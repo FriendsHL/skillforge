@@ -53,6 +53,13 @@ public class SkillRegistry {
     }
 
     /**
+     * 注销 SkillDefinition。
+     */
+    public void unregisterSkillDefinition(String name) {
+        skillDefinitions.remove(name);
+    }
+
+    /**
      * 获取 SkillDefinition。
      */
     public Optional<SkillDefinition> getSkillDefinition(String name) {

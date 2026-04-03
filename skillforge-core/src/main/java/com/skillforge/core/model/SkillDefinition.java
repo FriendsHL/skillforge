@@ -2,6 +2,7 @@ package com.skillforge.core.model;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.JsonSetter;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -82,6 +83,14 @@ public class SkillDefinition {
 
     public void setRequiredTools(List<String> requiredTools) {
         this.requiredTools = requiredTools;
+    }
+
+    /**
+     * 兼容 skill.yaml 中的 "tools" 字段，映射到 requiredTools。
+     */
+    @JsonSetter("tools")
+    public void setTools(List<String> tools) {
+        this.requiredTools = tools;
     }
 
     public String getPromptContent() {

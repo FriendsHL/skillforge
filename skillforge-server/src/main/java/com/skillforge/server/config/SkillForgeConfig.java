@@ -8,6 +8,7 @@ import com.skillforge.core.engine.SkillHook;
 import com.skillforge.core.llm.ClaudeProvider;
 import com.skillforge.core.llm.LlmProvider;
 import com.skillforge.core.llm.OpenAiProvider;
+import com.skillforge.core.skill.SkillPackageLoader;
 import com.skillforge.core.skill.SkillRegistry;
 import com.skillforge.skills.BashSkill;
 import com.skillforge.skills.FileEditSkill;
@@ -35,6 +36,11 @@ public class SkillForgeConfig {
         registry.register(new GlobSkill());
         registry.register(new GrepSkill());
         return registry;
+    }
+
+    @Bean
+    public SkillPackageLoader skillPackageLoader() {
+        return new SkillPackageLoader();
     }
 
     @Bean

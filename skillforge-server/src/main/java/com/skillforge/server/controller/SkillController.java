@@ -1,7 +1,7 @@
 package com.skillforge.server.controller;
 
 import com.skillforge.server.entity.SkillEntity;
-import com.skillforge.server.repository.SkillRepository;
+import com.skillforge.server.service.SkillService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -18,39 +18,50 @@ import java.util.List;
 @RequestMapping("/api/skills")
 public class SkillController {
 
-    private final SkillRepository skillRepository;
+    private final SkillService skillService;
 
-    public SkillController(SkillRepository skillRepository) {
-        this.skillRepository = skillRepository;
+    public SkillController(SkillService skillService) {
+        this.skillService = skillService;
     }
 
     @GetMapping
-    public ResponseEntity<List<SkillEntity>> listSkills() {
-        List<SkillEntity> skills = skillRepository.findAll();
+    public ResponseEntity<List<SkillEntity>> listSkills(
+            @RequestParam(value = "ownerId", required = false) Long ownerId) {
+        List<SkillEntity> skills;
+        if (ownerId != null) {
+            skills = skillService.listSkills(ownerId);
+        } else {
+            skills = skillService.listPublicSkills();
+        }
         return ResponseEntity.ok(skills);
     }
 
     @GetMapping("/{id}")
     public ResponseEntity<SkillEntity> getSkill(@PathVariable Long id) {
-        SkillEntity skill = skillRepository.findById(id)
-                .orElseThrow(() -> new RuntimeException("Skill not found: " + id));
-        return ResponseEntity.ok(skill);
+        // Delegate to service for consistent error handling
+        return ResponseEntity.ok(
+                skillService.listPublicSkills().stream()
+                        .filter(s -> s.getId().equals(id))
+                        .findFirst()
+                        .orElseThrow(() -> new RuntimeException("Skill not found: " + id)));
+    }
+
+    @GetMapping("/{id}/prompt")
+    public ResponseEntity<String> getSkillPrompt(@PathVariable Long id) {
+        return ResponseEntity.ok(skillService.getSkillPromptContent(id));
     }
 
     @PostMapping("/upload")
-    public ResponseEntity<SkillEntity> uploadSkill(@RequestParam("file") MultipartFile file) {
-        // TODO: 解压 zip、解析 skill.yaml + SKILL.md、存储、注册到 SkillRegistry
-        // 目前先创建一个占位 entity
-        SkillEntity skill = new SkillEntity();
-        skill.setName(file.getOriginalFilename());
-        skill.setDescription("Uploaded skill package");
-        SkillEntity saved = skillRepository.save(skill);
+    public ResponseEntity<SkillEntity> uploadSkill(
+            @RequestParam("file") MultipartFile file,
+            @RequestParam(value = "ownerId", defaultValue = "0") Long ownerId) {
+        SkillEntity saved = skillService.uploadSkill(file, ownerId);
         return ResponseEntity.ok(saved);
     }
 
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> deleteSkill(@PathVariable Long id) {
-        skillRepository.deleteById(id);
+        skillService.deleteSkill(id);
         return ResponseEntity.ok().build();
     }
 }
