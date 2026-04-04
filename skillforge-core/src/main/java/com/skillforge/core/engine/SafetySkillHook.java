@@ -80,6 +80,8 @@ public class SafetySkillHook implements SkillHook {
                 return checkWritePathSafety(skillName, input);
             case "FileRead":
                 return checkReadPathSafety(input);
+            case "Browser":
+                return checkBrowserSafety(input);
             default:
                 return input;
         }
@@ -147,6 +149,23 @@ public class SafetySkillHook implements SkillHook {
             }
         }
 
+        return input;
+    }
+
+    private static final List<String> BLOCKED_URL_PROTOCOLS = List.of("file:///", "javascript:");
+
+    private Map<String, Object> checkBrowserSafety(Map<String, Object> input) {
+        Object urlObj = input.get("url");
+        if (urlObj == null) {
+            return input;
+        }
+        String url = urlObj.toString().trim().toLowerCase();
+        for (String protocol : BLOCKED_URL_PROTOCOLS) {
+            if (url.startsWith(protocol)) {
+                log.warn("[SafetyHook] Blocked Browser navigation to dangerous URL: {}", urlObj);
+                return null;
+            }
+        }
         return input;
     }
 

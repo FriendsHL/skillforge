@@ -202,8 +202,6 @@ public class OpenAiProvider implements LlmProvider {
                 String textContent = msg.getTextContent();
                 if (textContent != null && !textContent.isEmpty()) {
                     assistantMsg.put("content", textContent);
-                } else {
-                    assistantMsg.putNull("content");
                 }
 
                 List<ToolUseBlock> toolUseBlocks = msg.getToolUseBlocks();

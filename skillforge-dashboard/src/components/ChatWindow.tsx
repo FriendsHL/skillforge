@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react';
-import { Spin, Input, Button, Collapse } from 'antd';
+import { Spin, Input, Button } from 'antd';
 import { SendOutlined } from '@ant-design/icons';
+import ToolCallTimeline from './ToolCallTimeline';
 
 export interface ChatMessage {
   role: 'user' | 'assistant';
@@ -53,16 +54,8 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, loading, onSend }) =>
               }}
             >
               {msg.content}
-              {msg.toolCalls && msg.toolCalls.length > 0 && (
-                <Collapse
-                  size="small"
-                  style={{ marginTop: 8 }}
-                  items={msg.toolCalls.map((tc: any, i: number) => ({
-                    key: i,
-                    label: `Tool: ${tc.name || tc.function?.name || 'unknown'}`,
-                    children: <pre style={{ fontSize: 12, margin: 0, whiteSpace: 'pre-wrap' }}>{JSON.stringify(tc, null, 2)}</pre>,
-                  }))}
-                />
+              {msg.role === 'assistant' && msg.toolCalls && msg.toolCalls.length > 0 && (
+                <ToolCallTimeline toolCalls={msg.toolCalls} />
               )}
             </div>
           </div>

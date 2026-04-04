@@ -1,6 +1,9 @@
 package com.skillforge.server.service;
 
+import com.skillforge.server.dto.AgentUsageDto;
+import com.skillforge.server.dto.DailyUsageDto;
 import com.skillforge.server.dto.DashboardOverview;
+import com.skillforge.server.dto.ModelUsageDto;
 import com.skillforge.server.entity.ModelUsageEntity;
 import com.skillforge.server.repository.AgentRepository;
 import com.skillforge.server.repository.ModelUsageRepository;
@@ -9,6 +12,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 
 @Service
@@ -52,5 +56,40 @@ public class DashboardService {
         overview.setTotalOutputTokens(totalOutput);
 
         return overview;
+    }
+
+    public List<DailyUsageDto> getDailyUsage(int days) {
+        LocalDateTime since = LocalDate.now().minusDays(days).atStartOfDay();
+        List<Object[]> rows = modelUsageRepository.findDailyUsage(since);
+        List<DailyUsageDto> result = new ArrayList<>();
+        for (Object[] row : rows) {
+            String date = row[0].toString();
+            long inputTokens = ((Number) row[1]).longValue();
+            long outputTokens = ((Number) row[2]).longValue();
+            result.add(new DailyUsageDto(date, inputTokens, outputTokens));
+        }
+        return result;
+    }
+
+    public List<ModelUsageDto> getUsageByModel() {
+        List<Object[]> rows = modelUsageRepository.findUsageByModel();
+        List<ModelUsageDto> result = new ArrayList<>();
+        for (Object[] row : rows) {
+            String model = (String) row[0];
+            long totalTokens = ((Number) row[1]).longValue();
+            result.add(new ModelUsageDto(model != null ? model : "unknown", totalTokens));
+        }
+        return result;
+    }
+
+    public List<AgentUsageDto> getUsageByAgent() {
+        List<Object[]> rows = modelUsageRepository.findUsageByAgent();
+        List<AgentUsageDto> result = new ArrayList<>();
+        for (Object[] row : rows) {
+            String agentName = (String) row[0];
+            long totalTokens = ((Number) row[1]).longValue();
+            result.add(new AgentUsageDto(agentName != null ? agentName : "Unknown", totalTokens));
+        }
+        return result;
     }
 }

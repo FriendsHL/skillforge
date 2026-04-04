@@ -6,6 +6,8 @@ import {
   ToolOutlined,
   MessageOutlined,
   CommentOutlined,
+  BulbOutlined,
+  BarChartOutlined,
 } from '@ant-design/icons';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 
@@ -15,7 +17,9 @@ const menuItems = [
   { key: '/', icon: <DashboardOutlined />, label: 'Dashboard' },
   { key: '/agents', icon: <RobotOutlined />, label: 'Agents' },
   { key: '/skills', icon: <ToolOutlined />, label: 'Skills' },
+  { key: '/memories', icon: <BulbOutlined />, label: 'Memories' },
   { key: '/sessions', icon: <MessageOutlined />, label: 'Sessions' },
+  { key: '/usage', icon: <BarChartOutlined />, label: 'Usage' },
   { key: '/chat', icon: <CommentOutlined />, label: 'Chat' },
 ];
 

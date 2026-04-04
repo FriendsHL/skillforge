@@ -39,6 +39,9 @@ public class SkillEntity {
 
     private boolean isPublic = false;
 
+    @Column(columnDefinition = "boolean default true")
+    private boolean enabled = true;
+
     @CreatedDate
     private LocalDateTime createdAt;
 
@@ -115,5 +118,13 @@ public class SkillEntity {
 
     public void setCreatedAt(LocalDateTime createdAt) {
         this.createdAt = createdAt;
+    }
+
+    public boolean isEnabled() {
+        return enabled;
+    }
+
+    public void setEnabled(boolean enabled) {
+        this.enabled = enabled;
     }
 }

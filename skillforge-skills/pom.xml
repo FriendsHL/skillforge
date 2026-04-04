@@ -14,10 +14,29 @@
     <name>SkillForge Skills</name>
     <description>Built-in Skill implementations: Bash, FileRead, FileWrite, etc.</description>
 
+    <repositories>
+        <repository>
+            <id>dianping-cache</id>
+            <name>Maven Central via direct access</name>
+            <url>https://repo1.maven.org/maven2</url>
+            <releases>
+                <enabled>true</enabled>
+            </releases>
+            <snapshots>
+                <enabled>false</enabled>
+            </snapshots>
+        </repository>
+    </repositories>
+
     <dependencies>
         <dependency>
             <groupId>com.skillforge</groupId>
             <artifactId>skillforge-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.microsoft.playwright</groupId>
+            <artifactId>playwright</artifactId>
+            <version>1.49.0</version>
         </dependency>
     </dependencies>
 </project>

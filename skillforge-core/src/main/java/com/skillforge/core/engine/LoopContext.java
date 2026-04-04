@@ -20,6 +20,7 @@ public class LoopContext {
     private long totalOutputTokens;
     private int loopCount;
     private int maxLoops;
+    private String subAgentTaskId;
 
     public LoopContext() {
         this.messages = new ArrayList<>();
@@ -96,6 +97,14 @@ public class LoopContext {
 
     public void setMaxLoops(int maxLoops) {
         this.maxLoops = maxLoops;
+    }
+
+    public String getSubAgentTaskId() {
+        return subAgentTaskId;
+    }
+
+    public void setSubAgentTaskId(String subAgentTaskId) {
+        this.subAgentTaskId = subAgentTaskId;
     }
 
     /**

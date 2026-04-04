@@ -44,6 +44,18 @@ public class AgentDefinition {
     }
 
     /**
+     * 获取最大上下文 token 数，默认 100000。
+     * 用于上下文压缩时判断是否需要压缩。
+     */
+    public int getMaxContextTokens() {
+        Object val = config.get("max_context_tokens");
+        if (val instanceof Number num) {
+            return num.intValue();
+        }
+        return 100000;
+    }
+
+    /**
      * 获取最大 token 数，默认 4096。
      */
     public int getMaxTokens() {

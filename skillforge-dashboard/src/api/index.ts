@@ -20,6 +20,7 @@ export const sendMessage = (sessionId: string, data: { message: string; userId: 
 
 // Skill API
 export const getSkills = () => api.get('/skills');
+export const getBuiltinSkills = () => api.get('/skills/builtin');
 export const uploadSkill = (file: File, ownerId: number) => {
   const form = new FormData();
   form.append('file', file);
@@ -27,6 +28,21 @@ export const uploadSkill = (file: File, ownerId: number) => {
   return api.post('/skills/upload', form);
 };
 export const deleteSkill = (id: number) => api.delete(`/skills/${id}`);
+export const getSkillDetail = (id: number) => api.get(`/skills/${id}/detail`);
+export const toggleSkill = (id: number, enabled: boolean) =>
+  api.put(`/skills/${id}/toggle?enabled=${enabled}`);
+
+// Memory API
+export const getMemories = (userId: number, type?: string) =>
+  api.get('/memories', { params: { userId, type } });
+export const searchMemories = (userId: number, keyword: string) =>
+  api.get('/memories/search', { params: { userId, keyword } });
+export const createMemory = (data: any) => api.post('/memories', data);
+export const updateMemory = (id: number, data: any) => api.put(`/memories/${id}`, data);
+export const deleteMemory = (id: number) => api.delete(`/memories/${id}`);
 
 // Dashboard API
 export const getDashboardOverview = () => api.get('/dashboard/overview');
+export const getDailyUsage = (days = 30) => api.get(`/dashboard/usage/daily?days=${days}`);
+export const getUsageByModel = () => api.get('/dashboard/usage/by-model');
+export const getUsageByAgent = () => api.get('/dashboard/usage/by-agent');

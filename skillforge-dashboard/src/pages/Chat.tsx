@@ -49,11 +49,26 @@ const Chat: React.FC = () => {
       .then((res) => {
         const list = Array.isArray(res.data) ? res.data : res.data?.data ?? [];
         setMessages(
-          list.map((m: any) => ({
-            role: m.role,
-            content: m.content,
-            toolCalls: m.toolCalls,
-          }))
+          list.map((m: any) => {
+            let textContent = '';
+            let toolCalls: any[] = [];
+
+            if (typeof m.content === 'string') {
+              textContent = m.content;
+            } else if (Array.isArray(m.content)) {
+              const textBlocks = m.content
+                .filter((b: any) => b.type === 'text')
+                .map((b: any) => b.text);
+              textContent = textBlocks.join('\n');
+              toolCalls = m.content.filter((b: any) => b.type === 'tool_use');
+            }
+
+            return {
+              role: m.role,
+              content: textContent,
+              toolCalls: toolCalls.length > 0 ? toolCalls : m.toolCalls,
+            };
+          })
         );
       })
       .catch(() => message.error('Failed to load messages'));
@@ -114,7 +129,7 @@ const Chat: React.FC = () => {
         ...prev,
         {
           role: 'assistant',
-          content: reply.content ?? reply.message ?? JSON.stringify(reply),
+          content: reply.response ?? reply.content ?? reply.message ?? JSON.stringify(reply),
           toolCalls: reply.toolCalls,
         },
       ]);
@@ -126,9 +141,9 @@ const Chat: React.FC = () => {
   };
 
   return (
-    <div style={{ display: 'flex', height: 'calc(100vh - 130px)', gap: 16 }}>
+    <div style={{ display: 'flex', height: 'calc(100vh - 130px)', gap: 16, overflow: 'hidden' }}>
       {/* Left panel */}
-      <div style={{ width: 280, display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div style={{ width: 280, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 12, overflow: 'hidden' }}>
         <Select
           placeholder="Select an Agent"
           style={{ width: '100%' }}
@@ -143,7 +158,7 @@ const Chat: React.FC = () => {
         <a onClick={handleNewSession} style={{ fontSize: 13 }}>
           + New Session
         </a>
-        <div style={{ flex: 1, overflowY: 'auto' }}>
+        <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
           <List
             size="small"
             dataSource={sessions}
@@ -170,7 +185,10 @@ const Chat: React.FC = () => {
       </div>
 
       {/* Right panel - chat */}
-      <Card style={{ flex: 1, display: 'flex', flexDirection: 'column' }} bodyStyle={{ flex: 1, padding: 0, display: 'flex', flexDirection: 'column' }}>
+      <Card
+        style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
+        styles={{ body: { flex: 1, padding: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' } }}
+      >
         {activeSessionId || selectedAgent ? (
           <ChatWindow messages={messages} loading={loading} onSend={handleSend} />
         ) : (

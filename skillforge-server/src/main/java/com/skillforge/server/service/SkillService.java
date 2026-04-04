@@ -15,8 +15,11 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Stream;
 
@@ -147,6 +150,116 @@ public class SkillService {
         } catch (IOException e) {
             throw new RuntimeException("Failed to read SKILL.md for skill " + id + ": " + e.getMessage(), e);
         }
+    }
+
+    /**
+     * 启用/禁用 Skill。
+     */
+    public SkillEntity toggleSkill(Long id, boolean enabled) {
+        SkillEntity entity = skillRepository.findById(id)
+                .orElseThrow(() -> new RuntimeException("Skill not found: " + id));
+        entity.setEnabled(enabled);
+        SkillEntity saved = skillRepository.save(entity);
+
+        // 同步到 SkillRegistry
+        if (enabled) {
+            // 重新加载并注册
+            if (entity.getSkillPath() != null) {
+                try {
+                    SkillDefinition def = skillPackageLoader.loadFromDirectory(Path.of(entity.getSkillPath()));
+                    skillRegistry.registerSkillDefinition(def);
+                    log.info("Skill re-enabled and registered: {}", entity.getName());
+                } catch (IOException e) {
+                    log.error("Failed to reload skill: {}", entity.getName(), e);
+                }
+            }
+        } else {
+            skillRegistry.unregisterSkillDefinition(entity.getName());
+            log.info("Skill disabled and unregistered: {}", entity.getName());
+        }
+
+        return saved;
+    }
+
+    /**
+     * 获取 Skill 详情，包含 SKILL.md 内容、reference 文件、scripts 列表。
+     */
+    public Map<String, Object> getSkillDetail(Long id) {
+        SkillEntity entity = skillRepository.findById(id)
+                .orElseThrow(() -> new RuntimeException("Skill not found: " + id));
+
+        Map<String, Object> detail = new HashMap<>();
+        detail.put("id", entity.getId());
+        detail.put("name", entity.getName());
+        detail.put("description", entity.getDescription());
+        detail.put("enabled", entity.isEnabled());
+        detail.put("requiredTools", entity.getRequiredTools());
+        detail.put("createdAt", entity.getCreatedAt());
+
+        if (entity.getSkillPath() == null) {
+            return detail;
+        }
+
+        Path skillDir = Path.of(entity.getSkillPath());
+
+        // 读取 SKILL.md
+        Path skillMd = skillDir.resolve("SKILL.md");
+        if (!Files.exists(skillMd)) {
+            skillMd = skillDir.resolve("skill.md");
+        }
+        if (Files.exists(skillMd)) {
+            try {
+                detail.put("skillMd", Files.readString(skillMd, StandardCharsets.UTF_8));
+            } catch (IOException e) {
+                detail.put("skillMd", "Failed to read: " + e.getMessage());
+            }
+        }
+
+        // 读取 reference 文件
+        Map<String, String> references = new HashMap<>();
+        for (String refName : List.of("reference.md", "examples.md", "template.md")) {
+            Path refPath = skillDir.resolve(refName);
+            if (Files.exists(refPath)) {
+                try {
+                    references.put(refName, Files.readString(refPath, StandardCharsets.UTF_8));
+                } catch (IOException ignored) {}
+            }
+        }
+        // docs/ 子目录
+        Path docsDir = skillDir.resolve("docs");
+        if (Files.isDirectory(docsDir)) {
+            try (Stream<Path> stream = Files.list(docsDir)) {
+                stream.filter(p -> p.toString().endsWith(".md"))
+                        .forEach(p -> {
+                            try {
+                                references.put("docs/" + p.getFileName(), Files.readString(p, StandardCharsets.UTF_8));
+                            } catch (IOException ignored) {}
+                        });
+            } catch (IOException ignored) {}
+        }
+        detail.put("references", references);
+
+        // scripts 列表
+        List<Map<String, String>> scripts = new ArrayList<>();
+        Path scriptsDir = skillDir.resolve("scripts");
+        if (Files.isDirectory(scriptsDir)) {
+            try (Stream<Path> stream = Files.walk(scriptsDir)) {
+                stream.filter(Files::isRegularFile)
+                        .forEach(p -> {
+                            Map<String, String> scriptInfo = new HashMap<>();
+                            scriptInfo.put("name", scriptsDir.relativize(p).toString());
+                            try {
+                                scriptInfo.put("content", Files.readString(p, StandardCharsets.UTF_8));
+                            } catch (IOException e) {
+                                scriptInfo.put("content", "Failed to read");
+                            }
+                            scripts.add(scriptInfo);
+                        });
+            } catch (IOException ignored) {}
+        }
+        detail.put("scripts", scripts);
+
+        return detail;
     }
 
     private void deleteDirectoryQuietly(Path dir) {

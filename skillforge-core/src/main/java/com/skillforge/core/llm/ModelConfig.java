@@ -9,6 +9,7 @@ import java.util.Map;
 public class ModelConfig {
 
     private String providerName;
+    private String type;
     private String apiKey;
     private String baseUrl;
     private String model;
@@ -24,12 +25,28 @@ public class ModelConfig {
         this.model = model;
     }
 
+    public ModelConfig(String providerName, String type, String apiKey, String baseUrl, String model) {
+        this.providerName = providerName;
+        this.type = type;
+        this.apiKey = apiKey;
+        this.baseUrl = baseUrl;
+        this.model = model;
+    }
+
     public String getProviderName() {
         return providerName;
     }
 
     public void setProviderName(String providerName) {
         this.providerName = providerName;
+    }
+
+    public String getType() {
+        return type;
+    }
+
+    public void setType(String type) {
+        this.type = type;
     }
 
     public String getApiKey() {

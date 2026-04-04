@@ -1,13 +1,9 @@
 package com.skillforge.server.config;
 
-import com.skillforge.core.context.ContextProvider;
 import com.skillforge.core.engine.AgentLoopEngine;
-import com.skillforge.core.engine.LoopHook;
 import com.skillforge.core.engine.SafetySkillHook;
-import com.skillforge.core.engine.SkillHook;
-import com.skillforge.core.llm.ClaudeProvider;
-import com.skillforge.core.llm.LlmProvider;
-import com.skillforge.core.llm.OpenAiProvider;
+import com.skillforge.core.llm.LlmProviderFactory;
+import com.skillforge.core.llm.ModelConfig;
 import com.skillforge.core.skill.SkillPackageLoader;
 import com.skillforge.core.skill.SkillRegistry;
 import com.skillforge.skills.BashSkill;
@@ -15,19 +11,31 @@ import com.skillforge.skills.FileEditSkill;
 import com.skillforge.skills.FileReadSkill;
 import com.skillforge.skills.FileWriteSkill;
 import com.skillforge.skills.GlobSkill;
+import com.skillforge.skills.BrowserSkill;
 import com.skillforge.skills.GrepSkill;
-import org.springframework.beans.factory.annotation.Value;
+import com.skillforge.skills.SubAgentSkill;
+import com.skillforge.core.engine.SubAgentExecutor;
+import com.skillforge.server.skill.MemorySkill;
+import com.skillforge.server.service.MemoryService;
+import com.skillforge.server.service.AgentService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
 @Configuration
+@EnableConfigurationProperties(LlmProperties.class)
 public class SkillForgeConfig {
 
+    private static final Logger log = LoggerFactory.getLogger(SkillForgeConfig.class);
+
     @Bean
-    public SkillRegistry skillRegistry() {
+    public SkillRegistry skillRegistry(MemoryService memoryService) {
         SkillRegistry registry = new SkillRegistry();
         registry.register(new BashSkill());
         registry.register(new FileReadSkill());
@@ -35,6 +43,8 @@ public class SkillForgeConfig {
         registry.register(new FileEditSkill());
         registry.register(new GlobSkill());
         registry.register(new GrepSkill());
+        registry.register(new BrowserSkill());
+        registry.register(new MemorySkill(memoryService));
         return registry;
     }
 
@@ -44,23 +54,56 @@ public class SkillForgeConfig {
     }
 
     @Bean
-    public LlmProvider llmProvider(
-            @Value("${skillforge.llm.default-provider:claude}") String defaultProvider,
-            @Value("${skillforge.llm.providers.claude.api-key:}") String claudeApiKey,
-            @Value("${skillforge.llm.providers.claude.base-url:https://api.anthropic.com}") String claudeBaseUrl,
-            @Value("${skillforge.llm.providers.claude.model:claude-sonnet-4-20250514}") String claudeModel,
-            @Value("${skillforge.llm.providers.openai.api-key:}") String openaiApiKey,
-            @Value("${skillforge.llm.providers.openai.base-url:https://api.openai.com}") String openaiBaseUrl,
-            @Value("${skillforge.llm.providers.openai.model:gpt-4o}") String openaiModel) {
-        return switch (defaultProvider) {
-            case "openai" -> new OpenAiProvider(openaiApiKey, openaiBaseUrl, openaiModel);
-            default -> new ClaudeProvider(claudeApiKey, claudeBaseUrl, claudeModel);
-        };
+    public LlmProviderFactory llmProviderFactory(LlmProperties llmProperties) {
+        LlmProviderFactory factory = new LlmProviderFactory();
+
+        for (Map.Entry<String, LlmProperties.ProviderConfig> entry : llmProperties.getProviders().entrySet()) {
+            String name = entry.getKey();
+            LlmProperties.ProviderConfig providerConfig = entry.getValue();
+
+            ModelConfig modelConfig = new ModelConfig(
+                    name,
+                    providerConfig.getType(),
+                    providerConfig.getApiKey(),
+                    providerConfig.getBaseUrl(),
+                    providerConfig.getModel()
+            );
+            factory.getProvider(modelConfig);
+            log.info("Registered LLM provider: name={}, type={}, baseUrl={}",
+                    name, providerConfig.getType(), providerConfig.getBaseUrl());
+        }
+
+        return factory;
     }
 
     @Bean
-    public AgentLoopEngine agentLoopEngine(LlmProvider llmProvider, SkillRegistry skillRegistry) {
-        return new AgentLoopEngine(llmProvider, skillRegistry,
+    public SubAgentExecutor subAgentExecutor(LlmProviderFactory llmProviderFactory, LlmProperties llmProperties,
+                                             SkillRegistry skillRegistry) {
+        String defaultProvider = llmProperties.getDefaultProvider() != null
+                ? llmProperties.getDefaultProvider() : "claude";
+        return new SubAgentExecutor(llmProviderFactory, defaultProvider, skillRegistry);
+    }
+
+    @Bean
+    public SubAgentSkill subAgentSkill(SubAgentExecutor subAgentExecutor, AgentService agentService,
+                                       SkillRegistry skillRegistry) {
+        SubAgentSkill skill = new SubAgentSkill(subAgentExecutor, agentId -> {
+            try {
+                return agentService.toAgentDefinition(agentService.getAgent(agentId));
+            } catch (Exception e) {
+                return null;
+            }
+        });
+        skillRegistry.register(skill);
+        return skill;
+    }
+
+    @Bean
+    public AgentLoopEngine agentLoopEngine(LlmProviderFactory llmProviderFactory, LlmProperties llmProperties,
+                                           SkillRegistry skillRegistry) {
+        String defaultProvider = llmProperties.getDefaultProvider() != null
+                ? llmProperties.getDefaultProvider() : "claude";
+        return new AgentLoopEngine(llmProviderFactory, defaultProvider, skillRegistry,
                 Collections.emptyList(), List.of(new SafetySkillHook()), Collections.emptyList());
     }
 }

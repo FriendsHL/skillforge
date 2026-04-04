@@ -3,6 +3,7 @@ package com.skillforge.core.engine;
 import com.skillforge.core.context.ContextProvider;
 import com.skillforge.core.context.SystemPromptBuilder;
 import com.skillforge.core.llm.LlmProvider;
+import com.skillforge.core.llm.LlmProviderFactory;
 import com.skillforge.core.llm.LlmRequest;
 import com.skillforge.core.llm.LlmResponse;
 import com.skillforge.core.model.AgentDefinition;
@@ -39,22 +40,31 @@ public class AgentLoopEngine {
 
     private static final Logger log = LoggerFactory.getLogger(AgentLoopEngine.class);
 
-    private final LlmProvider llmProvider;
+    private final LlmProviderFactory llmProviderFactory;
+    private final String defaultProviderName;
     private final SkillRegistry skillRegistry;
     private final List<LoopHook> loopHooks;
     private final List<SkillHook> skillHooks;
     private final List<ContextProvider> contextProviders;
+    private final TokenCounter tokenCounter;
+    private final ContextCompactor contextCompactor;
 
-    public AgentLoopEngine(LlmProvider llmProvider,
+    public AgentLoopEngine(LlmProviderFactory llmProviderFactory,
+                           String defaultProviderName,
                            SkillRegistry skillRegistry,
                            List<LoopHook> loopHooks,
                            List<SkillHook> skillHooks,
                            List<ContextProvider> contextProviders) {
-        this.llmProvider = llmProvider;
+        this.llmProviderFactory = llmProviderFactory;
+        this.defaultProviderName = defaultProviderName;
         this.skillRegistry = skillRegistry;
         this.loopHooks = loopHooks != null ? loopHooks : Collections.emptyList();
         this.skillHooks = skillHooks != null ? skillHooks : Collections.emptyList();
         this.contextProviders = contextProviders != null ? contextProviders : Collections.emptyList();
+        this.tokenCounter = new TokenCounter();
+        // contextCompactor needs an LlmProvider; resolve lazily on first use
+        LlmProvider defaultProvider = llmProviderFactory.getProvider(defaultProviderName);
+        this.contextCompactor = defaultProvider != null ? new ContextCompactor(defaultProvider, tokenCounter) : null;
     }
 
     /**
@@ -76,6 +86,18 @@ public class AgentLoopEngine {
         context.setAgentDefinition(agentDef);
         context.setSessionId(sessionId);
         context.setUserId(userId);
+
+        // 从 AgentDefinition config 读取 max_loops 配置
+        Object maxLoopsVal = agentDef.getConfig().get("max_loops");
+        if (maxLoopsVal instanceof Number) {
+            context.setMaxLoops(((Number) maxLoopsVal).intValue());
+        }
+
+        // 从 AgentDefinition config 读取 sub_agent_task_id（子 Agent 执行时设置）
+        Object subAgentTaskIdVal = agentDef.getConfig().get("sub_agent_task_id");
+        if (subAgentTaskIdVal instanceof String) {
+            context.setSubAgentTaskId((String) subAgentTaskIdVal);
+        }
 
         // 组装 messages: history + user message
         List<Message> messages = new ArrayList<>();
@@ -110,16 +132,34 @@ public class AgentLoopEngine {
         List<ToolCallRecord> toolCallRecords = new CopyOnWriteArrayList<>();
         LlmResponse lastResponse = null;
 
+        // 5.5 解析要使用的 LlmProvider 和模型名
+        String[] resolvedModel = new String[1];
+        LlmProvider llmProvider = resolveProvider(agentDef, resolvedModel);
+        String actualModelId = resolvedModel[0];
+
         // 6. 进入循环
         while (loopCtx.getLoopCount() < loopCtx.getMaxLoops()) {
             log.debug("AgentLoop iteration {} / {}", loopCtx.getLoopCount() + 1, loopCtx.getMaxLoops());
 
-            // a. 构建 LlmRequest
+            // a. 上下文压缩检查
+            if (contextCompactor != null) {
+                int maxContextTokens = agentDef.getMaxContextTokens();
+                List<Message> compactedMessages = contextCompactor.compactIfNeeded(messages, systemPrompt, maxContextTokens);
+                if (compactedMessages != messages) {
+                    int beforeTokens = tokenCounter.countMessageTokens(messages);
+                    int afterTokens = tokenCounter.countMessageTokens(compactedMessages);
+                    log.info("Context compacted: {} messages -> {} messages, {} tokens -> {} tokens",
+                            messages.size(), compactedMessages.size(), beforeTokens, afterTokens);
+                    messages = compactedMessages;
+                }
+            }
+
+            // b. 构建 LlmRequest
             LlmRequest request = new LlmRequest();
             request.setSystemPrompt(systemPrompt);
             request.setMessages(messages);
             request.setTools(tools);
-            request.setModel(agentDef.getModelId());
+            request.setModel(actualModelId);
             request.setMaxTokens(agentDef.getMaxTokens());
             request.setTemperature(agentDef.getTemperature());
 
@@ -192,6 +232,43 @@ public class AgentLoopEngine {
         // 8. 返回 LoopResult
         String finalText = lastResponse != null ? lastResponse.getContent() : "";
         return buildResult(loopCtx, messages, finalText, toolCallRecords);
+    }
+
+    /**
+     * 根据 AgentDefinition 的 modelId 解析要使用的 LlmProvider。
+     * <p>
+     * 支持两种格式:
+     * <ul>
+     *   <li>"deepseek:deepseek-chat" — 使用名为 "deepseek" 的 provider，覆盖模型为 "deepseek-chat"</li>
+     *   <li>"gpt-4o" — 使用默认 provider</li>
+     * </ul>
+     */
+    /**
+     * 解析 provider 和实际 model name。返回长度为 2 的数组: [0]=resolvedModelName, provider 通过返回值。
+     */
+    private LlmProvider resolveProvider(AgentDefinition agentDef, String[] resolvedModel) {
+        String modelId = agentDef.getModelId();
+
+        if (modelId != null && modelId.contains(":")) {
+            // 格式: "providerName:modelName"
+            int colonIndex = modelId.indexOf(':');
+            String providerName = modelId.substring(0, colonIndex);
+            String modelName = modelId.substring(colonIndex + 1);
+
+            LlmProvider provider = llmProviderFactory.getProvider(providerName);
+            if (provider != null) {
+                resolvedModel[0] = modelName;
+                return provider;
+            }
+            log.warn("Provider '{}' not found, falling back to default provider '{}'", providerName, defaultProviderName);
+        }
+
+        resolvedModel[0] = modelId;
+        LlmProvider defaultProvider = llmProviderFactory.getProvider(defaultProviderName);
+        if (defaultProvider == null) {
+            throw new IllegalStateException("Default LLM provider '" + defaultProviderName + "' is not configured");
+        }
+        return defaultProvider;
     }
 
     /**
@@ -278,6 +355,7 @@ public class AgentLoopEngine {
                         loopContext.getWorkingDirectory(),
                         loopContext.getSessionId(),
                         loopContext.getUserId());
+                skillContext.setSubAgentTaskId(loopContext.getSubAgentTaskId());
 
                 // 执行 SkillHook.beforeSkillExecute()
                 Map<String, Object> processedInput = input;
