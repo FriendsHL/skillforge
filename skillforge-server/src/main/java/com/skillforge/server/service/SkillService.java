@@ -107,6 +107,13 @@ public class SkillService {
     }
 
     /**
+     * 获取所有 Skill 列表。
+     */
+    public List<SkillEntity> listAllSkills() {
+        return skillRepository.findAll();
+    }
+
+    /**
      * 获取公共 Skill 列表。
      */
     public List<SkillEntity> listPublicSkills() {

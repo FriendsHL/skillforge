@@ -68,6 +68,14 @@ const SkillList: React.FC = () => {
     }
   };
 
+  const [builtinDetailVisible, setBuiltinDetailVisible] = useState(false);
+  const [builtinDetail, setBuiltinDetail] = useState<any>(null);
+
+  const showBuiltinDetail = (record: any) => {
+    setBuiltinDetail(record);
+    setBuiltinDetailVisible(true);
+  };
+
   const builtinColumns = [
     {
       title: 'Name',
@@ -81,7 +89,7 @@ const SkillList: React.FC = () => {
         </span>
       ),
     },
-    { title: 'Description', dataIndex: 'description', key: 'description' },
+    { title: 'Description', dataIndex: 'description', key: 'description', ellipsis: true },
     {
       title: 'Type',
       key: 'type',
@@ -94,6 +102,16 @@ const SkillList: React.FC = () => {
       key: 'readOnly',
       width: 90,
       render: (v: boolean) => v ? <Tag color="green">Yes</Tag> : <Tag color="orange">No</Tag>,
+    },
+    {
+      title: 'Actions',
+      key: 'actions',
+      width: 80,
+      render: (_: any, record: any) => (
+        <Button icon={<EyeOutlined />} size="small" onClick={() => showBuiltinDetail(record)}>
+          Detail
+        </Button>
+      ),
     },
   ];
 
@@ -269,6 +287,30 @@ const SkillList: React.FC = () => {
               },
             ]}
           />
+        ) : null}
+      </Modal>
+
+      <Modal
+        title={builtinDetail ? `System Skill: ${builtinDetail.name}` : 'System Skill Detail'}
+        open={builtinDetailVisible}
+        onCancel={() => { setBuiltinDetailVisible(false); setBuiltinDetail(null); }}
+        footer={null}
+        width={700}
+      >
+        {builtinDetail ? (
+          <div>
+            <Paragraph><strong>Name:</strong> {builtinDetail.name}</Paragraph>
+            <Paragraph><strong>Description:</strong> {builtinDetail.description}</Paragraph>
+            <Paragraph><strong>Read-Only:</strong> {builtinDetail.readOnly ? 'Yes' : 'No'}</Paragraph>
+            {builtinDetail.toolSchema && (
+              <>
+                <Divider orientation="left" plain>Tool Schema (Input Parameters)</Divider>
+                <pre style={{ maxHeight: 400, overflow: 'auto', fontSize: 13, background: '#f5f5f5', padding: 12, borderRadius: 6, margin: 0 }}>
+                  {JSON.stringify(builtinDetail.toolSchema, null, 2)}
+                </pre>
+              </>
+            )}
+          </div>
         ) : null}
       </Modal>
     </div>

@@ -38,7 +38,7 @@ public class SkillController {
         if (ownerId != null) {
             skills = skillService.listSkills(ownerId);
         } else {
-            skills = skillService.listPublicSkills();
+            skills = skillService.listAllSkills();
         }
         return ResponseEntity.ok(skills);
     }
@@ -52,6 +52,10 @@ public class SkillController {
                     info.put("description", skill.getDescription());
                     info.put("readOnly", skill.isReadOnly());
                     info.put("type", "builtin");
+                    // 工具 schema 信息
+                    if (skill.getToolSchema() != null) {
+                        info.put("toolSchema", skill.getToolSchema());
+                    }
                     return info;
                 })
                 .collect(Collectors.toList());
