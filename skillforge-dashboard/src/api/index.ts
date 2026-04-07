@@ -17,6 +17,11 @@ export const getSessionMessages = (id: string) => api.get(`/chat/sessions/${id}/
 // Chat API
 export const sendMessage = (sessionId: string, data: { message: string; userId: number }) =>
   api.post(`/chat/${sessionId}`, data);
+export const answerAsk = (sessionId: string, askId: string, answer: string) =>
+  api.post(`/chat/${sessionId}/answer`, { askId, answer });
+export const setSessionMode = (sessionId: string, mode: 'ask' | 'auto') =>
+  api.patch(`/chat/sessions/${sessionId}/mode`, { mode });
+export const getSession = (sessionId: string) => api.get(`/chat/sessions/${sessionId}`);
 
 // Skill API
 export const getSkills = () => api.get('/skills');

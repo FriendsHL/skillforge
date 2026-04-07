@@ -45,6 +45,10 @@ public class AgentEntity {
 
     private String status = "active";
 
+    /** 执行模式: ask / auto,默认 ask */
+    @Column(length = 16)
+    private String executionMode = "ask";
+
     @CreatedDate
     private LocalDateTime createdAt;
 
@@ -132,6 +136,14 @@ public class AgentEntity {
 
     public void setStatus(String status) {
         this.status = status;
+    }
+
+    public String getExecutionMode() {
+        return executionMode;
+    }
+
+    public void setExecutionMode(String executionMode) {
+        this.executionMode = executionMode;
     }
 
     public LocalDateTime getCreatedAt() {

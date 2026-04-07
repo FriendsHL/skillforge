@@ -26,6 +26,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.stream.Collectors;
@@ -48,6 +49,12 @@ public class AgentLoopEngine {
     private final List<ContextProvider> contextProviders;
     private final TokenCounter tokenCounter;
     private final ContextCompactor contextCompactor;
+    /** 可选:实时事件广播(server 注入 WebSocket 实现)。null 时降级为无广播模式。 */
+    private ChatEventBroadcaster broadcaster;
+    /** 可选:ask_user 待答复注册中心。null 时 ask_user 调用会直接返回错误。 */
+    private PendingAskRegistry pendingAskRegistry;
+    /** ask_user 默认超时 */
+    private long askUserTimeoutSeconds = 30 * 60L;
 
     public AgentLoopEngine(LlmProviderFactory llmProviderFactory,
                            String defaultProviderName,
@@ -65,6 +72,19 @@ public class AgentLoopEngine {
         // contextCompactor needs an LlmProvider; resolve lazily on first use
         LlmProvider defaultProvider = llmProviderFactory.getProvider(defaultProviderName);
         this.contextCompactor = defaultProvider != null ? new ContextCompactor(defaultProvider, tokenCounter) : null;
+    }
+
+    /** Setter injection: 延迟注入,避免 core 模块强依赖 server 组件。 */
+    public void setBroadcaster(ChatEventBroadcaster broadcaster) {
+        this.broadcaster = broadcaster;
+    }
+
+    public void setPendingAskRegistry(PendingAskRegistry pendingAskRegistry) {
+        this.pendingAskRegistry = pendingAskRegistry;
+    }
+
+    public void setAskUserTimeoutSeconds(long askUserTimeoutSeconds) {
+        this.askUserTimeoutSeconds = askUserTimeoutSeconds;
     }
 
     /**
@@ -99,6 +119,12 @@ public class AgentLoopEngine {
             context.setSubAgentTaskId((String) subAgentTaskIdVal);
         }
 
+        // 从 AgentDefinition config 读取 execution_mode (ask / auto)
+        Object modeVal = agentDef.getConfig().get("execution_mode");
+        if (modeVal instanceof String) {
+            context.setExecutionMode((String) modeVal);
+        }
+
         // 组装 messages: history + user message
         List<Message> messages = new ArrayList<>();
         if (history != null) {
@@ -125,8 +151,8 @@ public class AgentLoopEngine {
         List<SkillDefinition> skillDefs = new ArrayList<>(skillRegistry.getAllSkillDefinitions());
         String systemPrompt = new SystemPromptBuilder(agentDef, skillDefs, contextProviders).build();
 
-        // 5. 收集 tools: 内置 Skill 的 ToolSchema + SkillDefinition 的描述
-        List<ToolSchema> tools = collectTools();
+        // 5. 收集 tools: 内置 Skill 的 ToolSchema + SkillDefinition 的描述 + (可选) ask_user
+        List<ToolSchema> tools = collectTools(loopCtx.getExecutionMode());
 
         // 追踪工具调用记录
         List<ToolCallRecord> toolCallRecords = new CopyOnWriteArrayList<>();
@@ -163,13 +189,49 @@ public class AgentLoopEngine {
             request.setMaxTokens(agentDef.getMaxTokens());
             request.setTemperature(agentDef.getTemperature());
 
-            // b. 调用 LLM
-            LlmResponse response;
+            // b. 流式调用 LLM,文本增量通过 broadcaster.assistantDelta 推到前端
+            final java.util.concurrent.atomic.AtomicReference<LlmResponse> respHolder = new java.util.concurrent.atomic.AtomicReference<>();
+            final java.util.concurrent.atomic.AtomicReference<Throwable> errHolder = new java.util.concurrent.atomic.AtomicReference<>();
+            final java.util.concurrent.CountDownLatch streamDone = new java.util.concurrent.CountDownLatch(1);
+            final String broadcastSid = loopCtx.getSessionId();
             try {
-                response = llmProvider.chat(request);
+                llmProvider.chatStream(request, new com.skillforge.core.llm.LlmStreamHandler() {
+                    @Override public void onText(String text) {
+                        if (broadcaster != null && broadcastSid != null && text != null && !text.isEmpty()) {
+                            broadcaster.assistantDelta(broadcastSid, text);
+                        }
+                    }
+                    @Override public void onToolUse(com.skillforge.core.model.ToolUseBlock block) {
+                        // tool_use 的可视化由后续 tool_started 事件覆盖,此处不广播
+                    }
+                    @Override public void onComplete(LlmResponse fullResponse) {
+                        respHolder.set(fullResponse);
+                        if (broadcaster != null && broadcastSid != null) {
+                            broadcaster.assistantStreamEnd(broadcastSid);
+                        }
+                        streamDone.countDown();
+                    }
+                    @Override public void onError(Throwable error) {
+                        errHolder.set(error);
+                        if (broadcaster != null && broadcastSid != null) {
+                            broadcaster.assistantStreamEnd(broadcastSid);
+                        }
+                        streamDone.countDown();
+                    }
+                });
+                streamDone.await();
             } catch (Exception e) {
-                log.error("LLM call failed at loop {}", loopCtx.getLoopCount(), e);
-                return buildResult(loopCtx, messages, "Error calling LLM: " + e.getMessage(), toolCallRecords);
+                log.error("LLM stream call failed at loop {}", loopCtx.getLoopCount(), e);
+                throw new RuntimeException("LLM call failed: " + e.getMessage(), e);
+            }
+            if (errHolder.get() != null) {
+                Throwable e = errHolder.get();
+                log.error("LLM stream returned error at loop {}", loopCtx.getLoopCount(), e);
+                throw new RuntimeException("LLM call failed: " + e.getMessage(), e);
+            }
+            LlmResponse response = respHolder.get();
+            if (response == null) {
+                throw new RuntimeException("LLM stream completed without response");
             }
             lastResponse = response;
 
@@ -179,9 +241,12 @@ public class AgentLoopEngine {
                 loopCtx.addOutputTokens(response.getUsage().getOutputTokens());
             }
 
-            // d. 将 assistant 响应加入 messages
+            // d. 将 assistant 响应加入 messages 并广播
             Message assistantMsg = buildAssistantMessage(response);
             messages.add(assistantMsg);
+            if (broadcaster != null && loopCtx.getSessionId() != null) {
+                broadcaster.messageAppended(loopCtx.getSessionId(), assistantMsg);
+            }
 
             // e. 判断是否 tool_use
             if (!response.isToolUse()) {
@@ -190,22 +255,67 @@ public class AgentLoopEngine {
                 break;
             }
 
-            // 处理 tool_use: 并行执行所有 tool calls
+            // 处理 tool_use: 先把 ask_user 从列表里拆出来走特殊分支,其余并行执行
             List<ToolUseBlock> toolUseBlocks = response.getToolUseBlocks();
             log.info("Processing {} tool call(s) at loop {}", toolUseBlocks.size(), loopCtx.getLoopCount() + 1);
 
             List<CompletableFuture<Message>> futures = new ArrayList<>();
-            for (ToolUseBlock block : toolUseBlocks) {
-                futures.add(CompletableFuture.supplyAsync(() ->
-                        executeToolCall(block, loopCtx, toolCallRecords)));
+            Map<Integer, Message> askResults = new HashMap<>();
+            for (int i = 0; i < toolUseBlocks.size(); i++) {
+                ToolUseBlock block = toolUseBlocks.get(i);
+                if (AskUserTool.NAME.equals(block.getName())) {
+                    Message result = handleAskUser(block, loopCtx);
+                    askResults.put(i, result);
+                } else {
+                    final int idx = i;
+                    final ToolUseBlock fblock = block;
+                    if (broadcaster != null && loopCtx.getSessionId() != null) {
+                        broadcaster.toolStarted(loopCtx.getSessionId(), fblock.getId(), fblock.getName(), fblock.getInput());
+                    }
+                    final long toolStart = System.currentTimeMillis();
+                    futures.add(CompletableFuture.supplyAsync(() -> {
+                        Message r;
+                        String status = "success";
+                        String errorMsg = null;
+                        try {
+                            r = executeToolCall(fblock, loopCtx, toolCallRecords);
+                            if (r != null && r.getContent() instanceof java.util.List<?> blocks) {
+                                for (Object o : blocks) {
+                                    if (o instanceof com.skillforge.core.model.ContentBlock cb && Boolean.TRUE.equals(cb.getIsError())) {
+                                        status = "error";
+                                        errorMsg = String.valueOf(cb.getContent());
+                                        break;
+                                    }
+                                }
+                            }
+                        } catch (Exception e) {
+                            status = "error";
+                            errorMsg = e.getMessage();
+                            r = Message.toolResult(fblock.getId(), "Tool execution error: " + e.getMessage(), true);
+                        } finally {
+                            if (broadcaster != null && loopCtx.getSessionId() != null) {
+                                long dur = System.currentTimeMillis() - toolStart;
+                                broadcaster.toolFinished(loopCtx.getSessionId(), fblock.getId(), status, dur, errorMsg);
+                            }
+                        }
+                        synchronized (askResults) {
+                            askResults.put(idx, r);
+                        }
+                        return r;
+                    }));
+                }
             }
 
-            // 等待所有 tool 执行完成
+            // 等待所有并行 tool 执行完成
             CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
 
-            // 将所有 tool_result 加入 messages
-            for (CompletableFuture<Message> future : futures) {
-                messages.add(future.join());
+            // 按原顺序加入 messages + 广播
+            for (int i = 0; i < toolUseBlocks.size(); i++) {
+                Message toolResult = askResults.get(i);
+                messages.add(toolResult);
+                if (broadcaster != null && loopCtx.getSessionId() != null) {
+                    broadcaster.messageAppended(loopCtx.getSessionId(), toolResult);
+                }
             }
 
             // f. loopCount++
@@ -272,9 +382,9 @@ public class AgentLoopEngine {
     }
 
     /**
-     * 收集所有可用的工具 schema：内置 Skill + SkillDefinition。
+     * 收集所有可用的工具 schema：内置 Skill + SkillDefinition + (可选) ask_user。
      */
-    private List<ToolSchema> collectTools() {
+    private List<ToolSchema> collectTools(String executionMode) {
         List<ToolSchema> tools = new ArrayList<>();
 
         // 内置 Skill
@@ -291,6 +401,11 @@ public class AgentLoopEngine {
             inputSchema.put("type", "object");
             inputSchema.put("properties", Collections.emptyMap());
             tools.add(new ToolSchema(def.getName(), def.getDescription(), inputSchema));
+        }
+
+        // ask_user:仅在 ask 模式下注入,auto 模式下 LLM 看不到这个 tool
+        if ("ask".equalsIgnoreCase(executionMode) && pendingAskRegistry != null) {
+            tools.add(AskUserTool.toolSchema());
         }
 
         return tools;
@@ -320,6 +435,79 @@ public class AgentLoopEngine {
         }
 
         return msg;
+    }
+
+    /**
+     * 处理 ask_user tool_use:
+     * 1. 注册 PendingAsk
+     * 2. 广播 ask_user 事件 + session_status=waiting_user
+     * 3. 阻塞等待用户答复(CountDownLatch)
+     * 4. 将答复包装成 tool_result 返回
+     */
+    @SuppressWarnings("unchecked")
+    private Message handleAskUser(ToolUseBlock block, LoopContext loopContext) {
+        String toolUseId = block.getId();
+        Map<String, Object> input = block.getInput() != null ? block.getInput() : Collections.emptyMap();
+
+        if (pendingAskRegistry == null || broadcaster == null || loopContext.getSessionId() == null) {
+            log.warn("ask_user called but broadcaster/registry not configured");
+            return Message.toolResult(toolUseId,
+                    "ask_user is not available in this context. Proceed with your best judgment or return a text response.",
+                    true);
+        }
+
+        String question = input.get("question") != null ? input.get("question").toString() : "";
+        String contextStr = input.get("context") != null ? input.get("context").toString() : "";
+        boolean allowOther = !Boolean.FALSE.equals(input.get("allowOther"));
+
+        ChatEventBroadcaster.AskUserEvent event = new ChatEventBroadcaster.AskUserEvent();
+        event.askId = UUID.randomUUID().toString();
+        event.question = question;
+        event.context = contextStr;
+        event.allowOther = allowOther;
+        event.options = new ArrayList<>();
+
+        Object optsRaw = input.get("options");
+        if (optsRaw instanceof List<?> optsList) {
+            for (Object o : optsList) {
+                if (o instanceof Map<?, ?> m) {
+                    ChatEventBroadcaster.AskUserEvent.Option opt = new ChatEventBroadcaster.AskUserEvent.Option();
+                    Object lbl = m.get("label");
+                    Object desc = m.get("description");
+                    opt.label = lbl != null ? lbl.toString() : "";
+                    opt.description = desc != null ? desc.toString() : null;
+                    event.options.add(opt);
+                } else if (o instanceof String s) {
+                    event.options.add(new ChatEventBroadcaster.AskUserEvent.Option(s, null));
+                }
+            }
+        }
+
+        pendingAskRegistry.register(event.askId);
+        String sessionId = loopContext.getSessionId();
+
+        log.info("ask_user invoked: sessionId={}, askId={}, question={}", sessionId, event.askId, question);
+
+        broadcaster.sessionStatus(sessionId, "waiting_user", "Waiting for your reply", null);
+        broadcaster.askUser(sessionId, event);
+
+        String answer;
+        try {
+            answer = pendingAskRegistry.await(event.askId, askUserTimeoutSeconds);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            broadcaster.sessionStatus(sessionId, "running", null, null);
+            return Message.toolResult(toolUseId, "User answer wait was interrupted.", true);
+        }
+
+        broadcaster.sessionStatus(sessionId, "running", null, null);
+
+        if (answer == null) {
+            return Message.toolResult(toolUseId,
+                    "User did not respond within the timeout. Continue with your best judgment or return a text response explaining you are still waiting.",
+                    false);
+        }
+        return Message.toolResult(toolUseId, "User answered: " + answer, false);
     }
 
     /**

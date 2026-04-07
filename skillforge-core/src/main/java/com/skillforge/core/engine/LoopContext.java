@@ -21,6 +21,7 @@ public class LoopContext {
     private int loopCount;
     private int maxLoops;
     private String subAgentTaskId;
+    private String executionMode = "ask";
 
     public LoopContext() {
         this.messages = new ArrayList<>();
@@ -105,6 +106,14 @@ public class LoopContext {
 
     public void setSubAgentTaskId(String subAgentTaskId) {
         this.subAgentTaskId = subAgentTaskId;
+    }
+
+    public String getExecutionMode() {
+        return executionMode;
+    }
+
+    public void setExecutionMode(String executionMode) {
+        this.executionMode = executionMode;
     }
 
     /**

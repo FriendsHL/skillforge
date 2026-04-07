@@ -1,6 +1,6 @@
-import React, { useEffect, useRef } from 'react';
-import { Spin, Input, Button } from 'antd';
-import { SendOutlined } from '@ant-design/icons';
+import React, { useEffect, useRef, useState } from 'react';
+import { Spin, Input, Button, Tag } from 'antd';
+import { SendOutlined, LoadingOutlined } from '@ant-design/icons';
 import ToolCallTimeline from './ToolCallTimeline';
 import MarkdownRenderer from './MarkdownRenderer';
 
@@ -10,19 +10,45 @@ export interface ChatMessage {
   toolCalls?: any[];
 }
 
+interface InflightTool {
+  name: string;
+  input: any;
+  startTs: number;
+}
+
 interface ChatWindowProps {
   messages: ChatMessage[];
   loading: boolean;
   onSend: (text: string) => void;
+  inputDisabled?: boolean;
+  inflightTools?: Record<string, InflightTool>;
+  streamingText?: string;
 }
 
-const ChatWindow: React.FC<ChatWindowProps> = ({ messages, loading, onSend }) => {
+const ChatWindow: React.FC<ChatWindowProps> = ({
+  messages,
+  loading,
+  onSend,
+  inputDisabled,
+  inflightTools,
+  streamingText,
+}) => {
   const [input, setInput] = React.useState('');
   const bottomRef = useRef<HTMLDivElement>(null);
 
+  // 强制每秒重渲染一次,用于刷新 inflight tool 的"已耗时 N s"
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!inflightTools || Object.keys(inflightTools).length === 0) return;
+    const id = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(id);
+  }, [inflightTools]);
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, loading]);
+  }, [messages, loading, streamingText, inflightTools]);
+
+  const inflightList = inflightTools ? Object.entries(inflightTools) : [];
 
   const handleSend = () => {
     const text = input.trim();
@@ -67,7 +93,59 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, loading, onSend }) =>
             </div>
           </div>
         ))}
-        {loading && (
+        {streamingText && streamingText.length > 0 && (
+          <div style={{ display: 'flex', justifyContent: 'flex-start', marginBottom: 12 }}>
+            <div
+              style={{
+                maxWidth: '85%',
+                padding: '12px 18px',
+                borderRadius: 12,
+                background: '#fafafa',
+                color: '#000',
+                border: '1px dashed #d9d9d9',
+                wordBreak: 'break-word',
+              }}
+            >
+              <MarkdownRenderer content={streamingText} />
+              <span style={{ color: '#999', fontSize: 12, marginLeft: 4 }}>▍</span>
+            </div>
+          </div>
+        )}
+        {inflightList.map(([toolUseId, info]) => {
+          const elapsed = Math.max(0, Math.floor((Date.now() - info.startTs) / 1000));
+          let inputPreview = '';
+          try {
+            inputPreview = typeof info.input === 'string' ? info.input : JSON.stringify(info.input);
+          } catch {
+            inputPreview = '';
+          }
+          if (inputPreview.length > 120) inputPreview = inputPreview.slice(0, 120) + '...';
+          return (
+            <div
+              key={toolUseId}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                margin: '0 0 12px 0',
+                padding: '10px 14px',
+                borderRadius: 8,
+                background: '#f6ffed',
+                border: '1px solid #b7eb8f',
+                fontSize: 13,
+                color: '#389e0d',
+              }}
+            >
+              <LoadingOutlined spin />
+              <Tag color="green" style={{ marginRight: 0 }}>{info.name}</Tag>
+              <span style={{ color: '#666', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {inputPreview}
+              </span>
+              <span style={{ color: '#999' }}>{elapsed}s</span>
+            </div>
+          );
+        })}
+        {loading && !streamingText && inflightList.length === 0 && (
           <div style={{ textAlign: 'center', padding: 16 }}>
             <Spin tip="AI is thinking..." />
           </div>
@@ -80,9 +158,9 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, loading, onSend }) =>
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onPressEnter={handleSend}
-          disabled={loading}
+          disabled={loading || inputDisabled}
         />
-        <Button type="primary" icon={<SendOutlined />} onClick={handleSend} disabled={loading}>
+        <Button type="primary" icon={<SendOutlined />} onClick={handleSend} disabled={loading || inputDisabled}>
           Send
         </Button>
       </div>

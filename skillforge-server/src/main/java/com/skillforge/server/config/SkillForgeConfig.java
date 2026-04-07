@@ -1,6 +1,8 @@
 package com.skillforge.server.config;
 
 import com.skillforge.core.engine.AgentLoopEngine;
+import com.skillforge.core.engine.ChatEventBroadcaster;
+import com.skillforge.core.engine.PendingAskRegistry;
 import com.skillforge.core.engine.SafetySkillHook;
 import com.skillforge.core.llm.LlmProviderFactory;
 import com.skillforge.core.llm.ModelConfig;
@@ -27,6 +29,9 @@ import org.springframework.context.annotation.Configuration;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 @Configuration
 @EnableConfigurationProperties({LlmProperties.class, BrowserProperties.class})
@@ -107,11 +112,42 @@ public class SkillForgeConfig {
     }
 
     @Bean
+    public PendingAskRegistry pendingAskRegistry() {
+        return new PendingAskRegistry();
+    }
+
+    @Bean
     public AgentLoopEngine agentLoopEngine(LlmProviderFactory llmProviderFactory, LlmProperties llmProperties,
-                                           SkillRegistry skillRegistry) {
+                                           SkillRegistry skillRegistry,
+                                           ChatEventBroadcaster broadcaster,
+                                           PendingAskRegistry pendingAskRegistry) {
         String defaultProvider = llmProperties.getDefaultProvider() != null
                 ? llmProperties.getDefaultProvider() : "claude";
-        return new AgentLoopEngine(llmProviderFactory, defaultProvider, skillRegistry,
+        AgentLoopEngine engine = new AgentLoopEngine(llmProviderFactory, defaultProvider, skillRegistry,
                 Collections.emptyList(), List.of(new SafetySkillHook()), Collections.emptyList());
+        engine.setBroadcaster(broadcaster);
+        engine.setPendingAskRegistry(pendingAskRegistry);
+        return engine;
+    }
+
+    /**
+     * Chat loop 异步执行线程池。
+     * core=8 / max=64 / queue=128,溢出触发 AbortPolicy → RejectedExecutionException,
+     * Controller 层捕获后返回 429 Too Many Requests。
+     */
+    @Bean(name = "chatLoopExecutor", destroyMethod = "shutdown")
+    public ThreadPoolExecutor chatLoopExecutor() {
+        ThreadPoolExecutor executor = new ThreadPoolExecutor(
+                8, 64,
+                60L, TimeUnit.SECONDS,
+                new LinkedBlockingQueue<>(128),
+                r -> {
+                    Thread t = new Thread(r, "chat-loop-" + System.nanoTime());
+                    t.setDaemon(true);
+                    return t;
+                },
+                new ThreadPoolExecutor.AbortPolicy());
+        executor.allowCoreThreadTimeOut(false);
+        return executor;
     }
 }

@@ -44,6 +44,9 @@ public class AgentService {
         existing.setOwnerId(updated.getOwnerId());
         existing.setPublic(updated.isPublic());
         existing.setStatus(updated.getStatus());
+        if (updated.getExecutionMode() != null) {
+            existing.setExecutionMode(updated.getExecutionMode());
+        }
         return agentRepository.save(existing);
     }
 

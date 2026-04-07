@@ -76,6 +76,7 @@ const AgentList: React.FC = () => {
     { title: 'ID', dataIndex: 'id', key: 'id', width: 60 },
     { title: 'Name', dataIndex: 'name', key: 'name' },
     { title: 'Model', dataIndex: 'modelId', key: 'modelId' },
+    { title: 'Mode', dataIndex: 'executionMode', key: 'executionMode', width: 80 },
     { title: 'Status', dataIndex: 'status', key: 'status' },
     {
       title: 'Actions',
@@ -129,6 +130,19 @@ const AgentList: React.FC = () => {
               placeholder="选择模型"
               showSearch
               optionFilterProp="label"
+            />
+          </Form.Item>
+          <Form.Item
+            name="executionMode"
+            label="Execution Mode"
+            initialValue="ask"
+            tooltip="ask: Agent 遇到失败/歧义时主动问用户;auto: 自主执行"
+          >
+            <Select
+              options={[
+                { label: 'ask — 主动确认', value: 'ask' },
+                { label: 'auto — 自主执行', value: 'auto' },
+              ]}
             />
           </Form.Item>
           <Form.Item name="systemPrompt" label="System Prompt">

@@ -38,6 +38,22 @@ public class SessionEntity {
     @Column(columnDefinition = "CLOB")
     private String messagesJson;
 
+    /** 运行时状态: idle / running / waiting_user / error */
+    @Column(length = 32)
+    private String runtimeStatus = "idle";
+
+    /** 当前步骤描述 */
+    @Column(length = 256)
+    private String runtimeStep;
+
+    /** 最近一次错误消息 */
+    @Column(columnDefinition = "TEXT")
+    private String runtimeError;
+
+    /** 执行模式: ask / auto (覆盖 Agent 默认值) */
+    @Column(length = 16)
+    private String executionMode = "ask";
+
     @CreatedDate
     private LocalDateTime createdAt;
 
@@ -117,6 +133,38 @@ public class SessionEntity {
 
     public void setMessagesJson(String messagesJson) {
         this.messagesJson = messagesJson;
+    }
+
+    public String getRuntimeStatus() {
+        return runtimeStatus;
+    }
+
+    public void setRuntimeStatus(String runtimeStatus) {
+        this.runtimeStatus = runtimeStatus;
+    }
+
+    public String getRuntimeStep() {
+        return runtimeStep;
+    }
+
+    public void setRuntimeStep(String runtimeStep) {
+        this.runtimeStep = runtimeStep;
+    }
+
+    public String getRuntimeError() {
+        return runtimeError;
+    }
+
+    public void setRuntimeError(String runtimeError) {
+        this.runtimeError = runtimeError;
+    }
+
+    public String getExecutionMode() {
+        return executionMode;
+    }
+
+    public void setExecutionMode(String executionMode) {
+        this.executionMode = executionMode;
     }
 
     public LocalDateTime getCreatedAt() {

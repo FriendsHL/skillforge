@@ -8,6 +8,8 @@ import com.skillforge.core.model.ToolSchema;
 import com.skillforge.core.skill.Skill;
 import com.skillforge.core.skill.SkillContext;
 import com.skillforge.core.skill.SkillResult;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -29,6 +31,7 @@ import java.util.concurrent.TimeUnit;
  */
 public class BrowserSkill implements Skill {
 
+    private static final Logger log = LoggerFactory.getLogger(BrowserSkill.class);
     private static final int MAX_GOTO_CONTENT_LENGTH = 5000;
     private static final int MAX_CONTENT_LENGTH = 10000;
 
@@ -132,6 +135,7 @@ public class BrowserSkill implements Skill {
                         + ". Supported: goto, getContent, screenshot, click, type, evaluate, login, close");
             };
         } catch (Exception e) {
+            log.error("BrowserSkill execution failed", e);
             return SkillResult.error("Browser error: " + e.getMessage());
         }
     }

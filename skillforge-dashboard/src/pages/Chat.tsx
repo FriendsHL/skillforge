@@ -1,11 +1,35 @@
-import React, { useEffect, useState } from 'react';
-import { Select, List, Card, message, Typography, Empty } from 'antd';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Select, List, Card, message, Typography, Empty, Alert, Button, Input, Segmented, Space } from 'antd';
 import { useParams } from 'react-router-dom';
 import ChatWindow from '../components/ChatWindow';
 import type { ChatMessage } from '../components/ChatWindow';
-import { getAgents, createSession, getSessions, getSessionMessages, sendMessage } from '../api';
+import {
+  getAgents,
+  createSession,
+  getSessions,
+  getSessionMessages,
+  sendMessage,
+  answerAsk,
+  setSessionMode,
+  getSession,
+} from '../api';
 
 const { Text } = Typography;
+
+type RuntimeStatus = 'idle' | 'running' | 'waiting_user' | 'error';
+type ExecutionMode = 'ask' | 'auto';
+
+interface PendingAskOption {
+  label: string;
+  description?: string;
+}
+interface PendingAsk {
+  askId: string;
+  question: string;
+  context?: string;
+  options: PendingAskOption[];
+  allowOther: boolean;
+}
 
 /**
  * 归一化后端返回的消息列表:
@@ -14,12 +38,10 @@ const { Text } = Typography;
  */
 function normalizeMessages(list: any[]): ChatMessage[] {
   const result: ChatMessage[] = [];
-
   const extractBlocks = (content: any) => {
     let text = '';
     const toolUseBlocks: any[] = [];
     const toolResultBlocks: any[] = [];
-
     if (typeof content === 'string') {
       text = content;
     } else if (Array.isArray(content)) {
@@ -41,7 +63,6 @@ function normalizeMessages(list: any[]): ChatMessage[] {
     const { text, toolUseBlocks, toolResultBlocks } = extractBlocks(m.content);
 
     if (m.role === 'user') {
-      // tool_result 合并到上一条 assistant 的 toolCalls
       if (toolResultBlocks.length > 0 && result.length > 0) {
         const prev = result[result.length - 1];
         if (prev.role === 'assistant' && Array.isArray(prev.toolCalls)) {
@@ -68,7 +89,6 @@ function normalizeMessages(list: any[]): ChatMessage[] {
           }
         }
       }
-      // 只有空文本且没有除 tool_result 外的内容,跳过不渲染
       if (!text.trim()) continue;
       result.push({ role: 'user', content: text });
     } else if (m.role === 'assistant') {
@@ -77,7 +97,6 @@ function normalizeMessages(list: any[]): ChatMessage[] {
         name: b.name,
         input: b.input,
       }));
-      // 跳过完全空的 assistant 消息 (无文本且无工具调用)
       if (!text.trim() && toolCalls.length === 0) continue;
       result.push({
         role: 'assistant',
@@ -86,7 +105,6 @@ function normalizeMessages(list: any[]): ChatMessage[] {
       });
     }
   }
-
   return result;
 }
 
@@ -96,8 +114,22 @@ const Chat: React.FC = () => {
   const [selectedAgent, setSelectedAgent] = useState<number | undefined>();
   const [sessions, setSessions] = useState<any[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | undefined>(urlSessionId);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [loading, setLoading] = useState(false);
+  // 真理源:后端原始消息列表(WS message_appended 事件直接增量追加,避免 refetch 竞态)
+  const [rawMessages, setRawMessages] = useState<any[]>([]);
+  const messages = useMemo(() => normalizeMessages(rawMessages), [rawMessages]);
+
+  const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus>('idle');
+  const [runtimeStep, setRuntimeStep] = useState<string>('');
+  const [runtimeError, setRuntimeError] = useState<string>('');
+  const [executionMode, setExecutionModeState] = useState<ExecutionMode>('ask');
+  const [pendingAsk, setPendingAsk] = useState<PendingAsk | null>(null);
+  const [otherInput, setOtherInput] = useState('');
+  // Phase A: 进行中的工具调用(toolUseId -> 信息),用于在消息流末尾显示 spinner 卡片
+  const [inflightTools, setInflightTools] = useState<Record<string, { name: string; input: any; startTs: number }>>({});
+  // Phase B: LLM 流式输出累计文本,在 message_appended(assistant) 或 assistant_stream_end 时清空
+  const [streamingText, setStreamingText] = useState<string>('');
+
+  const wsRef = useRef<WebSocket | null>(null);
 
   // Load agents
   useEffect(() => {
@@ -122,24 +154,137 @@ const Chat: React.FC = () => {
       .catch(() => {});
   }, [selectedAgent]);
 
-  // Load messages when session changes
+  // Load messages + session detail when session changes; also (re)connect WS
   useEffect(() => {
+    // cleanup previous WS
+    if (wsRef.current) {
+      try { wsRef.current.close(); } catch {}
+      wsRef.current = null;
+    }
+    setPendingAsk(null);
+    setRuntimeError('');
+    setInflightTools({});
+    setStreamingText('');
+
     if (!activeSessionId) {
-      setMessages([]);
+      setRawMessages([]);
+      setRuntimeStatus('idle');
+      setRuntimeStep('');
       return;
     }
+
+    // load messages
     getSessionMessages(activeSessionId)
       .then((res) => {
         const list = Array.isArray(res.data) ? res.data : res.data?.data ?? [];
-        setMessages(normalizeMessages(list));
+        setRawMessages(list);
       })
       .catch(() => message.error('Failed to load messages'));
+
+    // load session detail for runtime status + mode
+    getSession(activeSessionId)
+      .then((res) => {
+        const s = res.data;
+        setRuntimeStatus((s.runtimeStatus ?? 'idle') as RuntimeStatus);
+        setRuntimeStep(s.runtimeStep ?? '');
+        setRuntimeError(s.runtimeError ?? '');
+        setExecutionModeState((s.executionMode ?? 'ask') as ExecutionMode);
+      })
+      .catch(() => {});
+
+    // open WS
+    const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
+    const ws = new WebSocket(`${proto}://${window.location.host}/ws/chat/${activeSessionId}`);
+    wsRef.current = ws;
+    ws.onmessage = (ev) => {
+      try {
+        const evt = JSON.parse(ev.data);
+        handleWsEvent(evt);
+      } catch (e) {
+        console.warn('Bad WS payload', ev.data);
+      }
+    };
+    ws.onclose = () => {
+      if (wsRef.current === ws) wsRef.current = null;
+    };
+    return () => {
+      try { ws.close(); } catch {}
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSessionId]);
 
-  // If URL has sessionId, use it
-  useEffect(() => {
-    if (urlSessionId) setActiveSessionId(urlSessionId);
-  }, [urlSessionId]);
+  const handleWsEvent = (evt: any) => {
+    if (!evt || !evt.type) return;
+    if (evt.type === 'session_status') {
+      setRuntimeStatus((evt.status ?? 'idle') as RuntimeStatus);
+      setRuntimeStep(evt.step ?? '');
+      setRuntimeError(evt.error ?? '');
+      if (evt.status !== 'waiting_user') {
+        setPendingAsk(null);
+      }
+      if (evt.status === 'idle' || evt.status === 'error') {
+        // 终态:把任何残留 inflight / streaming 清掉
+        setInflightTools({});
+        setStreamingText('');
+      }
+    } else if (evt.type === 'message_appended') {
+      const role = evt.message?.role;
+      if (role === 'assistant') {
+        // assistant 消息真正进入列表 → 流式临时文本可以清空了
+        setStreamingText('');
+      }
+      // 直接把后端推过来的原始消息追加到本地 raw 列表(同一真理源,
+      // 不依赖后端持久化时机,避免 refetch 竞态)
+      if (evt.message) {
+        setRawMessages((prev) => {
+          // 乐观追加过的 user 气泡可能已经在尾部,做一次去重:
+          // 尾部 role+纯文本 content 都相同则跳过
+          if (prev.length > 0) {
+            const last = prev[prev.length - 1];
+            if (
+              last &&
+              last.role === evt.message.role &&
+              typeof last.content === 'string' &&
+              typeof evt.message.content === 'string' &&
+              last.content === evt.message.content
+            ) {
+              return prev;
+            }
+          }
+          return [...prev, evt.message];
+        });
+      }
+    } else if (evt.type === 'messages_snapshot') {
+      // 全量快照:直接覆盖本地 raw 列表
+      if (Array.isArray(evt.messages)) {
+        setRawMessages(evt.messages);
+      }
+    } else if (evt.type === 'ask_user') {
+      setPendingAsk({
+        askId: evt.askId,
+        question: evt.question,
+        context: evt.context,
+        options: evt.options ?? [],
+        allowOther: evt.allowOther !== false,
+      });
+      setOtherInput('');
+    } else if (evt.type === 'tool_started') {
+      setInflightTools((prev) => ({
+        ...prev,
+        [evt.toolUseId]: { name: evt.name, input: evt.input, startTs: Date.now() },
+      }));
+    } else if (evt.type === 'tool_finished') {
+      setInflightTools((prev) => {
+        const next = { ...prev };
+        delete next[evt.toolUseId];
+        return next;
+      });
+    } else if (evt.type === 'assistant_delta') {
+      setStreamingText((prev) => prev + (evt.text ?? ''));
+    } else if (evt.type === 'assistant_stream_end') {
+      // 此时 message_appended 通常马上就到,不主动清,让 message_appended 清(避免抖动)
+    }
+  };
 
   const handleNewSession = async () => {
     if (!selectedAgent) {
@@ -152,7 +297,7 @@ const Chat: React.FC = () => {
       const sid = newSession.id ?? newSession.sessionId;
       setActiveSessionId(String(sid));
       setSessions((prev) => [newSession, ...prev]);
-      setMessages([]);
+      setRawMessages([]);
       message.success('Session created');
     } catch {
       message.error('Failed to create session');
@@ -161,7 +306,6 @@ const Chat: React.FC = () => {
 
   const handleSend = async (text: string) => {
     if (!activeSessionId) {
-      // Auto-create session
       if (!selectedAgent) {
         message.warning('Please select an agent first');
         return;
@@ -182,25 +326,133 @@ const Chat: React.FC = () => {
   };
 
   const doSend = async (sid: string, text: string) => {
-    setMessages((prev) => [...prev, { role: 'user', content: text }]);
-    setLoading(true);
+    // 乐观追加 user 气泡到 raw 列表;后续 message_appended 事件里会做去重
+    setRawMessages((prev) => [...prev, { role: 'user', content: text }]);
+    setRuntimeStatus('running');
+    setRuntimeStep('Starting');
     try {
-      const res = await sendMessage(sid, { message: text, userId: 1 });
-      const reply = res.data;
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: 'assistant',
-          content: reply.response ?? reply.content ?? reply.message ?? JSON.stringify(reply),
-          toolCalls: reply.toolCalls,
-        },
-      ]);
-    } catch {
-      message.error('Failed to send message');
-    } finally {
-      setLoading(false);
+      await sendMessage(sid, { message: text, userId: 1 });
+      // no need to handle response body — real updates arrive via WS
+    } catch (e: any) {
+      const status = e?.response?.status;
+      if (status === 429) {
+        message.error('服务器繁忙,请稍后再试');
+      } else {
+        message.error('Failed to send message');
+      }
+      setRuntimeStatus('idle');
     }
   };
+
+  const handleAnswerAsk = async (answer: string) => {
+    if (!pendingAsk || !activeSessionId) return;
+    try {
+      await answerAsk(activeSessionId, pendingAsk.askId, answer);
+      setPendingAsk(null);
+      setOtherInput('');
+    } catch {
+      message.error('Failed to submit answer');
+    }
+  };
+
+  const handleModeChange = async (mode: ExecutionMode) => {
+    if (!activeSessionId) {
+      setExecutionModeState(mode);
+      return;
+    }
+    try {
+      await setSessionMode(activeSessionId, mode);
+      setExecutionModeState(mode);
+      message.success(`已切换为 ${mode} 模式`);
+    } catch {
+      message.error('Failed to switch mode');
+    }
+  };
+
+  const renderBanner = () => {
+    if (runtimeStatus === 'idle' || !activeSessionId) return null;
+    if (runtimeStatus === 'running') {
+      return (
+        <Alert
+          type="info"
+          showIcon
+          message={`Agent 正在运行${runtimeStep ? `:${runtimeStep}` : ''}`}
+          style={{ margin: '8px 12px 0' }}
+        />
+      );
+    }
+    if (runtimeStatus === 'waiting_user') {
+      return (
+        <Alert
+          type="warning"
+          showIcon
+          message="Agent 正在等你回答"
+          style={{ margin: '8px 12px 0' }}
+        />
+      );
+    }
+    if (runtimeStatus === 'error') {
+      return (
+        <Alert
+          type="error"
+          showIcon
+          message={`出错了${runtimeError ? `:${runtimeError}` : ''}`}
+          style={{ margin: '8px 12px 0' }}
+        />
+      );
+    }
+    return null;
+  };
+
+  const renderPendingAsk = () => {
+    if (!pendingAsk) return null;
+    return (
+      <Card
+        size="small"
+        title="💬 Agent 在问你"
+        style={{ margin: '8px 12px 0', borderColor: '#faad14' }}
+      >
+        {pendingAsk.context && (
+          <div style={{ color: '#888', fontSize: 12, marginBottom: 8 }}>{pendingAsk.context}</div>
+        )}
+        <div style={{ fontWeight: 500, marginBottom: 12 }}>{pendingAsk.question}</div>
+        <Space direction="vertical" style={{ width: '100%' }}>
+          {pendingAsk.options.map((opt, i) => (
+            <Button
+              key={i}
+              block
+              style={{ textAlign: 'left', height: 'auto', padding: '8px 12px' }}
+              onClick={() => handleAnswerAsk(opt.label)}
+            >
+              <div style={{ fontWeight: 500 }}>{opt.label}</div>
+              {opt.description && (
+                <div style={{ fontSize: 12, color: '#888' }}>{opt.description}</div>
+              )}
+            </Button>
+          ))}
+          {pendingAsk.allowOther && (
+            <Space.Compact style={{ width: '100%', marginTop: 4 }}>
+              <Input
+                placeholder="或自己输入答复..."
+                value={otherInput}
+                onChange={(e) => setOtherInput(e.target.value)}
+                onPressEnter={() => otherInput.trim() && handleAnswerAsk(otherInput.trim())}
+              />
+              <Button
+                type="primary"
+                disabled={!otherInput.trim()}
+                onClick={() => handleAnswerAsk(otherInput.trim())}
+              >
+                发送
+              </Button>
+            </Space.Compact>
+          )}
+        </Space>
+      </Card>
+    );
+  };
+
+  const inputDisabled = runtimeStatus === 'running' || runtimeStatus === 'waiting_user';
 
   return (
     <div style={{ display: 'flex', height: 'calc(100vh - 130px)', gap: 16, overflow: 'hidden' }}>
@@ -213,7 +465,7 @@ const Chat: React.FC = () => {
           onChange={(v) => {
             setSelectedAgent(v);
             setActiveSessionId(undefined);
-            setMessages([]);
+            setRawMessages([]);
           }}
           options={agents.map((a: any) => ({ label: a.name, value: a.id }))}
         />
@@ -252,7 +504,41 @@ const Chat: React.FC = () => {
         styles={{ body: { flex: 1, padding: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' } }}
       >
         {activeSessionId || selectedAgent ? (
-          <ChatWindow messages={messages} loading={loading} onSend={handleSend} />
+          <>
+            {activeSessionId && (
+              <div
+                style={{
+                  padding: '8px 12px',
+                  borderBottom: '1px solid #f0f0f0',
+                  display: 'flex',
+                  justifyContent: 'flex-end',
+                  alignItems: 'center',
+                  gap: 8,
+                }}
+              >
+                <Text type="secondary" style={{ fontSize: 12 }}>模式:</Text>
+                <Segmented
+                  size="small"
+                  value={executionMode}
+                  options={[
+                    { label: 'ask', value: 'ask' },
+                    { label: 'auto', value: 'auto' },
+                  ]}
+                  onChange={(v) => handleModeChange(v as ExecutionMode)}
+                />
+              </div>
+            )}
+            {renderBanner()}
+            {renderPendingAsk()}
+            <ChatWindow
+              messages={messages}
+              loading={runtimeStatus === 'running'}
+              onSend={handleSend}
+              inputDisabled={inputDisabled}
+              inflightTools={inflightTools}
+              streamingText={streamingText}
+            />
+          </>
         ) : (
           <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             <Empty description="Select an Agent to start chatting" />

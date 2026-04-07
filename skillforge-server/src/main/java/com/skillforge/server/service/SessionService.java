@@ -4,7 +4,9 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillforge.core.model.Message;
+import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.SessionEntity;
+import com.skillforge.server.repository.AgentRepository;
 import com.skillforge.server.repository.SessionRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -20,10 +22,12 @@ public class SessionService {
     private static final Logger log = LoggerFactory.getLogger(SessionService.class);
 
     private final SessionRepository sessionRepository;
+    private final AgentRepository agentRepository;
     private final ObjectMapper objectMapper;
 
-    public SessionService(SessionRepository sessionRepository) {
+    public SessionService(SessionRepository sessionRepository, AgentRepository agentRepository) {
         this.sessionRepository = sessionRepository;
+        this.agentRepository = agentRepository;
         this.objectMapper = new ObjectMapper();
     }
 
@@ -34,6 +38,11 @@ public class SessionService {
         session.setAgentId(agentId);
         session.setTitle("New Session");
         session.setMessagesJson("[]");
+        // 创建时从 Agent 拷贝默认 executionMode
+        AgentEntity agent = agentRepository.findById(agentId).orElse(null);
+        if (agent != null && agent.getExecutionMode() != null) {
+            session.setExecutionMode(agent.getExecutionMode());
+        }
         return sessionRepository.save(session);
     }
 
@@ -55,6 +64,10 @@ public class SessionService {
         session.setTotalInputTokens(session.getTotalInputTokens() + inputTokens);
         session.setTotalOutputTokens(session.getTotalOutputTokens() + outputTokens);
         sessionRepository.save(session);
+    }
+
+    public SessionEntity saveSession(SessionEntity session) {
+        return sessionRepository.save(session);
     }
 
     public void archiveSession(String id) {
