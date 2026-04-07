@@ -5,10 +5,16 @@ import { getAgents, createAgent, updateAgent, deleteAgent } from '../api';
 
 const { TextArea } = Input;
 
+// 模型建议列表 —— 支持 "providerName:modelName" 格式覆盖默认 provider。
+// 用户也可以自由输入任何模型名。
 const modelOptions = [
-  { label: 'deepseek-chat', value: 'deepseek-chat' },
-  { label: 'gpt-4o', value: 'gpt-4o' },
-  { label: 'claude-sonnet', value: 'claude-sonnet' },
+  { label: 'bailian:qwen3.5-plus', value: 'bailian:qwen3.5-plus' },
+  { label: 'bailian:qwen3-max-2026-01-23', value: 'bailian:qwen3-max-2026-01-23' },
+  { label: 'bailian:qwen3-coder-next', value: 'bailian:qwen3-coder-next' },
+  { label: 'bailian:glm-5', value: 'bailian:glm-5' },
+  { label: 'openai:deepseek-chat', value: 'openai:deepseek-chat' },
+  { label: 'openai:gpt-4o', value: 'openai:gpt-4o' },
+  { label: 'claude:claude-sonnet-4-20250514', value: 'claude:claude-sonnet-4-20250514' },
 ];
 
 const AgentList: React.FC = () => {
@@ -69,7 +75,7 @@ const AgentList: React.FC = () => {
   const columns = [
     { title: 'ID', dataIndex: 'id', key: 'id', width: 60 },
     { title: 'Name', dataIndex: 'name', key: 'name' },
-    { title: 'Model', dataIndex: 'model', key: 'model' },
+    { title: 'Model', dataIndex: 'modelId', key: 'modelId' },
     { title: 'Status', dataIndex: 'status', key: 'status' },
     {
       title: 'Actions',
@@ -113,8 +119,17 @@ const AgentList: React.FC = () => {
           <Form.Item name="description" label="Description">
             <TextArea rows={2} />
           </Form.Item>
-          <Form.Item name="model" label="Model" rules={[{ required: true, message: 'Please select a model' }]}>
-            <Select options={modelOptions} />
+          <Form.Item
+            name="modelId"
+            label="Model"
+            rules={[{ required: true, message: 'Please select a model' }]}
+          >
+            <Select
+              options={modelOptions}
+              placeholder="选择模型"
+              showSearch
+              optionFilterProp="label"
+            />
           </Form.Item>
           <Form.Item name="systemPrompt" label="System Prompt">
             <TextArea rows={6} />

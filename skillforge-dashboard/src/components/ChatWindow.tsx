@@ -2,6 +2,7 @@ import React, { useEffect, useRef } from 'react';
 import { Spin, Input, Button } from 'antd';
 import { SendOutlined } from '@ant-design/icons';
 import ToolCallTimeline from './ToolCallTimeline';
+import MarkdownRenderer from './MarkdownRenderer';
 
 export interface ChatMessage {
   role: 'user' | 'assistant';
@@ -44,16 +45,22 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages, loading, onSend }) =>
           >
             <div
               style={{
-                maxWidth: '70%',
-                padding: '10px 16px',
+                maxWidth: msg.role === 'user' ? '70%' : '85%',
+                padding: msg.role === 'user' ? '10px 16px' : '12px 18px',
                 borderRadius: 12,
-                background: msg.role === 'user' ? '#1677ff' : '#f0f0f0',
+                background: msg.role === 'user' ? '#1677ff' : '#ffffff',
                 color: msg.role === 'user' ? '#fff' : '#000',
-                whiteSpace: 'pre-wrap',
+                border: msg.role === 'assistant' ? '1px solid #e8e8e8' : 'none',
+                boxShadow: msg.role === 'assistant' ? '0 1px 2px rgba(0,0,0,0.04)' : 'none',
+                whiteSpace: msg.role === 'user' ? 'pre-wrap' : 'normal',
                 wordBreak: 'break-word',
               }}
             >
-              {msg.content}
+              {msg.role === 'assistant' ? (
+                <MarkdownRenderer content={msg.content} />
+              ) : (
+                msg.content
+              )}
               {msg.role === 'assistant' && msg.toolCalls && msg.toolCalls.length > 0 && (
                 <ToolCallTimeline toolCalls={msg.toolCalls} />
               )}

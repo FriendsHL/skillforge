@@ -29,13 +29,21 @@ import java.util.List;
 import java.util.Map;
 
 @Configuration
-@EnableConfigurationProperties(LlmProperties.class)
+@EnableConfigurationProperties({LlmProperties.class, BrowserProperties.class})
 public class SkillForgeConfig {
 
     private static final Logger log = LoggerFactory.getLogger(SkillForgeConfig.class);
 
+    @Bean(destroyMethod = "shutdown")
+    public BrowserSkill browserSkill(BrowserProperties browserProperties) {
+        return new BrowserSkill(
+                browserProperties.getProfileDir(),
+                browserProperties.getDefaultTimeoutMs(),
+                browserProperties.getLoginTimeoutSeconds());
+    }
+
     @Bean
-    public SkillRegistry skillRegistry(MemoryService memoryService) {
+    public SkillRegistry skillRegistry(MemoryService memoryService, BrowserSkill browserSkill) {
         SkillRegistry registry = new SkillRegistry();
         registry.register(new BashSkill());
         registry.register(new FileReadSkill());
@@ -43,7 +51,7 @@ public class SkillForgeConfig {
         registry.register(new FileEditSkill());
         registry.register(new GlobSkill());
         registry.register(new GrepSkill());
-        registry.register(new BrowserSkill());
+        registry.register(browserSkill);
         registry.register(new MemorySkill(memoryService));
         return registry;
     }

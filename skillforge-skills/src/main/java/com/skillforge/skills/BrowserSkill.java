@@ -1,6 +1,6 @@
 package com.skillforge.skills;
 
-import com.microsoft.playwright.Browser;
+import com.microsoft.playwright.BrowserContext;
 import com.microsoft.playwright.BrowserType;
 import com.microsoft.playwright.Page;
 import com.microsoft.playwright.Playwright;
@@ -11,25 +11,45 @@ import com.skillforge.core.skill.SkillResult;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Skill that automates browser interactions using Playwright.
- * Supports navigation, content extraction, screenshots, clicking, typing,
- * and JavaScript evaluation.
+ * 使用持久化用户数据目录保持登录态跨会话复用。
+ * 支持:
+ * <ul>
+ *   <li>goto / getContent / screenshot / click / type / evaluate / close — 标准浏览器操作</li>
+ *   <li>login — headed 模式打开登录页,阻塞等待用户手动登录并关闭窗口,登录态落盘</li>
+ * </ul>
  */
 public class BrowserSkill implements Skill {
 
-    private static final int DEFAULT_TIMEOUT_MS = 30000;
     private static final int MAX_GOTO_CONTENT_LENGTH = 5000;
     private static final int MAX_CONTENT_LENGTH = 10000;
 
+    private final String profileDir;
+    private final int defaultTimeoutMs;
+    private final int loginTimeoutSeconds;
+
     private Playwright playwright;
-    private Browser browser;
+    private BrowserContext context;
     private Page page;
     private boolean currentHeadless = true;
+
+    public BrowserSkill() {
+        this("./data/browser-profile", 30000, 300);
+    }
+
+    public BrowserSkill(String profileDir, int defaultTimeoutMs, int loginTimeoutSeconds) {
+        this.profileDir = profileDir;
+        this.defaultTimeoutMs = defaultTimeoutMs;
+        this.loginTimeoutSeconds = loginTimeoutSeconds;
+    }
 
     @Override
     public String getName() {
@@ -38,9 +58,11 @@ public class BrowserSkill implements Skill {
 
     @Override
     public String getDescription() {
-        return "Automates browser interactions using Playwright. Supports navigating to URLs, "
-                + "extracting page content, taking screenshots, clicking elements, typing text, "
-                + "and evaluating JavaScript.";
+        return "Automates browser interactions using Playwright with persistent login state. "
+                + "Supports navigating to URLs, extracting page content, taking screenshots, "
+                + "clicking elements, typing text, evaluating JavaScript, and interactive login. "
+                + "Use the 'login' action to open a visible browser window for the user to manually "
+                + "sign in to a site; the session will be persisted for future headless calls.";
     }
 
     @Override
@@ -48,12 +70,12 @@ public class BrowserSkill implements Skill {
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put("action", Map.of(
                 "type", "string",
-                "description", "Action to perform: goto, getContent, screenshot, click, type, evaluate, close",
-                "enum", List.of("goto", "getContent", "screenshot", "click", "type", "evaluate", "close")
+                "description", "Action to perform: goto, getContent, screenshot, click, type, evaluate, login, close",
+                "enum", List.of("goto", "getContent", "screenshot", "click", "type", "evaluate", "login", "close")
         ));
         properties.put("url", Map.of(
                 "type", "string",
-                "description", "URL to navigate to (for goto action)"
+                "description", "URL to navigate to (for goto/login actions)"
         ));
         properties.put("selector", Map.of(
                 "type", "string",
@@ -69,7 +91,11 @@ public class BrowserSkill implements Skill {
         ));
         properties.put("headless", Map.of(
                 "type", "boolean",
-                "description", "Run browser in headless mode (default: true)"
+                "description", "Run browser in headless mode (default: true). Ignored by login action (always headed)."
+        ));
+        properties.put("timeoutSeconds", Map.of(
+                "type", "integer",
+                "description", "For login action: max seconds to wait for user to finish logging in (default: 300)"
         ));
 
         Map<String, Object> schema = new LinkedHashMap<>();
@@ -100,33 +126,47 @@ public class BrowserSkill implements Skill {
                 case "click" -> handleClick(input);
                 case "type" -> handleType(input);
                 case "evaluate" -> handleEvaluate(input);
+                case "login" -> handleLogin(input);
                 case "close" -> handleClose();
                 default -> SkillResult.error("Unknown action: " + action
-                        + ". Supported: goto, getContent, screenshot, click, type, evaluate, close");
+                        + ". Supported: goto, getContent, screenshot, click, type, evaluate, login, close");
             };
         } catch (Exception e) {
             return SkillResult.error("Browser error: " + e.getMessage());
         }
     }
 
-    private void ensureBrowser(boolean headless) {
-        if (browser != null && currentHeadless != headless) {
-            // headless mode changed, restart browser
-            closeBrowserQuietly();
+    /**
+     * 确保 BrowserContext 可用,并按需切换 headless 模式。
+     * 使用 launchPersistentContext 保持登录态。
+     */
+    private void ensureContext(boolean headless) {
+        if (context != null && currentHeadless != headless) {
+            // headless 模式变更,关闭重建
+            closeContextQuietly();
         }
-        if (browser == null || !browser.isConnected()) {
+        if (context == null) {
             if (playwright == null) {
                 playwright = Playwright.create();
             }
-            BrowserType.LaunchOptions options = new BrowserType.LaunchOptions();
-            options.setHeadless(headless);
-            browser = playwright.chromium().launch(options);
+
+            Path userDataDir = Paths.get(profileDir).toAbsolutePath();
+            try {
+                Files.createDirectories(userDataDir);
+            } catch (Exception e) {
+                throw new RuntimeException("Failed to create browser profile dir: " + userDataDir, e);
+            }
+
+            BrowserType.LaunchPersistentContextOptions options =
+                    new BrowserType.LaunchPersistentContextOptions().setHeadless(headless);
+            context = playwright.chromium().launchPersistentContext(userDataDir, options);
             currentHeadless = headless;
             page = null;
         }
         if (page == null || page.isClosed()) {
-            page = browser.newPage();
-            page.setDefaultTimeout(DEFAULT_TIMEOUT_MS);
+            // 复用 context 自动创建的第一个 page,否则新建一个
+            page = context.pages().isEmpty() ? context.newPage() : context.pages().get(0);
+            page.setDefaultTimeout(defaultTimeoutMs);
         }
     }
 
@@ -141,7 +181,7 @@ public class BrowserSkill implements Skill {
             headless = Boolean.TRUE.equals(input.get("headless"));
         }
 
-        ensureBrowser(headless);
+        ensureContext(headless);
         page.navigate(url);
 
         String title = page.title();
@@ -231,12 +271,76 @@ public class BrowserSkill implements Skill {
         return SkillResult.success("Result: " + resultStr);
     }
 
+    /**
+     * 打开可见浏览器窗口让用户手动登录。
+     * 阻塞等待用户关闭浏览器窗口(表示登录完成),或超时。
+     * 登录态通过持久化 profile 目录自动保存,后续 goto 调用会自动携带。
+     */
+    private SkillResult handleLogin(Map<String, Object> input) {
+        String url = (String) input.get("url");
+
+        int timeoutSec = loginTimeoutSeconds;
+        Object timeoutVal = input.get("timeoutSeconds");
+        if (timeoutVal instanceof Number) {
+            timeoutSec = ((Number) timeoutVal).intValue();
+        }
+
+        // 强制重建 headed context (headless -> headed 需要关闭 profile 锁)
+        closeContextQuietly();
+        ensureContext(false);
+
+        if (url != null && !url.isBlank()) {
+            page.navigate(url);
+        }
+
+        // 监听 context close,作为"用户完成登录"的信号
+        CountDownLatch latch = new CountDownLatch(1);
+        context.onClose(c -> latch.countDown());
+
+        boolean completedInTime;
+        try {
+            completedInTime = latch.await(timeoutSec, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            closeContextQuietly();
+            return SkillResult.error("Login wait interrupted");
+        }
+
+        if (!completedInTime) {
+            closeContextQuietly();
+            return SkillResult.error("Login timed out after " + timeoutSec
+                    + " seconds. Please call login again.");
+        }
+
+        // 用户关闭了窗口,清理内部引用 (context 已被 Playwright 标记关闭)
+        context = null;
+        page = null;
+
+        return SkillResult.success(
+                "Login window closed. Session state has been persisted to profile dir. "
+                + "Subsequent goto calls will automatically use the logged-in session.");
+    }
+
     private SkillResult handleClose() {
-        closeBrowserQuietly();
+        closeContextQuietly();
         return SkillResult.success("Browser closed.");
     }
 
-    private void closeBrowserQuietly() {
+    /**
+     * 外部调用,服务关闭时清理资源。
+     */
+    public void shutdown() {
+        closeContextQuietly();
+        try {
+            if (playwright != null) {
+                playwright.close();
+            }
+        } catch (Exception ignored) {
+        }
+        playwright = null;
+    }
+
+    private void closeContextQuietly() {
         try {
             if (page != null && !page.isClosed()) {
                 page.close();
@@ -246,19 +350,11 @@ public class BrowserSkill implements Skill {
         page = null;
 
         try {
-            if (browser != null && browser.isConnected()) {
-                browser.close();
+            if (context != null) {
+                context.close();
             }
         } catch (Exception ignored) {
         }
-        browser = null;
-
-        try {
-            if (playwright != null) {
-                playwright.close();
-            }
-        } catch (Exception ignored) {
-        }
-        playwright = null;
+        context = null;
     }
 }

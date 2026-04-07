@@ -7,6 +7,89 @@ import { getAgents, createSession, getSessions, getSessionMessages, sendMessage 
 
 const { Text } = Typography;
 
+/**
+ * 归一化后端返回的消息列表:
+ * Agent Loop 产生的历史消息里 tool_result 以 role=user 发回,会变成空文本的用户气泡。
+ * 这里把这类消息过滤掉,并把 tool_result 按 tool_use_id 合并到上一条 assistant 的 toolCalls。
+ */
+function normalizeMessages(list: any[]): ChatMessage[] {
+  const result: ChatMessage[] = [];
+
+  const extractBlocks = (content: any) => {
+    let text = '';
+    const toolUseBlocks: any[] = [];
+    const toolResultBlocks: any[] = [];
+
+    if (typeof content === 'string') {
+      text = content;
+    } else if (Array.isArray(content)) {
+      for (const b of content) {
+        if (!b || typeof b !== 'object') continue;
+        if (b.type === 'text' && b.text) {
+          text += (text ? '\n' : '') + b.text;
+        } else if (b.type === 'tool_use') {
+          toolUseBlocks.push(b);
+        } else if (b.type === 'tool_result') {
+          toolResultBlocks.push(b);
+        }
+      }
+    }
+    return { text, toolUseBlocks, toolResultBlocks };
+  };
+
+  for (const m of list) {
+    const { text, toolUseBlocks, toolResultBlocks } = extractBlocks(m.content);
+
+    if (m.role === 'user') {
+      // tool_result 合并到上一条 assistant 的 toolCalls
+      if (toolResultBlocks.length > 0 && result.length > 0) {
+        const prev = result[result.length - 1];
+        if (prev.role === 'assistant' && Array.isArray(prev.toolCalls)) {
+          for (const tr of toolResultBlocks) {
+            const id = tr.tool_use_id ?? tr.toolUseId ?? tr.id;
+            const match = prev.toolCalls.find((tc: any) => tc.id === id);
+            const outputText =
+              typeof tr.content === 'string'
+                ? tr.content
+                : Array.isArray(tr.content)
+                  ? tr.content.map((c: any) => c?.text ?? JSON.stringify(c)).join('\n')
+                  : JSON.stringify(tr.content ?? '');
+            if (match) {
+              match.output = outputText;
+              match.status = tr.is_error || tr.isError ? 'error' : 'success';
+            } else {
+              prev.toolCalls.push({
+                id,
+                name: 'tool',
+                output: outputText,
+                status: tr.is_error || tr.isError ? 'error' : 'success',
+              });
+            }
+          }
+        }
+      }
+      // 只有空文本且没有除 tool_result 外的内容,跳过不渲染
+      if (!text.trim()) continue;
+      result.push({ role: 'user', content: text });
+    } else if (m.role === 'assistant') {
+      const toolCalls = toolUseBlocks.map((b: any) => ({
+        id: b.id,
+        name: b.name,
+        input: b.input,
+      }));
+      // 跳过完全空的 assistant 消息 (无文本且无工具调用)
+      if (!text.trim() && toolCalls.length === 0) continue;
+      result.push({
+        role: 'assistant',
+        content: text,
+        toolCalls: toolCalls.length > 0 ? toolCalls : m.toolCalls,
+      });
+    }
+  }
+
+  return result;
+}
+
 const Chat: React.FC = () => {
   const { sessionId: urlSessionId } = useParams<{ sessionId?: string }>();
   const [agents, setAgents] = useState<any[]>([]);
@@ -48,28 +131,7 @@ const Chat: React.FC = () => {
     getSessionMessages(activeSessionId)
       .then((res) => {
         const list = Array.isArray(res.data) ? res.data : res.data?.data ?? [];
-        setMessages(
-          list.map((m: any) => {
-            let textContent = '';
-            let toolCalls: any[] = [];
-
-            if (typeof m.content === 'string') {
-              textContent = m.content;
-            } else if (Array.isArray(m.content)) {
-              const textBlocks = m.content
-                .filter((b: any) => b.type === 'text')
-                .map((b: any) => b.text);
-              textContent = textBlocks.join('\n');
-              toolCalls = m.content.filter((b: any) => b.type === 'tool_use');
-            }
-
-            return {
-              role: m.role,
-              content: textContent,
-              toolCalls: toolCalls.length > 0 ? toolCalls : m.toolCalls,
-            };
-          })
-        );
+        setMessages(normalizeMessages(list));
       })
       .catch(() => message.error('Failed to load messages'));
   }, [activeSessionId]);
