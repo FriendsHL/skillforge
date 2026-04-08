@@ -35,4 +35,13 @@ public interface ModelUsageRepository extends JpaRepository<ModelUsageEntity, Lo
            "GROUP BY a.name " +
            "ORDER BY SUM(u.inputTokens + u.outputTokens) DESC")
     List<Object[]> findUsageByAgent();
+
+    /**
+     * 求和指定时间之后的 input/output token。返回单行 List,行内 [inputSum, outputSum];
+     * 区间内无数据时也会因 COALESCE 返回 [0, 0]。
+     */
+    @Query("SELECT COALESCE(SUM(u.inputTokens), 0), COALESCE(SUM(u.outputTokens), 0) " +
+           "FROM ModelUsageEntity u " +
+           "WHERE u.createdAt >= :since")
+    List<Object[]> sumTokensSince(@Param("since") LocalDateTime since);
 }

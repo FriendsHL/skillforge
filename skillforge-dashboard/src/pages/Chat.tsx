@@ -283,6 +283,16 @@ const Chat: React.FC = () => {
       setStreamingText((prev) => prev + (evt.text ?? ''));
     } else if (evt.type === 'assistant_stream_end') {
       // 此时 message_appended 通常马上就到,不主动清,让 message_appended 清(避免抖动)
+    } else if (evt.type === 'session_title_updated') {
+      const newTitle = evt.title;
+      if (newTitle) {
+        setSessions((prev) =>
+          prev.map((s) => {
+            const sid = String(s.id ?? s.sessionId);
+            return sid === evt.sessionId ? { ...s, title: newTitle } : s;
+          })
+        );
+      }
     }
   };
 
@@ -489,7 +499,9 @@ const Chat: React.FC = () => {
                   }}
                 >
                   <Text ellipsis style={{ width: '100%' }}>
-                    Session {sid.slice(0, 8)}...
+                    {item.title && item.title !== 'New Session'
+                      ? item.title
+                      : `Session ${sid.slice(0, 8)}...`}
                   </Text>
                 </List.Item>
               );

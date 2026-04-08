@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { Table, Button, Modal, Form, Input, Select, Space, Popconfirm, message } from 'antd';
+import { Table, Button, Modal, Form, Input, Select, Space, Popconfirm, Tag, message } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
-import { getAgents, createAgent, updateAgent, deleteAgent } from '../api';
+import { getAgents, createAgent, updateAgent, deleteAgent, getBuiltinSkills } from '../api';
 
 const { TextArea } = Input;
 
@@ -17,11 +17,27 @@ const modelOptions = [
   { label: 'claude:claude-sonnet-4-20250514', value: 'claude:claude-sonnet-4-20250514' },
 ];
 
+// 把后端的 skillIds (JSON string) 解析成数组
+const parseSkillIds = (raw: any): string[] => {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw.map(String);
+  if (typeof raw === 'string') {
+    try {
+      const arr = JSON.parse(raw);
+      return Array.isArray(arr) ? arr.map(String) : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+};
+
 const AgentList: React.FC = () => {
   const [agents, setAgents] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<any>(null);
+  const [skillOptions, setSkillOptions] = useState<{ label: string; value: string }[]>([]);
   const [form] = Form.useForm();
 
   const fetchAgents = () => {
@@ -32,11 +48,31 @@ const AgentList: React.FC = () => {
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { fetchAgents(); }, []);
+  const fetchSkills = () => {
+    getBuiltinSkills()
+      .then((res) => {
+        const list: any[] = Array.isArray(res.data) ? res.data : (res.data as any)?.data ?? [];
+        setSkillOptions(
+          list.map((s: any) => ({
+            label: s.description ? `${s.name} — ${s.description}` : s.name,
+            value: s.name,
+          }))
+        );
+      })
+      .catch(() => {
+        // 静默失败:即使 skills 拉不到也不阻塞 Agent 管理
+      });
+  };
+
+  useEffect(() => {
+    fetchAgents();
+    fetchSkills();
+  }, []);
 
   const openCreate = () => {
     setEditing(null);
     form.resetFields();
+    form.setFieldsValue({ executionMode: 'ask', skillIds: [] });
     setModalOpen(true);
   };
 
@@ -44,7 +80,7 @@ const AgentList: React.FC = () => {
     setEditing(record);
     form.setFieldsValue({
       ...record,
-      skills: record.skills?.map((s: any) => (typeof s === 'string' ? s : s.name)) ?? [],
+      skillIds: parseSkillIds(record.skillIds),
     });
     setModalOpen(true);
   };
@@ -52,17 +88,23 @@ const AgentList: React.FC = () => {
   const handleOk = async () => {
     try {
       const values = await form.validateFields();
+      // 把数组形式的 skillIds 序列化成 JSON 字符串(后端字段是 TEXT)
+      const payload = {
+        ...values,
+        skillIds: JSON.stringify(values.skillIds ?? []),
+      };
       if (editing) {
-        await updateAgent(editing.id, values);
+        await updateAgent(editing.id, { ...editing, ...payload });
         message.success('Agent updated');
       } else {
-        await createAgent(values);
+        await createAgent(payload);
         message.success('Agent created');
       }
       setModalOpen(false);
       fetchAgents();
-    } catch {
-      // validation error
+    } catch (e: any) {
+      if (e?.errorFields) return; // form 校验
+      message.error('Save failed: ' + (e?.message ?? 'unknown'));
     }
   };
 
@@ -77,6 +119,27 @@ const AgentList: React.FC = () => {
     { title: 'Name', dataIndex: 'name', key: 'name' },
     { title: 'Model', dataIndex: 'modelId', key: 'modelId' },
     { title: 'Mode', dataIndex: 'executionMode', key: 'executionMode', width: 80 },
+    {
+      title: 'Skills',
+      dataIndex: 'skillIds',
+      key: 'skillIds',
+      render: (v: any) => {
+        const arr = parseSkillIds(v);
+        if (arr.length === 0) return <span style={{ color: '#999' }}>—</span>;
+        const shown = arr.slice(0, 4);
+        const rest = arr.length - shown.length;
+        return (
+          <Space size={[4, 4]} wrap>
+            {shown.map((n) => (
+              <Tag key={n} color="blue">
+                {n}
+              </Tag>
+            ))}
+            {rest > 0 && <Tag>+{rest}</Tag>}
+          </Space>
+        );
+      },
+    },
     { title: 'Status', dataIndex: 'status', key: 'status' },
     {
       title: 'Actions',
@@ -148,8 +211,19 @@ const AgentList: React.FC = () => {
           <Form.Item name="systemPrompt" label="System Prompt">
             <TextArea rows={6} />
           </Form.Item>
-          <Form.Item name="skills" label="Skills (names)">
-            <Select mode="tags" placeholder="Type skill names and press Enter" />
+          <Form.Item
+            name="skillIds"
+            label="Skills"
+            tooltip="选择 Agent 可调用的内置 / Zip 包技能"
+          >
+            <Select
+              mode="multiple"
+              placeholder="选择 Skills"
+              options={skillOptions}
+              showSearch
+              optionFilterProp="label"
+              allowClear
+            />
           </Form.Item>
         </Form>
       </Modal>

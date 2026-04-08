@@ -1,7 +1,17 @@
 import React, { useEffect, useState } from 'react';
-import { Card, Row, Col, Spin } from 'antd';
+import { Card, Row, Col, Spin, Segmented, Space, Typography } from 'antd';
 import ReactECharts from 'echarts-for-react';
 import { getDailyUsage, getUsageByModel, getUsageByAgent } from '../api';
+
+const { Text } = Typography;
+
+type RangeKey = '7d' | '30d' | '90d' | 'all';
+const RANGE_DAYS: Record<RangeKey, number> = {
+  '7d': 7,
+  '30d': 30,
+  '90d': 90,
+  all: 3650, // 10 年,作为"全部"的近似
+};
 
 interface DailyUsage {
   date: string;
@@ -24,26 +34,33 @@ const ModelUsage: React.FC = () => {
   const [modelData, setModelData] = useState<ModelUsageItem[]>([]);
   const [agentData, setAgentData] = useState<AgentUsageItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [range, setRange] = useState<RangeKey>('30d');
 
   useEffect(() => {
+    let cancelled = false;
     const fetchData = async () => {
+      setLoading(true);
       try {
         const [dailyRes, modelRes, agentRes] = await Promise.all([
-          getDailyUsage(30),
+          getDailyUsage(RANGE_DAYS[range]),
           getUsageByModel(),
           getUsageByAgent(),
         ]);
+        if (cancelled) return;
         setDailyData(dailyRes.data as DailyUsage[]);
         setModelData(modelRes.data as ModelUsageItem[]);
         setAgentData(agentRes.data as AgentUsageItem[]);
       } catch (err) {
-        console.error('Failed to fetch usage data', err);
+        if (!cancelled) console.error('Failed to fetch usage data', err);
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     };
     void fetchData();
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [range]);
 
   const dailyChartOption = {
     tooltip: {
@@ -128,32 +145,67 @@ const ModelUsage: React.FC = () => {
     ],
   };
 
-  if (loading) {
-    return (
-      <div style={{ textAlign: 'center', padding: 80 }}>
-        <Spin size="large" />
-      </div>
-    );
-  }
+  const totalInRange = dailyData.reduce(
+    (acc, d) => acc + (d.inputTokens || 0) + (d.outputTokens || 0),
+    0
+  );
 
   return (
     <div>
-      <h2 style={{ marginBottom: 16 }}>Model Usage</h2>
-      <Card title="Token Usage Trend (Last 30 Days)" style={{ marginBottom: 16 }}>
-        <ReactECharts option={dailyChartOption} style={{ height: 350 }} />
+      <Space style={{ marginBottom: 16, width: '100%', justifyContent: 'space-between' }}>
+        <h2 style={{ margin: 0 }}>Model Usage</h2>
+        <Space size={12}>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            范围内合计: {totalInRange.toLocaleString()} tokens
+          </Text>
+          <Segmented
+            value={range}
+            onChange={(v) => setRange(v as RangeKey)}
+            options={[
+              { label: '7d', value: '7d' },
+              { label: '30d', value: '30d' },
+              { label: '90d', value: '90d' },
+              { label: 'All', value: 'all' },
+            ]}
+          />
+        </Space>
+      </Space>
+
+      {loading ? (
+        <div style={{ textAlign: 'center', padding: 80 }}>
+          <Spin size="large" />
+        </div>
+      ) : (
+        <>
+      <Card title={`Token Usage Trend (${range})`} style={{ marginBottom: 16 }}>
+        {dailyData.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: 40, color: '#999' }}>暂无数据</div>
+        ) : (
+          <ReactECharts option={dailyChartOption} style={{ height: 350 }} />
+        )}
       </Card>
       <Row gutter={16}>
         <Col span={12}>
-          <Card title="Usage by Model">
-            <ReactECharts option={modelPieOption} style={{ height: 350 }} />
+          <Card title="Usage by Model (all-time)">
+            {modelData.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: 40, color: '#999' }}>暂无数据</div>
+            ) : (
+              <ReactECharts option={modelPieOption} style={{ height: 350 }} />
+            )}
           </Card>
         </Col>
         <Col span={12}>
-          <Card title="Usage by Agent">
-            <ReactECharts option={agentBarOption} style={{ height: 350 }} />
+          <Card title="Usage by Agent (all-time)">
+            {agentData.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: 40, color: '#999' }}>暂无数据</div>
+            ) : (
+              <ReactECharts option={agentBarOption} style={{ height: 350 }} />
+            )}
           </Card>
         </Col>
       </Row>
+        </>
+      )}
     </div>
   );
 };

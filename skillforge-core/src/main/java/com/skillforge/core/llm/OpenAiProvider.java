@@ -119,6 +119,10 @@ public class OpenAiProvider implements LlmProvider {
 
         if (stream) {
             root.put("stream", true);
+            // 必须显式开启 include_usage,OpenAI 兼容流式协议才会在最后一个 chunk 里带 usage
+            ObjectNode streamOptions = objectMapper.createObjectNode();
+            streamOptions.put("include_usage", true);
+            root.set("stream_options", streamOptions);
         }
 
         // messages - OpenAI puts system prompt as first message
@@ -313,6 +317,7 @@ public class OpenAiProvider implements LlmProvider {
         StringBuilder fullText = new StringBuilder();
         List<ToolUseBlock> toolUseBlocks = new ArrayList<>();
         String stopReason = "end_turn";
+        LlmResponse.Usage capturedUsage = null;
 
         // Track tool_calls being assembled incrementally (keyed by index)
         Map<Integer, String> toolCallIds = new HashMap<>();
@@ -338,6 +343,7 @@ public class OpenAiProvider implements LlmProvider {
                     fullResponse.setContent(fullText.toString());
                     fullResponse.setToolUseBlocks(toolUseBlocks);
                     fullResponse.setStopReason(stopReason);
+                    fullResponse.setUsage(capturedUsage);
                     handler.onComplete(fullResponse);
                     return;
                 }
@@ -348,6 +354,16 @@ public class OpenAiProvider implements LlmProvider {
                 } catch (JsonProcessingException e) {
                     log.warn("Failed to parse SSE data: {}", data, e);
                     continue;
+                }
+
+                // 开启 stream_options.include_usage 后,最后一个 chunk 会带 usage 字段且 choices 为空。
+                // 必须在 choices 为空判断之前提取,否则会被下面的 continue 跳掉。
+                JsonNode usageNode = event.path("usage");
+                if (usageNode.isObject()) {
+                    capturedUsage = new LlmResponse.Usage(
+                            usageNode.path("prompt_tokens").asInt(0),
+                            usageNode.path("completion_tokens").asInt(0)
+                    );
                 }
 
                 JsonNode choices = event.path("choices");
@@ -404,6 +420,7 @@ public class OpenAiProvider implements LlmProvider {
         fullResponse.setContent(fullText.toString());
         fullResponse.setToolUseBlocks(toolUseBlocks);
         fullResponse.setStopReason(stopReason);
+        fullResponse.setUsage(capturedUsage);
         handler.onComplete(fullResponse);
     }
 

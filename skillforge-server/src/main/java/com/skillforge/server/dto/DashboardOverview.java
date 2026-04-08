@@ -8,6 +8,8 @@ public class DashboardOverview {
     private long todaySessions;
     private long totalInputTokens;
     private long totalOutputTokens;
+    private long todayInputTokens;
+    private long todayOutputTokens;
 
     public DashboardOverview() {
     }
@@ -58,5 +60,21 @@ public class DashboardOverview {
 
     public void setTotalOutputTokens(long totalOutputTokens) {
         this.totalOutputTokens = totalOutputTokens;
+    }
+
+    public long getTodayInputTokens() {
+        return todayInputTokens;
+    }
+
+    public void setTodayInputTokens(long todayInputTokens) {
+        this.todayInputTokens = todayInputTokens;
+    }
+
+    public long getTodayOutputTokens() {
+        return todayOutputTokens;
+    }
+
+    public void setTodayOutputTokens(long todayOutputTokens) {
+        this.todayOutputTokens = todayOutputTokens;
     }
 }

@@ -54,6 +54,10 @@ public class SessionEntity {
     @Column(length = 16)
     private String executionMode = "ask";
 
+    /** 是否已通过 LLM 生成过精炼标题(避免重复触发) */
+    @Column(columnDefinition = "BOOLEAN DEFAULT FALSE")
+    private boolean smartTitled = false;
+
     @CreatedDate
     private LocalDateTime createdAt;
 
@@ -165,6 +169,14 @@ public class SessionEntity {
 
     public void setExecutionMode(String executionMode) {
         this.executionMode = executionMode;
+    }
+
+    public boolean isSmartTitled() {
+        return smartTitled;
+    }
+
+    public void setSmartTitled(boolean smartTitled) {
+        this.smartTitled = smartTitled;
     }
 
     public LocalDateTime getCreatedAt() {

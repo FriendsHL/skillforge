@@ -17,7 +17,13 @@ const SessionList: React.FC = () => {
   }, []);
 
   const columns = [
-    { title: 'Session ID', dataIndex: 'id', key: 'id' },
+    {
+      title: 'Title',
+      dataIndex: 'title',
+      key: 'title',
+      render: (v: string, r: any) =>
+        v && v !== 'New Session' ? v : `Session ${String(r.id ?? '').slice(0, 8)}`,
+    },
     { title: 'Agent', dataIndex: 'agentName', key: 'agentName', render: (v: string, r: any) => v || r.agentId },
     { title: 'Messages', dataIndex: 'messageCount', key: 'messageCount' },
     { title: 'Tokens', dataIndex: 'totalTokens', key: 'totalTokens' },

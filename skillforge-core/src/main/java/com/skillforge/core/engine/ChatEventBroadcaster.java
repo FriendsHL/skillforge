@@ -45,6 +45,11 @@ public interface ChatEventBroadcaster {
         // no-op default
     }
 
+    /** 会话标题更新事件。前端 SessionList / Chat 顶栏据此实时刷新标题。 */
+    default void sessionTitleUpdated(String sessionId, String title) {
+        // no-op default
+    }
+
     class AskUserEvent {
         public String askId;
         public String question;

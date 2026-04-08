@@ -35,6 +35,7 @@ public class ChatService {
     private final ModelUsageRepository modelUsageRepository;
     private final ChatEventBroadcaster broadcaster;
     private final ThreadPoolExecutor chatLoopExecutor;
+    private final SessionTitleService sessionTitleService;
     private final ObjectMapper objectMapper;
 
     public ChatService(AgentService agentService,
@@ -43,7 +44,8 @@ public class ChatService {
                        AgentLoopEngine agentLoopEngine,
                        ModelUsageRepository modelUsageRepository,
                        ChatEventBroadcaster broadcaster,
-                       @Qualifier("chatLoopExecutor") ThreadPoolExecutor chatLoopExecutor) {
+                       @Qualifier("chatLoopExecutor") ThreadPoolExecutor chatLoopExecutor,
+                       SessionTitleService sessionTitleService) {
         this.agentService = agentService;
         this.sessionService = sessionService;
         this.skillRegistry = skillRegistry;
@@ -51,6 +53,7 @@ public class ChatService {
         this.modelUsageRepository = modelUsageRepository;
         this.broadcaster = broadcaster;
         this.chatLoopExecutor = chatLoopExecutor;
+        this.sessionTitleService = sessionTitleService;
         this.objectMapper = new ObjectMapper();
     }
 
@@ -72,6 +75,11 @@ public class ChatService {
         List<Message> historyWithUser = new ArrayList<>(history);
         historyWithUser.add(userMsg);
         sessionService.saveSessionMessages(sessionId, historyWithUser);
+
+        // 2.1 第一条 user message 时立即生成截断标题(同步,极快)
+        if (history.isEmpty()) {
+            sessionTitleService.applyImmediateTitle(sessionId, userMessage);
+        }
 
         // 3. 更新 runtime 状态
         session.setRuntimeStatus("running");
@@ -142,6 +150,12 @@ public class ChatService {
             if (broadcaster != null) {
                 broadcaster.sessionStatus(sessionId, "idle", null, null);
             }
+
+            // 在 loop 完成后(messages 已经累积了若干轮)异步触发智能命名
+            int finalCount = result.getMessages().size();
+            log.info("Triggering maybeScheduleSmartRename: sessionId={}, msgCount={}", sessionId, finalCount);
+            sessionTitleService.maybeScheduleSmartRename(sessionId, finalCount);
+
             log.info("Agent loop completed: sessionId={}", sessionId);
         } catch (Exception e) {
             log.error("Agent loop failed: sessionId={}", sessionId, e);

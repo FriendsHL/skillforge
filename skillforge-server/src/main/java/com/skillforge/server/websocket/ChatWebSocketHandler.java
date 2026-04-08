@@ -176,4 +176,13 @@ public class ChatWebSocketHandler extends TextWebSocketHandler implements ChatEv
         payload.put("sessionId", sessionId);
         broadcast(sessionId, payload);
     }
+
+    @Override
+    public void sessionTitleUpdated(String sessionId, String title) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("type", "session_title_updated");
+        payload.put("sessionId", sessionId);
+        payload.put("title", title);
+        broadcast(sessionId, payload);
+    }
 }

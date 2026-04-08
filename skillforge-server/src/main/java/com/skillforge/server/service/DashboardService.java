@@ -37,14 +37,14 @@ public class DashboardService {
         overview.setActiveAgents(agentRepository.findByStatus("active").size());
         overview.setTotalSessions(sessionRepository.count());
 
-        // 今日会话数：遍历所有 session 统计今天创建的
+        // 今日会话数:遍历所有 session 统计今天创建的
         LocalDateTime todayStart = LocalDate.now().atStartOfDay();
         long todaySessions = sessionRepository.findAll().stream()
                 .filter(s -> s.getCreatedAt() != null && s.getCreatedAt().isAfter(todayStart))
                 .count();
         overview.setTodaySessions(todaySessions);
 
-        // 汇总 token 使用量
+        // 汇总历史 token(全量)
         List<ModelUsageEntity> allUsage = modelUsageRepository.findAll();
         long totalInput = 0;
         long totalOutput = 0;
@@ -54,6 +54,20 @@ public class DashboardService {
         }
         overview.setTotalInputTokens(totalInput);
         overview.setTotalOutputTokens(totalOutput);
+
+        // 今日 token(SQL 聚合,避免再扫一遍全表)
+        List<Object[]> todayRows = modelUsageRepository.sumTokensSince(todayStart);
+        long todayInput = 0L;
+        long todayOutput = 0L;
+        if (todayRows != null && !todayRows.isEmpty()) {
+            Object[] row = todayRows.get(0);
+            if (row != null && row.length >= 2) {
+                if (row[0] instanceof Number) todayInput = ((Number) row[0]).longValue();
+                if (row[1] instanceof Number) todayOutput = ((Number) row[1]).longValue();
+            }
+        }
+        overview.setTodayInputTokens(todayInput);
+        overview.setTodayOutputTokens(todayOutput);
 
         return overview;
     }
