@@ -1,8 +1,46 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Spin, Input, Button, Tag } from 'antd';
 import { SendOutlined, LoadingOutlined } from '@ant-design/icons';
 import ToolCallTimeline from './ToolCallTimeline';
 import MarkdownRenderer from './MarkdownRenderer';
+
+/**
+ * 输入框作为独立组件:自己持有 input state。
+ * 这样打字时只有 ChatInput 自己重渲染,不会触发父级 ChatWindow 重新跑
+ * messages.map → MarkdownRenderer,从根本上消除"打字卡顿"。
+ */
+interface ChatInputProps {
+  disabled?: boolean;
+  onSend: (text: string) => void;
+}
+const ChatInput: React.FC<ChatInputProps> = React.memo(({ disabled, onSend }) => {
+  const [input, setInput] = useState('');
+  const handleSend = () => {
+    const text = input.trim();
+    if (!text) return;
+    setInput('');
+    onSend(text);
+  };
+  return (
+    <div style={{ padding: '12px 16px', borderTop: '1px solid #f0f0f0', display: 'flex', gap: 8 }}>
+      <Input
+        placeholder="Type your message..."
+        value={input}
+        onChange={(e) => setInput(e.target.value)}
+        onPressEnter={handleSend}
+        disabled={disabled}
+      />
+      <Button
+        type="primary"
+        icon={<SendOutlined />}
+        onClick={handleSend}
+        disabled={disabled}
+      >
+        Send
+      </Button>
+    </div>
+  );
+});
 
 export interface ChatMessage {
   role: 'user' | 'assistant';
@@ -33,8 +71,13 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
   inflightTools,
   streamingText,
 }) => {
-  const [input, setInput] = React.useState('');
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  // 用 ref 透传最新的 onSend / disabled,这样 ChatInput 拿到的 props 引用稳定,
+  // React.memo 才能真正生效。
+  const onSendRef = useRef(onSend);
+  useEffect(() => { onSendRef.current = onSend; }, [onSend]);
+  const stableOnSend = useCallback((text: string) => onSendRef.current(text), []);
 
   // 强制每秒重渲染一次,用于刷新 inflight tool 的"已耗时 N s"
   const [, setTick] = useState(0);
@@ -49,13 +92,6 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
   }, [messages, loading, streamingText, inflightTools]);
 
   const inflightList = inflightTools ? Object.entries(inflightTools) : [];
-
-  const handleSend = () => {
-    const text = input.trim();
-    if (!text) return;
-    setInput('');
-    onSend(text);
-  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -152,18 +188,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
         )}
         <div ref={bottomRef} />
       </div>
-      <div style={{ padding: '12px 16px', borderTop: '1px solid #f0f0f0', display: 'flex', gap: 8 }}>
-        <Input
-          placeholder="Type your message..."
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onPressEnter={handleSend}
-          disabled={loading || inputDisabled}
-        />
-        <Button type="primary" icon={<SendOutlined />} onClick={handleSend} disabled={loading || inputDisabled}>
-          Send
-        </Button>
-      </div>
+      <ChatInput disabled={loading || inputDisabled} onSend={stableOnSend} />
     </div>
   );
 };

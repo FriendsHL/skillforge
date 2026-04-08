@@ -133,4 +133,6 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content }) => {
   );
 };
 
-export default MarkdownRenderer;
+// content 是唯一 prop;memo 化避免父组件因输入框等不相关 state 变化时
+// 触发昂贵的 markdown + 代码高亮重渲染。
+export default React.memo(MarkdownRenderer);
