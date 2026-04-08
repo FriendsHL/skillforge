@@ -31,6 +31,28 @@ public class SessionService {
         this.objectMapper = new ObjectMapper();
     }
 
+    /**
+     * 创建子 session,继承父的 userId,记录 parentSessionId + depth + subAgentRunId。
+     */
+    public SessionEntity createSubSession(SessionEntity parent, Long childAgentId, String runId) {
+        SessionEntity session = new SessionEntity();
+        session.setId(UUID.randomUUID().toString());
+        session.setUserId(parent.getUserId());
+        session.setAgentId(childAgentId);
+        session.setTitle("SubAgent run " + runId.substring(0, 8));
+        session.setMessagesJson("[]");
+        session.setParentSessionId(parent.getId());
+        session.setDepth(parent.getDepth() + 1);
+        session.setSubAgentRunId(runId);
+        // 子 session 默认继承父的 executionMode
+        session.setExecutionMode(parent.getExecutionMode());
+        AgentEntity agent = agentRepository.findById(childAgentId).orElse(null);
+        if (agent != null && agent.getExecutionMode() != null) {
+            session.setExecutionMode(agent.getExecutionMode());
+        }
+        return sessionRepository.save(session);
+    }
+
     public SessionEntity createSession(Long userId, Long agentId) {
         SessionEntity session = new SessionEntity();
         session.setId(UUID.randomUUID().toString());
@@ -52,7 +74,8 @@ public class SessionService {
     }
 
     public List<SessionEntity> listUserSessions(Long userId) {
-        return sessionRepository.findByUserIdOrderByUpdatedAtDesc(userId);
+        // 只返回顶层 session,SubAgent 派发的子 session 不污染主列表
+        return sessionRepository.findByUserIdAndParentSessionIdIsNullOrderByUpdatedAtDesc(userId);
     }
 
     public void updateSessionMessages(String id, List<Message> messages,

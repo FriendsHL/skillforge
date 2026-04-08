@@ -8,7 +8,6 @@ public class SkillContext {
     private String workingDirectory;
     private String sessionId;
     private Long userId;
-    private String subAgentTaskId;
 
     public SkillContext() {
     }
@@ -41,13 +40,5 @@ public class SkillContext {
 
     public void setUserId(Long userId) {
         this.userId = userId;
-    }
-
-    public String getSubAgentTaskId() {
-        return subAgentTaskId;
-    }
-
-    public void setSubAgentTaskId(String subAgentTaskId) {
-        this.subAgentTaskId = subAgentTaskId;
     }
 }

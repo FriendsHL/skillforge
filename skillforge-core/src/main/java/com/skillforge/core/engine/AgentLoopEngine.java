@@ -113,12 +113,6 @@ public class AgentLoopEngine {
             context.setMaxLoops(((Number) maxLoopsVal).intValue());
         }
 
-        // 从 AgentDefinition config 读取 sub_agent_task_id（子 Agent 执行时设置）
-        Object subAgentTaskIdVal = agentDef.getConfig().get("sub_agent_task_id");
-        if (subAgentTaskIdVal instanceof String) {
-            context.setSubAgentTaskId((String) subAgentTaskIdVal);
-        }
-
         // 从 AgentDefinition config 读取 execution_mode (ask / auto)
         Object modeVal = agentDef.getConfig().get("execution_mode");
         if (modeVal instanceof String) {
@@ -543,7 +537,6 @@ public class AgentLoopEngine {
                         loopContext.getWorkingDirectory(),
                         loopContext.getSessionId(),
                         loopContext.getUserId());
-                skillContext.setSubAgentTaskId(loopContext.getSubAgentTaskId());
 
                 // 执行 SkillHook.beforeSkillExecute()
                 Map<String, Object> processedInput = input;

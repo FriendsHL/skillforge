@@ -15,15 +15,18 @@ import com.skillforge.skills.FileWriteSkill;
 import com.skillforge.skills.GlobSkill;
 import com.skillforge.skills.BrowserSkill;
 import com.skillforge.skills.GrepSkill;
-import com.skillforge.skills.SubAgentSkill;
-import com.skillforge.core.engine.SubAgentExecutor;
 import com.skillforge.server.clawhub.ClawHubClient;
 import com.skillforge.server.clawhub.ClawHubInstallService;
 import com.skillforge.server.clawhub.ClawHubProperties;
 import com.skillforge.server.skill.ClawHubSkill;
 import com.skillforge.server.skill.MemorySkill;
-import com.skillforge.server.service.MemoryService;
+import com.skillforge.server.skill.SubAgentSkill;
 import com.skillforge.server.service.AgentService;
+import com.skillforge.server.service.ChatService;
+import com.skillforge.server.service.MemoryService;
+import com.skillforge.server.service.SessionService;
+import com.skillforge.server.subagent.SubAgentRegistry;
+import org.springframework.context.annotation.Lazy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -80,6 +83,22 @@ public class SkillForgeConfig {
         return skill;
     }
 
+    /**
+     * SubAgentSkill — 异步派发任务给另一个 agentId 指向的子 Agent。
+     * ChatService 用 @Lazy 打破 ChatService ↔ SubAgentRegistry ↔ SubAgentSkill 依赖环。
+     */
+    @Bean
+    public SubAgentSkill subAgentSkill(AgentService agentService,
+                                       SessionService sessionService,
+                                       @Lazy ChatService chatService,
+                                       SubAgentRegistry subAgentRegistry,
+                                       SkillRegistry skillRegistry) {
+        SubAgentSkill skill = new SubAgentSkill(agentService, sessionService, chatService, subAgentRegistry);
+        skillRegistry.register(skill);
+        log.info("Registered SubAgentSkill into SkillRegistry");
+        return skill;
+    }
+
     @Bean
     public SkillPackageLoader skillPackageLoader() {
         return new SkillPackageLoader();
@@ -106,28 +125,6 @@ public class SkillForgeConfig {
         }
 
         return factory;
-    }
-
-    @Bean
-    public SubAgentExecutor subAgentExecutor(LlmProviderFactory llmProviderFactory, LlmProperties llmProperties,
-                                             SkillRegistry skillRegistry) {
-        String defaultProvider = llmProperties.getDefaultProvider() != null
-                ? llmProperties.getDefaultProvider() : "claude";
-        return new SubAgentExecutor(llmProviderFactory, defaultProvider, skillRegistry);
-    }
-
-    @Bean
-    public SubAgentSkill subAgentSkill(SubAgentExecutor subAgentExecutor, AgentService agentService,
-                                       SkillRegistry skillRegistry) {
-        SubAgentSkill skill = new SubAgentSkill(subAgentExecutor, agentId -> {
-            try {
-                return agentService.toAgentDefinition(agentService.getAgent(agentId));
-            } catch (Exception e) {
-                return null;
-            }
-        });
-        skillRegistry.register(skill);
-        return skill;
     }
 
     @Bean

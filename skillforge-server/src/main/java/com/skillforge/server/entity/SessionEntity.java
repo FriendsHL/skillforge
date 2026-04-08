@@ -58,6 +58,18 @@ public class SessionEntity {
     @Column(columnDefinition = "BOOLEAN DEFAULT FALSE")
     private boolean smartTitled = false;
 
+    /** 父 session id(SubAgent 异步派发生成的子 session) */
+    @Column(length = 36)
+    private String parentSessionId;
+
+    /** 嵌套深度:根 session=0, 子=1, 孙=2 */
+    @Column(columnDefinition = "INT DEFAULT 0")
+    private int depth = 0;
+
+    /** SubAgent 派发时的 runId(用于结果回推时定位) */
+    @Column(length = 36)
+    private String subAgentRunId;
+
     @CreatedDate
     private LocalDateTime createdAt;
 
@@ -177,6 +189,30 @@ public class SessionEntity {
 
     public void setSmartTitled(boolean smartTitled) {
         this.smartTitled = smartTitled;
+    }
+
+    public String getParentSessionId() {
+        return parentSessionId;
+    }
+
+    public void setParentSessionId(String parentSessionId) {
+        this.parentSessionId = parentSessionId;
+    }
+
+    public int getDepth() {
+        return depth;
+    }
+
+    public void setDepth(int depth) {
+        this.depth = depth;
+    }
+
+    public String getSubAgentRunId() {
+        return subAgentRunId;
+    }
+
+    public void setSubAgentRunId(String subAgentRunId) {
+        this.subAgentRunId = subAgentRunId;
     }
 
     public LocalDateTime getCreatedAt() {

@@ -20,7 +20,6 @@ public class LoopContext {
     private long totalOutputTokens;
     private int loopCount;
     private int maxLoops;
-    private String subAgentTaskId;
     private String executionMode = "ask";
 
     public LoopContext() {
@@ -98,14 +97,6 @@ public class LoopContext {
 
     public void setMaxLoops(int maxLoops) {
         this.maxLoops = maxLoops;
-    }
-
-    public String getSubAgentTaskId() {
-        return subAgentTaskId;
-    }
-
-    public void setSubAgentTaskId(String subAgentTaskId) {
-        this.subAgentTaskId = subAgentTaskId;
     }
 
     public String getExecutionMode() {

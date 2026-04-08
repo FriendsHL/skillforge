@@ -13,6 +13,7 @@ import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.ModelUsageEntity;
 import com.skillforge.server.entity.SessionEntity;
 import com.skillforge.server.repository.ModelUsageRepository;
+import com.skillforge.server.subagent.SubAgentRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -36,6 +37,7 @@ public class ChatService {
     private final ChatEventBroadcaster broadcaster;
     private final ThreadPoolExecutor chatLoopExecutor;
     private final SessionTitleService sessionTitleService;
+    private final SubAgentRegistry subAgentRegistry;
     private final ObjectMapper objectMapper;
 
     public ChatService(AgentService agentService,
@@ -45,7 +47,8 @@ public class ChatService {
                        ModelUsageRepository modelUsageRepository,
                        ChatEventBroadcaster broadcaster,
                        @Qualifier("chatLoopExecutor") ThreadPoolExecutor chatLoopExecutor,
-                       SessionTitleService sessionTitleService) {
+                       SessionTitleService sessionTitleService,
+                       SubAgentRegistry subAgentRegistry) {
         this.agentService = agentService;
         this.sessionService = sessionService;
         this.skillRegistry = skillRegistry;
@@ -54,6 +57,7 @@ public class ChatService {
         this.broadcaster = broadcaster;
         this.chatLoopExecutor = chatLoopExecutor;
         this.sessionTitleService = sessionTitleService;
+        this.subAgentRegistry = subAgentRegistry;
         this.objectMapper = new ObjectMapper();
     }
 
@@ -102,6 +106,10 @@ public class ChatService {
      */
     private void runLoop(String sessionId, String userMessage, Long userId,
                          AgentEntity agentEntity, List<Message> history) {
+        long startedAt = System.currentTimeMillis();
+        String finalMessage = null;
+        int toolCallCount = 0;
+        String finalStatus = "completed";
         try {
             // 解析 agent definition,并把 session 的 executionMode 注入 config
             AgentDefinition agentDef = agentService.toAgentDefinition(agentEntity);
@@ -120,6 +128,8 @@ public class ChatService {
 
             log.info("Running agent loop (async): sessionId={}, agentId={}, mode={}", sessionId, agentEntity.getId(), mode);
             LoopResult result = agentLoopEngine.run(agentDef, userMessage, history, sessionId, userId);
+            finalMessage = result.getFinalResponse();
+            toolCallCount = result.getToolCalls() != null ? result.getToolCalls().size() : 0;
 
             // 保存最终 messages(engine 已经把 user msg + 之后所有消息组装好了)
             sessionService.updateSessionMessages(sessionId, result.getMessages(),
@@ -159,6 +169,8 @@ public class ChatService {
             log.info("Agent loop completed: sessionId={}", sessionId);
         } catch (Exception e) {
             log.error("Agent loop failed: sessionId={}", sessionId, e);
+            finalStatus = "error";
+            finalMessage = e.getMessage();
             try {
                 SessionEntity s = sessionService.getSession(sessionId);
                 s.setRuntimeStatus("error");
@@ -170,6 +182,14 @@ public class ChatService {
                 }
             } catch (Exception inner) {
                 log.error("Failed to mark session error: sessionId={}", sessionId, inner);
+            }
+        } finally {
+            // SubAgent 回调钩子:如果这是子 session,把结果 push 到父;如果这是父,drain 等待中的子结果
+            try {
+                subAgentRegistry.onSessionLoopFinished(sessionId, finalMessage, finalStatus,
+                        toolCallCount, System.currentTimeMillis() - startedAt);
+            } catch (Exception hookErr) {
+                log.error("SubAgentRegistry hook failed: sessionId={}", sessionId, hookErr);
             }
         }
     }
