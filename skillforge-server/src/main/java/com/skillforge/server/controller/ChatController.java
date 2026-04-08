@@ -7,6 +7,8 @@ import com.skillforge.server.dto.CreateSessionRequest;
 import com.skillforge.server.entity.SessionEntity;
 import com.skillforge.server.service.ChatService;
 import com.skillforge.server.service.SessionService;
+import com.skillforge.server.subagent.SubAgentRegistry;
+import com.skillforge.server.subagent.SubAgentRegistry.SubAgentRun;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -30,13 +32,16 @@ public class ChatController {
     private final ChatService chatService;
     private final SessionService sessionService;
     private final PendingAskRegistry pendingAskRegistry;
+    private final SubAgentRegistry subAgentRegistry;
 
     public ChatController(ChatService chatService,
                           SessionService sessionService,
-                          PendingAskRegistry pendingAskRegistry) {
+                          PendingAskRegistry pendingAskRegistry,
+                          SubAgentRegistry subAgentRegistry) {
         this.chatService = chatService;
         this.sessionService = sessionService;
         this.pendingAskRegistry = pendingAskRegistry;
+        this.subAgentRegistry = subAgentRegistry;
     }
 
     /**
@@ -113,5 +118,62 @@ public class ChatController {
     public ResponseEntity<List<Message>> getSessionMessages(@PathVariable String id) {
         List<Message> messages = sessionService.getSessionMessages(id);
         return ResponseEntity.ok(messages);
+    }
+
+    /**
+     * 列出某个父 session 下的所有子 session(SubAgent 派发的)。
+     */
+    @GetMapping("/sessions/{id}/children")
+    public ResponseEntity<List<Map<String, Object>>> getChildSessions(@PathVariable String id) {
+        // 验证父 session 存在(与 getSession 的 404 行为一致,getSession 会抛异常)
+        try {
+            sessionService.getSession(id);
+        } catch (RuntimeException e) {
+            return ResponseEntity.notFound().build();
+        }
+        List<SessionEntity> children = sessionService.listChildSessions(id);
+        List<Map<String, Object>> out = new java.util.ArrayList<>();
+        for (SessionEntity s : children) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("id", s.getId());
+            m.put("agentId", s.getAgentId());
+            m.put("title", s.getTitle());
+            m.put("depth", s.getDepth());
+            m.put("runtimeStatus", s.getRuntimeStatus());
+            m.put("messageCount", s.getMessageCount());
+            m.put("createdAt", s.getCreatedAt());
+            m.put("updatedAt", s.getUpdatedAt());
+            m.put("subAgentRunId", s.getSubAgentRunId());
+            out.add(m);
+        }
+        return ResponseEntity.ok(out);
+    }
+
+    /**
+     * 列出某个父 session 派发过的所有 SubAgent run(来自 SubAgentRegistry)。
+     */
+    @GetMapping("/sessions/{id}/subagent-runs")
+    public ResponseEntity<List<Map<String, Object>>> getSubAgentRuns(@PathVariable String id) {
+        try {
+            sessionService.getSession(id);
+        } catch (RuntimeException e) {
+            return ResponseEntity.notFound().build();
+        }
+        List<SubAgentRun> runs = subAgentRegistry.listRunsForParent(id);
+        List<Map<String, Object>> out = new java.util.ArrayList<>();
+        for (SubAgentRun r : runs) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("runId", r.runId);
+            m.put("childSessionId", r.childSessionId);
+            m.put("childAgentId", r.childAgentId);
+            m.put("childAgentName", r.childAgentName);
+            m.put("task", r.task);
+            m.put("status", r.status);
+            m.put("finalMessage", r.finalMessage);
+            m.put("spawnedAt", r.spawnedAt);
+            m.put("completedAt", r.completedAt);
+            out.add(m);
+        }
+        return ResponseEntity.ok(out);
     }
 }

@@ -78,6 +78,11 @@ public class SessionService {
         return sessionRepository.findByUserIdAndParentSessionIdIsNullOrderByUpdatedAtDesc(userId);
     }
 
+    /** 列出某个 parent session 下的所有子 session(SubAgent 派发)。 */
+    public List<SessionEntity> listChildSessions(String parentSessionId) {
+        return sessionRepository.findByParentSessionId(parentSessionId);
+    }
+
     public void updateSessionMessages(String id, List<Message> messages,
                                        long inputTokens, long outputTokens) {
         SessionEntity session = getSession(id);

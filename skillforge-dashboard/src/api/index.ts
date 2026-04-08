@@ -22,6 +22,10 @@ export const answerAsk = (sessionId: string, askId: string, answer: string) =>
 export const setSessionMode = (sessionId: string, mode: 'ask' | 'auto') =>
   api.patch(`/chat/sessions/${sessionId}/mode`, { mode });
 export const getSession = (sessionId: string) => api.get(`/chat/sessions/${sessionId}`);
+export const getChildSessions = (sessionId: string) =>
+  api.get(`/chat/sessions/${sessionId}/children`);
+export const getSubAgentRuns = (sessionId: string) =>
+  api.get(`/chat/sessions/${sessionId}/subagent-runs`);
 
 // Skill API
 export const getSkills = () => api.get('/skills');

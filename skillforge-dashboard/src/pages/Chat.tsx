@@ -1,8 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Select, List, Card, message, Typography, Empty, Alert, Button, Input, Segmented, Space } from 'antd';
-import { useParams } from 'react-router-dom';
+import { ArrowUpOutlined } from '@ant-design/icons';
+import { useNavigate, useParams } from 'react-router-dom';
 import ChatWindow from '../components/ChatWindow';
 import type { ChatMessage } from '../components/ChatWindow';
+import SubAgentRunsPanel from '../components/SubAgentRunsPanel';
 import {
   getAgents,
   createSession,
@@ -110,7 +112,10 @@ function normalizeMessages(list: any[]): ChatMessage[] {
 
 const Chat: React.FC = () => {
   const { sessionId: urlSessionId } = useParams<{ sessionId?: string }>();
+  const navigate = useNavigate();
   const [agents, setAgents] = useState<any[]>([]);
+  const [parentSessionId, setParentSessionId] = useState<string | null>(null);
+  const [sessionDepth, setSessionDepth] = useState<number>(0);
   const [selectedAgent, setSelectedAgent] = useState<number | undefined>();
   const [sessions, setSessions] = useState<any[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | undefined>(urlSessionId);
@@ -130,6 +135,14 @@ const Chat: React.FC = () => {
   const [streamingText, setStreamingText] = useState<string>('');
 
   const wsRef = useRef<WebSocket | null>(null);
+
+  // URL → activeSessionId 同步(navigate('/chat/:id') 时生效)
+  useEffect(() => {
+    if (urlSessionId && urlSessionId !== activeSessionId) {
+      setActiveSessionId(urlSessionId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [urlSessionId]);
 
   // Load agents
   useEffect(() => {
@@ -165,6 +178,8 @@ const Chat: React.FC = () => {
     setRuntimeError('');
     setInflightTools({});
     setStreamingText('');
+    setParentSessionId(null);
+    setSessionDepth(0);
 
     if (!activeSessionId) {
       setRawMessages([]);
@@ -189,6 +204,8 @@ const Chat: React.FC = () => {
         setRuntimeStep(s.runtimeStep ?? '');
         setRuntimeError(s.runtimeError ?? '');
         setExecutionModeState((s.executionMode ?? 'ask') as ExecutionMode);
+        setParentSessionId(s.parentSessionId ?? null);
+        setSessionDepth(typeof s.depth === 'number' ? s.depth : 0);
       })
       .catch(() => {});
 
@@ -540,7 +557,36 @@ const Chat: React.FC = () => {
                 />
               </div>
             )}
+            {activeSessionId && parentSessionId && (
+              <div
+                style={{
+                  padding: '6px 12px',
+                  borderBottom: '1px solid #f0f0f0',
+                  background: '#fafafa',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                }}
+              >
+                <Button
+                  type="link"
+                  size="small"
+                  icon={<ArrowUpOutlined />}
+                  onClick={() => navigate(`/chat/${parentSessionId}`)}
+                  style={{ padding: 0 }}
+                >
+                  Back to parent
+                </Button>
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  (SubAgent child · depth {sessionDepth})
+                </Text>
+              </div>
+            )}
             {renderBanner()}
+            <SubAgentRunsPanel
+              sessionId={activeSessionId}
+              parentRunning={runtimeStatus === 'running'}
+            />
             {renderPendingAsk()}
             <ChatWindow
               messages={messages}
