@@ -1,14 +1,23 @@
 package com.skillforge.server.subagent;
 
 import com.skillforge.server.entity.SessionEntity;
+import com.skillforge.server.entity.SubAgentPendingResultEntity;
+import com.skillforge.server.entity.SubAgentRunEntity;
 import com.skillforge.server.repository.SessionRepository;
+import com.skillforge.server.repository.SubAgentPendingResultRepository;
+import com.skillforge.server.repository.SubAgentRunRepository;
 import com.skillforge.server.service.ChatService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
 
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -27,23 +36,81 @@ import static org.mockito.Mockito.when;
  *  - 每父并发子上限
  *  - 子结束时:enqueue + (父 idle ⇒ 自动 chatAsync 唤醒)
  *  - 子结束时:父 running ⇒ 只 enqueue 不抢跑
+ *
+ * 持久化仓库用内存 HashMap 打桩模拟(不拉真实 JPA),这样依然是纯单元测试。
  */
 class SubAgentRegistryTest {
 
     private SessionRepository sessionRepository;
+    private SubAgentRunRepository runRepository;
+    private SubAgentPendingResultRepository pendingRepository;
     private ChatService chatService;
     private ObjectProvider<ChatService> chatServiceProvider;
     private SubAgentRegistry registry;
 
+    // 内存 storage
+    private final Map<String, SubAgentRunEntity> runStore = new HashMap<>();
+    private final Map<Long, SubAgentPendingResultEntity> pendingStore = new HashMap<>();
+    private final AtomicLong pendingIdSeq = new AtomicLong(0);
+
     @BeforeEach
     void setUp() {
         sessionRepository = mock(SessionRepository.class);
+        runRepository = mock(SubAgentRunRepository.class);
+        pendingRepository = mock(SubAgentPendingResultRepository.class);
         chatService = mock(ChatService.class);
         @SuppressWarnings("unchecked")
         ObjectProvider<ChatService> provider = mock(ObjectProvider.class);
         when(provider.getObject()).thenReturn(chatService);
         chatServiceProvider = provider;
-        registry = new SubAgentRegistry(sessionRepository, chatServiceProvider);
+
+        // ---- runRepository stub ----
+        when(runRepository.save(any(SubAgentRunEntity.class))).thenAnswer(inv -> {
+            SubAgentRunEntity e = inv.getArgument(0);
+            runStore.put(e.getRunId(), e);
+            return e;
+        });
+        when(runRepository.findById(anyString())).thenAnswer(inv -> {
+            String id = inv.getArgument(0);
+            return Optional.ofNullable(runStore.get(id));
+        });
+        when(runRepository.findByParentSessionId(anyString())).thenAnswer(inv -> {
+            String pid = inv.getArgument(0);
+            List<SubAgentRunEntity> out = new ArrayList<>();
+            for (SubAgentRunEntity e : runStore.values()) {
+                if (pid.equals(e.getParentSessionId())) out.add(e);
+            }
+            return out;
+        });
+
+        // ---- pendingRepository stub ----
+        when(pendingRepository.save(any(SubAgentPendingResultEntity.class))).thenAnswer(inv -> {
+            SubAgentPendingResultEntity e = inv.getArgument(0);
+            if (e.getId() == null) {
+                e.setId(pendingIdSeq.incrementAndGet());
+            }
+            pendingStore.put(e.getId(), e);
+            return e;
+        });
+        when(pendingRepository.findByParentSessionIdOrderByIdAsc(anyString())).thenAnswer(inv -> {
+            String pid = inv.getArgument(0);
+            List<SubAgentPendingResultEntity> out = new ArrayList<>();
+            for (SubAgentPendingResultEntity e : pendingStore.values()) {
+                if (pid.equals(e.getParentSessionId())) out.add(e);
+            }
+            out.sort(Comparator.comparing(SubAgentPendingResultEntity::getId));
+            return out;
+        });
+        org.mockito.Mockito.doAnswer(inv -> {
+            Iterable<?> rows = inv.getArgument(0);
+            for (Object r : rows) {
+                SubAgentPendingResultEntity e = (SubAgentPendingResultEntity) r;
+                pendingStore.remove(e.getId());
+            }
+            return null;
+        }).when(pendingRepository).deleteAll(any(Iterable.class));
+
+        registry = new SubAgentRegistry(sessionRepository, runRepository, pendingRepository, chatServiceProvider);
     }
 
     private SessionEntity session(String id, int depth, String runtimeStatus, String parentId) {
@@ -112,8 +179,10 @@ class SubAgentRegistryTest {
 
         // 父被唤醒一次,消息体包含子 final message
         verify(chatService, times(1)).chatAsync(eq("pa"), anyString(), eq(7L));
-        assertThat(run.status).isEqualTo("COMPLETED");
-        assertThat(run.finalMessage).isEqualTo("the answer is 42");
+        // 从持久层重新读出 run 做断言(DTO 本身不随持久化更新)
+        SubAgentRegistry.SubAgentRun refreshed = registry.getRun(run.runId);
+        assertThat(refreshed.status).isEqualTo("COMPLETED");
+        assertThat(refreshed.finalMessage).isEqualTo("the answer is 42");
     }
 
     @Test
@@ -132,7 +201,8 @@ class SubAgentRegistryTest {
 
         // 父在跑,不能抢跑
         verify(chatService, never()).chatAsync(anyString(), anyString(), any());
-        assertThat(run.status).isEqualTo("COMPLETED");
+        SubAgentRegistry.SubAgentRun refreshed = registry.getRun(run.runId);
+        assertThat(refreshed.status).isEqualTo("COMPLETED");
     }
 
     @Test

@@ -1,7 +1,11 @@
 package com.skillforge.server.subagent;
 
 import com.skillforge.server.entity.SessionEntity;
+import com.skillforge.server.entity.SubAgentPendingResultEntity;
+import com.skillforge.server.entity.SubAgentRunEntity;
 import com.skillforge.server.repository.SessionRepository;
+import com.skillforge.server.repository.SubAgentPendingResultRepository;
+import com.skillforge.server.repository.SubAgentRunRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
@@ -10,8 +14,6 @@ import org.springframework.stereotype.Component;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentLinkedDeque;
 
 /**
  * SubAgent 异步调度注册表。
@@ -22,6 +24,11 @@ import java.util.concurrent.ConcurrentLinkedDeque;
  *  - 子 session 完成时把结果投递给父 session
  *  - 如果父 session 当前 idle,立刻触发 chatAsync 唤醒父 loop;否则父 loop finally 时 drain
  *  - 强制深度 / 并发上限
+ *
+ * 持久化:
+ *  - runs   → t_subagent_run 表 (SubAgentRunRepository)
+ *  - pending → t_subagent_pending_result 表 (SubAgentPendingResultRepository)
+ *  这样 server 重启后 in-flight 的子派发和尚未投递的结果都不会丢。
  *
  * 为避免 ChatService ↔ SubAgentRegistry 的循环依赖,这里用 ObjectProvider<ChatService> 懒加载。
  */
@@ -34,16 +41,17 @@ public class SubAgentRegistry {
     public static final int MAX_ACTIVE_CHILDREN_PER_PARENT = 5;
 
     private final SessionRepository sessionRepository;
+    private final SubAgentRunRepository runRepository;
+    private final SubAgentPendingResultRepository pendingRepository;
     private final ObjectProvider<com.skillforge.server.service.ChatService> chatServiceProvider;
 
-    // runId → SubAgentRun
-    private final ConcurrentHashMap<String, SubAgentRun> runs = new ConcurrentHashMap<>();
-    // parentSessionId → queue of pending result messages
-    private final ConcurrentHashMap<String, ConcurrentLinkedDeque<String>> pendingResults = new ConcurrentHashMap<>();
-
     public SubAgentRegistry(SessionRepository sessionRepository,
+                            SubAgentRunRepository runRepository,
+                            SubAgentPendingResultRepository pendingRepository,
                             ObjectProvider<com.skillforge.server.service.ChatService> chatServiceProvider) {
         this.sessionRepository = sessionRepository;
+        this.runRepository = runRepository;
+        this.pendingRepository = pendingRepository;
         this.chatServiceProvider = chatServiceProvider;
     }
 
@@ -68,35 +76,33 @@ public class SubAgentRegistry {
                     + " active children per parent");
         }
         String runId = java.util.UUID.randomUUID().toString();
-        SubAgentRun run = new SubAgentRun();
-        run.runId = runId;
-        run.parentSessionId = parentSession.getId();
-        run.childAgentId = childAgentId;
-        run.childAgentName = childAgentName;
-        run.task = task;
-        run.spawnedAt = Instant.now();
-        run.status = "RUNNING";
-        runs.put(runId, run);
-        return run;
+        SubAgentRunEntity entity = new SubAgentRunEntity();
+        entity.setRunId(runId);
+        entity.setParentSessionId(parentSession.getId());
+        entity.setChildAgentId(childAgentId);
+        entity.setChildAgentName(childAgentName);
+        entity.setTask(task);
+        entity.setSpawnedAt(Instant.now());
+        entity.setStatus("RUNNING");
+        runRepository.save(entity);
+        return toRun(entity);
     }
 
     public void attachChildSession(String runId, String childSessionId) {
-        SubAgentRun run = runs.get(runId);
-        if (run != null) {
-            run.childSessionId = childSessionId;
-        }
+        runRepository.findById(runId).ifPresent(entity -> {
+            entity.setChildSessionId(childSessionId);
+            runRepository.save(entity);
+        });
     }
 
     public SubAgentRun getRun(String runId) {
-        return runs.get(runId);
+        return runRepository.findById(runId).map(this::toRun).orElse(null);
     }
 
     public List<SubAgentRun> listRunsForParent(String parentSessionId) {
         List<SubAgentRun> out = new ArrayList<>();
-        for (SubAgentRun r : runs.values()) {
-            if (parentSessionId.equals(r.parentSessionId)) {
-                out.add(r);
-            }
+        for (SubAgentRunEntity e : runRepository.findByParentSessionId(parentSessionId)) {
+            out.add(toRun(e));
         }
         return out;
     }
@@ -119,13 +125,15 @@ public class SubAgentRegistry {
         // case 1: 这是一个子 session 刚跑完 → 通知父
         if (session.getParentSessionId() != null) {
             String runId = session.getSubAgentRunId();
-            SubAgentRun run = runId != null ? runs.get(runId) : null;
-            if (run != null) {
-                run.status = "error".equals(status) ? "FAILED" : "COMPLETED";
-                run.finalMessage = finalMessage;
-                run.completedAt = Instant.now();
+            SubAgentRunEntity runEntity = runId != null ? runRepository.findById(runId).orElse(null) : null;
+            if (runEntity != null) {
+                runEntity.setStatus("error".equals(status) ? "FAILED" : "COMPLETED");
+                runEntity.setFinalMessage(finalMessage);
+                runEntity.setCompletedAt(Instant.now());
+                runRepository.save(runEntity);
             }
-            String resultMsg = buildResultMessage(run, session, finalMessage, status, toolCalls, durationMs);
+            SubAgentRun runDto = runEntity != null ? toRun(runEntity) : null;
+            String resultMsg = buildResultMessage(runDto, session, finalMessage, status, toolCalls, durationMs);
             enqueueForParent(session.getParentSessionId(), resultMsg);
             // 父 idle 则立刻唤醒(父 running 时会在父自己的 finally 里被 drain)
             maybeResumeParent(session.getParentSessionId());
@@ -137,47 +145,60 @@ public class SubAgentRegistry {
     }
 
     private void enqueueForParent(String parentSessionId, String resultMsg) {
-        pendingResults.computeIfAbsent(parentSessionId, k -> new ConcurrentLinkedDeque<>()).add(resultMsg);
-        log.info("SubAgent result enqueued for parent={}, pending={}",
-                parentSessionId, pendingResults.get(parentSessionId).size());
+        SubAgentPendingResultEntity row = new SubAgentPendingResultEntity();
+        row.setParentSessionId(parentSessionId);
+        row.setPayload(resultMsg);
+        row.setCreatedAt(Instant.now());
+        pendingRepository.save(row);
+        log.info("SubAgent result enqueued for parent={}", parentSessionId);
     }
 
+    /**
+     * 尝试把 pending 队列合并投递给父 session。
+     *
+     * 并发保护: 这里用 parentSessionId.intern() 做 JVM 本地锁保证同一父只有一个线程 drain,
+     * 避免两个并发 maybeResumeParent 都读到同一批行并重复投递。
+     * 注意: 这是单机 MVP 方案;多实例部署时应改用 DB 行锁 / 乐观锁。
+     */
     private void maybeResumeParent(String parentSessionId) {
-        ConcurrentLinkedDeque<String> queue = pendingResults.get(parentSessionId);
-        if (queue == null || queue.isEmpty()) return;
+        synchronized (parentSessionId.intern()) {
+            List<SubAgentPendingResultEntity> rows =
+                    pendingRepository.findByParentSessionIdOrderByIdAsc(parentSessionId);
+            if (rows.isEmpty()) return;
 
-        SessionEntity parent = sessionRepository.findById(parentSessionId).orElse(null);
-        if (parent == null) {
-            pendingResults.remove(parentSessionId);
-            return;
-        }
-        if (!"idle".equals(parent.getRuntimeStatus())) {
-            // 父还在跑,等它自己 finally 再 drain
-            return;
-        }
+            SessionEntity parent = sessionRepository.findById(parentSessionId).orElse(null);
+            if (parent == null) {
+                pendingRepository.deleteAll(rows);
+                return;
+            }
+            if (!"idle".equals(parent.getRuntimeStatus())) {
+                // 父还在跑,等它自己 finally 再 drain
+                return;
+            }
 
-        // 原子 drain:pollFirst 循环,直到队列空或有人跟我们抢走
-        StringBuilder combined = new StringBuilder();
-        int n = 0;
-        String item;
-        while ((item = queue.pollFirst()) != null) {
-            if (n > 0) combined.append("\n\n");
-            combined.append(item);
-            n++;
-        }
-        if (n == 0) return;
+            StringBuilder combined = new StringBuilder();
+            for (int i = 0; i < rows.size(); i++) {
+                if (i > 0) combined.append("\n\n");
+                combined.append(rows.get(i).getPayload());
+            }
+            String payload = combined.toString();
+            int n = rows.size();
 
-        // 移除空队列
-        pendingResults.remove(parentSessionId, queue);
+            // 先删除再 chatAsync:保证不会重复投递;如果 chatAsync 抛错,把合并后的 payload 作为单行塞回
+            pendingRepository.deleteAll(rows);
+            pendingRepository.flush();
 
-        log.info("Resuming parent session {} with {} pending subagent result(s)", parentSessionId, n);
-        try {
-            chatServiceProvider.getObject().chatAsync(parentSessionId, combined.toString(), parent.getUserId());
-        } catch (Exception e) {
-            log.error("Failed to resume parent session {}", parentSessionId, e);
-            // 失败时把结果塞回队列,下次机会再试
-            pendingResults.computeIfAbsent(parentSessionId, k -> new ConcurrentLinkedDeque<>())
-                    .addFirst(combined.toString());
+            log.info("Resuming parent session {} with {} pending subagent result(s)", parentSessionId, n);
+            try {
+                chatServiceProvider.getObject().chatAsync(parentSessionId, payload, parent.getUserId());
+            } catch (Exception e) {
+                log.error("Failed to resume parent session {}, re-enqueueing combined payload", parentSessionId, e);
+                SubAgentPendingResultEntity retry = new SubAgentPendingResultEntity();
+                retry.setParentSessionId(parentSessionId);
+                retry.setPayload(payload);
+                retry.setCreatedAt(Instant.now());
+                pendingRepository.save(retry);
+            }
         }
     }
 
@@ -199,8 +220,27 @@ public class SubAgentRegistry {
         return sb.toString();
     }
 
+    private SubAgentRun toRun(SubAgentRunEntity e) {
+        SubAgentRun r = new SubAgentRun();
+        r.runId = e.getRunId();
+        r.parentSessionId = e.getParentSessionId();
+        r.childSessionId = e.getChildSessionId();
+        r.childAgentId = e.getChildAgentId();
+        r.childAgentName = e.getChildAgentName();
+        r.task = e.getTask();
+        r.status = e.getStatus();
+        r.finalMessage = e.getFinalMessage();
+        r.spawnedAt = e.getSpawnedAt();
+        r.completedAt = e.getCompletedAt();
+        return r;
+    }
+
     // ============ 数据结构 ============
 
+    /**
+     * DTO,镜像 SubAgentRunEntity —— SubAgentSkill 和测试都直接读这些字段。
+     * 保留为 POJO 是为了不在 skill 代码里暴露 JPA entity。
+     */
     public static class SubAgentRun {
         public String runId;
         public String parentSessionId;
