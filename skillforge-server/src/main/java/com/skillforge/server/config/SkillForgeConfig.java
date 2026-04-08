@@ -17,6 +17,10 @@ import com.skillforge.skills.BrowserSkill;
 import com.skillforge.skills.GrepSkill;
 import com.skillforge.skills.SubAgentSkill;
 import com.skillforge.core.engine.SubAgentExecutor;
+import com.skillforge.server.clawhub.ClawHubClient;
+import com.skillforge.server.clawhub.ClawHubInstallService;
+import com.skillforge.server.clawhub.ClawHubProperties;
+import com.skillforge.server.skill.ClawHubSkill;
 import com.skillforge.server.skill.MemorySkill;
 import com.skillforge.server.service.MemoryService;
 import com.skillforge.server.service.AgentService;
@@ -34,7 +38,7 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 @Configuration
-@EnableConfigurationProperties({LlmProperties.class, BrowserProperties.class})
+@EnableConfigurationProperties({LlmProperties.class, BrowserProperties.class, ClawHubProperties.class})
 public class SkillForgeConfig {
 
     private static final Logger log = LoggerFactory.getLogger(SkillForgeConfig.class);
@@ -59,6 +63,21 @@ public class SkillForgeConfig {
         registry.register(browserSkill);
         registry.register(new MemorySkill(memoryService));
         return registry;
+    }
+
+    /**
+     * ClawHubSkill 单独成 bean,便于注入 ClawHubClient + ClawHubInstallService
+     * (它们都是 @Service / @Component,Spring 自动装配)。
+     * 注意:必须依赖 SkillRegistry,确保注册时机晚于上面 skillRegistry() 创建。
+     */
+    @Bean
+    public ClawHubSkill clawHubSkill(ClawHubClient client,
+                                     ClawHubInstallService installService,
+                                     SkillRegistry skillRegistry) {
+        ClawHubSkill skill = new ClawHubSkill(client, installService);
+        skillRegistry.register(skill);
+        log.info("Registered ClawHubSkill into SkillRegistry");
+        return skill;
     }
 
     @Bean

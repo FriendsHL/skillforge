@@ -55,6 +55,20 @@ skillforge:
         base-url: https://coding.dashscope.aliyuncs.com
         model: qwen3.5-plus
 
+clawhub:
+  enabled: true
+  base-url: https://clawhub.ai
+  install-dir: ./data/skills/clawhub
+  # install 操作即使在 auto 模式也强制 ask_user 确认
+  require-ask-user: true
+  ask-user-timeout-seconds: 600
+  http-timeout-ms: 30000
+  # 安全检测阈值
+  max-zip-entries: 200
+  max-uncompressed-bytes: 10485760   # 10 MB
+  max-single-entry-bytes: 2097152    # 2 MB
+  max-compression-ratio: 100
+
 logging:
   level:
     com.skillforge: DEBUG

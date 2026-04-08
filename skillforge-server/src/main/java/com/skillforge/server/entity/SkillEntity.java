@@ -42,6 +42,22 @@ public class SkillEntity {
     @Column(columnDefinition = "boolean default true")
     private boolean enabled = true;
 
+    /** Skill 来源: builtin / upload / clawhub。null 视为旧数据(upload) */
+    @Column(length = 32)
+    private String source;
+
+    /** ClawHub 安装时记录的版本号(其他来源为 null) */
+    @Column(length = 64)
+    private String version;
+
+    /** 风险等级: low / medium / high / blocked */
+    @Column(length = 16)
+    private String riskLevel;
+
+    /** 安全扫描报告(JSON 字符串,审计用) */
+    @Column(columnDefinition = "TEXT")
+    private String scanReport;
+
     @CreatedDate
     private LocalDateTime createdAt;
 
@@ -126,5 +142,37 @@ public class SkillEntity {
 
     public void setEnabled(boolean enabled) {
         this.enabled = enabled;
+    }
+
+    public String getSource() {
+        return source;
+    }
+
+    public void setSource(String source) {
+        this.source = source;
+    }
+
+    public String getVersion() {
+        return version;
+    }
+
+    public void setVersion(String version) {
+        this.version = version;
+    }
+
+    public String getRiskLevel() {
+        return riskLevel;
+    }
+
+    public void setRiskLevel(String riskLevel) {
+        this.riskLevel = riskLevel;
+    }
+
+    public String getScanReport() {
+        return scanReport;
+    }
+
+    public void setScanReport(String scanReport) {
+        this.scanReport = scanReport;
     }
 }

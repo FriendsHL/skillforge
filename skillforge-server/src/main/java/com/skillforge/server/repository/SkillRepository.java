@@ -13,4 +13,6 @@ public interface SkillRepository extends JpaRepository<SkillEntity, Long> {
     List<SkillEntity> findByIsPublicTrue();
 
     Optional<SkillEntity> findByName(String name);
+
+    List<SkillEntity> findBySource(String source);
 }
