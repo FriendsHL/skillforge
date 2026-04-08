@@ -304,7 +304,7 @@ const SkillList: React.FC = () => {
             <Paragraph><strong>Read-Only:</strong> {builtinDetail.readOnly ? 'Yes' : 'No'}</Paragraph>
             {builtinDetail.toolSchema && (
               <>
-                <Divider orientation="left" plain>Tool Schema (Input Parameters)</Divider>
+                <Divider titlePlacement="left" plain>Tool Schema (Input Parameters)</Divider>
                 <pre style={{ maxHeight: 400, overflow: 'auto', fontSize: 13, background: '#f5f5f5', padding: 12, borderRadius: 6, margin: 0 }}>
                   {JSON.stringify(builtinDetail.toolSchema, null, 2)}
                 </pre>

@@ -40,6 +40,16 @@ public class SubAgentRegistry {
     public static final int MAX_DEPTH = 3;
     public static final int MAX_ACTIVE_CHILDREN_PER_PARENT = 5;
 
+    /**
+     * 固定大小的 stripe 锁数组,按 parentSessionId 哈希分桶。
+     * 用数组而不是 ConcurrentHashMap / String.intern():
+     *  - intern() 的字符串常驻 metaspace,UUID 量大时会泄漏
+     *  - ConcurrentHashMap<String, Lock> 需要手动清理同样会增长
+     *  - 数组容量固定,内存恒定;不同父 session 偶尔哈希到同一桶只是轻度串行,不影响正确性
+     */
+    private static final int LOCK_STRIPES = 64;
+    private final Object[] parentLocks;
+
     private final SessionRepository sessionRepository;
     private final SubAgentRunRepository runRepository;
     private final SubAgentPendingResultRepository pendingRepository;
@@ -53,6 +63,15 @@ public class SubAgentRegistry {
         this.runRepository = runRepository;
         this.pendingRepository = pendingRepository;
         this.chatServiceProvider = chatServiceProvider;
+        this.parentLocks = new Object[LOCK_STRIPES];
+        for (int i = 0; i < LOCK_STRIPES; i++) {
+            this.parentLocks[i] = new Object();
+        }
+    }
+
+    private Object lockFor(String parentSessionId) {
+        // Math.floorMod 处理负哈希
+        return parentLocks[Math.floorMod(parentSessionId.hashCode(), LOCK_STRIPES)];
     }
 
     // ============ dispatch 侧 ============
@@ -156,12 +175,12 @@ public class SubAgentRegistry {
     /**
      * 尝试把 pending 队列合并投递给父 session。
      *
-     * 并发保护: 这里用 parentSessionId.intern() 做 JVM 本地锁保证同一父只有一个线程 drain,
-     * 避免两个并发 maybeResumeParent 都读到同一批行并重复投递。
+     * 并发保护: 用固定大小的 stripe 锁数组(按 parentSessionId 哈希),保证同一父只有一个线程
+     * 在 drain,避免重复投递。不同父大概率落不同桶,偶尔碰撞只是轻度串行。
      * 注意: 这是单机 MVP 方案;多实例部署时应改用 DB 行锁 / 乐观锁。
      */
     private void maybeResumeParent(String parentSessionId) {
-        synchronized (parentSessionId.intern()) {
+        synchronized (lockFor(parentSessionId)) {
             List<SubAgentPendingResultEntity> rows =
                     pendingRepository.findByParentSessionIdOrderByIdAsc(parentSessionId);
             if (rows.isEmpty()) return;
