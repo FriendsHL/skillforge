@@ -24,6 +24,12 @@ public class LoopContext {
     private String executionMode = "ask";
     /** 外部(CancellationRegistry)设置为 true 后,下次循环迭代开头 / LLM 调用返回后会立即退出。 */
     private final AtomicBoolean cancelRequested = new AtomicBoolean(false);
+    /**
+     * 本轮 iteration 内是否已经执行过一次 compact。
+     * 用于防止 "compact → 仍超限 → 再 compact → ..." 死循环, 也防止同一 iteration 里
+     * engine-soft 已执行后 agent-tool 再次触发。每次 iteration 开头清零。
+     */
+    private boolean compactedThisIteration = false;
 
     public LoopContext() {
         this.messages = new ArrayList<>();
@@ -139,5 +145,17 @@ public class LoopContext {
      */
     public void incrementLoopCount() {
         this.loopCount++;
+    }
+
+    public boolean isCompactedThisIteration() {
+        return compactedThisIteration;
+    }
+
+    public void markCompactedThisIteration() {
+        this.compactedThisIteration = true;
+    }
+
+    public void resetCompactedThisIteration() {
+        this.compactedThisIteration = false;
     }
 }

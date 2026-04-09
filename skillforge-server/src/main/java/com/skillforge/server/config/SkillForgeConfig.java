@@ -1,5 +1,8 @@
 package com.skillforge.server.config;
 
+import com.skillforge.core.compact.ContextCompactorCallback;
+import com.skillforge.core.compact.FullCompactStrategy;
+import com.skillforge.core.compact.LightCompactStrategy;
 import com.skillforge.core.engine.AgentLoopEngine;
 import com.skillforge.core.engine.CancellationRegistry;
 import com.skillforge.core.engine.ChatEventBroadcaster;
@@ -126,10 +129,14 @@ public class SkillForgeConfig {
             if (providerConfig.getMaxRetries() != null) {
                 modelConfig.setMaxRetries(providerConfig.getMaxRetries());
             }
+            if (providerConfig.getContextWindowTokens() != null) {
+                modelConfig.setContextWindowTokens(providerConfig.getContextWindowTokens());
+            }
             factory.getProvider(modelConfig);
-            log.info("Registered LLM provider: name={}, type={}, baseUrl={}, readTimeoutSec={}, maxRetries={}",
+            log.info("Registered LLM provider: name={}, type={}, baseUrl={}, readTimeoutSec={}, maxRetries={}, contextWindowTokens={}",
                     name, providerConfig.getType(), providerConfig.getBaseUrl(),
-                    modelConfig.getReadTimeoutSeconds(), modelConfig.getMaxRetries());
+                    modelConfig.getReadTimeoutSeconds(), modelConfig.getMaxRetries(),
+                    modelConfig.getContextWindowTokens());
         }
 
         return factory;
@@ -146,16 +153,28 @@ public class SkillForgeConfig {
     }
 
     @Bean
+    public LightCompactStrategy lightCompactStrategy() {
+        return new LightCompactStrategy();
+    }
+
+    @Bean
+    public FullCompactStrategy fullCompactStrategy() {
+        return new FullCompactStrategy();
+    }
+
+    @Bean
     public AgentLoopEngine agentLoopEngine(LlmProviderFactory llmProviderFactory, LlmProperties llmProperties,
                                            SkillRegistry skillRegistry,
                                            ChatEventBroadcaster broadcaster,
-                                           PendingAskRegistry pendingAskRegistry) {
+                                           PendingAskRegistry pendingAskRegistry,
+                                           @Lazy ContextCompactorCallback compactorCallback) {
         String defaultProvider = llmProperties.getDefaultProvider() != null
                 ? llmProperties.getDefaultProvider() : "claude";
         AgentLoopEngine engine = new AgentLoopEngine(llmProviderFactory, defaultProvider, skillRegistry,
                 Collections.emptyList(), List.of(new SafetySkillHook()), Collections.emptyList());
         engine.setBroadcaster(broadcaster);
         engine.setPendingAskRegistry(pendingAskRegistry);
+        engine.setCompactorCallback(compactorCallback);
         return engine;
     }
 

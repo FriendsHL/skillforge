@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Select, List, Card, message, Typography, Empty, Alert, Button, Input, Segmented, Space } from 'antd';
+import { Select, List, Card, message, Typography, Empty, Alert, Button, Input, Segmented, Space, Modal, Tag, Table } from 'antd';
 import { ArrowUpOutlined } from '@ant-design/icons';
 import { useNavigate, useParams } from 'react-router-dom';
 import ChatWindow from '../components/ChatWindow';
@@ -16,6 +16,8 @@ import {
   answerAsk,
   setSessionMode,
   getSession,
+  compactSession,
+  getCompactions,
 } from '../api';
 
 const { Text } = Typography;
@@ -140,6 +142,13 @@ const Chat: React.FC = () => {
   const [streamingToolInputs, setStreamingToolInputs] = useState<Record<string, { name: string; jsonBuffer: string }>>({});
   // cancel 按钮飞行中状态(避免重复点击)
   const [cancelling, setCancelling] = useState(false);
+  // compact badge stats (read from session detail)
+  const [lightCompactCount, setLightCompactCount] = useState(0);
+  const [fullCompactCount, setFullCompactCount] = useState(0);
+  const [totalTokensReclaimed, setTotalTokensReclaimed] = useState(0);
+  const [compactModalOpen, setCompactModalOpen] = useState(false);
+  const [compactEvents, setCompactEvents] = useState<any[]>([]);
+  const [compacting, setCompacting] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
 
@@ -215,6 +224,9 @@ const Chat: React.FC = () => {
         setExecutionModeState((s.executionMode ?? 'ask') as ExecutionMode);
         setParentSessionId(s.parentSessionId ?? null);
         setSessionDepth(typeof s.depth === 'number' ? s.depth : 0);
+        setLightCompactCount(s.lightCompactCount ?? 0);
+        setFullCompactCount(s.fullCompactCount ?? 0);
+        setTotalTokensReclaimed(s.totalTokensReclaimed ?? 0);
       })
       .catch(() => {});
 
@@ -548,6 +560,54 @@ const Chat: React.FC = () => {
     return merged;
   }, [inflightTools, streamingToolInputs]);
 
+  const refreshCompactStats = async () => {
+    if (!activeSessionId) return;
+    try {
+      const res = await getSession(activeSessionId, 1);
+      const s = res.data;
+      setLightCompactCount(s.lightCompactCount ?? 0);
+      setFullCompactCount(s.fullCompactCount ?? 0);
+      setTotalTokensReclaimed(s.totalTokensReclaimed ?? 0);
+    } catch {}
+  };
+
+  const handleCompactClick = async () => {
+    if (!activeSessionId || compacting || runtimeStatus === 'running') return;
+    setCompacting(true);
+    try {
+      const res = await compactSession(activeSessionId, 'full', 1, 'user clicked compact button');
+      const reclaimed = res.data?.tokensReclaimed ?? 0;
+      message.success(`已压缩:释放 ${reclaimed} tokens`);
+      await refreshCompactStats();
+      // also refetch messages so the new synthetic summary shows up
+      try {
+        const mres = await getSessionMessages(activeSessionId, 1);
+        const list = Array.isArray(mres.data) ? mres.data : mres.data?.data ?? [];
+        setRawMessages(list);
+      } catch {}
+    } catch (e: any) {
+      const status = e?.response?.status;
+      if (status === 409) {
+        message.warning('Session 正在运行, 无法压缩');
+      } else {
+        message.error('压缩失败');
+      }
+    }
+    setCompacting(false);
+  };
+
+  const handleOpenCompactModal = async () => {
+    setCompactModalOpen(true);
+    if (!activeSessionId) return;
+    try {
+      const res = await getCompactions(activeSessionId, 1);
+      const list = Array.isArray(res.data) ? res.data : res.data?.data ?? [];
+      setCompactEvents(list);
+    } catch {
+      setCompactEvents([]);
+    }
+  };
+
   const handleCancel = async () => {
     if (!activeSessionId || cancelling) return;
     setCancelling(true);
@@ -629,6 +689,22 @@ const Chat: React.FC = () => {
                   gap: 8,
                 }}
               >
+                <a
+                  onClick={handleOpenCompactModal}
+                  title="查看压缩历史"
+                  style={{ fontSize: 12, color: '#888', marginRight: 8 }}
+                >
+                  🗜 {lightCompactCount} light · {fullCompactCount} full · -{totalTokensReclaimed} tok
+                </a>
+                <Button
+                  size="small"
+                  disabled={runtimeStatus === 'running' || compacting}
+                  loading={compacting}
+                  onClick={handleCompactClick}
+                  title="立即对老历史做一次 LLM 总结压缩"
+                >
+                  🗜 Compact (full)
+                </Button>
                 <Text type="secondary" style={{ fontSize: 12 }}>模式:</Text>
                 <Segmented
                   size="small"
@@ -692,6 +768,50 @@ const Chat: React.FC = () => {
           </div>
         )}
       </Card>
+      <Modal
+        title="压缩历史"
+        open={compactModalOpen}
+        onCancel={() => setCompactModalOpen(false)}
+        footer={null}
+        width={900}
+      >
+        <Table
+          size="small"
+          rowKey="id"
+          dataSource={compactEvents}
+          pagination={{ pageSize: 10 }}
+          columns={[
+            {
+              title: 'Time',
+              dataIndex: 'triggeredAt',
+              width: 160,
+              render: (v: string) => (v ? new Date(v).toLocaleString() : '-'),
+            },
+            {
+              title: 'Level',
+              dataIndex: 'level',
+              width: 70,
+              render: (v: string) => (
+                <Tag color={v === 'full' ? 'volcano' : 'blue'}>{v}</Tag>
+              ),
+            },
+            { title: 'Source', dataIndex: 'source', width: 110 },
+            { title: 'Reason', dataIndex: 'reason', ellipsis: true },
+            {
+              title: 'Reclaimed',
+              dataIndex: 'tokensReclaimed',
+              width: 100,
+              render: (v: number) => `${v} tok`,
+            },
+            {
+              title: 'Strategies',
+              dataIndex: 'strategiesApplied',
+              width: 200,
+              ellipsis: true,
+            },
+          ]}
+        />
+      </Modal>
     </div>
   );
 };

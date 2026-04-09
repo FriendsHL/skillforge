@@ -58,6 +58,8 @@ public class LlmProperties {
         private Integer readTimeoutSeconds;
         /** Optional max retries override (on SocketTimeoutException only). Null = use ModelConfig default. */
         private Integer maxRetries;
+        /** Optional context window (tokens) override. Null = use ModelConfig default (32000). */
+        private Integer contextWindowTokens;
 
         public Integer getReadTimeoutSeconds() {
             return readTimeoutSeconds;
@@ -73,6 +75,14 @@ public class LlmProperties {
 
         public void setMaxRetries(Integer maxRetries) {
             this.maxRetries = maxRetries;
+        }
+
+        public Integer getContextWindowTokens() {
+            return contextWindowTokens;
+        }
+
+        public void setContextWindowTokens(Integer contextWindowTokens) {
+            this.contextWindowTokens = contextWindowTokens;
         }
 
         public String getType() {

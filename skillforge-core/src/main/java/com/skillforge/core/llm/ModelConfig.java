@@ -10,6 +10,7 @@ public class ModelConfig {
 
     public static final int DEFAULT_READ_TIMEOUT_SECONDS = 60;
     public static final int DEFAULT_MAX_RETRIES = 1;
+    public static final int DEFAULT_CONTEXT_WINDOW_TOKENS = 32000;
 
     private String providerName;
     private String type;
@@ -18,6 +19,7 @@ public class ModelConfig {
     private String model;
     private int readTimeoutSeconds = DEFAULT_READ_TIMEOUT_SECONDS;
     private int maxRetries = DEFAULT_MAX_RETRIES;
+    private int contextWindowTokens = DEFAULT_CONTEXT_WINDOW_TOKENS;
     private Map<String, Object> extraConfig = new HashMap<>();
 
     public ModelConfig() {
@@ -92,6 +94,14 @@ public class ModelConfig {
 
     public void setMaxRetries(int maxRetries) {
         this.maxRetries = maxRetries;
+    }
+
+    public int getContextWindowTokens() {
+        return contextWindowTokens;
+    }
+
+    public void setContextWindowTokens(int contextWindowTokens) {
+        this.contextWindowTokens = contextWindowTokens;
     }
 
     public Map<String, Object> getExtraConfig() {

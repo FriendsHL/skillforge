@@ -1,5 +1,9 @@
 package com.skillforge.core.engine;
 
+import com.skillforge.core.compact.ContextCompactTool;
+import com.skillforge.core.compact.ContextCompactorCallback;
+import com.skillforge.core.compact.ContextCompactorCallback.CompactCallbackResult;
+import com.skillforge.core.compact.TokenEstimator;
 import com.skillforge.core.context.ContextProvider;
 import com.skillforge.core.context.SystemPromptBuilder;
 import com.skillforge.core.llm.LlmProvider;
@@ -55,6 +59,13 @@ public class AgentLoopEngine {
     private PendingAskRegistry pendingAskRegistry;
     /** ask_user 默认超时 */
     private long askUserTimeoutSeconds = 30 * 60L;
+    /**
+     * 可选:context 压缩回调。server 通过 setter 注入 CompactionService 的实现。
+     * null 时 compact_context 工具不会被注入, 也不会跑 B1/B2 safety net。
+     */
+    private ContextCompactorCallback compactorCallback;
+    /** 默认 context window, 单位 token。从 AgentDefinition config 覆盖。 */
+    private int defaultContextWindowTokens = 32000;
 
     public AgentLoopEngine(LlmProviderFactory llmProviderFactory,
                            String defaultProviderName,
@@ -85,6 +96,25 @@ public class AgentLoopEngine {
 
     public void setAskUserTimeoutSeconds(long askUserTimeoutSeconds) {
         this.askUserTimeoutSeconds = askUserTimeoutSeconds;
+    }
+
+    public void setCompactorCallback(ContextCompactorCallback compactorCallback) {
+        this.compactorCallback = compactorCallback;
+    }
+
+    public void setDefaultContextWindowTokens(int defaultContextWindowTokens) {
+        if (defaultContextWindowTokens > 0) {
+            this.defaultContextWindowTokens = defaultContextWindowTokens;
+        }
+    }
+
+    // package-private for AgentLoopEngineCompactTest to verify per-agent override is honored
+    int resolveContextWindow(AgentDefinition agentDef) {
+        Object val = agentDef.getConfig().get("context_window_tokens");
+        if (val instanceof Number n && n.intValue() > 0) {
+            return n.intValue();
+        }
+        return defaultContextWindowTokens;
     }
 
     /**
@@ -156,8 +186,9 @@ public class AgentLoopEngine {
         List<SkillDefinition> skillDefs = new ArrayList<>(skillRegistry.getAllSkillDefinitions());
         String systemPrompt = new SystemPromptBuilder(agentDef, skillDefs, contextProviders).build();
 
-        // 5. 收集 tools: 内置 Skill 的 ToolSchema + SkillDefinition 的描述 + (可选) ask_user
+        // 5. 收集 tools: 内置 Skill 的 ToolSchema + SkillDefinition 的描述 + (可选) ask_user + compact_context
         List<ToolSchema> tools = collectTools(loopCtx.getExecutionMode());
+        final int contextWindowTokens = resolveContextWindow(agentDef);
 
         // 追踪工具调用记录
         List<ToolCallRecord> toolCallRecords = new CopyOnWriteArrayList<>();
@@ -179,16 +210,56 @@ public class AgentLoopEngine {
             }
             log.debug("AgentLoop iteration {} / {}", loopCtx.getLoopCount() + 1, loopCtx.getMaxLoops());
 
-            // a. 上下文压缩检查
-            if (contextCompactor != null) {
-                int maxContextTokens = agentDef.getMaxContextTokens();
-                List<Message> compactedMessages = contextCompactor.compactIfNeeded(messages, systemPrompt, maxContextTokens);
-                if (compactedMessages != messages) {
-                    int beforeTokens = tokenCounter.countMessageTokens(messages);
-                    int afterTokens = tokenCounter.countMessageTokens(compactedMessages);
-                    log.info("Context compacted: {} messages -> {} messages, {} tokens -> {} tokens",
-                            messages.size(), compactedMessages.size(), beforeTokens, afterTokens);
-                    messages = compactedMessages;
+            // 每次迭代开头清掉"本轮已压缩"标志 —— 这是防止无限压缩循环的核心
+            loopCtx.resetCompactedThisIteration();
+
+            // a. B1/B2 safety net: 基于 TokenEstimator 的估算自动触发压缩
+            //
+            // B1 = engine-soft light compact, 条件 ratio > 0.40 或 detectWaste
+            // B2 = engine-hard full compact, 条件 "B1 刚跑过(本轮) 且 ratio 仍 > 0.70"
+            //   (以 0.70 为阈值:  如果 B1 收回了足够 token, ratio 应该明显下降,
+            //    否则说明 light 不够用, 必须上 full LLM 总结)
+            //
+            // 防循环: 这两个分支各自只会在本 iteration 执行一次 —— B2 的前置条件是
+            // b1RanInThisIteration, 而 B1 分支的执行条件是 ratio/waste, 改过后 ratio
+            // 通常下降不再满足触发. 这保证了 "B2 只在 B1 执行后触发"
+            // 且"每个 iteration 至多一次完整 B1→B2 序列".
+            boolean b1RanInThisIteration = false;
+            if (compactorCallback != null) {
+                int estTokens = TokenEstimator.estimate(messages);
+                double ratio = contextWindowTokens > 0 ? (double) estTokens / contextWindowTokens : 0;
+                boolean waste = detectWaste(messages);
+                if (ratio > 0.40 || waste) {
+                    String reason = waste
+                            ? "engine-soft: waste detected (large tool_result / dedup / retry loop)"
+                            : String.format("engine-soft: estTokens=%d / window=%d (ratio=%.2f)",
+                                    estTokens, contextWindowTokens, ratio);
+                    CompactCallbackResult cr = compactorCallback.compactLight(
+                            loopCtx.getSessionId(), messages, "engine-soft", reason);
+                    b1RanInThisIteration = true;
+                    if (cr != null && cr.performed) {
+                        messages = cr.messages;
+                        loopCtx.setMessages(messages);
+                        loopCtx.markCompactedThisIteration();
+                        estTokens = TokenEstimator.estimate(messages);
+                        ratio = contextWindowTokens > 0 ? (double) estTokens / contextWindowTokens : 0;
+                        log.info("engine-soft light compact done: sessionId={}, reclaimed={} tokens, new ratio={}",
+                                loopCtx.getSessionId(), cr.tokensReclaimed, String.format("%.2f", ratio));
+                    }
+                }
+                // B2: B1 刚跑过 (无论实际 performed 还是 no-op) 且 ratio 仍 > 0.70 → 升级到 full
+                if (b1RanInThisIteration && ratio > 0.70) {
+                    String reason = String.format("engine-hard: B1 ran but ratio still %.2f (estTokens=%d / window=%d)",
+                            ratio, estTokens, contextWindowTokens);
+                    CompactCallbackResult cr = compactorCallback.compactFull(
+                            loopCtx.getSessionId(), messages, "engine-hard", reason);
+                    if (cr != null && cr.performed) {
+                        messages = cr.messages;
+                        loopCtx.setMessages(messages);
+                        loopCtx.markCompactedThisIteration();
+                        log.info("engine-hard full compact done: sessionId={}, reclaimed={} tokens",
+                                loopCtx.getSessionId(), cr.tokensReclaimed);
+                    }
                 }
             }
 
@@ -294,7 +365,7 @@ public class AgentLoopEngine {
                 break;
             }
 
-            // 处理 tool_use: 先把 ask_user 从列表里拆出来走特殊分支,其余并行执行
+            // 处理 tool_use: 先把 ask_user / compact_context 从列表里拆出来走特殊分支,其余并行执行
             List<ToolUseBlock> toolUseBlocks = response.getToolUseBlocks();
             log.info("Processing {} tool call(s) at loop {}", toolUseBlocks.size(), loopCtx.getLoopCount() + 1);
 
@@ -305,6 +376,11 @@ public class AgentLoopEngine {
                 if (AskUserTool.NAME.equals(block.getName())) {
                     Message result = handleAskUser(block, loopCtx);
                     askResults.put(i, result);
+                } else if (ContextCompactTool.NAME.equals(block.getName())) {
+                    Message result = handleCompactContext(block, loopCtx);
+                    askResults.put(i, result);
+                    // compact 可能替换了 messages, 同步回本地 messages 引用
+                    messages = loopCtx.getMessages();
                 } else {
                     final int idx = i;
                     final ToolUseBlock fblock = block;
@@ -454,6 +530,11 @@ public class AgentLoopEngine {
             tools.add(AskUserTool.toolSchema());
         }
 
+        // compact_context: 只在压缩回调可用时注入, 允许 LLM 自行决定何时压缩
+        if (compactorCallback != null) {
+            tools.add(ContextCompactTool.toolSchema());
+        }
+
         return tools;
     }
 
@@ -554,6 +635,108 @@ public class AgentLoopEngine {
                     false);
         }
         return Message.toolResult(toolUseId, "User answered: " + answer, false);
+    }
+
+    /**
+     * 检测消息流是否有浪费信号, 用于 B1 触发 light 压缩。
+     */
+    private boolean detectWaste(List<Message> messages) {
+        if (messages == null || messages.size() < 2) return false;
+        // 1) 任一 tool_result content > 5KB
+        // 2) 3+ 连续 is_error=true tool_result
+        int consecutiveErrors = 0;
+        for (Message m : messages) {
+            if (m.getContent() instanceof List<?> blocks) {
+                boolean hasError = false;
+                boolean hasToolResult = false;
+                for (Object o : blocks) {
+                    if (!(o instanceof ContentBlock cb)) continue;
+                    if ("tool_result".equals(cb.getType())) {
+                        hasToolResult = true;
+                        String c = cb.getContent();
+                        if (c != null && c.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 5 * 1024) {
+                            return true;
+                        }
+                        if (Boolean.TRUE.equals(cb.getIsError())) hasError = true;
+                    }
+                }
+                if (hasToolResult && hasError) {
+                    consecutiveErrors++;
+                    if (consecutiveErrors >= 3) return true;
+                } else if (hasToolResult) {
+                    consecutiveErrors = 0;
+                }
+            }
+        }
+        // 3) 3+ 连续相同 tool_use (name + input hash)
+        String lastSig = null;
+        int consecutiveSame = 1;
+        for (Message m : messages) {
+            if (m.getContent() instanceof List<?> blocks) {
+                for (Object o : blocks) {
+                    if (o instanceof ContentBlock cb && "tool_use".equals(cb.getType())) {
+                        String sig = (cb.getName() != null ? cb.getName() : "") + "#"
+                                + (cb.getInput() != null ? cb.getInput().toString().hashCode() : 0);
+                        if (sig.equals(lastSig)) {
+                            consecutiveSame++;
+                            if (consecutiveSame >= 3) return true;
+                        } else {
+                            consecutiveSame = 1;
+                            lastSig = sig;
+                        }
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 处理 LLM 发起的 compact_context tool_use。
+     * <p>防循环保护: 本 iteration 已经跑过一次 compact (engine-soft, engine-hard, 或更早的 agent-tool)
+     * 就直接短路 —— 无论 light 还是 full 都不再执行. 这是"每 iteration 最多一次 compact"的硬保证.
+     *
+     * <p>Package-private for unit testing the anti-loop guard.
+     */
+    Message handleCompactContext(ToolUseBlock block, LoopContext loopCtx) {
+        String toolUseId = block.getId();
+        Map<String, Object> input = block.getInput() != null ? block.getInput() : Collections.emptyMap();
+        String level = input.get("level") != null ? input.get("level").toString() : "light";
+        String reason = input.get("reason") != null ? input.get("reason").toString() : "(no reason)";
+
+        if (compactorCallback == null) {
+            return Message.toolResult(toolUseId, "compact_context is not available in this runtime.", true);
+        }
+        // 防循环:任何 level 都被此 flag 阻断 —— 一个 iteration 内至多一次 compact
+        if (loopCtx.isCompactedThisIteration()) {
+            log.info("compact_context short-circuited: already ran this iteration (level={})", level);
+            return Message.toolResult(toolUseId,
+                    "Skipped: a compact already ran this iteration", false);
+        }
+
+        try {
+            CompactCallbackResult cr;
+            if ("full".equalsIgnoreCase(level)) {
+                cr = compactorCallback.compactFull(loopCtx.getSessionId(), loopCtx.getMessages(),
+                        "agent-tool", reason);
+            } else {
+                cr = compactorCallback.compactLight(loopCtx.getSessionId(), loopCtx.getMessages(),
+                        "agent-tool", reason);
+            }
+            if (cr != null && cr.performed) {
+                loopCtx.setMessages(cr.messages);
+                loopCtx.markCompactedThisIteration();
+                String summary = String.format("Compact %s done: reclaimed %d tokens (%d→%d). %s",
+                        level, cr.tokensReclaimed, cr.beforeTokens, cr.afterTokens,
+                        cr.summary != null ? cr.summary : "");
+                return Message.toolResult(toolUseId, summary, false);
+            }
+            String msg = cr != null && cr.summary != null ? cr.summary : "no-op";
+            return Message.toolResult(toolUseId, "compact_context no-op: " + msg, false);
+        } catch (Exception e) {
+            log.error("compact_context failed", e);
+            return Message.toolResult(toolUseId, "compact_context error: " + e.getMessage(), true);
+        }
     }
 
     /**

@@ -30,6 +30,10 @@ export const getChildSessions = (sessionId: string, userId: number) =>
   api.get(`/chat/sessions/${sessionId}/children`, { params: { userId } });
 export const getSubAgentRuns = (sessionId: string, userId: number) =>
   api.get(`/chat/sessions/${sessionId}/subagent-runs`, { params: { userId } });
+export const compactSession = (sessionId: string, level: 'full', userId: number, reason?: string) =>
+  api.post(`/chat/sessions/${sessionId}/compact`, { level, reason }, { params: { userId } });
+export const getCompactions = (sessionId: string, userId: number) =>
+  api.get(`/chat/sessions/${sessionId}/compactions`, { params: { userId } });
 
 // Skill API
 export const getSkills = () => api.get('/skills');

@@ -5,8 +5,10 @@ import com.skillforge.core.engine.PendingAskRegistry;
 import com.skillforge.core.model.Message;
 import com.skillforge.server.dto.ChatRequest;
 import com.skillforge.server.dto.CreateSessionRequest;
+import com.skillforge.server.entity.CompactionEventEntity;
 import com.skillforge.server.entity.SessionEntity;
 import com.skillforge.server.service.ChatService;
+import com.skillforge.server.service.CompactionService;
 import com.skillforge.server.service.SessionService;
 import com.skillforge.server.subagent.SubAgentRegistry;
 import com.skillforge.server.subagent.SubAgentRegistry.SubAgentRun;
@@ -35,17 +37,20 @@ public class ChatController {
     private final PendingAskRegistry pendingAskRegistry;
     private final SubAgentRegistry subAgentRegistry;
     private final CancellationRegistry cancellationRegistry;
+    private final CompactionService compactionService;
 
     public ChatController(ChatService chatService,
                           SessionService sessionService,
                           PendingAskRegistry pendingAskRegistry,
                           SubAgentRegistry subAgentRegistry,
-                          CancellationRegistry cancellationRegistry) {
+                          CancellationRegistry cancellationRegistry,
+                          CompactionService compactionService) {
         this.chatService = chatService;
         this.sessionService = sessionService;
         this.pendingAskRegistry = pendingAskRegistry;
         this.subAgentRegistry = subAgentRegistry;
         this.cancellationRegistry = cancellationRegistry;
+        this.compactionService = compactionService;
     }
 
     /**
@@ -220,6 +225,47 @@ public class ChatController {
             out.add(m);
         }
         return ResponseEntity.ok(out);
+    }
+
+    /**
+     * 用户主动触发全量压缩 (C1 user-manual)。
+     * Body: {"level": "full", "reason": "optional"}。
+     * 409 当 session runtimeStatus=running。
+     */
+    @PostMapping("/sessions/{id}/compact")
+    public ResponseEntity<?> compactSession(@PathVariable String id,
+                                             @RequestParam Long userId,
+                                             @RequestBody Map<String, Object> body) {
+        ResponseEntity<SessionEntity> check = requireOwnedSession(id, userId);
+        if (!check.getStatusCode().is2xxSuccessful()) {
+            return ResponseEntity.status(check.getStatusCode()).build();
+        }
+        String level = body.get("level") != null ? body.get("level").toString() : "full";
+        if (!"full".equalsIgnoreCase(level)) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Only level=full is supported for manual compaction"));
+        }
+        String reason = body.get("reason") != null ? body.get("reason").toString() : "user manual";
+        try {
+            CompactionEventEntity event = compactionService.compact(id, "full", "user-manual", reason);
+            return ResponseEntity.ok(event);
+        } catch (IllegalStateException e) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", e.getMessage()));
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /**
+     * 列出该 session 的压缩历史事件, 按 id 降序 (最新在前)。
+     */
+    @GetMapping("/sessions/{id}/compactions")
+    public ResponseEntity<List<CompactionEventEntity>> listCompactions(@PathVariable String id,
+                                                                        @RequestParam Long userId) {
+        ResponseEntity<SessionEntity> check = requireOwnedSession(id, userId);
+        if (!check.getStatusCode().is2xxSuccessful()) {
+            return ResponseEntity.status(check.getStatusCode()).build();
+        }
+        return ResponseEntity.ok(compactionService.listEvents(id));
     }
 
     /**

@@ -9,6 +9,7 @@ import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.annotation.LastModifiedDate;
 import org.springframework.data.jpa.domain.support.AuditingEntityListener;
 
+import java.time.Instant;
 import java.time.LocalDateTime;
 
 @Entity
@@ -69,6 +70,32 @@ public class SessionEntity {
     /** SubAgent 派发时的 runId(用于结果回推时定位) */
     @Column(length = 36)
     private String subAgentRunId;
+
+    /** 迄今为止执行过的 light 压缩次数 */
+    @Column(columnDefinition = "INT DEFAULT 0")
+    private int lightCompactCount = 0;
+
+    /** 迄今为止执行过的 full 压缩次数 */
+    @Column(columnDefinition = "INT DEFAULT 0")
+    private int fullCompactCount = 0;
+
+    /** 最近一次压缩完成的时间 */
+    private Instant lastCompactedAt;
+
+    /** 最近一次压缩时的 messageCount, 用于 idempotency 守卫 */
+    @Column(columnDefinition = "INT DEFAULT 0")
+    private int lastCompactedAtMessageCount = 0;
+
+    /** 所有压缩累计释放的 token 数 */
+    @Column(columnDefinition = "BIGINT DEFAULT 0")
+    private long totalTokensReclaimed = 0;
+
+    /**
+     * 最近一次"真实 user 消息"到达的时间。用于 B3 engine-gap 的 idle 检测 ——
+     * 不能用 updatedAt, 因为后者会被内部 runtime_status 写入、smart title 等无关操作污染。
+     * createSession 时写当前时间; chatAsync 追加 user 消息前更新。
+     */
+    private Instant lastUserMessageAt;
 
     @CreatedDate
     private LocalDateTime createdAt;
@@ -213,6 +240,54 @@ public class SessionEntity {
 
     public void setSubAgentRunId(String subAgentRunId) {
         this.subAgentRunId = subAgentRunId;
+    }
+
+    public int getLightCompactCount() {
+        return lightCompactCount;
+    }
+
+    public void setLightCompactCount(int lightCompactCount) {
+        this.lightCompactCount = lightCompactCount;
+    }
+
+    public Instant getLastUserMessageAt() {
+        return lastUserMessageAt;
+    }
+
+    public void setLastUserMessageAt(Instant lastUserMessageAt) {
+        this.lastUserMessageAt = lastUserMessageAt;
+    }
+
+    public int getFullCompactCount() {
+        return fullCompactCount;
+    }
+
+    public void setFullCompactCount(int fullCompactCount) {
+        this.fullCompactCount = fullCompactCount;
+    }
+
+    public Instant getLastCompactedAt() {
+        return lastCompactedAt;
+    }
+
+    public void setLastCompactedAt(Instant lastCompactedAt) {
+        this.lastCompactedAt = lastCompactedAt;
+    }
+
+    public int getLastCompactedAtMessageCount() {
+        return lastCompactedAtMessageCount;
+    }
+
+    public void setLastCompactedAtMessageCount(int lastCompactedAtMessageCount) {
+        this.lastCompactedAtMessageCount = lastCompactedAtMessageCount;
+    }
+
+    public long getTotalTokensReclaimed() {
+        return totalTokensReclaimed;
+    }
+
+    public void setTotalTokensReclaimed(long totalTokensReclaimed) {
+        this.totalTokensReclaimed = totalTokensReclaimed;
     }
 
     public LocalDateTime getCreatedAt() {

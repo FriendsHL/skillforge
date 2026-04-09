@@ -96,6 +96,8 @@ public class SessionService {
         session.setAgentId(agentId);
         session.setTitle("New Session");
         session.setMessagesJson("[]");
+        // 初始化 lastUserMessageAt 以免 B3 在空会话上计算出巨大 gap
+        session.setLastUserMessageAt(java.time.Instant.now());
         // 创建时从 Agent 拷贝默认 executionMode
         AgentEntity agent = agentRepository.findById(agentId).orElse(null);
         if (agent != null && agent.getExecutionMode() != null) {
