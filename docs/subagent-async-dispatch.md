@@ -224,10 +224,31 @@ npx agent-browser eval "document.body.innerText.match(/SubAgent dispatches[\\s\\
 - **截图可能折叠**：右栏内容长时 SubAgentRunsPanel 在 fold 上面，screenshot 看不到。用 `agent-browser eval` 抓 `document.body.innerText` 更可靠
 - **Dashscope read timeout 120s**：偶发超时不是机制 bug，需要重试或换 model
 
-## 已知限制 / 后续工作
+## 后续工作的跟进状态（2026-04-09 更新）
 
-1. **多实例部署的并发锁**：单 JVM stripe lock 不够，需要换 DB 行锁
-2. **server 重启时正在跑的子线程会丢**：`chatLoopExecutor` 是内存线程池，子任务无法 resume。run 行会停留在 RUNNING 状态需要超时清理
-3. **`/children` 端点 UI 没用到**：当前 UI 只用 `/subagent-runs`，`/children` 留作未来子 session 树状视图入口
-4. **端点没做 userId scoping**：与兄弟端点 `GET /api/chat/sessions/{id}` 行为一致，应在全局加 ownership 校验时一起补
-5. **无 `/sub_agent_run` 超时清理 job**：长 RUNNING 行会一直留着，需要定时任务 mark CANCELLED
+### ✅ 已交付（本轮并行 3 agent 完成）
+
+1. ~~**server 重启时正在跑的子线程会丢**~~ → **`SubAgentStartupRecovery`**（`init/SubAgentStartupRecovery.java`）：`ApplicationRunner` @Order(100)，启动时扫 `t_subagent_run.status=RUNNING`，按子 session 运行态分流：
+   - 子 running → 调 `chatService.chatAsync(childId, "[Resume from restart] Continue your previous work.", userId)` 重新拉起
+   - 子 idle/error → 通过 `subAgentRegistry.onSessionLoopFinished` 回放 finally 钩子，父会被 enqueue 并 wake
+   - 子缺失 / childSessionId 为空 → 调 `notifyParentOfOrphanRun` 标 CANCELLED 并通知父
+2. ~~**无 `/sub_agent_run` 超时清理 job**~~ → **`SubAgentRunSweeper`**（`subagent/SubAgentRunSweeper.java`）：`@Scheduled(fixedDelay=60_000, initialDelay=30_000)` 定时清理三种僵尸：stale idle/error child (>30s)、no child after 10min、child 被物理删除。需要新加的 `@EnableScheduling` 在 `SkillForgeApplication`。走 `SubAgentRegistry.notifyParentOfOrphanRun` 统一入口，不复刻 drain 逻辑。新增 `SubAgentRunRepository.findByStatus(String)`。
+3. ~~**`/children` 端点 UI 没用到**~~ → **`ChildSessionsPanel.tsx`**：Chat 页面在 `SubAgentRunsPanel` 下面挂了一个新面板，消费 `GET /api/chat/sessions/{id}/children`。展示 title / status tag / depth / 消息数 / agent 名 / "Open child" 按钮，3s 轮询与旧面板一致。意外收益：`SubAgentRunsPanel` 与 `ChildSessionsPanel` 是互补关系 —— 前者读 `t_subagent_run`、后者读 `SessionEntity`，两者 desync（如 in-flight 丢 run 但 child session 还在）时互相兜底。
+4. ~~**端点没做 userId scoping**~~ → **`ChatController.requireOwnedSession`** 私有助手：所有 7 个 session-scoped endpoint 都加上 userId 校验。missing userId → 400，mismatch → 403，not found → 404。前端 `api/index.ts` 的 5 个函数签名加 userId 参数，Chat.tsx 调用点全部传 `1`。
+5. ~~**LLM read timeout 硬编码 120s**~~ → **`ModelConfig` + `LlmProperties.ProviderConfig`** 现在接受 `readTimeoutSeconds`（默认 60）和 `maxRetries`（默认 1）。`OpenAiProvider` / `ClaudeProvider` 的 `chat()`（非流式）会在 `SocketTimeoutException` 上重试到 `maxRetries` 次；`chatStream()` 是单次尝试（mid-stream retry 会重复投递 delta）。`application.yml` 中 bailian provider 下给出了参考配置注释。
+
+### 📋 仍未做
+
+1. **多实例部署的并发锁**：单 JVM stripe lock 不够，需要换 DB 行锁或外部锁服务。单机 MVP 够用。
+2. **启动恢复的 resume 提示词**："[Resume from restart] Continue your previous work." 是个粗糙的唤醒 prompt，child agent 未必能从上下文接着干。更好的做法是存储 snapshot（工具调用栈 / 待决 plan）并在恢复时注入，但需要先有 auto-compact 的元数据基础。
+
+## UX 优化 Backlog（2026-04-08 对齐）
+
+用户确认的下一束体感高价值项，这里统一跟进：
+
+1. **Loop 中断 / 取消按钮** —— 目前用户没法停止跑飞的 loop，只能等 `session_status=error` 或杀 server。需要 `LoopContext` 加 `AtomicBoolean cancelRequested`、iteration 之间检查、新增 `POST /api/chat/{id}/cancel` 端点、前端 running 时显示取消按钮。
+2. **流式文本增量推送 (per-token streaming)** —— 现在是整条 message 推一次，长回复时前端盯着空白等。LLM provider 的 `chatStream` 已经支持 SSE，需要把 text delta 通过 `ChatEventBroadcaster` 透传到 WS。first pass 只做 assistant text delta，tool_use input 的流式推后续再叠。
+3. **Session 列表实时刷新** —— 进入列表页要手动刷新才能看到状态。需要 `ChatEventBroadcaster` 加一个 per-user 广播通道，`SessionList.tsx` 订阅并更新 runtimeStatus 徽章。
+4. **Auto-compact 上下文压缩** —— 已有 150+ message 的长 session 接近模型 context 上限。建议混合触发：message 数 > N 或 token > 模型 context 60%，取早者。压缩时要小心 `tool_use` ↔ `tool_result` 成对出现，不能把其中一半塞进 summary。参考 Anthropic prompt caching + summarization 模式。
+
+**冲突分析**（并行/串行调度提示）：①②④ 都会改 `AgentLoopEngine`；其中 ①② 在同一 agent 做比较安全，④ 必须等前两个 commit 落地后串行做（否则自我冲突）。③ 完全独立可以随时并行。
