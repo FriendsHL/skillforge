@@ -251,6 +251,12 @@ npx agent-browser eval "document.body.innerText.match(/SubAgent dispatches[\\s\\
 2. ~~**流式文本增量推送（含 tool_use input JSON）**~~ → `LlmStreamHandler` additive 加 `onToolUseStart/InputDelta/End`；`ChatEventBroadcaster` additive 加 `textDelta/toolUseDelta/toolUseComplete`。ClaudeProvider 的 `content_block_start/delta(input_json_delta)/stop` 链路完整接上；OpenAiProvider 按 tool_calls index 聚合，id+name 到齐触发 start，arguments chunk 透传 delta。`AgentLoopEngine` 把 stream callback 全部路由到 broadcaster。**流式路径保持单次尝试**（不加 retry，不然会重复投递 delta）。前端 `Chat.tsx` 用 `streamingToolInputs` map 累积 tool 输入，和 `inflightTools` 合并到同一个卡片渲染，partial JSON 以 code preview 形式出现在 tool card 里。
 3. ~~**Session 列表实时刷新**~~ → 新 `/ws/users/{userId}` 端点 + `UserWebSocketHandler`（`Map<Long, Set<WebSocketSession>>`）。`ChatEventBroadcaster.userEvent()` 由 `ChatWebSocketHandler` 委托到 user handler。6 个 mutation 点发事件：`ChatService` 的 running/idle/error 三态切换、`SessionTitleService` 的 immediate + smart rename、`SessionService.createSession` / `archiveSession`。`SessionList.tsx` 订阅 + merge reducer（update/create/delete）+ `StatusDot` 徽章（5 色）+ 2s→30s 指数退避重连 + reconnect 后全量 refetch 对账。**两个 WS handler 的 ObjectMapper 都需要 `findAndRegisterModules()` + 关 `WRITE_DATES_AS_TIMESTAMPS`**，否则 `LocalDateTime` 字段序列化会炸或者前端收到数字数组。
 
-### 📋 未做（Phase 2 串行）
+### ✅ Phase 2 已交付
 
-4. **Auto-compact 上下文压缩** —— 150+ message 的长 session 接近模型 context 上限。**触发策略（已对齐）**：混合模式（c）—— message 数 > N 或 token > 模型 context 60%，取早者。压缩时要小心 `tool_use` ↔ `tool_result` 成对出现，不能把其中一半塞进 summary；参考 Anthropic prompt caching + summarization 模式。独占 `AgentLoopEngine`，必须在 Phase 1（①②）commit 之后串行做。
+4. **Auto-compact 上下文压缩 (light / full 双档)** —— 按 JVM GC 分代思路实现:
+   - `light` = 纯 Java 规则(截断大 tool_result / 去重连续同 tool / 折叠连续失败重试 / 去过渡文本), 无 LLM
+   - `full` = LLM 总结式压缩, 保留最近 20 条 young-gen, 边界必须不切割 tool_use ↔ tool_result 配对, 若初始边界落在配对中则向右扩大 young-gen 重试
+   - 触发矩阵: `agent-tool` (LLM 调 `compact_context` 工具) / `engine-soft` (B1, ratio>0.40 或 waste) / `engine-hard` (B2, B1 后 ratio 仍 >0.70) / `engine-gap` (B3, 入口 `chatAsync` 发现 lastUserMessageAt gap ≥12h) / `user-manual` (C1, `POST /api/chat/sessions/{id}/compact`)
+   - 所有 event 落 `t_compaction_event` 表; `SessionEntity` 新增 `lightCompactCount / fullCompactCount / lastCompactedAt / lastCompactedAtMessageCount / totalTokensReclaimed / lastUserMessageAt` 六列
+   - 每 iteration 至多一次 compact (LoopContext.compactedThisIteration 硬保证)
+   - C1 vs chatAsync 的 TOCTOU 竞争通过共享 `CompactionService.lockFor(sessionId)` stripe lock 消除
