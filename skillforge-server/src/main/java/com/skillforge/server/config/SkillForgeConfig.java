@@ -119,9 +119,16 @@ public class SkillForgeConfig {
                     providerConfig.getBaseUrl(),
                     providerConfig.getModel()
             );
+            if (providerConfig.getReadTimeoutSeconds() != null) {
+                modelConfig.setReadTimeoutSeconds(providerConfig.getReadTimeoutSeconds());
+            }
+            if (providerConfig.getMaxRetries() != null) {
+                modelConfig.setMaxRetries(providerConfig.getMaxRetries());
+            }
             factory.getProvider(modelConfig);
-            log.info("Registered LLM provider: name={}, type={}, baseUrl={}",
-                    name, providerConfig.getType(), providerConfig.getBaseUrl());
+            log.info("Registered LLM provider: name={}, type={}, baseUrl={}, readTimeoutSec={}, maxRetries={}",
+                    name, providerConfig.getType(), providerConfig.getBaseUrl(),
+                    modelConfig.getReadTimeoutSeconds(), modelConfig.getMaxRetries());
         }
 
         return factory;

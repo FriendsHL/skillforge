@@ -54,6 +54,10 @@ skillforge:
         api-key: ${DASHSCOPE_API_KEY:}
         base-url: https://coding.dashscope.aliyuncs.com
         model: qwen3.5-plus
+        # Optional per-provider tuning (defaults: 60s / 1 retry)
+        # read-timeout-seconds: 60    # raise for slow models; non-stream chat only
+        # max-retries: 1              # retries on SocketTimeoutException only,
+        #                             # does NOT apply to streaming (chatStream)
 
 clawhub:
   enabled: true

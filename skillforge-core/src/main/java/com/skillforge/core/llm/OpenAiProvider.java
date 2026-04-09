@@ -16,6 +16,7 @@ import org.slf4j.LoggerFactory;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.net.SocketTimeoutException;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 
@@ -31,17 +32,26 @@ public class OpenAiProvider implements LlmProvider {
     private final String apiKey;
     private final String baseUrl;
     private final String defaultModel;
+    private final int maxRetries;
     private final OkHttpClient httpClient;
     private final ObjectMapper objectMapper;
 
     public OpenAiProvider(String apiKey, String baseUrl, String defaultModel) {
+        this(apiKey, baseUrl, defaultModel,
+                ModelConfig.DEFAULT_READ_TIMEOUT_SECONDS,
+                ModelConfig.DEFAULT_MAX_RETRIES);
+    }
+
+    public OpenAiProvider(String apiKey, String baseUrl, String defaultModel,
+                          int readTimeoutSeconds, int maxRetries) {
         this.apiKey = Objects.requireNonNull(apiKey, "apiKey must not be null");
         this.baseUrl = baseUrl != null ? baseUrl : "https://api.openai.com";
         this.defaultModel = defaultModel != null ? defaultModel : "gpt-4o";
+        this.maxRetries = Math.max(0, maxRetries);
         this.objectMapper = new ObjectMapper();
         this.httpClient = new OkHttpClient.Builder()
                 .connectTimeout(10, TimeUnit.SECONDS)
-                .readTimeout(120, TimeUnit.SECONDS)
+                .readTimeout(readTimeoutSeconds, TimeUnit.SECONDS)
                 .writeTimeout(30, TimeUnit.SECONDS)
                 .build();
     }
@@ -53,29 +63,45 @@ public class OpenAiProvider implements LlmProvider {
 
     @Override
     public LlmResponse chat(LlmRequest request) {
-        String model = request.getModel() != null ? request.getModel() : defaultModel;
-        try {
-            String requestBody = buildRequestBody(request, model, false);
-            log.debug("OpenAI chat request: model={}, messages={}", model, request.getMessages().size());
-
-            Request httpRequest = new Request.Builder()
-                    .url(baseUrl + "/v1/chat/completions")
-                    .addHeader("Authorization", "Bearer " + apiKey)
-                    .addHeader("Content-Type", "application/json")
-                    .post(RequestBody.create(requestBody, JSON_MEDIA_TYPE))
-                    .build();
-
-            try (Response response = httpClient.newCall(httpRequest).execute()) {
-                if (!response.isSuccessful()) {
-                    String errorBody = response.body() != null ? response.body().string() : "no body";
-                    throw new RuntimeException("OpenAI API error: HTTP " + response.code() + " - " + errorBody);
+        // Retry ONLY on SocketTimeoutException. Non-timeout IO / HTTP errors fail fast.
+        // Streaming path (chatStream) is single-attempt on purpose — retrying mid-stream
+        // would duplicate already-delivered deltas to the handler.
+        int attempt = 0;
+        while (true) {
+            try {
+                return doChat(request);
+            } catch (SocketTimeoutException ste) {
+                if (attempt >= maxRetries) {
+                    throw new RuntimeException(
+                            "OpenAI API read timeout after " + (attempt + 1) + " attempt(s)", ste);
                 }
-
-                String responseBody = response.body().string();
-                return parseResponse(responseBody);
+                attempt++;
+                log.warn("OpenAI read timeout, retrying {}/{}", attempt, maxRetries);
+            } catch (IOException e) {
+                throw new RuntimeException("Failed to call OpenAI API", e);
             }
-        } catch (IOException e) {
-            throw new RuntimeException("Failed to call OpenAI API", e);
+        }
+    }
+
+    private LlmResponse doChat(LlmRequest request) throws IOException {
+        String model = request.getModel() != null ? request.getModel() : defaultModel;
+        String requestBody = buildRequestBody(request, model, false);
+        log.debug("OpenAI chat request: model={}, messages={}", model, request.getMessages().size());
+
+        Request httpRequest = new Request.Builder()
+                .url(baseUrl + "/v1/chat/completions")
+                .addHeader("Authorization", "Bearer " + apiKey)
+                .addHeader("Content-Type", "application/json")
+                .post(RequestBody.create(requestBody, JSON_MEDIA_TYPE))
+                .build();
+
+        try (Response response = httpClient.newCall(httpRequest).execute()) {
+            if (!response.isSuccessful()) {
+                String errorBody = response.body() != null ? response.body().string() : "no body";
+                throw new RuntimeException("OpenAI API error: HTTP " + response.code() + " - " + errorBody);
+            }
+            String responseBody = response.body().string();
+            return parseResponse(responseBody);
         }
     }
 

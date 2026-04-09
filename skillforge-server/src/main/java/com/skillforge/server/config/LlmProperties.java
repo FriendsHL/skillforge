@@ -54,6 +54,26 @@ public class LlmProperties {
         private String apiKey;
         private String baseUrl;
         private String model;
+        /** Optional read timeout override (seconds). Null = use ModelConfig default. */
+        private Integer readTimeoutSeconds;
+        /** Optional max retries override (on SocketTimeoutException only). Null = use ModelConfig default. */
+        private Integer maxRetries;
+
+        public Integer getReadTimeoutSeconds() {
+            return readTimeoutSeconds;
+        }
+
+        public void setReadTimeoutSeconds(Integer readTimeoutSeconds) {
+            this.readTimeoutSeconds = readTimeoutSeconds;
+        }
+
+        public Integer getMaxRetries() {
+            return maxRetries;
+        }
+
+        public void setMaxRetries(Integer maxRetries) {
+            this.maxRetries = maxRetries;
+        }
 
         public String getType() {
             return type;

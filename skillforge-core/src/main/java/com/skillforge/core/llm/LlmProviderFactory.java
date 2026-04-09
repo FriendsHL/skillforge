@@ -48,12 +48,16 @@ public class LlmProviderFactory {
             case "claude" -> new ClaudeProvider(
                     config.getApiKey(),
                     config.getBaseUrl(),
-                    config.getModel()
+                    config.getModel(),
+                    config.getReadTimeoutSeconds(),
+                    config.getMaxRetries()
             );
             case "openai" -> new OpenAiProvider(
                     config.getApiKey(),
                     config.getBaseUrl(),
-                    config.getModel()
+                    config.getModel(),
+                    config.getReadTimeoutSeconds(),
+                    config.getMaxRetries()
             );
             default -> throw new IllegalArgumentException(
                     "Unsupported LLM provider type: " + type

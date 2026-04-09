@@ -8,11 +8,16 @@ import java.util.Map;
  */
 public class ModelConfig {
 
+    public static final int DEFAULT_READ_TIMEOUT_SECONDS = 60;
+    public static final int DEFAULT_MAX_RETRIES = 1;
+
     private String providerName;
     private String type;
     private String apiKey;
     private String baseUrl;
     private String model;
+    private int readTimeoutSeconds = DEFAULT_READ_TIMEOUT_SECONDS;
+    private int maxRetries = DEFAULT_MAX_RETRIES;
     private Map<String, Object> extraConfig = new HashMap<>();
 
     public ModelConfig() {
@@ -71,6 +76,22 @@ public class ModelConfig {
 
     public void setModel(String model) {
         this.model = model;
+    }
+
+    public int getReadTimeoutSeconds() {
+        return readTimeoutSeconds;
+    }
+
+    public void setReadTimeoutSeconds(int readTimeoutSeconds) {
+        this.readTimeoutSeconds = readTimeoutSeconds;
+    }
+
+    public int getMaxRetries() {
+        return maxRetries;
+    }
+
+    public void setMaxRetries(int maxRetries) {
+        this.maxRetries = maxRetries;
     }
 
     public Map<String, Object> getExtraConfig() {
