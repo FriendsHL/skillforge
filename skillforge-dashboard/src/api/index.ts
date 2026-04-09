@@ -12,20 +12,22 @@ export const deleteAgent = (id: number) => api.delete(`/agents/${id}`);
 // Session API
 export const createSession = (data: { userId: number; agentId: number }) => api.post('/chat/sessions', data);
 export const getSessions = (userId: number) => api.get(`/chat/sessions?userId=${userId}`);
-export const getSessionMessages = (id: string) => api.get(`/chat/sessions/${id}/messages`);
+export const getSessionMessages = (id: string, userId: number) =>
+  api.get(`/chat/sessions/${id}/messages`, { params: { userId } });
 
 // Chat API
 export const sendMessage = (sessionId: string, data: { message: string; userId: number }) =>
   api.post(`/chat/${sessionId}`, data);
-export const answerAsk = (sessionId: string, askId: string, answer: string) =>
-  api.post(`/chat/${sessionId}/answer`, { askId, answer });
-export const setSessionMode = (sessionId: string, mode: 'ask' | 'auto') =>
-  api.patch(`/chat/sessions/${sessionId}/mode`, { mode });
-export const getSession = (sessionId: string) => api.get(`/chat/sessions/${sessionId}`);
-export const getChildSessions = (sessionId: string) =>
-  api.get(`/chat/sessions/${sessionId}/children`);
-export const getSubAgentRuns = (sessionId: string) =>
-  api.get(`/chat/sessions/${sessionId}/subagent-runs`);
+export const answerAsk = (sessionId: string, askId: string, answer: string, userId: number) =>
+  api.post(`/chat/${sessionId}/answer`, { askId, answer, userId });
+export const setSessionMode = (sessionId: string, mode: 'ask' | 'auto', userId: number) =>
+  api.patch(`/chat/sessions/${sessionId}/mode`, { mode }, { params: { userId } });
+export const getSession = (sessionId: string, userId: number) =>
+  api.get(`/chat/sessions/${sessionId}`, { params: { userId } });
+export const getChildSessions = (sessionId: string, userId: number) =>
+  api.get(`/chat/sessions/${sessionId}/children`, { params: { userId } });
+export const getSubAgentRuns = (sessionId: string, userId: number) =>
+  api.get(`/chat/sessions/${sessionId}/subagent-runs`, { params: { userId } });
 
 // Skill API
 export const getSkills = () => api.get('/skills');

@@ -5,6 +5,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import ChatWindow from '../components/ChatWindow';
 import type { ChatMessage } from '../components/ChatWindow';
 import SubAgentRunsPanel from '../components/SubAgentRunsPanel';
+import ChildSessionsPanel from '../components/ChildSessionsPanel';
 import {
   getAgents,
   createSession,
@@ -189,7 +190,7 @@ const Chat: React.FC = () => {
     }
 
     // load messages
-    getSessionMessages(activeSessionId)
+    getSessionMessages(activeSessionId, 1)
       .then((res) => {
         const list = Array.isArray(res.data) ? res.data : res.data?.data ?? [];
         setRawMessages(list);
@@ -197,7 +198,7 @@ const Chat: React.FC = () => {
       .catch(() => message.error('Failed to load messages'));
 
     // load session detail for runtime status + mode
-    getSession(activeSessionId)
+    getSession(activeSessionId, 1)
       .then((res) => {
         const s = res.data;
         setRuntimeStatus((s.runtimeStatus ?? 'idle') as RuntimeStatus);
@@ -374,7 +375,7 @@ const Chat: React.FC = () => {
   const handleAnswerAsk = async (answer: string) => {
     if (!pendingAsk || !activeSessionId) return;
     try {
-      await answerAsk(activeSessionId, pendingAsk.askId, answer);
+      await answerAsk(activeSessionId, pendingAsk.askId, answer, 1);
       setPendingAsk(null);
       setOtherInput('');
     } catch {
@@ -388,7 +389,7 @@ const Chat: React.FC = () => {
       return;
     }
     try {
-      await setSessionMode(activeSessionId, mode);
+      await setSessionMode(activeSessionId, mode, 1);
       setExecutionModeState(mode);
       message.success(`已切换为 ${mode} 模式`);
     } catch {
@@ -586,6 +587,11 @@ const Chat: React.FC = () => {
             <SubAgentRunsPanel
               sessionId={activeSessionId}
               parentRunning={runtimeStatus === 'running'}
+            />
+            <ChildSessionsPanel
+              sessionId={activeSessionId}
+              parentRunning={runtimeStatus === 'running'}
+              agents={agents}
             />
             {renderPendingAsk()}
             <ChatWindow

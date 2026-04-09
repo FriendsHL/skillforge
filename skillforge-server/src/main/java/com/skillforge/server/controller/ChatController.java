@@ -45,11 +45,39 @@ public class ChatController {
     }
 
     /**
+     * 内部: 校验 session 存在 + 属于 userId。
+     * 返回状态码:
+     *   - 200 OK + SessionEntity : session 存在且归属匹配
+     *   - 400 Bad Request        : userId 缺失
+     *   - 403 Forbidden          : session 存在但归属不匹配
+     *   - 404 Not Found          : session 不存在
+     */
+    private ResponseEntity<SessionEntity> requireOwnedSession(String sessionId, Long userId) {
+        if (userId == null) {
+            return ResponseEntity.badRequest().build();
+        }
+        SessionEntity session;
+        try {
+            session = sessionService.getSession(sessionId);
+        } catch (RuntimeException e) {
+            return ResponseEntity.notFound().build();
+        }
+        if (session.getUserId() == null || !session.getUserId().equals(userId)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        }
+        return ResponseEntity.ok(session);
+    }
+
+    /**
      * 发送用户消息。立即返回 202,实际结果通过 WebSocket 推送。
      */
     @PostMapping("/{sessionId}")
     public ResponseEntity<Map<String, Object>> sendMessage(@PathVariable String sessionId,
                                                             @RequestBody ChatRequest request) {
+        ResponseEntity<SessionEntity> check = requireOwnedSession(sessionId, request.getUserId());
+        if (!check.getStatusCode().is2xxSuccessful()) {
+            return ResponseEntity.status(check.getStatusCode()).build();
+        }
         try {
             chatService.chatAsync(sessionId, request.getMessage(), request.getUserId());
         } catch (RejectedExecutionException e) {
@@ -68,9 +96,22 @@ public class ChatController {
      */
     @PostMapping("/{sessionId}/answer")
     public ResponseEntity<Map<String, Object>> answer(@PathVariable String sessionId,
-                                                       @RequestBody Map<String, String> body) {
-        String askId = body.get("askId");
-        String answer = body.get("answer");
+                                                       @RequestBody Map<String, Object> body) {
+        Object userIdObj = body.get("userId");
+        Long userId = null;
+        if (userIdObj instanceof Number) {
+            userId = ((Number) userIdObj).longValue();
+        } else if (userIdObj instanceof String) {
+            try { userId = Long.parseLong((String) userIdObj); } catch (NumberFormatException ignored) {}
+        }
+        ResponseEntity<SessionEntity> check = requireOwnedSession(sessionId, userId);
+        if (!check.getStatusCode().is2xxSuccessful()) {
+            return ResponseEntity.status(check.getStatusCode()).build();
+        }
+        Object askIdObj = body.get("askId");
+        Object answerObj = body.get("answer");
+        String askId = askIdObj == null ? null : askIdObj.toString();
+        String answer = answerObj == null ? null : answerObj.toString();
         if (askId == null || answer == null) {
             return ResponseEntity.badRequest().body(Map.of("error", "askId and answer required"));
         }
@@ -87,12 +128,17 @@ public class ChatController {
      */
     @PatchMapping("/sessions/{sessionId}/mode")
     public ResponseEntity<SessionEntity> setSessionMode(@PathVariable String sessionId,
+                                                         @RequestParam(required = false) Long userId,
                                                          @RequestBody Map<String, String> body) {
         String mode = body.get("mode");
         if (mode == null || (!mode.equals("ask") && !mode.equals("auto"))) {
             return ResponseEntity.badRequest().build();
         }
-        SessionEntity session = sessionService.getSession(sessionId);
+        ResponseEntity<SessionEntity> check = requireOwnedSession(sessionId, userId);
+        if (!check.getStatusCode().is2xxSuccessful()) {
+            return ResponseEntity.status(check.getStatusCode()).build();
+        }
+        SessionEntity session = check.getBody();
         session.setExecutionMode(mode);
         return ResponseEntity.ok(sessionService.saveSession(session));
     }
@@ -110,12 +156,18 @@ public class ChatController {
     }
 
     @GetMapping("/sessions/{id}")
-    public ResponseEntity<SessionEntity> getSession(@PathVariable String id) {
-        return ResponseEntity.ok(sessionService.getSession(id));
+    public ResponseEntity<SessionEntity> getSession(@PathVariable String id,
+                                                     @RequestParam(required = false) Long userId) {
+        return requireOwnedSession(id, userId);
     }
 
     @GetMapping("/sessions/{id}/messages")
-    public ResponseEntity<List<Message>> getSessionMessages(@PathVariable String id) {
+    public ResponseEntity<List<Message>> getSessionMessages(@PathVariable String id,
+                                                             @RequestParam(required = false) Long userId) {
+        ResponseEntity<SessionEntity> check = requireOwnedSession(id, userId);
+        if (!check.getStatusCode().is2xxSuccessful()) {
+            return ResponseEntity.status(check.getStatusCode()).build();
+        }
         List<Message> messages = sessionService.getSessionMessages(id);
         return ResponseEntity.ok(messages);
     }
@@ -124,12 +176,11 @@ public class ChatController {
      * 列出某个父 session 下的所有子 session(SubAgent 派发的)。
      */
     @GetMapping("/sessions/{id}/children")
-    public ResponseEntity<List<Map<String, Object>>> getChildSessions(@PathVariable String id) {
-        // 验证父 session 存在(与 getSession 的 404 行为一致,getSession 会抛异常)
-        try {
-            sessionService.getSession(id);
-        } catch (RuntimeException e) {
-            return ResponseEntity.notFound().build();
+    public ResponseEntity<List<Map<String, Object>>> getChildSessions(@PathVariable String id,
+                                                                       @RequestParam(required = false) Long userId) {
+        ResponseEntity<SessionEntity> check = requireOwnedSession(id, userId);
+        if (!check.getStatusCode().is2xxSuccessful()) {
+            return ResponseEntity.status(check.getStatusCode()).build();
         }
         List<SessionEntity> children = sessionService.listChildSessions(id);
         List<Map<String, Object>> out = new java.util.ArrayList<>();
@@ -153,11 +204,11 @@ public class ChatController {
      * 列出某个父 session 派发过的所有 SubAgent run(来自 SubAgentRegistry)。
      */
     @GetMapping("/sessions/{id}/subagent-runs")
-    public ResponseEntity<List<Map<String, Object>>> getSubAgentRuns(@PathVariable String id) {
-        try {
-            sessionService.getSession(id);
-        } catch (RuntimeException e) {
-            return ResponseEntity.notFound().build();
+    public ResponseEntity<List<Map<String, Object>>> getSubAgentRuns(@PathVariable String id,
+                                                                      @RequestParam(required = false) Long userId) {
+        ResponseEntity<SessionEntity> check = requireOwnedSession(id, userId);
+        if (!check.getStatusCode().is2xxSuccessful()) {
+            return ResponseEntity.status(check.getStatusCode()).build();
         }
         List<SubAgentRun> runs = subAgentRegistry.listRunsForParent(id);
         List<Map<String, Object>> out = new java.util.ArrayList<>();

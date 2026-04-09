@@ -56,7 +56,7 @@ const SubAgentRunsPanel: React.FC<Props> = ({ sessionId, parentRunning }) => {
   const fetchRuns = useCallback(async () => {
     if (!sessionId) return;
     try {
-      const res = await getSubAgentRuns(sessionId);
+      const res = await getSubAgentRuns(sessionId, 1);
       const list: SubAgentRun[] = Array.isArray(res.data) ? res.data : res.data?.data ?? [];
       // 最近派发的排在前面
       list.sort((a, b) => {
