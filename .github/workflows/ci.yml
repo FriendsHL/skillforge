@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend:
+    name: Backend (JDK 17, mvn test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Maven install (no tests)
+        run: mvn -B install -DskipTests
+
+      - name: Run server tests
+        run: mvn -B -pl skillforge-server -am test -Dsurefire.failIfNoSpecifiedTests=false
+
+      - name: Upload surefire reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports
+          path: '**/target/surefire-reports/'
+          retention-days: 7
+
+  frontend:
+    name: Frontend (Node 20, vite build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: skillforge-dashboard/package-lock.json
+
+      - name: Install dashboard deps
+        working-directory: skillforge-dashboard
+        run: npm ci
+
+      - name: Build dashboard
+        working-directory: skillforge-dashboard
+        run: npm run build

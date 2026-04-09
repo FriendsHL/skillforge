@@ -59,6 +59,24 @@
                 <configuration>
                     <mainClass>com.skillforge.server.SkillForgeApplication</mainClass>
                 </configuration>
+                <!--
+                    NOTE on BrowserSkill / Playwright:
+                    The repackaged Spring Boot fat jar puts driver-bundle-1.49.0.jar inside
+                    BOOT-INF/lib/ (~190 MB). Playwright's DriverJar.initialize uses
+                    ClassLoader.getResource() to locate its native driver and returns null
+                    under Spring Boot's nested-jar protocol. requiresUnpack does NOT fix this
+                    (it unpacks the bundle to a temp dir but the resource lookup still fails).
+
+                    Workarounds:
+                      - Run via `mvn spring-boot:run` (exploded classpath, BrowserSkill works)
+                      - For production, deploy in a Docker image with Playwright pre-installed
+                        and set PLAYWRIGHT_BROWSERS_PATH so Java Playwright skips the bundle
+                      - Or run the fat jar but accept that BrowserSkill will fail until the
+                        upstream Playwright Java fix lands
+
+                    BrowserSkill has been hardened to detect this NPE at runtime and return
+                    a clear actionable error to the LLM (see BrowserSkill.execute).
+                -->
             </plugin>
         </plugins>
     </build>

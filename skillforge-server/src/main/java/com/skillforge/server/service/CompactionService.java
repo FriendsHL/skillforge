@@ -333,7 +333,7 @@ public class CompactionService implements ContextCompactorCallback {
             payload.put("totalTokensReclaimed", s.getTotalTokensReclaimed());
             payload.put("updatedAt", s.getUpdatedAt());
             broadcaster.userEvent(s.getUserId(), payload);
-        } catch (Throwable t) {
+        } catch (Exception t) {
             log.debug("compact broadcastUpdated skipped: {}", t.getMessage());
         }
     }

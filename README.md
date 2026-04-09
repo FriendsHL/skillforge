@@ -93,6 +93,17 @@ mvn spring-boot:run -pl skillforge-server
 
 Server starts at `http://localhost:8080`.
 
+> ⚠️ **Browser skill / Playwright deployment**: The `BrowserSkill` requires
+> the server to be started via `mvn spring-boot:run`. Running the
+> repackaged fat jar with `java -jar skillforge-server-*.jar` will cause
+> Playwright to fail loading its native driver due to a known
+> incompatibility between Spring Boot's nested-jar protocol and
+> Playwright's `ClassLoader.getResource()` lookup. For production
+> deployment use either `mvn spring-boot:run`, a Docker image with
+> Playwright pre-installed and `PLAYWRIGHT_BROWSERS_PATH` set, or
+> disable the `BrowserSkill` from your agents. The skill emits a clear
+> actionable error message when this state is detected at runtime.
+
 ### Configuration
 
 Edit `skillforge-server/src/main/resources/application.yml`:

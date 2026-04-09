@@ -51,8 +51,6 @@ public class AgentLoopEngine {
     private final List<LoopHook> loopHooks;
     private final List<SkillHook> skillHooks;
     private final List<ContextProvider> contextProviders;
-    private final TokenCounter tokenCounter;
-    private final ContextCompactor contextCompactor;
     /** 可选:实时事件广播(server 注入 WebSocket 实现)。null 时降级为无广播模式。 */
     private ChatEventBroadcaster broadcaster;
     /** 可选:ask_user 待答复注册中心。null 时 ask_user 调用会直接返回错误。 */
@@ -79,10 +77,6 @@ public class AgentLoopEngine {
         this.loopHooks = loopHooks != null ? loopHooks : Collections.emptyList();
         this.skillHooks = skillHooks != null ? skillHooks : Collections.emptyList();
         this.contextProviders = contextProviders != null ? contextProviders : Collections.emptyList();
-        this.tokenCounter = new TokenCounter();
-        // contextCompactor needs an LlmProvider; resolve lazily on first use
-        LlmProvider defaultProvider = llmProviderFactory.getProvider(defaultProviderName);
-        this.contextCompactor = defaultProvider != null ? new ContextCompactor(defaultProvider, tokenCounter) : null;
     }
 
     /** Setter injection: 延迟注入,避免 core 模块强依赖 server 组件。 */

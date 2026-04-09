@@ -136,8 +136,40 @@ public class BrowserSkill implements Skill {
             };
         } catch (Exception e) {
             log.error("BrowserSkill execution failed", e);
+            // Detect the well-known Spring Boot fat-jar + Playwright incompatibility:
+            // Playwright's DriverJar.initialize calls ClassLoader.getResource() which
+            // returns null inside Spring Boot's nested-jar protocol. Give the LLM and
+            // operator a clear, actionable message instead of a raw NPE stack trace.
+            String diag = diagnoseFatJarPlaywrightFailure(e);
+            if (diag != null) {
+                return SkillResult.error(diag);
+            }
             return SkillResult.error("Browser error: " + e.getMessage());
         }
+    }
+
+    /**
+     * Returns a clear actionable error if the throwable looks like Playwright's known
+     * "ClassLoader.getResource returned null" failure under Spring Boot's nested classpath.
+     * Returns null otherwise so the caller falls back to a generic error.
+     */
+    private String diagnoseFatJarPlaywrightFailure(Throwable e) {
+        Throwable cur = e;
+        while (cur != null) {
+            String msg = cur.getMessage();
+            if (msg != null
+                    && msg.contains("ClassLoader.getResource")
+                    && msg.contains("toURI")) {
+                return "BrowserSkill is unavailable: Playwright cannot locate its native "
+                        + "driver bundle when the server runs from a Spring Boot fat jar "
+                        + "(java -jar). Workarounds: (1) start the server via "
+                        + "`mvn spring-boot:run` instead of `java -jar`, or (2) deploy in a "
+                        + "container with Playwright pre-installed and PLAYWRIGHT_BROWSERS_PATH "
+                        + "set. See README \"Browser skill / Playwright deployment\" for details.";
+            }
+            cur = cur.getCause();
+        }
+        return null;
     }
 
     /**

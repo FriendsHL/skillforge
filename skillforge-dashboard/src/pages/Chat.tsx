@@ -689,13 +689,15 @@ const Chat: React.FC = () => {
                   gap: 8,
                 }}
               >
-                <a
-                  onClick={handleOpenCompactModal}
-                  title="查看压缩历史"
-                  style={{ fontSize: 12, color: '#888', marginRight: 8 }}
-                >
-                  🗜 {lightCompactCount} light · {fullCompactCount} full · -{totalTokensReclaimed} tok
-                </a>
+                {(lightCompactCount > 0 || fullCompactCount > 0 || totalTokensReclaimed > 0) && (
+                  <a
+                    onClick={handleOpenCompactModal}
+                    title="查看压缩历史"
+                    style={{ fontSize: 12, color: '#888', marginRight: 8 }}
+                  >
+                    🗜 {lightCompactCount} light · {fullCompactCount} full · -{totalTokensReclaimed} tok
+                  </a>
+                )}
                 <Button
                   size="small"
                   disabled={runtimeStatus === 'running' || compacting}
