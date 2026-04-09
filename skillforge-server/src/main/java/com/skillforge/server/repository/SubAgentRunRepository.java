@@ -8,4 +8,6 @@ import java.util.List;
 public interface SubAgentRunRepository extends JpaRepository<SubAgentRunEntity, String> {
 
     List<SubAgentRunEntity> findByParentSessionId(String parentSessionId);
+
+    List<SubAgentRunEntity> findByStatus(String status);
 }

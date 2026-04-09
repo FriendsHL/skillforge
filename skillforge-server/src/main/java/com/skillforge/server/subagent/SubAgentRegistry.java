@@ -163,6 +163,25 @@ public class SubAgentRegistry {
         maybeResumeParent(sessionId);
     }
 
+    /**
+     * Sweeper / 启动恢复用的入口:某个 run 卡死且没有可用的 child session,
+     * 直接伪造一条结果通知父 session,避免父面板永远停在 RUNNING。
+     */
+    public void notifyParentOfOrphanRun(SubAgentRunEntity run, String reason) {
+        if (run == null || run.getParentSessionId() == null) return;
+        StringBuilder sb = new StringBuilder();
+        sb.append("[SubAgent Result runId=").append(run.getRunId()).append("]\n");
+        if (run.getChildAgentName() != null) {
+            sb.append("Child agent: ").append(run.getChildAgentName()).append("\n");
+        }
+        sb.append("Status: cancelled\n");
+        sb.append("Final message:\n");
+        sb.append(reason == null ? "(cancelled by sweeper)" : reason);
+        sb.append("\n[/SubAgent Result]");
+        enqueueForParent(run.getParentSessionId(), sb.toString());
+        maybeResumeParent(run.getParentSessionId());
+    }
+
     private void enqueueForParent(String parentSessionId, String resultMsg) {
         SubAgentPendingResultEntity row = new SubAgentPendingResultEntity();
         row.setParentSessionId(parentSessionId);
