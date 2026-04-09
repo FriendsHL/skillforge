@@ -3,7 +3,9 @@ package com.skillforge.server.service;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillforge.core.engine.AgentLoopEngine;
+import com.skillforge.core.engine.CancellationRegistry;
 import com.skillforge.core.engine.ChatEventBroadcaster;
+import com.skillforge.core.engine.LoopContext;
 import com.skillforge.core.engine.LoopResult;
 import com.skillforge.core.model.AgentDefinition;
 import com.skillforge.core.model.Message;
@@ -20,7 +22,9 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
 
@@ -38,6 +42,7 @@ public class ChatService {
     private final ThreadPoolExecutor chatLoopExecutor;
     private final SessionTitleService sessionTitleService;
     private final SubAgentRegistry subAgentRegistry;
+    private final CancellationRegistry cancellationRegistry;
     private final ObjectMapper objectMapper;
 
     public ChatService(AgentService agentService,
@@ -48,7 +53,8 @@ public class ChatService {
                        ChatEventBroadcaster broadcaster,
                        @Qualifier("chatLoopExecutor") ThreadPoolExecutor chatLoopExecutor,
                        SessionTitleService sessionTitleService,
-                       SubAgentRegistry subAgentRegistry) {
+                       SubAgentRegistry subAgentRegistry,
+                       CancellationRegistry cancellationRegistry) {
         this.agentService = agentService;
         this.sessionService = sessionService;
         this.skillRegistry = skillRegistry;
@@ -58,6 +64,7 @@ public class ChatService {
         this.chatLoopExecutor = chatLoopExecutor;
         this.sessionTitleService = sessionTitleService;
         this.subAgentRegistry = subAgentRegistry;
+        this.cancellationRegistry = cancellationRegistry;
         this.objectMapper = new ObjectMapper();
     }
 
@@ -95,10 +102,28 @@ public class ChatService {
         if (broadcaster != null) {
             broadcaster.messageAppended(sessionId, userMsg);
             broadcaster.sessionStatus(sessionId, "running", "Starting", null);
+            // Per-user 通道:列表页据此把卡片翻成 running
+            broadcaster.userEvent(session.getUserId(), sessionUpdatedPayload(session, historyWithUser.size()));
         }
 
         // 5. 提交到线程池异步跑 loop
         chatLoopExecutor.execute(() -> runLoop(sessionId, userMessage, userId, agentEntity, history));
+    }
+
+    /**
+     * 组装 per-user 通道的 session_updated 轻量载荷(只含列表卡片需要的字段)。
+     */
+    private Map<String, Object> sessionUpdatedPayload(SessionEntity s, int messageCount) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("type", "session_updated");
+        m.put("sessionId", s.getId());
+        m.put("runtimeStatus", s.getRuntimeStatus());
+        m.put("runtimeStep", s.getRuntimeStep());
+        m.put("runtimeError", s.getRuntimeError());
+        m.put("messageCount", messageCount);
+        m.put("title", s.getTitle());
+        m.put("updatedAt", s.getUpdatedAt());
+        return m;
     }
 
     /**
@@ -127,9 +152,17 @@ public class ChatService {
             }
 
             log.info("Running agent loop (async): sessionId={}, agentId={}, mode={}", sessionId, agentEntity.getId(), mode);
-            LoopResult result = agentLoopEngine.run(agentDef, userMessage, history, sessionId, userId);
+            // 预建 LoopContext 并注册到 CancellationRegistry, 让 /cancel 端点可以找到它
+            LoopContext preCtx = new LoopContext();
+            cancellationRegistry.register(sessionId, preCtx);
+            LoopResult result = agentLoopEngine.run(agentDef, userMessage, history, sessionId, userId, preCtx);
             finalMessage = result.getFinalResponse();
             toolCallCount = result.getToolCalls() != null ? result.getToolCalls().size() : 0;
+
+            boolean wasCancelled = "cancelled".equals(result.getStatus());
+            if (wasCancelled) {
+                finalStatus = "cancelled";
+            }
 
             // 保存最终 messages(engine 已经把 user msg + 之后所有消息组装好了)
             sessionService.updateSessionMessages(sessionId, result.getMessages(),
@@ -152,13 +185,15 @@ public class ChatService {
             modelUsageRepository.save(usage);
 
             // 更新 session runtime 状态 = idle
+            // 取消退出也是 idle, 通过 step="cancelled" 标注, 避免引入新的 runtimeStatus 枚举值
             SessionEntity s = sessionService.getSession(sessionId);
             s.setRuntimeStatus("idle");
-            s.setRuntimeStep(null);
+            s.setRuntimeStep(wasCancelled ? "cancelled" : null);
             s.setRuntimeError(null);
             sessionService.saveSession(s);
             if (broadcaster != null) {
-                broadcaster.sessionStatus(sessionId, "idle", null, null);
+                broadcaster.sessionStatus(sessionId, "idle", wasCancelled ? "cancelled" : null, null);
+                broadcaster.userEvent(s.getUserId(), sessionUpdatedPayload(s, result.getMessages().size()));
             }
 
             // 在 loop 完成后(messages 已经累积了若干轮)异步触发智能命名
@@ -179,11 +214,17 @@ public class ChatService {
                 sessionService.saveSession(s);
                 if (broadcaster != null) {
                     broadcaster.sessionStatus(sessionId, "error", null, e.getMessage());
+                    broadcaster.userEvent(s.getUserId(), sessionUpdatedPayload(s, s.getMessageCount()));
                 }
             } catch (Exception inner) {
                 log.error("Failed to mark session error: sessionId={}", sessionId, inner);
             }
         } finally {
+            // 无论结果如何, 清理 CancellationRegistry 条目
+            try {
+                cancellationRegistry.unregister(sessionId);
+            } catch (Exception ignored) {
+            }
             // SubAgent 回调钩子:如果这是子 session,把结果 push 到父;如果这是父,drain 等待中的子结果
             try {
                 subAgentRegistry.onSessionLoopFinished(sessionId, finalMessage, finalStatus,

@@ -12,6 +12,7 @@ import {
   getSessions,
   getSessionMessages,
   sendMessage,
+  cancelChat,
   answerAsk,
   setSessionMode,
   getSession,
@@ -134,6 +135,11 @@ const Chat: React.FC = () => {
   const [inflightTools, setInflightTools] = useState<Record<string, { name: string; input: any; startTs: number }>>({});
   // Phase B: LLM 流式输出累计文本,在 message_appended(assistant) 或 assistant_stream_end 时清空
   const [streamingText, setStreamingText] = useState<string>('');
+  // Phase C: 正在流式到达的 tool_use input JSON 片段, key=toolUseId, value=已拼接 JSON 字符串
+  // tool_use_delta 累加, tool_use_complete 清掉, tool_started 以真实输入覆盖
+  const [streamingToolInputs, setStreamingToolInputs] = useState<Record<string, { name: string; jsonBuffer: string }>>({});
+  // cancel 按钮飞行中状态(避免重复点击)
+  const [cancelling, setCancelling] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
 
@@ -179,6 +185,8 @@ const Chat: React.FC = () => {
     setRuntimeError('');
     setInflightTools({});
     setStreamingText('');
+    setStreamingToolInputs({});
+    setCancelling(false);
     setParentSessionId(null);
     setSessionDepth(0);
 
@@ -244,6 +252,8 @@ const Chat: React.FC = () => {
         // 终态:把任何残留 inflight / streaming 清掉
         setInflightTools({});
         setStreamingText('');
+        setStreamingToolInputs({});
+        setCancelling(false);
       }
     } else if (evt.type === 'message_appended') {
       const role = evt.message?.role;
@@ -297,8 +307,28 @@ const Chat: React.FC = () => {
         delete next[evt.toolUseId];
         return next;
       });
-    } else if (evt.type === 'assistant_delta') {
-      setStreamingText((prev) => prev + (evt.text ?? ''));
+    } else if (evt.type === 'assistant_delta' || evt.type === 'text_delta') {
+      // assistant_delta (legacy) 和 text_delta (new) 语义一致, 都累加到 streamingText
+      const chunk = evt.type === 'assistant_delta' ? (evt.text ?? '') : (evt.delta ?? '');
+      setStreamingText((prev) => prev + chunk);
+    } else if (evt.type === 'tool_use_delta') {
+      // LLM 正在流式组装 tool_use 的 input JSON
+      setStreamingToolInputs((prev) => {
+        const next = { ...prev };
+        const existing = next[evt.toolUseId];
+        next[evt.toolUseId] = {
+          name: existing?.name || evt.toolName || 'tool',
+          jsonBuffer: (existing?.jsonBuffer ?? '') + (evt.jsonFragment ?? ''),
+        };
+        return next;
+      });
+    } else if (evt.type === 'tool_use_complete') {
+      // input 完整解析后, 清掉流式 buffer — 之后 tool_started 会以 inflightTools 替代
+      setStreamingToolInputs((prev) => {
+        const next = { ...prev };
+        delete next[evt.toolUseId];
+        return next;
+      });
     } else if (evt.type === 'assistant_stream_end') {
       // 此时 message_appended 通常马上就到,不主动清,让 message_appended 清(避免抖动)
     } else if (evt.type === 'session_title_updated') {
@@ -398,14 +428,37 @@ const Chat: React.FC = () => {
   };
 
   const renderBanner = () => {
-    if (runtimeStatus === 'idle' || !activeSessionId) return null;
+    if (!activeSessionId) return null;
+    // idle 时通常不显示, 但 runtimeStep === 'cancelled' 时用 warning 显示一次"已取消"
+    if (runtimeStatus === 'idle' && runtimeStep !== 'cancelled') return null;
     if (runtimeStatus === 'running') {
       return (
         <Alert
           type="info"
           showIcon
           message={`Agent 正在运行${runtimeStep ? `:${runtimeStep}` : ''}`}
+          action={
+            <Button
+              size="small"
+              danger
+              loading={cancelling}
+              onClick={handleCancel}
+            >
+              ✕ 取消
+            </Button>
+          }
           style={{ margin: '8px 12px 0' }}
+        />
+      );
+    }
+    if (runtimeStatus === 'idle' && runtimeStep === 'cancelled') {
+      return (
+        <Alert
+          type="warning"
+          showIcon
+          message="已取消"
+          style={{ margin: '8px 12px 0' }}
+          closable
         />
       );
     }
@@ -481,6 +534,36 @@ const Chat: React.FC = () => {
   };
 
   const inputDisabled = runtimeStatus === 'running' || runtimeStatus === 'waiting_user';
+
+  // 合并正在执行的工具(inflightTools)+ 正在流式组装 input 的工具(streamingToolInputs)
+  // tool_started 事件到达后, inflightTools 里的条目会覆盖同 id 的 streaming 条目
+  const combinedInflightTools = useMemo(() => {
+    const merged: Record<string, { name: string; input: any; startTs: number }> = {};
+    for (const [id, s] of Object.entries(streamingToolInputs)) {
+      merged[id] = { name: s.name, input: s.jsonBuffer, startTs: Date.now() };
+    }
+    for (const [id, t] of Object.entries(inflightTools)) {
+      merged[id] = t;
+    }
+    return merged;
+  }, [inflightTools, streamingToolInputs]);
+
+  const handleCancel = async () => {
+    if (!activeSessionId || cancelling) return;
+    setCancelling(true);
+    try {
+      await cancelChat(activeSessionId, 1);
+    } catch (e: any) {
+      const status = e?.response?.status;
+      if (status === 409) {
+        message.info('当前没有正在运行的 loop');
+      } else {
+        message.error('取消失败');
+      }
+      setCancelling(false);
+    }
+    // 成功: 等 WS session_status=idle 事件到达, useEffect 里会清 cancelling
+  };
 
   return (
     <div style={{ display: 'flex', height: 'calc(100vh - 130px)', gap: 16, overflow: 'hidden' }}>
@@ -599,7 +682,7 @@ const Chat: React.FC = () => {
               loading={runtimeStatus === 'running'}
               onSend={handleSend}
               inputDisabled={inputDisabled}
-              inflightTools={inflightTools}
+              inflightTools={combinedInflightTools}
               streamingText={streamingText}
             />
           </>

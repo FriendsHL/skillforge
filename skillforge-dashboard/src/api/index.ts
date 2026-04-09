@@ -18,6 +18,8 @@ export const getSessionMessages = (id: string, userId: number) =>
 // Chat API
 export const sendMessage = (sessionId: string, data: { message: string; userId: number }) =>
   api.post(`/chat/${sessionId}`, data);
+export const cancelChat = (sessionId: string, userId: number) =>
+  api.post(`/chat/${sessionId}/cancel`, null, { params: { userId } });
 export const answerAsk = (sessionId: string, askId: string, answer: string, userId: number) =>
   api.post(`/chat/${sessionId}/answer`, { askId, answer, userId });
 export const setSessionMode = (sessionId: string, mode: 'ask' | 'auto', userId: number) =>

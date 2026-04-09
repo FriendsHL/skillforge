@@ -99,10 +99,21 @@ public class AgentLoopEngine {
      */
     public LoopResult run(AgentDefinition agentDef, String userMessage,
                           List<Message> history, String sessionId, Long userId) {
+        return run(agentDef, userMessage, history, sessionId, userId, null);
+    }
+
+    /**
+     * 带 externalContext 的重载:允许调用方(ChatService)在 run 之前先拿到 LoopContext 引用,
+     * 注册到 CancellationRegistry 等外部组件,然后交给 engine 驱动。
+     * externalContext 为 null 时行为等同于旧版 run。
+     */
+    public LoopResult run(AgentDefinition agentDef, String userMessage,
+                          List<Message> history, String sessionId, Long userId,
+                          LoopContext externalContext) {
         log.info("AgentLoop started for agent={}, session={}, user={}", agentDef.getName(), sessionId, userId);
 
-        // 1. 创建 LoopContext
-        LoopContext context = new LoopContext();
+        // 1. 创建或复用 LoopContext
+        LoopContext context = externalContext != null ? externalContext : new LoopContext();
         context.setAgentDefinition(agentDef);
         context.setSessionId(sessionId);
         context.setUserId(userId);
@@ -158,7 +169,14 @@ public class AgentLoopEngine {
         String actualModelId = resolvedModel[0];
 
         // 6. 进入循环
+        boolean cancelled = false;
         while (loopCtx.getLoopCount() < loopCtx.getMaxLoops()) {
+            // 取消检查(每次迭代开头)
+            if (loopCtx.isCancelled()) {
+                log.info("AgentLoop cancelled at loop {} (pre-iteration)", loopCtx.getLoopCount() + 1);
+                cancelled = true;
+                break;
+            }
             log.debug("AgentLoop iteration {} / {}", loopCtx.getLoopCount() + 1, loopCtx.getMaxLoops());
 
             // a. 上下文压缩检查
@@ -189,10 +207,30 @@ public class AgentLoopEngine {
             final java.util.concurrent.CountDownLatch streamDone = new java.util.concurrent.CountDownLatch(1);
             final String broadcastSid = loopCtx.getSessionId();
             try {
+                // 流式 tool_use 分片需要记住 name(按 toolUseId 维度)才能广播 toolUseDelta
+                final java.util.Map<String, String> streamToolNames = new java.util.concurrent.ConcurrentHashMap<>();
                 llmProvider.chatStream(request, new com.skillforge.core.llm.LlmStreamHandler() {
                     @Override public void onText(String text) {
                         if (broadcaster != null && broadcastSid != null && text != null && !text.isEmpty()) {
                             broadcaster.assistantDelta(broadcastSid, text);
+                            broadcaster.textDelta(broadcastSid, text);
+                        }
+                    }
+                    @Override public void onToolUseStart(String toolUseId, String name) {
+                        if (toolUseId != null) {
+                            streamToolNames.put(toolUseId, name != null ? name : "");
+                        }
+                    }
+                    @Override public void onToolUseInputDelta(String toolUseId, String jsonFragment) {
+                        if (broadcaster != null && broadcastSid != null && toolUseId != null
+                                && jsonFragment != null && !jsonFragment.isEmpty()) {
+                            broadcaster.toolUseDelta(broadcastSid, toolUseId,
+                                    streamToolNames.getOrDefault(toolUseId, ""), jsonFragment);
+                        }
+                    }
+                    @Override public void onToolUseEnd(String toolUseId, java.util.Map<String, Object> parsedInput) {
+                        if (broadcaster != null && broadcastSid != null && toolUseId != null) {
+                            broadcaster.toolUseComplete(broadcastSid, toolUseId, parsedInput);
                         }
                     }
                     @Override public void onToolUse(com.skillforge.core.model.ToolUseBlock block) {
@@ -228,6 +266,13 @@ public class AgentLoopEngine {
                 throw new RuntimeException("LLM stream completed without response");
             }
             lastResponse = response;
+
+            // 取消检查(LLM 调用刚返回)
+            if (loopCtx.isCancelled()) {
+                log.info("AgentLoop cancelled after LLM call at loop {}", loopCtx.getLoopCount() + 1);
+                cancelled = true;
+                break;
+            }
 
             // c. 累加 token 用量
             if (response.getUsage() != null) {
@@ -314,6 +359,13 @@ public class AgentLoopEngine {
 
             // f. loopCount++
             loopCtx.incrementLoopCount();
+        }
+
+        // 取消退出
+        if (cancelled) {
+            LoopResult result = buildResult(loopCtx, messages, "[Cancelled by user]", toolCallRecords);
+            result.setStatus("cancelled");
+            return result;
         }
 
         // 检查是否因达到上限而退出

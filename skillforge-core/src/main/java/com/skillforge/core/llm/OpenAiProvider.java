@@ -349,6 +349,8 @@ public class OpenAiProvider implements LlmProvider {
         Map<Integer, String> toolCallIds = new HashMap<>();
         Map<Integer, String> toolCallNames = new HashMap<>();
         Map<Integer, StringBuilder> toolCallArgs = new HashMap<>();
+        // 记录每个 index 是否已经对 handler 发过 onToolUseStart(id + name 都已知)
+        Set<Integer> startedIndices = new HashSet<>();
 
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(response.body().byteStream()))) {
@@ -425,14 +427,29 @@ public class OpenAiProvider implements LlmProvider {
                         }
 
                         JsonNode funcDelta = callDelta.path("function");
+                        String argsFragment = null;
                         if (!funcDelta.isMissingNode()) {
                             if (funcDelta.has("name") && funcDelta.path("name").isTextual()) {
                                 toolCallNames.put(index, funcDelta.path("name").asText());
                             }
                             if (funcDelta.has("arguments") && funcDelta.path("arguments").isTextual()) {
+                                argsFragment = funcDelta.path("arguments").asText();
                                 toolCallArgs.computeIfAbsent(index, k -> new StringBuilder())
-                                        .append(funcDelta.path("arguments").asText());
+                                        .append(argsFragment);
                             }
+                        }
+
+                        // 一旦该 index 的 id + name 同时就绪, 触发 onToolUseStart(只触发一次)
+                        if (!startedIndices.contains(index)
+                                && toolCallIds.containsKey(index)
+                                && toolCallNames.containsKey(index)) {
+                            handler.onToolUseStart(toolCallIds.get(index), toolCallNames.get(index));
+                            startedIndices.add(index);
+                        }
+                        // 向 handler 透传 JSON 片段(必须已经发过 onToolUseStart)
+                        if (argsFragment != null && !argsFragment.isEmpty()
+                                && startedIndices.contains(index)) {
+                            handler.onToolUseInputDelta(toolCallIds.get(index), argsFragment);
                         }
                     }
                 }
@@ -482,6 +499,7 @@ public class OpenAiProvider implements LlmProvider {
 
             ToolUseBlock block = new ToolUseBlock(id, name, input);
             toolUseBlocks.add(block);
+            handler.onToolUseEnd(id, input);
             handler.onToolUse(block);
         }
 

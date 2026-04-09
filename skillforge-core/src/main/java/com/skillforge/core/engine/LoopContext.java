@@ -5,6 +5,7 @@ import com.skillforge.core.model.Message;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * 循环上下文，贯穿整个 Agent Loop 生命周期。
@@ -21,10 +22,22 @@ public class LoopContext {
     private int loopCount;
     private int maxLoops;
     private String executionMode = "ask";
+    /** 外部(CancellationRegistry)设置为 true 后,下次循环迭代开头 / LLM 调用返回后会立即退出。 */
+    private final AtomicBoolean cancelRequested = new AtomicBoolean(false);
 
     public LoopContext() {
         this.messages = new ArrayList<>();
         this.maxLoops = 50;
+    }
+
+    /** 请求取消当前循环(幂等)。 */
+    public void requestCancel() {
+        cancelRequested.set(true);
+    }
+
+    /** 是否已请求取消。 */
+    public boolean isCancelled() {
+        return cancelRequested.get();
     }
 
     public AgentDefinition getAgentDefinition() {

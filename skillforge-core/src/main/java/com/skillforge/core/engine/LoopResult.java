@@ -16,6 +16,8 @@ public class LoopResult {
     private long totalOutputTokens;
     private int loopCount;
     private List<ToolCallRecord> toolCalls;
+    /** completed / cancelled / max_loops / interrupted. 默认 completed 保持对旧调用者的兼容。 */
+    private String status = "completed";
 
     public LoopResult() {
         this.messages = new ArrayList<>();
@@ -31,6 +33,14 @@ public class LoopResult {
         this.totalOutputTokens = totalOutputTokens;
         this.loopCount = loopCount;
         this.toolCalls = toolCalls;
+    }
+
+    public String getStatus() {
+        return status;
+    }
+
+    public void setStatus(String status) {
+        this.status = status;
     }
 
     public String getFinalResponse() {

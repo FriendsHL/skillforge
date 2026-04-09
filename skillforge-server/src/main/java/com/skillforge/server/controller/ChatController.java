@@ -1,5 +1,6 @@
 package com.skillforge.server.controller;
 
+import com.skillforge.core.engine.CancellationRegistry;
 import com.skillforge.core.engine.PendingAskRegistry;
 import com.skillforge.core.model.Message;
 import com.skillforge.server.dto.ChatRequest;
@@ -33,15 +34,18 @@ public class ChatController {
     private final SessionService sessionService;
     private final PendingAskRegistry pendingAskRegistry;
     private final SubAgentRegistry subAgentRegistry;
+    private final CancellationRegistry cancellationRegistry;
 
     public ChatController(ChatService chatService,
                           SessionService sessionService,
                           PendingAskRegistry pendingAskRegistry,
-                          SubAgentRegistry subAgentRegistry) {
+                          SubAgentRegistry subAgentRegistry,
+                          CancellationRegistry cancellationRegistry) {
         this.chatService = chatService;
         this.sessionService = sessionService;
         this.pendingAskRegistry = pendingAskRegistry;
         this.subAgentRegistry = subAgentRegistry;
+        this.cancellationRegistry = cancellationRegistry;
     }
 
     /**
@@ -89,6 +93,24 @@ public class ChatController {
         body.put("sessionId", sessionId);
         body.put("status", "accepted");
         return ResponseEntity.accepted().body(body);
+    }
+
+    /**
+     * 取消正在运行的 loop。200 已取消, 409 当前无 loop 运行。
+     */
+    @PostMapping("/{sessionId}/cancel")
+    public ResponseEntity<Map<String, Object>> cancelChat(@PathVariable String sessionId,
+                                                           @RequestParam Long userId) {
+        ResponseEntity<SessionEntity> check = requireOwnedSession(sessionId, userId);
+        if (!check.getStatusCode().is2xxSuccessful()) {
+            return ResponseEntity.status(check.getStatusCode()).build();
+        }
+        boolean ok = cancellationRegistry.cancel(sessionId);
+        if (!ok) {
+            return ResponseEntity.status(HttpStatus.CONFLICT)
+                    .body(Map.of("error", "No running loop for this session"));
+        }
+        return ResponseEntity.ok(Map.of("status", "cancelling"));
     }
 
     /**

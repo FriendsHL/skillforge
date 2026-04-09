@@ -265,6 +265,7 @@ public class ClaudeProvider implements LlmProvider {
                                 currentToolId = contentBlock.path("id").asText();
                                 currentToolName = contentBlock.path("name").asText();
                                 currentToolInputJson.setLength(0);
+                                handler.onToolUseStart(currentToolId, currentToolName);
                             }
                         }
 
@@ -278,6 +279,9 @@ public class ClaudeProvider implements LlmProvider {
                             } else if ("input_json_delta".equals(deltaType)) {
                                 String partialJson = delta.path("partial_json").asText();
                                 currentToolInputJson.append(partialJson);
+                                if (currentToolId != null) {
+                                    handler.onToolUseInputDelta(currentToolId, partialJson);
+                                }
                             }
                         }
 
@@ -294,6 +298,7 @@ public class ClaudeProvider implements LlmProvider {
                                 }
                                 ToolUseBlock block = new ToolUseBlock(currentToolId, currentToolName, input);
                                 toolUseBlocks.add(block);
+                                handler.onToolUseEnd(currentToolId, input);
                                 handler.onToolUse(block);
 
                                 currentToolId = null;

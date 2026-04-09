@@ -50,6 +50,32 @@ public interface ChatEventBroadcaster {
         // no-op default
     }
 
+    // ---- 细粒度 token 流式事件(additive, 默认 no-op) ----
+
+    /** 文本 token 增量(与 assistantDelta 语义一致,保留以对齐 LlmStreamHandler 命名)。 */
+    default void textDelta(String sessionId, String delta) {
+        // no-op default
+    }
+
+    /** tool_use 的 input JSON 分片。前端据此在 inflight 卡片里实时展示正在组装的参数。 */
+    default void toolUseDelta(String sessionId, String toolUseId, String toolName, String jsonFragment) {
+        // no-op default
+    }
+
+    /** tool_use 的 input 组装完成并解析为 Map。 */
+    default void toolUseComplete(String sessionId, String toolUseId, Map<String, Object> parsedInput) {
+        // no-op default
+    }
+
+    /**
+     * 向 user 级别订阅者推送事件(per-user WebSocket 通道)。
+     * 用于 Session 列表页实时刷新 runtimeStatus / title / messageCount / 新建 / 删除 等。
+     * 载荷应保持精简(只含列表卡片所需字段)。
+     */
+    default void userEvent(Long userId, java.util.Map<String, Object> payload) {
+        // no-op default
+    }
+
     class AskUserEvent {
         public String askId;
         public String question;

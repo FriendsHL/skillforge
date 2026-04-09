@@ -29,7 +29,17 @@ public class ChatWebSocketHandler extends TextWebSocketHandler implements ChatEv
     private static final Logger log = LoggerFactory.getLogger(ChatWebSocketHandler.class);
 
     private final Map<String, Set<WebSocketSession>> sessions = new ConcurrentHashMap<>();
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    // findAndRegisterModules() picks up jackson-datatype-jsr310 (already on classpath via
+    // spring-boot-starter-web) so LocalDateTime / Instant in payloads serialize cleanly.
+    // disable WRITE_DATES_AS_TIMESTAMPS so the client gets ISO-8601 strings.
+    private final ObjectMapper objectMapper = new ObjectMapper()
+            .findAndRegisterModules()
+            .disable(com.fasterxml.jackson.databind.SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+    private final UserWebSocketHandler userWebSocketHandler;
+
+    public ChatWebSocketHandler(UserWebSocketHandler userWebSocketHandler) {
+        this.userWebSocketHandler = userWebSocketHandler;
+    }
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) {
@@ -178,11 +188,48 @@ public class ChatWebSocketHandler extends TextWebSocketHandler implements ChatEv
     }
 
     @Override
+    public void userEvent(Long userId, Map<String, Object> payload) {
+        if (userWebSocketHandler != null) {
+            userWebSocketHandler.broadcast(userId, payload);
+        }
+    }
+
+    @Override
     public void sessionTitleUpdated(String sessionId, String title) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("type", "session_title_updated");
         payload.put("sessionId", sessionId);
         payload.put("title", title);
+        broadcast(sessionId, payload);
+    }
+
+    @Override
+    public void textDelta(String sessionId, String delta) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("type", "text_delta");
+        payload.put("sessionId", sessionId);
+        payload.put("delta", delta);
+        broadcast(sessionId, payload);
+    }
+
+    @Override
+    public void toolUseDelta(String sessionId, String toolUseId, String toolName, String jsonFragment) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("type", "tool_use_delta");
+        payload.put("sessionId", sessionId);
+        payload.put("toolUseId", toolUseId);
+        payload.put("toolName", toolName);
+        payload.put("jsonFragment", jsonFragment);
+        broadcast(sessionId, payload);
+    }
+
+    @Override
+    public void toolUseComplete(String sessionId, String toolUseId, Map<String, Object> parsedInput) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("type", "tool_use_complete");
+        payload.put("sessionId", sessionId);
+        payload.put("toolUseId", toolUseId);
+        payload.put("input", parsedInput);
         broadcast(sessionId, payload);
     }
 }

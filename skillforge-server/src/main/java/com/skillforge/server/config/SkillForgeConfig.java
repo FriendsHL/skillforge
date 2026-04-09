@@ -1,6 +1,7 @@
 package com.skillforge.server.config;
 
 import com.skillforge.core.engine.AgentLoopEngine;
+import com.skillforge.core.engine.CancellationRegistry;
 import com.skillforge.core.engine.ChatEventBroadcaster;
 import com.skillforge.core.engine.PendingAskRegistry;
 import com.skillforge.core.engine.SafetySkillHook;
@@ -137,6 +138,11 @@ public class SkillForgeConfig {
     @Bean
     public PendingAskRegistry pendingAskRegistry() {
         return new PendingAskRegistry();
+    }
+
+    @Bean
+    public CancellationRegistry cancellationRegistry() {
+        return new CancellationRegistry();
     }
 
     @Bean
