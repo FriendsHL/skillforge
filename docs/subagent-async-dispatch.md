@@ -242,13 +242,15 @@ npx agent-browser eval "document.body.innerText.match(/SubAgent dispatches[\\s\\
 1. **多实例部署的并发锁**：单 JVM stripe lock 不够，需要换 DB 行锁或外部锁服务。单机 MVP 够用。
 2. **启动恢复的 resume 提示词**："[Resume from restart] Continue your previous work." 是个粗糙的唤醒 prompt，child agent 未必能从上下文接着干。更好的做法是存储 snapshot（工具调用栈 / 待决 plan）并在恢复时注入，但需要先有 auto-compact 的元数据基础。
 
-## UX 优化 Backlog（2026-04-08 对齐）
+## UX 优化 Backlog（2026-04-09 更新）
 
-用户确认的下一束体感高价值项，这里统一跟进：
+### ✅ 已交付
 
-1. **Loop 中断 / 取消按钮** —— 目前用户没法停止跑飞的 loop，只能等 `session_status=error` 或杀 server。需要 `LoopContext` 加 `AtomicBoolean cancelRequested`、iteration 之间检查、新增 `POST /api/chat/{id}/cancel` 端点、前端 running 时显示取消按钮。
-2. **流式文本增量推送 (per-token streaming)** —— 现在是整条 message 推一次，长回复时前端盯着空白等。LLM provider 的 `chatStream` 已经支持 SSE，需要把 text delta 通过 `ChatEventBroadcaster` 透传到 WS。first pass 只做 assistant text delta，tool_use input 的流式推后续再叠。
-3. **Session 列表实时刷新** —— 进入列表页要手动刷新才能看到状态。需要 `ChatEventBroadcaster` 加一个 per-user 广播通道，`SessionList.tsx` 订阅并更新 runtimeStatus 徽章。
-4. **Auto-compact 上下文压缩** —— 已有 150+ message 的长 session 接近模型 context 上限。建议混合触发：message 数 > N 或 token > 模型 context 60%，取早者。压缩时要小心 `tool_use` ↔ `tool_result` 成对出现，不能把其中一半塞进 summary。参考 Anthropic prompt caching + summarization 模式。
+1. ~~**Loop 中断 / 取消按钮**~~ → `LoopContext.cancelRequested`（AtomicBoolean）+ `CancellationRegistry`（sessionId→LoopContext）+ `POST /api/chat/{id}/cancel?userId=...`。ChatService 在 runLoop 前 register、finally unregister；`AgentLoopEngine.run()` 在 iteration 顶部和每次 LLM 调用返回后检查 flag，命中就返回 `LoopResult{status=cancelled, finalResponse="[Cancelled by user]"}`。Session 用 `runtimeStatus=idle + runtimeStep="cancelled"` 的注解形式暴露，不引入新枚举值。前端 running banner 的 action 区内联 `✕ 取消` 按钮，idle+cancelled 时显示可关闭的 "已取消" warning。
+   - **已知限制**：单轮流式回复时，okhttp 的 in-flight `read()` 不被打断，cancel 要等当前 LLM 流结束后下一次 iteration boundary 才生效。多轮 / tool-calling 任务通常秒级生效。要做到立即打断需要追踪活跃 `Call` 并 `call.cancel()`，后续可做。
+2. ~~**流式文本增量推送（含 tool_use input JSON）**~~ → `LlmStreamHandler` additive 加 `onToolUseStart/InputDelta/End`；`ChatEventBroadcaster` additive 加 `textDelta/toolUseDelta/toolUseComplete`。ClaudeProvider 的 `content_block_start/delta(input_json_delta)/stop` 链路完整接上；OpenAiProvider 按 tool_calls index 聚合，id+name 到齐触发 start，arguments chunk 透传 delta。`AgentLoopEngine` 把 stream callback 全部路由到 broadcaster。**流式路径保持单次尝试**（不加 retry，不然会重复投递 delta）。前端 `Chat.tsx` 用 `streamingToolInputs` map 累积 tool 输入，和 `inflightTools` 合并到同一个卡片渲染，partial JSON 以 code preview 形式出现在 tool card 里。
+3. ~~**Session 列表实时刷新**~~ → 新 `/ws/users/{userId}` 端点 + `UserWebSocketHandler`（`Map<Long, Set<WebSocketSession>>`）。`ChatEventBroadcaster.userEvent()` 由 `ChatWebSocketHandler` 委托到 user handler。6 个 mutation 点发事件：`ChatService` 的 running/idle/error 三态切换、`SessionTitleService` 的 immediate + smart rename、`SessionService.createSession` / `archiveSession`。`SessionList.tsx` 订阅 + merge reducer（update/create/delete）+ `StatusDot` 徽章（5 色）+ 2s→30s 指数退避重连 + reconnect 后全量 refetch 对账。**两个 WS handler 的 ObjectMapper 都需要 `findAndRegisterModules()` + 关 `WRITE_DATES_AS_TIMESTAMPS`**，否则 `LocalDateTime` 字段序列化会炸或者前端收到数字数组。
 
-**冲突分析**（并行/串行调度提示）：①②④ 都会改 `AgentLoopEngine`；其中 ①② 在同一 agent 做比较安全，④ 必须等前两个 commit 落地后串行做（否则自我冲突）。③ 完全独立可以随时并行。
+### 📋 未做（Phase 2 串行）
+
+4. **Auto-compact 上下文压缩** —— 150+ message 的长 session 接近模型 context 上限。**触发策略（已对齐）**：混合模式（c）—— message 数 > N 或 token > 模型 context 60%，取早者。压缩时要小心 `tool_use` ↔ `tool_result` 成对出现，不能把其中一半塞进 summary；参考 Anthropic prompt caching + summarization 模式。独占 `AgentLoopEngine`，必须在 Phase 1（①②）commit 之后串行做。
