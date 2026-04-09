@@ -3,6 +3,7 @@ package com.skillforge.server.service;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.skillforge.core.engine.ChatEventBroadcaster;
 import com.skillforge.core.model.Message;
 import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.SessionEntity;
@@ -10,10 +11,13 @@ import com.skillforge.server.repository.AgentRepository;
 import com.skillforge.server.repository.SessionRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @Service
@@ -25,10 +29,42 @@ public class SessionService {
     private final AgentRepository agentRepository;
     private final ObjectMapper objectMapper;
 
+    /**
+     * Optional:WebSocket 广播器。构造时可能不可用(测试 / 启动顺序),
+     * 通过 setter 注入以避免循环依赖。为 null 时静默跳过广播。
+     */
+    private ChatEventBroadcaster broadcaster;
+
     public SessionService(SessionRepository sessionRepository, AgentRepository agentRepository) {
         this.sessionRepository = sessionRepository;
         this.agentRepository = agentRepository;
         this.objectMapper = new ObjectMapper();
+    }
+
+    @Autowired(required = false)
+    public void setBroadcaster(ChatEventBroadcaster broadcaster) {
+        this.broadcaster = broadcaster;
+    }
+
+    private Map<String, Object> toListProjection(SessionEntity s) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("id", s.getId());
+        m.put("userId", s.getUserId());
+        m.put("agentId", s.getAgentId());
+        m.put("title", s.getTitle());
+        m.put("status", s.getStatus());
+        m.put("runtimeStatus", s.getRuntimeStatus());
+        m.put("runtimeStep", s.getRuntimeStep());
+        m.put("runtimeError", s.getRuntimeError());
+        m.put("messageCount", s.getMessageCount());
+        m.put("totalInputTokens", s.getTotalInputTokens());
+        m.put("totalOutputTokens", s.getTotalOutputTokens());
+        m.put("executionMode", s.getExecutionMode());
+        m.put("parentSessionId", s.getParentSessionId());
+        m.put("depth", s.getDepth());
+        m.put("createdAt", s.getCreatedAt());
+        m.put("updatedAt", s.getUpdatedAt());
+        return m;
     }
 
     /**
@@ -65,7 +101,19 @@ public class SessionService {
         if (agent != null && agent.getExecutionMode() != null) {
             session.setExecutionMode(agent.getExecutionMode());
         }
-        return sessionRepository.save(session);
+        SessionEntity saved = sessionRepository.save(session);
+        // 广播 per-user session_created,列表页据此立即插入新行
+        if (broadcaster != null && saved.getParentSessionId() == null) {
+            try {
+                Map<String, Object> payload = new LinkedHashMap<>();
+                payload.put("type", "session_created");
+                payload.put("session", toListProjection(saved));
+                broadcaster.userEvent(saved.getUserId(), payload);
+            } catch (Throwable t) {
+                log.debug("session_created broadcast skipped: {}", t.getMessage());
+            }
+        }
+        return saved;
     }
 
     public SessionEntity getSession(String id) {
@@ -102,6 +150,16 @@ public class SessionService {
         SessionEntity session = getSession(id);
         session.setStatus("archived");
         sessionRepository.save(session);
+        if (broadcaster != null) {
+            try {
+                Map<String, Object> payload = new LinkedHashMap<>();
+                payload.put("type", "session_deleted");
+                payload.put("sessionId", id);
+                broadcaster.userEvent(session.getUserId(), payload);
+            } catch (Throwable t) {
+                log.debug("session_deleted broadcast skipped: {}", t.getMessage());
+            }
+        }
     }
 
     public List<Message> getSessionMessages(String id) {

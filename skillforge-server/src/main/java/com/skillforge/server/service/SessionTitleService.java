@@ -266,5 +266,17 @@ public class SessionTitleService {
             // 广播是 best-effort,不让其影响主流程
             log.debug("broadcastTitle skipped: {}", t.getMessage());
         }
+        // Per-user 通道:列表页实时刷新该 session 的标题
+        try {
+            SessionEntity s = sessionService.getSession(sessionId);
+            java.util.Map<String, Object> payload = new java.util.LinkedHashMap<>();
+            payload.put("type", "session_updated");
+            payload.put("sessionId", sessionId);
+            payload.put("title", title);
+            payload.put("updatedAt", s.getUpdatedAt());
+            broadcaster.userEvent(s.getUserId(), payload);
+        } catch (Throwable t) {
+            log.debug("broadcastTitle user-event skipped: {}", t.getMessage());
+        }
     }
 }
