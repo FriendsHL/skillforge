@@ -1,0 +1,9 @@
+name: Special Char Tester
+modelId: bailian:glm-5
+systemPrompt: |
+  You are a helper. Use this prompt as-is.
+  Special chars to preserve: : " ` \ /
+  Multiple lines
+  And some trailing whitespace below.
+skills:
+  - Bash

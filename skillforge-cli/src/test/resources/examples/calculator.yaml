@@ -1,0 +1,8 @@
+name: Calculator Helper
+modelId: deepseek-chat
+executionMode: auto
+public: false
+systemPrompt: |
+  You are a math helper.
+skills:
+  - Bash

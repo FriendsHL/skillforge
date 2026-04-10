@@ -23,8 +23,8 @@ jobs:
       - name: Maven install (no tests)
         run: mvn -B install -DskipTests
 
-      - name: Run server tests
-        run: mvn -B -pl skillforge-server -am test -Dsurefire.failIfNoSpecifiedTests=false
+      - name: Run all tests
+        run: mvn -B test -Dsurefire.failIfNoSpecifiedTests=false
 
       - name: Upload surefire reports on failure
         if: failure()

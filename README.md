@@ -190,6 +190,54 @@ All session-scoped endpoints require `userId` (query param or body) and return 4
 | POST | `/api/skills/upload` | Upload skill zip package |
 | GET | `/h2-console` | H2 database console |
 
+## CLI
+
+The `skillforge-cli` module ships a one-shot command-line client for the
+server's REST API. It's a thin OkHttp wrapper with picocli commands —
+no Spring, starts in ~200ms.
+
+### Install
+
+```bash
+# build the shaded jar (once)
+mvn -pl skillforge-cli -am install -DskipTests
+
+# add a convenience alias
+alias skillforge='java -jar /absolute/path/to/skillforge/skillforge-cli/target/skillforge-cli-1.0.0-SNAPSHOT-shaded.jar'
+```
+
+Configuration resolution order (highest first):
+1. CLI flag (`--server`, `--user-id`)
+2. Environment variable (`SKILLFORGE_SERVER`, `SKILLFORGE_USER_ID`)
+3. `~/.skillforge/config.yaml` (optional, schema `{server: ..., userId: ...}`)
+4. Defaults: `http://localhost:8080`, `userId=1`
+
+### Examples
+
+```bash
+# list agents
+skillforge agents list
+
+# import an agent from a YAML file
+skillforge agents create -f examples/agents/general-assistant.yaml
+
+# export an agent back to YAML (so you can version it in git)
+skillforge agents export 1 > my-agent.yaml
+
+# one-shot chat: creates a fresh session in auto mode, polls until idle,
+# prints the assistant reply to stdout and the new session id to stderr
+skillforge chat 1 "List 3 interesting files in /tmp"
+
+# list recent sessions
+skillforge sessions list
+
+# manually compact a long session
+skillforge compact <session-id> --level full --reason "end of task"
+```
+
+See `examples/agents/` for starter YAML files and `examples/agents/README.md`
+for more on the schema.
+
 ## Built-in Skills
 
 | Skill | Description | Read-only |

@@ -23,12 +23,14 @@
         <module>skillforge-core</module>
         <module>skillforge-skills</module>
         <module>skillforge-server</module>
+        <module>skillforge-cli</module>
     </modules>
 
     <properties>
         <java.version>17</java.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <okhttp.version>4.12.0</okhttp.version>
+        <picocli.version>4.7.6</picocli.version>
     </properties>
 
     <dependencyManagement>

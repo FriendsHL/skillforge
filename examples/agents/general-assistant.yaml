@@ -1,0 +1,18 @@
+name: General Assistant
+description: A general-purpose assistant with full filesystem and shell access.
+modelId: deepseek-chat
+executionMode: ask
+public: false
+systemPrompt: |
+  You are a helpful assistant. Use tools when necessary to answer the
+  user's question. Prefer read-only skills (FileRead, Glob, Grep) before
+  making changes. Summarize what you did at the end of each task.
+skills:
+  - Bash
+  - FileRead
+  - FileWrite
+  - FileEdit
+  - Glob
+  - Grep
+  - Browser
+  - SubAgent
