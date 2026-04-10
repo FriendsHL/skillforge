@@ -1,5 +1,6 @@
 package com.skillforge.server.init;
 
+import com.skillforge.server.entity.SessionEntity;
 import com.skillforge.server.repository.SessionRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -7,6 +8,9 @@ import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
+
+import java.time.ZoneId;
+import java.util.List;
 
 /**
  * One-shot startup hook: backfill {@code lastUserMessageAt} for sessions created
@@ -40,12 +44,23 @@ public class LastUserMessageAtBackfill implements ApplicationRunner {
     @Override
     public void run(ApplicationArguments args) {
         try {
-            int updated = sessionRepository.backfillNullLastUserMessageAt();
-            if (updated > 0) {
-                log.info("LastUserMessageAtBackfill: seeded {} session row(s) with updatedAt", updated);
-            } else {
+            // lastUserMessageAt is Instant; updatedAt is LocalDateTime. JPQL
+            // bulk UPDATE can't auto-convert, so we iterate in Java.
+            List<SessionEntity> stale = sessionRepository.findByLastUserMessageAtIsNull();
+            if (stale.isEmpty()) {
                 log.debug("LastUserMessageAtBackfill: no rows needed backfill");
+                return;
             }
+            ZoneId zone = ZoneId.systemDefault();
+            int updated = 0;
+            for (SessionEntity s : stale) {
+                if (s.getUpdatedAt() != null) {
+                    s.setLastUserMessageAt(s.getUpdatedAt().atZone(zone).toInstant());
+                    sessionRepository.save(s);
+                    updated++;
+                }
+            }
+            log.info("LastUserMessageAtBackfill: seeded {} session row(s) from updatedAt", updated);
         } catch (Exception e) {
             // backfill is best-effort — never block boot
             log.warn("LastUserMessageAtBackfill failed (continuing boot)", e);
