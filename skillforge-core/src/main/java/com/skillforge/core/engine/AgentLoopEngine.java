@@ -275,6 +275,16 @@ public class AgentLoopEngine {
                 // 流式 tool_use 分片需要记住 name(按 toolUseId 维度)才能广播 toolUseDelta
                 final java.util.Map<String, String> streamToolNames = new java.util.concurrent.ConcurrentHashMap<>();
                 llmProvider.chatStream(request, new com.skillforge.core.llm.LlmStreamHandler() {
+                    @Override public void onStreamStart(Runnable cancelAction) {
+                        if (cancelAction != null) {
+                            loopCtx.setStreamCanceller(cancelAction);
+                        } else {
+                            loopCtx.clearStreamCanceller();
+                        }
+                    }
+                    @Override public boolean isCancelled() {
+                        return loopCtx.isCancelled();
+                    }
                     @Override public void onText(String text) {
                         if (broadcaster != null && broadcastSid != null && text != null && !text.isEmpty()) {
                             broadcaster.assistantDelta(broadcastSid, text);
@@ -321,6 +331,13 @@ public class AgentLoopEngine {
                 log.error("LLM stream call failed at loop {}", loopCtx.getLoopCount(), e);
                 throw new RuntimeException("LLM call failed: " + e.getMessage(), e);
             }
+            // 取消检查必须在 errHolder 之前:cancel 路径会设 errHolder 来释放 latch,
+            // 但不应把 cancel 当错误抛出
+            if (loopCtx.isCancelled()) {
+                log.info("AgentLoop cancelled during LLM call at loop {}", loopCtx.getLoopCount() + 1);
+                cancelled = true;
+                break;
+            }
             if (errHolder.get() != null) {
                 Throwable e = errHolder.get();
                 log.error("LLM stream returned error at loop {}", loopCtx.getLoopCount(), e);
@@ -331,13 +348,6 @@ public class AgentLoopEngine {
                 throw new RuntimeException("LLM stream completed without response");
             }
             lastResponse = response;
-
-            // 取消检查(LLM 调用刚返回)
-            if (loopCtx.isCancelled()) {
-                log.info("AgentLoop cancelled after LLM call at loop {}", loopCtx.getLoopCount() + 1);
-                cancelled = true;
-                break;
-            }
 
             // c. 累加 token 用量
             if (response.getUsage() != null) {

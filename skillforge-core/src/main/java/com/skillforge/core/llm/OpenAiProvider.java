@@ -108,6 +108,7 @@ public class OpenAiProvider implements LlmProvider {
     @Override
     public void chatStream(LlmRequest request, LlmStreamHandler handler) {
         String model = request.getModel() != null ? request.getModel() : defaultModel;
+        Call call = null;
         try {
             String requestBody = buildRequestBody(request, model, true);
             log.debug("OpenAI stream request: model={}", model);
@@ -119,7 +120,10 @@ public class OpenAiProvider implements LlmProvider {
                     .post(RequestBody.create(requestBody, JSON_MEDIA_TYPE))
                     .build();
 
-            try (Response response = httpClient.newCall(httpRequest).execute()) {
+            call = httpClient.newCall(httpRequest);
+            handler.onStreamStart(call::cancel);
+
+            try (Response response = call.execute()) {
                 if (!response.isSuccessful()) {
                     String errorBody = response.body() != null ? response.body().string() : "no body";
                     handler.onError(new RuntimeException(
@@ -130,7 +134,13 @@ public class OpenAiProvider implements LlmProvider {
                 processSSEStream(response, handler);
             }
         } catch (Exception e) {
+            if (handler.isCancelled()) {
+                log.debug("OpenAI stream cancelled");
+            }
+            // 即使是 cancel 引起的异常也要调 onError,确保 engine 的 CountDownLatch 释放
             handler.onError(e);
+        } finally {
+            handler.onStreamStart(null);
         }
     }
 
@@ -356,6 +366,10 @@ public class OpenAiProvider implements LlmProvider {
                 new InputStreamReader(response.body().byteStream()))) {
             String line;
             while ((line = reader.readLine()) != null) {
+                if (handler.isCancelled()) {
+                    log.debug("OpenAI SSE loop cancelled between lines");
+                    break;
+                }
                 if (!line.startsWith("data: ")) {
                     continue;
                 }
@@ -454,6 +468,12 @@ public class OpenAiProvider implements LlmProvider {
                     }
                 }
             }
+        }
+
+        // Cancel 时不能把 partial response 当完整结果交出去(会导致 orphan tool_use)
+        if (handler.isCancelled()) {
+            handler.onError(new java.io.IOException("stream cancelled"));
+            return;
         }
 
         // If stream ended without [DONE], still finalize

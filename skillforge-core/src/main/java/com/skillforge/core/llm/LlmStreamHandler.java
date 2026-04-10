@@ -37,6 +37,21 @@ public interface LlmStreamHandler {
      */
     void onError(Throwable error);
 
+    // ---- 流内取消支持(默认 no-op 保持向后兼容) ----
+
+    /**
+     * Provider 创建底层 HTTP Call 后回调此方法,传入可取消该 Call 的 Runnable。
+     * 流结束时 Provider 会以 null 调用一次以清理引用。
+     *
+     * @param cancelAction 取消动作;null 表示清理
+     */
+    default void onStreamStart(Runnable cancelAction) {}
+
+    /**
+     * Provider 在 SSE 循环中轮询此方法;返回 true 时 Provider 应尽快中断读取。
+     */
+    default boolean isCancelled() { return false; }
+
     // ---- 新增:细粒度 token/tool_use 流式事件(默认 no-op 保持向后兼容) ----
 
     /**

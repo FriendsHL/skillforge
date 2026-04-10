@@ -6,6 +6,7 @@ import com.skillforge.core.model.Message;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * 循环上下文，贯穿整个 Agent Loop 生命周期。
@@ -24,6 +25,8 @@ public class LoopContext {
     private String executionMode = "ask";
     /** 外部(CancellationRegistry)设置为 true 后,下次循环迭代开头 / LLM 调用返回后会立即退出。 */
     private final AtomicBoolean cancelRequested = new AtomicBoolean(false);
+    /** 当前活跃 SSE 流的取消动作(e.g. OkHttp Call::cancel)。cancel 时同步调用以中断阻塞读。 */
+    private final AtomicReference<Runnable> streamCanceller = new AtomicReference<>();
     /**
      * 本轮 iteration 内是否已经执行过一次 compact。
      * 用于防止 "compact → 仍超限 → 再 compact → ..." 死循环, 也防止同一 iteration 里
@@ -36,9 +39,27 @@ public class LoopContext {
         this.maxLoops = 50;
     }
 
-    /** 请求取消当前循环(幂等)。 */
+    /** 请求取消当前循环(幂等)。同时中断正在进行的 SSE 流读取。 */
     public void requestCancel() {
         cancelRequested.set(true);
+        Runnable canceller = streamCanceller.get();
+        if (canceller != null) {
+            try { canceller.run(); } catch (Exception ignored) {}
+        }
+    }
+
+    /** Provider 在 SSE 流开始时调用,注册取消动作。设置后立即检查是否已取消,防 TOCTOU race。 */
+    public void setStreamCanceller(Runnable r) {
+        streamCanceller.set(r);
+        // 防止 requestCancel 先于 setStreamCanceller 执行导致 call.cancel() 被跳过
+        if (r != null && cancelRequested.get()) {
+            try { r.run(); } catch (Exception ignored) {}
+        }
+    }
+
+    /** Provider 在 SSE 流结束后调用,清除取消动作引用。 */
+    public void clearStreamCanceller() {
+        streamCanceller.set(null);
     }
 
     /** 是否已请求取消。 */
