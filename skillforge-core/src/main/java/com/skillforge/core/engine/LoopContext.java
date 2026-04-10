@@ -5,6 +5,7 @@ import com.skillforge.core.model.Message;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -33,6 +34,9 @@ public class LoopContext {
      * engine-soft 已执行后 agent-tool 再次触发。每次 iteration 开头清零。
      */
     private boolean compactedThisIteration = false;
+
+    /** Thread-safe queue for user messages sent while the loop is running. */
+    private final ConcurrentLinkedQueue<String> pendingUserMessages = new ConcurrentLinkedQueue<>();
 
     public LoopContext() {
         this.messages = new ArrayList<>();
@@ -178,5 +182,27 @@ public class LoopContext {
 
     public void resetCompactedThisIteration() {
         this.compactedThisIteration = false;
+    }
+
+    /** Enqueue a user message to be injected at the next iteration boundary. Thread-safe. */
+    public void enqueueUserMessage(String text) {
+        if (text != null && !text.isBlank()) {
+            pendingUserMessages.add(text);
+        }
+    }
+
+    /** Drain all pending user messages. Returns empty list if none. Thread-safe. */
+    public List<String> drainPendingUserMessages() {
+        List<String> drained = new ArrayList<>();
+        String msg;
+        while ((msg = pendingUserMessages.poll()) != null) {
+            drained.add(msg);
+        }
+        return drained;
+    }
+
+    /** Check if there are pending messages without draining. */
+    public boolean hasPendingUserMessages() {
+        return !pendingUserMessages.isEmpty();
     }
 }

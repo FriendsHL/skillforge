@@ -37,6 +37,12 @@ public class CancellationRegistry {
         return true;
     }
 
+    /** Get the LoopContext for a running session. Returns null if not running. */
+    public LoopContext getContext(String sessionId) {
+        if (sessionId == null) return null;
+        return running.get(sessionId);
+    }
+
     /** 测试/运维辅助: 判断某个 session 当前是否有注册的 loop。 */
     public boolean isRunning(String sessionId) {
         return sessionId != null && running.containsKey(sessionId);

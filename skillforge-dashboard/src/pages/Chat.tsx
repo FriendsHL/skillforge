@@ -545,7 +545,7 @@ const Chat: React.FC = () => {
     );
   };
 
-  const inputDisabled = runtimeStatus === 'running' || runtimeStatus === 'waiting_user';
+  const inputDisabled = runtimeStatus === 'waiting_user';
 
   // 合并正在执行的工具(inflightTools)+ 正在流式组装 input 的工具(streamingToolInputs)
   // tool_started 事件到达后, inflightTools 里的条目会覆盖同 id 的 streaming 条目

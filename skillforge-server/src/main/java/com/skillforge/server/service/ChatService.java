@@ -21,6 +21,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -87,6 +89,39 @@ public class ChatService {
         // 必须在 CompactionService 的同一把 stripe lock 下进行, 否则 C1 compact 请求可能
         // 在我们检查 runtimeStatus == "running" 之前抢进来 (TOCTOU).
         synchronized (compactionService.lockFor(sessionId)) {
+            // Re-read session inside lock to avoid TOCTOU on runtimeStatus
+            session = sessionService.getSession(sessionId);
+
+            // If session is already running, enqueue the message instead of starting a new loop
+            if ("running".equals(session.getRuntimeStatus())) {
+                LoopContext ctx = cancellationRegistry.getContext(sessionId);
+                if (ctx != null) {
+                    ctx.enqueueUserMessage(userMessage);
+                    // Persist the user message to messagesJson so it's visible in history
+                    try {
+                        List<Map<String, Object>> msgs = objectMapper.readValue(
+                                session.getMessagesJson(), new TypeReference<>() {});
+                        msgs.add(Map.of("role", "user", "content", userMessage));
+                        session.setMessagesJson(objectMapper.writeValueAsString(msgs));
+                        session.setLastUserMessageAt(java.time.Instant.now());
+                        sessionService.saveSession(session);
+                    } catch (Exception e) {
+                        log.warn("Failed to append queued message to messagesJson, message is queued in-memory only: sessionId={}", sessionId, e);
+                        // Don't save inconsistent state — message is still in the in-memory queue
+                        // and will be persisted when the engine drains it
+                        return;
+                    }
+                    // Broadcast so frontend shows the message immediately
+                    if (broadcaster != null) {
+                        broadcaster.messageAppended(sessionId, Message.user(userMessage));
+                    }
+                    log.info("Enqueued user message for running session {}", sessionId);
+                    return;
+                }
+                // ctx is null = race condition (loop just finished). Fall through to normal path.
+                log.warn("Session {} is running but no LoopContext found, falling through to normal chatAsync", sessionId);
+            }
+
             // B3 idle-gap light compact: 会话空置 > 12h 且消息 > 10 条时, 先跑一次 light 压缩
             // 再追加 user message。只对 parent session 触发 (子 session 不走 user 交互).
             // 用 lastUserMessageAt (非 updatedAt) 以避免被 runtime_status 写入/smart title 污染.
@@ -202,8 +237,21 @@ public class ChatService {
                 finalStatus = "cancelled";
             }
 
+            // Drain any remaining queued messages that arrived after the loop ended,
+            // then unregister from CancellationRegistry BEFORE saving messages.
+            // This ensures no concurrent chatAsync can enqueue+persist between drain and save.
+            List<String> remaining = preCtx.drainPendingUserMessages();
+            List<Message> finalMessages = result.getMessages();
+            if (!remaining.isEmpty()) {
+                for (String text : remaining) {
+                    finalMessages.add(Message.user(text));
+                }
+                log.info("Appended {} remaining queued messages after loop end: sessionId={}", remaining.size(), sessionId);
+            }
+            cancellationRegistry.unregister(sessionId);
+
             // 保存最终 messages(engine 已经把 user msg + 之后所有消息组装好了)
-            sessionService.updateSessionMessages(sessionId, result.getMessages(),
+            sessionService.updateSessionMessages(sessionId, finalMessages,
                     result.getTotalInputTokens(), result.getTotalOutputTokens());
 
             // 记录 ModelUsage
@@ -258,7 +306,7 @@ public class ChatService {
                 log.error("Failed to mark session error: sessionId={}", sessionId, inner);
             }
         } finally {
-            // 无论结果如何, 清理 CancellationRegistry 条目
+            // Ensure CancellationRegistry is cleaned up (may already be done in happy path)
             try {
                 cancellationRegistry.unregister(sessionId);
             } catch (Exception ignored) {

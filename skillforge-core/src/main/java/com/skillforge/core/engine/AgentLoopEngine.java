@@ -207,6 +207,9 @@ public class AgentLoopEngine {
             // 每次迭代开头清掉"本轮已压缩"标志 —— 这是防止无限压缩循环的核心
             loopCtx.resetCompactedThisIteration();
 
+            // Drain any queued user messages into the conversation
+            injectQueuedMessages(loopCtx, messages);
+
             // a. B1/B2 safety net: 基于 TokenEstimator 的估算自动触发压缩
             //
             // B1 = engine-soft light compact, 条件 ratio > 0.40 或 detectWaste
@@ -364,6 +367,15 @@ public class AgentLoopEngine {
 
             // e. 判断是否 tool_use
             if (!response.isToolUse()) {
+                // Before breaking, check if user queued new messages while we were streaming
+                if (injectQueuedMessages(loopCtx, messages)) {
+                    if (loopCtx.getLoopCount() + 1 >= loopCtx.getMaxLoops()) {
+                        log.warn("Queued message(s) arrived but loop is at max iterations, appending without LLM processing");
+                        break;
+                    }
+                    loopCtx.incrementLoopCount();
+                    continue;
+                }
                 // 循环结束
                 log.info("AgentLoop completed with text response at loop {}", loopCtx.getLoopCount() + 1);
                 break;
@@ -505,6 +517,22 @@ public class AgentLoopEngine {
             throw new IllegalStateException("Default LLM provider '" + defaultProviderName + "' is not configured");
         }
         return defaultProvider;
+    }
+
+    /**
+     * Drain queued user messages from LoopContext and inject as a single merged user message.
+     * Multiple messages are joined with "\n\n---\n\n" to avoid consecutive user messages
+     * violating the LLM API alternation contract.
+     *
+     * @return true if at least one message was injected
+     */
+    private boolean injectQueuedMessages(LoopContext loopCtx, List<Message> messages) {
+        List<String> pending = loopCtx.drainPendingUserMessages();
+        if (pending.isEmpty()) return false;
+        String merged = String.join("\n\n---\n\n", pending);
+        messages.add(Message.user(merged));
+        log.debug("Injected {} queued user message(s) at iteration {}", pending.size(), loopCtx.getLoopCount() + 1);
+        return true;
     }
 
     /**
