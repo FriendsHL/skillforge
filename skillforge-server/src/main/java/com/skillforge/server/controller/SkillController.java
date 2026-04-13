@@ -118,8 +118,32 @@ public class SkillController {
     }
 
     @GetMapping("/{id}/detail")
-    public ResponseEntity<Map<String, Object>> getSkillDetail(@PathVariable Long id) {
-        return ResponseEntity.ok(skillService.getSkillDetail(id));
+    public ResponseEntity<Map<String, Object>> getSkillDetail(@PathVariable String id) {
+        // System skill: id starts with "system-"
+        if (id.startsWith("system-")) {
+            String name = id.substring("system-".length());
+            return skillRegistry.getSkillDefinition(name)
+                    .map(def -> {
+                        Map<String, Object> detail = new java.util.LinkedHashMap<>();
+                        detail.put("id", id);
+                        detail.put("name", def.getName());
+                        detail.put("description", def.getDescription());
+                        detail.put("promptContent", def.getPromptContent());
+                        detail.put("requiredTools", def.getRequiredTools());
+                        detail.put("references", def.getReferences());
+                        detail.put("system", true);
+                        detail.put("scripts", def.getScriptPaths());
+                        detail.put("enabled", true);
+                        return ResponseEntity.ok(detail);
+                    })
+                    .orElse(ResponseEntity.notFound().build());
+        }
+        // User skill: numeric id
+        try {
+            return ResponseEntity.ok(skillService.getSkillDetail(Long.parseLong(id)));
+        } catch (NumberFormatException e) {
+            return ResponseEntity.badRequest().build();
+        }
     }
 
     @GetMapping("/{id}/prompt")

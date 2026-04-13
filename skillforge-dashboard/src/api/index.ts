@@ -52,7 +52,7 @@ export const uploadSkill = (file: File, ownerId: number) => {
   return api.post('/skills/upload', form);
 };
 export const deleteSkill = (id: number) => api.delete(`/skills/${id}`);
-export const getSkillDetail = (id: number) => api.get(`/skills/${id}/detail`);
+export const getSkillDetail = (id: number | string) => api.get(`/skills/${id}/detail`);
 export const toggleSkill = (id: number, enabled: boolean) =>
   api.put(`/skills/${id}/toggle?enabled=${enabled}`);
 

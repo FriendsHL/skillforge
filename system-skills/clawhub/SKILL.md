@@ -1,27 +1,26 @@
 ---
 name: clawhub
-description: "Search, browse, and install Claude skill packages from the ClawHub marketplace using the `npx clawhub` CLI. Use `explore --sort downloads` to find popular skills efficiently — do NOT search with many different keywords."
+description: "Search and install Claude skill packages from the ClawHub marketplace using the `npx clawhub` CLI. Search once with a broad keyword, then inspect top results for download counts."
 ---
 
 # ClawHub Marketplace
 
 Use `npx clawhub` to interact with the ClawHub skill marketplace.
 
-## Browse Popular Skills (Recommended)
+## IMPORTANT: Efficient Search Strategy
 
-To find popular/trending skills, use `explore` with sort — this is the most efficient approach:
+ClawHub search does NOT return download counts in results. To find popular skills:
+1. Search ONCE with a broad keyword (e.g., "tool", "code", "assistant")
+2. Pick the top 5-10 results from that single search
+3. Use `inspect` on each to see download/star counts
+4. Rank by downloads and report to the user
 
-```bash
-npx clawhub explore --sort downloads --limit 10 --json
-```
-
-Sort options: `downloads`, `trending`, `newest`, `rating`, `installs`, `installsAllTime`
+**Do NOT search with many different keywords** — this wastes iterations and produces redundant results. One broad search + selective inspect is the correct approach.
 
 ## Search Skills
 
-Search by keyword (use only when looking for something specific):
 ```bash
-npx clawhub search "code review" --limit 10
+npx clawhub search "code" --limit 15
 ```
 
 ## Inspect Skill Details
@@ -80,7 +79,7 @@ npx clawhub list
 
 ## Important Notes
 
-- Use `explore --sort downloads` to find popular skills — do NOT repeatedly search with different keywords
+- Search ONCE with a broad keyword, then inspect selectively — do NOT repeatedly search with different keywords
 - Use `--json` flag for structured output when you need to parse the results
-- The `inspect` command shows full details without installing
+- The `inspect` command shows full details (including download counts) without installing
 - Always inspect a skill before installing to verify it is safe

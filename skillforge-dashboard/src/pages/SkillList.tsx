@@ -55,7 +55,7 @@ const SkillList: React.FC = () => {
     }
   };
 
-  const showDetail = async (id: number) => {
+  const showDetail = async (id: number | string) => {
     setDetailVisible(true);
     setDetailLoading(true);
     try {
@@ -170,15 +170,13 @@ const SkillList: React.FC = () => {
       width: 140,
       render: (_: any, record: any) => (
         <span style={{ display: 'flex', gap: 4 }}>
+          <Button icon={<EyeOutlined />} size="small" onClick={() => showDetail(record.id)}>
+            Detail
+          </Button>
           {!record.system && (
-            <>
-              <Button icon={<EyeOutlined />} size="small" onClick={() => showDetail(record.id)}>
-                Detail
-              </Button>
-              <Popconfirm title="Delete this skill?" onConfirm={() => handleDelete(record.id)}>
-                <Button icon={<DeleteOutlined />} size="small" danger />
-              </Popconfirm>
-            </>
+            <Popconfirm title="Delete this skill?" onConfirm={() => handleDelete(record.id)}>
+              <Button icon={<DeleteOutlined />} size="small" danger />
+            </Popconfirm>
           )}
         </span>
       ),
