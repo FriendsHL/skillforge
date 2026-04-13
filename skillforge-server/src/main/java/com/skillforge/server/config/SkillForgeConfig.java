@@ -19,10 +19,7 @@ import com.skillforge.skills.FileWriteSkill;
 import com.skillforge.skills.GlobSkill;
 import com.skillforge.skills.BrowserSkill;
 import com.skillforge.skills.GrepSkill;
-import com.skillforge.server.clawhub.ClawHubClient;
-import com.skillforge.server.clawhub.ClawHubInstallService;
 import com.skillforge.server.clawhub.ClawHubProperties;
-import com.skillforge.server.skill.ClawHubSkill;
 import com.skillforge.server.skill.MemorySkill;
 import com.skillforge.server.skill.SubAgentSkill;
 import com.skillforge.server.service.AgentService;
@@ -72,20 +69,8 @@ public class SkillForgeConfig {
         return registry;
     }
 
-    /**
-     * ClawHubSkill 单独成 bean,便于注入 ClawHubClient + ClawHubInstallService
-     * (它们都是 @Service / @Component,Spring 自动装配)。
-     * 注意:必须依赖 SkillRegistry,确保注册时机晚于上面 skillRegistry() 创建。
-     */
-    @Bean
-    public ClawHubSkill clawHubSkill(ClawHubClient client,
-                                     ClawHubInstallService installService,
-                                     SkillRegistry skillRegistry) {
-        ClawHubSkill skill = new ClawHubSkill(client, installService);
-        skillRegistry.register(skill);
-        log.info("Registered ClawHubSkill into SkillRegistry");
-        return skill;
-    }
+    // ClawHubSkill 已迁移为 system-skills/clawhub/ 文件化 Skill，
+    // 由 SystemSkillLoader 在启动时自动加载，不再需要 Java bean 注册。
 
     /**
      * SubAgentSkill — 异步派发任务给另一个 agentId 指向的子 Agent。

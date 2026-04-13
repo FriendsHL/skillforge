@@ -18,6 +18,14 @@ public class SafetySkillHook implements SkillHook {
 
     private static final Logger log = LoggerFactory.getLogger(SafetySkillHook.class);
 
+    /** 需要用户确认才能执行的高风险命令模式 */
+    private static final List<Pattern> CONFIRMATION_REQUIRED_PATTERNS = List.of(
+            // Skill package install — 必须用户确认
+            Pattern.compile("\\bclawhub\\s+install\\b"),
+            Pattern.compile("\\bskill-hub/cli\\s+install\\b"),
+            Pattern.compile("\\bskillhub\\s+install\\b")
+    );
+
     private static final List<Pattern> DANGEROUS_PATTERNS = List.of(
             // Destructive delete commands
             Pattern.compile("rm\\s+-rf\\s+/(?:\\s|$)"),
@@ -99,6 +107,14 @@ public class SafetySkillHook implements SkillHook {
             return input;
         }
         String command = commandObj.toString();
+
+        // 高风险安装命令 → 阻止执行，返回提示要求用 ask_user 确认
+        for (Pattern pattern : CONFIRMATION_REQUIRED_PATTERNS) {
+            if (pattern.matcher(command).find()) {
+                log.warn("[SafetyHook] Blocked install command requiring confirmation: {}", command);
+                return null; // 返回 null 阻止执行，engine 会返回错误提示
+            }
+        }
 
         for (Pattern pattern : DANGEROUS_PATTERNS) {
             if (pattern.matcher(command).find()) {

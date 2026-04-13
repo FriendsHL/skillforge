@@ -47,9 +47,13 @@ public class ClawHubSkill implements Skill {
 
     @Override
     public String getDescription() {
-        return "Search, inspect, and install Claude skill packages from clawhub.ai. " +
-                "Use search/get_detail/scan to discover skills before installing. " +
-                "The install action will ALWAYS require human confirmation for safety.";
+        return "Search, inspect, and install Claude skill packages from clawhub.ai.\n\n"
+                + "To find popular/trending skills, use the 'explore' action with sort=downloads or sort=trending. "
+                + "This returns skills sorted by popularity with download counts — much more efficient than "
+                + "multiple keyword searches.\n\n"
+                + "Use 'search' only when looking for skills matching a specific keyword.\n"
+                + "Use 'get_detail' to see full info for a specific skill.\n"
+                + "The 'install' action will ALWAYS require human confirmation for safety.";
     }
 
     @Override
@@ -63,8 +67,8 @@ public class ClawHubSkill implements Skill {
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put("action", Map.of(
                 "type", "string",
-                "description", "The action to perform: search, get_detail, scan, install, or list_installed",
-                "enum", List.of("search", "get_detail", "scan", "install", "list_installed")
+                "description", "The action to perform: explore (browse by popularity), search, get_detail, scan, install, or list_installed",
+                "enum", List.of("explore", "search", "get_detail", "scan", "install", "list_installed")
         ));
         properties.put("query", Map.of(
                 "type", "string",
@@ -81,6 +85,11 @@ public class ClawHubSkill implements Skill {
         properties.put("version", Map.of(
                 "type", "string",
                 "description", "Optional version (default: latest)"
+        ));
+        properties.put("sort", Map.of(
+                "type", "string",
+                "description", "Sort order for explore action: downloads, trending, newest, or rating (default: downloads)",
+                "enum", List.of("downloads", "trending", "newest", "rating")
         ));
         properties.put("includeSuspicious", Map.of(
                 "type", "boolean",
@@ -102,18 +111,45 @@ public class ClawHubSkill implements Skill {
                 return SkillResult.error("action is required");
             }
             return switch (action) {
+                case "explore" -> handleExplore(input);
                 case "search" -> handleSearch(input);
                 case "get_detail" -> handleGetDetail(input);
                 case "scan" -> handleScan(input);
                 case "install" -> handleInstall(input, context);
                 case "list_installed" -> handleListInstalled();
                 default -> SkillResult.error("Unknown action: " + action +
-                        ". Supported: search, get_detail, scan, install, list_installed");
+                        ". Supported: explore, search, get_detail, scan, install, list_installed");
             };
         } catch (Exception e) {
             log.error("ClawHubSkill execute failed", e);
             return SkillResult.error("ClawHub error: " + e.getMessage());
         }
+    }
+
+    private SkillResult handleExplore(Map<String, Object> input) throws Exception {
+        String sort = (String) input.get("sort");
+        if (sort == null || sort.isBlank()) sort = "downloads";
+        int limit = toInt(input.get("limit"), 20);
+
+        List<ClawHubModels.SkillSummary> results = client.explore(sort, limit);
+        if (results.isEmpty()) {
+            return SkillResult.success("No skills found (sort=" + sort + "). The explore API may require authentication.");
+        }
+
+        StringBuilder sb = new StringBuilder("Top ").append(results.size())
+                .append(" skills (sorted by ").append(sort).append("):\n");
+        int rank = 1;
+        for (ClawHubModels.SkillSummary s : results) {
+            sb.append(rank++).append(". ").append(s.slug);
+            if (s.name != null && !s.name.equals(s.slug)) sb.append(" (").append(s.name).append(")");
+            sb.append("  ↓").append(s.downloads).append("  ★").append(s.stars);
+            if (s.latestVersion != null) sb.append("  @").append(s.latestVersion);
+            sb.append("\n");
+            if (s.description != null && !s.description.isBlank()) {
+                sb.append("   ").append(truncate(s.description, 120)).append("\n");
+            }
+        }
+        return SkillResult.success(sb.toString());
     }
 
     private SkillResult handleSearch(Map<String, Object> input) throws Exception {

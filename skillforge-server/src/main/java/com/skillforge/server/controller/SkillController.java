@@ -1,8 +1,10 @@
 package com.skillforge.server.controller;
 
+import com.skillforge.core.model.SkillDefinition;
 import com.skillforge.core.skill.SkillRegistry;
 import com.skillforge.server.entity.SkillEntity;
 import com.skillforge.server.service.SkillService;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -14,9 +16,11 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 @RestController
@@ -31,18 +35,61 @@ public class SkillController {
         this.skillRegistry = skillRegistry;
     }
 
+    /**
+     * 返回所有 Skill（system + user），合并 SkillRegistry 中的 system SkillDefinition
+     * 和数据库中的 user skill。System skill 同名时优先，跳过数据库中的重复。
+     */
     @GetMapping
-    public ResponseEntity<List<SkillEntity>> listSkills(
+    public ResponseEntity<List<Map<String, Object>>> listSkills(
             @RequestParam(value = "ownerId", required = false) Long ownerId) {
-        List<SkillEntity> skills;
-        if (ownerId != null) {
-            skills = skillService.listSkills(ownerId);
-        } else {
-            skills = skillService.listAllSkills();
+
+        // 1. 收集 system skill definitions
+        List<Map<String, Object>> result = new ArrayList<>();
+        Set<String> systemSkillNames = new java.util.HashSet<>();
+
+        for (SkillDefinition def : skillRegistry.getAllSkillDefinitions()) {
+            if (def.isSystem()) {
+                systemSkillNames.add(def.getName());
+                Map<String, Object> item = new HashMap<>();
+                item.put("id", "system-" + def.getName());
+                item.put("name", def.getName());
+                item.put("description", def.getDescription());
+                item.put("requiredTools", String.join(",", def.getRequiredTools()));
+                item.put("enabled", true);
+                item.put("system", true);
+                item.put("source", "system");
+                result.add(item);
+            }
         }
-        return ResponseEntity.ok(skills);
+
+        // 2. 收集 user skills from DB，跳过与 system skill 同名的
+        List<SkillEntity> dbSkills;
+        if (ownerId != null) {
+            dbSkills = skillService.listSkills(ownerId);
+        } else {
+            dbSkills = skillService.listAllSkills();
+        }
+        for (SkillEntity entity : dbSkills) {
+            if (systemSkillNames.contains(entity.getName())) {
+                continue; // system 版本优先，跳过数据库中的同名 skill
+            }
+            Map<String, Object> item = new HashMap<>();
+            item.put("id", entity.getId());
+            item.put("name", entity.getName());
+            item.put("description", entity.getDescription());
+            item.put("requiredTools", entity.getRequiredTools());
+            item.put("enabled", entity.isEnabled());
+            item.put("system", false);
+            item.put("source", entity.getSource());
+            result.add(item);
+        }
+
+        return ResponseEntity.ok(result);
     }
 
+    /**
+     * 返回所有工具（Bash, FileRead 等 Java Skill），不包含 ClawHub 等已迁移为文件 Skill 的。
+     */
     @GetMapping("/builtin")
     public ResponseEntity<List<Map<String, Object>>> listBuiltinSkills() {
         List<Map<String, Object>> builtins = skillRegistry.getAllSkills().stream()
@@ -52,7 +99,6 @@ public class SkillController {
                     info.put("description", skill.getDescription());
                     info.put("readOnly", skill.isReadOnly());
                     info.put("type", "builtin");
-                    // 工具 schema 信息
                     if (skill.getToolSchema() != null) {
                         info.put("toolSchema", skill.getToolSchema());
                     }
@@ -71,9 +117,6 @@ public class SkillController {
                         .orElseThrow(() -> new RuntimeException("Skill not found: " + id)));
     }
 
-    /**
-     * 获取 Skill 详情：SKILL.md 内容 + reference 文件 + scripts 列表
-     */
     @GetMapping("/{id}/detail")
     public ResponseEntity<Map<String, Object>> getSkillDetail(@PathVariable Long id) {
         return ResponseEntity.ok(skillService.getSkillDetail(id));
@@ -96,18 +139,27 @@ public class SkillController {
         }
     }
 
-    /**
-     * 启用/禁用 Skill
-     */
     @PutMapping("/{id}/toggle")
     public ResponseEntity<SkillEntity> toggleSkill(@PathVariable Long id,
                                                     @RequestParam("enabled") boolean enabled) {
         return ResponseEntity.ok(skillService.toggleSkill(id, enabled));
     }
 
+    /**
+     * 删除 Skill。System skill 禁止删除，返回 403。
+     */
     @DeleteMapping("/{id}")
-    public ResponseEntity<Void> deleteSkill(@PathVariable Long id) {
-        skillService.deleteSkill(id);
-        return ResponseEntity.ok().build();
+    public ResponseEntity<?> deleteSkill(@PathVariable String id) {
+        // System skill 的 id 格式为 "system-xxx"
+        if (id.startsWith("system-")) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of("error", "System skills cannot be deleted"));
+        }
+        try {
+            skillService.deleteSkill(Long.parseLong(id));
+            return ResponseEntity.ok().build();
+        } catch (NumberFormatException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Invalid skill id: " + id));
+        }
     }
 }

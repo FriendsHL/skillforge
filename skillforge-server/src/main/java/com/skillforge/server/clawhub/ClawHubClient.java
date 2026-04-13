@@ -73,6 +73,29 @@ public class ClawHubClient {
     }
 
     /**
+     * 浏览 skill 列表,支持按 downloads/trending/newest/rating 排序。
+     * 对应 CLI: clawhub explore --sort downloads --limit N
+     */
+    public List<ClawHubModels.SkillSummary> explore(String sort, int limit) throws IOException {
+        HttpUrl url = HttpUrl.parse(props.getBaseUrl() + "/api/v1/explore").newBuilder()
+                .addQueryParameter("sort", sort != null ? sort : "downloads")
+                .addQueryParameter("limit", String.valueOf(Math.max(1, Math.min(limit, 200))))
+                .build();
+
+        JsonNode root = getJson(url);
+        // 响应: { "items": [{slug, displayName, summary, ...}], "nextCursor": ... }
+        JsonNode arr = root.path("items");
+        if (!arr.isArray()) arr = root.isArray() ? root : root.path("results");
+        List<ClawHubModels.SkillSummary> list = new ArrayList<>();
+        if (arr.isArray()) {
+            for (JsonNode n : arr) {
+                list.add(parseSummary(n));
+            }
+        }
+        return list;
+    }
+
+    /**
      * 获取 skill 详情。
      * 实际响应嵌套结构:
      *   { skill: {slug, displayName, summary, tags:{latest}, stats:{downloads,stars,...}},

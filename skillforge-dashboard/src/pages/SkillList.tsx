@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Table, Button, Upload, Popconfirm, message, Tag, Card, Divider, Switch, Modal, Tabs, Typography } from 'antd';
-import { DeleteOutlined, InboxOutlined, ThunderboltOutlined, ToolOutlined, EyeOutlined, CodeOutlined, FileTextOutlined } from '@ant-design/icons';
+import { DeleteOutlined, InboxOutlined, ThunderboltOutlined, ToolOutlined, EyeOutlined, CodeOutlined, FileTextOutlined, LockOutlined } from '@ant-design/icons';
 import { getSkills, getBuiltinSkills, uploadSkill, deleteSkill, getSkillDetail, toggleSkill } from '../api';
 
 const { Dragger } = Upload;
@@ -39,8 +39,8 @@ const SkillList: React.FC = () => {
     return false;
   };
 
-  const handleDelete = async (id: number) => {
-    await deleteSkill(id);
+  const handleDelete = async (id: number | string) => {
+    await deleteSkill(id as number);
     message.success('Skill deleted');
     fetchSkills();
   };
@@ -94,7 +94,7 @@ const SkillList: React.FC = () => {
       title: 'Type',
       key: 'type',
       width: 100,
-      render: () => <Tag color="blue">System</Tag>,
+      render: () => <Tag color="blue">Tool</Tag>,
     },
     {
       title: 'Read-Only',
@@ -115,17 +115,20 @@ const SkillList: React.FC = () => {
     },
   ];
 
-  const customColumns = [
-    { title: 'ID', dataIndex: 'id', key: 'id', width: 50 },
+  const skillColumns = [
     {
       title: 'Name',
       dataIndex: 'name',
       key: 'name',
-      width: 160,
-      render: (name: string) => (
+      width: 200,
+      render: (name: string, record: any) => (
         <span>
-          <ToolOutlined style={{ marginRight: 6, color: '#52c41a' }} />
+          {record.system
+            ? <LockOutlined style={{ marginRight: 6, color: '#1677ff' }} />
+            : <ToolOutlined style={{ marginRight: 6, color: '#52c41a' }} />
+          }
           {name}
+          {record.system && <Tag color="blue" style={{ marginLeft: 8 }}>System</Tag>}
         </span>
       ),
     },
@@ -150,13 +153,16 @@ const SkillList: React.FC = () => {
       dataIndex: 'enabled',
       key: 'enabled',
       width: 80,
-      render: (enabled: boolean, record: any) => (
-        <Switch
-          size="small"
-          checked={enabled}
-          onChange={(checked) => handleToggle(record.id, checked)}
-        />
-      ),
+      render: (enabled: boolean, record: any) =>
+        record.system ? (
+          <Tag color="green">Always</Tag>
+        ) : (
+          <Switch
+            size="small"
+            checked={enabled}
+            onChange={(checked) => handleToggle(record.id, checked)}
+          />
+        ),
     },
     {
       title: 'Actions',
@@ -164,12 +170,16 @@ const SkillList: React.FC = () => {
       width: 140,
       render: (_: any, record: any) => (
         <span style={{ display: 'flex', gap: 4 }}>
-          <Button icon={<EyeOutlined />} size="small" onClick={() => showDetail(record.id)}>
-            Detail
-          </Button>
-          <Popconfirm title="Delete this skill?" onConfirm={() => handleDelete(record.id)}>
-            <Button icon={<DeleteOutlined />} size="small" danger />
-          </Popconfirm>
+          {!record.system && (
+            <>
+              <Button icon={<EyeOutlined />} size="small" onClick={() => showDetail(record.id)}>
+                Detail
+              </Button>
+              <Popconfirm title="Delete this skill?" onConfirm={() => handleDelete(record.id)}>
+                <Button icon={<DeleteOutlined />} size="small" danger />
+              </Popconfirm>
+            </>
+          )}
         </span>
       ),
     },
@@ -203,9 +213,9 @@ const SkillList: React.FC = () => {
 
   return (
     <div>
-      <h2 style={{ marginBottom: 16 }}>Skills</h2>
+      <h2 style={{ marginBottom: 16 }}>Skills & Tools</h2>
 
-      <Card title="System Built-in Skills" size="small" style={{ marginBottom: 24 }}>
+      <Card title="System Tools" size="small" style={{ marginBottom: 24 }}>
         <Table
           dataSource={builtinSkills}
           columns={builtinColumns}
@@ -218,7 +228,7 @@ const SkillList: React.FC = () => {
 
       <Divider />
 
-      <Card title="Custom Skills" size="small" style={{ marginBottom: 16 }}>
+      <Card title="Skills" size="small" style={{ marginBottom: 16 }}>
         <Dragger
           accept=".zip"
           showUploadList={false}
@@ -233,11 +243,11 @@ const SkillList: React.FC = () => {
         </Dragger>
         <Table
           dataSource={skills}
-          columns={customColumns}
-          rowKey="id"
+          columns={skillColumns}
+          rowKey={(record) => record.id}
           loading={loading}
           size="small"
-          locale={{ emptyText: 'No custom skills uploaded yet' }}
+          locale={{ emptyText: 'No skills available' }}
         />
       </Card>
 
@@ -291,7 +301,7 @@ const SkillList: React.FC = () => {
       </Modal>
 
       <Modal
-        title={builtinDetail ? `System Skill: ${builtinDetail.name}` : 'System Skill Detail'}
+        title={builtinDetail ? `System Tool: ${builtinDetail.name}` : 'System Tool Detail'}
         open={builtinDetailVisible}
         onCancel={() => { setBuiltinDetailVisible(false); setBuiltinDetail(null); }}
         footer={null}

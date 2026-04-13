@@ -66,6 +66,9 @@ public class SkillDefinition {
     @JsonProperty("is_public")
     private boolean isPublic;
 
+    /** 系统级 Skill（随项目发布，不可删除） vs 用户级（可管理） */
+    private boolean system;
+
     public SkillDefinition() {
     }
 
@@ -134,6 +137,9 @@ public class SkillDefinition {
 
     public boolean isPublic() { return isPublic; }
     public void setPublic(boolean isPublic) { this.isPublic = isPublic; }
+
+    public boolean isSystem() { return system; }
+    public void setSystem(boolean system) { this.system = system; }
 
     /**
      * 对 promptContent 进行参数替换。
