@@ -188,7 +188,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
         )}
         <div ref={bottomRef} />
       </div>
-      <ChatInput disabled={loading || inputDisabled} onSend={stableOnSend} />
+      <ChatInput disabled={inputDisabled} onSend={stableOnSend} />
     </div>
   );
 };

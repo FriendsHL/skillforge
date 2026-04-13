@@ -34,6 +34,8 @@ export const compactSession = (sessionId: string, level: 'full', userId: number,
   api.post(`/chat/sessions/${sessionId}/compact`, { level, reason }, { params: { userId } });
 export const getCompactions = (sessionId: string, userId: number) =>
   api.get(`/chat/sessions/${sessionId}/compactions`, { params: { userId } });
+export const getSessionReplay = (sessionId: string, userId: number) =>
+  api.get(`/chat/sessions/${sessionId}/replay`, { params: { userId } });
 
 // Skill API
 export const getSkills = () => api.get('/skills');

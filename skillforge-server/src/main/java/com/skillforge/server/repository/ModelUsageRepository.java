@@ -14,6 +14,8 @@ public interface ModelUsageRepository extends JpaRepository<ModelUsageEntity, Lo
 
     List<ModelUsageEntity> findBySessionId(String sessionId);
 
+    List<ModelUsageEntity> findBySessionIdOrderByCreatedAtAsc(String sessionId);
+
     @Query("SELECT CAST(u.createdAt AS LocalDate) AS date, " +
            "SUM(u.inputTokens) AS inputTokens, " +
            "SUM(u.outputTokens) AS outputTokens " +

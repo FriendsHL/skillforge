@@ -7,8 +7,10 @@ import com.skillforge.server.dto.ChatRequest;
 import com.skillforge.server.dto.CreateSessionRequest;
 import com.skillforge.server.entity.CompactionEventEntity;
 import com.skillforge.server.entity.SessionEntity;
+import com.skillforge.server.dto.SessionReplayDto;
 import com.skillforge.server.service.ChatService;
 import com.skillforge.server.service.CompactionService;
+import com.skillforge.server.service.ReplayService;
 import com.skillforge.server.service.SessionService;
 import com.skillforge.server.subagent.SubAgentRegistry;
 import com.skillforge.server.subagent.SubAgentRegistry.SubAgentRun;
@@ -38,19 +40,22 @@ public class ChatController {
     private final SubAgentRegistry subAgentRegistry;
     private final CancellationRegistry cancellationRegistry;
     private final CompactionService compactionService;
+    private final ReplayService replayService;
 
     public ChatController(ChatService chatService,
                           SessionService sessionService,
                           PendingAskRegistry pendingAskRegistry,
                           SubAgentRegistry subAgentRegistry,
                           CancellationRegistry cancellationRegistry,
-                          CompactionService compactionService) {
+                          CompactionService compactionService,
+                          ReplayService replayService) {
         this.chatService = chatService;
         this.sessionService = sessionService;
         this.pendingAskRegistry = pendingAskRegistry;
         this.subAgentRegistry = subAgentRegistry;
         this.cancellationRegistry = cancellationRegistry;
         this.compactionService = compactionService;
+        this.replayService = replayService;
     }
 
     /**
@@ -266,6 +271,20 @@ public class ChatController {
             return ResponseEntity.status(check.getStatusCode()).build();
         }
         return ResponseEntity.ok(compactionService.listEvents(id));
+    }
+
+    /**
+     * Session Replay：返回结构化的 turn → iteration → tool call 时间线。
+     */
+    @GetMapping("/sessions/{id}/replay")
+    public ResponseEntity<SessionReplayDto> getSessionReplay(@PathVariable String id,
+                                                              @RequestParam(required = false) Long userId) {
+        ResponseEntity<SessionEntity> check = requireOwnedSession(id, userId);
+        if (!check.getStatusCode().is2xxSuccessful()) {
+            return ResponseEntity.status(check.getStatusCode()).build();
+        }
+        SessionReplayDto replay = replayService.buildReplay(id);
+        return ResponseEntity.ok(replay);
     }
 
     /**

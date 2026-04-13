@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Select, List, Card, message, Typography, Empty, Alert, Button, Input, Segmented, Space, Modal, Tag, Table } from 'antd';
-import { ArrowUpOutlined } from '@ant-design/icons';
+import { ArrowUpOutlined, HistoryOutlined, MessageOutlined } from '@ant-design/icons';
 import { useNavigate, useParams } from 'react-router-dom';
 import ChatWindow from '../components/ChatWindow';
 import type { ChatMessage } from '../components/ChatWindow';
+import SessionReplay from '../components/SessionReplay';
 import SubAgentRunsPanel from '../components/SubAgentRunsPanel';
 import ChildSessionsPanel from '../components/ChildSessionsPanel';
 import {
@@ -146,6 +147,7 @@ const Chat: React.FC = () => {
   const [lightCompactCount, setLightCompactCount] = useState(0);
   const [fullCompactCount, setFullCompactCount] = useState(0);
   const [totalTokensReclaimed, setTotalTokensReclaimed] = useState(0);
+  const [viewMode, setViewMode] = useState<'chat' | 'replay'>('chat');
   const [compactModalOpen, setCompactModalOpen] = useState(false);
   const [compactEvents, setCompactEvents] = useState<any[]>([]);
   const [compacting, setCompacting] = useState(false);
@@ -196,6 +198,7 @@ const Chat: React.FC = () => {
     setStreamingText('');
     setStreamingToolInputs({});
     setCancelling(false);
+    setViewMode('chat');
     setParentSessionId(null);
     setSessionDepth(0);
 
@@ -698,6 +701,15 @@ const Chat: React.FC = () => {
                     🗜 {lightCompactCount} light · {fullCompactCount} full · -{totalTokensReclaimed} tok
                   </a>
                 )}
+                <Segmented
+                  size="small"
+                  value={viewMode}
+                  options={[
+                    { label: <span><MessageOutlined /> Chat</span>, value: 'chat' },
+                    { label: <span><HistoryOutlined /> Replay</span>, value: 'replay' },
+                  ]}
+                  onChange={(v) => setViewMode(v as 'chat' | 'replay')}
+                />
                 <Button
                   size="small"
                   disabled={runtimeStatus === 'running' || compacting}
@@ -754,15 +766,21 @@ const Chat: React.FC = () => {
               parentRunning={runtimeStatus === 'running'}
               agents={agents}
             />
-            {renderPendingAsk()}
-            <ChatWindow
-              messages={messages}
-              loading={runtimeStatus === 'running'}
-              onSend={handleSend}
-              inputDisabled={inputDisabled}
-              inflightTools={combinedInflightTools}
-              streamingText={streamingText}
-            />
+            {viewMode === 'chat' ? (
+              <>
+                {renderPendingAsk()}
+                <ChatWindow
+                  messages={messages}
+                  loading={runtimeStatus === 'running'}
+                  onSend={handleSend}
+                  inputDisabled={inputDisabled}
+                  inflightTools={combinedInflightTools}
+                  streamingText={streamingText}
+                />
+              </>
+            ) : (
+              <SessionReplay sessionId={activeSessionId} />
+            )}
           </>
         ) : (
           <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>

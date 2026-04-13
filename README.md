@@ -301,15 +301,15 @@ my-skill.zip
 - **SubAgent orchestration** — async dispatch, child sessions, depth/concurrency limits, persistence, restart recovery, scheduled sweeper, dashboard child tree
 - **Auto-compact context compression** — light (rule-based) + full (LLM summary), 6 trigger sources (agent-tool / engine-soft / engine-hard / engine-gap / user-manual), recorded in `t_compaction_event`
 - **LLM client tuning** — per-provider read timeout + retry on `SocketTimeoutException` (non-streaming path)
+- **In-stream cancel** — dual-mechanism mid-read SSE cancel via OkHttp `Call.cancel()` for instant single-turn abort
+- **CLI module** (`skillforge-cli`) — headless agent runner with YAML-first agent import/export, picocli + OkHttp, one-shot `chat` command
+- **User message queuing** — messages queued in `LoopContext` during agent run, drained at iteration boundaries
 
 ### 📋 Planned
-- **Agent YAML import/export** — version-controlled agent definitions
 - **Session replay** — step through historical loop iterations in the dashboard
 - **JWT auth** — proper user identity (today's userId scoping is a placeholder)
 - **Redis session sharing** — multi-instance deployment + replace JVM stripe locks with distributed locks
 - **Elasticsearch conversation search** — full-text search across session history
-- **CLI module** — headless agent runner for scripting and CI
-- **Loop cancel during streaming** — interrupt the in-flight LLM SSE read for instant single-turn cancel
 
 ## License
 
