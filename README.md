@@ -6,22 +6,24 @@ Server-side Agentic Assistant Platform with configurable Skills and Agents.
 
 ```
 ┌──────────────────────────────────────────────────────┐
-│   React + Ant Design Dashboard  │   CLI (TODO)       │
+│   React + Ant Design Dashboard  │   CLI Module       │
 ├──────────────────────────────────────────────────────┤
 │              Entry Points                             │
 │   REST API   │   WebSocket (per-session + per-user)  │
 ├──────────────────────────────────────────────────────┤
 │              Spring Boot Server                       │
 │   Chat / Agent / Skill / SubAgent / Compaction       │
+│   Traces (LLM Observability)                         │
 ├──────────────────────────────────────────────────────┤
 │              Agent Loop Engine                        │
 │   Message → LLM (streaming) → tool_use → Skill →     │
-│   loop  +  cancel / context-compact safety net       │
+│   loop + cancel + anti-runaway + context-compact     │
+│   TraceCollector (per-span observability)             │
 ├──────────────┬──────────────┬────────────────────────┤
-│  LLM Layer   │ Skill System │ Session & Hooks        │
-│  Claude      │ Built-in     │ Session Mgmt           │
-│  OpenAI*     │ Skill Zip    │ SafetyHook             │
-│  DeepSeek    │ ClawHub Mkt  │ AskUser / Compact      │
+│  LLM Layer   │ Tool & Skill │ Session & Hooks        │
+│  Claude      │ System Tools │ Session Mgmt           │
+│  OpenAI*     │ System Skills│ SafetyHook             │
+│  DeepSeek    │ User Skills  │ AskUser / Compact      │
 ├──────────────┴──────────────┴────────────────────────┤
 │              Storage                                  │
 │   H2 (dev) / MySQL (prod)   │   Redis (TODO)         │
@@ -47,14 +49,22 @@ Server-side Agentic Assistant Platform with configurable Skills and Agents.
 ```
 skillforge/
 ├── skillforge-core         # Core engine: LLM abstraction, Agent Loop, Skill system,
-│                            #   Hooks, Cancellation, Context Compaction (light/full)
-├── skillforge-skills       # Built-in Skills: Bash, FileRead, FileWrite, FileEdit,
-│                            #   Glob, Grep, Browser (Playwright)
+│                            #   Hooks, Cancellation, Context Compaction, TraceCollector,
+│                            #   Anti-runaway (loop detection, tool result truncation)
+├── skillforge-skills       # System Tools: Bash, FileRead, FileWrite, FileEdit,
+│                            #   Glob, Grep, Memory, SubAgent
 ├── skillforge-server       # Spring Boot server: REST API, JPA entities, services,
-│                            #   WebSocket handlers, server-only skills (Memory, ClawHub,
-│                            #   SubAgent), SubAgent dispatcher + sweeper, CompactionService
-└── skillforge-dashboard    # React + Ant Design dashboard: chat, sessions list (live),
-                             #   agents, skills, memories, model usage, compaction modal
+│                            #   WebSocket handlers, Traces API, SystemSkillLoader,
+│                            #   EnvironmentContextProvider, CompactionService
+├── skillforge-dashboard    # React + Ant Design dashboard: chat, sessions (live),
+│                            #   agents, skills (unified), traces (Langfuse-style),
+│                            #   session replay, memories, model usage
+├── skillforge-cli          # CLI client: picocli + OkHttp, agent YAML import/export
+└── system-skills/          # System Skills (file-based, non-deletable)
+    ├── browser/            #   Browser automation via agent-browser CLI
+    ├── clawhub/            #   ClawHub marketplace search + install
+    ├── github/             #   GitHub API + gh CLI
+    └── skillhub/           #   SkillHub marketplace
 ```
 
 ## Features
@@ -93,16 +103,9 @@ mvn spring-boot:run -pl skillforge-server
 
 Server starts at `http://localhost:8080`.
 
-> ⚠️ **Browser skill / Playwright deployment**: The `BrowserSkill` requires
-> the server to be started via `mvn spring-boot:run`. Running the
-> repackaged fat jar with `java -jar skillforge-server-*.jar` will cause
-> Playwright to fail loading its native driver due to a known
-> incompatibility between Spring Boot's nested-jar protocol and
-> Playwright's `ClassLoader.getResource()` lookup. For production
-> deployment use either `mvn spring-boot:run`, a Docker image with
-> Playwright pre-installed and `PLAYWRIGHT_BROWSERS_PATH` set, or
-> disable the `BrowserSkill` from your agents. The skill emits a clear
-> actionable error message when this state is detected at runtime.
+> The Browser skill uses `npx agent-browser` CLI (not Playwright Java API),
+> so it works with both `mvn spring-boot:run` and `java -jar` deployment.
+> Make sure `npx` is available in the server's PATH.
 
 ### Configuration
 
@@ -186,8 +189,14 @@ All session-scoped endpoints require `userId` (query param or body) and return 4
 | GET | `/api/chat/sessions/{id}/compactions?userId=1` | List compaction history for the session |
 | WS | `/ws/chat/{sessionId}` | Per-session events: status, message_appended, text_delta, tool_use_delta, ask_user |
 | WS | `/ws/users/{userId}` | Per-user events: session_created, session_updated, session_deleted |
-| GET | `/api/skills` | List all skills |
+| GET | `/api/skills` | List all skills (system + user, unified) |
+| GET | `/api/skills/builtin` | List system tools (Bash, FileRead, etc.) |
+| GET | `/api/skills/{id}/detail` | Skill detail (supports system- prefix IDs) |
 | POST | `/api/skills/upload` | Upload skill zip package |
+| GET | `/api/traces` | List traces (AGENT_LOOP spans), optional `?sessionId=` filter |
+| GET | `/api/traces/{traceId}/spans` | Get span tree for a trace |
+| GET | `/api/traces/session/{sessionId}` | All spans for a session |
+| GET | `/api/chat/sessions/{id}/replay` | Structured replay (turns → iterations → tool calls) |
 | GET | `/h2-console` | H2 database console |
 
 ## CLI
@@ -238,37 +247,65 @@ skillforge compact <session-id> --level full --reason "end of task"
 See `examples/agents/` for starter YAML files and `examples/agents/README.md`
 for more on the schema.
 
-## Built-in Skills
+## Tools & Skills
 
-| Skill | Description | Read-only |
-|-------|-------------|-----------|
-| **Bash** | Execute shell commands | No |
+SkillForge separates **Tools** (Java implementations, system-level operations) from **Skills** (file-based SKILL.md, higher-level capabilities).
+
+### System Tools (Java, always available)
+
+| Tool | Description | Read-only |
+|------|-------------|-----------|
+| **Bash** | Execute shell commands (with safety rules, timeout, command chaining guidelines) | No |
 | **FileRead** | Read files with line numbers, offset/limit | Yes |
 | **FileWrite** | Write/create files | No |
 | **FileEdit** | Exact string replacement in files | No |
 | **Glob** | Find files by glob pattern | Yes |
 | **Grep** | Search file contents by regex | Yes |
-| **Browser** | Headed/headless Playwright (`goto`, `click`, `type`, `evaluate`, `screenshot`, `login` for stateful login flows) | No |
 | **Memory** | Persistent key/value memory across sessions, scoped per user | No |
-| **ClawHub** | Search + install community skills from [clawhub.ai](https://clawhub.ai) | No |
 | **SubAgent** | Dispatch a task to another agent asynchronously; result auto-delivers back | No |
 
-Two engine-internal tools the LLM can also call (registered as tools but handled by the engine, not skills):
+### System Skills (file-based, non-deletable)
+
+| Skill | Description |
+|-------|-------------|
+| **Browser** | Web automation via `npx agent-browser` CLI (goto, snapshot, click, type, eval, screenshot, login) |
+| **ClawHub** | Search + install skills from [clawhub.ai](https://clawhub.ai) marketplace |
+| **GitHub** | GitHub API + `gh` CLI for repo search, issues, PRs, CI |
+| **SkillHub** | Search + install skills from SkillHub marketplace |
+
+### User Skills (uploadable, manageable)
+
+Custom skills installed from ClawHub, SkillHub, or uploaded as zip packages. Managed via the Skills page.
+
+### Engine-internal Tools
 
 | Tool | When | Description |
 |------|------|-------------|
-| **`ask_user`** | session in `ask` mode | LLM presents a 2–4 option multiple-choice question, latch-blocks until the user replies (or 30 min timeout) |
-| **`compact_context`** | always | LLM requests a `light` (rule-based) or `full` (LLM summary) compaction of its own history |
+| **`ask_user`** | session in `ask` mode | LLM presents a 2–4 option multiple-choice question, blocks until reply |
+| **`compact_context`** | always | LLM requests `light` (rule-based) or `full` (LLM summary) compaction |
 
-## Safety
+## Safety & Anti-runaway
 
-`SafetySkillHook` provides baseline security:
+### SafetySkillHook
 
 - **Bash**: Blocks `rm -rf /`, `sudo`, `mkfs`, `shutdown`, `curl|sh`, fork bombs, etc.
+- **Bash**: Blocks `clawhub install` / `skillhub install` commands (requires user confirmation)
 - **File write/edit**: Blocks system directories (`/etc/`, `/usr/`, `/bin/`) and sensitive files (`~/.ssh/`)
 - **File read**: Blocks SSH private keys
 - **Path traversal**: Normalizes paths to prevent `../` attacks
-- **Audit log**: Every skill execution is logged
+
+### Agent Loop Guardrails
+
+- **Token budget**: Cumulative input token limit (default 500K, configurable via `max_input_tokens`)
+- **Duration limit**: Loop wall-clock timeout (default 600s, configurable via `max_duration_seconds`)
+- **Max iterations**: Default 25 loops (configurable via `max_loops`)
+- **Tool execution timeout**: 120s per batch, auto-generates error tool_result on timeout
+- **LLM stream timeout**: 300s overall guard
+- **Tool frequency warning**: System prompt guidance injected when any tool called ≥8 times
+- **No-progress detection**: Dual hash (call params + outcome), detects when same tool produces same result 3+ times
+- **Waste detection**: Triggers light compaction on 3+ consecutive errors, large tool_result, or repeated identical calls
+- **Compact circuit breaker**: Stops retrying after 3 consecutive compact failures
+- **Tool result truncation**: 40K char limit with smart head/tail split
 
 ## Hook System
 
@@ -277,39 +314,75 @@ Extensible hook interfaces for customization:
 - **LoopHook**: `beforeLoop()` / `afterLoop()` — intercept the entire agent loop
 - **SkillHook**: `beforeSkillExecute()` / `afterSkillExecute()` — intercept individual skill calls
 
+## Observability
+
+### Traces (Langfuse-style)
+
+Every agent loop execution is recorded as a structured trace with hierarchical spans:
+
+```
+AGENT_LOOP (root span — one per user message)
+├── LLM_CALL (iteration 0 — model inference, per-call tokens + duration)
+├── TOOL_CALL (Bash — input JSON, output, duration, toolUseId)
+├── TOOL_CALL (FileRead — ...)
+├── LLM_CALL (iteration 1)
+├── ASK_USER (blocked waiting for user reply)
+├── COMPACT (context compaction event)
+└── LLM_CALL (final iteration — text response)
+```
+
+Dashboard **Traces** page shows:
+- Trace list with LLM/tool call counts, duration, tokens, status
+- Span detail with waterfall timeline bars, expandable I/O
+- Session ID filter
+
+### Session Replay
+
+Dashboard **Chat** page includes a Replay toggle that restructures the flat message history into:
+- Turns (each user message → agent response cycle)
+- Iterations within each turn
+- Tool calls with timing, input/output, success/failure
+
 ## Skill Packages
 
-Custom skills can be installed via the `ClawHub` marketplace integration or uploaded directly as zip packages:
+Custom skills can be uploaded as zip packages or installed from marketplaces:
 
 ```
 my-skill.zip
-├── skill.yaml       # Metadata: name, description, triggers, required tools
-└── SKILL.md         # Prompt template loaded into agent context
+├── SKILL.md         # Required: YAML frontmatter + prompt content
+├── references/      # Optional: reference docs
+├── scripts/         # Optional: executable scripts
+└── docs/            # Optional: extended documentation
 ```
+
+System skills are loaded from `system-skills/` directory at startup (configurable via `skillforge.system-skills-dir`).
 
 ## Roadmap
 
 ### ✅ Delivered
-- **Skill system** — built-in skills, zip packages, ClawHub marketplace integration
-- **Dashboard** — React + Ant Design pages for chat, sessions (live), agents, skills, memories, model usage
+- **Tool & Skill system** — system tools (Java), system skills (file-based), user skills (marketplace + upload), unified loading
+- **Dashboard** — chat, sessions (live), agents, skills (unified), traces, session replay, memories, model usage
 - **Streaming chat** — per-token assistant text + tool_use input JSON via WebSocket
-- **Session lifecycle visibility** — runtime status, runtime step, ask_user blocking, error banner
-- **Loop cancel** — `POST /cancel` endpoint + dashboard ✕ button
+- **Agent Loop guardrails** — token budget, duration limit, tool frequency warning, no-progress detection, compact circuit breaker, tool result truncation
+- **LLM observability** — TraceCollector with AGENT_LOOP / LLM_CALL / TOOL_CALL / ASK_USER / COMPACT spans, per-call token tracking
+- **Session lifecycle** — runtime status, ask_user blocking, error banner, cancel (in-stream SSE + loop-level)
 - **Ask mode / Auto mode** — per-agent default with per-session override
-- **Session list realtime refresh** — per-user WebSocket channel + auto reconnect with backoff
-- **Endpoint ownership scoping** — userId-keyed validation on all session endpoints
-- **SubAgent orchestration** — async dispatch, child sessions, depth/concurrency limits, persistence, restart recovery, scheduled sweeper, dashboard child tree
-- **Auto-compact context compression** — light (rule-based) + full (LLM summary), 6 trigger sources (agent-tool / engine-soft / engine-hard / engine-gap / user-manual), recorded in `t_compaction_event`
-- **LLM client tuning** — per-provider read timeout + retry on `SocketTimeoutException` (non-streaming path)
-- **In-stream cancel** — dual-mechanism mid-read SSE cancel via OkHttp `Call.cancel()` for instant single-turn abort
-- **CLI module** (`skillforge-cli`) — headless agent runner with YAML-first agent import/export, picocli + OkHttp, one-shot `chat` command
-- **User message queuing** — messages queued in `LoopContext` during agent run, drained at iteration boundaries
+- **SubAgent orchestration** — async dispatch, child sessions, depth/concurrency limits, persistence, restart recovery
+- **Auto-compact context compression** — light (rule-based) + full (LLM summary with identifier preservation), 6 trigger sources
+- **Context awareness** — EnvironmentContextProvider (CWD, OS, date), Tool Usage Guidelines in system prompt
+- **CLI module** (`skillforge-cli`) — YAML-first agent import/export, one-shot `chat` command
+- **User message queuing** — messages queued during agent run, drained at iteration boundaries
+- **Marketplace integration** — ClawHub, SkillHub, GitHub skills pre-installed as system skills
 
 ### 📋 Planned
-- **Session replay** — step through historical loop iterations in the dashboard
+- **Skill always-on mode** — skills that inject promptContent into system prompt permanently (needed for OpenClaw skill compatibility)
+- **Memory system enhancement** — memory auto-injection into system prompt, cross-session learning
 - **JWT auth** — proper user identity (today's userId scoping is a placeholder)
 - **Redis session sharing** — multi-instance deployment + replace JVM stripe locks with distributed locks
 - **Elasticsearch conversation search** — full-text search across session history
+- **Stop hooks** — system-level hooks for custom checks at each loop iteration end
+- **Preemptive compaction** — check for context overflow before sending LLM request
+- **max_tokens recovery** — escalate + compact + retry on output truncation
 
 ## License
 
