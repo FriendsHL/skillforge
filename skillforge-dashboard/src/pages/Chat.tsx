@@ -225,6 +225,10 @@ const Chat: React.FC = () => {
         setRuntimeStep(s.runtimeStep ?? '');
         setRuntimeError(s.runtimeError ?? '');
         setExecutionModeState((s.executionMode ?? 'ask') as ExecutionMode);
+        // 通过 URL 进入时自动选中 agent，触发 session 列表加载
+        if (s.agentId != null && selectedAgent !== s.agentId) {
+          setSelectedAgent(s.agentId);
+        }
         setParentSessionId(s.parentSessionId ?? null);
         setSessionDepth(typeof s.depth === 'number' ? s.depth : 0);
         setLightCompactCount(s.lightCompactCount ?? 0);

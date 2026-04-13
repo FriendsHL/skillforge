@@ -40,7 +40,7 @@ public class LoopContext {
 
     public LoopContext() {
         this.messages = new ArrayList<>();
-        this.maxLoops = 50;
+        this.maxLoops = 25;
     }
 
     /** 请求取消当前循环(幂等)。同时中断正在进行的 SSE 流读取。 */

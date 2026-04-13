@@ -277,9 +277,28 @@ public class AgentLoopEngine {
                 }
             }
 
-            // b. 构建 LlmRequest
+            // b. 构建 LlmRequest — P-4/P-5 通过 system prompt 后缀注入，避免破坏 user/assistant 交替
+            StringBuilder promptSuffix = new StringBuilder();
+            // P-4: waste detected → append guidance to system prompt (after B1/B2 compact)
+            if (compactorCallback != null && detectWaste(messages)) {
+                promptSuffix.append("\n\n[IMPORTANT] Repetitive or inefficient tool usage pattern detected. "
+                        + "Adjust your strategy: if multiple searches have not found the needed information, "
+                        + "answer based on what you already have. If a tool keeps failing, try a different "
+                        + "approach or inform the user of the limitation.");
+                log.info("Appending waste-detection guidance to system prompt");
+            }
+            // P-5: loop ending reminder — only once at remaining==2
+            int remaining = loopCtx.getMaxLoops() - loopCtx.getLoopCount();
+            if (remaining == 2) {
+                promptSuffix.append("\n\n[IMPORTANT] You have only " + remaining
+                        + " iterations left. Wrap up your work and provide the user with "
+                        + "the best answer you can based on the information gathered so far.");
+                log.info("Appending loop-ending reminder: {} iterations remaining", remaining);
+            }
+
             LlmRequest request = new LlmRequest();
-            request.setSystemPrompt(systemPrompt);
+            request.setSystemPrompt(promptSuffix.isEmpty() ? systemPrompt
+                    : systemPrompt + promptSuffix);
             request.setMessages(messages);
             request.setTools(tools);
             request.setModel(actualModelId);
@@ -347,7 +366,15 @@ public class AgentLoopEngine {
                         streamDone.countDown();
                     }
                 });
-                streamDone.await();
+                // A-2: 整体 300s 超时兜底
+                boolean completed = streamDone.await(300, java.util.concurrent.TimeUnit.SECONDS);
+                if (!completed) {
+                    log.warn("LLM stream timed out after 300s at loop {}, requesting cancel", loopCtx.getLoopCount());
+                    loopCtx.requestCancel();
+                    throw new RuntimeException("LLM stream timed out after 300 seconds");
+                }
+            } catch (RuntimeException re) {
+                throw re;
             } catch (Exception e) {
                 log.error("LLM stream call failed at loop {}", loopCtx.getLoopCount(), e);
                 throw new RuntimeException("LLM call failed: " + e.getMessage(), e);
@@ -392,8 +419,30 @@ public class AgentLoopEngine {
                 llmSpan.setIterationIndex(loopCtx.getLoopCount());
                 llmSpan.setInputTokens(iterInputTokens);
                 llmSpan.setOutputTokens(iterOutputTokens);
-                llmSpan.setInput(String.valueOf(messages.size()) + " messages");
-                llmSpan.setOutput(response.getContent() != null ? response.getContent() : "");
+                // input: 最后一条消息的文本内容（用户消息或 tool_result 摘要）
+                String llmInput = messages.size() + " messages";
+                for (int mi = messages.size() - 1; mi >= 0; mi--) {
+                    String txt = messages.get(mi).getTextContent();
+                    if (txt != null && !txt.isBlank()) {
+                        llmInput = txt.length() > 500 ? txt.substring(0, 500) + "..." : txt;
+                        break;
+                    }
+                }
+                llmSpan.setInput(llmInput);
+                // output: LLM 的文本回复 + tool_use 名称列表
+                StringBuilder llmOutput = new StringBuilder();
+                if (response.getContent() != null && !response.getContent().isEmpty()) {
+                    llmOutput.append(response.getContent());
+                }
+                if (response.isToolUse() && response.getToolUseBlocks() != null) {
+                    if (!llmOutput.isEmpty()) llmOutput.append("\n");
+                    llmOutput.append("[tool_use: ");
+                    llmOutput.append(response.getToolUseBlocks().stream()
+                            .map(b -> b.getName())
+                            .collect(Collectors.joining(", ")));
+                    llmOutput.append("]");
+                }
+                llmSpan.setOutput(llmOutput.toString());
                 llmSpan.setSuccess(true);
                 traceCollector.record(llmSpan);
             }
@@ -519,12 +568,29 @@ public class AgentLoopEngine {
                 }
             }
 
-            // 等待所有并行 tool 执行完成
-            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+            // 等待所有并行 tool 执行完成 (A-1: 120s timeout)
+            try {
+                CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
+                        .get(120, java.util.concurrent.TimeUnit.SECONDS);
+            } catch (java.util.concurrent.TimeoutException e) {
+                log.warn("Tool execution timed out after 120s, cancelling remaining futures");
+                futures.forEach(f -> f.cancel(true));
+            } catch (java.util.concurrent.ExecutionException e) {
+                log.error("Tool execution failed", e.getCause());
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                log.warn("Tool execution wait interrupted, cancelling futures");
+                futures.forEach(f -> f.cancel(true));
+            }
 
-            // 按原顺序加入 messages + 广播
+            // 按原顺序加入 messages + 广播; 为超时未完成的工具补充 error tool_result
             for (int i = 0; i < toolUseBlocks.size(); i++) {
                 Message toolResult = askResults.get(i);
+                if (toolResult == null) {
+                    // Tool did not complete (timed out) — inject error tool_result
+                    toolResult = Message.toolResult(toolUseBlocks.get(i).getId(),
+                            "Tool execution timed out after 120 seconds", true);
+                }
                 messages.add(toolResult);
                 if (broadcaster != null && loopCtx.getSessionId() != null) {
                     broadcaster.messageAppended(loopCtx.getSessionId(), toolResult);

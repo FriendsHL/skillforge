@@ -25,7 +25,10 @@ public class FileWriteSkill implements Skill {
 
     @Override
     public String getDescription() {
-        return "Writes content to a file, creating it if it doesn't exist";
+        return "Writes content to a file, creating it if it doesn't exist.\n\n"
+                + "- If the file already exists, you MUST use FileRead first to read its contents\n"
+                + "- Prefer FileEdit for modifying existing files — it only sends the diff\n"
+                + "- Only use this tool to create new files or for complete rewrites";
     }
 
     @Override

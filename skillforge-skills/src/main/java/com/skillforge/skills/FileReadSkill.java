@@ -29,7 +29,11 @@ public class FileReadSkill implements Skill {
 
     @Override
     public String getDescription() {
-        return "Reads a file from the filesystem and returns its content with line numbers";
+        return "Reads a file from the filesystem and returns its content with line numbers.\n\n"
+                + "- The file_path parameter must be an absolute path, not a relative path\n"
+                + "- When you already know which part of the file you need, use offset and limit to read only that part\n"
+                + "- Always read a file before editing or overwriting it\n"
+                + "- Use this tool instead of running cat/head/tail via Bash";
     }
 
     @Override

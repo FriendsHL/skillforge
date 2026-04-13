@@ -30,7 +30,9 @@ public class GrepSkill implements Skill {
 
     @Override
     public String getDescription() {
-        return "Searches file contents using regex pattern";
+        return "Searches file contents using regex pattern.\n\n"
+                + "Use this tool instead of running grep or rg via Bash.\n"
+                + "Supports full regex syntax for pattern matching.";
     }
 
     @Override

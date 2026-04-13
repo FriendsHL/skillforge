@@ -28,7 +28,24 @@ public class BashSkill implements Skill {
 
     @Override
     public String getDescription() {
-        return "Executes a shell command and returns its output";
+        return "Executes a shell command and returns its output.\n\n"
+                + "IMPORTANT: Do NOT use Bash to run these commands when a dedicated tool is available:\n"
+                + "- Use FileRead instead of cat, head, tail\n"
+                + "- Use Glob instead of find or ls for file searching\n"
+                + "- Use Grep instead of grep or rg for content searching\n"
+                + "- Use FileEdit instead of sed or awk for file modifications\n"
+                + "- Use FileWrite instead of echo/cat heredoc for creating files\n\n"
+                + "Command chaining guidelines:\n"
+                + "- Independent commands: make separate parallel tool calls\n"
+                + "- Dependent commands: chain with && in a single call\n"
+                + "- Do NOT use newlines to separate commands\n\n"
+                + "Git safety:\n"
+                + "- Never use --no-verify or --force flags without explicit user approval\n"
+                + "- Never force push to main/master\n"
+                + "- Prefer new commits over amending existing ones\n\n"
+                + "Avoid unnecessary sleep commands.\n"
+                + "Default timeout is 120 seconds. For long-running commands (builds, tests, package installs), "
+                + "pass a larger timeout value (e.g., 300000 for 5 minutes). Maximum allowed is 600 seconds.";
     }
 
     @Override

@@ -27,7 +27,9 @@ public class GlobSkill implements Skill {
 
     @Override
     public String getDescription() {
-        return "Finds files matching a glob pattern";
+        return "Finds files matching a glob pattern.\n\n"
+                + "Use this tool instead of running find or ls via Bash.\n"
+                + "Supports glob patterns like \"**/*.java\" or \"src/**/*.ts\".";
     }
 
     @Override

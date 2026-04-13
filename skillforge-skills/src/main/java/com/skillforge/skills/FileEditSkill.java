@@ -25,7 +25,11 @@ public class FileEditSkill implements Skill {
 
     @Override
     public String getDescription() {
-        return "Performs exact string replacement in a file";
+        return "Performs exact string replacement in a file.\n\n"
+                + "- You must use FileRead at least once before editing a file\n"
+                + "- The old_string must be unique in the file; if not, provide more surrounding context to make it unique, or use replace_all\n"
+                + "- Prefer editing existing files over creating new ones\n"
+                + "- Use this tool instead of sed/awk via Bash";
     }
 
     @Override

@@ -36,7 +36,17 @@ public class SystemPromptBuilder {
             sb.append("\n\n");
         }
 
-        // 2. Available skills
+        // 2. Tool usage guidelines
+        sb.append("## Tool Usage Guidelines\n\n");
+        sb.append("- Use FileRead instead of running `cat` or `head` via Bash\n");
+        sb.append("- Use Glob instead of running `find` or `ls` via Bash\n");
+        sb.append("- Use Grep instead of running `grep` or `rg` via Bash\n");
+        sb.append("- Use FileEdit for modifying existing files instead of FileWrite\n");
+        sb.append("- Always read a file before editing or overwriting it\n");
+        sb.append("- Use absolute file paths whenever possible\n");
+        sb.append("\n");
+
+        // 3. Available skills
         if (skillDefinitions != null && !skillDefinitions.isEmpty()) {
             sb.append("## Available Skills\n\n");
             for (SkillDefinition skill : skillDefinitions) {
