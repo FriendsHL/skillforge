@@ -37,6 +37,11 @@ export const getCompactions = (sessionId: string, userId: number) =>
 export const getSessionReplay = (sessionId: string, userId: number) =>
   api.get(`/chat/sessions/${sessionId}/replay`, { params: { userId } });
 
+// Traces API
+export const getTraces = (sessionId?: string) =>
+  sessionId ? api.get(`/traces`, { params: { sessionId } }) : api.get('/traces');
+export const getTraceSpans = (traceId: string) => api.get(`/traces/${traceId}/spans`);
+
 // Skill API
 export const getSkills = () => api.get('/skills');
 export const getBuiltinSkills = () => api.get('/skills/builtin');

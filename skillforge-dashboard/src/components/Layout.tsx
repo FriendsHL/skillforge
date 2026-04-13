@@ -8,6 +8,7 @@ import {
   CommentOutlined,
   BulbOutlined,
   BarChartOutlined,
+  ApartmentOutlined,
 } from '@ant-design/icons';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 
@@ -20,6 +21,7 @@ const menuItems = [
   { key: '/memories', icon: <BulbOutlined />, label: 'Memories' },
   { key: '/sessions', icon: <MessageOutlined />, label: 'Sessions' },
   { key: '/usage', icon: <BarChartOutlined />, label: 'Usage' },
+  { key: '/traces', icon: <ApartmentOutlined />, label: 'Traces' },
   { key: '/chat', icon: <CommentOutlined />, label: 'Chat' },
 ];
 

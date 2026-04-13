@@ -7,6 +7,7 @@ import SessionList from './pages/SessionList';
 import Chat from './pages/Chat';
 import MemoryList from './pages/MemoryList';
 import ModelUsage from './pages/ModelUsage';
+import Traces from './pages/Traces';
 
 function App() {
   return (
@@ -19,6 +20,7 @@ function App() {
           <Route path="sessions" element={<SessionList />} />
           <Route path="memories" element={<MemoryList />} />
           <Route path="usage" element={<ModelUsage />} />
+          <Route path="traces" element={<Traces />} />
           <Route path="chat" element={<Chat />} />
           <Route path="chat/:sessionId" element={<Chat />} />
         </Route>
