@@ -63,6 +63,9 @@ public class TraceSpanEntity {
     @Column(columnDefinition = "TEXT")
     private String error;
 
+    @Column(length = 64)
+    private String toolUseId;
+
     public TraceSpanEntity() {}
 
     // --- getters & setters ---
@@ -114,4 +117,7 @@ public class TraceSpanEntity {
 
     public String getError() { return error; }
     public void setError(String error) { this.error = error; }
+
+    public String getToolUseId() { return toolUseId; }
+    public void setToolUseId(String toolUseId) { this.toolUseId = toolUseId; }
 }

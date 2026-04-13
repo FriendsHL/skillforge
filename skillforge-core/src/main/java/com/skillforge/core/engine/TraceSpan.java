@@ -32,6 +32,7 @@ public class TraceSpan {
     private String modelId;
     private boolean success;
     private String error;
+    private String toolUseId;
 
     public TraceSpan() {
         this.id = UUID.randomUUID().toString();
@@ -101,4 +102,7 @@ public class TraceSpan {
 
     public String getError() { return error; }
     public void setError(String error) { this.error = error; }
+
+    public String getToolUseId() { return toolUseId; }
+    public void setToolUseId(String toolUseId) { this.toolUseId = toolUseId; }
 }

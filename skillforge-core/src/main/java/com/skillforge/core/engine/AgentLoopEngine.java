@@ -212,6 +212,8 @@ public class AgentLoopEngine {
 
         // 6. 进入循环
         boolean cancelled = false;
+        boolean budgetExceeded = false;
+        boolean durationExceeded = false;
         while (loopCtx.getLoopCount() < loopCtx.getMaxLoops()) {
             // 取消检查(每次迭代开头)
             if (loopCtx.isCancelled()) {
@@ -219,6 +221,27 @@ public class AgentLoopEngine {
                 cancelled = true;
                 break;
             }
+
+            // Token budget check
+            long maxInputTokens = 500000;
+            Object maxTokVal = agentDef.getConfig().get("max_input_tokens");
+            if (maxTokVal instanceof Number) maxInputTokens = ((Number) maxTokVal).longValue();
+            if (loopCtx.getTotalInputTokens() > maxInputTokens) {
+                log.warn("Token budget exceeded: {} > {}", loopCtx.getTotalInputTokens(), maxInputTokens);
+                budgetExceeded = true;
+                break;
+            }
+
+            // Duration check
+            long maxDurationMs = 600000; // 10 minutes default
+            Object maxDurVal = agentDef.getConfig().get("max_duration_seconds");
+            if (maxDurVal instanceof Number) maxDurationMs = ((Number) maxDurVal).longValue() * 1000;
+            if (loopCtx.getElapsedMs() > maxDurationMs) {
+                log.warn("Duration limit exceeded: {}ms > {}ms", loopCtx.getElapsedMs(), maxDurationMs);
+                durationExceeded = true;
+                break;
+            }
+
             log.debug("AgentLoop iteration {} / {}", loopCtx.getLoopCount() + 1, loopCtx.getMaxLoops());
 
             // 每次迭代开头清掉"本轮已压缩"标志 —— 这是防止无限压缩循环的核心
@@ -239,7 +262,7 @@ public class AgentLoopEngine {
             // 通常下降不再满足触发. 这保证了 "B2 只在 B1 执行后触发"
             // 且"每个 iteration 至多一次完整 B1→B2 序列".
             boolean b1RanInThisIteration = false;
-            if (compactorCallback != null) {
+            if (compactorCallback != null && loopCtx.getConsecutiveCompactFailures() < 3) {
                 int estTokens = TokenEstimator.estimate(messages);
                 double ratio = contextWindowTokens > 0 ? (double) estTokens / contextWindowTokens : 0;
                 boolean waste = detectWaste(messages);
@@ -248,33 +271,54 @@ public class AgentLoopEngine {
                             ? "engine-soft: waste detected (large tool_result / dedup / retry loop)"
                             : String.format("engine-soft: estTokens=%d / window=%d (ratio=%.2f)",
                                     estTokens, contextWindowTokens, ratio);
-                    CompactCallbackResult cr = compactorCallback.compactLight(
-                            loopCtx.getSessionId(), messages, "engine-soft", reason);
-                    b1RanInThisIteration = true;
-                    if (cr != null && cr.performed) {
-                        messages = cr.messages;
-                        loopCtx.setMessages(messages);
-                        loopCtx.markCompactedThisIteration();
-                        estTokens = TokenEstimator.estimate(messages);
-                        ratio = contextWindowTokens > 0 ? (double) estTokens / contextWindowTokens : 0;
-                        log.info("engine-soft light compact done: sessionId={}, reclaimed={} tokens, new ratio={}",
-                                loopCtx.getSessionId(), cr.tokensReclaimed, String.format("%.2f", ratio));
+                    try {
+                        CompactCallbackResult cr = compactorCallback.compactLight(
+                                loopCtx.getSessionId(), messages, "engine-soft", reason);
+                        b1RanInThisIteration = true;
+                        if (cr != null && cr.performed) {
+                            loopCtx.resetCompactFailures();
+                            messages = cr.messages;
+                            loopCtx.setMessages(messages);
+                            loopCtx.markCompactedThisIteration();
+                            estTokens = TokenEstimator.estimate(messages);
+                            ratio = contextWindowTokens > 0 ? (double) estTokens / contextWindowTokens : 0;
+                            log.info("engine-soft light compact done: sessionId={}, reclaimed={} tokens, new ratio={}",
+                                    loopCtx.getSessionId(), cr.tokensReclaimed, String.format("%.2f", ratio));
+                        } else {
+                            loopCtx.incrementCompactFailures();
+                        }
+                    } catch (Exception e) {
+                        loopCtx.incrementCompactFailures();
+                        log.warn("engine-soft compact failed (consecutive failures: {}): {}",
+                                loopCtx.getConsecutiveCompactFailures(), e.getMessage());
                     }
                 }
                 // B2: B1 刚跑过 (无论实际 performed 还是 no-op) 且 ratio 仍 > 0.70 → 升级到 full
                 if (b1RanInThisIteration && ratio > 0.70) {
                     String reason = String.format("engine-hard: B1 ran but ratio still %.2f (estTokens=%d / window=%d)",
                             ratio, estTokens, contextWindowTokens);
-                    CompactCallbackResult cr = compactorCallback.compactFull(
-                            loopCtx.getSessionId(), messages, "engine-hard", reason);
-                    if (cr != null && cr.performed) {
-                        messages = cr.messages;
-                        loopCtx.setMessages(messages);
-                        loopCtx.markCompactedThisIteration();
-                        log.info("engine-hard full compact done: sessionId={}, reclaimed={} tokens",
-                                loopCtx.getSessionId(), cr.tokensReclaimed);
+                    try {
+                        CompactCallbackResult cr = compactorCallback.compactFull(
+                                loopCtx.getSessionId(), messages, "engine-hard", reason);
+                        if (cr != null && cr.performed) {
+                            loopCtx.resetCompactFailures();
+                            messages = cr.messages;
+                            loopCtx.setMessages(messages);
+                            loopCtx.markCompactedThisIteration();
+                            log.info("engine-hard full compact done: sessionId={}, reclaimed={} tokens",
+                                    loopCtx.getSessionId(), cr.tokensReclaimed);
+                        } else {
+                            loopCtx.incrementCompactFailures();
+                        }
+                    } catch (Exception e) {
+                        loopCtx.incrementCompactFailures();
+                        log.warn("engine-hard compact failed (consecutive failures: {}): {}",
+                                loopCtx.getConsecutiveCompactFailures(), e.getMessage());
                     }
                 }
+            } else if (compactorCallback != null && loopCtx.getConsecutiveCompactFailures() >= 3) {
+                log.warn("Skipping compact: circuit breaker open after {} consecutive failures",
+                        loopCtx.getConsecutiveCompactFailures());
             }
 
             // b. 构建 LlmRequest — P-4/P-5 通过 system prompt 后缀注入，避免破坏 user/assistant 交替
@@ -286,6 +330,23 @@ public class AgentLoopEngine {
                         + "answer based on what you already have. If a tool keeps failing, try a different "
                         + "approach or inform the user of the limitation.");
                 log.info("Appending waste-detection guidance to system prompt");
+            }
+            // Anti-runaway warnings — pick the most severe one only (avoid stacking multiple IMPORTANT)
+            if (loopCtx.isNoProgress()) {
+                // Highest priority: same tool + same input + same output repeatedly
+                promptSuffix.append("\n\n[IMPORTANT] No-progress detected: you are repeatedly calling the same tool "
+                        + "with the same parameters and getting the same results. Stop this pattern immediately "
+                        + "and answer based on what you already have, or try a completely different approach.");
+            } else {
+                // Lower priority: tool called many times (even with different params)
+                for (Map.Entry<String, Integer> entry : loopCtx.getToolCallCounts().entrySet()) {
+                    if (entry.getValue() >= 8) {
+                        promptSuffix.append("\n\n[IMPORTANT] You have called the tool '").append(entry.getKey())
+                                .append("' ").append(entry.getValue()).append(" times. If it is not producing useful new results, ")
+                                .append("stop calling it and answer based on what you already have.");
+                        break;
+                    }
+                }
             }
             // P-5: loop ending reminder — only once at remaining==2
             int remaining = loopCtx.getMaxLoops() - loopCtx.getLoopCount();
@@ -419,16 +480,28 @@ public class AgentLoopEngine {
                 llmSpan.setIterationIndex(loopCtx.getLoopCount());
                 llmSpan.setInputTokens(iterInputTokens);
                 llmSpan.setOutputTokens(iterOutputTokens);
-                // input: 最后一条消息的文本内容（用户消息或 tool_result 摘要）
-                String llmInput = messages.size() + " messages";
+                // input: structured summary of messages
+                StringBuilder llmInputSummary = new StringBuilder();
+                llmInputSummary.append("messages: ").append(messages.size());
                 for (int mi = messages.size() - 1; mi >= 0; mi--) {
-                    String txt = messages.get(mi).getTextContent();
-                    if (txt != null && !txt.isBlank()) {
-                        llmInput = txt.length() > 500 ? txt.substring(0, 500) + "..." : txt;
+                    Message m = messages.get(mi);
+                    if (m.getRole() == Message.Role.USER) {
+                        String txt = m.getTextContent();
+                        if (txt != null && !txt.isBlank()) {
+                            String preview = txt.length() > 200 ? txt.substring(0, 200) + "..." : txt;
+                            llmInputSummary.append(" | last_user: ").append(preview);
+                        } else if (m.getContent() instanceof List<?> contentBlocks) {
+                            long trCount = contentBlocks.stream()
+                                    .filter(o -> o instanceof ContentBlock cb && "tool_result".equals(cb.getType()))
+                                    .count();
+                            if (trCount > 0) {
+                                llmInputSummary.append(" | tool_results: ").append(trCount).append(" results");
+                            }
+                        }
                         break;
                     }
                 }
-                llmSpan.setInput(llmInput);
+                llmSpan.setInput(llmInputSummary.toString());
                 // output: LLM 的文本回复 + tool_use 名称列表
                 StringBuilder llmOutput = new StringBuilder();
                 if (response.getContent() != null && !response.getContent().isEmpty()) {
@@ -541,6 +614,20 @@ public class AgentLoopEngine {
                             r = Message.toolResult(fblock.getId(), "Tool execution error: " + e.getMessage(), true);
                         } finally {
                             long dur = System.currentTimeMillis() - toolStart;
+                            // Record tool call for anti-runaway tracking
+                            loopCtx.recordToolCall(fblock.getName());
+                            String toolOutputText = r != null ? r.getTextContent() : "";
+                            String toolInputStr = fblock.getInput() != null ? fblock.getInput().toString() : "";
+                            loopCtx.recordToolOutcome(fblock.getName(), toolInputStr, toolOutputText);
+                            // Truncate tool result output — 回写到 Message 和 trace
+                            String truncatedOutput = ToolResultTruncator.truncate(toolOutputText);
+                            if (r != null && !truncatedOutput.equals(toolOutputText)) {
+                                // 重建截断后的 tool_result message
+                                r = Message.toolResult(fblock.getId(), truncatedOutput, "error".equals(status));
+                                log.info("Truncated tool result for {}: {}→{} chars",
+                                        fblock.getName(), toolOutputText.length(), truncatedOutput.length());
+                            }
+                            toolOutputText = truncatedOutput;
                             if (broadcaster != null && loopCtx.getSessionId() != null) {
                                 broadcaster.toolFinished(loopCtx.getSessionId(), fblock.getId(), status, dur, errorMsg);
                             }
@@ -549,12 +636,13 @@ public class AgentLoopEngine {
                                 TraceSpan toolSpan = new TraceSpan("TOOL_CALL", fblock.getName());
                                 toolSpan.setSessionId(loopCtx.getSessionId());
                                 toolSpan.setParentSpanId(rootSpan.getId());
+                                toolSpan.setToolUseId(fblock.getId());
                                 toolSpan.setIterationIndex(currentIteration);
                                 toolSpan.setStartTimeMs(toolStart);
                                 toolSpan.setEndTimeMs(toolStart + dur);
                                 toolSpan.setDurationMs(dur);
-                                toolSpan.setInput(fblock.getInput() != null ? fblock.getInput().toString() : "");
-                                toolSpan.setOutput(r != null ? r.getTextContent() : "");
+                                toolSpan.setInput(fblock.getInput() != null ? mapToJson(fblock.getInput()) : "");
+                                toolSpan.setOutput(toolOutputText != null ? toolOutputText : "");
                                 toolSpan.setSuccess("success".equals(status));
                                 toolSpan.setError(errorMsg);
                                 traceCollector.record(toolSpan);
@@ -611,6 +699,26 @@ public class AgentLoopEngine {
                 rootSpan.setOutputTokens((int) loopCtx.getTotalOutputTokens());
                 rootSpan.setSuccess(false);
                 rootSpan.setError("cancelled");
+                rootSpan.end();
+                traceCollector.record(rootSpan);
+            }
+            return result;
+        }
+
+        // Budget / duration exceeded exits
+        if (budgetExceeded || durationExceeded) {
+            String reason = budgetExceeded ? "token_budget_exceeded" : "duration_exceeded";
+            String msg = budgetExceeded
+                    ? "Token budget exceeded (" + loopCtx.getTotalInputTokens() + " tokens). Providing best answer with current information."
+                    : "Duration limit exceeded (" + (loopCtx.getElapsedMs() / 1000) + "s). Providing best answer with current information.";
+            LoopResult result = buildResult(loopCtx, messages, msg, toolCallRecords);
+            result.setStatus(reason);
+            if (traceCollector != null && rootSpan != null) {
+                rootSpan.setOutput(msg);
+                rootSpan.setInputTokens((int) loopCtx.getTotalInputTokens());
+                rootSpan.setOutputTokens((int) loopCtx.getTotalOutputTokens());
+                rootSpan.setSuccess(false);
+                rootSpan.setError(reason);
                 rootSpan.end();
                 traceCollector.record(rootSpan);
             }
@@ -1006,6 +1114,7 @@ public class AgentLoopEngine {
                 }
 
                 String output = result.isSuccess() ? result.getOutput() : result.getError();
+                output = ToolResultTruncator.truncate(output);
                 toolCallRecords.add(new ToolCallRecord(skillName, input, output, result.isSuccess(), duration, startTime));
                 log.debug("Skill '{}' executed, success={}, duration={}ms", skillName, result.isSuccess(), duration);
                 return Message.toolResult(toolUseId, output, !result.isSuccess());
@@ -1041,5 +1150,51 @@ public class AgentLoopEngine {
                 context.getLoopCount(),
                 new ArrayList<>(toolCallRecords)
         );
+    }
+
+    /**
+     * Convert a Map to a JSON string without external dependencies.
+     * Handles String, Number, Boolean, null, Map, and List types recursively.
+     */
+    @SuppressWarnings("unchecked")
+    static String mapToJson(Map<String, Object> map) {
+        if (map == null) return "{}";
+        StringBuilder sb = new StringBuilder("{");
+        boolean first = true;
+        for (Map.Entry<String, Object> e : map.entrySet()) {
+            if (!first) sb.append(",");
+            first = false;
+            sb.append("\"").append(escapeJson(e.getKey())).append("\":");
+            sb.append(valueToJson(e.getValue()));
+        }
+        sb.append("}");
+        return sb.toString();
+    }
+
+    @SuppressWarnings("unchecked")
+    private static String valueToJson(Object v) {
+        if (v == null) return "null";
+        if (v instanceof String s) return "\"" + escapeJson(s) + "\"";
+        if (v instanceof Number || v instanceof Boolean) return v.toString();
+        if (v instanceof Map<?, ?> m) return mapToJson((Map<String, Object>) m);
+        if (v instanceof List<?> list) {
+            StringBuilder sb = new StringBuilder("[");
+            for (int i = 0; i < list.size(); i++) {
+                if (i > 0) sb.append(",");
+                sb.append(valueToJson(list.get(i)));
+            }
+            sb.append("]");
+            return sb.toString();
+        }
+        return "\"" + escapeJson(v.toString()) + "\"";
+    }
+
+    private static String escapeJson(String s) {
+        if (s == null) return "";
+        return s.replace("\\", "\\\\")
+                .replace("\"", "\\\"")
+                .replace("\n", "\\n")
+                .replace("\r", "\\r")
+                .replace("\t", "\\t");
     }
 }

@@ -46,6 +46,7 @@ public class TraceCollectorImpl implements TraceCollector {
             entity.setModelId(span.getModelId());
             entity.setSuccess(span.isSuccess());
             entity.setError(span.getError());
+            entity.setToolUseId(span.getToolUseId());
             repository.save(entity);
         } catch (Exception e) {
             log.warn("Failed to persist trace span: {}", e.getMessage());

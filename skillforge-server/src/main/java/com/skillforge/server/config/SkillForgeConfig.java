@@ -153,11 +153,13 @@ public class SkillForgeConfig {
                                            ChatEventBroadcaster broadcaster,
                                            PendingAskRegistry pendingAskRegistry,
                                            @Lazy ContextCompactorCallback compactorCallback,
-                                           com.skillforge.core.engine.TraceCollector traceCollector) {
+                                           com.skillforge.core.engine.TraceCollector traceCollector,
+                                           com.skillforge.server.context.EnvironmentContextProvider environmentContextProvider) {
         String defaultProvider = llmProperties.getDefaultProvider() != null
                 ? llmProperties.getDefaultProvider() : "claude";
         AgentLoopEngine engine = new AgentLoopEngine(llmProviderFactory, defaultProvider, skillRegistry,
-                Collections.emptyList(), List.of(new SafetySkillHook()), Collections.emptyList());
+                Collections.emptyList(), List.of(new SafetySkillHook()),
+                List.of(environmentContextProvider));
         engine.setBroadcaster(broadcaster);
         engine.setPendingAskRegistry(pendingAskRegistry);
         engine.setCompactorCallback(compactorCallback);

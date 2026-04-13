@@ -11,6 +11,7 @@ import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -93,6 +94,8 @@ public class FileReadSkill implements Skill {
             String result = IntStream.range(0, lines.size())
                     .mapToObj(i -> String.format("%3d\t%s", start + i + 1, lines.get(i)))
                     .collect(Collectors.joining("\n"));
+
+            // FileRead dedup removed — cross-session cache + compaction conflict issues
 
             return SkillResult.success(result);
         } catch (IOException e) {

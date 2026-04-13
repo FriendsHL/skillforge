@@ -38,7 +38,18 @@ public class FullCompactStrategy {
             "(d) any open questions or unresolved items, " +
             "(e) agreed-upon next steps. " +
             "Do NOT invent information. Keep the summary under 800 tokens. " +
-            "Output only the summary text, without preface or quotation marks.";
+            "Output only the summary text, without preface or quotation marks.\n\n" +
+            "IMPORTANT identity preservation rules:\n" +
+            "- Preserve all opaque identifiers exactly as written (no shortening or reconstruction), " +
+            "including UUIDs, hashes, IDs, tokens, API keys, hostnames, IPs, ports, URLs, and file paths.\n\n" +
+            "MUST preserve in summary:\n" +
+            "- Active tasks and their current status (in-progress, blocked, pending)\n" +
+            "- Batch operation progress (e.g., '5/17 items completed')\n" +
+            "- The last thing the user requested and what was being done about it\n" +
+            "- Decisions made and their rationale\n" +
+            "- TODOs, open questions, and constraints\n" +
+            "- Any commitments or follow-ups promised\n" +
+            "Prioritize recent context over older history.";
 
     public CompactResult apply(List<Message> messages, int contextWindowTokens,
                                LlmProvider provider, String modelId) {

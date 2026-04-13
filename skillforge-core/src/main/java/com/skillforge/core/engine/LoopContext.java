@@ -5,6 +5,8 @@ import com.skillforge.core.model.Message;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
@@ -34,6 +36,21 @@ public class LoopContext {
      * engine-soft 已执行后 agent-tool 再次触发。每次 iteration 开头清零。
      */
     private boolean compactedThisIteration = false;
+
+    /** Loop start timestamp for duration tracking. */
+    private long loopStartTimeMs = System.currentTimeMillis();
+
+    /** Per-tool call count tracking for high-frequency detection. */
+    private final Map<String, Integer> toolCallCounts = new ConcurrentHashMap<>();
+
+    /** Recent tool call hashes (toolName#inputHash) for no-progress detection. */
+    private final List<String> recentToolHashes = new ArrayList<>();
+
+    /** Outcome hashes per callHash: tracks if results are changing. */
+    private final Map<String, List<Integer>> outcomeHashes = new ConcurrentHashMap<>();
+
+    /** Consecutive compact failures for circuit breaker. */
+    private int consecutiveCompactFailures = 0;
 
     /** Thread-safe queue for user messages sent while the loop is running. */
     private final ConcurrentLinkedQueue<String> pendingUserMessages = new ConcurrentLinkedQueue<>();
@@ -204,5 +221,91 @@ public class LoopContext {
     /** Check if there are pending messages without draining. */
     public boolean hasPendingUserMessages() {
         return !pendingUserMessages.isEmpty();
+    }
+
+    // --- Anti-runaway: tool call counting ---
+
+    /** Record a tool call for frequency tracking. */
+    public void recordToolCall(String toolName) {
+        toolCallCounts.merge(toolName, 1, Integer::sum);
+    }
+
+    /** Get the call count for a specific tool. */
+    public int getToolCallCount(String toolName) {
+        return toolCallCounts.getOrDefault(toolName, 0);
+    }
+
+    /** Get all tool call counts. */
+    public Map<String, Integer> getToolCallCounts() {
+        return toolCallCounts;
+    }
+
+    /** Elapsed time since loop start in milliseconds. */
+    public long getElapsedMs() {
+        return System.currentTimeMillis() - loopStartTimeMs;
+    }
+
+    // --- No-progress detection ---
+
+    /**
+     * Record a tool outcome for no-progress detection.
+     * Tracks callHash (toolName#inputHash) and outcomeHash (output prefix hash).
+     */
+    public void recordToolOutcome(String toolName, String inputStr, String outputStr) {
+        String callHash = toolName + "#" + (inputStr != null ? inputStr.hashCode() : 0);
+        int outcomeHash = outputStr != null
+                ? outputStr.substring(0, Math.min(200, outputStr.length())).hashCode()
+                : 0;
+        synchronized (recentToolHashes) {
+            recentToolHashes.add(callHash);
+            // keep sliding window of last 20
+            if (recentToolHashes.size() > 20) {
+                recentToolHashes.remove(0);
+            }
+        }
+        outcomeHashes.computeIfAbsent(callHash, k -> new ArrayList<>()).add(outcomeHash);
+    }
+
+    /**
+     * Check if the agent is stuck in a no-progress loop:
+     * same callHash appears >= 3 times in recent window with unchanged outcome.
+     */
+    public boolean isNoProgress() {
+        synchronized (recentToolHashes) {
+            if (recentToolHashes.size() < 3) return false;
+            Map<String, Integer> counts = new java.util.HashMap<>();
+            for (String h : recentToolHashes) {
+                counts.merge(h, 1, Integer::sum);
+            }
+            for (Map.Entry<String, Integer> e : counts.entrySet()) {
+                if (e.getValue() >= 3) {
+                    // 检查 outcome 是否也相同（真正的 no-progress）
+                    List<Integer> outcomes = outcomeHashes.get(e.getKey());
+                    if (outcomes != null && outcomes.size() >= 3) {
+                        // 最后 3 次 outcome 都相同 → no-progress
+                        int last = outcomes.size();
+                        if (outcomes.get(last - 1).equals(outcomes.get(last - 2))
+                                && outcomes.get(last - 2).equals(outcomes.get(last - 3))) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    // --- Compact circuit breaker ---
+
+    public void incrementCompactFailures() {
+        this.consecutiveCompactFailures++;
+    }
+
+    public void resetCompactFailures() {
+        this.consecutiveCompactFailures = 0;
+    }
+
+    public int getConsecutiveCompactFailures() {
+        return consecutiveCompactFailures;
     }
 }
