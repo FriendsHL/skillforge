@@ -62,6 +62,8 @@ public class AgentLoopEngine {
      * null 时 compact_context 工具不会被注入, 也不会跑 B1/B2 safety net。
      */
     private ContextCompactorCallback compactorCallback;
+    /** 可选:链路追踪收集器。null 时不记录 span。 */
+    private TraceCollector traceCollector;
     /** 默认 context window, 单位 token。从 AgentDefinition config 覆盖。 */
     private int defaultContextWindowTokens = 32000;
 
@@ -94,6 +96,10 @@ public class AgentLoopEngine {
 
     public void setCompactorCallback(ContextCompactorCallback compactorCallback) {
         this.compactorCallback = compactorCallback;
+    }
+
+    public void setTraceCollector(TraceCollector traceCollector) {
+        this.traceCollector = traceCollector;
     }
 
     public void setDefaultContextWindowTokens(int defaultContextWindowTokens) {
@@ -193,6 +199,17 @@ public class AgentLoopEngine {
         LlmProvider llmProvider = resolveProvider(agentDef, resolvedModel);
         String actualModelId = resolvedModel[0];
 
+        // Trace: AGENT_LOOP root span
+        final TraceSpan rootSpan;
+        if (traceCollector != null) {
+            rootSpan = new TraceSpan("AGENT_LOOP", agentDef.getName());
+            rootSpan.setSessionId(sessionId);
+            rootSpan.setModelId(actualModelId);
+            rootSpan.setInput(userMessage);
+        } else {
+            rootSpan = null;
+        }
+
         // 6. 进入循环
         boolean cancelled = false;
         while (loopCtx.getLoopCount() < loopCtx.getMaxLoops()) {
@@ -270,6 +287,7 @@ public class AgentLoopEngine {
             request.setTemperature(agentDef.getTemperature());
 
             // b. 流式调用 LLM,文本增量通过 broadcaster.assistantDelta 推到前端
+            final long llmCallStart = System.currentTimeMillis();
             final java.util.concurrent.atomic.AtomicReference<LlmResponse> respHolder = new java.util.concurrent.atomic.AtomicReference<>();
             final java.util.concurrent.atomic.AtomicReference<Throwable> errHolder = new java.util.concurrent.atomic.AtomicReference<>();
             final java.util.concurrent.CountDownLatch streamDone = new java.util.concurrent.CountDownLatch(1);
@@ -353,9 +371,31 @@ public class AgentLoopEngine {
             lastResponse = response;
 
             // c. 累加 token 用量
+            int iterInputTokens = 0, iterOutputTokens = 0;
             if (response.getUsage() != null) {
-                loopCtx.addInputTokens(response.getUsage().getInputTokens());
-                loopCtx.addOutputTokens(response.getUsage().getOutputTokens());
+                iterInputTokens = response.getUsage().getInputTokens();
+                iterOutputTokens = response.getUsage().getOutputTokens();
+                loopCtx.addInputTokens(iterInputTokens);
+                loopCtx.addOutputTokens(iterOutputTokens);
+            }
+
+            // Trace: LLM_CALL span
+            if (traceCollector != null && rootSpan != null) {
+                long llmCallEnd = System.currentTimeMillis();
+                TraceSpan llmSpan = new TraceSpan("LLM_CALL", actualModelId);
+                llmSpan.setSessionId(sessionId);
+                llmSpan.setParentSpanId(rootSpan.getId());
+                llmSpan.setModelId(actualModelId);
+                llmSpan.setStartTimeMs(llmCallStart);
+                llmSpan.setEndTimeMs(llmCallEnd);
+                llmSpan.setDurationMs(llmCallEnd - llmCallStart);
+                llmSpan.setIterationIndex(loopCtx.getLoopCount());
+                llmSpan.setInputTokens(iterInputTokens);
+                llmSpan.setOutputTokens(iterOutputTokens);
+                llmSpan.setInput(String.valueOf(messages.size()) + " messages");
+                llmSpan.setOutput(response.getContent() != null ? response.getContent() : "");
+                llmSpan.setSuccess(true);
+                traceCollector.record(llmSpan);
             }
 
             // d. 将 assistant 响应加入 messages 并广播
@@ -390,11 +430,37 @@ public class AgentLoopEngine {
             for (int i = 0; i < toolUseBlocks.size(); i++) {
                 ToolUseBlock block = toolUseBlocks.get(i);
                 if (AskUserTool.NAME.equals(block.getName())) {
+                    long askStart = System.currentTimeMillis();
                     Message result = handleAskUser(block, loopCtx);
                     askResults.put(i, result);
+                    // Trace: ASK_USER span
+                    if (traceCollector != null && rootSpan != null) {
+                        TraceSpan askSpan = new TraceSpan("ASK_USER", "ask_user");
+                        askSpan.setSessionId(sessionId);
+                        askSpan.setParentSpanId(rootSpan.getId());
+                        askSpan.setIterationIndex(loopCtx.getLoopCount());
+                        askSpan.setStartTimeMs(askStart);
+                        askSpan.setInput(block.getInput() != null ? block.getInput().toString() : "");
+                        askSpan.setOutput(result.getTextContent());
+                        askSpan.end();
+                        traceCollector.record(askSpan);
+                    }
                 } else if (ContextCompactTool.NAME.equals(block.getName())) {
+                    long compactStart = System.currentTimeMillis();
                     Message result = handleCompactContext(block, loopCtx);
                     askResults.put(i, result);
+                    // Trace: COMPACT span
+                    if (traceCollector != null && rootSpan != null) {
+                        TraceSpan compactSpan = new TraceSpan("COMPACT", "compact_context");
+                        compactSpan.setSessionId(sessionId);
+                        compactSpan.setParentSpanId(rootSpan.getId());
+                        compactSpan.setIterationIndex(loopCtx.getLoopCount());
+                        compactSpan.setStartTimeMs(compactStart);
+                        compactSpan.setInput(block.getInput() != null ? block.getInput().toString() : "");
+                        compactSpan.setOutput(result.getTextContent());
+                        compactSpan.end();
+                        traceCollector.record(compactSpan);
+                    }
                     // compact 可能替换了 messages, 同步回本地 messages 引用
                     messages = loopCtx.getMessages();
                 } else {
@@ -404,8 +470,9 @@ public class AgentLoopEngine {
                         broadcaster.toolStarted(loopCtx.getSessionId(), fblock.getId(), fblock.getName(), fblock.getInput());
                     }
                     final long toolStart = System.currentTimeMillis();
+                    final int currentIteration = loopCtx.getLoopCount();
                     futures.add(CompletableFuture.supplyAsync(() -> {
-                        Message r;
+                        Message r = null;
                         String status = "success";
                         String errorMsg = null;
                         try {
@@ -424,9 +491,24 @@ public class AgentLoopEngine {
                             errorMsg = e.getMessage();
                             r = Message.toolResult(fblock.getId(), "Tool execution error: " + e.getMessage(), true);
                         } finally {
+                            long dur = System.currentTimeMillis() - toolStart;
                             if (broadcaster != null && loopCtx.getSessionId() != null) {
-                                long dur = System.currentTimeMillis() - toolStart;
                                 broadcaster.toolFinished(loopCtx.getSessionId(), fblock.getId(), status, dur, errorMsg);
+                            }
+                            // Trace: TOOL_CALL span
+                            if (traceCollector != null && rootSpan != null) {
+                                TraceSpan toolSpan = new TraceSpan("TOOL_CALL", fblock.getName());
+                                toolSpan.setSessionId(loopCtx.getSessionId());
+                                toolSpan.setParentSpanId(rootSpan.getId());
+                                toolSpan.setIterationIndex(currentIteration);
+                                toolSpan.setStartTimeMs(toolStart);
+                                toolSpan.setEndTimeMs(toolStart + dur);
+                                toolSpan.setDurationMs(dur);
+                                toolSpan.setInput(fblock.getInput() != null ? fblock.getInput().toString() : "");
+                                toolSpan.setOutput(r != null ? r.getTextContent() : "");
+                                toolSpan.setSuccess("success".equals(status));
+                                toolSpan.setError(errorMsg);
+                                traceCollector.record(toolSpan);
                             }
                         }
                         synchronized (askResults) {
@@ -457,6 +539,15 @@ public class AgentLoopEngine {
         if (cancelled) {
             LoopResult result = buildResult(loopCtx, messages, "[Cancelled by user]", toolCallRecords);
             result.setStatus("cancelled");
+            if (traceCollector != null && rootSpan != null) {
+                rootSpan.setOutput("[Cancelled by user]");
+                rootSpan.setInputTokens((int) loopCtx.getTotalInputTokens());
+                rootSpan.setOutputTokens((int) loopCtx.getTotalOutputTokens());
+                rootSpan.setSuccess(false);
+                rootSpan.setError("cancelled");
+                rootSpan.end();
+                traceCollector.record(rootSpan);
+            }
             return result;
         }
 
@@ -465,6 +556,15 @@ public class AgentLoopEngine {
             log.warn("AgentLoop reached max loops limit: {}", loopCtx.getMaxLoops());
             String limitMsg = "I've reached the maximum number of processing steps (" + loopCtx.getMaxLoops()
                     + "). Please try breaking your request into smaller parts.";
+            if (traceCollector != null && rootSpan != null) {
+                rootSpan.setOutput(limitMsg);
+                rootSpan.setInputTokens((int) loopCtx.getTotalInputTokens());
+                rootSpan.setOutputTokens((int) loopCtx.getTotalOutputTokens());
+                rootSpan.setSuccess(false);
+                rootSpan.setError("max_loops");
+                rootSpan.end();
+                traceCollector.record(rootSpan);
+            }
             return buildResult(loopCtx, messages, limitMsg, toolCallRecords);
         }
 
@@ -479,6 +579,14 @@ public class AgentLoopEngine {
 
         // 8. 返回 LoopResult
         String finalText = lastResponse != null ? lastResponse.getContent() : "";
+        // Trace: 关闭 AGENT_LOOP root span
+        if (traceCollector != null && rootSpan != null) {
+            rootSpan.setOutput(finalText);
+            rootSpan.setInputTokens((int) loopCtx.getTotalInputTokens());
+            rootSpan.setOutputTokens((int) loopCtx.getTotalOutputTokens());
+            rootSpan.end();
+            traceCollector.record(rootSpan);
+        }
         return buildResult(loopCtx, messages, finalText, toolCallRecords);
     }
 
