@@ -17,7 +17,6 @@ import com.skillforge.skills.FileEditSkill;
 import com.skillforge.skills.FileReadSkill;
 import com.skillforge.skills.FileWriteSkill;
 import com.skillforge.skills.GlobSkill;
-import com.skillforge.skills.BrowserSkill;
 import com.skillforge.skills.GrepSkill;
 import com.skillforge.server.clawhub.ClawHubProperties;
 import com.skillforge.server.skill.MemorySkill;
@@ -42,21 +41,13 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 @Configuration
-@EnableConfigurationProperties({LlmProperties.class, BrowserProperties.class, ClawHubProperties.class})
+@EnableConfigurationProperties({LlmProperties.class, ClawHubProperties.class})
 public class SkillForgeConfig {
 
     private static final Logger log = LoggerFactory.getLogger(SkillForgeConfig.class);
 
-    @Bean(destroyMethod = "shutdown")
-    public BrowserSkill browserSkill(BrowserProperties browserProperties) {
-        return new BrowserSkill(
-                browserProperties.getProfileDir(),
-                browserProperties.getDefaultTimeoutMs(),
-                browserProperties.getLoginTimeoutSeconds());
-    }
-
     @Bean
-    public SkillRegistry skillRegistry(MemoryService memoryService, BrowserSkill browserSkill) {
+    public SkillRegistry skillRegistry(MemoryService memoryService) {
         SkillRegistry registry = new SkillRegistry();
         registry.register(new BashSkill());
         registry.register(new FileReadSkill());
@@ -64,7 +55,6 @@ public class SkillForgeConfig {
         registry.register(new FileEditSkill());
         registry.register(new GlobSkill());
         registry.register(new GrepSkill());
-        registry.register(browserSkill);
         registry.register(new MemorySkill(memoryService));
         return registry;
     }
