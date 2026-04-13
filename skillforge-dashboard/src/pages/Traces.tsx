@@ -14,7 +14,7 @@ import {
 } from '@ant-design/icons';
 import { getTraces, getTraceSpans } from '../api';
 
-const { Text, Paragraph } = Typography;
+const { Text } = Typography;
 
 interface TraceItem {
   traceId: string;
