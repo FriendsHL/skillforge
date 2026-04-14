@@ -100,6 +100,15 @@ public class CollabRunService {
     public SessionEntity spawnMember(String collabRunId, String handle, Long agentId,
                                       String task, String briefing, SessionEntity spawningSession,
                                       boolean lightContext) {
+        return spawnMember(collabRunId, handle, agentId, task, briefing, spawningSession, lightContext, null);
+    }
+
+    /**
+     * Spawn a new member agent in the collaboration run, with optional lightContext and maxLoops override.
+     */
+    public SessionEntity spawnMember(String collabRunId, String handle, Long agentId,
+                                      String task, String briefing, SessionEntity spawningSession,
+                                      boolean lightContext, Integer maxLoops) {
         CollabRunEntity collabRun = collabRunRepository.findById(collabRunId)
                 .orElseThrow(() -> new IllegalStateException("CollabRun not found: " + collabRunId));
 
@@ -152,6 +161,10 @@ public class CollabRunService {
         // Set lightContext flag if requested
         if (lightContext) {
             child.setLightContext(true);
+        }
+        // Set maxLoops override on child session if provided
+        if (maxLoops != null && maxLoops > 0) {
+            child.setMaxLoops(maxLoops);
         }
         sessionService.saveSession(child);
 

@@ -134,8 +134,9 @@ public class SkillForgeConfig {
                                        AgentRoster agentRoster,
                                        SubAgentRegistry subAgentRegistry,
                                        ChatEventBroadcaster broadcaster,
+                                       com.skillforge.core.engine.TraceCollector traceCollector,
                                        SkillRegistry skillRegistry) {
-        TeamSendSkill skill = new TeamSendSkill(sessionService, agentRoster, subAgentRegistry, broadcaster);
+        TeamSendSkill skill = new TeamSendSkill(sessionService, agentRoster, subAgentRegistry, broadcaster, traceCollector);
         skillRegistry.register(skill);
         log.info("Registered TeamSendSkill into SkillRegistry");
         return skill;

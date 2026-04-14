@@ -72,6 +72,8 @@ export const saveClaudeMd = (userId: number, claudeMd: string) =>
 
 // Collab Run API
 export const getCollabRunMembers = (collabRunId: string) => api.get(`/collab-runs/${collabRunId}/members`);
+export const getCollabRunSummary = (collabRunId: string) => api.get(`/collab-runs/${collabRunId}/summary`);
+export const getCollabRunTraces = (collabRunId: string) => api.get(`/collab-runs/${collabRunId}/traces`);
 
 // Dashboard API
 export const getDashboardOverview = () => api.get('/dashboard/overview');

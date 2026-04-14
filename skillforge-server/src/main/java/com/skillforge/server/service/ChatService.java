@@ -237,6 +237,30 @@ public class ChatService {
                 log.info("lightContext enabled for session={}, stripping soul/tools prompts and memory", sessionId);
             }
 
+            // Inject team leader coordination instructions into system prompt
+            String collabRunIdForPrompt = freshSession.getCollabRunId();
+            if (collabRunIdForPrompt != null) {
+                CollabRunEntity collabRunForPrompt = collabRunRepository.findById(collabRunIdForPrompt).orElse(null);
+                if (collabRunForPrompt != null && sessionId.equals(collabRunForPrompt.getLeaderSessionId())) {
+                    // This is the leader session — inject coordination guidelines
+                    String existing = agentDef.getSystemPrompt() != null ? agentDef.getSystemPrompt() : "";
+                    agentDef.setSystemPrompt(existing + "\n\n## Team Leader Protocol\n\n"
+                            + "You are the LEADER of a multi-agent team. Your role is to DELEGATE, not to do the work yourself.\n\n"
+                            + "**Workflow:**\n"
+                            + "1. Analyze the user's request and break it into sub-tasks\n"
+                            + "2. Use TeamCreate to spawn team members for each sub-task (you can spawn multiple in one turn)\n"
+                            + "3. After spawning all members, STOP calling tools and end your turn with a brief summary of what you delegated\n"
+                            + "4. Wait for [TeamResult] messages to arrive automatically — do NOT poll or call TeamList\n"
+                            + "5. Once all results arrive, synthesize them into a final response for the user\n\n"
+                            + "**Rules:**\n"
+                            + "- Do NOT use Bash, FileRead, Grep, or other tools yourself — delegate to team members\n"
+                            + "- Do NOT do research or investigation yourself — that's what team members are for\n"
+                            + "- You MAY use TeamSend to send additional context to a running member\n"
+                            + "- You MAY use TeamKill to cancel a member that is no longer needed\n"
+                            + "- If a member's result is insufficient, spawn a new member with a refined task\n");
+                }
+            }
+
             // 收集 zip 包 Skill 定义
             List<SkillDefinition> skills = new ArrayList<>();
             for (String skillId : agentDef.getSkillIds()) {
@@ -260,6 +284,25 @@ public class ChatService {
                     log.info("Depth-aware filtering: excluding TeamCreate/SubAgent for session={} at depth={} (maxDepth={})",
                             sessionId, freshSession.getDepth(), collabRun.getMaxDepth());
                 }
+            }
+
+            // Apply maxLoops: session override > agent config > engine default (25)
+            Integer sessionMaxLoops = freshSession.getMaxLoops();
+            if (sessionMaxLoops != null && sessionMaxLoops > 0) {
+                preCtx.setMaxLoops(sessionMaxLoops);
+            } else {
+                Object maxLoopsObj = agentDef.getConfig().get("max_loops");
+                if (maxLoopsObj instanceof Number) {
+                    preCtx.setMaxLoops(((Number) maxLoopsObj).intValue());
+                }
+            }
+            // Safety cap: maxLoops cannot exceed 200
+            if (preCtx.getMaxLoops() > 200) {
+                preCtx.setMaxLoops(200);
+                log.warn("maxLoops capped at 200 for session={}", sessionId);
+            }
+            if (preCtx.getMaxLoops() != 25) {
+                log.info("maxLoops override: {} for session={}", preCtx.getMaxLoops(), sessionId);
             }
 
             cancellationRegistry.register(sessionId, preCtx);

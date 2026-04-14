@@ -41,9 +41,11 @@ public class TeamCreateSkill implements Skill {
     public String getDescription() {
         return "Spawn a new agent as a team member in the current collaboration run. "
                 + "Use this (not SubAgent) when orchestrating multiple agents in parallel as a team. "
-                + "All members share a collabRunId and results arrive as [TeamResult] messages. "
-                + "The agent runs asynchronously — do NOT poll. "
-                + "Use TeamList to see available agents and running members.";
+                + "All members share a collabRunId and results arrive as [TeamResult] messages automatically. "
+                + "IMPORTANT: After spawning all needed team members, you MUST stop calling tools and "
+                + "end your turn with a text response explaining what you delegated and what you are waiting for. "
+                + "Do NOT do the work yourself — let the team members handle it. "
+                + "Do NOT poll or call TeamList repeatedly. Results arrive automatically as user messages.";
     }
 
     @Override
@@ -73,6 +75,10 @@ public class TeamCreateSkill implements Skill {
         properties.put("lightContext", Map.of(
                 "type", "boolean",
                 "description", "If true, the child agent gets a stripped-down system prompt without SOUL.md, TOOLS.md, and Memory injection, saving ~30-50% input tokens."
+        ));
+        properties.put("maxLoops", Map.of(
+                "type", "integer",
+                "description", "Override max loop iterations for this agent (default: agent's configured value or 25)"
         ));
 
         Map<String, Object> schema = new LinkedHashMap<>();
@@ -106,6 +112,9 @@ public class TeamCreateSkill implements Skill {
             Object lightCtxObj = input.get("lightContext");
             boolean lightContext = lightCtxObj instanceof Boolean && (Boolean) lightCtxObj;
 
+            Object maxLoopsObj = input.get("maxLoops");
+            Integer maxLoops = maxLoopsObj instanceof Number ? ((Number) maxLoopsObj).intValue() : null;
+
             String sessionId = context.getSessionId();
             if (sessionId == null) {
                 return SkillResult.error("No session in context — cannot create team member");
@@ -124,14 +133,16 @@ public class TeamCreateSkill implements Skill {
 
             // Spawn the member
             SessionEntity child = collabRunService.spawnMember(
-                    collabRunId, handle, agentId, task, briefing, session, lightContext);
+                    collabRunId, handle, agentId, task, briefing, session, lightContext, maxLoops);
 
             String msg = "Team member '" + handle + "' spawned successfully.\n"
                     + "  collabRunId: " + collabRunId + "\n"
                     + "  childSessionId: " + child.getId() + "\n"
                     + "  runId: " + child.getSubAgentRunId() + "\n"
                     + "  depth: " + child.getDepth() + "\n"
-                    + "The agent is running asynchronously. Its result will arrive automatically — do NOT poll.";
+                    + "The agent is running asynchronously. Its result will arrive automatically.\n"
+                    + "REMINDER: After spawning all needed members, STOP calling tools and end your turn. "
+                    + "Do NOT do the work yourself — wait for [TeamResult] messages.";
             return SkillResult.success(msg);
 
         } catch (IllegalStateException e) {

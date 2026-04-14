@@ -75,6 +75,9 @@ public class SessionEntity {
     @Column(length = 36)
     private String collabRunId;
 
+    /** Override max loop iterations for this session (null = use agent default) */
+    private Integer maxLoops;
+
     /** If true, child agent gets stripped-down system prompt (no SOUL.md, TOOLS.md, memory) */
     @Column(columnDefinition = "BOOLEAN DEFAULT FALSE")
     private boolean lightContext = false;
@@ -262,6 +265,14 @@ public class SessionEntity {
 
     public void setCollabRunId(String collabRunId) {
         this.collabRunId = collabRunId;
+    }
+
+    public Integer getMaxLoops() {
+        return maxLoops;
+    }
+
+    public void setMaxLoops(Integer maxLoops) {
+        this.maxLoops = maxLoops;
     }
 
     public boolean isLightContext() {

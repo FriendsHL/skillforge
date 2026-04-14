@@ -1,6 +1,8 @@
 package com.skillforge.server.skill;
 
 import com.skillforge.core.engine.ChatEventBroadcaster;
+import com.skillforge.core.engine.TraceCollector;
+import com.skillforge.core.engine.TraceSpan;
 import com.skillforge.core.model.ToolSchema;
 import com.skillforge.core.skill.Skill;
 import com.skillforge.core.skill.SkillContext;
@@ -30,15 +32,18 @@ public class TeamSendSkill implements Skill {
     private final AgentRoster agentRoster;
     private final SubAgentRegistry subAgentRegistry;
     private final ChatEventBroadcaster broadcaster;
+    private final TraceCollector traceCollector;
 
     public TeamSendSkill(SessionService sessionService,
                          AgentRoster agentRoster,
                          SubAgentRegistry subAgentRegistry,
-                         ChatEventBroadcaster broadcaster) {
+                         ChatEventBroadcaster broadcaster,
+                         TraceCollector traceCollector) {
         this.sessionService = sessionService;
         this.agentRoster = agentRoster;
         this.subAgentRegistry = subAgentRegistry;
         this.broadcaster = broadcaster;
+        this.traceCollector = traceCollector;
     }
 
     @Override
@@ -78,6 +83,7 @@ public class TeamSendSkill implements Skill {
 
     @Override
     public SkillResult execute(Map<String, Object> input, SkillContext context) {
+        long startTime = System.currentTimeMillis();
         try {
             String to = (String) input.get("to");
             if (to == null || to.isBlank()) {
@@ -111,19 +117,61 @@ public class TeamSendSkill implements Skill {
                 }
             }
 
+            SkillResult result;
             if ("broadcast".equals(to)) {
-                return handleBroadcast(currentSession, collabRunId, senderHandle, message);
+                result = handleBroadcast(currentSession, collabRunId, senderHandle, message);
             } else if ("parent".equals(to)) {
-                return handleParent(currentSession, collabRunId, senderHandle, message);
+                result = handleParent(currentSession, collabRunId, senderHandle, message);
             } else {
-                return handleDirect(currentSession, collabRunId, senderHandle, to, message);
+                result = handleDirect(currentSession, collabRunId, senderHandle, to, message);
             }
+
+            // Record PEER_MESSAGE trace span(s)
+            if (result.isSuccess()) {
+                if ("broadcast".equals(to)) {
+                    // For broadcast, record one span per recipient
+                    Map<String, String> members = agentRoster.listMembers(collabRunId);
+                    for (String targetHandle : members.keySet()) {
+                        String targetSessionId = members.get(targetHandle);
+                        if (!targetSessionId.equals(sessionId)) {
+                            recordPeerMessageSpan(sessionId, "TeamSend → " + targetHandle,
+                                    message, "Delivered to " + targetHandle, startTime);
+                        }
+                    }
+                } else {
+                    String targetLabel = "parent".equals(to) ? "parent" : to;
+                    recordPeerMessageSpan(sessionId, "TeamSend → " + targetLabel,
+                            message, "Delivered to " + targetLabel, startTime);
+                }
+            }
+
+            return result;
 
         } catch (IllegalStateException e) {
             return SkillResult.error(e.getMessage());
         } catch (Exception e) {
             log.error("TeamSendSkill execute failed", e);
             return SkillResult.error("TeamSend error: " + e.getMessage());
+        }
+    }
+
+    private void recordPeerMessageSpan(String sessionId, String name,
+                                        String message, String output, long startTime) {
+        try {
+            TraceSpan span = new TraceSpan();
+            span.setId(UUID.randomUUID().toString());
+            span.setSessionId(sessionId);
+            span.setSpanType("PEER_MESSAGE");
+            span.setName(name);
+            span.setInput(message.substring(0, Math.min(500, message.length())));
+            span.setOutput(output);
+            span.setStartTimeMs(startTime);
+            span.setEndTimeMs(System.currentTimeMillis());
+            span.setDurationMs(span.getEndTimeMs() - span.getStartTimeMs());
+            span.setSuccess(true);
+            traceCollector.record(span);
+        } catch (Exception e) {
+            log.warn("Failed to record PEER_MESSAGE trace span: {}", e.getMessage());
         }
     }
 

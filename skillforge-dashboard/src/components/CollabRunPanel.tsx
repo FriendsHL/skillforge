@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Card, Table, Tag, Badge, Segmented, Typography } from 'antd';
 import { getCollabRunMembers } from '../api';
+import ChildAgentFeed from './ChildAgentFeed';
 
 const { Text } = Typography;
 
@@ -268,6 +269,15 @@ const CollabRunPanel: React.FC<Props> = ({ collabRunId, sessionId }) => {
           rowKey="sessionId"
           pagination={false}
           rowClassName={(record) => (record.sessionId === sessionId ? 'ant-table-row-selected' : '')}
+          expandable={{
+            expandedRowRender: (record: CollabMember) => (
+              <ChildAgentFeed
+                sessionId={record.sessionId}
+                isRunning={record.runtimeStatus === 'running'}
+              />
+            ),
+            rowExpandable: () => true,
+          }}
         />
       ) : (
         renderTreeView()

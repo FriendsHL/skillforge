@@ -51,6 +51,9 @@ public class AgentEntity {
 
     private String status = "active";
 
+    /** Max loop iterations for this agent (null = use engine default 25) */
+    private Integer maxLoops;
+
     /** 执行模式: ask / auto,默认 ask */
     @Column(length = 16)
     private String executionMode = "ask";
@@ -158,6 +161,14 @@ public class AgentEntity {
 
     public void setStatus(String status) {
         this.status = status;
+    }
+
+    public Integer getMaxLoops() {
+        return maxLoops;
+    }
+
+    public void setMaxLoops(Integer maxLoops) {
+        this.maxLoops = maxLoops;
     }
 
     public String getExecutionMode() {

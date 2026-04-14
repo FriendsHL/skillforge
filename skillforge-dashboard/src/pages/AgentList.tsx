@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Table, Button, Modal, Form, Input, Select, Space, Popconfirm, Tag, Tabs, message } from 'antd';
+import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, Popconfirm, Tag, Tabs, message } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, FileTextOutlined } from '@ant-design/icons';
 import { getAgents, createAgent, updateAgent, deleteAgent, getBuiltinSkills, getClaudeMd, saveClaudeMd } from '../api';
 
@@ -229,6 +229,13 @@ const AgentList: React.FC = () => {
                 { label: 'auto — 自主执行', value: 'auto' },
               ]}
             />
+          </Form.Item>
+          <Form.Item
+            name="maxLoops"
+            label="Max Loops"
+            tooltip="Maximum loop iterations for this agent (default: 25, max: 200). Increase for research/exploration tasks."
+          >
+            <InputNumber min={1} max={200} placeholder="25" style={{ width: '100%' }} />
           </Form.Item>
           <Form.Item label="Prompts">
             <Tabs destroyInactiveTabPane={false} items={[

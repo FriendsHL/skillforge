@@ -80,6 +80,10 @@ public class SubAgentSkill implements Skill {
                 "type", "string",
                 "description", "Task description to send to the child agent (required for dispatch)"
         ));
+        properties.put("maxLoops", Map.of(
+                "type", "integer",
+                "description", "Override max loop iterations for the child agent (default: agent's configured value or 25)"
+        ));
 
         Map<String, Object> schema = new LinkedHashMap<>();
         schema.put("type", "object");
@@ -139,6 +143,15 @@ public class SubAgentSkill implements Skill {
 
         // 2. 创建子 session
         SessionEntity child = sessionService.createSubSession(parent, agentId, run.runId);
+        // Set maxLoops override on child session if provided
+        Object maxLoopsObj = input.get("maxLoops");
+        if (maxLoopsObj instanceof Number) {
+            int maxLoops = ((Number) maxLoopsObj).intValue();
+            if (maxLoops > 0) {
+                child.setMaxLoops(maxLoops);
+                sessionService.saveSession(child);
+            }
+        }
         registry.attachChildSession(run.runId, child.getId());
 
         // 3. 异步启动子 agent loop

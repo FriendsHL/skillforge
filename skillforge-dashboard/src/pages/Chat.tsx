@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Select, List, Card, message, Typography, Empty, Alert, Button, Input, Segmented, Space, Modal, Tag, Table } from 'antd';
+import { Select, List, Card, message, Typography, Empty, Alert, Button, Input, Segmented, Space, Modal, Tag, Table, Collapse } from 'antd';
 import { ArrowUpOutlined, HistoryOutlined, MessageOutlined, TeamOutlined } from '@ant-design/icons';
 import { useNavigate, useParams } from 'react-router-dom';
 import ChatWindow from '../components/ChatWindow';
@@ -8,6 +8,8 @@ import SessionReplay from '../components/SessionReplay';
 import SubAgentRunsPanel from '../components/SubAgentRunsPanel';
 import ChildSessionsPanel from '../components/ChildSessionsPanel';
 import CollabRunPanel from '../components/CollabRunPanel';
+import CollabRunSummary from '../components/CollabRunSummary';
+import CollabRunTimeline from '../components/CollabRunTimeline';
 import PeerMessageFeed from '../components/PeerMessageFeed';
 import {
   getAgents,
@@ -824,6 +826,20 @@ const Chat: React.FC = () => {
               collabRunId={collabRunId}
               sessionId={activeSessionId}
             />
+            <CollabRunSummary collabRunId={collabRunId} />
+            {collabRunId && (
+              <Collapse
+                size="small"
+                style={{ margin: '8px 12px 0' }}
+                items={[
+                  {
+                    key: 'timeline',
+                    label: 'Collaboration Timeline',
+                    children: <CollabRunTimeline collabRunId={collabRunId} />,
+                  },
+                ]}
+              />
+            )}
             <PeerMessageFeed
               collabRunId={collabRunId}
             />

@@ -46,6 +46,7 @@ public class AgentService {
         existing.setOwnerId(updated.getOwnerId());
         existing.setPublic(updated.isPublic());
         existing.setStatus(updated.getStatus());
+        existing.setMaxLoops(updated.getMaxLoops());
         if (updated.getExecutionMode() != null) {
             existing.setExecutionMode(updated.getExecutionMode());
         }
@@ -107,6 +108,11 @@ public class AgentService {
                 log.warn("Failed to parse config JSON: {}", entity.getConfig(), e);
                 def.setConfig(new HashMap<>());
             }
+        }
+
+        // Pass agent-level maxLoops into config map
+        if (entity.getMaxLoops() != null) {
+            def.getConfig().put("max_loops", entity.getMaxLoops());
         }
 
         return def;
