@@ -29,4 +29,6 @@ public interface SessionRepository extends JpaRepository<SessionEntity, String> 
      * saves each row in Java.
      */
     List<SessionEntity> findByLastUserMessageAtIsNull();
+
+    List<SessionEntity> findByCompletedAtIsNotNullAndDigestExtractedAtIsNull();
 }

@@ -11,4 +11,6 @@ public interface ActivityLogRepository extends JpaRepository<ActivityLogEntity, 
     List<ActivityLogEntity> findByUserIdAndSessionIdOrderByCreatedAtAsc(Long userId, String sessionId);
 
     List<ActivityLogEntity> findByUserIdAndCreatedAtAfterOrderByCreatedAtDesc(Long userId, LocalDateTime since);
+
+    List<ActivityLogEntity> findBySessionIdOrderByCreatedAtAsc(String sessionId);
 }

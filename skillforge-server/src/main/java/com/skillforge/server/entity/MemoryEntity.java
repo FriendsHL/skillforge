@@ -11,6 +11,7 @@ import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.annotation.LastModifiedDate;
 import org.springframework.data.jpa.domain.support.AuditingEntityListener;
 
+import java.time.Instant;
 import java.time.LocalDateTime;
 
 @Entity
@@ -32,6 +33,11 @@ public class MemoryEntity {
     private String content;
 
     private String tags;
+
+    @Column(columnDefinition = "INT DEFAULT 0")
+    private int recallCount = 0;
+
+    private Instant lastRecalledAt;
 
     @CreatedDate
     private LocalDateTime createdAt;
@@ -88,6 +94,22 @@ public class MemoryEntity {
 
     public void setTags(String tags) {
         this.tags = tags;
+    }
+
+    public int getRecallCount() {
+        return recallCount;
+    }
+
+    public void setRecallCount(int recallCount) {
+        this.recallCount = recallCount;
+    }
+
+    public Instant getLastRecalledAt() {
+        return lastRecalledAt;
+    }
+
+    public void setLastRecalledAt(Instant lastRecalledAt) {
+        this.lastRecalledAt = lastRecalledAt;
     }
 
     public LocalDateTime getCreatedAt() {

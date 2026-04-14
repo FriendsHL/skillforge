@@ -37,6 +37,10 @@ public class ActivityLogService {
         return repository.findByUserIdAndCreatedAtAfterOrderByCreatedAtDesc(userId, since);
     }
 
+    public List<ActivityLogEntity> getSessionActivities(String sessionId) {
+        return repository.findBySessionIdOrderByCreatedAtAsc(sessionId);
+    }
+
     private String truncate(String s, int maxLen) {
         if (s == null) return null;
         return s.length() <= maxLen ? s : s.substring(0, maxLen);

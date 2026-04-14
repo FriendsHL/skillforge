@@ -148,7 +148,7 @@ public class MemorySkill implements Skill {
             return SkillResult.error("keyword is required for search");
         }
 
-        List<MemoryEntity> results = memoryService.searchMemories(userId, keyword);
+        List<MemoryEntity> results = memoryService.searchWithRanking(userId, keyword);
         if (results.isEmpty()) {
             return SkillResult.success("No memories found matching \"" + keyword + "\"");
         }
