@@ -231,7 +231,7 @@ const AgentList: React.FC = () => {
             />
           </Form.Item>
           <Form.Item label="Prompts">
-            <Tabs items={[
+            <Tabs destroyInactiveTabPane={false} items={[
               {
                 key: 'agent',
                 label: 'AGENT.md',

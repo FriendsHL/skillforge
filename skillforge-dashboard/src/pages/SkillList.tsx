@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Table, Button, Upload, Popconfirm, message, Tag, Card, Divider, Switch, Modal, Tabs, Typography } from 'antd';
 import { DeleteOutlined, InboxOutlined, ThunderboltOutlined, ToolOutlined, EyeOutlined, CodeOutlined, FileTextOutlined, LockOutlined } from '@ant-design/icons';
 import { getSkills, getBuiltinSkills, uploadSkill, deleteSkill, getSkillDetail, toggleSkill } from '../api';
+import MarkdownRenderer from '../components/MarkdownRenderer';
 
 const { Dragger } = Upload;
 const { Text, Paragraph } = Typography;
@@ -265,9 +266,9 @@ const SkillList: React.FC = () => {
                 key: 'skill-md',
                 label: 'SKILL.md',
                 children: (
-                  <pre style={{ maxHeight: 500, overflow: 'auto', fontSize: 13, whiteSpace: 'pre-wrap', background: '#fafafa', padding: 16, borderRadius: 6 }}>
-                    {detail.skillMd || detail.promptContent || 'No content'}
-                  </pre>
+                  <div style={{ maxHeight: 500, overflow: 'auto', padding: 8 }}>
+                    <MarkdownRenderer content={detail.skillMd || detail.promptContent || 'No content'} />
+                  </div>
                 ),
               },
               {
@@ -306,19 +307,36 @@ const SkillList: React.FC = () => {
         width={700}
       >
         {builtinDetail ? (
-          <div>
-            <Paragraph><strong>Name:</strong> {builtinDetail.name}</Paragraph>
-            <Paragraph><strong>Description:</strong> {builtinDetail.description}</Paragraph>
-            <Paragraph><strong>Read-Only:</strong> {builtinDetail.readOnly ? 'Yes' : 'No'}</Paragraph>
-            {builtinDetail.toolSchema && (
-              <>
-                <Divider titlePlacement="left" plain>Tool Schema (Input Parameters)</Divider>
-                <pre style={{ maxHeight: 400, overflow: 'auto', fontSize: 13, background: '#f5f5f5', padding: 12, borderRadius: 6, margin: 0 }}>
+          <Tabs items={[
+            {
+              key: 'description',
+              label: 'Description',
+              children: (
+                <div style={{ maxHeight: 400, overflow: 'auto', padding: 8 }}>
+                  <MarkdownRenderer content={builtinDetail.description || 'No description'} />
+                </div>
+              ),
+            },
+            {
+              key: 'schema',
+              label: 'Tool Schema',
+              children: builtinDetail.toolSchema ? (
+                <pre style={{ maxHeight: 400, overflow: 'auto', fontSize: 13, background: '#1e1e1e', color: '#d4d4d4', padding: 16, borderRadius: 8, margin: 0 }}>
                   {JSON.stringify(builtinDetail.toolSchema, null, 2)}
                 </pre>
-              </>
-            )}
-          </div>
+              ) : <Text type="secondary">No schema</Text>,
+            },
+            {
+              key: 'meta',
+              label: 'Metadata',
+              children: (
+                <div>
+                  <Paragraph><strong>Name:</strong> {builtinDetail.name}</Paragraph>
+                  <Paragraph><strong>Read-Only:</strong> {builtinDetail.readOnly ? 'Yes' : 'No'}</Paragraph>
+                </div>
+              ),
+            },
+          ]} />
         ) : null}
       </Modal>
     </div>
