@@ -64,6 +64,8 @@ public class AgentLoopEngine {
     private ContextCompactorCallback compactorCallback;
     /** 可选:链路追踪收集器。null 时不记录 span。 */
     private TraceCollector traceCollector;
+    /** 可选:记忆提供者。接受 userId 返回记忆 markdown 字符串,拼接到 system prompt 末尾。 */
+    private java.util.function.Function<Long, String> memoryProvider;
     /** 默认 context window, 单位 token。从 AgentDefinition config 覆盖。 */
     private int defaultContextWindowTokens = 32000;
 
@@ -100,6 +102,10 @@ public class AgentLoopEngine {
 
     public void setTraceCollector(TraceCollector traceCollector) {
         this.traceCollector = traceCollector;
+    }
+
+    public void setMemoryProvider(java.util.function.Function<Long, String> memoryProvider) {
+        this.memoryProvider = memoryProvider;
     }
 
     public void setDefaultContextWindowTokens(int defaultContextWindowTokens) {
@@ -185,6 +191,14 @@ public class AgentLoopEngine {
         // 4. 构建 system prompt
         List<SkillDefinition> skillDefs = new ArrayList<>(skillRegistry.getAllSkillDefinitions());
         String systemPrompt = new SystemPromptBuilder(agentDef, skillDefs, contextProviders).build();
+
+        // 4.1 注入用户记忆到 system prompt
+        if (memoryProvider != null) {
+            String memories = memoryProvider.apply(userId);
+            if (memories != null && !memories.isBlank()) {
+                systemPrompt = systemPrompt + "\n\n## User Memories\n\n" + memories;
+            }
+        }
 
         // 5. 收集 tools: 内置 Skill 的 ToolSchema + SkillDefinition 的描述 + (可选) ask_user + compact_context
         List<ToolSchema> tools = collectTools(loopCtx.getExecutionMode());

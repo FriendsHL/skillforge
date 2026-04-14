@@ -30,7 +30,15 @@ public class MemorySkill implements Skill {
 
     @Override
     public String getDescription() {
-        return "Manage user memories: save preferences, knowledge, and feedback for future reference";
+        return "Manage user memories for long-term learning and context persistence.\n\n"
+            + "Memory types:\n"
+            + "- preference: User preferences and working style (e.g., 'prefers concise output')\n"
+            + "- knowledge: Stable technical facts that won't change (e.g., 'project uses Spring Boot 3.2')\n"
+            + "- feedback: Corrections and confirmed approaches (e.g., 'don't mock DB in tests')\n"
+            + "- project: Time-sensitive project context that may expire (e.g., 'sprint ends Friday', 'currently refactoring auth module')\n"
+            + "- reference: External system pointers (e.g., 'bugs tracked in Linear INGEST')\n\n"
+            + "Do NOT save: code paths, git history, one-time debug steps, or info derivable from code.\n"
+            + "Actions: save, search, delete";
     }
 
     @Override
@@ -47,8 +55,8 @@ public class MemorySkill implements Skill {
         ));
         properties.put("type", Map.of(
                 "type", "string",
-                "description", "Memory type: preference, knowledge, or feedback (required for save)",
-                "enum", List.of("preference", "knowledge", "feedback")
+                "description", "Memory type (required for save)",
+                "enum", List.of("preference", "knowledge", "feedback", "project", "reference")
         ));
         properties.put("title", Map.of(
                 "type", "string",

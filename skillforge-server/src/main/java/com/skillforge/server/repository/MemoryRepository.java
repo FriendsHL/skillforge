@@ -12,4 +12,6 @@ public interface MemoryRepository extends JpaRepository<MemoryEntity, Long> {
     List<MemoryEntity> findByUserIdAndType(Long userId, String type);
 
     List<MemoryEntity> findByUserIdAndContentContaining(Long userId, String keyword);
+
+    List<MemoryEntity> findByUserIdOrderByUpdatedAtDesc(Long userId);
 }

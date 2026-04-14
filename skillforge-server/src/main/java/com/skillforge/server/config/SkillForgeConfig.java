@@ -144,16 +144,19 @@ public class SkillForgeConfig {
                                            PendingAskRegistry pendingAskRegistry,
                                            @Lazy ContextCompactorCallback compactorCallback,
                                            com.skillforge.core.engine.TraceCollector traceCollector,
-                                           com.skillforge.server.context.EnvironmentContextProvider environmentContextProvider) {
+                                           com.skillforge.server.context.EnvironmentContextProvider environmentContextProvider,
+                                           com.skillforge.server.hook.ActivityLogHook activityLogHook,
+                                           com.skillforge.server.service.MemoryService memoryService) {
         String defaultProvider = llmProperties.getDefaultProvider() != null
                 ? llmProperties.getDefaultProvider() : "claude";
         AgentLoopEngine engine = new AgentLoopEngine(llmProviderFactory, defaultProvider, skillRegistry,
-                Collections.emptyList(), List.of(new SafetySkillHook()),
+                Collections.emptyList(), List.of(new SafetySkillHook(), activityLogHook),
                 List.of(environmentContextProvider));
         engine.setBroadcaster(broadcaster);
         engine.setPendingAskRegistry(pendingAskRegistry);
         engine.setCompactorCallback(compactorCallback);
         engine.setTraceCollector(traceCollector);
+        engine.setMemoryProvider(userId -> memoryService.getMemoriesForPrompt(userId));
         return engine;
     }
 

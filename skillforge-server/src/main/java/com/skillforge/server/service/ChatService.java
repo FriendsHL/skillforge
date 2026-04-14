@@ -273,6 +273,7 @@ public class ChatService {
             // 更新 session runtime 状态 = idle
             // 取消退出也是 idle, 通过 step="cancelled" 标注, 避免引入新的 runtimeStatus 枚举值
             SessionEntity s = sessionService.getSession(sessionId);
+            s.setCompletedAt(java.time.Instant.now());
             s.setRuntimeStatus("idle");
             s.setRuntimeStep(wasCancelled ? "cancelled" : null);
             s.setRuntimeError(null);
@@ -294,6 +295,7 @@ public class ChatService {
             finalMessage = e.getMessage();
             try {
                 SessionEntity s = sessionService.getSession(sessionId);
+                s.setCompletedAt(java.time.Instant.now());
                 s.setRuntimeStatus("error");
                 s.setRuntimeStep(null);
                 s.setRuntimeError(e.getMessage());

@@ -97,6 +97,12 @@ public class SessionEntity {
      */
     private Instant lastUserMessageAt;
 
+    /** Loop 执行完毕的时间(正常/取消/异常都设置) */
+    private Instant completedAt;
+
+    /** 会话摘要已被 digest 提取的时间(用于增量记忆提取) */
+    private Instant digestExtractedAt;
+
     @CreatedDate
     private LocalDateTime createdAt;
 
@@ -288,6 +294,22 @@ public class SessionEntity {
 
     public void setTotalTokensReclaimed(long totalTokensReclaimed) {
         this.totalTokensReclaimed = totalTokensReclaimed;
+    }
+
+    public Instant getCompletedAt() {
+        return completedAt;
+    }
+
+    public void setCompletedAt(Instant completedAt) {
+        this.completedAt = completedAt;
+    }
+
+    public Instant getDigestExtractedAt() {
+        return digestExtractedAt;
+    }
+
+    public void setDigestExtractedAt(Instant digestExtractedAt) {
+        this.digestExtractedAt = digestExtractedAt;
     }
 
     public LocalDateTime getCreatedAt() {

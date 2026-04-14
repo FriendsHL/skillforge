@@ -11,6 +11,8 @@ const typeOptions = [
   { label: 'Preference', value: 'preference' },
   { label: 'Knowledge', value: 'knowledge' },
   { label: 'Feedback', value: 'feedback' },
+  { label: 'Project', value: 'project' },
+  { label: 'Reference', value: 'reference' },
 ];
 
 const TAG_COLORS = ['blue', 'green', 'orange', 'purple', 'cyan', 'magenta', 'gold'];
@@ -101,7 +103,12 @@ const MemoryList: React.FC = () => {
         {filteredMemories.map((m: any) => (
           <Card
             key={m.id}
-            title={m.title}
+            title={<span>{m.title} <Tag color={
+              m.type === 'preference' ? 'blue' :
+              m.type === 'feedback' ? 'orange' :
+              m.type === 'project' ? 'purple' :
+              m.type === 'reference' ? 'cyan' : 'green'
+            } style={{ marginLeft: 6, fontSize: 11 }}>{m.type}</Tag></span>}
             extra={
               <Space>
                 <Button icon={<EditOutlined />} size="small" onClick={() => openEdit(m)} />
@@ -147,6 +154,8 @@ const MemoryList: React.FC = () => {
     { key: 'preference', label: 'Preferences' },
     { key: 'knowledge', label: 'Knowledge' },
     { key: 'feedback', label: 'Feedback' },
+    { key: 'project', label: 'Project' },
+    { key: 'reference', label: 'Reference' },
   ];
 
   return (
