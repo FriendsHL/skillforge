@@ -66,6 +66,7 @@ public class AgentLoopEngine {
     private TraceCollector traceCollector;
     /** 可选:记忆提供者。接受 userId 返回记忆 markdown 字符串,拼接到 system prompt 末尾。 */
     private java.util.function.Function<Long, String> memoryProvider;
+    private java.util.function.Function<Long, String> claudeMdProvider;
     /** 默认 context window, 单位 token。从 AgentDefinition config 覆盖。 */
     private int defaultContextWindowTokens = 32000;
 
@@ -106,6 +107,10 @@ public class AgentLoopEngine {
 
     public void setMemoryProvider(java.util.function.Function<Long, String> memoryProvider) {
         this.memoryProvider = memoryProvider;
+    }
+
+    public void setClaudeMdProvider(java.util.function.Function<Long, String> claudeMdProvider) {
+        this.claudeMdProvider = claudeMdProvider;
     }
 
     public void setDefaultContextWindowTokens(int defaultContextWindowTokens) {
@@ -188,9 +193,10 @@ public class AgentLoopEngine {
         // 确保 context 引用是 effectively final（beforeLoop 可能替换了 context 对象）
         final LoopContext loopCtx = context;
 
-        // 4. 构建 system prompt
+        // 4. 构建 system prompt（注入全局 CLAUDE.md）
+        String claudeMd = claudeMdProvider != null ? claudeMdProvider.apply(userId) : null;
         List<SkillDefinition> skillDefs = new ArrayList<>(skillRegistry.getAllSkillDefinitions());
-        String systemPrompt = new SystemPromptBuilder(agentDef, skillDefs, contextProviders).build();
+        String systemPrompt = new SystemPromptBuilder(agentDef, skillDefs, contextProviders).build(claudeMd);
 
         // 4.1 注入用户记忆到 system prompt
         if (memoryProvider != null) {

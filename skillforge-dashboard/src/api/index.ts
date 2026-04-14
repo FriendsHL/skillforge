@@ -65,6 +65,11 @@ export const createMemory = (data: any) => api.post('/memories', data);
 export const updateMemory = (id: number, data: any) => api.put(`/memories/${id}`, data);
 export const deleteMemory = (id: number) => api.delete(`/memories/${id}`);
 
+// User Config API
+export const getClaudeMd = (userId: number) => api.get('/user-config/claude-md', { params: { userId } });
+export const saveClaudeMd = (userId: number, claudeMd: string) =>
+  api.put('/user-config/claude-md', { claudeMd }, { params: { userId } });
+
 // Dashboard API
 export const getDashboardOverview = () => api.get('/dashboard/overview');
 export const getDailyUsage = (days = 30) => api.get(`/dashboard/usage/daily?days=${days}`);

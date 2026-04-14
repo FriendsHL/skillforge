@@ -29,6 +29,12 @@ public class AgentDefinition {
 
     private Map<String, Object> config = new HashMap<>();
 
+    @JsonProperty("soul_prompt")
+    private String soulPrompt;
+
+    @JsonProperty("tools_prompt")
+    private String toolsPrompt;
+
     public AgentDefinition() {
     }
 
@@ -120,5 +126,21 @@ public class AgentDefinition {
 
     public void setConfig(Map<String, Object> config) {
         this.config = config;
+    }
+
+    public String getSoulPrompt() {
+        return soulPrompt;
+    }
+
+    public void setSoulPrompt(String soulPrompt) {
+        this.soulPrompt = soulPrompt;
+    }
+
+    public String getToolsPrompt() {
+        return toolsPrompt;
+    }
+
+    public void setToolsPrompt(String toolsPrompt) {
+        this.toolsPrompt = toolsPrompt;
     }
 }

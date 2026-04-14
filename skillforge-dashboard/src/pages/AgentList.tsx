@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { Table, Button, Modal, Form, Input, Select, Space, Popconfirm, Tag, message } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
-import { getAgents, createAgent, updateAgent, deleteAgent, getBuiltinSkills } from '../api';
+import { Table, Button, Modal, Form, Input, Select, Space, Popconfirm, Tag, Tabs, message } from 'antd';
+import { PlusOutlined, EditOutlined, DeleteOutlined, FileTextOutlined } from '@ant-design/icons';
+import { getAgents, createAgent, updateAgent, deleteAgent, getBuiltinSkills, getClaudeMd, saveClaudeMd } from '../api';
 
 const { TextArea } = Input;
 
@@ -39,6 +39,8 @@ const AgentList: React.FC = () => {
   const [editing, setEditing] = useState<any>(null);
   const [skillOptions, setSkillOptions] = useState<{ label: string; value: string }[]>([]);
   const [form] = Form.useForm();
+  const [claudeMdModalOpen, setClaudeMdModalOpen] = useState(false);
+  const [claudeMdContent, setClaudeMdContent] = useState('');
 
   const fetchAgents = () => {
     setLoading(true);
@@ -64,9 +66,14 @@ const AgentList: React.FC = () => {
       });
   };
 
+  const fetchClaudeMd = () => {
+    getClaudeMd(1).then((res) => setClaudeMdContent(res.data?.claudeMd ?? '')).catch(() => {});
+  };
+
   useEffect(() => {
     fetchAgents();
     fetchSkills();
+    fetchClaudeMd();
   }, []);
 
   const openCreate = () => {
@@ -112,6 +119,16 @@ const AgentList: React.FC = () => {
     await deleteAgent(id);
     message.success('Agent deleted');
     fetchAgents();
+  };
+
+  const handleSaveClaudeMd = async () => {
+    try {
+      await saveClaudeMd(1, claudeMdContent);
+      message.success('CLAUDE.md saved');
+      setClaudeMdModalOpen(false);
+    } catch {
+      message.error('Failed to save CLAUDE.md');
+    }
   };
 
   const columns = [
@@ -163,9 +180,14 @@ const AgentList: React.FC = () => {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
         <h2>Agents</h2>
-        <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-          Create Agent
-        </Button>
+        <Space>
+          <Button icon={<FileTextOutlined />} onClick={() => setClaudeMdModalOpen(true)}>
+            CLAUDE.md (Global)
+          </Button>
+          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+            Create Agent
+          </Button>
+        </Space>
       </div>
       <Table dataSource={agents} columns={columns} rowKey="id" loading={loading} />
 
@@ -208,8 +230,47 @@ const AgentList: React.FC = () => {
               ]}
             />
           </Form.Item>
-          <Form.Item name="systemPrompt" label="System Prompt">
-            <TextArea rows={6} />
+          <Form.Item label="Prompts">
+            <Tabs items={[
+              {
+                key: 'agent',
+                label: 'AGENT.md',
+                children: (
+                  <Form.Item name="systemPrompt" noStyle>
+                    <TextArea rows={10} placeholder="# Agent Core Instructions&#10;&#10;You are..." />
+                  </Form.Item>
+                ),
+              },
+              {
+                key: 'soul',
+                label: 'SOUL.md',
+                children: (
+                  <Form.Item name="soulPrompt" noStyle>
+                    <TextArea rows={10} placeholder="# Persona & Tone&#10;&#10;(Optional) Define personality..." />
+                  </Form.Item>
+                ),
+              },
+              {
+                key: 'tools',
+                label: 'TOOLS.md',
+                children: (
+                  <Form.Item name="toolsPrompt" noStyle>
+                    <TextArea rows={10} placeholder="# Tool Usage Rules&#10;&#10;(Optional) Custom tool rules..." />
+                  </Form.Item>
+                ),
+              },
+              {
+                key: 'memory',
+                label: 'MEMORY.md',
+                children: (
+                  <div style={{ color: '#999', padding: 16 }}>
+                    Memory is automatically injected from the Memory system.
+                    <br />
+                    <a href="/memories">Manage Memories &rarr;</a>
+                  </div>
+                ),
+              },
+            ]} />
           </Form.Item>
           <Form.Item
             name="skillIds"
@@ -226,6 +287,21 @@ const AgentList: React.FC = () => {
             />
           </Form.Item>
         </Form>
+      </Modal>
+
+      <Modal
+        title="CLAUDE.md — Global Rules (applies to all agents)"
+        open={claudeMdModalOpen}
+        onOk={handleSaveClaudeMd}
+        onCancel={() => setClaudeMdModalOpen(false)}
+        width={720}
+      >
+        <TextArea
+          rows={15}
+          value={claudeMdContent}
+          onChange={(e) => setClaudeMdContent(e.target.value)}
+          placeholder="# Global Rules&#10;&#10;Rules that apply to all agents..."
+        />
       </Modal>
     </div>
   );

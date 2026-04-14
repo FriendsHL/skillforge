@@ -25,26 +25,51 @@ public class SystemPromptBuilder {
 
     /**
      * 构建完整的系统提示词。
-     * 由三部分组成：Agent 的 systemPrompt、可用 Skill 列表、动态上下文。
+     * 拼接顺序：CLAUDE.md → AGENT.md → SOUL.md → TOOLS.md/默认Guidelines → Skills → Context
      */
     public String build() {
+        return build(null);
+    }
+
+    /**
+     * 构建完整的系统提示词，支持注入全局 CLAUDE.md 内容。
+     *
+     * @param claudeMd 全局 CLAUDE.md 内容（可为 null）
+     */
+    public String build(String claudeMd) {
         StringBuilder sb = new StringBuilder();
 
-        // 1. Agent system prompt
-        if (agentDefinition.getSystemPrompt() != null && !agentDefinition.getSystemPrompt().isBlank()) {
-            sb.append(agentDefinition.getSystemPrompt());
-            sb.append("\n\n");
+        // 1. CLAUDE.md — 全局规则
+        if (claudeMd != null && !claudeMd.isBlank()) {
+            sb.append(claudeMd.strip()).append("\n\n");
         }
 
-        // 2. Tool usage guidelines
-        sb.append("## Tool Usage Guidelines\n\n");
-        sb.append("- Use FileRead instead of running `cat` or `head` via Bash\n");
-        sb.append("- Use Glob instead of running `find` or `ls` via Bash\n");
-        sb.append("- Use Grep instead of running `grep` or `rg` via Bash\n");
-        sb.append("- Use FileEdit for modifying existing files instead of FileWrite\n");
-        sb.append("- Always read a file before editing or overwriting it\n");
-        sb.append("- Use absolute file paths whenever possible\n");
-        sb.append("\n");
+        // 2. AGENT.md — 核心指令（现有 systemPrompt）
+        String agentPrompt = agentDefinition.getSystemPrompt();
+        if (agentPrompt != null && !agentPrompt.isBlank()) {
+            sb.append(agentPrompt.strip()).append("\n\n");
+        }
+
+        // 3. SOUL.md — 人格/语气
+        String soulPrompt = agentDefinition.getSoulPrompt();
+        if (soulPrompt != null && !soulPrompt.isBlank()) {
+            sb.append(soulPrompt.strip()).append("\n\n");
+        }
+
+        // 4. TOOLS.md — 工具经验（有则替代默认 Guidelines）
+        String toolsPrompt = agentDefinition.getToolsPrompt();
+        if (toolsPrompt != null && !toolsPrompt.isBlank()) {
+            sb.append(toolsPrompt.strip()).append("\n\n");
+        } else {
+            sb.append("## Tool Usage Guidelines\n\n");
+            sb.append("- Use FileRead instead of running `cat` or `head` via Bash\n");
+            sb.append("- Use Glob instead of running `find` or `ls` via Bash\n");
+            sb.append("- Use Grep instead of running `grep` or `rg` via Bash\n");
+            sb.append("- Use FileEdit for modifying existing files instead of FileWrite\n");
+            sb.append("- Always read a file before editing or overwriting it\n");
+            sb.append("- Use absolute file paths whenever possible\n");
+            sb.append("\n");
+        }
 
         // 3. Available skills
         if (skillDefinitions != null && !skillDefinitions.isEmpty()) {

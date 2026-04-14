@@ -39,6 +39,12 @@ public class AgentEntity {
     @Column(columnDefinition = "TEXT")
     private String config;
 
+    @Column(columnDefinition = "TEXT")
+    private String soulPrompt;
+
+    @Column(columnDefinition = "TEXT")
+    private String toolsPrompt;
+
     private Long ownerId;
 
     private boolean isPublic = false;
@@ -112,6 +118,22 @@ public class AgentEntity {
 
     public void setConfig(String config) {
         this.config = config;
+    }
+
+    public String getSoulPrompt() {
+        return soulPrompt;
+    }
+
+    public void setSoulPrompt(String soulPrompt) {
+        this.soulPrompt = soulPrompt;
+    }
+
+    public String getToolsPrompt() {
+        return toolsPrompt;
+    }
+
+    public void setToolsPrompt(String toolsPrompt) {
+        this.toolsPrompt = toolsPrompt;
     }
 
     public Long getOwnerId() {

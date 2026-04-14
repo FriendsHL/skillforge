@@ -25,6 +25,7 @@ import com.skillforge.server.service.AgentService;
 import com.skillforge.server.service.ChatService;
 import com.skillforge.server.service.MemoryService;
 import com.skillforge.server.service.SessionService;
+import com.skillforge.server.service.UserConfigService;
 import com.skillforge.server.subagent.SubAgentRegistry;
 import org.springframework.context.annotation.Lazy;
 import org.slf4j.Logger;
@@ -146,7 +147,8 @@ public class SkillForgeConfig {
                                            com.skillforge.core.engine.TraceCollector traceCollector,
                                            com.skillforge.server.context.EnvironmentContextProvider environmentContextProvider,
                                            com.skillforge.server.hook.ActivityLogHook activityLogHook,
-                                           com.skillforge.server.service.MemoryService memoryService) {
+                                           com.skillforge.server.service.MemoryService memoryService,
+                           UserConfigService userConfigService) {
         String defaultProvider = llmProperties.getDefaultProvider() != null
                 ? llmProperties.getDefaultProvider() : "claude";
         AgentLoopEngine engine = new AgentLoopEngine(llmProviderFactory, defaultProvider, skillRegistry,
@@ -157,6 +159,7 @@ public class SkillForgeConfig {
         engine.setCompactorCallback(compactorCallback);
         engine.setTraceCollector(traceCollector);
         engine.setMemoryProvider(userId -> memoryService.getMemoriesForPrompt(userId));
+        engine.setClaudeMdProvider(userId -> userConfigService.getClaudeMd(userId));
         return engine;
     }
 

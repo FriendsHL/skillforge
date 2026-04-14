@@ -41,6 +41,8 @@ public class AgentService {
         existing.setSystemPrompt(updated.getSystemPrompt());
         existing.setSkillIds(updated.getSkillIds());
         existing.setConfig(updated.getConfig());
+        existing.setSoulPrompt(updated.getSoulPrompt());
+        existing.setToolsPrompt(updated.getToolsPrompt());
         existing.setOwnerId(updated.getOwnerId());
         existing.setPublic(updated.isPublic());
         existing.setStatus(updated.getStatus());
@@ -80,6 +82,8 @@ public class AgentService {
         def.setDescription(entity.getDescription());
         def.setModelId(entity.getModelId());
         def.setSystemPrompt(entity.getSystemPrompt());
+        def.setSoulPrompt(entity.getSoulPrompt());
+        def.setToolsPrompt(entity.getToolsPrompt());
 
         // 解析 skillIds JSON
         if (entity.getSkillIds() != null && !entity.getSkillIds().isBlank()) {

@@ -87,6 +87,8 @@ public class AgentYamlMapper {
         if (m.get("description") != null) a.setDescription(m.get("description").toString());
         if (m.get("modelId") != null) a.setModelId(m.get("modelId").toString());
         if (m.get("systemPrompt") != null) a.setSystemPrompt(m.get("systemPrompt").toString());
+        if (m.get("soulPrompt") != null) a.setSoulPrompt(m.get("soulPrompt").toString());
+        if (m.get("toolsPrompt") != null) a.setToolsPrompt(m.get("toolsPrompt").toString());
         if (m.get("executionMode") != null) a.setExecutionMode(m.get("executionMode").toString());
         Object pub = m.get("public");
         if (pub instanceof Boolean) a.setPublic((Boolean) pub);
@@ -133,6 +135,8 @@ public class AgentYamlMapper {
         if (entity.getExecutionMode() != null) m.put("executionMode", entity.getExecutionMode());
         m.put("public", entity.isPublic());
         if (entity.getSystemPrompt() != null) m.put("systemPrompt", entity.getSystemPrompt());
+        if (entity.getSoulPrompt() != null) m.put("soulPrompt", entity.getSoulPrompt());
+        if (entity.getToolsPrompt() != null) m.put("toolsPrompt", entity.getToolsPrompt());
 
         List<String> skills = new ArrayList<>();
         String skillIdsJson = entity.getSkillIds();
