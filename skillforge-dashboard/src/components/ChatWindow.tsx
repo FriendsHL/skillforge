@@ -5,6 +5,42 @@ import ToolCallTimeline from './ToolCallTimeline';
 import MarkdownRenderer from './MarkdownRenderer';
 
 /**
+ * 节流版 MarkdownRenderer：streaming 阶段每 150ms 才更新渲染一次，
+ * 避免高频 delta 触发昂贵的 markdown 解析 + Prism 高亮导致卡顿/不渲染。
+ */
+const ThrottledMarkdown: React.FC<{ content: string }> = ({ content }) => {
+  const [rendered, setRendered] = useState(content);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const latestRef = useRef(content);
+  latestRef.current = content;
+
+  useEffect(() => {
+    if (timerRef.current === null) {
+      // 立即渲染第一次
+      setRendered(content);
+      timerRef.current = setTimeout(() => {
+        timerRef.current = null;
+        // flush 最新内容
+        setRendered(latestRef.current);
+      }, 150);
+    }
+    return () => {};
+  }, [content]);
+
+  // 组件卸载或 content 清空时立即 flush
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+    };
+  }, []);
+
+  return <MarkdownRenderer content={rendered} />;
+};
+
+/**
  * 输入框作为独立组件:自己持有 input state。
  * 这样打字时只有 ChatInput 自己重渲染,不会触发父级 ChatWindow 重新跑
  * messages.map → MarkdownRenderer,从根本上消除"打字卡顿"。
@@ -142,7 +178,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
                 wordBreak: 'break-word',
               }}
             >
-              <MarkdownRenderer content={streamingText} />
+              <ThrottledMarkdown content={streamingText} />
               <span style={{ color: '#999', fontSize: 12, marginLeft: 4 }}>▍</span>
             </div>
           </div>
