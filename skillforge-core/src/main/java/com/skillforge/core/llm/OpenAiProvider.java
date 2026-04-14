@@ -428,6 +428,15 @@ public class OpenAiProvider implements LlmProvider {
                     fullText.append(text);
                     handler.onText(text);
                 }
+                // reasoning_content delta (Qwen 3.5+ / DeepSeek thinking mode)
+                // Stream thinking text to frontend so user sees activity, but don't
+                // append to fullText (thinking is not part of the final response)
+                if (delta.has("reasoning_content") && !delta.path("reasoning_content").isNull()) {
+                    String reasoning = delta.path("reasoning_content").asText();
+                    if (reasoning != null && !reasoning.isEmpty()) {
+                        handler.onText(reasoning);
+                    }
+                }
 
                 // tool_calls delta (incremental)
                 JsonNode toolCallsDelta = delta.path("tool_calls");
