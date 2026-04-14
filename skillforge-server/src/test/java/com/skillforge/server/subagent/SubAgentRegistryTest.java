@@ -92,7 +92,7 @@ class SubAgentRegistryTest {
             pendingStore.put(e.getId(), e);
             return e;
         });
-        when(pendingRepository.findByParentSessionIdOrderByIdAsc(anyString())).thenAnswer(inv -> {
+        when(pendingRepository.findByParentSessionIdAndStatusIsNullOrderByIdAsc(anyString())).thenAnswer(inv -> {
             String pid = inv.getArgument(0);
             List<SubAgentPendingResultEntity> out = new ArrayList<>();
             for (SubAgentPendingResultEntity e : pendingStore.values()) {
