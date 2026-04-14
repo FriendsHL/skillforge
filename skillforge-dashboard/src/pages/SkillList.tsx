@@ -266,7 +266,7 @@ const SkillList: React.FC = () => {
                 label: 'SKILL.md',
                 children: (
                   <pre style={{ maxHeight: 500, overflow: 'auto', fontSize: 13, whiteSpace: 'pre-wrap', background: '#fafafa', padding: 16, borderRadius: 6 }}>
-                    {detail.skillMd || 'No content'}
+                    {detail.skillMd || detail.promptContent || 'No content'}
                   </pre>
                 ),
               },
