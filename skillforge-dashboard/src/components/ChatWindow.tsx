@@ -5,37 +5,28 @@ import ToolCallTimeline from './ToolCallTimeline';
 import MarkdownRenderer from './MarkdownRenderer';
 
 /**
- * 节流版 MarkdownRenderer：streaming 阶段每 150ms 才更新渲染一次，
- * 避免高频 delta 触发昂贵的 markdown 解析 + Prism 高亮导致卡顿/不渲染。
+ * 节流版 MarkdownRenderer：每 200ms 刷新一次渲染，
+ * 避免高频 delta 触发昂贵的 markdown 解析 + Prism 高亮。
  */
 const ThrottledMarkdown: React.FC<{ content: string }> = ({ content }) => {
   const [rendered, setRendered] = useState(content);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const latestRef = useRef(content);
   latestRef.current = content;
 
   useEffect(() => {
-    if (timerRef.current === null) {
-      // 立即渲染第一次
-      setRendered(content);
-      timerRef.current = setTimeout(() => {
-        timerRef.current = null;
-        // flush 最新内容
-        setRendered(latestRef.current);
-      }, 150);
-    }
-    return () => {};
-  }, [content]);
-
-  // 组件卸载或 content 清空时立即 flush
-  useEffect(() => {
-    return () => {
-      if (timerRef.current) {
-        clearTimeout(timerRef.current);
-        timerRef.current = null;
-      }
-    };
+    // 定时刷新：每 200ms 把最新内容同步到渲染状态
+    const interval = setInterval(() => {
+      setRendered(latestRef.current);
+    }, 200);
+    return () => clearInterval(interval);
   }, []);
+
+  // content 首次有值时立即渲染（不等 200ms）
+  useEffect(() => {
+    if (content && !rendered) {
+      setRendered(content);
+    }
+  }, [content, rendered]);
 
   return <MarkdownRenderer content={rendered} />;
 };

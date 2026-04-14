@@ -326,10 +326,12 @@ const Chat: React.FC = () => {
         delete next[evt.toolUseId];
         return next;
       });
-    } else if (evt.type === 'assistant_delta' || evt.type === 'text_delta') {
-      // assistant_delta (legacy) 和 text_delta (new) 语义一致, 都累加到 streamingText
-      const chunk = evt.type === 'assistant_delta' ? (evt.text ?? '') : (evt.delta ?? '');
-      setStreamingText((prev) => prev + chunk);
+    } else if (evt.type === 'text_delta') {
+      // 只处理 text_delta（忽略 assistant_delta 避免重复累加）
+      const chunk = evt.delta ?? '';
+      if (chunk) {
+        setStreamingText((prev) => prev + chunk);
+      }
     } else if (evt.type === 'tool_use_delta') {
       // LLM 正在流式组装 tool_use 的 input JSON
       setStreamingToolInputs((prev) => {
