@@ -228,6 +228,7 @@ public class AgentLoopEngine {
         boolean cancelled = false;
         boolean budgetExceeded = false;
         boolean durationExceeded = false;
+        int maxTokensRetryCount = 0;
         while (loopCtx.getLoopCount() < loopCtx.getMaxLoops()) {
             // 取消检查(每次迭代开头)
             if (loopCtx.isCancelled()) {
@@ -362,6 +363,19 @@ public class AgentLoopEngine {
                     }
                 }
             }
+            // Stop hook: approaching token budget
+            if (loopCtx.getTotalInputTokens() > maxInputTokens * 0.8) {
+                promptSuffix.append("\n\n[NOTICE] You have consumed "
+                        + loopCtx.getTotalInputTokens() + "/" + maxInputTokens
+                        + " input tokens. Consider wrapping up soon.");
+            }
+            // Stop hook: approaching max loops
+            if (loopCtx.getLoopCount() > loopCtx.getMaxLoops() * 0.8) {
+                promptSuffix.append("\n\n[NOTICE] You are at iteration "
+                        + (loopCtx.getLoopCount() + 1) + "/" + loopCtx.getMaxLoops()
+                        + ". Start wrapping up your work.");
+            }
+
             // P-5: loop ending reminder — only once at remaining==2
             int remaining = loopCtx.getMaxLoops() - loopCtx.getLoopCount();
             if (remaining == 2) {
@@ -379,6 +393,34 @@ public class AgentLoopEngine {
             request.setModel(actualModelId);
             request.setMaxTokens(agentDef.getMaxTokens());
             request.setTemperature(agentDef.getTemperature());
+
+            // Preemptive compaction: last-resort check before LLM call
+            if (compactorCallback != null && loopCtx.getConsecutiveCompactFailures() < 3) {
+                int estTokens = TokenEstimator.estimate(messages);
+                double ratio = contextWindowTokens > 0 ? (double) estTokens / contextWindowTokens : 0;
+                if (ratio > 0.85) {
+                    log.info("Preemptive compaction triggered: ratio={}, estTokens={}, window={}",
+                            String.format("%.2f", ratio), estTokens, contextWindowTokens);
+                    try {
+                        CompactCallbackResult cr = compactorCallback.compactFull(
+                                loopCtx.getSessionId(), messages, "engine-preemptive",
+                                String.format("ratio %.2f > 0.85 before LLM call", ratio));
+                        if (cr != null && cr.performed) {
+                            messages = cr.messages;
+                            loopCtx.setMessages(messages);
+                            loopCtx.resetCompactFailures();
+                            request.setMessages(messages);
+                            log.info("Preemptive compaction done: reclaimed {} tokens", cr.tokensReclaimed);
+                        } else {
+                            loopCtx.incrementCompactFailures();
+                        }
+                    } catch (Exception e) {
+                        loopCtx.incrementCompactFailures();
+                        log.warn("Preemptive compaction failed (consecutive failures: {}): {}",
+                                loopCtx.getConsecutiveCompactFailures(), e.getMessage());
+                    }
+                }
+            }
 
             // b. 流式调用 LLM,文本增量通过 broadcaster.assistantDelta 推到前端
             final long llmCallStart = System.currentTimeMillis();
@@ -479,6 +521,43 @@ public class AgentLoopEngine {
                 iterOutputTokens = response.getUsage().getOutputTokens();
                 loopCtx.addInputTokens(iterInputTokens);
                 loopCtx.addOutputTokens(iterOutputTokens);
+            }
+
+            // max_tokens recovery: detect truncated output and retry
+            String stopReason = response.getStopReason();
+            if ("length".equals(stopReason) || "max_tokens".equals(stopReason)) {
+                maxTokensRetryCount++;
+                if (maxTokensRetryCount <= 2) {
+                    if (maxTokensRetryCount == 1) {
+                        // First attempt: escalate max_output_tokens
+                        int escalatedMaxTokens = Math.min(agentDef.getMaxTokens() * 4, 16384);
+                        log.info("max_tokens hit, escalating to {} (attempt {})", escalatedMaxTokens, maxTokensRetryCount);
+                        request.setMaxTokens(escalatedMaxTokens);
+                        continue; // retry — loopCount not incremented
+                    } else {
+                        // Second attempt: compact + retry
+                        log.info("max_tokens hit again, trying compact + retry (attempt {})", maxTokensRetryCount);
+                        if (compactorCallback != null) {
+                            try {
+                                CompactCallbackResult cr = compactorCallback.compactFull(
+                                        loopCtx.getSessionId(), messages, "engine-max-tokens",
+                                        "max_tokens recovery: output truncated");
+                                if (cr != null && cr.performed) {
+                                    messages = cr.messages;
+                                    loopCtx.setMessages(messages);
+                                    continue; // retry
+                                }
+                            } catch (Exception e) {
+                                log.warn("max_tokens compact failed: {}", e.getMessage());
+                            }
+                        }
+                    }
+                }
+                // Exhausted retries or compact failed — fall through to normal processing
+                log.warn("max_tokens recovery exhausted after {} attempts", maxTokensRetryCount);
+            } else {
+                // Reset counter on successful non-truncated response
+                maxTokensRetryCount = 0;
             }
 
             // Trace: LLM_CALL span
