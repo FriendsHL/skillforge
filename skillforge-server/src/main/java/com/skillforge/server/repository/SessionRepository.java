@@ -31,4 +31,10 @@ public interface SessionRepository extends JpaRepository<SessionEntity, String> 
     List<SessionEntity> findByLastUserMessageAtIsNull();
 
     List<SessionEntity> findByCompletedAtIsNotNullAndDigestExtractedAtIsNull();
+
+    List<SessionEntity> findByCollabRunId(String collabRunId);
+
+    long countByCollabRunId(String collabRunId);
+
+    List<SessionEntity> findByCollabRunIdAndRuntimeStatus(String collabRunId, String runtimeStatus);
 }

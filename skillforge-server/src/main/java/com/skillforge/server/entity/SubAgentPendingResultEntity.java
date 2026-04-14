@@ -30,6 +30,25 @@ public class SubAgentPendingResultEntity {
     @Column(columnDefinition = "CLOB", nullable = false)
     private String payload;
 
+    /** Monotonic sequence number per target session, for ordering */
+    private Long seqNo;
+
+    /** UUID for dedup */
+    @Column(length = 36)
+    private String messageId;
+
+    /** Generalized target session (for peer messages in Phase 2). Same as parentSessionId for now. */
+    @Column(length = 36)
+    private String targetSessionId;
+
+    /** Retry count for delivery failures */
+    @Column(columnDefinition = "INT DEFAULT 0")
+    private int retryCount = 0;
+
+    /** null = pending (normal), DELIVERY_FAILED = max retries exceeded */
+    @Column(length = 16)
+    private String status;
+
     private Instant createdAt;
 
     public SubAgentPendingResultEntity() {
@@ -57,6 +76,46 @@ public class SubAgentPendingResultEntity {
 
     public void setPayload(String payload) {
         this.payload = payload;
+    }
+
+    public Long getSeqNo() {
+        return seqNo;
+    }
+
+    public void setSeqNo(Long seqNo) {
+        this.seqNo = seqNo;
+    }
+
+    public String getMessageId() {
+        return messageId;
+    }
+
+    public void setMessageId(String messageId) {
+        this.messageId = messageId;
+    }
+
+    public String getTargetSessionId() {
+        return targetSessionId;
+    }
+
+    public void setTargetSessionId(String targetSessionId) {
+        this.targetSessionId = targetSessionId;
+    }
+
+    public int getRetryCount() {
+        return retryCount;
+    }
+
+    public void setRetryCount(int retryCount) {
+        this.retryCount = retryCount;
+    }
+
+    public String getStatus() {
+        return status;
+    }
+
+    public void setStatus(String status) {
+        this.status = status;
     }
 
     public Instant getCreatedAt() {

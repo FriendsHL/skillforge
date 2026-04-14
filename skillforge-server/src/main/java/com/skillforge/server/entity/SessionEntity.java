@@ -71,6 +71,14 @@ public class SessionEntity {
     @Column(length = 36)
     private String subAgentRunId;
 
+    /** 所属的多 Agent 协作运行 ID(nullable, 只有参与协作的 session 才有) */
+    @Column(length = 36)
+    private String collabRunId;
+
+    /** If true, child agent gets stripped-down system prompt (no SOUL.md, TOOLS.md, memory) */
+    @Column(columnDefinition = "BOOLEAN DEFAULT FALSE")
+    private boolean lightContext = false;
+
     /** 迄今为止执行过的 light 压缩次数 */
     @Column(columnDefinition = "INT DEFAULT 0")
     private int lightCompactCount = 0;
@@ -246,6 +254,22 @@ public class SessionEntity {
 
     public void setSubAgentRunId(String subAgentRunId) {
         this.subAgentRunId = subAgentRunId;
+    }
+
+    public String getCollabRunId() {
+        return collabRunId;
+    }
+
+    public void setCollabRunId(String collabRunId) {
+        this.collabRunId = collabRunId;
+    }
+
+    public boolean isLightContext() {
+        return lightContext;
+    }
+
+    public void setLightContext(boolean lightContext) {
+        this.lightContext = lightContext;
     }
 
     public int getLightCompactCount() {

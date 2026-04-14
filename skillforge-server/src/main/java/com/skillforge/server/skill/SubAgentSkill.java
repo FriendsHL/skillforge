@@ -53,9 +53,10 @@ public class SubAgentSkill implements Skill {
 
     @Override
     public String getDescription() {
-        return "Dispatch a task to another agent asynchronously. The child agent runs in its own session; "
-                + "when it finishes, its result is automatically delivered to you as a new user message in your next turn. "
-                + "Do NOT poll — the result arrives on its own. Use 'list' to see currently dispatched runs.";
+        return "Dispatch a single one-off task to another agent asynchronously. "
+                + "Use this for a simple parent→child delegation. For parallel multi-agent orchestration with team coordination, use TeamCreate instead. "
+                + "The child agent runs in its own session; its result is automatically delivered as a user message. "
+                + "Do NOT poll — the result arrives on its own. Use 'list' to see dispatched runs.";
     }
 
     @Override

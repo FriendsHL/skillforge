@@ -1,6 +1,6 @@
 # SkillForge
 
-Server-side Agentic Assistant Platform with configurable Skills and Agents.
+Server-side Agentic Assistant Platform with configurable Skills, Agents, and Multi-Agent Collaboration.
 
 ## Architecture
 
@@ -12,8 +12,8 @@ Server-side Agentic Assistant Platform with configurable Skills and Agents.
 │   REST API   │   WebSocket (per-session + per-user)  │
 ├──────────────────────────────────────────────────────┤
 │              Spring Boot Server                       │
-│   Chat / Agent / Skill / SubAgent / Compaction       │
-│   Traces (LLM Observability)                         │
+│   Chat / Agent / Skill / Memory / Compaction         │
+│   SubAgent / Multi-Agent Collab / Traces             │
 ├──────────────────────────────────────────────────────┤
 │              Agent Loop Engine                        │
 │   Message → LLM (streaming) → tool_use → Skill →     │
@@ -24,6 +24,7 @@ Server-side Agentic Assistant Platform with configurable Skills and Agents.
 │  Claude      │ System Tools │ Session Mgmt           │
 │  OpenAI*     │ System Skills│ SafetyHook             │
 │  DeepSeek    │ User Skills  │ AskUser / Compact      │
+│  Bailian     │ Team Collab  │ Memory System          │
 ├──────────────┴──────────────┴────────────────────────┤
 │              Storage                                  │
 │   H2 (dev) / MySQL (prod)   │   Redis (TODO)         │
@@ -55,10 +56,12 @@ skillforge/
 │                            #   Glob, Grep, Memory, SubAgent
 ├── skillforge-server       # Spring Boot server: REST API, JPA entities, services,
 │                            #   WebSocket handlers, Traces API, SystemSkillLoader,
+│                            #   Multi-Agent Collaboration, Memory System,
 │                            #   EnvironmentContextProvider, CompactionService
 ├── skillforge-dashboard    # React + Ant Design dashboard: chat, sessions (live),
 │                            #   agents, skills (unified), traces (Langfuse-style),
-│                            #   session replay, memories, model usage
+│                            #   session replay, memories, model usage,
+│                            #   collab run panel, peer message feed
 ├── skillforge-cli          # CLI client: picocli + OkHttp, agent YAML import/export
 └── system-skills/          # System Skills (file-based, non-deletable)
     ├── browser/            #   Browser automation via agent-browser CLI
@@ -69,43 +72,138 @@ skillforge/
 
 ## Features
 
-What works today, end-to-end verified:
+### Core Agent Loop
 
 - **Agentic loop** with multi-provider LLMs and a built-in skill system, running every chat session asynchronously on a `chatLoopExecutor` thread pool with a 429 backpressure path.
 - **Streaming chat** — assistant text and tool_use input JSON stream token-by-token over WebSocket; the dashboard renders deltas live and a tool card shows the partial JSON as the LLM is still emitting it.
 - **Loop cancel** — `POST /cancel` flips a flag the engine checks at iteration boundaries; the dashboard's running banner shows a `✕` button.
 - **Ask mode vs Auto mode** — agents can be configured per-session; in ask mode the engine injects an `ask_user` tool the LLM can call to halt and request a multiple-choice decision; in auto mode that tool is suppressed.
-- **SubAgent async dispatch** — an agent can call `compact_context` and `subagent dispatch` tools to spawn child sessions; child runs on its own thread, results auto-deliver back to the parent as a synthetic user message that wakes the parent loop. Persistent across server restarts (`t_subagent_run` table + startup recovery + scheduled sweeper for orphaned runs).
-- **Context compaction (light + full, JVM-GC style)** — `light` is rule-based and free (truncate large tool outputs, dedup duplicate searches, fold failure retries); `full` is LLM-summarization that preserves tool_use ↔ tool_result pairing and replaces older history with a single synthetic summary message. Triggered automatically by token-budget safety net at iteration top, by an idle-gap check on `chatAsync` entry, by the LLM via the built-in `compact_context` tool, or manually from the dashboard. All events recorded in `t_compaction_event` for audit.
-- **Session list realtime refresh** — a per-user `/ws/users/{userId}` channel streams session state changes; the list shows a live status dot and updates without page reload.
-- **Endpoint ownership scoping** — every session-keyed REST endpoint validates `userId` against the session owner (400 / 403 / 404 differentiated).
-- **Skill marketplace integration** — install skills from [ClawHub](https://clawhub.ai) directly via the `ClawHub` skill or the dashboard's Skills page.
+
+### Agent Configuration (Multi-file)
+
+Agents support a multi-file configuration model inspired by Claude Code and OpenClaw:
+
+| File | Scope | Purpose |
+|------|-------|---------|
+| **CLAUDE.md** | Global (all agents) | Global rules and guidelines |
+| **AGENT.md** | Per-agent (`systemPrompt`) | Core agent instructions |
+| **SOUL.md** | Per-agent (`soulPrompt`) | Persona & tone (optional) |
+| **TOOLS.md** | Per-agent (`toolsPrompt`) | Custom tool usage rules (optional) |
+| **MEMORY.md** | Per-agent | Auto-injected from Memory system |
+
+### SubAgent Orchestration (Tree Topology)
+
+Single parent→child task delegation:
+
+- An agent can call `SubAgent dispatch` to spawn a child session that runs asynchronously
+- Child results auto-deliver back to the parent as a synthetic user message
+- Persistent across server restarts (`t_subagent_run` table + startup recovery + scheduled sweeper)
+- Depth limit (3) + concurrent children limit (5 per parent)
+
+### Multi-Agent Collaboration (Network Topology)
+
+Full team-based collaboration where a leader dispatches multiple agents that can communicate with each other:
+
+| Tool | Description |
+|------|-------------|
+| **TeamCreate** | Spawn a team member (fire-and-forget, result auto-delivers) |
+| **TeamSend** | Send a message to a peer by handle, to "parent", or "broadcast" (leader-only) |
+| **TeamList** | List all team members with status |
+| **TeamKill** | Cancel a specific member or the entire collaboration run |
+
+Key capabilities:
+- **CollabRun** — groups all sessions in one collaboration with shared collabRunId
+- **AgentRoster** — in-memory handle→sessionId mapping with DB-backed recovery
+- **Adjacency policy** — agents can only message parent, children, or siblings
+- **Depth-aware tool filtering** — leaf agents cannot spawn further agents
+- **Cancel cascade** — killing the leader cancels all members
+- **lightContext** — optional stripped-down system prompt for child agents (saves ~30-50% tokens)
+- **Delivery retry** — messageId dedup, seqNo ordering, max 3 retries before DELIVERY_FAILED
+- **Stale run sweeper** — auto-completes collab runs with no activity for 30+ minutes
+
+### Memory System
+
+Persistent memory across sessions, scoped per user:
+
+- **5 memory types**: preference, knowledge, feedback, project, reference
+- **Type-slotted injection** into system prompt (preference/feedback: 10 each, others: 10 shared, 8000 char total cap)
+- **TF-IDF search ranking** with 30-day recency decay + recall frequency boost
+- **Auto-capture** via ActivityLogHook (SkillHook) — records every tool call
+- **Daily extraction** (@Scheduled cron 3am) — extracts memories from completed sessions
+- **Consolidation** — dedup by title + stale marking (30 days no recall + recallCount < 3)
+
+### Context Compaction (JVM-GC Style)
+
+- **Light** — rule-based (truncate large outputs, dedup searches, fold failures) — free
+- **Full** — LLM-summarization preserving tool_use ↔ tool_result pairing
+- 6 trigger sources: token-budget safety net, idle-gap check, LLM tool call, engine auto-trigger, manual API, waste detection
+- All events recorded in `t_compaction_event` for audit
+
+### Observability
+
+**Traces (Langfuse-style)** — every agent loop recorded as structured trace with hierarchical spans:
+
+```
+AGENT_LOOP (root span)
+├── LLM_CALL (iteration 0 — tokens + duration)
+├── TOOL_CALL (Bash — input, output, duration)
+├── LLM_CALL (iteration 1)
+├── ASK_USER (blocked waiting for user)
+├── COMPACT (context compaction)
+└── LLM_CALL (final iteration)
+```
+
+**Session Replay** — restructures flat message history into Turns → Iterations → Tool calls with timing.
+
+### Safety & Anti-runaway
+
+**SafetySkillHook**:
+- Blocks dangerous bash commands (`rm -rf /`, `sudo`, `mkfs`, `shutdown`, `curl|sh`, fork bombs)
+- Blocks `clawhub install` / `skillhub install` without user confirmation
+- Blocks writes to system directories and sensitive files
+- Normalizes paths to prevent traversal attacks
+
+**Agent Loop Guardrails**:
+- Token budget (500K), duration limit (600s), max iterations (25)
+- Tool execution timeout (120s per batch), LLM stream timeout (300s)
+- Tool frequency warning (≥8 calls), no-progress detection (dual hash)
+- Waste detection, compact circuit breaker (3 failures), tool result truncation (40K chars)
 
 ## Quick Start
 
 ### Prerequisites
 - JDK 17+
 - Maven 3.8+
-- An LLM API key (DeepSeek, OpenAI, Claude, etc.)
+- Node.js 18+ (for dashboard development)
+- An LLM API key (DeepSeek, DashScope/Bailian, OpenAI, Claude, etc.)
 
-### Run
+### Build & Run
 
 ```bash
 # Set your API key
-export DEEPSEEK_API_KEY=sk-your-key-here
+export DASHSCOPE_API_KEY=sk-your-key-here
 
-# Build
-mvn install -DskipTests
+# Build all modules
+mvn clean package -DskipTests
 
-# Start server
-mvn spring-boot:run -pl skillforge-server
+# Start server (MUST run from project root for correct H2 data path)
+cd /path/to/skillforge
+java -jar skillforge-server/target/skillforge-server-1.0.0-SNAPSHOT.jar
 ```
 
-Server starts at `http://localhost:8080`.
+Server starts at `http://localhost:8080`. Dashboard at the same URL.
 
-> The Browser skill uses `npx agent-browser` CLI (not Playwright Java API),
-> so it works with both `mvn spring-boot:run` and `java -jar` deployment.
-> Make sure `npx` is available in the server's PATH.
+> **Important**: Always start the server from the project root directory.
+> The H2 database uses a relative path (`./data/skillforge`), so the working
+> directory determines where your data is stored.
+
+### Dashboard Development
+
+```bash
+cd skillforge-dashboard
+npm install
+npm run dev    # Vite dev server at http://localhost:5173
+```
 
 ### Configuration
 
@@ -114,238 +212,167 @@ Edit `skillforge-server/src/main/resources/application.yml`:
 ```yaml
 skillforge:
   llm:
-    default-provider: openai    # or "claude"
+    default-provider: bailian    # or "claude", "openai"
     providers:
-      openai:
-        api-key: ${DEEPSEEK_API_KEY:}
-        base-url: https://api.deepseek.com    # or any OpenAI-compatible endpoint
-        model: deepseek-chat
+      bailian:
+        api-key: ${DASHSCOPE_API_KEY:}
+        base-url: https://coding.dashscope.aliyuncs.com
+        model: qwen3.5-plus
       claude:
         api-key: ${ANTHROPIC_API_KEY:}
         base-url: https://api.anthropic.com
         model: claude-sonnet-4-20250514
+      openai:
+        api-key: ${DEEPSEEK_API_KEY:}
+        base-url: https://api.deepseek.com    # any OpenAI-compatible endpoint
+        model: deepseek-chat
 ```
 
-## API Usage
+## API Reference
 
-### 1. Create an Agent
-
-```bash
-curl -X POST http://localhost:8080/api/agents \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "General Assistant",
-    "modelId": "deepseek-chat",
-    "systemPrompt": "You are a helpful assistant that can execute commands and read/write files.",
-    "skillIds": "[\"Bash\",\"FileRead\",\"FileWrite\",\"FileEdit\",\"Glob\",\"Grep\"]",
-    "status": "active"
-  }'
-```
-
-### 2. Create a Session
-
-```bash
-curl -X POST http://localhost:8080/api/chat/sessions \
-  -H "Content-Type: application/json" \
-  -d '{"userId": 1, "agentId": 1}'
-```
-
-### 3. Chat
-
-```bash
-curl -X POST http://localhost:8080/api/chat/{sessionId} \
-  -H "Content-Type: application/json" \
-  -d '{"message": "List files in /tmp", "userId": 1}'
-```
-
-The LLM will autonomously decide which Skills to invoke and return a structured response with tool call records.
-
-### 4. Dashboard
-
-```bash
-curl http://localhost:8080/api/dashboard/overview
-```
-
-### Other Endpoints
-
-All session-scoped endpoints require `userId` (query param or body) and return 400 / 403 / 404 / 409 as appropriate.
+### Agent Management
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/agents` | List all agents |
 | GET | `/api/agents/{id}` | Get agent detail |
+| POST | `/api/agents` | Create agent |
 | PUT | `/api/agents/{id}` | Update agent |
 | DELETE | `/api/agents/{id}` | Delete agent |
-| GET | `/api/chat/sessions?userId=1` | List user's top-level sessions (filters out SubAgent children) |
-| GET | `/api/chat/sessions/{id}?userId=1` | Get session detail incl. runtime status, compact counters |
+
+### Chat & Sessions
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/chat/sessions` | Create session |
+| GET | `/api/chat/sessions?userId=1` | List user's top-level sessions |
+| GET | `/api/chat/sessions/{id}?userId=1` | Get session detail |
 | GET | `/api/chat/sessions/{id}/messages?userId=1` | Get session messages |
-| POST | `/api/chat/{sessionId}` | Send a chat message (async, 202) |
-| POST | `/api/chat/{sessionId}/cancel?userId=1` | Cancel a running loop |
-| POST | `/api/chat/{sessionId}/answer` | Answer an `ask_user` question |
-| PATCH | `/api/chat/sessions/{sessionId}/mode?userId=1` | Switch session execution mode (`ask` / `auto`) |
-| GET | `/api/chat/sessions/{id}/children?userId=1` | List SubAgent child sessions |
-| GET | `/api/chat/sessions/{id}/subagent-runs?userId=1` | List SubAgent dispatch runs |
-| POST | `/api/chat/sessions/{id}/compact?userId=1` | Manual `full` context compact (409 if running) |
-| GET | `/api/chat/sessions/{id}/compactions?userId=1` | List compaction history for the session |
-| WS | `/ws/chat/{sessionId}` | Per-session events: status, message_appended, text_delta, tool_use_delta, ask_user |
-| WS | `/ws/users/{userId}` | Per-user events: session_created, session_updated, session_deleted |
-| GET | `/api/skills` | List all skills (system + user, unified) |
-| GET | `/api/skills/builtin` | List system tools (Bash, FileRead, etc.) |
-| GET | `/api/skills/{id}/detail` | Skill detail (supports system- prefix IDs) |
+| POST | `/api/chat/{sessionId}` | Send message (async, 202) |
+| POST | `/api/chat/{sessionId}/cancel?userId=1` | Cancel running loop |
+| POST | `/api/chat/{sessionId}/answer` | Answer `ask_user` question |
+| PATCH | `/api/chat/sessions/{id}/mode?userId=1` | Switch execution mode |
+| POST | `/api/chat/sessions/{id}/compact?userId=1` | Manual context compact |
+| GET | `/api/chat/sessions/{id}/compactions?userId=1` | Compaction history |
+| GET | `/api/chat/sessions/{id}/replay?userId=1` | Structured session replay |
+
+### SubAgent & Collaboration
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/chat/sessions/{id}/children?userId=1` | List child sessions |
+| GET | `/api/chat/sessions/{id}/subagent-runs?userId=1` | List SubAgent runs |
+| GET | `/api/collab-runs/{collabRunId}/members` | List collab run members with status |
+
+### Skills & Tools
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/skills` | List all skills (system + user) |
+| GET | `/api/skills/builtin` | List system tools |
+| GET | `/api/skills/{id}/detail` | Skill detail |
 | POST | `/api/skills/upload` | Upload skill zip package |
-| GET | `/api/traces` | List traces (AGENT_LOOP spans), optional `?sessionId=` filter |
-| GET | `/api/traces/{traceId}/spans` | Get span tree for a trace |
-| GET | `/api/traces/session/{sessionId}` | All spans for a session |
-| GET | `/api/chat/sessions/{id}/replay` | Structured replay (turns → iterations → tool calls) |
+| DELETE | `/api/skills/{id}` | Delete user skill |
+| PUT | `/api/skills/{id}/toggle?enabled=true` | Toggle skill |
+
+### Observability
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/traces` | List traces (optional `?sessionId=` filter) |
+| GET | `/api/traces/{traceId}/spans` | Span tree for a trace |
+| GET | `/api/dashboard/overview` | Dashboard overview stats |
+| GET | `/api/dashboard/usage/daily?days=30` | Daily usage |
+| GET | `/api/dashboard/usage/by-model` | Usage by model |
+| GET | `/api/dashboard/usage/by-agent` | Usage by agent |
+
+### Memory
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/memories?userId=1` | List memories (optional `&type=`) |
+| GET | `/api/memories/search?userId=1&keyword=` | Search with TF-IDF ranking |
+| POST | `/api/memories` | Create memory |
+| PUT | `/api/memories/{id}` | Update memory |
+| DELETE | `/api/memories/{id}` | Delete memory |
+
+### WebSocket
+
+| Endpoint | Description |
+|----------|-------------|
+| `/ws/chat/{sessionId}` | Per-session: status, message_appended, text_delta, tool_use_delta, ask_user, collab events |
+| `/ws/users/{userId}` | Per-user: session_created, session_updated, session_deleted |
+
+### Other
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/user-config/claude-md?userId=1` | Get global CLAUDE.md |
+| PUT | `/api/user-config/claude-md?userId=1` | Save global CLAUDE.md |
 | GET | `/h2-console` | H2 database console |
 
-## CLI
-
-The `skillforge-cli` module ships a one-shot command-line client for the
-server's REST API. It's a thin OkHttp wrapper with picocli commands —
-no Spring, starts in ~200ms.
-
-### Install
-
-```bash
-# build the shaded jar (once)
-mvn -pl skillforge-cli -am install -DskipTests
-
-# add a convenience alias
-alias skillforge='java -jar /absolute/path/to/skillforge/skillforge-cli/target/skillforge-cli-1.0.0-SNAPSHOT-shaded.jar'
-```
-
-Configuration resolution order (highest first):
-1. CLI flag (`--server`, `--user-id`)
-2. Environment variable (`SKILLFORGE_SERVER`, `SKILLFORGE_USER_ID`)
-3. `~/.skillforge/config.yaml` (optional, schema `{server: ..., userId: ...}`)
-4. Defaults: `http://localhost:8080`, `userId=1`
-
-### Examples
-
-```bash
-# list agents
-skillforge agents list
-
-# import an agent from a YAML file
-skillforge agents create -f examples/agents/general-assistant.yaml
-
-# export an agent back to YAML (so you can version it in git)
-skillforge agents export 1 > my-agent.yaml
-
-# one-shot chat: creates a fresh session in auto mode, polls until idle,
-# prints the assistant reply to stdout and the new session id to stderr
-skillforge chat 1 "List 3 interesting files in /tmp"
-
-# list recent sessions
-skillforge sessions list
-
-# manually compact a long session
-skillforge compact <session-id> --level full --reason "end of task"
-```
-
-See `examples/agents/` for starter YAML files and `examples/agents/README.md`
-for more on the schema.
-
 ## Tools & Skills
-
-SkillForge separates **Tools** (Java implementations, system-level operations) from **Skills** (file-based SKILL.md, higher-level capabilities).
 
 ### System Tools (Java, always available)
 
 | Tool | Description | Read-only |
 |------|-------------|-----------|
-| **Bash** | Execute shell commands (with safety rules, timeout, command chaining guidelines) | No |
+| **Bash** | Execute shell commands with safety rules, timeout, chaining guidelines | No |
 | **FileRead** | Read files with line numbers, offset/limit | Yes |
 | **FileWrite** | Write/create files | No |
 | **FileEdit** | Exact string replacement in files | No |
 | **Glob** | Find files by glob pattern | Yes |
 | **Grep** | Search file contents by regex | Yes |
-| **Memory** | Persistent key/value memory across sessions, scoped per user | No |
-| **SubAgent** | Dispatch a task to another agent asynchronously; result auto-delivers back | No |
+| **Memory** | Persistent memory across sessions (5 types, search with ranking) | No |
+| **SubAgent** | Dispatch a single task to another agent (tree topology) | No |
+| **TeamCreate** | Spawn a team member in a collaboration run (network topology) | No |
+| **TeamSend** | Send a message to a team peer, parent, or broadcast | No |
+| **TeamList** | List team members with status | Yes |
+| **TeamKill** | Cancel a team member or entire collaboration run | No |
 
 ### System Skills (file-based, non-deletable)
 
 | Skill | Description |
 |-------|-------------|
-| **Browser** | Web automation via `npx agent-browser` CLI (goto, snapshot, click, type, eval, screenshot, login) |
-| **ClawHub** | Search + install skills from [clawhub.ai](https://clawhub.ai) marketplace |
-| **GitHub** | GitHub API + `gh` CLI for repo search, issues, PRs, CI |
+| **Browser** | Web automation via `npx agent-browser` CLI |
+| **ClawHub** | Search + install skills from [clawhub.ai](https://clawhub.ai) |
+| **GitHub** | GitHub API + `gh` CLI for repos, issues, PRs, CI |
 | **SkillHub** | Search + install skills from SkillHub marketplace |
-
-### User Skills (uploadable, manageable)
-
-Custom skills installed from ClawHub, SkillHub, or uploaded as zip packages. Managed via the Skills page.
 
 ### Engine-internal Tools
 
 | Tool | When | Description |
 |------|------|-------------|
-| **`ask_user`** | session in `ask` mode | LLM presents a 2–4 option multiple-choice question, blocks until reply |
-| **`compact_context`** | always | LLM requests `light` (rule-based) or `full` (LLM summary) compaction |
+| **`ask_user`** | session in `ask` mode | Multiple-choice question, blocks until reply |
+| **`compact_context`** | always | Request `light` or `full` context compaction |
 
-## Safety & Anti-runaway
+## CLI
 
-### SafetySkillHook
+The `skillforge-cli` module ships a one-shot command-line client for the
+server's REST API. Thin OkHttp wrapper with picocli commands — no Spring, starts in ~200ms.
 
-- **Bash**: Blocks `rm -rf /`, `sudo`, `mkfs`, `shutdown`, `curl|sh`, fork bombs, etc.
-- **Bash**: Blocks `clawhub install` / `skillhub install` commands (requires user confirmation)
-- **File write/edit**: Blocks system directories (`/etc/`, `/usr/`, `/bin/`) and sensitive files (`~/.ssh/`)
-- **File read**: Blocks SSH private keys
-- **Path traversal**: Normalizes paths to prevent `../` attacks
+### Install
 
-### Agent Loop Guardrails
+```bash
+mvn -pl skillforge-cli -am install -DskipTests
 
-- **Token budget**: Cumulative input token limit (default 500K, configurable via `max_input_tokens`)
-- **Duration limit**: Loop wall-clock timeout (default 600s, configurable via `max_duration_seconds`)
-- **Max iterations**: Default 25 loops (configurable via `max_loops`)
-- **Tool execution timeout**: 120s per batch, auto-generates error tool_result on timeout
-- **LLM stream timeout**: 300s overall guard
-- **Tool frequency warning**: System prompt guidance injected when any tool called ≥8 times
-- **No-progress detection**: Dual hash (call params + outcome), detects when same tool produces same result 3+ times
-- **Waste detection**: Triggers light compaction on 3+ consecutive errors, large tool_result, or repeated identical calls
-- **Compact circuit breaker**: Stops retrying after 3 consecutive compact failures
-- **Tool result truncation**: 40K char limit with smart head/tail split
-
-## Hook System
-
-Extensible hook interfaces for customization:
-
-- **LoopHook**: `beforeLoop()` / `afterLoop()` — intercept the entire agent loop
-- **SkillHook**: `beforeSkillExecute()` / `afterSkillExecute()` — intercept individual skill calls
-
-## Observability
-
-### Traces (Langfuse-style)
-
-Every agent loop execution is recorded as a structured trace with hierarchical spans:
-
-```
-AGENT_LOOP (root span — one per user message)
-├── LLM_CALL (iteration 0 — model inference, per-call tokens + duration)
-├── TOOL_CALL (Bash — input JSON, output, duration, toolUseId)
-├── TOOL_CALL (FileRead — ...)
-├── LLM_CALL (iteration 1)
-├── ASK_USER (blocked waiting for user reply)
-├── COMPACT (context compaction event)
-└── LLM_CALL (final iteration — text response)
+alias skillforge='java -jar /path/to/skillforge-cli/target/skillforge-cli-1.0.0-SNAPSHOT-shaded.jar'
 ```
 
-Dashboard **Traces** page shows:
-- Trace list with LLM/tool call counts, duration, tokens, status
-- Span detail with waterfall timeline bars, expandable I/O
-- Session ID filter
+### Examples
 
-### Session Replay
-
-Dashboard **Chat** page includes a Replay toggle that restructures the flat message history into:
-- Turns (each user message → agent response cycle)
-- Iterations within each turn
-- Tool calls with timing, input/output, success/failure
+```bash
+skillforge agents list
+skillforge agents create -f examples/agents/general-assistant.yaml
+skillforge agents export 1 > my-agent.yaml
+skillforge chat 1 "List 3 interesting files in /tmp"
+skillforge sessions list
+skillforge compact <session-id> --level full --reason "end of task"
+```
 
 ## Skill Packages
 
-Custom skills can be uploaded as zip packages or installed from marketplaces:
+Custom skills uploaded as zip packages or installed from marketplaces:
 
 ```
 my-skill.zip
@@ -355,34 +382,31 @@ my-skill.zip
 └── docs/            # Optional: extended documentation
 ```
 
-System skills are loaded from `system-skills/` directory at startup (configurable via `skillforge.system-skills-dir`).
+System skills loaded from `system-skills/` at startup (configurable via `skillforge.system-skills-dir`).
 
 ## Roadmap
 
-### ✅ Delivered
-- **Tool & Skill system** — system tools (Java), system skills (file-based), user skills (marketplace + upload), unified loading
-- **Dashboard** — chat, sessions (live), agents, skills (unified), traces, session replay, memories, model usage
-- **Streaming chat** — per-token assistant text + tool_use input JSON via WebSocket
-- **Agent Loop guardrails** — token budget, duration limit, tool frequency warning, no-progress detection, compact circuit breaker, tool result truncation
-- **LLM observability** — TraceCollector with AGENT_LOOP / LLM_CALL / TOOL_CALL / ASK_USER / COMPACT spans, per-call token tracking
-- **Session lifecycle** — runtime status, ask_user blocking, error banner, cancel (in-stream SSE + loop-level)
-- **Ask mode / Auto mode** — per-agent default with per-session override
-- **SubAgent orchestration** — async dispatch, child sessions, depth/concurrency limits, persistence, restart recovery
-- **Auto-compact context compression** — light (rule-based) + full (LLM summary with identifier preservation), 6 trigger sources
-- **Context awareness** — EnvironmentContextProvider (CWD, OS, date), Tool Usage Guidelines in system prompt
-- **CLI module** (`skillforge-cli`) — YAML-first agent import/export, one-shot `chat` command
-- **User message queuing** — messages queued during agent run, drained at iteration boundaries
-- **Marketplace integration** — ClawHub, SkillHub, GitHub skills pre-installed as system skills
+### Delivered
+- Tool & Skill system (Java tools + file-based skills + marketplace install)
+- Dashboard (chat, sessions, agents, skills, traces, replay, memories, usage)
+- Streaming chat with per-token WebSocket delivery
+- Agent Loop guardrails (token budget, duration, frequency, no-progress, waste detection)
+- LLM observability (TraceCollector with 5 span types)
+- Session lifecycle (runtime status, ask_user, cancel, auto-compact)
+- SubAgent orchestration (async dispatch, persistence, recovery, sweeper)
+- Multi-Agent Collaboration (TeamCreate/Send/List/Kill, roster, adjacency policy, cancel cascade, lightContext)
+- Context compaction (light + full, 6 triggers, JVM-GC style)
+- Memory system (5 types, injection, auto-capture, daily extraction, consolidation, TF-IDF search)
+- Multi-file agent config (CLAUDE.md + AGENT.md + SOUL.md + TOOLS.md + MEMORY.md)
+- CLI module (YAML import/export, one-shot chat)
+- User message queuing during agent runs
 
-### 📋 Planned
-- **Skill always-on mode** — skills that inject promptContent into system prompt permanently (needed for OpenClaw skill compatibility)
-- **Memory system enhancement** — memory auto-injection into system prompt, cross-session learning
-- **JWT auth** — proper user identity (today's userId scoping is a placeholder)
-- **Redis session sharing** — multi-instance deployment + replace JVM stripe locks with distributed locks
-- **Elasticsearch conversation search** — full-text search across session history
-- **Stop hooks** — system-level hooks for custom checks at each loop iteration end
-- **Preemptive compaction** — check for context overflow before sending LLM request
-- **max_tokens recovery** — escalate + compact + retry on output truncation
+### Planned
+- JWT authentication (replace userId placeholder)
+- Redis for multi-instance deployment
+- Elasticsearch conversation search
+- Prompt cache optimization
+- Unit test coverage expansion
 
 ## License
 

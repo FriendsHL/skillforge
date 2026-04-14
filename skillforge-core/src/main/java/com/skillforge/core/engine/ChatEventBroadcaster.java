@@ -76,6 +76,28 @@ public interface ChatEventBroadcaster {
         // no-op default
     }
 
+    // ---- Multi-agent collaboration events ----
+
+    /** A new team member was spawned in a collaboration run. */
+    default void collabMemberSpawned(String collabRunId, String handle, String sessionId, String agentName) {
+        // no-op default
+    }
+
+    /** A team member finished in a collaboration run. */
+    default void collabMemberFinished(String collabRunId, String handle, String status, String summary) {
+        // no-op default
+    }
+
+    /** Collaboration run status changed (RUNNING / COMPLETED / CANCELLED). */
+    default void collabRunStatus(String collabRunId, String status) {
+        // no-op default
+    }
+
+    /** A peer message was routed between team members. */
+    default void collabMessageRouted(String collabRunId, String fromHandle, String toHandle, String messageId) {
+        // no-op default
+    }
+
     class AskUserEvent {
         public String askId;
         public String question;

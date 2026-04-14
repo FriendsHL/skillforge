@@ -189,4 +189,8 @@ public class SessionService {
             throw new RuntimeException("Failed to serialize session messages", e);
         }
     }
+
+    public List<SessionEntity> listByCollabRunId(String collabRunId) {
+        return sessionRepository.findByCollabRunId(collabRunId);
+    }
 }

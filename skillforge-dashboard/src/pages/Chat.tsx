@@ -1,12 +1,14 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Select, List, Card, message, Typography, Empty, Alert, Button, Input, Segmented, Space, Modal, Tag, Table } from 'antd';
-import { ArrowUpOutlined, HistoryOutlined, MessageOutlined } from '@ant-design/icons';
+import { ArrowUpOutlined, HistoryOutlined, MessageOutlined, TeamOutlined } from '@ant-design/icons';
 import { useNavigate, useParams } from 'react-router-dom';
 import ChatWindow from '../components/ChatWindow';
 import type { ChatMessage } from '../components/ChatWindow';
 import SessionReplay from '../components/SessionReplay';
 import SubAgentRunsPanel from '../components/SubAgentRunsPanel';
 import ChildSessionsPanel from '../components/ChildSessionsPanel';
+import CollabRunPanel from '../components/CollabRunPanel';
+import PeerMessageFeed from '../components/PeerMessageFeed';
 import {
   getAgents,
   createSession,
@@ -151,6 +153,10 @@ const Chat: React.FC = () => {
   const [compactModalOpen, setCompactModalOpen] = useState(false);
   const [compactEvents, setCompactEvents] = useState<any[]>([]);
   const [compacting, setCompacting] = useState(false);
+  const [collabRunId, setCollabRunId] = useState<string | null>(null);
+  const [collabHandle, setCollabHandle] = useState<string | null>(null);
+  const [collabLeaderSessionId, setCollabLeaderSessionId] = useState<string | null>(null);
+  const [collabRunStatus, setCollabRunStatus] = useState<string | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
 
@@ -201,6 +207,10 @@ const Chat: React.FC = () => {
     setViewMode('chat');
     setParentSessionId(null);
     setSessionDepth(0);
+    setCollabRunId(null);
+    setCollabHandle(null);
+    setCollabLeaderSessionId(null);
+    setCollabRunStatus(null);
 
     if (!activeSessionId) {
       setRawMessages([]);
@@ -231,6 +241,10 @@ const Chat: React.FC = () => {
         }
         setParentSessionId(s.parentSessionId ?? null);
         setSessionDepth(typeof s.depth === 'number' ? s.depth : 0);
+        setCollabRunId(s.collabRunId ?? null);
+        setCollabHandle(s.collabHandle ?? null);
+        setCollabLeaderSessionId(s.collabLeaderSessionId ?? null);
+        setCollabRunStatus(s.collabRunStatus ?? null);
         setLightCompactCount(s.lightCompactCount ?? 0);
         setFullCompactCount(s.fullCompactCount ?? 0);
         setTotalTokensReclaimed(s.totalTokensReclaimed ?? 0);
@@ -352,6 +366,18 @@ const Chat: React.FC = () => {
       });
     } else if (evt.type === 'assistant_stream_end') {
       // 此时 message_appended 通常马上就到,不主动清,让 message_appended 清(避免抖动)
+    } else if (
+      evt.type === 'collab_member_spawned' ||
+      evt.type === 'collab_member_finished' ||
+      evt.type === 'collab_run_status' ||
+      evt.type === 'collab_message_routed'
+    ) {
+      // Update collab run status in real-time
+      if (evt.type === 'collab_run_status' && evt.status) {
+        setCollabRunStatus(evt.status);
+      }
+      // Dispatch collab events to window so CollabRunPanel and PeerMessageFeed can listen
+      window.dispatchEvent(new CustomEvent('collab_ws_event', { detail: evt }));
     } else if (evt.type === 'session_title_updated') {
       const newTitle = evt.title;
       if (newTitle) {
@@ -669,6 +695,9 @@ const Chat: React.FC = () => {
                   }}
                 >
                   <Text ellipsis style={{ width: '100%' }}>
+                    {item.collabRunId && (
+                      <TeamOutlined style={{ marginRight: 4, color: '#1677ff', fontSize: 12 }} title="Team session" />
+                    )}
                     {item.title && item.title !== 'New Session'
                       ? item.title
                       : `Session ${sid.slice(0, 8)}...`}
@@ -771,6 +800,32 @@ const Chat: React.FC = () => {
               sessionId={activeSessionId}
               parentRunning={runtimeStatus === 'running'}
               agents={agents}
+            />
+            {collabRunId && collabHandle && (
+              <Alert
+                type="info"
+                banner
+                message={
+                  <span style={{ fontSize: 12 }}>
+                    <Tag color="blue" style={{ marginRight: 6 }}>Team: {collabHandle}</Tag>
+                    Part of collaboration run {collabRunId.length > 8 ? collabRunId.slice(0, 8) + '...' : collabRunId}
+                    {collabLeaderSessionId && (
+                      <> | Leader: {collabLeaderSessionId.slice(0, 8)}...</>
+                    )}
+                    {collabRunStatus && (
+                      <> | Status: {collabRunStatus}</>
+                    )}
+                  </span>
+                }
+                style={{ margin: '8px 12px 0' }}
+              />
+            )}
+            <CollabRunPanel
+              collabRunId={collabRunId}
+              sessionId={activeSessionId}
+            />
+            <PeerMessageFeed
+              collabRunId={collabRunId}
             />
             {viewMode === 'chat' ? (
               <>

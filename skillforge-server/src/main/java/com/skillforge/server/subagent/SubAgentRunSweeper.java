@@ -1,7 +1,9 @@
 package com.skillforge.server.subagent;
 
+import com.skillforge.server.entity.CollabRunEntity;
 import com.skillforge.server.entity.SessionEntity;
 import com.skillforge.server.entity.SubAgentRunEntity;
+import com.skillforge.server.repository.CollabRunRepository;
 import com.skillforge.server.repository.SessionRepository;
 import com.skillforge.server.repository.SubAgentRunRepository;
 import org.slf4j.Logger;
@@ -36,17 +38,24 @@ public class SubAgentRunSweeper {
     static final Duration CHILD_IDLE_GRACE = Duration.ofSeconds(30);
     /** 没 attach 子 session 的 run 多久算永久卡死 */
     static final Duration NO_CHILD_TIMEOUT = Duration.ofMinutes(10);
+    /** All members idle for this long means the collab run missed its completion notification */
+    static final Duration COLLAB_IDLE_THRESHOLD = Duration.ofMinutes(30);
+    /** Any member running longer than this without progress triggers a warning */
+    static final Duration COLLAB_STUCK_WARNING = Duration.ofHours(2);
 
     private final SubAgentRunRepository runRepository;
     private final SessionRepository sessionRepository;
     private final SubAgentRegistry subAgentRegistry;
+    private final CollabRunRepository collabRunRepository;
 
     public SubAgentRunSweeper(SubAgentRunRepository runRepository,
                               SessionRepository sessionRepository,
-                              SubAgentRegistry subAgentRegistry) {
+                              SubAgentRegistry subAgentRegistry,
+                              CollabRunRepository collabRunRepository) {
         this.runRepository = runRepository;
         this.sessionRepository = sessionRepository;
         this.subAgentRegistry = subAgentRegistry;
+        this.collabRunRepository = collabRunRepository;
     }
 
     @Scheduled(fixedDelay = 60000, initialDelay = 30000)
@@ -55,6 +64,11 @@ public class SubAgentRunSweeper {
             sweepOnce();
         } catch (Exception e) {
             log.error("SubAgentRunSweeper.sweep failed", e);
+        }
+        try {
+            sweepStaleCollabRuns();
+        } catch (Exception e) {
+            log.error("SubAgentRunSweeper.sweepStaleCollabRuns failed", e);
         }
     }
 
@@ -116,6 +130,70 @@ public class SubAgentRunSweeper {
                 : "Sweeper: recovered from lost finally hook";
         // 复用 registry 的恢复通路 —— 它会 mark 状态、enqueue、maybeResumeParent
         subAgentRegistry.onSessionLoopFinished(childSessionId, finalMessage, status, 0, 0L);
+    }
+
+    /**
+     * Sweep stale CollabRuns:
+     * - If all member sessions are done (idle/error) and have been idle > 30 min, mark COMPLETED
+     * - If any member has been running > 2 hours, log a warning
+     */
+    void sweepStaleCollabRuns() {
+        List<CollabRunEntity> running = collabRunRepository.findByStatus("RUNNING");
+        if (running.isEmpty()) return;
+        Instant now = Instant.now();
+
+        for (CollabRunEntity collabRun : running) {
+            try {
+                List<SessionEntity> members = sessionRepository.findByCollabRunId(collabRun.getCollabRunId());
+                if (members.isEmpty()) continue;
+
+                boolean allDone = true;
+                boolean allIdleLongEnough = true;
+
+                for (SessionEntity member : members) {
+                    String rs = member.getRuntimeStatus();
+                    boolean memberDone = "idle".equals(rs) || "error".equals(rs);
+
+                    if (!memberDone) {
+                        allDone = false;
+                        allIdleLongEnough = false;
+
+                        // Check for stuck member (running > 2 hours)
+                        if ("running".equals(rs) && member.getCreatedAt() != null) {
+                            Instant createdInstant = member.getCreatedAt()
+                                    .atZone(java.time.ZoneId.systemDefault()).toInstant();
+                            if (Duration.between(createdInstant, now).compareTo(COLLAB_STUCK_WARNING) >= 0) {
+                                log.warn("Sweeper: collab run {} member session {} has been running for > 2 hours",
+                                        collabRun.getCollabRunId(), member.getId());
+                            }
+                        }
+                    } else {
+                        // Member is done — check if it's been idle long enough
+                        Instant completedAt = member.getCompletedAt();
+                        if (completedAt == null) {
+                            // Use updatedAt as fallback
+                            LocalDateTime updatedAt = member.getUpdatedAt();
+                            if (updatedAt != null) {
+                                completedAt = updatedAt.atZone(java.time.ZoneId.systemDefault()).toInstant();
+                            }
+                        }
+                        if (completedAt == null || Duration.between(completedAt, now).compareTo(COLLAB_IDLE_THRESHOLD) < 0) {
+                            allIdleLongEnough = false;
+                        }
+                    }
+                }
+
+                if (allDone && allIdleLongEnough) {
+                    int updated = collabRunRepository.completeIfRunning(collabRun.getCollabRunId(), Instant.now());
+                    if (updated > 0) {
+                        log.warn("Sweeper: collab run {} had all members done but was still RUNNING; marked COMPLETED",
+                                collabRun.getCollabRunId());
+                    }
+                }
+            } catch (Exception e) {
+                log.error("Sweeper: failed to handle collab run {}", collabRun.getCollabRunId(), e);
+            }
+        }
     }
 
     /**

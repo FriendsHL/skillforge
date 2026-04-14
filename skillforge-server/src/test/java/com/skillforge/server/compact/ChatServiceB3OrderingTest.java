@@ -85,7 +85,8 @@ class ChatServiceB3OrderingTest {
 
         chatService = new ChatService(agentService, sessionService, skillRegistry,
                 agentLoopEngine, modelUsageRepository, broadcaster, chatLoopExecutor,
-                sessionTitleService, subAgentRegistry, cancellationRegistry, compactionService);
+                sessionTitleService, subAgentRegistry, cancellationRegistry, compactionService,
+                null, null);
     }
 
     private SessionEntity sessionWithGap(String id, long gapHours, int msgCount) {

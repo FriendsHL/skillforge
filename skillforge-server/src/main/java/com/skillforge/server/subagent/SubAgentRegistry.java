@@ -14,6 +14,8 @@ import org.springframework.stereotype.Component;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * SubAgent 异步调度注册表。
@@ -39,6 +41,7 @@ public class SubAgentRegistry {
 
     public static final int MAX_DEPTH = 3;
     public static final int MAX_ACTIVE_CHILDREN_PER_PARENT = 5;
+    public static final int MAX_DELIVERY_RETRIES = 3;
 
     /**
      * 固定大小的 stripe 锁数组,按 parentSessionId 哈希分桶。
@@ -49,6 +52,9 @@ public class SubAgentRegistry {
      */
     private static final int LOCK_STRIPES = 64;
     private final Object[] parentLocks;
+
+    /** Per-target monotonic seqNo generators for peer messaging. */
+    private final ConcurrentHashMap<String, AtomicLong> seqNoGenerators = new ConcurrentHashMap<>();
 
     private final SessionRepository sessionRepository;
     private final SubAgentRunRepository runRepository;
@@ -152,7 +158,14 @@ public class SubAgentRegistry {
                 runRepository.save(runEntity);
             }
             SubAgentRun runDto = runEntity != null ? toRun(runEntity) : null;
-            String resultMsg = buildResultMessage(runDto, session, finalMessage, status, toolCalls, durationMs);
+
+            // Use TeamResult format for collab run members, SubAgent Result format otherwise
+            String resultMsg;
+            if (session.getCollabRunId() != null) {
+                resultMsg = buildTeamResultMessage(runDto, session, finalMessage, status, toolCalls, durationMs);
+            } else {
+                resultMsg = buildResultMessage(runDto, session, finalMessage, status, toolCalls, durationMs);
+            }
             enqueueForParent(session.getParentSessionId(), resultMsg);
             // 父 idle 则立刻唤醒(父 running 时会在父自己的 finally 里被 drain)
             maybeResumeParent(session.getParentSessionId());
@@ -201,7 +214,7 @@ public class SubAgentRegistry {
     private void maybeResumeParent(String parentSessionId) {
         synchronized (lockFor(parentSessionId)) {
             List<SubAgentPendingResultEntity> rows =
-                    pendingRepository.findByParentSessionIdOrderByIdAsc(parentSessionId);
+                    pendingRepository.findByParentSessionIdAndStatusIsNullOrderByIdAsc(parentSessionId);
             if (rows.isEmpty()) return;
 
             SessionEntity parent = sessionRepository.findById(parentSessionId).orElse(null);
@@ -226,18 +239,187 @@ public class SubAgentRegistry {
             pendingRepository.deleteAll(rows);
             pendingRepository.flush();
 
+            // Compute max retryCount from the batch being delivered
+            int maxRetry = 0;
+            for (SubAgentPendingResultEntity r : rows) {
+                if (r.getRetryCount() > maxRetry) maxRetry = r.getRetryCount();
+            }
+
             log.info("Resuming parent session {} with {} pending subagent result(s)", parentSessionId, n);
             try {
                 chatServiceProvider.getObject().chatAsync(parentSessionId, payload, parent.getUserId());
             } catch (Exception e) {
-                log.error("Failed to resume parent session {}, re-enqueueing combined payload", parentSessionId, e);
-                SubAgentPendingResultEntity retry = new SubAgentPendingResultEntity();
-                retry.setParentSessionId(parentSessionId);
-                retry.setPayload(payload);
-                retry.setCreatedAt(Instant.now());
-                pendingRepository.save(retry);
+                int nextRetry = maxRetry + 1;
+                if (nextRetry >= MAX_DELIVERY_RETRIES) {
+                    log.error("Failed to resume parent session {} after {} retries, marking DELIVERY_FAILED",
+                            parentSessionId, nextRetry, e);
+                    SubAgentPendingResultEntity failed = new SubAgentPendingResultEntity();
+                    failed.setParentSessionId(parentSessionId);
+                    failed.setPayload(payload);
+                    failed.setRetryCount(nextRetry);
+                    failed.setStatus("DELIVERY_FAILED");
+                    failed.setCreatedAt(Instant.now());
+                    pendingRepository.save(failed);
+                } else {
+                    log.error("Failed to resume parent session {}, re-enqueueing (retry {})",
+                            parentSessionId, nextRetry, e);
+                    SubAgentPendingResultEntity retry = new SubAgentPendingResultEntity();
+                    retry.setParentSessionId(parentSessionId);
+                    retry.setPayload(payload);
+                    retry.setRetryCount(nextRetry);
+                    retry.setCreatedAt(Instant.now());
+                    pendingRepository.save(retry);
+                }
             }
         }
+    }
+
+    // ============ Peer messaging (Phase 2) ============
+
+    /**
+     * Generate a monotonic seqNo for the given target session.
+     * Uses System.nanoTime() as the initial value for MVP simplicity.
+     */
+    public long nextSeqNo(String targetSessionId) {
+        return seqNoGenerators
+                .computeIfAbsent(targetSessionId, k -> new AtomicLong(System.nanoTime()))
+                .incrementAndGet();
+    }
+
+    /**
+     * Enqueue a message for any session (generalized peer messaging).
+     * Uses messageId-based dedup to avoid duplicate delivery.
+     * Returns false if the target session doesn't exist or is in a terminal state.
+     */
+    public boolean enqueueForSession(String targetSessionId, String payload, String messageId, Long seqNo) {
+        // Orphan detection: check if target session is alive
+        SessionEntity target = sessionRepository.findById(targetSessionId).orElse(null);
+        if (target == null) {
+            log.warn("Target session {} does not exist, message dropped (messageId={})", targetSessionId, messageId);
+            return false;
+        }
+        if (target.getCompletedAt() != null
+                && !"running".equals(target.getRuntimeStatus())
+                && !"idle".equals(target.getRuntimeStatus())) {
+            log.warn("Target session {} is not alive (status={}, completedAt={}), message dropped (messageId={})",
+                    targetSessionId, target.getRuntimeStatus(), target.getCompletedAt(), messageId);
+            return false;
+        }
+
+        if (messageId != null && pendingRepository.existsByMessageId(messageId)) {
+            log.info("Dedup: messageId={} already exists for target={}, skipping", messageId, targetSessionId);
+            return true;
+        }
+        SubAgentPendingResultEntity row = new SubAgentPendingResultEntity();
+        row.setParentSessionId(targetSessionId); // keep parentSessionId populated for backward compat queries
+        row.setTargetSessionId(targetSessionId);
+        row.setPayload(payload);
+        row.setMessageId(messageId);
+        row.setSeqNo(seqNo);
+        row.setCreatedAt(Instant.now());
+        pendingRepository.save(row);
+        log.info("Peer message enqueued for target={} messageId={} seqNo={}", targetSessionId, messageId, seqNo);
+        return true;
+    }
+
+    /**
+     * Try to resume any session by draining its pending queue.
+     * Same logic as maybeResumeParent but works for any session.
+     */
+    public void maybeResumeSession(String targetSessionId) {
+        synchronized (lockFor(targetSessionId)) {
+            // Use targetSessionId query with seqNo ordering for proper peer message support
+            List<SubAgentPendingResultEntity> rows =
+                    pendingRepository.findByTargetSessionIdAndStatusIsNullOrderBySeqNoAsc(targetSessionId);
+            // Fallback to parentSessionId query for backward compat (SubAgent results don't set targetSessionId)
+            if (rows.isEmpty()) {
+                rows = pendingRepository.findByParentSessionIdAndStatusIsNullOrderByIdAsc(targetSessionId);
+            }
+            if (rows.isEmpty()) return;
+
+            SessionEntity target = sessionRepository.findById(targetSessionId).orElse(null);
+            if (target == null) {
+                pendingRepository.deleteAll(rows);
+                return;
+            }
+            if (!"idle".equals(target.getRuntimeStatus())) {
+                // Target still running, it will drain on its own loop finally
+                return;
+            }
+
+            StringBuilder combined = new StringBuilder();
+            for (int i = 0; i < rows.size(); i++) {
+                if (i > 0) combined.append("\n\n");
+                combined.append(rows.get(i).getPayload());
+            }
+            String payload = combined.toString();
+            int n = rows.size();
+
+            pendingRepository.deleteAll(rows);
+            pendingRepository.flush();
+
+            // Compute max retryCount from the batch being delivered
+            int maxRetry = 0;
+            for (SubAgentPendingResultEntity r : rows) {
+                if (r.getRetryCount() > maxRetry) maxRetry = r.getRetryCount();
+            }
+
+            log.info("Resuming session {} with {} pending message(s)", targetSessionId, n);
+            try {
+                chatServiceProvider.getObject().chatAsync(targetSessionId, payload, target.getUserId());
+            } catch (Exception e) {
+                int nextRetry = maxRetry + 1;
+                if (nextRetry >= MAX_DELIVERY_RETRIES) {
+                    log.error("Failed to resume session {} after {} retries, marking DELIVERY_FAILED",
+                            targetSessionId, nextRetry, e);
+                    SubAgentPendingResultEntity failed = new SubAgentPendingResultEntity();
+                    failed.setParentSessionId(targetSessionId);
+                    failed.setTargetSessionId(targetSessionId);
+                    failed.setPayload(payload);
+                    failed.setRetryCount(nextRetry);
+                    failed.setStatus("DELIVERY_FAILED");
+                    failed.setCreatedAt(Instant.now());
+                    pendingRepository.save(failed);
+                } else {
+                    log.error("Failed to resume session {}, re-enqueueing (retry {})",
+                            targetSessionId, nextRetry, e);
+                    SubAgentPendingResultEntity retry = new SubAgentPendingResultEntity();
+                    retry.setParentSessionId(targetSessionId);
+                    retry.setTargetSessionId(targetSessionId);
+                    retry.setPayload(payload);
+                    retry.setRetryCount(nextRetry);
+                    retry.setCreatedAt(Instant.now());
+                    pendingRepository.save(retry);
+                }
+            }
+        }
+    }
+
+    private String buildTeamResultMessage(SubAgentRun run, SessionEntity child, String finalMessage,
+                                          String status, int toolCalls, long durationMs) {
+        // Extract handle from session title (format: "Team: <handle>")
+        String handle = "unknown";
+        if (child.getTitle() != null && child.getTitle().startsWith("Team: ")) {
+            handle = child.getTitle().substring(6);
+        }
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("[TeamResult handle=").append(handle);
+        sb.append(" collabRunId=").append(child.getCollabRunId());
+        sb.append("]\n");
+        sb.append("Agent: ");
+        if (run != null && run.childAgentName != null) {
+            sb.append(run.childAgentName);
+        } else {
+            sb.append("unknown");
+        }
+        sb.append(" (session ").append(child.getId()).append(")\n");
+        sb.append("Status: ").append(status == null ? "completed" : status).append("\n");
+        sb.append("Tool calls: ").append(toolCalls).append(", duration: ").append(durationMs).append("ms\n");
+        sb.append("Result:\n");
+        sb.append(finalMessage == null ? "(no final message)" : finalMessage);
+        sb.append("\n[/TeamResult]");
+        return sb.toString();
     }
 
     private String buildResultMessage(SubAgentRun run, SessionEntity child, String finalMessage,

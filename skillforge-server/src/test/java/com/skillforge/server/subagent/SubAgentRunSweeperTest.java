@@ -2,6 +2,7 @@ package com.skillforge.server.subagent;
 
 import com.skillforge.server.entity.SessionEntity;
 import com.skillforge.server.entity.SubAgentRunEntity;
+import com.skillforge.server.repository.CollabRunRepository;
 import com.skillforge.server.repository.SessionRepository;
 import com.skillforge.server.repository.SubAgentRunRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -41,7 +42,8 @@ class SubAgentRunSweeperTest {
         runRepository = mock(SubAgentRunRepository.class);
         sessionRepository = mock(SessionRepository.class);
         subAgentRegistry = mock(SubAgentRegistry.class);
-        sweeper = new SubAgentRunSweeper(runRepository, sessionRepository, subAgentRegistry);
+        CollabRunRepository collabRunRepository = mock(CollabRunRepository.class);
+        sweeper = new SubAgentRunSweeper(runRepository, sessionRepository, subAgentRegistry, collabRunRepository);
     }
 
     private SubAgentRunEntity run(String runId, String parentId, String childId, Instant spawnedAt) {

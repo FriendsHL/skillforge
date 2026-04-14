@@ -198,8 +198,9 @@ public class AgentLoopEngine {
         List<SkillDefinition> skillDefs = new ArrayList<>(skillRegistry.getAllSkillDefinitions());
         String systemPrompt = new SystemPromptBuilder(agentDef, skillDefs, contextProviders).build(claudeMd);
 
-        // 4.1 注入用户记忆到 system prompt
-        if (memoryProvider != null) {
+        // 4.1 注入用户记忆到 system prompt (skip if lightContext / skip_memory flag set)
+        boolean skipMemory = Boolean.TRUE.equals(agentDef.getConfig().get("skip_memory"));
+        if (memoryProvider != null && !skipMemory) {
             String memories = memoryProvider.apply(userId);
             if (memories != null && !memories.isBlank()) {
                 systemPrompt = systemPrompt + "\n\n## User Memories\n\n" + memories;
@@ -207,7 +208,7 @@ public class AgentLoopEngine {
         }
 
         // 5. 收集 tools: 内置 Skill 的 ToolSchema + SkillDefinition 的描述 + (可选) ask_user + compact_context
-        List<ToolSchema> tools = collectTools(loopCtx.getExecutionMode());
+        List<ToolSchema> tools = collectTools(loopCtx.getExecutionMode(), loopCtx.getExcludedSkillNames());
         final int contextWindowTokens = resolveContextWindow(agentDef);
 
         // 追踪工具调用记录
@@ -919,11 +920,14 @@ public class AgentLoopEngine {
     /**
      * 收集所有可用的工具 schema：内置 Skill + SkillDefinition + (可选) ask_user。
      */
-    private List<ToolSchema> collectTools(String executionMode) {
+    private List<ToolSchema> collectTools(String executionMode, java.util.Set<String> excludedSkillNames) {
         List<ToolSchema> tools = new ArrayList<>();
 
-        // 内置 Skill
+        // 内置 Skill (filter out excluded skills for depth-aware multi-agent collab)
         for (Skill skill : skillRegistry.getAllSkills()) {
+            if (excludedSkillNames != null && excludedSkillNames.contains(skill.getName())) {
+                continue;
+            }
             ToolSchema schema = skill.getToolSchema();
             if (schema != null) {
                 tools.add(schema);

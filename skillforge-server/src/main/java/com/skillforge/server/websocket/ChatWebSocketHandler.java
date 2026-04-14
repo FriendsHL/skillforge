@@ -232,4 +232,50 @@ public class ChatWebSocketHandler extends TextWebSocketHandler implements ChatEv
         payload.put("input", parsedInput);
         broadcast(sessionId, payload);
     }
+
+    // ==== Multi-agent collaboration events ====
+
+    @Override
+    public void collabMemberSpawned(String collabRunId, String handle, String sessionId, String agentName) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("type", "collab_member_spawned");
+        payload.put("collabRunId", collabRunId);
+        payload.put("handle", handle);
+        payload.put("sessionId", sessionId);
+        payload.put("agentName", agentName);
+        // Broadcast to all sessions in the collab run — for now, broadcast to the specific sessionId
+        broadcast(sessionId, payload);
+    }
+
+    @Override
+    public void collabMemberFinished(String collabRunId, String handle, String status, String summary) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("type", "collab_member_finished");
+        payload.put("collabRunId", collabRunId);
+        payload.put("handle", handle);
+        payload.put("status", status);
+        payload.put("summary", summary);
+        // Cannot broadcast to a specific session without knowing the leader, but the event is mainly for logging
+        log.debug("Collab member finished: collab={}, handle={}, status={}", collabRunId, handle, status);
+    }
+
+    @Override
+    public void collabRunStatus(String collabRunId, String status) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("type", "collab_run_status");
+        payload.put("collabRunId", collabRunId);
+        payload.put("status", status);
+        log.debug("Collab run status: collab={}, status={}", collabRunId, status);
+    }
+
+    @Override
+    public void collabMessageRouted(String collabRunId, String fromHandle, String toHandle, String messageId) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("type", "collab_message_routed");
+        payload.put("collabRunId", collabRunId);
+        payload.put("fromHandle", fromHandle);
+        payload.put("toHandle", toHandle);
+        payload.put("messageId", messageId);
+        log.debug("Collab message routed: collab={}, from={}, to={}, messageId={}", collabRunId, fromHandle, toHandle, messageId);
+    }
 }

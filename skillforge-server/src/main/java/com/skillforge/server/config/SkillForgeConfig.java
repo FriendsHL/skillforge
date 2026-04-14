@@ -21,11 +21,17 @@ import com.skillforge.skills.GrepSkill;
 import com.skillforge.server.clawhub.ClawHubProperties;
 import com.skillforge.server.skill.MemorySkill;
 import com.skillforge.server.skill.SubAgentSkill;
+import com.skillforge.server.skill.TeamCreateSkill;
+import com.skillforge.server.skill.TeamKillSkill;
+import com.skillforge.server.skill.TeamListSkill;
+import com.skillforge.server.skill.TeamSendSkill;
 import com.skillforge.server.service.AgentService;
 import com.skillforge.server.service.ChatService;
 import com.skillforge.server.service.MemoryService;
 import com.skillforge.server.service.SessionService;
 import com.skillforge.server.service.UserConfigService;
+import com.skillforge.server.subagent.AgentRoster;
+import com.skillforge.server.subagent.CollabRunService;
 import com.skillforge.server.subagent.SubAgentRegistry;
 import org.springframework.context.annotation.Lazy;
 import org.slf4j.Logger;
@@ -76,6 +82,62 @@ public class SkillForgeConfig {
         SubAgentSkill skill = new SubAgentSkill(agentService, sessionService, chatService, subAgentRegistry);
         skillRegistry.register(skill);
         log.info("Registered SubAgentSkill into SkillRegistry");
+        return skill;
+    }
+
+    /**
+     * TeamCreateSkill — spawn a team member in a multi-agent collaboration run.
+     */
+    @Bean
+    public TeamCreateSkill teamCreateSkill(SessionService sessionService,
+                                           CollabRunService collabRunService,
+                                           SkillRegistry skillRegistry) {
+        TeamCreateSkill skill = new TeamCreateSkill(sessionService, collabRunService);
+        skillRegistry.register(skill);
+        log.info("Registered TeamCreateSkill into SkillRegistry");
+        return skill;
+    }
+
+    /**
+     * TeamListSkill — list team members in the current collaboration run.
+     */
+    @Bean
+    public TeamListSkill teamListSkill(SessionService sessionService,
+                                       AgentRoster agentRoster,
+                                       SkillRegistry skillRegistry) {
+        TeamListSkill skill = new TeamListSkill(sessionService, agentRoster);
+        skillRegistry.register(skill);
+        log.info("Registered TeamListSkill into SkillRegistry");
+        return skill;
+    }
+
+    /**
+     * TeamKillSkill — cancel a running team member or the entire collab run.
+     */
+    @Bean
+    public TeamKillSkill teamKillSkill(SessionService sessionService,
+                                       AgentRoster agentRoster,
+                                       CollabRunService collabRunService,
+                                       CancellationRegistry cancellationRegistry,
+                                       SkillRegistry skillRegistry) {
+        TeamKillSkill skill = new TeamKillSkill(sessionService, agentRoster, collabRunService, cancellationRegistry);
+        skillRegistry.register(skill);
+        log.info("Registered TeamKillSkill into SkillRegistry");
+        return skill;
+    }
+
+    /**
+     * TeamSendSkill — send peer messages between team members in a collaboration run.
+     */
+    @Bean
+    public TeamSendSkill teamSendSkill(SessionService sessionService,
+                                       AgentRoster agentRoster,
+                                       SubAgentRegistry subAgentRegistry,
+                                       ChatEventBroadcaster broadcaster,
+                                       SkillRegistry skillRegistry) {
+        TeamSendSkill skill = new TeamSendSkill(sessionService, agentRoster, subAgentRegistry, broadcaster);
+        skillRegistry.register(skill);
+        log.info("Registered TeamSendSkill into SkillRegistry");
         return skill;
     }
 

@@ -5,6 +5,7 @@ import com.skillforge.server.entity.SubAgentRunEntity;
 import com.skillforge.server.repository.SessionRepository;
 import com.skillforge.server.repository.SubAgentRunRepository;
 import com.skillforge.server.service.ChatService;
+import com.skillforge.server.subagent.AgentRoster;
 import com.skillforge.server.subagent.SubAgentRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -39,19 +40,29 @@ public class SubAgentStartupRecovery implements ApplicationRunner {
     private final SessionRepository sessionRepository;
     private final SubAgentRegistry subAgentRegistry;
     private final ChatService chatService;
+    private final AgentRoster agentRoster;
 
     public SubAgentStartupRecovery(SubAgentRunRepository runRepository,
                                    SessionRepository sessionRepository,
                                    SubAgentRegistry subAgentRegistry,
-                                   ChatService chatService) {
+                                   ChatService chatService,
+                                   AgentRoster agentRoster) {
         this.runRepository = runRepository;
         this.sessionRepository = sessionRepository;
         this.subAgentRegistry = subAgentRegistry;
         this.chatService = chatService;
+        this.agentRoster = agentRoster;
     }
 
     @Override
     public void run(ApplicationArguments args) {
+        // Rebuild AgentRoster from DB for multi-agent collab runs
+        try {
+            agentRoster.rebuildFromDb();
+        } catch (Exception e) {
+            log.error("AgentRoster rebuild failed", e);
+        }
+
         List<SubAgentRunEntity> runs = runRepository.findByStatus("RUNNING");
         if (runs.isEmpty()) {
             log.info("SubAgentStartupRecovery: no RUNNING rows to recover");

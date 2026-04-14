@@ -4,8 +4,11 @@ import com.skillforge.core.model.AgentDefinition;
 import com.skillforge.core.model.Message;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -54,6 +57,9 @@ public class LoopContext {
 
     /** Thread-safe queue for user messages sent while the loop is running. */
     private final ConcurrentLinkedQueue<String> pendingUserMessages = new ConcurrentLinkedQueue<>();
+
+    /** Skill names to exclude from the tool list (depth-aware filtering for multi-agent collab). */
+    private Set<String> excludedSkillNames = Collections.emptySet();
 
     public LoopContext() {
         this.messages = new ArrayList<>();
@@ -199,6 +205,14 @@ public class LoopContext {
 
     public void resetCompactedThisIteration() {
         this.compactedThisIteration = false;
+    }
+
+    public Set<String> getExcludedSkillNames() {
+        return excludedSkillNames;
+    }
+
+    public void setExcludedSkillNames(Set<String> excludedSkillNames) {
+        this.excludedSkillNames = excludedSkillNames != null ? excludedSkillNames : Collections.emptySet();
     }
 
     /** Enqueue a user message to be injected at the next iteration boundary. Thread-safe. */

@@ -12,9 +12,12 @@ import com.skillforge.core.model.Message;
 import com.skillforge.core.model.SkillDefinition;
 import com.skillforge.core.skill.SkillRegistry;
 import com.skillforge.server.entity.AgentEntity;
+import com.skillforge.server.entity.CollabRunEntity;
 import com.skillforge.server.entity.ModelUsageEntity;
 import com.skillforge.server.entity.SessionEntity;
+import com.skillforge.server.repository.CollabRunRepository;
 import com.skillforge.server.repository.ModelUsageRepository;
+import com.skillforge.server.subagent.CollabRunService;
 import com.skillforge.server.subagent.SubAgentRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -24,9 +27,11 @@ import org.springframework.stereotype.Service;
 import com.fasterxml.jackson.core.type.TypeReference;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
 
@@ -46,6 +51,8 @@ public class ChatService {
     private final SubAgentRegistry subAgentRegistry;
     private final CancellationRegistry cancellationRegistry;
     private final CompactionService compactionService;
+    private final CollabRunRepository collabRunRepository;
+    private final CollabRunService collabRunService;
     private final ObjectMapper objectMapper;
 
     public ChatService(AgentService agentService,
@@ -58,7 +65,9 @@ public class ChatService {
                        SessionTitleService sessionTitleService,
                        SubAgentRegistry subAgentRegistry,
                        CancellationRegistry cancellationRegistry,
-                       CompactionService compactionService) {
+                       CompactionService compactionService,
+                       CollabRunRepository collabRunRepository,
+                       CollabRunService collabRunService) {
         this.agentService = agentService;
         this.sessionService = sessionService;
         this.skillRegistry = skillRegistry;
@@ -70,6 +79,8 @@ public class ChatService {
         this.subAgentRegistry = subAgentRegistry;
         this.cancellationRegistry = cancellationRegistry;
         this.compactionService = compactionService;
+        this.collabRunRepository = collabRunRepository;
+        this.collabRunService = collabRunService;
         this.objectMapper = new ObjectMapper();
     }
 
@@ -218,6 +229,14 @@ public class ChatService {
             int sessionContextWindow = compactionService.resolveContextWindowForSession(freshSession);
             agentDef.getConfig().put("context_window_tokens", sessionContextWindow);
 
+            // lightContext: strip SOUL.md, TOOLS.md, and memory for lightweight child agents
+            if (freshSession.isLightContext()) {
+                agentDef.setSoulPrompt(null);
+                agentDef.setToolsPrompt(null);
+                agentDef.getConfig().put("skip_memory", true);
+                log.info("lightContext enabled for session={}, stripping soul/tools prompts and memory", sessionId);
+            }
+
             // 收集 zip 包 Skill 定义
             List<SkillDefinition> skills = new ArrayList<>();
             for (String skillId : agentDef.getSkillIds()) {
@@ -227,6 +246,22 @@ public class ChatService {
             log.info("Running agent loop (async): sessionId={}, agentId={}, mode={}", sessionId, agentEntity.getId(), mode);
             // 预建 LoopContext 并注册到 CancellationRegistry, 让 /cancel 端点可以找到它
             LoopContext preCtx = new LoopContext();
+
+            // Depth-aware tool filtering: if session is in a collab run and at max depth,
+            // exclude TeamCreate and SubAgent skills to prevent leaf agents from spawning further agents
+            String collabRunId = freshSession.getCollabRunId();
+            if (collabRunId != null) {
+                CollabRunEntity collabRun = collabRunRepository.findById(collabRunId).orElse(null);
+                if (collabRun != null && freshSession.getDepth() >= collabRun.getMaxDepth()) {
+                    Set<String> excluded = new HashSet<>();
+                    excluded.add("TeamCreate");
+                    excluded.add("SubAgent");
+                    preCtx.setExcludedSkillNames(excluded);
+                    log.info("Depth-aware filtering: excluding TeamCreate/SubAgent for session={} at depth={} (maxDepth={})",
+                            sessionId, freshSession.getDepth(), collabRun.getMaxDepth());
+                }
+            }
+
             cancellationRegistry.register(sessionId, preCtx);
             LoopResult result = agentLoopEngine.run(agentDef, userMessage, history, sessionId, userId, preCtx);
             finalMessage = result.getFinalResponse();
@@ -319,6 +354,29 @@ public class ChatService {
                         toolCallCount, System.currentTimeMillis() - startedAt);
             } catch (Exception hookErr) {
                 log.error("SubAgentRegistry hook failed: sessionId={}", sessionId, hookErr);
+            }
+
+            // CollabRun hooks: cancel cascade FIRST, then notify completion (null-safe for tests)
+            try {
+                if (collabRunService != null && collabRunRepository != null) {
+                    SessionEntity finishedSession = sessionService.getSession(sessionId);
+                    String finishedCollabRunId = finishedSession.getCollabRunId();
+                    if (finishedCollabRunId != null) {
+                        // Cancel cascade FIRST: if leader was cancelled, cancel all others before marking completion
+                        if ("cancelled".equals(finalStatus)) {
+                            CollabRunEntity collabRun = collabRunRepository.findById(finishedCollabRunId).orElse(null);
+                            if (collabRun != null && sessionId.equals(collabRun.getLeaderSessionId())) {
+                                log.info("Cancel cascade: leader session {} cancelled, cancelling entire collab run {}",
+                                        sessionId, finishedCollabRunId);
+                                collabRunService.cancelRun(finishedCollabRunId);
+                            }
+                        }
+                        // Then notify collab run of member completion
+                        collabRunService.onMemberCompleted(finishedCollabRunId, sessionId);
+                    }
+                }
+            } catch (Exception collabErr) {
+                log.error("CollabRun hook failed: sessionId={}", sessionId, collabErr);
             }
         }
     }

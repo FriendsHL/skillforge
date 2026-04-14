@@ -9,9 +9,23 @@ import java.util.List;
 
 public interface SubAgentPendingResultRepository extends JpaRepository<SubAgentPendingResultEntity, Long> {
 
+    List<SubAgentPendingResultEntity> findByParentSessionIdAndStatusIsNullOrderByIdAsc(String parentSessionId);
+
+    /** @deprecated Use findByParentSessionIdAndStatusIsNullOrderByIdAsc instead */
     List<SubAgentPendingResultEntity> findByParentSessionIdOrderByIdAsc(String parentSessionId);
 
     @Modifying
     @Transactional
     void deleteByParentSessionId(String parentSessionId);
+
+    List<SubAgentPendingResultEntity> findByTargetSessionIdAndStatusIsNullOrderBySeqNoAsc(String targetSessionId);
+
+    /** @deprecated Use findByTargetSessionIdAndStatusIsNullOrderBySeqNoAsc instead */
+    List<SubAgentPendingResultEntity> findByTargetSessionIdOrderBySeqNoAsc(String targetSessionId);
+
+    boolean existsByMessageId(String messageId);
+
+    @Modifying
+    @Transactional
+    void deleteByTargetSessionId(String targetSessionId);
 }

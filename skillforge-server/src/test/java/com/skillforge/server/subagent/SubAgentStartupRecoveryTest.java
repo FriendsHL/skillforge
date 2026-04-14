@@ -44,7 +44,8 @@ class SubAgentStartupRecoveryTest {
         sessionRepository = mock(SessionRepository.class);
         subAgentRegistry = mock(SubAgentRegistry.class);
         chatService = mock(ChatService.class);
-        recovery = new SubAgentStartupRecovery(runRepository, sessionRepository, subAgentRegistry, chatService);
+        AgentRoster agentRoster = mock(AgentRoster.class);
+        recovery = new SubAgentStartupRecovery(runRepository, sessionRepository, subAgentRegistry, chatService, agentRoster);
     }
 
     private SubAgentRunEntity run(String runId, String childId) {

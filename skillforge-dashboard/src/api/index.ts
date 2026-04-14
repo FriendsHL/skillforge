@@ -70,6 +70,9 @@ export const getClaudeMd = (userId: number) => api.get('/user-config/claude-md',
 export const saveClaudeMd = (userId: number, claudeMd: string) =>
   api.put('/user-config/claude-md', { claudeMd }, { params: { userId } });
 
+// Collab Run API
+export const getCollabRunMembers = (collabRunId: string) => api.get(`/collab-runs/${collabRunId}/members`);
+
 // Dashboard API
 export const getDashboardOverview = () => api.get('/dashboard/overview');
 export const getDailyUsage = (days = 30) => api.get(`/dashboard/usage/daily?days=${days}`);
