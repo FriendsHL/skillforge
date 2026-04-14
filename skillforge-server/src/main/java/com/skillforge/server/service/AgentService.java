@@ -40,6 +40,7 @@ public class AgentService {
         existing.setModelId(updated.getModelId());
         existing.setSystemPrompt(updated.getSystemPrompt());
         existing.setSkillIds(updated.getSkillIds());
+        existing.setToolIds(updated.getToolIds());
         existing.setConfig(updated.getConfig());
         existing.setSoulPrompt(updated.getSoulPrompt());
         existing.setToolsPrompt(updated.getToolsPrompt());
@@ -95,6 +96,19 @@ public class AgentService {
             } catch (JsonProcessingException e) {
                 log.warn("Failed to parse skillIds JSON: {}", entity.getSkillIds(), e);
                 def.setSkillIds(new ArrayList<>());
+            }
+        }
+
+        // 解析 toolIds JSON → 放入 config.tool_ids
+        if (entity.getToolIds() != null && !entity.getToolIds().isBlank()) {
+            try {
+                List<String> toolIdList = objectMapper.readValue(entity.getToolIds(),
+                        new TypeReference<List<String>>() {});
+                if (!toolIdList.isEmpty()) {
+                    def.getConfig().put("tool_ids", toolIdList);
+                }
+            } catch (JsonProcessingException e) {
+                log.warn("Failed to parse toolIds JSON: {}", entity.getToolIds(), e);
             }
         }
 

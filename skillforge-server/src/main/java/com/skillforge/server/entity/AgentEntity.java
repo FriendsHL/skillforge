@@ -36,6 +36,10 @@ public class AgentEntity {
     @Column(columnDefinition = "TEXT")
     private String skillIds;
 
+    /** JSON array of Tool names this agent can use. Null/empty = all tools available. */
+    @Column(columnDefinition = "TEXT")
+    private String toolIds;
+
     @Column(columnDefinition = "TEXT")
     private String config;
 
@@ -113,6 +117,14 @@ public class AgentEntity {
 
     public void setSkillIds(String skillIds) {
         this.skillIds = skillIds;
+    }
+
+    public String getToolIds() {
+        return toolIds;
+    }
+
+    public void setToolIds(String toolIds) {
+        this.toolIds = toolIds;
     }
 
     public String getConfig() {

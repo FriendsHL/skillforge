@@ -42,6 +42,9 @@ export const getTraces = (sessionId?: string) =>
   sessionId ? api.get(`/traces`, { params: { sessionId } }) : api.get('/traces');
 export const getTraceSpans = (traceId: string) => api.get(`/traces/${traceId}/spans`);
 
+// Tool API (Java function-calling tools: Bash, FileRead, etc.)
+export const getTools = () => api.get('/tools');
+
 // Skill API
 export const getSkills = () => api.get('/skills');
 export const getBuiltinSkills = () => api.get('/skills/builtin');

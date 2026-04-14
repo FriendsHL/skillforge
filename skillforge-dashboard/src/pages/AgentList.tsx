@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, Popconfirm, Tag, Tabs, message } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, FileTextOutlined } from '@ant-design/icons';
-import { getAgents, createAgent, updateAgent, deleteAgent, getBuiltinSkills, getClaudeMd, saveClaudeMd } from '../api';
+import { getAgents, createAgent, updateAgent, deleteAgent, getTools, getSkills, getClaudeMd, saveClaudeMd } from '../api';
 
 const { TextArea } = Input;
 
@@ -37,6 +37,7 @@ const AgentList: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<any>(null);
+  const [toolOptions, setToolOptions] = useState<{ label: string; value: string }[]>([]);
   const [skillOptions, setSkillOptions] = useState<{ label: string; value: string }[]>([]);
   const [form] = Form.useForm();
   const [claudeMdModalOpen, setClaudeMdModalOpen] = useState(false);
@@ -50,8 +51,22 @@ const AgentList: React.FC = () => {
       .finally(() => setLoading(false));
   };
 
+  const fetchTools = () => {
+    getTools()
+      .then((res) => {
+        const list: any[] = Array.isArray(res.data) ? res.data : (res.data as any)?.data ?? [];
+        setToolOptions(
+          list.map((t: any) => ({
+            label: t.description ? `${t.name} — ${t.description}` : t.name,
+            value: t.name,
+          }))
+        );
+      })
+      .catch(() => {});
+  };
+
   const fetchSkills = () => {
-    getBuiltinSkills()
+    getSkills()
       .then((res) => {
         const list: any[] = Array.isArray(res.data) ? res.data : (res.data as any)?.data ?? [];
         setSkillOptions(
@@ -61,9 +76,7 @@ const AgentList: React.FC = () => {
           }))
         );
       })
-      .catch(() => {
-        // 静默失败:即使 skills 拉不到也不阻塞 Agent 管理
-      });
+      .catch(() => {});
   };
 
   const fetchClaudeMd = () => {
@@ -72,6 +85,7 @@ const AgentList: React.FC = () => {
 
   useEffect(() => {
     fetchAgents();
+    fetchTools();
     fetchSkills();
     fetchClaudeMd();
   }, []);
@@ -79,7 +93,7 @@ const AgentList: React.FC = () => {
   const openCreate = () => {
     setEditing(null);
     form.resetFields();
-    form.setFieldsValue({ executionMode: 'ask', skillIds: [] });
+    form.setFieldsValue({ executionMode: 'ask', skillIds: [], toolIds: [] });
     setModalOpen(true);
   };
 
@@ -88,6 +102,7 @@ const AgentList: React.FC = () => {
     form.setFieldsValue({
       ...record,
       skillIds: parseSkillIds(record.skillIds),
+      toolIds: parseSkillIds(record.toolIds),
     });
     setModalOpen(true);
   };
@@ -99,6 +114,7 @@ const AgentList: React.FC = () => {
       const payload = {
         ...values,
         skillIds: JSON.stringify(values.skillIds ?? []),
+        toolIds: JSON.stringify(values.toolIds ?? []),
       };
       if (editing) {
         await updateAgent(editing.id, { ...editing, ...payload });
@@ -137,13 +153,34 @@ const AgentList: React.FC = () => {
     { title: 'Model', dataIndex: 'modelId', key: 'modelId' },
     { title: 'Mode', dataIndex: 'executionMode', key: 'executionMode', width: 80 },
     {
+      title: 'Tools',
+      dataIndex: 'toolIds',
+      key: 'toolIds',
+      render: (v: any) => {
+        const arr = parseSkillIds(v);
+        if (arr.length === 0) return <span style={{ color: '#999' }}>All</span>;
+        const shown = arr.slice(0, 3);
+        const rest = arr.length - shown.length;
+        return (
+          <Space size={[4, 4]} wrap>
+            {shown.map((n) => (
+              <Tag key={n} color="green">
+                {n}
+              </Tag>
+            ))}
+            {rest > 0 && <Tag>+{rest}</Tag>}
+          </Space>
+        );
+      },
+    },
+    {
       title: 'Skills',
       dataIndex: 'skillIds',
       key: 'skillIds',
       render: (v: any) => {
         const arr = parseSkillIds(v);
         if (arr.length === 0) return <span style={{ color: '#999' }}>—</span>;
-        const shown = arr.slice(0, 4);
+        const shown = arr.slice(0, 3);
         const rest = arr.length - shown.length;
         return (
           <Space size={[4, 4]} wrap>
@@ -280,13 +317,27 @@ const AgentList: React.FC = () => {
             ]} />
           </Form.Item>
           <Form.Item
-            name="skillIds"
-            label="Skills"
-            tooltip="选择 Agent 可调用的内置 / Zip 包技能"
+            name="toolIds"
+            label="Tools"
+            tooltip="Select which tools (function calling) this agent can use. Leave empty for all tools."
           >
             <Select
               mode="multiple"
-              placeholder="选择 Skills"
+              placeholder="All tools (default)"
+              options={toolOptions}
+              showSearch
+              optionFilterProp="label"
+              allowClear
+            />
+          </Form.Item>
+          <Form.Item
+            name="skillIds"
+            label="Skills"
+            tooltip="Select which skills (SKILL.md knowledge packs) to inject into this agent's prompt"
+          >
+            <Select
+              mode="multiple"
+              placeholder="Select skills"
               options={skillOptions}
               showSearch
               optionFilterProp="label"

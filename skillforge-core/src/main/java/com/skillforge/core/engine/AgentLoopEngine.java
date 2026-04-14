@@ -208,7 +208,7 @@ public class AgentLoopEngine {
         }
 
         // 5. 收集 tools: 内置 Skill 的 ToolSchema + SkillDefinition 的描述 + (可选) ask_user + compact_context
-        List<ToolSchema> tools = collectTools(loopCtx.getExecutionMode(), loopCtx.getExcludedSkillNames());
+        List<ToolSchema> tools = collectTools(loopCtx.getExecutionMode(), loopCtx.getExcludedSkillNames(), loopCtx.getAllowedToolNames());
         final int contextWindowTokens = resolveContextWindow(agentDef);
 
         // 追踪工具调用记录
@@ -920,12 +920,18 @@ public class AgentLoopEngine {
     /**
      * 收集所有可用的工具 schema：内置 Skill + SkillDefinition + (可选) ask_user。
      */
-    private List<ToolSchema> collectTools(String executionMode, java.util.Set<String> excludedSkillNames) {
+    private List<ToolSchema> collectTools(String executionMode, java.util.Set<String> excludedSkillNames,
+                                             java.util.Set<String> allowedToolNames) {
         List<ToolSchema> tools = new ArrayList<>();
 
-        // 内置 Skill (filter out excluded skills for depth-aware multi-agent collab)
+        // 内置 Skill (filter out excluded skills for depth-aware multi-agent collab,
+        // and apply allowedToolNames whitelist if configured)
         for (Skill skill : skillRegistry.getAllSkills()) {
             if (excludedSkillNames != null && excludedSkillNames.contains(skill.getName())) {
+                continue;
+            }
+            if (allowedToolNames != null && !allowedToolNames.isEmpty()
+                    && !allowedToolNames.contains(skill.getName())) {
                 continue;
             }
             ToolSchema schema = skill.getToolSchema();

@@ -18,6 +18,10 @@ import com.skillforge.skills.FileReadSkill;
 import com.skillforge.skills.FileWriteSkill;
 import com.skillforge.skills.GlobSkill;
 import com.skillforge.skills.GrepSkill;
+import com.skillforge.skills.WebFetchSkill;
+import com.skillforge.skills.WebSearchSkill;
+import com.skillforge.server.skill.TodoStore;
+import com.skillforge.server.skill.TodoWriteSkill;
 import com.skillforge.server.clawhub.ClawHubProperties;
 import com.skillforge.server.skill.MemorySkill;
 import com.skillforge.server.skill.SubAgentSkill;
@@ -63,7 +67,17 @@ public class SkillForgeConfig {
         registry.register(new GlobSkill());
         registry.register(new GrepSkill());
         registry.register(new MemorySkill(memoryService));
+        registry.register(new WebFetchSkill());
+        registry.register(new WebSearchSkill());
         return registry;
+    }
+
+    @Bean
+    public TodoWriteSkill todoWriteSkill(TodoStore todoStore, SkillRegistry skillRegistry) {
+        TodoWriteSkill skill = new TodoWriteSkill(todoStore);
+        skillRegistry.register(skill);
+        log.info("Registered TodoWriteSkill into SkillRegistry");
+        return skill;
     }
 
     // ClawHubSkill 已迁移为 system-skills/clawhub/ 文件化 Skill，

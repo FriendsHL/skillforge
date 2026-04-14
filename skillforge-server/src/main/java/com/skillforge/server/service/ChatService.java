@@ -286,6 +286,15 @@ public class ChatService {
                 }
             }
 
+            // Apply allowedToolNames from agent config (tool_ids)
+            Object toolIdsObj = agentDef.getConfig().get("tool_ids");
+            if (toolIdsObj instanceof List && !((List<?>) toolIdsObj).isEmpty()) {
+                @SuppressWarnings("unchecked")
+                List<String> toolIdList = (List<String>) toolIdsObj;
+                preCtx.setAllowedToolNames(new HashSet<>(toolIdList));
+                log.info("Tool filtering: only allowing {} tools for session={}", toolIdList.size(), sessionId);
+            }
+
             // Apply maxLoops: session override > agent config > engine default (25)
             Integer sessionMaxLoops = freshSession.getMaxLoops();
             if (sessionMaxLoops != null && sessionMaxLoops > 0) {

@@ -61,6 +61,9 @@ public class LoopContext {
     /** Skill names to exclude from the tool list (depth-aware filtering for multi-agent collab). */
     private Set<String> excludedSkillNames = Collections.emptySet();
 
+    /** Tool names this agent is allowed to use. Null = all tools allowed. */
+    private Set<String> allowedToolNames;
+
     public LoopContext() {
         this.messages = new ArrayList<>();
         this.maxLoops = 25;
@@ -213,6 +216,14 @@ public class LoopContext {
 
     public void setExcludedSkillNames(Set<String> excludedSkillNames) {
         this.excludedSkillNames = excludedSkillNames != null ? excludedSkillNames : Collections.emptySet();
+    }
+
+    public Set<String> getAllowedToolNames() {
+        return allowedToolNames;
+    }
+
+    public void setAllowedToolNames(Set<String> allowedToolNames) {
+        this.allowedToolNames = allowedToolNames;
     }
 
     /** Enqueue a user message to be injected at the next iteration boundary. Thread-safe. */
