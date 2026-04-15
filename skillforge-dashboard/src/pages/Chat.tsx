@@ -663,23 +663,40 @@ const Chat: React.FC = () => {
   };
 
   return (
-    <div style={{ display: 'flex', height: 'calc(100vh - 130px)', gap: 16, overflow: 'hidden' }}>
+    <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
       {/* Left panel */}
-      <div style={{ width: 280, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 12, overflow: 'hidden' }}>
-        <Select
-          placeholder="Select an Agent"
-          style={{ width: '100%' }}
-          value={selectedAgent}
-          onChange={(v) => {
-            setSelectedAgent(v);
-            setActiveSessionId(undefined);
-            setRawMessages([]);
-          }}
-          options={agents.map((a: any) => ({ label: a.name, value: a.id }))}
-        />
-        <a onClick={handleNewSession} style={{ fontSize: 13 }}>
-          + New Session
-        </a>
+      <div
+        style={{
+          width: 260,
+          flexShrink: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+          background: 'var(--bg-sidebar)',
+          borderRight: '1px solid var(--border-subtle)',
+        }}
+      >
+        <div style={{ padding: 12 }}>
+          <Select
+            placeholder="Select an Agent"
+            style={{ width: '100%', marginBottom: 8 }}
+            value={selectedAgent}
+            onChange={(v) => {
+              setSelectedAgent(v);
+              setActiveSessionId(undefined);
+              setRawMessages([]);
+            }}
+            options={agents.map((a: any) => ({ label: a.name, value: a.id }))}
+          />
+          <Button
+            type="primary"
+            block
+            onClick={handleNewSession}
+            style={{ borderRadius: 8 }}
+          >
+            + New Chat
+          </Button>
+        </div>
         <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
           <List
             size="small"
@@ -691,14 +708,16 @@ const Chat: React.FC = () => {
                   onClick={() => setActiveSessionId(sid)}
                   style={{
                     cursor: 'pointer',
-                    background: activeSessionId === sid ? '#e6f4ff' : undefined,
-                    padding: '8px 12px',
+                    background: activeSessionId === sid ? 'var(--bg-hover)' : undefined,
+                    padding: '10px 16px',
                     borderRadius: 6,
+                    margin: '2px 6px',
+                    border: 'none',
                   }}
                 >
                   <Text ellipsis style={{ width: '100%' }}>
                     {item.collabRunId && (
-                      <TeamOutlined style={{ marginRight: 4, color: '#1677ff', fontSize: 12 }} title="Team session" />
+                      <TeamOutlined style={{ marginRight: 4, color: 'var(--accent-primary)', fontSize: 12 }} title="Team session" />
                     )}
                     {item.title && item.title !== 'New Session'
                       ? item.title
@@ -712,9 +731,8 @@ const Chat: React.FC = () => {
       </div>
 
       {/* Right panel - chat */}
-      <Card
-        style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
-        styles={{ body: { flex: 1, padding: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' } }}
+      <div
+        style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: 'var(--bg-primary)' }}
       >
         {activeSessionId || selectedAgent ? (
           <>
@@ -722,7 +740,7 @@ const Chat: React.FC = () => {
               <div
                 style={{
                   padding: '8px 12px',
-                  borderBottom: '1px solid #f0f0f0',
+                  borderBottom: '1px solid var(--border-subtle)',
                   display: 'flex',
                   justifyContent: 'flex-end',
                   alignItems: 'center',
@@ -772,8 +790,8 @@ const Chat: React.FC = () => {
               <div
                 style={{
                   padding: '6px 12px',
-                  borderBottom: '1px solid #f0f0f0',
-                  background: '#fafafa',
+                  borderBottom: '1px solid var(--border-subtle)',
+                  background: 'var(--bg-assistant-structured)',
                   display: 'flex',
                   alignItems: 'center',
                   gap: 6,
@@ -864,7 +882,7 @@ const Chat: React.FC = () => {
             <Empty description="Select an Agent to start chatting" />
           </div>
         )}
-      </Card>
+      </div>
       <Modal
         title="压缩历史"
         open={compactModalOpen}

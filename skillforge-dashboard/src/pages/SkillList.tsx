@@ -211,10 +211,10 @@ const SkillList: React.FC = () => {
   };
 
   return (
-    <div>
-      <h2 style={{ marginBottom: 16 }}>Skills & Tools</h2>
+    <div style={{ padding: '24px 32px' }}>
+      <Typography.Title level={3} style={{ marginTop: 0 }}>Skills & Tools</Typography.Title>
 
-      <Card title="System Tools" size="small" style={{ marginBottom: 24 }}>
+      <Card title="System Tools" size="small" style={{ marginBottom: 24, borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
         <Table
           dataSource={builtinSkills}
           columns={builtinColumns}
@@ -227,7 +227,7 @@ const SkillList: React.FC = () => {
 
       <Divider />
 
-      <Card title="Skills" size="small" style={{ marginBottom: 16 }}>
+      <Card title="Skills" size="small" style={{ marginBottom: 16, borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
         <Dragger
           accept=".zip"
           showUploadList={false}

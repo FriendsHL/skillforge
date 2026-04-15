@@ -8,6 +8,8 @@ import {
   CalendarOutlined,
   FireOutlined,
 } from '@ant-design/icons';
+
+const { Title } = Typography;
 import ReactECharts from 'echarts-for-react';
 import { useNavigate } from 'react-router-dom';
 import { getDashboardOverview, getDailyUsage, getSessions } from '../api';
@@ -122,37 +124,37 @@ const Dashboard: React.FC = () => {
     {
       title: 'Total Agents',
       value: ov.totalAgents ?? 0,
-      icon: <RobotOutlined style={{ fontSize: 22, color: '#1677ff' }} />,
+      icon: <RobotOutlined style={{ fontSize: 22, color: 'var(--accent-primary)' }} />,
       sub: `${ov.activeAgents ?? 0} active`,
     },
     {
       title: 'Total Sessions',
       value: ov.totalSessions ?? 0,
-      icon: <MessageOutlined style={{ fontSize: 22, color: '#13c2c2' }} />,
+      icon: <MessageOutlined style={{ fontSize: 22, color: 'var(--accent-primary)' }} />,
       sub: `${ov.todaySessions ?? 0} today`,
     },
     {
       title: "Today's Tokens",
       value: todayTokens,
-      icon: <CalendarOutlined style={{ fontSize: 22, color: '#faad14' }} />,
+      icon: <CalendarOutlined style={{ fontSize: 22, color: 'var(--accent-primary)' }} />,
       sub: `in ${formatNumber(ov.todayInputTokens ?? 0)} / out ${formatNumber(ov.todayOutputTokens ?? 0)}`,
     },
     {
       title: 'Total Tokens',
       value: totalTokens,
-      icon: <CloudOutlined style={{ fontSize: 22, color: '#722ed1' }} />,
+      icon: <CloudOutlined style={{ fontSize: 22, color: 'var(--accent-primary)' }} />,
       sub: `in ${formatNumber(ov.totalInputTokens ?? 0)} / out ${formatNumber(ov.totalOutputTokens ?? 0)}`,
     },
   ];
 
   return (
-    <div>
-      <h2 style={{ marginBottom: 16 }}>Overview</h2>
+    <div style={{ padding: '24px 32px' }}>
+      <Title level={3} style={{ marginTop: 0 }}>Overview</Title>
 
       <Row gutter={[16, 16]}>
         {kpis.map((k) => (
           <Col xs={24} sm={12} lg={6} key={k.title}>
-            <Card>
+            <Card style={{ borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                 {k.icon}
                 <div style={{ flex: 1 }}>
@@ -174,7 +176,7 @@ const Dashboard: React.FC = () => {
 
       <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
         <Col xs={24} lg={16}>
-          <Card title={<><ThunderboltOutlined /> Token usage — last 7 days</>}>
+          <Card title={<><ThunderboltOutlined /> Token usage — last 7 days</>} style={{ borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
             {daily.length === 0 ? (
               <div style={{ textAlign: 'center', padding: 40, color: '#999' }}>
                 暂无数据
@@ -186,7 +188,7 @@ const Dashboard: React.FC = () => {
         </Col>
 
         <Col xs={24} lg={8}>
-          <Card title={<><FireOutlined /> Recent sessions</>}>
+          <Card title={<><FireOutlined /> Recent sessions</>} style={{ borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
             {recent.length === 0 ? (
               <div style={{ textAlign: 'center', padding: 40, color: '#999' }}>
                 暂无会话

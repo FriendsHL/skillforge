@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Spin, Input, Button, Tag } from 'antd';
-import { SendOutlined, LoadingOutlined } from '@ant-design/icons';
+import { Spin, Input, Button } from 'antd';
+import { SendOutlined } from '@ant-design/icons';
 import ToolCallTimeline from './ToolCallTimeline';
 import MarkdownRenderer from './MarkdownRenderer';
 
@@ -49,22 +49,37 @@ const ChatInput: React.FC<ChatInputProps> = React.memo(({ disabled, onSend }) =>
     onSend(text);
   };
   return (
-    <div style={{ padding: '12px 16px', borderTop: '1px solid #f0f0f0', display: 'flex', gap: 8 }}>
-      <Input
-        placeholder="Type your message..."
-        value={input}
-        onChange={(e) => setInput(e.target.value)}
-        onPressEnter={handleSend}
-        disabled={disabled}
-      />
-      <Button
-        type="primary"
-        icon={<SendOutlined />}
-        onClick={handleSend}
-        disabled={disabled}
+    <div style={{ background: 'var(--bg-primary)', padding: '12px 16px 20px' }}>
+      <div
+        style={{
+          background: 'var(--bg-surface)',
+          border: '1px solid var(--border-subtle)',
+          borderRadius: 'var(--radius-input)',
+          boxShadow: 'var(--shadow-input)',
+          display: 'flex',
+          alignItems: 'center',
+          padding: '4px 4px 4px 16px',
+          gap: 8,
+        }}
       >
-        Send
-      </Button>
+        <Input
+          placeholder="Type your message..."
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onPressEnter={handleSend}
+          disabled={disabled}
+          variant="borderless"
+          style={{ flex: 1 }}
+        />
+        <Button
+          type="primary"
+          icon={<SendOutlined />}
+          onClick={handleSend}
+          disabled={disabled}
+          shape="circle"
+          style={{ width: 32, height: 32, minWidth: 32 }}
+        />
+      </div>
     </div>
   );
 });
@@ -73,6 +88,7 @@ export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   toolCalls?: any[];
+  timestamp?: string;
 }
 
 interface InflightTool {
@@ -114,106 +130,163 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
     return () => clearInterval(id);
   }, [inflightTools]);
 
+  // Smart scroll: only auto-scroll if user is near bottom (within 100px)
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const isNearBottom = useRef(true);
+  const handleScroll = useCallback(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    isNearBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100;
+  }, []);
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, loading, streamingText, inflightTools]);
+    if (isNearBottom.current) {
+      bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [messages, streamingText]);
 
   const inflightList = inflightTools ? Object.entries(inflightTools) : [];
 
+  const formatTime = (date: Date) => {
+    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  };
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <div style={{ flex: 1, overflowY: 'auto', padding: 16 }}>
-        {messages.map((msg, idx) => (
-          <div
-            key={idx}
-            style={{
-              display: 'flex',
-              justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start',
-              marginBottom: 12,
-            }}
-          >
-            <div
-              style={{
-                maxWidth: msg.role === 'user' ? '70%' : '85%',
-                padding: msg.role === 'user' ? '10px 16px' : '12px 18px',
-                borderRadius: 12,
-                background: msg.role === 'user' ? '#1677ff' : '#ffffff',
-                color: msg.role === 'user' ? '#fff' : '#000',
-                border: msg.role === 'assistant' ? '1px solid #e8e8e8' : 'none',
-                boxShadow: msg.role === 'assistant' ? '0 1px 2px rgba(0,0,0,0.04)' : 'none',
-                whiteSpace: msg.role === 'user' ? 'pre-wrap' : 'normal',
-                wordBreak: 'break-word',
-              }}
-            >
-              {msg.role === 'assistant' ? (
-                <MarkdownRenderer content={msg.content} />
-              ) : (
-                msg.content
+      <div ref={scrollContainerRef} onScroll={handleScroll} style={{ flex: 1, overflowY: 'auto', padding: 16 }}>
+        <div style={{ maxWidth: 740, margin: '0 auto', padding: '0 16px' }}>
+          {messages.map((msg, idx) => (
+            <div key={idx} style={{ marginBottom: 16 }}>
+              {msg.role === 'assistant' && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                  <div
+                    style={{
+                      width: 20,
+                      height: 20,
+                      borderRadius: '50%',
+                      background: 'var(--accent-primary)',
+                      color: 'var(--text-on-accent)',
+                      fontSize: 9,
+                      fontWeight: 700,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                  >
+                    SF
+                  </div>
+                  <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Assistant</span>
+                </div>
               )}
-              {msg.role === 'assistant' && msg.toolCalls && msg.toolCalls.length > 0 && (
-                <ToolCallTimeline toolCalls={msg.toolCalls} />
-              )}
+              <div
+                style={{
+                  ...(msg.role === 'user'
+                    ? {
+                        maxWidth: '72%',
+                        marginLeft: 'auto',
+                        background: 'var(--bg-user-msg)',
+                        borderRadius: '18px 18px 4px 18px',
+                        padding: '10px 14px',
+                        color: 'var(--text-primary)',
+                        fontSize: 15,
+                        whiteSpace: 'pre-wrap' as const,
+                        wordBreak: 'break-word' as const,
+                      }
+                    : {
+                        fontSize: 15,
+                        lineHeight: 1.7,
+                        wordBreak: 'break-word' as const,
+                      }),
+                }}
+              >
+                {msg.role === 'assistant' ? (
+                  <MarkdownRenderer content={msg.content} />
+                ) : (
+                  msg.content
+                )}
+                {msg.role === 'assistant' && msg.toolCalls && msg.toolCalls.length > 0 && (
+                  <ToolCallTimeline toolCalls={msg.toolCalls} />
+                )}
+              </div>
+              <div
+                style={{
+                  fontSize: 11,
+                  color: 'var(--text-muted)',
+                  marginTop: 3,
+                  textAlign: msg.role === 'user' ? 'right' : 'left',
+                }}
+              >
+                {msg.timestamp ? formatTime(new Date(msg.timestamp)) : ''}
+              </div>
             </div>
-          </div>
-        ))}
-        {streamingText && streamingText.length > 0 && (
-          <div style={{ display: 'flex', justifyContent: 'flex-start', marginBottom: 12 }}>
-            <div
-              style={{
-                maxWidth: '85%',
-                padding: '12px 18px',
-                borderRadius: 12,
-                background: '#fafafa',
-                color: '#000',
-                border: '1px dashed #d9d9d9',
-                wordBreak: 'break-word',
-              }}
-            >
-              <ThrottledMarkdown content={streamingText} />
-              <span style={{ color: '#999', fontSize: 12, marginLeft: 4 }}>▍</span>
+          ))}
+          {streamingText && streamingText.length > 0 && (
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                <div
+                  style={{
+                    width: 28,
+                    height: 28,
+                    borderRadius: '50%',
+                    background: 'var(--accent-primary)',
+                    color: 'var(--text-on-accent)',
+                    fontSize: 11,
+                    fontWeight: 700,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  SF
+                </div>
+                <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Assistant</span>
+              </div>
+              <div style={{ fontSize: 15, lineHeight: 1.7, wordBreak: 'break-word' }}>
+                <ThrottledMarkdown content={streamingText} />
+                <span style={{ color: 'var(--text-muted)', fontSize: 12, marginLeft: 4 }}>▍</span>
+              </div>
             </div>
-          </div>
-        )}
-        {inflightList.map(([toolUseId, info]) => {
-          const elapsed = Math.max(0, Math.floor((Date.now() - info.startTs) / 1000));
-          let inputPreview = '';
-          try {
-            inputPreview = typeof info.input === 'string' ? info.input : JSON.stringify(info.input);
-          } catch {
-            inputPreview = '';
-          }
-          if (inputPreview.length > 120) inputPreview = inputPreview.slice(0, 120) + '...';
-          return (
-            <div
-              key={toolUseId}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 10,
-                margin: '0 0 12px 0',
-                padding: '10px 14px',
-                borderRadius: 8,
-                background: '#f6ffed',
-                border: '1px solid #b7eb8f',
-                fontSize: 13,
-                color: '#389e0d',
-              }}
-            >
-              <LoadingOutlined spin />
-              <Tag color="green" style={{ marginRight: 0 }}>{info.name}</Tag>
-              <span style={{ color: '#666', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {inputPreview}
-              </span>
-              <span style={{ color: '#999' }}>{elapsed}s</span>
+          )}
+          {inflightList.map(([toolUseId, info]) => {
+            const elapsed = Math.max(0, Math.floor((Date.now() - info.startTs) / 1000));
+            let inputPreview = '';
+            try {
+              inputPreview = typeof info.input === 'string' ? info.input : JSON.stringify(info.input);
+            } catch {
+              inputPreview = '';
+            }
+            if (inputPreview.length > 120) inputPreview = inputPreview.slice(0, 120) + '...';
+            return (
+              <div
+                key={toolUseId}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10,
+                  margin: '0 0 12px 0',
+                  padding: '10px 14px',
+                  borderRadius: 'var(--radius-md)',
+                  background: 'var(--bg-assistant-structured)',
+                  border: '1px solid var(--border-subtle)',
+                  fontSize: 13,
+                  color: 'var(--text-secondary)',
+                }}
+              >
+                <Spin size="small" />
+                <span style={{ fontWeight: 500, color: 'var(--text-primary)' }}>{info.name}</span>
+                <span style={{ color: 'var(--text-muted)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {inputPreview}
+                </span>
+                <span style={{ color: 'var(--text-muted)' }}>{elapsed}s</span>
+              </div>
+            );
+          })}
+          {loading && !streamingText && inflightList.length === 0 && (
+            <div style={{ textAlign: 'center', padding: 16 }}>
+              <Spin tip="AI is thinking..." />
             </div>
-          );
-        })}
-        {loading && !streamingText && inflightList.length === 0 && (
-          <div style={{ textAlign: 'center', padding: 16 }}>
-            <Spin tip="AI is thinking..." />
-          </div>
-        )}
-        <div ref={bottomRef} />
+          )}
+          <div ref={bottomRef} />
+        </div>
       </div>
       <ChatInput disabled={inputDisabled} onSend={stableOnSend} />
     </div>

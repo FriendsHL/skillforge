@@ -1,5 +1,5 @@
-import React from 'react';
-import { Layout as AntLayout, Menu } from 'antd';
+import React, { useState } from 'react';
+import { Layout as AntLayout, Menu, Button } from 'antd';
 import {
   DashboardOutlined,
   RobotOutlined,
@@ -9,6 +9,8 @@ import {
   BulbOutlined,
   BarChartOutlined,
   ApartmentOutlined,
+  MenuFoldOutlined,
+  MenuUnfoldOutlined,
 } from '@ant-design/icons';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 
@@ -25,24 +27,47 @@ const menuItems = [
   { key: '/chat', icon: <CommentOutlined />, label: 'Chat' },
 ];
 
+const pageTitles: Record<string, string> = {
+  '/': 'Dashboard',
+  '/agents': 'Agents',
+  '/skills': 'Skills & Tools',
+  '/memories': 'Memories',
+  '/sessions': 'Sessions',
+  '/usage': 'Usage',
+  '/traces': 'Traces',
+  '/chat': 'Chat',
+};
+
 const AppLayout: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
+  const [collapsed, setCollapsed] = useState(false);
 
   const selectedKey = menuItems
     .filter((item) => location.pathname.startsWith(item.key) && item.key !== '/')
     .sort((a, b) => b.key.length - a.key.length)[0]?.key || '/';
 
+  const pageTitle = pageTitles[selectedKey] || 'SkillForge';
+
   return (
-    <AntLayout style={{ minHeight: '100vh' }}>
-      <Sider theme="dark" breakpoint="lg" collapsedWidth={80}>
+    <AntLayout style={{ height: '100vh', overflow: 'hidden' }}>
+      <Sider
+        width={260}
+        collapsed={collapsed}
+        collapsedWidth={0}
+        trigger={null}
+        style={{
+          background: 'var(--bg-sidebar)',
+          borderRight: '1px solid var(--border-subtle)',
+        }}
+      >
         <div
           style={{
-            height: 64,
+            height: 48,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            color: '#fff',
+            color: 'var(--text-primary)',
             fontSize: 20,
             fontWeight: 700,
             letterSpacing: 1,
@@ -51,18 +76,35 @@ const AppLayout: React.FC = () => {
           SkillForge
         </div>
         <Menu
-          theme="dark"
           mode="inline"
           selectedKeys={[selectedKey]}
           items={menuItems}
           onClick={({ key }) => navigate(key)}
+          style={{ borderRight: 'none' }}
         />
       </Sider>
       <AntLayout>
-        <Header style={{ background: '#fff', padding: '0 24px', borderBottom: '1px solid #f0f0f0' }}>
-          <span style={{ fontSize: 16, fontWeight: 500 }}>SkillForge Dashboard</span>
+        <Header
+          style={{
+            height: 48,
+            lineHeight: '48px',
+            background: 'var(--bg-surface)',
+            padding: '0 16px',
+            borderBottom: '1px solid var(--border-subtle)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 12,
+          }}
+        >
+          <Button
+            type="text"
+            icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+            onClick={() => setCollapsed(!collapsed)}
+            style={{ fontSize: 16 }}
+          />
+          <span style={{ fontSize: 16, fontWeight: 500, color: 'var(--text-primary)' }}>{pageTitle}</span>
         </Header>
-        <Content style={{ margin: 16 }}>
+        <Content style={{ flex: 1, overflow: 'hidden' }}>
           <Outlet />
         </Content>
       </AntLayout>

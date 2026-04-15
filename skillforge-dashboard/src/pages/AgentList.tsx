@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, Popconfirm, Tag, Tabs, message } from 'antd';
+import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, Popconfirm, Tag, Tabs, message, Card, Typography } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, FileTextOutlined } from '@ant-design/icons';
 import { getAgents, createAgent, updateAgent, deleteAgent, getTools, getSkills, getClaudeMd, saveClaudeMd } from '../api';
 
@@ -214,9 +214,9 @@ const AgentList: React.FC = () => {
   ];
 
   return (
-    <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
-        <h2>Agents</h2>
+    <div style={{ padding: '24px 32px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <Typography.Title level={3} style={{ marginTop: 0, marginBottom: 0 }}>Agents</Typography.Title>
         <Space>
           <Button icon={<FileTextOutlined />} onClick={() => setClaudeMdModalOpen(true)}>
             CLAUDE.md (Global)
@@ -226,7 +226,9 @@ const AgentList: React.FC = () => {
           </Button>
         </Space>
       </div>
-      <Table dataSource={agents} columns={columns} rowKey="id" loading={loading} />
+      <Card style={{ borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
+        <Table dataSource={agents} columns={columns} rowKey="id" loading={loading} />
+      </Card>
 
       <Modal
         title={editing ? 'Edit Agent' : 'Create Agent'}
