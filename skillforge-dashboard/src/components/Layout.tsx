@@ -59,6 +59,7 @@ const AppLayout: React.FC = () => {
         collapsed={collapsed}
         collapsedWidth={0}
         trigger={null}
+        className="sf-sider"
         style={{
           background: 'var(--bg-sidebar)',
           borderRight: '1px solid var(--border-subtle)',

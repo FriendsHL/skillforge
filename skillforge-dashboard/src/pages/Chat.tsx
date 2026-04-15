@@ -1,9 +1,8 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Select, List, Card, message, Typography, Empty, Alert, Button, Input, Segmented, Space, Modal, Tag, Table, Collapse } from 'antd';
-import { ArrowUpOutlined, HistoryOutlined, MessageOutlined, TeamOutlined } from '@ant-design/icons';
+import React, { useEffect, useMemo, useState } from 'react';
+import { message, Typography, Empty, Alert, Button, Tag, Collapse } from 'antd';
+import { ArrowUpOutlined } from '@ant-design/icons';
 import { useNavigate, useParams } from 'react-router-dom';
 import ChatWindow from '../components/ChatWindow';
-import type { ChatMessage } from '../components/ChatWindow';
 import SessionReplay from '../components/SessionReplay';
 import SubAgentRunsPanel from '../components/SubAgentRunsPanel';
 import ChildSessionsPanel from '../components/ChildSessionsPanel';
@@ -11,6 +10,11 @@ import CollabRunPanel from '../components/CollabRunPanel';
 import CollabRunSummary from '../components/CollabRunSummary';
 import CollabRunTimeline from '../components/CollabRunTimeline';
 import PeerMessageFeed from '../components/PeerMessageFeed';
+import CompactionHistoryModal from '../components/CompactionHistoryModal';
+import RuntimeBanner from '../components/RuntimeBanner';
+import PendingAskCard from '../components/PendingAskCard';
+import SessionToolbar from '../components/SessionToolbar';
+import ChatSidebar from '../components/ChatSidebar';
 import {
   getAgents,
   createSession,
@@ -24,11 +28,13 @@ import {
   compactSession,
   getCompactions,
 } from '../api';
+import { useChatWebSocket } from '../hooks/useChatWebSocket';
+import { useChatMessages, type InflightTool } from '../hooks/useChatMessages';
+import { useCollabState } from '../hooks/useCollabState';
+import { useChatSession, type RuntimeStatus, type ExecutionMode } from '../hooks/useChatSession';
+import { useChatWsEventHandler } from '../hooks/useChatWsEventHandler';
 
 const { Text } = Typography;
-
-type RuntimeStatus = 'idle' | 'running' | 'waiting_user' | 'error';
-type ExecutionMode = 'ask' | 'auto';
 
 interface PendingAskOption {
   label: string;
@@ -42,83 +48,6 @@ interface PendingAsk {
   allowOther: boolean;
 }
 
-/**
- * 归一化后端返回的消息列表:
- * Agent Loop 产生的历史消息里 tool_result 以 role=user 发回,会变成空文本的用户气泡。
- * 这里把这类消息过滤掉,并把 tool_result 按 tool_use_id 合并到上一条 assistant 的 toolCalls。
- */
-function normalizeMessages(list: any[]): ChatMessage[] {
-  const result: ChatMessage[] = [];
-  const extractBlocks = (content: any) => {
-    let text = '';
-    const toolUseBlocks: any[] = [];
-    const toolResultBlocks: any[] = [];
-    if (typeof content === 'string') {
-      text = content;
-    } else if (Array.isArray(content)) {
-      for (const b of content) {
-        if (!b || typeof b !== 'object') continue;
-        if (b.type === 'text' && b.text) {
-          text += (text ? '\n' : '') + b.text;
-        } else if (b.type === 'tool_use') {
-          toolUseBlocks.push(b);
-        } else if (b.type === 'tool_result') {
-          toolResultBlocks.push(b);
-        }
-      }
-    }
-    return { text, toolUseBlocks, toolResultBlocks };
-  };
-
-  for (const m of list) {
-    const { text, toolUseBlocks, toolResultBlocks } = extractBlocks(m.content);
-
-    if (m.role === 'user') {
-      if (toolResultBlocks.length > 0 && result.length > 0) {
-        const prev = result[result.length - 1];
-        if (prev.role === 'assistant' && Array.isArray(prev.toolCalls)) {
-          for (const tr of toolResultBlocks) {
-            const id = tr.tool_use_id ?? tr.toolUseId ?? tr.id;
-            const match = prev.toolCalls.find((tc: any) => tc.id === id);
-            const outputText =
-              typeof tr.content === 'string'
-                ? tr.content
-                : Array.isArray(tr.content)
-                  ? tr.content.map((c: any) => c?.text ?? JSON.stringify(c)).join('\n')
-                  : JSON.stringify(tr.content ?? '');
-            if (match) {
-              match.output = outputText;
-              match.status = tr.is_error || tr.isError ? 'error' : 'success';
-            } else {
-              prev.toolCalls.push({
-                id,
-                name: 'tool',
-                output: outputText,
-                status: tr.is_error || tr.isError ? 'error' : 'success',
-              });
-            }
-          }
-        }
-      }
-      if (!text.trim()) continue;
-      result.push({ role: 'user', content: text });
-    } else if (m.role === 'assistant') {
-      const toolCalls = toolUseBlocks.map((b: any) => ({
-        id: b.id,
-        name: b.name,
-        input: b.input,
-      }));
-      if (!text.trim() && toolCalls.length === 0) continue;
-      result.push({
-        role: 'assistant',
-        content: text,
-        toolCalls: toolCalls.length > 0 ? toolCalls : m.toolCalls,
-      });
-    }
-  }
-  return result;
-}
-
 const Chat: React.FC = () => {
   const { sessionId: urlSessionId } = useParams<{ sessionId?: string }>();
   const navigate = useNavigate();
@@ -128,9 +57,17 @@ const Chat: React.FC = () => {
   const [selectedAgent, setSelectedAgent] = useState<number | undefined>();
   const [sessions, setSessions] = useState<any[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | undefined>(urlSessionId);
-  // 真理源:后端原始消息列表(WS message_appended 事件直接增量追加,避免 refetch 竞态)
-  const [rawMessages, setRawMessages] = useState<any[]>([]);
-  const messages = useMemo(() => normalizeMessages(rawMessages), [rawMessages]);
+
+  const {
+    setRawMessages,
+    messages,
+    streamingText,
+    setStreamingText,
+    streamingToolInputs,
+    setStreamingToolInputs,
+    inflightTools,
+    setInflightTools,
+  } = useChatMessages(activeSessionId);
 
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus>('idle');
   const [runtimeStep, setRuntimeStep] = useState<string>('');
@@ -138,16 +75,7 @@ const Chat: React.FC = () => {
   const [executionMode, setExecutionModeState] = useState<ExecutionMode>('ask');
   const [pendingAsk, setPendingAsk] = useState<PendingAsk | null>(null);
   const [otherInput, setOtherInput] = useState('');
-  // Phase A: 进行中的工具调用(toolUseId -> 信息),用于在消息流末尾显示 spinner 卡片
-  const [inflightTools, setInflightTools] = useState<Record<string, { name: string; input: any; startTs: number }>>({});
-  // Phase B: LLM 流式输出累计文本,在 message_appended(assistant) 或 assistant_stream_end 时清空
-  const [streamingText, setStreamingText] = useState<string>('');
-  // Phase C: 正在流式到达的 tool_use input JSON 片段, key=toolUseId, value=已拼接 JSON 字符串
-  // tool_use_delta 累加, tool_use_complete 清掉, tool_started 以真实输入覆盖
-  const [streamingToolInputs, setStreamingToolInputs] = useState<Record<string, { name: string; jsonBuffer: string }>>({});
-  // cancel 按钮飞行中状态(避免重复点击)
   const [cancelling, setCancelling] = useState(false);
-  // compact badge stats (read from session detail)
   const [lightCompactCount, setLightCompactCount] = useState(0);
   const [fullCompactCount, setFullCompactCount] = useState(0);
   const [totalTokensReclaimed, setTotalTokensReclaimed] = useState(0);
@@ -155,14 +83,17 @@ const Chat: React.FC = () => {
   const [compactModalOpen, setCompactModalOpen] = useState(false);
   const [compactEvents, setCompactEvents] = useState<any[]>([]);
   const [compacting, setCompacting] = useState(false);
-  const [collabRunId, setCollabRunId] = useState<string | null>(null);
-  const [collabHandle, setCollabHandle] = useState<string | null>(null);
-  const [collabLeaderSessionId, setCollabLeaderSessionId] = useState<string | null>(null);
-  const [collabRunStatus, setCollabRunStatus] = useState<string | null>(null);
 
-  const wsRef = useRef<WebSocket | null>(null);
-  const wsReconnectTimerRef = useRef<number | null>(null);
-  const wsReconnectDelayRef = useRef(2000);
+  const {
+    collabRunId,
+    setCollabRunId,
+    collabHandle,
+    setCollabHandle,
+    collabLeaderSessionId,
+    setCollabLeaderSessionId,
+    collabRunStatus,
+    setCollabRunStatus,
+  } = useCollabState(activeSessionId);
 
   // URL → activeSessionId 同步(navigate('/chat/:id') 时生效)
   useEffect(() => {
@@ -188,251 +119,63 @@ const Chat: React.FC = () => {
     getSessions(1)
       .then((res) => {
         const list = (Array.isArray(res.data) ? res.data : res.data?.data ?? []).filter(
-          (s: any) => s.agentId === selectedAgent
+          (s: any) => s.agentId === selectedAgent,
         );
         setSessions(list);
       })
       .catch(() => {});
   }, [selectedAgent]);
 
-  // Load messages + session detail when session changes; also (re)connect WS
+  // Reset Chat-local state when session changes
   useEffect(() => {
-    // cleanup previous WS
-    if (wsRef.current) {
-      try { wsRef.current.close(); } catch {}
-      wsRef.current = null;
-    }
     setPendingAsk(null);
     setRuntimeError('');
-    setInflightTools({});
-    setStreamingText('');
-    setStreamingToolInputs({});
     setCancelling(false);
     setViewMode('chat');
     setParentSessionId(null);
     setSessionDepth(0);
-    setCollabRunId(null);
-    setCollabHandle(null);
-    setCollabLeaderSessionId(null);
-    setCollabRunStatus(null);
-
     if (!activeSessionId) {
-      setRawMessages([]);
       setRuntimeStatus('idle');
       setRuntimeStep('');
-      return;
     }
-
-    // load messages
-    getSessionMessages(activeSessionId, 1)
-      .then((res) => {
-        const list = Array.isArray(res.data) ? res.data : res.data?.data ?? [];
-        setRawMessages(list);
-      })
-      .catch(() => message.error('Failed to load messages'));
-
-    // load session detail for runtime status + mode
-    getSession(activeSessionId, 1)
-      .then((res) => {
-        const s = res.data;
-        setRuntimeStatus((s.runtimeStatus ?? 'idle') as RuntimeStatus);
-        setRuntimeStep(s.runtimeStep ?? '');
-        setRuntimeError(s.runtimeError ?? '');
-        setExecutionModeState((s.executionMode ?? 'ask') as ExecutionMode);
-        // 通过 URL 进入时自动选中 agent，触发 session 列表加载
-        if (s.agentId != null && selectedAgent !== s.agentId) {
-          setSelectedAgent(s.agentId);
-        }
-        setParentSessionId(s.parentSessionId ?? null);
-        setSessionDepth(typeof s.depth === 'number' ? s.depth : 0);
-        setCollabRunId(s.collabRunId ?? null);
-        setCollabHandle(s.collabHandle ?? null);
-        setCollabLeaderSessionId(s.collabLeaderSessionId ?? null);
-        setCollabRunStatus(s.collabRunStatus ?? null);
-        setLightCompactCount(s.lightCompactCount ?? 0);
-        setFullCompactCount(s.fullCompactCount ?? 0);
-        setTotalTokensReclaimed(s.totalTokensReclaimed ?? 0);
-      })
-      .catch(() => {});
-
-    // open WS — with exponential-backoff reconnect on unexpected close
-    const sessionId = activeSessionId;
-
-    // Cancel any reconnect timer left over from a previous session
-    if (wsReconnectTimerRef.current != null) {
-      clearTimeout(wsReconnectTimerRef.current);
-      wsReconnectTimerRef.current = null;
-    }
-    wsReconnectDelayRef.current = 2000;
-
-    const connectWs = () => {
-      const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
-      const ws = new WebSocket(`${proto}://${window.location.host}/ws/chat/${sessionId}`);
-      wsRef.current = ws;
-
-      ws.onopen = () => {
-        // Successful (re)connect — reset backoff
-        wsReconnectDelayRef.current = 2000;
-      };
-      ws.onmessage = (ev) => {
-        try {
-          const evt = JSON.parse(ev.data);
-          handleWsEvent(evt);
-        } catch (e) {
-          console.warn('Bad WS payload', ev.data);
-        }
-      };
-      ws.onclose = () => {
-        if (wsRef.current !== ws) {
-          // wsRef was already nulled before onclose fired → intentional close (cleanup ran)
-          return;
-        }
-        wsRef.current = null;
-        // Schedule reconnect with exponential backoff (max 30s)
-        const delay = wsReconnectDelayRef.current;
-        wsReconnectDelayRef.current = Math.min(delay * 2, 30000);
-        wsReconnectTimerRef.current = window.setTimeout(() => {
-          wsReconnectTimerRef.current = null;
-          if (wsRef.current === null) connectWs(); // still on same session
-        }, delay);
-      };
-    };
-
-    connectWs();
-
-    return () => {
-      // Cancel pending reconnect timer
-      if (wsReconnectTimerRef.current != null) {
-        clearTimeout(wsReconnectTimerRef.current);
-        wsReconnectTimerRef.current = null;
-        wsReconnectDelayRef.current = 2000;
-      }
-      // Null wsRef BEFORE calling ws.close() so onclose sees it and skips reconnect
-      const ws = wsRef.current;
-      wsRef.current = null;
-      try { if (ws) ws.close(); } catch {}
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSessionId]);
 
-  const handleWsEvent = (evt: any) => {
-    if (!evt || !evt.type) return;
-    if (evt.type === 'session_status') {
-      setRuntimeStatus((evt.status ?? 'idle') as RuntimeStatus);
-      setRuntimeStep(evt.step ?? '');
-      setRuntimeError(evt.error ?? '');
-      if (evt.status !== 'waiting_user') {
-        setPendingAsk(null);
-      }
-      if (evt.status === 'idle' || evt.status === 'error') {
-        // 终态:把任何残留 inflight / streaming 清掉
-        setInflightTools({});
-        setStreamingText('');
-        setStreamingToolInputs({});
-        setCancelling(false);
-      }
-    } else if (evt.type === 'message_appended') {
-      const role = evt.message?.role;
-      if (role === 'assistant') {
-        // assistant 消息真正进入列表 → 流式临时文本可以清空了
-        setStreamingText('');
-      }
-      // 直接把后端推过来的原始消息追加到本地 raw 列表(同一真理源,
-      // 不依赖后端持久化时机,避免 refetch 竞态)
-      if (evt.message) {
-        setRawMessages((prev) => {
-          // 乐观追加过的 user 气泡可能已经在尾部,做一次去重:
-          // 尾部 role+纯文本 content 都相同则跳过
-          if (prev.length > 0) {
-            const last = prev[prev.length - 1];
-            if (
-              last &&
-              last.role === evt.message.role &&
-              typeof last.content === 'string' &&
-              typeof evt.message.content === 'string' &&
-              last.content === evt.message.content
-            ) {
-              return prev;
-            }
-          }
-          return [...prev, evt.message];
-        });
-      }
-    } else if (evt.type === 'messages_snapshot') {
-      // 全量快照:直接覆盖本地 raw 列表
-      if (Array.isArray(evt.messages)) {
-        setRawMessages(evt.messages);
-      }
-    } else if (evt.type === 'ask_user') {
-      setPendingAsk({
-        askId: evt.askId,
-        question: evt.question,
-        context: evt.context,
-        options: evt.options ?? [],
-        allowOther: evt.allowOther !== false,
-      });
-      setOtherInput('');
-    } else if (evt.type === 'tool_started') {
-      setInflightTools((prev) => ({
-        ...prev,
-        [evt.toolUseId]: { name: evt.name, input: evt.input, startTs: Date.now() },
-      }));
-    } else if (evt.type === 'tool_finished') {
-      setInflightTools((prev) => {
-        const next = { ...prev };
-        delete next[evt.toolUseId];
-        return next;
-      });
-    } else if (evt.type === 'text_delta') {
-      // 只处理 text_delta（忽略 assistant_delta 避免重复累加）
-      const chunk = evt.delta ?? '';
-      if (chunk) {
-        setStreamingText((prev) => prev + chunk);
-      }
-    } else if (evt.type === 'tool_use_delta') {
-      // LLM 正在流式组装 tool_use 的 input JSON
-      setStreamingToolInputs((prev) => {
-        const next = { ...prev };
-        const existing = next[evt.toolUseId];
-        next[evt.toolUseId] = {
-          name: existing?.name || evt.toolName || 'tool',
-          jsonBuffer: (existing?.jsonBuffer ?? '') + (evt.jsonFragment ?? ''),
-        };
-        return next;
-      });
-    } else if (evt.type === 'tool_use_complete') {
-      // input 完整解析后, 清掉流式 buffer — 之后 tool_started 会以 inflightTools 替代
-      setStreamingToolInputs((prev) => {
-        const next = { ...prev };
-        delete next[evt.toolUseId];
-        return next;
-      });
-    } else if (evt.type === 'assistant_stream_end') {
-      // 此时 message_appended 通常马上就到,不主动清,让 message_appended 清(避免抖动)
-    } else if (
-      evt.type === 'collab_member_spawned' ||
-      evt.type === 'collab_member_finished' ||
-      evt.type === 'collab_run_status' ||
-      evt.type === 'collab_message_routed'
-    ) {
-      // Update collab run status in real-time
-      if (evt.type === 'collab_run_status' && evt.status) {
-        setCollabRunStatus(evt.status);
-      }
-      // Dispatch collab events to window so CollabRunPanel and PeerMessageFeed can listen
-      window.dispatchEvent(new CustomEvent('collab_ws_event', { detail: evt }));
-    } else if (evt.type === 'session_title_updated') {
-      const newTitle = evt.title;
-      if (newTitle) {
-        setSessions((prev) =>
-          prev.map((s) => {
-            const sid = String(s.id ?? s.sessionId);
-            return sid === evt.sessionId ? { ...s, title: newTitle } : s;
-          })
-        );
-      }
-    }
-  };
+  useChatSession(activeSessionId, {
+    setRawMessages,
+    setRuntimeStatus,
+    setRuntimeStep,
+    setRuntimeError,
+    setExecutionMode: setExecutionModeState,
+    setSelectedAgent: (id: number) => {
+      if (selectedAgent !== id) setSelectedAgent(id);
+    },
+    setParentSessionId,
+    setSessionDepth,
+    setCollabRunId,
+    setCollabHandle,
+    setCollabLeaderSessionId,
+    setCollabRunStatus,
+    setLightCompactCount,
+    setFullCompactCount,
+    setTotalTokensReclaimed,
+  });
+
+  const handleWsEvent = useChatWsEventHandler({
+    setRuntimeStatus,
+    setRuntimeStep,
+    setRuntimeError,
+    setPendingAsk,
+    setInflightTools,
+    setStreamingText,
+    setStreamingToolInputs,
+    setCancelling,
+    setRawMessages,
+    setOtherInput,
+    setCollabRunStatus,
+    setSessions,
+  });
+
+  useChatWebSocket(activeSessionId, handleWsEvent);
 
   const handleNewSession = async () => {
     if (!selectedAgent) {
@@ -474,15 +217,13 @@ const Chat: React.FC = () => {
   };
 
   const doSend = async (sid: string, text: string) => {
-    // 乐观追加 user 气泡到 raw 列表;后续 message_appended 事件里会做去重
     setRawMessages((prev) => [...prev, { role: 'user', content: text }]);
     setRuntimeStatus('running');
     setRuntimeStep('Starting');
     try {
       await sendMessage(sid, { message: text, userId: 1 });
-      // no need to handle response body — real updates arrive via WS
-    } catch (e: any) {
-      const status = e?.response?.status;
+    } catch (e: unknown) {
+      const status = (e as { response?: { status?: number } })?.response?.status;
       if (status === 429) {
         message.error('服务器繁忙,请稍后再试');
       } else {
@@ -517,120 +258,12 @@ const Chat: React.FC = () => {
     }
   };
 
-  const renderBanner = () => {
-    if (!activeSessionId) return null;
-    // idle 时通常不显示, 但 runtimeStep === 'cancelled' 时用 warning 显示一次"已取消"
-    if (runtimeStatus === 'idle' && runtimeStep !== 'cancelled') return null;
-    if (runtimeStatus === 'running') {
-      return (
-        <Alert
-          type="info"
-          showIcon
-          message={`Agent 正在运行${runtimeStep ? `:${runtimeStep}` : ''}`}
-          action={
-            <Button
-              size="small"
-              danger
-              loading={cancelling}
-              onClick={handleCancel}
-            >
-              ✕ 取消
-            </Button>
-          }
-          style={{ margin: '8px 12px 0' }}
-        />
-      );
-    }
-    if (runtimeStatus === 'idle' && runtimeStep === 'cancelled') {
-      return (
-        <Alert
-          type="warning"
-          showIcon
-          message="已取消"
-          style={{ margin: '8px 12px 0' }}
-          closable
-        />
-      );
-    }
-    if (runtimeStatus === 'waiting_user') {
-      return (
-        <Alert
-          type="warning"
-          showIcon
-          message="Agent 正在等你回答"
-          style={{ margin: '8px 12px 0' }}
-        />
-      );
-    }
-    if (runtimeStatus === 'error') {
-      return (
-        <Alert
-          type="error"
-          showIcon
-          message={`出错了${runtimeError ? `:${runtimeError}` : ''}`}
-          style={{ margin: '8px 12px 0' }}
-        />
-      );
-    }
-    return null;
-  };
-
-  const renderPendingAsk = () => {
-    if (!pendingAsk) return null;
-    return (
-      <Card
-        size="small"
-        title="💬 Agent 在问你"
-        style={{ margin: '8px 12px 0', borderColor: '#faad14' }}
-      >
-        {pendingAsk.context && (
-          <div style={{ color: '#888', fontSize: 12, marginBottom: 8 }}>{pendingAsk.context}</div>
-        )}
-        <div style={{ fontWeight: 500, marginBottom: 12 }}>{pendingAsk.question}</div>
-        <Space direction="vertical" style={{ width: '100%' }}>
-          {pendingAsk.options.map((opt, i) => (
-            <Button
-              key={i}
-              block
-              style={{ textAlign: 'left', height: 'auto', padding: '8px 12px' }}
-              onClick={() => handleAnswerAsk(opt.label)}
-            >
-              <div style={{ fontWeight: 500 }}>{opt.label}</div>
-              {opt.description && (
-                <div style={{ fontSize: 12, color: '#888' }}>{opt.description}</div>
-              )}
-            </Button>
-          ))}
-          {pendingAsk.allowOther && (
-            <Space.Compact style={{ width: '100%', marginTop: 4 }}>
-              <Input
-                placeholder="或自己输入答复..."
-                value={otherInput}
-                onChange={(e) => setOtherInput(e.target.value)}
-                onPressEnter={() => otherInput.trim() && handleAnswerAsk(otherInput.trim())}
-              />
-              <Button
-                type="primary"
-                disabled={!otherInput.trim()}
-                onClick={() => handleAnswerAsk(otherInput.trim())}
-              >
-                发送
-              </Button>
-            </Space.Compact>
-          )}
-        </Space>
-      </Card>
-    );
-  };
-
   const inputDisabled = runtimeStatus === 'waiting_user';
 
-  // 合并正在执行的工具(inflightTools)+ 正在流式组装 input 的工具(streamingToolInputs)
-  // tool_started 事件到达后, inflightTools 里的条目会覆盖同 id 的 streaming 条目
   const combinedInflightTools = useMemo(() => {
-    const merged: Record<string, { name: string; input: any; startTs: number }> = {};
+    const merged: Record<string, InflightTool> = {};
     for (const [id, s] of Object.entries(streamingToolInputs)) {
-      merged[id] = { name: s.name, input: s.jsonBuffer, startTs: Date.now() };
+      merged[id] = { name: s.name, input: s.jsonBuffer, startTs: s.startTs };
     }
     for (const [id, t] of Object.entries(inflightTools)) {
       merged[id] = t;
@@ -646,7 +279,10 @@ const Chat: React.FC = () => {
       setLightCompactCount(s.lightCompactCount ?? 0);
       setFullCompactCount(s.fullCompactCount ?? 0);
       setTotalTokensReclaimed(s.totalTokensReclaimed ?? 0);
-    } catch {}
+    } catch {
+      // Non-critical background refresh — silently ignore; compact op itself
+      // already showed success/error feedback to the user.
+    }
   };
 
   const handleCompactClick = async () => {
@@ -657,14 +293,13 @@ const Chat: React.FC = () => {
       const reclaimed = res.data?.tokensReclaimed ?? 0;
       message.success(`已压缩:释放 ${reclaimed} tokens`);
       await refreshCompactStats();
-      // also refetch messages so the new synthetic summary shows up
       try {
         const mres = await getSessionMessages(activeSessionId, 1);
         const list = Array.isArray(mres.data) ? mres.data : mres.data?.data ?? [];
         setRawMessages(list);
       } catch {}
-    } catch (e: any) {
-      const status = e?.response?.status;
+    } catch (e: unknown) {
+      const status = (e as { response?: { status?: number } })?.response?.status;
       if (status === 409) {
         message.warning('Session 正在运行, 无法压缩');
       } else {
@@ -691,8 +326,8 @@ const Chat: React.FC = () => {
     setCancelling(true);
     try {
       await cancelChat(activeSessionId, 1);
-    } catch (e: any) {
-      const status = e?.response?.status;
+    } catch (e: unknown) {
+      const status = (e as { response?: { status?: number } })?.response?.status;
       if (status === 409) {
         message.info('当前没有正在运行的 loop');
       } else {
@@ -700,76 +335,23 @@ const Chat: React.FC = () => {
       }
       setCancelling(false);
     }
-    // 成功: 等 WS session_status=idle 事件到达, useEffect 里会清 cancelling
   };
 
   return (
     <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
-      {/* Left panel */}
-      <div
-        style={{
-          width: 260,
-          flexShrink: 0,
-          display: 'flex',
-          flexDirection: 'column',
-          overflow: 'hidden',
-          background: 'var(--bg-sidebar)',
-          borderRight: '1px solid var(--border-subtle)',
+      <ChatSidebar
+        agents={agents}
+        sessions={sessions}
+        selectedAgent={selectedAgent}
+        activeSessionId={activeSessionId}
+        onSelectAgent={(id) => {
+          setSelectedAgent(id);
+          setActiveSessionId(undefined);
+          setRawMessages([]);
         }}
-      >
-        <div style={{ padding: 12 }}>
-          <Select
-            placeholder="Select an Agent"
-            style={{ width: '100%', marginBottom: 8 }}
-            value={selectedAgent}
-            onChange={(v) => {
-              setSelectedAgent(v);
-              setActiveSessionId(undefined);
-              setRawMessages([]);
-            }}
-            options={agents.map((a: any) => ({ label: a.name, value: a.id }))}
-          />
-          <Button
-            type="primary"
-            block
-            onClick={handleNewSession}
-            style={{ borderRadius: 8 }}
-          >
-            + New Chat
-          </Button>
-        </div>
-        <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
-          <List
-            size="small"
-            dataSource={sessions}
-            renderItem={(item: any) => {
-              const sid = String(item.id ?? item.sessionId);
-              return (
-                <List.Item
-                  onClick={() => setActiveSessionId(sid)}
-                  style={{
-                    cursor: 'pointer',
-                    background: activeSessionId === sid ? 'var(--bg-hover)' : undefined,
-                    padding: '10px 16px',
-                    borderRadius: 6,
-                    margin: '2px 6px',
-                    border: 'none',
-                  }}
-                >
-                  <Text ellipsis style={{ width: '100%' }}>
-                    {item.collabRunId && (
-                      <TeamOutlined style={{ marginRight: 4, color: 'var(--accent-primary)', fontSize: 12 }} title="Team session" />
-                    )}
-                    {item.title && item.title !== 'New Session'
-                      ? item.title
-                      : `Session ${sid.slice(0, 8)}...`}
-                  </Text>
-                </List.Item>
-              );
-            }}
-          />
-        </div>
-      </div>
+        onNewChat={handleNewSession}
+        onSelectSession={setActiveSessionId}
+      />
 
       {/* Right panel - chat */}
       <div
@@ -778,54 +360,19 @@ const Chat: React.FC = () => {
         {activeSessionId || selectedAgent ? (
           <>
             {activeSessionId && (
-              <div
-                style={{
-                  padding: '8px 12px',
-                  borderBottom: '1px solid var(--border-subtle)',
-                  display: 'flex',
-                  justifyContent: 'flex-end',
-                  alignItems: 'center',
-                  gap: 8,
-                }}
-              >
-                {(lightCompactCount > 0 || fullCompactCount > 0 || totalTokensReclaimed > 0) && (
-                  <a
-                    onClick={handleOpenCompactModal}
-                    title="查看压缩历史"
-                    style={{ fontSize: 12, color: '#888', marginRight: 8 }}
-                  >
-                    🗜 {lightCompactCount} light · {fullCompactCount} full · -{totalTokensReclaimed} tok
-                  </a>
-                )}
-                <Segmented
-                  size="small"
-                  value={viewMode}
-                  options={[
-                    { label: <span><MessageOutlined /> Chat</span>, value: 'chat' },
-                    { label: <span><HistoryOutlined /> Replay</span>, value: 'replay' },
-                  ]}
-                  onChange={(v) => setViewMode(v as 'chat' | 'replay')}
-                />
-                <Button
-                  size="small"
-                  disabled={runtimeStatus === 'running' || compacting}
-                  loading={compacting}
-                  onClick={handleCompactClick}
-                  title="立即对老历史做一次 LLM 总结压缩"
-                >
-                  🗜 Compact (full)
-                </Button>
-                <Text type="secondary" style={{ fontSize: 12 }}>模式:</Text>
-                <Segmented
-                  size="small"
-                  value={executionMode}
-                  options={[
-                    { label: 'ask', value: 'ask' },
-                    { label: 'auto', value: 'auto' },
-                  ]}
-                  onChange={(v) => handleModeChange(v as ExecutionMode)}
-                />
-              </div>
+              <SessionToolbar
+                lightCompactCount={lightCompactCount}
+                fullCompactCount={fullCompactCount}
+                totalTokensReclaimed={totalTokensReclaimed}
+                viewMode={viewMode}
+                onViewModeChange={setViewMode}
+                compacting={compacting}
+                runtimeRunning={runtimeStatus === 'running'}
+                executionMode={executionMode}
+                onExecutionModeChange={handleModeChange}
+                onCompactClick={handleCompactClick}
+                onOpenCompactModal={handleOpenCompactModal}
+              />
             )}
             {activeSessionId && parentSessionId && (
               <div
@@ -852,7 +399,15 @@ const Chat: React.FC = () => {
                 </Text>
               </div>
             )}
-            {renderBanner()}
+            {activeSessionId && (
+              <RuntimeBanner
+                runtimeStatus={runtimeStatus}
+                runtimeStep={runtimeStep}
+                runtimeError={runtimeError}
+                cancelling={cancelling}
+                onCancel={handleCancel}
+              />
+            )}
             <SubAgentRunsPanel
               sessionId={activeSessionId}
               parentRunning={runtimeStatus === 'running'}
@@ -904,7 +459,14 @@ const Chat: React.FC = () => {
             />
             {viewMode === 'chat' ? (
               <>
-                {renderPendingAsk()}
+                {pendingAsk && (
+                  <PendingAskCard
+                    pendingAsk={pendingAsk}
+                    otherInput={otherInput}
+                    onOtherInputChange={setOtherInput}
+                    onAnswer={handleAnswerAsk}
+                  />
+                )}
                 <ChatWindow
                   messages={messages}
                   loading={runtimeStatus === 'running'}
@@ -924,50 +486,11 @@ const Chat: React.FC = () => {
           </div>
         )}
       </div>
-      <Modal
-        title="压缩历史"
+      <CompactionHistoryModal
         open={compactModalOpen}
-        onCancel={() => setCompactModalOpen(false)}
-        footer={null}
-        width={900}
-      >
-        <Table
-          size="small"
-          rowKey="id"
-          dataSource={compactEvents}
-          pagination={{ pageSize: 10 }}
-          columns={[
-            {
-              title: 'Time',
-              dataIndex: 'triggeredAt',
-              width: 160,
-              render: (v: string) => (v ? new Date(v).toLocaleString() : '-'),
-            },
-            {
-              title: 'Level',
-              dataIndex: 'level',
-              width: 70,
-              render: (v: string) => (
-                <Tag color={v === 'full' ? 'volcano' : 'blue'}>{v}</Tag>
-              ),
-            },
-            { title: 'Source', dataIndex: 'source', width: 110 },
-            { title: 'Reason', dataIndex: 'reason', ellipsis: true },
-            {
-              title: 'Reclaimed',
-              dataIndex: 'tokensReclaimed',
-              width: 100,
-              render: (v: number) => `${v} tok`,
-            },
-            {
-              title: 'Strategies',
-              dataIndex: 'strategiesApplied',
-              width: 200,
-              ellipsis: true,
-            },
-          ]}
-        />
-      </Modal>
+        onClose={() => setCompactModalOpen(false)}
+        events={compactEvents}
+      />
     </div>
   );
 };

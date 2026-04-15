@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Card, Col, Row, Statistic, Spin, message, List, Tag, Typography } from 'antd';
+import { Card, Col, Row, Spin, message, List, Tag, Typography } from 'antd';
 import {
   RobotOutlined,
   MessageOutlined,
@@ -151,20 +151,17 @@ const Dashboard: React.FC = () => {
       <Row gutter={[16, 16]}>
         {kpis.map((k) => (
           <Col xs={24} sm={12} lg={6} key={k.title}>
-            <Card style={{ borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                {k.icon}
-                <div style={{ flex: 1 }}>
-                  <Statistic
-                    title={k.title}
-                    value={k.value}
-                    valueStyle={{ fontSize: 22 }}
-                    formatter={(v) => formatNumber(Number(v))}
-                  />
-                  <Text type="secondary" style={{ fontSize: 12 }}>
-                    {k.sub}
-                  </Text>
+            <Card
+              className="sf-stat-card"
+              style={{ borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div className="sf-stat-label">{k.title}</div>
+                  <div className="sf-stat-metric">{formatNumber(Number(k.value))}</div>
+                  <div className="sf-stat-sub">{k.sub}</div>
                 </div>
+                <div style={{ flexShrink: 0, opacity: 0.85 }}>{k.icon}</div>
               </div>
             </Card>
           </Col>
@@ -173,7 +170,7 @@ const Dashboard: React.FC = () => {
 
       <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
         <Col xs={24} lg={16}>
-          <Card title={<><ThunderboltOutlined /> Token usage — last 7 days</>} style={{ borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
+          <Card title={<><ThunderboltOutlined /> Token usage — last 7 days</>} className="sf-surface-card" style={{ borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
             {daily.length === 0 ? (
               <div style={{ textAlign: 'center', padding: 40, color: '#999' }}>
                 暂无数据
@@ -185,7 +182,7 @@ const Dashboard: React.FC = () => {
         </Col>
 
         <Col xs={24} lg={8}>
-          <Card title={<><FireOutlined /> Recent sessions</>} style={{ borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
+          <Card title={<><FireOutlined /> Recent sessions</>} className="sf-surface-card" style={{ borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
             {recent.length === 0 ? (
               <div style={{ textAlign: 'center', padding: 40, color: '#999' }}>
                 暂无会话

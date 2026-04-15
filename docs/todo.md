@@ -4,16 +4,6 @@
 
 ---
 
-## 进行中 / 近期
-
-| # | 任务 | 来源 | 优先级 | 状态 |
-|---|------|------|-------|------|
-| 4 | Commit 当前所有未提交改动（ObjectMapper、@Transactional、H2→PG、.claude/集成） | — | 立刻 | ⬜ |
-| 8 | Chat 稳定性：ErrorBoundary + WS 重连 + 变更操作错误提示 | 遗留 P0 | P0 | ⬜ |
-| 7 | Memory 调度修复：SessionDigestExtractor 接入触发器 | 遗留 P1 | P1 | ⬜ |
-
----
-
 ## 待排期
 
 | # | 任务 | 来源 | 优先级 |
@@ -46,10 +36,13 @@
 
 | 任务 | 完成日期 |
 |------|---------|
+| Teams 页面（多 Agent 协作可观测 UI） | 2026-04-15 |
+| ObjectMapper 全项目修复（10 处补 JavaTimeModule） | 2026-04-15 |
+| @Transactional 修复（CollabRunService、SubAgentRunSweeper） | 2026-04-15 |
 | H2 → PostgreSQL 迁移（embedded zonky PG，port 15432） | 2026-04-15 |
 | EmbeddedPostgresConfig 重启修复（setCleanDataDirectory） | 2026-04-15 |
 | Flyway schema 管理（ddl-auto: validate） | 2026-04-15 |
-| ObjectMapper 全项目修复（10 处补 JavaTimeModule） | 2026-04-15 |
-| @Transactional 修复（CollabRunService、SubAgentRunSweeper） | 2026-04-15 |
 | .claude/ 规则/Agent/命令集成（ECC + design.md） | 2026-04-15 |
-| Teams 页面（多 Agent 协作可观测 UI） | 2026-04-15 |
+| #4 Commit 所有积压改动 | 2026-04-15 |
+| #8 Chat 稳定性：ErrorBoundary + WS 断线重连（指数退避） | 2026-04-15 |
+| #7 Memory 调度：session 完成后立即异步提取，补 @EnableAsync，加 /api/memories/refresh | 2026-04-15 |
