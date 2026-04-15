@@ -159,7 +159,7 @@ const MemoryList: React.FC = () => {
   ];
 
   return (
-    <div style={{ padding: '24px 32px' }}>
+    <div>
       <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginBottom: 16 }}>
         <Space>
           <Input

@@ -107,6 +107,7 @@ const AppLayout: React.FC = () => {
         <Content style={{
           flex: 1,
           overflow: location.pathname.startsWith('/chat') ? 'hidden' : 'auto',
+          padding: location.pathname.startsWith('/chat') ? 0 : '24px 32px',
         }}>
           <Outlet />
         </Content>

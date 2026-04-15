@@ -285,7 +285,7 @@ const Traces: React.FC = () => {
   ];
 
   return (
-    <div style={{ display: 'flex', height: '100%', gap: 16, overflow: 'hidden', padding: '24px 32px' }}>
+    <div style={{ display: 'flex', height: '100%', gap: 16, overflow: 'hidden' }}>
       {/* Left: trace list */}
       <Card
         title="Traces"

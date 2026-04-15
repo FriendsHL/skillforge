@@ -107,9 +107,10 @@ const SkillList: React.FC = () => {
     {
       title: 'Actions',
       key: 'actions',
-      width: 80,
+      width: 100,
+      align: 'center' as const,
       render: (_: any, record: any) => (
-        <div style={{ display: 'flex', alignItems: 'center' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
           <Button icon={<EyeOutlined />} size="small" onClick={() => showBuiltinDetail(record)}>
             Detail
           </Button>
@@ -171,8 +172,9 @@ const SkillList: React.FC = () => {
       title: 'Actions',
       key: 'actions',
       width: 140,
+      align: 'center' as const,
       render: (_: any, record: any) => (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
           <Button icon={<EyeOutlined />} size="small" onClick={() => showDetail(record.id)}>
             Detail
           </Button>
@@ -213,7 +215,7 @@ const SkillList: React.FC = () => {
   };
 
   return (
-    <div style={{ padding: '24px 32px' }}>
+    <div>
       <Card title="System Tools" size="small" style={{ marginBottom: 24, borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
         <Table
           dataSource={builtinSkills}
@@ -324,7 +326,7 @@ const SkillList: React.FC = () => {
               key: 'schema',
               label: 'Tool Schema',
               children: builtinDetail.toolSchema ? (
-                <pre style={{ overflow: 'auto', fontSize: 13, background: 'var(--bg-code)', color: '#E8E8E8', padding: 16, borderRadius: 'var(--radius-md)', fontFamily: 'var(--font-mono)', margin: 0 }}>
+                <pre style={{ background: 'var(--bg-code)', color: '#E8E8E8', padding: 16, borderRadius: 'var(--radius-md)', fontFamily: 'var(--font-mono)', fontSize: 13, overflow: 'auto', maxHeight: 400, margin: 0 }}>
                   {JSON.stringify(builtinDetail.toolSchema, null, 2)}
                 </pre>
               ) : <Text type="secondary">No schema</Text>,

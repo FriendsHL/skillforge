@@ -228,7 +228,7 @@ const SessionList: React.FC = () => {
   ];
 
   return (
-    <div style={{ padding: '24px 32px' }}>
+    <div>
       <Card style={{ borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
       <Table
         dataSource={sessions}
