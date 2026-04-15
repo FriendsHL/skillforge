@@ -360,7 +360,9 @@ const Teams: React.FC = () => {
           dataSource={runs}
           columns={columns}
           loading={loading}
-          pagination={{ pageSize: 20, size: 'small' }}
+          virtual
+          scroll={{ y: 500 }}
+          pagination={false}
           onRow={(record) => ({
             onClick: () => setSelectedId(record.collabRunId),
             style: {

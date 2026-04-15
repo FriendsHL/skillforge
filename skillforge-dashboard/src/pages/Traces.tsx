@@ -237,6 +237,7 @@ const Traces: React.FC = () => {
     {
       title: 'Input',
       dataIndex: 'input',
+      width: 200,
       ellipsis: true,
       render: (v: string) => <Text style={{ fontSize: 12 }}>{v}</Text>,
     },
@@ -305,7 +306,9 @@ const Traces: React.FC = () => {
           dataSource={traces}
           columns={columns}
           loading={loading}
-          pagination={{ pageSize: 20, size: 'small' }}
+          virtual
+          scroll={{ y: 500 }}
+          pagination={false}
           onRow={(record) => ({
             onClick: () => handleSelectTrace(record.traceId),
             style: {

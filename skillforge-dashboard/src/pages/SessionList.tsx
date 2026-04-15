@@ -213,6 +213,7 @@ const SessionList: React.FC = () => {
       title: 'Title',
       dataIndex: 'title',
       key: 'title',
+      width: 300,
       render: (v: string, r: SessionRow) => (
         <span>
           <StatusDot status={r.runtimeStatus} error={r.runtimeError} />
@@ -220,13 +221,14 @@ const SessionList: React.FC = () => {
         </span>
       ),
     },
-    { title: 'Agent', dataIndex: 'agentName', key: 'agentName', render: (v: string, r: SessionRow) => v || r.agentId },
-    { title: 'Messages', dataIndex: 'messageCount', key: 'messageCount' },
-    { title: 'Tokens', dataIndex: 'totalTokens', key: 'totalTokens' },
+    { title: 'Agent', dataIndex: 'agentName', key: 'agentName', width: 140, render: (v: string, r: SessionRow) => v || r.agentId },
+    { title: 'Messages', dataIndex: 'messageCount', key: 'messageCount', width: 80 },
+    { title: 'Tokens', dataIndex: 'totalTokens', key: 'totalTokens', width: 80 },
     {
       title: 'Created',
       dataIndex: 'createdAt',
       key: 'createdAt',
+      width: 160,
       render: (v: string) => (v ? new Date(v).toLocaleString() : '-'),
     },
   ];
@@ -239,6 +241,9 @@ const SessionList: React.FC = () => {
         columns={columns}
         rowKey="id"
         loading={loading}
+        virtual
+        scroll={{ y: 500 }}
+        pagination={false}
         onRow={(record) => ({
           onClick: () => navigate(`/chat/${record.id}`),
           style: { cursor: 'pointer' },
