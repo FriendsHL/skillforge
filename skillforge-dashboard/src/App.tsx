@@ -9,22 +9,23 @@ import MemoryList from './pages/MemoryList';
 import ModelUsage from './pages/ModelUsage';
 import Traces from './pages/Traces';
 import Teams from './pages/Teams';
+import { ErrorBoundary } from './components/ErrorBoundary';
 
 function App() {
   return (
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<AppLayout />}>
-          <Route index element={<Dashboard />} />
-          <Route path="agents" element={<AgentList />} />
-          <Route path="skills" element={<SkillList />} />
-          <Route path="sessions" element={<SessionList />} />
-          <Route path="memories" element={<MemoryList />} />
-          <Route path="usage" element={<ModelUsage />} />
-          <Route path="traces" element={<Traces />} />
-          <Route path="teams" element={<Teams />} />
-          <Route path="chat" element={<Chat />} />
-          <Route path="chat/:sessionId" element={<Chat />} />
+          <Route index element={<ErrorBoundary context="Dashboard"><Dashboard /></ErrorBoundary>} />
+          <Route path="agents" element={<ErrorBoundary context="Agents"><AgentList /></ErrorBoundary>} />
+          <Route path="skills" element={<ErrorBoundary context="Skills"><SkillList /></ErrorBoundary>} />
+          <Route path="sessions" element={<ErrorBoundary context="Sessions"><SessionList /></ErrorBoundary>} />
+          <Route path="memories" element={<ErrorBoundary context="Memories"><MemoryList /></ErrorBoundary>} />
+          <Route path="usage" element={<ErrorBoundary context="Model Usage"><ModelUsage /></ErrorBoundary>} />
+          <Route path="traces" element={<ErrorBoundary context="Traces"><Traces /></ErrorBoundary>} />
+          <Route path="teams" element={<ErrorBoundary context="Teams"><Teams /></ErrorBoundary>} />
+          <Route path="chat" element={<ErrorBoundary context="Chat"><Chat /></ErrorBoundary>} />
+          <Route path="chat/:sessionId" element={<ErrorBoundary context="Chat"><Chat /></ErrorBoundary>} />
         </Route>
       </Routes>
     </BrowserRouter>

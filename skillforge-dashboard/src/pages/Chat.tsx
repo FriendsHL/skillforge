@@ -161,6 +161,8 @@ const Chat: React.FC = () => {
   const [collabRunStatus, setCollabRunStatus] = useState<string | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
+  const wsReconnectTimerRef = useRef<number | null>(null);
+  const wsReconnectDelayRef = useRef(2000);
 
   // URL → activeSessionId 同步(navigate('/chat/:id') 时生效)
   useEffect(() => {
@@ -253,23 +255,62 @@ const Chat: React.FC = () => {
       })
       .catch(() => {});
 
-    // open WS
-    const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
-    const ws = new WebSocket(`${proto}://${window.location.host}/ws/chat/${activeSessionId}`);
-    wsRef.current = ws;
-    ws.onmessage = (ev) => {
-      try {
-        const evt = JSON.parse(ev.data);
-        handleWsEvent(evt);
-      } catch (e) {
-        console.warn('Bad WS payload', ev.data);
-      }
+    // open WS — with exponential-backoff reconnect on unexpected close
+    const sessionId = activeSessionId;
+
+    // Cancel any reconnect timer left over from a previous session
+    if (wsReconnectTimerRef.current != null) {
+      clearTimeout(wsReconnectTimerRef.current);
+      wsReconnectTimerRef.current = null;
+    }
+    wsReconnectDelayRef.current = 2000;
+
+    const connectWs = () => {
+      const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
+      const ws = new WebSocket(`${proto}://${window.location.host}/ws/chat/${sessionId}`);
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        // Successful (re)connect — reset backoff
+        wsReconnectDelayRef.current = 2000;
+      };
+      ws.onmessage = (ev) => {
+        try {
+          const evt = JSON.parse(ev.data);
+          handleWsEvent(evt);
+        } catch (e) {
+          console.warn('Bad WS payload', ev.data);
+        }
+      };
+      ws.onclose = () => {
+        if (wsRef.current !== ws) {
+          // wsRef was already nulled before onclose fired → intentional close (cleanup ran)
+          return;
+        }
+        wsRef.current = null;
+        // Schedule reconnect with exponential backoff (max 30s)
+        const delay = wsReconnectDelayRef.current;
+        wsReconnectDelayRef.current = Math.min(delay * 2, 30000);
+        wsReconnectTimerRef.current = window.setTimeout(() => {
+          wsReconnectTimerRef.current = null;
+          if (wsRef.current === null) connectWs(); // still on same session
+        }, delay);
+      };
     };
-    ws.onclose = () => {
-      if (wsRef.current === ws) wsRef.current = null;
-    };
+
+    connectWs();
+
     return () => {
-      try { ws.close(); } catch {}
+      // Cancel pending reconnect timer
+      if (wsReconnectTimerRef.current != null) {
+        clearTimeout(wsReconnectTimerRef.current);
+        wsReconnectTimerRef.current = null;
+        wsReconnectDelayRef.current = 2000;
+      }
+      // Null wsRef BEFORE calling ws.close() so onclose sees it and skips reconnect
+      const ws = wsRef.current;
+      wsRef.current = null;
+      try { if (ws) ws.close(); } catch {}
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSessionId]);
