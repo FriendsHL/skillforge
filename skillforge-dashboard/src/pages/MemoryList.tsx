@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import {
-  Button, Card, Modal, Form, Input, Select, Space, Popconfirm, Tag, Tabs, message, Typography,
+  Button, Card, Modal, Form, Input, Select, Space, Popconfirm, Tag, Tabs, message,
 } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, SearchOutlined } from '@ant-design/icons';
 import { getMemories, searchMemories, createMemory, updateMemory, deleteMemory } from '../api';
@@ -159,9 +159,8 @@ const MemoryList: React.FC = () => {
   ];
 
   return (
-    <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-        <Typography.Title level={4} style={{ margin: 0, color: 'var(--text-primary)' }}>Memories</Typography.Title>
+    <div style={{ padding: '24px 32px' }}>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginBottom: 16 }}>
         <Space>
           <Input
             placeholder="Search memories..."

@@ -9,7 +9,6 @@ import {
   FireOutlined,
 } from '@ant-design/icons';
 
-const { Title } = Typography;
 import ReactECharts from 'echarts-for-react';
 import { useNavigate } from 'react-router-dom';
 import { getDashboardOverview, getDailyUsage, getSessions } from '../api';
@@ -149,8 +148,6 @@ const Dashboard: React.FC = () => {
 
   return (
     <div style={{ padding: '24px 32px' }}>
-      <Title level={4} style={{ margin: '0 0 20px 0', color: 'var(--text-primary)' }}>Overview</Title>
-
       <Row gutter={[16, 16]}>
         {kpis.map((k) => (
           <Col xs={24} sm={12} lg={6} key={k.title}>

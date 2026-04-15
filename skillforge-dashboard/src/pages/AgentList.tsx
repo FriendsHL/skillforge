@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, Popconfirm, Tag, Tabs, message, Card, Typography } from 'antd';
+import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, Popconfirm, Tag, Tabs, message, Card } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, FileTextOutlined } from '@ant-design/icons';
 import { getAgents, createAgent, updateAgent, deleteAgent, getTools, getSkills, getClaudeMd, saveClaudeMd } from '../api';
 
@@ -215,8 +215,7 @@ const AgentList: React.FC = () => {
 
   return (
     <div style={{ padding: '24px 32px' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-        <Typography.Title level={4} style={{ margin: 0, color: 'var(--text-primary)' }}>Agents</Typography.Title>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginBottom: 16 }}>
         <Space>
           <Button icon={<FileTextOutlined />} onClick={() => setClaudeMdModalOpen(true)}>
             CLAUDE.md (Global)

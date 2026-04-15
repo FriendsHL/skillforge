@@ -6,7 +6,7 @@ import {
   CloseCircleOutlined,
   RobotOutlined,
   ToolOutlined,
-  MessageOutlined,
+
   QuestionCircleOutlined,
   CompressOutlined,
   ThunderboltOutlined,
@@ -285,14 +285,10 @@ const Traces: React.FC = () => {
   ];
 
   return (
-    <div style={{ display: 'flex', height: 'calc(100vh - 130px)', gap: 16, overflow: 'hidden' }}>
+    <div style={{ display: 'flex', height: '100%', gap: 16, overflow: 'hidden', padding: '24px 32px' }}>
       {/* Left: trace list */}
       <Card
-        title={
-          <Space>
-            <MessageOutlined /> Traces
-          </Space>
-        }
+        title="Traces"
         extra={
           <Input
             placeholder="Filter by Session ID"

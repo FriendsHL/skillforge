@@ -104,7 +104,10 @@ const AppLayout: React.FC = () => {
           />
           <span style={{ fontSize: 16, fontWeight: 500, color: 'var(--text-primary)' }}>{pageTitle}</span>
         </Header>
-        <Content style={{ flex: 1, overflow: 'hidden' }}>
+        <Content style={{
+          flex: 1,
+          overflow: location.pathname.startsWith('/chat') ? 'hidden' : 'auto',
+        }}>
           <Outlet />
         </Content>
       </AntLayout>

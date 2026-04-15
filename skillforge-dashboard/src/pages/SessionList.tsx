@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Table, Tooltip, message, Typography } from 'antd';
+import { Table, Tooltip, message, Card } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import { getSessions } from '../api';
 
@@ -228,8 +228,8 @@ const SessionList: React.FC = () => {
   ];
 
   return (
-    <div>
-      <Typography.Title level={4} style={{ margin: '0 0 20px 0', color: 'var(--text-primary)' }}>Sessions</Typography.Title>
+    <div style={{ padding: '24px 32px' }}>
+      <Card style={{ borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
       <Table
         dataSource={sessions}
         columns={columns}
@@ -240,6 +240,7 @@ const SessionList: React.FC = () => {
           style: { cursor: 'pointer' },
         })}
       />
+      </Card>
     </div>
   );
 };

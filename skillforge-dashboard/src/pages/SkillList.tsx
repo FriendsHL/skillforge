@@ -214,8 +214,6 @@ const SkillList: React.FC = () => {
 
   return (
     <div style={{ padding: '24px 32px' }}>
-      <Typography.Title level={4} style={{ margin: '0 0 20px 0', color: 'var(--text-primary)' }}>Skills & Tools</Typography.Title>
-
       <Card title="System Tools" size="small" style={{ marginBottom: 24, borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
         <Table
           dataSource={builtinSkills}

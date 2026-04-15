@@ -151,12 +151,11 @@ const ModelUsage: React.FC = () => {
   );
 
   return (
-    <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-        <Typography.Title level={4} style={{ margin: 0, color: 'var(--text-primary)' }}>Model Usage</Typography.Title>
+    <div style={{ padding: '24px 32px' }}>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginBottom: 20 }}>
         <Space size={12}>
           <Text type="secondary" style={{ fontSize: 12 }}>
-            范围内合计: {totalInRange.toLocaleString()} tokens
+            Total: {totalInRange.toLocaleString()} tokens
           </Text>
           <Segmented
             value={range}
