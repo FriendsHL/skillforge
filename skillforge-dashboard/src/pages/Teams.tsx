@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Card, Table, Tag, Typography, Space, Tabs, Empty, Spin, Tooltip, Progress } from 'antd';
+import { Card, Table, Tag, Typography, Space, Tabs, Empty, Spin, Tooltip, Progress, Collapse } from 'antd';
 import {
   ClockCircleOutlined,
   CheckCircleOutlined,
@@ -226,6 +226,34 @@ const TracesPanel: React.FC<{ collabRunId: string }> = ({ collabRunId }) => {
         const widthPct = Math.max((span.durationMs / totalDuration) * 100, 0.3);
         const color = span.handle ? handleColor(span.handle) : '#bfbfbf';
 
+        const collapseItems = [];
+        if (span.input) {
+          collapseItems.push({
+            key: 'input',
+            label: <Text type="secondary" style={{ fontSize: 11 }}>Input</Text>,
+            children: (
+              <div style={{ maxHeight: 200, overflowY: 'auto' }}>
+                <pre style={{ fontSize: 11, margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                  {span.input}
+                </pre>
+              </div>
+            ),
+          });
+        }
+        if (span.output) {
+          collapseItems.push({
+            key: 'output',
+            label: <Text type="secondary" style={{ fontSize: 11 }}>Output</Text>,
+            children: (
+              <div style={{ maxHeight: 200, overflowY: 'auto' }}>
+                <pre style={{ fontSize: 11, margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                  {span.output}
+                </pre>
+              </div>
+            ),
+          });
+        }
+
         return (
           <div key={span.id} style={{ borderBottom: '1px solid #f5f5f5', padding: '4px 0' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
@@ -241,12 +269,17 @@ const TracesPanel: React.FC<{ collabRunId: string }> = ({ collabRunId }) => {
               {span.success
                 ? <CheckCircleOutlined style={{ color: '#52c41a', fontSize: 10 }} />
                 : <CloseCircleOutlined style={{ color: '#ff4d4f', fontSize: 10 }} />}
+              {(span.inputTokens > 0 || span.outputTokens > 0) && (
+                <Tag style={{ margin: 0, fontSize: 10 }}>
+                  {formatTokens((span.inputTokens ?? 0) + (span.outputTokens ?? 0))} tok
+                </Tag>
+              )}
               <Text type="secondary" style={{ fontSize: 10, marginLeft: 'auto' }}>
                 {formatDuration(span.durationMs ?? 0)}
               </Text>
             </div>
             {/* Waterfall bar */}
-            <div style={{ height: 6, background: '#f5f5f5', borderRadius: 3, position: 'relative' }}>
+            <div style={{ height: 6, background: '#f5f5f5', borderRadius: 3, position: 'relative', marginBottom: 3 }}>
               <Tooltip title={`@${span.handle ?? '?'} · ${span.spanType} · ${formatDuration(span.durationMs ?? 0)}`}>
                 <div
                   style={{
@@ -261,6 +294,14 @@ const TracesPanel: React.FC<{ collabRunId: string }> = ({ collabRunId }) => {
                 />
               </Tooltip>
             </div>
+            {/* Error */}
+            {span.error && (
+              <Text type="danger" style={{ fontSize: 11 }}>Error: {span.error}</Text>
+            )}
+            {/* Collapsible I/O */}
+            {collapseItems.length > 0 && (
+              <Collapse size="small" ghost items={collapseItems} />
+            )}
           </div>
         );
       })}
@@ -287,7 +328,13 @@ const Teams: React.FC = () => {
     {
       title: 'ID',
       dataIndex: 'collabRunId',
-      render: (v: string) => <Text style={{ fontSize: 11, fontFamily: 'monospace' }}>{v.slice(0, 12)}…</Text>,
+      width: 160,
+      ellipsis: true,
+      render: (v: string) => (
+        <Tooltip title={v}>
+          <Text style={{ fontSize: 11, fontFamily: 'monospace', whiteSpace: 'nowrap' }}>{v.slice(0, 16)}…</Text>
+        </Tooltip>
+      ),
     },
     {
       title: 'Status',
@@ -298,7 +345,7 @@ const Teams: React.FC = () => {
     {
       title: 'Members',
       dataIndex: 'memberCount',
-      width: 70,
+      width: 90,
       align: 'center' as const,
       render: (v: number) => <Tag icon={<TeamOutlined />} style={{ margin: 0 }}>{v}</Tag>,
     },
