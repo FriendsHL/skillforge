@@ -2,6 +2,41 @@ import axios from 'axios';
 
 const api = axios.create({ baseURL: '/api' });
 
+// Request interceptor: inject Bearer token from localStorage
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem('sf_token');
+  if (token) {
+    config.headers['Authorization'] = `Bearer ${token}`;
+  }
+  return config;
+});
+
+// Response interceptor: redirect to /login on 401
+api.interceptors.response.use(
+  (res) => res,
+  (error: unknown) => {
+    const status =
+      error &&
+      typeof error === 'object' &&
+      'response' in error &&
+      (error as { response?: { status?: number } }).response?.status;
+    const requestUrl =
+      (error &&
+      typeof error === 'object' &&
+      'config' in error &&
+      (error as { config?: { url?: string } }).config?.url) ?? '';
+    // Skip auto-redirect for auth endpoints — let the caller handle the error directly
+    const isAuthEndpoint = typeof requestUrl === 'string' && requestUrl.startsWith('/auth/');
+    if (status === 401 && !isAuthEndpoint) {
+      if (!window.location.pathname.includes('/login')) {
+        localStorage.removeItem('sf_token');
+        window.location.href = '/login';
+      }
+    }
+    return Promise.reject(error);
+  },
+);
+
 /** Unwrap a paginated-or-direct array response from the backend. */
 export function extractList<T>(res: { data: T[] | { data: T[] } | unknown }): T[] {
   const d = (res as { data: unknown }).data;
@@ -94,3 +129,5 @@ export const getDashboardOverview = () => api.get('/dashboard/overview');
 export const getDailyUsage = (days = 30) => api.get(`/dashboard/usage/daily?days=${days}`);
 export const getUsageByModel = () => api.get('/dashboard/usage/by-model');
 export const getUsageByAgent = () => api.get('/dashboard/usage/by-agent');
+
+export default api;

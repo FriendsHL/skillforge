@@ -26,7 +26,8 @@ export function useChatWebSocket(
 
     const connectWs = () => {
       const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
-      const ws = new WebSocket(`${proto}://${window.location.host}/ws/chat/${sessionId}`);
+      const token = localStorage.getItem('sf_token') ?? '';
+      const ws = new WebSocket(`${proto}://${window.location.host}/ws/chat/${sessionId}?token=${encodeURIComponent(token)}`);
       wsRef.current = ws;
 
       ws.onopen = () => {

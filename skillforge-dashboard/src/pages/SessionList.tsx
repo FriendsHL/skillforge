@@ -143,7 +143,8 @@ const SessionList: React.FC = () => {
   const connectWs = () => {
     if (unmountedRef.current) return;
     const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
-    const url = `${proto}://${window.location.host}/ws/users/${USER_ID}`;
+    const token = localStorage.getItem('sf_token') ?? '';
+    const url = `${proto}://${window.location.host}/ws/users/${USER_ID}?token=${encodeURIComponent(token)}`;
     let ws: WebSocket;
     try {
       ws = new WebSocket(url);
