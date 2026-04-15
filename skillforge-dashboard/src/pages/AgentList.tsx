@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, Popconfirm, Tag, Tabs, message, Card } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, FileTextOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { getAgents, createAgent, updateAgent, deleteAgent, getTools, getSkills, getClaudeMd, saveClaudeMd } from '../api';
+import { getAgents, createAgent, updateAgent, deleteAgent, getTools, getSkills, getClaudeMd, saveClaudeMd, extractList } from '../api';
 
 const { TextArea } = Input;
 
@@ -44,7 +44,7 @@ const AgentList: React.FC = () => {
   const { data: agents = [], isLoading: loading, isError: agentsError } = useQuery({
     queryKey: ['agents'],
     queryFn: () =>
-      getAgents().then((res) => (Array.isArray(res.data) ? res.data : res.data?.data ?? [])),
+      getAgents().then((res) => extractList<any>(res)),
   });
   // Fire toast once after all retries exhausted — avoids double-toast from catch+retry.
   useEffect(() => {
@@ -54,7 +54,7 @@ const AgentList: React.FC = () => {
   const { data: tools = [] } = useQuery({
     queryKey: ['tools'],
     queryFn: () =>
-      getTools().then((res) => (Array.isArray(res.data) ? res.data : (res.data as any)?.data ?? [])),
+      getTools().then((res) => extractList<any>(res)),
   });
   const toolOptions = useMemo(
     () =>
@@ -68,7 +68,7 @@ const AgentList: React.FC = () => {
   const { data: skills = [] } = useQuery({
     queryKey: ['skills'],
     queryFn: () =>
-      getSkills().then((res) => (Array.isArray(res.data) ? res.data : (res.data as any)?.data ?? [])),
+      getSkills().then((res) => extractList<any>(res)),
   });
   const skillOptions = useMemo(
     () =>

@@ -9,7 +9,7 @@ import {
   RobotOutlined,
   ToolOutlined,
 } from '@ant-design/icons';
-import { getSessionMessages } from '../api';
+import { getSessionMessages, extractList } from '../api';
 
 const { Text } = Typography;
 
@@ -122,7 +122,8 @@ const ChildAgentFeed: React.FC<Props> = ({ sessionId, isRunning }) => {
   const fetchMessages = useCallback(async () => {
     try {
       const res = await getSessionMessages(sessionId, 1);
-      const raw: any[] = Array.isArray(res.data) ? res.data : res.data?.data ?? res.data?.messages ?? [];
+      const list = extractList<any>(res);
+      const raw: any[] = list.length > 0 ? list : (res.data as any)?.messages ?? [];
       const parsed = parseMessages(raw);
       // Keep last 8 messages
       setMessages(parsed.slice(-8));

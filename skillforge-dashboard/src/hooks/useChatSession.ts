@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { message } from 'antd';
-import { getSession, getSessionMessages } from '../api';
+import { getSession, getSessionMessages, extractList } from '../api';
 
 export type RuntimeStatus = 'idle' | 'running' | 'waiting_user' | 'error';
 export type ExecutionMode = 'ask' | 'auto';
@@ -38,8 +38,7 @@ export function useChatSession(
 
     getSessionMessages(activeSessionId, 1)
       .then((res) => {
-        const list = Array.isArray(res.data) ? res.data : res.data?.data ?? [];
-        s.setRawMessages(list);
+        s.setRawMessages(extractList(res));
       })
       .catch(() => message.error('Failed to load messages'));
 

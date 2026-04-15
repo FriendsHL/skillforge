@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Card, List, Tag, Typography, Button } from 'antd';
 import { useNavigate } from 'react-router-dom';
-import { getChildSessions } from '../api';
+import { getChildSessions, extractList } from '../api';
 
 const { Text } = Typography;
 
@@ -56,7 +56,7 @@ const ChildSessionsPanel: React.FC<Props> = ({ sessionId, parentRunning, agents 
     if (!sessionId) return;
     try {
       const res = await getChildSessions(sessionId, 1);
-      const list: ChildSession[] = Array.isArray(res.data) ? res.data : res.data?.data ?? [];
+      const list = extractList<ChildSession>(res);
       list.sort((a, b) => {
         const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0;
         const tb = b.createdAt ? new Date(b.createdAt).getTime() : 0;

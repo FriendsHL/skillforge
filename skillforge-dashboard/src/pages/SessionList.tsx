@@ -2,7 +2,7 @@ import React, { useEffect, useRef } from 'react';
 import { Table, Tooltip, message, Card } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { getSessions } from '../api';
+import { getSessions, extractList } from '../api';
 
 const USER_ID = 1;
 
@@ -89,10 +89,7 @@ const SessionList: React.FC = () => {
   const { data: sessions = [], isLoading: loading, refetch, isError: sessionsError } = useQuery({
     queryKey: SESSIONS_QUERY_KEY,
     queryFn: () =>
-      getSessions(USER_ID).then((res) => {
-        const data = Array.isArray(res.data) ? res.data : res.data?.data ?? [];
-        return data as SessionRow[];
-      }),
+      getSessions(USER_ID).then((res) => extractList<SessionRow>(res)),
     // staleTime:0 so page re-visits always refetch — WS keeps data live after that.
     // Without this, the 30s global staleTime hides status changes that happened
     // while the component was unmounted and the WS was closed.

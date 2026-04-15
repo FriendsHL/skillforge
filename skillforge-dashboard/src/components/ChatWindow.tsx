@@ -51,11 +51,8 @@ const ChatInput: React.FC<ChatInputProps> = React.memo(({ disabled, onSend }) =>
   return (
     <div style={{ background: 'var(--bg-primary)', padding: '12px 16px 20px' }}>
       <div
+        className="sf-chat-input"
         style={{
-          background: 'var(--bg-surface)',
-          border: '1px solid var(--border-subtle)',
-          borderRadius: 'var(--radius-input)',
-          boxShadow: 'var(--shadow-input)',
           display: 'flex',
           alignItems: 'center',
           padding: '4px 4px 4px 16px',
@@ -72,10 +69,11 @@ const ChatInput: React.FC<ChatInputProps> = React.memo(({ disabled, onSend }) =>
           style={{ flex: 1 }}
         />
         <Button
+          className="sf-send-btn"
           type="primary"
           icon={<SendOutlined />}
           onClick={handleSend}
-          disabled={disabled}
+          disabled={disabled || !input.trim()}
           shape="circle"
           style={{ width: 32, height: 32, minWidth: 32 }}
         />
@@ -258,6 +256,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
             return (
               <div
                 key={toolUseId}
+                className="sf-tool-row"
                 style={{
                   display: 'flex',
                   alignItems: 'center',

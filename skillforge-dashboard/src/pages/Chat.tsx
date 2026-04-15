@@ -27,6 +27,7 @@ import {
   getSession,
   compactSession,
   getCompactions,
+  extractList,
 } from '../api';
 import { useChatWebSocket } from '../hooks/useChatWebSocket';
 import { useChatMessages, type InflightTool } from '../hooks/useChatMessages';
@@ -107,8 +108,7 @@ const Chat: React.FC = () => {
   useEffect(() => {
     getAgents()
       .then((res) => {
-        const list = Array.isArray(res.data) ? res.data : res.data?.data ?? [];
-        setAgents(list);
+        setAgents(extractList(res));
       })
       .catch(() => message.error('Failed to load agents'));
   }, []);
@@ -118,7 +118,7 @@ const Chat: React.FC = () => {
     if (selectedAgent == null) return;
     getSessions(1)
       .then((res) => {
-        const list = (Array.isArray(res.data) ? res.data : res.data?.data ?? []).filter(
+        const list = extractList<any>(res).filter(
           (s: any) => s.agentId === selectedAgent,
         );
         setSessions(list);
@@ -295,8 +295,7 @@ const Chat: React.FC = () => {
       await refreshCompactStats();
       try {
         const mres = await getSessionMessages(activeSessionId, 1);
-        const list = Array.isArray(mres.data) ? mres.data : mres.data?.data ?? [];
-        setRawMessages(list);
+        setRawMessages(extractList(mres));
       } catch {}
     } catch (e: unknown) {
       const status = (e as { response?: { status?: number } })?.response?.status;
@@ -314,8 +313,7 @@ const Chat: React.FC = () => {
     if (!activeSessionId) return;
     try {
       const res = await getCompactions(activeSessionId, 1);
-      const list = Array.isArray(res.data) ? res.data : res.data?.data ?? [];
-      setCompactEvents(list);
+      setCompactEvents(extractList(res));
     } catch {
       setCompactEvents([]);
     }

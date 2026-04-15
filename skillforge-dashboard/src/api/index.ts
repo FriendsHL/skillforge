@@ -2,6 +2,16 @@ import axios from 'axios';
 
 const api = axios.create({ baseURL: '/api' });
 
+/** Unwrap a paginated-or-direct array response from the backend. */
+export function extractList<T>(res: { data: T[] | { data: T[] } | unknown }): T[] {
+  const d = (res as { data: unknown }).data;
+  if (Array.isArray(d)) return d as T[];
+  if (d && typeof d === 'object' && Array.isArray((d as { data?: unknown }).data)) {
+    return (d as { data: T[] }).data;
+  }
+  return [];
+}
+
 // Agent API
 export const getAgents = () => api.get('/agents');
 export const getAgent = (id: number) => api.get(`/agents/${id}`);

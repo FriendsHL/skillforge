@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Table, Button, Upload, Popconfirm, message, Tag, Card, Divider, Switch, Modal, Tabs, Typography } from 'antd';
 import { DeleteOutlined, InboxOutlined, ThunderboltOutlined, ToolOutlined, EyeOutlined, CodeOutlined, FileTextOutlined, LockOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { getSkills, getBuiltinSkills, uploadSkill, deleteSkill, getSkillDetail, toggleSkill } from '../api';
+import { getSkills, getBuiltinSkills, uploadSkill, deleteSkill, getSkillDetail, toggleSkill, extractList } from '../api';
 import MarkdownRenderer from '../components/MarkdownRenderer';
 
 const { Dragger } = Upload;
@@ -16,7 +16,7 @@ const SkillList: React.FC = () => {
   const { data: skills = [], isLoading: skillsLoading, isError: skillsError } = useQuery({
     queryKey: ['skills'],
     queryFn: () =>
-      getSkills().then((res) => (Array.isArray(res.data) ? res.data : res.data?.data ?? [])),
+      getSkills().then((res) => extractList<any>(res)),
   });
   useEffect(() => {
     if (skillsError) message.error('Failed to load skills');
@@ -29,7 +29,7 @@ const SkillList: React.FC = () => {
   });
   const { data: builtinSkills = [], isLoading: builtinLoading } = useQuery({
     queryKey: ['builtin-skills'],
-    queryFn: () => getBuiltinSkills().then((res) => (Array.isArray(res.data) ? res.data : [])),
+    queryFn: () => getBuiltinSkills().then((res) => extractList<any>(res)),
   });
   const loading = skillsLoading || builtinLoading;
 

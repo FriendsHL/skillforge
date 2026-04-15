@@ -10,7 +10,7 @@ import {
   ThunderboltOutlined,
   TeamOutlined,
 } from '@ant-design/icons';
-import { getCollabRuns, getCollabRunMembers, getCollabRunTraces, getCollabRunSummary } from '../api';
+import { getCollabRuns, getCollabRunMembers, getCollabRunTraces, getCollabRunSummary, extractList } from '../api';
 
 const { Text } = Typography;
 
@@ -299,7 +299,7 @@ const Teams: React.FC = () => {
   const { data: runs = [], isLoading: loading, isError: runsError } = useQuery({
     queryKey: ['collab-runs'],
     queryFn: () =>
-      getCollabRuns().then((res) => (Array.isArray(res.data) ? (res.data as any[]) : [])),
+      getCollabRuns().then((res) => extractList<any>(res)),
   });
   useEffect(() => {
     if (runsError) message.error('Failed to load collab runs');

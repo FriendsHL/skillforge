@@ -14,7 +14,7 @@ import {
   ThunderboltOutlined,
   SearchOutlined,
 } from '@ant-design/icons';
-import { getTraces, getTraceSpans } from '../api';
+import { getTraces, getTraceSpans, extractList } from '../api';
 
 const { Text } = Typography;
 
@@ -203,7 +203,7 @@ const Traces: React.FC = () => {
     queryKey: ['traces', debouncedFilter || null],
     queryFn: () =>
       getTraces(debouncedFilter || undefined)
-        .then((res) => (Array.isArray(res.data) ? (res.data as TraceItem[]) : [])),
+        .then((res) => extractList<TraceItem>(res)),
   });
 
   const spansQuery = useQuery({

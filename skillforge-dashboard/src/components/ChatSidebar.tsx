@@ -52,17 +52,11 @@ const ChatSidebar: React.FC<ChatSidebarProps> = ({
         dataSource={sessions}
         renderItem={(item: any) => {
           const sid = String(item.id ?? item.sessionId);
+          const isActive = activeSessionId === sid;
           return (
             <List.Item
               onClick={() => onSelectSession(sid)}
-              style={{
-                cursor: 'pointer',
-                background: activeSessionId === sid ? 'var(--bg-hover)' : undefined,
-                padding: '10px 16px',
-                borderRadius: 6,
-                margin: '2px 6px',
-                border: 'none',
-              }}
+              className={`sf-session-item${isActive ? ' sf-session-item--active' : ''}`}
             >
               <Text ellipsis style={{ width: '100%' }}>
                 {item.collabRunId && (

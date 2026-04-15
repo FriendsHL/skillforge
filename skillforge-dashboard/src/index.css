@@ -177,6 +177,98 @@ body {
   display: none !important; /* remove AntD's default right-side selection indicator */
 }
 
+/*
+ * Chat session list item — Linear/Raycast style hover + active,
+ * matching the left-nav treatment (.sf-sider .ant-menu-item).
+ */
+.sf-session-item {
+  cursor: pointer;
+  border-radius: 6px;
+  margin: 2px 6px;
+  padding: 10px 16px;
+  border: none;
+  transition: background var(--transition-base), color var(--transition-base),
+    box-shadow var(--transition-base);
+}
+.sf-session-item:hover {
+  background: var(--bg-hover);
+}
+.sf-session-item.sf-session-item--active {
+  background: var(--accent-muted);
+  color: var(--accent-primary);
+  /* inset 3px left accent bar — same pattern as sidebar nav */
+  box-shadow: inset 3px 0 0 var(--accent-primary);
+}
+.sf-session-item.sf-session-item--active .anticon {
+  color: var(--accent-primary);
+}
+
+/*
+ * Chat input wrapper — subtle hover, designed focus ring.
+ * Uses :focus-within so the container lights up when the inner Input
+ * is focused (Input itself is variant="borderless").
+ */
+.sf-chat-input {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-input);
+  box-shadow: var(--shadow-input);
+  transition: border-color var(--transition-base), box-shadow var(--transition-base);
+}
+.sf-chat-input:hover {
+  border-color: var(--border-medium);
+}
+.sf-chat-input:focus-within {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 2px var(--accent-muted), 0 1px 4px rgba(0, 0, 0, 0.08);
+}
+
+/*
+ * Send button — designed hover/active/disabled states.
+ * Scoped under .sf-send-btn so we don't fight every AntD primary button.
+ */
+.sf-send-btn.ant-btn-primary:not(:disabled):hover {
+  background: var(--accent-primary-hover) !important;
+  border-color: var(--accent-primary-hover) !important;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 6px rgba(99, 102, 241, 0.3);
+}
+.sf-send-btn.ant-btn-primary:not(:disabled):active {
+  transform: scale(0.97);
+  box-shadow: none;
+}
+.sf-send-btn.ant-btn-primary:disabled,
+.sf-send-btn.ant-btn-primary.ant-btn-loading {
+  opacity: 0.6;
+  background: var(--accent-primary) !important;
+  border-color: var(--accent-primary) !important;
+  color: var(--text-on-accent) !important;
+  cursor: not-allowed;
+}
+
+/*
+ * Tool-call row in ChatWindow — signals that expand/collapse is clickable.
+ * Applied to both the inflight-tool row and the collapsible header.
+ */
+.sf-tool-row {
+  cursor: pointer;
+  transition: background var(--transition-base), border-color var(--transition-base);
+}
+.sf-tool-row:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-medium);
+}
+
+/* Collapse header inside tool-call timeline should feel clickable too */
+.sf-tool-collapse .ant-collapse-header {
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background var(--transition-base);
+}
+.sf-tool-collapse .ant-collapse-header:hover {
+  background: var(--bg-hover);
+}
+
 /* Markdown in chat bubbles */
 .chat-markdown p {
   margin: 0 0 8px 0;

@@ -75,6 +75,7 @@ const ToolCallTimeline: React.FC<ToolCallTimelineProps> = ({ toolCalls }) => {
                 <Collapse
                   size="small"
                   ghost
+                  className="sf-tool-collapse"
                   style={{ marginTop: 0, marginLeft: -16 }}
                   items={collapseItems}
                 />

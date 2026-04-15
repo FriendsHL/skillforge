@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Tooltip, Spin } from 'antd';
-import { getCollabRunTraces } from '../api';
+import { getCollabRunTraces, extractList } from '../api';
 
 interface TraceSpan {
   id: string;
@@ -63,7 +63,7 @@ const CollabRunTimeline: React.FC<Props> = ({ collabRunId }) => {
     if (!collabRunId) return;
     try {
       const res = await getCollabRunTraces(collabRunId);
-      setSpans(Array.isArray(res.data) ? res.data : []);
+      setSpans(extractList<TraceSpan>(res));
     } catch {
       // non-critical
     }

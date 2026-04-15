@@ -4,7 +4,7 @@ import {
 } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, SearchOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { getMemories, searchMemories, createMemory, updateMemory, deleteMemory } from '../api';
+import { getMemories, searchMemories, createMemory, updateMemory, deleteMemory, extractList } from '../api';
 
 const { TextArea } = Input;
 
@@ -34,7 +34,7 @@ const MemoryList: React.FC = () => {
     queryKey: ['memories', userId, typeParam],
     queryFn: () =>
       getMemories(userId, typeParam)
-        .then((res) => (Array.isArray(res.data) ? res.data : []))
+        .then((res) => extractList<any>(res))
         .catch((e) => {
           message.error('Failed to load memories');
           throw e;
@@ -45,7 +45,7 @@ const MemoryList: React.FC = () => {
     queryKey: ['memories', userId, 'search', activeSearch],
     queryFn: () =>
       searchMemories(userId, activeSearch)
-        .then((res) => (Array.isArray(res.data) ? res.data : []))
+        .then((res) => extractList<any>(res))
         .catch((e) => {
           message.error('Search failed');
           throw e;

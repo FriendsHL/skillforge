@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Card, List, Tag, Typography, Button, Tooltip } from 'antd';
 import { useNavigate } from 'react-router-dom';
-import { getSubAgentRuns } from '../api';
+import { getSubAgentRuns, extractList } from '../api';
 
 const { Text } = Typography;
 
@@ -57,7 +57,7 @@ const SubAgentRunsPanel: React.FC<Props> = ({ sessionId, parentRunning }) => {
     if (!sessionId) return;
     try {
       const res = await getSubAgentRuns(sessionId, 1);
-      const list: SubAgentRun[] = Array.isArray(res.data) ? res.data : res.data?.data ?? [];
+      const list = extractList<SubAgentRun>(res);
       // 最近派发的排在前面
       list.sort((a, b) => {
         const ta = a.spawnedAt ? new Date(a.spawnedAt).getTime() : 0;
