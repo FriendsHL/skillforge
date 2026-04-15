@@ -8,11 +8,14 @@ import com.skillforge.core.llm.LlmProviderFactory;
 import com.skillforge.core.llm.LlmRequest;
 import com.skillforge.core.llm.LlmResponse;
 import com.skillforge.core.llm.LlmStreamHandler;
+import com.skillforge.core.llm.ModelConfig;
 import com.skillforge.core.model.ContentBlock;
 import com.skillforge.core.model.Message;
 import com.skillforge.server.config.LlmProperties;
+import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.CompactionEventEntity;
 import com.skillforge.server.entity.SessionEntity;
+import com.skillforge.server.repository.AgentRepository;
 import com.skillforge.server.repository.CompactionEventRepository;
 import com.skillforge.server.repository.SessionRepository;
 import com.skillforge.server.service.CompactionService;
@@ -47,6 +50,7 @@ class CompactionServiceTest {
     private LlmProviderFactory llmProviderFactory;
     private LlmProperties llmProperties;
     private ChatEventBroadcaster broadcaster;
+    private AgentRepository agentRepository;
     private CompactionService service;
 
     // in-memory storage
@@ -78,6 +82,7 @@ class CompactionServiceTest {
         llmProviderFactory = mock(LlmProviderFactory.class);
         llmProperties = mock(LlmProperties.class);
         broadcaster = mock(ChatEventBroadcaster.class);
+        agentRepository = mock(AgentRepository.class);
 
         when(llmProperties.getDefaultProvider()).thenReturn("mock");
         when(llmProperties.getProviders()).thenReturn(new HashMap<>());
@@ -112,6 +117,7 @@ class CompactionServiceTest {
         service = new CompactionService(sessionRepository, eventRepository, sessionService,
                 new LightCompactStrategy(), new FullCompactStrategy(),
                 llmProviderFactory, llmProperties, broadcaster);
+        service.setAgentRepository(agentRepository);
     }
 
     private SessionEntity seedSession(String id, int msgCount, int lastCompactAt, String runtimeStatus) {
@@ -395,6 +401,90 @@ class CompactionServiceTest {
         service.compact("sLIST", "light", "engine-soft", "one");
         List<CompactionEventEntity> events = service.listEvents("sLIST");
         assertThat(events).isNotEmpty();
+    }
+
+    /**
+     * Explicit YAML contextWindowTokens should win over the model map (step 1 > step 2).
+     */
+    @Test
+    void resolveContextWindow_yaml_explicit_wins_over_model_map() throws Exception {
+        LlmProperties.ProviderConfig pc = new LlmProperties.ProviderConfig();
+        pc.setModel("claude-sonnet-4-20250514");
+        pc.setContextWindowTokens(50_000);  // deliberate override — not a real value, just testing priority
+        when(llmProperties.getProviders()).thenReturn(Map.of("claude", pc));
+        when(llmProperties.getDefaultProvider()).thenReturn("claude");
+
+        SessionEntity session = new SessionEntity();
+        session.setId("s-yaml");
+        session.setAgentId(97L);
+
+        AgentEntity agent = new AgentEntity();
+        agent.setId(97L);
+        agent.setModelId("claude:claude-sonnet-4-20250514");
+        when(agentRepository.findById(97L)).thenReturn(Optional.of(agent));
+
+        java.lang.reflect.Method m = CompactionService.class.getDeclaredMethod(
+                "resolveContextWindowForSession", SessionEntity.class);
+        m.setAccessible(true);
+        int result = (int) m.invoke(service, session);
+
+        assertThat(result).isEqualTo(50_000);  // YAML wins, not 200000 from model map
+    }
+
+    /**
+     * When YAML contextWindowTokens is unset, the known-model map should resolve
+     * claude-sonnet-4-20250514 to 200_000.
+     */
+    @Test
+    void resolveContextWindow_uses_known_model_map_when_yaml_unset() throws Exception {
+        LlmProperties.ProviderConfig pc = new LlmProperties.ProviderConfig();
+        pc.setModel("claude-sonnet-4-20250514");
+        // contextWindowTokens NOT set → null
+        when(llmProperties.getProviders()).thenReturn(Map.of("claude", pc));
+        when(llmProperties.getDefaultProvider()).thenReturn("claude");
+
+        SessionEntity session = new SessionEntity();
+        session.setId("s-claude");
+        session.setAgentId(99L);
+
+        AgentEntity agent = new AgentEntity();
+        agent.setId(99L);
+        agent.setModelId("claude:claude-sonnet-4-20250514");
+        when(agentRepository.findById(99L)).thenReturn(Optional.of(agent));
+
+        java.lang.reflect.Method m = CompactionService.class.getDeclaredMethod(
+                "resolveContextWindowForSession", SessionEntity.class);
+        m.setAccessible(true);
+        int result = (int) m.invoke(service, session);
+
+        assertThat(result).isEqualTo(200_000);
+    }
+
+    /**
+     * Unknown model names should fall through the known-model map to the 32000 constant.
+     */
+    @Test
+    void resolveContextWindow_falls_back_to_32000_for_unknown_model() throws Exception {
+        LlmProperties.ProviderConfig pc = new LlmProperties.ProviderConfig();
+        pc.setModel("some-custom-llm-v1");
+        when(llmProperties.getProviders()).thenReturn(Map.of("custom", pc));
+        when(llmProperties.getDefaultProvider()).thenReturn("custom");
+
+        SessionEntity session = new SessionEntity();
+        session.setId("s-unknown");
+        session.setAgentId(98L);
+
+        AgentEntity agent = new AgentEntity();
+        agent.setId(98L);
+        agent.setModelId("custom:some-custom-llm-v1");
+        when(agentRepository.findById(98L)).thenReturn(Optional.of(agent));
+
+        java.lang.reflect.Method m = CompactionService.class.getDeclaredMethod(
+                "resolveContextWindowForSession", SessionEntity.class);
+        m.setAccessible(true);
+        int result = (int) m.invoke(service, session);
+
+        assertThat(result).isEqualTo(ModelConfig.DEFAULT_CONTEXT_WINDOW_TOKENS);
     }
 
     /**

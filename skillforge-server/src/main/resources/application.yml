@@ -44,11 +44,13 @@ skillforge:
         api-key: ${ANTHROPIC_API_KEY:}
         base-url: https://api.anthropic.com
         model: claude-sonnet-4-20250514
+        context-window-tokens: 200000   # claude-sonnet-4 / claude-3.x = 200K
       openai:
         type: openai
         api-key: ${DEEPSEEK_API_KEY:}
         base-url: https://api.deepseek.com
         model: deepseek-chat
+        # context-window-tokens: 64000  # deepseek-chat; resolved automatically via model map if unset
       bailian:
         type: openai
         api-key: ${DASHSCOPE_API_KEY:}

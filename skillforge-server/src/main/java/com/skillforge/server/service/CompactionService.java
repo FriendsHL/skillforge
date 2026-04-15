@@ -258,7 +258,9 @@ public class CompactionService implements ContextCompactorCallback {
 
     /**
      * 解析 session 对应的 context window. 优先级:
-     *   agent.modelId → ModelConfig.contextWindowTokens → llmProperties default → 32000 fallback.
+     *   1. llmProperties.providers[providerName].contextWindowTokens  (YAML 显式配置)
+     *   2. ModelConfig.lookupKnownContextWindow(modelName)            (静态已知模型表)
+     *   3. ModelConfig.DEFAULT_CONTEXT_WINDOW_TOKENS = 32000          (最终兜底)
      */
     int resolveContextWindowForSession(SessionEntity session) {
         try {
@@ -275,7 +277,19 @@ public class CompactionService implements ContextCompactorCallback {
                     if (providerName != null) {
                         LlmProperties.ProviderConfig pc = llmProperties.getProviders().get(providerName);
                         if (pc != null && pc.getContextWindowTokens() != null) {
-                            return pc.getContextWindowTokens();
+                            return pc.getContextWindowTokens();  // YAML explicit config — highest priority
+                        }
+                        // Step 2: static known-model map lookup using the provider's configured model name
+                        String modelName = (pc != null) ? pc.getModel() : null;
+                        if (modelName == null) {
+                            // provider config absent; use the part after ":" in modelId as model name
+                            modelName = modelId.contains(":") ? modelId.substring(modelId.indexOf(':') + 1) : modelId;
+                        }
+                        java.util.Optional<Integer> known = ModelConfig.lookupKnownContextWindow(modelName);
+                        if (known.isPresent()) {
+                            log.debug("Resolved context window via known-model map: session={} model={} window={}",
+                                    session.getId(), modelName, known.get());
+                            return known.get();
                         }
                     }
                 }
