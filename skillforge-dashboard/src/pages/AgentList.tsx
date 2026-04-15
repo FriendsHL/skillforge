@@ -1,6 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, Popconfirm, Tag, Tabs, message, Card } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, FileTextOutlined } from '@ant-design/icons';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getAgents, createAgent, updateAgent, deleteAgent, getTools, getSkills, getClaudeMd, saveClaudeMd } from '../api';
 
 const { TextArea } = Input;
@@ -33,62 +34,92 @@ const parseSkillIds = (raw: any): string[] => {
 };
 
 const AgentList: React.FC = () => {
-  const [agents, setAgents] = useState<any[]>([]);
-  const [loading, setLoading] = useState(false);
+  const queryClient = useQueryClient();
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<any>(null);
-  const [toolOptions, setToolOptions] = useState<{ label: string; value: string }[]>([]);
-  const [skillOptions, setSkillOptions] = useState<{ label: string; value: string }[]>([]);
   const [form] = Form.useForm();
   const [claudeMdModalOpen, setClaudeMdModalOpen] = useState(false);
-  const [claudeMdContent, setClaudeMdContent] = useState('');
+  const [claudeMdDraft, setClaudeMdDraft] = useState<string | null>(null);
 
-  const fetchAgents = () => {
-    setLoading(true);
-    getAgents()
-      .then((res) => setAgents(Array.isArray(res.data) ? res.data : res.data?.data ?? []))
-      .catch(() => message.error('Failed to load agents'))
-      .finally(() => setLoading(false));
-  };
-
-  const fetchTools = () => {
-    getTools()
-      .then((res) => {
-        const list: any[] = Array.isArray(res.data) ? res.data : (res.data as any)?.data ?? [];
-        setToolOptions(
-          list.map((t: any) => ({
-            label: t.description ? `${t.name} — ${t.description}` : t.name,
-            value: t.name,
-          }))
-        );
-      })
-      .catch(() => {});
-  };
-
-  const fetchSkills = () => {
-    getSkills()
-      .then((res) => {
-        const list: any[] = Array.isArray(res.data) ? res.data : (res.data as any)?.data ?? [];
-        setSkillOptions(
-          list.map((s: any) => ({
-            label: s.description ? `${s.name} — ${s.description}` : s.name,
-            value: s.name,
-          }))
-        );
-      })
-      .catch(() => {});
-  };
-
-  const fetchClaudeMd = () => {
-    getClaudeMd(1).then((res) => setClaudeMdContent(res.data?.claudeMd ?? '')).catch(() => {});
-  };
-
+  const { data: agents = [], isLoading: loading, isError: agentsError } = useQuery({
+    queryKey: ['agents'],
+    queryFn: () =>
+      getAgents().then((res) => (Array.isArray(res.data) ? res.data : res.data?.data ?? [])),
+  });
+  // Fire toast once after all retries exhausted — avoids double-toast from catch+retry.
   useEffect(() => {
-    fetchAgents();
-    fetchTools();
-    fetchSkills();
-    fetchClaudeMd();
-  }, []);
+    if (agentsError) message.error('Failed to load agents');
+  }, [agentsError]);
+
+  const { data: tools = [] } = useQuery({
+    queryKey: ['tools'],
+    queryFn: () =>
+      getTools().then((res) => (Array.isArray(res.data) ? res.data : (res.data as any)?.data ?? [])),
+  });
+  const toolOptions = useMemo(
+    () =>
+      tools.map((t: any) => ({
+        label: t.description ? `${t.name} — ${t.description}` : t.name,
+        value: t.name,
+      })),
+    [tools],
+  );
+
+  const { data: skills = [] } = useQuery({
+    queryKey: ['skills'],
+    queryFn: () =>
+      getSkills().then((res) => (Array.isArray(res.data) ? res.data : (res.data as any)?.data ?? [])),
+  });
+  const skillOptions = useMemo(
+    () =>
+      skills.map((s: any) => ({
+        label: s.description ? `${s.name} — ${s.description}` : s.name,
+        value: s.name,
+      })),
+    [skills],
+  );
+
+  const { data: claudeMdFromServer = '' } = useQuery({
+    queryKey: ['claude-md', 1],
+    queryFn: () => getClaudeMd(1).then((res) => res.data?.claudeMd ?? ''),
+  });
+  const claudeMdContent = claudeMdDraft ?? claudeMdFromServer;
+
+  const invalidateAgents = () => queryClient.invalidateQueries({ queryKey: ['agents'] });
+
+  const createMutation = useMutation({
+    mutationFn: (payload: any) => createAgent(payload),
+    onSuccess: () => {
+      message.success('Agent created');
+      invalidateAgents();
+    },
+  });
+  const updateMutation = useMutation({
+    mutationFn: ({ id, payload }: { id: number; payload: any }) => updateAgent(id, payload),
+    onSuccess: () => {
+      message.success('Agent updated');
+      invalidateAgents();
+    },
+    onError: () => message.error('Failed to update agent'),
+  });
+  const deleteMutation = useMutation({
+    mutationFn: (id: number) => deleteAgent(id),
+    onSuccess: () => {
+      message.success('Agent deleted');
+      invalidateAgents();
+    },
+    onError: () => message.error('Failed to delete agent'),
+  });
+  const saveClaudeMdMutation = useMutation({
+    mutationFn: (content: string) => saveClaudeMd(1, content),
+    onSuccess: () => {
+      message.success('CLAUDE.md saved');
+      setClaudeMdModalOpen(false);
+      setClaudeMdDraft(null);
+      queryClient.invalidateQueries({ queryKey: ['claude-md', 1] });
+    },
+    onError: () => message.error('Failed to save CLAUDE.md'),
+  });
 
   const openCreate = () => {
     setEditing(null);
@@ -110,42 +141,26 @@ const AgentList: React.FC = () => {
   const handleOk = async () => {
     try {
       const values = await form.validateFields();
-      // 把数组形式的 skillIds 序列化成 JSON 字符串(后端字段是 TEXT)
       const payload = {
         ...values,
         skillIds: JSON.stringify(values.skillIds ?? []),
         toolIds: JSON.stringify(values.toolIds ?? []),
       };
       if (editing) {
-        await updateAgent(editing.id, { ...editing, ...payload });
-        message.success('Agent updated');
+        await updateMutation.mutateAsync({ id: editing.id, payload: { ...editing, ...payload } });
       } else {
-        await createAgent(payload);
-        message.success('Agent created');
+        await createMutation.mutateAsync(payload);
       }
       setModalOpen(false);
-      fetchAgents();
     } catch (e: any) {
-      if (e?.errorFields) return; // form 校验
+      if (e?.errorFields) return;
       message.error('Save failed: ' + (e?.message ?? 'unknown'));
     }
   };
 
-  const handleDelete = async (id: number) => {
-    await deleteAgent(id);
-    message.success('Agent deleted');
-    fetchAgents();
-  };
+  const handleDelete = (id: number) => deleteMutation.mutate(id);
 
-  const handleSaveClaudeMd = async () => {
-    try {
-      await saveClaudeMd(1, claudeMdContent);
-      message.success('CLAUDE.md saved');
-      setClaudeMdModalOpen(false);
-    } catch {
-      message.error('Failed to save CLAUDE.md');
-    }
-  };
+  const handleSaveClaudeMd = () => saveClaudeMdMutation.mutate(claudeMdContent);
 
   const columns = [
     { title: 'ID', dataIndex: 'id', key: 'id', width: 60 },
@@ -352,13 +367,13 @@ const AgentList: React.FC = () => {
         title="CLAUDE.md — Global Rules (applies to all agents)"
         open={claudeMdModalOpen}
         onOk={handleSaveClaudeMd}
-        onCancel={() => setClaudeMdModalOpen(false)}
+        onCancel={() => { setClaudeMdModalOpen(false); setClaudeMdDraft(null); }}
         width={720}
       >
         <TextArea
           rows={15}
           value={claudeMdContent}
-          onChange={(e) => setClaudeMdContent(e.target.value)}
+          onChange={(e) => setClaudeMdDraft(e.target.value)}
           placeholder="# Global Rules&#10;&#10;Rules that apply to all agents..."
         />
       </Modal>

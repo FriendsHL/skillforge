@@ -1,8 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import {
   Button, Card, Modal, Form, Input, Select, Space, Popconfirm, Tag, Tabs, message,
 } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, SearchOutlined } from '@ant-design/icons';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getMemories, searchMemories, createMemory, updateMemory, deleteMemory } from '../api';
 
 const { TextArea } = Input;
@@ -18,40 +19,73 @@ const typeOptions = [
 const TAG_COLORS = ['blue', 'green', 'orange', 'purple', 'cyan', 'magenta', 'gold'];
 
 const MemoryList: React.FC = () => {
-  const [memories, setMemories] = useState<any[]>([]);
-  const [loading, setLoading] = useState(false);
+  const queryClient = useQueryClient();
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<any>(null);
   const [activeTab, setActiveTab] = useState('all');
   const [searchKeyword, setSearchKeyword] = useState('');
+  const [activeSearch, setActiveSearch] = useState<string>('');
   const [form] = Form.useForm();
 
   const userId = 1; // default user
 
-  const fetchMemories = (type?: string) => {
-    setLoading(true);
-    const typeParam = type && type !== 'all' ? type : undefined;
-    getMemories(userId, typeParam)
-      .then((res) => setMemories(Array.isArray(res.data) ? res.data : []))
-      .catch(() => message.error('Failed to load memories'))
-      .finally(() => setLoading(false));
-  };
+  const typeParam = activeTab !== 'all' ? activeTab : undefined;
+  const listQuery = useQuery({
+    queryKey: ['memories', userId, typeParam],
+    queryFn: () =>
+      getMemories(userId, typeParam)
+        .then((res) => (Array.isArray(res.data) ? res.data : []))
+        .catch((e) => {
+          message.error('Failed to load memories');
+          throw e;
+        }),
+    enabled: activeSearch === '',
+  });
+  const searchQuery = useQuery({
+    queryKey: ['memories', userId, 'search', activeSearch],
+    queryFn: () =>
+      searchMemories(userId, activeSearch)
+        .then((res) => (Array.isArray(res.data) ? res.data : []))
+        .catch((e) => {
+          message.error('Search failed');
+          throw e;
+        }),
+    enabled: activeSearch !== '',
+  });
+  const memories = (activeSearch ? searchQuery.data : listQuery.data) ?? [];
+  const loading = activeSearch ? searchQuery.isLoading : listQuery.isLoading;
 
   const handleSearch = () => {
-    if (!searchKeyword.trim()) {
-      fetchMemories(activeTab);
-      return;
-    }
-    setLoading(true);
-    searchMemories(userId, searchKeyword)
-      .then((res) => setMemories(Array.isArray(res.data) ? res.data : []))
-      .catch(() => message.error('Search failed'))
-      .finally(() => setLoading(false));
+    setActiveSearch(searchKeyword.trim());
   };
 
-  useEffect(() => {
-    fetchMemories(activeTab);
-  }, [activeTab]);
+  const invalidateMemories = () => queryClient.invalidateQueries({ queryKey: ['memories', userId] });
+
+  const createMutation = useMutation({
+    mutationFn: (values: any) => createMemory({ ...values, userId }),
+    onSuccess: () => {
+      message.success('Memory created');
+      invalidateMemories();
+    },
+    onError: () => message.error('Failed to save memory'),
+  });
+  const updateMutation = useMutation({
+    mutationFn: ({ id, values }: { id: number; values: any }) =>
+      updateMemory(id, { ...values, userId }),
+    onSuccess: () => {
+      message.success('Memory updated');
+      invalidateMemories();
+    },
+    onError: () => message.error('Failed to save memory'),
+  });
+  const deleteMutation = useMutation({
+    mutationFn: (id: number) => deleteMemory(id),
+    onSuccess: () => {
+      message.success('Memory deleted');
+      invalidateMemories();
+    },
+    onError: () => message.error('Failed to delete memory'),
+  });
 
   const openCreate = () => {
     setEditing(null);
@@ -69,27 +103,21 @@ const MemoryList: React.FC = () => {
     try {
       const values = await form.validateFields();
       if (editing) {
-        await updateMemory(editing.id, { ...values, userId });
-        message.success('Memory updated');
+        await updateMutation.mutateAsync({ id: editing.id, values });
       } else {
-        await createMemory({ ...values, userId });
-        message.success('Memory created');
+        await createMutation.mutateAsync(values);
       }
       setModalOpen(false);
-      fetchMemories(activeTab);
     } catch {
-      // validation error
+      // validation or mutation error (error toast already fired by mutation)
     }
   };
 
-  const handleDelete = async (id: number) => {
-    await deleteMemory(id);
-    message.success('Memory deleted');
-    fetchMemories(activeTab);
-  };
+  const handleDelete = (id: number) => deleteMutation.mutate(id);
 
+  // Skip tab filter when a search is active — server already returns all types for the keyword.
   const filteredMemories =
-    activeTab === 'all' ? memories : memories.filter((m) => m.type === activeTab);
+    activeSearch || activeTab === 'all' ? memories : memories.filter((m) => m.type === activeTab);
 
   const renderCards = () => {
     if (loading) {
@@ -165,7 +193,11 @@ const MemoryList: React.FC = () => {
           <Input
             placeholder="Search memories..."
             value={searchKeyword}
-            onChange={(e) => setSearchKeyword(e.target.value)}
+            allowClear
+            onChange={(e) => {
+              setSearchKeyword(e.target.value);
+              if (e.target.value === '') setActiveSearch(''); // restore list immediately on clear
+            }}
             onPressEnter={handleSearch}
             suffix={<SearchOutlined onClick={handleSearch} style={{ cursor: 'pointer' }} />}
             style={{ width: 260 }}

@@ -1,6 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Table, Button, Upload, Popconfirm, message, Tag, Card, Divider, Switch, Modal, Tabs, Typography } from 'antd';
 import { DeleteOutlined, InboxOutlined, ThunderboltOutlined, ToolOutlined, EyeOutlined, CodeOutlined, FileTextOutlined, LockOutlined } from '@ant-design/icons';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getSkills, getBuiltinSkills, uploadSkill, deleteSkill, getSkillDetail, toggleSkill } from '../api';
 import MarkdownRenderer from '../components/MarkdownRenderer';
 
@@ -8,65 +9,71 @@ const { Dragger } = Upload;
 const { Text, Paragraph } = Typography;
 
 const SkillList: React.FC = () => {
-  const [skills, setSkills] = useState<any[]>([]);
-  const [builtinSkills, setBuiltinSkills] = useState<any[]>([]);
-  const [loading, setLoading] = useState(false);
+  const queryClient = useQueryClient();
   const [detailVisible, setDetailVisible] = useState(false);
-  const [detail, setDetail] = useState<any>(null);
-  const [detailLoading, setDetailLoading] = useState(false);
+  const [selectedDetailId, setSelectedDetailId] = useState<number | null>(null);
 
-  const fetchSkills = () => {
-    setLoading(true);
-    Promise.all([getSkills(), getBuiltinSkills()])
-      .then(([skillsRes, builtinRes]) => {
-        setSkills(Array.isArray(skillsRes.data) ? skillsRes.data : skillsRes.data?.data ?? []);
-        setBuiltinSkills(Array.isArray(builtinRes.data) ? builtinRes.data : []);
-      })
-      .catch(() => message.error('Failed to load skills'))
-      .finally(() => setLoading(false));
-  };
+  const { data: skills = [], isLoading: skillsLoading, isError: skillsError } = useQuery({
+    queryKey: ['skills'],
+    queryFn: () =>
+      getSkills().then((res) => (Array.isArray(res.data) ? res.data : res.data?.data ?? [])),
+  });
+  useEffect(() => {
+    if (skillsError) message.error('Failed to load skills');
+  }, [skillsError]);
 
-  useEffect(() => { fetchSkills(); }, []);
+  const { data: detail, isLoading: detailLoading } = useQuery({
+    queryKey: ['skill-detail', selectedDetailId],
+    queryFn: () => getSkillDetail(selectedDetailId!).then((res) => res.data),
+    enabled: !!selectedDetailId,
+  });
+  const { data: builtinSkills = [], isLoading: builtinLoading } = useQuery({
+    queryKey: ['builtin-skills'],
+    queryFn: () => getBuiltinSkills().then((res) => (Array.isArray(res.data) ? res.data : [])),
+  });
+  const loading = skillsLoading || builtinLoading;
 
-  const handleUpload = async (file: File) => {
-    try {
-      await uploadSkill(file, 1);
+  const invalidateSkills = () => queryClient.invalidateQueries({ queryKey: ['skills'] });
+
+  const uploadMutation = useMutation({
+    mutationFn: (file: File) => uploadSkill(file, 1),
+    onSuccess: () => {
       message.success('Skill uploaded');
-      fetchSkills();
-    } catch (err: any) {
+      invalidateSkills();
+    },
+    onError: (err: any) => {
       const errMsg = err?.response?.data?.error || 'Upload failed';
       message.error(errMsg);
-    }
+    },
+  });
+  const deleteMutation = useMutation({
+    mutationFn: (id: number) => deleteSkill(id),
+    onSuccess: () => {
+      message.success('Skill deleted');
+      invalidateSkills();
+    },
+    onError: () => message.error('Failed to delete skill'),
+  });
+  const toggleMutation = useMutation({
+    mutationFn: ({ id, enabled }: { id: number; enabled: boolean }) => toggleSkill(id, enabled),
+    onSuccess: (_d, vars) => {
+      message.success(vars.enabled ? 'Skill enabled' : 'Skill disabled');
+      invalidateSkills();
+    },
+    onError: () => message.error('Failed to toggle skill'),
+  });
+
+  const handleUpload = (file: File) => {
+    uploadMutation.mutate(file);
     return false;
   };
 
-  const handleDelete = async (id: number | string) => {
-    await deleteSkill(id as number);
-    message.success('Skill deleted');
-    fetchSkills();
-  };
+  const handleDelete = (id: number | string) => deleteMutation.mutate(id as number);
+  const handleToggle = (id: number, enabled: boolean) => toggleMutation.mutate({ id, enabled });
 
-  const handleToggle = async (id: number, enabled: boolean) => {
-    try {
-      await toggleSkill(id, enabled);
-      message.success(enabled ? 'Skill enabled' : 'Skill disabled');
-      fetchSkills();
-    } catch {
-      message.error('Failed to toggle skill');
-    }
-  };
-
-  const showDetail = async (id: number | string) => {
+  const showDetail = (id: number | string) => {
+    setSelectedDetailId(id as number);
     setDetailVisible(true);
-    setDetailLoading(true);
-    try {
-      const res = await getSkillDetail(id);
-      setDetail(res.data);
-    } catch {
-      message.error('Failed to load skill detail');
-    } finally {
-      setDetailLoading(false);
-    }
   };
 
   const [builtinDetailVisible, setBuiltinDetailVisible] = useState(false);
@@ -255,7 +262,7 @@ const SkillList: React.FC = () => {
       <Modal
         title={detail ? `Skill: ${detail.name}` : 'Skill Detail'}
         open={detailVisible}
-        onCancel={() => { setDetailVisible(false); setDetail(null); }}
+        onCancel={() => { setDetailVisible(false); setSelectedDetailId(null); }}
         footer={null}
         width={800}
       >

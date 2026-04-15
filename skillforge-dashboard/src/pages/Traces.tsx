@@ -1,5 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
+import { useDebounce } from '../hooks/useDebounce';
 import { Card, Table, Tag, Typography, Space, Collapse, Tooltip, Empty, Spin, Input } from 'antd';
+import { useQuery } from '@tanstack/react-query';
 import {
   ClockCircleOutlined,
   CheckCircleOutlined,
@@ -192,37 +194,32 @@ const SpanWaterfall: React.FC<{ spans: SpanItem[]; rootDurationMs: number; rootS
 };
 
 const Traces: React.FC = () => {
-  const [traces, setTraces] = useState<TraceItem[]>([]);
-  const [loading, setLoading] = useState(false);
   const [selectedTraceId, setSelectedTraceId] = useState<string | null>(null);
-  const [spans, setSpans] = useState<SpanItem[]>([]);
-  const [spansLoading, setSpansLoading] = useState(false);
-  const [rootSpan, setRootSpan] = useState<SpanItem | null>(null);
   const [sessionFilter, setSessionFilter] = useState<string>('');
+  // Debounce filter input — prevents a new API call on every keystroke.
+  const debouncedFilter = useDebounce(sessionFilter.trim(), 300);
 
-  useEffect(() => {
-    setLoading(true);
-    const sid = sessionFilter.trim() || undefined;
-    getTraces(sid)
-      .then((res) => setTraces(Array.isArray(res.data) ? res.data : []))
-      .catch(() => setTraces([]))
-      .finally(() => setLoading(false));
-  }, [sessionFilter]);
+  const { data: traces = [], isLoading: loading, isError: tracesError } = useQuery({
+    queryKey: ['traces', debouncedFilter || null],
+    queryFn: () =>
+      getTraces(debouncedFilter || undefined)
+        .then((res) => (Array.isArray(res.data) ? (res.data as TraceItem[]) : [])),
+  });
 
-  const handleSelectTrace = (traceId: string) => {
-    setSelectedTraceId(traceId);
-    setSpansLoading(true);
-    getTraceSpans(traceId)
-      .then((res) => {
-        setRootSpan(res.data.root ?? null);
-        setSpans(Array.isArray(res.data.spans) ? res.data.spans : []);
-      })
-      .catch(() => {
-        setRootSpan(null);
-        setSpans([]);
-      })
-      .finally(() => setSpansLoading(false));
-  };
+  const spansQuery = useQuery({
+    queryKey: ['trace-spans', selectedTraceId],
+    queryFn: () =>
+      getTraceSpans(selectedTraceId as string).then((res) => ({
+        root: (res.data.root ?? null) as SpanItem | null,
+        spans: (Array.isArray(res.data.spans) ? res.data.spans : []) as SpanItem[],
+      })),
+    enabled: !!selectedTraceId,
+  });
+  const spans = spansQuery.data?.spans ?? [];
+  const rootSpan = spansQuery.data?.root ?? null;
+  const spansLoading = spansQuery.isLoading && !!selectedTraceId;
+
+  const handleSelectTrace = (traceId: string) => setSelectedTraceId(traceId);
 
   const columns = [
     {
@@ -316,7 +313,9 @@ const Traces: React.FC = () => {
               background: selectedTraceId === record.traceId ? '#e6f4ff' : undefined,
             },
           })}
-          locale={{ emptyText: <Empty description="No traces yet. Send a message to generate traces." /> }}
+          locale={{ emptyText: tracesError
+            ? <Empty description="Failed to load traces" />
+            : <Empty description="No traces yet. Send a message to generate traces." /> }}
         />
       </Card>
 

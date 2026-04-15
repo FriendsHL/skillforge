@@ -1,5 +1,6 @@
-import React, { useEffect, useState } from 'react';
-import { Card, Table, Tag, Typography, Space, Tabs, Empty, Spin, Tooltip, Progress, Collapse } from 'antd';
+import React, { useState, useEffect } from 'react';
+import { Card, Table, Tag, Typography, Space, Tabs, Empty, Spin, Tooltip, Progress, Collapse, message } from 'antd';
+import { useQuery } from '@tanstack/react-query';
 import {
   ClockCircleOutlined,
   CheckCircleOutlined,
@@ -57,16 +58,10 @@ const AGENT_COLORS = [
 // ── Member panel ──────────────────────────────────────────────────────────────
 
 const MembersPanel: React.FC<{ collabRunId: string }> = ({ collabRunId }) => {
-  const [data, setData] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    setLoading(true);
-    getCollabRunMembers(collabRunId)
-      .then((res) => setData(res.data))
-      .catch(() => setData(null))
-      .finally(() => setLoading(false));
-  }, [collabRunId]);
+  const { data, isLoading: loading } = useQuery({
+    queryKey: ['collab-run', collabRunId, 'members'],
+    queryFn: () => getCollabRunMembers(collabRunId).then((res) => res.data).catch(() => null),
+  });
 
   if (loading) return <Spin style={{ display: 'block', margin: '40px auto' }} />;
   if (!data) return <Empty description="Failed to load" />;
@@ -116,16 +111,10 @@ const MembersPanel: React.FC<{ collabRunId: string }> = ({ collabRunId }) => {
 // ── Summary panel ─────────────────────────────────────────────────────────────
 
 const SummaryPanel: React.FC<{ collabRunId: string }> = ({ collabRunId }) => {
-  const [data, setData] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    setLoading(true);
-    getCollabRunSummary(collabRunId)
-      .then((res) => setData(res.data))
-      .catch(() => setData(null))
-      .finally(() => setLoading(false));
-  }, [collabRunId]);
+  const { data, isLoading: loading } = useQuery({
+    queryKey: ['collab-run', collabRunId, 'summary'],
+    queryFn: () => getCollabRunSummary(collabRunId).then((res) => res.data).catch(() => null),
+  });
 
   if (loading) return <Spin style={{ display: 'block', margin: '40px auto' }} />;
   if (!data) return <Empty description="Failed to load" />;
@@ -181,16 +170,10 @@ const SummaryPanel: React.FC<{ collabRunId: string }> = ({ collabRunId }) => {
 // ── Traces panel (multi-agent waterfall) ──────────────────────────────────────
 
 const TracesPanel: React.FC<{ collabRunId: string }> = ({ collabRunId }) => {
-  const [data, setData] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    setLoading(true);
-    getCollabRunTraces(collabRunId)
-      .then((res) => setData(res.data))
-      .catch(() => setData(null))
-      .finally(() => setLoading(false));
-  }, [collabRunId]);
+  const { data, isLoading: loading } = useQuery({
+    queryKey: ['collab-run', collabRunId, 'traces'],
+    queryFn: () => getCollabRunTraces(collabRunId).then((res) => res.data).catch(() => null),
+  });
 
   if (loading) return <Spin style={{ display: 'block', margin: '40px auto' }} />;
   if (!data) return <Empty description="Failed to load" />;
@@ -312,17 +295,15 @@ const TracesPanel: React.FC<{ collabRunId: string }> = ({ collabRunId }) => {
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 const Teams: React.FC = () => {
-  const [runs, setRuns] = useState<any[]>([]);
-  const [loading, setLoading] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-
+  const { data: runs = [], isLoading: loading, isError: runsError } = useQuery({
+    queryKey: ['collab-runs'],
+    queryFn: () =>
+      getCollabRuns().then((res) => (Array.isArray(res.data) ? (res.data as any[]) : [])),
+  });
   useEffect(() => {
-    setLoading(true);
-    getCollabRuns()
-      .then((res) => setRuns(Array.isArray(res.data) ? res.data : []))
-      .catch(() => setRuns([]))
-      .finally(() => setLoading(false));
-  }, []);
+    if (runsError) message.error('Failed to load collab runs');
+  }, [runsError]);
 
   const columns = [
     {

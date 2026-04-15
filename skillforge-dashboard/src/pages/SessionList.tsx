@@ -1,6 +1,7 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { Table, Tooltip, message, Card } from 'antd';
 import { useNavigate } from 'react-router-dom';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getSessions } from '../api';
 
 const USER_ID = 1;
@@ -79,34 +80,44 @@ const StatusDot: React.FC<{ status?: string; error?: string }> = ({ status, erro
   );
 };
 
+const SESSIONS_QUERY_KEY = ['sessions', USER_ID] as const;
+
 const SessionList: React.FC = () => {
-  const [sessions, setSessions] = useState<SessionRow[]>([]);
-  const [loading, setLoading] = useState(false);
+  const queryClient = useQueryClient();
   const navigate = useNavigate();
+
+  const { data: sessions = [], isLoading: loading, refetch, isError: sessionsError } = useQuery({
+    queryKey: SESSIONS_QUERY_KEY,
+    queryFn: () =>
+      getSessions(USER_ID).then((res) => {
+        const data = Array.isArray(res.data) ? res.data : res.data?.data ?? [];
+        return data as SessionRow[];
+      }),
+    // staleTime:0 so page re-visits always refetch — WS keeps data live after that.
+    // Without this, the 30s global staleTime hides status changes that happened
+    // while the component was unmounted and the WS was closed.
+    staleTime: 0,
+  });
+  useEffect(() => {
+    if (sessionsError) message.error('Failed to load sessions');
+  }, [sessionsError]);
 
   const wsRef = useRef<WebSocket | null>(null);
   const unmountedRef = useRef(false);
   const reconnectDelayRef = useRef(2000);
   const reconnectTimerRef = useRef<number | null>(null);
 
-  const fetchSessions = () => {
-    setLoading(true);
-    return getSessions(USER_ID)
-      .then((res) => {
-        const data = Array.isArray(res.data) ? res.data : res.data?.data ?? [];
-        setSessions(data);
-      })
-      .catch(() => message.error('Failed to load sessions'))
-      .finally(() => setLoading(false));
+  const updateCache = (updater: (prev: SessionRow[]) => SessionRow[]) => {
+    queryClient.setQueryData<SessionRow[]>(SESSIONS_QUERY_KEY, (prev) => updater(prev ?? []));
   };
 
-  // --- WS merge reducer (closure-free, operates on setState updater) ---
+  // --- WS merge reducer ---
   const applyEvent = (evt: any) => {
     if (!evt || !evt.type) return;
     if (evt.type === 'session_updated') {
-      setSessions((prev) => {
+      updateCache((prev) => {
         const idx = prev.findIndex((s) => s.id === evt.sessionId);
-        if (idx < 0) return prev; // edge case: not in list, ignore
+        if (idx < 0) return prev;
         const next = prev.slice();
         next[idx] = { ...next[idx], ...pickUpdatableFields(evt) };
         return next;
@@ -114,12 +125,9 @@ const SessionList: React.FC = () => {
     } else if (evt.type === 'session_created') {
       const row = evt.session;
       if (!row || !row.id) return;
-      setSessions((prev) => {
-        if (prev.some((s) => s.id === row.id)) return prev;
-        return [row, ...prev];
-      });
+      updateCache((prev) => (prev.some((s) => s.id === row.id) ? prev : [row, ...prev]));
     } else if (evt.type === 'session_deleted') {
-      setSessions((prev) => prev.filter((s) => s.id !== evt.sessionId));
+      updateCache((prev) => prev.filter((s) => s.id !== evt.sessionId));
     }
   };
 
@@ -152,7 +160,7 @@ const SessionList: React.FC = () => {
       const wasReconnect = reconnectDelayRef.current !== 2000;
       reconnectDelayRef.current = 2000;
       if (wasReconnect) {
-        fetchSessions();
+        refetch();
       }
     };
     ws.onmessage = (ev) => {
@@ -187,7 +195,6 @@ const SessionList: React.FC = () => {
   useEffect(() => {
     ensurePulseStyle();
     unmountedRef.current = false;
-    fetchSessions();
     connectWs();
     return () => {
       unmountedRef.current = true;

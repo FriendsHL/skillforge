@@ -1,6 +1,7 @@
-import React, { useEffect, useState } from 'react';
-import { Card, Row, Col, Spin, Segmented, Space, Typography } from 'antd';
+import React, { useState, useEffect } from 'react';
+import { Card, Row, Col, Spin, Segmented, Space, Typography, message } from 'antd';
 import ReactECharts from 'echarts-for-react';
+import { useQuery } from '@tanstack/react-query';
 import { getDailyUsage, getUsageByModel, getUsageByAgent } from '../api';
 
 const { Text } = Typography;
@@ -30,37 +31,37 @@ interface AgentUsageItem {
 }
 
 const ModelUsage: React.FC = () => {
-  const [dailyData, setDailyData] = useState<DailyUsage[]>([]);
-  const [modelData, setModelData] = useState<ModelUsageItem[]>([]);
-  const [agentData, setAgentData] = useState<AgentUsageItem[]>([]);
-  const [loading, setLoading] = useState(true);
   const [range, setRange] = useState<RangeKey>('30d');
 
+  const dailyQuery = useQuery({
+    queryKey: ['usage', 'daily', range],
+    queryFn: () => getDailyUsage(RANGE_DAYS[range]).then((res) => res.data as DailyUsage[]),
+  });
+  const modelQuery = useQuery({
+    queryKey: ['usage', 'by-model'],
+    queryFn: () => getUsageByModel().then((res) => res.data as ModelUsageItem[]),
+    staleTime: 5 * 60_000, // aggregate stats rarely change — 5 min stale
+  });
+  const agentQuery = useQuery({
+    queryKey: ['usage', 'by-agent'],
+    queryFn: () => getUsageByAgent().then((res) => res.data as AgentUsageItem[]),
+    staleTime: 5 * 60_000,
+  });
+
   useEffect(() => {
-    let cancelled = false;
-    const fetchData = async () => {
-      setLoading(true);
-      try {
-        const [dailyRes, modelRes, agentRes] = await Promise.all([
-          getDailyUsage(RANGE_DAYS[range]),
-          getUsageByModel(),
-          getUsageByAgent(),
-        ]);
-        if (cancelled) return;
-        setDailyData(dailyRes.data as DailyUsage[]);
-        setModelData(modelRes.data as ModelUsageItem[]);
-        setAgentData(agentRes.data as AgentUsageItem[]);
-      } catch (err) {
-        if (!cancelled) console.error('Failed to fetch usage data', err);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    };
-    void fetchData();
-    return () => {
-      cancelled = true;
-    };
-  }, [range]);
+    if (dailyQuery.isError) message.error('Failed to load daily usage');
+  }, [dailyQuery.isError]);
+  useEffect(() => {
+    if (modelQuery.isError) message.error('Failed to load usage by model');
+  }, [modelQuery.isError]);
+  useEffect(() => {
+    if (agentQuery.isError) message.error('Failed to load usage by agent');
+  }, [agentQuery.isError]);
+
+  const dailyData = dailyQuery.data ?? [];
+  const modelData = modelQuery.data ?? [];
+  const agentData = agentQuery.data ?? [];
+  const loading = dailyQuery.isLoading || modelQuery.isLoading || agentQuery.isLoading;
 
   const dailyChartOption = {
     tooltip: {
