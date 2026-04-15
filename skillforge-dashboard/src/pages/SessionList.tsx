@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Table, Tooltip, message } from 'antd';
+import { Table, Tooltip, message, Typography } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import { getSessions } from '../api';
 
@@ -229,7 +229,7 @@ const SessionList: React.FC = () => {
 
   return (
     <div>
-      <h2 style={{ marginBottom: 16 }}>Sessions</h2>
+      <Typography.Title level={4} style={{ margin: '0 0 20px 0', color: 'var(--text-primary)' }}>Sessions</Typography.Title>
       <Table
         dataSource={sessions}
         columns={columns}

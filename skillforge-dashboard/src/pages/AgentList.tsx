@@ -215,8 +215,8 @@ const AgentList: React.FC = () => {
 
   return (
     <div style={{ padding: '24px 32px' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <Typography.Title level={3} style={{ marginTop: 0, marginBottom: 0 }}>Agents</Typography.Title>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+        <Typography.Title level={4} style={{ margin: 0, color: 'var(--text-primary)' }}>Agents</Typography.Title>
         <Space>
           <Button icon={<FileTextOutlined />} onClick={() => setClaudeMdModalOpen(true)}>
             CLAUDE.md (Global)

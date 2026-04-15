@@ -98,10 +98,10 @@ const SkillList: React.FC = () => {
       render: () => <Tag color="blue">Tool</Tag>,
     },
     {
-      title: 'Read-Only',
+      title: 'R/O',
       dataIndex: 'readOnly',
       key: 'readOnly',
-      width: 90,
+      width: 100,
       render: (v: boolean) => v ? <Tag color="green">Yes</Tag> : <Tag color="orange">No</Tag>,
     },
     {
@@ -109,9 +109,11 @@ const SkillList: React.FC = () => {
       key: 'actions',
       width: 80,
       render: (_: any, record: any) => (
-        <Button icon={<EyeOutlined />} size="small" onClick={() => showBuiltinDetail(record)}>
-          Detail
-        </Button>
+        <div style={{ display: 'flex', alignItems: 'center' }}>
+          <Button icon={<EyeOutlined />} size="small" onClick={() => showBuiltinDetail(record)}>
+            Detail
+          </Button>
+        </div>
       ),
     },
   ];
@@ -170,7 +172,7 @@ const SkillList: React.FC = () => {
       key: 'actions',
       width: 140,
       render: (_: any, record: any) => (
-        <span style={{ display: 'flex', gap: 4 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
           <Button icon={<EyeOutlined />} size="small" onClick={() => showDetail(record.id)}>
             Detail
           </Button>
@@ -179,7 +181,7 @@ const SkillList: React.FC = () => {
               <Button icon={<DeleteOutlined />} size="small" danger />
             </Popconfirm>
           )}
-        </span>
+        </div>
       ),
     },
   ];
@@ -212,7 +214,7 @@ const SkillList: React.FC = () => {
 
   return (
     <div style={{ padding: '24px 32px' }}>
-      <Typography.Title level={3} style={{ marginTop: 0 }}>Skills & Tools</Typography.Title>
+      <Typography.Title level={4} style={{ margin: '0 0 20px 0', color: 'var(--text-primary)' }}>Skills & Tools</Typography.Title>
 
       <Card title="System Tools" size="small" style={{ marginBottom: 24, borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
         <Table
@@ -260,6 +262,7 @@ const SkillList: React.FC = () => {
         {detailLoading ? (
           <div style={{ textAlign: 'center', padding: 40 }}>Loading...</div>
         ) : detail ? (
+          <div style={{ maxHeight: '70vh', overflowY: 'auto' }}>
           <Tabs
             items={[
               {
@@ -296,6 +299,7 @@ const SkillList: React.FC = () => {
               },
             ]}
           />
+          </div>
         ) : null}
       </Modal>
 
@@ -307,6 +311,7 @@ const SkillList: React.FC = () => {
         width={700}
       >
         {builtinDetail ? (
+          <div style={{ maxHeight: '70vh', overflowY: 'auto' }}>
           <Tabs items={[
             {
               key: 'description',
@@ -321,7 +326,7 @@ const SkillList: React.FC = () => {
               key: 'schema',
               label: 'Tool Schema',
               children: builtinDetail.toolSchema ? (
-                <pre style={{ maxHeight: 400, overflow: 'auto', fontSize: 13, background: '#1e1e1e', color: '#d4d4d4', padding: 16, borderRadius: 8, margin: 0 }}>
+                <pre style={{ overflow: 'auto', fontSize: 13, background: 'var(--bg-code)', color: '#E8E8E8', padding: 16, borderRadius: 'var(--radius-md)', fontFamily: 'var(--font-mono)', margin: 0 }}>
                   {JSON.stringify(builtinDetail.toolSchema, null, 2)}
                 </pre>
               ) : <Text type="secondary">No schema</Text>,
@@ -337,6 +342,7 @@ const SkillList: React.FC = () => {
               ),
             },
           ]} />
+          </div>
         ) : null}
       </Modal>
     </div>

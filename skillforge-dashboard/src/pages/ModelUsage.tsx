@@ -152,8 +152,8 @@ const ModelUsage: React.FC = () => {
 
   return (
     <div>
-      <Space style={{ marginBottom: 16, width: '100%', justifyContent: 'space-between' }}>
-        <h2 style={{ margin: 0 }}>Model Usage</h2>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+        <Typography.Title level={4} style={{ margin: 0, color: 'var(--text-primary)' }}>Model Usage</Typography.Title>
         <Space size={12}>
           <Text type="secondary" style={{ fontSize: 12 }}>
             范围内合计: {totalInRange.toLocaleString()} tokens
@@ -169,7 +169,7 @@ const ModelUsage: React.FC = () => {
             ]}
           />
         </Space>
-      </Space>
+      </div>
 
       {loading ? (
         <div style={{ textAlign: 'center', padding: 80 }}>
