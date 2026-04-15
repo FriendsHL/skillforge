@@ -29,6 +29,7 @@ import {
   getCompactions,
   extractList,
 } from '../api';
+import { AgentSchema, SessionSchema, safeParseList } from '../api/schemas';
 import { useChatWebSocket } from '../hooks/useChatWebSocket';
 import { useChatMessages, type InflightTool } from '../hooks/useChatMessages';
 import { useCollabState } from '../hooks/useCollabState';
@@ -108,7 +109,7 @@ const Chat: React.FC = () => {
   useEffect(() => {
     getAgents()
       .then((res) => {
-        setAgents(extractList(res));
+        setAgents(safeParseList(AgentSchema, extractList(res)));
       })
       .catch(() => message.error('Failed to load agents'));
   }, []);
@@ -118,7 +119,7 @@ const Chat: React.FC = () => {
     if (selectedAgent == null) return;
     getSessions(1)
       .then((res) => {
-        const list = extractList<any>(res).filter(
+        const list = safeParseList(SessionSchema, extractList<any>(res)).filter(
           (s: any) => s.agentId === selectedAgent,
         );
         setSessions(list);

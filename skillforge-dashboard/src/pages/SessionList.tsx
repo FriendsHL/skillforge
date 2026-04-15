@@ -3,6 +3,7 @@ import { Table, Tooltip, message, Card } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getSessions, extractList } from '../api';
+import { SessionSchema, safeParseList } from '../api/schemas';
 
 const USER_ID = 1;
 
@@ -28,7 +29,7 @@ function ensurePulseStyle() {
   if (document.getElementById(PULSE_STYLE_ID)) return;
   const style = document.createElement('style');
   style.id = PULSE_STYLE_ID;
-  style.innerHTML = `
+  style.textContent = `
 @keyframes sflPulse {
   0%   { box-shadow: 0 0 0 0 rgba(24,144,255,0.6); }
   70%  { box-shadow: 0 0 0 6px rgba(24,144,255,0); }
@@ -89,7 +90,7 @@ const SessionList: React.FC = () => {
   const { data: sessions = [], isLoading: loading, refetch, isError: sessionsError } = useQuery({
     queryKey: SESSIONS_QUERY_KEY,
     queryFn: () =>
-      getSessions(USER_ID).then((res) => extractList<SessionRow>(res)),
+      getSessions(USER_ID).then((res) => safeParseList(SessionSchema, extractList<SessionRow>(res)) as SessionRow[]),
     // staleTime:0 so page re-visits always refetch — WS keeps data live after that.
     // Without this, the 30s global staleTime hides status changes that happened
     // while the component was unmounted and the WS was closed.

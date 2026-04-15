@@ -3,6 +3,7 @@ import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, Popconfi
 import { PlusOutlined, EditOutlined, DeleteOutlined, FileTextOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getAgents, createAgent, updateAgent, deleteAgent, getTools, getSkills, getClaudeMd, saveClaudeMd, extractList } from '../api';
+import { AgentSchema, safeParseList } from '../api/schemas';
 
 const { TextArea } = Input;
 
@@ -44,7 +45,7 @@ const AgentList: React.FC = () => {
   const { data: agents = [], isLoading: loading, isError: agentsError } = useQuery({
     queryKey: ['agents'],
     queryFn: () =>
-      getAgents().then((res) => extractList<any>(res)),
+      getAgents().then((res) => safeParseList(AgentSchema, extractList<any>(res))),
   });
   // Fire toast once after all retries exhausted — avoids double-toast from catch+retry.
   useEffect(() => {

@@ -18,7 +18,7 @@ export interface StreamingToolInput {
  * Agent Loop 产生的历史消息里 tool_result 以 role=user 发回,会变成空文本的用户气泡。
  * 这里把这类消息过滤掉,并把 tool_result 按 tool_use_id 合并到上一条 assistant 的 toolCalls。
  */
-function normalizeMessages(list: any[]): ChatMessage[] {
+export function normalizeMessages(list: any[]): ChatMessage[] {
   const result: ChatMessage[] = [];
   const extractBlocks = (content: any) => {
     let text = '';

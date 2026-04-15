@@ -49,6 +49,14 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content }) => {
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
+          a({ href, children, ...props }: React.ComponentPropsWithoutRef<'a'>) {
+            const safe = href && /^(https?:\/\/|\/|#)/.test(href) ? href : '#';
+            return (
+              <a href={safe} target="_blank" rel="noopener noreferrer" {...props}>
+                {children}
+              </a>
+            );
+          },
           code({ inline, className, children, ...props }: any) {
             const match = /language-(\w+)/.exec(className || '');
             const codeStr = String(children).replace(/\n$/, '');

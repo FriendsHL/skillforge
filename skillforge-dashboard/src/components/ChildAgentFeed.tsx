@@ -166,7 +166,7 @@ const ChildAgentFeed: React.FC<Props> = ({ sessionId, isRunning }) => {
   }, [messages]);
 
   const openInNewTab = () => {
-    window.open(`/chat/${sessionId}`, '_blank');
+    window.open(`/chat/${sessionId}`, '_blank', 'noopener,noreferrer');
   };
 
   if (loading) {
