@@ -35,10 +35,10 @@ public class SessionService {
      */
     private ChatEventBroadcaster broadcaster;
 
-    public SessionService(SessionRepository sessionRepository, AgentRepository agentRepository) {
+    public SessionService(SessionRepository sessionRepository, AgentRepository agentRepository, ObjectMapper objectMapper) {
         this.sessionRepository = sessionRepository;
         this.agentRepository = agentRepository;
-        this.objectMapper = new ObjectMapper();
+        this.objectMapper = objectMapper;
     }
 
     @Autowired(required = false)

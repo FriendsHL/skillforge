@@ -23,9 +23,9 @@ public class AgentService {
     private final AgentRepository agentRepository;
     private final ObjectMapper objectMapper;
 
-    public AgentService(AgentRepository agentRepository) {
+    public AgentService(AgentRepository agentRepository, ObjectMapper objectMapper) {
         this.agentRepository = agentRepository;
-        this.objectMapper = new ObjectMapper();
+        this.objectMapper = objectMapper;
     }
 
     public AgentEntity createAgent(AgentEntity agent) {

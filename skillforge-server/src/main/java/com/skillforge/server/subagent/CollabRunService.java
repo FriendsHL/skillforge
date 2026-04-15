@@ -14,6 +14,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.List;
@@ -196,6 +197,7 @@ public class CollabRunService {
      * Called when a member session completes. Checks if all members are done.
      * Uses JPQL conditional update to avoid TOCTOU race when multiple children complete simultaneously.
      */
+    @Transactional
     public void onMemberCompleted(String collabRunId, String sessionId) {
         CollabRunEntity collabRun = collabRunRepository.findById(collabRunId).orElse(null);
         if (collabRun == null || !"RUNNING".equals(collabRun.getStatus())) return;

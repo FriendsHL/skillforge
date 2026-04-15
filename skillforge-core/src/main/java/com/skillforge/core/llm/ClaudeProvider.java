@@ -3,6 +3,7 @@ package com.skillforge.core.llm;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.skillforge.core.model.Message;
@@ -47,7 +48,7 @@ public class ClaudeProvider implements LlmProvider {
         this.baseUrl = baseUrl != null ? baseUrl : "https://api.anthropic.com";
         this.defaultModel = defaultModel != null ? defaultModel : "claude-sonnet-4-20250514";
         this.maxRetries = Math.max(0, maxRetries);
-        this.objectMapper = new ObjectMapper();
+        this.objectMapper = new ObjectMapper().findAndRegisterModules().disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
         this.httpClient = new OkHttpClient.Builder()
                 .connectTimeout(10, TimeUnit.SECONDS)
                 .readTimeout(readTimeoutSeconds, TimeUnit.SECONDS)

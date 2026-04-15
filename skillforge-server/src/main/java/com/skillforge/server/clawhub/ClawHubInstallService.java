@@ -48,7 +48,7 @@ public class ClawHubInstallService {
     private final SkillRepository skillRepository;
     private final ChatEventBroadcaster broadcaster;
     private final PendingAskRegistry pendingAskRegistry;
-    private final ObjectMapper json = new ObjectMapper();
+    private final ObjectMapper json;
 
     public ClawHubInstallService(ClawHubProperties props,
                                  ClawHubClient client,
@@ -57,7 +57,8 @@ public class ClawHubInstallService {
                                  SkillRegistry skillRegistry,
                                  SkillRepository skillRepository,
                                  ChatEventBroadcaster broadcaster,
-                                 PendingAskRegistry pendingAskRegistry) {
+                                 PendingAskRegistry pendingAskRegistry,
+                                 ObjectMapper json) {
         this.props = props;
         this.client = client;
         this.safetyChecker = safetyChecker;
@@ -66,6 +67,7 @@ public class ClawHubInstallService {
         this.skillRepository = skillRepository;
         this.broadcaster = broadcaster;
         this.pendingAskRegistry = pendingAskRegistry;
+        this.json = json;
     }
 
     /**

@@ -38,7 +38,7 @@ public class WebFetchSkill implements Skill {
                 .followRedirects(true)
                 .followSslRedirects(true)
                 .build();
-        this.objectMapper = new ObjectMapper().enable(SerializationFeature.INDENT_OUTPUT);
+        this.objectMapper = new ObjectMapper().findAndRegisterModules().disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS).enable(SerializationFeature.INDENT_OUTPUT);
     }
 
     @Override

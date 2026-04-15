@@ -25,11 +25,12 @@ public class DefaultAgentInitializer implements ApplicationRunner {
 
     private final AgentRepository agentRepository;
     private final SkillRegistry skillRegistry;
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ObjectMapper objectMapper;
 
-    public DefaultAgentInitializer(AgentRepository agentRepository, SkillRegistry skillRegistry) {
+    public DefaultAgentInitializer(AgentRepository agentRepository, SkillRegistry skillRegistry, ObjectMapper objectMapper) {
         this.agentRepository = agentRepository;
         this.skillRegistry = skillRegistry;
+        this.objectMapper = objectMapper;
     }
 
     @Override

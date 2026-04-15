@@ -3,6 +3,7 @@ package com.skillforge.server.service;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import com.fasterxml.jackson.dataformat.yaml.YAMLGenerator;
 import com.skillforge.server.entity.AgentEntity;
@@ -40,7 +41,7 @@ public class AgentYamlMapper {
 
     private static final Logger log = LoggerFactory.getLogger(AgentYamlMapper.class);
 
-    private static final ObjectMapper JSON = new ObjectMapper();
+    private static final ObjectMapper JSON = new ObjectMapper().findAndRegisterModules().disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
     private static final ObjectMapper YAML;
 
     static {
@@ -48,7 +49,7 @@ public class AgentYamlMapper {
                 .disable(YAMLGenerator.Feature.WRITE_DOC_START_MARKER)
                 .enable(YAMLGenerator.Feature.LITERAL_BLOCK_STYLE)
                 .enable(YAMLGenerator.Feature.MINIMIZE_QUOTES);
-        YAML = new ObjectMapper(f);
+        YAML = new ObjectMapper(f).findAndRegisterModules().disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
     }
 
     private AgentYamlMapper() {}

@@ -67,7 +67,8 @@ public class ChatService {
                        CancellationRegistry cancellationRegistry,
                        CompactionService compactionService,
                        CollabRunRepository collabRunRepository,
-                       CollabRunService collabRunService) {
+                       CollabRunService collabRunService,
+                       ObjectMapper objectMapper) {
         this.agentService = agentService;
         this.sessionService = sessionService;
         this.skillRegistry = skillRegistry;
@@ -81,7 +82,7 @@ public class ChatService {
         this.compactionService = compactionService;
         this.collabRunRepository = collabRunRepository;
         this.collabRunService = collabRunService;
-        this.objectMapper = new ObjectMapper();
+        this.objectMapper = objectMapper;
     }
 
     /**

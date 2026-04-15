@@ -10,6 +10,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -137,6 +138,7 @@ public class SubAgentRunSweeper {
      * - If all member sessions are done (idle/error) and have been idle > 30 min, mark COMPLETED
      * - If any member has been running > 2 hours, log a warning
      */
+    @Transactional
     void sweepStaleCollabRuns() {
         List<CollabRunEntity> running = collabRunRepository.findByStatus("RUNNING");
         if (running.isEmpty()) return;

@@ -34,10 +34,11 @@ public class ClawHubClient {
 
     private final ClawHubProperties props;
     private final OkHttpClient http;
-    private final ObjectMapper json = new ObjectMapper();
+    private final ObjectMapper json;
 
-    public ClawHubClient(ClawHubProperties props) {
+    public ClawHubClient(ClawHubProperties props, ObjectMapper json) {
         this.props = props;
+        this.json = json;
         this.http = new OkHttpClient.Builder()
                 .connectTimeout(props.getHttpTimeoutMs(), TimeUnit.MILLISECONDS)
                 .readTimeout(props.getHttpTimeoutMs(), TimeUnit.MILLISECONDS)

@@ -12,8 +12,8 @@ import java.time.Instant;
 
 @Entity
 @Table(name = "t_compaction_event", indexes = {
-        @Index(name = "idx_compact_session", columnList = "sessionId"),
-        @Index(name = "idx_compact_triggered_at", columnList = "triggeredAt")
+        @Index(name = "idx_compaction_event_session", columnList = "sessionId"),
+        @Index(name = "idx_compaction_event_triggered", columnList = "triggeredAt")
 })
 public class CompactionEventEntity {
 
