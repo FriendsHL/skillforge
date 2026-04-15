@@ -14,6 +14,8 @@ public interface CollabRunRepository extends JpaRepository<CollabRunEntity, Stri
 
     List<CollabRunEntity> findByStatus(String status);
 
+    List<CollabRunEntity> findAllByOrderByCreatedAtDesc();
+
     /**
      * Atomically set status=COMPLETED only if currently RUNNING.
      * Returns 1 if updated, 0 if already COMPLETED/CANCELLED (TOCTOU guard).

@@ -4,6 +4,7 @@ import com.skillforge.server.entity.CollabRunEntity;
 import com.skillforge.server.entity.SessionEntity;
 import com.skillforge.server.entity.SubAgentPendingResultEntity;
 import com.skillforge.server.entity.TraceSpanEntity;
+import com.skillforge.server.repository.CollabRunRepository;
 import com.skillforge.server.repository.SubAgentPendingResultRepository;
 import com.skillforge.server.repository.TraceSpanRepository;
 import com.skillforge.server.service.AgentService;
@@ -32,19 +33,47 @@ public class CollabRunController {
     private final AgentService agentService;
     private final SubAgentPendingResultRepository pendingResultRepository;
     private final TraceSpanRepository traceSpanRepository;
+    private final CollabRunRepository collabRunRepository;
 
     public CollabRunController(CollabRunService collabRunService,
                                AgentRoster agentRoster,
                                SessionService sessionService,
                                AgentService agentService,
                                SubAgentPendingResultRepository pendingResultRepository,
-                               TraceSpanRepository traceSpanRepository) {
+                               TraceSpanRepository traceSpanRepository,
+                               CollabRunRepository collabRunRepository) {
         this.collabRunService = collabRunService;
         this.agentRoster = agentRoster;
         this.sessionService = sessionService;
         this.agentService = agentService;
         this.pendingResultRepository = pendingResultRepository;
         this.traceSpanRepository = traceSpanRepository;
+        this.collabRunRepository = collabRunRepository;
+    }
+
+    @GetMapping
+    public ResponseEntity<?> listCollabRuns() {
+        List<CollabRunEntity> runs = collabRunRepository.findAllByOrderByCreatedAtDesc();
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (CollabRunEntity run : runs) {
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("collabRunId", run.getCollabRunId());
+            item.put("status", run.getStatus());
+            item.put("leaderSessionId", run.getLeaderSessionId());
+            item.put("maxDepth", run.getMaxDepth());
+            item.put("maxTotalAgents", run.getMaxTotalAgents());
+            item.put("memberCount", agentRoster.listMembers(run.getCollabRunId()).size());
+            item.put("createdAt", run.getCreatedAt());
+            item.put("completedAt", run.getCompletedAt());
+            long durationMs = 0;
+            if (run.getCreatedAt() != null) {
+                java.time.Instant end = run.getCompletedAt() != null ? run.getCompletedAt() : java.time.Instant.now();
+                durationMs = java.time.Duration.between(run.getCreatedAt(), end).toMillis();
+            }
+            item.put("durationMs", durationMs);
+            result.add(item);
+        }
+        return ResponseEntity.ok(result);
     }
 
     @GetMapping("/{collabRunId}/members")

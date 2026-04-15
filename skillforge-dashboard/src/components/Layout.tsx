@@ -11,6 +11,7 @@ import {
   ApartmentOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
+  TeamOutlined,
 } from '@ant-design/icons';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 
@@ -24,6 +25,7 @@ const menuItems = [
   { key: '/sessions', icon: <MessageOutlined />, label: 'Sessions' },
   { key: '/usage', icon: <BarChartOutlined />, label: 'Usage' },
   { key: '/traces', icon: <ApartmentOutlined />, label: 'Traces' },
+  { key: '/teams', icon: <TeamOutlined />, label: 'Teams' },
   { key: '/chat', icon: <CommentOutlined />, label: 'Chat' },
 ];
 
@@ -35,6 +37,7 @@ const pageTitles: Record<string, string> = {
   '/sessions': 'Sessions',
   '/usage': 'Usage',
   '/traces': 'Traces',
+  '/teams': 'Teams',
   '/chat': 'Chat',
 };
 
