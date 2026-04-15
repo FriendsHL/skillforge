@@ -9,6 +9,7 @@ import com.skillforge.server.service.MemoryService;
 import com.skillforge.server.service.SessionService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -39,6 +40,31 @@ public class SessionDigestExtractor {
         this.activityLogService = activityLogService;
         this.memoryService = memoryService;
         this.memoryConsolidator = memoryConsolidator;
+    }
+
+    /**
+     * Asynchronously extract memories for a single session immediately after it completes.
+     * Skips if digestExtractedAt is already set. Only runs for top-level sessions
+     * (parentSessionId == null) to avoid noise from short-lived sub-agent sessions.
+     */
+    @Async
+    public void triggerExtractionAsync(String sessionId) {
+        try {
+            SessionEntity session = sessionRepository.findById(sessionId).orElse(null);
+            if (session == null) return;
+            // Skip child sessions — they are sub-tasks, not user conversations
+            if (session.getParentSessionId() != null) return;
+            // Skip if already extracted
+            if (session.getDigestExtractedAt() != null) return;
+            // Skip sessions that ended immediately (< 3 activities will be filtered inside)
+            extractSessionMemories(session);
+            session.setDigestExtractedAt(java.time.Instant.now());
+            sessionRepository.save(session);
+            memoryConsolidator.consolidate(session.getUserId());
+            log.info("SessionDigestExtractor: async extraction done for session={}", sessionId);
+        } catch (Exception e) {
+            log.error("SessionDigestExtractor: async extraction failed for session={}", sessionId, e);
+        }
     }
 
     @Scheduled(cron = "0 0 3 * * *")

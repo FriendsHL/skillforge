@@ -1,6 +1,7 @@
 package com.skillforge.server.controller;
 
 import com.skillforge.server.entity.MemoryEntity;
+import com.skillforge.server.memory.SessionDigestExtractor;
 import com.skillforge.server.service.MemoryService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -14,15 +15,18 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/memories")
 public class MemoryController {
 
     private final MemoryService memoryService;
+    private final SessionDigestExtractor sessionDigestExtractor;
 
-    public MemoryController(MemoryService memoryService) {
+    public MemoryController(MemoryService memoryService, SessionDigestExtractor sessionDigestExtractor) {
         this.memoryService = memoryService;
+        this.sessionDigestExtractor = sessionDigestExtractor;
     }
 
     @GetMapping
@@ -58,5 +62,16 @@ public class MemoryController {
     public ResponseEntity<Void> deleteMemory(@PathVariable Long id) {
         memoryService.deleteMemory(id);
         return ResponseEntity.ok().build();
+    }
+
+    /**
+     * Manually trigger memory extraction for a specific session.
+     * Intended for development/testing — fires the same async extraction that
+     * normally runs automatically when a session loop completes.
+     */
+    @PostMapping("/refresh")
+    public ResponseEntity<Map<String, String>> refreshSession(@RequestParam String sessionId) {
+        sessionDigestExtractor.triggerExtractionAsync(sessionId);
+        return ResponseEntity.ok(Map.of("status", "triggered", "sessionId", sessionId));
     }
 }

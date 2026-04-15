@@ -17,6 +17,7 @@ import com.skillforge.server.entity.ModelUsageEntity;
 import com.skillforge.server.entity.SessionEntity;
 import com.skillforge.server.repository.CollabRunRepository;
 import com.skillforge.server.repository.ModelUsageRepository;
+import com.skillforge.server.memory.SessionDigestExtractor;
 import com.skillforge.server.subagent.CollabRunService;
 import com.skillforge.server.subagent.SubAgentRegistry;
 import org.slf4j.Logger;
@@ -54,6 +55,7 @@ public class ChatService {
     private final CollabRunRepository collabRunRepository;
     private final CollabRunService collabRunService;
     private final ObjectMapper objectMapper;
+    private final SessionDigestExtractor sessionDigestExtractor;
 
     public ChatService(AgentService agentService,
                        SessionService sessionService,
@@ -68,7 +70,8 @@ public class ChatService {
                        CompactionService compactionService,
                        CollabRunRepository collabRunRepository,
                        CollabRunService collabRunService,
-                       ObjectMapper objectMapper) {
+                       ObjectMapper objectMapper,
+                       SessionDigestExtractor sessionDigestExtractor) {
         this.agentService = agentService;
         this.sessionService = sessionService;
         this.skillRegistry = skillRegistry;
@@ -83,6 +86,7 @@ public class ChatService {
         this.collabRunRepository = collabRunRepository;
         this.collabRunService = collabRunService;
         this.objectMapper = objectMapper;
+        this.sessionDigestExtractor = sessionDigestExtractor;
     }
 
     /**
@@ -375,6 +379,9 @@ public class ChatService {
             int finalCount = result.getMessages().size();
             log.info("Triggering maybeScheduleSmartRename: sessionId={}, msgCount={}", sessionId, finalCount);
             sessionTitleService.maybeScheduleSmartRename(sessionId, finalCount);
+
+            // 异步触发记忆提取:不等待,失败不影响主流程
+            sessionDigestExtractor.triggerExtractionAsync(sessionId);
 
             log.info("Agent loop completed: sessionId={}", sessionId);
         } catch (Exception e) {
