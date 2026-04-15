@@ -88,12 +88,12 @@ public class ChatController {
     @PostMapping("/{sessionId}")
     public ResponseEntity<Map<String, Object>> sendMessage(@PathVariable String sessionId,
                                                             @RequestBody ChatRequest request) {
-        ResponseEntity<SessionEntity> check = requireOwnedSession(sessionId, request.getUserId());
+        ResponseEntity<SessionEntity> check = requireOwnedSession(sessionId, request.userId());
         if (!check.getStatusCode().is2xxSuccessful()) {
             return ResponseEntity.status(check.getStatusCode()).build();
         }
         try {
-            chatService.chatAsync(sessionId, request.getMessage(), request.getUserId());
+            chatService.chatAsync(sessionId, request.message(), request.userId());
         } catch (RejectedExecutionException e) {
             Map<String, Object> body = new LinkedHashMap<>();
             body.put("error", "Server is busy, please try again later");
@@ -177,7 +177,7 @@ public class ChatController {
 
     @PostMapping("/sessions")
     public ResponseEntity<SessionEntity> createSession(@RequestBody CreateSessionRequest request) {
-        SessionEntity session = sessionService.createSession(request.getUserId(), request.getAgentId());
+        SessionEntity session = sessionService.createSession(request.userId(), request.agentId());
         return ResponseEntity.ok(session);
     }
 
