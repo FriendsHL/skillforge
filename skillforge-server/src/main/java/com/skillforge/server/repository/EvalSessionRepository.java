@@ -10,4 +10,6 @@ import java.util.List;
 public interface EvalSessionRepository extends JpaRepository<EvalSessionEntity, String> {
 
     List<EvalSessionEntity> findByEvalRunId(String evalRunId);
+
+    void deleteByEvalRunId(String evalRunId);
 }

@@ -133,6 +133,20 @@ public class EvalOrchestrator {
                 if (runResult.getErrorMessage() != null) {
                     scenarioResult.put("errorMessage", runResult.getErrorMessage());
                 }
+                scenarioResult.put("agentFinalOutput", runResult.getAgentFinalOutput());
+                scenarioResult.put("task", scenario.getTask());
+                if (scenario.getOracle() != null) {
+                    scenarioResult.put("oracleType", scenario.getOracle().getType());
+                    if (scenario.getOracle().getExpected() != null) {
+                        scenarioResult.put("oracleExpected", scenario.getOracle().getExpected());
+                    }
+                    if (scenario.getOracle().getExpectedList() != null) {
+                        scenarioResult.put("oracleExpectedList", scenario.getOracle().getExpectedList());
+                    }
+                }
+                if (judgeOutput.getMetaJudgeRationale() != null) {
+                    scenarioResult.put("judgeRationale", judgeOutput.getMetaJudgeRationale());
+                }
                 scenarioResults.add(scenarioResult);
 
                 totalOracleScore += judgeOutput.getCompositeScore();

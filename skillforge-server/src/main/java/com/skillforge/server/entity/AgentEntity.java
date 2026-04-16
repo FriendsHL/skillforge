@@ -11,6 +11,7 @@ import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.annotation.LastModifiedDate;
 import org.springframework.data.jpa.domain.support.AuditingEntityListener;
 
+import java.time.Instant;
 import java.time.LocalDateTime;
 
 @Entity
@@ -61,6 +62,15 @@ public class AgentEntity {
     /** 执行模式: ask / auto,默认 ask */
     @Column(length = 16)
     private String executionMode = "ask";
+
+    @Column(length = 36)
+    private String activePromptVersionId;
+
+    private boolean autoImprovePaused = false;
+
+    private int abDeclineCount = 0;
+
+    private Instant lastPromotedAt;
 
     @CreatedDate
     private LocalDateTime createdAt;
@@ -205,5 +215,37 @@ public class AgentEntity {
 
     public void setUpdatedAt(LocalDateTime updatedAt) {
         this.updatedAt = updatedAt;
+    }
+
+    public String getActivePromptVersionId() {
+        return activePromptVersionId;
+    }
+
+    public void setActivePromptVersionId(String activePromptVersionId) {
+        this.activePromptVersionId = activePromptVersionId;
+    }
+
+    public boolean isAutoImprovePaused() {
+        return autoImprovePaused;
+    }
+
+    public void setAutoImprovePaused(boolean autoImprovePaused) {
+        this.autoImprovePaused = autoImprovePaused;
+    }
+
+    public int getAbDeclineCount() {
+        return abDeclineCount;
+    }
+
+    public void setAbDeclineCount(int abDeclineCount) {
+        this.abDeclineCount = abDeclineCount;
+    }
+
+    public Instant getLastPromotedAt() {
+        return lastPromotedAt;
+    }
+
+    public void setLastPromotedAt(Instant lastPromotedAt) {
+        this.lastPromotedAt = lastPromotedAt;
     }
 }

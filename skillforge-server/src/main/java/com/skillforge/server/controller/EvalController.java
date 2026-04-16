@@ -3,12 +3,16 @@ package com.skillforge.server.controller;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillforge.server.entity.EvalRunEntity;
 import com.skillforge.server.eval.EvalOrchestrator;
+import com.skillforge.server.eval.scenario.EvalScenario;
+import com.skillforge.server.eval.scenario.ScenarioLoader;
 import com.skillforge.server.repository.EvalRunRepository;
 import com.skillforge.server.repository.EvalSessionRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.ResponseEntity;
+import jakarta.transaction.Transactional;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -16,6 +20,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -37,17 +42,20 @@ public class EvalController {
     // evalLoopExecutor is used by ScenarioRunnerSkill for inner scenario runs;
     // using it here for outer runEval tasks would cause both pools to block on each other.
     private final ExecutorService evalOrchestratorExecutor;
+    private final ScenarioLoader scenarioLoader;
 
     public EvalController(EvalOrchestrator evalOrchestrator,
                           EvalRunRepository evalRunRepository,
                           EvalSessionRepository evalSessionRepository,
                           ObjectMapper objectMapper,
-                          @Qualifier("evalOrchestratorExecutor") ExecutorService evalOrchestratorExecutor) {
+                          @Qualifier("evalOrchestratorExecutor") ExecutorService evalOrchestratorExecutor,
+                          ScenarioLoader scenarioLoader) {
         this.evalOrchestrator = evalOrchestrator;
         this.evalRunRepository = evalRunRepository;
         this.evalSessionRepository = evalSessionRepository;
         this.objectMapper = objectMapper;
         this.evalOrchestratorExecutor = evalOrchestratorExecutor;
+        this.scenarioLoader = scenarioLoader;
     }
 
     @PostMapping("/runs")
@@ -109,6 +117,54 @@ public class EvalController {
                     return ResponseEntity.ok(detail);
                 })
                 .orElse(ResponseEntity.notFound().build());
+    }
+
+    @Transactional
+    @DeleteMapping("/runs/{id}")
+    public ResponseEntity<Void> deleteEvalRun(@PathVariable String id) {
+        if (!evalRunRepository.existsById(id)) {
+            return ResponseEntity.notFound().build();
+        }
+        evalSessionRepository.deleteByEvalRunId(id);
+        evalRunRepository.deleteById(id);
+        log.info("Deleted eval run: {}", id);
+        return ResponseEntity.noContent().build();
+    }
+
+    @GetMapping("/scenarios")
+    public ResponseEntity<List<Map<String, Object>>> listScenarios() {
+        List<EvalScenario> scenarios = scenarioLoader.loadAll()
+                .stream()
+                .sorted(Comparator.comparing(EvalScenario::getId))
+                .collect(Collectors.toList());
+
+        List<Map<String, Object>> result = scenarios.stream()
+                .map(s -> {
+                    Map<String, Object> map = new LinkedHashMap<>();
+                    map.put("id", s.getId());
+                    map.put("name", s.getName());
+                    map.put("description", s.getDescription());
+                    map.put("category", s.getCategory());
+                    map.put("split", s.getSplit());
+                    map.put("task", s.getTask());
+                    map.put("maxLoops", s.getMaxLoops());
+                    map.put("tags", s.getTags());
+                    map.put("toolsHint", s.getToolsHint());
+                    map.put("performanceThresholdMs", s.getPerformanceThresholdMs());
+                    if (s.getOracle() != null) {
+                        Map<String, Object> oracle = new LinkedHashMap<>();
+                        oracle.put("type", s.getOracle().getType());
+                        oracle.put("expected", s.getOracle().getExpected());
+                        oracle.put("expectedList", s.getOracle().getExpectedList());
+                        map.put("oracle", oracle);
+                    }
+                    if (s.getSetup() != null && s.getSetup().getFiles() != null) {
+                        map.put("setupFiles", new java.util.ArrayList<>(s.getSetup().getFiles().keySet()));
+                    }
+                    return map;
+                })
+                .collect(Collectors.toList());
+        return ResponseEntity.ok(result);
     }
 
     private Map<String, Object> toSummaryMap(EvalRunEntity run) {

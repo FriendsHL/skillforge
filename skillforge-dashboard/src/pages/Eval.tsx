@@ -1,15 +1,19 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import {
   Card, Table, Tag, Button, Typography, Space, Progress, Drawer,
-  Statistic, Row, Col, Empty, Spin, Select, message, Tooltip, Alert,
+  Statistic, Row, Col, Empty, Spin, Select, message, Tooltip, Alert, Tabs,
 } from 'antd';
 import {
   PlayCircleOutlined, CheckCircleOutlined, CloseCircleOutlined,
   ClockCircleOutlined, ExperimentOutlined, WarningOutlined,
-  ReloadOutlined, RiseOutlined,
+  ReloadOutlined, RiseOutlined, InfoCircleOutlined, DatabaseOutlined,
 } from '@ant-design/icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { getEvalRuns, getEvalRun, triggerEvalRun, getAgents, extractList } from '../api';
+import {
+  getEvalRuns, getEvalRun, triggerEvalRun, getAgents,
+  getEvalScenarios, extractList,
+} from '../api';
+import ImprovePromptButton from '../components/ImprovePromptButton';
 
 const { Text } = Typography;
 
@@ -59,11 +63,178 @@ const ATTRIBUTION_COLOR: Record<string, string> = {
   VETO_EXCEPTION: 'magenta',
 };
 
+const ORACLE_TYPE_COLOR: Record<string, string> = {
+  exact_match: 'blue',
+  contains: 'cyan',
+  regex: 'purple',
+  llm_judge: 'gold',
+};
+
 function scoreColor(score: number): string {
   if (score >= 70) return '#52c41a';
   if (score >= 40) return '#faad14';
   return '#ff4d4f';
 }
+
+// ── Scenario expandable row content ──────────────────────────────────────────
+
+interface ScenarioResultRecord {
+  scenarioId: string;
+  status: string;
+  compositeScore?: number;
+  attribution?: string;
+  loopCount?: number;
+  executionTimeMs?: number;
+  agentFinalOutput?: string;
+  task?: string;
+  oracleType?: string;
+  oracleExpected?: string;
+  oracleExpectedList?: string[];
+  judgeRationale?: string;
+  errorMessage?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  improvementSuggestions?: string;
+}
+
+const ScenarioExpandedRow: React.FC<{ record: ScenarioResultRecord }> = ({ record }) => {
+  const hasContent =
+    record.task ||
+    record.oracleExpected ||
+    (record.oracleExpectedList && record.oracleExpectedList.length > 0) ||
+    record.agentFinalOutput ||
+    record.judgeRationale ||
+    record.errorMessage ||
+    record.inputTokens != null ||
+    record.outputTokens != null ||
+    record.improvementSuggestions;
+
+  if (!hasContent) {
+    return <Text type="secondary" style={{ fontSize: 11 }}>No additional details</Text>;
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '8px 0' }}>
+      {/* Error alert — highest priority */}
+      {record.errorMessage && (
+        <Alert
+          type="error"
+          showIcon
+          message="Run Error"
+          description={<Text style={{ fontSize: 12, fontFamily: 'monospace' }}>{record.errorMessage}</Text>}
+        />
+      )}
+
+      {/* Task */}
+      {record.task && (
+        <div>
+          <Text type="secondary" style={{ fontSize: 11, display: 'block', marginBottom: 3 }}>Task:</Text>
+          <pre style={{
+            fontSize: 11, margin: 0, fontFamily: 'JetBrains Mono, Fira Code, monospace',
+            whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+            overflow: 'hidden',
+            display: '-webkit-box',
+            WebkitLineClamp: 3,
+            WebkitBoxOrient: 'vertical' as const,
+            background: 'var(--bg-surface, #fafafa)', padding: '6px 8px', borderRadius: 4,
+            borderLeft: '2px solid #6366f1',
+          }}>
+            {record.task}
+          </pre>
+        </div>
+      )}
+
+      {/* Oracle expected */}
+      {(record.oracleExpected || (record.oracleExpectedList && record.oracleExpectedList.length > 0)) && (
+        <div>
+          <Text type="secondary" style={{ fontSize: 11, display: 'block', marginBottom: 3 }}>
+            Expected:
+            {record.oracleType && (
+              <Tag
+                color={ORACLE_TYPE_COLOR[record.oracleType] ?? 'default'}
+                style={{ fontSize: 10, marginLeft: 6, lineHeight: '16px', padding: '0 4px' }}
+              >
+                {record.oracleType}
+              </Tag>
+            )}
+          </Text>
+          {record.oracleExpected && (
+            <Text code style={{ fontSize: 11, display: 'block' }}>{record.oracleExpected}</Text>
+          )}
+          {record.oracleExpectedList && record.oracleExpectedList.length > 0 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+              {record.oracleExpectedList.map((item, i) => (
+                <Text key={i} code style={{ fontSize: 11 }}>{item}</Text>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Agent final output */}
+      {record.agentFinalOutput && (
+        <div>
+          <Text type="secondary" style={{ fontSize: 11, display: 'block', marginBottom: 3 }}>Agent Output:</Text>
+          <pre style={{
+            fontSize: 11, margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+            maxHeight: 180, overflowY: 'auto',
+            background: 'var(--bg-surface, #fafafa)', padding: '6px 8px', borderRadius: 4,
+          }}>
+            {record.agentFinalOutput}
+          </pre>
+        </div>
+      )}
+
+      {/* Judge rationale */}
+      {record.judgeRationale && (
+        <div>
+          <Text type="secondary" style={{ fontSize: 11, display: 'block', marginBottom: 3 }}>
+            <RiseOutlined style={{ marginRight: 4 }} />Judge Rationale:
+          </Text>
+          <pre style={{
+            fontSize: 11, margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+            maxHeight: 120, overflowY: 'auto',
+            background: 'var(--bg-surface, #fafafa)', padding: '6px 8px', borderRadius: 4,
+            borderLeft: '2px solid #faad14',
+          }}>
+            {record.judgeRationale}
+          </pre>
+        </div>
+      )}
+
+      {/* Improvement suggestions */}
+      {record.improvementSuggestions && (
+        <div>
+          <Text type="secondary" style={{ fontSize: 11, display: 'block', marginBottom: 3 }}>
+            <RiseOutlined style={{ marginRight: 4 }} />Improvement Suggestions:
+          </Text>
+          <pre style={{
+            fontSize: 11, margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+            maxHeight: 120, overflowY: 'auto',
+            background: 'var(--bg-surface, #fafafa)', padding: '6px 8px', borderRadius: 4,
+          }}>
+            {record.improvementSuggestions}
+          </pre>
+        </div>
+      )}
+
+      {/* Token usage */}
+      {(record.inputTokens != null || record.outputTokens != null) && (
+        <div style={{ marginTop: 4 }}>
+          <Text type="secondary" style={{ fontSize: 10 }}>
+            Tokens:
+            {record.inputTokens != null && (
+              <> in <Text style={{ fontSize: 10 }}>{record.inputTokens.toLocaleString()}</Text></>
+            )}
+            {record.outputTokens != null && (
+              <> · out <Text style={{ fontSize: 10 }}>{record.outputTokens.toLocaleString()}</Text></>
+            )}
+          </Text>
+        </div>
+      )}
+    </div>
+  );
+};
 
 // ── Detail Drawer ────────────────────────────────────────────────────────────
 
@@ -83,20 +254,20 @@ const EvalDetailDrawer: React.FC<EvalDetailDrawerProps> = ({ evalRunId, open, on
   if (!evalRunId) return null;
 
   const run: any = data;
-  const scenarios: any[] = run?.scenarioResults ?? [];
-  const passed = scenarios.filter((s: any) => s.status === 'PASS').length;
-  const failed = scenarios.filter((s: any) => s.status === 'FAIL').length;
-  const timeout = scenarios.filter((s: any) => s.status === 'TIMEOUT').length;
-  const veto = scenarios.filter((s: any) => s.status === 'VETO').length;
+  const scenarios: ScenarioResultRecord[] = run?.scenarioResults ?? [];
+  const passed = scenarios.filter((s) => s.status === 'PASS').length;
+  const failed = scenarios.filter((s) => s.status === 'FAIL').length;
+  const timeout = scenarios.filter((s) => s.status === 'TIMEOUT').length;
+  const veto = scenarios.filter((s) => s.status === 'VETO').length;
   const total = scenarios.length;
   const passRate = total > 0 ? Math.round((passed / total) * 100) : 0;
   const avgScore = total > 0
-    ? Math.round(scenarios.reduce((sum: number, s: any) => sum + (s.compositeScore ?? 0), 0) / total)
+    ? Math.round(scenarios.reduce((sum, s) => sum + (s.compositeScore ?? 0), 0) / total)
     : 0;
 
   // Attribution histogram
   const attrCounts: Record<string, number> = {};
-  scenarios.forEach((s: any) => {
+  scenarios.forEach((s) => {
     const attr = s.attribution ?? 'NONE';
     attrCounts[attr] = (attrCounts[attr] ?? 0) + 1;
   });
@@ -213,44 +384,227 @@ const EvalDetailDrawer: React.FC<EvalDetailDrawerProps> = ({ evalRunId, open, on
             columns={scenarioColumns}
             pagination={false}
             expandable={{
-              expandedRowRender: (record: any) => (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '8px 0' }}>
-                  {record.agentFinalOutput && (
-                    <div>
-                      <Text type="secondary" style={{ fontSize: 11 }}>Agent Output:</Text>
-                      <pre style={{
-                        fontSize: 11, margin: '4px 0 0', whiteSpace: 'pre-wrap',
-                        wordBreak: 'break-word', maxHeight: 200, overflowY: 'auto',
-                        background: 'var(--bg-surface, #fafafa)', padding: 8, borderRadius: 4,
-                      }}>
-                        {record.agentFinalOutput}
-                      </pre>
-                    </div>
-                  )}
-                  {record.improvementSuggestions && (
-                    <div>
-                      <Text type="secondary" style={{ fontSize: 11 }}>
-                        <RiseOutlined /> Improvement Suggestions:
-                      </Text>
-                      <pre style={{
-                        fontSize: 11, margin: '4px 0 0', whiteSpace: 'pre-wrap',
-                        wordBreak: 'break-word', maxHeight: 200, overflowY: 'auto',
-                        background: 'var(--bg-surface, #fafafa)', padding: 8, borderRadius: 4,
-                      }}>
-                        {record.improvementSuggestions}
-                      </pre>
-                    </div>
-                  )}
-                  {!record.agentFinalOutput && !record.improvementSuggestions && (
-                    <Text type="secondary" style={{ fontSize: 11 }}>No additional details</Text>
-                  )}
-                </div>
+              expandedRowRender: (record: ScenarioResultRecord) => (
+                <ScenarioExpandedRow record={record} />
               ),
             }}
           />
+
+          {/* Prompt Improve action */}
+          {run && (
+            <ImprovePromptButton
+              agentId={String(run.agentDefinitionId)}
+              evalRun={{
+                id: run.id ?? run.evalRunId,
+                primaryAttribution: run.primaryAttribution,
+                status: run.status,
+              }}
+            />
+          )}
         </div>
       )}
     </Drawer>
+  );
+};
+
+// ── Scenarios Panel ──────────────────────────────────────────────────────────
+
+interface EvalScenario {
+  id: string;
+  name: string;
+  category?: string;
+  split?: string;
+  task?: string;
+  oracleType?: string;
+  maxLoops?: number;
+  tags?: string[];
+  expected?: string;
+  expectedList?: string[];
+  setupFiles?: string[];
+  toolsHint?: string;
+  performanceThresholdMs?: number;
+}
+
+const ScenariosPanel: React.FC = () => {
+  const { data: scenarios = [], isLoading, isError } = useQuery({
+    queryKey: ['eval-scenarios'],
+    queryFn: () => getEvalScenarios().then(res => extractList<EvalScenario>(res)),
+  });
+
+  const columns = [
+    {
+      title: 'ID',
+      dataIndex: 'id',
+      width: 160,
+      ellipsis: true,
+      render: (v: string) => (
+        <Text style={{ fontSize: 11, fontFamily: 'JetBrains Mono, Fira Code, monospace' }}>{v}</Text>
+      ),
+    },
+    {
+      title: 'Name',
+      dataIndex: 'name',
+      width: 180,
+      ellipsis: true,
+      render: (v: string) => <Text style={{ fontSize: 12 }}>{v}</Text>,
+    },
+    {
+      title: 'Category',
+      dataIndex: 'category',
+      width: 120,
+      render: (v: string) => v ? <Tag style={{ fontSize: 11 }}>{v}</Tag> : <Text type="secondary">—</Text>,
+    },
+    {
+      title: 'Split',
+      dataIndex: 'split',
+      width: 90,
+      render: (v: string) => v ? (
+        <Tag color={v === 'held_out' ? 'blue' : 'cyan'} style={{ fontSize: 11 }}>{v}</Tag>
+      ) : <Text type="secondary">—</Text>,
+    },
+    {
+      title: 'Task',
+      dataIndex: 'task',
+      ellipsis: true,
+      render: (v: string) => (
+        <Text style={{ fontSize: 11 }} type={v ? undefined : 'secondary'}>{v ?? '—'}</Text>
+      ),
+    },
+    {
+      title: 'Oracle Type',
+      dataIndex: 'oracleType',
+      width: 110,
+      render: (v: string) => v ? (
+        <Tag color={ORACLE_TYPE_COLOR[v] ?? 'default'} style={{ fontSize: 11 }}>{v}</Tag>
+      ) : <Text type="secondary">—</Text>,
+    },
+    {
+      title: 'Max Loops',
+      dataIndex: 'maxLoops',
+      width: 90,
+      align: 'center' as const,
+      render: (v: number) => <Text style={{ fontSize: 12 }}>{v ?? '—'}</Text>,
+    },
+    {
+      title: 'Tags',
+      dataIndex: 'tags',
+      width: 160,
+      render: (v: string[]) => v?.length ? (
+        <Space size={2} wrap>
+          {v.map(t => <Tag key={t} style={{ fontSize: 10, margin: 0 }}>{t}</Tag>)}
+        </Space>
+      ) : <Text type="secondary">—</Text>,
+    },
+  ];
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <Alert
+        type="info"
+        showIcon
+        icon={<InfoCircleOutlined />}
+        message={
+          <Text style={{ fontSize: 12 }}>
+            Scenario files are at{' '}
+            <Text code style={{ fontSize: 11 }}>
+              skillforge-server/src/main/resources/eval/scenarios/*.json
+            </Text>
+            {' '}— add new <Text code style={{ fontSize: 11 }}>.json</Text> files there and restart the server to include them in eval runs.
+          </Text>
+        }
+      />
+
+      {isError && (
+        <Alert type="error" showIcon message="Failed to load scenarios. Is the server running?" />
+      )}
+
+      <Table
+        size="small"
+        rowKey="id"
+        dataSource={scenarios}
+        columns={columns}
+        loading={isLoading}
+        pagination={{ pageSize: 20, showSizeChanger: false }}
+        scroll={{ x: 1100 }}
+        locale={{ emptyText: <Empty description="No scenarios loaded. Add .json files to the scenarios directory and restart." /> }}
+        expandable={{
+          expandedRowRender: (record: EvalScenario) => (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '8px 0' }}>
+              {/* Full task text */}
+              {record.task && (
+                <div>
+                  <Text type="secondary" style={{ fontSize: 11, display: 'block', marginBottom: 3 }}>Full Task:</Text>
+                  <pre style={{
+                    fontSize: 11, margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                    background: 'var(--bg-surface, #fafafa)', padding: '6px 8px', borderRadius: 4,
+                    borderLeft: '2px solid #6366f1',
+                    fontFamily: 'JetBrains Mono, Fira Code, monospace',
+                  }}>
+                    {record.task}
+                  </pre>
+                </div>
+              )}
+
+              {/* Oracle details */}
+              {(record.expected || (record.expectedList && record.expectedList.length > 0)) && (
+                <div>
+                  <Text type="secondary" style={{ fontSize: 11, display: 'block', marginBottom: 3 }}>
+                    Oracle Expected:
+                    {record.oracleType && (
+                      <Tag
+                        color={ORACLE_TYPE_COLOR[record.oracleType] ?? 'default'}
+                        style={{ fontSize: 10, marginLeft: 6, lineHeight: '16px', padding: '0 4px' }}
+                      >
+                        {record.oracleType}
+                      </Tag>
+                    )}
+                  </Text>
+                  {record.expected && (
+                    <Text code style={{ fontSize: 11, display: 'block' }}>{record.expected}</Text>
+                  )}
+                  {record.expectedList && record.expectedList.length > 0 && (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                      {record.expectedList.map((item, i) => (
+                        <Text key={i} code style={{ fontSize: 11 }}>{item}</Text>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Setup files */}
+              {record.setupFiles && record.setupFiles.length > 0 && (
+                <div>
+                  <Text type="secondary" style={{ fontSize: 11, display: 'block', marginBottom: 3 }}>Setup Files:</Text>
+                  <Space size={4} wrap>
+                    {record.setupFiles.map((f, i) => (
+                      <Tag key={i} style={{ fontSize: 11, fontFamily: 'monospace' }}>{f}</Tag>
+                    ))}
+                  </Space>
+                </div>
+              )}
+
+              {/* Tools hint */}
+              {record.toolsHint && (
+                <div>
+                  <Text type="secondary" style={{ fontSize: 11, display: 'block', marginBottom: 3 }}>Tools Hint:</Text>
+                  <Text code style={{ fontSize: 11 }}>{record.toolsHint}</Text>
+                </div>
+              )}
+
+              {/* Performance threshold */}
+              {record.performanceThresholdMs != null && (
+                <div>
+                  <Text type="secondary" style={{ fontSize: 11 }}>
+                    Performance Threshold: <Text style={{ fontSize: 11 }}>{formatDuration(record.performanceThresholdMs)}</Text>
+                  </Text>
+                </div>
+              )}
+            </div>
+          ),
+        }}
+      />
+    </div>
   );
 };
 
@@ -417,6 +771,24 @@ const Eval: React.FC = () => {
     },
   ];
 
+  const storageInfo = (
+    <Tooltip
+      title={
+        <div style={{ fontSize: 11 }}>
+          Results stored in PostgreSQL <Text code style={{ fontSize: 11, color: '#ccc' }}>t_eval_run</Text>
+          <br />
+          Scenarios loaded from classpath <Text code style={{ fontSize: 11, color: '#ccc' }}>eval/scenarios/</Text>
+        </div>
+      }
+    >
+      <Space style={{ cursor: 'default', opacity: 0.65 }} size={4}>
+        <DatabaseOutlined style={{ fontSize: 12 }} />
+        <Text style={{ fontSize: 11 }}>Storage info</Text>
+        <InfoCircleOutlined style={{ fontSize: 11 }} />
+      </Space>
+    </Tooltip>
+  );
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16, height: '100%' }}>
       {/* Header */}
@@ -427,6 +799,7 @@ const Eval: React.FC = () => {
           {hasRunningRuns && (
             <Tag color="processing" icon={<ClockCircleOutlined />}>Running</Tag>
           )}
+          {storageInfo}
         </Space>
         <Space>
           <Select
@@ -458,22 +831,54 @@ const Eval: React.FC = () => {
         </Space>
       </div>
 
-      {/* Runs table */}
-      <Card
-        styles={{ body: { padding: 0 } }}
-        style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}
-      >
-        <Table
-          size="small"
-          rowKey={(r: any) => r.id ?? r.evalRunId}
-          dataSource={runs}
-          columns={columns}
-          loading={isLoading}
-          pagination={{ pageSize: 20, showSizeChanger: false }}
-          scroll={{ x: 1000 }}
-          locale={{ emptyText: <Empty description="No eval runs yet. Select an agent and click Run Eval." /> }}
-        />
-      </Card>
+      {/* Tabs: Runs + Scenarios */}
+      <Tabs
+        defaultActiveKey="runs"
+        style={{ flex: 1 }}
+        items={[
+          {
+            key: 'runs',
+            label: (
+              <Space size={6}>
+                <ClockCircleOutlined />
+                Runs
+                {runs.length > 0 && (
+                  <Tag style={{ margin: 0, fontSize: 10, lineHeight: '16px', padding: '0 4px' }}>
+                    {runs.length}
+                  </Tag>
+                )}
+              </Space>
+            ),
+            children: (
+              <Card
+                styles={{ body: { padding: 0 } }}
+                style={{ overflow: 'hidden' }}
+              >
+                <Table
+                  size="small"
+                  rowKey={(r: any) => r.id ?? r.evalRunId}
+                  dataSource={runs}
+                  columns={columns}
+                  loading={isLoading}
+                  pagination={{ pageSize: 20, showSizeChanger: false }}
+                  scroll={{ x: 1000 }}
+                  locale={{ emptyText: <Empty description="No eval runs yet. Select an agent and click Run Eval." /> }}
+                />
+              </Card>
+            ),
+          },
+          {
+            key: 'scenarios',
+            label: (
+              <Space size={6}>
+                <WarningOutlined />
+                Scenarios
+              </Space>
+            ),
+            children: <ScenariosPanel />,
+          },
+        ]}
+      />
 
       {/* Detail drawer */}
       <EvalDetailDrawer

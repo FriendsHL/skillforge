@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, Popconfirm, Tag, Tabs, message, Card } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, FileTextOutlined } from '@ant-design/icons';
+import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, Popconfirm, Tag, Tabs, message, Card, Drawer } from 'antd';
+import { PlusOutlined, EditOutlined, DeleteOutlined, FileTextOutlined, HistoryOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getAgents, createAgent, updateAgent, deleteAgent, getTools, getSkills, getClaudeMd, saveClaudeMd, extractList } from '../api';
 import { AgentSchema, safeParseList } from '../api/schemas';
+import PromptHistoryPanel from '../components/PromptHistoryPanel';
 
 const { TextArea } = Input;
 
@@ -41,6 +42,7 @@ const AgentList: React.FC = () => {
   const [form] = Form.useForm();
   const [claudeMdModalOpen, setClaudeMdModalOpen] = useState(false);
   const [claudeMdDraft, setClaudeMdDraft] = useState<string | null>(null);
+  const [promptHistoryAgentId, setPromptHistoryAgentId] = useState<string | null>(null);
 
   const { data: agents = [], isLoading: loading, isError: agentsError } = useQuery({
     queryKey: ['agents'],
@@ -219,6 +221,13 @@ const AgentList: React.FC = () => {
           <Button icon={<EditOutlined />} size="small" onClick={() => openEdit(record)}>
             Edit
           </Button>
+          <Button
+            icon={<HistoryOutlined />}
+            size="small"
+            onClick={() => setPromptHistoryAgentId(String(record.id))}
+          >
+            Prompts
+          </Button>
           <Popconfirm title="Delete this agent?" onConfirm={() => handleDelete(record.id)}>
             <Button icon={<DeleteOutlined />} size="small" danger>
               Delete
@@ -378,6 +387,23 @@ const AgentList: React.FC = () => {
           placeholder="# Global Rules&#10;&#10;Rules that apply to all agents..."
         />
       </Modal>
+
+      <Drawer
+        title={
+          <Space>
+            <HistoryOutlined />
+            <span>Prompt Version History</span>
+          </Space>
+        }
+        width={640}
+        open={!!promptHistoryAgentId}
+        onClose={() => setPromptHistoryAgentId(null)}
+        destroyOnClose
+      >
+        {promptHistoryAgentId && (
+          <PromptHistoryPanel agentId={promptHistoryAgentId} />
+        )}
+      </Drawer>
     </div>
   );
 };

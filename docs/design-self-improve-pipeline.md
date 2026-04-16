@@ -383,33 +383,596 @@ EvalRun 完成后生成改进建议报告（基于 `primaryAttribution` 聚合�
 
 `ScenarioRunResult.resultWithHint`（v1.0 始终 null）：Phase 2 实现 few-shot hint 实验时，hint 结果存此字段，**绝不混入 oracle 判定路径**。
 
-### Phase 2：PromptImprover + 自动晋升
+### Phase 2：PromptImprover + A/B 评测 + 自动晋升
 
-**必须先实现 PromptVersionEntity**（[HIGH H4]）：
+> 本节为最终设计方案，由 Plan A + Plan B 双方案 + Reviewer A/B 双轮交叉挑战 + 裁判整合产出。
+> 更新于：2026-04-16
+
+---
+
+#### 2.1 架构总览
+
+```
+用户在 Eval Drawer 点击 "Improve Prompt"
+  │
+  POST /api/agents/{agentId}/prompt-improve  { evalRunId }
+  │
+  PromptImproverService（异步，promptImprovExecutor）
+  ├── 资格检查（attribution + 冷却期 + Goodhart 暂停状态）
+  ├── 调用 Sonnet LLM 生成候选 prompt（只处理 PROMPT_QUALITY / CONTEXT_OVERFLOW）
+  ├── 保存 t_prompt_version（status=candidate）
+  │
+  AbEvalPipeline（abEvalCoordinatorExecutor）
+  ├── 加载 held-out 场景（split=held_out，即 7 个 seed_ 场景）
+  ├── 从 baseline evalRun.scenarioResultsJson 计算 heldOutBaselineRate（同一子集）
+  ├── 用 abEvalLoopExecutor 顺序执行 7 个场景（候选 prompt）
+  ├── 存储 per-scenario 对比结果到 t_prompt_ab_run.ab_scenario_results_json
+  ├── 计算 Δ = candidatePassRate - heldOutBaselineRate
+  │
+  PromptPromotionService（@Transactional）
+  ├── Goodhart Guard 检查（4 层）
+  ├── 晋升 or 丢弃候选
+  ├── 发布 PromptPromotedEvent（@TransactionalEventListener AFTER_COMMIT 广播 WS）
+  └── 更新 t_agent 字段
+```
+
+**核心约束（不可违反）**：
+
+- `EvalOrchestrator.java` 零改动（红灯文件）
+- `ScenarioRunnerSkill.java` 零改动（AbEvalPipeline 自己组装底层执行链）
+- AB eval 使用独立线程池，与正常 eval 完全隔离
+
+---
+
+#### 2.2 数据库设计（Flyway V4）
+
+```sql
+-- V4__prompt_version_tables.sql
+
+-- ─────────────────────────────────────────────────────────
+-- 1. Prompt 版本表
+-- ─────────────────────────────────────────────────────────
+CREATE TABLE t_prompt_version (
+    id                    VARCHAR(36)  PRIMARY KEY,
+    agent_id              VARCHAR(36)  NOT NULL,
+    content               TEXT         NOT NULL,
+    version_number        INTEGER      NOT NULL,
+    status                VARCHAR(32)  NOT NULL DEFAULT 'candidate',
+    -- candidate: 等待 A/B 测试
+    -- active:    当前使用中（每个 agent 只有一个）
+    -- deprecated: 已被新版本替换
+    -- failed:    A/B 测试未通过（delta < 15pp）或生成失败
+    source                VARCHAR(32)  NOT NULL DEFAULT 'auto_improve',
+    -- auto_improve: 由 PromptImproverService 生成
+    -- manual:       用户手动创建/回滚
+    source_eval_run_id    VARCHAR(36),           -- 触发本次改进的 full eval run id
+    ab_run_id             VARCHAR(36),           -- 验证此版本的 A/B run id（完成后回填）
+    delta_pass_rate       DOUBLE PRECISION,      -- Δ = candidate_rate - baseline_rate（百分制）
+    baseline_pass_rate    DOUBLE PRECISION,      -- 控制组通过率快照（held-out 子集，百分制）
+    improvement_rationale TEXT,                  -- LLM 生成的改动说明
+    created_at            TIMESTAMP    NOT NULL DEFAULT NOW(),
+    promoted_at           TIMESTAMP,
+    deprecated_at         TIMESTAMP,
+    CONSTRAINT uq_agent_version UNIQUE (agent_id, version_number)
+);
+
+CREATE INDEX idx_pv_agent_id     ON t_prompt_version (agent_id);
+CREATE INDEX idx_pv_agent_status ON t_prompt_version (agent_id, status);
+
+-- ─────────────────────────────────────────────────────────
+-- 2. A/B 测试运行表（关注点分离：version 是什么 vs 怎么被验证）
+-- ─────────────────────────────────────────────────────────
+CREATE TABLE t_prompt_ab_run (
+    id                       VARCHAR(36)  PRIMARY KEY,
+    agent_id                 VARCHAR(36)  NOT NULL,
+    prompt_version_id        VARCHAR(36)  NOT NULL,
+    baseline_eval_run_id     VARCHAR(36)  NOT NULL,  -- 控制组数据来源
+    status                   VARCHAR(32)  NOT NULL DEFAULT 'PENDING',
+    -- PENDING / RUNNING / COMPLETED / FAILED
+    baseline_pass_rate       DOUBLE PRECISION,       -- held-out 子集通过率（百分制）
+    candidate_pass_rate      DOUBLE PRECISION,       -- 候选 prompt 通过率（百分制）
+    delta_pass_rate          DOUBLE PRECISION,       -- 最终 Δ（百分制）
+    promoted                 BOOLEAN      NOT NULL DEFAULT FALSE,
+    skip_reason              VARCHAR(128),           -- NO_ELIGIBLE_FAILURES / COOLDOWN_ACTIVE 等
+    failure_reason           TEXT,
+    ab_scenario_results_json TEXT,                   -- per-scenario 对比结果（JSON 数组）
+    triggered_by_user_id     BIGINT,
+    started_at               TIMESTAMP,
+    completed_at             TIMESTAMP
+);
+
+CREATE INDEX idx_par_agent_id          ON t_prompt_ab_run (agent_id);
+CREATE INDEX idx_par_prompt_version_id ON t_prompt_ab_run (prompt_version_id);
+
+-- 并发防护：同一 agent 最多一个 PENDING/RUNNING 的 ab_run
+-- INSERT 冲突时抛 DataIntegrityViolationException → 返回 409
+CREATE UNIQUE INDEX uq_ab_run_agent_active
+    ON t_prompt_ab_run (agent_id)
+    WHERE status IN ('PENDING', 'RUNNING');
+
+-- ─────────────────────────────────────────────────────────
+-- 3. t_agent 扩展（Goodhart 状态 + 版本指针）
+-- ─────────────────────────────────────────────────────────
+ALTER TABLE t_agent
+    ADD COLUMN IF NOT EXISTS active_prompt_version_id VARCHAR(36),
+    -- 指向当前激活的 t_prompt_version.id（NULL = 未进入版本管理）
+    ADD COLUMN IF NOT EXISTS auto_improve_paused      BOOLEAN   NOT NULL DEFAULT FALSE,
+    -- Goodhart 停止信号：ab_decline_count >= 3 后置为 true
+    ADD COLUMN IF NOT EXISTS ab_decline_count         INTEGER   NOT NULL DEFAULT 0,
+    -- AB eval 连续 delta < 0 次数（区别于 t_eval_run.consecutive_decline_count 的全量 eval 趋势）
+    ADD COLUMN IF NOT EXISTS last_promoted_at         TIMESTAMP;
+    -- 最后一次晋升时间，用于 24h 冷却校验
+```
+
+**字段命名说明**：
+
+| 字段                          | 表            | 含义                                        | 触发条件                        |
+| --------------------------- | ------------ | ----------------------------------------- | --------------------------- |
+| `consecutive_decline_count` | `t_eval_run` | **全量 eval（13 场景）**连续下降次数                  | full eval pass rate 下降 ≥ 5% |
+| `ab_decline_count`          | `t_agent`    | **AB eval（7 held-out 场景）**连续 delta < 0 次数 | AB eval delta < 0 时递增       |
+
+---
+
+#### 2.3 线程池设计（三套完全隔离）
 
 ```java
-@Entity
-@Table(name = "t_prompt_version")
-public class PromptVersionEntity {
-    @Id private String id;
-    private String agentDefinitionId;
-    private int versionNumber;
-    @Column(columnDefinition = "TEXT") private String promptContent;
-    private String baseVersionId;       // 基于哪个版本生成 patch
-    private String patchSha256;
-    private String status;              // draft | testing | active | retired
-    private Instant createdAt;
+// AbEvalExecutorConfig.java（新增）
+@Configuration
+public class AbEvalExecutorConfig {
+
+    // Outer：AB 改进流程协调（LLM 调用 + pipeline 串联）
+    @Bean("abEvalCoordinatorExecutor")
+    public ExecutorService abEvalCoordinatorExecutor() {
+        return new ThreadPoolExecutor(
+            2, 4, 60L, TimeUnit.SECONDS,
+            new LinkedBlockingQueue<>(10),
+            r -> new Thread(r, "ab-eval-coord-" + ...),
+            new ThreadPoolExecutor.AbortPolicy()  // 超载直接 503，不阻塞 HTTP 线程
+        );
+    }
+
+    // Inner：AB eval 场景执行（与 evalLoopExecutor 完全隔离，互不抢占）
+    @Bean("abEvalLoopExecutor")
+    public ExecutorService abEvalLoopExecutor() {
+        return new ThreadPoolExecutor(
+            4, 8, 60L, TimeUnit.SECONDS,
+            new LinkedBlockingQueue<>(20),
+            r -> new Thread(r, "ab-eval-loop-" + ...),
+            new ThreadPoolExecutor.AbortPolicy()
+        );
+    }
 }
 ```
 
-apply patch 时校验 `baseVersionId` 与当前 active prompt id 一致，不一致则拒绝。
+三套线程池职责：
 
-**A/B 测试统计方法（分阶段）**：
+| 线程池                         | 用途                | 备注                         |
+| --------------------------- | ----------------- | -------------------------- |
+| `evalOrchestratorExecutor`  | 正常 full eval 外层协调 | Phase 1 已有                 |
+| `evalLoopExecutor`          | 正常 eval 场景执行      | Phase 1 已有，AB eval **不复用** |
+| `abEvalCoordinatorExecutor` | AB 改进流程协调         | Phase 2 新增                 |
+| `abEvalLoopExecutor`        | AB eval 场景执行      | Phase 2 新增，完全独立            |
+
+---
+
+#### 2.4 PromptImproverService
+
+```java
+@Service
+public class PromptImproverService {
+
+    private static final Set<FailureAttribution> ELIGIBLE = Set.of(
+        FailureAttribution.PROMPT_QUALITY, FailureAttribution.CONTEXT_OVERFLOW);
+
+    /**
+     * 异步启动改进流程，立即返回 abRunId。
+     * 后续通过 WS 事件推送进度。
+     */
+    public ImprovementStartResult startImprovement(String agentId, String evalRunId, long userId) {
+        EvalRunEntity evalRun = evalRunRepository.findById(evalRunId).orElseThrow();
+        AgentEntity agent = agentRepository.findById(agentId).orElseThrow();
+
+        checkEligibility(agent, evalRun);  // 抛 ImprovementIneligibleException
+
+        // 生成候选 PromptVersion（status=candidate，content 待 LLM 填充）
+        PromptVersionEntity version = createCandidateVersion(agent, evalRunId);
+        // 并发防护：INSERT t_prompt_ab_run(status=PENDING)，unique partial index 兜底
+        PromptAbRunEntity abRun = createAbRun(agentId, version.getId(), evalRunId, userId);
+
+        abEvalCoordinatorExecutor.submit(() -> runImprovementAsync(version, abRun, evalRun, agent));
+
+        return new ImprovementStartResult(abRun.getId(), version.getId(), "PENDING");
+    }
+
+    private void checkEligibility(AgentEntity agent, EvalRunEntity evalRun) {
+        // 1. Eval 必须是 COMPLETED 状态的 full eval（非 AB eval）
+        if (!"COMPLETED".equals(evalRun.getStatus()))
+            throw new ImprovementIneligibleException("EVAL_NOT_COMPLETED");
+
+        // 2. Attribution 必须可处理
+        if (!ELIGIBLE.contains(evalRun.getPrimaryAttribution()))
+            throw new ImprovementIneligibleException("INELIGIBLE_ATTRIBUTION");
+
+        // 3. 24h 冷却
+        if (agent.getLastPromotedAt() != null) {
+            long hours = Duration.between(agent.getLastPromotedAt(), Instant.now()).toHours();
+            if (hours < 24) throw new ImprovementIneligibleException("COOLDOWN_ACTIVE");
+        }
+
+        // 4. Goodhart 暂停
+        if (agent.isAutoImprovePaused())
+            throw new ImprovementIneligibleException("AUTO_IMPROVE_PAUSED");
+    }
+
+    private void runImprovementAsync(PromptVersionEntity version, PromptAbRunEntity abRun,
+                                      EvalRunEntity evalRun, AgentEntity agent) {
+        try {
+            // Step 1: LLM 生成候选 prompt（Sonnet，temperature=0.3）
+            String candidateContent = generateCandidatePrompt(evalRun, agent);
+            version.setContent(candidateContent);
+            promptVersionRepository.save(version);
+
+            // Step 2: A/B eval（独立 pipeline，不经过 EvalOrchestrator）
+            abEvalPipeline.run(abRun, version, evalRun, agent);
+
+            // Step 3: 晋升决策（在 PromptPromotionService 内完成）
+            promotionService.evaluateAndPromote(abRun.getId(), agent.getId());
+
+        } catch (DataIntegrityViolationException e) {
+            // unique partial index 触发，另一个 ab_run 并发插入
+            throw new ImprovementConflictException("ALREADY_IMPROVING");
+        } catch (Exception e) {
+            abRun.setStatus("FAILED");
+            abRun.setFailureReason(e.getMessage());
+            abRunRepository.save(abRun);
+        }
+    }
+}
+```
+
+**LLM Prompt 结构（Sonnet，只传 PROMPT_QUALITY/CONTEXT_OVERFLOW 的失败场景）**：
 
 ```
-Phase 2（场景库 < 100）: pass rate delta ≥ 15% 且 heldOutPassRate 不退步 → 晋升
-Phase 3（场景库 ≥ 100）: Welch t-test p < 0.05 且 Cohen's d > 0.5
+[System]
+You are a prompt engineer. Analyze failure patterns and produce an improved system prompt.
+Return ONLY the raw prompt text — no markdown, no explanation, no prefix.
+
+[User]
+CURRENT SYSTEM PROMPT:
+---
+{agent.systemPrompt}
+---
+PRIMARY FAILURE ATTRIBUTION: {primaryAttribution}
+
+FAILED SCENARIOS (eligible attributions only):
+[{scenarioName}]
+Task: {task}
+Agent Output (truncated 300 chars): {agentFinalOutput}
+Expected: {oracle.expected}
+Attribution: {failureAttribution}
+
+PASSED SCENARIOS (preserve this behavior):
+- {scenarioName}: {task, 80 chars}
+
+GUIDANCE:
+{if CONTEXT_OVERFLOW: "Require agent to summarize state at each step before proceeding."}
+{if PROMPT_QUALITY: "Clarify task boundaries and output format requirements."}
+
+Produce an improved system prompt addressing the failures without regressing the passing scenarios.
 ```
+
+---
+
+#### 2.5 AbEvalPipeline（不改 EvalOrchestrator / ScenarioRunnerSkill）
+
+```java
+@Component
+public class AbEvalPipeline {
+
+    // 注意：直接使用底层组件，不经过 ScenarioRunnerSkill（避免 retry/cleanup/session 逻辑混入）
+    @Autowired private SandboxSkillRegistryFactory sandboxFactory;
+    @Autowired private EvalEngineFactory evalEngineFactory;
+    @Autowired private EvalJudgeSkill evalJudgeSkill;
+    @Qualifier("abEvalLoopExecutor") @Autowired private ExecutorService loopExecutor;
+
+    public void run(PromptAbRunEntity abRun, PromptVersionEntity candidate,
+                    EvalRunEntity baselineRun, AgentEntity originalAgent) {
+        abRun.setStatus("RUNNING");
+        abRunRepository.save(abRun);
+
+        // 1. 加载 held-out 场景（split=held_out，7 个 seed_ 场景）
+        List<EvalScenario> heldOutScenarios = scenarioLoader.loadAll().stream()
+            .filter(s -> "held_out".equals(s.getSplit()))
+            .toList();
+
+        // 2. 计算 baseline（从 baselineRun.scenarioResultsJson 过滤同一子集，保证分母一致）
+        double baselineRate = computeHeldOutPassRate(baselineRun.getScenarioResultsJson());
+
+        // 3. 构造候选 AgentEntity（transient 拷贝，永不 save）
+        AgentEntity candidateDef = copyWithPrompt(originalAgent, candidate.getContent());
+
+        // 4. 逐场景执行（自组装底层调用，30s timeout，无 retry）
+        List<AbScenarioResult> results = new ArrayList<>();
+        for (EvalScenario scenario : heldOutScenarios) {
+            AbScenarioResult result = runSingleScenario(scenario, candidateDef, abRun.getId());
+            results.add(result);
+            broadcastScenarioProgress(abRun, result);  // WS 推送 ab_scenario_finished
+        }
+
+        // 5. 计算 Δ
+        double candidateRate = results.stream().filter(r -> r.pass()).count()
+            / (double) results.size() * 100.0;
+        double delta = candidateRate - baselineRate;
+
+        // 6. 回填结果
+        abRun.setBaselinePassRate(baselineRate);
+        abRun.setCandidatePassRate(candidateRate);
+        abRun.setDeltaPassRate(delta);
+        abRun.setAbScenarioResultsJson(objectMapper.writeValueAsString(results));
+        abRun.setStatus("COMPLETED");
+        abRunRepository.save(abRun);
+
+        candidate.setDeltaPassRate(delta);
+        candidate.setBaselinePassRate(baselineRate);
+        candidate.setAbRunId(abRun.getId());
+        promptVersionRepository.save(candidate);
+    }
+
+    private AbScenarioResult runSingleScenario(EvalScenario scenario, AgentEntity agentDef, String abRunId) {
+        String sandboxPath = buildSandboxPath(abRunId, scenario.getId());
+        try {
+            SandboxSkillRegistry registry = sandboxFactory.createSandbox(scenario, abRunId, scenario.getId());
+            AgentLoopEngine engine = evalEngineFactory.buildEngine(agentDef, registry);
+            LoopResult result = loopExecutor.submit(() -> engine.run(buildCtx(scenario, agentDef)))
+                .get(30, TimeUnit.SECONDS);  // AB eval 单场景 30s（不需要 90s budget）
+            EvalJudgeOutput judge = evalJudgeSkill.judge(scenario, result);
+            return AbScenarioResult.from(scenario, result, judge);
+        } catch (TimeoutException e) {
+            return AbScenarioResult.timeout(scenario);
+        } finally {
+            sandboxFactory.cleanupSandbox(sandboxPath);
+        }
+    }
+
+    /** held_out == seed_：同一批 7 个场景，两种称呼统一用 split=held_out */
+    private double computeHeldOutPassRate(String scenarioResultsJson) {
+        // 从 JSON 过滤 split=held_out 的场景，计算通过率（百分制）
+        // 保证与 AB eval 用相同子集，delta 分母严格对齐
+        ...
+    }
+}
+```
+
+---
+
+#### 2.6 PromptPromotionService（Goodhart 四层防护）
+
+```java
+@Service
+public class PromptPromotionService {
+
+    // 晋升阈值：百分制（overallPassRate 存储为 0–100），15 个百分点
+    private static final double PROMOTION_DELTA_THRESHOLD_PP = 15.0;
+
+    @Transactional
+    public PromotionResult evaluateAndPromote(String abRunId, String agentId) {
+        PromptAbRunEntity abRun = abRunRepository.findById(abRunId).orElseThrow();
+        AgentEntity agent = agentRepository.findById(agentId).orElseThrow();
+        PromptVersionEntity candidate = promptVersionRepository
+            .findById(abRun.getPromptVersionId()).orElseThrow();
+
+        // Guard 1: Δ 阈值（百分制，15pp）
+        if (abRun.getDeltaPassRate() < PROMOTION_DELTA_THRESHOLD_PP) {
+            candidate.setStatus("failed");
+            promptVersionRepository.save(candidate);
+            updateAbDeclineTracking(agent, abRun.getDeltaPassRate());
+            return PromotionResult.rejected("DELTA_BELOW_THRESHOLD");
+        }
+
+        // Guard 2: 每天最多晋升 1 次（无状态，实时查询，无定时任务依赖）
+        if (hasPromotedToday(agentId)) return PromotionResult.rejected("DAILY_LIMIT");
+
+        // Guard 3: 24h 冷却
+        if (agent.getLastPromotedAt() != null) {
+            long hours = Duration.between(agent.getLastPromotedAt(), Instant.now()).toHours();
+            if (hours < 24) return PromotionResult.rejected("COOLDOWN_ACTIVE");
+        }
+
+        // Guard 4: AB eval 连续下降 >= 3 次暂停
+        if (agent.isAutoImprovePaused()) return PromotionResult.rejected("AUTO_IMPROVE_PAUSED");
+
+        // ── 原子晋升（@Transactional 保证）─────────────────────────
+        // a. 旧 active → deprecated
+        promptVersionRepository.findByAgentIdAndStatus(agentId, "active")
+            .forEach(v -> { v.setStatus("deprecated"); v.setDeprecatedAt(Instant.now()); });
+
+        // b. 候选 → active
+        candidate.setStatus("active");
+        candidate.setPromotedAt(Instant.now());
+
+        // c. 更新 t_agent
+        agent.setSystemPrompt(candidate.getContent());
+        agent.setActivePromptVersionId(candidate.getId());
+        agent.setLastPromotedAt(Instant.now());
+        agent.setAbDeclineCount(0);  // 成功晋升后清零
+        agentRepository.save(agent);
+
+        abRun.setPromoted(true);
+        abRunRepository.save(abRun);
+
+        // d. 发布事件（AFTER_COMMIT 广播，事务回滚时不触发）
+        eventPublisher.publishEvent(new PromptPromotedEvent(
+            agentId, candidate.getId(), abRun.getDeltaPassRate(), candidate.getVersionNumber()));
+
+        return PromotionResult.promoted(candidate.getId());
+    }
+
+    private boolean hasPromotedToday(String agentId) {
+        // 实时查询，无状态，无定时任务
+        return promptAbRunRepository.countPromotedToday(agentId) >= 1;
+        // JPQL: SELECT COUNT(r) FROM PromptAbRunEntity r
+        //       WHERE r.agentId = :agentId AND r.promoted = true
+        //         AND CAST(r.completedAt AS LocalDate) = CURRENT_DATE
+    }
+
+    private void updateAbDeclineTracking(AgentEntity agent, double delta) {
+        if (delta < 0) {  // 只在真实下降时递增（0 <= delta < 15pp 不算下降）
+            int newCount = agent.getAbDeclineCount() + 1;
+            agent.setAbDeclineCount(newCount);
+            if (newCount >= 3) {
+                agent.setAutoImprovePaused(true);
+                eventPublisher.publishEvent(new ImprovePausedEvent(agent.getId(), newCount));
+            }
+            agentRepository.save(agent);
+        }
+    }
+}
+
+// WS 广播在事务提交后执行（不在事务内做 I/O）
+@Component
+public class PromptEventBroadcaster {
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onPromoted(PromptPromotedEvent e) {
+        broadcaster.userEvent(e.userId(), Map.of(
+            "type", "prompt_promoted",
+            "agentId", e.agentId(),
+            "versionId", e.versionId(),
+            "deltaPassRate", e.deltaPassRate(),
+            "versionNumber", e.versionNumber()
+        ));
+    }
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onPaused(ImprovePausedEvent e) {
+        broadcaster.broadcast(Map.of("type", "improve_paused", "agentId", e.agentId()));
+    }
+}
+```
+
+---
+
+#### 2.7 REST API
+
+```
+# 触发改进（improve 是 agent 级操作，evalRunId 是触发上下文）
+POST   /api/agents/{agentId}/prompt-improve
+Body:  { "evalRunId": "xxx" }
+→ 202 { "abRunId": "...", "promptVersionId": "...", "status": "PENDING" }
+→ 409 { "error": "ALREADY_IMPROVING" }  ← unique partial index 触发
+→ 422 { "error": "INELIGIBLE_ATTRIBUTION" | "COOLDOWN_ACTIVE" | "AUTO_IMPROVE_PAUSED" | "EVAL_NOT_COMPLETED" }
+
+# 查询 A/B 测试状态（含 per-scenario 明细）
+GET    /api/agents/{agentId}/prompt-improve/{abRunId}
+→ { abRunId, status, deltaPassRate, candidatePassRate, baselinePassRate,
+    promoted, completedScenarios, scenarioResults: [ { scenarioId, scenarioName,
+    baseline: { status, oracleScore }, candidate: { status, oracleScore } } ] }
+
+# 查询当前是否有进行中的改进（前端 mount 时调用，用于状态恢复）
+GET    /api/agents/{agentId}/prompt-improve/active
+→ 200 { abRunId, promptVersionId, status, deltaPassRate }  ← 最近 2h 内的 RUNNING/COMPLETED
+→ 204 No Content
+
+# Prompt 版本历史列表
+GET    /api/agents/{agentId}/prompt-versions?page=0&size=10
+→ [ { id, versionNumber, status, source, deltaPassRate, baselinePassRate,
+       improvementRationale, createdAt, promotedAt, deprecatedAt } ]
+
+# 单个版本详情（含完整 content）
+GET    /api/agents/{agentId}/prompt-versions/{versionId}
+→ { ...同上 + content }
+
+# 手动回滚（仅历史 deprecated 版本；不重置 abDeclineCount；直接生效不走 AB 测试）
+POST   /api/agents/{agentId}/prompt-versions/{versionId}/rollback
+→ { "success": true, "newActiveVersionId": "..." }
+
+# 恢复被 Goodhart 暂停的改进功能（显式操作，需用户确认）
+POST   /api/agents/{agentId}/prompt-improve/resume
+→ { "success": true }
+# 清零 ab_decline_count，设置 auto_improve_paused=false，记录操作日志
+```
+
+---
+
+#### 2.8 前端交互
+
+**ImprovePromptButton 状态机（WS 事件驱动 + onopen 快照同步）**：
+
+```typescript
+type ImproveState =
+  | { phase: 'ineligible'; reason: string }
+  | { phase: 'idle' }
+  | { phase: 'generating' }                              // LLM 生成候选中
+  | { phase: 'ab_testing'; progress: number }            // AB eval 中（N/7）
+  | { phase: 'success'; delta: number; promoted: boolean }
+  | { phase: 'skipped'; reason: string }
+  | { phase: 'failed'; error: string };
+
+// WS 断线重连时做快照同步（防止状态卡住）
+ws.onopen = () => {
+  if (activeAbRunId) {
+    api.getAbRunStatus(agentId, activeAbRunId).then(syncStateFromSnapshot);
+  }
+};
+
+// WS 事件驱动状态转换
+// ab_test_started → generating→ab_testing
+// ab_scenario_finished → progress++
+// ab_test_completed → success（promoted/not）
+// improve_paused → ineligible
+```
+
+**Prompt History Panel（Agent 详情页）**：
+
+- 竖排时间线，active 版本置顶绿色 badge
+- 每行：`v{N} · status · source · Δ{deltaPassRate}pp · {createdAt}`
+- "View" → Modal 展示完整 prompt（`<pre>` 纯文本，防 XSS）
+- "Rollback" → 仅对 deprecated 版本显示，二次确认后直接生效
+- AB 结果区域：per-scenario 对比表（FAIL→PASS 绿色，PASS→FAIL 红色）
+
+---
+
+#### 2.9 新增/修改文件清单（Phase 2）
+
+**新增文件（14 个）**：
+
+| 文件                                                | 行数   | 说明                               |
+| ------------------------------------------------- | ---- | -------------------------------- |
+| `V4__prompt_version_tables.sql`                   | ~70  | Flyway migration                 |
+| `entity/PromptVersionEntity.java`                 | ~80  | JPA entity                       |
+| `entity/PromptAbRunEntity.java`                   | ~70  | JPA entity                       |
+| `repository/PromptVersionRepository.java`         | ~30  | Spring Data                      |
+| `repository/PromptAbRunRepository.java`           | ~30  | Spring Data + countPromotedToday |
+| `improve/PromptImproverService.java`              | ~180 | 触发/资格检查/LLM 调用                   |
+| `improve/AbEvalPipeline.java`                     | ~200 | AB eval 独立执行链                    |
+| `improve/PromptPromotionService.java`             | ~150 | 晋升 + 4 层 Goodhart 防护             |
+| `improve/event/PromptPromotedEvent.java`          | ~20  | Spring ApplicationEvent          |
+| `improve/event/ImprovePausedEvent.java`           | ~15  | Spring ApplicationEvent          |
+| `improve/event/PromptEventBroadcaster.java`       | ~40  | @TransactionalEventListener      |
+| `config/AbEvalExecutorConfig.java`                | ~40  | 两个线程池 bean                       |
+| `controller/PromptImproveController.java`         | ~120 | REST 端点                          |
+| `dashboard/src/components/PromptHistoryPanel.tsx` | ~200 | 版本列表 + AB 明细                     |
+
+**修改文件（5 个）**：
+
+| 文件                                        | 改动                                                                                       |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `entity/AgentEntity.java`                 | +4 字段（active_prompt_version_id, auto_improve_paused, ab_decline_count, last_promoted_at） |
+| `dashboard/src/pages/Eval.tsx`            | +ImprovePromptButton，Drawer 底部                                                           |
+| `dashboard/src/pages/AgentDetail.tsx`     | +Prompt History tab                                                                      |
+| `dashboard/src/api/index.ts`              | +6 API 函数                                                                                |
+| `dashboard/src/hooks/useImprovePrompt.ts` | 新建（ImprovePromptButton 逻辑提取）                                                             |
+
+**零改动（红灯文件）**：`EvalOrchestrator.java`、`ScenarioRunnerSkill.java`
+
+---
+
+#### 2.10 A/B 测试统计方法
+
+```
+Phase 2（当前）：delta ≥ 15pp（百分制），held-out 子集不退步 → 晋升
+Phase 3（场景库 ≥ 100）：Welch t-test p < 0.05 且 Cohen's d > 0.5
+```
+
+**注意**：`held_out == seed_`，指的是同一批 7 个场景（文件名前缀 `seed_`，JSON 字段 `split=held_out`）。代码中统一使用 `split=held_out` 过滤，不依赖文件名。
 
 ---
 
