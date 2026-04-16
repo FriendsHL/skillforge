@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Card, Table, Tag, Typography, Space, Tabs, Empty, Spin, Tooltip, Progress, Collapse, message } from 'antd';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ClockCircleOutlined,
   CheckCircleOutlined,
@@ -13,6 +13,8 @@ import {
 import { getCollabRuns, getCollabRunMembers, getCollabRunTraces, getCollabRunSummary, extractList } from '../api';
 
 const { Text } = Typography;
+
+const USER_ID = 1; // MVP: single-user, matches SessionList pattern
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -296,6 +298,43 @@ const TracesPanel: React.FC<{ collabRunId: string }> = ({ collabRunId }) => {
 
 const Teams: React.FC = () => {
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const queryClient = useQueryClient();
+
+  useEffect(() => {
+    const token = localStorage.getItem('sf_token') ?? '';
+    const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
+    const url = `${proto}://${window.location.host}/ws/users/${USER_ID}?token=${encodeURIComponent(token)}`;
+    const ws = new WebSocket(url);
+
+    ws.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data);
+        const type: string = msg.type ?? '';
+        const runId: string | undefined = msg.collabRunId;
+
+        if (type === 'collab_run_status' || type === 'collab_member_spawned' || type === 'collab_member_finished') {
+          queryClient.invalidateQueries({ queryKey: ['collab-runs'] });
+          if (runId) {
+            queryClient.invalidateQueries({ queryKey: ['collab-run', runId, 'members'] });
+            queryClient.invalidateQueries({ queryKey: ['collab-run', runId, 'summary'] });
+          }
+        } else if (type === 'collab_message_routed') {
+          if (runId) {
+            queryClient.invalidateQueries({ queryKey: ['collab-run', runId, 'traces'] });
+            queryClient.invalidateQueries({ queryKey: ['collab-run', runId, 'summary'] });
+          }
+        }
+      } catch {
+        // ignore unparseable messages
+      }
+    };
+
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    ws.onerror = (_e) => { /* silent — Teams page is not chat-critical */ };
+
+    return () => { ws.close(); };
+  }, [queryClient]);
+
   const { data: runs = [], isLoading: loading, isError: runsError } = useQuery({
     queryKey: ['collab-runs'],
     queryFn: () =>

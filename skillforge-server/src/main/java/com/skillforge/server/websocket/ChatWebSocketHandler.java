@@ -3,6 +3,10 @@ package com.skillforge.server.websocket;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillforge.core.engine.ChatEventBroadcaster;
 import com.skillforge.core.model.Message;
+import com.skillforge.server.entity.CollabRunEntity;
+import com.skillforge.server.entity.SessionEntity;
+import com.skillforge.server.repository.CollabRunRepository;
+import com.skillforge.server.repository.SessionRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -36,9 +40,15 @@ public class ChatWebSocketHandler extends TextWebSocketHandler implements ChatEv
             .findAndRegisterModules()
             .disable(com.fasterxml.jackson.databind.SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
     private final UserWebSocketHandler userWebSocketHandler;
+    private final CollabRunRepository collabRunRepository;
+    private final SessionRepository sessionRepository;
 
-    public ChatWebSocketHandler(UserWebSocketHandler userWebSocketHandler) {
+    public ChatWebSocketHandler(UserWebSocketHandler userWebSocketHandler,
+                                CollabRunRepository collabRunRepository,
+                                SessionRepository sessionRepository) {
         this.userWebSocketHandler = userWebSocketHandler;
+        this.collabRunRepository = collabRunRepository;
+        this.sessionRepository = sessionRepository;
     }
 
     @Override
@@ -235,6 +245,20 @@ public class ChatWebSocketHandler extends TextWebSocketHandler implements ChatEv
 
     // ==== Multi-agent collaboration events ====
 
+    /** Look up the userId of the leader of a collab run. Returns null on any miss. */
+    private Long lookupCollabUserId(String collabRunId) {
+        try {
+            return collabRunRepository.findById(collabRunId)
+                    .map(CollabRunEntity::getLeaderSessionId)
+                    .flatMap(sessionRepository::findById)
+                    .map(SessionEntity::getUserId)
+                    .orElse(null);
+        } catch (Exception e) {
+            log.debug("lookupCollabUserId failed for collabRunId={}: {}", collabRunId, e.getMessage());
+            return null;
+        }
+    }
+
     @Override
     public void collabMemberSpawned(String collabRunId, String handle, String sessionId, String agentName) {
         Map<String, Object> payload = new LinkedHashMap<>();
@@ -243,8 +267,11 @@ public class ChatWebSocketHandler extends TextWebSocketHandler implements ChatEv
         payload.put("handle", handle);
         payload.put("sessionId", sessionId);
         payload.put("agentName", agentName);
-        // Broadcast to all sessions in the collab run — for now, broadcast to the specific sessionId
+        // Broadcast to the child session's chat channel
         broadcast(sessionId, payload);
+        // Also broadcast to the leader's user-level channel (Teams page)
+        Long userId = lookupCollabUserId(collabRunId);
+        if (userId != null) userEvent(userId, payload);
     }
 
     @Override
@@ -255,8 +282,12 @@ public class ChatWebSocketHandler extends TextWebSocketHandler implements ChatEv
         payload.put("handle", handle);
         payload.put("status", status);
         payload.put("summary", summary);
-        // Cannot broadcast to a specific session without knowing the leader, but the event is mainly for logging
-        log.debug("Collab member finished: collab={}, handle={}, status={}", collabRunId, handle, status);
+        Long userId = lookupCollabUserId(collabRunId);
+        if (userId != null) {
+            userEvent(userId, payload);
+        } else {
+            log.debug("collabMemberFinished: userId not found for collabRunId={}", collabRunId);
+        }
     }
 
     @Override
@@ -265,7 +296,12 @@ public class ChatWebSocketHandler extends TextWebSocketHandler implements ChatEv
         payload.put("type", "collab_run_status");
         payload.put("collabRunId", collabRunId);
         payload.put("status", status);
-        log.debug("Collab run status: collab={}, status={}", collabRunId, status);
+        Long userId = lookupCollabUserId(collabRunId);
+        if (userId != null) {
+            userEvent(userId, payload);
+        } else {
+            log.debug("collabRunStatus: userId not found for collabRunId={}", collabRunId);
+        }
     }
 
     @Override
@@ -276,6 +312,11 @@ public class ChatWebSocketHandler extends TextWebSocketHandler implements ChatEv
         payload.put("fromHandle", fromHandle);
         payload.put("toHandle", toHandle);
         payload.put("messageId", messageId);
-        log.debug("Collab message routed: collab={}, from={}, to={}, messageId={}", collabRunId, fromHandle, toHandle, messageId);
+        Long userId = lookupCollabUserId(collabRunId);
+        if (userId != null) {
+            userEvent(userId, payload);
+        } else {
+            log.debug("collabMessageRouted: userId not found for collabRunId={}", collabRunId);
+        }
     }
 }
