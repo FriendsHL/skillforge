@@ -91,13 +91,13 @@ const EvalDetailDrawer: React.FC<EvalDetailDrawerProps> = ({ evalRunId, open, on
   const total = scenarios.length;
   const passRate = total > 0 ? Math.round((passed / total) * 100) : 0;
   const avgScore = total > 0
-    ? Math.round(scenarios.reduce((sum: number, s: any) => sum + (s.oracleScore ?? 0), 0) / total)
+    ? Math.round(scenarios.reduce((sum: number, s: any) => sum + (s.compositeScore ?? 0), 0) / total)
     : 0;
 
   // Attribution histogram
   const attrCounts: Record<string, number> = {};
   scenarios.forEach((s: any) => {
-    const attr = s.primaryAttribution ?? 'NONE';
+    const attr = s.attribution ?? 'NONE';
     attrCounts[attr] = (attrCounts[attr] ?? 0) + 1;
   });
 
@@ -117,15 +117,15 @@ const EvalDetailDrawer: React.FC<EvalDetailDrawerProps> = ({ evalRunId, open, on
     },
     {
       title: 'Oracle Score',
-      dataIndex: 'oracleScore',
+      dataIndex: 'compositeScore',
       width: 100,
       render: (v: number) => (
-        <Text strong style={{ color: scoreColor(v ?? 0) }}>{v ?? '-'}</Text>
+        <Text strong style={{ color: scoreColor(v ?? 0) }}>{v != null ? Math.round(v) : '-'}</Text>
       ),
     },
     {
       title: 'Attribution',
-      dataIndex: 'primaryAttribution',
+      dataIndex: 'attribution',
       width: 160,
       render: (v: string) => (
         <Tag color={ATTRIBUTION_COLOR[v] ?? 'default'} style={{ fontSize: 11 }}>
@@ -262,10 +262,14 @@ const Eval: React.FC = () => {
   const [triggerAgent, setTriggerAgent] = useState<string | null>(null);
   const [triggering, setTriggering] = useState(false);
 
-  // Fetch eval runs
+  // Fetch eval runs — auto-refresh every 3s while any run is RUNNING
   const { data: runs = [], isLoading, isError } = useQuery({
     queryKey: ['eval-runs'],
     queryFn: () => getEvalRuns().then(res => extractList<any>(res)),
+    refetchInterval: (query) => {
+      const data = query.state.data as any[] | undefined;
+      return data?.some((r: any) => r.status === 'RUNNING') ? 3000 : false;
+    },
   });
 
   // Fetch agents for the trigger select
@@ -278,18 +282,6 @@ const Eval: React.FC = () => {
     () => runs.some((r: any) => r.status === 'RUNNING'),
     [runs],
   );
-
-  // Auto-refresh when runs are in progress
-  useQuery({
-    queryKey: ['eval-runs-poll'],
-    queryFn: () => getEvalRuns().then(res => {
-      const list = extractList<any>(res);
-      queryClient.setQueryData(['eval-runs'], list);
-      return list;
-    }),
-    refetchInterval: hasRunningRuns ? 3000 : false,
-    enabled: hasRunningRuns,
-  });
 
   // WebSocket for real-time updates
   useEffect(() => {
@@ -351,7 +343,7 @@ const Eval: React.FC = () => {
     },
     {
       title: 'Agent',
-      dataIndex: 'agentId',
+      dataIndex: 'agentDefinitionId',
       width: 140,
       render: (v: string) => {
         const agent = agents.find((a: any) => String(a.id) === String(v));
@@ -360,7 +352,7 @@ const Eval: React.FC = () => {
     },
     {
       title: 'Pass Rate',
-      dataIndex: 'passRate',
+      dataIndex: 'overallPassRate',
       width: 140,
       render: (v: number) => {
         const pct = typeof v === 'number' ? Math.round(v) : 0;
@@ -381,8 +373,8 @@ const Eval: React.FC = () => {
       width: 90,
       align: 'center' as const,
       render: (_: unknown, r: any) => {
-        const passed = r.passedCount ?? 0;
-        const total = r.totalCount ?? 0;
+        const passed = r.passedScenarios ?? 0;
+        const total = r.totalScenarios ?? 0;
         return <Text style={{ fontSize: 12 }}>{passed}/{total}</Text>;
       },
     },

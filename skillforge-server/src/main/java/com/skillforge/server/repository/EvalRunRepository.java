@@ -16,5 +16,7 @@ public interface EvalRunRepository extends JpaRepository<EvalRunEntity, String> 
     Optional<EvalRunEntity> findTopByAgentDefinitionIdAndStatusOrderByStartedAtDesc(
             String agentDefinitionId, String status);
 
-    List<EvalRunEntity> findByAgentDefinitionIdAndStartedAtAfter(String agentDefinitionId, Instant since);
+    // Rate limit check: only count active/successful runs, not FAILED/error ghost runs
+    List<EvalRunEntity> findByAgentDefinitionIdAndStatusInAndStartedAtAfter(
+            String agentDefinitionId, List<String> statuses, Instant since);
 }

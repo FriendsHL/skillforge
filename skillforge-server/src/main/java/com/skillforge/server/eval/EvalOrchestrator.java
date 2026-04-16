@@ -58,16 +58,14 @@ public class EvalOrchestrator {
     public void runEval(String agentDefinitionId, Long userId, String evalRunId) {
         log.info("Starting eval run: evalRunId={}, agentId={}", evalRunId, agentDefinitionId);
 
-        // 1. Goodhart rate limit: no eval in last 30 minutes for this agent
-        List<EvalRunEntity> recentRuns = evalRunRepository.findByAgentDefinitionIdAndStartedAtAfter(
-                agentDefinitionId, Instant.now().minusSeconds(30 * 60));
+        // 1. Goodhart rate limit: no active/completed eval in last 30 minutes for this agent.
+        // Only count RUNNING or COMPLETED runs — FAILED ghost runs must not extend the window indefinitely.
+        List<EvalRunEntity> recentRuns = evalRunRepository.findByAgentDefinitionIdAndStatusInAndStartedAtAfter(
+                agentDefinitionId, List.of("RUNNING", "COMPLETED"), Instant.now().minusSeconds(30 * 60));
         if (!recentRuns.isEmpty()) {
             log.warn("Eval rate limited: agent {} already ran eval within 30 minutes", agentDefinitionId);
-            EvalRunEntity run = createEvalRun(evalRunId, agentDefinitionId, userId);
-            run.setStatus("FAILED");
-            run.setErrorMessage("Rate limited: eval runs for this agent must be at least 30 minutes apart");
-            run.setCompletedAt(Instant.now());
-            evalRunRepository.save(run);
+            // Do NOT create a FAILED entity here — that would itself become a blocker on the next check.
+            // Just return without persisting.
             return;
         }
 

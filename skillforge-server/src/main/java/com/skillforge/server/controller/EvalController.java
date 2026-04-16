@@ -33,18 +33,21 @@ public class EvalController {
     private final EvalRunRepository evalRunRepository;
     private final EvalSessionRepository evalSessionRepository;
     private final ObjectMapper objectMapper;
-    private final ExecutorService evalLoopExecutor;
+    // Use evalOrchestratorExecutor (not evalLoopExecutor) to prevent nested-pool deadlock:
+    // evalLoopExecutor is used by ScenarioRunnerSkill for inner scenario runs;
+    // using it here for outer runEval tasks would cause both pools to block on each other.
+    private final ExecutorService evalOrchestratorExecutor;
 
     public EvalController(EvalOrchestrator evalOrchestrator,
                           EvalRunRepository evalRunRepository,
                           EvalSessionRepository evalSessionRepository,
                           ObjectMapper objectMapper,
-                          @Qualifier("evalLoopExecutor") ExecutorService evalLoopExecutor) {
+                          @Qualifier("evalOrchestratorExecutor") ExecutorService evalOrchestratorExecutor) {
         this.evalOrchestrator = evalOrchestrator;
         this.evalRunRepository = evalRunRepository;
         this.evalSessionRepository = evalSessionRepository;
         this.objectMapper = objectMapper;
-        this.evalLoopExecutor = evalLoopExecutor;
+        this.evalOrchestratorExecutor = evalOrchestratorExecutor;
     }
 
     @PostMapping("/runs")
@@ -57,7 +60,7 @@ public class EvalController {
                 ? ((Number) request.get("userId")).longValue() : 1L;
 
         String evalRunId = UUID.randomUUID().toString();
-        evalLoopExecutor.submit(() -> evalOrchestrator.runEval(agentId, userId, evalRunId));
+        evalOrchestratorExecutor.submit(() -> evalOrchestrator.runEval(agentId, userId, evalRunId));
 
         return ResponseEntity.accepted().body(Map.of("evalRunId", evalRunId, "status", "RUNNING"));
     }

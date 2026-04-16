@@ -21,6 +21,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ExecutionException;
@@ -158,19 +159,25 @@ public class ScenarioRunnerSkill {
             SkillRegistry sandboxRegistry = sandboxFactory.buildSandboxRegistry(evalRunId, scenario.getId());
             AgentLoopEngine engine = engineFactory.buildEvalEngine(sandboxRegistry);
 
-            // Build LoopContext
+            // Build LoopContext — set scenario's maxLoops BEFORE engine.run() overwrites it.
+            // AgentLoopEngine.run() unconditionally applies agentDef.config.max_loops if present,
+            // which would corrupt the hitLoopLimit signal and the loop budget.
+            // Fix: pass a copy of agentDef with max_loops removed so the scenario's value wins.
             String evalSessionId = "eval_" + UUID.randomUUID().toString();
             LoopContext ctx = new LoopContext();
             ctx.setMaxLoops(scenario.getMaxLoops());
             ctx.setExecutionMode("auto");
             ctx.setMaxLlmStreamTimeoutMs(20_000L);
 
+            // Strip max_loops and execution_mode from a defensive copy so they don't override eval values
+            AgentDefinition evalAgentDef = copyAgentDefWithoutEvalOverrides(agentDef);
+
             // Rewrite task to use sandbox paths
             Path sandboxRoot = sandboxFactory.getSandboxRoot(evalRunId, scenario.getId());
             String task = scenario.getTask().replace("/tmp/eval/", sandboxRoot.toString() + "/");
 
             // Run engine
-            LoopResult loopResult = engine.run(agentDef, task, null, evalSessionId, null, ctx);
+            LoopResult loopResult = engine.run(evalAgentDef, task, null, evalSessionId, null, ctx);
 
             long executionTimeMs = System.currentTimeMillis() - startMs;
 
@@ -202,5 +209,25 @@ public class ScenarioRunnerSkill {
             result.setExecutionTimeMs(System.currentTimeMillis() - startMs);
             return result;
         }
+    }
+
+    /**
+     * Returns a copy of agentDef with eval-sensitive config keys removed so they don't override
+     * eval-specific LoopContext values (max_loops, execution_mode) set by the scenario.
+     */
+    private AgentDefinition copyAgentDefWithoutEvalOverrides(AgentDefinition original) {
+        AgentDefinition copy = new AgentDefinition();
+        copy.setName(original.getName());
+        copy.setDescription(original.getDescription());
+        copy.setSystemPrompt(original.getSystemPrompt());
+        copy.setModelId(original.getModelId());
+        copy.setSkillIds(original.getSkillIds());
+        if (original.getConfig() != null) {
+            Map<String, Object> configCopy = new HashMap<>(original.getConfig());
+            configCopy.remove("max_loops");       // scenario's maxLoops must win
+            configCopy.remove("execution_mode");  // eval always runs in "auto" mode
+            copy.setConfig(configCopy);
+        }
+        return copy;
     }
 }

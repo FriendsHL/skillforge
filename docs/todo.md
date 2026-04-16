@@ -1,6 +1,6 @@
 # SkillForge 待办任务
 
-> 更新于：2026-04-15
+> 更新于：2026-04-16
 
 ---
 
@@ -8,8 +8,8 @@
 
 | # | 任务 | 来源 | 优先级 |
 |---|------|------|-------|
-| #5 | Self-Improve Pipeline：设计 Scenario 格式 + 编写初始 eval 场景集（10-20 个） | 新方向 | P2 |
-| #6 | Self-Improve Pipeline：ScenarioRunner Skill + EvalJudge Skill + collab run 模板（blocked by #5） | 新方向 | P2 |
+| #5 | Self-Improve Pipeline：按 design-self-improve-pipeline.md 实现 Scenario 格式 + 13 个初始场景 JSON 文件（7 held_out + 6 training） | 新方向 | P2 |
+| #6 | Self-Improve Pipeline：EvalExecutorConfig + AttributionEngine + SandboxSkillRegistryFactory + EvalEngineFactory + ScenarioRunnerSkill + EvalJudgeSkill + EvalOrchestrator + REST API（blocked by #5） | 新方向 | P2 |
 
 ---
 
@@ -17,6 +17,7 @@
 
 | 任务 | 完成日期 |
 |------|---------|
+| #5/#6 Self-Improve Pipeline 完整方案设计（Plan A + Plan B + 双 Reviewer + Judge 全流程）；详见 docs/design-self-improve-pipeline.md | 2026-04-16 |
 | P1-3 CollabRun WS 广播：ChatWebSocketHandler 注入 repo 查 userId，4 个 collab 事件改写为 userEvent 广播；Teams.tsx 订阅 /ws/users/1 实时 invalidate TanStack Query | 2026-04-16 |
 | P1-2 CompactionService 解锁 LLM 调用：3-phase split — Phase 1 guard/prepareCompact (stripe lock) → Phase 2 applyPrepared (LLM, no lock) → Phase 3 persist (stripe lock + tx)；fullCompactInFlight Set 防并发重入 | 2026-04-15 |
 | P1-1 动态 Context Window：ModelConfig 静态模型表 + CompactionService 3 级解析链，废弃硬编码 32000 | 2026-04-15 |
