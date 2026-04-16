@@ -1,10 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, Popconfirm, Tag, Tabs, message, Card, Drawer } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, FileTextOutlined, HistoryOutlined } from '@ant-design/icons';
+import { PlusOutlined, EditOutlined, DeleteOutlined, FileTextOutlined, HistoryOutlined, ExperimentOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getAgents, createAgent, updateAgent, deleteAgent, getTools, getSkills, getClaudeMd, saveClaudeMd, extractList } from '../api';
 import { AgentSchema, safeParseList } from '../api/schemas';
 import PromptHistoryPanel from '../components/PromptHistoryPanel';
+import ScenarioDraftPanel from '../components/ScenarioDraftPanel';
 
 const { TextArea } = Input;
 
@@ -43,6 +44,7 @@ const AgentList: React.FC = () => {
   const [claudeMdModalOpen, setClaudeMdModalOpen] = useState(false);
   const [claudeMdDraft, setClaudeMdDraft] = useState<string | null>(null);
   const [promptHistoryAgentId, setPromptHistoryAgentId] = useState<string | null>(null);
+  const [scenariosAgentId, setScenariosAgentId] = useState<string | null>(null);
 
   const { data: agents = [], isLoading: loading, isError: agentsError } = useQuery({
     queryKey: ['agents'],
@@ -228,6 +230,13 @@ const AgentList: React.FC = () => {
           >
             Prompts
           </Button>
+          <Button
+            icon={<ExperimentOutlined />}
+            size="small"
+            onClick={() => setScenariosAgentId(String(record.id))}
+          >
+            Scenarios
+          </Button>
           <Popconfirm title="Delete this agent?" onConfirm={() => handleDelete(record.id)}>
             <Button icon={<DeleteOutlined />} size="small" danger>
               Delete
@@ -402,6 +411,23 @@ const AgentList: React.FC = () => {
       >
         {promptHistoryAgentId && (
           <PromptHistoryPanel agentId={promptHistoryAgentId} />
+        )}
+      </Drawer>
+
+      <Drawer
+        title={
+          <Space>
+            <ExperimentOutlined />
+            <span>Scenario Drafts — Agent #{scenariosAgentId}</span>
+          </Space>
+        }
+        width={680}
+        open={!!scenariosAgentId}
+        onClose={() => setScenariosAgentId(null)}
+        destroyOnClose
+      >
+        {scenariosAgentId && (
+          <ScenarioDraftPanel agentId={scenariosAgentId} />
         )}
       </Drawer>
     </div>

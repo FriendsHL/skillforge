@@ -130,6 +130,37 @@ export const getDailyUsage = (days = 30) => api.get(`/dashboard/usage/daily?days
 export const getUsageByModel = () => api.get('/dashboard/usage/by-model');
 export const getUsageByAgent = () => api.get('/dashboard/usage/by-agent');
 
+// ─── Scenario Drafts ─────────────────────────────────────────────────────────
+
+export interface EvalScenarioDraft {
+  id: string;
+  agentId: string;
+  name: string;
+  description?: string;
+  category: string;
+  split: string;
+  task: string;
+  oracleType: string;
+  oracleExpected?: string;
+  status: 'draft' | 'active' | 'discarded';
+  extractionRationale?: string;
+  createdAt: string;
+  reviewedAt?: string;
+}
+
+export const getScenarioDrafts = (agentId: string | number) =>
+  api.get<EvalScenarioDraft[]>(`/agents/${agentId}/scenario-drafts`).then(r => r.data);
+
+export const triggerScenarioExtraction = (agentId: string | number) =>
+  api.post(`/agents/${agentId}/scenario-drafts`).then(r => r.data);
+
+export const reviewScenarioDraft = (
+  id: string,
+  action: 'approve' | 'discard',
+  edits?: { name?: string; task?: string; oracleExpected?: string },
+) =>
+  api.patch<EvalScenarioDraft>(`/agents/scenario-drafts/${id}`, { action, ...edits }).then(r => r.data);
+
 // ─── Eval Pipeline ────────────────────────────────────────────────────────────
 export const getEvalRuns = () => api.get('/eval/runs');
 export const getEvalRun = (id: string) => api.get(`/eval/runs/${id}`);
