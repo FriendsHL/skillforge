@@ -61,6 +61,14 @@ skillforge:
         # max-retries: 1              # retries on SocketTimeoutException only,
         #                             # does NOT apply to streaming (chatStream)
 
+  # Embedding provider for memory vector search (disabled by default for dev)
+  embedding:
+    enabled: false
+    api-key: ${EMBEDDING_API_KEY:}
+    base-url: https://api.openai.com
+    model: text-embedding-3-small
+    dimension: 1536
+
 clawhub:
   enabled: true
   base-url: https://clawhub.ai

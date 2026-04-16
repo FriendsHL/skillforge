@@ -8,8 +8,10 @@ import com.skillforge.core.engine.CancellationRegistry;
 import com.skillforge.core.engine.ChatEventBroadcaster;
 import com.skillforge.core.engine.PendingAskRegistry;
 import com.skillforge.core.engine.SafetySkillHook;
+import com.skillforge.core.llm.EmbeddingProvider;
 import com.skillforge.core.llm.LlmProviderFactory;
 import com.skillforge.core.llm.ModelConfig;
+import com.skillforge.core.llm.OpenAiEmbeddingProvider;
 import com.skillforge.core.skill.SkillPackageLoader;
 import com.skillforge.core.skill.SkillRegistry;
 import com.skillforge.skills.BashSkill;
@@ -23,6 +25,8 @@ import com.skillforge.skills.WebSearchSkill;
 import com.skillforge.server.skill.TodoStore;
 import com.skillforge.server.skill.TodoWriteSkill;
 import com.skillforge.server.clawhub.ClawHubProperties;
+import com.skillforge.server.skill.MemoryDetailSkill;
+import com.skillforge.server.skill.MemorySearchSkill;
 import com.skillforge.server.skill.MemorySkill;
 import com.skillforge.server.skill.SubAgentSkill;
 import com.skillforge.server.skill.TeamCreateSkill;
@@ -31,6 +35,7 @@ import com.skillforge.server.skill.TeamListSkill;
 import com.skillforge.server.skill.TeamSendSkill;
 import com.skillforge.server.service.AgentService;
 import com.skillforge.server.service.ChatService;
+import com.skillforge.server.service.EmbeddingService;
 import com.skillforge.server.service.MemoryService;
 import com.skillforge.server.service.SessionService;
 import com.skillforge.server.service.UserConfigService;
@@ -41,6 +46,9 @@ import org.springframework.context.annotation.Lazy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -58,7 +66,29 @@ public class SkillForgeConfig {
     private static final Logger log = LoggerFactory.getLogger(SkillForgeConfig.class);
 
     @Bean
-    public SkillRegistry skillRegistry(MemoryService memoryService) {
+    @ConditionalOnProperty(name = "skillforge.embedding.enabled", havingValue = "true")
+    public EmbeddingProvider embeddingProvider(
+            @Value("${skillforge.embedding.api-key}") String apiKey,
+            @Value("${skillforge.embedding.base-url:https://api.openai.com}") String baseUrl,
+            @Value("${skillforge.embedding.model:text-embedding-3-small}") String model,
+            @Value("${skillforge.embedding.dimension:1536}") int dimension) {
+        if (dimension != 1536) {
+            log.warn("Configured embedding dimension {} does not match schema column vector(1536). "
+                    + "Vector search will fail at runtime unless migration is updated.", dimension);
+        }
+        return new OpenAiEmbeddingProvider(apiKey, baseUrl, model, dimension);
+    }
+
+    // When embedding provider is not configured, inject a no-op that throws on use.
+    // EmbeddingService catches EmbeddingNotSupportedException and degrades to FTS-only.
+    @Bean
+    @ConditionalOnMissingBean(EmbeddingProvider.class)
+    public EmbeddingProvider noOpEmbeddingProvider() {
+        return text -> { throw new com.skillforge.core.llm.EmbeddingNotSupportedException("no-op"); };
+    }
+
+    @Bean
+    public SkillRegistry skillRegistry(MemoryService memoryService, EmbeddingService embeddingService) {
         SkillRegistry registry = new SkillRegistry();
         registry.register(new BashSkill());
         registry.register(new FileReadSkill());
@@ -67,6 +97,8 @@ public class SkillForgeConfig {
         registry.register(new GlobSkill());
         registry.register(new GrepSkill());
         registry.register(new MemorySkill(memoryService));
+        registry.register(new MemorySearchSkill(memoryService, embeddingService));
+        registry.register(new MemoryDetailSkill(memoryService));
         registry.register(new WebFetchSkill());
         registry.register(new WebSearchSkill());
         return registry;

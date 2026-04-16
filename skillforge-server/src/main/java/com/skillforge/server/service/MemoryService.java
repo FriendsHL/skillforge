@@ -1,9 +1,15 @@
 package com.skillforge.server.service;
 
+import com.skillforge.server.dto.MemorySearchResult;
 import com.skillforge.server.entity.MemoryEntity;
 import com.skillforge.server.repository.MemoryRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import com.skillforge.server.util.VectorUtils;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -14,15 +20,20 @@ import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 @Service
 public class MemoryService {
 
-    private final MemoryRepository memoryRepository;
+    private static final Logger log = LoggerFactory.getLogger(MemoryService.class);
 
-    public MemoryService(MemoryRepository memoryRepository) {
+    private final MemoryRepository memoryRepository;
+    private final MemoryEmbeddingWorker embeddingWorker;
+
+    public MemoryService(MemoryRepository memoryRepository, MemoryEmbeddingWorker embeddingWorker) {
         this.memoryRepository = memoryRepository;
+        this.embeddingWorker = embeddingWorker;
     }
 
     public List<MemoryEntity> listMemories(Long userId, String type) {
@@ -36,10 +47,14 @@ public class MemoryService {
         return memoryRepository.findByUserIdAndContentContaining(userId, keyword);
     }
 
+    @Transactional
     public MemoryEntity createMemory(MemoryEntity memory) {
-        return memoryRepository.save(memory);
+        MemoryEntity saved = memoryRepository.save(memory);
+        scheduleEmbeddingAfterCommit(saved);
+        return saved;
     }
 
+    @Transactional
     public MemoryEntity updateMemory(Long id, MemoryEntity memory) {
         MemoryEntity existing = memoryRepository.findById(id)
                 .orElseThrow(() -> new RuntimeException("Memory not found: " + id));
@@ -47,20 +62,81 @@ public class MemoryService {
         existing.setTitle(memory.getTitle());
         existing.setContent(memory.getContent());
         existing.setTags(memory.getTags());
-        return memoryRepository.save(existing);
+        MemoryEntity saved = memoryRepository.save(existing);
+        scheduleEmbeddingAfterCommit(saved);
+        return saved;
+    }
+
+    public Optional<MemoryEntity> findById(Long id) {
+        return memoryRepository.findById(id);
+    }
+
+    /**
+     * Full-text search via tsvector.
+     */
+    public List<MemorySearchResult> searchByFts(Long userId, String query, int limit) {
+        return memoryRepository.findByFts(userId, query, limit).stream()
+                .map(this::toSearchResult)
+                .toList();
+    }
+
+    /**
+     * Vector similarity search via pgvector cosine distance.
+     */
+    public List<MemorySearchResult> searchByVector(Long userId, float[] vec, int limit) {
+        String embedding = VectorUtils.toVectorString(vec);
+        return memoryRepository.findByVector(userId, embedding, limit).stream()
+                .map(this::toSearchResult)
+                .toList();
+    }
+
+    private MemorySearchResult toSearchResult(Object[] row) {
+        long id = ((Number) row[0]).longValue();
+        String type = (String) row[1];
+        String title = (String) row[2];
+        String content = (String) row[3];
+        // row[4] = tags, row[5] = recall_count, row[6] = rank/distance
+        double score = row[6] != null ? ((Number) row[6]).doubleValue() : 0.0;
+        return new MemorySearchResult(id, type, title, content, score);
+    }
+
+    private String buildEmbedText(MemoryEntity m) {
+        StringBuilder sb = new StringBuilder();
+        if (m.getTitle() != null) sb.append(m.getTitle()).append("\n");
+        if (m.getContent() != null) sb.append(m.getContent());
+        if (m.getTags() != null) sb.append("\nTags: ").append(m.getTags());
+        return sb.toString();
+    }
+
+    /**
+     * Schedule async embedding generation to fire only after the current transaction commits.
+     * This avoids a race condition where the async thread tries to UPDATE a row
+     * that hasn't been committed yet.
+     */
+    private void scheduleEmbeddingAfterCommit(MemoryEntity saved) {
+        String text = buildEmbedText(saved);
+        Long memoryId = saved.getId();
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                embeddingWorker.triggerEmbeddingAsync(memoryId, text);
+            }
+        });
     }
 
     public void deleteMemory(Long id) {
         memoryRepository.deleteById(id);
     }
 
+    @Transactional
     public void createMemoryIfNotDuplicate(Long userId, String type, String title, String content, String tags) {
         List<MemoryEntity> existing = memoryRepository.findByUserIdAndTitle(userId, title);
         if (!existing.isEmpty()) {
             MemoryEntity e = existing.get(0);
             e.setContent(content);
             e.setTags(tags);
-            memoryRepository.save(e);
+            MemoryEntity saved = memoryRepository.save(e);
+            scheduleEmbeddingAfterCommit(saved);
             return;
         }
         MemoryEntity entity = new MemoryEntity();
@@ -69,7 +145,8 @@ public class MemoryService {
         entity.setTitle(title);
         entity.setContent(content);
         entity.setTags(tags);
-        memoryRepository.save(entity);
+        MemoryEntity saved = memoryRepository.save(entity);
+        scheduleEmbeddingAfterCommit(saved);
     }
 
     public List<MemoryEntity> searchWithRanking(Long userId, String query) {
