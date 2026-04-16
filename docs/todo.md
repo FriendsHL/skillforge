@@ -8,8 +8,7 @@
 
 | # | 任务 | 来源 | 优先级 |
 |---|------|------|-------|
-| #5 | Self-Improve Pipeline：按 design-self-improve-pipeline.md 实现 Scenario 格式 + 13 个初始场景 JSON 文件（7 held_out + 6 training） | 新方向 | P2 |
-| #6 | Self-Improve Pipeline：EvalExecutorConfig + AttributionEngine + SandboxSkillRegistryFactory + EvalEngineFactory + ScenarioRunnerSkill + EvalJudgeSkill + EvalOrchestrator + REST API（blocked by #5） | 新方向 | P2 |
+| #5/#6 Phase 2 — PromptImprover + PromptVersionEntity + A/B 测试（delta ≥ 15%）+ 自动晋升 + 真实 session → eval 场景转换 | 新方向 | P3 |
 
 ---
 
@@ -17,6 +16,7 @@
 
 | 任务 | 完成日期 |
 |------|---------|
+| #5/#6 Self-Improve Pipeline Phase 1 实现：13 个场景 JSON（7 seed_ + 6 train_）；EvalExecutorConfig + evalOrchestratorExecutor（双独立线程池防死锁）；AttributionEngine（7×5 矩阵）；EvalRunEntity + EvalSessionEntity + V3 Flyway；SandboxSkillRegistryFactory + EvalEngineFactory（无 compactorCallback/pendingAskRegistry）；ScenarioRunnerSkill（3级重试 90s 预算）；EvalJudgeSkill（2×Haiku + Sonnet meta）；EvalOrchestrator（Goodhart 防护 + Δ 监控）；REST API POST/GET /api/eval/runs；/eval 前端页面（实时 WS + 详情 Drawer）；Full Pipeline 评审修复：executor 死锁、rate limit ghost run、maxLoops 覆盖、5 个字段名错误 | 2026-04-16 |
 | #5/#6 Self-Improve Pipeline 完整方案设计（Plan A + Plan B + 双 Reviewer + Judge 全流程）；详见 docs/design-self-improve-pipeline.md | 2026-04-16 |
 | P1-3 CollabRun WS 广播：ChatWebSocketHandler 注入 repo 查 userId，4 个 collab 事件改写为 userEvent 广播；Teams.tsx 订阅 /ws/users/1 实时 invalidate TanStack Query | 2026-04-16 |
 | P1-2 CompactionService 解锁 LLM 调用：3-phase split — Phase 1 guard/prepareCompact (stripe lock) → Phase 2 applyPrepared (LLM, no lock) → Phase 3 persist (stripe lock + tx)；fullCompactInFlight Set 防并发重入 | 2026-04-15 |
