@@ -1,0 +1,21 @@
+{
+  "id": "sc-bs-05",
+  "name": "Structured output format",
+  "description": "Agent produces output in a required structure",
+  "category": "basic",
+  "split": "training",
+  "task": "Read /tmp/eval/person.txt which contains name and age on separate lines. Format the output as: 'Name: [name], Age: [age]'",
+  "setup": {
+    "files": {
+      "person.txt": "Alice\n30\n"
+    }
+  },
+  "oracle": {
+    "type": "contains",
+    "expectedList": ["Name: Alice", "Age: 30"]
+  },
+  "performanceThresholdMs": 15000,
+  "toolsHint": ["FileRead"],
+  "maxLoops": 8,
+  "tags": ["basic", "format"]
+}

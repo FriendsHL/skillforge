@@ -1,0 +1,23 @@
+{
+  "id": "sc-bs-03",
+  "name": "List directory files",
+  "description": "Agent lists files in a directory",
+  "category": "basic",
+  "split": "held_out",
+  "task": "List all files in the /tmp/eval/data/ directory. Use Glob or similar tool.",
+  "setup": {
+    "files": {
+      "data/file_a.txt": "content a",
+      "data/file_b.txt": "content b",
+      "data/file_c.txt": "content c"
+    }
+  },
+  "oracle": {
+    "type": "contains",
+    "expectedList": ["file_a.txt", "file_b.txt", "file_c.txt"]
+  },
+  "performanceThresholdMs": 15000,
+  "toolsHint": ["Glob"],
+  "maxLoops": 8,
+  "tags": ["file-io", "basic"]
+}

@@ -1,0 +1,21 @@
+{
+  "id": "sc-tc-01",
+  "name": "Read process write pipeline",
+  "description": "Agent reads a file, converts content to uppercase, writes to new file",
+  "category": "tool-chain",
+  "split": "held_out",
+  "task": "Read the file /tmp/eval/input.txt, convert its content to uppercase, and write the result to /tmp/eval/output.txt. Then confirm what you wrote.",
+  "setup": {
+    "files": {
+      "input.txt": "hello world\n"
+    }
+  },
+  "oracle": {
+    "type": "regex",
+    "expected": "(?i)HELLO WORLD|wrote|written|output\\.txt"
+  },
+  "performanceThresholdMs": 20000,
+  "toolsHint": ["FileRead", "FileWrite"],
+  "maxLoops": 10,
+  "tags": ["file-io", "tool-chain"]
+}

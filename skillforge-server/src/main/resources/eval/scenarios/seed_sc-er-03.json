@@ -1,0 +1,21 @@
+{
+  "id": "sc-er-03",
+  "name": "Detect and report missing dependency",
+  "description": "Agent detects a broken reference and reports it clearly",
+  "category": "error-recovery",
+  "split": "held_out",
+  "task": "Read /tmp/eval/config.txt which references another file. Check if that referenced file exists. If it doesn't exist, report the missing file path clearly.",
+  "setup": {
+    "files": {
+      "config.txt": "depends_on=/tmp/eval/missing_dep.txt\n"
+    }
+  },
+  "oracle": {
+    "type": "contains",
+    "expectedList": ["missing_dep.txt"]
+  },
+  "performanceThresholdMs": 20000,
+  "toolsHint": ["FileRead"],
+  "maxLoops": 10,
+  "tags": ["error-recovery", "dependency"]
+}

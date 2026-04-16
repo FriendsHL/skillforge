@@ -1,0 +1,22 @@
+{
+  "id": "sc-tc-02",
+  "name": "Conditional file processing",
+  "description": "Agent applies different processing based on file content",
+  "category": "tool-chain",
+  "split": "training",
+  "task": "Read /tmp/eval/mode.txt to get the mode ('upper' or 'lower'). Then read /tmp/eval/text.txt and convert its content according to the mode. Report the converted text.",
+  "setup": {
+    "files": {
+      "mode.txt": "upper",
+      "text.txt": "hello world"
+    }
+  },
+  "oracle": {
+    "type": "contains",
+    "expectedList": ["HELLO WORLD"]
+  },
+  "performanceThresholdMs": 20000,
+  "toolsHint": ["FileRead"],
+  "maxLoops": 10,
+  "tags": ["tool-chain", "conditional"]
+}

@@ -1,0 +1,22 @@
+{
+  "id": "sc-tc-05",
+  "name": "Tool fallback chain",
+  "description": "Agent uses Grep when direct read fails, reporting results",
+  "category": "tool-chain",
+  "split": "training",
+  "task": "Find all lines containing 'TODO' in the /tmp/eval/source/ directory. List each TODO item found.",
+  "setup": {
+    "files": {
+      "source/main.txt": "# Main module\n# TODO: implement feature A\n# Regular comment\n# TODO: fix bug B\n",
+      "source/utils.txt": "# Utils\n# Helper functions\n# TODO: add unit tests\n"
+    }
+  },
+  "oracle": {
+    "type": "contains",
+    "expectedList": ["implement feature A", "fix bug B", "add unit tests"]
+  },
+  "performanceThresholdMs": 20000,
+  "toolsHint": ["Grep"],
+  "maxLoops": 10,
+  "tags": ["tool-chain", "grep", "fallback"]
+}

@@ -1,0 +1,23 @@
+{
+  "id": "sc-cm-01",
+  "name": "Task completion after context pressure",
+  "description": "Agent completes a simple task after reading multiple files",
+  "category": "compaction",
+  "split": "held_out",
+  "task": "Read all files in /tmp/eval/docs/ directory one by one, then summarize how many files you read and list their names.",
+  "setup": {
+    "files": {
+      "docs/doc1.txt": "Document 1 content",
+      "docs/doc2.txt": "Document 2 content",
+      "docs/doc3.txt": "Document 3 content"
+    }
+  },
+  "oracle": {
+    "type": "contains",
+    "expectedList": ["3", "doc1", "doc2", "doc3"]
+  },
+  "performanceThresholdMs": 30000,
+  "toolsHint": ["Glob", "FileRead"],
+  "maxLoops": 15,
+  "tags": ["compaction", "multi-file"]
+}

@@ -1,0 +1,21 @@
+{
+  "id": "sc-bs-02",
+  "name": "Instruction following and output format",
+  "description": "Agent follows precise formatting instructions",
+  "category": "basic",
+  "split": "training",
+  "task": "Read /tmp/eval/numbers.txt which contains numbers one per line. Sum them up and respond with ONLY the number, no other text.",
+  "setup": {
+    "files": {
+      "numbers.txt": "10\n20\n30\n"
+    }
+  },
+  "oracle": {
+    "type": "llm_judge",
+    "expected": "The agent should output only the number 60, with no additional text, explanation or formatting."
+  },
+  "performanceThresholdMs": 15000,
+  "toolsHint": ["FileRead"],
+  "maxLoops": 8,
+  "tags": ["basic", "output-format"]
+}

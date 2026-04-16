@@ -55,6 +55,9 @@ public class LoopContext {
     /** Consecutive compact failures for circuit breaker. */
     private int consecutiveCompactFailures = 0;
 
+    /** For eval mode: override ClaudeProvider's default 300s stream timeout. -1 = use default. */
+    private long maxLlmStreamTimeoutMs = -1;
+
     /** Thread-safe queue for user messages sent while the loop is running. */
     private final ConcurrentLinkedQueue<String> pendingUserMessages = new ConcurrentLinkedQueue<>();
 
@@ -332,5 +335,13 @@ public class LoopContext {
 
     public int getConsecutiveCompactFailures() {
         return consecutiveCompactFailures;
+    }
+
+    public long getMaxLlmStreamTimeoutMs() {
+        return maxLlmStreamTimeoutMs;
+    }
+
+    public void setMaxLlmStreamTimeoutMs(long maxLlmStreamTimeoutMs) {
+        this.maxLlmStreamTimeoutMs = maxLlmStreamTimeoutMs;
     }
 }

@@ -1,0 +1,21 @@
+{
+  "id": "sc-er-02",
+  "name": "Error retry and report",
+  "description": "Agent retries on error and reports the failure reason",
+  "category": "error-recovery",
+  "split": "training",
+  "task": "Try to read /tmp/eval/data1.txt first. If it fails, try /tmp/eval/data2.txt. Report which file you successfully read and its content.",
+  "setup": {
+    "files": {
+      "data2.txt": "second attempt succeeded\n"
+    }
+  },
+  "oracle": {
+    "type": "contains",
+    "expectedList": ["data2.txt", "second attempt succeeded"]
+  },
+  "performanceThresholdMs": 20000,
+  "toolsHint": ["FileRead"],
+  "maxLoops": 10,
+  "tags": ["error-recovery", "retry"]
+}

@@ -1,0 +1,21 @@
+{
+  "id": "sc-er-01",
+  "name": "File not found fallback",
+  "description": "Agent falls back to alternative path when primary file missing",
+  "category": "error-recovery",
+  "split": "held_out",
+  "task": "Try to read /tmp/eval/primary.txt. If it doesn't exist, read /tmp/eval/backup.txt instead and return its content.",
+  "setup": {
+    "files": {
+      "backup.txt": "fallback content\n"
+    }
+  },
+  "oracle": {
+    "type": "contains",
+    "expectedList": ["fallback content"]
+  },
+  "performanceThresholdMs": 20000,
+  "toolsHint": ["FileRead"],
+  "maxLoops": 10,
+  "tags": ["error-recovery", "fallback"]
+}

@@ -29,6 +29,10 @@ public class CollabRunEntity {
 
     private int maxTotalAgents = 20;
 
+    /** "user" for normal collab runs, "eval" for eval pipeline runs. */
+    @Column(length = 16)
+    private String runType = "user";
+
     private Instant createdAt;
 
     private Instant completedAt;
@@ -90,5 +94,13 @@ public class CollabRunEntity {
 
     public void setCompletedAt(Instant completedAt) {
         this.completedAt = completedAt;
+    }
+
+    public String getRunType() {
+        return runType;
+    }
+
+    public void setRunType(String runType) {
+        this.runType = runType;
     }
 }

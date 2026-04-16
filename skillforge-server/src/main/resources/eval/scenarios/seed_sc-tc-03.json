@@ -1,0 +1,21 @@
+{
+  "id": "sc-tc-03",
+  "name": "Grep and count pattern",
+  "description": "Agent greps for a pattern and reports count",
+  "category": "tool-chain",
+  "split": "held_out",
+  "task": "Search for lines containing the word 'error' in /tmp/eval/logs.txt and report how many lines contain it.",
+  "setup": {
+    "files": {
+      "logs.txt": "INFO: system started\nERROR: connection failed\nINFO: retrying\nERROR: timeout occurred\nINFO: recovered\n"
+    }
+  },
+  "oracle": {
+    "type": "contains",
+    "expectedList": ["2"]
+  },
+  "performanceThresholdMs": 15000,
+  "toolsHint": ["Grep"],
+  "maxLoops": 8,
+  "tags": ["grep", "tool-chain"]
+}

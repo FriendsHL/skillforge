@@ -1,0 +1,21 @@
+{
+  "id": "sc-bs-04",
+  "name": "Read numbers and calculate average",
+  "description": "Agent reads numbers from file and calculates exact average",
+  "category": "basic",
+  "split": "training",
+  "task": "Read /tmp/eval/values.txt. It contains exactly 4 numbers, one per line. Calculate their average and reply with only the number (integer, no decimals).",
+  "setup": {
+    "files": {
+      "values.txt": "10\n20\n30\n40\n"
+    }
+  },
+  "oracle": {
+    "type": "exact_match",
+    "expected": "25"
+  },
+  "performanceThresholdMs": 15000,
+  "toolsHint": ["FileRead"],
+  "maxLoops": 8,
+  "tags": ["basic", "math"]
+}

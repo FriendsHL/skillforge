@@ -1,0 +1,21 @@
+{
+  "id": "sc-bs-01",
+  "name": "Simple file read",
+  "description": "Agent reads a file and returns its first line",
+  "category": "basic",
+  "split": "held_out",
+  "task": "Read file /tmp/eval/input.txt and return its first line. Reply with only the first line, nothing else.",
+  "setup": {
+    "files": {
+      "input.txt": "hello world\nline two\nline three\n"
+    }
+  },
+  "oracle": {
+    "type": "exact_match",
+    "expected": "hello world"
+  },
+  "performanceThresholdMs": 15000,
+  "toolsHint": ["FileRead"],
+  "maxLoops": 8,
+  "tags": ["file-io", "basic"]
+}
