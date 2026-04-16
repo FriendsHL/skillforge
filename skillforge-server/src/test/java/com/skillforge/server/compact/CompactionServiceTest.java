@@ -116,7 +116,8 @@ class CompactionServiceTest {
 
         service = new CompactionService(sessionRepository, eventRepository, sessionService,
                 new LightCompactStrategy(), new FullCompactStrategy(),
-                llmProviderFactory, llmProperties, broadcaster);
+                llmProviderFactory, llmProperties, broadcaster,
+                null /* transactionManager — null OK in unit tests, runInTransaction runs directly */);
         service.setAgentRepository(agentRepository);
     }
 
@@ -485,6 +486,55 @@ class CompactionServiceTest {
         int result = (int) m.invoke(service, session);
 
         assertThat(result).isEqualTo(ModelConfig.DEFAULT_CONTEXT_WINDOW_TOKENS);
+    }
+
+    /**
+     * P1-2: if a full compact is already in-flight for a session (Phase 2 LLM call in progress),
+     * a concurrent second full compact request must be deduped and return null (no-op).
+     */
+    @Test
+    void fullCompact_inFlight_deduplication() throws Exception {
+        seedSession("sIF", 30, 0, "idle");
+        seedMessages("sIF");
+
+        // A slow LLM provider: blocks Phase 2 until we release the latch.
+        CountDownLatch llmStarted = new CountDownLatch(1);
+        CountDownLatch llmRelease = new CountDownLatch(1);
+        LlmProvider slowProvider = new LlmProvider() {
+            @Override public String getName() { return "slow"; }
+            @Override public LlmResponse chat(LlmRequest request) {
+                llmStarted.countDown();
+                try { llmRelease.await(5, TimeUnit.SECONDS); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+                LlmResponse r = new LlmResponse();
+                r.setContent("SLOW SUMMARY");
+                return r;
+            }
+            @Override public void chatStream(LlmRequest request, LlmStreamHandler handler) {}
+        };
+        when(llmProviderFactory.getProvider("mock")).thenReturn(slowProvider);
+
+        // Thread 1: first full compact — will block in Phase 2
+        AtomicBoolean t1Done = new AtomicBoolean(false);
+        AtomicBoolean t1NonNull = new AtomicBoolean(false);
+        Thread t1 = new Thread(() -> {
+            CompactionEventEntity e = service.compact("sIF", "full", "engine-hard", "first");
+            t1NonNull.set(e != null);
+            t1Done.set(true);
+        }, "full-compact-t1");
+        t1.start();
+
+        // Wait for Phase 2 to start (LLM call in progress, stripe lock released)
+        assertThat(llmStarted.await(3, TimeUnit.SECONDS)).isTrue();
+
+        // Thread 2: second full compact while t1 is in Phase 2 — must be deduped
+        CompactionEventEntity e2 = service.compact("sIF", "full", "engine-hard", "second");
+        assertThat(e2).isNull(); // deduped
+
+        // Let t1 finish
+        llmRelease.countDown();
+        t1.join(5000);
+        assertThat(t1Done.get()).isTrue();
+        assertThat(t1NonNull.get()).isTrue(); // t1 should have succeeded
     }
 
     /**

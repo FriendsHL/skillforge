@@ -21,12 +21,16 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 上下文压缩服务。实现 {@link ContextCompactorCallback} 供 core 层 AgentLoopEngine 调用,
@@ -45,8 +49,15 @@ import java.util.Map;
  * ChatService.chatAsync 也通过 {@link #lockFor(String)} 取到同一个锁, 保证 C1 vs running
  * 的 TOCTOU 竞争被消除.
  *
- * <p>事务: compact / 回调两个主入口都加了 {@code @Transactional}, 保证 messagesJson 更新 +
- * session 计数器 + event 入表要么都成功要么都回滚. 广播在事务外部执行 (best-effort).
+ * <p>Full compact 三阶段设计（P1-2）:
+ * <ul>
+ *   <li>Phase 1 (under stripe lock): 守卫检查 + prepareCompact (纯 Java, 无 LLM)</li>
+ *   <li>Phase 2 (stripe lock 已释放): applyPrepared — 阻塞 LLM 调用, 不持锁</li>
+ *   <li>Phase 3 (under stripe lock + transaction): 持久化结果</li>
+ * </ul>
+ * 通过 {@link #fullCompactInFlight} Set 防止同一 session 同时有两个 full compact 并发进行.
+ *
+ * <p>事务: light 路径通过 {@link TransactionTemplate} 包裹 DB 操作; full 路径 Phase 3 同样.
  */
 @Service
 public class CompactionService implements ContextCompactorCallback {
@@ -68,6 +79,13 @@ public class CompactionService implements ContextCompactorCallback {
 
     private final Object[] sessionLocks;
 
+    /** Sessions currently executing Phase 2 (LLM call) of full compact. */
+    private final Set<String> fullCompactInFlight =
+            Collections.newSetFromMap(new ConcurrentHashMap<>());
+
+    /** Null-safe transaction template; null when no PlatformTransactionManager is provided (tests). */
+    private final TransactionTemplate transactionTemplate;
+
     public CompactionService(SessionRepository sessionRepository,
                              CompactionEventRepository eventRepository,
                              SessionService sessionService,
@@ -75,7 +93,8 @@ public class CompactionService implements ContextCompactorCallback {
                              FullCompactStrategy fullStrategy,
                              LlmProviderFactory llmProviderFactory,
                              LlmProperties llmProperties,
-                             ChatEventBroadcaster broadcaster) {
+                             ChatEventBroadcaster broadcaster,
+                             PlatformTransactionManager transactionManager) {
         this.sessionRepository = sessionRepository;
         this.eventRepository = eventRepository;
         this.sessionService = sessionService;
@@ -84,6 +103,8 @@ public class CompactionService implements ContextCompactorCallback {
         this.llmProviderFactory = llmProviderFactory;
         this.llmProperties = llmProperties;
         this.broadcaster = broadcaster;
+        this.transactionTemplate = (transactionManager != null)
+                ? new TransactionTemplate(transactionManager) : null;
         this.sessionLocks = new Object[LOCK_STRIPES];
         for (int i = 0; i < LOCK_STRIPES; i++) {
             this.sessionLocks[i] = new Object();
@@ -109,64 +130,13 @@ public class CompactionService implements ContextCompactorCallback {
     /**
      * 用户或脚本主动触发一次压缩。
      * <p>会校验 runtimeStatus — running 时 user-manual 拒绝 (409 由 controller 映射).
-     * <p>上调用方必须在 {@link #lockFor(String)} 锁内 — 这样才能和 ChatService.chatAsync
-     * 的 runtimeStatus 检查互斥.
      */
-    @Transactional
     public CompactionEventEntity compact(String sessionId, String level, String source, String reason) {
-        synchronized (lockFor(sessionId)) {
-            SessionEntity session = sessionRepository.findById(sessionId)
-                    .orElseThrow(() -> new RuntimeException("Session not found: " + sessionId));
-
-            // user-manual 不允许在 running 时触发
-            if ("user-manual".equals(source) && "running".equals(session.getRuntimeStatus())) {
-                throw new IllegalStateException("Cannot compact while session is running");
-            }
-
-            // idempotency guard (user-manual 和 A1 light bypass)
-            boolean bypassGuard = isBypassGuard(source, level);
-            if (!bypassGuard) {
-                int gap = session.getMessageCount() - session.getLastCompactedAtMessageCount();
-                if (gap < IDEMPOTENCY_MIN_GAP_MESSAGES) {
-                    log.info("compact skipped by idempotency guard: sessionId={} gap={}", sessionId, gap);
-                    return null;
-                }
-            }
-
-            List<Message> messages = sessionService.getSessionMessages(sessionId);
-            int contextWindow = resolveContextWindowForSession(session);
-            CompactResult result = runStrategy(level, messages, contextWindow);
-
-            // #12: 真正的 no-op 不入表
-            if (result == null || isTrulyNoOp(result)) {
-                log.info("compact no-op (not persisted): sessionId={} level={} source={}",
-                        sessionId, level, source);
-                return null;
-            }
-
-            // 持久化新的 messages
-            sessionService.saveSessionMessages(sessionId, result.getMessages());
-            SessionEntity fresh = sessionRepository.findById(sessionId).orElseThrow();
-            fresh.setMessageCount(result.getMessages().size());
-            fresh.setLastCompactedAt(Instant.now());
-            fresh.setLastCompactedAtMessageCount(result.getMessages().size());
-            fresh.setTotalTokensReclaimed(fresh.getTotalTokensReclaimed() + result.getTokensReclaimed());
-            if ("light".equalsIgnoreCase(level)) {
-                fresh.setLightCompactCount(fresh.getLightCompactCount() + 1);
-            } else {
-                fresh.setFullCompactCount(fresh.getFullCompactCount() + 1);
-            }
-            sessionRepository.save(fresh);
-
-            CompactionEventEntity evt = buildEvent(sessionId, level, source, reason, result);
-            CompactionEventEntity saved = eventRepository.save(evt);
-
-            // 广播在事务提交后也 OK, 这里先调用 (best-effort)
-            broadcastUpdated(fresh);
-            log.info("compact done: sessionId={} level={} source={} reclaimed={} tokens",
-                    sessionId, level, source, result.getTokensReclaimed());
-            return saved;
+        if ("full".equalsIgnoreCase(level)) {
+            FullCompactOutcome outcome = compactFullThreePhase(sessionId, source, reason, null);
+            return (outcome != null) ? outcome.event() : null;
         }
+        return compactLightUnderLock(sessionId, source, reason);
     }
 
     public List<CompactionEventEntity> listEvents(String sessionId) {
@@ -178,70 +148,241 @@ public class CompactionService implements ContextCompactorCallback {
     @Override
     public CompactCallbackResult compactLight(String sessionId, List<Message> currentMessages,
                                                String sourceLabel, String reason) {
-        return doCallback(sessionId, currentMessages, "light", sourceLabel, reason);
+        return doCallbackLight(sessionId, currentMessages, sourceLabel, reason);
     }
 
     @Override
     public CompactCallbackResult compactFull(String sessionId, List<Message> currentMessages,
                                               String sourceLabel, String reason) {
-        return doCallback(sessionId, currentMessages, "full", sourceLabel, reason);
+        FullCompactOutcome outcome = compactFullThreePhase(sessionId, sourceLabel, reason, currentMessages);
+        if (outcome == null) {
+            return CompactCallbackResult.noOp(currentMessages, "full compact no-op or in-flight");
+        }
+        CompactResult r = outcome.compactResult();
+        return new CompactCallbackResult(r.getMessages(), true,
+                r.getTokensReclaimed(), r.getBeforeTokens(), r.getAfterTokens(),
+                "applied=" + String.join(",", r.getStrategiesApplied()));
     }
 
-    /**
-     * Engine 回调路径: 直接用 engine 传过来的 in-memory 列表压缩. 仍然会持久化结果.
-     */
-    @Transactional
-    public CompactCallbackResult doCallback(String sessionId, List<Message> current,
-                                             String level, String source, String reason) {
+    // ================ Light compact (single-phase, under stripe lock + tx) ================
+
+    private CompactionEventEntity compactLightUnderLock(String sessionId, String source, String reason) {
         synchronized (lockFor(sessionId)) {
-            SessionEntity session = sessionRepository.findById(sessionId).orElse(null);
-            if (session == null) {
-                return CompactCallbackResult.noOp(current, "session not found");
-            }
-            // idempotency guard (A1 light 和 user-manual bypass)
-            boolean bypassGuard = isBypassGuard(source, level);
-            if (!bypassGuard) {
-                int gap = current.size() - session.getLastCompactedAtMessageCount();
-                if (gap < IDEMPOTENCY_MIN_GAP_MESSAGES) {
-                    log.debug("callback compact skipped (idempotency): sessionId={} gap={}", sessionId, gap);
-                    return CompactCallbackResult.noOp(current, "idempotency guard");
+            final CompactionEventEntity[] saved = {null};
+            runInTransaction(() -> {
+                SessionEntity session = sessionRepository.findById(sessionId)
+                        .orElseThrow(() -> new RuntimeException("Session not found: " + sessionId));
+
+                if ("user-manual".equals(source) && "running".equals(session.getRuntimeStatus())) {
+                    throw new IllegalStateException("Cannot compact while session is running");
                 }
-            }
 
-            int contextWindow = resolveContextWindowForSession(session);
-            CompactResult result = runStrategy(level, current, contextWindow);
+                if (!isBypassGuard(source, "light")) {
+                    int gap = session.getMessageCount() - session.getLastCompactedAtMessageCount();
+                    if (gap < IDEMPOTENCY_MIN_GAP_MESSAGES) {
+                        log.info("light compact skipped (idempotency): sessionId={} gap={}", sessionId, gap);
+                        return;
+                    }
+                }
 
-            // #12: 真正的 no-op 不入表
-            if (result == null || isTrulyNoOp(result)) {
-                log.info("callback compact no-op (not persisted): sessionId={} level={} source={}",
-                        sessionId, level, source);
-                return CompactCallbackResult.noOp(current, "strategy returned no-op");
-            }
+                List<Message> messages = sessionService.getSessionMessages(sessionId);
+                int contextWindow = resolveContextWindowForSession(session);
+                CompactResult result = lightStrategy.apply(messages, contextWindow);
 
-            sessionService.saveSessionMessages(sessionId, result.getMessages());
-            SessionEntity fresh = sessionRepository.findById(sessionId).orElseThrow();
-            fresh.setMessageCount(result.getMessages().size());
-            fresh.setLastCompactedAt(Instant.now());
-            fresh.setLastCompactedAtMessageCount(result.getMessages().size());
-            fresh.setTotalTokensReclaimed(fresh.getTotalTokensReclaimed() + result.getTokensReclaimed());
-            if ("light".equalsIgnoreCase(level)) {
-                fresh.setLightCompactCount(fresh.getLightCompactCount() + 1);
-            } else {
-                fresh.setFullCompactCount(fresh.getFullCompactCount() + 1);
-            }
-            sessionRepository.save(fresh);
+                if (result == null || isTrulyNoOp(result)) {
+                    log.info("light compact no-op (not persisted): sessionId={} source={}", sessionId, source);
+                    return;
+                }
 
-            CompactionEventEntity evt = buildEvent(sessionId, level, source, reason, result);
-            eventRepository.save(evt);
-            broadcastUpdated(fresh);
-
-            return new CompactCallbackResult(result.getMessages(), true,
-                    result.getTokensReclaimed(), result.getBeforeTokens(), result.getAfterTokens(),
-                    "applied=" + String.join(",", result.getStrategiesApplied()));
+                saved[0] = persistCompactResult(sessionId, "light", source, reason, result);
+            });
+            return saved[0];
         }
     }
 
+    private CompactCallbackResult doCallbackLight(String sessionId, List<Message> current,
+                                                   String source, String reason) {
+        synchronized (lockFor(sessionId)) {
+            final CompactCallbackResult[] out = {null};
+            runInTransaction(() -> {
+                SessionEntity session = sessionRepository.findById(sessionId).orElse(null);
+                if (session == null) {
+                    out[0] = CompactCallbackResult.noOp(current, "session not found");
+                    return;
+                }
+                if (!isBypassGuard(source, "light")) {
+                    int gap = current.size() - session.getLastCompactedAtMessageCount();
+                    if (gap < IDEMPOTENCY_MIN_GAP_MESSAGES) {
+                        log.debug("callback light compact skipped (idempotency): sessionId={} gap={}", sessionId, gap);
+                        out[0] = CompactCallbackResult.noOp(current, "idempotency guard");
+                        return;
+                    }
+                }
+
+                int contextWindow = resolveContextWindowForSession(session);
+                CompactResult result = lightStrategy.apply(current, contextWindow);
+
+                if (result == null || isTrulyNoOp(result)) {
+                    log.info("callback light compact no-op: sessionId={}", sessionId);
+                    out[0] = CompactCallbackResult.noOp(current, "strategy returned no-op");
+                    return;
+                }
+
+                persistCompactResult(sessionId, "light", source, reason, result);
+                out[0] = new CompactCallbackResult(result.getMessages(), true,
+                        result.getTokensReclaimed(), result.getBeforeTokens(), result.getAfterTokens(),
+                        "applied=" + String.join(",", result.getStrategiesApplied()));
+            });
+            return (out[0] != null) ? out[0] : CompactCallbackResult.noOp(current, "light compact no-op");
+        }
+    }
+
+    // ================ Full compact (three-phase) ================
+
+    /**
+     * Three-phase full compact. {@code inMemoryMessages} may be null (REST path reads from DB).
+     * Returns null if no-op, in-flight dedup, or provider unavailable.
+     */
+    private FullCompactOutcome compactFullThreePhase(String sessionId, String source, String reason,
+                                                      List<Message> inMemoryMessages) {
+        // ── Phase 1: guard + boundary detection, under stripe lock ──────────────
+        FullCompactStrategy.PreparedCompact prep;
+        LlmProvider provider;
+
+        synchronized (lockFor(sessionId)) {
+            if (!fullCompactInFlight.add(sessionId)) {
+                log.info("fullCompact skipped: already in-flight: sessionId={}", sessionId);
+                return null;
+            }
+            // phase1Success guards the finally: if Phase 1 exits without completing successfully
+            // (early return or exception), remove from in-flight. On success, Phase 3's finally handles it.
+            boolean phase1Success = false;
+            try {
+                SessionEntity session = sessionRepository.findById(sessionId).orElse(null);
+                if (session == null) {
+                    return null;
+                }
+
+                if ("user-manual".equals(source) && "running".equals(session.getRuntimeStatus())) {
+                    throw new IllegalStateException("Cannot compact while session is running");
+                }
+
+                if (!isBypassGuard(source, "full")) {
+                    // For REST path: use the session's stored messageCount (consistent with old behavior).
+                    // For callback path: use current.size() (the engine has an accurate live count).
+                    int effectiveCount = (inMemoryMessages != null)
+                            ? inMemoryMessages.size() : session.getMessageCount();
+                    int gap = effectiveCount - session.getLastCompactedAtMessageCount();
+                    if (gap < IDEMPOTENCY_MIN_GAP_MESSAGES) {
+                        log.info("fullCompact skipped (idempotency): sessionId={} gap={}", sessionId, gap);
+                        return null;
+                    }
+                }
+
+                List<Message> messages = (inMemoryMessages != null)
+                        ? inMemoryMessages
+                        : sessionService.getSessionMessages(sessionId);
+
+                int contextWindow = resolveContextWindowForSession(session);
+                prep = fullStrategy.prepareCompact(messages, contextWindow);
+                if (prep == null) {
+                    log.info("fullCompact no-op (no safe boundary): sessionId={}", sessionId);
+                    return null;
+                }
+
+                String providerName = llmProperties.getDefaultProvider();
+                provider = llmProviderFactory.getProvider(providerName);
+                if (provider == null) {
+                    log.warn("fullCompact skipped: default provider '{}' unavailable", providerName);
+                    return null;
+                }
+                // Phase 1 complete — stripe lock releases at end of synchronized block.
+                // fullCompactInFlight keeps deduplication active through Phase 2.
+                phase1Success = true;
+            } finally {
+                if (!phase1Success) {
+                    fullCompactInFlight.remove(sessionId);
+                }
+            }
+        }
+
+        // ── Phase 2: LLM call, outside stripe lock ───────────────────────────────
+        CompactResult result;
+        try {
+            result = fullStrategy.applyPrepared(prep, provider, null);
+        } catch (Exception e) {
+            fullCompactInFlight.remove(sessionId);
+            log.error("fullCompact Phase 2 LLM call failed: sessionId={}", sessionId, e);
+            return null;
+        }
+
+        if (result == null || isTrulyNoOp(result)) {
+            fullCompactInFlight.remove(sessionId);
+            log.info("fullCompact no-op (LLM returned empty): sessionId={}", sessionId);
+            return null;
+        }
+
+        // ── Phase 3: persist, under stripe lock + transaction ────────────────────
+        final CompactResult finalResult = result;
+        final CompactionEventEntity[] savedEvt = {null};
+        try {
+            synchronized (lockFor(sessionId)) {
+                runInTransaction(() ->
+                        savedEvt[0] = persistCompactResult(sessionId, "full", source, reason, finalResult)
+                );
+            }
+        } finally {
+            fullCompactInFlight.remove(sessionId);
+        }
+
+        log.info("fullCompact done: sessionId={} source={} reclaimed={} tokens",
+                sessionId, source, result.getTokensReclaimed());
+        return new FullCompactOutcome(savedEvt[0], result);
+    }
+
     // ================ 内部辅助 ================
+
+    /** Holds both the persisted event and the CompactResult for callers that need both. */
+    private record FullCompactOutcome(CompactionEventEntity event, CompactResult compactResult) {}
+
+    /**
+     * Persist a CompactResult to DB (messages + session counters + event).
+     * Must be called inside a transaction and (for thread safety) under the stripe lock.
+     * Returns the saved CompactionEventEntity.
+     */
+    private CompactionEventEntity persistCompactResult(String sessionId, String level,
+                                                        String source, String reason,
+                                                        CompactResult result) {
+        sessionService.saveSessionMessages(sessionId, result.getMessages());
+        SessionEntity fresh = sessionRepository.findById(sessionId).orElseThrow();
+        fresh.setMessageCount(result.getMessages().size());
+        fresh.setLastCompactedAt(Instant.now());
+        fresh.setLastCompactedAtMessageCount(result.getMessages().size());
+        fresh.setTotalTokensReclaimed(fresh.getTotalTokensReclaimed() + result.getTokensReclaimed());
+        if ("light".equalsIgnoreCase(level)) {
+            fresh.setLightCompactCount(fresh.getLightCompactCount() + 1);
+        } else {
+            fresh.setFullCompactCount(fresh.getFullCompactCount() + 1);
+        }
+        sessionRepository.save(fresh);
+
+        CompactionEventEntity evt = buildEvent(sessionId, level, source, reason, result);
+        CompactionEventEntity saved = eventRepository.save(evt);
+        broadcastUpdated(fresh);
+        return saved;
+    }
+
+    /** Runs action in a Spring transaction if a PlatformTransactionManager was provided; otherwise runs directly. */
+    private void runInTransaction(Runnable action) {
+        if (transactionTemplate != null) {
+            transactionTemplate.execute(status -> {
+                action.run();
+                return null;
+            });
+        } else {
+            action.run();
+        }
+    }
 
     /** 判断 source + level 组合是否绕过 idempotency guard. */
     private boolean isBypassGuard(String source, String level) {
@@ -282,7 +423,6 @@ public class CompactionService implements ContextCompactorCallback {
                         // Step 2: static known-model map lookup using the provider's configured model name
                         String modelName = (pc != null) ? pc.getModel() : null;
                         if (modelName == null) {
-                            // provider config absent; use the part after ":" in modelId as model name
                             modelName = modelId.contains(":") ? modelId.substring(modelId.indexOf(':') + 1) : modelId;
                         }
                         java.util.Optional<Integer> known = ModelConfig.lookupKnownContextWindow(modelName);
@@ -299,19 +439,6 @@ public class CompactionService implements ContextCompactorCallback {
                     session.getId(), e);
         }
         return ModelConfig.DEFAULT_CONTEXT_WINDOW_TOKENS;
-    }
-
-    private CompactResult runStrategy(String level, List<Message> messages, int contextWindow) {
-        if ("full".equalsIgnoreCase(level)) {
-            String providerName = llmProperties.getDefaultProvider();
-            LlmProvider provider = llmProviderFactory.getProvider(providerName);
-            if (provider == null) {
-                log.warn("Full compact skipped: default provider '{}' unavailable", providerName);
-                return null;
-            }
-            return fullStrategy.apply(messages, contextWindow, provider, null);
-        }
-        return lightStrategy.apply(messages, contextWindow);
     }
 
     private CompactionEventEntity buildEvent(String sessionId, String level, String source,

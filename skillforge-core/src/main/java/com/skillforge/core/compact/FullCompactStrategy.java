@@ -21,8 +21,24 @@ import java.util.Map;
  * 边界必须落在安全位置(不得切割 tool_use↔tool_result 配对)。
  * <p>如果默认 young-gen 下找不到安全边界, 会向右"扩大 young-gen"重试, 直到找到
  * 安全点或 young-gen 覆盖整条历史为止(此时返回 no-op)。
+ *
+ * <p>3-phase support: use {@link #prepareCompact} (Phase 1, pure Java, under stripe lock)
+ * followed by {@link #applyPrepared} (Phase 2, LLM call, outside stripe lock) to avoid
+ * holding the stripe lock during the blocking LLM call.
  */
 public class FullCompactStrategy {
+
+    /**
+     * Snapshot produced by Phase 1 boundary detection — no LLM involvement.
+     * Passed from Phase 1 (under stripe lock) to Phase 2 (LLM call, lock released).
+     */
+    public record PreparedCompact(
+            int rightEdge,
+            List<Message> window,
+            List<Message> youngGen,
+            int beforeTokens,
+            int beforeCount
+    ) {}
 
     private static final Logger log = LoggerFactory.getLogger(FullCompactStrategy.class);
 
@@ -120,6 +136,74 @@ public class FullCompactStrategy {
         return new CompactResult(compacted, beforeTokens, afterTokens, beforeCount, compacted.size(), applied);
     }
 
+    // ── 3-phase API ──────────────────────────────────────────────────────────
+
+    /**
+     * Phase 1: boundary detection only, no LLM. Returns {@code null} if history is too
+     * short or no safe boundary is found (caller should treat as no-op).
+     * <p>This method is pure Java and safe to call under the stripe lock.
+     */
+    public PreparedCompact prepareCompact(List<Message> messages, int contextWindowTokens) {
+        if (messages == null || messages.size() <= YOUNG_GEN_KEEP) {
+            return null;
+        }
+        int beforeTokens = TokenEstimator.estimate(messages);
+        int beforeCount = messages.size();
+        int youngGenKeep = YOUNG_GEN_KEEP;
+        int rightEdge = -1;
+        while (youngGenKeep < messages.size()) {
+            int initial = messages.size() - youngGenKeep;
+            int candidate = findSafeBoundary(messages, initial);
+            if (candidate > 0) {
+                rightEdge = candidate;
+                break;
+            }
+            youngGenKeep++;
+        }
+        if (rightEdge <= 0) {
+            log.info("FullCompactStrategy.prepareCompact: no safe boundary, returning null (no-op)");
+            return null;
+        }
+        List<Message> window = new ArrayList<>(messages.subList(0, rightEdge));
+        List<Message> youngGen = new ArrayList<>(messages.subList(rightEdge, messages.size()));
+        return new PreparedCompact(rightEdge, window, youngGen, beforeTokens, beforeCount);
+    }
+
+    /**
+     * Phase 2: LLM call + result assembly. Takes the snapshot from {@link #prepareCompact}.
+     * Returns {@code null} if the LLM returns empty (caller should treat as no-op).
+     * <p>This method blocks on the LLM call and must be called outside the stripe lock.
+     */
+    public CompactResult applyPrepared(PreparedCompact prep, LlmProvider provider, String modelId) {
+        String windowSerialized = serializeWindow(prep.window());
+        String summary = callLlm(provider, modelId, windowSerialized);
+        if (summary == null || summary.isBlank()) {
+            log.warn("FullCompactStrategy.applyPrepared: LLM returned empty summary, no-op");
+            return null;
+        }
+        String summaryPrefix = "[Context summary from " + prep.window().size()
+                + " messages compacted at " + Instant.now() + "]\n" + summary.trim();
+        List<Message> compacted = new ArrayList<>(prep.youngGen().size() + 1);
+        if (!prep.youngGen().isEmpty() && prep.youngGen().get(0).getRole() == Message.Role.USER) {
+            Message originalFirst = prep.youngGen().get(0);
+            Message merged = mergeSummaryIntoUser(originalFirst, summaryPrefix);
+            compacted.add(merged);
+            for (int i = 1; i < prep.youngGen().size(); i++) {
+                compacted.add(prep.youngGen().get(i));
+            }
+        } else {
+            compacted.add(Message.user(summaryPrefix));
+            compacted.addAll(prep.youngGen());
+        }
+        int afterTokens = TokenEstimator.estimate(compacted);
+        List<String> applied = new ArrayList<>();
+        applied.add("llm-summary");
+        return new CompactResult(compacted, prep.beforeTokens(), afterTokens,
+                prep.beforeCount(), compacted.size(), applied);
+    }
+
+    // ── private helpers ───────────────────────────────────────────────────────
+
     /**
      * 把摘要作为前缀合并到 young-gen 第一条 user 消息里, 避免连续两条 user role 触发
      * Anthropic/Gemini 的 invalid payload 校验。
@@ -147,7 +231,7 @@ public class FullCompactStrategy {
      * 向左寻找一个不会切割 tool_use/tool_result 配对的边界。
      * 优先落在 user 消息后或无 open tool_use 的 assistant text 后。
      */
-    int findSafeBoundary(List<Message> messages, int initial) {
+    public int findSafeBoundary(List<Message> messages, int initial) {
         int idx = Math.min(initial, messages.size());
         while (idx > 0) {
             if (isBoundarySafe(messages, idx)) {
