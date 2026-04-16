@@ -9,6 +9,7 @@
 3. **重启即丢**：所有运行态在内存里，server crash 一切清零
 
 目标改成 **fire-and-forget + 自动 resume**：
+
 - 父 dispatch 立即拿到 runId 继续干别的或直接结束当前轮
 - 子在自己的 session 里独立跑（独立线程池任务）
 - 子结束时**结果作为新的 user message 自动注入父 session**，父 loop 被自动 chatAsync 唤醒
@@ -41,21 +42,22 @@
 
 ### 关键不变量
 
-| 不变量 | 实现位置 |
-|---|---|
-| 父 dispatch 不阻塞 | `SubAgentSkill.handleDispatch` 立即 return runId，`chatService.chatAsync(child, ...)` 异步起 |
-| 子结束 ⇒ 父被通知 | `ChatService.runLoop` finally 调 `subAgentRegistry.onSessionLoopFinished(sessionId, ...)` |
-| 父 idle 时立刻 resume | `onSessionLoopFinished` → enqueue → `maybeResumeParent` → `chatAsync(parent, combinedPayload)` |
-| 父 running 时不抢跑 | `maybeResumeParent` 检查 `parent.runtimeStatus == "idle"`，否则只 enqueue |
-| 父自己 loop 结束时 drain 残留 | finally 钩子也对自己 `sessionId` 调一次 `maybeResumeParent` |
-| 多子结果合并成单条 | drain 时把 pending 队列所有 row 的 payload 拼起来，一次 `chatAsync` |
-| 重启不丢 in-flight | `t_subagent_run` + `t_subagent_pending_result` 两张表，H2 ddl-auto 自动建 |
-| chatAsync 失败不丢消息 | 删行后 try chatAsync，catch 时把合并 payload 重新插回作为单行 |
-| depth ≤ 3 / 每父并发 ≤ 5 | `SubAgentRegistry.MAX_DEPTH` / `MAX_ACTIVE_CHILDREN_PER_PARENT`，`registerRun` 检查 |
+| 不变量                   | 实现位置                                                                                           |
+| --------------------- | ---------------------------------------------------------------------------------------------- |
+| 父 dispatch 不阻塞        | `SubAgentSkill.handleDispatch` 立即 return runId，`chatService.chatAsync(child, ...)` 异步起         |
+| 子结束 ⇒ 父被通知            | `ChatService.runLoop` finally 调 `subAgentRegistry.onSessionLoopFinished(sessionId, ...)`       |
+| 父 idle 时立刻 resume     | `onSessionLoopFinished` → enqueue → `maybeResumeParent` → `chatAsync(parent, combinedPayload)` |
+| 父 running 时不抢跑        | `maybeResumeParent` 检查 `parent.runtimeStatus == "idle"`，否则只 enqueue                            |
+| 父自己 loop 结束时 drain 残留 | finally 钩子也对自己 `sessionId` 调一次 `maybeResumeParent`                                             |
+| 多子结果合并成单条             | drain 时把 pending 队列所有 row 的 payload 拼起来，一次 `chatAsync`                                         |
+| 重启不丢 in-flight        | `t_subagent_run` + `t_subagent_pending_result` 两张表，H2 ddl-auto 自动建                             |
+| chatAsync 失败不丢消息      | 删行后 try chatAsync，catch 时把合并 payload 重新插回作为单行                                                  |
+| depth ≤ 3 / 每父并发 ≤ 5  | `SubAgentRegistry.MAX_DEPTH` / `MAX_ACTIVE_CHILDREN_PER_PARENT`，`registerRun` 检查               |
 
 ### 数据库 schema
 
 `t_subagent_run`：每次 dispatch 一行
+
 - `runId` (PK String 36)
 - `parentSessionId` (indexed)
 - `childSessionId`（attach 后回填）
@@ -65,6 +67,7 @@
 - `spawnedAt`、`completedAt`
 
 `t_subagent_pending_result`：父的结果信箱队列
+
 - `id` (Long auto-gen PK，决定 drain 顺序)
 - `parentSessionId` (indexed)
 - `payload` (CLOB)
@@ -80,9 +83,9 @@
 
 ### REST 端点（dashboard 用）
 
-| 方法 | 路径 | 用途 |
-|---|---|---|
-| `GET` | `/api/chat/sessions/{id}/children` | 列出某个父 session 派生的所有子 session |
+| 方法    | 路径                                      | 用途                                      |
+| ----- | --------------------------------------- | --------------------------------------- |
+| `GET` | `/api/chat/sessions/{id}/children`      | 列出某个父 session 派生的所有子 session            |
 | `GET` | `/api/chat/sessions/{id}/subagent-runs` | 列出某个父 session 的所有 SubAgent dispatch run |
 
 主 session 列表 `GET /api/chat/sessions?userId=...` 自动过滤掉子 session（`parentSessionId IS NULL`），不污染主列表。
@@ -108,18 +111,19 @@
 
 ### Phase 1 — 后端契约 + 渲染 smoke
 
-| 测项 | 命令 / 操作 | 结果 |
-|---|---|---|
-| `/children` 端点 | `curl /api/chat/sessions/324d3e71.../children` | ✅ 返回子 session JSON，含 depth=1、parentSessionId、subAgentRunId |
-| `/subagent-runs` 端点 | `curl /api/chat/sessions/324d3e71.../subagent-runs` | ✅ 返回 `[]`（旧 in-memory run 重启丢了 — 反向证明持久化必要）|
-| 主列表过滤 | `curl /api/chat/sessions?userId=1` | ✅ 26 session 中**不含**子 session `8bee2269` |
-| 子 session 字段 | `curl /api/chat/sessions/8bee2269...` | ✅ depth=1, parentSessionId=324d3e71..., subAgentRunId=8a31683e... |
-| 父 session 渲染 | 浏览器 `/chat/324d3e71...` | ✅ 历史消息完整，含蓝色 `[SubAgent Result]` 自动注入 user 消息和父的 fallback 回答 |
-| 子 session 面包屑 | 浏览器 `/chat/8bee2269...` | ✅ "↑ Back to parent (SubAgent child · depth 1)" 显示并可点击导航 |
+| 测项                  | 命令 / 操作                                             | 结果                                                                |
+| ------------------- | --------------------------------------------------- | ----------------------------------------------------------------- |
+| `/children` 端点      | `curl /api/chat/sessions/324d3e71.../children`      | ✅ 返回子 session JSON，含 depth=1、parentSessionId、subAgentRunId        |
+| `/subagent-runs` 端点 | `curl /api/chat/sessions/324d3e71.../subagent-runs` | ✅ 返回 `[]`（旧 in-memory run 重启丢了 — 反向证明持久化必要）                       |
+| 主列表过滤               | `curl /api/chat/sessions?userId=1`                  | ✅ 26 session 中**不含**子 session `8bee2269`                          |
+| 子 session 字段        | `curl /api/chat/sessions/8bee2269...`               | ✅ depth=1, parentSessionId=324d3e71..., subAgentRunId=8a31683e... |
+| 父 session 渲染        | 浏览器 `/chat/324d3e71...`                             | ✅ 历史消息完整，含蓝色 `[SubAgent Result]` 自动注入 user 消息和父的 fallback 回答      |
+| 子 session 面包屑       | 浏览器 `/chat/8bee2269...`                             | ✅ "↑ Back to parent (SubAgent child · depth 1)" 显示并可点击导航          |
 
 ### Phase 2 — 真实 LLM dispatch 端到端
 
 **测试**：新建 parent session `f4a9c7f8`（agent 1，auto 模式），发送提示词
+
 > 请立刻调用 SubAgent 工具，参数 action=dispatch, agentId=2, task="计算 99 * 88 等于多少"。派发后只回我一句"已派发"，不要等结果。
 
 **事件时间线**（API 轮询采样）：
@@ -139,6 +143,7 @@ t+~30s  parent idle (msgs=6)
 ```
 
 **Token 消耗**：
+
 - Parent 两轮 loop: input **5887** / output **225**
 - Child（超时未完成）: 0 / 0
 - 估算 ¥0.01–0.02
@@ -159,12 +164,12 @@ View child              ← 子 session 跳转链接
 
 ### 自动化覆盖
 
-| 层 | 覆盖 |
-|---|---|
+| 层                               | 覆盖                                                                                     |
+| ------------------------------- | -------------------------------------------------------------------------------------- |
 | **单元测试** `SubAgentRegistryTest` | depth/并发上限、enqueue 路径、父 idle 自动 resume、父 running 不抢跑、父 finally drain、多子合并 → **7/7 通过** |
-| **API 契约** | curl 4 个端点，全部返回正确 schema |
-| **端到端 LLM** | 上述时间线验证，含成功的 fallback 路径 |
-| **重启持久化** | 未跑（只 cost 观察 t_subagent_run 表里的 row 还在），逻辑上 H2 file db 必然保留 |
+| **API 契约**                      | curl 4 个端点，全部返回正确 schema                                                               |
+| **端到端 LLM**                     | 上述时间线验证，含成功的 fallback 路径                                                               |
+| **重启持久化**                       | 未跑（只 cost 观察 t_subagent_run 表里的 row 还在），逻辑上 H2 file db 必然保留                            |
 
 ## 后续 Claude Code 端到端测试 playbook
 

@@ -6,6 +6,64 @@
 
 ## 待排期
 
+### 竞品分析新增（优先执行）
+
+#### N1 — Memory 向量检索（最高优先级）
+
+> 参考：openclaw memory-host-sdk（FTS5 + embedding 混合检索）、hermes-agent（简洁文件方案对照）
+> 技术方案：docs/design-memory-vector-search.md
+
+| 子任务                           | 说明                                                                                                                                                                                                                   |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| N1-1 pgvector 接入              | PostgreSQL 启用 `pgvector` 扩展；`t_memory` 表新增 `embedding vector(1536)` 列（维度可配）+ `search_vector tsvector GENERATED` 列；HNSW 索引 + GIN 索引；Flyway V6 migration                                                               |
+| N1-2 EmbeddingService         | 新增 `EmbeddingService`：复用 `LlmProviderFactory` 中已配置的 OpenAI-compatible provider（`POST /v1/embeddings`），不引入 Ollama；provider 不支持 embedding 时返回 `Optional.empty()`，降级纯 FTS，不报错；memory 写入/更新时异步触发                         |
+| N1-3 混合检索（memory_search Tool） | 拆出独立 Skill `MemorySearchSkill`：FTS 召回（`tsvector @@ plainto_tsquery`）+ pgvector 余弦检索（`ORDER BY embedding <=> :vec`）两路 Top-20，RRF 合并取 Top-K；仅返回 snippet（body 前 100 字）+ memoryId + score；provider 无 embedding 时退化为纯 FTS |
+| N1-4 按需全文（memory_detail Tool） | 新增 `MemoryDetailSkill`：按 memoryId 返回完整 body；Agent 先调 memory_search，按需再调 memory_detail，大幅降低每次检索 token 消耗                                                                                                              |
+
+#### N2 — Agent 行为规范层（Behavioral Rules）
+
+> 参考：andrej-karpathy-skills（+30k 星/周）、CLAUDE.md 结构化行为原则
+
+| 子任务                   | 说明                                                                                                    |
+| --------------------- | ----------------------------------------------------------------------------------------------------- |
+| N2-1 规范条目库            | 平台内置 10-15 条可选行为规范（想清楚再写代码、只改必要文件、先问清楚再行动……）；`t_agent` 表新增 `behaviorRules JSON` 字段；Flyway 补 migration |
+| N2-2 system prompt 组装 | `SystemPromptBuilder` 读取 Agent 的 behaviorRules 配置，自动拼装成结构化规则块追加到 system prompt 末尾                     |
+| N2-3 前端配置 UI          | Agent 编辑页新增 "Behavioral Rules" 区域：复选框列表 + 自定义规则输入框                                                    |
+
+#### N3 — 用户可配置 Lifecycle Hook
+
+> 参考：claude-mem（SessionStart / UserPromptSubmit / PostToolUse / Stop / SessionEnd 5 个节点）
+
+| 子任务             | 说明                                                                                                               |
+| --------------- | ---------------------------------------------------------------------------------------------------------------- |
+| N3-1 Hook 配置 DB | `t_agent_hook` 表：agentId、event（session_start / post_tool_use / session_end 等）、skillName、enabled；Flyway migration |
+| N3-2 引擎读取 Hook  | `AgentLoopEngine` 在 `LoopHook` 节点读取 DB 配置，自动触发对应 Skill（如 session_end → MemorySkill、post_tool_use → 飞书通知 Skill）   |
+| N3-3 前端配置 UI    | Agent 编辑页新增 "Hooks" 区域：每个事件节点可绑定一个已安装的 Skill                                                                     |
+
+---
+
+### P1 — Skill 自动生成 + 自进化
+
+| 子任务                     | 说明                                                                                                          |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------- |
+| P1-Skill-1 对话提取 Skill   | 分析已完成 session，LLM 识别可复用模式 → 生成 SkillEntity 草稿（复用 SessionScenarioExtractorService 的批处理模式）；触发方式：用户手动 + 批量分析历史 |
+| P1-Skill-2 Skill 版本管理   | SkillEntity 新增 version / parentSkillId / usageCount / successRate 字段；支持版本回滚                                 |
+| P1-Skill-3 Skill A/B 测试 | 复用现有 AbEvalPipeline；对 Skill 两版本在 held-out 场景集上对比；Δ≥15pp 自动晋升                                                |
+| P1-Skill-4 进化闭环         | Skill 使用后收集成功/失败信号 → 定期触发 LLM 优化 prompt → 走 A/B 验证 → 自动晋升或回滚                                                |
+
+---
+
+### P2 — 飞书消息网关
+
+| 子任务               | 说明                                                    |
+| ----------------- | ----------------------------------------------------- |
+| P2-飞书-1 飞书 Bot 接入 | 创建飞书应用 + Webhook/事件订阅；消息网关 Spring 模块接收飞书事件            |
+| P2-飞书-2 会话路由      | 飞书用户 ↔ SkillForge userId 映射；每个飞书对话绑定一个 Agent Session  |
+| P2-飞书-3 消息收发      | 接收文本/图片/文件消息 → 转发到 Agent Loop；Agent 回复 → 飞书消息推送       |
+| P2-飞书-4 指令支持      | `/new` 新建会话、`/switch <agent>` 切换 Agent、`/history` 查历史 |
+
+---
+
 ### Phase 3 — 记忆质量评估（P3）
 
 | 子任务                 | 说明                                                                                                                                 |
@@ -21,8 +79,8 @@
 
 | 任务                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | 完成日期       |
 | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
-| P2-6 Session → Scenario 转换：LLM 批量分析历史 session → draft scenarios → `t_eval_scenario`（V5 migration）；ScenarioLoader 同时加载 DB active 记录；ScenarioDraftPanel Review UI（Approve/Edit/Discard）；ScenarioLoader 改造 | 2026-04-16 |
-| P2-1~P2-5 Self-Improve Pipeline Phase 2：PromptVersionEntity（V4 migration）、PromptImproverService（LLM 生成候选 prompt）、AbEvalPipeline（held-out 集 A/B 对比）、PromptPromotionService（Δ≥15pp 自动晋升 + 4 层 Goodhart 防护）、前端 ImprovePromptButton + PromptHistoryPanel + rollback/resume | 2026-04-16 |
+| P2-6 Session → Scenario 转换：LLM 批量分析历史 session → draft scenarios → `t_eval_scenario`（V5 migration）；ScenarioLoader 同时加载 DB active 记录；ScenarioDraftPanel Review UI（Approve/Edit/Discard）；ScenarioLoader 改造                                                                                                                                                                                                                                                                                                                                             | 2026-04-16 |
+| P2-1~P2-5 Self-Improve Pipeline Phase 2：PromptVersionEntity（V4 migration）、PromptImproverService（LLM 生成候选 prompt）、AbEvalPipeline（held-out 集 A/B 对比）、PromptPromotionService（Δ≥15pp 自动晋升 + 4 层 Goodhart 防护）、前端 ImprovePromptButton + PromptHistoryPanel + rollback/resume                                                                                                                                                                                                                                                                              | 2026-04-16 |
 | #5/#6 Self-Improve Pipeline Phase 1 实现：13 个场景 JSON（7 seed_ + 6 train_）；EvalExecutorConfig + evalOrchestratorExecutor（双独立线程池防死锁）；AttributionEngine（7×5 矩阵）；EvalRunEntity + EvalSessionEntity + V3 Flyway；SandboxSkillRegistryFactory + EvalEngineFactory（无 compactorCallback/pendingAskRegistry）；ScenarioRunnerSkill（3级重试 90s 预算）；EvalJudgeSkill（2×Haiku + Sonnet meta）；EvalOrchestrator（Goodhart 防护 + Δ 监控）；REST API POST/GET /api/eval/runs；/eval 前端页面（实时 WS + 详情 Drawer）；Full Pipeline 评审修复：executor 死锁、rate limit ghost run、maxLoops 覆盖、5 个字段名错误 | 2026-04-16 |
 | #5/#6 Self-Improve Pipeline 完整方案设计（Plan A + Plan B + 双 Reviewer + Judge 全流程）；详见 docs/design-self-improve-pipeline.md                                                                                                                                                                                                                                                                                                                                                                                                                                | 2026-04-16 |
 | P1-3 CollabRun WS 广播：ChatWebSocketHandler 注入 repo 查 userId，4 个 collab 事件改写为 userEvent 广播；Teams.tsx 订阅 /ws/users/1 实时 invalidate TanStack Query                                                                                                                                                                                                                                                                                                                                                                                                      | 2026-04-16 |

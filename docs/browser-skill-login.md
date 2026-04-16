@@ -35,12 +35,14 @@
 ### 2. Playwright API 切换
 
 **旧实现：**
+
 ```java
 Browser browser = playwright.chromium().launch(options);
 Page page = browser.newPage();
 ```
 
 **新实现：**
+
 ```java
 BrowserContext context = playwright.chromium().launchPersistentContext(
     Paths.get(profileDir),
@@ -55,12 +57,13 @@ Page page = context.pages().isEmpty() ? context.newPage() : context.pages().get(
 
 Tool schema 新增 action 枚举值 `login`，参数：
 
-| 参数 | 类型 | 说明 |
-|------|------|------|
-| url | string | 要登录的站点 URL（可选，默认跳转到首页） |
+| 参数             | 类型     | 说明                       |
+| -------------- | ------ | ------------------------ |
+| url            | string | 要登录的站点 URL（可选，默认跳转到首页）   |
 | timeoutSeconds | number | 等待用户完成登录的超时，默认 300（5 分钟） |
 
 **行为：**
+
 1. 关闭当前 headless context（释放 profile 目录锁）
 2. 用 `headless=false` 重新 `launchPersistentContext`
 3. `page.navigate(url)` 打开登录页
@@ -90,16 +93,16 @@ Tool schema 新增 action 枚举值 `login`，参数：
 
 ## 新旧 action 对照
 
-| Action | 变更 |
-|--------|------|
-| `goto` | 无感变更，自动带登录态 |
-| `getContent` | 无变更 |
-| `screenshot` | 无变更 |
-| `click` | 无变更 |
-| `type` | 无变更 |
-| `evaluate` | 无变更 |
-| `close` | 关闭 context（不删除 profile 目录） |
-| `login` | **新增**：headed 模式 + 等待用户手动登录 |
+| Action       | 变更                          |
+| ------------ | --------------------------- |
+| `goto`       | 无感变更，自动带登录态                 |
+| `getContent` | 无变更                         |
+| `screenshot` | 无变更                         |
+| `click`      | 无变更                         |
+| `type`       | 无变更                         |
+| `evaluate`   | 无变更                         |
+| `close`      | 关闭 context（不删除 profile 目录）  |
+| `login`      | **新增**：headed 模式 + 等待用户手动登录 |
 
 ## 用户使用流程
 
@@ -155,14 +158,14 @@ skillforge:
 
 ## 风险与权衡
 
-| 风险 | 应对 |
-|------|------|
-| profile 目录损坏 | 允许手动删除目录重置（记录在 README） |
-| 同 profile 不能并发 headed/headless | ensureContext 自动切换，代价是关闭重开 |
-| 多用户场景 | 当前单用户不考虑。后续多用户时 profile-dir 按 userId 隔离：`./data/browser-profile/{userId}/` |
-| 敏感数据落盘 | profile 目录需加入 .gitignore |
-| login 阻塞时间长 | 设置 5 分钟默认超时，避免永久挂起 |
-| Playwright 版本依赖 | 当前依赖已存在，本次无升级 |
+| 风险                             | 应对                                                                         |
+| ------------------------------ | -------------------------------------------------------------------------- |
+| profile 目录损坏                   | 允许手动删除目录重置（记录在 README）                                                     |
+| 同 profile 不能并发 headed/headless | ensureContext 自动切换，代价是关闭重开                                                 |
+| 多用户场景                          | 当前单用户不考虑。后续多用户时 profile-dir 按 userId 隔离：`./data/browser-profile/{userId}/` |
+| 敏感数据落盘                         | profile 目录需加入 .gitignore                                                   |
+| login 阻塞时间长                    | 设置 5 分钟默认超时，避免永久挂起                                                         |
+| Playwright 版本依赖                | 当前依赖已存在，本次无升级                                                              |
 
 ## 不在本次范围
 
