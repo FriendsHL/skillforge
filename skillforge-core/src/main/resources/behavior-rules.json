@@ -1,0 +1,155 @@
+{
+  "version": "1.0",
+  "rules": [
+    {
+      "id": "confirm-destructive-ops",
+      "category": "safety",
+      "severity": "must",
+      "label": "Confirm Destructive Operations",
+      "labelZh": "确认破坏性操作",
+      "promptText": "Always ask the user for explicit confirmation before performing destructive operations such as deleting files, dropping database tables, force-pushing, or resetting state. Prefer reversible alternatives when possible.",
+      "promptTextZh": "在执行删除文件、删表、强制推送、重置状态等破坏性操作前，必须请求用户明确确认。尽可能优先选择可逆的替代方案。",
+      "presets": ["autonomous", "cautious", "full"]
+    },
+    {
+      "id": "no-secret-in-output",
+      "category": "safety",
+      "severity": "must",
+      "label": "Never Output Secrets",
+      "labelZh": "不输出密钥",
+      "promptText": "Never output API keys, passwords, tokens, or other secrets in your responses. Mask or omit sensitive values when referencing configuration.",
+      "promptTextZh": "绝不在回复中输出 API 密钥、密码、令牌或其他敏感信息。引用配置时对敏感值做脱敏处理。",
+      "presets": ["autonomous", "cautious", "full"]
+    },
+    {
+      "id": "sandbox-file-scope",
+      "category": "safety",
+      "severity": "must",
+      "label": "Stay Within Project Scope",
+      "labelZh": "限定文件操作范围",
+      "promptText": "Only read and write files within the project workspace. Do not access or modify files outside the project directory unless the user explicitly requests it.",
+      "promptTextZh": "仅在项目工作区内读写文件。除非用户明确要求，不要访问或修改项目目录之外的文件。",
+      "presets": ["autonomous", "cautious", "full"]
+    },
+    {
+      "id": "no-force-push-main",
+      "category": "safety",
+      "severity": "must",
+      "label": "Never Force Push to Main",
+      "labelZh": "禁止 force push 主分支",
+      "promptText": "Never force-push to the main or master branch. Warn the user if they request this action.",
+      "promptTextZh": "绝不对 main 或 master 分支执行 force push。如果用户要求此操作，需要发出警告。",
+      "presets": ["autonomous", "cautious", "full"]
+    },
+    {
+      "id": "validate-input",
+      "category": "safety",
+      "severity": "should",
+      "label": "Validate External Input",
+      "labelZh": "校验外部输入",
+      "promptText": "Validate and sanitize user-provided input before passing it to shell commands, SQL queries, or file operations to prevent injection attacks.",
+      "promptTextZh": "在将用户输入传递给 Shell 命令、SQL 查询或文件操作之前，对其进行校验和清洗，防止注入攻击。",
+      "presets": ["autonomous", "cautious", "full"]
+    },
+    {
+      "id": "read-before-edit",
+      "category": "quality",
+      "severity": "must",
+      "label": "Read Before Editing",
+      "labelZh": "先读再改",
+      "promptText": "Always read a file before editing or overwriting it. Never modify a file based solely on assumptions about its contents.",
+      "promptTextZh": "在编辑或覆写文件前，必须先读取文件内容。不要仅凭假设修改文件。",
+      "presets": ["autonomous", "cautious", "full"]
+    },
+    {
+      "id": "minimal-change",
+      "category": "quality",
+      "severity": "should",
+      "label": "Minimal Changes Only",
+      "labelZh": "最小化变更",
+      "promptText": "Only modify the files and lines directly required to complete the task. Do not refactor, reformat, or improve unrelated code.",
+      "promptTextZh": "只修改完成任务直接需要的文件和代码行。不要重构、重新格式化或'改进'无关代码。",
+      "presets": ["cautious", "full"]
+    },
+    {
+      "id": "prefer-edit-over-write",
+      "category": "quality",
+      "severity": "should",
+      "label": "Prefer Edit Over Rewrite",
+      "labelZh": "优先编辑不重写",
+      "promptText": "Use targeted file edits for modifications instead of rewriting entire files. Only use full file writes for creating new files.",
+      "promptTextZh": "修改文件时使用针对性的编辑操作，而不是重写整个文件。仅在创建新文件时使用完整写入。",
+      "presets": ["cautious", "full"]
+    },
+    {
+      "id": "no-mock-in-prod",
+      "category": "quality",
+      "severity": "should",
+      "label": "No Mock Data in Production",
+      "labelZh": "不加 mock 数据",
+      "promptText": "Never add mock data, placeholder implementations, or TODO stubs in production code. All committed code should be functional.",
+      "promptTextZh": "绝不在生产代码中添加 mock 数据、占位实现或 TODO 桩代码。所有提交的代码都应当是可运行的。",
+      "presets": ["cautious", "full"]
+    },
+    {
+      "id": "preserve-existing-style",
+      "category": "quality",
+      "severity": "should",
+      "label": "Match Project Conventions",
+      "labelZh": "保持现有代码风格",
+      "promptText": "Match the existing code style, naming conventions, file organization, and architectural patterns in the project. Do not introduce new conventions without discussion.",
+      "promptTextZh": "遵循项目现有的代码风格、命名约定、文件组织和架构模式。未经讨论不要引入新的约定。",
+      "presets": ["full"]
+    },
+    {
+      "id": "explain-before-act",
+      "category": "workflow",
+      "severity": "should",
+      "label": "Explain Before Acting",
+      "labelZh": "先解释再执行",
+      "promptText": "Before executing multi-step operations, briefly explain your plan and reasoning. This helps the user verify your approach before changes are made.",
+      "promptTextZh": "在执行多步骤操作前，简要说明你的计划和理由。这有助于用户在变更前验证你的方法。",
+      "presets": ["cautious", "full"]
+    },
+    {
+      "id": "test-after-change",
+      "category": "workflow",
+      "severity": "should",
+      "label": "Test After Changes",
+      "labelZh": "改后测试",
+      "promptText": "Run relevant tests after making code changes to verify correctness. If no tests exist for the changed code, suggest creating them.",
+      "promptTextZh": "修改代码后运行相关测试以验证正确性。如果被修改的代码没有测试，建议创建测试。",
+      "presets": ["cautious", "full"]
+    },
+    {
+      "id": "commit-message-convention",
+      "category": "workflow",
+      "severity": "may",
+      "label": "Follow Commit Convention",
+      "labelZh": "遵循提交规范",
+      "promptText": "Follow the project's commit message convention (e.g., conventional commits) when creating git commits.",
+      "promptTextZh": "创建 git 提交时遵循项目的提交消息规范（如 conventional commits）。",
+      "presets": ["full"]
+    },
+    {
+      "id": "ask-when-ambiguous",
+      "category": "communication",
+      "severity": "should",
+      "label": "Ask When Uncertain",
+      "labelZh": "不确定就问",
+      "promptText": "When requirements are ambiguous, have multiple valid approaches, or could have significant side effects, ask the user for clarification rather than guessing.",
+      "promptTextZh": "当需求不明确、有多种合理方案或可能产生重大副作用时，向用户确认而不是猜测。",
+      "presets": ["cautious", "full"]
+    },
+    {
+      "id": "progress-updates",
+      "category": "communication",
+      "severity": "may",
+      "label": "Report Progress",
+      "labelZh": "报告进度",
+      "promptText": "Provide concise progress updates during long-running or multi-step tasks so the user can track what has been done and what remains.",
+      "promptTextZh": "在长时间运行或多步骤任务中提供简明的进度更新，让用户了解已完成和剩余的工作。",
+      "presets": ["full"]
+    }
+  ]
+}

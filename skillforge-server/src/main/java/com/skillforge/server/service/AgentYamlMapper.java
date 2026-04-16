@@ -115,6 +115,21 @@ public class AgentYamlMapper {
             }
         }
 
+        // behaviorRules — prefer raw if present (corrupt round-trip)
+        Object rawBehaviorRules = m.get("behaviorRulesRaw");
+        if (rawBehaviorRules != null) {
+            a.setBehaviorRules(rawBehaviorRules.toString());
+        } else {
+            Object brObj = m.get("behaviorRules");
+            if (brObj instanceof Map) {
+                try {
+                    a.setBehaviorRules(JSON.writeValueAsString(brObj));
+                } catch (Exception e) {
+                    throw new IllegalArgumentException("Failed to serialize behaviorRules", e);
+                }
+            }
+        }
+
         Object configObj = m.get("config");
         if (configObj instanceof Map) {
             try {
@@ -168,6 +183,30 @@ public class AgentYamlMapper {
             // Surface the raw form so round-trip through fromYaml() preserves
             // the user's (corrupted) data instead of silently losing it.
             m.put("skillIdsRaw", rawCorruptValue);
+        }
+
+        // behaviorRules — same corrupt-data defense pattern as skillIds
+        String brJson = entity.getBehaviorRules();
+        boolean brCorrupt = false;
+        String brRawCorruptValue = null;
+        if (brJson != null && !brJson.isBlank()) {
+            try {
+                JsonNode brNode = JSON.readTree(brJson);
+                if (brNode != null && brNode.isObject()) {
+                    m.put("behaviorRules", JSON.convertValue(brNode, Map.class));
+                } else {
+                    brCorrupt = true;
+                    brRawCorruptValue = brJson;
+                }
+            } catch (Exception e) {
+                log.warn("AgentYamlMapper: failed to parse behaviorRules, exporting as raw. agentId={}",
+                        entity.getId());
+                brCorrupt = true;
+                brRawCorruptValue = brJson;
+            }
+        }
+        if (brCorrupt) {
+            m.put("behaviorRulesRaw", brRawCorruptValue);
         }
 
         if (entity.getConfig() != null && !entity.getConfig().isBlank()) {

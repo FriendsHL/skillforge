@@ -5,11 +5,17 @@ import com.skillforge.core.model.SkillDefinition;
 
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 /**
  * 系统提示词构建器，将 Agent 定义、Skill 列表和上下文整合为完整的 system prompt。
  */
 public class SystemPromptBuilder {
+
+    private static final int MAX_CUSTOM_RULE_LENGTH = 500;
+    private static final Pattern DANGEROUS_TAGS = Pattern.compile(
+            "<(?:system|assistant|user|tool_use|tool_result|function|instructions)[^>]*>",
+            Pattern.CASE_INSENSITIVE);
 
     private final AgentDefinition agentDefinition;
     private final List<SkillDefinition> skillDefinitions;
@@ -71,7 +77,7 @@ public class SystemPromptBuilder {
             sb.append("\n");
         }
 
-        // 3. Available skills
+        // 5. Available skills
         if (skillDefinitions != null && !skillDefinitions.isEmpty()) {
             sb.append("## Available Skills\n\n");
             for (SkillDefinition skill : skillDefinitions) {
@@ -80,7 +86,10 @@ public class SystemPromptBuilder {
             sb.append("\n");
         }
 
-        // 3. Context from providers
+        // 6. Behavior Rules — after Available Skills, before Context (recency bias)
+        appendBehaviorRules(sb);
+
+        // 7. Context from providers
         if (contextProviders != null && !contextProviders.isEmpty()) {
             sb.append("## Context\n\n");
             for (ContextProvider provider : contextProviders) {
@@ -96,5 +105,52 @@ public class SystemPromptBuilder {
         }
 
         return sb.toString().stripTrailing();
+    }
+
+    /**
+     * Append resolved builtin behavior rules and sandboxed custom rules to the prompt.
+     */
+    private void appendBehaviorRules(StringBuilder sb) {
+        List<String> resolved = agentDefinition.getResolvedBehaviorRules();
+        boolean hasBuiltin = resolved != null && !resolved.isEmpty();
+
+        AgentDefinition.BehaviorRulesConfig config = agentDefinition.getBehaviorRules();
+        List<String> customRules = config != null ? config.getCustomRules() : null;
+        boolean hasCustom = customRules != null && !customRules.isEmpty();
+
+        if (!hasBuiltin && !hasCustom) return;
+
+        sb.append("## Behavior Rules\n\n");
+
+        // Builtin rules — resolved prompt texts
+        if (hasBuiltin) {
+            sb.append("You MUST follow these behavioral guidelines:\n\n");
+            for (int i = 0; i < resolved.size(); i++) {
+                sb.append(i + 1).append(". ").append(resolved.get(i)).append("\n");
+            }
+            sb.append("\n");
+        }
+
+        // Custom rules — sandboxed with XML tag for prompt injection defense
+        if (hasCustom) {
+            sb.append("<user-configured-guidelines>\n");
+            sb.append("The agent creator has configured the following custom behavior guidelines:\n");
+            for (String rule : customRules) {
+                String sanitized = sanitizeCustomRule(rule);
+                if (!sanitized.isBlank()) {
+                    sb.append("- ").append(sanitized).append("\n");
+                }
+            }
+            sb.append("</user-configured-guidelines>\n\n");
+        }
+    }
+
+    static String sanitizeCustomRule(String rule) {
+        if (rule == null) return "";
+        String cleaned = DANGEROUS_TAGS.matcher(rule).replaceAll("[filtered]");
+        if (cleaned.length() > MAX_CUSTOM_RULE_LENGTH) {
+            cleaned = cleaned.substring(0, MAX_CUSTOM_RULE_LENGTH) + "...";
+        }
+        return cleaned.strip();
     }
 }

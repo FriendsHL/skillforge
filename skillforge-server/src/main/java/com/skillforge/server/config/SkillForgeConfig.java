@@ -1,5 +1,7 @@
 package com.skillforge.server.config;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.skillforge.core.context.BehaviorRuleRegistry;
 import com.skillforge.core.compact.ContextCompactorCallback;
 import com.skillforge.core.compact.FullCompactStrategy;
 import com.skillforge.core.compact.LightCompactStrategy;
@@ -64,6 +66,11 @@ import java.util.concurrent.TimeUnit;
 public class SkillForgeConfig {
 
     private static final Logger log = LoggerFactory.getLogger(SkillForgeConfig.class);
+
+    @Bean
+    public BehaviorRuleRegistry behaviorRuleRegistry(ObjectMapper objectMapper) {
+        return new BehaviorRuleRegistry(objectMapper);
+    }
 
     @Bean
     @ConditionalOnProperty(name = "skillforge.embedding.enabled", havingValue = "true")

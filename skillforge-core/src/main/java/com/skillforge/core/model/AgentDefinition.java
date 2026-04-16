@@ -1,5 +1,7 @@
 package com.skillforge.core.model;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
@@ -34,6 +36,33 @@ public class AgentDefinition {
 
     @JsonProperty("tools_prompt")
     private String toolsPrompt;
+
+    @JsonProperty("behavior_rules")
+    private BehaviorRulesConfig behaviorRules;
+
+    /** Resolved prompt texts from builtin rules, populated by server layer. Not serialized. */
+    @JsonIgnore
+    private List<String> resolvedBehaviorRules = new ArrayList<>();
+
+    /**
+     * Structured behavior rules config parsed from the JSON storage column.
+     */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class BehaviorRulesConfig {
+        private List<String> builtinRuleIds = new ArrayList<>();
+        private List<String> customRules = new ArrayList<>();
+
+        public BehaviorRulesConfig() {}
+
+        public List<String> getBuiltinRuleIds() { return builtinRuleIds; }
+        public void setBuiltinRuleIds(List<String> builtinRuleIds) {
+            this.builtinRuleIds = builtinRuleIds != null ? builtinRuleIds : new ArrayList<>();
+        }
+        public List<String> getCustomRules() { return customRules; }
+        public void setCustomRules(List<String> customRules) {
+            this.customRules = customRules != null ? customRules : new ArrayList<>();
+        }
+    }
 
     public AgentDefinition() {
     }
@@ -142,5 +171,21 @@ public class AgentDefinition {
 
     public void setToolsPrompt(String toolsPrompt) {
         this.toolsPrompt = toolsPrompt;
+    }
+
+    public BehaviorRulesConfig getBehaviorRules() {
+        return behaviorRules;
+    }
+
+    public void setBehaviorRules(BehaviorRulesConfig behaviorRules) {
+        this.behaviorRules = behaviorRules;
+    }
+
+    public List<String> getResolvedBehaviorRules() {
+        return resolvedBehaviorRules;
+    }
+
+    public void setResolvedBehaviorRules(List<String> resolvedBehaviorRules) {
+        this.resolvedBehaviorRules = resolvedBehaviorRules != null ? resolvedBehaviorRules : new ArrayList<>();
     }
 }

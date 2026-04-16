@@ -3,6 +3,7 @@ package com.skillforge.server.service;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.skillforge.core.context.BehaviorRuleRegistry;
 import com.skillforge.core.model.AgentDefinition;
 import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.repository.AgentRepository;
@@ -22,16 +23,23 @@ public class AgentService {
 
     private final AgentRepository agentRepository;
     private final ObjectMapper objectMapper;
+    private final BehaviorRuleRegistry behaviorRuleRegistry;
 
-    public AgentService(AgentRepository agentRepository, ObjectMapper objectMapper) {
+    public AgentService(AgentRepository agentRepository,
+                        ObjectMapper objectMapper,
+                        BehaviorRuleRegistry behaviorRuleRegistry) {
         this.agentRepository = agentRepository;
         this.objectMapper = objectMapper;
+        this.behaviorRuleRegistry = behaviorRuleRegistry;
     }
 
     public AgentEntity createAgent(AgentEntity agent) {
         return agentRepository.save(agent);
     }
 
+    // WARNING: This method manually copies each field. When adding new fields
+    // to AgentEntity, you MUST add the corresponding setter here, or updates
+    // will silently lose data.
     public AgentEntity updateAgent(Long id, AgentEntity updated) {
         AgentEntity existing = agentRepository.findById(id)
                 .orElseThrow(() -> new RuntimeException("Agent not found: " + id));
@@ -44,6 +52,7 @@ public class AgentService {
         existing.setConfig(updated.getConfig());
         existing.setSoulPrompt(updated.getSoulPrompt());
         existing.setToolsPrompt(updated.getToolsPrompt());
+        existing.setBehaviorRules(updated.getBehaviorRules());
         existing.setOwnerId(updated.getOwnerId());
         existing.setPublic(updated.isPublic());
         existing.setStatus(updated.getStatus());
@@ -127,6 +136,22 @@ public class AgentService {
         // Pass agent-level maxLoops into config map
         if (entity.getMaxLoops() != null) {
             def.getConfig().put("max_loops", entity.getMaxLoops());
+        }
+
+        // Parse behaviorRules JSON -> BehaviorRulesConfig, then resolve prompt texts
+        if (entity.getBehaviorRules() != null && !entity.getBehaviorRules().isBlank()) {
+            try {
+                AgentDefinition.BehaviorRulesConfig rulesConfig = objectMapper.readValue(
+                        entity.getBehaviorRules(), AgentDefinition.BehaviorRulesConfig.class);
+                def.setBehaviorRules(rulesConfig);
+                def.setResolvedBehaviorRules(
+                        behaviorRuleRegistry.resolvePromptTexts(
+                                rulesConfig.getBuiltinRuleIds(), def.getSystemPrompt()));
+            } catch (JsonProcessingException e) {
+                log.warn("Failed to parse behaviorRules for agent {}: {}",
+                        entity.getId(), entity.getBehaviorRules(), e);
+                def.setBehaviorRules(new AgentDefinition.BehaviorRulesConfig());
+            }
         }
 
         return def;

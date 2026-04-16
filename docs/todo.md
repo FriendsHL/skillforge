@@ -1,6 +1,6 @@
 # SkillForge 待办任务
 
-> 更新于：2026-04-16
+> 更新于：2026-04-17
 
 ---
 
@@ -19,16 +19,6 @@
 | N1-2 EmbeddingService         | 新增 `EmbeddingService`：复用 `LlmProviderFactory` 中已配置的 OpenAI-compatible provider（`POST /v1/embeddings`），不引入 Ollama；provider 不支持 embedding 时返回 `Optional.empty()`，降级纯 FTS，不报错；memory 写入/更新时异步触发                         |
 | N1-3 混合检索（memory_search Tool） | 拆出独立 Skill `MemorySearchSkill`：FTS 召回（`tsvector @@ plainto_tsquery`）+ pgvector 余弦检索（`ORDER BY embedding <=> :vec`）两路 Top-20，RRF 合并取 Top-K；仅返回 snippet（body 前 100 字）+ memoryId + score；provider 无 embedding 时退化为纯 FTS |
 | N1-4 按需全文（memory_detail Tool） | 新增 `MemoryDetailSkill`：按 memoryId 返回完整 body；Agent 先调 memory_search，按需再调 memory_detail，大幅降低每次检索 token 消耗                                                                                                              |
-
-#### N2 — Agent 行为规范层（Behavioral Rules）
-
-> 参考：andrej-karpathy-skills（+30k 星/周）、CLAUDE.md 结构化行为原则
-
-| 子任务                   | 说明                                                                                                    |
-| --------------------- | ----------------------------------------------------------------------------------------------------- |
-| N2-1 规范条目库            | 平台内置 10-15 条可选行为规范（想清楚再写代码、只改必要文件、先问清楚再行动……）；`t_agent` 表新增 `behaviorRules JSON` 字段；Flyway 补 migration |
-| N2-2 system prompt 组装 | `SystemPromptBuilder` 读取 Agent 的 behaviorRules 配置，自动拼装成结构化规则块追加到 system prompt 末尾                     |
-| N2-3 前端配置 UI          | Agent 编辑页新增 "Behavioral Rules" 区域：复选框列表 + 自定义规则输入框                                                    |
 
 #### N3 — 用户可配置 Lifecycle Hook
 
@@ -79,6 +69,7 @@
 
 | 任务                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | 完成日期       |
 | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| N2-1~N2-3 Agent 行为规范层：V8 Flyway migration（behaviorRules TEXT 列）、BehaviorRuleRegistry（15 条内置规则 JSON + 语言检测 + deprecated 链 + 预设模板）、BehaviorRuleDefinition record、SystemPromptBuilder 注入（Available Skills 之后 + 自定义规则 XML 沙箱 + prompt injection 防护）、AgentYamlMapper round-trip（corrupt data 防御）、REST API（GET /api/behavior-rules + /presets）、前端 BehaviorRulesEditor（模板选择器 + 分类折叠 + Switch + 自定义规则 CRUD）、useBehaviorRules Hook、AgentList.tsx RULES.md Tab 集成；技术方案：docs/design-n2-behavioral-rules.md | 2026-04-17 |
 | N1-1~N1-4 Memory 向量检索：V7 Flyway migration（pgvector + tsvector，graceful fallback）、EmbeddingProvider + OpenAiEmbeddingProvider（/v1/embeddings）、EmbeddingService（降级）、MemoryEmbeddingWorker（@Async afterCommit）、MemorySearchSkill（FTS + pgvector RRF 混合检索）、MemoryDetailSkill（按需全文）、VectorUtils/SkillInputUtils 工具类提取；MemorySkill 移除 search action；Full Pipeline 审查修复：pgvector graceful degradation、afterCommit race fix、no-op sentinel bean、error sanitization、dimension validation | 2026-04-16 |
 | P2-6 Session → Scenario 转换：LLM 批量分析历史 session → draft scenarios → `t_eval_scenario`（V5 migration）；ScenarioLoader 同时加载 DB active 记录；ScenarioDraftPanel Review UI（Approve/Edit/Discard）；ScenarioLoader 改造                                                                                                                                                                                                                                                                                                                                             | 2026-04-16 |
 | P2-1~P2-5 Self-Improve Pipeline Phase 2：PromptVersionEntity（V4 migration）、PromptImproverService（LLM 生成候选 prompt）、AbEvalPipeline（held-out 集 A/B 对比）、PromptPromotionService（Δ≥15pp 自动晋升 + 4 层 Goodhart 防护）、前端 ImprovePromptButton + PromptHistoryPanel + rollback/resume                                                                                                                                                                                                                                                                              | 2026-04-16 |

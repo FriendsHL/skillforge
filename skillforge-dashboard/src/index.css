@@ -329,3 +329,145 @@ body {
 .chat-markdown h3 {
   margin: 8px 0 4px 0;
 }
+
+/* ── Behavior Rules Editor ───────────────────────────────────────── */
+
+.sf-rules-container {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.sf-rules-template-bar {
+  padding: var(--sp-2) 0;
+}
+
+.sf-rules-categories {
+  max-height: 400px;
+  overflow-y: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.sf-rules-category-header {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.sf-rules-category-counter {
+  font-size: var(--font-size-xs);
+  color: var(--text-muted);
+  font-weight: 400;
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.sf-rules-item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-4);
+  border-bottom: 1px solid var(--border-subtle);
+  transition: background var(--transition-base);
+}
+
+.sf-rules-item:last-child {
+  border-bottom: none;
+}
+
+.sf-rules-item:hover {
+  background: var(--bg-hover);
+}
+
+.sf-rules-item-title {
+  flex: 1;
+  font-size: var(--font-size-sm);
+  color: var(--text-primary);
+}
+
+.sf-rules-severity {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  padding: 1px var(--sp-2);
+  border-radius: var(--radius-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+}
+
+.sf-rules-severity--must {
+  color: var(--accent-primary);
+  background: var(--accent-muted);
+}
+
+.sf-rules-severity--should {
+  color: var(--text-secondary);
+  background: var(--bg-hover);
+}
+
+.sf-rules-severity--may {
+  color: var(--text-muted);
+  background: var(--bg-sidebar);
+}
+
+/* Custom rules section */
+.sf-rules-custom-section {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: var(--sp-3) var(--sp-4);
+}
+
+.sf-rules-custom-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  color: var(--text-primary);
+  margin-bottom: var(--sp-2);
+}
+
+.sf-rules-custom-item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  padding: var(--sp-2) 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.sf-rules-custom-item:last-child {
+  border-bottom: none;
+}
+
+.sf-rules-custom-item--editing {
+  flex-direction: column;
+}
+
+.sf-rules-custom-text {
+  flex: 1;
+  font-size: var(--font-size-sm);
+  color: var(--text-primary);
+  line-height: 1.5;
+}
+
+.sf-rules-custom-actions {
+  flex-shrink: 0;
+  opacity: 0.4;
+  transition: opacity var(--transition-base);
+}
+
+.sf-rules-custom-item:hover .sf-rules-custom-actions {
+  opacity: 1;
+}
+
+.sf-rules-custom-add {
+  margin-top: var(--sp-2);
+}
+
+.sf-rules-custom-input {
+  font-size: var(--font-size-sm) !important;
+}

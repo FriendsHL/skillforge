@@ -130,6 +130,42 @@ export const getDailyUsage = (days = 30) => api.get(`/dashboard/usage/daily?days
 export const getUsageByModel = () => api.get('/dashboard/usage/by-model');
 export const getUsageByAgent = () => api.get('/dashboard/usage/by-agent');
 
+// ─── Behavior Rules ─────────────────────────────────────────────────────────
+
+export interface BehaviorRule {
+  id: string;
+  category: string;
+  severity: 'must' | 'should' | 'may';
+  label: string;
+  labelZh: string;
+  deprecated: boolean;
+  replacedBy: string | null;
+  presets: string[];
+}
+
+export interface BehaviorRulesResponse {
+  version: string;
+  rules: BehaviorRule[];
+}
+
+export interface BehaviorRulePresetResponse {
+  presetName: string;
+  ruleIds: string[];
+}
+
+export interface BehaviorRuleConfig {
+  builtinRuleIds: string[];
+  customRules: string[];
+}
+
+export const getBehaviorRules = () =>
+  api.get<BehaviorRulesResponse>('/behavior-rules');
+
+export const getBehaviorRulesPreset = (executionMode: string) =>
+  api.get<BehaviorRulePresetResponse>('/behavior-rules/presets', {
+    params: { executionMode },
+  });
+
 // ─── Scenario Drafts ─────────────────────────────────────────────────────────
 
 export interface EvalScenarioDraft {

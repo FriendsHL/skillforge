@@ -50,6 +50,10 @@ public class AgentEntity {
     @Column(columnDefinition = "TEXT")
     private String toolsPrompt;
 
+    /** JSON: {"builtinRuleIds":["rule-id",...],"customRules":["text",...]} */
+    @Column(columnDefinition = "TEXT")
+    private String behaviorRules;
+
     private Long ownerId;
 
     private boolean isPublic = false;
@@ -159,6 +163,14 @@ public class AgentEntity {
 
     public void setToolsPrompt(String toolsPrompt) {
         this.toolsPrompt = toolsPrompt;
+    }
+
+    public String getBehaviorRules() {
+        return behaviorRules;
+    }
+
+    public void setBehaviorRules(String behaviorRules) {
+        this.behaviorRules = behaviorRules;
     }
 
     public Long getOwnerId() {

@@ -2,10 +2,13 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, Popconfirm, Tag, Tabs, message, Card, Drawer } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, FileTextOutlined, HistoryOutlined, ExperimentOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { getAgents, createAgent, updateAgent, deleteAgent, getTools, getSkills, getClaudeMd, saveClaudeMd, extractList } from '../api';
+import { getAgents, createAgent, updateAgent, deleteAgent, getTools, getSkills, getClaudeMd, saveClaudeMd, extractList, type BehaviorRuleConfig } from '../api';
 import { AgentSchema, safeParseList } from '../api/schemas';
 import PromptHistoryPanel from '../components/PromptHistoryPanel';
 import ScenarioDraftPanel from '../components/ScenarioDraftPanel';
+import BehaviorRulesEditor from '../components/BehaviorRulesEditor';
+import { useBehaviorRules } from '../hooks/useBehaviorRules';
+import { DEFAULT_TEMPLATE } from '../constants/behaviorRules';
 
 const { TextArea } = Input;
 
@@ -36,15 +39,30 @@ const parseSkillIds = (raw: any): string[] => {
   return [];
 };
 
+const parseBehaviorRules = (raw: unknown): BehaviorRuleConfig | null => {
+  if (!raw) return null;
+  if (typeof raw === 'string') {
+    try { return JSON.parse(raw) as BehaviorRuleConfig; } catch { return null; }
+  }
+  if (typeof raw === 'object' && raw !== null) return raw as BehaviorRuleConfig;
+  return null;
+};
+
 const AgentList: React.FC = () => {
   const queryClient = useQueryClient();
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<any>(null);
   const [form] = Form.useForm();
+  const executionMode = Form.useWatch('executionMode', form) ?? 'ask';
   const [claudeMdModalOpen, setClaudeMdModalOpen] = useState(false);
   const [claudeMdDraft, setClaudeMdDraft] = useState<string | null>(null);
   const [promptHistoryAgentId, setPromptHistoryAgentId] = useState<string | null>(null);
   const [scenariosAgentId, setScenariosAgentId] = useState<string | null>(null);
+
+  const behaviorRules = useBehaviorRules(
+    editing ? parseBehaviorRules(editing.behaviorRules) : null,
+    executionMode,
+  );
 
   const { data: agents = [], isLoading: loading, isError: agentsError } = useQuery({
     queryKey: ['agents'],
@@ -150,6 +168,7 @@ const AgentList: React.FC = () => {
         ...values,
         skillIds: JSON.stringify(values.skillIds ?? []),
         toolIds: JSON.stringify(values.toolIds ?? []),
+        behaviorRules: JSON.stringify(behaviorRules.config),
       };
       if (editing) {
         await updateMutation.mutateAsync({ id: editing.id, payload: { ...editing, ...payload } });
@@ -268,7 +287,7 @@ const AgentList: React.FC = () => {
         open={modalOpen}
         onOk={handleOk}
         onCancel={() => setModalOpen(false)}
-        width={640}
+        width={760}
       >
         <Form form={form} layout="vertical">
           <Form.Item name="name" label="Name" rules={[{ required: true, message: 'Please enter agent name' }]}>
@@ -336,6 +355,23 @@ const AgentList: React.FC = () => {
                   <Form.Item name="toolsPrompt" noStyle>
                     <TextArea rows={10} placeholder="# Tool Usage Rules&#10;&#10;(Optional) Custom tool rules..." />
                   </Form.Item>
+                ),
+              },
+              {
+                key: 'rules',
+                label: 'RULES.md',
+                children: (
+                  <BehaviorRulesEditor
+                    groupedRules={behaviorRules.groupedRules}
+                    templateId={behaviorRules.templateId}
+                    customRules={behaviorRules.config.customRules}
+                    isLoading={behaviorRules.isLoading}
+                    onApplyTemplate={behaviorRules.applyTemplate}
+                    onToggleRule={behaviorRules.toggleRule}
+                    onAddCustomRule={behaviorRules.addCustomRule}
+                    onRemoveCustomRule={behaviorRules.removeCustomRule}
+                    onUpdateCustomRule={behaviorRules.updateCustomRule}
+                  />
                 ),
               },
               {
