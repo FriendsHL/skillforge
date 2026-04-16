@@ -6,17 +6,6 @@
 
 ## 待排期
 
-### Phase 2 — Self-Improve 核心闭环（P2）
-
-| 子任务                        | 说明                                                                                                                                                                                        |
-| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| P2-1 PromptVersionEntity   | 新建 `t_prompt_version`（V4 Flyway）；字段：id、agent_id、content、version_number、status(candidate/active/deprecated)、source(manual/auto_improve)、eval_run_id、delta_pass_rate、created_at、promoted_at |
-| P2-2 PromptImproverService | 输入：当前 system prompt + 失败场景（task/agent输出/oracle期望/attribution）+ 通过场景；调用 LLM 分析失败原因，生成候选 prompt；**只处理 PROMPT_QUALITY 和 CONTEXT_OVERFLOW 归因**，其余跳过                                           |
-| P2-3 A/B 评测对比              | 用候选 prompt 重跑一次 eval（**只跑 seed_ held-out 集**，防 Goodhart）；计算 Δ = new_pass_rate - old_pass_rate；Δ ≥ 15% 触发晋升，否则丢弃候选                                                                         |
-| P2-4 自动晋升                  | 旧 prompt → deprecated；候选 → active；更新 `t_agent.system_prompt`；记录 promoted_at + delta_pass_rate；WS 广播 `prompt_promoted`；防护：每 agent 每天最多晋升 1 次，晋升后 24h 冷却，Goodhart 连续下降 ≥ 3 次停止自动晋升          |
-| P2-5 前端                    | Eval Detail 抽屉加"Improve Prompt"按钮；Agent 详情页加 Prompt History 面板（版本列表、当前版本、Δ）；WS 晋升 toast 通知                                                                                                |
-| P2-6 Session → Scenario 转换 | 分析历史 session 生成 eval 场景草稿；写入 `t_eval_scenario`（DB 存储，区别于文件）；前端 Review UI 人工确认/编辑/丢弃；**依赖足够真实 session 数据，最后做**                                                                             |
-
 ### Phase 3 — 记忆质量评估（P3）
 
 | 子任务                 | 说明                                                                                                                                 |
@@ -32,6 +21,8 @@
 
 | 任务                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | 完成日期       |
 | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| P2-6 Session → Scenario 转换：LLM 批量分析历史 session → draft scenarios → `t_eval_scenario`（V5 migration）；ScenarioLoader 同时加载 DB active 记录；ScenarioDraftPanel Review UI（Approve/Edit/Discard）；ScenarioLoader 改造 | 2026-04-16 |
+| P2-1~P2-5 Self-Improve Pipeline Phase 2：PromptVersionEntity（V4 migration）、PromptImproverService（LLM 生成候选 prompt）、AbEvalPipeline（held-out 集 A/B 对比）、PromptPromotionService（Δ≥15pp 自动晋升 + 4 层 Goodhart 防护）、前端 ImprovePromptButton + PromptHistoryPanel + rollback/resume | 2026-04-16 |
 | #5/#6 Self-Improve Pipeline Phase 1 实现：13 个场景 JSON（7 seed_ + 6 train_）；EvalExecutorConfig + evalOrchestratorExecutor（双独立线程池防死锁）；AttributionEngine（7×5 矩阵）；EvalRunEntity + EvalSessionEntity + V3 Flyway；SandboxSkillRegistryFactory + EvalEngineFactory（无 compactorCallback/pendingAskRegistry）；ScenarioRunnerSkill（3级重试 90s 预算）；EvalJudgeSkill（2×Haiku + Sonnet meta）；EvalOrchestrator（Goodhart 防护 + Δ 监控）；REST API POST/GET /api/eval/runs；/eval 前端页面（实时 WS + 详情 Drawer）；Full Pipeline 评审修复：executor 死锁、rate limit ghost run、maxLoops 覆盖、5 个字段名错误 | 2026-04-16 |
 | #5/#6 Self-Improve Pipeline 完整方案设计（Plan A + Plan B + 双 Reviewer + Judge 全流程）；详见 docs/design-self-improve-pipeline.md                                                                                                                                                                                                                                                                                                                                                                                                                                | 2026-04-16 |
 | P1-3 CollabRun WS 广播：ChatWebSocketHandler 注入 repo 查 userId，4 个 collab 事件改写为 userEvent 广播；Teams.tsx 订阅 /ws/users/1 实时 invalidate TanStack Query                                                                                                                                                                                                                                                                                                                                                                                                      | 2026-04-16 |
