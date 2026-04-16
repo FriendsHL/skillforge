@@ -9,6 +9,7 @@ import MemoryList from './pages/MemoryList';
 import ModelUsage from './pages/ModelUsage';
 import Traces from './pages/Traces';
 import Teams from './pages/Teams';
+import Eval from './pages/Eval';
 import Login from './pages/Login';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { AuthProvider } from './contexts/AuthContext';
@@ -36,6 +37,7 @@ function App() {
             <Route path="usage" element={<ErrorBoundary context="Model Usage"><ModelUsage /></ErrorBoundary>} />
             <Route path="traces" element={<ErrorBoundary context="Traces"><Traces /></ErrorBoundary>} />
             <Route path="teams" element={<ErrorBoundary context="Teams"><Teams /></ErrorBoundary>} />
+            <Route path="eval" element={<ErrorBoundary context="Eval"><Eval /></ErrorBoundary>} />
             <Route path="chat" element={<ErrorBoundary context="Chat"><Chat /></ErrorBoundary>} />
             <Route path="chat/:sessionId" element={<ErrorBoundary context="Chat"><Chat /></ErrorBoundary>} />
           </Route>

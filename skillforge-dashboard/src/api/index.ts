@@ -130,4 +130,10 @@ export const getDailyUsage = (days = 30) => api.get(`/dashboard/usage/daily?days
 export const getUsageByModel = () => api.get('/dashboard/usage/by-model');
 export const getUsageByAgent = () => api.get('/dashboard/usage/by-agent');
 
+// ─── Eval Pipeline ────────────────────────────────────────────────────────────
+export const getEvalRuns = () => api.get('/eval/runs');
+export const getEvalRun = (id: string) => api.get(`/eval/runs/${id}`);
+export const triggerEvalRun = (agentId: string, userId = 1) =>
+  api.post('/eval/runs', { agentId, userId });
+
 export default api;
