@@ -12,7 +12,7 @@ import java.time.Instant;
 public class EvalSessionEntity {
 
     @Id
-    @Column(length = 36)
+    @Column(length = 64)
     private String sessionId;
 
     @Column(length = 36)
