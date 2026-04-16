@@ -338,6 +338,18 @@ const EvalDetailDrawer: React.FC<EvalDetailDrawerProps> = ({ evalRunId, open, on
         <Empty description="Failed to load eval run" />
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+          {/* Run-level error — shown when the entire run failed before scenario execution */}
+          {run.status === 'FAILED' && run.errorMessage && (
+            <Alert
+              type="error"
+              showIcon
+              message="Eval Run Failed"
+              description={
+                <Text style={{ fontSize: 12, fontFamily: 'monospace' }}>{run.errorMessage}</Text>
+              }
+            />
+          )}
+
           {/* Summary stats */}
           <Row gutter={16}>
             <Col span={5}>
@@ -676,8 +688,13 @@ const Eval: React.FC = () => {
       const evalRunId = res.data?.id ?? res.data?.evalRunId ?? '(unknown)';
       message.success(`Eval started, ID: ${evalRunId}`);
       queryClient.invalidateQueries({ queryKey: ['eval-runs'] });
-    } catch {
-      message.error('Failed to trigger eval run');
+    } catch (err: unknown) {
+      const detail =
+        (err as any)?.response?.data?.error ??
+        (err as any)?.response?.data?.message ??
+        (err as any)?.message ??
+        'Unknown error';
+      message.error(`Failed to trigger eval run: ${detail}`);
     } finally {
       setTriggering(false);
     }

@@ -81,6 +81,13 @@ public class SessionTitleService {
         if (firstUserMessage == null || firstUserMessage.isBlank()) {
             return;
         }
+        // 跳过结构化/技术类 prompt：以 * # { [ 开头，或内容过短（< 10 字符）
+        // 这类消息通常是 eval 任务指令，截断后标题无意义；等 smart rename 接管
+        String trimmed = firstUserMessage.strip();
+        if (trimmed.length() < 10 || trimmed.matches("^[*#\\[{].*")) {
+            log.debug("applyImmediateTitle: skipped structured/short message, sessionId={}", sessionId);
+            return;
+        }
         try {
             SessionEntity s = sessionService.getSession(sessionId);
             if (!isDefaultTitle(s.getTitle())) {
@@ -150,7 +157,9 @@ public class SessionTitleService {
             LlmRequest req = new LlmRequest();
             req.setSystemPrompt("你是一个会话标题生成助手。" +
                     "请根据下面的对话内容,用不超过 10 个汉字直接给出一个简明扼要的中文标题。" +
-                    "只输出标题文本本身,不要加引号、不要加标点、不要解释。");
+                    "只输出标题文本本身,不要加引号、不要加标点、不要解释。" +
+                    "如果对话内容是技术任务（如代码生成、评测、数据分析等英文指令），" +
+                    "请描述任务类型而不是复述指令原文，例如「代码评测任务」「场景分析」「Agent 调试」。");
             List<Message> reqMsgs = new ArrayList<>();
             reqMsgs.add(Message.user("以下是一段对话摘要,请生成标题:\n\n" + summary));
             req.setMessages(reqMsgs);

@@ -48,25 +48,33 @@ const ChatInput: React.FC<ChatInputProps> = React.memo(({ disabled, onSend }) =>
     setInput('');
     onSend(text);
   };
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Enter 发送，Shift+Enter 换行
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSend();
+    }
+  };
   return (
     <div style={{ background: 'var(--bg-primary)', padding: '12px 16px 20px' }}>
       <div
         className="sf-chat-input"
         style={{
           display: 'flex',
-          alignItems: 'center',
+          alignItems: 'flex-end',
           padding: '4px 4px 4px 16px',
           gap: 8,
         }}
       >
-        <Input
-          placeholder="Type your message..."
+        <Input.TextArea
+          placeholder="Type your message... (Shift+Enter for newline)"
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          onPressEnter={handleSend}
+          onKeyDown={handleKeyDown}
           disabled={disabled}
           variant="borderless"
-          style={{ flex: 1 }}
+          autoSize={{ minRows: 1, maxRows: 6 }}
+          style={{ flex: 1, resize: 'none' }}
         />
         <Button
           className="sf-send-btn"
@@ -75,7 +83,7 @@ const ChatInput: React.FC<ChatInputProps> = React.memo(({ disabled, onSend }) =>
           onClick={handleSend}
           disabled={disabled || !input.trim()}
           shape="circle"
-          style={{ width: 32, height: 32, minWidth: 32 }}
+          style={{ width: 32, height: 32, minWidth: 32, marginBottom: 4 }}
         />
       </div>
     </div>

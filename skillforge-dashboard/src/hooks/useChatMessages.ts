@@ -78,7 +78,24 @@ export function normalizeMessages(list: any[]): ChatMessage[] {
         }
       }
       if (!text.trim()) continue;
-      result.push({ role: 'user', content: text });
+
+      // Compaction 压缩摘要注入为 user 消息：
+      //   独立形态: "[Context summary from N messages...]\n...summary..." — 跳过不显示
+      //   合并形态: "[Context summary from N messages...]\n\n---\n\noriginal user text" — 只显示原始用户文本
+      let displayText = text;
+      if (text.startsWith('[Context summary from ')) {
+        const sep = '\n\n---\n\n';
+        const sepIdx = text.indexOf(sep);
+        if (sepIdx === -1) {
+          // 独立摘要消息，跳过
+          continue;
+        }
+        // 合并消息，取分隔符之后的原始用户文本
+        displayText = text.slice(sepIdx + sep.length).trim();
+        if (!displayText) continue;
+      }
+
+      result.push({ role: 'user', content: displayText });
     } else if (m.role === 'assistant') {
       const toolCalls = toolUseBlocks.map((b: any) => ({
         id: b.id,
