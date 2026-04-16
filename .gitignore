@@ -6,3 +6,4 @@ data/
 *.class
 *.jar
 *.log
+.claude/worktrees/
