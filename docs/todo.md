@@ -8,7 +8,6 @@
 
 | # | 任务 | 来源 | 优先级 |
 |---|------|------|-------|
-| P1-2 | CompactionService 解锁 LLM 调用：Full compact 持 stripe lock 调 LLM → head-of-line blocking，拆三阶段（Phase 1 guard/snapshot → Phase 2 LLM → Phase 3 persist），LLM 调用不持 stripe lock | P1 | P1 |
 | P1-3 | CollabRun WS 广播缺失：`collabMemberFinished` 等事件只写 log 不广播，Teams 页面协作状态不实时 | P1 | P1 |
 | #5 | Self-Improve Pipeline：设计 Scenario 格式 + 编写初始 eval 场景集（10-20 个） | 新方向 | P2 |
 | #6 | Self-Improve Pipeline：ScenarioRunner Skill + EvalJudge Skill + collab run 模板（blocked by #5） | 新方向 | P2 |
@@ -19,6 +18,7 @@
 
 | 任务 | 完成日期 |
 |------|---------|
+| P1-2 CompactionService 解锁 LLM 调用：3-phase split — Phase 1 guard/prepareCompact (stripe lock) → Phase 2 applyPrepared (LLM, no lock) → Phase 3 persist (stripe lock + tx)；fullCompactInFlight Set 防并发重入 | 2026-04-15 |
 | P1-1 动态 Context Window：ModelConfig 静态模型表 + CompactionService 3 级解析链，废弃硬编码 32000 | 2026-04-15 |
 | #9 认证鉴权 MVP：auto-token on startup，Login 页自动预填，Bearer 拦截器 + WS 握手鉴权 | 2026-04-15 |
 | #20 API 响应格式统一 + extractList 防御代码集中 | 2026-04-15 |
