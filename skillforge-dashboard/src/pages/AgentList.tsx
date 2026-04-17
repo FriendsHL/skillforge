@@ -225,7 +225,7 @@ const AgentList: React.FC = () => {
       key: 'toolIds',
       render: (v: any) => {
         const arr = parseSkillIds(v);
-        if (arr.length === 0) return <span style={{ color: '#999' }}>All</span>;
+        if (arr.length === 0) return <span style={{ color: 'var(--text-muted)' }}>All</span>;
         const shown = arr.slice(0, 3);
         const rest = arr.length - shown.length;
         return (
@@ -246,7 +246,7 @@ const AgentList: React.FC = () => {
       key: 'skillIds',
       render: (v: any) => {
         const arr = parseSkillIds(v);
-        if (arr.length === 0) return <span style={{ color: '#999' }}>—</span>;
+        if (arr.length === 0) return <span style={{ color: 'var(--text-muted)' }}>—</span>;
         const shown = arr.slice(0, 3);
         const rest = arr.length - shown.length;
         return (
@@ -414,7 +414,7 @@ const AgentList: React.FC = () => {
                 key: 'memory',
                 label: 'MEMORY.md',
                 children: (
-                  <div style={{ color: '#999', padding: 16 }}>
+                  <div style={{ color: 'var(--text-muted)', padding: 16 }}>
                     Memory is automatically injected from the Memory system.
                     <br />
                     <a href="/memories">Manage Memories &rarr;</a>

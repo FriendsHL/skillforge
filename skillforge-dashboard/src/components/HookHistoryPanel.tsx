@@ -111,9 +111,9 @@ const DetailModal: React.FC<DetailModalProps> = React.memo(({ entry, open, onClo
         <div style={{
           display: 'flex', gap: 16, flexWrap: 'wrap',
           padding: '10px 14px',
-          background: 'var(--bg-surface, #fafafa)',
-          borderRadius: 'var(--radius-sm, 6px)',
-          border: '1px solid var(--border-subtle, #E2E0DC)',
+          background: 'var(--bg-surface)',
+          borderRadius: 'var(--radius-sm)',
+          border: '1px solid var(--border-subtle)',
         }}>
           <div>
             <Text type="secondary" style={{ fontSize: 11, display: 'block' }}>Event</Text>
@@ -143,8 +143,8 @@ const DetailModal: React.FC<DetailModalProps> = React.memo(({ entry, open, onClo
             </Text>
             <pre style={{
               fontSize: 11, margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-              background: 'var(--bg-code, #1C1C1E)', color: '#e5e7eb',
-              padding: '10px 12px', borderRadius: 'var(--radius-sm, 6px)',
+              background: 'var(--bg-code)', color: 'var(--text-on-accent)',
+              padding: '10px 12px', borderRadius: 'var(--radius-sm)',
               fontFamily: 'var(--font-mono)', maxHeight: 180, overflowY: 'auto',
             }}>
               {entry.input}
@@ -160,10 +160,10 @@ const DetailModal: React.FC<DetailModalProps> = React.memo(({ entry, open, onClo
             </Text>
             <pre style={{
               fontSize: 11, margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-              background: 'var(--bg-surface, #fafafa)',
-              padding: '10px 12px', borderRadius: 'var(--radius-sm, 6px)',
+              background: 'var(--bg-surface)',
+              padding: '10px 12px', borderRadius: 'var(--radius-sm)',
               fontFamily: 'var(--font-mono)', maxHeight: 240, overflowY: 'auto',
-              border: '1px solid var(--border-subtle, #E2E0DC)',
+              border: '1px solid var(--border-subtle)',
             }}>
               {entry.output}
             </pre>
@@ -178,10 +178,10 @@ const DetailModal: React.FC<DetailModalProps> = React.memo(({ entry, open, onClo
             </Text>
             <pre style={{
               fontSize: 11, margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-              background: 'rgba(255,77,79,0.06)', color: '#ff4d4f',
-              padding: '10px 12px', borderRadius: 'var(--radius-sm, 6px)',
+              background: 'var(--color-error-bg)', color: 'var(--color-error)',
+              padding: '10px 12px', borderRadius: 'var(--radius-sm)',
               fontFamily: 'var(--font-mono)', maxHeight: 180, overflowY: 'auto',
-              border: '1px solid rgba(255,77,79,0.15)',
+              border: '1px solid var(--color-error-border)',
             }}>
               {entry.error}
             </pre>
@@ -254,9 +254,9 @@ const HookHistoryPanel: React.FC<HookHistoryPanelProps> = ({ agentId }) => {
       align: 'center' as const,
       render: (v: boolean) =>
         v ? (
-          <CheckCircleOutlined style={{ color: '#52c41a' }} />
+          <CheckCircleOutlined style={{ color: 'var(--color-success)' }} />
         ) : (
-          <CloseCircleOutlined style={{ color: '#ff4d4f' }} />
+          <CloseCircleOutlined style={{ color: 'var(--color-error)' }} />
         ),
     },
     {
@@ -319,7 +319,7 @@ const HookHistoryPanel: React.FC<HookHistoryPanelProps> = ({ agentId }) => {
           emptyText: <Empty description="No hook executions yet" />,
         }}
         style={{
-          borderRadius: 'var(--radius-sm, 6px)',
+          borderRadius: 'var(--radius-sm)',
         }}
       />
 

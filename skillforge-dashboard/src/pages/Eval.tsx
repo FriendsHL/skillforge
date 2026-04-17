@@ -13,6 +13,7 @@ import {
   getEvalRuns, getEvalRun, triggerEvalRun, getAgents,
   getEvalScenarios, extractList,
 } from '../api';
+import { useAuth } from '../contexts/AuthContext';
 import ImprovePromptButton from '../components/ImprovePromptButton';
 
 const { Text } = Typography;
@@ -71,9 +72,9 @@ const ORACLE_TYPE_COLOR: Record<string, string> = {
 };
 
 function scoreColor(score: number): string {
-  if (score >= 70) return '#52c41a';
-  if (score >= 40) return '#faad14';
-  return '#ff4d4f';
+  if (score >= 70) return 'var(--color-success)';
+  if (score >= 40) return 'var(--color-warning)';
+  return 'var(--color-error)';
 }
 
 // ── Scenario expandable row content ──────────────────────────────────────────
@@ -136,8 +137,8 @@ const ScenarioExpandedRow: React.FC<{ record: ScenarioResultRecord }> = ({ recor
             display: '-webkit-box',
             WebkitLineClamp: 3,
             WebkitBoxOrient: 'vertical' as const,
-            background: 'var(--bg-surface, #fafafa)', padding: '6px 8px', borderRadius: 4,
-            borderLeft: '2px solid #6366f1',
+            background: 'var(--bg-surface)', padding: '6px 8px', borderRadius: 4,
+            borderLeft: '2px solid var(--accent-primary)',
           }}>
             {record.task}
           </pre>
@@ -178,7 +179,7 @@ const ScenarioExpandedRow: React.FC<{ record: ScenarioResultRecord }> = ({ recor
           <pre style={{
             fontSize: 11, margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
             maxHeight: 180, overflowY: 'auto',
-            background: 'var(--bg-surface, #fafafa)', padding: '6px 8px', borderRadius: 4,
+            background: 'var(--bg-surface)', padding: '6px 8px', borderRadius: 4,
           }}>
             {record.agentFinalOutput}
           </pre>
@@ -194,8 +195,8 @@ const ScenarioExpandedRow: React.FC<{ record: ScenarioResultRecord }> = ({ recor
           <pre style={{
             fontSize: 11, margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
             maxHeight: 120, overflowY: 'auto',
-            background: 'var(--bg-surface, #fafafa)', padding: '6px 8px', borderRadius: 4,
-            borderLeft: '2px solid #faad14',
+            background: 'var(--bg-surface)', padding: '6px 8px', borderRadius: 4,
+            borderLeft: '2px solid var(--color-warning)',
           }}>
             {record.judgeRationale}
           </pre>
@@ -211,7 +212,7 @@ const ScenarioExpandedRow: React.FC<{ record: ScenarioResultRecord }> = ({ recor
           <pre style={{
             fontSize: 11, margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
             maxHeight: 120, overflowY: 'auto',
-            background: 'var(--bg-surface, #fafafa)', padding: '6px 8px', borderRadius: 4,
+            background: 'var(--bg-surface)', padding: '6px 8px', borderRadius: 4,
           }}>
             {record.improvementSuggestions}
           </pre>
@@ -362,16 +363,16 @@ const EvalDetailDrawer: React.FC<EvalDetailDrawerProps> = ({ evalRunId, open, on
               <Statistic title="Total" value={total} />
             </Col>
             <Col span={3}>
-              <Statistic title="Passed" value={passed} valueStyle={{ color: '#52c41a' }} />
+              <Statistic title="Passed" value={passed} valueStyle={{ color: 'var(--color-success)' }} />
             </Col>
             <Col span={3}>
-              <Statistic title="Failed" value={failed} valueStyle={{ color: '#ff4d4f' }} />
+              <Statistic title="Failed" value={failed} valueStyle={{ color: 'var(--color-error)' }} />
             </Col>
             <Col span={3}>
-              <Statistic title="Timeout" value={timeout} valueStyle={{ color: '#faad14' }} />
+              <Statistic title="Timeout" value={timeout} valueStyle={{ color: 'var(--color-warning)' }} />
             </Col>
             <Col span={2}>
-              <Statistic title="Veto" value={veto} valueStyle={{ color: '#eb2f96' }} />
+              <Statistic title="Veto" value={veto} valueStyle={{ color: 'var(--accent-primary)' }} />
             </Col>
           </Row>
 
@@ -548,8 +549,8 @@ const ScenariosPanel: React.FC = () => {
                   <Text type="secondary" style={{ fontSize: 11, display: 'block', marginBottom: 3 }}>Full Task:</Text>
                   <pre style={{
                     fontSize: 11, margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-                    background: 'var(--bg-surface, #fafafa)', padding: '6px 8px', borderRadius: 4,
-                    borderLeft: '2px solid #6366f1',
+                    background: 'var(--bg-surface)', padding: '6px 8px', borderRadius: 4,
+                    borderLeft: '2px solid var(--accent-primary)',
                     fontFamily: 'JetBrains Mono, Fira Code, monospace',
                   }}>
                     {record.task}
@@ -623,6 +624,7 @@ const ScenariosPanel: React.FC = () => {
 // ── Main page ────────────────────────────────────────────────────────────────
 
 const Eval: React.FC = () => {
+  const { userId } = useAuth();
   const queryClient = useQueryClient();
   const [drawerRunId, setDrawerRunId] = useState<string | null>(null);
   const [triggerAgent, setTriggerAgent] = useState<string | null>(null);
@@ -653,7 +655,7 @@ const Eval: React.FC = () => {
   useEffect(() => {
     const token = localStorage.getItem('sf_token') ?? '';
     const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
-    const url = `${proto}://${window.location.host}/ws/users/1?token=${encodeURIComponent(token)}`;
+    const url = `${proto}://${window.location.host}/ws/users/${userId}?token=${encodeURIComponent(token)}`;
     const ws = new WebSocket(url);
 
     ws.onmessage = (event) => {
@@ -671,7 +673,7 @@ const Eval: React.FC = () => {
     };
 
     return () => { ws.close(); };
-  }, [queryClient]);
+  }, [queryClient, userId]);
 
   useEffect(() => {
     if (isError) message.error('Failed to load eval runs');
@@ -792,9 +794,9 @@ const Eval: React.FC = () => {
     <Tooltip
       title={
         <div style={{ fontSize: 11 }}>
-          Results stored in PostgreSQL <Text code style={{ fontSize: 11, color: '#ccc' }}>t_eval_run</Text>
+          Results stored in PostgreSQL <Text code style={{ fontSize: 11, color: 'var(--text-muted)' }}>t_eval_run</Text>
           <br />
-          Scenarios loaded from classpath <Text code style={{ fontSize: 11, color: '#ccc' }}>eval/scenarios/</Text>
+          Scenarios loaded from classpath <Text code style={{ fontSize: 11, color: 'var(--text-muted)' }}>eval/scenarios/</Text>
         </div>
       }
     >

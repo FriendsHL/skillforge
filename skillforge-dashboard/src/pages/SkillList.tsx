@@ -92,7 +92,7 @@ const SkillList: React.FC = () => {
       width: 150,
       render: (name: string) => (
         <span>
-          <ThunderboltOutlined style={{ marginRight: 6, color: '#1677ff' }} />
+          <ThunderboltOutlined style={{ marginRight: 6, color: 'var(--color-info)' }} />
           {name}
         </span>
       ),
@@ -135,8 +135,8 @@ const SkillList: React.FC = () => {
       render: (name: string, record: any) => (
         <span>
           {record.system
-            ? <LockOutlined style={{ marginRight: 6, color: '#1677ff' }} />
-            : <ToolOutlined style={{ marginRight: 6, color: '#52c41a' }} />
+            ? <LockOutlined style={{ marginRight: 6, color: 'var(--color-info)' }} />
+            : <ToolOutlined style={{ marginRight: 6, color: 'var(--color-success)' }} />
           }
           {name}
           {record.system && <Tag color="blue" style={{ marginLeft: 8 }}>System</Tag>}
@@ -214,7 +214,7 @@ const SkillList: React.FC = () => {
     }
     return detail.scripts.map((script: any) => (
       <Card key={script.name} size="small" title={<span><CodeOutlined style={{ marginRight: 6 }} />{script.name}</span>} style={{ marginBottom: 8 }}>
-        <pre style={{ maxHeight: 300, overflow: 'auto', fontSize: 13, background: '#1e1e1e', color: '#d4d4d4', padding: 12, borderRadius: 6, margin: 0 }}>
+        <pre style={{ maxHeight: 300, overflow: 'auto', fontSize: 13, background: 'var(--bg-code)', color: 'var(--text-on-accent)', padding: 12, borderRadius: 6, margin: 0 }}>
           {script.content}
         </pre>
       </Card>
@@ -245,7 +245,7 @@ const SkillList: React.FC = () => {
         >
           <p className="ant-upload-drag-icon"><InboxOutlined /></p>
           <p className="ant-upload-text">Click or drag a .zip file to upload a Skill</p>
-          <p className="ant-upload-hint" style={{ color: '#888', fontSize: 12 }}>
+          <p className="ant-upload-hint" style={{ color: 'var(--text-muted)', fontSize: 12 }}>
             zip 包须包含 SKILL.md（支持 YAML frontmatter），可选 reference.md、scripts/ 等
           </p>
         </Dragger>
@@ -333,7 +333,7 @@ const SkillList: React.FC = () => {
               key: 'schema',
               label: 'Tool Schema',
               children: builtinDetail.toolSchema ? (
-                <pre style={{ background: 'var(--bg-code)', color: '#E8E8E8', padding: 16, borderRadius: 'var(--radius-md)', fontFamily: 'var(--font-mono)', fontSize: 13, overflow: 'auto', maxHeight: 400, margin: 0 }}>
+                <pre style={{ background: 'var(--bg-code)', color: 'var(--text-on-accent)', padding: 16, borderRadius: 'var(--radius-md)', fontFamily: 'var(--font-mono)', fontSize: 13, overflow: 'auto', maxHeight: 400, margin: 0 }}>
                   {JSON.stringify(builtinDetail.toolSchema, null, 2)}
                 </pre>
               ) : <Text type="secondary">No schema</Text>,

@@ -11,10 +11,9 @@ import {
   TeamOutlined,
 } from '@ant-design/icons';
 import { getCollabRuns, getCollabRunMembers, getCollabRunTraces, getCollabRunSummary, extractList } from '../api';
+import { useAuth } from '../contexts/AuthContext';
 
 const { Text } = Typography;
-
-const USER_ID = 1; // MVP: single-user, matches SessionList pattern
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -72,13 +71,13 @@ const MembersPanel: React.FC<{ collabRunId: string }> = ({ collabRunId }) => {
 
   const statusDot = (status: string) => {
     const colorMap: Record<string, string> = {
-      running: '#1890ff', idle: '#52c41a', error: '#ff4d4f', waiting_user: '#faad14',
+      running: 'var(--color-info)', idle: 'var(--color-success)', error: 'var(--color-error)', waiting_user: 'var(--color-warning)',
     };
     return (
       <span
         style={{
           display: 'inline-block', width: 8, height: 8, borderRadius: '50%',
-          background: colorMap[status] ?? '#bfbfbf', marginRight: 6,
+          background: colorMap[status] ?? 'var(--border-medium)', marginRight: 6,
         }}
       />
     );
@@ -209,7 +208,7 @@ const TracesPanel: React.FC<{ collabRunId: string }> = ({ collabRunId }) => {
         const spanStart = new Date(span.startTime).getTime();
         const offsetPct = ((spanStart - rootStart) / totalDuration) * 100;
         const widthPct = Math.max((span.durationMs / totalDuration) * 100, 0.3);
-        const color = span.handle ? handleColor(span.handle) : '#bfbfbf';
+        const color = span.handle ? handleColor(span.handle) : 'var(--border-medium)';
 
         const collapseItems = [];
         if (span.input) {
@@ -240,7 +239,7 @@ const TracesPanel: React.FC<{ collabRunId: string }> = ({ collabRunId }) => {
         }
 
         return (
-          <div key={span.id} style={{ borderBottom: '1px solid #f5f5f5', padding: '4px 0' }}>
+          <div key={span.id} style={{ borderBottom: '1px solid var(--border-subtle)', padding: '4px 0' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
               {span.handle && (
                 <Tag style={{ margin: 0, fontSize: 10, borderColor: color, color }} icon={<TeamOutlined />}>
@@ -252,8 +251,8 @@ const TracesPanel: React.FC<{ collabRunId: string }> = ({ collabRunId }) => {
               </Tag>
               <Text style={{ fontSize: 11 }}>{span.name}</Text>
               {span.success
-                ? <CheckCircleOutlined style={{ color: '#52c41a', fontSize: 10 }} />
-                : <CloseCircleOutlined style={{ color: '#ff4d4f', fontSize: 10 }} />}
+                ? <CheckCircleOutlined style={{ color: 'var(--color-success)', fontSize: 10 }} />
+                : <CloseCircleOutlined style={{ color: 'var(--color-error)', fontSize: 10 }} />}
               {(span.inputTokens > 0 || span.outputTokens > 0) && (
                 <Tag style={{ margin: 0, fontSize: 10 }}>
                   {formatTokens((span.inputTokens ?? 0) + (span.outputTokens ?? 0))} tok
@@ -264,7 +263,7 @@ const TracesPanel: React.FC<{ collabRunId: string }> = ({ collabRunId }) => {
               </Text>
             </div>
             {/* Waterfall bar */}
-            <div style={{ height: 6, background: '#f5f5f5', borderRadius: 3, position: 'relative', marginBottom: 3 }}>
+            <div style={{ height: 6, background: 'var(--bg-hover)', borderRadius: 3, position: 'relative', marginBottom: 3 }}>
               <Tooltip title={`@${span.handle ?? '?'} · ${span.spanType} · ${formatDuration(span.durationMs ?? 0)}`}>
                 <div
                   style={{
@@ -273,7 +272,7 @@ const TracesPanel: React.FC<{ collabRunId: string }> = ({ collabRunId }) => {
                     width: `${Math.max(widthPct, 0.3)}%`,
                     height: '100%',
                     borderRadius: 3,
-                    background: span.success ? color : '#ff7875',
+                    background: span.success ? color : 'var(--color-error)',
                     opacity: 0.75,
                   }}
                 />
@@ -299,11 +298,12 @@ const TracesPanel: React.FC<{ collabRunId: string }> = ({ collabRunId }) => {
 const Teams: React.FC = () => {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const queryClient = useQueryClient();
+  const { userId } = useAuth();
 
   useEffect(() => {
     const token = localStorage.getItem('sf_token') ?? '';
     const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
-    const url = `${proto}://${window.location.host}/ws/users/${USER_ID}?token=${encodeURIComponent(token)}`;
+    const url = `${proto}://${window.location.host}/ws/users/${userId}?token=${encodeURIComponent(token)}`;
     const ws = new WebSocket(url);
 
     ws.onmessage = (event) => {
@@ -333,7 +333,7 @@ const Teams: React.FC = () => {
     ws.onerror = (_e) => { /* silent — Teams page is not chat-critical */ };
 
     return () => { ws.close(); };
-  }, [queryClient]);
+  }, [queryClient, userId]);
 
   const { data: runs = [], isLoading: loading, isError: runsError } = useQuery({
     queryKey: ['collab-runs'],
@@ -406,7 +406,7 @@ const Teams: React.FC = () => {
             onClick: () => setSelectedId(record.collabRunId),
             style: {
               cursor: 'pointer',
-              background: selectedId === record.collabRunId ? '#e6f4ff' : undefined,
+              background: selectedId === record.collabRunId ? 'var(--accent-muted)' : undefined,
             },
           })}
           locale={{ emptyText: <Empty description="No collab runs yet. Ask an agent to use TeamCreate." /> }}

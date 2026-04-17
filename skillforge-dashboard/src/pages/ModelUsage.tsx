@@ -3,6 +3,7 @@ import { Card, Row, Col, Spin, Segmented, Space, Typography, message } from 'ant
 import ReactECharts from 'echarts-for-react';
 import { useQuery } from '@tanstack/react-query';
 import { getDailyUsage, getUsageByModel, getUsageByAgent } from '../api';
+import { useTheme } from '../contexts/ThemeContext';
 
 const { Text } = Typography;
 
@@ -32,6 +33,7 @@ interface AgentUsageItem {
 
 const ModelUsage: React.FC = () => {
   const [range, setRange] = useState<RangeKey>('30d');
+  const { tokens } = useTheme();
 
   const dailyQuery = useQuery({
     queryKey: ['usage', 'daily', range],
@@ -83,14 +85,14 @@ const ModelUsage: React.FC = () => {
         type: 'line',
         smooth: true,
         data: dailyData.map((d) => d.inputTokens),
-        itemStyle: { color: '#1890ff' },
+        itemStyle: { color: tokens.colorInfo },
       },
       {
         name: 'Output Tokens',
         type: 'line',
         smooth: true,
         data: dailyData.map((d) => d.outputTokens),
-        itemStyle: { color: '#52c41a' },
+        itemStyle: { color: tokens.colorSuccess },
       },
     ],
   };
@@ -141,7 +143,7 @@ const ModelUsage: React.FC = () => {
       {
         type: 'bar',
         data: agentData.map((a) => a.totalTokens),
-        itemStyle: { color: '#722ed1' },
+        itemStyle: { color: tokens.accentPrimary },
       },
     ],
   };
@@ -179,7 +181,7 @@ const ModelUsage: React.FC = () => {
         <>
       <Card title={`Token Usage Trend (${range})`} style={{ marginBottom: 16 }}>
         {dailyData.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: 40, color: '#999' }}>暂无数据</div>
+          <div style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>暂无数据</div>
         ) : (
           <ReactECharts option={dailyChartOption} style={{ height: 350 }} />
         )}
@@ -188,7 +190,7 @@ const ModelUsage: React.FC = () => {
         <Col span={12}>
           <Card title="Usage by Model (all-time)">
             {modelData.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: 40, color: '#999' }}>暂无数据</div>
+              <div style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>暂无数据</div>
             ) : (
               <ReactECharts option={modelPieOption} style={{ height: 350 }} />
             )}
@@ -197,7 +199,7 @@ const ModelUsage: React.FC = () => {
         <Col span={12}>
           <Card title="Usage by Agent (all-time)">
             {agentData.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: 40, color: '#999' }}>暂无数据</div>
+              <div style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>暂无数据</div>
             ) : (
               <ReactECharts option={agentBarOption} style={{ height: 350 }} />
             )}

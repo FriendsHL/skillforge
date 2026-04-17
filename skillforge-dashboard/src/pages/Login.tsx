@@ -41,7 +41,7 @@ const Login: React.FC = () => {
     <div
       style={{
         minHeight: '100vh',
-        background: 'var(--bg-primary, #0f0f10)',
+        background: 'var(--bg-primary)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -49,17 +49,17 @@ const Login: React.FC = () => {
     >
       <div
         style={{
-          background: 'var(--bg-surface, #1a1a1e)',
-          border: '1px solid var(--border-subtle, #2a2a2e)',
+          background: 'var(--bg-surface)',
+          border: '1px solid var(--border-subtle)',
           borderRadius: 12,
           padding: '40px 48px',
           width: 400,
-          boxShadow: 'var(--shadow-elevated, 0 8px 32px rgba(0,0,0,0.4))',
+          boxShadow: 'var(--shadow-elevated)',
         }}
       >
         <h1
           style={{
-            color: 'var(--text-primary, #e8e6e1)',
+            color: 'var(--text-primary)',
             marginBottom: 4,
             fontSize: 24,
             fontWeight: 600,
@@ -70,7 +70,7 @@ const Login: React.FC = () => {
         </h1>
         <p
           style={{
-            color: 'var(--text-secondary, #6b6760)',
+            color: 'var(--text-secondary)',
             marginBottom: 24,
             fontSize: 14,
             marginTop: 0,
@@ -87,9 +87,9 @@ const Login: React.FC = () => {
           disabled={fetching}
           style={{
             marginBottom: 16,
-            background: 'var(--bg-primary, #0f0f10)',
-            borderColor: 'var(--border-subtle, #2a2a2e)',
-            color: 'var(--text-primary, #e8e6e1)',
+            background: 'var(--bg-primary)',
+            borderColor: 'var(--border-subtle)',
+            color: 'var(--text-primary)',
           }}
         />
         <Button
@@ -100,8 +100,8 @@ const Login: React.FC = () => {
           disabled={fetching || !tokenInput.trim()}
           onClick={handleLogin}
           style={{
-            background: 'var(--accent-primary, #6366f1)',
-            borderColor: 'var(--accent-primary, #6366f1)',
+            background: 'var(--accent-primary)',
+            borderColor: 'var(--accent-primary)',
             fontWeight: 500,
             letterSpacing: '0.02em',
           }}

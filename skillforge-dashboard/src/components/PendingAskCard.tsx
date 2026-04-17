@@ -26,9 +26,9 @@ const PendingAskCard: React.FC<PendingAskCardProps> = ({
   onOtherInputChange,
   onAnswer,
 }) => (
-  <Card size="small" title="💬 Agent 在问你" style={{ margin: '8px 12px 0', borderColor: '#faad14' }}>
+  <Card size="small" title="💬 Agent 在问你" style={{ margin: '8px 12px 0', borderColor: 'var(--color-warning)' }}>
     {pendingAsk.context && (
-      <div style={{ color: '#888', fontSize: 12, marginBottom: 8 }}>{pendingAsk.context}</div>
+      <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 8 }}>{pendingAsk.context}</div>
     )}
     <div style={{ fontWeight: 500, marginBottom: 12 }}>{pendingAsk.question}</div>
     <Space direction="vertical" style={{ width: '100%' }}>
@@ -40,7 +40,7 @@ const PendingAskCard: React.FC<PendingAskCardProps> = ({
           onClick={() => onAnswer(opt.label)}
         >
           <div style={{ fontWeight: 500 }}>{opt.label}</div>
-          {opt.description && <div style={{ fontSize: 12, color: '#888' }}>{opt.description}</div>}
+          {opt.description && <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{opt.description}</div>}
         </Button>
       ))}
       {pendingAsk.allowOther && (

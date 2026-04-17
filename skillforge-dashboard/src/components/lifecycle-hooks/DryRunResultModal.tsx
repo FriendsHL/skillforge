@@ -23,9 +23,9 @@ const DryRunResultModal: React.FC<DryRunResultModalProps> = ({ open, result, onC
       title={
         <Space>
           {result.success ? (
-            <CheckCircleOutlined style={{ color: '#52c41a' }} />
+            <CheckCircleOutlined style={{ color: 'var(--color-success)' }} />
           ) : (
-            <CloseCircleOutlined style={{ color: '#ff4d4f' }} />
+            <CloseCircleOutlined style={{ color: 'var(--color-error)' }} />
           )}
           <span>Dry-Run Result</span>
         </Space>
@@ -40,13 +40,13 @@ const DryRunResultModal: React.FC<DryRunResultModalProps> = ({ open, result, onC
         <div style={{
           display: 'flex', gap: 16, flexWrap: 'wrap',
           padding: '10px 14px',
-          background: 'var(--bg-surface, #fafafa)',
-          borderRadius: 'var(--radius-sm, 6px)',
-          border: '1px solid var(--border-subtle, #E2E0DC)',
+          background: 'var(--bg-surface)',
+          borderRadius: 'var(--radius-sm)',
+          border: '1px solid var(--border-subtle)',
         }}>
           <div>
             <Typography.Text type="secondary" style={{ fontSize: 11, display: 'block' }}>Status</Typography.Text>
-            <Typography.Text strong style={{ color: result.success ? '#52c41a' : '#ff4d4f', fontSize: 12 }}>
+            <Typography.Text strong style={{ color: result.success ? 'var(--color-success)' : 'var(--color-error)', fontSize: 12 }}>
               {result.success ? 'SUCCESS' : 'FAILED'}
             </Typography.Text>
           </div>
@@ -65,8 +65,8 @@ const DryRunResultModal: React.FC<DryRunResultModalProps> = ({ open, result, onC
             <Typography.Text type="secondary" style={{ fontSize: 11, display: 'block', marginBottom: 4 }}>Output</Typography.Text>
             <pre style={{
               fontSize: 11, margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-              background: 'var(--bg-code, #1C1C1E)', color: '#e5e7eb',
-              padding: '10px 12px', borderRadius: 'var(--radius-sm, 6px)',
+              background: 'var(--bg-code)', color: 'var(--text-on-accent)',
+              padding: '10px 12px', borderRadius: 'var(--radius-sm)',
               fontFamily: 'var(--font-mono)', maxHeight: 240, overflowY: 'auto',
             }}>
               {result.output}
@@ -79,10 +79,10 @@ const DryRunResultModal: React.FC<DryRunResultModalProps> = ({ open, result, onC
             <Typography.Text type="secondary" style={{ fontSize: 11, display: 'block', marginBottom: 4 }}>Error</Typography.Text>
             <pre style={{
               fontSize: 11, margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-              background: 'rgba(255,77,79,0.06)', color: '#ff4d4f',
-              padding: '10px 12px', borderRadius: 'var(--radius-sm, 6px)',
+              background: 'var(--color-error-bg)', color: 'var(--color-error)',
+              padding: '10px 12px', borderRadius: 'var(--radius-sm)',
               fontFamily: 'var(--font-mono)', maxHeight: 240, overflowY: 'auto',
-              border: '1px solid rgba(255,77,79,0.15)',
+              border: '1px solid var(--color-error-border)',
             }}>
               {result.errorMessage}
             </pre>

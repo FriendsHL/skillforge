@@ -6,66 +6,67 @@
 
 ## 待排期
 
-### 竞品分析新增（优先执行）
-
-#### N1 — Memory 向量检索（最高优先级）
-
-> 参考：openclaw memory-host-sdk（FTS5 + embedding 混合检索）、hermes-agent（简洁文件方案对照）
-> 技术方案：docs/design-memory-vector-search.md
-
-| 子任务                           | 说明                                                                                                                                                                                                                   |
-| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| N1-1 pgvector 接入              | PostgreSQL 启用 `pgvector` 扩展；`t_memory` 表新增 `embedding vector(1536)` 列（维度可配）+ `search_vector tsvector GENERATED` 列；HNSW 索引 + GIN 索引；Flyway V6 migration                                                               |
-| N1-2 EmbeddingService         | 新增 `EmbeddingService`：复用 `LlmProviderFactory` 中已配置的 OpenAI-compatible provider（`POST /v1/embeddings`），不引入 Ollama；provider 不支持 embedding 时返回 `Optional.empty()`，降级纯 FTS，不报错；memory 写入/更新时异步触发                         |
-| N1-3 混合检索（memory_search Tool） | 拆出独立 Skill `MemorySearchSkill`：FTS 召回（`tsvector @@ plainto_tsquery`）+ pgvector 余弦检索（`ORDER BY embedding <=> :vec`）两路 Top-20，RRF 合并取 Top-K；仅返回 snippet（body 前 100 字）+ memoryId + score；provider 无 embedding 时退化为纯 FTS |
-| N1-4 按需全文（memory_detail Tool） | 新增 `MemoryDetailSkill`：按 memoryId 返回完整 body；Agent 先调 memory_search，按需再调 memory_detail，大幅降低每次检索 token 消耗                                                                                                              |
-
-#### N3 — 用户可配置 Lifecycle Hook（P0/P1 已完成，P2 待排期）
-
-> 参考：claude-mem（SessionStart / UserPromptSubmit / PostToolUse / Stop / SessionEnd 5 个节点）
-> 技术方案：`docs/design-n3-lifecycle-hooks.md`（P0）+ `docs/design-n3-p1.md`（P1）
-> **P0 已于 2026-04-17 完成；P1 已于 2026-04-17 完成**
-
-| 子任务（P2）                  | 说明                                                                    |
-| ------------------------ | --------------------------------------------------------------------- |
-| N3-P2-1 MethodHandlerRunner | `BuiltInMethodRegistry`：`builtin.log.file` / `builtin.http.post` / `builtin.feishu.notify` |
-| N3-P2-2 前端 Method handler 启用 | 内置方法下拉 + args JSON 编辑器                                          |
-| N3-P2-3 dry-run 端点           | `POST /api/agents/{id}/hooks/test`                                |
-| N3-P2-4 Traces LIFECYCLE_HOOK 可视化 | span 过滤器                                                       |
-| N3-P2-5 Hook 触发历史面板        | 类似 PromptHistoryPanel                                            |
-
----
+> 统一编号 P1~P5，子任务编号 P{n}-{seq}。已完成任务保留历史编号不变。
 
 ### P1 — Skill 自动生成 + 自进化
 
-| 子任务                     | 说明                                                                                                          |
-| ----------------------- | ----------------------------------------------------------------------------------------------------------- |
-| P1-Skill-1 对话提取 Skill   | 分析已完成 session，LLM 识别可复用模式 → 生成 SkillEntity 草稿（复用 SessionScenarioExtractorService 的批处理模式）；触发方式：用户手动 + 批量分析历史 |
-| P1-Skill-2 Skill 版本管理   | SkillEntity 新增 version / parentSkillId / usageCount / successRate 字段；支持版本回滚                                 |
-| P1-Skill-3 Skill A/B 测试 | 复用现有 AbEvalPipeline；对 Skill 两版本在 held-out 场景集上对比；Δ≥15pp 自动晋升                                                |
-| P1-Skill-4 进化闭环         | Skill 使用后收集成功/失败信号 → 定期触发 LLM 优化 prompt → 走 A/B 验证 → 自动晋升或回滚                                                |
+| 子任务 | 说明 |
+| --- | --- |
+| P1-1 对话提取 Skill | 分析已完成 session，LLM 识别可复用模式 → 生成 SkillEntity 草稿（复用 SessionScenarioExtractorService 的批处理模式）；触发方式：用户手动 + 批量分析历史 |
+| P1-2 Skill 版本管理 | SkillEntity 新增 version / parentSkillId / usageCount / successRate 字段；支持版本回滚 |
+| P1-3 Skill A/B 测试 | 复用现有 AbEvalPipeline；对 Skill 两版本在 held-out 场景集上对比；Δ≥15pp 自动晋升 |
+| P1-4 进化闭环 | Skill 使用后收集成功/失败信号 → 定期触发 LLM 优化 prompt → 走 A/B 验证 → 自动晋升或回滚 |
 
 ---
 
 ### P2 — 飞书消息网关
 
-| 子任务               | 说明                                                    |
-| ----------------- | ----------------------------------------------------- |
-| P2-飞书-1 飞书 Bot 接入 | 创建飞书应用 + Webhook/事件订阅；消息网关 Spring 模块接收飞书事件            |
-| P2-飞书-2 会话路由      | 飞书用户 ↔ SkillForge userId 映射；每个飞书对话绑定一个 Agent Session  |
-| P2-飞书-3 消息收发      | 接收文本/图片/文件消息 → 转发到 Agent Loop；Agent 回复 → 飞书消息推送       |
-| P2-飞书-4 指令支持      | `/new` 新建会话、`/switch <agent>` 切换 Agent、`/history` 查历史 |
+| 子任务 | 说明 |
+| --- | --- |
+| P2-1 飞书 Bot 接入 | 创建飞书应用 + Webhook/事件订阅；消息网关 Spring 模块接收飞书事件 |
+| P2-2 会话路由 | 飞书用户 ↔ SkillForge userId 映射；每个飞书对话绑定一个 Agent Session |
+| P2-3 消息收发 | 接收文本/图片/文件消息 → 转发到 Agent Loop；Agent 回复 → 飞书消息推送 |
+| P2-4 指令支持 | `/new` 新建会话、`/switch <agent>` 切换 Agent、`/history` 查历史 |
 
 ---
 
-### Phase 3 — 记忆质量评估（P3）
+### P3 — 记忆质量评估
 
-| 子任务                 | 说明                                                                                                                                 |
-| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| P3-1 记忆快照           | 每次记忆提取前打快照（extraction_batch_id）；支持按 batch 回滚                                                                                       |
-| P3-2 Memory Eval 模式 | eval sandbox 加入 Memory Skill（只读，读快照不读生产）；新增记忆专属场景集（测试记忆检索和使用）                                                                      |
-| P3-3 记忆影响归因         | AttributionEngine 新增两个枚举：`MEMORY_INTERFERENCE`（带记忆失败、不带记忆通过）、`MEMORY_MISSING`（检索结果为空导致失败）；新增信号：memorySkillCalled、memoryResultEmpty |
-| P3-4 记忆质量闭环         | 每次记忆提取后自动触发 Memory Eval；对比 Δ；Δ 为负则标记问题 batch；人工审核 or 自动回滚                                                                          |
+| 子任务 | 说明 |
+| --- | --- |
+| P3-1 记忆快照 | 每次记忆提取前打快照（extraction_batch_id）；支持按 batch 回滚 |
+| P3-2 Memory Eval 模式 | eval sandbox 加入 Memory Skill（只读，读快照不读生产）；新增记忆专属场景集（测试记忆检索和使用） |
+| P3-3 记忆影响归因 | AttributionEngine 新增两个枚举：`MEMORY_INTERFERENCE`（带记忆失败、不带记忆通过）、`MEMORY_MISSING`（检索结果为空导致失败）；新增信号：memorySkillCalled、memoryResultEmpty |
+| P3-4 记忆质量闭环 | 每次记忆提取后自动触发 Memory Eval；对比 Δ；Δ 为负则标记问题 batch；人工审核 or 自动回滚 |
+
+---
+
+### P4 — 编码 Agent（Code Agent）
+
+> 目标：创建一个能编码的 Agent，通过绑定代码类 Skill 实现自主编写 Hook 方法，提升 Agent 自身能力（自举闭环）
+
+| 子任务 | 说明 |
+| --- | --- |
+| P4-1 代码 Skill 体系 | 整合现有 Skill（Bash, FileRead, FileWrite, Glob, Grep）为「Code Skill Pack」；新增 CodeReview Skill（调用 LLM 审查生成的代码）；Skill Pack 可一键绑定到 Agent |
+| P4-2 代码沙箱执行环境 | 代码 Agent 生成的代码需要在隔离环境中编译/运行验证；支持 Java（Maven compile）和 JS/TS（node eval）两种 runtime；执行结果回传 Agent Loop |
+| P4-3 Hook 方法自动生成 | Code Agent 根据用户意图生成 BuiltInMethod 实现（Java 类）；生成后自动编译验证 + 注册到 BuiltInMethodRegistry；失败时回传错误让 Agent 自修复 |
+| P4-4 Code Agent 预设模板 | 预配置的 Agent 模板：system prompt 引导编码行为 + Code Skill Pack 绑定 + 适当的 behavior rules；开箱即用 |
+| P4-5 自举闭环 | Code Agent 生成的 Hook 方法可被其他 Agent 的 Lifecycle Hook 引用；形成「Agent 写代码增强 Agent」的正循环 |
+
+---
+
+### P5 — 前端体验优化
+
+> 目标：修复当前 Dashboard 的交互痛点，补全缺失功能，提升整体使用体验
+
+| 子任务 | 说明 |
+| --- | --- |
+| P5-1 Session 列表分页 | 当前 Session 列表一次性加载全部，数据多时卡顿；加入服务端分页（后端 Pageable + 前端 Table pagination） |
+| P5-2 Chat 历史消息丢失修复 | 聊了几轮后最前面的消息从 UI 消失；排查是前端 state 截断还是后端 Context Compaction 导致；确保 UI 始终能回溯完整聊天记录（分页加载或虚拟滚动） |
+| P5-3 用户输入样式优化 | 用户 query 气泡背景色不协调；重新设计 user/assistant 消息的视觉区分（配色、圆角、间距），符合 SkillForge 深色精准风格 |
+| P5-4 Agent 列表 UX | Agent 卡片/列表的操作动线优化；快速切换 Agent、一键复制 Agent、批量操作等 |
+| P5-5 响应式与空状态 | 各页面补全 empty state 插画/提示；窄屏适配；loading skeleton 替代白屏等待 |
+| P5-6 Traces 页面增强 | Trace 时间线交互优化；span 详情展开/折叠；按时间范围筛选 |
 
 ---
 
@@ -73,6 +74,7 @@
 
 | 任务                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | 完成日期       |
 | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| N3 P2 Lifecycle Hook Method 体系：BuiltInMethod 接口 + BuiltInMethodRegistry（HttpPost/FeishuNotify/LogToFile 三个内置方法）+ MethodHandlerRunner（arg merging）+ UrlValidator（InetAddress SSRF 防护 + IPv6/link-local 拦截）+ 静态 HttpClient 防线程池泄漏 + header injection denylist + 异常信息脱敏 + ConcurrentHashMap 文件锁 + LifecycleHookService 抽取（dry-run + hook-history）+ HookHistoryDto DTO 投影 + 前端 MethodHandlerFields（方法下拉 + args 表单 + loading 状态穿透）+ DryRunResultModal + HookHistoryPanel 时间线 + Traces LIFECYCLE_HOOK 可视化 + API 类型安全（消灭 4 个 any）+ getLifecycleHookMethods 响应解析 bug 修复 + React key 去重 + 18 项 review fix；Full Pipeline（2 reviewer + judge + fix）；202 后端测试全绿 | 2026-04-17 |
 | N3 P1 Lifecycle Hook 完善：多 entry 链式执行（dispatcher for 循环 + ChainDecision 三值 + SKIP_CHAIN policy）+ ScriptHandlerRunner（bash/node 子进程 + /tmp toRealPath() symlink 防护 + ProcessHandle.descendants 进程树 kill + 双线程 drain-and-discard 防 OOM + env 5 白名单 + DangerousCommandChecker 绝对路径 pipe 防护）+ UserPromptSubmit prompt enrichment（handler output.injected_context 注入独立 user message 支持全 provider）+ 前端多 entry UI（上移/下移/删除/新增 cap 10 + stable \_id key 防 stale debounce）+ Script handler 启用（Confirm Modal + lang 硬编码 [bash,node] + 字符计数）+ Forbidden Skill 黑名单（dispatcher 层）+ async×SKIP_CHAIN 保存时拒绝 + scriptBody 长度后端校验 + FailurePolicy @JsonCreator 防回滚炸 + discriminated-union 类型安全 + CSS var(--color-error) + 全 provider 支持；2 planner + 2 reviewer + judge + 2 fix pipeline；145 后端测试 + agent-browser e2e 全绿；技术方案：docs/design-n3-p1.md | 2026-04-17 |
 | N3 P0 用户可配置 Lifecycle Hook：V9 migration + polymorphic HookHandler (skill/script/method 子类，P0 只实现 SkillHandlerRunner) + LifecycleHookDispatcher（hookDepth ThreadLocal 跨 worker 线程传播 + 独立 hookExecutor + timeout + failurePolicy CONTINUE/ABORT + LIFECYCLE_HOOK TraceSpan）+ SessionStart 插在 ChatService.chatAsync 首条消息处 / SessionEnd 异步在 loop 结束 + AgentLoopEngine ABORT 语义 (LoopContext.abortedByHook + HookAbortException) + REST `/api/lifecycle-hooks/events|presets` + 前端 3 模式编辑器（Preset/Form/JSON + Zod discriminatedUnion + useDebouncedCallback + formKey 解决 create→create 复用）+ AgentSchema 加 lifecycleHooks/behaviorRules 字段防 Zod strip + 25 测试全绿 + agent-browser e2e 验证通过；3 轮 reviewer (java/typescript/security) + judge 仲裁 + fix 两侧并行；技术方案：docs/design-n3-lifecycle-hooks.md | 2026-04-17 |
 | N2-1~N2-3 Agent 行为规范层：V8 Flyway migration（behaviorRules TEXT 列）、BehaviorRuleRegistry（15 条内置规则 JSON + 语言检测 + deprecated 链 + 预设模板）、BehaviorRuleDefinition record、SystemPromptBuilder 注入（Available Skills 之后 + 自定义规则 XML 沙箱 + prompt injection 防护）、AgentYamlMapper round-trip（corrupt data 防御）、REST API（GET /api/behavior-rules + /presets）、前端 BehaviorRulesEditor（模板选择器 + 分类折叠 + Switch + 自定义规则 CRUD）、useBehaviorRules Hook、AgentList.tsx RULES.md Tab 集成；技术方案：docs/design-n2-behavioral-rules.md | 2026-04-17 |

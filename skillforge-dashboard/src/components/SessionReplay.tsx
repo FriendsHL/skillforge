@@ -10,6 +10,7 @@ import {
   ThunderboltOutlined,
 } from '@ant-design/icons';
 import { getSessionReplay } from '../api';
+import { useAuth } from '../contexts/AuthContext';
 
 const { Text, Paragraph } = Typography;
 
@@ -68,9 +69,9 @@ function formatTokens(input: number, output: number): string {
 
 const ToolCallCard: React.FC<{ tc: ReplayToolCall }> = ({ tc }) => {
   const statusIcon = tc.success ? (
-    <CheckCircleOutlined style={{ color: '#52c41a', fontSize: 12 }} />
+    <CheckCircleOutlined style={{ color: 'var(--color-success)', fontSize: 12 }} />
   ) : (
-    <CloseCircleOutlined style={{ color: '#ff4d4f', fontSize: 12 }} />
+    <CloseCircleOutlined style={{ color: 'var(--color-error)', fontSize: 12 }} />
   );
 
   const items = [];
@@ -101,14 +102,14 @@ const ToolCallCard: React.FC<{ tc: ReplayToolCall }> = ({ tc }) => {
 
   return (
     <div style={{
-      border: '1px solid #f0f0f0',
+      border: '1px solid var(--border-subtle)',
       borderRadius: 6,
       padding: '8px 12px',
       marginBottom: 6,
-      background: tc.success ? '#fafff5' : '#fff2f0',
+      background: tc.success ? 'var(--bg-hover)' : 'var(--color-error-bg)',
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: items.length > 0 ? 4 : 0 }}>
-        <ToolOutlined style={{ fontSize: 12, color: '#999' }} />
+        <ToolOutlined style={{ fontSize: 12, color: 'var(--text-muted)' }} />
         <Text strong style={{ fontSize: 12 }}>{tc.name}</Text>
         {statusIcon}
         {tc.durationMs != null && (
@@ -137,12 +138,12 @@ const IterationCard: React.FC<{ iter: Iteration }> = ({ iter }) => {
 
   return (
     <div style={{
-      borderLeft: `3px solid ${allSuccess ? '#52c41a' : '#ff4d4f'}`,
+      borderLeft: `3px solid ${allSuccess ? 'var(--color-success)' : 'var(--color-error)'}`,
       paddingLeft: 12,
       marginBottom: 12,
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
-        <ThunderboltOutlined style={{ fontSize: 12, color: '#1677ff' }} />
+        <ThunderboltOutlined style={{ fontSize: 12, color: 'var(--color-info)' }} />
         <Text strong style={{ fontSize: 12 }}>
           Iteration {iter.iterationIndex + 1}
         </Text>
@@ -179,7 +180,7 @@ const TurnCard: React.FC<{ turn: Turn }> = ({ turn }) => {
 
   const header = (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-      <UserOutlined style={{ color: '#1677ff' }} />
+      <UserOutlined style={{ color: 'var(--color-info)' }} />
       <Text strong>Turn {turn.turnIndex + 1}</Text>
       {turn.iterationCount > 0 && (
         <Tag color="blue" style={{ margin: 0 }}>
@@ -209,13 +210,13 @@ const TurnCard: React.FC<{ turn: Turn }> = ({ turn }) => {
           <div>
             {/* User message */}
             <div style={{
-              background: '#e6f4ff',
+              background: 'var(--accent-muted)',
               borderRadius: 8,
               padding: '8px 12px',
               marginBottom: 12,
             }}>
               <Space size={4} style={{ marginBottom: 4 }}>
-                <UserOutlined style={{ fontSize: 11, color: '#1677ff' }} />
+                <UserOutlined style={{ fontSize: 11, color: 'var(--color-info)' }} />
                 <Text type="secondary" style={{ fontSize: 11 }}>User</Text>
               </Space>
               <Paragraph style={{ margin: 0, fontSize: 13, whiteSpace: 'pre-wrap' }}>
@@ -231,13 +232,13 @@ const TurnCard: React.FC<{ turn: Turn }> = ({ turn }) => {
             {/* Final response */}
             {turn.finalResponse && (
               <div style={{
-                background: '#f6ffed',
+                background: 'var(--bg-hover)',
                 borderRadius: 8,
                 padding: '8px 12px',
                 marginTop: 8,
               }}>
                 <Space size={4} style={{ marginBottom: 4 }}>
-                  <RobotOutlined style={{ fontSize: 11, color: '#52c41a' }} />
+                  <RobotOutlined style={{ fontSize: 11, color: 'var(--color-success)' }} />
                   <Text type="secondary" style={{ fontSize: 11 }}>Final Response</Text>
                 </Space>
                 <Paragraph
@@ -251,7 +252,7 @@ const TurnCard: React.FC<{ turn: Turn }> = ({ turn }) => {
 
             {/* Token summary */}
             {(turn.inputTokens > 0 || turn.outputTokens > 0) && (
-              <div style={{ marginTop: 8, fontSize: 11, color: '#999' }}>
+              <div style={{ marginTop: 8, fontSize: 11, color: 'var(--text-muted)' }}>
                 {turn.modelId && <span>{turn.modelId} &middot; </span>}
                 {turn.inputTokens.toLocaleString()} input / {turn.outputTokens.toLocaleString()} output tokens
               </div>
@@ -268,6 +269,7 @@ export interface SessionReplayProps {
 }
 
 const SessionReplay: React.FC<SessionReplayProps> = ({ sessionId }) => {
+  const { userId } = useAuth();
   const [data, setData] = useState<ReplayData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -280,7 +282,7 @@ const SessionReplay: React.FC<SessionReplayProps> = ({ sessionId }) => {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    getSessionReplay(sessionId, 1)
+    getSessionReplay(sessionId, userId)
       .then((res) => {
         if (!cancelled) setData(res.data);
       })
@@ -333,7 +335,7 @@ const SessionReplay: React.FC<SessionReplayProps> = ({ sessionId }) => {
         flexWrap: 'wrap',
         marginBottom: 16,
         padding: '8px 12px',
-        background: '#fafafa',
+        background: 'var(--bg-primary)',
         borderRadius: 8,
         fontSize: 12,
       }}>

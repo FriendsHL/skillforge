@@ -147,7 +147,7 @@ const SpanWaterfall: React.FC<{
         }
 
         return (
-          <div key={span.id} style={{ borderBottom: '1px solid #f5f5f5', padding: '6px 0' }}>
+          <div key={span.id} style={{ borderBottom: '1px solid var(--border-subtle)', padding: '6px 0' }}>
             {/* Header row */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
               <Tag color={cfg.color} icon={cfg.icon} style={{ margin: 0, fontSize: 11 }}>
@@ -155,9 +155,9 @@ const SpanWaterfall: React.FC<{
               </Tag>
               <Text strong style={{ fontSize: 12 }}>{span.name}</Text>
               {span.success ? (
-                <CheckCircleOutlined style={{ color: '#52c41a', fontSize: 11 }} />
+                <CheckCircleOutlined style={{ color: 'var(--color-success)', fontSize: 11 }} />
               ) : (
-                <CloseCircleOutlined style={{ color: '#ff4d4f', fontSize: 11 }} />
+                <CloseCircleOutlined style={{ color: 'var(--color-error)', fontSize: 11 }} />
               )}
               <Tooltip title={`${span.durationMs}ms`}>
                 <Tag icon={<ClockCircleOutlined />} style={{ margin: 0, fontSize: 10 }}>
@@ -175,7 +175,7 @@ const SpanWaterfall: React.FC<{
             </div>
 
             {/* Waterfall bar */}
-            <div style={{ height: 8, background: '#f5f5f5', borderRadius: 4, position: 'relative', marginBottom: 4 }}>
+            <div style={{ height: 8, background: 'var(--bg-hover)', borderRadius: 4, position: 'relative', marginBottom: 4 }}>
               <Tooltip title={`${formatDuration(span.durationMs)} (${widthPct.toFixed(1)}%)`}>
                 <div
                   style={{
@@ -185,8 +185,8 @@ const SpanWaterfall: React.FC<{
                     height: '100%',
                     borderRadius: 4,
                     background: span.success
-                      ? (span.spanType === 'LLM_CALL' ? '#b37feb' : '#95de64')
-                      : '#ff7875',
+                      ? (span.spanType === 'LLM_CALL' ? 'var(--accent-primary)' : 'var(--color-success)')
+                      : 'var(--color-error)',
                     opacity: 0.8,
                   }}
                 />
@@ -295,7 +295,7 @@ const Traces: React.FC = () => {
       width: 60,
       align: 'center' as const,
       render: (v: boolean) =>
-        v ? <CheckCircleOutlined style={{ color: '#52c41a' }} /> : <CloseCircleOutlined style={{ color: '#ff4d4f' }} />,
+        v ? <CheckCircleOutlined style={{ color: 'var(--color-success)' }} /> : <CloseCircleOutlined style={{ color: 'var(--color-error)' }} />,
     },
   ];
 
@@ -343,7 +343,7 @@ const Traces: React.FC = () => {
             onClick: () => handleSelectTrace(record.traceId),
             style: {
               cursor: 'pointer',
-              background: selectedTraceId === record.traceId ? '#e6f4ff' : undefined,
+              background: selectedTraceId === record.traceId ? 'var(--accent-muted)' : undefined,
             },
           })}
           locale={{ emptyText: tracesError

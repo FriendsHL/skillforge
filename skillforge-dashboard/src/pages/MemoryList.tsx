@@ -5,6 +5,7 @@ import {
 import { PlusOutlined, EditOutlined, DeleteOutlined, SearchOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getMemories, searchMemories, createMemory, updateMemory, deleteMemory, extractList } from '../api';
+import { useAuth } from '../contexts/AuthContext';
 
 const { TextArea } = Input;
 
@@ -27,7 +28,7 @@ const MemoryList: React.FC = () => {
   const [activeSearch, setActiveSearch] = useState<string>('');
   const [form] = Form.useForm();
 
-  const userId = 1; // default user
+  const { userId } = useAuth();
 
   const typeParam = activeTab !== 'all' ? activeTab : undefined;
   const listQuery = useQuery({
@@ -121,10 +122,10 @@ const MemoryList: React.FC = () => {
 
   const renderCards = () => {
     if (loading) {
-      return <div style={{ textAlign: 'center', padding: 48, color: '#999' }}>Loading...</div>;
+      return <div style={{ textAlign: 'center', padding: 48, color: 'var(--text-muted)' }}>Loading...</div>;
     }
     if (filteredMemories.length === 0) {
-      return <div style={{ textAlign: 'center', padding: 48, color: '#999' }}>No memories found</div>;
+      return <div style={{ textAlign: 'center', padding: 48, color: 'var(--text-muted)' }}>No memories found</div>;
     }
     return (
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 16 }}>
@@ -168,7 +169,7 @@ const MemoryList: React.FC = () => {
                     </Tag>
                   ))}
             </div>
-            <div style={{ fontSize: 12, color: '#999' }}>
+            <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
               {m.createdAt ? new Date(m.createdAt).toLocaleString() : ''}
             </div>
           </Card>

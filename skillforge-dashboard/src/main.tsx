@@ -1,32 +1,34 @@
-import { StrictMode } from 'react';
+import React, { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { ConfigProvider } from 'antd';
-import zhCN from 'antd/locale/zh_CN';
+import { ConfigProvider, theme as antTheme } from 'antd';
+import enUS from 'antd/locale/en_US';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import '@fontsource/inter/400.css';
 import '@fontsource/inter/500.css';
 import '@fontsource/inter/600.css';
 import App from './App';
+import { ThemeProvider, useTheme } from './contexts/ThemeContext';
 import './index.css';
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 30_000, retry: 1 } },
 });
 
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <QueryClientProvider client={queryClient}>
+const ThemeConfigProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { theme, tokens } = useTheme();
+  return (
     <ConfigProvider
-      locale={zhCN}
+      locale={enUS}
       theme={{
+        algorithm: theme === 'dark' ? antTheme.darkAlgorithm : antTheme.defaultAlgorithm,
         token: {
-          colorPrimary: '#2563EB',
-          colorBgLayout: '#FAFAFA',
-          colorBgContainer: '#FFFFFF',
-          colorBgElevated: '#FFFFFF',
-          colorBorder: '#E2E0DC',
-          colorText: '#1A1915',
-          colorTextSecondary: '#6B6760',
+          colorPrimary: tokens.accentPrimary,
+          colorBgLayout: tokens.bgBase,
+          colorBgContainer: tokens.bgSurface,
+          colorBgElevated: tokens.bgSurface,
+          colorBorder: tokens.borderSubtle,
+          colorText: tokens.textPrimary,
+          colorTextSecondary: tokens.textSecondary,
           borderRadius: 8,
           borderRadiusLG: 12,
           fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
@@ -34,18 +36,18 @@ createRoot(document.getElementById('root')!).render(
         },
         components: {
           Layout: {
-            siderBg: '#F5F4F2',
-            bodyBg: '#FAFAFA',
-            headerBg: '#FFFFFF',
+            siderBg: tokens.bgSidebar,
+            bodyBg: tokens.bgBase,
+            headerBg: tokens.bgSurface,
             headerHeight: 48,
             headerPadding: '0 16px',
           },
           Menu: {
             itemBg: 'transparent',
-            itemSelectedBg: '#ECEAE6',
-            itemHoverBg: '#ECEAE6',
-            itemColor: '#6B6760',
-            itemSelectedColor: '#1A1915',
+            itemSelectedBg: tokens.bgHover,
+            itemHoverBg: tokens.bgHover,
+            itemColor: tokens.textSecondary,
+            itemSelectedColor: tokens.textPrimary,
             activeBarBorderWidth: 0,
           },
           Card: {
@@ -54,8 +56,19 @@ createRoot(document.getElementById('root')!).render(
         },
       }}
     >
-      <App />
+      {children}
     </ConfigProvider>
+  );
+};
+
+createRoot(document.getElementById('root')!).render(
+  <StrictMode>
+    <QueryClientProvider client={queryClient}>
+      <ThemeProvider>
+        <ThemeConfigProvider>
+          <App />
+        </ThemeConfigProvider>
+      </ThemeProvider>
     </QueryClientProvider>
   </StrictMode>,
 );

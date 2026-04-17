@@ -8,6 +8,7 @@ import {
   triggerPromptImprove, getActiveImprovement, getAbRunDetail,
   type AbRunDetail,
 } from '../api';
+import { useAuth } from '../contexts/AuthContext';
 
 // ── State machine ────────────────────────────────────────────────────────────
 
@@ -33,6 +34,7 @@ const ELIGIBLE_ATTRIBUTIONS = new Set(['PROMPT_QUALITY', 'CONTEXT_OVERFLOW']);
 const TOTAL_SCENARIOS = 7;
 
 const ImprovePromptButton: React.FC<ImprovePromptButtonProps> = ({ agentId, evalRun }) => {
+  const { userId } = useAuth();
   const [state, setState] = useState<ImproveState>(() => {
     if (!evalRun.primaryAttribution || !ELIGIBLE_ATTRIBUTIONS.has(evalRun.primaryAttribution)) {
       const reason = !evalRun.primaryAttribution
@@ -99,7 +101,7 @@ const ImprovePromptButton: React.FC<ImprovePromptButtonProps> = ({ agentId, eval
       const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
       const token = localStorage.getItem('sf_token') ?? '';
       const ws = new WebSocket(
-        `${proto}://${window.location.host}/ws/users/1?token=${encodeURIComponent(token)}`,
+        `${proto}://${window.location.host}/ws/users/${userId}?token=${encodeURIComponent(token)}`,
       );
       wsRef.current = ws;
 
@@ -201,11 +203,11 @@ const ImprovePromptButton: React.FC<ImprovePromptButtonProps> = ({ agentId, eval
 
   const renderButton = () => {
     const baseStyle: React.CSSProperties = {
-      borderRadius: 'var(--radius-sm, 6px)',
+      borderRadius: 'var(--radius-sm)',
       fontFamily: 'var(--font-family)',
-      fontSize: 'var(--font-size-xs, 12px)',
+      fontSize: 'var(--font-size-xs)',
       fontWeight: 500,
-      transition: 'all var(--transition-base, 150ms ease)',
+      transition: 'all var(--transition-base)',
     };
 
     switch (state.phase) {
@@ -235,8 +237,8 @@ const ImprovePromptButton: React.FC<ImprovePromptButtonProps> = ({ agentId, eval
             onClick={handleClick}
             style={{
               ...baseStyle,
-              background: 'var(--accent-primary, #6366f1)',
-              borderColor: 'var(--accent-primary, #6366f1)',
+              background: 'var(--accent-primary)',
+              borderColor: 'var(--accent-primary)',
             }}
           >
             Improve Prompt
@@ -252,8 +254,8 @@ const ImprovePromptButton: React.FC<ImprovePromptButtonProps> = ({ agentId, eval
             icon={<LoadingOutlined />}
             style={{
               ...baseStyle,
-              borderColor: 'var(--accent-primary, #6366f1)',
-              color: 'var(--accent-primary, #6366f1)',
+              borderColor: 'var(--accent-primary)',
+              color: 'var(--accent-primary)',
             }}
           >
             Generating candidate...
@@ -268,8 +270,8 @@ const ImprovePromptButton: React.FC<ImprovePromptButtonProps> = ({ agentId, eval
             disabled
             style={{
               ...baseStyle,
-              borderColor: 'var(--accent-primary, #6366f1)',
-              color: 'var(--accent-primary, #6366f1)',
+              borderColor: 'var(--accent-primary)',
+              color: 'var(--accent-primary)',
             }}
           >
             A/B Testing ({state.progress}/{TOTAL_SCENARIOS})...
@@ -284,9 +286,9 @@ const ImprovePromptButton: React.FC<ImprovePromptButtonProps> = ({ agentId, eval
             icon={<CheckCircleOutlined />}
             style={{
               ...baseStyle,
-              background: 'rgba(82, 196, 26, 0.1)',
-              borderColor: '#52c41a',
-              color: '#52c41a',
+              background: 'var(--bg-hover)',
+              borderColor: 'var(--color-success)',
+              color: 'var(--color-success)',
             }}
           >
             Promoted (+{state.delta.toFixed(1)}pp)
@@ -298,8 +300,8 @@ const ImprovePromptButton: React.FC<ImprovePromptButtonProps> = ({ agentId, eval
             icon={<MinusCircleOutlined />}
             style={{
               ...baseStyle,
-              color: 'var(--text-secondary, #6B6760)',
-              borderColor: 'var(--border-subtle, #E2E0DC)',
+              color: 'var(--text-secondary)',
+              borderColor: 'var(--border-subtle)',
             }}
           >
             Below threshold ({state.delta >= 0 ? '+' : ''}{state.delta.toFixed(1)}pp)
@@ -314,7 +316,7 @@ const ImprovePromptButton: React.FC<ImprovePromptButtonProps> = ({ agentId, eval
               disabled
               style={{
                 ...baseStyle,
-                color: 'var(--text-muted, #7A7870)',
+                color: 'var(--text-muted)',
               }}
             >
               Skipped
@@ -341,7 +343,7 @@ const ImprovePromptButton: React.FC<ImprovePromptButtonProps> = ({ agentId, eval
   };
 
   return (
-    <div style={{ marginTop: 'var(--sp-3, 12px)' }}>
+    <div style={{ marginTop: 'var(--sp-3)' }}>
       {renderButton()}
     </div>
   );

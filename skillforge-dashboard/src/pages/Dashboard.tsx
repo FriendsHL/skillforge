@@ -12,6 +12,7 @@ import {
 import ReactECharts from 'echarts-for-react';
 import { useNavigate } from 'react-router-dom';
 import { getDashboardOverview, getDailyUsage, getSessions } from '../api';
+import { useTheme } from '../contexts/ThemeContext';
 
 const { Text } = Typography;
 
@@ -51,6 +52,7 @@ const Dashboard: React.FC = () => {
   const [recent, setRecent] = useState<SessionItem[]>([]);
   const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
+  const { tokens } = useTheme();
 
   useEffect(() => {
     const load = async () => {
@@ -94,7 +96,7 @@ const Dashboard: React.FC = () => {
           smooth: true,
           showSymbol: false,
           areaStyle: { opacity: 0.15 },
-          itemStyle: { color: '#1677ff' },
+          itemStyle: { color: tokens.colorInfo },
           data: daily.map((d) => d.inputTokens),
         },
         {
@@ -103,12 +105,12 @@ const Dashboard: React.FC = () => {
           smooth: true,
           showSymbol: false,
           areaStyle: { opacity: 0.15 },
-          itemStyle: { color: '#52c41a' },
+          itemStyle: { color: tokens.colorSuccess },
           data: daily.map((d) => d.outputTokens),
         },
       ],
     }),
-    [daily]
+    [daily, tokens]
   );
 
   if (loading) {
@@ -172,7 +174,7 @@ const Dashboard: React.FC = () => {
         <Col xs={24} lg={16}>
           <Card title={<><ThunderboltOutlined /> Token usage — last 7 days</>} className="sf-surface-card" style={{ borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
             {daily.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: 40, color: '#999' }}>
+              <div style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>
                 No data yet
               </div>
             ) : (
@@ -184,7 +186,7 @@ const Dashboard: React.FC = () => {
         <Col xs={24} lg={8}>
           <Card title={<><FireOutlined /> Recent sessions</>} className="sf-surface-card" style={{ borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
             {recent.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: 40, color: '#999' }}>
+              <div style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>
                 No sessions yet
               </div>
             ) : (

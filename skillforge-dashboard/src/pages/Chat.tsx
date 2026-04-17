@@ -35,6 +35,7 @@ import { useChatMessages, type InflightTool } from '../hooks/useChatMessages';
 import { useCollabState } from '../hooks/useCollabState';
 import { useChatSession, type RuntimeStatus, type ExecutionMode } from '../hooks/useChatSession';
 import { useChatWsEventHandler } from '../hooks/useChatWsEventHandler';
+import { useAuth } from '../contexts/AuthContext';
 
 const { Text } = Typography;
 
@@ -53,6 +54,7 @@ interface PendingAsk {
 const Chat: React.FC = () => {
   const { sessionId: urlSessionId } = useParams<{ sessionId?: string }>();
   const navigate = useNavigate();
+  const { userId } = useAuth();
   const [agents, setAgents] = useState<any[]>([]);
   const [parentSessionId, setParentSessionId] = useState<string | null>(null);
   const [sessionDepth, setSessionDepth] = useState<number>(0);
@@ -124,7 +126,7 @@ const Chat: React.FC = () => {
   // Load sessions when agent selected
   useEffect(() => {
     if (selectedAgent == null) return;
-    getSessions(1)
+    getSessions(userId)
       .then((res) => {
         const list = safeParseList(SessionSchema, extractList<any>(res)).filter(
           (s: any) => s.agentId === selectedAgent,
@@ -132,7 +134,7 @@ const Chat: React.FC = () => {
         setSessions(list);
       })
       .catch(() => {});
-  }, [selectedAgent]);
+  }, [selectedAgent, userId]);
 
   // Reset Chat-local state when session changes
   useEffect(() => {
@@ -193,7 +195,7 @@ const Chat: React.FC = () => {
       return;
     }
     try {
-      const res = await createSession({ userId: 1, agentId: selectedAgent });
+      const res = await createSession({ userId, agentId: selectedAgent });
       const newSession = res.data;
       const sid = newSession.id ?? newSession.sessionId;
       setActiveSessionId(String(sid));
@@ -212,7 +214,7 @@ const Chat: React.FC = () => {
         return;
       }
       try {
-        const res = await createSession({ userId: 1, agentId: selectedAgent });
+        const res = await createSession({ userId, agentId: selectedAgent });
         const newSession = res.data;
         const sid = String(newSession.id ?? newSession.sessionId);
         setActiveSessionId(sid);
@@ -231,7 +233,7 @@ const Chat: React.FC = () => {
     setRuntimeStatus('running');
     setRuntimeStep('Starting');
     try {
-      await sendMessage(sid, { message: text, userId: 1 });
+      await sendMessage(sid, { message: text, userId });
     } catch (e: unknown) {
       const status = (e as { response?: { status?: number } })?.response?.status;
       if (status === 429) {
@@ -246,7 +248,7 @@ const Chat: React.FC = () => {
   const handleAnswerAsk = async (answer: string) => {
     if (!pendingAsk || !activeSessionId) return;
     try {
-      await answerAsk(activeSessionId, pendingAsk.askId, answer, 1);
+      await answerAsk(activeSessionId, pendingAsk.askId, answer, userId);
       setPendingAsk(null);
       setOtherInput('');
     } catch {
@@ -260,7 +262,7 @@ const Chat: React.FC = () => {
       return;
     }
     try {
-      await setSessionMode(activeSessionId, mode, 1);
+      await setSessionMode(activeSessionId, mode, userId);
       setExecutionModeState(mode);
       message.success(`Switched to ${mode} mode`);
     } catch {
@@ -284,7 +286,7 @@ const Chat: React.FC = () => {
   const refreshCompactStats = async () => {
     if (!activeSessionId) return;
     try {
-      const res = await getSession(activeSessionId, 1);
+      const res = await getSession(activeSessionId, userId);
       const s = res.data;
       setLightCompactCount(s.lightCompactCount ?? 0);
       setFullCompactCount(s.fullCompactCount ?? 0);
@@ -299,12 +301,12 @@ const Chat: React.FC = () => {
     if (!activeSessionId || compacting || runtimeStatus === 'running') return;
     setCompacting(true);
     try {
-      const res = await compactSession(activeSessionId, 'full', 1, 'user clicked compact button');
+      const res = await compactSession(activeSessionId, 'full', userId, 'user clicked compact button');
       const reclaimed = res.data?.tokensReclaimed ?? 0;
       message.success(`Compacted: reclaimed ${reclaimed} tokens`);
       await refreshCompactStats();
       try {
-        const mres = await getSessionMessages(activeSessionId, 1);
+        const mres = await getSessionMessages(activeSessionId, userId);
         setRawMessages(extractList(mres));
       } catch {}
     } catch (e: unknown) {
@@ -322,7 +324,7 @@ const Chat: React.FC = () => {
     setCompactModalOpen(true);
     if (!activeSessionId) return;
     try {
-      const res = await getCompactions(activeSessionId, 1);
+      const res = await getCompactions(activeSessionId, userId);
       setCompactEvents(extractList(res));
     } catch {
       setCompactEvents([]);
@@ -333,7 +335,7 @@ const Chat: React.FC = () => {
     if (!activeSessionId || cancelling) return;
     setCancelling(true);
     try {
-      await cancelChat(activeSessionId, 1);
+      await cancelChat(activeSessionId, userId);
     } catch (e: unknown) {
       const status = (e as { response?: { status?: number } })?.response?.status;
       if (status === 409) {

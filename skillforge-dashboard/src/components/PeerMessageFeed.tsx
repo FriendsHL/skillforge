@@ -99,22 +99,22 @@ const PeerMessageFeed: React.FC<Props> = ({ collabRunId }) => {
             style={{
               padding: '2px 12px',
               borderBottom: 'none',
-              background: msg.isBroadcast ? '#f0f5ff' : undefined,
+              background: msg.isBroadcast ? 'var(--accent-muted)' : undefined,
             }}
           >
             <Text style={{ fontSize: 12, fontFamily: 'monospace' }}>
               <Text type="secondary" style={{ fontSize: 12 }}>
                 [{formatTime(msg.timestamp)}]
               </Text>{' '}
-              <Text strong style={{ fontSize: 12, color: msg.isBroadcast ? '#1677ff' : undefined }}>
+              <Text strong style={{ fontSize: 12, color: msg.isBroadcast ? 'var(--color-info)' : undefined }}>
                 {msg.fromHandle}
               </Text>
               {' \u2192 '}
-              <Text strong style={{ fontSize: 12, color: msg.isBroadcast ? '#1677ff' : undefined }}>
+              <Text strong style={{ fontSize: 12, color: msg.isBroadcast ? 'var(--color-info)' : undefined }}>
                 {msg.toHandle === '*' ? 'all' : msg.toHandle}
               </Text>
               {msg.isBroadcast && (
-                <Text style={{ fontSize: 11, color: '#1677ff', marginLeft: 4 }}>(broadcast)</Text>
+                <Text style={{ fontSize: 11, color: 'var(--color-info)', marginLeft: 4 }}>(broadcast)</Text>
               )}
             </Text>
           </List.Item>

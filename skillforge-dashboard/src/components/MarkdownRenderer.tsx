@@ -28,7 +28,7 @@ const CopyButton: React.FC<{ text: string }> = ({ text }) => {
         background: 'rgba(255,255,255,0.15)',
         border: '1px solid rgba(255,255,255,0.25)',
         borderRadius: 4,
-        color: '#ccc',
+        color: 'var(--text-muted)',
         cursor: 'pointer',
         padding: '2px 8px',
         fontSize: 12,
@@ -64,12 +64,12 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content }) => {
               return (
                 <div style={{ position: 'relative', margin: '12px 0' }}>
                   <div style={{
-                    background: '#1e1e1e',
+                    background: 'var(--bg-code)',
                     borderRadius: '8px 8px 0 0',
                     padding: '4px 12px',
                     fontSize: 11,
-                    color: '#999',
-                    borderBottom: '1px solid #333',
+                    color: 'var(--text-muted)',
+                    borderBottom: '1px solid var(--border-subtle)',
                     fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
                   }}>
                     {match[1]}
@@ -97,8 +97,8 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content }) => {
                 <div style={{ position: 'relative', margin: '12px 0' }}>
                   <CopyButton text={codeStr} />
                   <pre style={{
-                    background: '#1e1e1e',
-                    color: '#d4d4d4',
+                    background: 'var(--bg-code)',
+                    color: 'var(--text-on-accent)',
                     padding: '12px 16px',
                     borderRadius: 8,
                     fontSize: 13,

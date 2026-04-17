@@ -1,6 +1,7 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Tooltip, Spin } from 'antd';
 import { getCollabRunTraces, extractList } from '../api';
+import { useTheme } from '../contexts/ThemeContext';
 
 interface TraceSpan {
   id: string;
@@ -18,14 +19,6 @@ interface TraceSpan {
 interface Props {
   collabRunId?: string | null;
 }
-
-const spanColors: Record<string, string> = {
-  LLM_CALL: '#4096ff',
-  TOOL_CALL: '#52c41a',
-  PEER_MESSAGE: '#722ed1',
-  ASK_USER: '#fa8c16',
-  COMPACT: '#8c8c8c',
-};
 
 function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
@@ -55,6 +48,14 @@ function buildTimeTicks(totalDurationMs: number): { pct: number; label: string }
 }
 
 const CollabRunTimeline: React.FC<Props> = ({ collabRunId }) => {
+  const { tokens } = useTheme();
+  const spanColors = useMemo<Record<string, string>>(() => ({
+    LLM_CALL: tokens.opThinking,
+    TOOL_CALL: tokens.opExecute,
+    PEER_MESSAGE: tokens.opWrite,
+    ASK_USER: tokens.opSearch,
+    COMPACT: tokens.textMuted,
+  }), [tokens]);
   const [spans, setSpans] = useState<TraceSpan[]>([]);
   const [loading, setLoading] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -137,7 +138,7 @@ const CollabRunTimeline: React.FC<Props> = ({ collabRunId }) => {
           marginLeft: LABEL_WIDTH,
           position: 'relative',
           height: 20,
-          borderBottom: '1px solid #f0f0f0',
+          borderBottom: '1px solid var(--border-subtle)',
           marginBottom: 4,
         }}
       >
@@ -149,7 +150,7 @@ const CollabRunTimeline: React.FC<Props> = ({ collabRunId }) => {
               left: `${tick.pct}%`,
               transform: 'translateX(-50%)',
               fontSize: 10,
-              color: '#999',
+              color: 'var(--text-muted)',
               whiteSpace: 'nowrap',
             }}
           >
@@ -181,7 +182,7 @@ const CollabRunTimeline: React.FC<Props> = ({ collabRunId }) => {
                 width: LABEL_WIDTH,
                 flexShrink: 0,
                 fontSize: 11,
-                color: '#666',
+                color: 'var(--text-secondary)',
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap',
@@ -198,14 +199,14 @@ const CollabRunTimeline: React.FC<Props> = ({ collabRunId }) => {
                 flex: 1,
                 position: 'relative',
                 height: '100%',
-                background: '#fafafa',
+                background: 'var(--bg-hover)',
                 borderRadius: 4,
               }}
             >
               {sorted.map((span) => {
                 const leftPct = ((span.startTimeMs - collabStartMs) / totalDurationMs) * 100;
                 const widthPct = (span.durationMs / totalDurationMs) * 100;
-                const color = spanColors[span.spanType] ?? '#d9d9d9';
+                const color = spanColors[span.spanType] ?? tokens.borderMedium;
 
                 return (
                   <Tooltip
@@ -231,7 +232,7 @@ const CollabRunTimeline: React.FC<Props> = ({ collabRunId }) => {
                         borderRadius: 3,
                         background: color,
                         opacity: span.success ? 0.85 : 0.5,
-                        border: span.success ? 'none' : '1px solid #ff4d4f',
+                        border: span.success ? 'none' : '1px solid var(--color-error)',
                         cursor: 'pointer',
                         minWidth: 2,
                       }}
@@ -251,9 +252,9 @@ const CollabRunTimeline: React.FC<Props> = ({ collabRunId }) => {
           gap: 12,
           marginTop: 8,
           paddingTop: 6,
-          borderTop: '1px solid #f0f0f0',
+          borderTop: '1px solid var(--border-subtle)',
           fontSize: 11,
-          color: '#888',
+          color: 'var(--text-muted)',
           flexWrap: 'wrap',
         }}
       >

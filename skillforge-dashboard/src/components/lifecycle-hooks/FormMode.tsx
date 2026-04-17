@@ -395,7 +395,7 @@ const EntryRow: React.FC<EntryRowProps> = ({
               loading={dryRunMutation.isPending}
               disabled={!agentId}
               aria-label="Test entry"
-              style={{ color: agentId ? 'var(--accent-primary, #6366f1)' : undefined }}
+              style={{ color: agentId ? 'var(--accent-primary)' : undefined }}
             />
           </Tooltip>
           <Tooltip title="Move up">

@@ -4,8 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getSessions, extractList } from '../api';
 import { SessionSchema, safeParseList } from '../api/schemas';
-
-const USER_ID = 1;
+import { useAuth } from '../contexts/AuthContext';
 
 type SessionRow = {
   id: string;
@@ -39,25 +38,25 @@ function ensurePulseStyle() {
 }
 
 const StatusDot: React.FC<{ status?: string; error?: string }> = ({ status, error }) => {
-  let color = '#bfbfbf';
+  let color = 'var(--text-muted)';
   let label = status || 'unknown';
   let animated = false;
   switch (status) {
     case 'idle':
-      color = '#52c41a';
+      color = 'var(--color-success)';
       label = 'idle';
       break;
     case 'running':
-      color = '#1890ff';
+      color = 'var(--color-info)';
       label = 'running';
       animated = true;
       break;
     case 'error':
-      color = '#ff4d4f';
+      color = 'var(--color-error)';
       label = error ? `error: ${error}` : 'error';
       break;
     case 'waiting_user':
-      color = '#faad14';
+      color = 'var(--color-warning)';
       label = 'waiting user';
       break;
     default:
@@ -81,16 +80,16 @@ const StatusDot: React.FC<{ status?: string; error?: string }> = ({ status, erro
   );
 };
 
-const SESSIONS_QUERY_KEY = ['sessions', USER_ID] as const;
-
 const SessionList: React.FC = () => {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const { userId } = useAuth();
+  const SESSIONS_QUERY_KEY = React.useMemo(() => ['sessions', userId] as const, [userId]);
 
   const { data: sessions = [], isLoading: loading, refetch, isError: sessionsError } = useQuery({
     queryKey: SESSIONS_QUERY_KEY,
     queryFn: () =>
-      getSessions(USER_ID).then((res) => safeParseList(SessionSchema, extractList<SessionRow>(res)) as SessionRow[]),
+      getSessions(userId).then((res) => safeParseList(SessionSchema, extractList<SessionRow>(res)) as SessionRow[]),
     // staleTime:0 so page re-visits always refetch — WS keeps data live after that.
     // Without this, the 30s global staleTime hides status changes that happened
     // while the component was unmounted and the WS was closed.
@@ -144,7 +143,7 @@ const SessionList: React.FC = () => {
     if (unmountedRef.current) return;
     const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
     const token = localStorage.getItem('sf_token') ?? '';
-    const url = `${proto}://${window.location.host}/ws/users/${USER_ID}?token=${encodeURIComponent(token)}`;
+    const url = `${proto}://${window.location.host}/ws/users/${userId}?token=${encodeURIComponent(token)}`;
     let ws: WebSocket;
     try {
       ws = new WebSocket(url);

@@ -96,7 +96,7 @@ const RationaleText: React.FC<{ text: string }> = React.memo(({ text }) => {
       <Button
         type="link"
         size="small"
-        style={{ padding: 0, fontSize: 11, color: 'var(--text-muted, #7A7870)' }}
+        style={{ padding: 0, fontSize: 11, color: 'var(--text-muted)' }}
         icon={expanded ? <DownOutlined /> : <RightOutlined />}
         onClick={() => setExpanded((v) => !v)}
       >
@@ -108,7 +108,7 @@ const RationaleText: React.FC<{ text: string }> = React.memo(({ text }) => {
           style={{
             display: 'block',
             fontSize: 11,
-            color: 'var(--text-muted, #7A7870)',
+            color: 'var(--text-muted)',
             marginTop: 4,
             lineHeight: 1.5,
           }}
@@ -144,9 +144,9 @@ const ScenarioCard: React.FC<ScenarioCardProps> = React.memo(
           display: 'flex',
           gap: 12,
           padding: '12px 16px',
-          borderRadius: 'var(--radius-sm, 6px)',
-          border: '1px solid var(--border-subtle, #E2E0DC)',
-          background: isDiscarded ? 'var(--bg-surface-muted, #fafafa)' : 'var(--bg-surface, #fff)',
+          borderRadius: 'var(--radius-sm)',
+          border: '1px solid var(--border-subtle)',
+          background: isDiscarded ? 'var(--bg-hover)' : 'var(--bg-surface)',
           opacity: isDiscarded ? 0.55 : 1,
         }}
       >
@@ -362,7 +362,7 @@ const ScenarioDraftPanel: React.FC<ScenarioDraftPanelProps> = ({ agentId }) => {
             count={counts[tab.key]}
             size="small"
             showZero
-            style={{ backgroundColor: activeTab === tab.key ? 'var(--accent-primary, #6366f1)' : '#d9d9d9' }}
+            style={{ backgroundColor: activeTab === tab.key ? 'var(--accent-primary)' : 'var(--border-medium)' }}
           >
             <Button
               size="small"

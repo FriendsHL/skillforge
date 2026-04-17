@@ -54,19 +54,19 @@ const statusColor = (status?: string) => {
 const statusBorderColor = (status?: string) => {
   switch (status) {
     case 'running':
-      return '#52c41a';
+      return 'var(--color-success)';
     case 'RUNNING':
-      return '#52c41a';
+      return 'var(--color-success)';
     case 'COMPLETED':
-      return '#1677ff';
+      return 'var(--color-info)';
     case 'idle':
-      return '#d9d9d9';
+      return 'var(--border-medium)';
     case 'error':
-      return '#ff4d4f';
+      return 'var(--color-error)';
     case 'CANCELLED':
-      return '#d9d9d9';
+      return 'var(--border-medium)';
     default:
-      return '#d9d9d9';
+      return 'var(--border-medium)';
   }
 };
 
@@ -116,7 +116,7 @@ const TreeNode: React.FC<{ member: CollabMember; isCurrentSession: boolean }> = 
       padding: '6px 12px',
       borderLeft: `3px solid ${statusBorderColor(member.runtimeStatus)}`,
       marginBottom: 4,
-      background: isCurrentSession ? '#e6f4ff' : '#fafafa',
+      background: isCurrentSession ? 'var(--accent-muted)' : 'var(--bg-hover)',
       borderRadius: 4,
     }}
   >
@@ -287,23 +287,23 @@ const CollabRunPanel: React.FC<Props> = ({ collabRunId, sessionId }) => {
         <div
           style={{
             padding: '6px 12px',
-            borderTop: '1px solid #f0f0f0',
+            borderTop: '1px solid var(--border-subtle)',
             display: 'flex',
             gap: 16,
             fontSize: 12,
-            color: '#666',
+            color: 'var(--text-secondary)',
             flexWrap: 'wrap',
           }}
         >
           <span>Members: <Text strong style={{ fontSize: 12 }}>{summaryStats.total}</Text></span>
           {summaryStats.running > 0 && (
-            <span>Running: <Text style={{ fontSize: 12, color: '#52c41a' }}>{summaryStats.running}</Text></span>
+            <span>Running: <Text style={{ fontSize: 12, color: 'var(--color-success)' }}>{summaryStats.running}</Text></span>
           )}
           {summaryStats.completed > 0 && (
-            <span>Done: <Text style={{ fontSize: 12, color: '#1677ff' }}>{summaryStats.completed}</Text></span>
+            <span>Done: <Text style={{ fontSize: 12, color: 'var(--color-info)' }}>{summaryStats.completed}</Text></span>
           )}
           {summaryStats.failed > 0 && (
-            <span>Failed: <Text style={{ fontSize: 12, color: '#ff4d4f' }}>{summaryStats.failed}</Text></span>
+            <span>Failed: <Text style={{ fontSize: 12, color: 'var(--color-error)' }}>{summaryStats.failed}</Text></span>
           )}
           <span>Duration: {formatDuration(data.createdAt, data.completedAt)}</span>
           <span title={data.collabRunId}>

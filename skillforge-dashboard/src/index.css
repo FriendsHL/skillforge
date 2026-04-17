@@ -67,6 +67,9 @@
   --color-error: #991b1b;
   --color-error-bg: #fef2f2;
   --color-error-border: #fecaca;
+  --color-success: #52c41a;
+  --color-warning: #faad14;
+  --color-info: #1677ff;
 }
 
 @media (max-width: 1024px) {

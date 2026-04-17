@@ -105,11 +105,11 @@ function truncate(s: string, max: number): string {
 const statusIcon = (status: 'success' | 'error' | 'running') => {
   switch (status) {
     case 'success':
-      return <CheckCircleOutlined style={{ color: '#52c41a', fontSize: 12 }} />;
+      return <CheckCircleOutlined style={{ color: 'var(--color-success)', fontSize: 12 }} />;
     case 'error':
-      return <CloseCircleOutlined style={{ color: '#ff4d4f', fontSize: 12 }} />;
+      return <CloseCircleOutlined style={{ color: 'var(--color-error)', fontSize: 12 }} />;
     case 'running':
-      return <LoadingOutlined style={{ color: '#1677ff', fontSize: 12 }} spin />;
+      return <LoadingOutlined style={{ color: 'var(--color-info)', fontSize: 12 }} spin />;
   }
 };
 
@@ -208,9 +208,9 @@ const ChildAgentFeed: React.FC<Props> = ({ sessionId, isRunning }) => {
         style={{
           maxHeight: 300,
           overflowY: 'auto',
-          border: '1px solid #f0f0f0',
+          border: '1px solid var(--border-subtle)',
           borderRadius: 6,
-          background: '#fafafa',
+          background: 'var(--bg-hover)',
         }}
       >
         {messages.length === 0 ? (
@@ -225,25 +225,25 @@ const ChildAgentFeed: React.FC<Props> = ({ sessionId, isRunning }) => {
               key={msg.id}
               style={{
                 padding: '6px 10px',
-                borderBottom: '1px solid #f0f0f0',
+                borderBottom: '1px solid var(--border-subtle)',
                 fontSize: 12,
               }}
             >
               {/* Role indicator + text */}
               <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
                 {msg.role === 'user' ? (
-                  <UserOutlined style={{ color: '#1677ff', marginTop: 2, flexShrink: 0 }} />
+                  <UserOutlined style={{ color: 'var(--color-info)', marginTop: 2, flexShrink: 0 }} />
                 ) : (
-                  <RobotOutlined style={{ color: '#722ed1', marginTop: 2, flexShrink: 0 }} />
+                  <RobotOutlined style={{ color: 'var(--accent-primary)', marginTop: 2, flexShrink: 0 }} />
                 )}
                 <div style={{ flex: 1, minWidth: 0 }}>
                   {msg.text && (
                     <div
                       style={{
-                        background: msg.role === 'user' ? '#e6f4ff' : '#fff',
+                        background: msg.role === 'user' ? 'var(--accent-muted)' : 'var(--bg-surface)',
                         padding: '4px 8px',
                         borderRadius: 4,
-                        color: '#333',
+                        color: 'var(--text-primary)',
                         lineHeight: 1.5,
                         wordBreak: 'break-word',
                       }}
@@ -261,12 +261,12 @@ const ChildAgentFeed: React.FC<Props> = ({ sessionId, isRunning }) => {
                         gap: 6,
                         marginTop: 4,
                         padding: '3px 8px',
-                        background: '#f6ffed',
-                        border: '1px solid #d9f7be',
+                        background: 'var(--bg-hover)',
+                        border: '1px solid var(--border-subtle)',
                         borderRadius: 4,
                       }}
                     >
-                      <ToolOutlined style={{ color: '#666', fontSize: 11 }} />
+                      <ToolOutlined style={{ color: 'var(--text-secondary)', fontSize: 11 }} />
                       <Tag
                         color="green"
                         style={{ margin: 0, fontSize: 11, lineHeight: '18px' }}

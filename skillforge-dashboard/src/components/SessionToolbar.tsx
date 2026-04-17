@@ -46,7 +46,7 @@ const SessionToolbar: React.FC<SessionToolbarProps> = ({
       <a
         onClick={onOpenCompactModal}
         title="查看压缩历史"
-        style={{ fontSize: 12, color: '#888', marginRight: 8 }}
+        style={{ fontSize: 12, color: 'var(--text-muted)', marginRight: 8 }}
       >
         🗜 {lightCompactCount} light · {fullCompactCount} full · -{totalTokensReclaimed} tok
       </a>

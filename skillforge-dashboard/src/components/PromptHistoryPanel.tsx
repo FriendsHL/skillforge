@@ -17,10 +17,10 @@ const { Text } = Typography;
 // ── Status styling ──────────────────────────────────────────────────────────
 
 const STATUS_CONFIG: Record<string, { color: string; label: string }> = {
-  active: { color: '#52c41a', label: 'Active' },
-  candidate: { color: 'var(--accent-primary, #6366f1)', label: 'Candidate' },
-  deprecated: { color: 'var(--text-muted, #7A7870)', label: 'Deprecated' },
-  failed: { color: '#ff4d4f', label: 'Failed' },
+  active: { color: 'var(--color-success)', label: 'Active' },
+  candidate: { color: 'var(--accent-primary)', label: 'Candidate' },
+  deprecated: { color: 'var(--text-muted)', label: 'Deprecated' },
+  failed: { color: 'var(--color-error)', label: 'Failed' },
 };
 
 const SOURCE_LABEL: Record<string, string> = {
@@ -35,16 +35,16 @@ function deltaIndicator(
   candidate: { status: string },
 ): React.ReactNode {
   if (baseline.status === 'FAIL' && candidate.status === 'PASS') {
-    return <span style={{ color: '#52c41a', fontWeight: 600 }}>&#x25B2;</span>;
+    return <span style={{ color: 'var(--color-success)', fontWeight: 600 }}>&#x25B2;</span>;
   }
   if (baseline.status === 'PASS' && candidate.status === 'FAIL') {
-    return <span style={{ color: '#ff4d4f', fontWeight: 600 }}>&#x25BC;</span>;
+    return <span style={{ color: 'var(--color-error)', fontWeight: 600 }}>&#x25BC;</span>;
   }
   if (baseline.status === 'PASS' && candidate.status === 'PASS') {
-    return <span style={{ color: 'var(--text-muted, #7A7870)' }}>&#x2500;</span>;
+    return <span style={{ color: 'var(--text-muted)' }}>&#x2500;</span>;
   }
   // FAIL→FAIL
-  return <span style={{ color: '#faad14' }}>&#x2500;</span>;
+  return <span style={{ color: 'var(--color-warning)' }}>&#x2500;</span>;
 }
 
 // ── AB Results Table (inside modal) ─────────────────────────────────────────
@@ -161,9 +161,9 @@ const VersionDetailModal: React.FC<DetailModalProps> = ({ agentId, versionId, op
           <div style={{
             display: 'flex', gap: 16, flexWrap: 'wrap',
             padding: '12px 16px',
-            background: 'var(--bg-surface, #fff)',
+            background: 'var(--bg-surface)',
             borderRadius: 'var(--radius-sm, 6px)',
-            border: '1px solid var(--border-subtle, #E2E0DC)',
+            border: '1px solid var(--border-subtle)',
           }}>
             <div>
               <Text type="secondary" style={{ fontSize: 11, display: 'block' }}>Source</Text>
@@ -176,7 +176,7 @@ const VersionDetailModal: React.FC<DetailModalProps> = ({ agentId, versionId, op
                   strong
                   style={{
                     fontSize: 12,
-                    color: version.deltaPassRate > 0 ? '#52c41a' : version.deltaPassRate < 0 ? '#ff4d4f' : undefined,
+                    color: version.deltaPassRate > 0 ? 'var(--color-success)' : version.deltaPassRate < 0 ? 'var(--color-error)' : undefined,
                   }}
                 >
                   {version.deltaPassRate >= 0 ? '+' : ''}{version.deltaPassRate.toFixed(1)}pp
@@ -207,9 +207,9 @@ const VersionDetailModal: React.FC<DetailModalProps> = ({ agentId, versionId, op
               </Text>
               <pre style={{
                 fontSize: 12, margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-                background: 'var(--bg-surface, #fafafa)', padding: '10px 12px',
+                background: 'var(--bg-surface)', padding: '10px 12px',
                 borderRadius: 'var(--radius-sm, 6px)',
-                borderLeft: '3px solid var(--accent-primary, #6366f1)',
+                borderLeft: '3px solid var(--accent-primary)',
                 fontFamily: 'var(--font-mono)',
                 maxHeight: 120, overflowY: 'auto',
               }}>
@@ -226,7 +226,7 @@ const VersionDetailModal: React.FC<DetailModalProps> = ({ agentId, versionId, op
               </Text>
               <pre style={{
                 fontSize: 11, margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-                background: 'var(--bg-code, #1C1C1E)', color: '#e5e7eb',
+                background: 'var(--bg-code)', color: 'var(--text-on-accent)',
                 padding: '12px 14px',
                 borderRadius: 'var(--radius-sm, 6px)',
                 fontFamily: 'var(--font-mono)',
@@ -294,7 +294,7 @@ const PromptHistoryPanel: React.FC<PromptHistoryPanelProps> = ({ agentId }) => {
       width: 100,
       render: (_: unknown, r: PromptVersion) => (
         <Space size={4}>
-          {r.status === 'active' && <CrownOutlined style={{ color: '#52c41a', fontSize: 12 }} />}
+          {r.status === 'active' && <CrownOutlined style={{ color: 'var(--color-success)', fontSize: 12 }} />}
           <Text strong style={{ fontSize: 12, fontFamily: 'var(--font-mono)' }}>v{r.versionNumber}</Text>
         </Space>
       ),
@@ -310,7 +310,7 @@ const PromptHistoryPanel: React.FC<PromptHistoryPanelProps> = ({ agentId }) => {
             style={{
               color: cfg?.color,
               borderColor: cfg?.color,
-              background: v === 'active' ? 'rgba(82,196,26,0.08)' : 'transparent',
+              background: v === 'active' ? 'color-mix(in oklab, var(--color-success) 10%, transparent)' : 'transparent',
               fontSize: 11,
               margin: 0,
             }}
@@ -336,7 +336,7 @@ const PromptHistoryPanel: React.FC<PromptHistoryPanelProps> = ({ agentId }) => {
       width: 80,
       render: (v: number | null) => {
         if (v == null) return <Text type="secondary" style={{ fontSize: 11 }}>-</Text>;
-        const color = v > 0 ? '#52c41a' : v < 0 ? '#ff4d4f' : undefined;
+        const color = v > 0 ? 'var(--color-success)' : v < 0 ? 'var(--color-error)' : undefined;
         return (
           <Text strong style={{ fontSize: 12, color }}>
             {v >= 0 ? '+' : ''}{v.toFixed(1)}pp
@@ -382,7 +382,7 @@ const PromptHistoryPanel: React.FC<PromptHistoryPanelProps> = ({ agentId }) => {
                 type="link"
                 icon={<RollbackOutlined />}
                 loading={rollbackMutation.isPending}
-                style={{ fontSize: 12, padding: '0 4px', color: '#faad14' }}
+                style={{ fontSize: 12, padding: '0 4px', color: 'var(--color-warning)' }}
               >
                 Rollback
               </Button>
