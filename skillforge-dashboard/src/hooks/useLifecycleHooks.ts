@@ -14,6 +14,8 @@ import { useQuery } from '@tanstack/react-query';
 import {
   getLifecycleHookEvents,
   getLifecycleHookPresets,
+  getLifecycleHookMethods,
+  type BuiltInMethodDto,
   type LifecycleHookEventDto,
   type LifecycleHookPresetDto,
 } from '../api';
@@ -42,9 +44,12 @@ export interface UseLifecycleHooksReturn {
   events: LifecycleHookEventMeta[];
   /** Presets metadata (from API; empty array while loading / on error). */
   presets: LifecycleHookPresetDto[];
+  /** Built-in methods metadata (from API; empty array while loading / on error). */
+  methods: BuiltInMethodDto[];
   /** Loading flags. */
   isEventsLoading: boolean;
   isPresetsLoading: boolean;
+  isMethodsLoading: boolean;
 
   setRawJson: (next: string) => void;
   setMode: (mode: LifecycleHooksMode) => void;
@@ -83,12 +88,23 @@ export function useLifecycleHooks(initialJson: string | null | undefined): UseLi
     retry: 1,
   });
 
+  const { data: methodsData, isLoading: isMethodsLoading } = useQuery({
+    queryKey: ['lifecycle-hook-methods'],
+    queryFn: () => getLifecycleHookMethods().then((r) => {
+      const d = r.data;
+      return Array.isArray(d) ? d : [];
+    }),
+    staleTime: 86_400_000,
+    retry: 1,
+  });
+
   const events = useMemo<LifecycleHookEventMeta[]>(() => {
     if (!eventsData || eventsData.length === 0) return DEFAULT_LIFECYCLE_HOOK_EVENTS;
     return mergeEventsWithFallback(eventsData, DEFAULT_LIFECYCLE_HOOK_EVENTS);
   }, [eventsData]);
 
   const presets = presetsData ?? [];
+  const methods = methodsData ?? [];
 
   const { parsed, errors } = useMemo(() => {
     const { parsed: p, errors: e } = safeParseHooksJson(rawJson);
@@ -110,8 +126,10 @@ export function useLifecycleHooks(initialJson: string | null | undefined): UseLi
     errors,
     events,
     presets,
+    methods,
     isEventsLoading,
     isPresetsLoading,
+    isMethodsLoading,
     setRawJson,
     setMode,
     setConfig,

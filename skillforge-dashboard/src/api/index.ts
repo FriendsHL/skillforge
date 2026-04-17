@@ -48,10 +48,30 @@ export function extractList<T>(res: { data: T[] | { data: T[] } | unknown }): T[
 }
 
 // Agent API
+
+export interface CreateAgentRequest {
+  name: string;
+  description?: string;
+  systemPrompt?: string;
+  soulPrompt?: string;
+  toolsPrompt?: string;
+  modelId?: string;
+  executionMode?: 'ask' | 'auto';
+  maxLoops?: number;
+  skillIds?: string;
+  toolIds?: string;
+  behaviorRules?: string;
+  lifecycleHooks?: string;
+}
+
+export interface UpdateAgentRequest extends Partial<CreateAgentRequest> {
+  id?: number;
+}
+
 export const getAgents = () => api.get('/agents');
 export const getAgent = (id: number) => api.get(`/agents/${id}`);
-export const createAgent = (data: any) => api.post('/agents', data);
-export const updateAgent = (id: number, data: any) => api.put(`/agents/${id}`, data);
+export const createAgent = (data: CreateAgentRequest) => api.post('/agents', data);
+export const updateAgent = (id: number, data: UpdateAgentRequest) => api.put(`/agents/${id}`, data);
 export const deleteAgent = (id: number) => api.delete(`/agents/${id}`);
 
 // Session API
@@ -109,8 +129,21 @@ export const getMemories = (userId: number, type?: string) =>
   api.get('/memories', { params: { userId, type } });
 export const searchMemories = (userId: number, keyword: string) =>
   api.get('/memories/search', { params: { userId, keyword } });
-export const createMemory = (data: any) => api.post('/memories', data);
-export const updateMemory = (id: number, data: any) => api.put(`/memories/${id}`, data);
+export interface CreateMemoryRequest {
+  userId: number;
+  type: string;
+  content: string;
+  source?: string;
+}
+
+export interface UpdateMemoryRequest {
+  content?: string;
+  type?: string;
+  source?: string;
+}
+
+export const createMemory = (data: CreateMemoryRequest) => api.post('/memories', data);
+export const updateMemory = (id: number, data: UpdateMemoryRequest) => api.put(`/memories/${id}`, data);
 export const deleteMemory = (id: number) => api.delete(`/memories/${id}`);
 
 // User Config API
@@ -204,6 +237,57 @@ export const getLifecycleHookPresets = () =>
   api
     .get<LifecycleHookPresetsEnvelope>('/lifecycle-hooks/presets')
     .then((r) => ({ ...r, data: r.data?.presets ?? [] }));
+
+// ─── Built-in Methods (N3 P2) ──────────────────────────────────────────────
+
+export interface BuiltInMethodDto {
+  ref: string;
+  displayName: string;
+  description: string;
+  argsSchema: Record<string, string>;
+}
+
+export const getLifecycleHookMethods = () =>
+  api.get<BuiltInMethodDto[]>('/lifecycle-hooks/methods');
+
+// ─── Hook History (N3 P2) ──────────────────────────────────────────────────
+
+export interface HookHistoryEntry {
+  id: string;
+  sessionId: string;
+  spanType: string;
+  name: string;
+  input: string;
+  output: string | null;
+  startTime: string;
+  endTime: string | null;
+  durationMs: number;
+  success: boolean;
+  error: string | null;
+}
+
+export const getHookHistory = (agentId: string, limit = 50) =>
+  api.get<HookHistoryEntry[]>(`/agents/${agentId}/hook-history`, {
+    params: { limit },
+  });
+
+// ─── Hook Dry-Run (N3 P2) ──────────────────────────────────────────────────
+
+export interface DryRunRequest {
+  event: string;
+  entryIndex: number;
+}
+
+export interface DryRunResponse {
+  success: boolean;
+  output: string | null;
+  errorMessage: string | null;
+  durationMs: number;
+  chainDecision: string;
+}
+
+export const dryRunHook = (agentId: string, body: DryRunRequest) =>
+  api.post<DryRunResponse>(`/agents/${agentId}/hooks/test`, body);
 
 // ─── Scenario Drafts ─────────────────────────────────────────────────────────
 

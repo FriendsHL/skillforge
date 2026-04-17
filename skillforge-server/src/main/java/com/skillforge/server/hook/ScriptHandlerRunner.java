@@ -63,6 +63,7 @@ public class ScriptHandlerRunner implements HandlerRunner<HookHandler.ScriptHand
     private final LifecycleHooksScriptProperties props;
     private final ScriptWorkdirManager workdirManager;
 
+    @org.springframework.beans.factory.annotation.Autowired
     public ScriptHandlerRunner(LifecycleHooksScriptProperties props) {
         this(props, new ScriptWorkdirManager());
     }

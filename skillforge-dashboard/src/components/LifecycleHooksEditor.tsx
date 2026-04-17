@@ -24,6 +24,8 @@ interface LifecycleHooksEditorProps {
   initialJson: string | null;
   /** Skills list from getSkills() — used by FormMode skill selector. */
   skills: SkillOption[];
+  /** Agent id — needed for dry-run test button. */
+  agentId: string | null;
 }
 
 /**
@@ -47,7 +49,7 @@ export interface LifecycleHooksEditorHandle {
  * See docs/design-n3-lifecycle-hooks.md §5.2.
  */
 const LifecycleHooksEditor = forwardRef<LifecycleHooksEditorHandle, LifecycleHooksEditorProps>(
-  ({ initialJson, skills }, ref) => {
+  ({ initialJson, skills, agentId }, ref) => {
     const {
       rawJson,
       mode,
@@ -55,7 +57,9 @@ const LifecycleHooksEditor = forwardRef<LifecycleHooksEditorHandle, LifecycleHoo
       errors,
       events,
       presets,
+      methods,
       isPresetsLoading,
+      isMethodsLoading,
       setRawJson,
       setMode,
       setConfig,
@@ -132,6 +136,9 @@ const LifecycleHooksEditor = forwardRef<LifecycleHooksEditorHandle, LifecycleHoo
               errors={errors}
               events={events}
               skills={skills}
+              methods={methods}
+              isMethodsLoading={isMethodsLoading}
+              agentId={agentId}
               onConfigChange={handleFormChange}
             />
           )}

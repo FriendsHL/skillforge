@@ -71,6 +71,7 @@ public class LifecycleHookDispatcherImpl implements LifecycleHookDispatcher {
     private final TraceCollector traceCollector;
     private final Set<String> forbiddenSkills;
 
+    @org.springframework.beans.factory.annotation.Autowired
     public LifecycleHookDispatcherImpl(List<HandlerRunner<?>> runners,
                                        @Qualifier("hookExecutor") Executor hookExecutor,
                                        TraceCollector traceCollector,

@@ -1,6 +1,7 @@
 package com.skillforge.server.repository;
 
 import com.skillforge.server.entity.TraceSpanEntity;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -25,4 +26,10 @@ public interface TraceSpanRepository extends JpaRepository<TraceSpanEntity, Stri
     /** 查询多个 session 的所有 span，按 startTime 正序（用于 collab run 跨 session 追踪）。 */
     @Query("SELECT s FROM TraceSpanEntity s WHERE s.sessionId IN :ids ORDER BY s.startTime ASC")
     List<TraceSpanEntity> findBySessionIdInOrderByStartTimeAsc(@Param("ids") Collection<String> sessionIds);
+
+    /** 查询某个 agent 的所有 LIFECYCLE_HOOK span（通过 session → agent 关联），按 startTime 降序。 */
+    @Query("SELECT t FROM TraceSpanEntity t WHERE t.spanType = 'LIFECYCLE_HOOK' " +
+           "AND t.sessionId IN (SELECT s.id FROM SessionEntity s WHERE s.agentId = :agentId) " +
+           "ORDER BY t.startTime DESC")
+    List<TraceSpanEntity> findHookHistoryByAgentId(@Param("agentId") Long agentId, Pageable pageable);
 }

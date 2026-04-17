@@ -1,8 +1,18 @@
 package com.skillforge.server.controller;
 
+import com.skillforge.core.engine.hook.BuiltInMethod;
+import com.skillforge.core.engine.hook.HookRunResult;
+import com.skillforge.server.hook.BuiltInMethodRegistry;
+import com.skillforge.server.service.LifecycleHookService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.LinkedHashMap;
@@ -10,24 +20,38 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Static metadata endpoints for the lifecycle-hook editor UI.
+ * Lifecycle hook metadata + operational endpoints.
  *
  * <ul>
  *   <li>{@code GET /api/lifecycle-hooks/events} — 5-event schema + display metadata.</li>
  *   <li>{@code GET /api/lifecycle-hooks/presets} — 4 built-in templates the Preset UI renders.</li>
+ *   <li>{@code GET /api/lifecycle-hooks/methods} — P2: list all registered builtin methods.</li>
+ *   <li>{@code POST /api/agents/{id}/hooks/test} — P2: dry-run a single hook entry.</li>
+ *   <li>{@code GET /api/agents/{id}/hook-history} — P2: hook execution trace history.</li>
  * </ul>
- *
- * <p>Both payloads are hard-coded server-side so the frontend stays a thin consumer.
  *
  * <p>Auth: protected by the global {@link com.skillforge.server.config.AuthInterceptor},
  * which requires a Bearer token on every {@code /api/**} request except {@code /api/auth/**}.
  * Unauthenticated calls receive 401.
  */
 @RestController
-@RequestMapping("/api/lifecycle-hooks")
+@RequestMapping("/api")
 public class LifecycleHookController {
 
-    @GetMapping("/events")
+    private static final Logger log = LoggerFactory.getLogger(LifecycleHookController.class);
+
+    private final BuiltInMethodRegistry methodRegistry;
+    private final LifecycleHookService lifecycleHookService;
+
+    public LifecycleHookController(BuiltInMethodRegistry methodRegistry,
+                                   LifecycleHookService lifecycleHookService) {
+        this.methodRegistry = methodRegistry;
+        this.lifecycleHookService = lifecycleHookService;
+    }
+
+    // ===== Static metadata =====
+
+    @GetMapping("/lifecycle-hooks/events")
     public ResponseEntity<Map<String, Object>> listEvents() {
         List<Map<String, Object>> events = List.of(
                 eventMeta("SessionStart",
@@ -71,7 +95,7 @@ public class LifecycleHookController {
         return ResponseEntity.ok(Map.of("version", "1.0", "events", events));
     }
 
-    @GetMapping("/presets")
+    @GetMapping("/lifecycle-hooks/presets")
     public ResponseEntity<Map<String, Object>> listPresets() {
         List<Map<String, Object>> presets = List.of(
                 auditAllPreset(),
@@ -82,7 +106,83 @@ public class LifecycleHookController {
         return ResponseEntity.ok(Map.of("version", "1.0", "presets", presets));
     }
 
-    // ----- event / preset builders -----
+    // ===== P2: Methods list =====
+
+    @GetMapping("/lifecycle-hooks/methods")
+    public ResponseEntity<List<Map<String, Object>>> listMethods() {
+        List<Map<String, Object>> result = methodRegistry.listAll().stream()
+                .map(LifecycleHookController::methodToMap)
+                .toList();
+        return ResponseEntity.ok(result);
+    }
+
+    // ===== P2: Dry-run =====
+
+    @PostMapping("/agents/{id}/hooks/test")
+    public ResponseEntity<?> dryRunHook(@PathVariable Long id,
+                                        @RequestBody Map<String, Object> body) {
+        Object eventRaw = body.get("event");
+        Object indexRaw = body.get("entryIndex");
+        Integer entryIndex = null;
+        if (indexRaw instanceof Number n) {
+            entryIndex = n.intValue();
+        } else if (indexRaw != null) {
+            try {
+                entryIndex = Integer.parseInt(indexRaw.toString());
+            } catch (NumberFormatException e) {
+                return ResponseEntity.badRequest().body(Map.of("error", "invalid entryIndex: " + indexRaw));
+            }
+        }
+
+        try {
+            HookRunResult result = lifecycleHookService.dryRun(
+                    new LifecycleHookService.DryRunInput(id,
+                            eventRaw != null ? eventRaw.toString() : null,
+                            entryIndex));
+            return ResponseEntity.ok(hookRunResultToMap(result));
+        } catch (IllegalArgumentException e) {
+            String msg = e.getMessage();
+            if (msg != null && msg.startsWith("agent not found")) {
+                return ResponseEntity.status(404).body(Map.of("error", msg));
+            }
+            return ResponseEntity.badRequest().body(Map.of("error", msg));
+        }
+    }
+
+    // ===== P2: Hook history =====
+
+    @GetMapping("/agents/{id}/hook-history")
+    public ResponseEntity<?> hookHistory(@PathVariable Long id,
+                                         @RequestParam(defaultValue = "50") int limit) {
+        try {
+            return ResponseEntity.ok(lifecycleHookService.getHookHistory(id, limit));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(404).body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    // ----- helpers -----
+
+    private static Map<String, Object> methodToMap(BuiltInMethod m) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        map.put("ref", m.ref());
+        map.put("displayName", m.displayName());
+        map.put("description", m.description());
+        map.put("argsSchema", m.argsSchema());
+        return map;
+    }
+
+    private static Map<String, Object> hookRunResultToMap(HookRunResult r) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        map.put("success", r.success());
+        map.put("output", r.output());
+        map.put("errorMessage", r.errorMessage());
+        map.put("durationMs", r.durationMs());
+        map.put("chainDecision", r.chainDecision() != null ? r.chainDecision().name() : null);
+        return map;
+    }
+
+    // ----- event / preset builders (unchanged from P0) -----
 
     private static Map<String, Object> eventMeta(String id, String displayName, String description,
                                                  Map<String, String> inputSchema, boolean canAbort,

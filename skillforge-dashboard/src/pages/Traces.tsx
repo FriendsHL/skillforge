@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useDebounce } from '../hooks/useDebounce';
-import { Card, Table, Tag, Typography, Space, Collapse, Tooltip, Empty, Spin, Input } from 'antd';
+import { Card, Table, Tag, Typography, Space, Collapse, Tooltip, Empty, Spin, Input, Select } from 'antd';
 import { useQuery } from '@tanstack/react-query';
 import {
   ClockCircleOutlined,
@@ -8,11 +8,12 @@ import {
   CloseCircleOutlined,
   RobotOutlined,
   ToolOutlined,
-
+  ApiOutlined,
   QuestionCircleOutlined,
   CompressOutlined,
   ThunderboltOutlined,
   SearchOutlined,
+  FilterOutlined,
 } from '@ant-design/icons';
 import { getTraces, getTraceSpans, extractList } from '../api';
 
@@ -85,18 +86,33 @@ const spanTypeConfig: Record<string, { color: string; icon: React.ReactNode; lab
   TOOL_CALL: { color: 'green', icon: <ToolOutlined />, label: 'Tool Call' },
   ASK_USER: { color: 'orange', icon: <QuestionCircleOutlined />, label: 'Ask User' },
   COMPACT: { color: 'cyan', icon: <CompressOutlined />, label: 'Compact' },
+  LIFECYCLE_HOOK: { color: 'magenta', icon: <ApiOutlined />, label: 'Lifecycle Hook' },
 };
 
-const SpanWaterfall: React.FC<{ spans: SpanItem[]; rootDurationMs: number; rootStartMs: number }> = ({
+const SPAN_TYPE_FILTER_OPTIONS = Object.entries(spanTypeConfig).map(([key, cfg]) => ({
+  label: cfg.label,
+  value: key,
+}));
+
+const SpanWaterfall: React.FC<{
+  spans: SpanItem[];
+  rootDurationMs: number;
+  rootStartMs: number;
+  spanTypeFilter: string[];
+}> = ({
   spans,
   rootDurationMs,
   rootStartMs,
+  spanTypeFilter,
 }) => {
-  if (spans.length === 0) return <Empty description="No spans" />;
+  const filtered = spanTypeFilter.length > 0
+    ? spans.filter((s) => spanTypeFilter.includes(s.spanType))
+    : spans;
+  if (filtered.length === 0) return <Empty description="No spans" />;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-      {spans.map((span) => {
+      {filtered.map((span) => {
         const cfg = spanTypeConfig[span.spanType] ?? { color: 'default', icon: null, label: span.spanType };
         const spanStartMs = new Date(span.startTime).getTime();
         const offsetPct = rootDurationMs > 0 ? ((spanStartMs - rootStartMs) / rootDurationMs) * 100 : 0;
@@ -196,6 +212,7 @@ const SpanWaterfall: React.FC<{ spans: SpanItem[]; rootDurationMs: number; rootS
 const Traces: React.FC = () => {
   const [selectedTraceId, setSelectedTraceId] = useState<string | null>(null);
   const [sessionFilter, setSessionFilter] = useState<string>('');
+  const [spanTypeFilter, setSpanTypeFilter] = useState<string[]>([]);
   // Debounce filter input — prevents a new API call on every keystroke.
   const debouncedFilter = useDebounce(sessionFilter.trim(), 300);
 
@@ -288,14 +305,27 @@ const Traces: React.FC = () => {
       <Card
         title="Traces"
         extra={
-          <Input
-            placeholder="Filter by Session ID"
-            prefix={<SearchOutlined />}
-            size="small"
-            style={{ width: 200 }}
-            allowClear
-            onChange={(e) => setSessionFilter(e.target.value)}
-          />
+          <Space>
+            <Select
+              mode="multiple"
+              placeholder={<><FilterOutlined /> Span types</>}
+              options={SPAN_TYPE_FILTER_OPTIONS}
+              value={spanTypeFilter}
+              onChange={setSpanTypeFilter}
+              size="small"
+              style={{ minWidth: 180 }}
+              maxTagCount={2}
+              allowClear
+            />
+            <Input
+              placeholder="Filter by Session ID"
+              prefix={<SearchOutlined />}
+              size="small"
+              style={{ width: 200 }}
+              allowClear
+              onChange={(e) => setSessionFilter(e.target.value)}
+            />
+          </Space>
         }
         style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
         styles={{ body: { flex: 1, padding: 0, overflow: 'auto' } }}
@@ -355,6 +385,7 @@ const Traces: React.FC = () => {
             spans={spans}
             rootDurationMs={rootSpan?.durationMs ?? 1}
             rootStartMs={rootSpan?.startTime ? new Date(rootSpan.startTime).getTime() : 0}
+            spanTypeFilter={spanTypeFilter}
           />
         )}
       </Card>

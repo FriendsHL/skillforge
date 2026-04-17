@@ -1,10 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, Popconfirm, Tag, Tabs, message, Card, Drawer } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, FileTextOutlined, HistoryOutlined, ExperimentOutlined } from '@ant-design/icons';
+import { PlusOutlined, EditOutlined, DeleteOutlined, FileTextOutlined, HistoryOutlined, ExperimentOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { getAgents, createAgent, updateAgent, deleteAgent, getTools, getSkills, getClaudeMd, saveClaudeMd, extractList, type BehaviorRuleConfig } from '../api';
-import { AgentSchema, safeParseList } from '../api/schemas';
+import { getAgents, createAgent, updateAgent, deleteAgent, getTools, getSkills, getClaudeMd, saveClaudeMd, extractList, type BehaviorRuleConfig, type CreateAgentRequest, type UpdateAgentRequest } from '../api';
+import { AgentSchema, safeParseList, type AgentDto } from '../api/schemas';
 import PromptHistoryPanel from '../components/PromptHistoryPanel';
+import HookHistoryPanel from '../components/HookHistoryPanel';
 import ScenarioDraftPanel from '../components/ScenarioDraftPanel';
 import BehaviorRulesEditor from '../components/BehaviorRulesEditor';
 import LifecycleHooksEditor, {
@@ -53,7 +54,7 @@ const parseBehaviorRules = (raw: unknown): BehaviorRuleConfig | null => {
 const AgentList: React.FC = () => {
   const queryClient = useQueryClient();
   const [modalOpen, setModalOpen] = useState(false);
-  const [editing, setEditing] = useState<any>(null);
+  const [editing, setEditing] = useState<AgentDto | null>(null);
   // Bumped on every open so Modal (and the ref-tracked LifecycleHooksEditor inside)
   // remounts on create→create cycles too, not just editing-id changes.
   const [formKey, setFormKey] = useState(0);
@@ -62,6 +63,7 @@ const AgentList: React.FC = () => {
   const [claudeMdModalOpen, setClaudeMdModalOpen] = useState(false);
   const [claudeMdDraft, setClaudeMdDraft] = useState<string | null>(null);
   const [promptHistoryAgentId, setPromptHistoryAgentId] = useState<string | null>(null);
+  const [hookHistoryAgentId, setHookHistoryAgentId] = useState<string | null>(null);
   const [scenariosAgentId, setScenariosAgentId] = useState<string | null>(null);
 
   const behaviorRules = useBehaviorRules(
@@ -123,14 +125,14 @@ const AgentList: React.FC = () => {
   const invalidateAgents = () => queryClient.invalidateQueries({ queryKey: ['agents'] });
 
   const createMutation = useMutation({
-    mutationFn: (payload: any) => createAgent(payload),
+    mutationFn: (payload: CreateAgentRequest) => createAgent(payload),
     onSuccess: () => {
       message.success('Agent created');
       invalidateAgents();
     },
   });
   const updateMutation = useMutation({
-    mutationFn: ({ id, payload }: { id: number; payload: any }) => updateAgent(id, payload),
+    mutationFn: ({ id, payload }: { id: number; payload: UpdateAgentRequest }) => updateAgent(id, payload),
     onSuccess: () => {
       message.success('Agent updated');
       invalidateAgents();
@@ -164,7 +166,7 @@ const AgentList: React.FC = () => {
     setModalOpen(true);
   };
 
-  const openEdit = (record: any) => {
+  const openEdit = (record: AgentDto) => {
     setEditing(record);
     form.setFieldsValue({
       ...record,
@@ -274,6 +276,13 @@ const AgentList: React.FC = () => {
             onClick={() => setPromptHistoryAgentId(String(record.id))}
           >
             Prompts
+          </Button>
+          <Button
+            icon={<ThunderboltOutlined />}
+            size="small"
+            onClick={() => setHookHistoryAgentId(String(record.id))}
+          >
+            Hooks
           </Button>
           <Button
             icon={<ExperimentOutlined />}
@@ -419,6 +428,7 @@ const AgentList: React.FC = () => {
                   <LifecycleHooksEditor
                     ref={lifecycleHooksRef}
                     initialJson={initialLifecycleHooks}
+                    agentId={editing ? String(editing.id) : null}
                     skills={skills.map((s: { name: string; description?: string }) => ({
                       name: s.name,
                       description: s.description,
@@ -488,6 +498,23 @@ const AgentList: React.FC = () => {
       >
         {promptHistoryAgentId && (
           <PromptHistoryPanel agentId={promptHistoryAgentId} />
+        )}
+      </Drawer>
+
+      <Drawer
+        title={
+          <Space>
+            <ThunderboltOutlined />
+            <span>Hook Execution History</span>
+          </Space>
+        }
+        width={680}
+        open={!!hookHistoryAgentId}
+        onClose={() => setHookHistoryAgentId(null)}
+        destroyOnClose
+      >
+        {hookHistoryAgentId && (
+          <HookHistoryPanel agentId={hookHistoryAgentId} />
         )}
       </Drawer>
 

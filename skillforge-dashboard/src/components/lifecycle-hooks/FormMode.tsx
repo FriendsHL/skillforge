@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
   Card,
   Radio,
@@ -22,7 +22,12 @@ import {
   ArrowDownOutlined,
   DeleteOutlined,
   PlusOutlined,
+  PlayCircleOutlined,
 } from '@ant-design/icons';
+import { useMutation } from '@tanstack/react-query';
+import { dryRunHook, type BuiltInMethodDto, type DryRunResponse } from '../../api';
+import MethodHandlerFields from './MethodHandlerFields';
+import DryRunResultModal from './DryRunResultModal';
 import {
   HOOK_HANDLER_TYPE_META,
   LIFECYCLE_HOOK_EVENT_IDS,
@@ -59,6 +64,9 @@ interface FormModeProps {
   errors: string[];
   events: LifecycleHookEventMeta[];
   skills: SkillOption[];
+  methods: BuiltInMethodDto[];
+  isMethodsLoading?: boolean;
+  agentId: string | null;
   /** Called when any field changes — caller re-serializes to rawJson. */
   onConfigChange: (next: LifecycleHooksConfig) => void;
 }
@@ -80,6 +88,9 @@ const FormMode: React.FC<FormModeProps> = ({
   errors,
   events,
   skills,
+  methods,
+  isMethodsLoading,
+  agentId,
   onConfigChange,
 }) => {
   if (!parsed) {
@@ -108,6 +119,9 @@ const FormMode: React.FC<FormModeProps> = ({
           event={event}
           entries={parsed.hooks[event.id] ?? []}
           skills={skills}
+          methods={methods}
+          isMethodsLoading={isMethodsLoading}
+          agentId={agentId}
           onEntriesChange={(nextEntries) =>
             onConfigChange(replaceEntries(parsed, event.id, nextEntries))
           }
@@ -123,6 +137,9 @@ interface EventCardProps {
   event: LifecycleHookEventMeta;
   entries: HookEntry[];
   skills: SkillOption[];
+  methods: BuiltInMethodDto[];
+  isMethodsLoading?: boolean;
+  agentId: string | null;
   onEntriesChange: (next: HookEntry[]) => void;
 }
 
@@ -130,6 +147,9 @@ const EventCard: React.FC<EventCardProps> = ({
   event,
   entries,
   skills,
+  methods,
+  isMethodsLoading,
+  agentId,
   onEntriesChange,
 }) => {
   const isEnabled = entries.length > 0;
@@ -221,6 +241,9 @@ const EventCard: React.FC<EventCardProps> = ({
               total={entries.length}
               eventId={event.id}
               skills={skills}
+              methods={methods}
+              isMethodsLoading={isMethodsLoading}
+              agentId={agentId}
               onUpdate={(next) => handleUpdateEntry(idx, next)}
               onMoveUp={() => handleMoveEntry(idx, -1)}
               onMoveDown={() => handleMoveEntry(idx, 1)}
@@ -260,6 +283,9 @@ interface EntryRowProps {
   total: number;
   eventId: LifecycleHookEventId;
   skills: SkillOption[];
+  methods: BuiltInMethodDto[];
+  isMethodsLoading?: boolean;
+  agentId: string | null;
   onUpdate: (next: HookEntry) => void;
   onMoveUp: () => void;
   onMoveDown: () => void;
@@ -272,6 +298,9 @@ const EntryRow: React.FC<EntryRowProps> = ({
   total,
   eventId,
   skills,
+  methods,
+  isMethodsLoading,
+  agentId,
   onUpdate,
   onMoveUp,
   onMoveDown,
@@ -280,6 +309,23 @@ const EntryRow: React.FC<EntryRowProps> = ({
   const handlerType = entry.handler.type;
   const canMoveUp = index > 0;
   const canMoveDown = index < total - 1;
+  const [dryRunResult, setDryRunResult] = useState<DryRunResponse | null>(null);
+  const [dryRunModalOpen, setDryRunModalOpen] = useState(false);
+
+  const dryRunMutation = useMutation({
+    mutationFn: () => {
+      if (!agentId) throw new Error('Agent must be saved first');
+      return dryRunHook(agentId, { event: eventId, entryIndex: index });
+    },
+    onSuccess: (res) => {
+      setDryRunResult(res.data);
+      setDryRunModalOpen(true);
+    },
+    onError: (err: unknown) => {
+      const msg = err instanceof Error ? err.message : 'Dry-run failed';
+      message.error(msg);
+    },
+  });
 
   const handleHandlerTypeChange = useCallback(
     (nextType: HookHandlerType) => {
@@ -300,6 +346,14 @@ const EntryRow: React.FC<EntryRowProps> = ({
   const handleUpdateScriptHandler = useCallback(
     (patch: Partial<Extract<HookHandler, { type: 'script' }>>) => {
       if (entry.handler.type !== 'script') return;
+      onUpdate({ ...entry, handler: { ...entry.handler, ...patch } });
+    },
+    [entry, onUpdate],
+  );
+
+  const handleUpdateMethodHandler = useCallback(
+    (patch: Partial<Extract<HookHandler, { type: 'method' }>>) => {
+      if (entry.handler.type !== 'method') return;
       onUpdate({ ...entry, handler: { ...entry.handler, ...patch } });
     },
     [entry, onUpdate],
@@ -332,6 +386,18 @@ const EntryRow: React.FC<EntryRowProps> = ({
           </span>
         </div>
         <div className="sf-hooks-entry-actions">
+          <Tooltip title={agentId ? 'Dry-run this entry' : 'Save the agent first to test'}>
+            <Button
+              size="small"
+              type="text"
+              icon={<PlayCircleOutlined />}
+              onClick={() => dryRunMutation.mutate()}
+              loading={dryRunMutation.isPending}
+              disabled={!agentId}
+              aria-label="Test entry"
+              style={{ color: agentId ? 'var(--accent-primary, #6366f1)' : undefined }}
+            />
+          </Tooltip>
           <Tooltip title="Move up">
             <Button
               size="small"
@@ -381,10 +447,23 @@ const EntryRow: React.FC<EntryRowProps> = ({
             onChange={handleUpdateScriptHandler}
           />
         )}
-        {entry.handler.type === 'method' && <MethodPlaceholder />}
+        {entry.handler.type === 'method' && (
+          <MethodHandlerFields
+            handler={entry.handler}
+            methods={methods}
+            isLoading={isMethodsLoading}
+            onChange={handleUpdateMethodHandler}
+          />
+        )}
 
         <CommonFields entry={entry} eventId={eventId} onUpdate={handleUpdateField} />
       </div>
+
+      <DryRunResultModal
+        open={dryRunModalOpen}
+        result={dryRunResult}
+        onClose={() => { setDryRunModalOpen(false); setDryRunResult(null); }}
+      />
     </div>
   );
 };
@@ -601,17 +680,7 @@ const ScriptHandlerFields: React.FC<{
   );
 };
 
-// ─── Method handler placeholder ─────────────────────────────────────────────
-
-const MethodPlaceholder: React.FC = () => (
-  <div className="sf-hooks-disabled-placeholder">
-    <FunctionOutlined />
-    <span>
-      Method handler is coming in P2 (platform built-in methods: log, http,
-      feishu, etc).
-    </span>
-  </div>
-);
+// MethodHandlerFields and DryRunResultModal extracted to separate files.
 
 // ─── Common fields (timeout / policy / async / displayName) ────────────────
 
@@ -708,7 +777,7 @@ function buildDefaultHandler(type: HookHandlerType): HookHandler {
     case 'script':
       return { type: 'script', scriptLang: 'bash', scriptBody: '' };
     case 'method':
-      return { type: 'method', methodRef: '' };
+      return { type: 'method', methodRef: '', args: {} };
   }
 }
 

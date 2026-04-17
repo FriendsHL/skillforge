@@ -116,8 +116,8 @@ export const HOOK_HANDLER_TYPE_META: HookHandlerTypeMeta[] = [
   {
     value: 'method',
     label: 'Method',
-    availability: 'p2',
-    description: '平台内置方法(P2 实现)。',
+    availability: 'available',
+    description: '平台内置方法(log, http, feishu 等)。',
   },
 ];
 
