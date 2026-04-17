@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useRef } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
 import type { InflightTool, StreamingToolInput } from './useChatMessages';
 import type { RuntimeStatus } from './useChatSession';
@@ -17,6 +17,7 @@ interface PendingAsk {
 
 interface WsEvent {
   type: string;
+  snapshotVersion?: number;
   [key: string]: unknown;
 }
 
@@ -33,6 +34,7 @@ export interface WsEventHandlerDeps {
   setOtherInput: Dispatch<SetStateAction<string>>;
   setCollabRunStatus: Dispatch<SetStateAction<string | null>>;
   setSessions: Dispatch<SetStateAction<any[]>>;
+  setCompactionNotice: Dispatch<SetStateAction<boolean>>;
 }
 
 export function useChatWsEventHandler(deps: WsEventHandlerDeps) {
@@ -49,7 +51,10 @@ export function useChatWsEventHandler(deps: WsEventHandlerDeps) {
     setOtherInput,
     setCollabRunStatus,
     setSessions,
+    setCompactionNotice,
   } = deps;
+
+  const lastSnapshotVersionRef = useRef<number>(-1);
 
   return useCallback(
     (evtRaw: unknown) => {
@@ -69,6 +74,12 @@ export function useChatWsEventHandler(deps: WsEventHandlerDeps) {
           setCancelling(false);
         }
       } else if (evt.type === 'message_appended') {
+        if (
+          typeof evt.snapshotVersion === 'number' &&
+          evt.snapshotVersion < lastSnapshotVersionRef.current
+        ) {
+          return;
+        }
         const msg = evt.message as { role?: string; content?: unknown } | undefined;
         if (msg?.role === 'assistant') {
           setStreamingText('');
@@ -92,7 +103,14 @@ export function useChatWsEventHandler(deps: WsEventHandlerDeps) {
         }
       } else if (evt.type === 'messages_snapshot') {
         if (Array.isArray(evt.messages)) {
+          const prevVersion = lastSnapshotVersionRef.current;
+          if (typeof evt.snapshotVersion === 'number') {
+            lastSnapshotVersionRef.current = evt.snapshotVersion;
+          }
           setRawMessages(evt.messages);
+          if (prevVersion >= 0) {
+            setCompactionNotice(true);
+          }
         }
       } else if (evt.type === 'ask_user') {
         setPendingAsk({
@@ -179,6 +197,7 @@ export function useChatWsEventHandler(deps: WsEventHandlerDeps) {
       setOtherInput,
       setCollabRunStatus,
       setSessions,
+      setCompactionNotice,
     ],
   );
 }

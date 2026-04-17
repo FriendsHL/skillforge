@@ -173,7 +173,7 @@ const Dashboard: React.FC = () => {
           <Card title={<><ThunderboltOutlined /> Token usage — last 7 days</>} className="sf-surface-card" style={{ borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
             {daily.length === 0 ? (
               <div style={{ textAlign: 'center', padding: 40, color: '#999' }}>
-                暂无数据
+                No data yet
               </div>
             ) : (
               <ReactECharts option={trendOption} style={{ height: 280 }} />
@@ -185,7 +185,7 @@ const Dashboard: React.FC = () => {
           <Card title={<><FireOutlined /> Recent sessions</>} className="sf-surface-card" style={{ borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
             {recent.length === 0 ? (
               <div style={{ textAlign: 'center', padding: 40, color: '#999' }}>
-                暂无会话
+                No sessions yet
               </div>
             ) : (
               <List

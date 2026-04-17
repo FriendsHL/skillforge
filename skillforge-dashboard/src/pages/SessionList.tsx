@@ -243,9 +243,8 @@ const SessionList: React.FC = () => {
         columns={columns}
         rowKey="id"
         loading={loading}
-        virtual
-        scroll={{ y: 500 }}
-        pagination={false}
+        scroll={{ x: 'max-content' }}
+        pagination={{ pageSize: 20, showSizeChanger: false, showTotal: (t: number) => `${t} sessions` }}
         onRow={(record) => ({
           onClick: () => navigate(`/chat/${record.id}`),
           style: { cursor: 'pointer' },

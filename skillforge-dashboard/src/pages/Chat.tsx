@@ -85,6 +85,13 @@ const Chat: React.FC = () => {
   const [compactModalOpen, setCompactModalOpen] = useState(false);
   const [compactEvents, setCompactEvents] = useState<any[]>([]);
   const [compacting, setCompacting] = useState(false);
+  const [compactionNotice, setCompactionNotice] = useState(false);
+
+  useEffect(() => {
+    if (!compactionNotice) return;
+    const t = setTimeout(() => setCompactionNotice(false), 8000);
+    return () => clearTimeout(t);
+  }, [compactionNotice]);
 
   const {
     collabRunId,
@@ -135,6 +142,7 @@ const Chat: React.FC = () => {
     setViewMode('chat');
     setParentSessionId(null);
     setSessionDepth(0);
+    setCompactionNotice(false);
     if (!activeSessionId) {
       setRuntimeStatus('idle');
       setRuntimeStep('');
@@ -174,6 +182,7 @@ const Chat: React.FC = () => {
     setOtherInput,
     setCollabRunStatus,
     setSessions,
+    setCompactionNotice,
   });
 
   useChatWebSocket(activeSessionId, handleWsEvent);
@@ -226,7 +235,7 @@ const Chat: React.FC = () => {
     } catch (e: unknown) {
       const status = (e as { response?: { status?: number } })?.response?.status;
       if (status === 429) {
-        message.error('服务器繁忙,请稍后再试');
+        message.error('Server is busy, please try again later');
       } else {
         message.error('Failed to send message');
       }
@@ -253,7 +262,7 @@ const Chat: React.FC = () => {
     try {
       await setSessionMode(activeSessionId, mode, 1);
       setExecutionModeState(mode);
-      message.success(`已切换为 ${mode} 模式`);
+      message.success(`Switched to ${mode} mode`);
     } catch {
       message.error('Failed to switch mode');
     }
@@ -292,7 +301,7 @@ const Chat: React.FC = () => {
     try {
       const res = await compactSession(activeSessionId, 'full', 1, 'user clicked compact button');
       const reclaimed = res.data?.tokensReclaimed ?? 0;
-      message.success(`已压缩:释放 ${reclaimed} tokens`);
+      message.success(`Compacted: reclaimed ${reclaimed} tokens`);
       await refreshCompactStats();
       try {
         const mres = await getSessionMessages(activeSessionId, 1);
@@ -301,9 +310,9 @@ const Chat: React.FC = () => {
     } catch (e: unknown) {
       const status = (e as { response?: { status?: number } })?.response?.status;
       if (status === 409) {
-        message.warning('Session 正在运行, 无法压缩');
+        message.warning('Session is running, cannot compact');
       } else {
-        message.error('压缩失败');
+        message.error('Compaction failed');
       }
     }
     setCompacting(false);
@@ -328,9 +337,9 @@ const Chat: React.FC = () => {
     } catch (e: unknown) {
       const status = (e as { response?: { status?: number } })?.response?.status;
       if (status === 409) {
-        message.info('当前没有正在运行的 loop');
+        message.info('No active loop running');
       } else {
-        message.error('取消失败');
+        message.error('Cancel failed');
       }
       setCancelling(false);
     }
@@ -473,6 +482,8 @@ const Chat: React.FC = () => {
                   inputDisabled={inputDisabled}
                   inflightTools={combinedInflightTools}
                   streamingText={streamingText}
+                  compactionNotice={compactionNotice}
+                  onCompactionDismiss={() => setCompactionNotice(false)}
                 />
               </>
             ) : (

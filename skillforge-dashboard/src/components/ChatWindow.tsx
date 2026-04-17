@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Spin, Input, Button } from 'antd';
+import { Spin, Input, Button, Alert } from 'antd';
 import { SendOutlined } from '@ant-design/icons';
 import ToolCallTimeline from './ToolCallTimeline';
 import MarkdownRenderer from './MarkdownRenderer';
@@ -110,6 +110,8 @@ interface ChatWindowProps {
   inputDisabled?: boolean;
   inflightTools?: Record<string, InflightTool>;
   streamingText?: string;
+  compactionNotice?: boolean;
+  onCompactionDismiss?: () => void;
 }
 
 const ChatWindow: React.FC<ChatWindowProps> = ({
@@ -119,6 +121,8 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
   inputDisabled,
   inflightTools,
   streamingText,
+  compactionNotice,
+  onCompactionDismiss,
 }) => {
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -160,6 +164,17 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <div ref={scrollContainerRef} onScroll={handleScroll} style={{ flex: 1, overflowY: 'auto', padding: 16 }}>
         <div style={{ maxWidth: 740, margin: '0 auto', padding: '0 16px' }}>
+          {compactionNotice && (
+            <div role="status">
+              <Alert
+                type="info"
+                closable
+                message="Context was compacted to save tokens. Earlier messages may be summarized."
+                afterClose={onCompactionDismiss}
+                style={{ marginBottom: 12 }}
+              />
+            </div>
+          )}
           {messages.map((msg, idx) => (
             <div key={idx} style={{ marginBottom: 16 }}>
               {msg.role === 'assistant' && (
