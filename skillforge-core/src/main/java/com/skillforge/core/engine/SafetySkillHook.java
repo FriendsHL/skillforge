@@ -18,41 +18,12 @@ public class SafetySkillHook implements SkillHook {
 
     private static final Logger log = LoggerFactory.getLogger(SafetySkillHook.class);
 
-    /** 需要用户确认才能执行的高风险命令模式 */
-    private static final List<Pattern> CONFIRMATION_REQUIRED_PATTERNS = List.of(
-            // Skill package install — 必须用户确认
-            Pattern.compile("\\bclawhub\\s+install\\b"),
-            Pattern.compile("\\bskill-hub/cli\\s+install\\b"),
-            Pattern.compile("\\bskillhub\\s+install\\b")
-    );
+    /** 需要用户确认才能执行的高风险命令模式。委托给 {@link DangerousCommandChecker}。 */
+    private static final List<Pattern> CONFIRMATION_REQUIRED_PATTERNS =
+            DangerousCommandChecker.CONFIRMATION_REQUIRED_PATTERNS;
 
-    private static final List<Pattern> DANGEROUS_PATTERNS = List.of(
-            // Destructive delete commands
-            Pattern.compile("rm\\s+-rf\\s+/(?:\\s|$)"),
-            Pattern.compile("rm\\s+-rf\\s+~(?:\\s|$|/)"),
-            Pattern.compile("rm\\s+-rf\\s+\\.(?:\\s|$)"),
-            // Privilege escalation
-            Pattern.compile("\\bsudo\\b"),
-            // Disk formatting
-            Pattern.compile("\\bmkfs\\b"),
-            // Disk operations
-            Pattern.compile("\\bdd\\s+if="),
-            // Fork bomb
-            Pattern.compile(":\\(\\)\\s*\\{\\s*:\\s*\\|\\s*:\\s*&\\s*\\}\\s*;\\s*:"),
-            // Write to disk device
-            Pattern.compile(">\\s*/dev/sda"),
-            // Global permission change
-            Pattern.compile("chmod\\s+-R\\s+777\\s+/(?:\\s|$)"),
-            // System shutdown/reboot
-            Pattern.compile("\\bshutdown\\b"),
-            Pattern.compile("\\breboot\\b"),
-            Pattern.compile("\\bhalt\\b"),
-            Pattern.compile("\\bpoweroff\\b"),
-            // Remote code execution
-            Pattern.compile("curl\\s+.*\\|\\s*sh"),
-            Pattern.compile("wget\\s+.*\\|\\s*sh"),
-            Pattern.compile("curl\\s+.*\\|\\s*bash")
-    );
+    /** 危险模式共享：保证 Bash Skill 与 ScriptHandlerRunner 扫描规则一致。 */
+    private static final List<Pattern> DANGEROUS_PATTERNS = DangerousCommandChecker.DANGEROUS_PATTERNS;
 
     private static final List<String> PROTECTED_SYSTEM_DIRS = List.of(
             "/etc/", "/usr/", "/bin/", "/sbin/", "/boot/", "/sys/", "/proc/"

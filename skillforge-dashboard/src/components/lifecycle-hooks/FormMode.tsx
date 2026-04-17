@@ -1,16 +1,16 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useMemo } from 'react';
 import {
   Card,
   Radio,
   Select,
-  InputNumber,
   Switch,
-  Input,
   Tooltip,
-  Tag,
   Space,
   Empty,
   Typography,
+  Button,
+  Modal,
+  message,
 } from 'antd';
 import {
   InfoCircleOutlined,
@@ -18,10 +18,18 @@ import {
   CodeOutlined,
   FunctionOutlined,
   ExclamationCircleOutlined,
+  ArrowUpOutlined,
+  ArrowDownOutlined,
+  DeleteOutlined,
+  PlusOutlined,
 } from '@ant-design/icons';
 import {
   HOOK_HANDLER_TYPE_META,
   LIFECYCLE_HOOK_EVENT_IDS,
+  MAX_ENTRIES_PER_EVENT,
+  MAX_SCRIPT_BODY_BYTES,
+  SCRIPT_CONFIRM_STORAGE_KEY,
+  SCRIPT_LANG_OPTIONS,
   TIMEOUT_DEFAULT_SECONDS,
   TIMEOUT_MAX_SECONDS,
   TIMEOUT_MIN_SECONDS,
@@ -33,10 +41,13 @@ import {
   type LifecycleHookEventMeta,
   type LifecycleHooksConfig,
   type FailurePolicy,
+  type ScriptLang,
 } from '../../constants/lifecycleHooks';
-import { useDebouncedCallback } from '../../hooks/useDebouncedCallback';
-
-const FIELD_COMMIT_DEBOUNCE_MS = 200;
+import {
+  BufferedInput,
+  BufferedInputNumber,
+  BufferedTextArea,
+} from './BufferedInputs';
 
 interface SkillOption {
   name: string;
@@ -59,8 +70,10 @@ const HANDLER_TYPE_ICONS: Record<HookHandlerType, React.ReactNode> = {
 };
 
 /**
- * Form mode: one Card per event. P0 constraint — list length ≤ 1 per event.
- * Handler type selector shows all 3 options with Script / Method disabled.
+ * Form mode: one Card per event, each holding an ordered list of up to
+ * {@link MAX_ENTRIES_PER_EVENT} entries (P1). Entries can be added, moved,
+ * edited in place and deleted — the rawJson source of truth in the parent
+ * editor is updated on every commit.
  */
 const FormMode: React.FC<FormModeProps> = ({
   parsed,
@@ -93,10 +106,10 @@ const FormMode: React.FC<FormModeProps> = ({
         <EventCard
           key={event.id}
           event={event}
-          entry={parsed.hooks[event.id]?.[0] ?? null}
+          entries={parsed.hooks[event.id] ?? []}
           skills={skills}
-          onEntryChange={(next) =>
-            onConfigChange(updateEntry(parsed, event.id, next))
+          onEntriesChange={(nextEntries) =>
+            onConfigChange(replaceEntries(parsed, event.id, nextEntries))
           }
         />
       ))}
@@ -108,55 +121,62 @@ const FormMode: React.FC<FormModeProps> = ({
 
 interface EventCardProps {
   event: LifecycleHookEventMeta;
-  entry: HookEntry | null;
+  entries: HookEntry[];
   skills: SkillOption[];
-  onEntryChange: (next: HookEntry | null) => void;
+  onEntriesChange: (next: HookEntry[]) => void;
 }
 
-const EventCard: React.FC<EventCardProps> = ({ event, entry, skills, onEntryChange }) => {
-  const isEnabled = entry !== null;
-  const handlerType = entry?.handler?.type ?? 'skill';
+const EventCard: React.FC<EventCardProps> = ({
+  event,
+  entries,
+  skills,
+  onEntriesChange,
+}) => {
+  const isEnabled = entries.length > 0;
+  const atCap = entries.length >= MAX_ENTRIES_PER_EVENT;
 
   const handleToggle = (enabled: boolean) => {
     if (enabled) {
-      onEntryChange(buildDefaultEntry());
+      onEntriesChange([buildDefaultEntry()]);
     } else {
-      onEntryChange(null);
+      onEntriesChange([]);
     }
   };
 
-  const handleHandlerTypeChange = (nextType: HookHandlerType) => {
-    if (!entry) return;
-    // Preserve common fields (timeoutSeconds / failurePolicy / async / displayName).
-    // Reset handler-specific fields only.
-    onEntryChange({
-      ...entry,
-      handler: buildDefaultHandler(nextType),
-    });
+  const handleAddEntry = () => {
+    if (atCap) return;
+    onEntriesChange([...entries, buildDefaultEntry()]);
   };
 
-  const updateHandler = (patch: Partial<HookHandler>) => {
-    if (!entry) return;
-    onEntryChange({
-      ...entry,
-      handler: { ...entry.handler, ...patch } as HookHandler,
-    });
+  const handleUpdateEntry = (idx: number, next: HookEntry) => {
+    const copy = entries.map((e, i) => (i === idx ? next : e));
+    onEntriesChange(copy);
   };
 
-  const updateEntryField = <K extends keyof HookEntry>(key: K, value: HookEntry[K]) => {
-    if (!entry) return;
-    onEntryChange({ ...entry, [key]: value });
+  const handleMoveEntry = (idx: number, direction: -1 | 1) => {
+    const target = idx + direction;
+    if (target < 0 || target >= entries.length) return;
+    const copy = [...entries];
+    [copy[idx], copy[target]] = [copy[target], copy[idx]];
+    onEntriesChange(copy);
+  };
+
+  const handleDeleteEntry = (idx: number) => {
+    onEntriesChange(entries.filter((_, i) => i !== idx));
   };
 
   return (
     <Card
       className="sf-hooks-event-card"
-      bordered
+      variant="outlined"
       title={
         <div className="sf-hooks-event-header">
           <div className="sf-hooks-event-title">
             <span className="sf-hooks-event-name">{event.id}</span>
             <span className="sf-hooks-event-display">{event.displayName}</span>
+            {isEnabled && entries.length > 1 && (
+              <span className="sf-hooks-entry-count">{entries.length} entries</span>
+            )}
           </div>
           <Tooltip
             title={
@@ -191,28 +211,209 @@ const EventCard: React.FC<EventCardProps> = ({ event, entry, skills, onEntryChan
         <div className="sf-hooks-event-empty">Toggle ON to configure this hook.</div>
       )}
 
-      {isEnabled && entry && (
-        <div className="sf-hooks-event-body">
-          <HandlerTypeSelector value={handlerType} onChange={handleHandlerTypeChange} />
-
-          {handlerType === 'skill' && entry.handler.type === 'skill' && (
-            <SkillHandlerFields
-              handler={entry.handler}
+      {isEnabled && (
+        <div className="sf-hooks-entry-list">
+          {entries.map((entry, idx) => (
+            <EntryRow
+              key={entry._id ?? String(idx)}
+              entry={entry}
+              index={idx}
+              total={entries.length}
+              eventId={event.id}
               skills={skills}
-              onChange={(patch) => updateHandler(patch)}
+              onUpdate={(next) => handleUpdateEntry(idx, next)}
+              onMoveUp={() => handleMoveEntry(idx, -1)}
+              onMoveDown={() => handleMoveEntry(idx, 1)}
+              onDelete={() => handleDeleteEntry(idx)}
             />
-          )}
-          {handlerType === 'script' && <DisabledHandlerPlaceholder type="script" />}
-          {handlerType === 'method' && <DisabledHandlerPlaceholder type="method" />}
+          ))}
 
-          <CommonFields
-            entry={entry}
-            eventId={event.id}
-            onUpdate={updateEntryField}
-          />
+          <Tooltip
+            title={
+              atCap
+                ? `Maximum ${MAX_ENTRIES_PER_EVENT} entries per event — delete one to add more.`
+                : ''
+            }
+          >
+            <Button
+              type="dashed"
+              icon={<PlusOutlined />}
+              disabled={atCap}
+              onClick={handleAddEntry}
+              className="sf-hooks-entry-add"
+              block
+            >
+              Add entry
+            </Button>
+          </Tooltip>
         </div>
       )}
     </Card>
+  );
+};
+
+// ─── EntryRow ───────────────────────────────────────────────────────────────
+
+interface EntryRowProps {
+  entry: HookEntry;
+  index: number;
+  total: number;
+  eventId: LifecycleHookEventId;
+  skills: SkillOption[];
+  onUpdate: (next: HookEntry) => void;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
+  onDelete: () => void;
+}
+
+const EntryRow: React.FC<EntryRowProps> = ({
+  entry,
+  index,
+  total,
+  eventId,
+  skills,
+  onUpdate,
+  onMoveUp,
+  onMoveDown,
+  onDelete,
+}) => {
+  const handlerType = entry.handler.type;
+  const canMoveUp = index > 0;
+  const canMoveDown = index < total - 1;
+
+  const handleHandlerTypeChange = useCallback(
+    (nextType: HookHandlerType) => {
+      if (nextType === handlerType) return;
+      onUpdate({ ...entry, handler: buildDefaultHandler(nextType) });
+    },
+    [entry, handlerType, onUpdate],
+  );
+
+  const handleUpdateSkillHandler = useCallback(
+    (patch: Partial<Extract<HookHandler, { type: 'skill' }>>) => {
+      if (entry.handler.type !== 'skill') return;
+      onUpdate({ ...entry, handler: { ...entry.handler, ...patch } });
+    },
+    [entry, onUpdate],
+  );
+
+  const handleUpdateScriptHandler = useCallback(
+    (patch: Partial<Extract<HookHandler, { type: 'script' }>>) => {
+      if (entry.handler.type !== 'script') return;
+      onUpdate({ ...entry, handler: { ...entry.handler, ...patch } });
+    },
+    [entry, onUpdate],
+  );
+
+  const handleUpdateField = useCallback(
+    <K extends keyof HookEntry>(key: K, value: HookEntry[K]) => {
+      if (key === 'async' && value === true && entry.failurePolicy === 'SKIP_CHAIN') {
+        message.info(
+          'async entries cannot use SKIP_CHAIN — switching policy to CONTINUE.',
+        );
+        onUpdate({ ...entry, async: true, failurePolicy: 'CONTINUE' });
+        return;
+      }
+      onUpdate({ ...entry, [key]: value });
+    },
+    [entry, onUpdate],
+  );
+
+  return (
+    <div className="sf-hooks-entry-row">
+      <div className="sf-hooks-entry-row-header">
+        <div className="sf-hooks-entry-row-title">
+          <span className="sf-hooks-entry-badge">
+            {total > 1 ? `entry ${index + 1}/${total}` : 'entry'}
+          </span>
+          <span className="sf-hooks-entry-summary">
+            {HANDLER_TYPE_ICONS[handlerType]}
+            <EntrySummary entry={entry} />
+          </span>
+        </div>
+        <div className="sf-hooks-entry-actions">
+          <Tooltip title="Move up">
+            <Button
+              size="small"
+              type="text"
+              disabled={!canMoveUp}
+              icon={<ArrowUpOutlined />}
+              onClick={onMoveUp}
+              aria-label="Move entry up"
+            />
+          </Tooltip>
+          <Tooltip title="Move down">
+            <Button
+              size="small"
+              type="text"
+              disabled={!canMoveDown}
+              icon={<ArrowDownOutlined />}
+              onClick={onMoveDown}
+              aria-label="Move entry down"
+            />
+          </Tooltip>
+          <Tooltip title="Delete entry">
+            <Button
+              size="small"
+              type="text"
+              danger
+              icon={<DeleteOutlined />}
+              onClick={onDelete}
+              aria-label="Delete entry"
+            />
+          </Tooltip>
+        </div>
+      </div>
+
+      <div className="sf-hooks-entry-row-body">
+        <HandlerTypeSelector value={handlerType} onChange={handleHandlerTypeChange} />
+
+        {entry.handler.type === 'skill' && (
+          <SkillHandlerFields
+            handler={entry.handler}
+            skills={skills}
+            onChange={handleUpdateSkillHandler}
+          />
+        )}
+        {entry.handler.type === 'script' && (
+          <ScriptHandlerFields
+            handler={entry.handler}
+            onChange={handleUpdateScriptHandler}
+          />
+        )}
+        {entry.handler.type === 'method' && <MethodPlaceholder />}
+
+        <CommonFields entry={entry} eventId={eventId} onUpdate={handleUpdateField} />
+      </div>
+    </div>
+  );
+};
+
+// ─── Entry summary (shown in the row header) ────────────────────────────────
+
+const EntrySummary: React.FC<{ entry: HookEntry }> = ({ entry }) => {
+  const { handler, timeoutSeconds, failurePolicy, async, displayName } = entry;
+  let label: string;
+  if (handler.type === 'skill') {
+    label = handler.skillName || '(no skill selected)';
+  } else if (handler.type === 'script') {
+    const preview = handler.scriptBody
+      ? handler.scriptBody.trim().replace(/\s+/g, ' ').slice(0, 40)
+      : '(empty script)';
+    label = `${handler.scriptLang}: ${preview}${handler.scriptBody && handler.scriptBody.length > 40 ? '…' : ''}`;
+  } else {
+    label = handler.methodRef || '(no method)';
+  }
+
+  const badges: string[] = [`${timeoutSeconds}s`, failurePolicy];
+  if (async) badges.push('async');
+  if (displayName) badges.unshift(displayName);
+
+  return (
+    <span className="sf-hooks-entry-summary-text">
+      <code className="sf-hooks-entry-summary-label">{label}</code>
+      <span className="sf-hooks-entry-summary-meta">{badges.join(' · ')}</span>
+    </span>
   );
 };
 
@@ -221,49 +422,79 @@ const EventCard: React.FC<EventCardProps> = ({ event, entry, skills, onEntryChan
 const HandlerTypeSelector: React.FC<{
   value: HookHandlerType;
   onChange: (next: HookHandlerType) => void;
-}> = ({ value, onChange }) => (
-  <div className="sf-hooks-field">
-    <label className="sf-hooks-label">Handler Type</label>
-    <Radio.Group
-      value={value}
-      onChange={(e) => onChange(e.target.value as HookHandlerType)}
-      optionType="button"
-      buttonStyle="solid"
-      size="small"
-    >
-      {HOOK_HANDLER_TYPE_META.map((meta) => {
-        const disabled = meta.availability !== 'available';
-        return (
-          <Tooltip key={meta.value} title={meta.description}>
-            <Radio.Button value={meta.value} disabled={disabled}>
-              <Space size={4}>
-                {HANDLER_TYPE_ICONS[meta.value]}
-                <span>{meta.label}</span>
-                {meta.availability === 'p1' && (
-                  <Tag className="sf-hooks-coming-tag" color="default">
-                    coming in P1
-                  </Tag>
-                )}
-                {meta.availability === 'p2' && (
-                  <Tag className="sf-hooks-coming-tag" color="default">
-                    coming in P2
-                  </Tag>
-                )}
-              </Space>
-            </Radio.Button>
-          </Tooltip>
-        );
-      })}
-    </Radio.Group>
-  </div>
-);
+}> = ({ value, onChange }) => {
+  const handleChange = (nextType: HookHandlerType) => {
+    if (nextType === value) return;
+    if (nextType === 'script') {
+      if (hasConfirmedScript()) {
+        onChange(nextType);
+        return;
+      }
+      Modal.confirm({
+        title: 'Enable Script handler?',
+        icon: <ExclamationCircleOutlined />,
+        content: (
+          <div className="sf-hooks-script-confirm-body">
+            <p>
+              Script handlers run inline bash / node code on the SkillForge
+              server. Make sure the script body is reviewed and trusted before
+              saving.
+            </p>
+            <p>
+              In production deployments consider disabling Script handlers
+              entirely via <code>lifecycle.hooks.script.allowed-langs: []</code>.
+            </p>
+          </div>
+        ),
+        okText: 'I understand, enable Script',
+        cancelText: 'Cancel',
+        onOk: () => {
+          markScriptConfirmed();
+          onChange(nextType);
+        },
+      });
+      return;
+    }
+    onChange(nextType);
+  };
+
+  return (
+    <div className="sf-hooks-field">
+      <label className="sf-hooks-label">Handler Type</label>
+      <Radio.Group
+        value={value}
+        onChange={(e) => handleChange(e.target.value as HookHandlerType)}
+        optionType="button"
+        buttonStyle="solid"
+        size="small"
+      >
+        {HOOK_HANDLER_TYPE_META.map((meta) => {
+          const disabled = meta.availability === 'p2';
+          return (
+            <Tooltip key={meta.value} title={meta.description}>
+              <Radio.Button value={meta.value} disabled={disabled}>
+                <Space size={4}>
+                  {HANDLER_TYPE_ICONS[meta.value]}
+                  <span>{meta.label}</span>
+                  {meta.availability === 'p2' && (
+                    <span className="sf-hooks-coming-tag">P2</span>
+                  )}
+                </Space>
+              </Radio.Button>
+            </Tooltip>
+          );
+        })}
+      </Radio.Group>
+    </div>
+  );
+};
 
 // ─── Skill handler fields ───────────────────────────────────────────────────
 
 const SkillHandlerFields: React.FC<{
   handler: Extract<HookHandler, { type: 'skill' }>;
   skills: SkillOption[];
-  onChange: (patch: Partial<HookHandler>) => void;
+  onChange: (patch: Partial<Extract<HookHandler, { type: 'skill' }>>) => void;
 }> = ({ handler, skills, onChange }) => {
   const options = useMemo(
     () =>
@@ -307,15 +538,77 @@ const SkillHandlerFields: React.FC<{
   );
 };
 
-// ─── Disabled handler placeholders ──────────────────────────────────────────
+// ─── Script handler fields ──────────────────────────────────────────────────
 
-const DisabledHandlerPlaceholder: React.FC<{ type: 'script' | 'method' }> = ({ type }) => (
+const ScriptHandlerFields: React.FC<{
+  handler: Extract<HookHandler, { type: 'script' }>;
+  onChange: (patch: Partial<Extract<HookHandler, { type: 'script' }>>) => void;
+}> = ({ handler, onChange }) => {
+  const bodyLength = handler.scriptBody.length;
+  const isEmpty = handler.scriptBody.trim() === '';
+  const overLimit = bodyLength > MAX_SCRIPT_BODY_BYTES;
+
+  return (
+    <div className="sf-hooks-script-fields">
+      <div className="sf-hooks-field">
+        <label className="sf-hooks-label">Language</label>
+        <Select<ScriptLang>
+          value={handler.scriptLang}
+          onChange={(next) => onChange({ scriptLang: next })}
+          options={SCRIPT_LANG_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+          style={{ width: 180 }}
+        />
+      </div>
+
+      <div className="sf-hooks-field">
+        <div className="sf-hooks-script-body-header">
+          <label className="sf-hooks-label">Script Body</label>
+          <span
+            className={
+              overLimit
+                ? 'sf-hooks-script-counter sf-hooks-script-counter--over'
+                : 'sf-hooks-script-counter'
+            }
+          >
+            {bodyLength} / {MAX_SCRIPT_BODY_BYTES}
+          </span>
+        </div>
+        <BufferedTextArea
+          value={handler.scriptBody}
+          rows={8}
+          maxLength={MAX_SCRIPT_BODY_BYTES}
+          placeholder={
+            handler.scriptLang === 'bash'
+              ? '#!/usr/bin/env bash\necho "hello"'
+              : '// node script\nconsole.log("hello");'
+          }
+          onCommit={(next) => onChange({ scriptBody: next })}
+          className="sf-hooks-script-body"
+          status={isEmpty || overLimit ? 'error' : undefined}
+        />
+        {isEmpty && (
+          <Typography.Text type="danger" className="sf-hooks-field-error">
+            Script body is required.
+          </Typography.Text>
+        )}
+        {overLimit && (
+          <Typography.Text type="danger" className="sf-hooks-field-error">
+            Script body exceeds {MAX_SCRIPT_BODY_BYTES} characters.
+          </Typography.Text>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// ─── Method handler placeholder ─────────────────────────────────────────────
+
+const MethodPlaceholder: React.FC = () => (
   <div className="sf-hooks-disabled-placeholder">
-    <CodeOutlined />
+    <FunctionOutlined />
     <span>
-      {type === 'script'
-        ? 'Script handler is coming in P1 (bash / node / python sub-process with sandbox).'
-        : 'Method handler is coming in P2 (platform built-in methods: log, http, feishu, etc).'}
+      Method handler is coming in P2 (platform built-in methods: log, http,
+      feishu, etc).
     </span>
   </div>
 );
@@ -331,6 +624,8 @@ const CommonFields: React.FC<{
   const policyOptions = policies.map((p) => ({
     label: formatPolicyLabel(p),
     value: p,
+    // async entries cannot use SKIP_CHAIN — disable the option in that case.
+    disabled: entry.async && p === 'SKIP_CHAIN',
   }));
 
   return (
@@ -383,92 +678,6 @@ const CommonFields: React.FC<{
   );
 };
 
-// ─── Buffered inputs (character-level debounce) ─────────────────────────────
-// Parent commits hit the rawJson source of truth + Zod reparse, so debouncing
-// keystrokes keeps the editor responsive on busy configs. Select / Switch /
-// Radio stay synchronous so the Save button always sees the latest choice.
-
-interface BufferedInputProps {
-  value: string;
-  onCommit: (next: string) => void;
-  placeholder?: string;
-  maxLength?: number;
-}
-
-const BufferedInput: React.FC<BufferedInputProps> = ({
-  value,
-  onCommit,
-  placeholder,
-  maxLength,
-}) => {
-  const [local, setLocal] = useState(value);
-  const lastExternalRef = useRef(value);
-  const [debouncedCommit, flush] = useDebouncedCallback(onCommit, FIELD_COMMIT_DEBOUNCE_MS);
-
-  useEffect(() => {
-    if (value !== lastExternalRef.current) {
-      lastExternalRef.current = value;
-      setLocal(value);
-    }
-  }, [value]);
-
-  return (
-    <Input
-      value={local}
-      onChange={(e) => {
-        const next = e.target.value;
-        lastExternalRef.current = next;
-        setLocal(next);
-        debouncedCommit(next);
-      }}
-      onBlur={flush}
-      placeholder={placeholder}
-      maxLength={maxLength}
-    />
-  );
-};
-
-interface BufferedInputNumberProps {
-  value: number;
-  min?: number;
-  max?: number;
-  onCommit: (next: number | null) => void;
-}
-
-const BufferedInputNumber: React.FC<BufferedInputNumberProps> = ({
-  value,
-  min,
-  max,
-  onCommit,
-}) => {
-  const [local, setLocal] = useState<number | null>(value);
-  const lastExternalRef = useRef<number | null>(value);
-  const [debouncedCommit, flush] = useDebouncedCallback(onCommit, FIELD_COMMIT_DEBOUNCE_MS);
-
-  useEffect(() => {
-    if (value !== lastExternalRef.current) {
-      lastExternalRef.current = value;
-      setLocal(value);
-    }
-  }, [value]);
-
-  return (
-    <InputNumber
-      min={min}
-      max={max}
-      value={local ?? undefined}
-      onChange={(next) => {
-        const nextValue = (next ?? null) as number | null;
-        lastExternalRef.current = nextValue;
-        setLocal(nextValue);
-        debouncedCommit(nextValue);
-      }}
-      onBlur={flush}
-      style={{ width: '100%' }}
-    />
-  );
-};
-
 function formatPolicyLabel(policy: FailurePolicy): string {
   switch (policy) {
     case 'CONTINUE':
@@ -485,9 +694,10 @@ function formatPolicyLabel(policy: FailurePolicy): string {
 function buildDefaultEntry(): HookEntry {
   return {
     handler: { type: 'skill', skillName: '' },
-    timeoutSeconds: 30,
+    timeoutSeconds: TIMEOUT_DEFAULT_SECONDS,
     failurePolicy: 'CONTINUE',
     async: false,
+    _id: crypto.randomUUID(),
   };
 }
 
@@ -503,20 +713,40 @@ function buildDefaultHandler(type: HookHandlerType): HookHandler {
 }
 
 /**
- * Produce a new LifecycleHooksConfig with `entry` written at `eventId` slot 0.
- * null entry → empty list for that event. Other event slots are preserved as-is.
+ * Produce a new LifecycleHooksConfig with the given entry list written at
+ * `eventId`. Other event slots are preserved as-is; missing slots are
+ * backfilled with empty arrays so the shape stays stable.
  */
-function updateEntry(
+function replaceEntries(
   cfg: LifecycleHooksConfig,
   eventId: LifecycleHookEventId,
-  entry: HookEntry | null,
+  entries: HookEntry[],
 ): LifecycleHooksConfig {
   const hooks = { ...cfg.hooks };
   for (const id of LIFECYCLE_HOOK_EVENT_IDS) {
     if (!hooks[id]) hooks[id] = [];
   }
-  hooks[eventId] = entry ? [entry] : [];
+  hooks[eventId] = entries;
   return { version: 1, hooks };
+}
+
+// ─── Script-confirm localStorage gate ──────────────────────────────────────
+
+function hasConfirmedScript(): boolean {
+  try {
+    return window.localStorage.getItem(SCRIPT_CONFIRM_STORAGE_KEY) === '1';
+  } catch {
+    // Private-mode Safari or storage blocked — fall back to prompting each time.
+    return false;
+  }
+}
+
+function markScriptConfirmed(): void {
+  try {
+    window.localStorage.setItem(SCRIPT_CONFIRM_STORAGE_KEY, '1');
+  } catch {
+    // Swallow — acceptable to prompt again if storage is unavailable.
+  }
 }
 
 export default FormMode;

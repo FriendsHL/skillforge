@@ -1,5 +1,8 @@
 package com.skillforge.server.hook;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.skillforge.core.engine.TraceCollector;
 import com.skillforge.core.engine.TraceSpan;
 import com.skillforge.core.engine.hook.FailurePolicy;
@@ -15,6 +18,7 @@ import com.skillforge.core.skill.SkillRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -291,5 +295,177 @@ class LifecycleHookDispatcherTest {
         HookRunResult r = runner.run(handler, Map.of(), ctx);
         assertThat(r.success()).isFalse();
         assertThat(r.errorMessage()).startsWith("skill_not_found");
+    }
+
+    // ---------- P1 tests ----------
+
+    /** Helper: build a dispatcher with the given forbidden-skill list. */
+    private LifecycleHookDispatcherImpl newDispatcherWithForbidden(List<String> forbidden, HandlerRunner<?>... runners) {
+        return new LifecycleHookDispatcherImpl(List.of(runners), executor, traceCollector, forbidden);
+    }
+
+    /** Helper: agent with multiple entries for a single event, in order. */
+    private AgentDefinition agentWithEntries(HookEvent event, List<HookEntry> entries) {
+        AgentDefinition def = new AgentDefinition();
+        def.setId("42");
+        def.setName("TestAgent");
+        LifecycleHooksConfig cfg = new LifecycleHooksConfig();
+        cfg.putEntries(event, entries);
+        def.setLifecycleHooks(cfg);
+        return def;
+    }
+
+    @Test
+    @DisplayName("Multi-entry CONTINUE runs every entry in order (both synchronous)")
+    void multiEntry_continue_runsAll() {
+        // Two entries routed to a single counting runner (dispatcher indexes runners by handlerType()).
+        AtomicInteger counter = new AtomicInteger();
+        HandlerRunner<HookHandler.SkillHandler> counting = new HandlerRunner<>() {
+            @Override public Class<HookHandler.SkillHandler> handlerType() { return HookHandler.SkillHandler.class; }
+            @Override public HookRunResult run(HookHandler.SkillHandler h, Map<String, Object> in, HookExecutionContext c) {
+                counter.incrementAndGet();
+                return HookRunResult.ok("call-" + counter.get(), 0);
+            }
+        };
+        LifecycleHookDispatcherImpl dispatcher = newDispatcher(counting);
+        HookEntry e1 = entry(new HookHandler.SkillHandler("X"), 5, FailurePolicy.CONTINUE, false);
+        HookEntry e2 = entry(new HookHandler.SkillHandler("Y"), 5, FailurePolicy.CONTINUE, false);
+        AgentDefinition def = agentWithEntries(HookEvent.POST_TOOL_USE, List.of(e1, e2));
+
+        boolean keepGoing = dispatcher.dispatch(HookEvent.POST_TOOL_USE, Map.of(), def, "s1", 99L);
+        assertThat(keepGoing).isTrue();
+        assertThat(counter.get()).isEqualTo(2);
+        assertThat(collected).hasSize(2);
+    }
+
+    @Test
+    @DisplayName("ABORT at entry index 1 prevents entry index 2 from running (dispatcher returns false)")
+    void multiEntry_abortMidway_stopsSubsequent() {
+        AtomicInteger callIndex = new AtomicInteger(-1);
+        HandlerRunner<HookHandler.SkillHandler> runner = new HandlerRunner<>() {
+            @Override public Class<HookHandler.SkillHandler> handlerType() { return HookHandler.SkillHandler.class; }
+            @Override public HookRunResult run(HookHandler.SkillHandler h, Map<String, Object> in, HookExecutionContext c) {
+                int idx = callIndex.incrementAndGet();
+                // index 1 fails; index 0 succeeds
+                if (idx == 1) return HookRunResult.failure("boom", 0);
+                return HookRunResult.ok("ok-" + idx, 0);
+            }
+        };
+        LifecycleHookDispatcherImpl dispatcher = newDispatcher(runner);
+        HookEntry e0 = entry(new HookHandler.SkillHandler("A"), 5, FailurePolicy.CONTINUE, false);
+        HookEntry e1 = entry(new HookHandler.SkillHandler("B"), 5, FailurePolicy.ABORT, false);
+        HookEntry e2 = entry(new HookHandler.SkillHandler("C"), 5, FailurePolicy.CONTINUE, false);
+        AgentDefinition def = agentWithEntries(HookEvent.USER_PROMPT_SUBMIT, List.of(e0, e1, e2));
+
+        boolean keepGoing = dispatcher.dispatch(HookEvent.USER_PROMPT_SUBMIT, Map.of(), def, "s1", 99L);
+        assertThat(keepGoing).isFalse();
+        // The third entry (index 2) must NOT have run.
+        assertThat(callIndex.get()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("SKIP_CHAIN stops the chain but returns true (main flow continues)")
+    void multiEntry_skipChain_stopsButKeepsGoing() {
+        AtomicInteger invocations = new AtomicInteger();
+        HandlerRunner<HookHandler.SkillHandler> runner = new HandlerRunner<>() {
+            @Override public Class<HookHandler.SkillHandler> handlerType() { return HookHandler.SkillHandler.class; }
+            @Override public HookRunResult run(HookHandler.SkillHandler h, Map<String, Object> in, HookExecutionContext c) {
+                int n = invocations.incrementAndGet();
+                return n == 1 ? HookRunResult.failure("skip-me", 0) : HookRunResult.ok("should-not-run", 0);
+            }
+        };
+        LifecycleHookDispatcherImpl dispatcher = newDispatcher(runner);
+        HookEntry e0 = entry(new HookHandler.SkillHandler("A"), 5, FailurePolicy.SKIP_CHAIN, false);
+        HookEntry e1 = entry(new HookHandler.SkillHandler("B"), 5, FailurePolicy.CONTINUE, false);
+        AgentDefinition def = agentWithEntries(HookEvent.POST_TOOL_USE, List.of(e0, e1));
+
+        boolean keepGoing = dispatcher.dispatch(HookEvent.POST_TOOL_USE, Map.of(), def, "s1", 99L);
+        assertThat(keepGoing).isTrue();
+        assertThat(invocations.get()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("Forbidden skill short-circuits with forbidden_skill error — runner is never called")
+    void forbiddenSkill_neverInvokesRunner() {
+        AtomicInteger calls = new AtomicInteger();
+        HandlerRunner<HookHandler.SkillHandler> runner = new HandlerRunner<>() {
+            @Override public Class<HookHandler.SkillHandler> handlerType() { return HookHandler.SkillHandler.class; }
+            @Override public HookRunResult run(HookHandler.SkillHandler h, Map<String, Object> in, HookExecutionContext c) {
+                calls.incrementAndGet();
+                return HookRunResult.ok("should-not-run", 0);
+            }
+        };
+        LifecycleHookDispatcherImpl dispatcher = newDispatcherWithForbidden(List.of("TeamCreate"), runner);
+        HookEntry e = entry(new HookHandler.SkillHandler("TeamCreate"), 5, FailurePolicy.ABORT, false);
+        AgentDefinition def = agentWithEntries(HookEvent.USER_PROMPT_SUBMIT, List.of(e));
+
+        boolean keepGoing = dispatcher.dispatch(HookEvent.USER_PROMPT_SUBMIT, Map.of(), def, "s1", 99L);
+        assertThat(keepGoing).isFalse(); // ABORT policy → false
+        assertThat(calls.get()).isEqualTo(0);
+        assertThat(collected).hasSize(1);
+        assertThat(collected.get(0).getError()).startsWith("forbidden_skill");
+    }
+
+    @Test
+    @DisplayName("async entry with SKIP_CHAIN policy (legacy data) runtime-downgrades to CONTINUE and logs policy_overridden_async")
+    void asyncWithSkipChain_downgradesAtRuntime() throws Exception {
+        CountDownLatch releaseRunner = new CountDownLatch(1);
+        StubRunner slow = new StubRunner(HookRunResult.ok("done", 0), 0, null) {
+            @Override
+            public HookRunResult run(HookHandler.SkillHandler handler, Map<String, Object> input, HookExecutionContext ctx) {
+                try { releaseRunner.await(3, TimeUnit.SECONDS); } catch (InterruptedException ignored) {}
+                return super.run(handler, input, ctx);
+            }
+        };
+        LifecycleHookDispatcherImpl dispatcher = newDispatcher(slow);
+        HookEntry e = entry(new HookHandler.SkillHandler("X"), 5, FailurePolicy.SKIP_CHAIN, true);
+        AgentDefinition def = agentWithEntries(HookEvent.POST_TOOL_USE, List.of(e));
+
+        // Capture logs to assert the policy_overridden_async warning is emitted.
+        Logger dispatcherLogger = (Logger) LoggerFactory.getLogger(LifecycleHookDispatcherImpl.class);
+        ListAppender<ILoggingEvent> logCapture = new ListAppender<>();
+        logCapture.start();
+        dispatcherLogger.addAppender(logCapture);
+        try {
+            long t0 = System.currentTimeMillis();
+            boolean keepGoing = dispatcher.dispatch(HookEvent.POST_TOOL_USE, Map.of(), def, "s1", 99L);
+            long elapsed = System.currentTimeMillis() - t0;
+            // chainDecision is CONTINUE (downgraded from SKIP_CHAIN), so dispatch returns true.
+            assertThat(keepGoing).isTrue();
+            // async path returns before the runner finishes — should be well under 500ms.
+            assertThat(elapsed).isLessThan(500L);
+            // Warn log must record the downgrade event.
+            assertThat(logCapture.list).anySatisfy(event ->
+                    assertThat(event.getFormattedMessage()).contains("policy_overridden_async"));
+        } finally {
+            dispatcherLogger.detachAppender(logCapture);
+            releaseRunner.countDown();
+        }
+    }
+
+    @Test
+    @DisplayName("Two async entries run concurrently — hookDepth is isolated per executor thread")
+    void twoAsyncEntries_runConcurrently() throws Exception {
+        CountDownLatch insideRunner = new CountDownLatch(2);
+        CountDownLatch release = new CountDownLatch(1);
+        StubRunner concurrent = new StubRunner(HookRunResult.ok("ok", 0), 0, null) {
+            @Override
+            public HookRunResult run(HookHandler.SkillHandler handler, Map<String, Object> input, HookExecutionContext ctx) {
+                insideRunner.countDown();
+                try { release.await(3, TimeUnit.SECONDS); } catch (InterruptedException ignored) {}
+                return super.run(handler, input, ctx);
+            }
+        };
+        LifecycleHookDispatcherImpl dispatcher = newDispatcher(concurrent);
+        HookEntry e0 = entry(new HookHandler.SkillHandler("A"), 5, FailurePolicy.CONTINUE, true);
+        HookEntry e1 = entry(new HookHandler.SkillHandler("B"), 5, FailurePolicy.CONTINUE, true);
+        AgentDefinition def = agentWithEntries(HookEvent.SESSION_END, List.of(e0, e1));
+
+        boolean keepGoing = dispatcher.dispatch(HookEvent.SESSION_END, Map.of(), def, "s1", 99L);
+        assertThat(keepGoing).isTrue();
+        // Both async runners must enter the runner body despite hookDepth ThreadLocal.
+        boolean bothEntered = insideRunner.await(5, TimeUnit.SECONDS);
+        assertThat(bothEntered).as("two async entries should run concurrently — hookDepth must not block the second").isTrue();
+        release.countDown();
     }
 }

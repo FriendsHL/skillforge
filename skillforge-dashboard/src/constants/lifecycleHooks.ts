@@ -110,8 +110,8 @@ export const HOOK_HANDLER_TYPE_META: HookHandlerTypeMeta[] = [
   {
     value: 'script',
     label: 'Script',
-    availability: 'p1',
-    description: '内联 bash / node / python 脚本(P1 实现)。',
+    availability: 'available',
+    description: '内联 bash / node 脚本,沙箱子进程执行。',
   },
   {
     value: 'method',
@@ -120,6 +120,17 @@ export const HOOK_HANDLER_TYPE_META: HookHandlerTypeMeta[] = [
     description: '平台内置方法(P2 实现)。',
   },
 ];
+
+/** Allowed script languages (P1 = bash, node; python reserved for P2). */
+export const SCRIPT_LANG_OPTIONS = [
+  { value: 'bash', label: 'Bash' },
+  { value: 'node', label: 'Node.js' },
+] as const;
+
+export type ScriptLang = (typeof SCRIPT_LANG_OPTIONS)[number]['value'];
+
+/** localStorage key for "user already confirmed script-handler risk" flag. */
+export const SCRIPT_CONFIRM_STORAGE_KEY = 'sf.lifecycle.scriptConfirmed';
 
 // ─── Policy / limits ─────────────────────────────────────────────────────────
 
@@ -143,8 +154,11 @@ const skillHandlerSchema = z.object({
 
 const scriptHandlerSchema = z.object({
   type: z.literal('script'),
-  scriptLang: z.enum(['bash', 'node', 'python']),
-  scriptBody: z.string().max(MAX_SCRIPT_BODY_BYTES, 'scriptBody too large (max 4KB)'),
+  scriptLang: z.enum(['bash', 'node']),
+  scriptBody: z
+    .string()
+    .min(1, 'scriptBody is required')
+    .max(MAX_SCRIPT_BODY_BYTES, 'scriptBody too large (max 4KB)'),
   args: z.record(z.string(), z.unknown()).optional(),
 });
 
@@ -160,18 +174,24 @@ export const hookHandlerSchema = z.discriminatedUnion('type', [
   methodHandlerSchema,
 ]);
 
-export const hookEntrySchema = z.object({
-  handler: hookHandlerSchema,
-  timeoutSeconds: z
-    .number()
-    .int()
-    .min(TIMEOUT_MIN_SECONDS)
-    .max(TIMEOUT_MAX_SECONDS)
-    .default(TIMEOUT_DEFAULT_SECONDS),
-  failurePolicy: z.enum(FAILURE_POLICIES).default('CONTINUE'),
-  async: z.boolean().default(false),
-  displayName: z.string().optional(),
-});
+export const hookEntrySchema = z
+  .object({
+    handler: hookHandlerSchema,
+    timeoutSeconds: z
+      .number()
+      .int()
+      .min(TIMEOUT_MIN_SECONDS)
+      .max(TIMEOUT_MAX_SECONDS)
+      .default(TIMEOUT_DEFAULT_SECONDS),
+    failurePolicy: z.enum(FAILURE_POLICIES).default('CONTINUE'),
+    async: z.boolean().default(false),
+    displayName: z.string().optional(),
+    _id: z.string().optional(),
+  })
+  .refine((entry) => !(entry.async === true && entry.failurePolicy === 'SKIP_CHAIN'), {
+    message: 'async entry cannot use SKIP_CHAIN policy',
+    path: ['failurePolicy'],
+  });
 
 export const lifecycleHooksConfigSchema = z.object({
   version: z.literal(1),
@@ -262,7 +282,7 @@ export function safeParseHooksJson(raw: string): JsonParseResult {
   return { parsed: filled, errors: [] };
 }
 
-/** Serialize config to rawJson with 2-space indent. */
+/** Serialize config to rawJson with 2-space indent. Strips the UI-only `_id` field from entries. */
 export function stringifyHooks(config: LifecycleHooksConfig): string {
-  return JSON.stringify(config, null, 2);
+  return JSON.stringify(config, (key, value) => (key === '_id' ? undefined : value), 2);
 }

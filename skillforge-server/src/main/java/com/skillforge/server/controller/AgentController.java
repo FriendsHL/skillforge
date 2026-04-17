@@ -43,16 +43,24 @@ public class AgentController {
     }
 
     @PostMapping
-    public ResponseEntity<AgentEntity> createAgent(@RequestBody AgentEntity agent) {
-        AgentEntity created = agentService.createAgent(agent);
-        return ResponseEntity.ok(created);
+    public ResponseEntity<?> createAgent(@RequestBody AgentEntity agent) {
+        try {
+            AgentEntity created = agentService.createAgent(agent);
+            return ResponseEntity.ok(created);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
     }
 
     @PutMapping("/{id}")
-    public ResponseEntity<AgentEntity> updateAgent(@PathVariable Long id,
-                                                    @RequestBody AgentEntity agent) {
-        AgentEntity updated = agentService.updateAgent(id, agent);
-        return ResponseEntity.ok(updated);
+    public ResponseEntity<?> updateAgent(@PathVariable Long id,
+                                          @RequestBody AgentEntity agent) {
+        try {
+            AgentEntity updated = agentService.updateAgent(id, agent);
+            return ResponseEntity.ok(updated);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
     }
 
     @DeleteMapping("/{id}")

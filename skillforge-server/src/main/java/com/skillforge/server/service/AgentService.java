@@ -5,8 +5,10 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillforge.core.context.BehaviorRuleRegistry;
+import com.skillforge.core.engine.hook.FailurePolicy;
 import com.skillforge.core.engine.hook.HookEntry;
 import com.skillforge.core.engine.hook.HookEvent;
+import com.skillforge.core.engine.hook.HookHandler;
 import com.skillforge.core.engine.hook.LifecycleHooksConfig;
 import com.skillforge.core.model.AgentDefinition;
 import com.skillforge.server.entity.AgentEntity;
@@ -29,6 +31,9 @@ public class AgentService {
     /** Hard cap on lifecycle_hooks JSON payload size to prevent unbounded writes / memory blowups. */
     private static final int LIFECYCLE_HOOKS_MAX_BYTES = 65_536;
 
+    /** Hard cap on {@link HookHandler.ScriptHandler#getScriptBody()} chars. */
+    private static final int SCRIPT_BODY_MAX_CHARS = 4_096;
+
     private final AgentRepository agentRepository;
     private final ObjectMapper objectMapper;
     private final BehaviorRuleRegistry behaviorRuleRegistry;
@@ -43,6 +48,7 @@ public class AgentService {
 
     public AgentEntity createAgent(AgentEntity agent) {
         validateLifecycleHooksSize(agent);
+        validateLifecycleHooksSemantics(agent);
         return agentRepository.save(agent);
     }
 
@@ -51,6 +57,7 @@ public class AgentService {
     // will silently lose data.
     public AgentEntity updateAgent(Long id, AgentEntity updated) {
         validateLifecycleHooksSize(updated);
+        validateLifecycleHooksSemantics(updated);
         AgentEntity existing = agentRepository.findById(id)
                 .orElseThrow(() -> new RuntimeException("Agent not found: " + id));
         existing.setName(updated.getName());
@@ -84,6 +91,54 @@ public class AgentService {
         if (hooks != null && hooks.length() > LIFECYCLE_HOOKS_MAX_BYTES) {
             throw new IllegalArgumentException(
                     "lifecycle_hooks payload exceeds " + LIFECYCLE_HOOKS_MAX_BYTES + " char limit");
+        }
+    }
+
+    /**
+     * Semantic validation on every {@link HookEntry} after JSON parse:
+     * <ul>
+     *   <li>{@code ScriptHandler.scriptBody} length &le; {@link #SCRIPT_BODY_MAX_CHARS}. Backend
+     *       is the source of truth — frontend Zod is convenience only.</li>
+     *   <li>Reject {@code async=true && failurePolicy=SKIP_CHAIN} — the combination has no
+     *       meaningful semantics; async entries cannot rewrite the chain.</li>
+     * </ul>
+     * Throws {@link IllegalArgumentException} → Spring maps to 400 at the controller layer.
+     */
+    private void validateLifecycleHooksSemantics(AgentEntity agent) {
+        if (agent == null) return;
+        String json = agent.getLifecycleHooks();
+        if (json == null || json.isBlank()) return;
+
+        LifecycleHooksConfig cfg;
+        try {
+            cfg = parseLifecycleHooksLenient(agent);
+        } catch (Exception e) {
+            // Parser is already lenient; hard failure here means malformed top-level JSON —
+            // let the persist layer accept it (subsequent read returns empty config).
+            return;
+        }
+
+        for (Map.Entry<HookEvent, List<HookEntry>> ev : cfg.getHooks().entrySet()) {
+            List<HookEntry> entries = ev.getValue();
+            if (entries == null) continue;
+            for (int i = 0; i < entries.size(); i++) {
+                HookEntry entry = entries.get(i);
+                if (entry == null) continue;
+                HookHandler h = entry.getHandler();
+                if (h instanceof HookHandler.ScriptHandler sh) {
+                    String body = sh.getScriptBody();
+                    if (body != null && body.length() > SCRIPT_BODY_MAX_CHARS) {
+                        throw new IllegalArgumentException(
+                                "scriptBody exceeds " + SCRIPT_BODY_MAX_CHARS + " char limit "
+                                        + "(event=" + ev.getKey().wireName() + " index=" + i + ")");
+                    }
+                }
+                if (entry.isAsync() && entry.getFailurePolicy() == FailurePolicy.SKIP_CHAIN) {
+                    throw new IllegalArgumentException(
+                            "async entry cannot use SKIP_CHAIN policy "
+                                    + "(event=" + ev.getKey().wireName() + " index=" + i + ")");
+                }
+            }
         }
     }
 

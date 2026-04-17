@@ -729,3 +729,182 @@ body {
   padding-left: 1.25rem;
   font-size: var(--font-size-xs);
 }
+
+/* ─── Multi-entry list (P1) ──────────────────────────────────────────────── */
+
+.sf-hooks-entry-count {
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent-primary);
+  background: color-mix(in oklab, var(--accent-primary) 12%, transparent);
+  padding: 2px var(--sp-2);
+  border-radius: var(--radius-sm);
+}
+
+.sf-hooks-entry-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  border-top: 1px dashed var(--border-subtle);
+  padding-top: var(--sp-3);
+}
+
+.sf-hooks-entry-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: color-mix(in oklab, var(--bg-sidebar) 60%, transparent);
+  transition: border-color var(--transition-base), background-color var(--transition-base);
+}
+
+.sf-hooks-entry-row:hover {
+  border-color: var(--border-medium);
+  background: var(--bg-sidebar);
+}
+
+.sf-hooks-entry-row-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+
+.sf-hooks-entry-row-title {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  flex: 1;
+}
+
+.sf-hooks-entry-badge {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  background: var(--bg-primary);
+  padding: 2px var(--sp-2);
+  border-radius: var(--radius-sm);
+  flex-shrink: 0;
+}
+
+.sf-hooks-entry-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  color: var(--text-muted);
+}
+
+.sf-hooks-entry-summary-text {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  min-width: 0;
+  flex: 1;
+}
+
+.sf-hooks-entry-summary-label {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 320px;
+  background: transparent;
+  padding: 0;
+}
+
+.sf-hooks-entry-summary-meta {
+  font-size: 10px;
+  color: var(--text-muted);
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.sf-hooks-entry-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.sf-hooks-entry-row-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding-top: var(--sp-2);
+  border-top: 1px dashed var(--border-subtle);
+}
+
+.sf-hooks-entry-add {
+  border-radius: var(--radius-sm);
+  border-style: dashed;
+  color: var(--text-muted);
+}
+
+.sf-hooks-entry-add:hover:not([disabled]) {
+  color: var(--accent-primary);
+  border-color: var(--accent-primary);
+}
+
+/* ─── Script handler fields (P1) ─────────────────────────────────────────── */
+
+.sf-hooks-script-fields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.sf-hooks-script-body-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--sp-2);
+}
+
+.sf-hooks-script-counter {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  letter-spacing: 0.03em;
+}
+
+.sf-hooks-script-counter--over {
+  color: var(--color-error);
+}
+
+.sf-hooks-script-fields .sf-hooks-script-body {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.55;
+  background: var(--bg-sidebar);
+  border-radius: var(--radius-sm);
+  tab-size: 2;
+}
+
+.sf-hooks-script-confirm-body {
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+  line-height: 1.55;
+}
+
+.sf-hooks-script-confirm-body p {
+  margin: 0 0 var(--sp-2) 0;
+}
+
+.sf-hooks-script-confirm-body code {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  background: var(--bg-sidebar);
+  padding: 1px var(--sp-1);
+  border-radius: var(--radius-sm);
+}

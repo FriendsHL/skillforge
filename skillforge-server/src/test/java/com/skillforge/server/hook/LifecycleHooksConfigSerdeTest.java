@@ -25,7 +25,7 @@ class LifecycleHooksConfigSerdeTest {
 
     @BeforeEach
     void setUp() {
-        mapper = new ObjectMapper();
+        mapper = new ObjectMapper().findAndRegisterModules();
     }
 
     @Test
@@ -150,5 +150,39 @@ class LifecycleHooksConfigSerdeTest {
                 """;
         HookEntry entry = mapper.readValue(json, HookEntry.class);
         assertThat(entry.getFailurePolicy()).isEqualTo(FailurePolicy.CONTINUE);
+    }
+
+    @Test
+    @DisplayName("ScriptHandler full round-trip preserves lang, body, and settings")
+    void scriptHandler_fullRoundTrip_preservesFields() throws Exception {
+        HookHandler.ScriptHandler sh = new HookHandler.ScriptHandler();
+        sh.setScriptLang("bash");
+        sh.setScriptBody("echo hi");
+        sh.setArgs(Map.of("quiet", true));
+        HookEntry entry = new HookEntry();
+        entry.setHandler(sh);
+        entry.setTimeoutSeconds(12);
+        entry.setFailurePolicy(FailurePolicy.SKIP_CHAIN);
+        entry.setAsync(false);
+        entry.setDisplayName("cleanup script");
+
+        LifecycleHooksConfig cfg = new LifecycleHooksConfig();
+        cfg.putEntries(HookEvent.SESSION_END, List.of(entry));
+
+        String json = mapper.writeValueAsString(cfg);
+        assertThat(json).contains("\"type\":\"script\"");
+        assertThat(json).contains("\"SessionEnd\"");
+        assertThat(json).contains("\"SKIP_CHAIN\"");
+
+        LifecycleHooksConfig back = mapper.readValue(json, LifecycleHooksConfig.class);
+        HookEntry got = back.entriesFor(HookEvent.SESSION_END).get(0);
+        assertThat(got.getHandler()).isInstanceOf(HookHandler.ScriptHandler.class);
+        HookHandler.ScriptHandler sh2 = (HookHandler.ScriptHandler) got.getHandler();
+        assertThat(sh2.getScriptLang()).isEqualTo("bash");
+        assertThat(sh2.getScriptBody()).isEqualTo("echo hi");
+        assertThat(sh2.getArgs()).containsEntry("quiet", true);
+        assertThat(got.getTimeoutSeconds()).isEqualTo(12);
+        assertThat(got.getFailurePolicy()).isEqualTo(FailurePolicy.SKIP_CHAIN);
+        assertThat(got.getDisplayName()).isEqualTo("cleanup script");
     }
 }

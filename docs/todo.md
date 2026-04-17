@@ -20,20 +20,11 @@
 | N1-3 混合检索（memory_search Tool） | 拆出独立 Skill `MemorySearchSkill`：FTS 召回（`tsvector @@ plainto_tsquery`）+ pgvector 余弦检索（`ORDER BY embedding <=> :vec`）两路 Top-20，RRF 合并取 Top-K；仅返回 snippet（body 前 100 字）+ memoryId + score；provider 无 embedding 时退化为纯 FTS |
 | N1-4 按需全文（memory_detail Tool） | 新增 `MemoryDetailSkill`：按 memoryId 返回完整 body；Agent 先调 memory_search，按需再调 memory_detail，大幅降低每次检索 token 消耗                                                                                                              |
 
-#### N3 — 用户可配置 Lifecycle Hook（P0 已完成，P1/P2 待排期）
+#### N3 — 用户可配置 Lifecycle Hook（P0/P1 已完成，P2 待排期）
 
 > 参考：claude-mem（SessionStart / UserPromptSubmit / PostToolUse / Stop / SessionEnd 5 个节点）
-> 技术方案：`docs/design-n3-lifecycle-hooks.md`
-> **P0 已于 2026-04-17 完成（backend + frontend + 3 reviewer + judge + fix）**
-
-| 子任务（P1）            | 说明                                                                      |
-| ------------------ | ----------------------------------------------------------------------- |
-| N3-P1-1 多 entry 链式 | 一个 event 可绑多个 handler；新增 `SKIP_CHAIN` failurePolicy                      |
-| N3-P1-2 前端多 entry UI | 每个 event Card 下列表 + 上移/下移                                              |
-| N3-P1-3 ScriptHandlerRunner | bash/node 子进程；白名单 lang；沙箱（`/tmp/sf-hook-<sessionId>/` + ulimit） |
-| N3-P1-4 前端 Script handler 启用 | 去掉 P1 置灰；lang 下拉 + code textarea                              |
-| N3-P1-5 UserPromptSubmit prompt enrichment | handler output 的 `injected_context` 注入 LoopContext.messages |
-| N3-P1-6 禁止 Skill 黑名单 | `application.yml: lifecycle.hooks.forbidden-skills`                 |
+> 技术方案：`docs/design-n3-lifecycle-hooks.md`（P0）+ `docs/design-n3-p1.md`（P1）
+> **P0 已于 2026-04-17 完成；P1 已于 2026-04-17 完成**
 
 | 子任务（P2）                  | 说明                                                                    |
 | ------------------------ | --------------------------------------------------------------------- |
@@ -82,6 +73,7 @@
 
 | 任务                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | 完成日期       |
 | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| N3 P1 Lifecycle Hook 完善：多 entry 链式执行（dispatcher for 循环 + ChainDecision 三值 + SKIP_CHAIN policy）+ ScriptHandlerRunner（bash/node 子进程 + /tmp toRealPath() symlink 防护 + ProcessHandle.descendants 进程树 kill + 双线程 drain-and-discard 防 OOM + env 5 白名单 + DangerousCommandChecker 绝对路径 pipe 防护）+ UserPromptSubmit prompt enrichment（handler output.injected_context 注入独立 user message 支持全 provider）+ 前端多 entry UI（上移/下移/删除/新增 cap 10 + stable \_id key 防 stale debounce）+ Script handler 启用（Confirm Modal + lang 硬编码 [bash,node] + 字符计数）+ Forbidden Skill 黑名单（dispatcher 层）+ async×SKIP_CHAIN 保存时拒绝 + scriptBody 长度后端校验 + FailurePolicy @JsonCreator 防回滚炸 + discriminated-union 类型安全 + CSS var(--color-error) + 全 provider 支持；2 planner + 2 reviewer + judge + 2 fix pipeline；145 后端测试 + agent-browser e2e 全绿；技术方案：docs/design-n3-p1.md | 2026-04-17 |
 | N3 P0 用户可配置 Lifecycle Hook：V9 migration + polymorphic HookHandler (skill/script/method 子类，P0 只实现 SkillHandlerRunner) + LifecycleHookDispatcher（hookDepth ThreadLocal 跨 worker 线程传播 + 独立 hookExecutor + timeout + failurePolicy CONTINUE/ABORT + LIFECYCLE_HOOK TraceSpan）+ SessionStart 插在 ChatService.chatAsync 首条消息处 / SessionEnd 异步在 loop 结束 + AgentLoopEngine ABORT 语义 (LoopContext.abortedByHook + HookAbortException) + REST `/api/lifecycle-hooks/events|presets` + 前端 3 模式编辑器（Preset/Form/JSON + Zod discriminatedUnion + useDebouncedCallback + formKey 解决 create→create 复用）+ AgentSchema 加 lifecycleHooks/behaviorRules 字段防 Zod strip + 25 测试全绿 + agent-browser e2e 验证通过；3 轮 reviewer (java/typescript/security) + judge 仲裁 + fix 两侧并行；技术方案：docs/design-n3-lifecycle-hooks.md | 2026-04-17 |
 | N2-1~N2-3 Agent 行为规范层：V8 Flyway migration（behaviorRules TEXT 列）、BehaviorRuleRegistry（15 条内置规则 JSON + 语言检测 + deprecated 链 + 预设模板）、BehaviorRuleDefinition record、SystemPromptBuilder 注入（Available Skills 之后 + 自定义规则 XML 沙箱 + prompt injection 防护）、AgentYamlMapper round-trip（corrupt data 防御）、REST API（GET /api/behavior-rules + /presets）、前端 BehaviorRulesEditor（模板选择器 + 分类折叠 + Switch + 自定义规则 CRUD）、useBehaviorRules Hook、AgentList.tsx RULES.md Tab 集成；技术方案：docs/design-n2-behavioral-rules.md | 2026-04-17 |
 | N1-1~N1-4 Memory 向量检索：V7 Flyway migration（pgvector + tsvector，graceful fallback）、EmbeddingProvider + OpenAiEmbeddingProvider（/v1/embeddings）、EmbeddingService（降级）、MemoryEmbeddingWorker（@Async afterCommit）、MemorySearchSkill（FTS + pgvector RRF 混合检索）、MemoryDetailSkill（按需全文）、VectorUtils/SkillInputUtils 工具类提取；MemorySkill 移除 search action；Full Pipeline 审查修复：pgvector graceful degradation、afterCommit race fix、no-op sentinel bean、error sanitization、dimension validation | 2026-04-16 |
