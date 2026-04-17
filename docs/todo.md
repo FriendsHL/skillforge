@@ -20,15 +20,28 @@
 | N1-3 混合检索（memory_search Tool） | 拆出独立 Skill `MemorySearchSkill`：FTS 召回（`tsvector @@ plainto_tsquery`）+ pgvector 余弦检索（`ORDER BY embedding <=> :vec`）两路 Top-20，RRF 合并取 Top-K；仅返回 snippet（body 前 100 字）+ memoryId + score；provider 无 embedding 时退化为纯 FTS |
 | N1-4 按需全文（memory_detail Tool） | 新增 `MemoryDetailSkill`：按 memoryId 返回完整 body；Agent 先调 memory_search，按需再调 memory_detail，大幅降低每次检索 token 消耗                                                                                                              |
 
-#### N3 — 用户可配置 Lifecycle Hook
+#### N3 — 用户可配置 Lifecycle Hook（P0 已完成，P1/P2 待排期）
 
 > 参考：claude-mem（SessionStart / UserPromptSubmit / PostToolUse / Stop / SessionEnd 5 个节点）
+> 技术方案：`docs/design-n3-lifecycle-hooks.md`
+> **P0 已于 2026-04-17 完成（backend + frontend + 3 reviewer + judge + fix）**
 
-| 子任务             | 说明                                                                                                               |
-| --------------- | ---------------------------------------------------------------------------------------------------------------- |
-| N3-1 Hook 配置 DB | `t_agent_hook` 表：agentId、event（session_start / post_tool_use / session_end 等）、skillName、enabled；Flyway migration |
-| N3-2 引擎读取 Hook  | `AgentLoopEngine` 在 `LoopHook` 节点读取 DB 配置，自动触发对应 Skill（如 session_end → MemorySkill、post_tool_use → 飞书通知 Skill）   |
-| N3-3 前端配置 UI    | Agent 编辑页新增 "Hooks" 区域：每个事件节点可绑定一个已安装的 Skill                                                                     |
+| 子任务（P1）            | 说明                                                                      |
+| ------------------ | ----------------------------------------------------------------------- |
+| N3-P1-1 多 entry 链式 | 一个 event 可绑多个 handler；新增 `SKIP_CHAIN` failurePolicy                      |
+| N3-P1-2 前端多 entry UI | 每个 event Card 下列表 + 上移/下移                                              |
+| N3-P1-3 ScriptHandlerRunner | bash/node 子进程；白名单 lang；沙箱（`/tmp/sf-hook-<sessionId>/` + ulimit） |
+| N3-P1-4 前端 Script handler 启用 | 去掉 P1 置灰；lang 下拉 + code textarea                              |
+| N3-P1-5 UserPromptSubmit prompt enrichment | handler output 的 `injected_context` 注入 LoopContext.messages |
+| N3-P1-6 禁止 Skill 黑名单 | `application.yml: lifecycle.hooks.forbidden-skills`                 |
+
+| 子任务（P2）                  | 说明                                                                    |
+| ------------------------ | --------------------------------------------------------------------- |
+| N3-P2-1 MethodHandlerRunner | `BuiltInMethodRegistry`：`builtin.log.file` / `builtin.http.post` / `builtin.feishu.notify` |
+| N3-P2-2 前端 Method handler 启用 | 内置方法下拉 + args JSON 编辑器                                          |
+| N3-P2-3 dry-run 端点           | `POST /api/agents/{id}/hooks/test`                                |
+| N3-P2-4 Traces LIFECYCLE_HOOK 可视化 | span 过滤器                                                       |
+| N3-P2-5 Hook 触发历史面板        | 类似 PromptHistoryPanel                                            |
 
 ---
 
@@ -69,6 +82,7 @@
 
 | 任务                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | 完成日期       |
 | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| N3 P0 用户可配置 Lifecycle Hook：V9 migration + polymorphic HookHandler (skill/script/method 子类，P0 只实现 SkillHandlerRunner) + LifecycleHookDispatcher（hookDepth ThreadLocal 跨 worker 线程传播 + 独立 hookExecutor + timeout + failurePolicy CONTINUE/ABORT + LIFECYCLE_HOOK TraceSpan）+ SessionStart 插在 ChatService.chatAsync 首条消息处 / SessionEnd 异步在 loop 结束 + AgentLoopEngine ABORT 语义 (LoopContext.abortedByHook + HookAbortException) + REST `/api/lifecycle-hooks/events|presets` + 前端 3 模式编辑器（Preset/Form/JSON + Zod discriminatedUnion + useDebouncedCallback + formKey 解决 create→create 复用）+ AgentSchema 加 lifecycleHooks/behaviorRules 字段防 Zod strip + 25 测试全绿 + agent-browser e2e 验证通过；3 轮 reviewer (java/typescript/security) + judge 仲裁 + fix 两侧并行；技术方案：docs/design-n3-lifecycle-hooks.md | 2026-04-17 |
 | N2-1~N2-3 Agent 行为规范层：V8 Flyway migration（behaviorRules TEXT 列）、BehaviorRuleRegistry（15 条内置规则 JSON + 语言检测 + deprecated 链 + 预设模板）、BehaviorRuleDefinition record、SystemPromptBuilder 注入（Available Skills 之后 + 自定义规则 XML 沙箱 + prompt injection 防护）、AgentYamlMapper round-trip（corrupt data 防御）、REST API（GET /api/behavior-rules + /presets）、前端 BehaviorRulesEditor（模板选择器 + 分类折叠 + Switch + 自定义规则 CRUD）、useBehaviorRules Hook、AgentList.tsx RULES.md Tab 集成；技术方案：docs/design-n2-behavioral-rules.md | 2026-04-17 |
 | N1-1~N1-4 Memory 向量检索：V7 Flyway migration（pgvector + tsvector，graceful fallback）、EmbeddingProvider + OpenAiEmbeddingProvider（/v1/embeddings）、EmbeddingService（降级）、MemoryEmbeddingWorker（@Async afterCommit）、MemorySearchSkill（FTS + pgvector RRF 混合检索）、MemoryDetailSkill（按需全文）、VectorUtils/SkillInputUtils 工具类提取；MemorySkill 移除 search action；Full Pipeline 审查修复：pgvector graceful degradation、afterCommit race fix、no-op sentinel bean、error sanitization、dimension validation | 2026-04-16 |
 | P2-6 Session → Scenario 转换：LLM 批量分析历史 session → draft scenarios → `t_eval_scenario`（V5 migration）；ScenarioLoader 同时加载 DB active 记录；ScenarioDraftPanel Review UI（Approve/Edit/Discard）；ScenarioLoader 改造                                                                                                                                                                                                                                                                                                                                             | 2026-04-16 |

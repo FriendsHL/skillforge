@@ -13,7 +13,6 @@ import {
 } from '@ant-design/icons';
 import { RULE_TEMPLATES, CATEGORY_META, type RuleTemplateId } from '../constants/behaviorRules';
 import type { GroupedCategory } from '../hooks/useBehaviorRules';
-import type { BehaviorRule } from '../api';
 
 const { TextArea } = Input;
 

@@ -12,6 +12,10 @@ export const AgentSchema = z.object({
   executionMode: z.enum(['ask', 'auto']).optional(),
   skillIds: z.union([z.string(), z.array(z.string()), z.array(z.number())]).optional().nullable(),
   toolIds: z.union([z.string(), z.array(z.string())]).optional().nullable(),
+  // JSON-serialised config blobs persisted on AgentEntity — keep as string here,
+  // hooks (useBehaviorRules / useLifecycleHooks) parse them client-side.
+  behaviorRules: z.string().optional().nullable(),
+  lifecycleHooks: z.string().optional().nullable(),
 });
 export type AgentDto = z.infer<typeof AgentSchema>;
 

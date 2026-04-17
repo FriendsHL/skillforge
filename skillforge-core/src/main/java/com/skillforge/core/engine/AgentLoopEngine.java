@@ -181,11 +181,21 @@ public class AgentLoopEngine {
 
         // 2. 执行所有 LoopHook.beforeLoop()
         for (LoopHook hook : loopHooks) {
+            LoopContext prev = context;
             context = hook.beforeLoop(context);
             if (context == null) {
                 log.warn("LoopHook interrupted the loop before start");
-                return new LoopResult("Loop interrupted by hook", messages,
-                        0, 0, 0, Collections.emptyList());
+                // Check whether the hook set abortedByHook on the pre-hook context for richer reason.
+                boolean hookAbort = prev != null && prev.isAbortedByHook();
+                String reason = hookAbort ? prev.getAbortedByHookReason() : null;
+                String msg = hookAbort
+                        ? "[Aborted by lifecycle hook: " + (reason != null ? reason : "unspecified") + "]"
+                        : "Loop interrupted by hook";
+                LoopResult result = new LoopResult(msg, messages, 0, 0, 0, Collections.emptyList());
+                if (hookAbort) {
+                    result.setStatus("aborted_by_hook");
+                }
+                return result;
             }
         }
         // beforeLoop 可能修改了 messages

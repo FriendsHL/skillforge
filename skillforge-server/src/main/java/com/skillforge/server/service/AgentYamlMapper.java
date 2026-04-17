@@ -130,6 +130,21 @@ public class AgentYamlMapper {
             }
         }
 
+        // lifecycleHooks — same corrupt-defense pattern as behaviorRules
+        Object rawLifecycleHooks = m.get("lifecycleHooksRaw");
+        if (rawLifecycleHooks != null) {
+            a.setLifecycleHooks(rawLifecycleHooks.toString());
+        } else {
+            Object lhObj = m.get("lifecycleHooks");
+            if (lhObj instanceof Map) {
+                try {
+                    a.setLifecycleHooks(JSON.writeValueAsString(lhObj));
+                } catch (Exception e) {
+                    throw new IllegalArgumentException("Failed to serialize lifecycleHooks", e);
+                }
+            }
+        }
+
         Object configObj = m.get("config");
         if (configObj instanceof Map) {
             try {
@@ -207,6 +222,30 @@ public class AgentYamlMapper {
         }
         if (brCorrupt) {
             m.put("behaviorRulesRaw", brRawCorruptValue);
+        }
+
+        // lifecycleHooks — same corrupt-defense pattern
+        String lhJson = entity.getLifecycleHooks();
+        boolean lhCorrupt = false;
+        String lhRawCorruptValue = null;
+        if (lhJson != null && !lhJson.isBlank()) {
+            try {
+                JsonNode lhNode = JSON.readTree(lhJson);
+                if (lhNode != null && lhNode.isObject()) {
+                    m.put("lifecycleHooks", JSON.convertValue(lhNode, Map.class));
+                } else {
+                    lhCorrupt = true;
+                    lhRawCorruptValue = lhJson;
+                }
+            } catch (Exception e) {
+                log.warn("AgentYamlMapper: failed to parse lifecycleHooks, exporting as raw. agentId={}",
+                        entity.getId());
+                lhCorrupt = true;
+                lhRawCorruptValue = lhJson;
+            }
+        }
+        if (lhCorrupt) {
+            m.put("lifecycleHooksRaw", lhRawCorruptValue);
         }
 
         if (entity.getConfig() != null && !entity.getConfig().isBlank()) {

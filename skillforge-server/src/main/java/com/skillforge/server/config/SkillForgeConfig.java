@@ -8,8 +8,12 @@ import com.skillforge.core.compact.LightCompactStrategy;
 import com.skillforge.core.engine.AgentLoopEngine;
 import com.skillforge.core.engine.CancellationRegistry;
 import com.skillforge.core.engine.ChatEventBroadcaster;
+import com.skillforge.core.engine.LoopContext;
 import com.skillforge.core.engine.PendingAskRegistry;
 import com.skillforge.core.engine.SafetySkillHook;
+import com.skillforge.core.engine.hook.LifecycleHookDispatcher;
+import com.skillforge.server.hook.LifecycleHookLoopAdapter;
+import com.skillforge.server.hook.LifecycleHookSkillAdapter;
 import com.skillforge.core.llm.EmbeddingProvider;
 import com.skillforge.core.llm.LlmProviderFactory;
 import com.skillforge.core.llm.ModelConfig;
@@ -254,6 +258,33 @@ public class SkillForgeConfig {
         return new FullCompactStrategy();
     }
 
+    /**
+     * Resolver that maps sessionId → active AgentDefinition. Used by
+     * {@link LifecycleHookSkillAdapter} since the {@code SkillHook} contract does not pass
+     * the owning {@code LoopContext}. Reads from {@link CancellationRegistry} which holds the
+     * live {@code LoopContext} for every running loop.
+     */
+    @Bean
+    public LifecycleHookSkillAdapter.AgentDefinitionResolver lifecycleHookAgentDefResolver(
+            CancellationRegistry cancellationRegistry) {
+        return sessionId -> {
+            LoopContext ctx = cancellationRegistry.getContext(sessionId);
+            return ctx != null ? ctx.getAgentDefinition() : null;
+        };
+    }
+
+    @Bean
+    public LifecycleHookLoopAdapter lifecycleHookLoopAdapter(LifecycleHookDispatcher dispatcher) {
+        return new LifecycleHookLoopAdapter(dispatcher);
+    }
+
+    @Bean
+    public LifecycleHookSkillAdapter lifecycleHookSkillAdapter(
+            LifecycleHookDispatcher dispatcher,
+            LifecycleHookSkillAdapter.AgentDefinitionResolver resolver) {
+        return new LifecycleHookSkillAdapter(dispatcher, resolver);
+    }
+
     @Bean
     public AgentLoopEngine agentLoopEngine(LlmProviderFactory llmProviderFactory, LlmProperties llmProperties,
                                            SkillRegistry skillRegistry,
@@ -263,12 +294,15 @@ public class SkillForgeConfig {
                                            com.skillforge.core.engine.TraceCollector traceCollector,
                                            com.skillforge.server.context.EnvironmentContextProvider environmentContextProvider,
                                            com.skillforge.server.hook.ActivityLogHook activityLogHook,
+                                           LifecycleHookLoopAdapter lifecycleHookLoopAdapter,
+                                           LifecycleHookSkillAdapter lifecycleHookSkillAdapter,
                                            com.skillforge.server.service.MemoryService memoryService,
                            UserConfigService userConfigService) {
         String defaultProvider = llmProperties.getDefaultProvider() != null
                 ? llmProperties.getDefaultProvider() : "claude";
         AgentLoopEngine engine = new AgentLoopEngine(llmProviderFactory, defaultProvider, skillRegistry,
-                Collections.emptyList(), List.of(new SafetySkillHook(), activityLogHook),
+                List.of(lifecycleHookLoopAdapter),
+                List.of(new SafetySkillHook(), activityLogHook, lifecycleHookSkillAdapter),
                 List.of(environmentContextProvider));
         engine.setBroadcaster(broadcaster);
         engine.setPendingAskRegistry(pendingAskRegistry);

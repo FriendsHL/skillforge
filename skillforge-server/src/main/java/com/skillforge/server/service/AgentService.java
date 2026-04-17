@@ -2,8 +2,12 @@ package com.skillforge.server.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillforge.core.context.BehaviorRuleRegistry;
+import com.skillforge.core.engine.hook.HookEntry;
+import com.skillforge.core.engine.hook.HookEvent;
+import com.skillforge.core.engine.hook.LifecycleHooksConfig;
 import com.skillforge.core.model.AgentDefinition;
 import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.repository.AgentRepository;
@@ -13,6 +17,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 
@@ -20,6 +25,9 @@ import java.util.Map;
 public class AgentService {
 
     private static final Logger log = LoggerFactory.getLogger(AgentService.class);
+
+    /** Hard cap on lifecycle_hooks JSON payload size to prevent unbounded writes / memory blowups. */
+    private static final int LIFECYCLE_HOOKS_MAX_BYTES = 65_536;
 
     private final AgentRepository agentRepository;
     private final ObjectMapper objectMapper;
@@ -34,6 +42,7 @@ public class AgentService {
     }
 
     public AgentEntity createAgent(AgentEntity agent) {
+        validateLifecycleHooksSize(agent);
         return agentRepository.save(agent);
     }
 
@@ -41,6 +50,7 @@ public class AgentService {
     // to AgentEntity, you MUST add the corresponding setter here, or updates
     // will silently lose data.
     public AgentEntity updateAgent(Long id, AgentEntity updated) {
+        validateLifecycleHooksSize(updated);
         AgentEntity existing = agentRepository.findById(id)
                 .orElseThrow(() -> new RuntimeException("Agent not found: " + id));
         existing.setName(updated.getName());
@@ -53,6 +63,7 @@ public class AgentService {
         existing.setSoulPrompt(updated.getSoulPrompt());
         existing.setToolsPrompt(updated.getToolsPrompt());
         existing.setBehaviorRules(updated.getBehaviorRules());
+        existing.setLifecycleHooks(updated.getLifecycleHooks());
         existing.setOwnerId(updated.getOwnerId());
         existing.setPublic(updated.isPublic());
         existing.setStatus(updated.getStatus());
@@ -65,6 +76,15 @@ public class AgentService {
 
     public void deleteAgent(Long id) {
         agentRepository.deleteById(id);
+    }
+
+    private static void validateLifecycleHooksSize(AgentEntity agent) {
+        if (agent == null) return;
+        String hooks = agent.getLifecycleHooks();
+        if (hooks != null && hooks.length() > LIFECYCLE_HOOKS_MAX_BYTES) {
+            throw new IllegalArgumentException(
+                    "lifecycle_hooks payload exceeds " + LIFECYCLE_HOOKS_MAX_BYTES + " char limit");
+        }
     }
 
     public AgentEntity getAgent(Long id) {
@@ -154,6 +174,64 @@ public class AgentService {
             }
         }
 
+        // Parse lifecycleHooks JSON -> LifecycleHooksConfig.
+        // Two-tier defense:
+        //   - Outer try: top-level JSON must be valid; otherwise empty config.
+        //   - Inner per-entry parse: a single bad HookEntry only drops itself; other entries survive.
+        // Logs intentionally avoid the raw JSON payload to prevent leaking secrets in user-supplied hook configs.
+        if (entity.getLifecycleHooks() != null && !entity.getLifecycleHooks().isBlank()) {
+            def.setLifecycleHooks(parseLifecycleHooksLenient(entity));
+        }
+
         return def;
+    }
+
+    private LifecycleHooksConfig parseLifecycleHooksLenient(AgentEntity entity) {
+        JsonNode root;
+        try {
+            root = objectMapper.readTree(entity.getLifecycleHooks());
+        } catch (Exception e) {
+            log.warn("Failed to parse lifecycleHooks JSON for agent {}: {}",
+                    entity.getId(), e.getClass().getSimpleName());
+            return LifecycleHooksConfig.empty();
+        }
+        if (root == null || !root.isObject()) {
+            return LifecycleHooksConfig.empty();
+        }
+
+        LifecycleHooksConfig cfg = new LifecycleHooksConfig();
+        JsonNode versionNode = root.get("version");
+        if (versionNode != null && versionNode.isInt()) {
+            cfg.setVersion(versionNode.intValue());
+        }
+
+        JsonNode hooksNode = root.get("hooks");
+        if (hooksNode == null || !hooksNode.isObject()) {
+            return cfg;
+        }
+
+        Iterator<Map.Entry<String, JsonNode>> it = hooksNode.fields();
+        while (it.hasNext()) {
+            Map.Entry<String, JsonNode> ev = it.next();
+            String wireName = ev.getKey();
+            HookEvent event = HookEvent.fromWire(wireName);
+            if (event == null || ev.getValue() == null || !ev.getValue().isArray()) {
+                continue;
+            }
+            List<HookEntry> entries = new ArrayList<>();
+            for (JsonNode entryNode : ev.getValue()) {
+                try {
+                    HookEntry entry = objectMapper.treeToValue(entryNode, HookEntry.class);
+                    if (entry != null) entries.add(entry);
+                } catch (Exception entryErr) {
+                    log.warn("Skipping malformed lifecycle hook entry for agent {} event {}: {}",
+                            entity.getId(), wireName, entryErr.getClass().getSimpleName());
+                }
+            }
+            if (!entries.isEmpty()) {
+                cfg.putEntries(event, entries);
+            }
+        }
+        return cfg;
     }
 }

@@ -7,6 +7,7 @@ import com.skillforge.core.engine.CancellationRegistry;
 import com.skillforge.core.engine.ChatEventBroadcaster;
 import com.skillforge.core.engine.LoopContext;
 import com.skillforge.core.engine.LoopResult;
+import com.skillforge.core.engine.hook.LifecycleHookDispatcher;
 import com.skillforge.core.model.AgentDefinition;
 import com.skillforge.core.model.Message;
 import com.skillforge.core.model.SkillDefinition;
@@ -56,6 +57,7 @@ public class ChatService {
     private final CollabRunService collabRunService;
     private final ObjectMapper objectMapper;
     private final SessionDigestExtractor sessionDigestExtractor;
+    private final LifecycleHookDispatcher lifecycleHookDispatcher;
 
     public ChatService(AgentService agentService,
                        SessionService sessionService,
@@ -71,7 +73,8 @@ public class ChatService {
                        CollabRunRepository collabRunRepository,
                        CollabRunService collabRunService,
                        ObjectMapper objectMapper,
-                       SessionDigestExtractor sessionDigestExtractor) {
+                       SessionDigestExtractor sessionDigestExtractor,
+                       LifecycleHookDispatcher lifecycleHookDispatcher) {
         this.agentService = agentService;
         this.sessionService = sessionService;
         this.skillRegistry = skillRegistry;
@@ -87,6 +90,7 @@ public class ChatService {
         this.collabRunService = collabRunService;
         this.objectMapper = objectMapper;
         this.sessionDigestExtractor = sessionDigestExtractor;
+        this.lifecycleHookDispatcher = lifecycleHookDispatcher;
     }
 
     /**
@@ -168,8 +172,33 @@ public class ChatService {
             sessionService.saveSessionMessages(sessionId, historyWithUser);
 
             // 2.1 第一条 user message 时立即生成截断标题(同步,极快)
+            // 同时触发 SessionStart lifecycle hook（仅在首条消息时，非每轮）
             if (history.isEmpty()) {
                 sessionTitleService.applyImmediateTitle(sessionId, userMessage);
+                try {
+                    AgentDefinition sessionStartDef = agentService.toAgentDefinition(agentEntity);
+                    boolean keepGoing = lifecycleHookDispatcher.fireSessionStart(
+                            sessionStartDef, sessionId, userId);
+                    if (!keepGoing) {
+                        // ABORT: persist error state, broadcast, do not submit to executor.
+                        log.warn("SessionStart hook aborted session {}; refusing to start loop", sessionId);
+                        session = sessionService.getSession(sessionId);
+                        session.setRuntimeStatus("error");
+                        session.setRuntimeStep(null);
+                        session.setRuntimeError("Aborted by SessionStart hook");
+                        session.setCompletedAt(java.time.Instant.now());
+                        sessionService.saveSession(session);
+                        if (broadcaster != null) {
+                            broadcaster.sessionStatus(sessionId, "error", null,
+                                    "Aborted by SessionStart hook");
+                            broadcaster.userEvent(session.getUserId(),
+                                    sessionUpdatedPayload(session, historyWithUser.size()));
+                        }
+                        return;
+                    }
+                } catch (Exception e) {
+                    log.warn("SessionStart hook dispatch threw (session={}): {}", sessionId, e.toString());
+                }
             }
 
             // 3. 更新 runtime 状态 + 记录 lastUserMessageAt
@@ -328,6 +357,10 @@ public class ChatService {
             if (wasCancelled) {
                 finalStatus = "cancelled";
             }
+            boolean wasAbortedByHook = "aborted_by_hook".equals(result.getStatus());
+            if (wasAbortedByHook) {
+                finalStatus = "aborted_by_hook";
+            }
 
             // Drain any remaining queued messages that arrived after the loop ended,
             // then unregister from CancellationRegistry BEFORE saving messages.
@@ -362,16 +395,27 @@ public class ChatService {
             }
             modelUsageRepository.save(usage);
 
-            // 更新 session runtime 状态 = idle
+            // 更新 session runtime 状态 = idle / error
             // 取消退出也是 idle, 通过 step="cancelled" 标注, 避免引入新的 runtimeStatus 枚举值
+            // aborted_by_hook → error + message，视为用户显式拒绝的流程
             SessionEntity s = sessionService.getSession(sessionId);
             s.setCompletedAt(java.time.Instant.now());
-            s.setRuntimeStatus("idle");
-            s.setRuntimeStep(wasCancelled ? "cancelled" : null);
-            s.setRuntimeError(null);
+            if (wasAbortedByHook) {
+                s.setRuntimeStatus("error");
+                s.setRuntimeStep(null);
+                s.setRuntimeError(finalMessage != null ? finalMessage : "Aborted by lifecycle hook");
+            } else {
+                s.setRuntimeStatus("idle");
+                s.setRuntimeStep(wasCancelled ? "cancelled" : null);
+                s.setRuntimeError(null);
+            }
             sessionService.saveSession(s);
             if (broadcaster != null) {
-                broadcaster.sessionStatus(sessionId, "idle", wasCancelled ? "cancelled" : null, null);
+                if (wasAbortedByHook) {
+                    broadcaster.sessionStatus(sessionId, "error", null, s.getRuntimeError());
+                } else {
+                    broadcaster.sessionStatus(sessionId, "idle", wasCancelled ? "cancelled" : null, null);
+                }
                 broadcaster.userEvent(s.getUserId(), sessionUpdatedPayload(s, result.getMessages().size()));
             }
 
@@ -383,21 +427,44 @@ public class ChatService {
             // 异步触发记忆提取:不等待,失败不影响主流程
             sessionDigestExtractor.triggerExtractionAsync(sessionId);
 
+            // SessionEnd lifecycle hook (异步执行 via hookExecutor，本身不阻塞这里).
+            // reason: completed / cancelled / aborted_by_hook
+            // by-design: uses startup snapshot of agentDef to avoid reading stale DB state during session teardown
+            try {
+                String reasonStr = wasCancelled ? "cancelled"
+                        : wasAbortedByHook ? "aborted_by_hook" : "completed";
+                lifecycleHookDispatcher.fireSessionEnd(agentDef, sessionId, userId,
+                        finalCount, reasonStr);
+            } catch (Exception e) {
+                log.warn("SessionEnd hook dispatch threw (session={}): {}", sessionId, e.toString());
+            }
+
             log.info("Agent loop completed: sessionId={}", sessionId);
         } catch (Exception e) {
             log.error("Agent loop failed: sessionId={}", sessionId, e);
             finalStatus = "error";
-            finalMessage = e.getMessage();
+            // Generic, non-leaking message for client-facing surfaces.
+            // Full exception detail is captured in the server log above.
+            String safeError = "Agent loop failed";
+            finalMessage = safeError;
             try {
                 SessionEntity s = sessionService.getSession(sessionId);
                 s.setCompletedAt(java.time.Instant.now());
                 s.setRuntimeStatus("error");
                 s.setRuntimeStep(null);
-                s.setRuntimeError(e.getMessage());
+                s.setRuntimeError(safeError);
                 sessionService.saveSession(s);
                 if (broadcaster != null) {
-                    broadcaster.sessionStatus(sessionId, "error", null, e.getMessage());
+                    broadcaster.sessionStatus(sessionId, "error", null, safeError);
                     broadcaster.userEvent(s.getUserId(), sessionUpdatedPayload(s, s.getMessageCount()));
+                }
+                // SessionEnd hook on error path as well (reason=error)
+                try {
+                    AgentDefinition errDef = agentService.toAgentDefinition(agentEntity);
+                    lifecycleHookDispatcher.fireSessionEnd(errDef, sessionId, userId,
+                            s.getMessageCount(), "error");
+                } catch (Exception hookErr) {
+                    log.warn("SessionEnd hook dispatch on error path failed: {}", hookErr.toString());
                 }
             } catch (Exception inner) {
                 log.error("Failed to mark session error: sessionId={}", sessionId, inner);

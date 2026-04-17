@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, Popconfirm, Tag, Tabs, message, Card, Drawer } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, FileTextOutlined, HistoryOutlined, ExperimentOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -7,8 +7,10 @@ import { AgentSchema, safeParseList } from '../api/schemas';
 import PromptHistoryPanel from '../components/PromptHistoryPanel';
 import ScenarioDraftPanel from '../components/ScenarioDraftPanel';
 import BehaviorRulesEditor from '../components/BehaviorRulesEditor';
+import LifecycleHooksEditor, {
+  type LifecycleHooksEditorHandle,
+} from '../components/LifecycleHooksEditor';
 import { useBehaviorRules } from '../hooks/useBehaviorRules';
-import { DEFAULT_TEMPLATE } from '../constants/behaviorRules';
 
 const { TextArea } = Input;
 
@@ -52,6 +54,9 @@ const AgentList: React.FC = () => {
   const queryClient = useQueryClient();
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<any>(null);
+  // Bumped on every open so Modal (and the ref-tracked LifecycleHooksEditor inside)
+  // remounts on create→create cycles too, not just editing-id changes.
+  const [formKey, setFormKey] = useState(0);
   const [form] = Form.useForm();
   const executionMode = Form.useWatch('executionMode', form) ?? 'ask';
   const [claudeMdModalOpen, setClaudeMdModalOpen] = useState(false);
@@ -63,6 +68,13 @@ const AgentList: React.FC = () => {
     editing ? parseBehaviorRules(editing.behaviorRules) : null,
     executionMode,
   );
+
+  // N3 lifecycle hooks — raw JSON string round-trips via AgentEntity.lifecycleHooks.
+  // The editor owns its state and exposes live rawJson/errors via this ref so we
+  // can validate at Save-time without a render round-trip per keystroke.
+  const initialLifecycleHooks =
+    editing && typeof editing.lifecycleHooks === 'string' ? editing.lifecycleHooks : null;
+  const lifecycleHooksRef = useRef<LifecycleHooksEditorHandle>(null);
 
   const { data: agents = [], isLoading: loading, isError: agentsError } = useQuery({
     queryKey: ['agents'],
@@ -148,6 +160,7 @@ const AgentList: React.FC = () => {
     setEditing(null);
     form.resetFields();
     form.setFieldsValue({ executionMode: 'ask', skillIds: [], toolIds: [] });
+    setFormKey((k) => k + 1);
     setModalOpen(true);
   };
 
@@ -158,17 +171,28 @@ const AgentList: React.FC = () => {
       skillIds: parseSkillIds(record.skillIds),
       toolIds: parseSkillIds(record.toolIds),
     });
+    setFormKey((k) => k + 1);
     setModalOpen(true);
   };
 
   const handleOk = async () => {
     try {
       const values = await form.validateFields();
+
+      // Validate lifecycle hooks before save — block on errors (see doc §5.6).
+      const hooksState = lifecycleHooksRef.current;
+      const hooksErrors = hooksState?.errors ?? [];
+      if (hooksErrors.length > 0) {
+        message.error(`Fix lifecycle hooks config before saving: ${hooksErrors[0]}`);
+        return;
+      }
+
       const payload = {
         ...values,
         skillIds: JSON.stringify(values.skillIds ?? []),
         toolIds: JSON.stringify(values.toolIds ?? []),
         behaviorRules: JSON.stringify(behaviorRules.config),
+        lifecycleHooks: hooksState?.rawJson ?? '',
       };
       if (editing) {
         await updateMutation.mutateAsync({ id: editing.id, payload: { ...editing, ...payload } });
@@ -176,9 +200,11 @@ const AgentList: React.FC = () => {
         await createMutation.mutateAsync(payload);
       }
       setModalOpen(false);
-    } catch (e: any) {
-      if (e?.errorFields) return;
-      message.error('Save failed: ' + (e?.message ?? 'unknown'));
+    } catch (e: unknown) {
+      // antd Form.validateFields rejects with { errorFields, ... } — ignore, Form shows the errors inline.
+      if (typeof e === 'object' && e !== null && 'errorFields' in e) return;
+      const detail = e instanceof Error ? e.message : 'unknown';
+      message.error(`Save failed: ${detail}`);
     }
   };
 
@@ -283,6 +309,7 @@ const AgentList: React.FC = () => {
       </Card>
 
       <Modal
+        key={`${editing?.id ?? 'new'}-${formKey}`}
         title={editing ? 'Edit Agent' : 'Create Agent'}
         open={modalOpen}
         onOk={handleOk}
@@ -383,6 +410,20 @@ const AgentList: React.FC = () => {
                     <br />
                     <a href="/memories">Manage Memories &rarr;</a>
                   </div>
+                ),
+              },
+              {
+                key: 'hooks',
+                label: 'HOOKS.md',
+                children: (
+                  <LifecycleHooksEditor
+                    ref={lifecycleHooksRef}
+                    initialJson={initialLifecycleHooks}
+                    skills={skills.map((s: { name: string; description?: string }) => ({
+                      name: s.name,
+                      description: s.description,
+                    }))}
+                  />
                 ),
               },
             ]} />

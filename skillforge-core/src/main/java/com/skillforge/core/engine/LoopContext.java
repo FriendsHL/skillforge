@@ -67,6 +67,15 @@ public class LoopContext {
     /** Tool names this agent is allowed to use. Null = all tools allowed. */
     private Set<String> allowedToolNames;
 
+    /**
+     * Set by {@code LifecycleHookLoopAdapter} when a synchronous hook returns ABORT. The engine
+     * checks this flag at iteration boundaries and exits cleanly. Kept separate from
+     * {@link #cancelRequested} so observability can distinguish user-cancel vs. hook-abort.
+     */
+    private volatile boolean abortedByHook = false;
+    /** Optional human-readable reason set alongside {@link #abortedByHook}. */
+    private volatile String abortedByHookReason;
+
     public LoopContext() {
         this.messages = new ArrayList<>();
         this.maxLoops = 25;
@@ -343,5 +352,27 @@ public class LoopContext {
 
     public void setMaxLlmStreamTimeoutMs(long maxLlmStreamTimeoutMs) {
         this.maxLlmStreamTimeoutMs = maxLlmStreamTimeoutMs;
+    }
+
+    public boolean isAbortedByHook() {
+        return abortedByHook;
+    }
+
+    public void setAbortedByHook(boolean abortedByHook) {
+        this.abortedByHook = abortedByHook;
+    }
+
+    public String getAbortedByHookReason() {
+        return abortedByHookReason;
+    }
+
+    public void setAbortedByHookReason(String abortedByHookReason) {
+        this.abortedByHookReason = abortedByHookReason;
+    }
+
+    /** Mark this loop as aborted by a lifecycle hook with the given reason. */
+    public void markAbortedByHook(String reason) {
+        this.abortedByHook = true;
+        this.abortedByHookReason = reason;
     }
 }

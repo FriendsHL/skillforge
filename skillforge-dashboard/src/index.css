@@ -61,6 +61,12 @@
   --radius-md: 10px;
   --radius-lg: 18px;
   --radius-input: 24px;
+
+  /* Semantic status colors — shared across forms, banners, inline errors */
+  --color-warn: #b45309;
+  --color-error: #991b1b;
+  --color-error-bg: #fef2f2;
+  --color-error-border: #fecaca;
 }
 
 @media (max-width: 1024px) {
@@ -470,4 +476,256 @@ body {
 
 .sf-rules-custom-input {
   font-size: var(--font-size-sm) !important;
+}
+
+/* ── Lifecycle Hooks Editor ──────────────────────────────────────── */
+
+.sf-hooks-editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+.sf-hooks-mode-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-2) 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.sf-hooks-mode-bar-warn {
+  font-size: var(--font-size-xs);
+  color: var(--color-warn);
+  font-family: var(--font-mono);
+}
+
+.sf-hooks-mode-body {
+  min-height: 260px;
+}
+
+/* Preset mode — horizontal row of cards */
+.sf-hooks-preset-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: var(--sp-3);
+}
+
+.sf-hooks-preset-card {
+  border-radius: var(--radius-sm);
+  transition: transform var(--transition-base), box-shadow var(--transition-base),
+    border-color var(--transition-base);
+}
+
+.sf-hooks-preset-card:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-card-hover);
+  border-color: var(--accent-primary);
+}
+
+.sf-hooks-preset-title {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.sf-hooks-preset-desc {
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+  line-height: 1.5;
+  min-height: 48px;
+  margin: 0 0 var(--sp-2);
+}
+
+.sf-hooks-preset-meta {
+  display: flex;
+  gap: var(--sp-1);
+  margin-bottom: var(--sp-3);
+}
+
+/* Form mode — stacked event cards */
+.sf-hooks-form-grid {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.sf-hooks-form-error {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  background: var(--color-error-bg);
+  border: 1px solid var(--color-error-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-error);
+}
+
+.sf-hooks-field-error {
+  display: block;
+  margin-top: var(--sp-1);
+  font-size: var(--font-size-xs);
+}
+
+.sf-hooks-form-error-title {
+  font-weight: 500;
+  margin-bottom: var(--sp-2);
+}
+
+.sf-hooks-form-error-list {
+  margin: 0;
+  padding-left: 1.25rem;
+  font-size: var(--font-size-xs);
+  font-family: var(--font-mono);
+}
+
+.sf-hooks-event-card {
+  border-radius: var(--radius-sm);
+  transition: border-color var(--transition-base);
+}
+
+.sf-hooks-event-header {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.sf-hooks-event-title {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+}
+
+.sf-hooks-event-name {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--accent-primary);
+}
+
+.sf-hooks-event-display {
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+  font-weight: 400;
+}
+
+.sf-hooks-event-info {
+  color: var(--text-muted);
+  cursor: help;
+}
+
+.sf-hooks-event-desc {
+  font-size: var(--font-size-xs);
+  color: var(--text-muted);
+  line-height: 1.5;
+  margin-bottom: var(--sp-3);
+}
+
+.sf-hooks-event-empty {
+  font-size: var(--font-size-xs);
+  color: var(--text-muted);
+  font-style: italic;
+  padding: var(--sp-3) 0;
+}
+
+.sf-hooks-event-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  border-top: 1px dashed var(--border-subtle);
+  padding-top: var(--sp-3);
+}
+
+.sf-hooks-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  flex: 1;
+}
+
+.sf-hooks-field--inline {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.sf-hooks-field-row {
+  display: flex;
+  gap: var(--sp-3);
+}
+
+.sf-hooks-label {
+  font-size: var(--font-size-xs);
+  font-weight: 500;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.sf-hooks-hint {
+  font-size: var(--font-size-xs);
+  color: var(--text-muted);
+}
+
+.sf-hooks-coming-tag {
+  font-size: 10px;
+  margin-left: var(--sp-1);
+  padding: 0 var(--sp-1);
+  line-height: 1.4;
+}
+
+.sf-hooks-disabled-placeholder {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  background: var(--bg-sidebar);
+  border: 1px dashed var(--border-medium);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-xs);
+  color: var(--text-muted);
+}
+
+.sf-hooks-input-schema-tip {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.sf-hooks-input-schema-label {
+  font-weight: 600;
+  margin-bottom: var(--sp-1);
+}
+
+.sf-hooks-input-schema-row {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: 1px 0;
+}
+
+/* JSON mode */
+.sf-hooks-json-mode {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.sf-hooks-json-textarea {
+  background: var(--bg-sidebar) !important;
+  border-radius: var(--radius-sm) !important;
+  font-family: var(--font-mono) !important;
+  font-size: 13px !important;
+  line-height: 1.55 !important;
+}
+
+.sf-hooks-json-status {
+  border-radius: var(--radius-sm);
+}
+
+.sf-hooks-json-errors {
+  margin: 0;
+  padding-left: 1.25rem;
+  font-size: var(--font-size-xs);
 }

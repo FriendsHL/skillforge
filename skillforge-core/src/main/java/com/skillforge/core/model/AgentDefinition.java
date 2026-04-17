@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.skillforge.core.engine.hook.LifecycleHooksConfig;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -43,6 +44,15 @@ public class AgentDefinition {
     /** Resolved prompt texts from builtin rules, populated by server layer. Not serialized. */
     @JsonIgnore
     private List<String> resolvedBehaviorRules = new ArrayList<>();
+
+    /**
+     * Lifecycle hook configuration. Parsed from {@code t_agent.lifecycle_hooks} JSON column
+     * by {@code AgentService.toAgentDefinition}. The dispatcher consumes it directly.
+     * Not re-serialized (AgentDefinition is not the wire schema for lifecycle_hooks) — keep
+     * {@code @JsonIgnore} so the JSON payload stays stable.
+     */
+    @JsonIgnore
+    private LifecycleHooksConfig lifecycleHooks;
 
     /**
      * Structured behavior rules config parsed from the JSON storage column.
@@ -187,5 +197,13 @@ public class AgentDefinition {
 
     public void setResolvedBehaviorRules(List<String> resolvedBehaviorRules) {
         this.resolvedBehaviorRules = resolvedBehaviorRules != null ? resolvedBehaviorRules : new ArrayList<>();
+    }
+
+    public LifecycleHooksConfig getLifecycleHooks() {
+        return lifecycleHooks;
+    }
+
+    public void setLifecycleHooks(LifecycleHooksConfig lifecycleHooks) {
+        this.lifecycleHooks = lifecycleHooks;
     }
 }

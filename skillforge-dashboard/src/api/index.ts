@@ -166,6 +166,45 @@ export const getBehaviorRulesPreset = (executionMode: string) =>
     params: { executionMode },
   });
 
+// ─── Lifecycle Hooks (N3) ────────────────────────────────────────────────────
+
+export interface LifecycleHookEventDto {
+  id: string;
+  displayName: string;
+  description: string;
+  inputSchema: Record<string, string>;
+  canAbort: boolean;
+}
+
+export interface LifecycleHookPresetDto {
+  id: string;
+  name: string;
+  description: string;
+  /** Parsed config object (backend returns structured JSON, not a string). */
+  config: unknown;
+}
+
+interface LifecycleHookEventsEnvelope {
+  version: string;
+  events: LifecycleHookEventDto[];
+}
+
+interface LifecycleHookPresetsEnvelope {
+  version: string;
+  presets: LifecycleHookPresetDto[];
+}
+
+// Backend wraps list in {version, events|presets}; unwrap here so consumers get the array directly.
+export const getLifecycleHookEvents = () =>
+  api
+    .get<LifecycleHookEventsEnvelope>('/lifecycle-hooks/events')
+    .then((r) => ({ ...r, data: r.data?.events ?? [] }));
+
+export const getLifecycleHookPresets = () =>
+  api
+    .get<LifecycleHookPresetsEnvelope>('/lifecycle-hooks/presets')
+    .then((r) => ({ ...r, data: r.data?.presets ?? [] }));
+
 // ─── Scenario Drafts ─────────────────────────────────────────────────────────
 
 export interface EvalScenarioDraft {

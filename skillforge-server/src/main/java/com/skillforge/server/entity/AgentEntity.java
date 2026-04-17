@@ -54,6 +54,10 @@ public class AgentEntity {
     @Column(columnDefinition = "TEXT")
     private String behaviorRules;
 
+    /** JSON: {"version":1,"hooks":{"SessionStart":[...],...}} — see LifecycleHooksConfig */
+    @Column(columnDefinition = "TEXT")
+    private String lifecycleHooks;
+
     private Long ownerId;
 
     private boolean isPublic = false;
@@ -171,6 +175,14 @@ public class AgentEntity {
 
     public void setBehaviorRules(String behaviorRules) {
         this.behaviorRules = behaviorRules;
+    }
+
+    public String getLifecycleHooks() {
+        return lifecycleHooks;
+    }
+
+    public void setLifecycleHooks(String lifecycleHooks) {
+        this.lifecycleHooks = lifecycleHooks;
     }
 
     public Long getOwnerId() {
