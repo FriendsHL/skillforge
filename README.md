@@ -184,18 +184,24 @@ AGENT_LOOP (root)
 
 ### Prerequisites
 
-- JDK 17+
+- JDK 17 — must be the **active** JDK (`java -version` → 17). If `JAVA_HOME` points to JDK 8/11, Maven fails with `无效的标记: --release`.
 - Maven 3.8+
 - Node.js 18+ (for dashboard development)
 - An LLM API key (DeepSeek, DashScope/Bailian, OpenAI, Claude, etc.)
 
-### Build & Run
+```bash
+# Example (macOS, Temurin 17)
+export JAVA_HOME=/Library/Java/JavaVirtualMachines/temurin-17.jdk/Contents/Home
+export PATH=$JAVA_HOME/bin:$PATH
+```
+
+### Build & Run (production jar)
 
 ```bash
 # Set your API key
 export DASHSCOPE_API_KEY=sk-your-key-here
 
-# Build all modules
+# Build all modules — run from repo root, packages every sub-module in order
 mvn clean package -DskipTests
 
 # Start server (embedded PostgreSQL starts automatically)
@@ -205,12 +211,29 @@ java -jar skillforge-server/target/skillforge-server-1.0.0-SNAPSHOT.jar
 
 Server starts at `http://localhost:8080` with embedded PostgreSQL on port 15432.
 
+### Dev Mode (hot-reload with `spring-boot:run`)
+
+```bash
+# From repo root — FIRST install upstream modules into your local ~/.m2,
+# otherwise skillforge-server can't resolve skillforge-core / skillforge-skills
+mvn install -DskipTests
+
+# Then run server from the server module
+cd skillforge-server
+mvn spring-boot:run
+```
+
+> Running `mvn spring-boot:run` directly inside `skillforge-server` **without the
+> root `mvn install` step** will fail with `找不到符号: 类 BehaviorRuleRegistry`
+> (or similar) because the other modules haven't been published to your local
+> Maven repo yet. One-shot alternative: `mvn -pl skillforge-server -am spring-boot:run` from root.
+
 ### Dashboard Development
 
 ```bash
 cd skillforge-dashboard
 npm install
-npm run dev    # Vite dev server at http://localhost:5173, proxied to :8080
+npm run dev    # Vite dev server at http://localhost:3000, proxied to :8080
 ```
 
 ### Configuration

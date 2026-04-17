@@ -184,18 +184,24 @@ AGENT_LOOP（根节点）
 
 ### 前置条件
 
-- JDK 17+
+- JDK 17 —— 必须是**当前生效**的 JDK（`java -version` 显示 17）。如果 `JAVA_HOME` 指向 JDK 8/11，Maven 会报 `无效的标记: --release`。
 - Maven 3.8+
 - Node.js 18+（前端开发）
 - 一个 LLM API Key（DeepSeek、通义千问/百炼、OpenAI、Claude 等）
 
-### 构建运行
+```bash
+# macOS + Temurin 17 示例
+export JAVA_HOME=/Library/Java/JavaVirtualMachines/temurin-17.jdk/Contents/Home
+export PATH=$JAVA_HOME/bin:$PATH
+```
+
+### 构建运行（生产 jar 方式）
 
 ```bash
 # 设置 API Key
 export DASHSCOPE_API_KEY=sk-your-key-here
 
-# 构建所有模块
+# 构建所有模块 —— 必须在仓库根目录执行，按依赖顺序打包全部子模块
 mvn clean package -DskipTests
 
 # 启动服务（内嵌 PostgreSQL 自动启动）
@@ -205,12 +211,28 @@ java -jar skillforge-server/target/skillforge-server-1.0.0-SNAPSHOT.jar
 
 服务启动在 `http://localhost:8080`，内嵌 PostgreSQL 端口 15432。
 
+### 开发模式（`spring-boot:run` 热重载）
+
+```bash
+# 在仓库根目录 —— 先 install 把上游模块发到本地 ~/.m2，
+# 否则 skillforge-server 解析不到 skillforge-core / skillforge-skills
+mvn install -DskipTests
+
+# 然后在 server 子模块启动
+cd skillforge-server
+mvn spring-boot:run
+```
+
+> 直接进 `skillforge-server` 跑 `mvn spring-boot:run` 而**跳过根目录 `mvn install`**，
+> 会报 `找不到符号: 类 BehaviorRuleRegistry` 之类编译错误 —— 因为其他子模块还没发到本地仓库。
+> 一条命令等价写法：在根目录执行 `mvn -pl skillforge-server -am spring-boot:run`。
+
 ### 前端开发
 
 ```bash
 cd skillforge-dashboard
 npm install
-npm run dev    # Vite 开发服务器 http://localhost:5173，代理到 :8080
+npm run dev    # Vite 开发服务器 http://localhost:3000，代理到 :8080
 ```
 
 ### 配置
