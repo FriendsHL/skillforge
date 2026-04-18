@@ -3,6 +3,7 @@ import AppLayout from './components/Layout';
 import Dashboard from './pages/Dashboard';
 import AgentList from './pages/AgentList';
 import SkillList from './pages/SkillList';
+import ToolList from './pages/ToolList';
 import SessionList from './pages/SessionList';
 import Chat from './pages/Chat';
 import MemoryList from './pages/MemoryList';
@@ -32,6 +33,7 @@ function App() {
             <Route index element={<ErrorBoundary context="Dashboard"><Dashboard /></ErrorBoundary>} />
             <Route path="agents" element={<ErrorBoundary context="Agents"><AgentList /></ErrorBoundary>} />
             <Route path="skills" element={<ErrorBoundary context="Skills"><SkillList /></ErrorBoundary>} />
+            <Route path="tools" element={<ErrorBoundary context="Tools"><ToolList /></ErrorBoundary>} />
             <Route path="sessions" element={<ErrorBoundary context="Sessions"><SessionList /></ErrorBoundary>} />
             <Route path="memories" element={<ErrorBoundary context="Memories"><MemoryList /></ErrorBoundary>} />
             <Route path="usage" element={<ErrorBoundary context="Model Usage"><ModelUsage /></ErrorBoundary>} />

@@ -1,51 +1,56 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { type ToolCall } from './ToolCallTimeline';
+import MarkdownRenderer from './MarkdownRenderer';
+import { RoleAvatar } from './chat/primitives';
+import {
+  IconAttach,
+  IconCheck,
+  IconCompact,
+  IconMic,
+  IconSend,
+  IconTool,
+  IconX,
+} from './chat/ChatIcons';
 
 const formatTime = (date: Date): string =>
   date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-import { Spin, Input, Button, Alert } from 'antd';
-import { SendOutlined } from '@ant-design/icons';
-import ToolCallTimeline, { type ToolCall } from './ToolCallTimeline';
-import MarkdownRenderer from './MarkdownRenderer';
-import ActivityRail from './ActivityRail';
 
-/**
- * 节流版 MarkdownRenderer：每 200ms 刷新一次渲染，
- * 避免高频 delta 触发昂贵的 markdown 解析 + Prism 高亮。
- */
 const ThrottledMarkdown: React.FC<{ content: string }> = ({ content }) => {
   const [rendered, setRendered] = useState(content);
   const latestRef = useRef(content);
   latestRef.current = content;
 
   useEffect(() => {
-    // 定时刷新：每 200ms 把最新内容同步到渲染状态
-    const interval = setInterval(() => {
-      setRendered(latestRef.current);
-    }, 200);
+    const interval = setInterval(() => setRendered(latestRef.current), 200);
     return () => clearInterval(interval);
   }, []);
 
-  // content 首次有值时立即渲染（不等 200ms）
   useEffect(() => {
-    if (content && !rendered) {
-      setRendered(content);
-    }
+    if (content && !rendered) setRendered(content);
   }, [content, rendered]);
 
   return <MarkdownRenderer content={rendered} />;
 };
 
-/**
- * 输入框作为独立组件:自己持有 input state。
- * 这样打字时只有 ChatInput 自己重渲染,不会触发父级 ChatWindow 重新跑
- * messages.map → MarkdownRenderer,从根本上消除"打字卡顿"。
- */
 interface ChatInputProps {
   disabled?: boolean;
   onSend: (text: string) => void;
 }
 const ChatInput: React.FC<ChatInputProps> = React.memo(({ disabled, onSend }) => {
   const [input, setInput] = useState('');
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const autosize = useCallback(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+  }, []);
+
+  useEffect(() => {
+    autosize();
+  }, [input, autosize]);
+
   const handleSend = () => {
     const text = input.trim();
     if (!text) return;
@@ -53,46 +58,55 @@ const ChatInput: React.FC<ChatInputProps> = React.memo(({ disabled, onSend }) =>
     onSend(text);
   };
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    // Enter 发送，Shift+Enter 换行
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSend();
     }
   };
+
   return (
-    <div style={{ background: 'var(--bg-primary)', padding: '12px 16px 20px' }}>
-      <div
-        className="sf-chat-input"
-        style={{
-          display: 'flex',
-          alignItems: 'flex-end',
-          padding: '4px 4px 4px 16px',
-          gap: 8,
-        }}
-      >
-        <Input.TextArea
-          placeholder="Type your message... (Shift+Enter for newline)"
+    <div className="composer-wrap">
+      <div className="composer">
+        <div className="comp-left-tools">
+          <button type="button" className="comp-btn" title="Attach" aria-label="Attach">
+            <IconAttach s={14} />
+          </button>
+        </div>
+        <textarea
+          ref={textareaRef}
+          placeholder="Message the agent… (Shift+Enter for newline)"
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
           disabled={disabled}
-          variant="borderless"
-          autoSize={{ minRows: 1, maxRows: 6 }}
-          style={{ flex: 1, resize: 'none' }}
+          rows={1}
         />
-        <Button
-          className="sf-send-btn"
-          type="primary"
-          aria-label="Send message"
-          icon={<SendOutlined />}
+        <button type="button" className="comp-btn" title="Voice" aria-label="Voice">
+          <IconMic s={14} />
+        </button>
+        <button
+          type="button"
+          className="send-btn"
           onClick={handleSend}
           disabled={disabled || !input.trim()}
-          style={{ width: 32, height: 32, minWidth: 32, marginBottom: 4, borderRadius: 'var(--radius-sm)' }}
-        />
+          aria-label="Send"
+        >
+          <IconSend s={15} />
+        </button>
+      </div>
+      <div className="comp-foot">
+        <div className="tokens">
+          <span>⌘ SkillForge</span>
+        </div>
+        <div>
+          <span className="kbd">↵</span> send &nbsp;
+          <span className="kbd">⇧↵</span> newline
+        </div>
       </div>
     </div>
   );
 });
+ChatInput.displayName = 'ChatInput';
 
 export interface ChatMessage {
   role: 'user' | 'assistant';
@@ -121,6 +135,63 @@ interface ChatWindowProps {
   agentName?: string;
 }
 
+interface ToolCallRowProps {
+  tc: ToolCall;
+}
+const ToolCallRow: React.FC<ToolCallRowProps> = ({ tc }) => {
+  const [open, setOpen] = useState(false);
+  const ok = tc.status !== 'error';
+  const inputText =
+    typeof tc.input === 'string' ? tc.input : JSON.stringify(tc.input ?? {});
+  const outputText = tc.output;
+  const durMs = tc.duration;
+  const durStr =
+    typeof durMs === 'number'
+      ? durMs >= 1000
+        ? `${(durMs / 1000).toFixed(1)}s`
+        : `${durMs}ms`
+      : '';
+
+  return (
+    <>
+      <button
+        type="button"
+        className="tool-row"
+        onClick={() => setOpen((o) => !o)}
+        style={{ border: 0, background: 'transparent', font: 'inherit', color: 'inherit', width: '100%' }}
+      >
+        <span className="tool-icon">
+          <IconTool s={11} />
+        </span>
+        <span className="tool-name">{tc.name}</span>
+        <span className="tool-input">{inputText}</span>
+        {durStr && <span className="tool-dur">{durStr}</span>}
+        {ok ? (
+          <span className="tool-check"><IconCheck s={12} /></span>
+        ) : (
+          <span className="tool-err"><IconX s={12} /></span>
+        )}
+      </button>
+      {open && (
+        <div className="tool-expanded">
+          <div className="tool-section">
+            <div className="tool-section-label">input</div>
+            <pre>{inputText}</pre>
+          </div>
+          {outputText && (
+            <div className="tool-section">
+              <div className="tool-section-label">
+                output · {outputText.split('\n').length} lines
+              </div>
+              <pre>{outputText}</pre>
+            </div>
+          )}
+        </div>
+      )}
+    </>
+  );
+};
+
 const ChatWindow: React.FC<ChatWindowProps> = ({
   messages,
   loading,
@@ -130,18 +201,15 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
   streamingText,
   compactionNotice,
   onCompactionDismiss,
-  runtimeStatus,
   agentName,
 }) => {
+  const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  // 用 ref 透传最新的 onSend / disabled,这样 ChatInput 拿到的 props 引用稳定,
-  // React.memo 才能真正生效。
   const onSendRef = useRef(onSend);
   useEffect(() => { onSendRef.current = onSend; }, [onSend]);
   const stableOnSend = useCallback((text: string) => onSendRef.current(text), []);
 
-  // 强制每秒重渲染一次,用于刷新 inflight tool 的"已耗时 N s"
   const [, setTick] = useState(0);
   useEffect(() => {
     if (!inflightTools || Object.keys(inflightTools).length === 0) return;
@@ -149,11 +217,9 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
     return () => clearInterval(id);
   }, [inflightTools]);
 
-  // Smart scroll: only auto-scroll if user is near bottom (within 100px)
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const isNearBottom = useRef(true);
   const handleScroll = useCallback(() => {
-    const el = scrollContainerRef.current;
+    const el = scrollRef.current;
     if (!el) return;
     isNearBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100;
   }, []);
@@ -164,113 +230,61 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
   }, [messages, streamingText]);
 
   const inflightList = inflightTools ? Object.entries(inflightTools) : [];
+  const assistantName = agentName ?? 'Assistant';
 
   return (
-    <div className="sf-chat-surface">
-      <div className="sf-chat-center">
-      <div ref={scrollContainerRef} onScroll={handleScroll} style={{ flex: 1, overflowY: 'auto', padding: 16 }}>
-        <div style={{ maxWidth: 740, margin: '0 auto', padding: '0 16px' }}>
+    <>
+      <div className="scroll" ref={scrollRef} onScroll={handleScroll}>
+        <div className="thread">
           {compactionNotice && (
-            <div role="status">
-              <Alert
-                type="info"
-                closable
-                message="Context was compacted to save tokens. Earlier messages may be summarized."
-                afterClose={onCompactionDismiss}
-                style={{ marginBottom: 12 }}
-              />
+            <div className="compact-notice" role="status">
+              <IconCompact s={12} />
+              Context was compacted to save tokens. Earlier messages may be summarized.
+              {onCompactionDismiss && (
+                <button
+                  type="button"
+                  className="x-btn"
+                  onClick={onCompactionDismiss}
+                  aria-label="Dismiss"
+                >
+                  <IconX s={12} />
+                </button>
+              )}
             </div>
           )}
-          {messages.map((msg, idx) => (
-            <div key={msg.id ?? `${msg.role}-${idx}`} style={{ marginBottom: 16 }}>
-              {msg.role === 'assistant' && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
-                  <div
-                    style={{
-                      width: 20,
-                      height: 20,
-                      borderRadius: '50%',
-                      background: 'var(--accent-primary)',
-                      color: 'var(--text-on-accent)',
-                      fontSize: 9,
-                      fontWeight: 700,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                    }}
-                  >
-                    SF
-                  </div>
-                  <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Assistant</span>
+          {messages.map((msg, idx) => {
+            const isUser = msg.role === 'user';
+            return (
+              <div key={msg.id ?? `${msg.role}-${idx}`} className={`msg ${msg.role}`}>
+                <div className="msg-head">
+                  <RoleAvatar role={isUser ? 'user' : 'assistant'} />
+                  <span className="msg-name">{isUser ? 'You' : assistantName}</span>
+                  <span className="msg-time">
+                    {msg.timestamp ? formatTime(new Date(msg.timestamp)) : ''}
+                  </span>
                 </div>
-              )}
-              <div
-                style={{
-                  ...(msg.role === 'user'
-                    ? {
-                        maxWidth: '68%',
-                        marginLeft: 'auto',
-                        background: 'var(--bg-user-msg)',
-                        border: '1px solid var(--border-subtle)',
-                        borderRadius: '18px 18px 4px 18px',
-                        padding: '10px 14px',
-                        color: 'var(--text-primary)',
-                        fontSize: 15,
-                        whiteSpace: 'pre-wrap' as const,
-                        wordBreak: 'break-word' as const,
-                      }
-                    : {
-                        fontSize: 15,
-                        lineHeight: 1.7,
-                        wordBreak: 'break-word' as const,
-                      }),
-                }}
-              >
-                {msg.role === 'assistant' ? (
-                  <MarkdownRenderer content={msg.content} />
-                ) : (
-                  msg.content
-                )}
-                {msg.role === 'assistant' && msg.toolCalls && msg.toolCalls.length > 0 && (
-                  <ToolCallTimeline toolCalls={msg.toolCalls} />
-                )}
+                <div className="msg-body">
+                  {isUser ? msg.content : <MarkdownRenderer content={msg.content} />}
+                  {!isUser && msg.toolCalls && msg.toolCalls.length > 0 && (
+                    <div className="tool-calls">
+                      {msg.toolCalls.map((tc, i) => (
+                        <ToolCallRow key={tc.id ?? i} tc={tc} />
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
-              <div
-                style={{
-                  fontSize: 11,
-                  color: 'var(--text-muted)',
-                  marginTop: 3,
-                  textAlign: msg.role === 'user' ? 'right' : 'left',
-                }}
-              >
-                {msg.timestamp ? formatTime(new Date(msg.timestamp)) : ''}
-              </div>
-            </div>
-          ))}
+            );
+          })}
           {streamingText && streamingText.length > 0 && (
-            <div style={{ marginBottom: 16 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
-                <div
-                  style={{
-                    width: 20,
-                    height: 20,
-                    borderRadius: '50%',
-                    background: 'var(--accent-primary)',
-                    color: 'var(--text-on-accent)',
-                    fontSize: 9,
-                    fontWeight: 700,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                  }}
-                >
-                  SF
-                </div>
-                <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Assistant</span>
+            <div className="msg assistant">
+              <div className="msg-head">
+                <RoleAvatar role="assistant" />
+                <span className="msg-name">{assistantName}</span>
               </div>
-              <div style={{ fontSize: 15, lineHeight: 1.7, wordBreak: 'break-word' }}>
+              <div className="msg-body">
                 <ThrottledMarkdown content={streamingText} />
-                <span style={{ color: 'var(--text-muted)', fontSize: 12, marginLeft: 4 }}>▍</span>
+                <span style={{ color: 'var(--fg-4)', fontSize: 12, marginLeft: 4 }}>▍</span>
               </div>
             </div>
           )}
@@ -278,54 +292,31 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
             const elapsed = Math.max(0, Math.floor((Date.now() - info.startTs) / 1000));
             let inputPreview = '';
             try {
-              inputPreview = typeof info.input === 'string' ? info.input : JSON.stringify(info.input);
+              inputPreview =
+                typeof info.input === 'string' ? info.input : JSON.stringify(info.input);
             } catch {
               inputPreview = '';
             }
-            if (inputPreview.length > 120) inputPreview = inputPreview.slice(0, 120) + '...';
+            if (inputPreview.length > 120) inputPreview = inputPreview.slice(0, 120) + '…';
             return (
-              <div
-                key={toolUseId}
-                className="sf-tool-row"
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 10,
-                  margin: '0 0 12px 0',
-                  padding: '10px 14px',
-                  borderRadius: 'var(--radius-md)',
-                  background: 'var(--bg-assistant-structured)',
-                  border: '1px solid var(--border-subtle)',
-                  fontSize: 13,
-                  color: 'var(--text-secondary)',
-                }}
-              >
-                <Spin size="small" />
-                <span style={{ fontWeight: 500, color: 'var(--text-primary)' }}>{info.name}</span>
-                <span style={{ color: 'var(--text-muted)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {inputPreview}
-                </span>
-                <span style={{ color: 'var(--text-muted)' }}>{elapsed}s</span>
+              <div key={toolUseId} className="inflight">
+                <span className="spinner" />
+                <span className="inflight-name">{info.name}</span>
+                <span className="inflight-input">{inputPreview}</span>
+                <span className="inflight-time">{elapsed}s</span>
               </div>
             );
           })}
           {loading && !streamingText && inflightList.length === 0 && (
-            <div style={{ textAlign: 'center', padding: 16 }}>
-              <Spin tip="AI is thinking..." />
+            <div style={{ textAlign: 'center', padding: 16, color: 'var(--fg-3)', fontSize: 13 }}>
+              Agent is thinking…
             </div>
           )}
           <div ref={bottomRef} />
         </div>
       </div>
-      <div className="sf-composer-fade" aria-hidden="true" />
       <ChatInput disabled={inputDisabled} onSend={stableOnSend} />
-      </div>
-      <ActivityRail
-        inflightTools={inflightTools ?? {}}
-        runtimeStatus={runtimeStatus ?? 'idle'}
-        agentName={agentName}
-      />
-    </div>
+    </>
   );
 };
 

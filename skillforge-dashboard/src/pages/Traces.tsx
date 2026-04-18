@@ -1,411 +1,412 @@
-import React, { useMemo, useState } from 'react';
-import { useDebounce } from '../hooks/useDebounce';
-import { Card, Table, Tag, Typography, Space, Collapse, Tooltip, Empty, Spin, Input, Select } from 'antd';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import {
-  ClockCircleOutlined,
-  CheckCircleOutlined,
-  CloseCircleOutlined,
-  RobotOutlined,
-  ToolOutlined,
-  ApiOutlined,
-  QuestionCircleOutlined,
-  CompressOutlined,
-  ThunderboltOutlined,
-  SearchOutlined,
-  FilterOutlined,
-} from '@ant-design/icons';
 import { getTraces, getTraceSpans, extractList } from '../api';
+import '../components/traces/traces.css';
+import '../components/skills/skills.css';
 
-const { Text } = Typography;
-
-interface TraceItem {
-  traceId: string;
-  sessionId: string;
-  name: string;
-  input: string;
-  output: string;
-  startTime: string;
-  endTime: string;
-  durationMs: number;
-  inputTokens: number;
-  outputTokens: number;
-  modelId: string;
-  success: boolean;
-  error: string | null;
-  llmCallCount: number;
-  toolCallCount: number;
-}
-
-interface SpanItem {
+interface TraceRun {
   id: string;
-  sessionId: string;
-  parentSpanId: string | null;
-  spanType: string;
   name: string;
+  title: string;
+  session: string;
+  agent: string;
+  status: 'ok' | 'error';
+  totalMs: number;
+  tokensIn: number;
+  tokensOut: number;
+  cost: number;
+  model: string;
+  llmCalls: number;
+  toolCalls: number;
+  at: string;
+}
+
+interface Span {
+  id: string;
+  kind: string;
+  name: string;
+  parent: string | null;
+  start: number;
+  dur: number;
+  ok: boolean;
   input: string;
   output: string;
-  startTime: string;
-  endTime: string;
-  durationMs: number;
-  iterationIndex: number;
-  inputTokens: number;
-  outputTokens: number;
-  modelId: string;
-  success: boolean;
   error: string | null;
+  tokensIn: number;
+  tokensOut: number;
+  model: string;
 }
 
-function formatDuration(ms: number): string {
-  if (ms >= 60000) return `${(ms / 60000).toFixed(1)}m`;
-  if (ms >= 1000) return `${(ms / 1000).toFixed(1)}s`;
-  return `${ms}ms`;
+function normalizeRun(raw: Record<string, unknown>): TraceRun {
+  const tokensIn = Number(raw.inputTokens || 0);
+  const tokensOut = Number(raw.outputTokens || 0);
+  const inputStr = String(raw.input || '');
+  const title = inputStr.length > 50 ? inputStr.slice(0, 50) + '…' : inputStr;
+  return {
+    id: String(raw.traceId || ''),
+    name: String(raw.name || 'Agent loop'),
+    title: title || String(raw.name || 'Agent loop'),
+    session: String(raw.sessionId || '').slice(0, 12),
+    agent: String(raw.agentName || raw.name || 'agent'),
+    status: raw.success === false ? 'error' : 'ok',
+    totalMs: Number(raw.durationMs || 0),
+    tokensIn,
+    tokensOut,
+    cost: (tokensIn * 3 + tokensOut * 15) / 1_000_000,
+    model: String(raw.modelId || '—'),
+    llmCalls: Number(raw.llmCallCount || 0),
+    toolCalls: Number(raw.toolCallCount || 0),
+    at: fmtTime(String(raw.startTime || '')),
+  };
 }
 
-function formatTokens(input: number, output: number): string {
-  const total = input + output;
-  if (total >= 1000) return `${(total / 1000).toFixed(1)}k`;
-  return `${total}`;
+function spanKind(spanType: string): string {
+  if (spanType === 'LLM_CALL') return 'llm';
+  if (spanType === 'TOOL_CALL') return 'tool';
+  return 'agent';
 }
 
-function formatTime(iso: string): string {
-  if (!iso) return '-';
+function normalizeSpan(raw: Record<string, unknown>, rootStartMs: number): Span {
+  const startMs = raw.startTime ? new Date(String(raw.startTime)).getTime() : 0;
+  return {
+    id: String(raw.id || ''),
+    kind: spanKind(String(raw.spanType || '')),
+    name: String(raw.name || ''),
+    parent: (raw.parentSpanId as string) || null,
+    start: Math.max(0, startMs - rootStartMs),
+    dur: Number(raw.durationMs || 0),
+    ok: raw.success !== false,
+    input: String(raw.input || ''),
+    output: String(raw.output || ''),
+    error: (raw.error as string) || null,
+    tokensIn: Number(raw.inputTokens || 0),
+    tokensOut: Number(raw.outputTokens || 0),
+    model: String(raw.modelId || ''),
+  };
+}
+
+function fmtMs(ms: number): string {
+  if (ms < 1000) return ms + 'ms';
+  if (ms < 60000) return (ms / 1000).toFixed(2) + 's';
+  return (ms / 60000).toFixed(1) + 'm';
+}
+
+function fmtTime(iso: string): string {
+  if (!iso) return '—';
   const d = new Date(iso);
-  return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  const now = Date.now();
+  const diff = now - d.getTime();
+  if (diff < 60000) return 'just now';
+  if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
+  if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
-
-function formatDateTime(iso: string): string {
-  if (!iso) return '-';
-  const d = new Date(iso);
-  return d.toLocaleString('en-US', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
-}
-
-const spanTypeConfig: Record<string, { color: string; icon: React.ReactNode; label: string; barColor: string }> = {
-  AGENT_LOOP: { color: 'blue', icon: <ThunderboltOutlined />, label: 'Agent Loop', barColor: 'var(--accent-primary)' },
-  LLM_CALL: { color: 'purple', icon: <RobotOutlined />, label: 'LLM Call', barColor: 'var(--op-thinking)' },
-  TOOL_CALL: { color: 'green', icon: <ToolOutlined />, label: 'Tool Call', barColor: 'var(--op-execute)' },
-  ASK_USER: { color: 'orange', icon: <QuestionCircleOutlined />, label: 'Ask User', barColor: 'var(--color-warning)' },
-  COMPACT: { color: 'cyan', icon: <CompressOutlined />, label: 'Compact', barColor: 'var(--op-read)' },
-  LIFECYCLE_HOOK: { color: 'magenta', icon: <ApiOutlined />, label: 'Lifecycle Hook', barColor: 'var(--op-write)' },
-};
-
-const SPAN_TYPE_FILTER_OPTIONS = Object.entries(spanTypeConfig).map(([key, cfg]) => ({
-  label: cfg.label,
-  value: key,
-}));
-
-const SpanWaterfall: React.FC<{
-  spans: SpanItem[];
-  rootDurationMs: number;
-  rootStartMs: number;
-  spanTypeFilter: string[];
-}> = ({
-  spans,
-  rootDurationMs,
-  rootStartMs,
-  spanTypeFilter,
-}) => {
-  const filtered = spanTypeFilter.length > 0
-    ? spans.filter((s) => spanTypeFilter.includes(s.spanType))
-    : spans;
-  if (filtered.length === 0) return <Empty description="No spans" />;
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-      {filtered.map((span) => {
-        const cfg = spanTypeConfig[span.spanType] ?? { color: 'default', icon: null, label: span.spanType, barColor: 'var(--color-success)' };
-        const spanStartMs = new Date(span.startTime).getTime();
-        const offsetPct = rootDurationMs > 0 ? ((spanStartMs - rootStartMs) / rootDurationMs) * 100 : 0;
-        const widthPct = rootDurationMs > 0 ? (span.durationMs / rootDurationMs) * 100 : 100;
-
-        const collapseItems = [];
-        if (span.input) {
-          collapseItems.push({
-            key: 'input',
-            label: <Text type="secondary" style={{ fontSize: 11 }}>Input</Text>,
-            children: (
-              <div style={{ maxHeight: 200, overflowY: 'auto' }}>
-                <pre style={{ fontSize: 11, margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                  {span.input}
-                </pre>
-              </div>
-            ),
-          });
-        }
-        if (span.output) {
-          collapseItems.push({
-            key: 'output',
-            label: <Text type="secondary" style={{ fontSize: 11 }}>Output</Text>,
-            children: (
-              <div style={{ maxHeight: 200, overflowY: 'auto' }}>
-                <pre style={{ fontSize: 11, margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                  {span.output}
-                </pre>
-              </div>
-            ),
-          });
-        }
-
-        return (
-          <div key={span.id} style={{ borderBottom: '1px solid var(--border-subtle)', padding: '6px 0' }}>
-            {/* Header row */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-              <Tag color={cfg.color} icon={cfg.icon} style={{ margin: 0, fontSize: 11 }}>
-                {cfg.label}
-              </Tag>
-              <Text strong style={{ fontSize: 12 }}>{span.name}</Text>
-              {span.success ? (
-                <CheckCircleOutlined style={{ color: 'var(--color-success)', fontSize: 11 }} />
-              ) : (
-                <CloseCircleOutlined style={{ color: 'var(--color-error)', fontSize: 11 }} />
-              )}
-              <Tooltip title={`${span.durationMs}ms`}>
-                <Tag icon={<ClockCircleOutlined />} style={{ margin: 0, fontSize: 10 }}>
-                  {formatDuration(span.durationMs)}
-                </Tag>
-              </Tooltip>
-              {(span.inputTokens > 0 || span.outputTokens > 0) && (
-                <Tag style={{ margin: 0, fontSize: 10 }}>
-                  {formatTokens(span.inputTokens, span.outputTokens)} tok
-                </Tag>
-              )}
-              <Text type="secondary" style={{ fontSize: 10, marginLeft: 'auto' }}>
-                iter {span.iterationIndex} &middot; {formatTime(span.startTime)}
-              </Text>
-            </div>
-
-            {/* Waterfall bar */}
-            <div style={{ height: 8, background: 'var(--bg-hover)', borderRadius: 4, position: 'relative', marginBottom: 4 }}>
-              <Tooltip title={`${formatDuration(span.durationMs)} (${widthPct.toFixed(1)}%)`}>
-                <div
-                  style={{
-                    position: 'absolute',
-                    left: `${Math.min(offsetPct, 99)}%`,
-                    width: `${Math.max(widthPct, 0.5)}%`,
-                    height: '100%',
-                    borderRadius: 4,
-                    background: span.success ? cfg.barColor : 'var(--color-error)',
-                    opacity: 0.8,
-                  }}
-                />
-              </Tooltip>
-            </div>
-
-            {/* Error */}
-            {span.error && (
-              <Text type="danger" style={{ fontSize: 11 }}>Error: {span.error}</Text>
-            )}
-
-            {/* Collapsible I/O */}
-            {collapseItems.length > 0 && (
-              <Collapse size="small" ghost items={collapseItems} />
-            )}
-          </div>
-        );
-      })}
-    </div>
-  );
-};
 
 const Traces: React.FC = () => {
-  const [selectedTraceId, setSelectedTraceId] = useState<string | null>(null);
-  const [sessionFilter, setSessionFilter] = useState<string>('');
-  const [spanTypeFilter, setSpanTypeFilter] = useState<string[]>([]);
-  // Debounce filter input — prevents a new API call on every keystroke.
-  const debouncedFilter = useDebounce(sessionFilter.trim(), 300);
+  const [q, setQ] = useState('');
+  const [statusFilter, setStatusFilter] = useState<string | null>(null);
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [selectedSpanId, setSelectedSpanId] = useState<string | null>(null);
 
-  const { data: traces = [], isLoading: loading, isError: tracesError } = useQuery({
-    queryKey: ['traces', debouncedFilter || null],
-    queryFn: () =>
-      getTraces(debouncedFilter || undefined)
-        .then((res) => extractList<TraceItem>(res)),
+  const { data: rawTraces = [] } = useQuery({
+    queryKey: ['traces'],
+    queryFn: () => getTraces().then(res => extractList<Record<string, unknown>>(res)),
   });
 
-  const spansQuery = useQuery({
-    queryKey: ['trace-spans', selectedTraceId],
-    queryFn: () =>
-      getTraceSpans(selectedTraceId as string).then((res) => ({
-        root: (res.data.root ?? null) as SpanItem | null,
-        spans: (Array.isArray(res.data.spans) ? res.data.spans : []) as SpanItem[],
-      })),
-    enabled: !!selectedTraceId,
+  const runs = useMemo<TraceRun[]>(() => rawTraces.map(normalizeRun), [rawTraces]);
+
+  const filteredRuns = useMemo(() => {
+    return runs.filter(r => {
+      if (q && !`${r.name} ${r.session} ${r.agent} ${r.model}`.toLowerCase().includes(q.toLowerCase())) return false;
+      if (statusFilter === 'ok' && r.status !== 'ok') return false;
+      if (statusFilter === 'error' && r.status === 'ok') return false;
+      return true;
+    });
+  }, [runs, q, statusFilter]);
+
+  const selectedRun = filteredRuns.find(r => r.id === selectedRunId) || filteredRuns[0] || null;
+  const activeRunId = selectedRun?.id || null;
+
+  // Fetch spans for selected run
+  const { data: spansData } = useQuery({
+    queryKey: ['trace-spans', activeRunId],
+    queryFn: () => getTraceSpans(activeRunId!).then(res => res.data),
+    enabled: !!activeRunId,
   });
-  const spans = spansQuery.data?.spans ?? [];
-  const rootSpan = spansQuery.data?.root ?? null;
-  const spansLoading = spansQuery.isLoading && !!selectedTraceId;
 
-  const handleSelectTrace = (traceId: string) => setSelectedTraceId(traceId);
+  const spans = useMemo<Span[]>(() => {
+    if (!spansData) return [];
+    const root = spansData.root as Record<string, unknown> | null;
+    const rootStart = root?.startTime ? new Date(String(root.startTime)).getTime() : 0;
+    const rawSpans = Array.isArray(spansData.spans) ? spansData.spans : [];
+    const all: Span[] = [];
+    if (root) all.push(normalizeSpan(root, rootStart));
+    rawSpans.forEach((s: Record<string, unknown>) => all.push(normalizeSpan(s, rootStart)));
+    return all;
+  }, [spansData]);
 
-  const maxDurationMs = useMemo(
-    () => traces.reduce((m, t) => Math.max(m, t.durationMs), 1),
-    [traces],
-  );
+  const selectedSpan = spans.find(s => s.id === selectedSpanId) || spans[0] || null;
 
-  const columns = [
-    {
-      title: 'Time',
-      dataIndex: 'startTime',
-      width: 100,
-      render: (v: string) => <Text style={{ fontSize: 11 }}>{formatDateTime(v)}</Text>,
-    },
-    {
-      title: 'Agent',
-      dataIndex: 'name',
-      width: 130,
-      ellipsis: true,
-    },
-    {
-      title: 'Input',
-      dataIndex: 'input',
-      width: 200,
-      ellipsis: true,
-      render: (v: string) => <Text style={{ fontSize: 12 }}>{v}</Text>,
-    },
-    {
-      title: 'LLM',
-      dataIndex: 'llmCallCount',
-      width: 55,
-      align: 'center' as const,
-      render: (v: number) => <Tag color="purple" style={{ margin: 0 }}>{v}</Tag>,
-    },
-    {
-      title: 'Tools',
-      dataIndex: 'toolCallCount',
-      width: 55,
-      align: 'center' as const,
-      render: (v: number) => <Tag color="green" style={{ margin: 0 }}>{v}</Tag>,
-    },
-    {
-      title: 'Duration',
-      dataIndex: 'durationMs',
-      width: 100,
-      render: (v: number) => (
-        <div>
-          <Tag icon={<ClockCircleOutlined />} color={v > 30000 ? 'orange' : 'default'} style={{ margin: 0 }}>
-            {formatDuration(v)}
-          </Tag>
-          <div style={{ height: 3, background: 'var(--bg-hover)', borderRadius: 2, marginTop: 4 }}>
-            <div
-              style={{
-                height: '100%',
-                width: `${Math.min((v / maxDurationMs) * 100, 100)}%`,
-                background: 'var(--accent-primary)',
-                borderRadius: 2,
-              }}
-            />
-          </div>
-        </div>
-      ),
-    },
-    {
-      title: 'Tokens',
-      width: 80,
-      render: (_: any, r: TraceItem) => (
-        <Text style={{ fontSize: 11 }}>{formatTokens(r.inputTokens, r.outputTokens)}</Text>
-      ),
-    },
-    {
-      title: 'Status',
-      dataIndex: 'success',
-      width: 60,
-      align: 'center' as const,
-      render: (v: boolean) =>
-        v ? <CheckCircleOutlined style={{ color: 'var(--color-success)' }} /> : <CloseCircleOutlined style={{ color: 'var(--color-error)' }} />,
-    },
-  ];
+  const toggleStatus = (v: string) => setStatusFilter(s => s === v ? null : v);
 
   return (
-    <div style={{ display: 'flex', height: '100%', gap: 16, overflow: 'hidden' }}>
-      {/* Left: trace list */}
-      <Card
-        title="Traces"
-        extra={
-          <Space>
-            <Select
-              mode="multiple"
-              placeholder={<><FilterOutlined /> Span types</>}
-              options={SPAN_TYPE_FILTER_OPTIONS}
-              value={spanTypeFilter}
-              onChange={setSpanTypeFilter}
-              size="small"
-              style={{ minWidth: 180 }}
-              maxTagCount={2}
-              allowClear
-            />
-            <Input
-              placeholder="Filter by Session ID"
-              prefix={<SearchOutlined />}
-              size="small"
-              style={{ width: 200 }}
-              allowClear
-              onChange={(e) => setSessionFilter(e.target.value)}
-            />
-          </Space>
-        }
-        style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
-        styles={{ body: { flex: 1, padding: 0, overflow: 'auto' } }}
-      >
-        <Table
-          size="small"
-          rowKey="traceId"
-          dataSource={traces}
-          columns={columns}
-          loading={loading}
-          virtual
-          scroll={{ y: 500 }}
-          pagination={false}
-          onRow={(record) => ({
-            onClick: () => handleSelectTrace(record.traceId),
-            style: {
-              cursor: 'pointer',
-              background: selectedTraceId === record.traceId ? 'var(--accent-muted)' : undefined,
-            },
-          })}
-          locale={{ emptyText: tracesError
-            ? <Empty description="Failed to load traces" />
-            : <Empty description="No traces yet. Send a message to generate traces." /> }}
-        />
-      </Card>
-
-      {/* Right: span detail */}
-      <Card
-        title={
-          rootSpan ? (
-            <Space>
-              <ThunderboltOutlined />
-              <span>{rootSpan.name}</span>
-              {rootSpan.success ? (
-                <Tag color="success">success</Tag>
-              ) : (
-                <Tag color="error">{rootSpan.error ?? 'failed'}</Tag>
-              )}
-              <Tag icon={<ClockCircleOutlined />}>{formatDuration(rootSpan.durationMs)}</Tag>
-              <Tag>{formatTokens(rootSpan.inputTokens, rootSpan.outputTokens)} tok</Tag>
-            </Space>
-          ) : (
-            'Span Detail'
-          )
-        }
-        style={{ width: 520, flexShrink: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
-        styles={{ body: { flex: 1, padding: '12px', overflow: 'auto' } }}
-      >
-        {!selectedTraceId ? (
-          <Empty description="Click a trace to view spans" style={{ marginTop: 60 }} />
-        ) : spansLoading ? (
-          <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: 200 }}>
-            <Spin tip="Loading spans..." />
+    <div className="tr-surface">
+      {/* Left: runs list */}
+      <aside className="tr-runs">
+        <div className="tr-runs-h">
+          <input className="tr-search" placeholder="Search runs, sessions…" value={q} onChange={e => setQ(e.target.value)} />
+          <div className="tr-filter-chips">
+            <button className={`tr-chip ${statusFilter === null ? 'on' : ''}`} onClick={() => setStatusFilter(null)}>all · {runs.length}</button>
+            <button className={`tr-chip ${statusFilter === 'ok' ? 'on' : ''}`} onClick={() => toggleStatus('ok')}>ok · {runs.filter(r => r.status === 'ok').length}</button>
+            <button className={`tr-chip err ${statusFilter === 'error' ? 'on' : ''}`} onClick={() => toggleStatus('error')}>err · {runs.filter(r => r.status !== 'ok').length}</button>
           </div>
-        ) : (
-          <SpanWaterfall
-            spans={spans}
-            rootDurationMs={rootSpan?.durationMs ?? 1}
-            rootStartMs={rootSpan?.startTime ? new Date(rootSpan.startTime).getTime() : 0}
-            spanTypeFilter={spanTypeFilter}
-          />
-        )}
-      </Card>
+        </div>
+        <div className="tr-runs-list">
+          {filteredRuns.map(r => (
+            <button
+              key={r.id}
+              className={`tr-run ${r.id === activeRunId ? 'sel' : ''} ${r.status !== 'ok' ? 'err' : ''}`}
+              onClick={() => { setSelectedRunId(r.id); setSelectedSpanId(null); }}
+            >
+              <div className="tr-run-top">
+                <span className={`tr-dot ${r.status === 'ok' ? 'ok' : 'err'}`} />
+                <span className="tr-run-name">{r.title}</span>
+              </div>
+              <div className="tr-run-meta">
+                <span className="mono-sm">{r.agent}</span>
+                <span className="tr-run-sep">·</span>
+                <span className="mono-sm tr-session">{r.session}</span>
+              </div>
+              <div className="tr-run-stats">
+                <span className="mono-sm">{fmtMs(r.totalMs)}</span>
+                <span className="tr-run-sep">·</span>
+                <span className="mono-sm">{(r.tokensIn + r.tokensOut).toLocaleString()} tok</span>
+                <span className="tr-run-sep">·</span>
+                <span className="mono-sm">${r.cost.toFixed(3)}</span>
+                <span className="tr-run-when">{r.at}</span>
+              </div>
+            </button>
+          ))}
+          {filteredRuns.length === 0 && (
+            <div className="tr-empty">No runs match your filters.</div>
+          )}
+        </div>
+      </aside>
+
+      {/* Right: detail */}
+      {selectedRun ? (
+        <section className="tr-detail">
+          <RunHeader run={selectedRun} />
+          <div className="tr-detail-split">
+            <Waterfall
+              spans={spans}
+              totalMs={selectedRun.totalMs || 1}
+              selectedSpanId={selectedSpan?.id || null}
+              onSelect={id => setSelectedSpanId(id)}
+            />
+            <SpanDetail span={selectedSpan} runId={selectedRun.id} session={selectedRun.session} />
+          </div>
+        </section>
+      ) : (
+        <section className="tr-detail">
+          <div className="tr-empty">Select a run to inspect.</div>
+        </section>
+      )}
     </div>
   );
 };
+
+function RunHeader({ run }: { run: TraceRun }) {
+  return (
+    <div className="tr-run-header">
+      <div className="tr-run-header-top">
+        <div>
+          <div className="tr-run-header-title">
+            <span className={`tr-dot ${run.status === 'ok' ? 'ok' : 'err'}`} />
+            <h2>{run.name}</h2>
+            <span className="kv-chip-sf">{run.status}</span>
+          </div>
+          <div className="tr-run-header-sub">
+            <span>{run.id.slice(0, 16)}</span>
+            <span>·</span>
+            <span>{run.session}</span>
+            <span>·</span>
+            <span>{run.at}</span>
+          </div>
+        </div>
+      </div>
+      <div className="tr-stats-bar">
+        <StatItem label="Latency" value={fmtMs(run.totalMs)} />
+        <StatItem label="LLM calls" value={String(run.llmCalls)} />
+        <StatItem label="Tool calls" value={String(run.toolCalls)} />
+        <StatItem label="Tokens in" value={run.tokensIn.toLocaleString()} />
+        <StatItem label="Tokens out" value={run.tokensOut.toLocaleString()} />
+        <StatItem label="Cost" value={`$${run.cost.toFixed(4)}`} />
+        <StatItem label="Model" value={run.model} mono />
+      </div>
+    </div>
+  );
+}
+
+function StatItem({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+  return (
+    <div className="tr-stat">
+      <span className="tr-stat-lbl">{label}</span>
+      <span className={`tr-stat-v ${mono ? 'mono' : ''}`}>{value}</span>
+    </div>
+  );
+}
+
+function Waterfall({ spans, totalMs, selectedSpanId, onSelect }: {
+  spans: Span[];
+  totalMs: number;
+  selectedSpanId: string | null;
+  onSelect: (id: string) => void;
+}) {
+  const rows = useMemo(() => {
+    const byParent: Record<string, Span[]> = {};
+    spans.forEach(s => {
+      const p = s.parent || '__root';
+      (byParent[p] = byParent[p] || []).push(s);
+    });
+    const out: { span: Span; depth: number }[] = [];
+    const flatten = (parent = '__root', depth = 0) => {
+      (byParent[parent] || []).forEach(span => {
+        out.push({ span, depth });
+        flatten(span.id, depth + 1);
+      });
+    };
+    flatten();
+    return out;
+  }, [spans]);
+
+  return (
+    <div className="tr-waterfall">
+      <div className="tr-waterfall-h">
+        <div className="tr-waterfall-h-name">Spans</div>
+        <div className="tr-waterfall-h-bar">
+          <div className="tr-timescale">
+            {[0, 0.25, 0.5, 0.75, 1].map(t => (
+              <div key={t} className="tr-timescale-tick" style={{ left: `${t * 100}%` }}>
+                <span>{fmtMs(totalMs * t)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+      <div className="tr-waterfall-body">
+        {rows.map(({ span, depth }) => {
+          const pct = Math.max(0.5, (span.dur / totalMs) * 100);
+          const left = (span.start / totalMs) * 100;
+          return (
+            <button
+              key={span.id}
+              className={`tr-span-row ${span.id === selectedSpanId ? 'sel' : ''} ${span.ok ? '' : 'err'}`}
+              onClick={() => onSelect(span.id)}
+            >
+              <div className="tr-span-name" style={{ paddingLeft: 4 + depth * 18 }}>
+                {depth > 0 && <span className="tr-tree-line" aria-hidden="true">└─</span>}
+                <span className={`tr-kind-tag k-${span.kind}`}>{span.kind}</span>
+                <span className="tr-span-label mono-sm">{span.name}</span>
+              </div>
+              <div className="tr-span-bar-track">
+                <div
+                  className={`tr-span-bar k-${span.kind} ${span.ok ? '' : 'err'}`}
+                  style={{ left: `${left}%`, width: `${pct}%` }}
+                  title={`${span.name} · ${fmtMs(span.dur)}`}
+                />
+                <span className="tr-span-dur mono-sm" style={{ left: `calc(${left + pct}% + 6px)` }}>
+                  {fmtMs(span.dur)}
+                </span>
+              </div>
+            </button>
+          );
+        })}
+        {rows.length === 0 && (
+          <div className="tr-empty">No spans for this run.</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SpanDetail({ span, runId, session }: { span: Span | null; runId: string; session: string }) {
+  const [tab, setTab] = useState('io');
+
+  useEffect(() => { setTab('io'); }, [span?.id]);
+
+  if (!span) return <div className="tr-span-detail"><div className="tr-empty">No span selected.</div></div>;
+
+  return (
+    <div className="tr-span-detail">
+      <div className="tr-span-detail-h">
+        <div className="tr-span-detail-title">
+          <span className={`tr-kind-tag k-${span.kind}`}>{span.kind}</span>
+          <b className="mono-sm">{span.name}</b>
+          <span className="kv-chip-sf">{fmtMs(span.dur)}</span>
+          <span className="kv-chip-sf">{span.tokensIn + span.tokensOut} tok</span>
+          {!span.ok && <span className="kv-chip-sf" style={{ color: 'var(--color-err)' }}>error</span>}
+        </div>
+        <div className="tr-span-detail-tabs">
+          {['io', 'metadata', 'raw'].map(t => (
+            <button key={t} className={`tr-tab ${tab === t ? 'on' : ''}`} onClick={() => setTab(t)}>
+              {t === 'io' ? 'I/O' : t}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="tr-span-detail-body">
+        {tab === 'io' && (
+          <>
+            <div className="tr-io-block">
+              <div className="tr-io-label">
+                <span>Input</span>
+                <button className="mini-btn" onClick={() => navigator.clipboard?.writeText(span.input || '')}>copy</button>
+              </div>
+              <pre className="tr-io-pre">{span.input || '—'}</pre>
+            </div>
+            <div className="tr-io-block">
+              <div className="tr-io-label">
+                <span>Output</span>
+                <button className="mini-btn" onClick={() => navigator.clipboard?.writeText(span.output || '')}>copy</button>
+              </div>
+              <pre className={`tr-io-pre ${span.ok ? '' : 'err'}`}>
+                {span.ok ? (span.output || '—') : (span.error || span.output || 'error')}
+              </pre>
+            </div>
+          </>
+        )}
+        {tab === 'metadata' && (
+          <div className="tr-meta-grid">
+            <MetaRow k="span.id" v={span.id} />
+            <MetaRow k="kind" v={span.kind} />
+            <MetaRow k="name" v={span.name} />
+            <MetaRow k="parent" v={span.parent || '(root)'} />
+            <MetaRow k="start" v={fmtMs(span.start) + ' (offset)'} />
+            <MetaRow k="duration" v={fmtMs(span.dur)} />
+            <MetaRow k="status" v={span.ok ? 'ok' : 'error'} />
+            <MetaRow k="tokens.in" v={String(span.tokensIn)} />
+            <MetaRow k="tokens.out" v={String(span.tokensOut)} />
+            {span.model && <MetaRow k="model" v={span.model} />}
+            <MetaRow k="run.id" v={runId} />
+            <MetaRow k="session" v={session} />
+          </div>
+        )}
+        {tab === 'raw' && (
+          <pre className="tr-io-pre">{JSON.stringify(span, null, 2)}</pre>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function MetaRow({ k, v }: { k: string; v: string }) {
+  return (
+    <div className="tr-meta-row">
+      <span className="tr-meta-k mono-sm">{k}</span>
+      <span className="tr-meta-v mono-sm">{v}</span>
+    </div>
+  );
+}
 
 export default Traces;

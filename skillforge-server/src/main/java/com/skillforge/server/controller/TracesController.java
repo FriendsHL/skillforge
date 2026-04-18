@@ -87,12 +87,26 @@ public class TracesController {
             return ResponseEntity.notFound().build();
         }
 
-        List<TraceSpanEntity> children = spanRepository.findByParentSpanIdOrderByStartTimeAsc(traceId);
+        // BFS to collect all descendants, not just direct children
+        List<TraceSpanEntity> allDescendants = new ArrayList<>();
+        List<String> frontier = new ArrayList<>();
+        frontier.add(traceId);
+        while (!frontier.isEmpty()) {
+            List<String> nextFrontier = new ArrayList<>();
+            for (String parentId : frontier) {
+                List<TraceSpanEntity> children = spanRepository.findByParentSpanIdOrderByStartTimeAsc(parentId);
+                allDescendants.addAll(children);
+                for (TraceSpanEntity child : children) {
+                    nextFrontier.add(child.getId());
+                }
+            }
+            frontier = nextFrontier;
+        }
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("root", toMap(root));
         List<Map<String, Object>> spans = new ArrayList<>();
-        for (TraceSpanEntity child : children) {
+        for (TraceSpanEntity child : allDescendants) {
             spans.add(toMap(child));
         }
         result.put("spans", spans);

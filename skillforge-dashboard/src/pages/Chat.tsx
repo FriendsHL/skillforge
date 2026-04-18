@@ -1,20 +1,18 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { message, Typography, Empty, Alert, Button, Tag, Collapse } from 'antd';
-import { ArrowUpOutlined } from '@ant-design/icons';
+import { message } from 'antd';
 import { useNavigate, useParams } from 'react-router-dom';
 import ChatWindow from '../components/ChatWindow';
 import SessionReplay from '../components/SessionReplay';
-import SubAgentRunsPanel from '../components/SubAgentRunsPanel';
-import ChildSessionsPanel from '../components/ChildSessionsPanel';
-import CollabRunPanel from '../components/CollabRunPanel';
-import CollabRunSummary from '../components/CollabRunSummary';
-import CollabRunTimeline from '../components/CollabRunTimeline';
-import PeerMessageFeed from '../components/PeerMessageFeed';
 import CompactionHistoryModal from '../components/CompactionHistoryModal';
 import RuntimeBanner from '../components/RuntimeBanner';
 import PendingAskCard from '../components/PendingAskCard';
-import SessionToolbar from '../components/SessionToolbar';
 import ChatSidebar from '../components/ChatSidebar';
+import RightRail, {
+  type CollabMember,
+  type PeerMessage,
+} from '../components/chat/RightRail';
+import { Chip, Seg } from '../components/chat/primitives';
+import { IconChat, IconCompact, IconReplay } from '../components/chat/ChatIcons';
 import {
   getAgents,
   createSession,
@@ -27,6 +25,7 @@ import {
   getSession,
   compactSession,
   getCompactions,
+  getCollabRunMembers,
   extractList,
 } from '../api';
 import { z } from 'zod';
@@ -34,11 +33,13 @@ import { AgentSchema, SessionSchema, safeParseList } from '../api/schemas';
 import { useChatWebSocket } from '../hooks/useChatWebSocket';
 import { useChatMessages, type InflightTool } from '../hooks/useChatMessages';
 import { useCollabState } from '../hooks/useCollabState';
-import { useChatSession, type RuntimeStatus, type ExecutionMode } from '../hooks/useChatSession';
+import {
+  useChatSession,
+  type RuntimeStatus,
+  type ExecutionMode,
+} from '../hooks/useChatSession';
 import { useChatWsEventHandler } from '../hooks/useChatWsEventHandler';
 import { useAuth } from '../contexts/AuthContext';
-
-const { Text } = Typography;
 
 interface PendingAskOption {
   label: string;
@@ -52,6 +53,8 @@ interface PendingAsk {
   allowOther: boolean;
 }
 
+const MAX_PEER_MESSAGES = 50;
+
 const Chat: React.FC = () => {
   const { sessionId: urlSessionId } = useParams<{ sessionId?: string }>();
   const navigate = useNavigate();
@@ -62,7 +65,9 @@ const Chat: React.FC = () => {
   const [selectedAgent, setSelectedAgent] = useState<number | undefined>();
   const [sessions, setSessions] = useState<z.infer<typeof SessionSchema>[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(false);
-  const [activeSessionId, setActiveSessionId] = useState<string | undefined>(urlSessionId);
+  const [activeSessionId, setActiveSessionId] = useState<string | undefined>(
+    urlSessionId,
+  );
 
   const {
     setRawMessages,
@@ -90,6 +95,8 @@ const Chat: React.FC = () => {
   const [compactEvents, setCompactEvents] = useState<unknown[]>([]);
   const [compacting, setCompacting] = useState(false);
   const [compactionNotice, setCompactionNotice] = useState(false);
+  const [collabMembers, setCollabMembers] = useState<CollabMember[]>([]);
+  const [peerMessages, setPeerMessages] = useState<PeerMessage[]>([]);
 
   useEffect(() => {
     if (!compactionNotice) return;
@@ -108,7 +115,6 @@ const Chat: React.FC = () => {
     setCollabRunStatus,
   } = useCollabState(activeSessionId);
 
-  // URL → activeSessionId 同步(navigate('/chat/:id') 时生效)
   useEffect(() => {
     if (urlSessionId && urlSessionId !== activeSessionId) {
       setActiveSessionId(urlSessionId);
@@ -116,7 +122,6 @@ const Chat: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [urlSessionId]);
 
-  // Load agents
   useEffect(() => {
     getAgents()
       .then((res) => {
@@ -125,7 +130,6 @@ const Chat: React.FC = () => {
       .catch(() => message.error('Failed to load agents'));
   }, []);
 
-  // Load sessions when agent selected
   useEffect(() => {
     if (selectedAgent == null) return;
     let cancelled = false;
@@ -142,10 +146,11 @@ const Chat: React.FC = () => {
       .finally(() => {
         if (!cancelled) setSessionsLoading(false);
       });
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [selectedAgent, userId]);
 
-  // Reset Chat-local state when session changes
   useEffect(() => {
     setPendingAsk(null);
     setRuntimeError('');
@@ -154,6 +159,7 @@ const Chat: React.FC = () => {
     setParentSessionId(null);
     setSessionDepth(0);
     setCompactionNotice(false);
+    setPeerMessages([]);
     if (!activeSessionId) {
       setRuntimeStatus('idle');
       setRuntimeStep('');
@@ -197,6 +203,61 @@ const Chat: React.FC = () => {
   });
 
   useChatWebSocket(activeSessionId, handleWsEvent);
+
+  // Fetch collab members when there's a collab run
+  useEffect(() => {
+    if (!collabRunId) {
+      setCollabMembers([]);
+      return;
+    }
+    let cancelled = false;
+    const fetchMembers = async () => {
+      try {
+        const res = await getCollabRunMembers(collabRunId);
+        if (cancelled) return;
+        const members = (res.data?.members ?? []) as CollabMember[];
+        setCollabMembers(members);
+      } catch {
+        // non-critical
+      }
+    };
+    fetchMembers();
+    const hasRunning =
+      collabRunStatus === 'RUNNING' || collabRunStatus === 'running';
+    const id = hasRunning ? setInterval(fetchMembers, 5000) : null;
+    return () => {
+      cancelled = true;
+      if (id) clearInterval(id);
+    };
+  }, [collabRunId, collabRunStatus]);
+
+  // Listen for peer messages
+  useEffect(() => {
+    if (!collabRunId) return;
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (
+        detail?.type === 'collab_message_routed' &&
+        detail.collabRunId === collabRunId
+      ) {
+        const isBroadcast = detail.toHandle === '*' || detail.broadcast === true;
+        const pm: PeerMessage = {
+          fromHandle: detail.fromHandle ?? '?',
+          toHandle: detail.toHandle ?? '?',
+          timestamp: new Date().toISOString(),
+          isBroadcast,
+        };
+        setPeerMessages((prev) => {
+          const next = [...prev, pm];
+          return next.length > MAX_PEER_MESSAGES
+            ? next.slice(next.length - MAX_PEER_MESSAGES)
+            : next;
+        });
+      }
+    };
+    window.addEventListener('collab_ws_event', handler);
+    return () => window.removeEventListener('collab_ws_event', handler);
+  }, [collabRunId]);
 
   const handleNewSession = async () => {
     if (!selectedAgent) {
@@ -301,8 +362,7 @@ const Chat: React.FC = () => {
       setFullCompactCount(s.fullCompactCount ?? 0);
       setTotalTokensReclaimed(s.totalTokensReclaimed ?? 0);
     } catch {
-      // Non-critical background refresh — silently ignore; compact op itself
-      // already showed success/error feedback to the user.
+      // non-critical
     }
   };
 
@@ -310,7 +370,12 @@ const Chat: React.FC = () => {
     if (!activeSessionId || compacting || runtimeStatus === 'running') return;
     setCompacting(true);
     try {
-      const res = await compactSession(activeSessionId, 'full', userId, 'user clicked compact button');
+      const res = await compactSession(
+        activeSessionId,
+        'full',
+        userId,
+        'user clicked compact button',
+      );
       const reclaimed = res.data?.tokensReclaimed ?? 0;
       message.success(`Compacted: reclaimed ${reclaimed} tokens`);
       await refreshCompactStats();
@@ -359,8 +424,28 @@ const Chat: React.FC = () => {
     }
   };
 
+  const activeSession = sessions.find(
+    (s) => String(s.id) === String(activeSessionId),
+  );
+  const agentName = agents.find((a) => a.id === selectedAgent)?.name;
+  const sessionTitle =
+    (activeSession?.title && activeSession.title !== 'New Session'
+      ? activeSession.title
+      : undefined) ?? (activeSessionId ? `Session ${activeSessionId.slice(0, 8)}` : 'New conversation');
+
+  const compactionSummary = {
+    lightCount: lightCompactCount,
+    fullCount: fullCompactCount,
+    tokensReclaimed: totalTokensReclaimed,
+  };
+
+  const tokenUsage = {
+    used: (activeSession as { totalTokens?: number } | undefined)?.totalTokens ?? 0,
+    total: 200000,
+  };
+
   return (
-    <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
+    <div className="chat-redesign">
       <ChatSidebar
         agents={agents}
         sessions={sessions}
@@ -376,52 +461,91 @@ const Chat: React.FC = () => {
         onSelectSession={setActiveSessionId}
       />
 
-      {/* Right panel - chat */}
-      <div
-        style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: 'var(--bg-primary)' }}
-      >
+      <main className="center">
         {activeSessionId || selectedAgent ? (
           <>
-            {activeSessionId && (
-              <SessionToolbar
-                lightCompactCount={lightCompactCount}
-                fullCompactCount={fullCompactCount}
-                totalTokensReclaimed={totalTokensReclaimed}
-                viewMode={viewMode}
-                onViewModeChange={setViewMode}
-                compacting={compacting}
-                runtimeRunning={runtimeStatus === 'running'}
-                executionMode={executionMode}
-                onExecutionModeChange={handleModeChange}
-                onCompactClick={handleCompactClick}
-                onOpenCompactModal={handleOpenCompactModal}
-              />
-            )}
-            {activeSessionId && parentSessionId && (
-              <div
-                style={{
-                  padding: '6px 12px',
-                  borderBottom: '1px solid var(--border-subtle)',
-                  background: 'var(--bg-assistant-structured)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 6,
-                }}
-              >
-                <Button
-                  type="link"
-                  size="small"
-                  icon={<ArrowUpOutlined />}
-                  onClick={() => navigate(`/chat/${parentSessionId}`)}
-                  style={{ padding: 0 }}
-                >
-                  Back to parent
-                </Button>
-                <Text type="secondary" style={{ fontSize: 12 }}>
-                  (SubAgent child · depth {sessionDepth})
-                </Text>
+            <header className="session-header">
+              <div style={{ minWidth: 0 }}>
+                <h1 className="session-title-big">{sessionTitle}</h1>
+                <div className="session-crumbs">
+                  <span>session</span>
+                  <span className="sep">/</span>
+                  <span>
+                    {activeSessionId ? activeSessionId.slice(0, 8) : 'new'}
+                  </span>
+                  {agentName && (
+                    <>
+                      <span className="sep">·</span>
+                      <span style={{ color: 'var(--accent)' }}>{agentName}</span>
+                    </>
+                  )}
+                  <span className="sep">·</span>
+                  <span>depth {sessionDepth}</span>
+                  {collabHandle && (
+                    <>
+                      <span className="sep">·</span>
+                      <span>team {collabHandle}</span>
+                    </>
+                  )}
+                  {parentSessionId && (
+                    <>
+                      <span className="sep">·</span>
+                      <button
+                        type="button"
+                        onClick={() => navigate(`/chat/${parentSessionId}`)}
+                        style={{
+                          background: 'transparent',
+                          border: 0,
+                          color: 'var(--accent)',
+                          cursor: 'pointer',
+                          padding: 0,
+                          font: 'inherit',
+                        }}
+                      >
+                        ↑ parent
+                      </button>
+                    </>
+                  )}
+                </div>
               </div>
-            )}
+              <div className="session-actions">
+                {(lightCompactCount > 0 ||
+                  fullCompactCount > 0 ||
+                  totalTokensReclaimed > 0) && (
+                  <Chip
+                    title="Compaction history"
+                    onClick={handleOpenCompactModal}
+                  >
+                    <IconCompact s={11} /> {lightCompactCount} light ·{' '}
+                    {fullCompactCount} full ·{' '}
+                    {totalTokensReclaimed > 0
+                      ? `–${(totalTokensReclaimed / 1000).toFixed(1)}K tok`
+                      : '0 tok'}
+                  </Chip>
+                )}
+                <Seg
+                  value={viewMode}
+                  options={[
+                    { value: 'chat', label: 'Chat', icon: <IconChat s={11} /> },
+                    {
+                      value: 'replay',
+                      label: 'Replay',
+                      icon: <IconReplay s={11} />,
+                    },
+                  ]}
+                  onChange={setViewMode}
+                />
+                <Seg
+                  value={executionMode}
+                  options={[
+                    { value: 'ask', label: 'ask' },
+                    { value: 'auto', label: 'auto' },
+                  ]}
+                  onChange={handleModeChange}
+                />
+              </div>
+            </header>
+
             {activeSessionId && (
               <RuntimeBanner
                 runtimeStatus={runtimeStatus}
@@ -431,55 +555,7 @@ const Chat: React.FC = () => {
                 onCancel={handleCancel}
               />
             )}
-            <SubAgentRunsPanel
-              sessionId={activeSessionId}
-              parentRunning={runtimeStatus === 'running'}
-            />
-            <ChildSessionsPanel
-              sessionId={activeSessionId}
-              parentRunning={runtimeStatus === 'running'}
-              agents={agents}
-            />
-            {collabRunId && collabHandle && (
-              <Alert
-                type="info"
-                banner
-                message={
-                  <span style={{ fontSize: 12 }}>
-                    <Tag color="blue" style={{ marginRight: 6 }}>Team: {collabHandle}</Tag>
-                    Part of collaboration run {collabRunId.length > 8 ? collabRunId.slice(0, 8) + '...' : collabRunId}
-                    {collabLeaderSessionId && (
-                      <> | Leader: {collabLeaderSessionId.slice(0, 8)}...</>
-                    )}
-                    {collabRunStatus && (
-                      <> | Status: {collabRunStatus}</>
-                    )}
-                  </span>
-                }
-                style={{ margin: '8px 12px 0' }}
-              />
-            )}
-            <CollabRunPanel
-              collabRunId={collabRunId}
-              sessionId={activeSessionId}
-            />
-            <CollabRunSummary collabRunId={collabRunId} />
-            {collabRunId && (
-              <Collapse
-                size="small"
-                style={{ margin: '8px 12px 0' }}
-                items={[
-                  {
-                    key: 'timeline',
-                    label: 'Collaboration Timeline',
-                    children: <CollabRunTimeline collabRunId={collabRunId} />,
-                  },
-                ]}
-              />
-            )}
-            <PeerMessageFeed
-              collabRunId={collabRunId}
-            />
+
             {viewMode === 'chat' ? (
               <>
                 {pendingAsk && (
@@ -500,7 +576,7 @@ const Chat: React.FC = () => {
                   compactionNotice={compactionNotice}
                   onCompactionDismiss={() => setCompactionNotice(false)}
                   runtimeStatus={runtimeStatus}
-                  agentName={agents.find((a) => a.id === selectedAgent)?.name}
+                  agentName={agentName}
                 />
               </>
             ) : (
@@ -508,11 +584,39 @@ const Chat: React.FC = () => {
             )}
           </>
         ) : (
-          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <Empty description="Select an Agent to start chatting" />
+          <div
+            style={{
+              flex: 1,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: 'var(--fg-3)',
+              fontFamily: 'var(--font-serif)',
+              fontSize: 20,
+            }}
+          >
+            Select an agent to start chatting.
           </div>
         )}
-      </div>
+      </main>
+
+      <RightRail
+        collabMembers={collabMembers}
+        collabRunId={collabRunId}
+        collabHandle={collabHandle}
+        collabLeaderSessionId={collabLeaderSessionId}
+        peerMessages={peerMessages}
+        inflightTools={combinedInflightTools}
+        runtimeStatus={runtimeStatus}
+        tokenUsage={tokenUsage}
+        compaction={compactionSummary}
+        currentSessionId={activeSessionId ?? null}
+        sessionId={activeSessionId ?? null}
+        userId={userId}
+        onCompactClick={handleCompactClick}
+        compacting={compacting}
+      />
+
       <CompactionHistoryModal
         open={compactModalOpen}
         onClose={() => setCompactModalOpen(false)}

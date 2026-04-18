@@ -1,264 +1,415 @@
-import React, { useEffect, useRef } from 'react';
-import { Table, Tooltip, Card, Alert, Button } from 'antd';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { getSessions, extractList } from '../api';
-import { SessionSchema, safeParseList } from '../api/schemas';
+import { getSessions, getSessionMessages, extractList } from '../api';
 import { useAuth } from '../contexts/AuthContext';
+import '../components/agents/agents.css';
+import '../components/sessions/sessions.css';
+import '../components/skills/skills.css';
 
-type SessionRow = {
+const CLOSE_ICON = (
+  <svg width={14} height={14} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+    <path d="M4 4l8 8M12 4l-8 8" />
+  </svg>
+);
+const EXT_ICON = (
+  <svg width={10} height={10} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4">
+    <path d="M10 3h3v3M13 3l-6 6M7 4H4a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h7a1 1 0 0 0 1-1V9" />
+  </svg>
+);
+
+interface SessionRow {
   id: string;
-  title?: string;
+  title: string;
+  agent: string;
   agentId?: number | string;
-  agentName?: string;
-  messageCount?: number;
-  totalTokens?: number;
-  runtimeStatus?: string;
-  runtimeStep?: string;
-  runtimeError?: string;
-  createdAt?: string;
-  updatedAt?: string;
-  [k: string]: any;
-};
-
-// Keyframes for the running pulse dot (injected once on mount).
-const PULSE_STYLE_ID = 'session-list-pulse-style';
-function ensurePulseStyle() {
-  if (typeof document === 'undefined') return;
-  if (document.getElementById(PULSE_STYLE_ID)) return;
-  const style = document.createElement('style');
-  style.id = PULSE_STYLE_ID;
-  style.textContent = `
-@keyframes sflPulse {
-  0%   { box-shadow: 0 0 0 0 rgba(24,144,255,0.6); }
-  70%  { box-shadow: 0 0 0 6px rgba(24,144,255,0); }
-  100% { box-shadow: 0 0 0 0 rgba(24,144,255,0); }
-}`;
-  document.head.appendChild(style);
+  status: string;
+  msgs: number;
+  tokens: number;
+  ctx: number;
+  cost: number;
+  turns: number;
+  createdAt: string;
+  updatedAt: string;
+  raw: Record<string, unknown>;
 }
 
-const StatusDot: React.FC<{ status?: string; error?: string }> = ({ status, error }) => {
-  let color = 'var(--text-muted)';
-  let label = status || 'unknown';
-  let animated = false;
-  switch (status) {
-    case 'idle':
-      color = 'var(--color-success)';
-      label = 'idle';
-      break;
-    case 'running':
-      color = 'var(--color-info)';
-      label = 'running';
-      animated = true;
-      break;
-    case 'error':
-      color = 'var(--color-error)';
-      label = error ? `error: ${error}` : 'error';
-      break;
-    case 'waiting_user':
-      color = 'var(--color-warning)';
-      label = 'waiting user';
-      break;
-    default:
-      break;
-  }
+function normalizeSession(raw: Record<string, unknown>): SessionRow {
+  const id = String(raw.id || '');
+  const title = (raw.title as string) || `Session ${id.slice(0, 8)}`;
+  const agent = (raw.agentName as string) || String(raw.agentId || 'unknown');
+  const msgs = Number(raw.messageCount || 0);
+  const tokens = Number(raw.totalTokens || 0);
+  const ctx = Math.min(tokens / 200000, 1);
+  const cost = tokens * 0.000003;
+  const turns = Math.ceil(msgs / 2);
+  let status = String(raw.runtimeStatus || 'idle');
+  if (status === 'waiting_user') status = 'waiting';
+  return {
+    id,
+    title,
+    agent,
+    agentId: raw.agentId as number | undefined,
+    status,
+    msgs,
+    tokens,
+    ctx,
+    cost,
+    turns,
+    createdAt: String(raw.createdAt || ''),
+    updatedAt: String(raw.updatedAt || ''),
+    raw,
+  };
+}
+
+function statusCls(s: string): string {
+  if (s === 'running') return 's-running';
+  if (s === 'error') return 's-error';
+  if (s === 'done') return 's-done';
+  if (s === 'waiting') return 's-waiting';
+  return 's-idle';
+}
+
+function fmtTime(iso: string): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  const now = Date.now();
+  const diff = now - d.getTime();
+  if (diff < 60000) return 'just now';
+  if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
+  if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+function FilterItem({ label, count, active, onClick }: { label: string; count: number; active: boolean; onClick: () => void }) {
   return (
-    <Tooltip title={label}>
-      <span
-        role="img"
-        aria-label={label}
-        style={{
-          display: 'inline-block',
-          width: 10,
-          height: 10,
-          borderRadius: '50%',
-          background: color,
-          marginRight: 8,
-          verticalAlign: 'middle',
-          animation: animated ? 'sflPulse 1.4s infinite' : 'none',
-        }}
-      />
-    </Tooltip>
+    <button className={`filter-item ${active ? 'on' : ''}`} onClick={onClick}>
+      <span>{label}</span>
+      <span className="filter-item-count">{count}</span>
+    </button>
   );
-};
+}
 
 const SessionList: React.FC = () => {
-  const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { userId } = useAuth();
-  const SESSIONS_QUERY_KEY = React.useMemo(() => ['sessions', userId] as const, [userId]);
+  const [q, setQ] = useState('');
+  const [filterStatus, setFilterStatus] = useState<string | null>(null);
+  const [filterAgent, setFilterAgent] = useState<string | null>(null);
+  const [open, setOpen] = useState<SessionRow | null>(null);
+  const [drawerTab, setDrawerTab] = useState('turns');
 
-  const { data: sessions = [], isLoading: loading, refetch, isError: sessionsError } = useQuery({
-    queryKey: SESSIONS_QUERY_KEY,
-    queryFn: () =>
-      getSessions(userId).then((res) => safeParseList(SessionSchema, extractList<SessionRow>(res)) as SessionRow[]),
-    // staleTime:0 so page re-visits always refetch — WS keeps data live after that.
-    // Without this, the 30s global staleTime hides status changes that happened
-    // while the component was unmounted and the WS was closed.
+  const SESSIONS_KEY = useMemo(() => ['sessions', userId] as const, [userId]);
+
+  const { data: rawSessions = [] } = useQuery({
+    queryKey: SESSIONS_KEY,
+    queryFn: () => getSessions(userId).then(res => extractList<Record<string, unknown>>(res)),
     staleTime: 0,
   });
+
+  const all = useMemo<SessionRow[]>(() => rawSessions.map(normalizeSession), [rawSessions]);
+  const agents = useMemo(() => Array.from(new Set(all.map(s => s.agent))).sort(), [all]);
+
+  const rows = useMemo(() => {
+    return all.filter(s => {
+      if (q) {
+        const ql = q.toLowerCase();
+        if (!`${s.id} ${s.title} ${s.agent}`.toLowerCase().includes(ql)) return false;
+      }
+      if (filterStatus && s.status !== filterStatus) return false;
+      if (filterAgent && s.agent !== filterAgent) return false;
+      return true;
+    });
+  }, [all, q, filterStatus, filterAgent]);
+
+  const toggleStatus = (v: string) => setFilterStatus(s => s === v ? null : v);
+  const toggleAgent = (v: string) => setFilterAgent(a => a === v ? null : v);
+
+  // WebSocket for live updates
   const wsRef = useRef<WebSocket | null>(null);
   const unmountedRef = useRef(false);
-  const reconnectDelayRef = useRef(2000);
-  const reconnectTimerRef = useRef<number | null>(null);
 
-  const updateCache = (updater: (prev: SessionRow[]) => SessionRow[]) => {
-    queryClient.setQueryData<SessionRow[]>(SESSIONS_QUERY_KEY, (prev) => updater(prev ?? []));
-  };
-
-  // --- WS merge reducer ---
-  const applyEvent = (evt: any) => {
-    if (!evt || !evt.type) return;
-    if (evt.type === 'session_updated') {
-      updateCache((prev) => {
-        const idx = prev.findIndex((s) => s.id === evt.sessionId);
-        if (idx < 0) return prev;
-        const next = prev.slice();
-        next[idx] = { ...next[idx], ...pickUpdatableFields(evt) };
-        return next;
-      });
-    } else if (evt.type === 'session_created') {
-      const row = evt.session;
-      if (!row || !row.id) return;
-      updateCache((prev) => (prev.some((s) => s.id === row.id) ? prev : [row, ...prev]));
-    } else if (evt.type === 'session_deleted') {
-      updateCache((prev) => prev.filter((s) => s.id !== evt.sessionId));
-    }
-  };
-
-  const pickUpdatableFields = (evt: any): Partial<SessionRow> => {
-    const out: Partial<SessionRow> = {};
-    if ('title' in evt && evt.title != null) out.title = evt.title;
-    if ('runtimeStatus' in evt && evt.runtimeStatus != null) out.runtimeStatus = evt.runtimeStatus;
-    if ('runtimeStep' in evt) out.runtimeStep = evt.runtimeStep;
-    if ('runtimeError' in evt) out.runtimeError = evt.runtimeError;
-    if ('messageCount' in evt && evt.messageCount != null) out.messageCount = evt.messageCount;
-    if ('updatedAt' in evt && evt.updatedAt != null) out.updatedAt = evt.updatedAt;
-    return out;
-  };
-
-  const connectWs = () => {
-    if (unmountedRef.current) return;
+  useEffect(() => {
+    unmountedRef.current = false;
     const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
     const token = localStorage.getItem('sf_token') ?? '';
     const url = `${proto}://${window.location.host}/ws/users/${userId}?token=${encodeURIComponent(token)}`;
-    let ws: WebSocket;
     try {
-      ws = new WebSocket(url);
-    } catch (e) {
-      scheduleReconnect();
-      return;
-    }
-    wsRef.current = ws;
-    ws.onopen = () => {
-      // Successful connection — reset backoff. If this is a reconnect
-      // (not the very first open), also refetch to reconcile drift.
-      const wasReconnect = reconnectDelayRef.current !== 2000;
-      reconnectDelayRef.current = 2000;
-      if (wasReconnect) {
-        refetch();
-      }
-    };
-    ws.onmessage = (ev) => {
-      try {
-        const evt = JSON.parse(ev.data);
-        applyEvent(evt);
-      } catch (e) {
-        console.warn('Bad user WS payload', ev.data);
-      }
-    };
-    ws.onerror = () => {
-      // onclose will fire next; let it handle reconnect.
-    };
-    ws.onclose = () => {
-      if (wsRef.current === ws) wsRef.current = null;
-      if (!unmountedRef.current) scheduleReconnect();
-    };
-  };
-
-  const scheduleReconnect = () => {
-    if (unmountedRef.current) return;
-    if (reconnectTimerRef.current != null) return;
-    const delay = reconnectDelayRef.current;
-    reconnectTimerRef.current = window.setTimeout(() => {
-      reconnectTimerRef.current = null;
-      // Exponential backoff up to 30s.
-      reconnectDelayRef.current = Math.min(reconnectDelayRef.current * 2, 30000);
-      connectWs();
-    }, delay);
-  };
-
-  useEffect(() => {
-    ensurePulseStyle();
-    unmountedRef.current = false;
-    connectWs();
+      const ws = new WebSocket(url);
+      wsRef.current = ws;
+      ws.onmessage = () => {
+        if (!unmountedRef.current) queryClient.invalidateQueries({ queryKey: SESSIONS_KEY });
+      };
+      ws.onerror = () => {};
+      ws.onclose = () => { if (wsRef.current === ws) wsRef.current = null; };
+    } catch { /* ignore */ }
     return () => {
       unmountedRef.current = true;
-      if (reconnectTimerRef.current != null) {
-        window.clearTimeout(reconnectTimerRef.current);
-        reconnectTimerRef.current = null;
-      }
       const ws = wsRef.current;
       wsRef.current = null;
-      if (ws) {
-        try { ws.close(); } catch { /* noop */ }
-      }
+      if (ws) try { ws.close(); } catch { /* noop */ }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [userId, queryClient, SESSIONS_KEY]);
 
-  const columns = [
-    {
-      title: 'Title',
-      dataIndex: 'title',
-      key: 'title',
-      width: 300,
-      render: (v: string, r: SessionRow) => (
-        <span>
-          <StatusDot status={r.runtimeStatus} error={r.runtimeError} />
-          {v && v !== 'New Session' ? v : `Session ${String(r.id ?? '').slice(0, 8)}`}
-        </span>
-      ),
-    },
-    { title: 'Agent', dataIndex: 'agentName', key: 'agentName', width: 140, render: (v: string, r: SessionRow) => v || r.agentId },
-    { title: 'Messages', dataIndex: 'messageCount', key: 'messageCount', width: 80 },
-    { title: 'Tokens', dataIndex: 'totalTokens', key: 'totalTokens', width: 80 },
-    {
-      title: 'Created',
-      dataIndex: 'createdAt',
-      key: 'createdAt',
-      width: 160,
-      render: (v: string) => (v ? new Date(v).toLocaleString() : '-'),
-    },
-  ];
+  const openDetail = (s: SessionRow) => { setOpen(s); setDrawerTab('turns'); };
 
   return (
-    <div>
-      {sessionsError && (
-        <Alert
-          type="error"
-          showIcon
-          message="Failed to load sessions"
-          action={<Button size="small" onClick={() => refetch()}>Retry</Button>}
-          style={{ marginBottom: 16 }}
+    <div className="agents-view">
+      <aside className="agents-filters">
+        <div className="agents-filters-h">Search</div>
+        <input className="agents-search" placeholder="id, title, agent…" value={q} onChange={e => setQ(e.target.value)} />
+
+        <div className="agents-filters-h">Status</div>
+        {['running', 'idle', 'done', 'error', 'waiting'].map(s => (
+          <FilterItem key={s} label={s} count={all.filter(x => x.status === s).length} active={filterStatus === s} onClick={() => toggleStatus(s)} />
+        ))}
+
+        <div className="agents-filters-h">Agent</div>
+        {agents.map(a => (
+          <FilterItem key={a} label={a} count={all.filter(x => x.agent === a).length} active={filterAgent === a} onClick={() => toggleAgent(a)} />
+        ))}
+      </aside>
+
+      <section className="agents-main">
+        <header className="agents-head">
+          <div>
+            <h1 className="agents-head-title">Sessions</h1>
+            <p className="agents-head-sub">{rows.length} of {all.length} · active conversations</p>
+          </div>
+          <div className="agents-head-actions">
+            <button className="btn-ghost-sf">Export</button>
+          </div>
+        </header>
+
+        <div className="agents-body">
+          {rows.length === 0 ? (
+            <div className="sf-empty-state">No sessions match your filters.</div>
+          ) : (
+            <div className="sess-table-sf">
+              <div className="sess-table-h">
+                <div>Session</div>
+                <div>Agent</div>
+                <div>Msgs</div>
+                <div>Tokens</div>
+                <div>Context</div>
+                <div>Cost</div>
+                <div>Last</div>
+              </div>
+              {rows.map(s => (
+                <button key={s.id} className="sess-row" onClick={() => openDetail(s)}>
+                  <div className="sess-name-col">
+                    <span className={`sess-status ${statusCls(s.status)}`}>
+                      {s.status === 'running' && <span className="pulse-dot" />}
+                      {s.status}
+                    </span>
+                    <div className="sess-name-text">
+                      <b>{s.title}</b>
+                      <span>{s.id.slice(0, 12)}</span>
+                    </div>
+                  </div>
+                  <div className="mono-sm">{s.agent}</div>
+                  <div className="mono-sm">{s.msgs}</div>
+                  <div className="mono-sm">{s.tokens.toLocaleString()}</div>
+                  <div className="ctx-bar" title={`${Math.round(s.ctx * 100)}% of 200K`}>
+                    <span style={{ width: `${s.ctx * 100}%`, background: s.ctx > 0.7 ? '#d97b5c' : 'var(--accent)' }} />
+                    <em>{Math.round(s.ctx * 100)}%</em>
+                  </div>
+                  <div className="mono-sm">${s.cost.toFixed(2)}</div>
+                  <div className="mono-sm">{fmtTime(s.updatedAt || s.createdAt)}</div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </section>
+
+      {open && (
+        <SessionDrawer
+          session={open}
+          tab={drawerTab}
+          setTab={setDrawerTab}
+          onClose={() => setOpen(null)}
+          onOpenChat={() => navigate(`/chat/${open.id}`)}
+          userId={userId}
         />
       )}
-      <Card style={{ borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
-      <Table
-        dataSource={sessions}
-        columns={columns}
-        rowKey="id"
-        loading={loading}
-        scroll={{ x: 'max-content' }}
-        pagination={{ pageSize: 20, showSizeChanger: false, showTotal: (t: number) => `${t} sessions` }}
-        onRow={(record) => ({
-          onClick: () => navigate(`/chat/${record.id}`),
-          style: { cursor: 'pointer' },
-        })}
-      />
-      </Card>
     </div>
   );
 };
+
+interface MessageItem {
+  role: 'user' | 'assistant';
+  text: string;
+  toolUses?: { name: string; id: string }[];
+  toolResults?: { toolUseId: string; content: string; isError: boolean }[];
+}
+
+function extractText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .filter((b: Record<string, unknown>) => b.type === 'text')
+    .map((b: Record<string, unknown>) => String(b.text || ''))
+    .join('\n');
+}
+
+function extractToolUses(content: unknown): { name: string; id: string }[] {
+  if (!Array.isArray(content)) return [];
+  return content
+    .filter((b: Record<string, unknown>) => b.type === 'tool_use')
+    .map((b: Record<string, unknown>) => ({ name: String(b.name || ''), id: String(b.id || '') }));
+}
+
+function extractToolResults(content: unknown): { toolUseId: string; content: string; isError: boolean }[] {
+  if (!Array.isArray(content)) return [];
+  return content
+    .filter((b: Record<string, unknown>) => b.type === 'tool_result')
+    .map((b: Record<string, unknown>) => ({
+      toolUseId: String(b.tool_use_id || ''),
+      content: String(b.content || ''),
+      isError: b.is_error === true,
+    }));
+}
+
+function normalizeMessages(rawMsgs: Record<string, unknown>[]): MessageItem[] {
+  return rawMsgs
+    .filter(m => m.role === 'user' || m.role === 'assistant')
+    .map(m => {
+      const role = m.role === 'assistant' ? 'assistant' as const : 'user' as const;
+      return {
+        role,
+        text: extractText(m.content),
+        toolUses: role === 'assistant' ? extractToolUses(m.content) : undefined,
+        toolResults: role === 'user' ? extractToolResults(m.content) : undefined,
+      };
+    });
+}
+
+function SessionDrawer({ session, tab, setTab, onClose, onOpenChat, userId }: {
+  session: SessionRow;
+  tab: string;
+  setTab: (t: string) => void;
+  onClose: () => void;
+  onOpenChat: () => void;
+  userId: number;
+}) {
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, [onClose]);
+
+  const { data: rawMessages, isLoading: msgsLoading } = useQuery({
+    queryKey: ['session-messages', session.id],
+    queryFn: () => getSessionMessages(session.id, userId).then(res => res.data as Record<string, unknown>[]),
+    staleTime: 30_000,
+  });
+
+  const messages = useMemo(() => normalizeMessages(rawMessages ?? []), [rawMessages]);
+
+  const tabs = [
+    { id: 'turns', label: 'Turns' },
+    { id: 'context', label: 'Context' },
+    { id: 'raw', label: 'Raw' },
+  ];
+
+  return (
+    <>
+      <div className="sf-drawer-backdrop" onClick={onClose} />
+      <aside className="sf-drawer" role="dialog">
+        <div className="sf-drawer-head">
+          <div className="sf-drawer-head-row">
+            <div>
+              <h2 className="sf-drawer-title">{session.title}</h2>
+              <p className="sf-drawer-subtitle">{session.id} · {session.agent}</p>
+            </div>
+            <div className="sf-drawer-actions">
+              <button className="btn-ghost-sf" onClick={onOpenChat}>{EXT_ICON} Open chat</button>
+            </div>
+            <button className="sf-drawer-close" onClick={onClose} title="Close (Esc)">{CLOSE_ICON}</button>
+          </div>
+          <div className="sf-drawer-badges">
+            <span className={`sess-status ${statusCls(session.status)}`}>{session.status}</span>
+            <span className="kv-chip-sf">{session.msgs} msgs · {session.turns} turns</span>
+            <span className="kv-chip-sf">${session.cost.toFixed(2)}</span>
+          </div>
+        </div>
+
+        <nav className="sf-drawer-tabs">
+          {tabs.map(t => (
+            <button key={t.id} className={`sf-drawer-tab ${tab === t.id ? 'on' : ''}`} onClick={() => setTab(t.id)}>
+              {t.label}
+            </button>
+          ))}
+        </nav>
+
+        <div className="sf-drawer-body">
+          {tab === 'turns' && (
+            <div className="turn-list">
+              {msgsLoading ? (
+                <div className="sf-empty-state">Loading messages…</div>
+              ) : messages.length === 0 ? (
+                <div className="sf-empty-state">No messages in this session.</div>
+              ) : (
+                messages.map((m, i) => {
+                  const isUser = m.role === 'user';
+                  const hasToolResults = (m.toolResults?.length ?? 0) > 0;
+                  const isToolResultOnly = isUser && hasToolResults && !m.text.trim();
+                  if (isToolResultOnly) return null;
+                  return (
+                    <div key={i} className="turn-row">
+                      <span className="turn-n">#{i + 1}</span>
+                      <div className="turn-body">
+                        <div className="turn-head">
+                          <span className={`turn-role role-${isUser ? 'user' : 'agent'}`}>
+                            {isUser ? 'user' : 'agent'}
+                          </span>
+                        </div>
+                        {m.text && <div className="turn-text">{m.text}</div>}
+                        {(m.toolUses?.length ?? 0) > 0 && (
+                          <div className="turn-tools">
+                            {m.toolUses!.map((t, j) => (
+                              <span key={j} className="turn-tool-chip">{t.name}</span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          )}
+          {tab === 'context' && (
+            <div className="ctx-panel">
+              <div className="ctx-big">
+                <div className="ctx-ring" style={{ '--v': session.ctx } as React.CSSProperties}>
+                  <span>{Math.round(session.ctx * 100)}<em>%</em></span>
+                </div>
+                <div>
+                  <div className="ctx-lbl">Context window</div>
+                  <div className="ctx-val">{session.tokens.toLocaleString()} / 200K</div>
+                  <p className="ctx-hint">
+                    {session.ctx > 0.7 ? 'Compaction recommended before next long task.' : 'Plenty of headroom remaining.'}
+                  </p>
+                </div>
+              </div>
+              <div className="ctx-breakdown">
+                <div><span>system prompt</span><em>8.2K</em></div>
+                <div><span>agent + skills</span><em>12.4K</em></div>
+                <div><span>conversation</span><em>{session.tokens.toLocaleString()}</em></div>
+                <div><span>tool results</span><em>—</em></div>
+              </div>
+            </div>
+          )}
+          {tab === 'raw' && (
+            <pre className="sf-code-block">{JSON.stringify(session.raw, null, 2)}</pre>
+          )}
+        </div>
+      </aside>
+    </>
+  );
+}
 
 export default SessionList;

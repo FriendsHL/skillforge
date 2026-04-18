@@ -1,0 +1,126 @@
+/* ============== MEMORY SURFACE ============== */
+
+.memory-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: var(--sp-4);
+}
+
+.mem-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-md);
+  padding: 16px;
+  cursor: pointer;
+  transition: border-color var(--transition-base), box-shadow var(--transition-base);
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  width: 100%;
+}
+.mem-card:hover {
+  border-color: var(--border-2);
+  box-shadow: var(--shadow-card-hover);
+}
+.mem-card.pinned { border-color: rgba(212, 154, 58, 0.3); }
+
+.mem-card-h {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.mem-scope {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 3px;
+  letter-spacing: 0.04em;
+  text-transform: lowercase;
+  white-space: nowrap;
+}
+.mem-scope.scope-project  { background: rgba(138, 111, 179, 0.12); color: #8a6fb3; }
+.mem-scope.scope-team     { background: rgba(74, 122, 168, 0.12); color: #4a7aa8; }
+.mem-scope.scope-user     { background: rgba(92, 138, 74, 0.12);  color: #5c8a4a; }
+.mem-scope.scope-agent    { background: rgba(212, 154, 58, 0.12); color: #d49a3a; }
+[data-theme="dark"] .mem-scope.scope-project { background: rgba(138, 111, 179, 0.2); color: #b89ad8; }
+[data-theme="dark"] .mem-scope.scope-team    { background: rgba(74, 122, 168, 0.2); color: #90b8d8; }
+[data-theme="dark"] .mem-scope.scope-user    { background: rgba(92, 138, 74, 0.2);  color: #8fca8f; }
+[data-theme="dark"] .mem-scope.scope-agent   { background: rgba(212, 154, 58, 0.2); color: #d4b86e; }
+
+.mem-pinned {
+  color: #d49a3a;
+  font-size: 12px;
+}
+.mem-kind {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--fg-4);
+  margin-left: auto;
+}
+
+.mem-key {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--fg-1);
+  margin-bottom: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mem-val {
+  font-size: var(--font-size-sm);
+  color: var(--fg-2);
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin-bottom: 10px;
+  flex: 1;
+}
+.mem-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--fg-4);
+  padding-top: 10px;
+  border-top: 1px dashed var(--border-1);
+  flex-wrap: wrap;
+}
+.mem-foot b { color: var(--fg-3); font-weight: 500; }
+
+/* Memory metadata grid in drawer */
+.mem-meta-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.mem-meta-grid > div {
+  display: flex;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-1);
+  font-size: var(--font-size-sm);
+}
+.mem-meta-grid > div:last-child { border-bottom: 0; }
+.mem-meta-grid span { color: var(--fg-3); }
+.mem-meta-grid em {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--fg-1);
+  font-style: normal;
+  font-weight: 500;
+}

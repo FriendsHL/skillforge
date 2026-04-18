@@ -1,0 +1,196 @@
+/* ============== EVALS SURFACE ============== */
+
+.eval-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: var(--sp-4);
+}
+
+.eval-card {
+  position: relative;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  transition: border-color var(--transition-base), box-shadow var(--transition-base);
+}
+.eval-card:hover {
+  border-color: var(--border-2);
+  box-shadow: var(--shadow-card-hover);
+}
+.eval-card.s-pass { border-left: 3px solid var(--color-ok); }
+.eval-card.s-warn { border-left: 3px solid var(--color-warn); }
+.eval-card.s-fail { border-left: 3px solid var(--color-err); }
+
+.eval-card-body {
+  display: flex;
+  flex-direction: column;
+  padding: 18px 18px 14px;
+  cursor: pointer;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  width: 100%;
+}
+.eval-card-h {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.eval-card-h h3 {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--fg-1);
+  margin: 0;
+  letter-spacing: -0.005em;
+}
+.eval-card-meta {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.eval-big {
+  display: flex;
+  align-items: flex-end;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+.eval-score {
+  font-family: var(--font-serif);
+  font-size: 36px;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  line-height: 1;
+}
+.eval-score em {
+  font-size: 16px;
+  font-style: normal;
+  opacity: 0.6;
+}
+.eval-trend {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  flex: 1;
+}
+
+.eval-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0;
+  background: var(--bg-base);
+  border-radius: 8px;
+  padding: 8px 4px;
+}
+.eval-stats > div {
+  text-align: center;
+  border-right: 1px solid var(--border-1);
+  padding: 0 4px;
+}
+.eval-stats > div:last-child { border-right: 0; }
+.eval-stats .n {
+  font-family: var(--font-serif);
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--fg-1);
+  display: block;
+}
+.eval-stats .n.ok { color: var(--color-ok); }
+.eval-stats .n.err { color: var(--color-err); }
+.eval-stats .lbl {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--fg-4);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.eval-card-actions {
+  padding: 0 18px 12px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* History chart */
+.history-chart {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.history-chart .pos { color: var(--color-ok); }
+.history-chart .neg { color: var(--color-err); }
+
+/* Run eval dialog */
+.sf-modal-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.sf-estimate {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  padding: 14px;
+  background: var(--bg-hover);
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-md);
+  margin-top: 6px;
+}
+.sf-estimate > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.sf-estimate-lbl {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--fg-4);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.sf-estimate-v {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  color: var(--fg-1);
+  font-weight: 500;
+}
+
+/* Radio options */
+.sf-radio {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-1);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: border-color var(--transition-base);
+}
+.sf-radio:hover { border-color: var(--border-2); }
+.sf-radio.on { border-color: var(--accent); background: rgba(99, 102, 241, 0.04); }
+.sf-radio input { margin-top: 2px; }
+.sf-radio-t {
+  font-size: var(--font-size-sm);
+  color: var(--fg-1);
+  font-weight: 500;
+}
+.sf-radio-s {
+  font-size: 11.5px;
+  color: var(--fg-3);
+  margin-left: auto;
+  font-family: var(--font-mono);
+}
+
+/* MiniSpark */
+.mini-spark svg {
+  display: block;
+}

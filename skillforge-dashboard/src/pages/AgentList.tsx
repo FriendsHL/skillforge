@@ -1,22 +1,14 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, Popconfirm, Tag, Tabs, message, Card, Drawer, Empty } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, FileTextOutlined, HistoryOutlined, ExperimentOutlined, ThunderboltOutlined } from '@ant-design/icons';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Form, Input, InputNumber, Select, Modal, Tabs, message } from 'antd';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { getAgents, createAgent, updateAgent, deleteAgent, getTools, getSkills, getClaudeMd, saveClaudeMd, extractList, type BehaviorRuleConfig, type CreateAgentRequest, type UpdateAgentRequest } from '../api';
+import { getAgents, createAgent, getTools, getSkills, extractList, type CreateAgentRequest } from '../api';
 import { AgentSchema, safeParseList, type AgentDto } from '../api/schemas';
-import PromptHistoryPanel from '../components/PromptHistoryPanel';
-import HookHistoryPanel from '../components/HookHistoryPanel';
-import ScenarioDraftPanel from '../components/ScenarioDraftPanel';
-import BehaviorRulesEditor from '../components/BehaviorRulesEditor';
-import LifecycleHooksEditor, {
-  type LifecycleHooksEditorHandle,
-} from '../components/LifecycleHooksEditor';
-import { useBehaviorRules } from '../hooks/useBehaviorRules';
+import AgentCard, { initials, parseCount, guessRole } from '../components/agents/AgentCard';
+import AgentDrawer from '../components/agents/AgentDrawer';
+import '../components/agents/agents.css';
 
 const { TextArea } = Input;
 
-// 模型建议列表 —— 支持 "providerName:modelName" 格式覆盖默认 provider。
-// 用户也可以自由输入任何模型名。
 const modelOptions = [
   { label: 'bailian:qwen3.5-plus', value: 'bailian:qwen3.5-plus' },
   { label: 'bailian:qwen3-max-2026-01-23', value: 'bailian:qwen3-max-2026-01-23' },
@@ -27,319 +19,270 @@ const modelOptions = [
   { label: 'claude:claude-sonnet-4-20250514', value: 'claude:claude-sonnet-4-20250514' },
 ];
 
-// 把后端的 skillIds (JSON string) 解析成数组
-const parseSkillIds = (raw: any): string[] => {
-  if (!raw) return [];
-  if (Array.isArray(raw)) return raw.map(String);
-  if (typeof raw === 'string') {
-    try {
-      const arr = JSON.parse(raw);
-      return Array.isArray(arr) ? arr.map(String) : [];
-    } catch {
-      return [];
-    }
-  }
-  return [];
-};
+const GRID_ICON = (
+  <svg width={12} height={12} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4">
+    <rect x="2" y="2" width="5" height="5" rx="1" /><rect x="9" y="2" width="5" height="5" rx="1" />
+    <rect x="2" y="9" width="5" height="5" rx="1" /><rect x="9" y="9" width="5" height="5" rx="1" />
+  </svg>
+);
+const ROWS_ICON = (
+  <svg width={12} height={12} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4">
+    <line x1="3" y1="4" x2="13" y2="4" /><line x1="3" y1="8" x2="13" y2="8" /><line x1="3" y1="12" x2="13" y2="12" />
+  </svg>
+);
+const PLUS_ICON = (
+  <svg width={13} height={13} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+    <path d="M8 3v10M3 8h10" />
+  </svg>
+);
 
-const parseBehaviorRules = (raw: unknown): BehaviorRuleConfig | null => {
-  if (!raw) return null;
-  if (typeof raw === 'string') {
-    try { return JSON.parse(raw) as BehaviorRuleConfig; } catch { return null; }
-  }
-  if (typeof raw === 'object' && raw !== null) return raw as BehaviorRuleConfig;
-  return null;
-};
+interface FilterState {
+  model: string | null;
+  role: string | null;
+}
+
+function AgentsTable({ rows, onOpen }: { rows: AgentDto[]; onOpen: (a: AgentDto) => void }) {
+  return (
+    <table className="agents-table">
+      <thead>
+        <tr>
+          <th>Agent</th>
+          <th>Model</th>
+          <th>Mode</th>
+          <th>Tools</th>
+          <th>Skills</th>
+          <th>ID</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map(a => {
+          const role = guessRole(a);
+          return (
+            <tr key={a.id} onClick={() => onOpen(a)}>
+              <td>
+                <div className="t-name">
+                  <div className={`agent-mark ${role}`} style={{ width: 24, height: 24, fontSize: 11 }}>
+                    {initials(a.name)}
+                  </div>
+                  <div className="t-name-text">
+                    <b>{a.name}</b>
+                    <span>{a.description ? a.description.slice(0, 60) : '—'}</span>
+                  </div>
+                </div>
+              </td>
+              <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--fg-2)' }}>{a.modelId || '—'}</td>
+              <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{a.executionMode || 'ask'}</td>
+              <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{parseCount(a.toolIds) === 0 ? 'all' : parseCount(a.toolIds)}</td>
+              <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{parseCount(a.skillIds)}</td>
+              <td style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg-4)' }}>#{a.id}</td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+}
 
 const AgentList: React.FC = () => {
   const queryClient = useQueryClient();
-  const [modalOpen, setModalOpen] = useState(false);
-  const [editing, setEditing] = useState<AgentDto | null>(null);
-  // Bumped on every open so Modal (and the ref-tracked LifecycleHooksEditor inside)
-  // remounts on create→create cycles too, not just editing-id changes.
-  const [formKey, setFormKey] = useState(0);
+  const [view, setView] = useState<'grid' | 'table'>('grid');
+  const [q, setQ] = useState('');
+  const [filter, setFilter] = useState<FilterState>({ model: null, role: null });
+  const [openAgent, setOpenAgent] = useState<AgentDto | null>(null);
+  const [createModalOpen, setCreateModalOpen] = useState(false);
   const [form] = Form.useForm();
-  const executionMode = Form.useWatch('executionMode', form) ?? 'ask';
-  const [claudeMdModalOpen, setClaudeMdModalOpen] = useState(false);
-  const [claudeMdDraft, setClaudeMdDraft] = useState<string | null>(null);
-  const [promptHistoryAgentId, setPromptHistoryAgentId] = useState<string | null>(null);
-  const [hookHistoryAgentId, setHookHistoryAgentId] = useState<string | null>(null);
-  const [scenariosAgentId, setScenariosAgentId] = useState<string | null>(null);
-
-  const behaviorRules = useBehaviorRules(
-    editing ? parseBehaviorRules(editing.behaviorRules) : null,
-    executionMode,
-  );
-
-  // N3 lifecycle hooks — raw JSON string round-trips via AgentEntity.lifecycleHooks.
-  // The editor owns its state and exposes live rawJson/errors via this ref so we
-  // can validate at Save-time without a render round-trip per keystroke.
-  const initialLifecycleHooks =
-    editing && typeof editing.lifecycleHooks === 'string' ? editing.lifecycleHooks : null;
-  const lifecycleHooksRef = useRef<LifecycleHooksEditorHandle>(null);
 
   const { data: agents = [], isLoading: loading, isError: agentsError } = useQuery({
     queryKey: ['agents'],
-    queryFn: () =>
-      getAgents().then((res) => safeParseList(AgentSchema, extractList<any>(res))),
+    queryFn: () => getAgents().then((res) => safeParseList(AgentSchema, extractList<Record<string, unknown>>(res))),
   });
-  // Fire toast once after all retries exhausted — avoids double-toast from catch+retry.
+
   useEffect(() => {
     if (agentsError) message.error('Failed to load agents');
   }, [agentsError]);
 
   const { data: tools = [] } = useQuery({
     queryKey: ['tools'],
-    queryFn: () =>
-      getTools().then((res) => extractList<any>(res)),
+    queryFn: () => getTools().then((res) => extractList<Record<string, unknown>>(res)),
   });
   const toolOptions = useMemo(
-    () =>
-      tools.map((t: any) => ({
-        label: t.description ? `${t.name} — ${t.description}` : t.name,
-        value: t.name,
-      })),
+    () => tools.map((t: Record<string, unknown>) => ({
+      label: t.description ? `${t.name} — ${t.description}` : String(t.name),
+      value: String(t.name),
+    })),
     [tools],
   );
 
   const { data: skills = [] } = useQuery({
     queryKey: ['skills'],
-    queryFn: () =>
-      getSkills().then((res) => extractList<any>(res)),
+    queryFn: () => getSkills().then((res) => extractList<Record<string, unknown>>(res)),
   });
   const skillOptions = useMemo(
-    () =>
-      skills.map((s: any) => ({
-        label: s.description ? `${s.name} — ${s.description}` : s.name,
-        value: s.name,
-      })),
+    () => skills.map((s: Record<string, unknown>) => ({
+      label: s.description ? `${s.name} — ${s.description}` : String(s.name),
+      value: String(s.name),
+    })),
     [skills],
   );
-
-  const { data: claudeMdFromServer = '' } = useQuery({
-    queryKey: ['claude-md', 1],
-    queryFn: () => getClaudeMd(1).then((res) => res.data?.claudeMd ?? ''),
-  });
-  const claudeMdContent = claudeMdDraft ?? claudeMdFromServer;
-
-  const invalidateAgents = () => queryClient.invalidateQueries({ queryKey: ['agents'] });
 
   const createMutation = useMutation({
     mutationFn: (payload: CreateAgentRequest) => createAgent(payload),
     onSuccess: () => {
       message.success('Agent created');
-      invalidateAgents();
+      queryClient.invalidateQueries({ queryKey: ['agents'] });
+      setCreateModalOpen(false);
+      form.resetFields();
     },
-  });
-  const updateMutation = useMutation({
-    mutationFn: ({ id, payload }: { id: number; payload: UpdateAgentRequest }) => updateAgent(id, payload),
-    onSuccess: () => {
-      message.success('Agent updated');
-      invalidateAgents();
-    },
-    onError: () => message.error('Failed to update agent'),
-  });
-  const deleteMutation = useMutation({
-    mutationFn: (id: number) => deleteAgent(id),
-    onSuccess: () => {
-      message.success('Agent deleted');
-      invalidateAgents();
-    },
-    onError: () => message.error('Failed to delete agent'),
-  });
-  const saveClaudeMdMutation = useMutation({
-    mutationFn: (content: string) => saveClaudeMd(1, content),
-    onSuccess: () => {
-      message.success('CLAUDE.md saved');
-      setClaudeMdModalOpen(false);
-      setClaudeMdDraft(null);
-      queryClient.invalidateQueries({ queryKey: ['claude-md', 1] });
-    },
-    onError: () => message.error('Failed to save CLAUDE.md'),
   });
 
-  const openCreate = () => {
-    setEditing(null);
-    form.resetFields();
-    form.setFieldsValue({ executionMode: 'ask', skillIds: [], toolIds: [] });
-    setFormKey((k) => k + 1);
-    setModalOpen(true);
-  };
-
-  const openEdit = (record: AgentDto) => {
-    setEditing(record);
-    form.setFieldsValue({
-      ...record,
-      skillIds: parseSkillIds(record.skillIds),
-      toolIds: parseSkillIds(record.toolIds),
+  const rows = useMemo(() => {
+    return agents.filter((a: AgentDto) => {
+      if (filter.model && a.modelId !== filter.model) return false;
+      if (filter.role && guessRole(a) !== filter.role) return false;
+      if (q) {
+        const s = q.toLowerCase();
+        const hay = ((a.name || '') + ' ' + (a.description || '') + ' ' + (a.modelId || '')).toLowerCase();
+        if (!hay.includes(s)) return false;
+      }
+      return true;
     });
-    setFormKey((k) => k + 1);
-    setModalOpen(true);
-  };
+  }, [q, filter, agents]);
 
-  const handleOk = async () => {
+  const models = useMemo(() => {
+    const map: Record<string, number> = {};
+    agents.forEach((a: AgentDto) => {
+      const m = a.modelId || 'default';
+      map[m] = (map[m] || 0) + 1;
+    });
+    return Object.entries(map).map(([id, count]) => ({ id, count }));
+  }, [agents]);
+
+  const roles = useMemo(() => {
+    const map: Record<string, number> = {};
+    agents.forEach((a: AgentDto) => {
+      const r = guessRole(a);
+      map[r] = (map[r] || 0) + 1;
+    });
+    return Object.entries(map).map(([id, count]) => ({ id, count }));
+  }, [agents]);
+
+  const toggle = (k: keyof FilterState, v: string) => setFilter(f => ({ ...f, [k]: f[k] === v ? null : v }));
+
+  const handleCreate = async () => {
     try {
       const values = await form.validateFields();
-
-      // Validate lifecycle hooks before save — block on errors (see doc §5.6).
-      const hooksState = lifecycleHooksRef.current;
-      const hooksErrors = hooksState?.errors ?? [];
-      if (hooksErrors.length > 0) {
-        message.error(`Fix lifecycle hooks config before saving: ${hooksErrors[0]}`);
-        return;
-      }
-
-      const payload = {
+      const payload: CreateAgentRequest = {
         ...values,
         skillIds: JSON.stringify(values.skillIds ?? []),
         toolIds: JSON.stringify(values.toolIds ?? []),
-        behaviorRules: JSON.stringify(behaviorRules.config),
-        lifecycleHooks: hooksState?.rawJson ?? '',
       };
-      if (editing) {
-        await updateMutation.mutateAsync({ id: editing.id, payload: { ...editing, ...payload } });
-      } else {
-        await createMutation.mutateAsync(payload);
-      }
-      setModalOpen(false);
+      await createMutation.mutateAsync(payload);
     } catch (e: unknown) {
-      // antd Form.validateFields rejects with { errorFields, ... } — ignore, Form shows the errors inline.
       if (typeof e === 'object' && e !== null && 'errorFields' in e) return;
       const detail = e instanceof Error ? e.message : 'unknown';
       message.error(`Save failed: ${detail}`);
     }
   };
 
-  const handleDelete = (id: number) => deleteMutation.mutate(id);
-
-  const handleSaveClaudeMd = () => saveClaudeMdMutation.mutate(claudeMdContent);
-
-  const columns = [
-    { title: 'ID', dataIndex: 'id', key: 'id', width: 60 },
-    { title: 'Name', dataIndex: 'name', key: 'name' },
-    { title: 'Model', dataIndex: 'modelId', key: 'modelId' },
-    { title: 'Mode', dataIndex: 'executionMode', key: 'executionMode', width: 80 },
-    {
-      title: 'Tools',
-      dataIndex: 'toolIds',
-      key: 'toolIds',
-      render: (v: any) => {
-        const arr = parseSkillIds(v);
-        if (arr.length === 0) return <span style={{ color: 'var(--text-muted)' }}>All</span>;
-        const shown = arr.slice(0, 3);
-        const rest = arr.length - shown.length;
-        return (
-          <Space size={[4, 4]} wrap>
-            {shown.map((n) => (
-              <Tag key={n} color="green">
-                {n}
-              </Tag>
-            ))}
-            {rest > 0 && <Tag>+{rest}</Tag>}
-          </Space>
-        );
-      },
-    },
-    {
-      title: 'Skills',
-      dataIndex: 'skillIds',
-      key: 'skillIds',
-      render: (v: any) => {
-        const arr = parseSkillIds(v);
-        if (arr.length === 0) return <span style={{ color: 'var(--text-muted)' }}>—</span>;
-        const shown = arr.slice(0, 3);
-        const rest = arr.length - shown.length;
-        return (
-          <Space size={[4, 4]} wrap>
-            {shown.map((n) => (
-              <Tag key={n} color="blue">
-                {n}
-              </Tag>
-            ))}
-            {rest > 0 && <Tag>+{rest}</Tag>}
-          </Space>
-        );
-      },
-    },
-    {
-      title: 'Status',
-      dataIndex: 'status',
-      key: 'status',
-      render: (v: string) => {
-        const color = v === 'active' ? 'green' : v === 'inactive' ? 'default' : 'orange';
-        return <Tag color={color} style={{ borderRadius: 'var(--radius-pill)' }}>{v}</Tag>;
-      },
-    },
-    {
-      title: 'Actions',
-      key: 'actions',
-      render: (_: any, record: any) => (
-        <Space>
-          <Button icon={<EditOutlined />} size="small" onClick={() => openEdit(record)}>
-            Edit
-          </Button>
-          <Button
-            icon={<HistoryOutlined />}
-            size="small"
-            onClick={() => setPromptHistoryAgentId(String(record.id))}
-          >
-            Prompts
-          </Button>
-          <Button
-            icon={<ThunderboltOutlined />}
-            size="small"
-            onClick={() => setHookHistoryAgentId(String(record.id))}
-          >
-            Hooks
-          </Button>
-          <Button
-            icon={<ExperimentOutlined />}
-            size="small"
-            onClick={() => setScenariosAgentId(String(record.id))}
-          >
-            Scenarios
-          </Button>
-          <Popconfirm title="Delete this agent?" onConfirm={() => handleDelete(record.id)}>
-            <Button icon={<DeleteOutlined />} size="small" danger>
-              Delete
-            </Button>
-          </Popconfirm>
-        </Space>
-      ),
-    },
-  ];
-
   return (
-    <div>
-      <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginBottom: 16 }}>
-        <Space>
-          <Button icon={<FileTextOutlined />} onClick={() => setClaudeMdModalOpen(true)}>
-            CLAUDE.md (Global)
-          </Button>
-          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-            Create Agent
-          </Button>
-        </Space>
-      </div>
-      <Card className="sf-agent-card" style={{ borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
-        {!loading && agents.length === 0 ? (
-          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No agents yet">
-            <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-              Create your first Agent
-            </Button>
-          </Empty>
-        ) : (
-          <Table dataSource={agents} columns={columns} rowKey="id" loading={loading} />
+    <div className="agents-view">
+      <aside className="agents-filters">
+        <div className="agents-filters-h" style={{ marginTop: 0 }}>Search</div>
+        <input className="agents-search" placeholder="name, model, description…" value={q} onChange={e => setQ(e.target.value)} />
+
+        {roles.length > 0 && (
+          <>
+            <div className="agents-filters-h">Role</div>
+            {roles.map(r => (
+              <button key={r.id} className={`filter-item ${filter.role === r.id ? 'on' : ''}`} onClick={() => toggle('role', r.id)}>
+                <div className={`agent-mark ${r.id}`} style={{ width: 14, height: 14, fontSize: 8, borderRadius: 3 }} />
+                {r.id}
+                <span className="filter-item-count">{r.count}</span>
+              </button>
+            ))}
+          </>
         )}
-      </Card>
+
+        {models.length > 0 && (
+          <>
+            <div className="agents-filters-h">Model</div>
+            {models.map(m => (
+              <button key={m.id} className={`filter-item ${filter.model === m.id ? 'on' : ''}`} onClick={() => toggle('model', m.id)}>
+                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg-3)' }}>{m.id}</span>
+                <span className="filter-item-count">{m.count}</span>
+              </button>
+            ))}
+          </>
+        )}
+      </aside>
+
+      <section className="agents-main">
+        <header className="agents-head">
+          <div>
+            <h1 className="agents-head-title">Agents</h1>
+            <p className="agents-head-sub">{rows.length} of {agents.length} shown</p>
+          </div>
+          <div className="agents-head-actions">
+            <div className="view-seg">
+              <button className={view === 'grid' ? 'on' : ''} onClick={() => setView('grid')}>{GRID_ICON} Grid</button>
+              <button className={view === 'table' ? 'on' : ''} onClick={() => setView('table')}>{ROWS_ICON} Table</button>
+            </div>
+            <button className="btn-primary-sf" onClick={() => setCreateModalOpen(true)}>{PLUS_ICON} New agent</button>
+          </div>
+        </header>
+
+        <div className="agents-body">
+          {loading && (
+            <div style={{ textAlign: 'center', color: 'var(--fg-3)', padding: '60px 0', fontSize: 14 }}>
+              Loading agents…
+            </div>
+          )}
+
+          {!loading && rows.length === 0 && (
+            <div style={{ textAlign: 'center', color: 'var(--fg-3)', padding: '60px 0', fontSize: 14 }}>
+              {agents.length === 0 ? (
+                <>
+                  No agents yet.
+                  <div>
+                    <button className="btn-primary-sf" style={{ marginTop: 12 }} onClick={() => setCreateModalOpen(true)}>
+                      {PLUS_ICON} Create your first agent
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  No agents match these filters.
+                  <div>
+                    <button className="btn-ghost-sf" style={{ marginTop: 12 }} onClick={() => { setFilter({ model: null, role: null }); setQ(''); }}>
+                      Clear filters
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+          {view === 'grid' && !loading && rows.length > 0 && (
+            <div className="agents-grid">
+              {rows.map((a: AgentDto) => <AgentCard key={a.id} agent={a} onOpen={setOpenAgent} />)}
+            </div>
+          )}
+
+          {view === 'table' && !loading && rows.length > 0 && (
+            <AgentsTable rows={rows} onOpen={setOpenAgent} />
+          )}
+        </div>
+      </section>
+
+      {openAgent && <AgentDrawer agent={openAgent} onClose={() => setOpenAgent(null)} />}
 
       <Modal
-        key={`${editing?.id ?? 'new'}-${formKey}`}
-        title={editing ? 'Edit Agent' : 'Create Agent'}
-        open={modalOpen}
-        onOk={handleOk}
-        onCancel={() => setModalOpen(false)}
-        width={760}
+        title="Create Agent"
+        open={createModalOpen}
+        onOk={handleCreate}
+        onCancel={() => setCreateModalOpen(false)}
+        width={680}
+        destroyOnClose
       >
         <Form form={form} layout="vertical">
           <Form.Item name="name" label="Name" rules={[{ required: true, message: 'Please enter agent name' }]}>
@@ -348,36 +291,18 @@ const AgentList: React.FC = () => {
           <Form.Item name="description" label="Description">
             <TextArea rows={2} />
           </Form.Item>
-          <Form.Item
-            name="modelId"
-            label="Model"
-            rules={[{ required: true, message: 'Please select a model' }]}
-          >
-            <Select
-              options={modelOptions}
-              placeholder="选择模型"
-              showSearch
-              optionFilterProp="label"
-            />
+          <Form.Item name="modelId" label="Model" rules={[{ required: true, message: 'Please select a model' }]}>
+            <Select options={modelOptions} placeholder="Select model" showSearch optionFilterProp="label" />
           </Form.Item>
-          <Form.Item
-            name="executionMode"
-            label="Execution Mode"
-            initialValue="ask"
-            tooltip="ask: Agent 遇到失败/歧义时主动问用户;auto: 自主执行"
-          >
+          <Form.Item name="executionMode" label="Execution Mode" initialValue="ask">
             <Select
               options={[
-                { label: 'ask — 主动确认', value: 'ask' },
-                { label: 'auto — 自主执行', value: 'auto' },
+                { label: 'ask — confirms before acting', value: 'ask' },
+                { label: 'auto — autonomous execution', value: 'auto' },
               ]}
             />
           </Form.Item>
-          <Form.Item
-            name="maxLoops"
-            label="Max Loops"
-            tooltip="Maximum loop iterations for this agent (default: 25, max: 200). Increase for research/exploration tasks."
-          >
+          <Form.Item name="maxLoops" label="Max Loops" tooltip="Max loop iterations (default: 25, max: 200)">
             <InputNumber min={1} max={200} placeholder="25" style={{ width: '100%' }} />
           </Form.Item>
           <Form.Item label="Prompts">
@@ -387,7 +312,7 @@ const AgentList: React.FC = () => {
                 label: 'AGENT.md',
                 children: (
                   <Form.Item name="systemPrompt" noStyle>
-                    <TextArea rows={10} placeholder="# Agent Core Instructions&#10;&#10;You are..." />
+                    <TextArea rows={8} placeholder="# Agent Core Instructions" />
                   </Form.Item>
                 ),
               },
@@ -396,160 +321,20 @@ const AgentList: React.FC = () => {
                 label: 'SOUL.md',
                 children: (
                   <Form.Item name="soulPrompt" noStyle>
-                    <TextArea rows={10} placeholder="# Persona & Tone&#10;&#10;(Optional) Define personality..." />
+                    <TextArea rows={8} placeholder="# Persona & Tone" />
                   </Form.Item>
-                ),
-              },
-              {
-                key: 'tools',
-                label: 'TOOLS.md',
-                children: (
-                  <Form.Item name="toolsPrompt" noStyle>
-                    <TextArea rows={10} placeholder="# Tool Usage Rules&#10;&#10;(Optional) Custom tool rules..." />
-                  </Form.Item>
-                ),
-              },
-              {
-                key: 'rules',
-                label: 'RULES.md',
-                children: (
-                  <BehaviorRulesEditor
-                    groupedRules={behaviorRules.groupedRules}
-                    templateId={behaviorRules.templateId}
-                    customRules={behaviorRules.config.customRules}
-                    isLoading={behaviorRules.isLoading}
-                    onApplyTemplate={behaviorRules.applyTemplate}
-                    onToggleRule={behaviorRules.toggleRule}
-                    onAddCustomRule={behaviorRules.addCustomRule}
-                    onRemoveCustomRule={behaviorRules.removeCustomRule}
-                    onUpdateCustomRule={behaviorRules.updateCustomRule}
-                  />
-                ),
-              },
-              {
-                key: 'memory',
-                label: 'MEMORY.md',
-                children: (
-                  <div style={{ color: 'var(--text-muted)', padding: 16 }}>
-                    Memory is automatically injected from the Memory system.
-                    <br />
-                    <a href="/memories">Manage Memories &rarr;</a>
-                  </div>
-                ),
-              },
-              {
-                key: 'hooks',
-                label: 'HOOKS.md',
-                children: (
-                  <LifecycleHooksEditor
-                    ref={lifecycleHooksRef}
-                    initialJson={initialLifecycleHooks}
-                    agentId={editing ? String(editing.id) : null}
-                    skills={skills.map((s: { name: string; description?: string }) => ({
-                      name: s.name,
-                      description: s.description,
-                    }))}
-                  />
                 ),
               },
             ]} />
           </Form.Item>
-          <Form.Item
-            name="toolIds"
-            label="Tools"
-            tooltip="Select which tools (function calling) this agent can use. Leave empty for all tools."
-          >
-            <Select
-              mode="multiple"
-              placeholder="All tools (default)"
-              options={toolOptions}
-              showSearch
-              optionFilterProp="label"
-              allowClear
-            />
+          <Form.Item name="toolIds" label="Tools" tooltip="Which tools this agent can use. Leave empty for all.">
+            <Select mode="multiple" placeholder="All tools (default)" options={toolOptions} showSearch optionFilterProp="label" allowClear />
           </Form.Item>
-          <Form.Item
-            name="skillIds"
-            label="Skills"
-            tooltip="Select which skills (SKILL.md knowledge packs) to inject into this agent's prompt"
-          >
-            <Select
-              mode="multiple"
-              placeholder="Select skills"
-              options={skillOptions}
-              showSearch
-              optionFilterProp="label"
-              allowClear
-            />
+          <Form.Item name="skillIds" label="Skills" tooltip="Which skills to inject into this agent's prompt">
+            <Select mode="multiple" placeholder="Select skills" options={skillOptions} showSearch optionFilterProp="label" allowClear />
           </Form.Item>
         </Form>
       </Modal>
-
-      <Modal
-        title="CLAUDE.md — Global Rules (applies to all agents)"
-        open={claudeMdModalOpen}
-        onOk={handleSaveClaudeMd}
-        onCancel={() => { setClaudeMdModalOpen(false); setClaudeMdDraft(null); }}
-        width={720}
-      >
-        <TextArea
-          rows={15}
-          value={claudeMdContent}
-          onChange={(e) => setClaudeMdDraft(e.target.value)}
-          placeholder="# Global Rules&#10;&#10;Rules that apply to all agents..."
-        />
-      </Modal>
-
-      <Drawer
-        title={
-          <Space>
-            <HistoryOutlined />
-            <span>Prompt Version History</span>
-          </Space>
-        }
-        width={640}
-        open={!!promptHistoryAgentId}
-        onClose={() => setPromptHistoryAgentId(null)}
-        destroyOnClose
-      >
-        {promptHistoryAgentId && (
-          <PromptHistoryPanel agentId={promptHistoryAgentId} />
-        )}
-      </Drawer>
-
-      <Drawer
-        title={
-          <Space>
-            <ThunderboltOutlined />
-            <span>Hook Execution History</span>
-          </Space>
-        }
-        width={680}
-        open={!!hookHistoryAgentId}
-        onClose={() => setHookHistoryAgentId(null)}
-        destroyOnClose
-      >
-        {hookHistoryAgentId && (
-          <HookHistoryPanel agentId={hookHistoryAgentId} />
-        )}
-      </Drawer>
-
-      <Drawer
-        title={
-          <Space>
-            <ExperimentOutlined />
-            <span>Scenario Drafts — Agent #{scenariosAgentId}</span>
-          </Space>
-        }
-        width={680}
-        open={!!scenariosAgentId}
-        onClose={() => setScenariosAgentId(null)}
-        destroyOnClose
-      >
-        {scenariosAgentId && (
-          <ScenarioDraftPanel agentId={scenariosAgentId} />
-        )}
-      </Drawer>
     </div>
   );
 };

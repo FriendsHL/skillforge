@@ -1,5 +1,5 @@
 import React from 'react';
-import { Card, Space, Button, Input } from 'antd';
+import { IconSparkle } from './chat/ChatIcons';
 
 interface PendingAskOption {
   label: string;
@@ -25,39 +25,55 @@ const PendingAskCard: React.FC<PendingAskCardProps> = ({
   otherInput,
   onOtherInputChange,
   onAnswer,
-}) => (
-  <Card size="small" title="💬 Agent 在问你" style={{ margin: '8px 12px 0', borderColor: 'var(--color-warning)' }}>
-    {pendingAsk.context && (
-      <div style={{ color: 'var(--text-muted)', fontSize: 12, marginBottom: 8 }}>{pendingAsk.context}</div>
-    )}
-    <div style={{ fontWeight: 500, marginBottom: 12 }}>{pendingAsk.question}</div>
-    <Space direction="vertical" style={{ width: '100%' }}>
-      {pendingAsk.options.map((opt, i) => (
-        <Button
-          key={i}
-          block
-          style={{ textAlign: 'left', height: 'auto', padding: '8px 12px' }}
-          onClick={() => onAnswer(opt.label)}
-        >
-          <div style={{ fontWeight: 500 }}>{opt.label}</div>
-          {opt.description && <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{opt.description}</div>}
-        </Button>
-      ))}
-      {pendingAsk.allowOther && (
-        <Space.Compact style={{ width: '100%', marginTop: 4 }}>
-          <Input
-            placeholder="或自己输入答复..."
-            value={otherInput}
-            onChange={(e) => onOtherInputChange(e.target.value)}
-            onPressEnter={() => otherInput.trim() && onAnswer(otherInput.trim())}
-          />
-          <Button type="primary" disabled={!otherInput.trim()} onClick={() => onAnswer(otherInput.trim())}>
-            发送
-          </Button>
-        </Space.Compact>
-      )}
-    </Space>
-  </Card>
-);
+}) => {
+  const trimmed = otherInput.trim();
+  return (
+    <div className="ask-card" role="dialog" aria-label="Agent is asking">
+      <div className="ask-header">
+        <IconSparkle s={11} />
+        Agent is asking
+      </div>
+      <div className="ask-q">{pendingAsk.question}</div>
+      {pendingAsk.context && <div className="ask-ctx">{pendingAsk.context}</div>}
+      <div className="ask-options">
+        {pendingAsk.options.map((opt, i) => (
+          <button
+            type="button"
+            key={i}
+            className="ask-opt"
+            onClick={() => onAnswer(opt.label)}
+          >
+            <div className="ask-opt-label">{opt.label}</div>
+            {opt.description && (
+              <div className="ask-opt-desc">{opt.description}</div>
+            )}
+          </button>
+        ))}
+        {pendingAsk.allowOther && (
+          <div className="ask-other">
+            <input
+              placeholder="Or write your own answer…"
+              value={otherInput}
+              onChange={(e) => onOtherInputChange(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && trimmed) {
+                  e.preventDefault();
+                  onAnswer(trimmed);
+                }
+              }}
+            />
+            <button
+              type="button"
+              disabled={!trimmed}
+              onClick={() => onAnswer(trimmed)}
+            >
+              Send
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
 
 export default PendingAskCard;
