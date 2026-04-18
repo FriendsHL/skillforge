@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, Popconfirm, Tag, Tabs, message, Card, Drawer } from 'antd';
+import { Table, Button, Modal, Form, Input, InputNumber, Select, Space, Popconfirm, Tag, Tabs, message, Card, Drawer, Empty } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, FileTextOutlined, HistoryOutlined, ExperimentOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getAgents, createAgent, updateAgent, deleteAgent, getTools, getSkills, getClaudeMd, saveClaudeMd, extractList, type BehaviorRuleConfig, type CreateAgentRequest, type UpdateAgentRequest } from '../api';
@@ -261,7 +261,15 @@ const AgentList: React.FC = () => {
         );
       },
     },
-    { title: 'Status', dataIndex: 'status', key: 'status' },
+    {
+      title: 'Status',
+      dataIndex: 'status',
+      key: 'status',
+      render: (v: string) => {
+        const color = v === 'active' ? 'green' : v === 'inactive' ? 'default' : 'orange';
+        return <Tag color={color} style={{ borderRadius: 'var(--radius-pill)' }}>{v}</Tag>;
+      },
+    },
     {
       title: 'Actions',
       key: 'actions',
@@ -313,8 +321,16 @@ const AgentList: React.FC = () => {
           </Button>
         </Space>
       </div>
-      <Card style={{ borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
-        <Table dataSource={agents} columns={columns} rowKey="id" loading={loading} />
+      <Card className="sf-agent-card" style={{ borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
+        {!loading && agents.length === 0 ? (
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No agents yet">
+            <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+              Create your first Agent
+            </Button>
+          </Empty>
+        ) : (
+          <Table dataSource={agents} columns={columns} rowKey="id" loading={loading} />
+        )}
       </Card>
 
       <Modal

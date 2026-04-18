@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import {
-  Button, Card, Modal, Form, Input, Select, Space, Popconfirm, Tag, Tabs, message,
+  Button, Card, Modal, Form, Input, Select, Space, Popconfirm, Tag, Tabs, message, Spin,
 } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, SearchOutlined } from '@ant-design/icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -122,7 +122,11 @@ const MemoryList: React.FC = () => {
 
   const renderCards = () => {
     if (loading) {
-      return <div style={{ textAlign: 'center', padding: 48, color: 'var(--text-muted)' }}>Loading...</div>;
+      return (
+        <div style={{ display: 'flex', justifyContent: 'center', padding: 48 }}>
+          <Spin size="large" aria-label="Loading memories" />
+        </div>
+      );
     }
     if (filteredMemories.length === 0) {
       return <div style={{ textAlign: 'center', padding: 48, color: 'var(--text-muted)' }}>No memories found</div>;

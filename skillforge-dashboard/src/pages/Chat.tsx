@@ -60,6 +60,7 @@ const Chat: React.FC = () => {
   const [sessionDepth, setSessionDepth] = useState<number>(0);
   const [selectedAgent, setSelectedAgent] = useState<number | undefined>();
   const [sessions, setSessions] = useState<any[]>([]);
+  const [sessionsLoading, setSessionsLoading] = useState(false);
   const [activeSessionId, setActiveSessionId] = useState<string | undefined>(urlSessionId);
 
   const {
@@ -126,14 +127,21 @@ const Chat: React.FC = () => {
   // Load sessions when agent selected
   useEffect(() => {
     if (selectedAgent == null) return;
+    let cancelled = false;
+    setSessionsLoading(true);
     getSessions(userId)
       .then((res) => {
+        if (cancelled) return;
         const list = safeParseList(SessionSchema, extractList<any>(res)).filter(
           (s: any) => s.agentId === selectedAgent,
         );
         setSessions(list);
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setSessionsLoading(false);
+      });
+    return () => { cancelled = true; };
   }, [selectedAgent, userId]);
 
   // Reset Chat-local state when session changes
@@ -354,6 +362,7 @@ const Chat: React.FC = () => {
         sessions={sessions}
         selectedAgent={selectedAgent}
         activeSessionId={activeSessionId}
+        loading={sessionsLoading}
         onSelectAgent={(id) => {
           setSelectedAgent(id);
           setActiveSessionId(undefined);

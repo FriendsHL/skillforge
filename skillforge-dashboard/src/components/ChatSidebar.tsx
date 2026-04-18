@@ -1,5 +1,5 @@
 import React from 'react';
-import { Select, Button, List, Typography } from 'antd';
+import { Select, Button, List, Typography, Skeleton } from 'antd';
 import { TeamOutlined } from '@ant-design/icons';
 
 const { Text } = Typography;
@@ -12,6 +12,7 @@ interface ChatSidebarProps {
   onSelectAgent: (id: number) => void;
   onNewChat: () => void;
   onSelectSession: (sid: string) => void;
+  loading?: boolean;
 }
 
 const ChatSidebar: React.FC<ChatSidebarProps> = ({
@@ -22,6 +23,7 @@ const ChatSidebar: React.FC<ChatSidebarProps> = ({
   onSelectAgent,
   onNewChat,
   onSelectSession,
+  loading,
 }) => (
   <div
     style={{
@@ -46,33 +48,38 @@ const ChatSidebar: React.FC<ChatSidebarProps> = ({
         + New Chat
       </Button>
     </div>
-    <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
-      <List
-        size="small"
-        dataSource={sessions}
-        renderItem={(item: any) => {
-          const sid = String(item.id ?? item.sessionId);
-          const isActive = activeSessionId === sid;
-          return (
-            <List.Item
-              onClick={() => onSelectSession(sid)}
-              className={`sf-session-item${isActive ? ' sf-session-item--active' : ''}`}
-            >
-              <Text ellipsis style={{ width: '100%' }}>
-                {item.collabRunId && (
-                  <TeamOutlined
-                    style={{ marginRight: 4, color: 'var(--accent-primary)', fontSize: 12 }}
-                    title="Team session"
-                  />
-                )}
-                {item.title && item.title !== 'New Session'
-                  ? item.title
-                  : `Session ${sid.slice(0, 8)}...`}
-              </Text>
-            </List.Item>
-          );
-        }}
-      />
+    <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }} aria-live="polite">
+      {loading ? (
+        <Skeleton active paragraph={{ rows: 3 }} style={{ padding: '12px 16px' }} />
+      ) : (
+        <List
+          size="small"
+          dataSource={sessions}
+          locale={{ emptyText: 'No sessions yet' }}
+          renderItem={(item: any) => {
+            const sid = String(item.id ?? item.sessionId);
+            const isActive = activeSessionId === sid;
+            return (
+              <List.Item
+                onClick={() => onSelectSession(sid)}
+                className={`sf-session-item${isActive ? ' sf-session-item--active' : ''}`}
+              >
+                <Text ellipsis style={{ width: '100%' }}>
+                  {item.collabRunId && (
+                    <TeamOutlined
+                      style={{ marginRight: 4, color: 'var(--accent-primary)', fontSize: 12 }}
+                      title="Team session"
+                    />
+                  )}
+                  {item.title && item.title !== 'New Session'
+                    ? item.title
+                    : `Session ${sid.slice(0, 8)}...`}
+                </Text>
+              </List.Item>
+            );
+          }}
+        />
+      )}
     </div>
   </div>
 );

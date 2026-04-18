@@ -61,6 +61,7 @@
   --radius-md: 10px;
   --radius-lg: 18px;
   --radius-input: 24px;
+  --radius-pill: 9999px;
 
   /* Semantic status colors — shared across forms, banners, inline errors */
   --color-warn: #b45309;
@@ -248,11 +249,18 @@ body {
 }
 .sf-send-btn.ant-btn-primary:disabled,
 .sf-send-btn.ant-btn-primary.ant-btn-loading {
-  opacity: 0.6;
+  opacity: 0.4;
   background: var(--accent-primary) !important;
   border-color: var(--accent-primary) !important;
   color: var(--text-on-accent) !important;
   cursor: not-allowed;
+}
+
+.sf-agent-card {
+  transition: box-shadow var(--transition-base);
+}
+.sf-agent-card:hover {
+  box-shadow: var(--shadow-card-hover);
 }
 
 /*

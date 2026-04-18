@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { Table, Tooltip, message, Card } from 'antd';
+import { Table, Tooltip, Card, Alert, Button } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getSessions, extractList } from '../api';
@@ -95,10 +95,6 @@ const SessionList: React.FC = () => {
     // while the component was unmounted and the WS was closed.
     staleTime: 0,
   });
-  useEffect(() => {
-    if (sessionsError) message.error('Failed to load sessions');
-  }, [sessionsError]);
-
   const wsRef = useRef<WebSocket | null>(null);
   const unmountedRef = useRef(false);
   const reconnectDelayRef = useRef(2000);
@@ -236,6 +232,15 @@ const SessionList: React.FC = () => {
 
   return (
     <div>
+      {sessionsError && (
+        <Alert
+          type="error"
+          showIcon
+          message="Failed to load sessions"
+          action={<Button size="small" onClick={() => refetch()}>Retry</Button>}
+          style={{ marginBottom: 16 }}
+        />
+      )}
       <Card style={{ borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
       <Table
         dataSource={sessions}

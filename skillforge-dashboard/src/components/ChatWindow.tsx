@@ -82,8 +82,7 @@ const ChatInput: React.FC<ChatInputProps> = React.memo(({ disabled, onSend }) =>
           icon={<SendOutlined />}
           onClick={handleSend}
           disabled={disabled || !input.trim()}
-          shape="circle"
-          style={{ width: 32, height: 32, minWidth: 32, marginBottom: 4 }}
+          style={{ width: 32, height: 32, minWidth: 32, marginBottom: 4, borderRadius: 'var(--radius-sm)' }}
         />
       </div>
     </div>
@@ -202,9 +201,10 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
                 style={{
                   ...(msg.role === 'user'
                     ? {
-                        maxWidth: '72%',
+                        maxWidth: '68%',
                         marginLeft: 'auto',
                         background: 'var(--bg-user-msg)',
+                        border: '1px solid var(--border-subtle)',
                         borderRadius: '18px 18px 4px 18px',
                         padding: '10px 14px',
                         color: 'var(--text-primary)',
