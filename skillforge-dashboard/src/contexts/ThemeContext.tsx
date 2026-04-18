@@ -16,6 +16,7 @@ const ThemeContext = createContext<ThemeContextValue>({
 export const useTheme = () => useContext(ThemeContext);
 
 const CSS_VAR_MAP: Record<string, keyof ThemeTokens> = {
+  '--bg-base': 'bgBase',
   '--bg-primary': 'bgBase',
   '--bg-sidebar': 'bgSidebar',
   '--bg-surface': 'bgSurface',
@@ -25,6 +26,7 @@ const CSS_VAR_MAP: Record<string, keyof ThemeTokens> = {
   '--bg-hover': 'bgHover',
   '--text-primary': 'textPrimary',
   '--text-secondary': 'textSecondary',
+  '--text-tertiary': 'textTertiary',
   '--text-muted': 'textMuted',
   '--text-on-accent': 'textOnAccent',
   '--accent-primary': 'accentPrimary',
@@ -32,13 +34,24 @@ const CSS_VAR_MAP: Record<string, keyof ThemeTokens> = {
   '--accent-muted': 'accentMuted',
   '--border-subtle': 'borderSubtle',
   '--border-medium': 'borderMedium',
+  '--color-ok': 'colorOk',
   '--color-warn': 'colorWarn',
+  '--color-err': 'colorErr',
   '--color-error': 'colorError',
   '--color-error-bg': 'colorErrorBg',
   '--color-error-border': 'colorErrorBorder',
   '--color-success': 'colorSuccess',
   '--color-warning': 'colorWarning',
   '--color-info': 'colorInfo',
+  '--a-leader': 'aLeader',
+  '--a-reviewer': 'aReviewer',
+  '--a-writer': 'aWriter',
+  '--a-evaluator': 'aEvaluator',
+  '--a-grep': 'aGrep',
+  '--a-judge': 'aJudge',
+  '--shadow-1': 'shadow1',
+  '--shadow-2': 'shadow2',
+  '--shadow-3': 'shadow3',
   '--shadow-input': 'shadowInput',
   '--shadow-surface': 'shadowSurface',
   '--shadow-card': 'shadowCard',
@@ -70,7 +83,7 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   useEffect(() => {
     applyCssVars(tokens);
     document.documentElement.setAttribute('data-theme', theme);
-  }, [theme]);
+  }, [theme, tokens]);
 
   const toggleTheme = () => {
     const next = theme === 'dark' ? 'light' : 'dark';

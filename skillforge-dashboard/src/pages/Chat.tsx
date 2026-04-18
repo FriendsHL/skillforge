@@ -29,6 +29,7 @@ import {
   getCompactions,
   extractList,
 } from '../api';
+import { z } from 'zod';
 import { AgentSchema, SessionSchema, safeParseList } from '../api/schemas';
 import { useChatWebSocket } from '../hooks/useChatWebSocket';
 import { useChatMessages, type InflightTool } from '../hooks/useChatMessages';
@@ -55,11 +56,11 @@ const Chat: React.FC = () => {
   const { sessionId: urlSessionId } = useParams<{ sessionId?: string }>();
   const navigate = useNavigate();
   const { userId } = useAuth();
-  const [agents, setAgents] = useState<any[]>([]);
+  const [agents, setAgents] = useState<z.infer<typeof AgentSchema>[]>([]);
   const [parentSessionId, setParentSessionId] = useState<string | null>(null);
   const [sessionDepth, setSessionDepth] = useState<number>(0);
   const [selectedAgent, setSelectedAgent] = useState<number | undefined>();
-  const [sessions, setSessions] = useState<any[]>([]);
+  const [sessions, setSessions] = useState<z.infer<typeof SessionSchema>[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(false);
   const [activeSessionId, setActiveSessionId] = useState<string | undefined>(urlSessionId);
 
@@ -86,7 +87,7 @@ const Chat: React.FC = () => {
   const [totalTokensReclaimed, setTotalTokensReclaimed] = useState(0);
   const [viewMode, setViewMode] = useState<'chat' | 'replay'>('chat');
   const [compactModalOpen, setCompactModalOpen] = useState(false);
-  const [compactEvents, setCompactEvents] = useState<any[]>([]);
+  const [compactEvents, setCompactEvents] = useState<unknown[]>([]);
   const [compacting, setCompacting] = useState(false);
   const [compactionNotice, setCompactionNotice] = useState(false);
 
@@ -316,7 +317,9 @@ const Chat: React.FC = () => {
       try {
         const mres = await getSessionMessages(activeSessionId, userId);
         setRawMessages(extractList(mres));
-      } catch {}
+      } catch {
+        message.warning('Could not refresh messages after compaction');
+      }
     } catch (e: unknown) {
       const status = (e as { response?: { status?: number } })?.response?.status;
       if (status === 409) {
@@ -324,8 +327,9 @@ const Chat: React.FC = () => {
       } else {
         message.error('Compaction failed');
       }
+    } finally {
+      setCompacting(false);
     }
-    setCompacting(false);
   };
 
   const handleOpenCompactModal = async () => {
@@ -495,6 +499,8 @@ const Chat: React.FC = () => {
                   streamingText={streamingText}
                   compactionNotice={compactionNotice}
                   onCompactionDismiss={() => setCompactionNotice(false)}
+                  runtimeStatus={runtimeStatus}
+                  agentName={agents.find((a) => a.id === selectedAgent)?.name}
                 />
               </>
             ) : (

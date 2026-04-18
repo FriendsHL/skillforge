@@ -1,8 +1,12 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+
+const formatTime = (date: Date): string =>
+  date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 import { Spin, Input, Button, Alert } from 'antd';
 import { SendOutlined } from '@ant-design/icons';
-import ToolCallTimeline from './ToolCallTimeline';
+import ToolCallTimeline, { type ToolCall } from './ToolCallTimeline';
 import MarkdownRenderer from './MarkdownRenderer';
+import ActivityRail from './ActivityRail';
 
 /**
  * 节流版 MarkdownRenderer：每 200ms 刷新一次渲染，
@@ -93,13 +97,14 @@ const ChatInput: React.FC<ChatInputProps> = React.memo(({ disabled, onSend }) =>
 export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
-  toolCalls?: any[];
+  toolCalls?: ToolCall[];
   timestamp?: string;
+  id?: string;
 }
 
 interface InflightTool {
   name: string;
-  input: any;
+  input: unknown;
   startTs: number;
 }
 
@@ -112,6 +117,8 @@ interface ChatWindowProps {
   streamingText?: string;
   compactionNotice?: boolean;
   onCompactionDismiss?: () => void;
+  runtimeStatus?: string;
+  agentName?: string;
 }
 
 const ChatWindow: React.FC<ChatWindowProps> = ({
@@ -123,6 +130,8 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
   streamingText,
   compactionNotice,
   onCompactionDismiss,
+  runtimeStatus,
+  agentName,
 }) => {
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -156,12 +165,9 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
 
   const inflightList = inflightTools ? Object.entries(inflightTools) : [];
 
-  const formatTime = (date: Date) => {
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  };
-
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+    <div className="sf-chat-surface">
+      <div className="sf-chat-center">
       <div ref={scrollContainerRef} onScroll={handleScroll} style={{ flex: 1, overflowY: 'auto', padding: 16 }}>
         <div style={{ maxWidth: 740, margin: '0 auto', padding: '0 16px' }}>
           {compactionNotice && (
@@ -176,7 +182,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
             </div>
           )}
           {messages.map((msg, idx) => (
-            <div key={idx} style={{ marginBottom: 16 }}>
+            <div key={msg.id ?? `${msg.role}-${idx}`} style={{ marginBottom: 16 }}>
               {msg.role === 'assistant' && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
                   <div
@@ -246,12 +252,12 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
                 <div
                   style={{
-                    width: 28,
-                    height: 28,
+                    width: 20,
+                    height: 20,
                     borderRadius: '50%',
                     background: 'var(--accent-primary)',
                     color: 'var(--text-on-accent)',
-                    fontSize: 11,
+                    fontSize: 9,
                     fontWeight: 700,
                     display: 'flex',
                     alignItems: 'center',
@@ -311,7 +317,14 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
           <div ref={bottomRef} />
         </div>
       </div>
+      <div className="sf-composer-fade" aria-hidden="true" />
       <ChatInput disabled={inputDisabled} onSend={stableOnSend} />
+      </div>
+      <ActivityRail
+        inflightTools={inflightTools ?? {}}
+        runtimeStatus={runtimeStatus ?? 'idle'}
+        agentName={agentName}
+      />
     </div>
   );
 };

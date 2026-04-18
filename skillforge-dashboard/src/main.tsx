@@ -3,9 +3,6 @@ import { createRoot } from 'react-dom/client';
 import { ConfigProvider, theme as antTheme } from 'antd';
 import enUS from 'antd/locale/en_US';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import '@fontsource/inter/400.css';
-import '@fontsource/inter/500.css';
-import '@fontsource/inter/600.css';
 import App from './App';
 import { ThemeProvider, useTheme } from './contexts/ThemeContext';
 import './index.css';
@@ -31,7 +28,7 @@ const ThemeConfigProvider: React.FC<{ children: React.ReactNode }> = ({ children
           colorTextSecondary: tokens.textSecondary,
           borderRadius: 8,
           borderRadiusLG: 12,
-          fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
+          fontFamily: "'Inter Tight', 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif",
           fontSize: 15,
         },
         components: {
