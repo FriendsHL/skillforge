@@ -21,6 +21,8 @@ import com.skillforge.core.llm.OpenAiEmbeddingProvider;
 import com.skillforge.core.skill.SkillPackageLoader;
 import com.skillforge.core.skill.SkillRegistry;
 import com.skillforge.skills.BashSkill;
+import com.skillforge.skills.CodeReviewSkill;
+import com.skillforge.skills.CodeSandboxSkill;
 import com.skillforge.skills.FileEditSkill;
 import com.skillforge.skills.FileReadSkill;
 import com.skillforge.skills.FileWriteSkill;
@@ -28,6 +30,8 @@ import com.skillforge.skills.GlobSkill;
 import com.skillforge.skills.GrepSkill;
 import com.skillforge.skills.WebFetchSkill;
 import com.skillforge.skills.WebSearchSkill;
+import com.skillforge.server.code.RegisterScriptMethodSkill;
+import com.skillforge.server.code.ScriptMethodService;
 import com.skillforge.server.skill.TodoStore;
 import com.skillforge.server.skill.TodoWriteSkill;
 import com.skillforge.server.clawhub.ClawHubProperties;
@@ -113,6 +117,47 @@ public class SkillForgeConfig {
         registry.register(new WebFetchSkill());
         registry.register(new WebSearchSkill());
         return registry;
+    }
+
+    /**
+     * CodeSandboxSkill — lets Code Agent test-run bash/node/java snippets in an isolated sandbox
+     * before registering them as hook methods.
+     */
+    @Bean
+    public CodeSandboxSkill codeSandboxSkill(SkillRegistry skillRegistry) {
+        CodeSandboxSkill skill = new CodeSandboxSkill();
+        skillRegistry.register(skill);
+        log.info("Registered CodeSandboxSkill into SkillRegistry");
+        return skill;
+    }
+
+    /**
+     * CodeReviewSkill — delegates code review to an LLM provider.
+     */
+    @Bean
+    public CodeReviewSkill codeReviewSkill(LlmProviderFactory llmProviderFactory,
+                                           LlmProperties llmProperties,
+                                           SkillRegistry skillRegistry) {
+        String providerName = llmProperties.getDefaultProvider() != null
+                ? llmProperties.getDefaultProvider() : "claude";
+        CodeReviewSkill skill = new CodeReviewSkill(llmProviderFactory, providerName);
+        skillRegistry.register(skill);
+        log.info("Registered CodeReviewSkill into SkillRegistry (provider={})", providerName);
+        return skill;
+    }
+
+    /**
+     * RegisterScriptMethodSkill — lets Code Agent persist a bash/node script as an
+     * {@code agent.*} hook method and register it at runtime.
+     */
+    @Bean
+    public RegisterScriptMethodSkill registerScriptMethodSkill(ScriptMethodService scriptMethodService,
+                                                               ObjectMapper objectMapper,
+                                                               SkillRegistry skillRegistry) {
+        RegisterScriptMethodSkill skill = new RegisterScriptMethodSkill(scriptMethodService, objectMapper);
+        skillRegistry.register(skill);
+        log.info("Registered RegisterScriptMethodSkill into SkillRegistry");
+        return skill;
     }
 
     @Bean
