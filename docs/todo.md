@@ -1,6 +1,6 @@
 # SkillForge 待办任务
 
-> 更新于：2026-04-17
+> 更新于：2026-04-19
 
 ---
 
@@ -55,18 +55,11 @@
 
 ---
 
-### P5 — 前端体验优化
+### ~~P5 — 前端体验优化~~ ✅ 已完成
 
-> 目标：修复当前 Dashboard 的交互痛点，补全缺失功能，提升整体使用体验
+> ~~目标：修复当前 Dashboard 的交互痛点，补全缺失功能，提升整体使用体验~~
 
-| 子任务 | 说明 |
-| --- | --- |
-| P5-1 Session 列表分页 | 当前 Session 列表一次性加载全部，数据多时卡顿；加入服务端分页（后端 Pageable + 前端 Table pagination） |
-| P5-2 Chat 历史消息丢失修复 | 聊了几轮后最前面的消息从 UI 消失；排查是前端 state 截断还是后端 Context Compaction 导致；确保 UI 始终能回溯完整聊天记录（分页加载或虚拟滚动） |
-| P5-3 用户输入样式优化 | 用户 query 气泡背景色不协调；重新设计 user/assistant 消息的视觉区分（配色、圆角、间距），符合 SkillForge 深色精准风格 |
-| P5-4 Agent 列表 UX | Agent 卡片/列表的操作动线优化；快速切换 Agent、一键复制 Agent、批量操作等 |
-| P5-5 响应式与空状态 | 各页面补全 empty state 插画/提示；窄屏适配；loading skeleton 替代白屏等待 |
-| P5-6 Traces 页面增强 | Trace 时间线交互优化；span 详情展开/折叠；按时间范围筛选 |
+已移至「已完成」表格。
 
 ---
 
@@ -74,6 +67,7 @@
 
 | 任务                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | 完成日期       |
 | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| P5 前端��验优化（Phase 1-6 全部完成）：设计系统 token 字典 + ThemeContext 暗色模式 + 全页面重构（Skills/Tools/Traces/Sessions/Evals/Memory/Usage/Agents）+ Layout 重构 + ActivityRail + CmdK 命令面板 + 响应式侧边栏 + Traces 颜色编码/BFS span 遍历/input 预览标题 + Session drawer 真实消息 + Skills system/custom 分类 + Agent drawer hook handler 类型感知自动补全 + Tool 描述截断 + Hook tab 配置扩展 + Chat RightRail SubAgent tab + 顶部导航 Memory 标签修正 + a11y 改善 | 2026-04-19 |
 | N3 P2 Lifecycle Hook Method 体系：BuiltInMethod 接口 + BuiltInMethodRegistry（HttpPost/FeishuNotify/LogToFile 三个内置方法）+ MethodHandlerRunner（arg merging）+ UrlValidator（InetAddress SSRF 防护 + IPv6/link-local 拦截）+ 静态 HttpClient 防线程池泄漏 + header injection denylist + 异常信息脱敏 + ConcurrentHashMap 文件锁 + LifecycleHookService 抽取（dry-run + hook-history）+ HookHistoryDto DTO 投影 + 前端 MethodHandlerFields（方法下拉 + args 表单 + loading 状态穿透）+ DryRunResultModal + HookHistoryPanel 时间线 + Traces LIFECYCLE_HOOK 可视化 + API 类型安全（消灭 4 个 any）+ getLifecycleHookMethods 响应解析 bug 修复 + React key 去重 + 18 项 review fix；Full Pipeline（2 reviewer + judge + fix）；202 后端测试全绿 | 2026-04-17 |
 | N3 P1 Lifecycle Hook 完善：多 entry 链式执行（dispatcher for 循环 + ChainDecision 三值 + SKIP_CHAIN policy）+ ScriptHandlerRunner（bash/node 子进程 + /tmp toRealPath() symlink 防护 + ProcessHandle.descendants 进程树 kill + 双线程 drain-and-discard 防 OOM + env 5 白名单 + DangerousCommandChecker 绝对路径 pipe 防护）+ UserPromptSubmit prompt enrichment（handler output.injected_context 注入独立 user message 支持全 provider）+ 前端多 entry UI（上移/下移/删除/新增 cap 10 + stable \_id key 防 stale debounce）+ Script handler 启用（Confirm Modal + lang 硬编码 [bash,node] + 字符计数）+ Forbidden Skill 黑名单（dispatcher 层）+ async×SKIP_CHAIN 保存时拒绝 + scriptBody 长度后端校验 + FailurePolicy @JsonCreator 防回滚炸 + discriminated-union 类型安全 + CSS var(--color-error) + 全 provider 支持；2 planner + 2 reviewer + judge + 2 fix pipeline；145 后端测试 + agent-browser e2e 全绿；技术方案：docs/design-n3-p1.md | 2026-04-17 |
 | N3 P0 用户可配置 Lifecycle Hook：V9 migration + polymorphic HookHandler (skill/script/method 子类，P0 只实现 SkillHandlerRunner) + LifecycleHookDispatcher（hookDepth ThreadLocal 跨 worker 线程传播 + 独立 hookExecutor + timeout + failurePolicy CONTINUE/ABORT + LIFECYCLE_HOOK TraceSpan）+ SessionStart 插在 ChatService.chatAsync 首条消息处 / SessionEnd 异步在 loop 结束 + AgentLoopEngine ABORT 语义 (LoopContext.abortedByHook + HookAbortException) + REST `/api/lifecycle-hooks/events|presets` + 前端 3 模式编辑器（Preset/Form/JSON + Zod discriminatedUnion + useDebouncedCallback + formKey 解决 create→create 复用）+ AgentSchema 加 lifecycleHooks/behaviorRules 字段防 Zod strip + 25 测试全绿 + agent-browser e2e 验证通过；3 轮 reviewer (java/typescript/security) + judge 仲裁 + fix 两侧并行；技术方案：docs/design-n3-lifecycle-hooks.md | 2026-04-17 |
