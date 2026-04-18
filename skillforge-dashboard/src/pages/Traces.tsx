@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useDebounce } from '../hooks/useDebounce';
 import { Card, Table, Tag, Typography, Space, Collapse, Tooltip, Empty, Spin, Input, Select } from 'antd';
 import { useQuery } from '@tanstack/react-query';
@@ -71,22 +71,22 @@ function formatTokens(input: number, output: number): string {
 function formatTime(iso: string): string {
   if (!iso) return '-';
   const d = new Date(iso);
-  return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
 function formatDateTime(iso: string): string {
   if (!iso) return '-';
   const d = new Date(iso);
-  return d.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  return d.toLocaleString('en-US', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
-const spanTypeConfig: Record<string, { color: string; icon: React.ReactNode; label: string }> = {
-  AGENT_LOOP: { color: 'blue', icon: <ThunderboltOutlined />, label: 'Agent Loop' },
-  LLM_CALL: { color: 'purple', icon: <RobotOutlined />, label: 'LLM Call' },
-  TOOL_CALL: { color: 'green', icon: <ToolOutlined />, label: 'Tool Call' },
-  ASK_USER: { color: 'orange', icon: <QuestionCircleOutlined />, label: 'Ask User' },
-  COMPACT: { color: 'cyan', icon: <CompressOutlined />, label: 'Compact' },
-  LIFECYCLE_HOOK: { color: 'magenta', icon: <ApiOutlined />, label: 'Lifecycle Hook' },
+const spanTypeConfig: Record<string, { color: string; icon: React.ReactNode; label: string; barColor: string }> = {
+  AGENT_LOOP: { color: 'blue', icon: <ThunderboltOutlined />, label: 'Agent Loop', barColor: 'var(--accent-primary)' },
+  LLM_CALL: { color: 'purple', icon: <RobotOutlined />, label: 'LLM Call', barColor: 'var(--op-thinking)' },
+  TOOL_CALL: { color: 'green', icon: <ToolOutlined />, label: 'Tool Call', barColor: 'var(--op-execute)' },
+  ASK_USER: { color: 'orange', icon: <QuestionCircleOutlined />, label: 'Ask User', barColor: 'var(--color-warning)' },
+  COMPACT: { color: 'cyan', icon: <CompressOutlined />, label: 'Compact', barColor: 'var(--op-read)' },
+  LIFECYCLE_HOOK: { color: 'magenta', icon: <ApiOutlined />, label: 'Lifecycle Hook', barColor: 'var(--op-write)' },
 };
 
 const SPAN_TYPE_FILTER_OPTIONS = Object.entries(spanTypeConfig).map(([key, cfg]) => ({
@@ -113,7 +113,7 @@ const SpanWaterfall: React.FC<{
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
       {filtered.map((span) => {
-        const cfg = spanTypeConfig[span.spanType] ?? { color: 'default', icon: null, label: span.spanType };
+        const cfg = spanTypeConfig[span.spanType] ?? { color: 'default', icon: null, label: span.spanType, barColor: 'var(--color-success)' };
         const spanStartMs = new Date(span.startTime).getTime();
         const offsetPct = rootDurationMs > 0 ? ((spanStartMs - rootStartMs) / rootDurationMs) * 100 : 0;
         const widthPct = rootDurationMs > 0 ? (span.durationMs / rootDurationMs) * 100 : 100;
@@ -184,9 +184,7 @@ const SpanWaterfall: React.FC<{
                     width: `${Math.max(widthPct, 0.5)}%`,
                     height: '100%',
                     borderRadius: 4,
-                    background: span.success
-                      ? (span.spanType === 'LLM_CALL' ? 'var(--accent-primary)' : 'var(--color-success)')
-                      : 'var(--color-error)',
+                    background: span.success ? cfg.barColor : 'var(--color-error)',
                     opacity: 0.8,
                   }}
                 />
@@ -238,6 +236,11 @@ const Traces: React.FC = () => {
 
   const handleSelectTrace = (traceId: string) => setSelectedTraceId(traceId);
 
+  const maxDurationMs = useMemo(
+    () => traces.reduce((m, t) => Math.max(m, t.durationMs), 1),
+    [traces],
+  );
+
   const columns = [
     {
       title: 'Time',
@@ -275,11 +278,23 @@ const Traces: React.FC = () => {
     {
       title: 'Duration',
       dataIndex: 'durationMs',
-      width: 80,
+      width: 100,
       render: (v: number) => (
-        <Tag icon={<ClockCircleOutlined />} color={v > 30000 ? 'orange' : 'default'} style={{ margin: 0 }}>
-          {formatDuration(v)}
-        </Tag>
+        <div>
+          <Tag icon={<ClockCircleOutlined />} color={v > 30000 ? 'orange' : 'default'} style={{ margin: 0 }}>
+            {formatDuration(v)}
+          </Tag>
+          <div style={{ height: 3, background: 'var(--bg-hover)', borderRadius: 2, marginTop: 4 }}>
+            <div
+              style={{
+                height: '100%',
+                width: `${Math.min((v / maxDurationMs) * 100, 100)}%`,
+                background: 'var(--accent-primary)',
+                borderRadius: 2,
+              }}
+            />
+          </div>
+        </div>
       ),
     },
     {

@@ -65,6 +65,8 @@ const StatusDot: React.FC<{ status?: string; error?: string }> = ({ status, erro
   return (
     <Tooltip title={label}>
       <span
+        role="img"
+        aria-label={label}
         style={{
           display: 'inline-block',
           width: 10,

@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Layout as AntLayout, Menu, Button } from 'antd';
+import React, { useMemo, useState } from 'react';
+import { Layout as AntLayout, Menu, Button, Drawer, Grid } from 'antd';
 import {
   DashboardOutlined,
   RobotOutlined,
@@ -47,7 +47,9 @@ const pageTitles: Record<string, string> = {
 const AppLayout: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
-  const [collapsed, setCollapsed] = useState(false);
+  const screens = Grid.useBreakpoint();
+  const isMobile = screens.md === false;
+  const [collapsed, setCollapsed] = useState(() => window.innerWidth < 768);
 
   const selectedKey = menuItems
     .filter((item) => location.pathname.startsWith(item.key) && item.key !== '/')
@@ -55,41 +57,70 @@ const AppLayout: React.FC = () => {
 
   const pageTitle = pageTitles[selectedKey] || 'SkillForge';
 
+  const brandHeader = useMemo(() => (
+    <div
+      style={{
+        height: 48,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        color: 'var(--text-primary)',
+        fontSize: 20,
+        fontWeight: 700,
+        letterSpacing: 1,
+      }}
+    >
+      SkillForge
+    </div>
+  ), []);
+
+  const navMenu = useMemo(() => (
+    <Menu
+      mode="inline"
+      selectedKeys={[selectedKey]}
+      items={menuItems}
+      onClick={({ key }) => {
+        navigate(key);
+        if (isMobile) setCollapsed(true);
+      }}
+      style={{ borderRight: 'none', background: 'var(--bg-sidebar)' }}
+    />
+  ), [selectedKey, isMobile, navigate]);
+
   return (
     <AntLayout style={{ height: '100vh', overflow: 'hidden' }}>
-      <Sider
-        width={260}
-        collapsed={collapsed}
-        collapsedWidth={0}
-        trigger={null}
-        className="sf-sider"
-        style={{
-          background: 'var(--bg-sidebar)',
-          borderRight: '1px solid var(--border-subtle)',
-        }}
-      >
-        <div
-          style={{
-            height: 48,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            color: 'var(--text-primary)',
-            fontSize: 20,
-            fontWeight: 700,
-            letterSpacing: 1,
+      {isMobile ? (
+        <Drawer
+          placement="left"
+          open={!collapsed}
+          onClose={() => setCollapsed(true)}
+          width={260}
+          closable={false}
+          styles={{
+            body: { padding: 0, background: 'var(--bg-sidebar)' },
+            header: { display: 'none' },
+            content: { background: 'var(--bg-sidebar)' },
           }}
         >
-          SkillForge
-        </div>
-        <Menu
-          mode="inline"
-          selectedKeys={[selectedKey]}
-          items={menuItems}
-          onClick={({ key }) => navigate(key)}
-          style={{ borderRight: 'none' }}
-        />
-      </Sider>
+          {brandHeader}
+          {navMenu}
+        </Drawer>
+      ) : (
+        <Sider
+          width={260}
+          collapsed={collapsed}
+          collapsedWidth={0}
+          trigger={null}
+          className="sf-sider"
+          style={{
+            background: 'var(--bg-sidebar)',
+            borderRight: '1px solid var(--border-subtle)',
+          }}
+        >
+          {brandHeader}
+          {navMenu}
+        </Sider>
+      )}
       <AntLayout>
         <Header
           style={{
@@ -105,8 +136,9 @@ const AppLayout: React.FC = () => {
         >
           <Button
             type="text"
+            aria-label="Toggle navigation"
             icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
-            onClick={() => setCollapsed(!collapsed)}
+            onClick={() => setCollapsed((c) => !c)}
             style={{ fontSize: 16 }}
           />
           <span style={{ fontSize: 16, fontWeight: 500, color: 'var(--text-primary)' }}>{pageTitle}</span>

@@ -61,6 +61,7 @@ const ChatSidebar: React.FC<ChatSidebarProps> = ({
             const isActive = activeSessionId === sid;
             return (
               <List.Item
+                aria-current={isActive ? 'true' : undefined}
                 onClick={() => onSelectSession(sid)}
                 className={`sf-session-item${isActive ? ' sf-session-item--active' : ''}`}
               >

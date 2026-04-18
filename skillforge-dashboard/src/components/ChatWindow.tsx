@@ -79,6 +79,7 @@ const ChatInput: React.FC<ChatInputProps> = React.memo(({ disabled, onSend }) =>
         <Button
           className="sf-send-btn"
           type="primary"
+          aria-label="Send message"
           icon={<SendOutlined />}
           onClick={handleSend}
           disabled={disabled || !input.trim()}

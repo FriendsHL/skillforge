@@ -44,6 +44,11 @@ const CSS_VAR_MAP: Record<string, keyof ThemeTokens> = {
   '--shadow-card': 'shadowCard',
   '--shadow-card-hover': 'shadowCardHover',
   '--shadow-elevated': 'shadowElevated',
+  '--op-thinking': 'opThinking',
+  '--op-search': 'opSearch',
+  '--op-read': 'opRead',
+  '--op-write': 'opWrite',
+  '--op-execute': 'opExecute',
 };
 
 function applyCssVars(tokens: ThemeTokens) {
