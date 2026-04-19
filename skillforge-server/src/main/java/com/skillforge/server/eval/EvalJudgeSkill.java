@@ -85,10 +85,12 @@ public class EvalJudgeSkill {
         output.setPass(compositeScore >= 40.0);
 
         // 6. Build signals and compute attribution
-        boolean nearPass = outcomeScore >= 40 && outcomeScore <= 60;
+        // nearPassOracle: [40, 60) exclusive upper — 60 itself is the oracle-pass threshold (s1)
+        boolean nearPass = outcomeScore >= 40 && outcomeScore < 60;
         EvalSignals signals = EvalSignals.builder()
                 .engineThrewException(runResult.isEngineThrewException())
-                .taskCompletionOraclePass(output.isPass())
+                // taskCompletionOraclePass uses oracle threshold (60), NOT composite pass (40)
+                .taskCompletionOraclePass(outcomeScore >= 60.0)
                 .skillExecutionFailed(runResult.isSkillExecutionFailed())
                 .skillOutputWasMalformed(runResult.isSkillOutputWasMalformed())
                 .hitLoopLimit(runResult.getLoopCount() >= scenario.getMaxLoops())
