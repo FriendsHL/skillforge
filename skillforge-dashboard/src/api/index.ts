@@ -145,6 +145,38 @@ export const forkSkill = (id: number | string, ownerId: number) =>
 export const recordSkillUsage = (id: number | string, success: boolean) =>
   api.post(`/skills/${id}/usage?success=${success}`);
 
+export interface SkillAbRun {
+  id: string;
+  parentSkillId: number;
+  candidateSkillId: number;
+  agentId: string;
+  baselineEvalRunId?: string;
+  status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED';
+  baselinePassRate?: number;
+  candidatePassRate?: number;
+  deltaPassRate?: number;
+  promoted: boolean;
+  skipReason?: string;
+  startedAt?: string;
+  completedAt?: string;
+}
+
+export interface StartAbTestRequest {
+  candidateSkillId: number;
+  agentId?: string;
+  baselineEvalRunId?: string;
+  triggeredByUserId?: number;
+}
+
+export const startSkillAbTest = (parentSkillId: number | string, req: StartAbTestRequest) =>
+  api.post<SkillAbRun>(`/skills/${parentSkillId}/abtest`, req);
+
+export const getSkillAbTests = (skillId: number | string) =>
+  api.get<SkillAbRun[]>(`/skills/${skillId}/abtest`);
+
+export const getSkillAbTest = (abRunId: string) =>
+  api.get<SkillAbRun>(`/skills/abtest/${abRunId}`);
+
 // Memory API
 export const getMemories = (userId: number, type?: string) =>
   api.get('/memories', { params: { userId, type } });

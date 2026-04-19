@@ -2,8 +2,11 @@ package com.skillforge.server.controller;
 
 import com.skillforge.core.model.SkillDefinition;
 import com.skillforge.core.skill.SkillRegistry;
+import com.skillforge.server.entity.SkillAbRunEntity;
 import com.skillforge.server.entity.SkillEntity;
+import com.skillforge.server.improve.SkillAbEvalService;
 import com.skillforge.server.service.SkillService;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -29,10 +32,13 @@ public class SkillController {
 
     private final SkillService skillService;
     private final SkillRegistry skillRegistry;
+    private final SkillAbEvalService skillAbEvalService;
 
-    public SkillController(SkillService skillService, SkillRegistry skillRegistry) {
+    public SkillController(SkillService skillService, SkillRegistry skillRegistry,
+                           SkillAbEvalService skillAbEvalService) {
         this.skillService = skillService;
         this.skillRegistry = skillRegistry;
+        this.skillAbEvalService = skillAbEvalService;
     }
 
     /**
@@ -234,6 +240,65 @@ public class SkillController {
         } catch (RuntimeException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
+    }
+
+    /** Start an A/B test between parentSkillId (baseline) and candidateSkillId (fork). */
+    @PostMapping("/{id}/abtest")
+    public ResponseEntity<?> startAbTest(@PathVariable Long id,
+                                          @RequestBody Map<String, Object> body) {
+        Long candidateSkillId = body.containsKey("candidateSkillId")
+                ? Long.parseLong(body.get("candidateSkillId").toString()) : null;
+        String agentId = body.containsKey("agentId") && body.get("agentId") != null
+                ? body.get("agentId").toString() : null;
+        String baselineEvalRunId = body.containsKey("baselineEvalRunId")
+                ? body.get("baselineEvalRunId").toString() : null;
+        Long triggeredByUserId = body.containsKey("triggeredByUserId") && body.get("triggeredByUserId") != null
+                ? Long.parseLong(body.get("triggeredByUserId").toString()) : 0L;
+        if (candidateSkillId == null) {
+            return ResponseEntity.badRequest().body(Map.of("error", "candidateSkillId is required"));
+        }
+        if (agentId == null || agentId.isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "agentId is required"));
+        }
+        try {
+            SkillAbRunEntity abRun = skillAbEvalService.createAndTrigger(
+                    id, candidateSkillId, agentId, baselineEvalRunId, triggeredByUserId);
+            return ResponseEntity.accepted().body(toAbRunMap(abRun));
+        } catch (RuntimeException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @GetMapping("/{id}/abtest")
+    public ResponseEntity<List<Map<String, Object>>> listAbTests(@PathVariable Long id) {
+        return ResponseEntity.ok(
+                skillAbEvalService.getAbRunsForSkill(id).stream()
+                        .map(this::toAbRunMap).collect(Collectors.toList()));
+    }
+
+    @GetMapping("/abtest/{abRunId}")
+    public ResponseEntity<?> getAbTest(@PathVariable String abRunId) {
+        return skillAbEvalService.getAbRun(abRunId)
+                .map(r -> ResponseEntity.ok(toAbRunMap(r)))
+                .orElse(ResponseEntity.notFound().build());
+    }
+
+    private Map<String, Object> toAbRunMap(SkillAbRunEntity r) {
+        Map<String, Object> m = new java.util.LinkedHashMap<>();
+        m.put("id", r.getId());
+        m.put("parentSkillId", r.getParentSkillId());
+        m.put("candidateSkillId", r.getCandidateSkillId());
+        m.put("agentId", r.getAgentId());
+        m.put("baselineEvalRunId", r.getBaselineEvalRunId());
+        m.put("status", r.getStatus());
+        m.put("baselinePassRate", r.getBaselinePassRate());
+        m.put("candidatePassRate", r.getCandidatePassRate());
+        m.put("deltaPassRate", r.getDeltaPassRate());
+        m.put("promoted", r.isPromoted());
+        m.put("skipReason", r.getSkipReason());
+        m.put("startedAt", r.getStartedAt());
+        m.put("completedAt", r.getCompletedAt());
+        return m;
     }
 
     /** Record a usage event — called after skill execution completes. */

@@ -10,6 +10,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Comparator;
+import java.util.List;
 
 @Component
 public class SandboxSkillRegistryFactory {
@@ -26,6 +27,15 @@ public class SandboxSkillRegistryFactory {
         sandbox.register(new SandboxedGrepSkill(sandboxRoot));
         sandbox.register(new SandboxedGlobSkill(sandboxRoot));
         return sandbox;
+    }
+
+    public SkillRegistry buildSandboxRegistryWithSkills(String runId, String scenarioId,
+                                                         List<com.skillforge.core.model.SkillDefinition> extraSkills) throws IOException {
+        SkillRegistry registry = buildSandboxRegistry(runId, scenarioId);
+        for (com.skillforge.core.model.SkillDefinition def : extraSkills) {
+            registry.registerSkillDefinition(def);
+        }
+        return registry;
     }
 
     public Path getSandboxRoot(String evalRunId, String scenarioId) {
