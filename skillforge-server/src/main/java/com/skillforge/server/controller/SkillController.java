@@ -4,7 +4,9 @@ import com.skillforge.core.model.SkillDefinition;
 import com.skillforge.core.skill.SkillRegistry;
 import com.skillforge.server.entity.SkillAbRunEntity;
 import com.skillforge.server.entity.SkillEntity;
+import com.skillforge.server.entity.SkillEvolutionRunEntity;
 import com.skillforge.server.improve.SkillAbEvalService;
+import com.skillforge.server.improve.SkillEvolutionService;
 import com.skillforge.server.service.SkillService;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.http.HttpStatus;
@@ -33,12 +35,15 @@ public class SkillController {
     private final SkillService skillService;
     private final SkillRegistry skillRegistry;
     private final SkillAbEvalService skillAbEvalService;
+    private final SkillEvolutionService skillEvolutionService;
 
     public SkillController(SkillService skillService, SkillRegistry skillRegistry,
-                           SkillAbEvalService skillAbEvalService) {
+                           SkillAbEvalService skillAbEvalService,
+                           SkillEvolutionService skillEvolutionService) {
         this.skillService = skillService;
         this.skillRegistry = skillRegistry;
         this.skillAbEvalService = skillAbEvalService;
+        this.skillEvolutionService = skillEvolutionService;
     }
 
     /**
@@ -296,6 +301,59 @@ public class SkillController {
         m.put("deltaPassRate", r.getDeltaPassRate());
         m.put("promoted", r.isPromoted());
         m.put("skipReason", r.getSkipReason());
+        m.put("startedAt", r.getStartedAt());
+        m.put("completedAt", r.getCompletedAt());
+        return m;
+    }
+
+    /** Start skill evolution — generates improved SKILL.md and triggers A/B test. */
+    @PostMapping("/{id}/evolve")
+    public ResponseEntity<?> evolveSkill(@PathVariable Long id,
+                                          @RequestBody Map<String, Object> body) {
+        String agentId = body.containsKey("agentId") && body.get("agentId") != null
+                ? body.get("agentId").toString() : null;
+        Long triggeredByUserId = body.containsKey("triggeredByUserId") && body.get("triggeredByUserId") != null
+                ? Long.parseLong(body.get("triggeredByUserId").toString()) : null;
+        if (agentId == null || agentId.isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "agentId is required"));
+        }
+        try {
+            SkillEvolutionRunEntity run = skillEvolutionService.createAndTrigger(id, agentId, triggeredByUserId);
+            return ResponseEntity.accepted().body(toEvolutionRunMap(run));
+        } catch (RuntimeException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @GetMapping("/{id}/evolution")
+    public ResponseEntity<List<Map<String, Object>>> listEvolutionRuns(@PathVariable Long id) {
+        return ResponseEntity.ok(
+                skillEvolutionService.getEvolutionRuns(id).stream()
+                        .map(this::toEvolutionRunMap).collect(Collectors.toList()));
+    }
+
+    @GetMapping("/evolution/{evolutionRunId}")
+    public ResponseEntity<?> getEvolutionRun(@PathVariable String evolutionRunId) {
+        return skillEvolutionService.getEvolutionRun(evolutionRunId)
+                .map(r -> ResponseEntity.ok(toEvolutionRunMap(r)))
+                .orElse(ResponseEntity.notFound().build());
+    }
+
+    private Map<String, Object> toEvolutionRunMap(SkillEvolutionRunEntity r) {
+        Map<String, Object> m = new java.util.LinkedHashMap<>();
+        m.put("id", r.getId());
+        m.put("skillId", r.getSkillId());
+        m.put("forkedSkillId", r.getForkedSkillId());
+        m.put("abRunId", r.getAbRunId());
+        m.put("agentId", r.getAgentId());
+        m.put("status", r.getStatus());
+        m.put("successRateBefore", r.getSuccessRateBefore());
+        m.put("usageCountBefore", r.getUsageCountBefore());
+        m.put("improvedSkillMd", r.getImprovedSkillMd());
+        m.put("evolutionReasoning", r.getEvolutionReasoning());
+        m.put("failureReason", r.getFailureReason());
+        m.put("triggeredByUserId", r.getTriggeredByUserId());
+        m.put("createdAt", r.getCreatedAt());
         m.put("startedAt", r.getStartedAt());
         m.put("completedAt", r.getCompletedAt());
         return m;

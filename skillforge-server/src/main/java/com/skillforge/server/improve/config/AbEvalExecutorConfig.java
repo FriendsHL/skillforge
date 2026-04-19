@@ -46,4 +46,21 @@ public class AbEvalExecutorConfig {
                 new ThreadPoolExecutor.AbortPolicy()
         );
     }
+
+    @Bean(name = "skillEvolutionExecutor", destroyMethod = "shutdown")
+    public ExecutorService skillEvolutionExecutor() {
+        AtomicInteger counter = new AtomicInteger(0);
+        ThreadFactory factory = r -> {
+            Thread t = new Thread(r);
+            t.setName("skill-evo-" + counter.getAndIncrement());
+            t.setDaemon(true);
+            return t;
+        };
+        return new ThreadPoolExecutor(
+                2, 4, 60L, TimeUnit.SECONDS,
+                new LinkedBlockingQueue<>(10),
+                factory,
+                new ThreadPoolExecutor.AbortPolicy()
+        );
+    }
 }

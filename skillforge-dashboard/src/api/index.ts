@@ -177,6 +177,42 @@ export const getSkillAbTests = (skillId: number | string) =>
 export const getSkillAbTest = (abRunId: string) =>
   api.get<SkillAbRun>(`/skills/abtest/${abRunId}`);
 
+// ─── Skill Evolution (P1-4) ─────────────────────────────────────────────────
+
+export interface SkillEvolutionRun {
+  id: string;
+  skillId: number;
+  forkedSkillId?: number;
+  abRunId?: string;
+  agentId?: string;
+  status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'PARTIAL' | 'FAILED';
+  successRateBefore?: number;
+  usageCountBefore?: number;
+  improvedSkillMd?: string;
+  /** Not yet populated by the backend — reserved for future reasoning trace. */
+  evolutionReasoning?: string;
+  failureReason?: string;
+  triggeredByUserId?: number;
+  createdAt?: string;
+  startedAt?: string;
+  completedAt?: string;
+}
+
+export interface StartEvolutionRequest {
+  agentId: string;
+  triggeredByUserId?: number;
+}
+
+export const startSkillEvolution = (skillId: number, req: StartEvolutionRequest) =>
+  api.post<SkillEvolutionRun>(`/skills/${skillId}/evolve`, req);
+
+export const getSkillEvolutions = (skillId: number) =>
+  api.get<SkillEvolutionRun[]>(`/skills/${skillId}/evolution`);
+
+// Reserved for future detail view
+export const getSkillEvolution = (evolutionRunId: string) =>
+  api.get<SkillEvolutionRun>(`/skills/evolution/${evolutionRunId}`);
+
 // Memory API
 export const getMemories = (userId: number, type?: string) =>
   api.get('/memories', { params: { userId, type } });
