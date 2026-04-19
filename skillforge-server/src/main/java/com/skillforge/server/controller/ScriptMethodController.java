@@ -45,7 +45,7 @@ public class ScriptMethodController {
     @GetMapping
     public ResponseEntity<List<Map<String, Object>>> list() {
         List<Map<String, Object>> result = scriptMethodService.listAll().stream()
-                .map(ScriptMethodController::toMap)
+                .map(ScriptMethodController::toSummaryMap)
                 .toList();
         return ResponseEntity.ok(result);
     }
@@ -116,6 +116,20 @@ public class ScriptMethodController {
         } catch (ScriptMethodService.ScriptMethodException e) {
             return ResponseEntity.status(404).body(Map.of("error", e.getMessage()));
         }
+    }
+
+    private static Map<String, Object> toSummaryMap(ScriptMethodEntity e) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("id", e.getId());
+        m.put("ref", e.getRef());
+        m.put("displayName", e.getDisplayName());
+        m.put("description", e.getDescription());
+        m.put("lang", e.getLang());
+        m.put("ownerId", e.getOwnerId());
+        m.put("enabled", e.isEnabled());
+        m.put("createdAt", e.getCreatedAt());
+        m.put("updatedAt", e.getUpdatedAt());
+        return m;
     }
 
     private static Map<String, Object> toMap(ScriptMethodEntity e) {

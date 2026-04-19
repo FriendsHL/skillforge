@@ -34,7 +34,7 @@ import java.util.concurrent.TimeUnit;
  *   <li>Language allow-list (bash / node / java)</li>
  *   <li>{@link DangerousCommandChecker} pre-scan</li>
  *   <li>Isolated workdir under {@code /tmp/sf-code/<UUID>/}</li>
- *   <li>Env whitelist: {@code PATH, HOME, LANG, TERM, JAVA_HOME}</li>
+ *   <li>Env whitelist: {@code PATH, LANG, TERM, JAVA_HOME}; {@code HOME} set to sandbox workdir</li>
  *   <li>Output capped at 32KB</li>
  *   <li>Per-lang default timeouts; caller may override up to 300s</li>
  *   <li>Process tree kill on timeout (descendants + root)</li>
@@ -53,7 +53,7 @@ public class CodeSandboxSkill implements Skill {
     private static final long DESTROY_GRACE_SEC = 2L;
     private static final long READER_JOIN_MS = 2_000L;
 
-    private static final List<String> INHERITED_ENV_KEYS = List.of("PATH", "HOME", "LANG", "TERM", "JAVA_HOME");
+    private static final List<String> INHERITED_ENV_KEYS = List.of("PATH", "LANG", "TERM", "JAVA_HOME");
     private static final Set<String> ALLOWED_LANGS = Set.of("bash", "node", "java");
 
     private static final String SANDBOX_ROOT_NAME = "sf-code";
@@ -69,7 +69,7 @@ public class CodeSandboxSkill implements Skill {
                 + "Use this to test-run a script BEFORE registering it as a hook method.\n\n"
                 + "- bash / node scripts run directly.\n"
                 + "- java code must be a single public class; it is compiled and executed via `java SourceFile.java`.\n"
-                + "- Environment is scrubbed: only PATH, HOME, LANG, TERM, JAVA_HOME are visible.\n"
+                + "- Environment is scrubbed: only PATH, LANG, TERM, JAVA_HOME are visible; HOME is set to the sandbox workdir.\n"
                 + "- Output is capped at 32KB. Default timeout: node=30s, bash/java=120s. Pass timeoutSec to override (max 300).\n"
                 + "- Dangerous patterns (rm -rf /, fork bombs, :(){ :|:& };:) are rejected before launch.";
     }
@@ -173,6 +173,7 @@ public class CodeSandboxSkill implements Skill {
             String v = System.getenv(key);
             if (v != null) env.put(key, v);
         }
+        env.put("HOME", workdir.toString());
 
         Process process = pb.start();
         CappedReader stdoutReader = drain(process.getInputStream(), "sf-code-stdout");

@@ -115,6 +115,50 @@ CREATE TABLE t_compiled_method (
 - System prompt：内置选择规则（脚本 vs Java）
 - 前端：ScriptMethod 管理页、CompiledMethod 审批页、Agent 模板创建、Hook 编辑器扩展
 
+## 已知限制（Review 记录）
+
+### 文件系统 / 网络隔离
+
+CodeSandboxSkill 与 BashSkill 共享同一隔离策略（ProcessBuilder + 工作目录约束）。沙箱进程**可以**：
+- 读取主机文件系统（`/etc/passwd`、项目目录等）
+- 发起任意网络请求（curl、wget、nc）
+
+当前靠 `DangerousCommandChecker` 拦截高危模式，但无法防御全部变体。完整隔离需要 Docker/nsjail，计划在 Phase 2+ 评估引入。
+
+> HOME 环境变量已设为沙箱 workdir（不继承真实 HOME），防止通过 `~/.ssh`、`~/.aws` 等路径泄露凭证。
+
+### Registry / DB 一致性
+
+`ScriptMethodService` 在 `@Transactional` 方法内先修改 DB 再更新 `BuiltInMethodRegistry`（内存）。
+极端情况下（JVM 在事务提交后、registry 更新前崩溃），两者可能不一致。
+`ScriptMethodLoader`（ApplicationRunner）在重启时从 DB 重建 registry，自动修复此类不一致。
+
+### 认证 / 鉴权
+
+`ScriptMethodController` 当前无认证保护，与平台其他 REST API 一致（待统一鉴权层）。
+`ownerId` 由调用方传入，未校验是否与当前用户匹配。
+
+### CompiledMethod 源码扫描局限（Phase 2）
+
+`DynamicMethodCompiler.FORBIDDEN_PATTERNS` 是文本级正则扫描，已知绕过方式：
+- **Unicode 转义**：`\u0052untime` 等在 javac 词法阶段展开，正则看不到原始 API 名。修复需在扫描前预处理 unicode escape。
+- **字符串拼接**：`"Process" + "Builder"` 运行时组装。文本扫描无法捕获。
+- **字节码注入**：源码扫描只覆盖源码层；理论上可通过 annotation processor 或 synthetic accessor 在字节码中引入源码中不存在的调用。
+
+> 核心安全边界是 **人工审批**（approve），源码扫描是 defense-in-depth。
+
+### 生成类运行时能力（Phase 2）
+
+`GeneratedMethodClassLoader` 的 parent 是 application ClassLoader，生成类运行时可见整个 Spring classpath。
+- `static { ... }` 初始化块在 `loadClass()` 时执行，先于任何后续检查
+- 生成类可创建线程（Thread 不在禁止列表），线程持有 ClassLoader 引用阻止 GC
+- 真正的沙箱隔离需要 OS 级进程边界（seccomp / 独立 JVM），ClassLoader 无法实现
+
+### FQCN 未持久化（Phase 2）
+
+`loadAndInstantiate()` 通过重新解析 `sourceCode` 推导 FQCN，未将 `CompilationResult.className()` 存入实体。
+若 sourceCode 与 compiledClassBytes 不一致（如直接 DB 编辑），加载可能静默失败。低风险——API 不提供 source 编辑功能。
+
 ## 自举闭环示例
 
 1. 用户对 Code Agent 说："写一个 hook，每次 session 结束后把 token 用量发到 Slack"

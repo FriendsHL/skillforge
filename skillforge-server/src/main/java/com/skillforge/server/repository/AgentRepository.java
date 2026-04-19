@@ -18,6 +18,8 @@ public interface AgentRepository extends JpaRepository<AgentEntity, Long> {
 
     List<AgentEntity> findByIsPublicTrue();
 
+    boolean existsByName(String name);
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT a FROM AgentEntity a WHERE a.id = :id")
     Optional<AgentEntity> findByIdForUpdate(@Param("id") Long id);

@@ -1,5 +1,6 @@
 package com.skillforge.server.code;
 
+import com.skillforge.core.engine.DangerousCommandChecker;
 import com.skillforge.core.engine.hook.BuiltInMethod;
 import com.skillforge.core.engine.hook.HookExecutionContext;
 import com.skillforge.core.engine.hook.HookHandler;
@@ -100,6 +101,11 @@ public class ScriptMethodService {
             if (req.scriptBody().length() > MAX_SCRIPT_BODY_CHARS) {
                 throw new ScriptMethodException("scriptBody too long: " + req.scriptBody().length());
             }
+            String dangerous = DangerousCommandChecker.firstDangerousMatch(req.scriptBody());
+            if (dangerous != null) {
+                log.warn("Dangerous pattern in scriptBody during update: {}", dangerous);
+                throw new ScriptMethodException("scriptBody contains a disallowed pattern");
+            }
             e.setScriptBody(req.scriptBody());
         }
         if (req.argsSchema() != null) e.setArgsSchema(req.argsSchema());
@@ -191,6 +197,11 @@ public class ScriptMethodService {
         }
         if (req.scriptBody().length() > MAX_SCRIPT_BODY_CHARS) {
             throw new ScriptMethodException("scriptBody too long (max " + MAX_SCRIPT_BODY_CHARS + " chars)");
+        }
+        String dangerous = DangerousCommandChecker.firstDangerousMatch(req.scriptBody());
+        if (dangerous != null) {
+            log.warn("Dangerous pattern in scriptBody during create ref={}: {}", req.ref(), dangerous);
+            throw new ScriptMethodException("scriptBody contains a disallowed pattern");
         }
     }
 

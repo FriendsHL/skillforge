@@ -9,8 +9,8 @@ CREATE TABLE t_script_method (
     args_schema  TEXT,
     owner_id     BIGINT,
     enabled      BOOLEAN NOT NULL DEFAULT TRUE,
-    created_at   TIMESTAMP,
-    updated_at   TIMESTAMP
+    created_at   TIMESTAMPTZ,
+    updated_at   TIMESTAMPTZ
 );
 
 CREATE INDEX idx_script_method_enabled ON t_script_method(enabled);

@@ -30,6 +30,8 @@ import com.skillforge.skills.GlobSkill;
 import com.skillforge.skills.GrepSkill;
 import com.skillforge.skills.WebFetchSkill;
 import com.skillforge.skills.WebSearchSkill;
+import com.skillforge.server.code.CompiledMethodService;
+import com.skillforge.server.code.RegisterCompiledMethodSkill;
 import com.skillforge.server.code.RegisterScriptMethodSkill;
 import com.skillforge.server.code.ScriptMethodService;
 import com.skillforge.server.skill.TodoStore;
@@ -157,6 +159,21 @@ public class SkillForgeConfig {
         RegisterScriptMethodSkill skill = new RegisterScriptMethodSkill(scriptMethodService, objectMapper);
         skillRegistry.register(skill);
         log.info("Registered RegisterScriptMethodSkill into SkillRegistry");
+        return skill;
+    }
+
+    /**
+     * RegisterCompiledMethodSkill — lets Code Agent submit a Java class that implements
+     * {@code BuiltInMethod}; source is compiled in-process and stored for human approval before
+     * being loaded into the runtime registry.
+     */
+    @Bean
+    public RegisterCompiledMethodSkill registerCompiledMethodSkill(CompiledMethodService compiledMethodService,
+                                                                   ObjectMapper objectMapper,
+                                                                   SkillRegistry skillRegistry) {
+        RegisterCompiledMethodSkill skill = new RegisterCompiledMethodSkill(compiledMethodService, objectMapper);
+        skillRegistry.register(skill);
+        log.info("Registered RegisterCompiledMethodSkill into SkillRegistry");
         return skill;
     }
 
