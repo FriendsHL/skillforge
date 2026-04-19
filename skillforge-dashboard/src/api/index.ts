@@ -481,4 +481,38 @@ export const rejectCompiledMethod = (id: number, reviewerUserId?: number) =>
   api.post<CompiledMethodDetail>(`/compiled-methods/${id}/reject`, { reviewerUserId });
 export const deleteCompiledMethod = (id: number) => api.delete(`/compiled-methods/${id}`);
 
+// ─── Skill Drafts ───────────────────────────────────────────────────────────
+
+export interface SkillDraft {
+  id: string;
+  sourceSessionId?: string;
+  ownerId: number;
+  name: string;
+  description?: string;
+  triggers?: string;
+  requiredTools?: string;
+  promptHint?: string;
+  extractionRationale?: string;
+  status: 'draft' | 'approved' | 'discarded';
+  skillId?: number;
+  createdAt: string;
+  reviewedAt?: string;
+  reviewedBy?: number;
+}
+
+export interface SkillExtractionStartResult {
+  status: string;
+  count?: number;
+  message?: string;
+}
+
+export const triggerSkillExtraction = (agentId: number | string, ownerId: number) =>
+  api.post<SkillExtractionStartResult>(`/agents/${agentId}/skill-drafts?ownerId=${ownerId}`);
+
+export const getSkillDrafts = (ownerId: number) =>
+  api.get<SkillDraft[]>(`/skill-drafts?ownerId=${ownerId}`);
+
+export const reviewSkillDraft = (id: string, action: 'approve' | 'discard', reviewedBy: number) =>
+  api.patch<SkillDraft>(`/skill-drafts/${id}`, { action, reviewedBy });
+
 export default api;

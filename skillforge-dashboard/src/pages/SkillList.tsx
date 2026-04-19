@@ -4,7 +4,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   getSkills, uploadSkill, deleteSkill,
   getSkillDetail, toggleSkill, extractList,
+  getSkillDrafts, triggerSkillExtraction, reviewSkillDraft,
+  type SkillDraft,
 } from '../api';
+import { useAuth } from '../contexts/AuthContext';
 import '../components/agents/agents.css';
 import '../components/skills/skills.css';
 
@@ -23,6 +26,21 @@ const COPY_ICON = (
     <rect x="5" y="5" width="8" height="8" rx="1.5" /><path d="M3 10V4a1 1 0 0 1 1-1h6" />
   </svg>
 );
+const BOLT_ICON = (
+  <svg width={12} height={12} viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+    <path d="M9 1 3 9h4l-1 6 6-8H8l1-6z" />
+  </svg>
+);
+const CHEVRON_ICON = (
+  <svg width={10} height={10} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+    <path d="M4 6l4 4 4-4" />
+  </svg>
+);
+
+// TODO(P1-1 follow-up): source agentId from an agent selector or route context.
+// Current SkillList is a global page with no agent scope — placeholder until a
+// picker lands (tracked in docs/design-self-improve-pipeline.md).
+const DEFAULT_SOURCE_AGENT_ID = 1;
 
 interface SkillRow {
   id: number | string;
@@ -104,6 +122,8 @@ function timeAgo(iso?: string): string {
 
 const SkillList: React.FC = () => {
   const queryClient = useQueryClient();
+  const { userId: currentUserId } = useAuth();
+  const currentAgentId = DEFAULT_SOURCE_AGENT_ID;
   const [view, setView] = useState<'grid' | 'table'>('grid');
   const [q, setQ] = useState('');
   const [filterStatus, setFilterStatus] = useState<string | null>(null);
@@ -111,11 +131,78 @@ const SkillList: React.FC = () => {
   const [open, setOpen] = useState<SkillRow | null>(null);
   const [drawerTab, setDrawerTab] = useState('readme');
   const [creating, setCreating] = useState(false);
+  const [draftsOpen, setDraftsOpen] = useState(false);
+  const [extracting, setExtracting] = useState(false);
 
   const { data: rawSkills = [] } = useQuery({
     queryKey: ['skills'],
     queryFn: () => getSkills().then(res => extractList<Record<string, unknown>>(res)),
   });
+
+  const { data: draftsData } = useQuery({
+    queryKey: ['skill-drafts', currentUserId],
+    queryFn: () => getSkillDrafts(currentUserId).then(r => r.data),
+    enabled: !!currentUserId,
+  });
+  const drafts: SkillDraft[] = draftsData ?? [];
+  const pendingDrafts = useMemo(() => drafts.filter(d => d.status === 'draft'), [drafts]);
+
+  const approveMutation = useMutation({
+    mutationFn: (id: string) => reviewSkillDraft(id, 'approve', currentUserId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['skill-drafts'] });
+      queryClient.invalidateQueries({ queryKey: ['skills'] });
+      message.success('Skill approved');
+    },
+    onError: () => message.error('Failed to approve draft'),
+  });
+
+  const discardMutation = useMutation({
+    mutationFn: (id: string) => reviewSkillDraft(id, 'discard', currentUserId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['skill-drafts'] });
+      message.success('Draft discarded');
+    },
+    onError: () => message.error('Failed to discard draft'),
+  });
+
+  const handleExtract = async () => {
+    if (!currentAgentId) { message.warning('Select an agent first'); return; }
+    setExtracting(true);
+    try {
+      const res = await triggerSkillExtraction(currentAgentId, currentUserId);
+      if (res.data.status === 'already_has_drafts') {
+        message.info(`${res.data.count ?? 0} pending draft(s) already waiting for review`);
+      } else {
+        message.success('Extraction started — check back in a moment');
+      }
+      setDraftsOpen(true);
+    } catch {
+      message.error('Failed to start skill extraction');
+    } finally {
+      setExtracting(false);
+    }
+  };
+
+  // WS: auto-refresh drafts when backend finishes extraction
+  useEffect(() => {
+    if (!currentUserId) return;
+    const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
+    const token = localStorage.getItem('sf_token') ?? '';
+    const ws = new WebSocket(
+      `${proto}://${window.location.host}/ws/users/${currentUserId}?token=${encodeURIComponent(token)}`,
+    );
+    ws.onmessage = (ev) => {
+      try {
+        const msg = JSON.parse(ev.data) as { type?: string };
+        if (msg.type === 'skill_draft_extracted') {
+          queryClient.invalidateQueries({ queryKey: ['skill-drafts'] });
+          setDraftsOpen(true);
+        }
+      } catch { /* ignore non-JSON */ }
+    };
+    return () => { try { ws.close(); } catch { /* ignore */ } };
+  }, [currentUserId, queryClient]);
 
   const all = useMemo<SkillRow[]>(() => rawSkills.map(normalizeSkill), [rawSkills]);
 
@@ -189,9 +276,43 @@ const SkillList: React.FC = () => {
               <button className={view === 'grid' ? 'on' : ''} onClick={() => setView('grid')}>Grid</button>
               <button className={view === 'table' ? 'on' : ''} onClick={() => setView('table')}>Table</button>
             </div>
+            {pendingDrafts.length > 0 && (
+              <button
+                className="btn-ghost-sf"
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 6,
+                  borderStyle: 'dashed', color: 'var(--accent-primary, #6366f1)',
+                }}
+                onClick={() => setDraftsOpen(o => !o)}
+                title="Review extracted skill drafts"
+              >
+                {pendingDrafts.length} pending draft{pendingDrafts.length > 1 ? 's' : ''}
+              </button>
+            )}
+            <button
+              className="btn-ghost-sf"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+              onClick={handleExtract}
+              disabled={extracting}
+              title="Extract new skill drafts from recent sessions"
+            >
+              {BOLT_ICON} {extracting ? 'Extracting…' : 'Extract from Sessions'}
+            </button>
             <button className="btn-primary-sf" onClick={() => setCreating(true)}>{PLUS_ICON} New skill</button>
           </div>
         </header>
+
+        {draftsOpen && (
+          <SkillDraftsSection
+            drafts={drafts}
+            pendingCount={pendingDrafts.length}
+            onClose={() => setDraftsOpen(false)}
+            onApprove={(id) => approveMutation.mutate(id)}
+            onDiscard={(id) => discardMutation.mutate(id)}
+            approvingId={approveMutation.isPending ? approveMutation.variables ?? null : null}
+            discardingId={discardMutation.isPending ? discardMutation.variables ?? null : null}
+          />
+        )}
 
         <div className="agents-body">
           {rows.length === 0 ? (
@@ -510,5 +631,220 @@ function NewSkillModal({ onClose, onUpload, uploading }: {
     </div>
   );
 }
+
+/* ─── Skill Drafts Section ─── */
+interface SkillDraftsSectionProps {
+  drafts: SkillDraft[];
+  pendingCount: number;
+  onClose: () => void;
+  onApprove: (id: string) => void;
+  onDiscard: (id: string) => void;
+  approvingId: string | null;
+  discardingId: string | null;
+}
+
+function SkillDraftsSection({
+  drafts, pendingCount, onClose, onApprove, onDiscard, approvingId, discardingId,
+}: SkillDraftsSectionProps) {
+  const pending = drafts.filter(d => d.status === 'draft');
+  return (
+    <section
+      style={{
+        margin: '0 24px 16px',
+        padding: '14px 16px',
+        border: '1px solid var(--border-subtle, #2a2a31)',
+        borderRadius: 8,
+        background: 'var(--bg-secondary, #15151a)',
+      }}
+    >
+      <header
+        style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          marginBottom: 10,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+          <h3 style={{ margin: 0, fontSize: 13, fontWeight: 600, letterSpacing: 0.2 }}>
+            Extracted Skill Drafts
+          </h3>
+          <span style={{ fontSize: 11, color: 'var(--fg-4, #8a8a93)' }}>
+            {pendingCount} pending · {drafts.length} total
+          </span>
+        </div>
+        <button
+          className="sf-icon-btn"
+          onClick={onClose}
+          title="Hide drafts"
+          style={{ transform: 'rotate(180deg)' }}
+        >
+          {CHEVRON_ICON}
+        </button>
+      </header>
+
+      {pending.length === 0 ? (
+        <div className="sf-empty-state" style={{ padding: '18px 8px', fontSize: 12 }}>
+          No pending drafts. Run “Extract from Sessions” to generate new candidates.
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {pending.map(d => (
+            <SkillDraftCard
+              key={d.id}
+              draft={d}
+              onApprove={onApprove}
+              onDiscard={onDiscard}
+              approving={approvingId === d.id}
+              discarding={discardingId === d.id}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+/* ─── Single Draft Card ─── */
+interface SkillDraftCardProps {
+  draft: SkillDraft;
+  onApprove: (id: string) => void;
+  onDiscard: (id: string) => void;
+  approving: boolean;
+  discarding: boolean;
+}
+
+const SkillDraftCard: React.FC<SkillDraftCardProps> = React.memo(
+  ({ draft, onApprove, onDiscard, approving, discarding }) => {
+    const [showHint, setShowHint] = useState(false);
+    const [showRationale, setShowRationale] = useState(false);
+    const triggers = (draft.triggers ?? '').split(',').map(t => t.trim()).filter(Boolean);
+
+    return (
+      <div
+        style={{
+          display: 'flex',
+          gap: 12,
+          padding: '12px 14px',
+          borderRadius: 6,
+          border: '1px solid var(--border-subtle, #2a2a31)',
+          background: 'var(--bg-primary, #0f0f10)',
+        }}
+      >
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <span
+              style={{
+                fontFamily: 'var(--font-mono, monospace)',
+                fontSize: 13, fontWeight: 600,
+                color: 'var(--text-primary, #e7e7ea)',
+              }}
+            >
+              {draft.name}
+            </span>
+            {triggers.slice(0, 3).map(t => (
+              <span
+                key={t}
+                style={{
+                  fontSize: 10,
+                  padding: '1px 6px',
+                  borderRadius: 3,
+                  background: 'var(--bg-hover, #1d1d22)',
+                  color: 'var(--fg-4, #8a8a93)',
+                  fontFamily: 'var(--font-mono, monospace)',
+                }}
+              >
+                {t}
+              </span>
+            ))}
+          </div>
+
+          {draft.description && (
+            <div
+              style={{
+                marginTop: 4,
+                fontSize: 12,
+                lineHeight: 1.5,
+                color: 'var(--fg-3, #a8a8b1)',
+                display: '-webkit-box',
+                WebkitLineClamp: 2,
+                WebkitBoxOrient: 'vertical',
+                overflow: 'hidden',
+              }}
+            >
+              {draft.description}
+            </div>
+          )}
+
+          {draft.requiredTools && (
+            <div style={{ marginTop: 6, fontSize: 11, color: 'var(--fg-4, #8a8a93)' }}>
+              Tools: <code style={{ fontFamily: 'var(--font-mono, monospace)' }}>{draft.requiredTools}</code>
+            </div>
+          )}
+
+          {draft.promptHint && (
+            <div style={{ marginTop: 6 }}>
+              <button
+                className="sf-mini-btn"
+                onClick={() => setShowHint(v => !v)}
+                style={{ fontSize: 11 }}
+              >
+                {showHint ? 'Hide' : 'Show'} prompt hint
+              </button>
+              {showHint && (
+                <pre
+                  className="sf-code-block"
+                  style={{ marginTop: 6, fontSize: 11, maxHeight: 160, overflow: 'auto' }}
+                >
+                  {draft.promptHint}
+                </pre>
+              )}
+            </div>
+          )}
+
+          {draft.extractionRationale && (
+            <div style={{ marginTop: 6 }}>
+              <button
+                className="sf-mini-btn"
+                onClick={() => setShowRationale(v => !v)}
+                style={{ fontSize: 11 }}
+              >
+                {showRationale ? 'Hide' : 'Why extracted?'}
+              </button>
+              {showRationale && (
+                <div
+                  style={{
+                    marginTop: 4, fontSize: 11, fontStyle: 'italic',
+                    color: 'var(--fg-4, #8a8a93)', lineHeight: 1.5,
+                  }}
+                >
+                  {draft.extractionRationale}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flexShrink: 0 }}>
+          <button
+            className="btn-primary-sf"
+            disabled={approving || discarding}
+            onClick={() => onApprove(draft.id)}
+            style={{ fontSize: 11, padding: '4px 10px' }}
+          >
+            {approving ? '…' : 'Approve'}
+          </button>
+          <button
+            className="btn-ghost-sf"
+            disabled={approving || discarding}
+            onClick={() => onDiscard(draft.id)}
+            style={{ fontSize: 11, padding: '4px 10px', color: 'var(--color-err, #f0616d)' }}
+          >
+            {discarding ? '…' : 'Discard'}
+          </button>
+        </div>
+      </div>
+    );
+  },
+);
+SkillDraftCard.displayName = 'SkillDraftCard';
 
 export default SkillList;

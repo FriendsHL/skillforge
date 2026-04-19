@@ -37,4 +37,16 @@ public interface SessionRepository extends JpaRepository<SessionEntity, String> 
     long countByCollabRunId(String collabRunId);
 
     List<SessionEntity> findByCollabRunIdAndRuntimeStatus(String collabRunId, String runtimeStatus);
+
+    @org.springframework.data.jpa.repository.Query("""
+            SELECT s FROM SessionEntity s
+            WHERE s.agentId = :agentId
+              AND s.runtimeStatus IN ('completed', 'idle')
+              AND s.messagesJson IS NOT NULL
+              AND s.messagesJson <> ''
+            ORDER BY s.completedAt DESC NULLS LAST
+            """)
+    List<SessionEntity> findRecentEligibleSessionsForSkillDraft(
+            @org.springframework.data.repository.query.Param("agentId") Long agentId,
+            org.springframework.data.domain.Pageable pageable);
 }
