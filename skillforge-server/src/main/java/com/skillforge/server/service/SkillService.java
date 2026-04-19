@@ -9,6 +9,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
@@ -202,6 +203,10 @@ public class SkillService {
         detail.put("enabled", entity.isEnabled());
         detail.put("requiredTools", entity.getRequiredTools());
         detail.put("createdAt", entity.getCreatedAt());
+        detail.put("semver", entity.getSemver());
+        detail.put("parentSkillId", entity.getParentSkillId());
+        detail.put("usageCount", entity.getUsageCount());
+        detail.put("successCount", entity.getSuccessCount());
 
         if (entity.getSkillPath() == null) {
             return detail;
@@ -267,6 +272,97 @@ public class SkillService {
         detail.put("scripts", scripts);
 
         return detail;
+    }
+
+    /**
+     * Record a skill-execution usage event. Increments usageCount; increments successCount when success=true.
+     */
+    @Transactional
+    public void recordUsage(Long skillId, boolean success) {
+        skillRepository.incrementUsage(skillId, success ? 1 : 0);
+    }
+
+    /**
+     * Fork a skill into a new disabled child version for later A/B promotion.
+     */
+    @Transactional
+    public SkillEntity forkSkill(Long parentId, Long ownerId) {
+        SkillEntity parent = skillRepository.findById(parentId)
+                .orElseThrow(() -> new RuntimeException("Skill not found: " + parentId));
+
+        // Bootstrap parent to v1 if it has no semver yet (pre-versioning skills)
+        if (parent.getSemver() == null) {
+            parent.setSemver("v1");
+            parent = skillRepository.save(parent);
+        }
+
+        SkillEntity child = new SkillEntity();
+        child.setName(parent.getName());
+        child.setDescription(parent.getDescription());
+        child.setSkillPath(parent.getSkillPath());
+        child.setTriggers(parent.getTriggers());
+        child.setRequiredTools(parent.getRequiredTools());
+        child.setOwnerId(ownerId != null ? ownerId : parent.getOwnerId());
+        child.setPublic(parent.isPublic());
+        child.setSource(parent.getSource());
+        child.setRiskLevel(parent.getRiskLevel());
+        child.setParentSkillId(parentId);
+        child.setSemver(nextSemver(parent.getSemver()));
+        child.setEnabled(false);
+
+        SkillEntity saved = skillRepository.save(child);
+        log.info("Forked skill id={} (semver={}) from parent id={}", saved.getId(), saved.getSemver(), parentId);
+        return saved;
+    }
+
+    private String nextSemver(String current) {
+        if (current == null || current.isBlank()) return "v2";
+        if (current.startsWith("v")) {
+            try {
+                int n = Integer.parseInt(current.substring(1));
+                return "v" + (n + 1);
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        return current + "-next";
+    }
+
+    /**
+     * Walk the lineage: ancestors (root first) + current skill + its direct children.
+     */
+    @Transactional(readOnly = true)
+    public List<SkillEntity> getVersionChain(Long skillId) {
+        SkillEntity current = skillRepository.findById(skillId)
+                .orElseThrow(() -> new RuntimeException("Skill not found: " + skillId));
+
+        java.util.Deque<SkillEntity> ancestors = new java.util.ArrayDeque<>();
+        SkillEntity cursor = current;
+        int maxDepth = 20;
+        while (cursor.getParentSkillId() != null && maxDepth-- > 0) {
+            SkillEntity next = skillRepository.findById(cursor.getParentSkillId()).orElse(null);
+            if (next == null) break;
+            ancestors.addFirst(next);
+            cursor = next;
+        }
+
+        List<SkillEntity> chain = new ArrayList<>(ancestors);
+        chain.add(current);
+        chain.addAll(skillRepository.findByParentSkillId(skillId));
+        return chain;
+    }
+
+    /**
+     * Bootstrap semver to "v1" for skills that were created before versioning existed.
+     */
+    @Transactional
+    public SkillEntity initSemver(Long skillId) {
+        SkillEntity skill = skillRepository.findById(skillId)
+                .orElseThrow(() -> new RuntimeException("Skill not found: " + skillId));
+        if (skill.getSemver() == null) {
+            skill.setSemver("v1");
+            return skillRepository.save(skill);
+        }
+        return skill;
     }
 
     private void deleteDirectoryQuietly(Path dir) {

@@ -81,6 +81,10 @@ public class SkillController {
             item.put("enabled", entity.isEnabled());
             item.put("system", false);
             item.put("source", entity.getSource());
+            item.put("semver", entity.getSemver());
+            item.put("parentSkillId", entity.getParentSkillId());
+            item.put("usageCount", entity.getUsageCount());
+            item.put("successCount", entity.getSuccessCount());
             result.add(item);
         }
 
@@ -184,6 +188,63 @@ public class SkillController {
             return ResponseEntity.ok().build();
         } catch (NumberFormatException e) {
             return ResponseEntity.badRequest().body(Map.of("error", "Invalid skill id: " + id));
+        }
+    }
+
+    /** Version chain: returns the current skill + its ancestors + direct children. */
+    @GetMapping("/{id}/versions")
+    public ResponseEntity<?> getVersionChain(@PathVariable Long id) {
+        try {
+            List<SkillEntity> chain = skillService.getVersionChain(id);
+            List<Map<String, Object>> result = chain.stream().map(s -> {
+                Map<String, Object> m = new java.util.LinkedHashMap<>();
+                m.put("id", s.getId());
+                m.put("name", s.getName());
+                m.put("semver", s.getSemver());
+                m.put("parentSkillId", s.getParentSkillId());
+                m.put("enabled", s.isEnabled());
+                m.put("usageCount", s.getUsageCount());
+                m.put("successCount", s.getSuccessCount());
+                m.put("source", s.getSource());
+                m.put("createdAt", s.getCreatedAt());
+                return m;
+            }).collect(Collectors.toList());
+            return ResponseEntity.ok(result);
+        } catch (RuntimeException e) {
+            return ResponseEntity.notFound().build();
+        }
+    }
+
+    /** Fork a skill to create a new disabled variant for A/B testing (P1-3). */
+    @PostMapping("/{id}/fork")
+    public ResponseEntity<?> forkSkill(@PathVariable Long id,
+                                       @RequestParam(value = "ownerId", defaultValue = "0") Long ownerId) {
+        try {
+            SkillEntity forked = skillService.forkSkill(id, ownerId);
+            Map<String, Object> m = new java.util.LinkedHashMap<>();
+            m.put("id", forked.getId());
+            m.put("name", forked.getName());
+            m.put("semver", forked.getSemver());
+            m.put("parentSkillId", forked.getParentSkillId());
+            m.put("enabled", forked.isEnabled());
+            m.put("usageCount", forked.getUsageCount());
+            m.put("successCount", forked.getSuccessCount());
+            m.put("source", forked.getSource());
+            return ResponseEntity.ok(m);
+        } catch (RuntimeException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /** Record a usage event — called after skill execution completes. */
+    @PostMapping("/{id}/usage")
+    public ResponseEntity<?> recordUsage(@PathVariable Long id,
+                                         @RequestParam(value = "success", defaultValue = "true") boolean success) {
+        try {
+            skillService.recordUsage(id, success);
+            return ResponseEntity.ok().build();
+        } catch (RuntimeException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
     }
 }

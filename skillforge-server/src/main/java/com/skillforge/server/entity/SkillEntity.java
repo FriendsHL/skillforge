@@ -8,8 +8,10 @@ import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import org.springframework.data.annotation.CreatedDate;
+import org.springframework.data.annotation.LastModifiedDate;
 import org.springframework.data.jpa.domain.support.AuditingEntityListener;
 
+import java.time.Instant;
 import java.time.LocalDateTime;
 
 @Entity
@@ -60,6 +62,20 @@ public class SkillEntity {
 
     @CreatedDate
     private LocalDateTime createdAt;
+
+    @LastModifiedDate
+    private Instant updatedAt;
+
+    private Long parentSkillId;
+
+    @Column(length = 32)
+    private String semver;
+
+    @Column(nullable = false)
+    private long usageCount = 0;
+
+    @Column(nullable = false)
+    private long successCount = 0;
 
     public SkillEntity() {
     }
@@ -174,5 +190,45 @@ public class SkillEntity {
 
     public void setScanReport(String scanReport) {
         this.scanReport = scanReport;
+    }
+
+    public Instant getUpdatedAt() {
+        return updatedAt;
+    }
+
+    public void setUpdatedAt(Instant updatedAt) {
+        this.updatedAt = updatedAt;
+    }
+
+    public Long getParentSkillId() {
+        return parentSkillId;
+    }
+
+    public void setParentSkillId(Long parentSkillId) {
+        this.parentSkillId = parentSkillId;
+    }
+
+    public String getSemver() {
+        return semver;
+    }
+
+    public void setSemver(String semver) {
+        this.semver = semver;
+    }
+
+    public long getUsageCount() {
+        return usageCount;
+    }
+
+    public void setUsageCount(long usageCount) {
+        this.usageCount = usageCount;
+    }
+
+    public long getSuccessCount() {
+        return successCount;
+    }
+
+    public void setSuccessCount(long successCount) {
+        this.successCount = successCount;
     }
 }

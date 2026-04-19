@@ -30,10 +30,12 @@ public class MemoryService {
 
     private final MemoryRepository memoryRepository;
     private final MemoryEmbeddingWorker embeddingWorker;
+    private final EmbeddingService embeddingService;
 
-    public MemoryService(MemoryRepository memoryRepository, MemoryEmbeddingWorker embeddingWorker) {
+    public MemoryService(MemoryRepository memoryRepository, MemoryEmbeddingWorker embeddingWorker, EmbeddingService embeddingService) {
         this.memoryRepository = memoryRepository;
         this.embeddingWorker = embeddingWorker;
+        this.embeddingService = embeddingService;
     }
 
     public List<MemoryEntity> listMemories(Long userId, String type) {
@@ -183,25 +185,48 @@ public class MemoryService {
         return matchCount * recencyBoost * recallBoost;
     }
 
-    @Transactional
+    /**
+     * Get memories for prompt injection.
+     * Legacy version: no semantic context, falls back to time-based ranking.
+     */
     public String getMemoriesForPrompt(Long userId) {
+        return getMemoriesForPrompt(userId, null);
+    }
+
+    /**
+     * Get memories for prompt injection with semantic search.
+     *
+     * @param userId the user ID
+     * @param taskContext optional current task context for semantic retrieval
+     * @return formatted memories for injection into agent prompt
+     */
+    @Transactional
+    public String getMemoriesForPrompt(Long userId, String taskContext) {
+        List<Long> injectedIds = new ArrayList<>();
+        StringBuilder sb = new StringBuilder();
+
+        // Always inject preferences and feedback (time-based, most relevant for behavior)
         List<MemoryEntity> all = memoryRepository.findByUserIdOrderByUpdatedAtDesc(userId);
         if (all.isEmpty()) return "";
 
         Map<String, List<MemoryEntity>> byType = all.stream()
                 .collect(Collectors.groupingBy(m -> m.getType() != null ? m.getType() : "knowledge"));
 
-        List<Long> injectedIds = new ArrayList<>();
-        StringBuilder sb = new StringBuilder();
         appendTypeMemories(sb, byType.get("preference"), "Preferences", 10, injectedIds);
         appendTypeMemories(sb, byType.get("feedback"), "Feedback", 10, injectedIds);
 
-        List<MemoryEntity> kpr = new ArrayList<>();
-        if (byType.containsKey("knowledge")) kpr.addAll(byType.get("knowledge"));
-        if (byType.containsKey("project")) kpr.addAll(byType.get("project"));
-        if (byType.containsKey("reference")) kpr.addAll(byType.get("reference"));
-        kpr.sort(Comparator.comparing(MemoryEntity::getUpdatedAt).reversed());
-        appendTypeMemories(sb, kpr.subList(0, Math.min(10, kpr.size())), "Knowledge & Context", 10, injectedIds);
+        // For knowledge/project/reference: use semantic search if taskContext is provided
+        if (taskContext != null && !taskContext.isBlank()) {
+            appendSemanticallyRankedMemories(sb, userId, taskContext, byType, injectedIds);
+        } else {
+            // Fallback to time-based ranking
+            List<MemoryEntity> kpr = new ArrayList<>();
+            if (byType.containsKey("knowledge")) kpr.addAll(byType.get("knowledge"));
+            if (byType.containsKey("project")) kpr.addAll(byType.get("project"));
+            if (byType.containsKey("reference")) kpr.addAll(byType.get("reference"));
+            kpr.sort(Comparator.comparing(MemoryEntity::getUpdatedAt).reversed());
+            appendTypeMemories(sb, kpr.subList(0, Math.min(10, kpr.size())), "Knowledge & Context", 10, injectedIds);
+        }
 
         // Update recall counts for injected memories
         Instant now = Instant.now();
@@ -210,6 +235,91 @@ public class MemoryService {
         }
 
         return sb.toString();
+    }
+
+    /**
+     * Append memories ranked by semantic similarity to the task context.
+     * Uses hybrid search (FTS + Vector) with RRF fusion, similar to MemorySearchSkill.
+     */
+    private void appendSemanticallyRankedMemories(
+            StringBuilder sb,
+            Long userId,
+            String taskContext,
+            Map<String, List<MemoryEntity>> byType,
+            List<Long> injectedIds) {
+
+        // Filter to knowledge/project/reference types only
+        List<MemoryEntity> candidates = new ArrayList<>();
+        for (String type : List.of("knowledge", "project", "reference")) {
+            if (byType.containsKey(type)) {
+                candidates.addAll(byType.get(type));
+            }
+        }
+        if (candidates.isEmpty()) return;
+
+        // FTS recall
+        List<MemorySearchResult> ftsResults = searchByFts(userId, taskContext, 20);
+
+        // Vector recall
+        List<MemorySearchResult> vectorResults = embeddingService.embed(taskContext)
+                .map(vec -> searchByVector(userId, vec, 20))
+                .orElse(List.of());
+
+        // RRF merge
+        List<MemorySearchResult> merged = mergeWithRrf(ftsResults, vectorResults, 15);
+
+        if (merged.isEmpty()) {
+            // Fallback to time-based if semantic search returns nothing
+            appendTypeMemories(sb, candidates.subList(0, Math.min(10, candidates.size())), 
+                    "Knowledge & Context", 10, injectedIds);
+            return;
+        }
+
+        // Append semantically ranked memories
+        sb.append("### Knowledge & Context (ranked by relevance)\n");
+        for (MemorySearchResult result : merged) {
+            if (sb.length() >= MAX_TOTAL_CHARS) break;
+            sb.append("- **").append(result.title()).append("**: ");
+            String content = result.content();
+            if (content.length() > MAX_CONTENT_CHARS) {
+                content = content.substring(0, MAX_CONTENT_CHARS) + "...[truncated]";
+            }
+            sb.append(content).append("\n");
+            injectedIds.add(result.memoryId());
+        }
+        sb.append("\n");
+    }
+
+    /**
+     * Reciprocal Rank Fusion: merge FTS and vector results into a unified ranking.
+     */
+    private List<MemorySearchResult> mergeWithRrf(
+            List<MemorySearchResult> ftsResults,
+            List<MemorySearchResult> vectorResults,
+            int topK) {
+
+        java.util.Map<Long, Double> scores = new java.util.HashMap<>();
+        int RRF_K = 60;
+
+        for (int i = 0; i < ftsResults.size(); i++) {
+            long id = ftsResults.get(i).memoryId();
+            scores.merge(id, 1.0 / (RRF_K + i + 1), Double::sum);
+        }
+        for (int i = 0; i < vectorResults.size(); i++) {
+            long id = vectorResults.get(i).memoryId();
+            scores.merge(id, 1.0 / (RRF_K + i + 1), Double::sum);
+        }
+
+        // Merge candidates from both sources, keyed by id
+        java.util.Map<Long, MemorySearchResult> byId = new java.util.HashMap<>();
+        ftsResults.forEach(r -> byId.put(r.memoryId(), r));
+        vectorResults.forEach(r -> byId.putIfAbsent(r.memoryId(), r));
+
+        return scores.entrySet().stream()
+                .sorted(java.util.Map.Entry.<Long, Double>comparingByValue().reversed())
+                .limit(topK)
+                .map(e -> byId.get(e.getKey()).withScore(e.getValue()))
+                .toList();
     }
 
     private static final int MAX_CONTENT_CHARS = 500;

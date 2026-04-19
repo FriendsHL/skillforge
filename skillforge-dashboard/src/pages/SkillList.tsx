@@ -55,6 +55,10 @@ interface SkillRow {
   tags: string[];
   readOnly?: boolean;
   toolSchema?: unknown;
+  semver?: string;
+  parentSkillId?: number;
+  usageCount?: number;
+  successCount?: number;
 }
 
 interface SkillDetailData {
@@ -103,6 +107,10 @@ function normalizeSkill(raw: Record<string, unknown>): SkillRow {
     tags: deriveTags(raw),
     readOnly: raw.readOnly as boolean | undefined,
     toolSchema: raw.toolSchema,
+    semver: raw.semver ? String(raw.semver) : undefined,
+    parentSkillId: raw.parentSkillId != null ? Number(raw.parentSkillId) : undefined,
+    usageCount: raw.usageCount != null ? Number(raw.usageCount) : undefined,
+    successCount: raw.successCount != null ? Number(raw.successCount) : undefined,
   };
 }
 
@@ -323,7 +331,25 @@ const SkillList: React.FC = () => {
                 <button key={s.id} className="skill-card-sf" onClick={() => openDetail(s)}>
                   <div className="skill-card-head-sf">
                     <span className={`skill-lang-sf lang-${s.lang}`}>{s.lang}</span>
-                    <span className="skill-name-sf">{s.name}</span>
+                    <span className="skill-name-sf">
+                      {s.name}
+                      {s.semver && (
+                        <span
+                          style={{
+                            fontSize: 10,
+                            padding: '1px 5px',
+                            borderRadius: 3,
+                            background: 'var(--bg-hover, #1d1d22)',
+                            color: 'var(--fg-4, #8a8a93)',
+                            fontFamily: 'var(--font-mono, monospace)',
+                            marginLeft: 6,
+                            verticalAlign: 'middle',
+                          }}
+                        >
+                          {s.semver}
+                        </span>
+                      )}
+                    </span>
                     {!s.enabled && <span className="skill-draft-sf">disabled</span>}
                     <span className={`skill-source-sf src-${s.source}`}>{s.source}</span>
                   </div>
@@ -357,6 +383,22 @@ const SkillList: React.FC = () => {
                       <div className="t-name-sf">
                         <span className={`skill-lang-sf lang-${s.lang}`}>{s.lang}</span>
                         <b>{s.name}</b>
+                        {s.semver && (
+                          <span
+                            style={{
+                              fontSize: 10,
+                              padding: '1px 5px',
+                              borderRadius: 3,
+                              background: 'var(--bg-hover, #1d1d22)',
+                              color: 'var(--fg-4, #8a8a93)',
+                              fontFamily: 'var(--font-mono, monospace)',
+                              marginLeft: 6,
+                              verticalAlign: 'middle',
+                            }}
+                          >
+                            {s.semver}
+                          </span>
+                        )}
                       </div>
                     </td>
                     <td>{s.description || '—'}</td>
@@ -444,8 +486,40 @@ function SkillDrawer({ skill, tab, setTab, onClose, onToggle, onDelete }: {
         <div className="sf-drawer-head">
           <div className="sf-drawer-head-row">
             <div>
-              <h2 className="sf-drawer-title">{skill.name}</h2>
+              <h2 className="sf-drawer-title">
+                {skill.name}
+                {skill.semver && (
+                  <span
+                    style={{
+                      fontSize: 11,
+                      padding: '1px 6px',
+                      borderRadius: 3,
+                      background: 'var(--bg-hover, #1d1d22)',
+                      color: 'var(--fg-4, #8a8a93)',
+                      fontFamily: 'var(--font-mono, monospace)',
+                      marginLeft: 8,
+                      verticalAlign: 'middle',
+                      fontWeight: 400,
+                    }}
+                  >
+                    {skill.semver}
+                  </span>
+                )}
+              </h2>
               {skill.description && <p className="sf-drawer-subtitle">{skill.description}</p>}
+              {skill.parentSkillId != null && (
+                <div style={{ fontSize: 11, color: 'var(--fg-4, #8a8a93)', marginTop: 2 }}>
+                  Forked from skill #{skill.parentSkillId}
+                </div>
+              )}
+              {skill.usageCount != null && skill.usageCount > 0 && (
+                <div style={{ fontSize: 11, color: 'var(--fg-4, #8a8a93)', marginTop: 4 }}>
+                  {skill.usageCount} uses · {skill.successCount ?? 0} succeeded
+                  <span style={{ marginLeft: 6 }}>
+                    ({Math.round(((skill.successCount ?? 0) / skill.usageCount) * 100)}% success)
+                  </span>
+                </div>
+              )}
             </div>
             <div className="sf-drawer-actions">
               {!skill.system && (

@@ -124,6 +124,27 @@ export const getSkillDetail = (id: number | string) => api.get(`/skills/${id}/de
 export const toggleSkill = (id: number, enabled: boolean) =>
   api.put(`/skills/${id}/toggle?enabled=${enabled}`);
 
+export interface SkillVersionEntry {
+  id: number;
+  name: string;
+  semver?: string;
+  parentSkillId?: number;
+  enabled: boolean;
+  usageCount: number;
+  successCount: number;
+  source?: string;
+  createdAt?: string;
+}
+
+export const getSkillVersionChain = (id: number | string) =>
+  api.get<SkillVersionEntry[]>(`/skills/${id}/versions`);
+
+export const forkSkill = (id: number | string, ownerId: number) =>
+  api.post<SkillVersionEntry>(`/skills/${id}/fork?ownerId=${ownerId}`);
+
+export const recordSkillUsage = (id: number | string, success: boolean) =>
+  api.post(`/skills/${id}/usage?success=${success}`);
+
 // Memory API
 export const getMemories = (userId: number, type?: string) =>
   api.get('/memories', { params: { userId, type } });
