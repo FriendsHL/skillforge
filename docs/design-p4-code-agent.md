@@ -1,6 +1,6 @@
 # P4 — Code Agent 设计方案
 
-> 2026-04-19 approved
+> 2026-04-19 approved → **2026-04-19 completed**（Phase 1-3 全部交付，commit `59d3d80`）
 
 ## 目标
 
@@ -75,16 +75,17 @@ CREATE TABLE t_compiled_method (
     display_name            VARCHAR(256),
     description             TEXT,
     source_code             TEXT NOT NULL,
-    compiled_class_path     TEXT,
+    compiled_class_bytes    BYTEA,          -- javac 编译产物，直接存字节码
     status                  VARCHAR(16) NOT NULL DEFAULT 'pending_review',
     compile_error           TEXT,
     args_schema             TEXT,
     generated_by_session_id VARCHAR(36),
     generated_by_agent_id   BIGINT,
     reviewed_by_user_id     BIGINT,
-    created_at              TIMESTAMPTZ NOT NULL,
-    updated_at              TIMESTAMPTZ NOT NULL
+    created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+CREATE INDEX idx_compiled_method_status ON t_compiled_method(status);
 ```
 
 ## 分 Phase 交付
@@ -110,10 +111,11 @@ CREATE TABLE t_compiled_method (
 - `RegisterCompiledMethodSkill`
 
 ### Phase 3：Code Agent Template + 前端
-- `CodeAgentInitializer`：种子 Code Agent 模板
-- Code Skill Pack preset：`["Bash","FileRead","FileWrite","Glob","Grep","CodeSandbox","CodeReview","RegisterScriptMethod"]`
+- `CodeAgentInitializer`：种子 Code Agent 模板（existsByName + DataIntegrityViolationException 防并发）
+- Code Skill Pack：`["Bash","FileRead","FileWrite","Glob","Grep","CodeSandbox","CodeReview","RegisterScriptMethod","RegisterCompiledMethod"]`
 - System prompt：内置选择规则（脚本 vs Java）
-- 前端：ScriptMethod 管理页、CompiledMethod 审批页、Agent 模板创建、Hook 编辑器扩展
+- 前端 `HookMethods.tsx`：`/hooks` 路由，双 Tab（Script Methods / Compiled Methods），grid/table 视图切换，detail drawer，approval/reject/compile 操作，手动创建 ScriptMethod 弹窗
+- `api/index.ts`：typed API functions（ScriptMethod CRUD + CompiledMethod lifecycle）
 
 ## 已知限制（Review 记录）
 
