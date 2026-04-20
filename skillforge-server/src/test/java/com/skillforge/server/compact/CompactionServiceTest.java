@@ -17,6 +17,7 @@ import com.skillforge.server.entity.CompactionEventEntity;
 import com.skillforge.server.entity.SessionEntity;
 import com.skillforge.server.repository.AgentRepository;
 import com.skillforge.server.repository.CompactionEventRepository;
+import com.skillforge.server.repository.SessionCompactionCheckpointRepository;
 import com.skillforge.server.repository.SessionRepository;
 import com.skillforge.server.service.CompactionService;
 import com.skillforge.server.service.SessionService;
@@ -32,7 +33,6 @@ import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -40,12 +40,14 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class CompactionServiceTest {
 
     private SessionRepository sessionRepository;
     private CompactionEventRepository eventRepository;
+    private SessionCompactionCheckpointRepository checkpointRepository;
     private SessionService sessionService;
     private LlmProviderFactory llmProviderFactory;
     private LlmProperties llmProperties;
@@ -78,6 +80,7 @@ class CompactionServiceTest {
 
         sessionRepository = mock(SessionRepository.class);
         eventRepository = mock(CompactionEventRepository.class);
+        checkpointRepository = mock(SessionCompactionCheckpointRepository.class);
         sessionService = mock(SessionService.class);
         llmProviderFactory = mock(LlmProviderFactory.class);
         llmProperties = mock(LlmProperties.class);
@@ -114,7 +117,7 @@ class CompactionServiceTest {
             return e;
         });
 
-        service = new CompactionService(sessionRepository, eventRepository, sessionService,
+        service = new CompactionService(sessionRepository, eventRepository, checkpointRepository, sessionService,
                 new LightCompactStrategy(), new FullCompactStrategy(),
                 llmProviderFactory, llmProperties, broadcaster,
                 null /* transactionManager — null OK in unit tests, runInTransaction runs directly */);
@@ -306,6 +309,7 @@ class CompactionServiceTest {
         CompactionEventEntity event = service.compact("sFS", "full", "engine-hard", "full check");
         assertThat(event).isNotNull();
         assertThat(event.getStrategiesApplied()).isEqualTo("llm-summary");
+        verify(checkpointRepository).save(any());
     }
 
     /**
@@ -536,10 +540,4 @@ class CompactionServiceTest {
         assertThat(t1Done.get()).isTrue();
         assertThat(t1NonNull.get()).isTrue(); // t1 should have succeeded
     }
-
-    /**
-     * Reference use of AtomicInteger to satisfy the import (keeps the test file clean).
-     */
-    @SuppressWarnings("unused")
-    private AtomicInteger keepImport() { return new AtomicInteger(0); }
 }
