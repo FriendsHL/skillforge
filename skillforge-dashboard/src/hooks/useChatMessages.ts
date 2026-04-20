@@ -87,11 +87,16 @@ export function normalizeMessages(list: any[]): ChatMessage[] {
         const sep = '\n\n---\n\n';
         const sepIdx = text.indexOf(sep);
         if (sepIdx === -1) {
-          // 独立摘要消息：提取摘要内容显示给用户，第一行是标头跳过
+          // 独立摘要消息：提取压缩条数 + 摘要内容
+          const countMatch = text.match(/^\[Context summary from (\d+) messages/);
+          const compactedCount = countMatch ? parseInt(countMatch[1], 10) : null;
           const firstNewline = text.indexOf('\n');
           const summaryContent = firstNewline !== -1 ? text.slice(firstNewline + 1).trim() : '';
-          if (summaryContent) {
-            result.push({ role: 'summary', content: summaryContent });
+          const displayContent = compactedCount != null
+            ? `**${compactedCount} earlier messages were compacted**\n\n${summaryContent}`
+            : summaryContent;
+          if (displayContent.trim()) {
+            result.push({ role: 'summary', content: displayContent });
           }
           continue;
         }

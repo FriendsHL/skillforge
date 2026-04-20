@@ -259,7 +259,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
                 <div key={`summary-${idx}`} className="msg-compaction-summary">
                   <div className="mcs-header">
                     <IconCompact s={11} />
-                    Earlier messages were compacted
+                    Context compacted · earlier messages replaced by summary below
                   </div>
                   <div className="mcs-body">
                     <MarkdownRenderer content={msg.content} />

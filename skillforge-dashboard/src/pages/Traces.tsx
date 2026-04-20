@@ -315,9 +315,21 @@ function Waterfall({ spans, totalMs, selectedSpanId, onSelect }: {
                   style={{ left: `${left}%`, width: `${pct}%` }}
                   title={`${span.name} · ${fmtMs(span.dur)}`}
                 />
-                <span className="tr-span-dur mono-sm" style={{ left: `min(calc(${left + pct}% + 6px), calc(100% - 44px))` }}>
-                  {fmtMs(span.dur)}
-                </span>
+                {(() => {
+                  const endPct = left + pct;
+                  const isNearEdge = endPct > 75;
+                  return (
+                    <span
+                      className="tr-span-dur mono-sm"
+                      style={isNearEdge
+                        ? { left: `calc(${endPct}% - 4px)`, transform: 'translateY(-50%) translateX(-100%)', color: 'rgba(255,255,255,0.88)' }
+                        : { left: `calc(${endPct}% + 4px)` }
+                      }
+                    >
+                      {fmtMs(span.dur)}
+                    </span>
+                  );
+                })()}
               </div>
             </button>
           );
