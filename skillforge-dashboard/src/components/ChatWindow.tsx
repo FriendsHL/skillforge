@@ -225,7 +225,8 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
   }, []);
   useEffect(() => {
     if (isNearBottom.current) {
-      bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+      const el = scrollRef.current;
+      if (el) el.scrollTop = el.scrollHeight;
     }
   }, [messages, streamingText]);
 

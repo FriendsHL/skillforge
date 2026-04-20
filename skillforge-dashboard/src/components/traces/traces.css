@@ -191,15 +191,18 @@
 
 .tr-stats-bar {
   display: flex;
+  flex-wrap: wrap;
   gap: 20px;
   margin-top: 12px;
   padding-top: 10px;
   border-top: 1px solid var(--border-1);
+  overflow: visible;
 }
 .tr-stat {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  min-width: 0;
 }
 .tr-stat-lbl {
   font-family: var(--font-mono);
@@ -212,6 +215,7 @@
   font-size: 13px;
   color: var(--fg-1);
   font-weight: 500;
+  white-space: nowrap;
 }
 .tr-stat-v.mono { font-family: var(--font-mono); font-weight: 400; font-size: 12px; }
 
@@ -278,7 +282,7 @@
   font: inherit;
   color: inherit;
   width: 100%;
-  padding: 6px 12px;
+  padding: 10px 12px;
   transition: background var(--transition-base);
 }
 .tr-span-row:hover { background: var(--bg-hover); }

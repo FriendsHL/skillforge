@@ -208,6 +208,18 @@ public class AgentLoopEngine {
         List<SkillDefinition> skillDefs = new ArrayList<>(skillRegistry.getAllSkillDefinitions());
         String systemPrompt = new SystemPromptBuilder(agentDef, skillDefs, contextProviders).build(claudeMd);
 
+        // 4.0.1 注入 Session Context (userId / sessionId) — 让 Agent 自动知道当前用户/会话
+        if (userId != null || loopCtx.getSessionId() != null) {
+            StringBuilder userCtx = new StringBuilder("\n\n## Session Context\n");
+            if (userId != null) {
+                userCtx.append("- userId: ").append(sanitizePromptValue(String.valueOf(userId))).append("\n");
+            }
+            if (loopCtx.getSessionId() != null) {
+                userCtx.append("- sessionId: ").append(sanitizePromptValue(loopCtx.getSessionId())).append("\n");
+            }
+            systemPrompt = systemPrompt + userCtx;
+        }
+
         // 4.1 注入用户记忆到 system prompt (skip if lightContext / skip_memory flag set)
         boolean skipMemory = Boolean.TRUE.equals(agentDef.getConfig().get("skip_memory"));
         if (memoryProvider != null && !skipMemory) {
@@ -284,9 +296,9 @@ public class AgentLoopEngine {
 
             // a. B1/B2 safety net: 基于 TokenEstimator 的估算自动触发压缩
             //
-            // B1 = engine-soft light compact, 条件 ratio > 0.40 或 detectWaste
-            // B2 = engine-hard full compact, 条件 "B1 刚跑过(本轮) 且 ratio 仍 > 0.70"
-            //   (以 0.70 为阈值:  如果 B1 收回了足够 token, ratio 应该明显下降,
+            // B1 = engine-soft light compact, 条件 ratio > 0.60 或 detectWaste
+            // B2 = engine-hard full compact, 条件 "B1 刚跑过(本轮) 且 ratio 仍 > 0.80"
+            //   (以 0.80 为阈值:  如果 B1 收回了足够 token, ratio 应该明显下降,
             //    否则说明 light 不够用, 必须上 full LLM 总结)
             //
             // 防循环: 这两个分支各自只会在本 iteration 执行一次 —— B2 的前置条件是
@@ -298,7 +310,7 @@ public class AgentLoopEngine {
                 int estTokens = TokenEstimator.estimate(messages);
                 double ratio = contextWindowTokens > 0 ? (double) estTokens / contextWindowTokens : 0;
                 boolean waste = detectWaste(messages);
-                if (ratio > 0.40 || waste) {
+                if (ratio > 0.60 || waste) {
                     String reason = waste
                             ? "engine-soft: waste detected (large tool_result / dedup / retry loop)"
                             : String.format("engine-soft: estTokens=%d / window=%d (ratio=%.2f)",
@@ -325,8 +337,8 @@ public class AgentLoopEngine {
                                 loopCtx.getConsecutiveCompactFailures(), e.getMessage());
                     }
                 }
-                // B2: B1 刚跑过 (无论实际 performed 还是 no-op) 且 ratio 仍 > 0.70 → 升级到 full
-                if (b1RanInThisIteration && ratio > 0.70) {
+                // B2: B1 刚跑过 (无论实际 performed 还是 no-op) 且 ratio 仍 > 0.80 → 升级到 full
+                if (b1RanInThisIteration && ratio > 0.80) {
                     String reason = String.format("engine-hard: B1 ran but ratio still %.2f (estTokens=%d / window=%d)",
                             ratio, estTokens, contextWindowTokens);
                     try {
@@ -1068,6 +1080,10 @@ public class AgentLoopEngine {
                     false);
         }
         return Message.toolResult(toolUseId, "User answered: " + answer, false);
+    }
+
+    private static String sanitizePromptValue(String value) {
+        return value == null ? null : value.replaceAll("[\r\n\t]", " ").trim();
     }
 
     /**

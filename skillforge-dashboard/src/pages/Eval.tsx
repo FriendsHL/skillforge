@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Select } from 'antd';
 import { getEvalRuns, getEvalRun, triggerEvalRun, getAgents, extractList } from '../api';
 import { useAuth } from '../contexts/AuthContext';
 import '../components/agents/agents.css';
@@ -408,16 +409,16 @@ function RunEvalDialog({ agents, userId, onClose, onSuccess }: {
         <div className="sf-modal-body">
           <div className="sf-modal-field">
             <label>Target agent</label>
-            <select
-              value={agentId}
-              onChange={e => setAgentId(e.target.value)}
-              style={{ width: '100%', padding: '8px 10px', background: 'var(--bg-surface)', border: '1px solid var(--border-1)', borderRadius: 7, fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--fg-1)' }}
-            >
-              <option value="">Select agent…</option>
-              {agents.map(a => (
-                <option key={String(a.id)} value={String(a.id)}>{String(a.name || `Agent #${a.id}`)}</option>
-              ))}
-            </select>
+            <Select
+              value={agentId || undefined}
+              onChange={(v) => setAgentId(v ?? '')}
+              placeholder="Select agent…"
+              style={{ width: '100%' }}
+              options={agents.map((a) => ({
+                value: String(a.id),
+                label: String(a.name || `Agent #${a.id}`),
+              }))}
+            />
           </div>
         </div>
         <div className="sf-modal-f">
