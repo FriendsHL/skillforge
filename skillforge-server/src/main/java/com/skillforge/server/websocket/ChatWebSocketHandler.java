@@ -3,12 +3,14 @@ package com.skillforge.server.websocket;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillforge.core.engine.ChatEventBroadcaster;
 import com.skillforge.core.model.Message;
+import com.skillforge.server.channel.event.ChannelSessionOutputEvent;
 import com.skillforge.server.entity.CollabRunEntity;
 import com.skillforge.server.entity.SessionEntity;
 import com.skillforge.server.repository.CollabRunRepository;
 import com.skillforge.server.repository.SessionRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
@@ -33,6 +35,13 @@ public class ChatWebSocketHandler extends TextWebSocketHandler implements ChatEv
     private static final Logger log = LoggerFactory.getLogger(ChatWebSocketHandler.class);
 
     private final Map<String, Set<WebSocketSession>> sessions = new ConcurrentHashMap<>();
+
+    /** Per-session buffered reply text for channel-originated turns. */
+    private final Map<String, ChannelTurnContext> channelContexts = new ConcurrentHashMap<>();
+
+    /** Holds the turn's platformMessageId + accumulating reply text between deltas. */
+    private record ChannelTurnContext(String platformMessageId, StringBuilder text) {}
+
     // findAndRegisterModules() picks up jackson-datatype-jsr310 (already on classpath via
     // spring-boot-starter-web) so LocalDateTime / Instant in payloads serialize cleanly.
     // disable WRITE_DATES_AS_TIMESTAMPS so the client gets ISO-8601 strings.
@@ -42,13 +51,26 @@ public class ChatWebSocketHandler extends TextWebSocketHandler implements ChatEv
     private final UserWebSocketHandler userWebSocketHandler;
     private final CollabRunRepository collabRunRepository;
     private final SessionRepository sessionRepository;
+    private final ApplicationEventPublisher eventPublisher;
 
     public ChatWebSocketHandler(UserWebSocketHandler userWebSocketHandler,
                                 CollabRunRepository collabRunRepository,
-                                SessionRepository sessionRepository) {
+                                SessionRepository sessionRepository,
+                                ApplicationEventPublisher eventPublisher) {
         this.userWebSocketHandler = userWebSocketHandler;
         this.collabRunRepository = collabRunRepository;
         this.sessionRepository = sessionRepository;
+        this.eventPublisher = eventPublisher;
+    }
+
+    /**
+     * Called by {@link com.skillforge.server.channel.router.ChannelSessionRouter} before
+     * each channel-originated turn. Captures the inbound platformMessageId so that when
+     * {@link #assistantStreamEnd} fires we can emit a {@link ChannelSessionOutputEvent}
+     * carrying the accumulated reply text back to the message gateway.
+     */
+    public void registerChannelTurn(String sessionId, String platformMessageId) {
+        channelContexts.put(sessionId, new ChannelTurnContext(platformMessageId, new StringBuilder()));
     }
 
     @Override
@@ -187,6 +209,13 @@ public class ChatWebSocketHandler extends TextWebSocketHandler implements ChatEv
         payload.put("sessionId", sessionId);
         payload.put("text", text);
         broadcast(sessionId, payload);
+
+        ChannelTurnContext ctx = channelContexts.get(sessionId);
+        if (ctx != null && text != null) {
+            synchronized (ctx.text()) {
+                ctx.text().append(text);
+            }
+        }
     }
 
     @Override
@@ -195,6 +224,18 @@ public class ChatWebSocketHandler extends TextWebSocketHandler implements ChatEv
         payload.put("type", "assistant_stream_end");
         payload.put("sessionId", sessionId);
         broadcast(sessionId, payload);
+
+        ChannelTurnContext ctx = channelContexts.remove(sessionId);
+        if (ctx != null) {
+            String replyText;
+            synchronized (ctx.text()) {
+                replyText = ctx.text().toString();
+            }
+            if (!replyText.isBlank()) {
+                eventPublisher.publishEvent(new ChannelSessionOutputEvent(
+                        sessionId, ctx.platformMessageId(), replyText));
+            }
+        }
     }
 
     @Override

@@ -193,4 +193,39 @@ public class SessionService {
     public List<SessionEntity> listByCollabRunId(String collabRunId) {
         return sessionRepository.findByCollabRunId(collabRunId);
     }
+
+    /**
+     * Creates a session driven by a channel (Feishu/Telegram/...). UserId is null
+     * because the platform user may not yet be mapped to a SkillForge user.
+     * Skips the per-user {@code session_created} broadcast for the same reason.
+     */
+    public String createChannelSession(Long agentId, String title) {
+        SessionEntity session = new SessionEntity();
+        session.setId(UUID.randomUUID().toString());
+        session.setUserId(null);
+        session.setAgentId(agentId);
+        session.setTitle(title != null ? title : "Channel session");
+        session.setMessagesJson("[]");
+        session.setLastUserMessageAt(java.time.Instant.now());
+        AgentEntity agent = agentRepository.findById(agentId).orElse(null);
+        if (agent != null && agent.getExecutionMode() != null) {
+            session.setExecutionMode(agent.getExecutionMode());
+        }
+        SessionEntity saved = sessionRepository.save(session);
+        return saved.getId();
+    }
+
+    /**
+     * True when a session is active and idle/waiting — i.e. safe to enqueue a new
+     * channel turn. Returns false for archived sessions, running sessions, or
+     * unknown ids.
+     */
+    public boolean isChannelSessionActive(String sessionId) {
+        return sessionRepository.findById(sessionId)
+                .map(s -> "active".equals(s.getStatus())
+                        && (s.getRuntimeStatus() == null
+                            || "idle".equals(s.getRuntimeStatus())
+                            || "waiting_user".equals(s.getRuntimeStatus())))
+                .orElse(false);
+    }
 }
