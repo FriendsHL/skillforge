@@ -315,7 +315,7 @@ function Waterfall({ spans, totalMs, selectedSpanId, onSelect }: {
                   style={{ left: `${left}%`, width: `${pct}%` }}
                   title={`${span.name} · ${fmtMs(span.dur)}`}
                 />
-                <span className="tr-span-dur mono-sm" style={{ left: `calc(${left + pct}% + 6px)` }}>
+                <span className="tr-span-dur mono-sm" style={{ left: `min(calc(${left + pct}% + 6px), calc(100% - 44px))` }}>
                   {fmtMs(span.dur)}
                 </span>
               </div>

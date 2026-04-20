@@ -87,7 +87,12 @@ export function normalizeMessages(list: any[]): ChatMessage[] {
         const sep = '\n\n---\n\n';
         const sepIdx = text.indexOf(sep);
         if (sepIdx === -1) {
-          // 独立摘要消息，跳过
+          // 独立摘要消息：提取摘要内容显示给用户，第一行是标头跳过
+          const firstNewline = text.indexOf('\n');
+          const summaryContent = firstNewline !== -1 ? text.slice(firstNewline + 1).trim() : '';
+          if (summaryContent) {
+            result.push({ role: 'summary', content: summaryContent });
+          }
           continue;
         }
         // 合并消息，取分隔符之后的原始用户文本

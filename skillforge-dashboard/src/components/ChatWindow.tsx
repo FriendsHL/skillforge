@@ -109,7 +109,7 @@ const ChatInput: React.FC<ChatInputProps> = React.memo(({ disabled, onSend }) =>
 ChatInput.displayName = 'ChatInput';
 
 export interface ChatMessage {
-  role: 'user' | 'assistant';
+  role: 'user' | 'assistant' | 'summary';
   content: string;
   toolCalls?: ToolCall[];
   timestamp?: string;
@@ -254,6 +254,19 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
             </div>
           )}
           {messages.map((msg, idx) => {
+            if (msg.role === 'summary') {
+              return (
+                <div key={`summary-${idx}`} className="msg-compaction-summary">
+                  <div className="mcs-header">
+                    <IconCompact s={11} />
+                    Earlier messages were compacted
+                  </div>
+                  <div className="mcs-body">
+                    <MarkdownRenderer content={msg.content} />
+                  </div>
+                </div>
+              );
+            }
             const isUser = msg.role === 'user';
             return (
               <div key={msg.id ?? `${msg.role}-${idx}`} className={`msg ${msg.role}`}>
