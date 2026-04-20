@@ -16,6 +16,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class ChannelPushManagerTest {
@@ -91,9 +92,29 @@ class ChannelPushManagerTest {
         assertThat(callbackCalled.get()).isTrue();
     }
 
+    @Test
+    @DisplayName("start should keep manager stopped when config loading fails")
+    void start_configLoadFailure_keepsStopped() {
+        SlowStopConnector connector = new SlowStopConnector("feishu", 10);
+        ChannelConfigService configService = mock(ChannelConfigService.class);
+        when(configService.listActiveDecryptedConfigs()).thenThrow(new RuntimeException("db unavailable"));
+        ChannelPushManager manager = new ChannelPushManager(
+                List.of(connector),
+                configService,
+                new ObjectMapper(),
+                Duration.ofMillis(30));
+
+        manager.start();
+
+        assertThat(manager.isRunning()).isFalse();
+        assertThat(connector.startCalls()).isZero();
+        verify(configService).listActiveDecryptedConfigs();
+    }
+
     private static final class SlowStopConnector implements ChannelPushConnector {
         private final String platformId;
         private final long stopSleepMs;
+        private final AtomicInteger startCalls = new AtomicInteger(0);
         private final AtomicInteger stopCalls = new AtomicInteger(0);
         private final CountDownLatch stopCalled = new CountDownLatch(1);
 
@@ -109,7 +130,7 @@ class ChannelPushManagerTest {
 
         @Override
         public void start(ChannelConfigDecrypted config) {
-            // no-op for this test
+            startCalls.incrementAndGet();
         }
 
         @Override
@@ -129,6 +150,10 @@ class ChannelPushManagerTest {
 
         private int stopCalls() {
             return stopCalls.get();
+        }
+
+        private int startCalls() {
+            return startCalls.get();
         }
     }
 }

@@ -12,8 +12,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class ApiClientTest {
 
-    MockWebServer server;
-    ApiClient api;
+    private MockWebServer server;
+    private ApiClient api;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -124,6 +124,32 @@ class ApiClientTest {
         String body = req.getBody().readUtf8();
         assertThat(body).contains("\"level\"").contains("full")
                 .contains("\"reason\"").contains("test");
+    }
+
+    @Test
+    void setSessionModeUsesPatchAndCarriesMode() throws Exception {
+        server.enqueue(new MockResponse().setBody("{\"id\":\"s1\",\"mode\":\"ask\"}"));
+
+        JsonNode resp = api.setSessionMode("s1", "ask");
+
+        assertThat(resp.get("mode").asText()).isEqualTo("ask");
+        RecordedRequest req = server.takeRequest();
+        assertThat(req.getMethod()).isEqualTo("PATCH");
+        assertThat(req.getPath()).isEqualTo("/api/chat/sessions/s1/mode?userId=1");
+        assertThat(req.getBody().readUtf8()).contains("\"mode\"").contains("ask");
+    }
+
+    @Test
+    void compactWithoutReasonOmitsReasonField() throws Exception {
+        server.enqueue(new MockResponse().setBody("{\"id\":11,\"level\":\"light\"}"));
+
+        api.compact("s2", "light", null);
+
+        RecordedRequest req = server.takeRequest();
+        assertThat(req.getPath()).isEqualTo("/api/chat/sessions/s2/compact?userId=1");
+        String body = req.getBody().readUtf8();
+        assertThat(body).contains("\"level\"").contains("light");
+        assertThat(body).doesNotContain("\"reason\"");
     }
 
     @Test
