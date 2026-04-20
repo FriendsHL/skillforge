@@ -11,25 +11,33 @@ import com.skillforge.core.llm.LlmProviderFactory;
 import com.skillforge.core.llm.ModelConfig;
 import com.skillforge.core.model.Message;
 import com.skillforge.server.config.LlmProperties;
+import com.skillforge.server.dto.SessionCompactionCheckpointDto;
 import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.CompactionEventEntity;
+import com.skillforge.server.entity.SessionCompactionCheckpointEntity;
 import com.skillforge.server.entity.SessionEntity;
 import com.skillforge.server.repository.AgentRepository;
 import com.skillforge.server.repository.CompactionEventRepository;
+import com.skillforge.server.repository.SessionCompactionCheckpointRepository;
 import com.skillforge.server.repository.SessionRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -69,6 +77,7 @@ public class CompactionService implements ContextCompactorCallback {
 
     private final SessionRepository sessionRepository;
     private final CompactionEventRepository eventRepository;
+    private final SessionCompactionCheckpointRepository checkpointRepository;
     private final SessionService sessionService;
     private final LightCompactStrategy lightStrategy;
     private final FullCompactStrategy fullStrategy;
@@ -86,8 +95,15 @@ public class CompactionService implements ContextCompactorCallback {
     /** Null-safe transaction template; null when no PlatformTransactionManager is provided (tests). */
     private final TransactionTemplate transactionTemplate;
 
+    public static class CheckpointNotFoundException extends RuntimeException {
+        public CheckpointNotFoundException(String message) {
+            super(message);
+        }
+    }
+
     public CompactionService(SessionRepository sessionRepository,
                              CompactionEventRepository eventRepository,
+                             SessionCompactionCheckpointRepository checkpointRepository,
                              SessionService sessionService,
                              LightCompactStrategy lightStrategy,
                              FullCompactStrategy fullStrategy,
@@ -97,6 +113,7 @@ public class CompactionService implements ContextCompactorCallback {
                              PlatformTransactionManager transactionManager) {
         this.sessionRepository = sessionRepository;
         this.eventRepository = eventRepository;
+        this.checkpointRepository = checkpointRepository;
         this.sessionService = sessionService;
         this.lightStrategy = lightStrategy;
         this.fullStrategy = fullStrategy;
@@ -143,6 +160,83 @@ public class CompactionService implements ContextCompactorCallback {
         return eventRepository.findBySessionIdOrderByIdDesc(sessionId);
     }
 
+    @Transactional(readOnly = true)
+    public List<SessionCompactionCheckpointDto> listCheckpoints(String sessionId, int size) {
+        int safeSize = Math.max(1, Math.min(size, 200));
+        List<SessionCompactionCheckpointEntity> checkpoints = checkpointRepository
+                .findBySessionIdOrderByCreatedAtDesc(sessionId, PageRequest.of(0, safeSize))
+                .getContent();
+        List<SessionCompactionCheckpointDto> out = new ArrayList<>(checkpoints.size());
+        for (SessionCompactionCheckpointEntity checkpoint : checkpoints) {
+            out.add(toCheckpointDto(checkpoint));
+        }
+        return out;
+    }
+
+    @Transactional(readOnly = true)
+    public SessionCompactionCheckpointDto getCheckpoint(String sessionId, String checkpointId) {
+        SessionCompactionCheckpointEntity checkpoint = getCheckpointEntity(sessionId, checkpointId);
+        return toCheckpointDto(checkpoint);
+    }
+
+    public SessionEntity createBranchFromCheckpoint(String sessionId, String checkpointId, String title) {
+        synchronized (lockFor(sessionId)) {
+            ensureCheckpointOperationAllowed(sessionId);
+            SessionCompactionCheckpointEntity checkpoint = getCheckpointEntity(sessionId, checkpointId);
+            SessionEntity source = sessionService.getSession(sessionId);
+
+            final SessionEntity[] branchRef = new SessionEntity[1];
+            runInTransaction(() -> {
+                List<SessionService.AppendMessage> checkpointMessages = buildCheckpointMessages(sessionId, checkpoint);
+                SessionEntity branch = new SessionEntity();
+                branch.setId(UUID.randomUUID().toString());
+                branch.setUserId(source.getUserId());
+                branch.setAgentId(source.getAgentId());
+                branch.setTitle((title != null && !title.isBlank())
+                        ? title : source.getTitle() + " (branch)");
+                branch.setParentSessionId(source.getId());
+                // branch 是“分叉快照”，深度沿用源会话，避免影响 sub-agent 深度限制。
+                branch.setDepth(source.getDepth());
+                branch.setExecutionMode(source.getExecutionMode());
+                branch.setLightContext(source.isLightContext());
+                branch.setMaxLoops(source.getMaxLoops());
+                branch.setMessagesJson("[]");
+                branch.setLastUserMessageAt(Instant.now());
+                branch.setStatus("active");
+                branch.setRuntimeStatus("idle");
+                branch = sessionService.saveSession(branch);
+                sessionService.rewriteMessages(branch.getId(), checkpointMessages);
+                branchRef[0] = branch;
+            });
+            String branchId = branchRef[0] != null ? branchRef[0].getId() : null;
+            if (branchId == null) {
+                throw new IllegalStateException("Failed to create branch session");
+            }
+            return sessionService.getSession(branchId);
+        }
+    }
+
+    public SessionEntity restoreFromCheckpoint(String sessionId, String checkpointId) {
+        synchronized (lockFor(sessionId)) {
+            ensureCheckpointOperationAllowed(sessionId);
+            SessionCompactionCheckpointEntity checkpoint = getCheckpointEntity(sessionId, checkpointId);
+            long restoreEndSeq = resolveCheckpointEndSeq(checkpoint);
+            runInTransaction(() -> {
+                List<SessionService.AppendMessage> checkpointMessages = buildCheckpointMessages(sessionId, checkpoint);
+                sessionService.rewriteMessages(sessionId, checkpointMessages);
+                // restore 后旧 seq 空间失效，清理“位于恢复点之后”的 checkpoint，避免后续回放歧义。
+                checkpointRepository.deleteBySessionIdAfterSeqNo(sessionId, restoreEndSeq);
+                SessionEntity updated = sessionService.getSession(sessionId);
+                updated.setRuntimeStatus("idle");
+                updated.setRuntimeStep("restored_checkpoint");
+                updated.setRuntimeError(null);
+                updated.setLastCompactedAtMessageCount(updated.getMessageCount());
+                sessionService.saveSession(updated);
+            });
+            return sessionService.getSession(sessionId);
+        }
+    }
+
     // ================ ContextCompactorCallback ================
 
     @Override
@@ -185,7 +279,7 @@ public class CompactionService implements ContextCompactorCallback {
                     }
                 }
 
-                List<Message> messages = sessionService.getSessionMessages(sessionId);
+                List<Message> messages = sessionService.getContextMessages(sessionId);
                 int contextWindow = resolveContextWindowForSession(session);
                 CompactResult result = lightStrategy.apply(messages, contextWindow);
 
@@ -281,7 +375,7 @@ public class CompactionService implements ContextCompactorCallback {
 
                 List<Message> messages = (inMemoryMessages != null)
                         ? inMemoryMessages
-                        : sessionService.getSessionMessages(sessionId);
+                        : sessionService.getContextMessages(sessionId);
 
                 int contextWindow = resolveContextWindowForSession(session);
                 prep = fullStrategy.prepareCompact(messages, contextWindow);
@@ -353,11 +447,79 @@ public class CompactionService implements ContextCompactorCallback {
     private CompactionEventEntity persistCompactResult(String sessionId, String level,
                                                         String source, String reason,
                                                         CompactResult result) {
-        sessionService.saveSessionMessages(sessionId, result.getMessages());
         SessionEntity fresh = sessionRepository.findById(sessionId).orElseThrow();
-        fresh.setMessageCount(result.getMessages().size());
+        if ("full".equalsIgnoreCase(level)) {
+            String summaryText = extractSummaryText(result.getMessages());
+            Message boundary = new Message();
+            boundary.setRole(Message.Role.SYSTEM);
+            boundary.setContent("Conversation compacted");
+            Message summary = new Message();
+            summary.setRole(Message.Role.SYSTEM);
+            summary.setContent(summaryText);
+            Map<String, Object> boundaryMeta = new HashMap<>();
+            int compactedCount = result.getBeforeMessageCount() - result.getAfterMessageCount();
+            boundaryMeta.put("trigger", source);
+            boundaryMeta.put("tokens_before", result.getBeforeTokens());
+            boundaryMeta.put("tokens_after", result.getAfterTokens());
+            boundaryMeta.put("compacted_message_count", compactedCount);
+            Map<String, Object> summaryMeta = new HashMap<>();
+            summaryMeta.put("compacted_message_count", compactedCount);
+            summaryMeta.put("trigger", source);
+            List<SessionService.AppendMessage> appends = new ArrayList<>();
+            appends.add(new SessionService.AppendMessage(
+                    boundary, SessionService.MSG_TYPE_COMPACT_BOUNDARY, boundaryMeta));
+            appends.add(new SessionService.AppendMessage(
+                    summary, SessionService.MSG_TYPE_SUMMARY, summaryMeta));
+            List<Message> retained = extractRetainedMessages(result.getMessages());
+            if (!retained.isEmpty()) {
+                for (Message message : retained) {
+                    appends.add(new SessionService.AppendMessage(
+                            message, SessionService.MSG_TYPE_NORMAL, Collections.emptyMap()));
+                }
+            }
+            long lastSeqNo = sessionService.appendMessages(sessionId, appends);
+            long firstSeqNo = lastSeqNo - appends.size() + 1;
+            long boundarySeqNo = firstSeqNo;
+            long summarySeqNo = firstSeqNo + 1;
+            SessionCompactionCheckpointEntity checkpoint = new SessionCompactionCheckpointEntity();
+            checkpoint.setId(UUID.randomUUID().toString());
+            checkpoint.setSessionId(sessionId);
+            checkpoint.setBoundarySeqNo(boundarySeqNo);
+            checkpoint.setSummarySeqNo(summarySeqNo);
+            checkpoint.setReason(trimReason(source));
+            checkpoint.setPreRangeStartSeqNo(0L);
+            checkpoint.setPreRangeEndSeqNo(Math.max(0, boundarySeqNo - 1));
+            checkpoint.setPostRangeStartSeqNo(summarySeqNo);
+            checkpoint.setPostRangeEndSeqNo(lastSeqNo);
+            checkpointRepository.save(checkpoint);
+        } else {
+            List<SessionService.StoredMessage> all = sessionService.getFullHistoryRecords(sessionId);
+            int lastBoundary = -1;
+            for (int i = all.size() - 1; i >= 0; i--) {
+                if (SessionService.MSG_TYPE_COMPACT_BOUNDARY.equals(all.get(i).msgType())) {
+                    lastBoundary = i;
+                    break;
+                }
+            }
+            if (lastBoundary >= 0) {
+                List<SessionService.AppendMessage> rewritten = new ArrayList<>();
+                for (int i = 0; i <= lastBoundary; i++) {
+                    SessionService.StoredMessage item = all.get(i);
+                    rewritten.add(new SessionService.AppendMessage(
+                            item.message(), item.msgType(), item.metadata()));
+                }
+                for (Message msg : result.getMessages()) {
+                    rewritten.add(new SessionService.AppendMessage(
+                            msg, SessionService.MSG_TYPE_NORMAL, Collections.emptyMap()));
+                }
+                sessionService.rewriteMessages(sessionId, rewritten);
+            } else {
+                sessionService.saveSessionMessages(sessionId, result.getMessages());
+            }
+        }
+        fresh.setMessageCount((int) sessionService.countMessageRows(sessionId));
         fresh.setLastCompactedAt(Instant.now());
-        fresh.setLastCompactedAtMessageCount(result.getMessages().size());
+        fresh.setLastCompactedAtMessageCount(fresh.getMessageCount());
         fresh.setTotalTokensReclaimed(fresh.getTotalTokensReclaimed() + result.getTokensReclaimed());
         if ("light".equalsIgnoreCase(level)) {
             fresh.setLightCompactCount(fresh.getLightCompactCount() + 1);
@@ -370,6 +532,95 @@ public class CompactionService implements ContextCompactorCallback {
         CompactionEventEntity saved = eventRepository.save(evt);
         broadcastUpdated(fresh);
         return saved;
+    }
+
+    private String extractSummaryText(List<Message> compactedMessages) {
+        if (compactedMessages == null || compactedMessages.isEmpty()) {
+            return "Summary unavailable";
+        }
+        Message first = compactedMessages.get(0);
+        Object content = first.getContent();
+        if (content instanceof String s) {
+            final String sep = "\n\n---\n\n";
+            int sepIdx = s.indexOf(sep);
+            if (sepIdx > 0) {
+                return s.substring(0, sepIdx);
+            }
+            return s;
+        }
+        return "Summary unavailable";
+    }
+
+    private String trimReason(String reason) {
+        if (reason == null || reason.isBlank()) {
+            return "unknown";
+        }
+        return reason.length() <= 32 ? reason : reason.substring(0, 32);
+    }
+
+    private List<Message> extractRetainedMessages(List<Message> compactedMessages) {
+        if (compactedMessages == null || compactedMessages.size() <= 1) {
+            return Collections.emptyList();
+        }
+        return new ArrayList<>(compactedMessages.subList(1, compactedMessages.size()));
+    }
+
+    private SessionCompactionCheckpointDto toCheckpointDto(SessionCompactionCheckpointEntity checkpoint) {
+        return new SessionCompactionCheckpointDto(
+                checkpoint.getId(),
+                checkpoint.getSessionId(),
+                checkpoint.getBoundarySeqNo(),
+                checkpoint.getSummarySeqNo(),
+                checkpoint.getReason(),
+                checkpoint.getPreRangeStartSeqNo(),
+                checkpoint.getPreRangeEndSeqNo(),
+                checkpoint.getPostRangeStartSeqNo(),
+                checkpoint.getPostRangeEndSeqNo(),
+                checkpoint.getSnapshotRef(),
+                checkpoint.getCreatedAt()
+        );
+    }
+
+    private SessionCompactionCheckpointEntity getCheckpointEntity(String sessionId, String checkpointId) {
+        SessionCompactionCheckpointEntity checkpoint = checkpointRepository.findById(checkpointId)
+                .orElseThrow(() -> new CheckpointNotFoundException("Checkpoint not found"));
+        if (!sessionId.equals(checkpoint.getSessionId())) {
+            throw new CheckpointNotFoundException("Checkpoint not found");
+        }
+        return checkpoint;
+    }
+
+    private List<SessionService.AppendMessage> buildCheckpointMessages(String sessionId,
+                                                                       SessionCompactionCheckpointEntity checkpoint) {
+        long endSeq = resolveCheckpointEndSeq(checkpoint);
+        List<SessionService.StoredMessage> records = sessionService.getFullHistoryRecords(sessionId);
+        List<SessionService.AppendMessage> out = new ArrayList<>();
+        for (SessionService.StoredMessage record : records) {
+            if (record.seqNo() > endSeq) {
+                break;
+            }
+            out.add(new SessionService.AppendMessage(
+                    record.message(), record.msgType(), record.metadata()));
+        }
+        return out;
+    }
+
+    private long resolveCheckpointEndSeq(SessionCompactionCheckpointEntity checkpoint) {
+        return checkpoint.getPostRangeEndSeqNo() != null
+                ? checkpoint.getPostRangeEndSeqNo()
+                : checkpoint.getSummarySeqNo() != null
+                ? checkpoint.getSummarySeqNo()
+                : checkpoint.getBoundarySeqNo();
+    }
+
+    private void ensureCheckpointOperationAllowed(String sessionId) {
+        if (fullCompactInFlight.contains(sessionId)) {
+            throw new IllegalStateException("Cannot mutate checkpoint state while full compact is in progress");
+        }
+        SessionEntity session = sessionService.getSession(sessionId);
+        if ("running".equals(session.getRuntimeStatus())) {
+            throw new IllegalStateException("Cannot operate on checkpoint while session is running");
+        }
     }
 
     /** Runs action in a Spring transaction if a PlatformTransactionManager was provided; otherwise runs directly. */

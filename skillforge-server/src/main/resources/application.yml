@@ -28,6 +28,12 @@ spring:
 
 # SkillForge configuration
 skillforge:
+  session-message-store:
+    row-read-enabled: true
+    row-write-enabled: true
+    dual-read-verify-enabled: false
+    backfill-enabled: true
+    max-backfill-sessions-per-startup: 300
   # Skill packages storage path
   skills-dir: ./data/skills
   # Browser skill persistent profile (keeps login cookies/storage across runs)

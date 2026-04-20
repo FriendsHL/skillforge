@@ -99,6 +99,59 @@ export const compactSession = (sessionId: string, level: 'full', userId: number,
   api.post(`/chat/sessions/${sessionId}/compact`, { level, reason }, { params: { userId } });
 export const getCompactions = (sessionId: string, userId: number) =>
   api.get(`/chat/sessions/${sessionId}/compactions`, { params: { userId } });
+export interface SessionCompactionCheckpoint {
+  id: string;
+  sessionId: string;
+  boundarySeqNo: number;
+  summarySeqNo?: number | null;
+  reason: string;
+  preRangeStartSeqNo?: number | null;
+  preRangeEndSeqNo?: number | null;
+  postRangeStartSeqNo?: number | null;
+  postRangeEndSeqNo?: number | null;
+  snapshotRef?: string | null;
+  createdAt: string;
+}
+
+export type SessionRuntimeStatus = 'idle' | 'running' | 'error' | 'waiting_user' | 'compacting';
+export type SessionStatus = 'active' | 'archived';
+
+export interface SessionCheckpointMutationResult {
+  id: string;
+  userId: number;
+  agentId: number;
+  title: string | null;
+  status: SessionStatus;
+  runtimeStatus: SessionRuntimeStatus;
+  messageCount: number;
+  parentSessionId?: string | null;
+  updatedAt?: string;
+}
+
+export interface PruneToolOutputsResult {
+  sessionId: string;
+  prunedCount: number;
+  limit: number;
+}
+
+export const getSessionCheckpoints = (sessionId: string, userId: number, size = 20) =>
+  api.get<SessionCompactionCheckpoint[]>(`/chat/sessions/${sessionId}/checkpoints`, { params: { userId, size } });
+export const getSessionCheckpoint = (sessionId: string, checkpointId: string, userId: number) =>
+  api.get<SessionCompactionCheckpoint>(`/chat/sessions/${sessionId}/checkpoints/${checkpointId}`, { params: { userId } });
+export const branchFromCheckpoint = (sessionId: string, checkpointId: string, userId: number, title?: string) =>
+  api.post<SessionCheckpointMutationResult>(
+    `/chat/sessions/${sessionId}/checkpoints/${checkpointId}/branch`,
+    title !== undefined ? { title } : {},
+    { params: { userId } },
+  );
+export const restoreFromCheckpoint = (sessionId: string, checkpointId: string, userId: number) =>
+  api.post<SessionCheckpointMutationResult>(
+    `/chat/sessions/${sessionId}/checkpoints/${checkpointId}/restore`,
+    null,
+    { params: { userId } },
+  );
+export const pruneSessionToolOutputs = (sessionId: string, userId: number, limit = 200) =>
+  api.post<PruneToolOutputsResult>(`/chat/sessions/${sessionId}/prune-tools`, { limit }, { params: { userId } });
 export const getSessionReplay = (sessionId: string, userId: number) =>
   api.get(`/chat/sessions/${sessionId}/replay`, { params: { userId } });
 

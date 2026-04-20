@@ -2,6 +2,8 @@ package com.skillforge.server.repository;
 
 import com.skillforge.server.entity.SessionEntity;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 
 import java.util.List;
 
@@ -40,10 +42,22 @@ public interface SessionRepository extends JpaRepository<SessionEntity, String> 
 
     @org.springframework.data.jpa.repository.Query("""
             SELECT s FROM SessionEntity s
+            WHERE s.messagesJson IS NOT NULL
+              AND s.messagesJson <> ''
+              AND s.messagesJson <> '[]'
+              AND NOT EXISTS (
+                SELECT 1 FROM SessionMessageEntity m
+                WHERE m.sessionId = s.id
+              )
+            ORDER BY s.id ASC
+            """)
+    Page<SessionEntity> findLegacySessionsWithoutRowMessages(Pageable pageable);
+
+    @org.springframework.data.jpa.repository.Query("""
+            SELECT s FROM SessionEntity s
             WHERE s.agentId = :agentId
               AND s.runtimeStatus IN ('completed', 'idle')
-              AND s.messagesJson IS NOT NULL
-              AND s.messagesJson <> ''
+              AND s.messageCount > 0
             ORDER BY s.completedAt DESC NULLS LAST
             """)
     List<SessionEntity> findRecentEligibleSessionsForSkillDraft(

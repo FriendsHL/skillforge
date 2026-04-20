@@ -1,9 +1,10 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { message } from 'antd';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Modal, message } from 'antd';
 import { useNavigate, useParams } from 'react-router-dom';
 import ChatWindow from '../components/ChatWindow';
 import SessionReplay from '../components/SessionReplay';
 import CompactionHistoryModal from '../components/CompactionHistoryModal';
+import CheckpointModal from '../components/CheckpointModal';
 import RuntimeBanner from '../components/RuntimeBanner';
 import PendingAskCard from '../components/PendingAskCard';
 import ChatSidebar from '../components/ChatSidebar';
@@ -25,8 +26,13 @@ import {
   getSession,
   compactSession,
   getCompactions,
+  getSessionCheckpoints,
+  getSessionCheckpoint,
+  branchFromCheckpoint,
+  restoreFromCheckpoint,
   getCollabRunMembers,
   extractList,
+  type SessionCompactionCheckpoint,
 } from '../api';
 import { z } from 'zod';
 import { AgentSchema, SessionSchema, safeParseList } from '../api/schemas';
@@ -54,6 +60,7 @@ interface PendingAsk {
 }
 
 const MAX_PEER_MESSAGES = 50;
+const DEFAULT_CONTEXT_WINDOW_TOKENS = 200000;
 
 const Chat: React.FC = () => {
   const { sessionId: urlSessionId } = useParams<{ sessionId?: string }>();
@@ -93,10 +100,22 @@ const Chat: React.FC = () => {
   const [viewMode, setViewMode] = useState<'chat' | 'replay'>('chat');
   const [compactModalOpen, setCompactModalOpen] = useState(false);
   const [compactEvents, setCompactEvents] = useState<unknown[]>([]);
+  const [checkpointModalOpen, setCheckpointModalOpen] = useState(false);
+  const [checkpointsLoading, setCheckpointsLoading] = useState(false);
+  const [checkpoints, setCheckpoints] = useState<SessionCompactionCheckpoint[]>([]);
+  const [selectedCheckpoint, setSelectedCheckpoint] = useState<SessionCompactionCheckpoint>();
+  const [checkpointActionLoading, setCheckpointActionLoading] = useState<string | null>(null);
   const [compacting, setCompacting] = useState(false);
   const [compactionNotice, setCompactionNotice] = useState(false);
   const [collabMembers, setCollabMembers] = useState<CollabMember[]>([]);
   const [peerMessages, setPeerMessages] = useState<PeerMessage[]>([]);
+  const activeSessionIdRef = useRef<string | undefined>(activeSessionId);
+  const checkpointLoadSeqRef = useRef(0);
+  const checkpointDetailSeqRef = useRef(0);
+
+  useEffect(() => {
+    activeSessionIdRef.current = activeSessionId;
+  }, [activeSessionId]);
 
   useEffect(() => {
     if (!compactionNotice) return;
@@ -137,8 +156,8 @@ const Chat: React.FC = () => {
     getSessions(userId)
       .then((res) => {
         if (cancelled) return;
-        const list = safeParseList(SessionSchema, extractList<any>(res)).filter(
-          (s: any) => s.agentId === selectedAgent,
+        const list = safeParseList(SessionSchema, extractList<unknown>(res)).filter(
+          (s) => Number(s.agentId) === selectedAgent,
         );
         setSessions(list);
       })
@@ -160,6 +179,11 @@ const Chat: React.FC = () => {
     setSessionDepth(0);
     setCompactionNotice(false);
     setPeerMessages([]);
+    checkpointLoadSeqRef.current += 1;
+    checkpointDetailSeqRef.current += 1;
+    setCheckpoints([]);
+    setSelectedCheckpoint(undefined);
+    setCheckpointModalOpen(false);
     if (!activeSessionId) {
       setRuntimeStatus('idle');
       setRuntimeStep('');
@@ -408,6 +432,126 @@ const Chat: React.FC = () => {
     }
   };
 
+  const loadCheckpoints = async (withDetail = true) => {
+    const sessionId = activeSessionIdRef.current;
+    if (!sessionId) return;
+    const loadSeq = ++checkpointLoadSeqRef.current;
+    setCheckpointsLoading(true);
+    try {
+      const res = await getSessionCheckpoints(sessionId, userId, 30);
+      if (loadSeq !== checkpointLoadSeqRef.current || sessionId !== activeSessionIdRef.current) return;
+      const rows = Array.isArray(res.data) ? res.data : [];
+      setCheckpoints(rows);
+      if (!withDetail) return;
+      const first = rows[0];
+      if (!first) {
+        setSelectedCheckpoint(undefined);
+        return;
+      }
+      const detail = await getSessionCheckpoint(sessionId, first.id, userId);
+      if (loadSeq !== checkpointLoadSeqRef.current || sessionId !== activeSessionIdRef.current) return;
+      setSelectedCheckpoint(detail.data);
+    } catch {
+      if (loadSeq !== checkpointLoadSeqRef.current || sessionId !== activeSessionIdRef.current) return;
+      setCheckpoints([]);
+      setSelectedCheckpoint(undefined);
+      message.error('Failed to load checkpoints');
+    } finally {
+      if (loadSeq === checkpointLoadSeqRef.current) {
+        setCheckpointsLoading(false);
+      }
+    }
+  };
+
+  const handleOpenCheckpointModal = async () => {
+    setCheckpointModalOpen(true);
+    await loadCheckpoints(true);
+  };
+
+  const handleSelectCheckpoint = async (checkpointId: string) => {
+    const sessionId = activeSessionIdRef.current;
+    if (!sessionId) return;
+    const detailSeq = ++checkpointDetailSeqRef.current;
+    try {
+      const detail = await getSessionCheckpoint(sessionId, checkpointId, userId);
+      if (detailSeq !== checkpointDetailSeqRef.current || sessionId !== activeSessionIdRef.current) return;
+      setSelectedCheckpoint(detail.data);
+    } catch {
+      if (detailSeq !== checkpointDetailSeqRef.current) return;
+      message.error('Failed to load checkpoint detail');
+    }
+  };
+
+  const refreshMessagesAfterMutation = async () => {
+    const sessionId = activeSessionIdRef.current;
+    if (!sessionId) return;
+    await refreshCompactStats();
+    try {
+      const mres = await getSessionMessages(sessionId, userId);
+      if (sessionId !== activeSessionIdRef.current) return;
+      setRawMessages(extractList(mres));
+    } catch {
+      message.warning('Checkpoint applied, but failed to refresh messages');
+    }
+  };
+
+  const handleBranchCheckpoint = async (checkpointId: string) => {
+    if (!activeSessionId) return;
+    setCheckpointActionLoading(`branch:${checkpointId}`);
+    try {
+      const res = await branchFromCheckpoint(activeSessionId, checkpointId, userId);
+      const newSessionId = String(res.data?.id ?? '');
+      if (!newSessionId) {
+        throw new Error('Missing branched session id');
+      }
+      message.success('Checkpoint branch created');
+      setCheckpointModalOpen(false);
+      navigate(`/chat/${newSessionId}`);
+    } catch (e: unknown) {
+      const status = (e as { response?: { status?: number } })?.response?.status;
+      if (status === 409) {
+        message.warning('Session is running or compacting, cannot branch now');
+      } else {
+        message.error('Failed to branch checkpoint');
+      }
+    } finally {
+      setCheckpointActionLoading(null);
+    }
+  };
+
+  const handleRestoreCheckpoint = async (checkpointId: string) => {
+    if (!activeSessionId) return;
+    const ok = await new Promise<boolean>((resolve) => {
+      Modal.confirm({
+        title: '确认恢复到该 checkpoint？',
+        content: '恢复会覆盖当前会话消息历史，此操作不可撤销。',
+        okText: '确认恢复',
+        okButtonProps: { danger: true },
+        cancelText: '取消',
+        onOk: () => resolve(true),
+        onCancel: () => resolve(false),
+      });
+    });
+    if (!ok) return;
+
+    setCheckpointActionLoading(`restore:${checkpointId}`);
+    try {
+      await restoreFromCheckpoint(activeSessionId, checkpointId, userId);
+      await refreshMessagesAfterMutation();
+      await loadCheckpoints(false);
+      message.success('Session restored from checkpoint');
+    } catch (e: unknown) {
+      const status = (e as { response?: { status?: number } })?.response?.status;
+      if (status === 409) {
+        message.warning('Session is running or compacting, cannot restore now');
+      } else {
+        message.error('Failed to restore checkpoint');
+      }
+    } finally {
+      setCheckpointActionLoading(null);
+    }
+  };
+
   const handleCancel = async () => {
     if (!activeSessionId || cancelling) return;
     setCancelling(true);
@@ -440,8 +584,8 @@ const Chat: React.FC = () => {
   };
 
   const tokenUsage = {
-    used: (activeSession as { totalTokens?: number } | undefined)?.totalTokens ?? 0,
-    total: 200000,
+    used: activeSession?.totalTokens ?? 0,
+    total: DEFAULT_CONTEXT_WINDOW_TOKENS,
   };
 
   return (
@@ -521,6 +665,11 @@ const Chat: React.FC = () => {
                     {totalTokensReclaimed > 0
                       ? `–${(totalTokensReclaimed / 1000).toFixed(1)}K tok`
                       : '0 tok'}
+                  </Chip>
+                )}
+                {activeSessionId && (
+                  <Chip title="Checkpoint list and actions" onClick={handleOpenCheckpointModal}>
+                    <IconReplay s={11} /> Checkpoints
                   </Chip>
                 )}
                 <Seg
@@ -621,6 +770,24 @@ const Chat: React.FC = () => {
         open={compactModalOpen}
         onClose={() => setCompactModalOpen(false)}
         events={compactEvents}
+      />
+      <CheckpointModal
+        open={checkpointModalOpen}
+        loading={checkpointsLoading}
+        checkpoints={checkpoints}
+        selectedCheckpoint={selectedCheckpoint}
+        actionLoadingId={checkpointActionLoading}
+        onClose={() => setCheckpointModalOpen(false)}
+        onSelect={handleSelectCheckpoint}
+        onRefresh={() => {
+          void loadCheckpoints(true);
+        }}
+        onBranch={(checkpointId) => {
+          void handleBranchCheckpoint(checkpointId);
+        }}
+        onRestore={(checkpointId) => {
+          void handleRestoreCheckpoint(checkpointId);
+        }}
       />
     </div>
   );

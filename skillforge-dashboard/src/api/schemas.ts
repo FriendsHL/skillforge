@@ -44,7 +44,7 @@ const ContentBlockSchema = z.union([
 ]);
 
 export const MessageSchema = z.object({
-  role: z.enum(['user', 'assistant']),
+  role: z.enum(['user', 'assistant', 'system']),
   content: z.union([z.string(), z.array(ContentBlockSchema)]),
   timestamp: z.string().optional(),
   toolCalls: z.array(z.unknown()).optional(),

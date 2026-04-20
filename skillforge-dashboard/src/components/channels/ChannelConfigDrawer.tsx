@@ -330,9 +330,9 @@ const ChannelConfigDrawer: React.FC<ChannelConfigDrawerProps> = ({
             <Form.Item
               label="Encrypt Key"
               name="feishu_encryptKey"
-              rules={[{ required: true, message: 'Encrypt Key required' }]}
+              extra="Optional — leave empty to skip signature verification"
             >
-              <Input.Password placeholder="Webhook signature key" />
+              <Input.Password placeholder="Webhook signature key (optional)" />
             </Form.Item>
           </div>
         )}

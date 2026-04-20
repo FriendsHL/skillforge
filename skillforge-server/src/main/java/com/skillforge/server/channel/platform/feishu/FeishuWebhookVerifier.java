@@ -18,6 +18,11 @@ public class FeishuWebhookVerifier {
     private static final long TIMESTAMP_WINDOW_SEC = 300;
 
     public void verify(WebhookContext ctx, String encryptKey) {
+        // No encryptKey configured in Feishu app → signature headers won't be present; skip.
+        if (encryptKey == null || encryptKey.isBlank()) {
+            return;
+        }
+
         String timestamp = ctx.header("x-lark-request-timestamp");
         String nonce = ctx.header("x-lark-request-nonce");
         String signature = ctx.header("x-lark-signature");

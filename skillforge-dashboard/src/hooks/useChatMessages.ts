@@ -42,7 +42,28 @@ export function normalizeMessages(list: any[]): ChatMessage[] {
   };
 
   for (const m of list) {
+    const msgType = typeof m.msgType === 'string' ? m.msgType.toUpperCase() : '';
     const { text, toolUseBlocks, toolResultBlocks } = extractBlocks(m.content);
+
+    if (msgType === 'COMPACT_BOUNDARY') {
+      // Boundary is a structural marker for context slicing, not a user-visible card.
+      continue;
+    }
+
+    if (msgType === 'SUMMARY') {
+      const summaryText = text.trim();
+      if (summaryText) {
+        const compactedCount =
+          m.metadata && typeof m.metadata === 'object' && 'compacted_message_count' in m.metadata
+            ? Number((m.metadata as Record<string, unknown>).compacted_message_count)
+            : undefined;
+        const header = Number.isFinite(compactedCount)
+          ? `**${compactedCount} earlier messages were compacted**\n\n`
+          : '';
+        result.push({ role: 'summary', content: `${header}${summaryText}`.trim() });
+      }
+      continue;
+    }
 
     if (m.role === 'user') {
       if (toolResultBlocks.length > 0 && result.length > 0) {

@@ -2,9 +2,10 @@ package com.skillforge.server.controller;
 
 import com.skillforge.core.engine.CancellationRegistry;
 import com.skillforge.core.engine.PendingAskRegistry;
-import com.skillforge.core.model.Message;
 import com.skillforge.server.dto.ChatRequest;
+import com.skillforge.server.dto.SessionCompactionCheckpointDto;
 import com.skillforge.server.dto.CreateSessionRequest;
+import com.skillforge.server.dto.SessionMessageDto;
 import com.skillforge.server.entity.CompactionEventEntity;
 import com.skillforge.server.entity.SessionEntity;
 import com.skillforge.server.dto.SessionReplayDto;
@@ -80,6 +81,20 @@ public class ChatController {
             return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
         }
         return ResponseEntity.ok(session);
+    }
+
+    private Map<String, Object> toSessionMutationResponse(SessionEntity session) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("id", session.getId());
+        out.put("userId", session.getUserId());
+        out.put("agentId", session.getAgentId());
+        out.put("title", session.getTitle());
+        out.put("status", session.getStatus());
+        out.put("runtimeStatus", session.getRuntimeStatus());
+        out.put("messageCount", session.getMessageCount());
+        out.put("parentSessionId", session.getParentSessionId());
+        out.put("updatedAt", session.getUpdatedAt());
+        return out;
     }
 
     /**
@@ -194,13 +209,13 @@ public class ChatController {
     }
 
     @GetMapping("/sessions/{id}/messages")
-    public ResponseEntity<List<Message>> getSessionMessages(@PathVariable String id,
-                                                             @RequestParam(required = false) Long userId) {
+    public ResponseEntity<List<SessionMessageDto>> getSessionMessages(@PathVariable String id,
+                                                                      @RequestParam(required = false) Long userId) {
         ResponseEntity<SessionEntity> check = requireOwnedSession(id, userId);
         if (!check.getStatusCode().is2xxSuccessful()) {
             return ResponseEntity.status(check.getStatusCode()).build();
         }
-        List<Message> messages = sessionService.getSessionMessages(id);
+        List<SessionMessageDto> messages = sessionService.getFullHistoryDtos(id);
         return ResponseEntity.ok(messages);
     }
 
@@ -271,6 +286,102 @@ public class ChatController {
             return ResponseEntity.status(check.getStatusCode()).build();
         }
         return ResponseEntity.ok(compactionService.listEvents(id));
+    }
+
+    @GetMapping("/sessions/{id}/checkpoints")
+    public ResponseEntity<List<SessionCompactionCheckpointDto>> listCheckpoints(@PathVariable String id,
+                                                                                 @RequestParam Long userId,
+                                                                                 @RequestParam(defaultValue = "20") int size) {
+        ResponseEntity<SessionEntity> check = requireOwnedSession(id, userId);
+        if (!check.getStatusCode().is2xxSuccessful()) {
+            return ResponseEntity.status(check.getStatusCode()).build();
+        }
+        return ResponseEntity.ok(compactionService.listCheckpoints(id, size));
+    }
+
+    @GetMapping("/sessions/{id}/checkpoints/{checkpointId}")
+    public ResponseEntity<?> getCheckpoint(@PathVariable String id,
+                                           @PathVariable String checkpointId,
+                                           @RequestParam Long userId) {
+        ResponseEntity<SessionEntity> check = requireOwnedSession(id, userId);
+        if (!check.getStatusCode().is2xxSuccessful()) {
+            return ResponseEntity.status(check.getStatusCode()).build();
+        }
+        try {
+            return ResponseEntity.ok(compactionService.getCheckpoint(id, checkpointId));
+        } catch (CompactionService.CheckpointNotFoundException e) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @PostMapping("/sessions/{id}/checkpoints/{checkpointId}/branch")
+    public ResponseEntity<?> branchFromCheckpoint(@PathVariable String id,
+                                                  @PathVariable String checkpointId,
+                                                  @RequestParam Long userId,
+                                                  @RequestBody(required = false) Map<String, Object> body) {
+        ResponseEntity<SessionEntity> check = requireOwnedSession(id, userId);
+        if (!check.getStatusCode().is2xxSuccessful()) {
+            return ResponseEntity.status(check.getStatusCode()).build();
+        }
+        String title = null;
+        if (body != null && body.get("title") instanceof String t) {
+            title = t;
+        }
+        try {
+            SessionEntity branch = compactionService.createBranchFromCheckpoint(id, checkpointId, title);
+            return ResponseEntity.status(HttpStatus.CREATED).body(toSessionMutationResponse(branch));
+        } catch (CompactionService.CheckpointNotFoundException e) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("error", e.getMessage()));
+        } catch (IllegalStateException e) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @PostMapping("/sessions/{id}/checkpoints/{checkpointId}/restore")
+    public ResponseEntity<?> restoreFromCheckpoint(@PathVariable String id,
+                                                   @PathVariable String checkpointId,
+                                                   @RequestParam Long userId) {
+        ResponseEntity<SessionEntity> check = requireOwnedSession(id, userId);
+        if (!check.getStatusCode().is2xxSuccessful()) {
+            return ResponseEntity.status(check.getStatusCode()).build();
+        }
+        try {
+            SessionEntity restored = compactionService.restoreFromCheckpoint(id, checkpointId);
+            return ResponseEntity.ok(toSessionMutationResponse(restored));
+        } catch (CompactionService.CheckpointNotFoundException e) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("error", e.getMessage()));
+        } catch (IllegalStateException e) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @PostMapping("/sessions/{id}/prune-tools")
+    public ResponseEntity<?> pruneSessionToolOutputs(@PathVariable String id,
+                                                     @RequestParam Long userId,
+                                                     @RequestBody(required = false) Map<String, Object> body) {
+        ResponseEntity<SessionEntity> check = requireOwnedSession(id, userId);
+        if (!check.getStatusCode().is2xxSuccessful()) {
+            return ResponseEntity.status(check.getStatusCode()).build();
+        }
+        SessionEntity session = check.getBody();
+        if (session != null && "running".equals(session.getRuntimeStatus())) {
+            return ResponseEntity.status(HttpStatus.CONFLICT)
+                    .body(Map.of("error", "Cannot prune tool outputs while session is running"));
+        }
+        int limit = 200;
+        if (body != null && body.get("limit") instanceof Number n) {
+            limit = n.intValue();
+        }
+        if (limit <= 0 || limit > 5000) {
+            return ResponseEntity.badRequest()
+                    .body(Map.of("error", "limit must be between 1 and 5000"));
+        }
+        try {
+            int pruned = sessionService.pruneToolOutputs(id, limit);
+            return ResponseEntity.ok(Map.of("sessionId", id, "prunedCount", pruned, "limit", limit));
+        } catch (IllegalStateException e) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", e.getMessage()));
+        }
     }
 
     /**

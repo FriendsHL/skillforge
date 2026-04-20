@@ -72,7 +72,12 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 @Configuration
-@EnableConfigurationProperties({LlmProperties.class, ClawHubProperties.class, LifecycleHooksScriptProperties.class})
+@EnableConfigurationProperties({
+        LlmProperties.class,
+        ClawHubProperties.class,
+        LifecycleHooksScriptProperties.class,
+        SessionMessageStoreProperties.class
+})
 public class SkillForgeConfig {
 
     private static final Logger log = LoggerFactory.getLogger(SkillForgeConfig.class);

@@ -1,6 +1,6 @@
 # SkillForge 待办任务
 
-> 更新于：2026-04-19
+> 更新于：2026-04-20
 
 ---
 
@@ -8,25 +8,39 @@
 
 > 统一编号 P1~P5，子任务编号 P{n}-{seq}。已完成任务保留历史编号不变。
 
-### P1 — Skill 自动生成 + 自进化
+### ~~P1 — Skill 自动生成 + 自进化~~ ✅ 已完成
 
-| 子任务 | 说明 |
-| --- | --- |
-| P1-1 对话提取 Skill | 分析已完成 session，LLM 识别可复用模式 → 生成 SkillEntity 草稿（复用 SessionScenarioExtractorService 的批处理模式）；触发方式：用户手动 + 批量分析历史 |
-| P1-2 Skill 版本管理 | SkillEntity 新增 version / parentSkillId / usageCount / successRate 字段；支持版本回滚 |
-| P1-3 Skill A/B 测试 | 复用现有 AbEvalPipeline；对 Skill 两版本在 held-out 场景集上对比；Δ≥15pp 自动晋升 |
-| P1-4 进化闭环 | Skill 使用后收集成功/失败信号 → 定期触发 LLM 优化 prompt → 走 A/B 验证 → 自动晋升或回滚 |
+> ~~目标：从历史 session 自动提取可复用 Skill，建立版本管理 + A/B 验证 + 进化闭环~~
+
+已移至「已完成」表格。
 
 ---
 
-### P2 — 飞书消息网关
+### ~~P2 — 多平台消息网关~~ ✅ 已完成
+
+> ~~目标：构建可扩展的消息网关，P2 首批支持飞书 + Telegram，框架可无缝扩展至微信、Discord、Slack、iMessage~~
+
+已移至「已完成」表格。
+
+---
+
+### P6 — 消息行存储重构（Chat History 完整保留）
+
+> 目标：将消息存储从单 CLOB `messagesJson` 迁移到 `t_session_message` 独立行存储，实现 UI 历史完整保留（compaction 不再丢失旧消息），对齐 Claude Code / OpenCode 设计。
+
+**核心不变量：消息只增不删。** Compaction 改为追加 `COMPACT_BOUNDARY` + `SUMMARY` 两行，LLM context 通过 `youngGenStartSeqNo` 指针三段拼接，UI 始终读全量。
 
 | 子任务 | 说明 |
 | --- | --- |
-| P2-1 飞书 Bot 接入 | 创建飞书应用 + Webhook/事件订阅；消息网关 Spring 模块接收飞书事件 |
-| P2-2 会话路由 | 飞书用户 ↔ SkillForge userId 映射；每个飞书对话绑定一个 Agent Session |
-| P2-3 消息收发 | 接收文本/图片/文件消息 → 转发到 Agent Loop；Agent 回复 → 飞书消息推送 |
-| P2-4 指令支持 | `/new` 新建会话、`/switch <agent>` 切换 Agent、`/history` 查历史 |
+| P6-1 Schema + Entity | V18 migration：新建 `t_session_message`（id/session_id/seq_no/role/content_json/msg_type/metadata_json/created_at）；新增 `SessionMessageEntity` + `SessionMessageRepository`；保留旧 `messagesJson` CLOB 作回滚安全边界 |
+| P6-2 SessionService | 新增 `getFullHistory()`（UI 全量）、`getContextMessages()`（LLM 三段拼接：youngGen + summary + 新消息）、`appendMessages()`；旧方法 delegate 到新方法保持 API 兼容 |
+| P6-3 Compaction 改造 | `FullCompactStrategy.applyPrepared()` 返回 `CompactionBoundary`（summaryText + youngGenStartIndex）；`CompactionService.persistBoundary()` 替换 `persistCompactResult()`：INSERT COMPACT_BOUNDARY 行 + SUMMARY 行，不删任何旧消息 |
+| P6-4 AgentLoopEngine | 加载时改用 `getContextMessages()`；loop 结束改用 `appendMessages()` 只写入本轮新消息 |
+| P6-5 数据迁移 | V18 Java Migration：遍历所有 session 的 `messagesJson` → INSERT rows（seq_no 从 0 递增，检测旧 summary 前缀设 msg_type=SUMMARY） |
+| P6-6 前端适配 | `useChatMessages.ts` 适配 `COMPACT_BOUNDARY` msg_type 渲染分隔线；保留旧字符串检测作 fallback |
+| P6-7 Tool 输出裁剪（V2 预留） | V19：`t_session_message` 加 `pruned_at` 列；Light compact 改为 UPDATE pruned_at，不再操作 CLOB；context 构建对 pruned 行替换为占位文本 |
+
+技术方案：`docs/design-p6-session-message-storage.md`（2026-04-20）
 
 ---
 
@@ -61,6 +75,8 @@
 
 | 任务                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | 完成日期       |
 | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| P2 多平台消息网关（飞书 + Telegram，可扩展至微信/Discord/Slack/iMessage）：ChannelAdapter SPI（List<ChannelAdapter> Spring 自动收集，新平台零框架改动）+ V17 migration（5 张表：t_channel_config/conversation/message_dedup/user_identity_mapping/delivery）+ 3-phase 交付事务（claimBatch SKIP LOCKED + IN_FLIGHT 首次直接入库防 30s race）+ ChannelTurnContext 多轮回复关联（per-turn platformMessageId 防 unique constraint 冲突）+ MockChannelAdapter @Profile(dev,test) CI 友好 + 飞书 SHA-256 签名验证（encryptKey，非 HMAC）+ Telegram HTML parse mode + 4096 codepoint 安全拆分 + ChannelConversationResolver 独立 @Service 解决 @Transactional self-invocation bypass（HIGH-1）+ DeliveryTransactionHelper @Service 解决相同问题 + 前端 /channels 页面（平台卡片 + 会话列表 + 投递重试面板）+ 升级路径记录于 docs/p2-channel-plan-b.md §12.3；Full Pipeline（2 planner + 2 reviewer 多轮 + judge 裁判）| 2026-04-20 |
+| P1 Skill 自动生成 + 自进化（P1-1~P1-4 全部完成）：Session → SkillEntity 自动提取（LLM 识别可复用模式，批处理模式）+ Skill 版本管理（version/parentSkillId/usageCount/successRate 字段 + 版本回滚）+ Skill A/B 测试（复用 AbEvalPipeline，held-out 场景集对比，Δ≥15pp 自动晋升）+ 进化闭环（使用信号采集 → LLM 优化 SKILL.md prompt → A/B 验证 → 自动晋升/回滚） | 2026-04-20 |
 | P4 Code Agent（Phase 1-3 全部完成）：**混合 Hook Method 体系** — ScriptMethod（bash/node 脚本，即时生效）+ CompiledMethod（Java 类，需编译+人工审批）；Phase 1 CodeSandboxSkill（隔离沙箱执行 + HOME 环境变量沙箱化 + DangerousCommandChecker）+ CodeReviewSkill + ScriptMethod CRUD + BuiltInMethodRegistry 可变化 + V10 migration；Phase 2 DynamicMethodCompiler（javax.tools 进程内编译 + FORBIDDEN_PATTERNS 安全扫描）+ GeneratedMethodClassLoader（child-first 隔离）+ CompiledMethodService（submit→compile→approve 审批流）+ V11 migration；Phase 3 CodeAgentInitializer（9-skill pack 种子模板 + existsByName 防并发）+ HookMethods.tsx 前端页面（双 Tab script/compiled + grid/table + detail drawer + approval 操作）+ typed API functions；Review 修复：Instant 时间字段、TIMESTAMPTZ、@Lob 移除、registry/DB 原子性、FORBIDDEN_PATTERNS 扩充、temp path 脱敏、错误信息安全化、ARIA 无障碍、delete 确认弹窗 | 2026-04-19 |
 | P5 前端体验优化（Phase 1-6 全部完成）：**整体交互重构** — 从 Ant Design 默认样式迁移到自研设计系统（CSS custom properties token 字典 + feature-scoped CSS modules），参考 Linear/Raycast 开发者工具风格；全部 10 个页面重写（Skills/Tools/Traces/Sessions/Evals/Memory/Usage/Agents/Chat/Teams）；Phase 1 chat compaction banner + session 分页 + i18n；Phase 2 token 字典 + ThemeContext 暗色模式；Phase 3 用户输入样式 + Agent UX + empty states + loading/error；Phase 4 响应式侧边栏 + Traces 颜色编码 + a11y；Phase 5 Layout 重构 + ActivityRail + CmdK 命令面板；Phase 6 Traces BFS span 遍历 + input 预览标题 + Session drawer 真实消息 + Skills system/custom 分类 + Agent hook handler 类型感知自动补全 + Tool 描述截断 + Hook tab 配置扩展 + Chat RightRail SubAgent tab + 顶部导航 Memory 标签修正 | 2026-04-19 |
 | N3 P2 Lifecycle Hook Method 体系：BuiltInMethod 接口 + BuiltInMethodRegistry（HttpPost/FeishuNotify/LogToFile 三个内置方法）+ MethodHandlerRunner（arg merging）+ UrlValidator（InetAddress SSRF 防护 + IPv6/link-local 拦截）+ 静态 HttpClient 防线程池泄漏 + header injection denylist + 异常信息脱敏 + ConcurrentHashMap 文件锁 + LifecycleHookService 抽取（dry-run + hook-history）+ HookHistoryDto DTO 投影 + 前端 MethodHandlerFields（方法下拉 + args 表单 + loading 状态穿透）+ DryRunResultModal + HookHistoryPanel 时间线 + Traces LIFECYCLE_HOOK 可视化 + API 类型安全（消灭 4 个 any）+ getLifecycleHookMethods 响应解析 bug 修复 + React key 去重 + 18 项 review fix；Full Pipeline（2 reviewer + judge + fix）；202 后端测试全绿 | 2026-04-17 |
@@ -72,9 +88,9 @@
 | P2-1~P2-5 Self-Improve Pipeline Phase 2：PromptVersionEntity（V4 migration）、PromptImproverService（LLM 生成候选 prompt）、AbEvalPipeline（held-out 集 A/B 对比）、PromptPromotionService（Δ≥15pp 自动晋升 + 4 层 Goodhart 防护）、前端 ImprovePromptButton + PromptHistoryPanel + rollback/resume                                                                                                                                                                                                                                                                              | 2026-04-16 |
 | #5/#6 Self-Improve Pipeline Phase 1 实现：13 个场景 JSON（7 seed_ + 6 train_）；EvalExecutorConfig + evalOrchestratorExecutor（双独立线程池防死锁）；AttributionEngine（7×5 矩阵）；EvalRunEntity + EvalSessionEntity + V3 Flyway；SandboxSkillRegistryFactory + EvalEngineFactory（无 compactorCallback/pendingAskRegistry）；ScenarioRunnerSkill（3级重试 90s 预算）；EvalJudgeSkill（2×Haiku + Sonnet meta）；EvalOrchestrator（Goodhart 防护 + Δ 监控）；REST API POST/GET /api/eval/runs；/eval 前端页面（实时 WS + 详情 Drawer）；Full Pipeline 评审修复：executor 死锁、rate limit ghost run、maxLoops 覆盖、5 个字段名错误 | 2026-04-16 |
 | #5/#6 Self-Improve Pipeline 完整方案设计（Plan A + Plan B + 双 Reviewer + Judge 全流程）；详见 docs/design-self-improve-pipeline.md                                                                                                                                                                                                                                                                                                                                                                                                                                | 2026-04-16 |
-| P1-3 CollabRun WS 广播：ChatWebSocketHandler 注入 repo 查 userId，4 个 collab 事件改写为 userEvent 广播；Teams.tsx 订阅 /ws/users/1 实时 invalidate TanStack Query                                                                                                                                                                                                                                                                                                                                                                                                      | 2026-04-16 |
-| P1-2 CompactionService 解锁 LLM 调用：3-phase split — Phase 1 guard/prepareCompact (stripe lock) → Phase 2 applyPrepared (LLM, no lock) → Phase 3 persist (stripe lock + tx)；fullCompactInFlight Set 防并发重入                                                                                                                                                                                                                                                                                                                                               | 2026-04-15 |
-| P1-1 动态 Context Window：ModelConfig 静态模型表 + CompactionService 3 级解析链，废弃硬编码 32000                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | 2026-04-15 |
+| Collab-3 CollabRun WS 广播：ChatWebSocketHandler 注入 repo 查 userId，4 个 collab 事件改写为 userEvent 广播；Teams.tsx 订阅 /ws/users/1 实时 invalidate TanStack Query                                                                                                                                                                                                                                                                                                                                                                                                      | 2026-04-16 |
+| Compact-2 CompactionService 解锁 LLM 调用：3-phase split — Phase 1 guard/prepareCompact (stripe lock) → Phase 2 applyPrepared (LLM, no lock) → Phase 3 persist (stripe lock + tx)；fullCompactInFlight Set 防并发重入                                                                                                                                                                                                                                                                                                                                               | 2026-04-15 |
+| Context-1 动态 Context Window：ModelConfig 静态模型表 + CompactionService 3 级解析链，废弃硬编码 32000                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | 2026-04-15 |
 | #9 认证鉴权 MVP：auto-token on startup，Login 页自动预填，Bearer 拦截器 + WS 握手鉴权                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | 2026-04-15 |
 | #20 API 响应格式统一 + extractList 防御代码集中                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | 2026-04-15 |
 | #19 前端测试基础建设：Vitest 单元测试 + Playwright E2E                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | 2026-04-15 |

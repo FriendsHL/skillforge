@@ -26,7 +26,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 
-import com.fasterxml.jackson.core.type.TypeReference;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -117,16 +116,12 @@ public class ChatService {
                 LoopContext ctx = cancellationRegistry.getContext(sessionId);
                 if (ctx != null) {
                     ctx.enqueueUserMessage(userMessage);
-                    // Persist the user message to messagesJson so it's visible in history
                     try {
-                        List<Map<String, Object>> msgs = objectMapper.readValue(
-                                session.getMessagesJson(), new TypeReference<>() {});
-                        msgs.add(Map.of("role", "user", "content", userMessage));
-                        session.setMessagesJson(objectMapper.writeValueAsString(msgs));
+                        sessionService.appendNormalMessages(sessionId, List.of(Message.user(userMessage)));
                         session.setLastUserMessageAt(java.time.Instant.now());
                         sessionService.saveSession(session);
                     } catch (Exception e) {
-                        log.warn("Failed to append queued message to messagesJson, message is queued in-memory only: sessionId={}", sessionId, e);
+                        log.warn("Failed to append queued message to session_message, message is queued in-memory only: sessionId={}", sessionId, e);
                         // Don't save inconsistent state — message is still in the in-memory queue
                         // and will be persisted when the engine drains it
                         return;
@@ -163,17 +158,16 @@ public class ChatService {
                 log.warn("B3 engine-gap compact failed, continuing: sessionId={}", sessionId, e);
             }
 
-            // 2. 把 user message 立即持久化到 session.messagesJson,这样即使前端刷新也能看到
-            //    (B3 必须在这一步之前完成, 否则旧 gap 会被新 user message 打掉)
-            List<Message> history = sessionService.getSessionMessages(sessionId);
+            // 2. 把 user message 立即持久化到行存储，这样前端刷新也能看到。
+            //    B3 必须在这一步之前完成, 否则旧 gap 会被新 user message 打掉。
+            List<Message> fullHistory = sessionService.getFullHistory(sessionId);
+            List<Message> history = sessionService.getContextMessages(sessionId);
             Message userMsg = Message.user(userMessage);
-            List<Message> historyWithUser = new ArrayList<>(history);
-            historyWithUser.add(userMsg);
-            sessionService.saveSessionMessages(sessionId, historyWithUser);
+            sessionService.appendNormalMessages(sessionId, List.of(userMsg));
 
             // 2.1 第一条 user message 时立即生成截断标题(同步,极快)
             // 同时触发 SessionStart lifecycle hook（仅在首条消息时，非每轮）
-            if (history.isEmpty()) {
+            if (fullHistory.isEmpty()) {
                 sessionTitleService.applyImmediateTitle(sessionId, userMessage);
                 try {
                     AgentDefinition sessionStartDef = agentService.toAgentDefinition(agentEntity);
@@ -192,7 +186,7 @@ public class ChatService {
                             broadcaster.sessionStatus(sessionId, "error", null,
                                     "Aborted by SessionStart hook");
                             broadcaster.userEvent(session.getUserId(),
-                                    sessionUpdatedPayload(session, historyWithUser.size()));
+                                    sessionUpdatedPayload(session, fullHistory.size() + 1));
                         }
                         return;
                     }
@@ -213,7 +207,7 @@ public class ChatService {
             if (broadcaster != null) {
                 broadcaster.messageAppended(sessionId, userMsg);
                 broadcaster.sessionStatus(sessionId, "running", "Starting", null);
-                broadcaster.userEvent(session.getUserId(), sessionUpdatedPayload(session, historyWithUser.size()));
+                broadcaster.userEvent(session.getUserId(), sessionUpdatedPayload(session, fullHistory.size() + 1));
             }
 
             // 5. 提交到线程池异步跑 loop

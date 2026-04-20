@@ -189,6 +189,7 @@ public class MemoryService {
      * Get memories for prompt injection.
      * Legacy version: no semantic context, falls back to time-based ranking.
      */
+    @Transactional
     public String getMemoriesForPrompt(Long userId) {
         return getMemoriesForPrompt(userId, null);
     }

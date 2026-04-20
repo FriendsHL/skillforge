@@ -37,7 +37,7 @@ public class SystemSkillLoader {
 
     @EventListener(ApplicationReadyEvent.class)
     public void loadSystemSkills() {
-        Path systemSkillsDir = Paths.get(systemSkillsDirConfig).toAbsolutePath().normalize();
+        Path systemSkillsDir = resolveSystemSkillsDir();
         if (!Files.isDirectory(systemSkillsDir)) {
             log.error("System skills directory not found: {}. System skills (clawhub, github, skillhub) will NOT be available. "
                     + "Set skillforge.system-skills-dir to the correct path.", systemSkillsDir);
@@ -67,5 +67,19 @@ public class SystemSkillLoader {
         }
 
         log.info("System skill loading complete: {} skills registered", loaded);
+    }
+
+    private Path resolveSystemSkillsDir() {
+        Path configured = Paths.get(systemSkillsDirConfig).toAbsolutePath().normalize();
+        if (Files.isDirectory(configured)) {
+            return configured;
+        }
+        // 本地常见启动路径：在 skillforge-server 模块目录执行 mvn spring-boot:run
+        Path siblingDir = Paths.get("..", "system-skills").toAbsolutePath().normalize();
+        if (Files.isDirectory(siblingDir)) {
+            log.info("System skills fallback directory detected: {}", siblingDir);
+            return siblingDir;
+        }
+        return configured;
     }
 }
