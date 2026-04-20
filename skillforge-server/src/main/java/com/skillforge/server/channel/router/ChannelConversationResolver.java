@@ -49,14 +49,22 @@ public class ChannelConversationResolver {
      * Uses PESSIMISTIC_WRITE; on rare race the unique index catches it and we retry once.
      */
     @Transactional
-    public SessionRouteResult resolveSession(ChannelMessage msg, ChannelConfigDecrypted config) {
+    public SessionRouteResult resolveSession(
+            ChannelMessage msg,
+            ChannelConfigDecrypted config,
+            Long mappedUserId) {
         Optional<ChannelConversationEntity> existing =
                 conversationRepo.findActiveForUpdate(msg.platform(), msg.conversationId());
 
         if (existing.isPresent()) {
             String sessionId = existing.get().getSessionId();
             if (sessionService.isChannelSessionActive(sessionId)) {
-                return new SessionRouteResult(sessionId, false);
+                Long sessionUserId = sessionService.getSession(sessionId).getUserId();
+                if (sessionUserId != null) {
+                    return new SessionRouteResult(sessionId, false, sessionUserId);
+                }
+                Long fallbackUserId = mappedUserId != null ? mappedUserId : SessionService.DEFAULT_CHANNEL_USER_ID;
+                return new SessionRouteResult(sessionId, false, fallbackUserId);
             }
             existing.get().setClosedAt(Instant.now());
             conversationRepo.save(existing.get());
@@ -64,14 +72,18 @@ public class ChannelConversationResolver {
 
         try {
             String newSessionId = sessionService.createChannelSession(
-                    config.defaultAgentId(), buildSessionTitle(msg));
+                    config.defaultAgentId(), buildSessionTitle(msg), mappedUserId);
             ChannelConversationEntity newConv = new ChannelConversationEntity();
             newConv.setPlatform(msg.platform());
             newConv.setConversationId(msg.conversationId());
             newConv.setSessionId(newSessionId);
             newConv.setChannelConfigId(config.id());
             conversationRepo.save(newConv);
-            return new SessionRouteResult(newSessionId, true);
+            Long sessionUserId = sessionService.getSession(newSessionId).getUserId();
+            Long effectiveUserId = sessionUserId != null
+                    ? sessionUserId
+                    : (mappedUserId != null ? mappedUserId : SessionService.DEFAULT_CHANNEL_USER_ID);
+            return new SessionRouteResult(newSessionId, true, effectiveUserId);
         } catch (DataIntegrityViolationException race) {
             // uq_ch_conv_active caught a concurrent creator — fall back to the
             // winning row. Won't recurse because it's now visible.
@@ -79,7 +91,12 @@ public class ChannelConversationResolver {
             ChannelConversationEntity winner = conversationRepo
                     .findActiveForUpdate(msg.platform(), msg.conversationId())
                     .orElseThrow(() -> race);
-            return new SessionRouteResult(winner.getSessionId(), false);
+            String winnerSessionId = winner.getSessionId();
+            Long sessionUserId = sessionService.getSession(winnerSessionId).getUserId();
+            Long effectiveUserId = sessionUserId != null
+                    ? sessionUserId
+                    : (mappedUserId != null ? mappedUserId : SessionService.DEFAULT_CHANNEL_USER_ID);
+            return new SessionRouteResult(winnerSessionId, false, effectiveUserId);
         }
     }
 

@@ -10,6 +10,7 @@ import {
   Divider,
   message,
   Tooltip,
+  Alert,
 } from 'antd';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getAgents } from '../../api';
@@ -67,6 +68,7 @@ const platformOptions = [
 
 interface FormValues {
   platform: string;
+  mode: 'webhook' | 'websocket';
   displayName: string;
   defaultAgentId: number;
   active: boolean;
@@ -85,11 +87,22 @@ const ChannelConfigDrawer: React.FC<ChannelConfigDrawerProps> = ({
   onClose,
 }) => {
   const [form] = Form.useForm<FormValues>();
+  const mode = Form.useWatch('mode', form) ?? 'webhook';
   const queryClient = useQueryClient();
   const isEdit = config !== null;
   const [platform, setPlatform] = useState<string>(config?.platform ?? 'feishu');
   const [updateCreds, setUpdateCreds] = useState(false);
   const [testing, setTesting] = useState(false);
+
+  function parseMode(configJson?: string | null): 'webhook' | 'websocket' {
+    if (!configJson) return 'webhook';
+    try {
+      const parsed = JSON.parse(configJson) as { mode?: string };
+      return parsed.mode === 'websocket' ? 'websocket' : 'webhook';
+    } catch {
+      return 'webhook';
+    }
+  }
 
   const { data: agentsRaw = [] } = useQuery({
     queryKey: ['agents'],
@@ -103,8 +116,10 @@ const ChannelConfigDrawer: React.FC<ChannelConfigDrawerProps> = ({
   useEffect(() => {
     if (!open) return;
     if (config) {
+      const mode = parseMode(config.configJson);
       form.setFieldsValue({
         platform: config.platform,
+        mode,
         displayName: config.displayName,
         defaultAgentId: config.defaultAgentId,
         active: config.active,
@@ -114,7 +129,12 @@ const ChannelConfigDrawer: React.FC<ChannelConfigDrawerProps> = ({
       setUpdateCreds(false);
     } else {
       form.resetFields();
-      form.setFieldsValue({ platform: 'feishu', active: true, updateCredentials: true });
+      form.setFieldsValue({
+        platform: 'feishu',
+        mode: 'webhook',
+        active: true,
+        updateCredentials: true,
+      });
       setPlatform('feishu');
       setUpdateCreds(true);
     }
@@ -127,6 +147,7 @@ const ChannelConfigDrawer: React.FC<ChannelConfigDrawerProps> = ({
           displayName: values.displayName,
           defaultAgentId: values.defaultAgentId,
           active: values.active,
+          configJson: JSON.stringify({ mode: values.mode }),
         };
         if (values.updateCredentials) {
           body.credentials = buildCredentials(values);
@@ -139,12 +160,17 @@ const ChannelConfigDrawer: React.FC<ChannelConfigDrawerProps> = ({
           defaultAgentId: values.defaultAgentId,
           active: values.active,
           credentials: buildCredentials(values),
+          configJson: JSON.stringify({ mode: values.mode }),
         };
         return createChannelConfig(body);
       }
     },
-    onSuccess: () => {
+    onSuccess: (res) => {
+      const warning = res?.data?.warning;
       message.success(isEdit ? 'Channel updated' : 'Channel created');
+      if (warning) {
+        message.warning(warning);
+      }
       queryClient.invalidateQueries({ queryKey: ['channel-configs'] });
       onClose();
     },
@@ -262,34 +288,59 @@ const ChannelConfigDrawer: React.FC<ChannelConfigDrawerProps> = ({
           <Switch />
         </Form.Item>
 
+        <Form.Item
+          label="Push Mode"
+          name="mode"
+          rules={[{ required: true, message: 'Select push mode' }]}
+          extra="webhook 需要公网回调；websocket 由服务端主动建连飞书。"
+        >
+          <Select
+            options={[
+              { value: 'webhook', label: 'Webhook (回调模式)' },
+              { value: 'websocket', label: 'WebSocket (长连接模式)' },
+            ]}
+          />
+        </Form.Item>
+
         <Divider style={{ margin: '8px 0 16px' }} />
 
         {/* Webhook URL */}
         <div style={{ marginBottom: 16 }}>
-          <p className="credentials-section-label" style={{ marginBottom: 6 }}>
-            Webhook URL
-          </p>
-          <div className="webhook-url-box">
-            <span className="webhook-url-text">{buildWebhookUrl(platform)}</span>
-            <Tooltip title="Copy">
-              <button
-                type="button"
-                onClick={handleCopyWebhook}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  cursor: 'pointer',
-                  color: 'inherit',
-                  opacity: 0.5,
-                  padding: '2px 4px',
-                  display: 'flex',
-                  alignItems: 'center',
-                }}
-              >
-                {COPY_ICON}
-              </button>
-            </Tooltip>
-          </div>
+          {mode === 'webhook' ? (
+            <>
+              <p className="credentials-section-label" style={{ marginBottom: 6 }}>
+                Webhook URL
+              </p>
+              <div className="webhook-url-box">
+                <span className="webhook-url-text">{buildWebhookUrl(platform)}</span>
+                <Tooltip title="Copy">
+                  <button
+                    type="button"
+                    onClick={handleCopyWebhook}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      cursor: 'pointer',
+                      color: 'inherit',
+                      opacity: 0.5,
+                      padding: '2px 4px',
+                      display: 'flex',
+                      alignItems: 'center',
+                    }}
+                  >
+                    {COPY_ICON}
+                  </button>
+                </Tooltip>
+              </div>
+            </>
+          ) : (
+            <Alert
+              type="info"
+              showIcon
+              message="WebSocket 模式无需配置回调 URL"
+              description="此模式下由 SkillForge 服务端主动连接飞书，不需要公网 webhook。若从 webhook 切换到 websocket，请重启服务生效。"
+            />
+          )}
         </div>
 
         {/* Credential update toggle (edit mode only) */}

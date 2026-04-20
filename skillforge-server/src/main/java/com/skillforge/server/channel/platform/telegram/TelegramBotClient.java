@@ -66,6 +66,32 @@ public class TelegramBotClient {
         }
     }
 
+    public String testConnection(ChannelConfigDecrypted config) {
+        try {
+            JsonNode creds = objectMapper.readTree(
+                    config.credentialsJson() == null ? "{}" : config.credentialsJson());
+            String token = creds.path("bot_token").asText();
+            if (token.isBlank()) {
+                throw new IllegalStateException("missing bot_token in credentials");
+            }
+            String url = "https://api.telegram.org/bot" + token + "/getMe";
+            Request req = new Request.Builder().url(url).get().build();
+            try (Response resp = http.newCall(req).execute()) {
+                String bodyText = resp.body() != null ? resp.body().string() : "";
+                if (!resp.isSuccessful()) {
+                    throw new RuntimeException("http " + resp.code() + ": " + bodyText);
+                }
+                JsonNode json = objectMapper.readTree(bodyText);
+                if (!json.path("ok").asBoolean(false)) {
+                    throw new RuntimeException("telegram getMe failed: " + json.path("description").asText(""));
+                }
+                return json.path("result").path("username").asText("bot_ok");
+            }
+        } catch (Exception e) {
+            throw new RuntimeException("Telegram connection test failed: " + e.getMessage(), e);
+        }
+    }
+
     private DeliveryResult sendOne(String token, String chatId, String text) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("chat_id", chatId);

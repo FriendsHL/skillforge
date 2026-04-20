@@ -39,6 +39,13 @@ public class ChannelConfigService {
         return repo.findAll();
     }
 
+    @Transactional(readOnly = true)
+    public List<ChannelConfigDecrypted> listActiveDecryptedConfigs() {
+        return repo.findByActiveTrue().stream()
+                .map(this::toDecrypted)
+                .toList();
+    }
+
     @Transactional
     public ChannelConfigEntity save(ChannelConfigEntity entity) {
         // TODO: AES-GCM encrypt webhookSecret and credentialsJson before persistence.

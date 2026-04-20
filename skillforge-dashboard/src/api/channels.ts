@@ -7,6 +7,7 @@ export interface CreateChannelConfigRequest {
   defaultAgentId: number;
   active?: boolean;
   credentials?: Record<string, string>;
+  configJson?: string;
 }
 
 export interface UpdateChannelConfigRequest {
@@ -14,6 +15,7 @@ export interface UpdateChannelConfigRequest {
   defaultAgentId?: number;
   active?: boolean;
   credentials?: Record<string, string> | null;
+  configJson?: string;
 }
 
 export interface ListChannelConversationsParams {

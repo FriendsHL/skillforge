@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillforge.server.channel.spi.ChannelAdapter;
 import com.skillforge.server.channel.spi.ChannelConfigDecrypted;
 import com.skillforge.server.channel.spi.ChannelMessage;
+import com.skillforge.server.channel.spi.ChannelPushConnector;
 import com.skillforge.server.channel.spi.ChannelReply;
 import com.skillforge.server.channel.spi.DeliveryResult;
 import com.skillforge.server.channel.spi.WebhookContext;
@@ -20,18 +21,28 @@ import java.util.Optional;
  * Feishu (Lark) ChannelAdapter — composes verifier + parser + client.
  */
 @Component
-public class FeishuChannelAdapter implements ChannelAdapter {
+public class FeishuChannelAdapter implements ChannelAdapter, ChannelPushConnector {
 
     private final FeishuWebhookVerifier verifier;
     private final FeishuEventParser parser;
     private final FeishuClient client;
     private final ObjectMapper objectMapper;
+    private final FeishuWsConnector wsConnector;
 
-    public FeishuChannelAdapter(FeishuClient client, ObjectMapper objectMapper) {
+    public FeishuChannelAdapter(
+            FeishuClient client,
+            FeishuEventParser parser,
+            FeishuWsEventDispatcher wsEventDispatcher,
+            ObjectMapper objectMapper) {
         this.client = client;
+        this.parser = parser;
         this.objectMapper = objectMapper;
         this.verifier = new FeishuWebhookVerifier();
-        this.parser = new FeishuEventParser(objectMapper);
+        this.wsConnector = new FeishuWsConnector(
+                client,
+                wsEventDispatcher,
+                FeishuWsReconnectPolicy.defaultPolicy(),
+                objectMapper);
     }
 
     @Override
@@ -75,5 +86,15 @@ public class FeishuChannelAdapter implements ChannelAdapter {
     @Override
     public DeliveryResult deliver(ChannelReply reply, ChannelConfigDecrypted config) {
         return client.sendInteractive(reply, config);
+    }
+
+    @Override
+    public void start(ChannelConfigDecrypted config) {
+        wsConnector.start(config);
+    }
+
+    @Override
+    public void stop() {
+        wsConnector.stop();
     }
 }

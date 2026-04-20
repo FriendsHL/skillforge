@@ -43,6 +43,8 @@ public class SessionService {
 
     private static final Logger log = LoggerFactory.getLogger(SessionService.class);
     private static final int APPEND_LOCK_STRIPES = 64;
+    /** Channel 会话在缺少用户映射且 Agent 也无 ownerId 时的最终兜底用户。 */
+    public static final long DEFAULT_CHANNEL_USER_ID = 1L;
     public static final String MSG_TYPE_NORMAL = "NORMAL";
     public static final String MSG_TYPE_COMPACT_BOUNDARY = "COMPACT_BOUNDARY";
     public static final String MSG_TYPE_SUMMARY = "SUMMARY";
@@ -503,14 +505,25 @@ public class SessionService {
     }
 
     /**
-     * Creates a session driven by a channel (Feishu/Telegram/...). UserId is null
-     * because the platform user may not yet be mapped to a SkillForge user.
-     * Skips the per-user {@code session_created} broadcast for the same reason.
+     * Creates a channel-driven session and applies default user fallback.
      */
     public String createChannelSession(Long agentId, String title) {
+        return createChannelSession(agentId, title, null);
+    }
+
+    /**
+     * Creates a channel-driven session with an explicit SkillForge user owner.
+     * Unknown identity mapping falls back to {@link #DEFAULT_CHANNEL_USER_ID}.
+     */
+    public String createChannelSession(Long agentId, String title, Long mappedUserId) {
+        Long effectiveUserId = resolveChannelSessionUserId(agentId, mappedUserId);
+        if (mappedUserId == null) {
+            log.info("Channel user mapping missing, fallback user resolved. agentId={}, fallbackUserId={}",
+                    agentId, effectiveUserId);
+        }
         SessionEntity session = new SessionEntity();
         session.setId(UUID.randomUUID().toString());
-        session.setUserId(null);
+        session.setUserId(effectiveUserId);
         session.setAgentId(agentId);
         session.setTitle(title != null ? title : "Channel session");
         session.setMessagesJson("[]");
@@ -521,6 +534,17 @@ public class SessionService {
         }
         SessionEntity saved = sessionRepository.save(session);
         return saved.getId();
+    }
+
+    private Long resolveChannelSessionUserId(Long agentId, Long mappedUserId) {
+        if (mappedUserId != null) {
+            return mappedUserId;
+        }
+        AgentEntity agent = agentRepository.findById(agentId).orElse(null);
+        if (agent != null && agent.getOwnerId() != null) {
+            return agent.getOwnerId();
+        }
+        return DEFAULT_CHANNEL_USER_ID;
     }
 
     /**

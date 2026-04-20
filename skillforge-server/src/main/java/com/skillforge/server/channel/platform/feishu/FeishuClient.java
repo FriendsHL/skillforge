@@ -20,7 +20,6 @@ import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Feishu (Lark) tenant access token management + Interactive Card posting.
@@ -35,6 +34,8 @@ public class FeishuClient {
             "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal";
     private static final String SEND_MESSAGE_URL =
             "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id";
+    private static final String WS_ENDPOINT_URL =
+            "https://open.feishu.cn/callback/ws/endpoint";
 
     private final OkHttpClient http;
     private final ObjectMapper objectMapper;
@@ -68,6 +69,58 @@ public class FeishuClient {
             return newToken;
         } catch (Exception e) {
             throw new RuntimeException("Feishu token fetch failed: " + e.getMessage(), e);
+        }
+    }
+
+    public String testConnection(ChannelConfigDecrypted config) {
+        String token = getAccessToken(config);
+        if (token == null || token.isBlank()) {
+            throw new RuntimeException("Feishu token is empty");
+        }
+        return "token_ok";
+    }
+
+    public String getWsEndpoint(ChannelConfigDecrypted config) {
+        try {
+            JsonNode creds = objectMapper.readTree(
+                    config.credentialsJson() == null ? "{}" : config.credentialsJson());
+            String appId = creds.path("app_id").asText();
+            String appSecret = creds.path("app_secret").asText();
+            if (appId.isBlank() || appSecret.isBlank()) {
+                throw new IllegalStateException("feishu credentials missing app_id/app_secret");
+            }
+
+            Map<String, String> body = Map.of("AppID", appId, "AppSecret", appSecret);
+            String payload = objectMapper.writeValueAsString(body);
+            Request req = new Request.Builder()
+                    .url(WS_ENDPOINT_URL)
+                    .header("locale", "zh")
+                    .post(RequestBody.create(payload, JSON))
+                    .build();
+            try (Response resp = http.newCall(req).execute()) {
+                String bodyText = resp.body() != null ? resp.body().string() : "";
+                if (!resp.isSuccessful()) {
+                    throw new RuntimeException("http " + resp.code() + ": " + bodyText);
+                }
+                JsonNode json = objectMapper.readTree(bodyText);
+                int code = json.path("code").asInt(-1);
+                if (code != 0) {
+                    throw new RuntimeException("endpoint api code=" + code + ", msg=" + json.path("msg").asText(""));
+                }
+                String url = json.path("data").path("url").asText("");
+                if (url.isBlank()) {
+                    url = json.path("data").path("ws_url").asText("");
+                }
+                if (url.isBlank()) {
+                    url = json.path("data").path("URL").asText("");
+                }
+                if (url.isBlank()) {
+                    throw new RuntimeException("ws endpoint is empty, response=" + bodyText);
+                }
+                return url;
+            }
+        } catch (Exception e) {
+            throw new RuntimeException("Feishu ws endpoint fetch failed: " + e.getMessage(), e);
         }
     }
 

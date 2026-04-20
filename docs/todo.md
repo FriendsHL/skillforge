@@ -8,6 +8,24 @@
 
 > 统一编号 P1~P5，子任务编号 P{n}-{seq}。已完成任务保留历史编号不变。
 
+### P7 — 飞书 WebSocket 长连接模式
+
+> 目标：支持飞书 WebSocket 长连接（我方主动建连），本地开发无需 ngrok/公网 IP。  
+> 方案：`docs/design-feishu-websocket.md`（Plan B + Review 修复，2026-04-20）
+
+| 子任务 | 说明 |
+| --- | --- |
+| P7-1 ChannelPushConnector SPI | 新增 `ChannelPushConnector` 接口（`channel/spi`）：`start(config)` / `stop()`；`FeishuChannelAdapter implements ChannelPushConnector` |
+| P7-2 FeishuWsConnector | OkHttp WebSocket 连接封装；ping/pong 响应；断线触发 `FeishuWsReconnectPolicy` 重连；通过构造器接受 `FeishuClient`（避免 ObjectMapper footgun） |
+| P7-3 FeishuWsEventDispatcher | 剥开 WS 帧（header.type + body）→ `FeishuEventParser.parse()` → `ChannelSessionRouter.routeAsync()`；ack 回复含 `service_id` |
+| P7-4 FeishuWsReconnectPolicy | record 值对象；指数退避 1s→64s；±20% jitter（ThreadLocalRandom）；`nextDelayMs(attempt)` |
+| P7-5 ChannelPushManager | `SmartLifecycle`，phase=`DEFAULT_PHASE+100`（晚启动，JPA 就绪后建连）；`start()` 扫 DB 按 mode 建连；`stop(Runnable)` 最多等 3s 等 ACK 再调 callback |
+| P7-6 配置 + 兼容 | `configJson["mode"]` 字段：`"websocket"` / `"webhook"`（默认）；`ChannelConfigController.patch()` 修改 mode 时返回 restart warn |
+| P7-7 前端 UI | `ChannelConfigDrawer` 新增 mode 切换（webhook / websocket）；websocket 模式下显示重启提示 |
+| P7-8 E2E 验证 | 本地无 ngrok 发飞书消息 → SkillForge 收到并回复；agent-browser 验证 |
+
+---
+
 ### ~~P1 — Skill 自动生成 + 自进化~~ ✅ 已完成
 
 > ~~目标：从历史 session 自动提取可复用 Skill，建立版本管理 + A/B 验证 + 进化闭环~~

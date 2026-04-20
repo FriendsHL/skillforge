@@ -6,6 +6,7 @@ import com.skillforge.server.channel.spi.ChannelConfigDecrypted;
 import com.skillforge.server.channel.spi.ChannelMessage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
 
 import java.time.Instant;
 import java.util.Collections;
@@ -15,6 +16,7 @@ import java.util.Optional;
  * Parses Feishu Event Callback v2 payloads into {@link ChannelMessage}.
  * Filters bot self-messages (sender.sender_type == "app") to avoid loops.
  */
+@Component
 public class FeishuEventParser {
 
     private static final Logger log = LoggerFactory.getLogger(FeishuEventParser.class);
@@ -71,11 +73,11 @@ public class FeishuEventParser {
                 }
                 case "image" -> {
                     type = ChannelMessage.MessageType.IMAGE;
-                    attachmentUrl = message.path("content").asText(null);
+                    attachmentUrl = extractFieldFromContentJson(message.path("content").asText(""), "image_key");
                 }
                 case "file" -> {
                     type = ChannelMessage.MessageType.FILE;
-                    attachmentUrl = message.path("content").asText(null);
+                    attachmentUrl = extractFieldFromContentJson(message.path("content").asText(""), "file_key");
                 }
                 default -> type = ChannelMessage.MessageType.UNSUPPORTED;
             }
@@ -118,6 +120,17 @@ public class FeishuEventParser {
             return n.path("text").asText("");
         } catch (Exception e) {
             return contentJson;
+        }
+    }
+
+    private String extractFieldFromContentJson(String contentJson, String field) {
+        if (contentJson == null || contentJson.isBlank()) return null;
+        try {
+            JsonNode n = objectMapper.readTree(contentJson);
+            String value = n.path(field).asText(null);
+            return value == null || value.isBlank() ? null : value;
+        } catch (Exception e) {
+            return null;
         }
     }
 

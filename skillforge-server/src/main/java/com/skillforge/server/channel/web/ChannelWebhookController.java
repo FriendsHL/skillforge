@@ -91,7 +91,7 @@ public class ChannelWebhookController {
             return ResponseEntity.ok(Map.of("status", "duplicate"));
         }
 
-        router.routeAsync(msg, adapter, config);
+        router.routeAsync(msg, config);
         return ResponseEntity.ok(Map.of("status", "accepted"));
     }
 

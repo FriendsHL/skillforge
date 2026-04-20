@@ -1,7 +1,12 @@
 package com.skillforge.server.channel.web;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillforge.server.channel.ChannelConfigService;
+import com.skillforge.server.channel.platform.feishu.FeishuClient;
+import com.skillforge.server.channel.platform.telegram.TelegramBotClient;
 import com.skillforge.server.channel.registry.ChannelAdapterRegistry;
+import com.skillforge.server.channel.spi.ChannelConfigDecrypted;
 import com.skillforge.server.entity.ChannelConfigEntity;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -25,11 +30,20 @@ public class ChannelConfigController {
 
     private final ChannelConfigService configService;
     private final ChannelAdapterRegistry registry;
+    private final ObjectMapper objectMapper;
+    private final FeishuClient feishuClient;
+    private final TelegramBotClient telegramBotClient;
 
     public ChannelConfigController(ChannelConfigService configService,
-                                   ChannelAdapterRegistry registry) {
+                                   ChannelAdapterRegistry registry,
+                                   ObjectMapper objectMapper,
+                                   FeishuClient feishuClient,
+                                   TelegramBotClient telegramBotClient) {
         this.configService = configService;
         this.registry = registry;
+        this.objectMapper = objectMapper;
+        this.feishuClient = feishuClient;
+        this.telegramBotClient = telegramBotClient;
     }
 
     @GetMapping
@@ -57,6 +71,30 @@ public class ChannelConfigController {
                         .body(Map.of("error", "not found")));
     }
 
+    @GetMapping("/{id}/test")
+    public ResponseEntity<?> testConnection(@PathVariable Long id) {
+        return configService.getById(id).<ResponseEntity<?>>map(e -> {
+            try {
+                ChannelConfigDecrypted config = new ChannelConfigDecrypted(
+                        e.getId(),
+                        e.getPlatform(),
+                        e.getWebhookSecret(),
+                        e.getCredentialsJson(),
+                        e.getConfigJson(),
+                        e.getDefaultAgentId());
+                String detail = switch (e.getPlatform()) {
+                    case "feishu" -> feishuClient.testConnection(config);
+                    case "telegram" -> telegramBotClient.testConnection(config);
+                    default -> throw new IllegalArgumentException("unsupported platform: " + e.getPlatform());
+                };
+                return ResponseEntity.ok(new ChannelTestResult(true, "Connection test passed: " + detail));
+            } catch (Exception ex) {
+                return ResponseEntity.ok(new ChannelTestResult(false, ex.getMessage()));
+            }
+        }).orElseGet(() -> ResponseEntity.status(404)
+                .body(Map.of("error", "not found")));
+    }
+
     @PostMapping
     public ResponseEntity<?> create(@RequestBody ConfigRequest req) {
         if (req.platform == null || req.platform.isBlank()) {
@@ -73,8 +111,8 @@ public class ChannelConfigController {
         e.setPlatform(req.platform);
         e.setDisplayName(req.displayName);
         e.setActive(req.active != null ? req.active : true);
-        e.setWebhookSecret(req.webhookSecret == null ? "" : req.webhookSecret);
-        e.setCredentialsJson(req.credentialsJson == null ? "{}" : req.credentialsJson);
+        e.setWebhookSecret(resolveWebhookSecret(req, req.platform));
+        e.setCredentialsJson(resolveCredentialsJson(req));
         e.setConfigJson(req.configJson);
         e.setDefaultAgentId(req.defaultAgentId);
         ChannelConfigEntity saved = configService.save(e);
@@ -84,13 +122,21 @@ public class ChannelConfigController {
     @PatchMapping("/{id}")
     public ResponseEntity<?> patch(@PathVariable Long id, @RequestBody ConfigRequest req) {
         return configService.getById(id).<ResponseEntity<?>>map(e -> {
+            String oldMode = resolveMode(e.getConfigJson());
             if (req.displayName != null) e.setDisplayName(req.displayName);
             if (req.active != null) e.setActive(req.active);
-            if (req.webhookSecret != null) e.setWebhookSecret(req.webhookSecret);
-            if (req.credentialsJson != null) e.setCredentialsJson(req.credentialsJson);
+            if (req.webhookSecret != null || req.credentials != null) {
+                e.setWebhookSecret(resolveWebhookSecret(req, e.getPlatform()));
+            }
+            if (req.credentialsJson != null || req.credentials != null) {
+                e.setCredentialsJson(resolveCredentialsJson(req));
+            }
             if (req.configJson != null) e.setConfigJson(req.configJson);
             if (req.defaultAgentId != null) e.setDefaultAgentId(req.defaultAgentId);
-            return ResponseEntity.ok(ConfigView.from(configService.save(e)));
+            ChannelConfigEntity saved = configService.save(e);
+            String newMode = resolveMode(saved.getConfigJson());
+            String warning = oldMode.equals(newMode) ? null : "ws mode change requires server restart";
+            return ResponseEntity.ok(ConfigView.from(saved, warning));
         }).orElseGet(() -> ResponseEntity.status(404)
                 .body(Map.of("error", "not found")));
     }
@@ -110,6 +156,7 @@ public class ChannelConfigController {
         public String displayName;
         public Boolean active;
         public String webhookSecret;
+        public Map<String, Object> credentials;
         public String credentialsJson;
         public String configJson;
         public Long defaultAgentId;
@@ -119,13 +166,79 @@ public class ChannelConfigController {
     public record ConfigView(
             Long id, String platform, String displayName, boolean active,
             String configJson, Long defaultAgentId,
-            boolean webhookSecretSet, boolean credentialsSet) {
+            boolean webhookSecretSet, boolean credentialsSet, String warning) {
         public static ConfigView from(ChannelConfigEntity e) {
             return new ConfigView(
                     e.getId(), e.getPlatform(), e.getDisplayName(), e.isActive(),
                     e.getConfigJson(), e.getDefaultAgentId(),
                     e.getWebhookSecret() != null && !e.getWebhookSecret().isBlank(),
-                    e.getCredentialsJson() != null && !e.getCredentialsJson().isBlank());
+                    hasCredentials(e.getCredentialsJson()),
+                    null);
         }
+
+        public static ConfigView from(ChannelConfigEntity e, String warning) {
+            return new ConfigView(
+                    e.getId(), e.getPlatform(), e.getDisplayName(), e.isActive(),
+                    e.getConfigJson(), e.getDefaultAgentId(),
+                    e.getWebhookSecret() != null && !e.getWebhookSecret().isBlank(),
+                    hasCredentials(e.getCredentialsJson()),
+                    warning);
+        }
+
+        private static boolean hasCredentials(String credentialsJson) {
+            if (credentialsJson == null || credentialsJson.isBlank()) {
+                return false;
+            }
+            String normalized = credentialsJson.trim();
+            return !"{}".equals(normalized);
+        }
+    }
+
+    public record ChannelTestResult(boolean ok, String message) {}
+
+    private String resolveMode(String configJson) {
+        String raw = configJson == null ? "{}" : configJson;
+        try {
+            JsonNode node = objectMapper.readTree(raw);
+            String mode = node.path("mode").asText("");
+            if ("websocket".equalsIgnoreCase(mode)) {
+                return "websocket";
+            }
+        } catch (Exception ignored) {
+            // keep webhook mode for invalid JSON
+        }
+        return "webhook";
+    }
+
+    private String resolveCredentialsJson(ConfigRequest req) {
+        if (req.credentialsJson != null) {
+            return req.credentialsJson;
+        }
+        if (req.credentials != null) {
+            try {
+                return objectMapper.writeValueAsString(req.credentials);
+            } catch (Exception e) {
+                throw new IllegalArgumentException("invalid credentials payload");
+            }
+        }
+        return "{}";
+    }
+
+    private String resolveWebhookSecret(ConfigRequest req, String platform) {
+        if (req.webhookSecret != null) {
+            return req.webhookSecret;
+        }
+        if (req.credentials == null) {
+            return "";
+        }
+        if ("telegram".equals(platform)) {
+            Object value = req.credentials.get("webhook_secret");
+            return value != null ? String.valueOf(value) : "";
+        }
+        if ("feishu".equals(platform)) {
+            Object value = req.credentials.get("encrypt_key");
+            return value != null ? String.valueOf(value) : "";
+        }
+        return "";
     }
 }

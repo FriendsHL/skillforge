@@ -3,7 +3,11 @@ export interface ChannelConfig {
   platform: string;
   displayName: string;
   active: boolean;
+  configJson?: string | null;
   defaultAgentId: number;
+  webhookSecretSet?: boolean;
+  credentialsSet?: boolean;
+  warning?: string | null;
   createdAt: string;
   updatedAt: string;
 }

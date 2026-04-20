@@ -1,6 +1,5 @@
 package com.skillforge.server.channel.router;
 
-import com.skillforge.server.channel.spi.ChannelAdapter;
 import com.skillforge.server.channel.spi.ChannelConfigDecrypted;
 import com.skillforge.server.channel.spi.ChannelMessage;
 import com.skillforge.server.service.ChatService;
@@ -41,22 +40,25 @@ public class ChannelSessionRouter {
     }
 
     @Async("channelRouterExecutor")
-    public void routeAsync(ChannelMessage msg, ChannelAdapter adapter,
-                           ChannelConfigDecrypted config) {
+    public void routeAsync(ChannelMessage msg, ChannelConfigDecrypted config) {
         try {
-            SessionRouteResult route = resolver.resolveSession(msg, config);
-            Long userId = resolver.resolveUser(msg);
-
-            // Register per-turn context before triggering the loop, so
-            // assistantStreamEnd finds the correct platformMessageId.
-            chatWebSocketHandler.registerChannelTurn(
-                    route.sessionId(), msg.platformMessageId());
-
-            String text = msg.text() != null ? msg.text() : "";
-            chatService.chatAsync(route.sessionId(), text, userId);
+            routeInternal(msg, config);
         } catch (Exception e) {
             log.error("Channel routing failed [{}] msg [{}]: {}",
                     msg.platform(), msg.platformMessageId(), e.getMessage(), e);
         }
+    }
+
+    private void routeInternal(ChannelMessage msg, ChannelConfigDecrypted config) {
+        Long mappedUserId = resolver.resolveUser(msg);
+        SessionRouteResult route = resolver.resolveSession(msg, config, mappedUserId);
+
+        // Register per-turn context before triggering the loop, so
+        // assistantStreamEnd finds the correct platformMessageId.
+        chatWebSocketHandler.registerChannelTurn(
+                route.sessionId(), msg.platformMessageId());
+
+        String text = msg.text() != null ? msg.text() : "";
+        chatService.chatAsync(route.sessionId(), text, route.skillforgeUserId());
     }
 }
