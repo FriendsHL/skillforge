@@ -1,6 +1,6 @@
 # SkillForge 待办任务
 
-> 更新于：2026-04-20
+> 更新于：2026-04-21
 
 ---
 
@@ -8,21 +8,12 @@
 
 > 统一编号 P1~P5，子任务编号 P{n}-{seq}。已完成任务保留历史编号不变。
 
-### P7 — 飞书 WebSocket 长连接模式
+### ~~P7 — 飞书 WebSocket 长连接模式~~ ✅ 已完成
 
 > 目标：支持飞书 WebSocket 长连接（我方主动建连），本地开发无需 ngrok/公网 IP。  
 > 方案：`docs/design-feishu-websocket.md`（Plan B + Review 修复，2026-04-20）
 
-| 子任务 | 说明 |
-| --- | --- |
-| P7-1 ChannelPushConnector SPI | 新增 `ChannelPushConnector` 接口（`channel/spi`）：`start(config)` / `stop()`；`FeishuChannelAdapter implements ChannelPushConnector` |
-| P7-2 FeishuWsConnector | OkHttp WebSocket 连接封装；ping/pong 响应；断线触发 `FeishuWsReconnectPolicy` 重连；通过构造器接受 `FeishuClient`（避免 ObjectMapper footgun） |
-| P7-3 FeishuWsEventDispatcher | 剥开 WS 帧（header.type + body）→ `FeishuEventParser.parse()` → `ChannelSessionRouter.routeAsync()`；ack 回复含 `service_id` |
-| P7-4 FeishuWsReconnectPolicy | record 值对象；指数退避 1s→64s；±20% jitter（ThreadLocalRandom）；`nextDelayMs(attempt)` |
-| P7-5 ChannelPushManager | `SmartLifecycle`，phase=`DEFAULT_PHASE+100`（晚启动，JPA 就绪后建连）；`start()` 扫 DB 按 mode 建连；`stop(Runnable)` 最多等 3s 等 ACK 再调 callback |
-| P7-6 配置 + 兼容 | `configJson["mode"]` 字段：`"websocket"` / `"webhook"`（默认）；`ChannelConfigController.patch()` 修改 mode 时返回 restart warn |
-| P7-7 前端 UI | `ChannelConfigDrawer` 新增 mode 切换（webhook / websocket）；websocket 模式下显示重启提示 |
-| P7-8 E2E 验证 | 本地无 ngrok 发飞书消息 → SkillForge 收到并回复；agent-browser 验证 |
+已移至「已完成」表格。
 
 ---
 
@@ -42,23 +33,11 @@
 
 ---
 
-### P6 — 消息行存储重构（Chat History 完整保留）
+### ~~P6 — 消息行存储重构（Chat History 完整保留）~~ ✅ 已完成
 
 > 目标：将消息存储从单 CLOB `messagesJson` 迁移到 `t_session_message` 独立行存储，实现 UI 历史完整保留（compaction 不再丢失旧消息），对齐 Claude Code / OpenCode 设计。
 
-**核心不变量：消息只增不删。** Compaction 改为追加 `COMPACT_BOUNDARY` + `SUMMARY` 两行，LLM context 通过 `youngGenStartSeqNo` 指针三段拼接，UI 始终读全量。
-
-| 子任务 | 说明 |
-| --- | --- |
-| P6-1 Schema + Entity | V18 migration：新建 `t_session_message`（id/session_id/seq_no/role/content_json/msg_type/metadata_json/created_at）；新增 `SessionMessageEntity` + `SessionMessageRepository`；保留旧 `messagesJson` CLOB 作回滚安全边界 |
-| P6-2 SessionService | 新增 `getFullHistory()`（UI 全量）、`getContextMessages()`（LLM 三段拼接：youngGen + summary + 新消息）、`appendMessages()`；旧方法 delegate 到新方法保持 API 兼容 |
-| P6-3 Compaction 改造 | `FullCompactStrategy.applyPrepared()` 返回 `CompactionBoundary`（summaryText + youngGenStartIndex）；`CompactionService.persistBoundary()` 替换 `persistCompactResult()`：INSERT COMPACT_BOUNDARY 行 + SUMMARY 行，不删任何旧消息 |
-| P6-4 AgentLoopEngine | 加载时改用 `getContextMessages()`；loop 结束改用 `appendMessages()` 只写入本轮新消息 |
-| P6-5 数据迁移 | V18 Java Migration：遍历所有 session 的 `messagesJson` → INSERT rows（seq_no 从 0 递增，检测旧 summary 前缀设 msg_type=SUMMARY） |
-| P6-6 前端适配 | `useChatMessages.ts` 适配 `COMPACT_BOUNDARY` msg_type 渲染分隔线；保留旧字符串检测作 fallback |
-| P6-7 Tool 输出裁剪（V2 预留） | V19：`t_session_message` 加 `pruned_at` 列；Light compact 改为 UPDATE pruned_at，不再操作 CLOB；context 构建对 pruned 行替换为占位文本 |
-
-技术方案：`docs/design-p6-session-message-storage.md`（2026-04-20）
+已移至「已完成」表格。P6-7（Tool 输出裁剪）标记为 V2 预留，未实现。
 
 ---
 
@@ -93,6 +72,8 @@
 
 | 任务                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | 完成日期       |
 | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| P7 飞书 WebSocket 长连接模式（P7-1~P7-7 全部完成，P7-8 E2E 验证已完成）：ChannelPushConnector SPI（`channel/spi`）+ FeishuWsConnector（OkHttp + ping/pong + 构造器注入 FeishuClient）+ FeishuWsEventDispatcher（WS 帧解析 → FeishuEventParser → ChannelSessionRouter + service_id ACK）+ FeishuWsReconnectPolicy（指数退避 1s→64s + ±20% jitter）+ ChannelPushManager（SmartLifecycle phase=DEFAULT_PHASE+100，start 扫 DB 建连，stop 最多等 3s）+ configJson mode 字段（websocket/webhook，patch 时返回 restart warn）+ 前端 ChannelConfigDrawer mode 切换 + websocket 重启提示；fix 提交加固 ping/pong + ACK 头保留 + ChannelPushManager 重启安全；新增 FeishuWsEventDispatcherTest + ChannelPushManagerTest 回归测试；技术方案：docs/design-feishu-websocket.md | 2026-04-21 |
+| P6 消息行存储重构（P6-1~P6-6 全部完成，P6-7 V2 预留）：核心不变量消息只增不删；V18 migration 新建 `t_session_message`（seq_no/role/content_json/msg_type/metadata_json）+ SessionMessageEntity + SessionMessageRepository；SessionService 新增 getFullHistory/getContextMessages/appendMessages 三方法（LLM 三段拼接：youngGen + summary + 新消息）；CompactionService 改为 INSERT COMPACT_BOUNDARY + SUMMARY 行不删旧消息；ChatService 改用 getContextMessages + appendMessages；SessionMessageStoreBackfill 历史数据迁移；前端 useChatMessages.ts 适配 COMPACT_BOUNDARY 渲染分隔线；CheckpointModal + branch/restore API；rollout toggle 脚本；技术方案：docs/design-p6-session-message-storage.md | 2026-04-21 |
 | P2 多平台消息网关（飞书 + Telegram，可扩展至微信/Discord/Slack/iMessage）：ChannelAdapter SPI（List<ChannelAdapter> Spring 自动收集，新平台零框架改动）+ V17 migration（5 张表：t_channel_config/conversation/message_dedup/user_identity_mapping/delivery）+ 3-phase 交付事务（claimBatch SKIP LOCKED + IN_FLIGHT 首次直接入库防 30s race）+ ChannelTurnContext 多轮回复关联（per-turn platformMessageId 防 unique constraint 冲突）+ MockChannelAdapter @Profile(dev,test) CI 友好 + 飞书 SHA-256 签名验证（encryptKey，非 HMAC）+ Telegram HTML parse mode + 4096 codepoint 安全拆分 + ChannelConversationResolver 独立 @Service 解决 @Transactional self-invocation bypass（HIGH-1）+ DeliveryTransactionHelper @Service 解决相同问题 + 前端 /channels 页面（平台卡片 + 会话列表 + 投递重试面板）+ 升级路径记录于 docs/p2-channel-plan-b.md §12.3；Full Pipeline（2 planner + 2 reviewer 多轮 + judge 裁判）| 2026-04-20 |
 | P1 Skill 自动生成 + 自进化（P1-1~P1-4 全部完成）：Session → SkillEntity 自动提取（LLM 识别可复用模式，批处理模式）+ Skill 版本管理（version/parentSkillId/usageCount/successRate 字段 + 版本回滚）+ Skill A/B 测试（复用 AbEvalPipeline，held-out 场景集对比，Δ≥15pp 自动晋升）+ 进化闭环（使用信号采集 → LLM 优化 SKILL.md prompt → A/B 验证 → 自动晋升/回滚） | 2026-04-20 |
 | P4 Code Agent（Phase 1-3 全部完成）：**混合 Hook Method 体系** — ScriptMethod（bash/node 脚本，即时生效）+ CompiledMethod（Java 类，需编译+人工审批）；Phase 1 CodeSandboxSkill（隔离沙箱执行 + HOME 环境变量沙箱化 + DangerousCommandChecker）+ CodeReviewSkill + ScriptMethod CRUD + BuiltInMethodRegistry 可变化 + V10 migration；Phase 2 DynamicMethodCompiler（javax.tools 进程内编译 + FORBIDDEN_PATTERNS 安全扫描）+ GeneratedMethodClassLoader（child-first 隔离）+ CompiledMethodService（submit→compile→approve 审批流）+ V11 migration；Phase 3 CodeAgentInitializer（9-skill pack 种子模板 + existsByName 防并发）+ HookMethods.tsx 前端页面（双 Tab script/compiled + grid/table + detail drawer + approval 操作）+ typed API functions；Review 修复：Instant 时间字段、TIMESTAMPTZ、@Lob 移除、registry/DB 原子性、FORBIDDEN_PATTERNS 扩充、temp path 脱敏、错误信息安全化、ARIA 无障碍、delete 确认弹窗 | 2026-04-19 |

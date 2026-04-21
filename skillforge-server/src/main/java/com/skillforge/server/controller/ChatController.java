@@ -17,6 +17,7 @@ import com.skillforge.server.subagent.SubAgentRegistry;
 import com.skillforge.server.subagent.SubAgentRegistry.SubAgentRun;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -26,6 +27,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -424,5 +427,53 @@ public class ChatController {
             out.add(m);
         }
         return ResponseEntity.ok(out);
+    }
+
+    /**
+     * 单删 session。running 状态返回 400。
+     */
+    @DeleteMapping("/sessions/{id}")
+    public ResponseEntity<Map<String, Object>> deleteSession(@PathVariable String id,
+                                                              @RequestParam(required = false) Long userId) {
+        ResponseEntity<SessionEntity> check = requireOwnedSession(id, userId);
+        if (!check.getStatusCode().is2xxSuccessful()) {
+            return ResponseEntity.status(check.getStatusCode()).build();
+        }
+        try {
+            sessionService.deleteSession(id);
+        } catch (IllegalStateException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("deleted", 1);
+        body.put("skipped", Collections.emptyList());
+        return ResponseEntity.ok(body);
+    }
+
+    /**
+     * 批量删除。running / 非本用户的 session 自动跳过，整体不报错。
+     * Body: {"ids": ["id1", "id2"]}
+     */
+    @DeleteMapping("/sessions")
+    public ResponseEntity<Map<String, Object>> deleteSessions(@RequestParam Long userId,
+                                                               @RequestBody Map<String, Object> requestBody) {
+        Object idsObj = requestBody.get("ids");
+        if (!(idsObj instanceof List<?> rawList)) {
+            return ResponseEntity.badRequest().body(Map.of("error", "ids must be a list"));
+        }
+        if (rawList.size() > 100) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Cannot delete more than 100 sessions at once"));
+        }
+        List<String> ids = new ArrayList<>(rawList.size());
+        for (Object o : rawList) {
+            if (o != null) {
+                ids.add(o.toString());
+            }
+        }
+        SessionService.DeleteResult result = sessionService.deleteSessions(ids, userId);
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("deleted", result.deleted());
+        body.put("skipped", result.skipped());
+        return ResponseEntity.ok(body);
     }
 }

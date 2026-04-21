@@ -80,6 +80,18 @@ export const getSessions = (userId: number) => api.get(`/chat/sessions?userId=${
 export const getSessionMessages = (id: string, userId: number) =>
   api.get(`/chat/sessions/${id}/messages`, { params: { userId } });
 
+export interface DeleteSessionsSkippedEntry {
+  id: string;
+  reason: string;
+}
+export interface DeleteSessionsResponse {
+  deleted: number;
+  skipped: DeleteSessionsSkippedEntry[];
+}
+
+export const deleteSessions = (ids: string[], userId: number) =>
+  api.delete<DeleteSessionsResponse>('/chat/sessions', { data: { ids }, params: { userId } });
+
 // Chat API
 export const sendMessage = (sessionId: string, data: { message: string; userId: number }) =>
   api.post(`/chat/${sessionId}`, data);

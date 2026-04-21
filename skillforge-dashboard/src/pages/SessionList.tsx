@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { getSessions, getSessionMessages, extractList } from '../api';
+import { Modal, message } from 'antd';
+import { getSessions, getSessionMessages, extractList, deleteSessions } from '../api';
 import { useAuth } from '../contexts/AuthContext';
 import '../components/agents/agents.css';
 import '../components/sessions/sessions.css';
@@ -15,6 +16,11 @@ const CLOSE_ICON = (
 const EXT_ICON = (
   <svg width={10} height={10} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4">
     <path d="M10 3h3v3M13 3l-6 6M7 4H4a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h7a1 1 0 0 0 1-1V9" />
+  </svg>
+);
+const TRASH_ICON = (
+  <svg width={13} height={13} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M2.5 4h11M6 4V2.5h4V4M4 4l.7 9a1 1 0 0 0 1 .9h4.6a1 1 0 0 0 1-.9L12 4M6.5 7v4M9.5 7v4" />
   </svg>
 );
 
@@ -90,6 +96,31 @@ function FilterItem({ label, count, active, onClick }: { label: string; count: n
   );
 }
 
+interface SelectCheckboxProps {
+  checked: boolean;
+  indeterminate?: boolean;
+  onChange: () => void;
+  ariaLabel: string;
+}
+
+function SelectCheckbox({ checked, indeterminate, onChange, ariaLabel }: SelectCheckboxProps) {
+  const ref = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    if (ref.current) ref.current.indeterminate = Boolean(indeterminate);
+  }, [indeterminate]);
+  return (
+    <input
+      ref={ref}
+      type="checkbox"
+      className="sf-checkbox"
+      checked={checked}
+      onChange={onChange}
+      onClick={(e) => e.stopPropagation()}
+      aria-label={ariaLabel}
+    />
+  );
+}
+
 const SessionList: React.FC = () => {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -99,6 +130,8 @@ const SessionList: React.FC = () => {
   const [filterAgent, setFilterAgent] = useState<string | null>(null);
   const [open, setOpen] = useState<SessionRow | null>(null);
   const [drawerTab, setDrawerTab] = useState('turns');
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const [deleting, setDeleting] = useState(false);
 
   const SESSIONS_KEY = useMemo(() => ['sessions', userId] as const, [userId]);
 
@@ -125,6 +158,103 @@ const SessionList: React.FC = () => {
 
   const toggleStatus = (v: string) => setFilterStatus(s => s === v ? null : v);
   const toggleAgent = (v: string) => setFilterAgent(a => a === v ? null : v);
+
+  // Drop stale selections when the underlying list updates (e.g. after delete / WS refresh)
+  useEffect(() => {
+    setSelectedIds(prev => {
+      if (prev.size === 0) return prev;
+      const valid = new Set(all.map(s => s.id));
+      let changed = false;
+      const next = new Set<string>();
+      prev.forEach(id => {
+        if (valid.has(id)) next.add(id);
+        else changed = true;
+      });
+      return changed ? next : prev;
+    });
+  }, [all]);
+
+  const toggleOne = (id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const visibleIds = useMemo(() => rows.map(r => r.id), [rows]);
+  const allVisibleSelected = visibleIds.length > 0 && visibleIds.every(id => selectedIds.has(id));
+  const someVisibleSelected = !allVisibleSelected && visibleIds.some(id => selectedIds.has(id));
+
+  const toggleAll = () => {
+    setSelectedIds(prev => {
+      if (allVisibleSelected) {
+        const next = new Set(prev);
+        visibleIds.forEach(id => next.delete(id));
+        return next;
+      }
+      const next = new Set(prev);
+      visibleIds.forEach(id => next.add(id));
+      return next;
+    });
+  };
+
+  const clearSelection = () => setSelectedIds(new Set());
+
+  const performDelete = async (ids: string[]) => {
+    if (ids.length === 0) return;
+    setDeleting(true);
+    try {
+      const res = await deleteSessions(ids, userId);
+      const { deleted, skipped } = res.data;
+      if (deleted > 0) message.success(`已删除 ${deleted} 个会话`);
+      if (skipped && skipped.length > 0) {
+        message.warning(`${skipped.length} 个正在运行的会话已跳过`);
+      }
+      // 保留 skipped（running）会话的选中状态，只取消已成功删除的
+      const skippedIds = new Set((skipped ?? []).map(e => e.id));
+      setSelectedIds(prev => {
+        const next = new Set(prev);
+        ids.forEach(id => { if (!skippedIds.has(id)) next.delete(id); });
+        return next;
+      });
+      queryClient.invalidateQueries({ queryKey: SESSIONS_KEY });
+    } catch (err) {
+      console.error('[deleteSessions] failed', err);
+      message.error('删除失败，请稍后重试');
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const confirmDelete = (ids: string[], title: string, content: string) => {
+    Modal.confirm({
+      title,
+      content,
+      okText: '删除',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: () => performDelete(ids),
+    });
+  };
+
+  const handleBatchDelete = () => {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+    confirmDelete(
+      ids,
+      `删除 ${ids.length} 个会话？`,
+      '正在运行的会话会被跳过，其余会话将被永久删除。此操作不可撤销。',
+    );
+  };
+
+  const handleSingleDelete = (row: SessionRow) => {
+    confirmDelete(
+      [row.id],
+      '删除该会话？',
+      `会话「${row.title}」将被永久删除。此操作不可撤销。`,
+    );
+  };
 
   // WebSocket for live updates
   const wsRef = useRef<WebSocket | null>(null);
@@ -182,12 +312,44 @@ const SessionList: React.FC = () => {
           </div>
         </header>
 
+        {selectedIds.size > 0 && (
+          <div className="sess-batch-bar" role="toolbar" aria-label="Batch actions">
+            <span className="sess-batch-count">已选 {selectedIds.size} 个会话</span>
+            <div className="sess-batch-actions">
+              <button
+                type="button"
+                className="btn-ghost-sf"
+                onClick={clearSelection}
+                disabled={deleting}
+              >
+                取消选择
+              </button>
+              <button
+                type="button"
+                className="btn-danger-sf"
+                onClick={handleBatchDelete}
+                disabled={deleting}
+              >
+                {deleting ? '删除中…' : '批量删除'}
+              </button>
+            </div>
+          </div>
+        )}
+
         <div className="agents-body">
           {rows.length === 0 ? (
             <div className="sf-empty-state">No sessions match your filters.</div>
           ) : (
-            <div className="sess-table-sf">
+            <div className="sess-table-sf sess-table-with-select">
               <div className="sess-table-h">
+                <div className="sess-cell-check">
+                  <SelectCheckbox
+                    checked={allVisibleSelected}
+                    indeterminate={someVisibleSelected}
+                    onChange={toggleAll}
+                    ariaLabel="Select all visible sessions"
+                  />
+                </div>
                 <div>Session</div>
                 <div>Agent</div>
                 <div>Msgs</div>
@@ -195,30 +357,67 @@ const SessionList: React.FC = () => {
                 <div>Context</div>
                 <div>Cost</div>
                 <div>Last</div>
+                <div />
               </div>
-              {rows.map(s => (
-                <button key={s.id} className="sess-row" onClick={() => openDetail(s)}>
-                  <div className="sess-name-col">
-                    <span className={`sess-status ${statusCls(s.status)}`}>
-                      {s.status === 'running' && <span className="pulse-dot" />}
-                      {s.status}
-                    </span>
-                    <div className="sess-name-text">
-                      <b>{s.title}</b>
-                      <span>{s.id.slice(0, 12)}</span>
+              {rows.map(s => {
+                const checked = selectedIds.has(s.id);
+                return (
+                  <div
+                    key={s.id}
+                    className={`sess-row ${checked ? 'is-selected' : ''}`}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => openDetail(s)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        openDetail(s);
+                      }
+                    }}
+                  >
+                    <div
+                      className="sess-cell-check"
+                      onClick={(e) => { e.stopPropagation(); toggleOne(s.id); }}
+                    >
+                      <SelectCheckbox
+                        checked={checked}
+                        onChange={() => toggleOne(s.id)}
+                        ariaLabel={`Select session ${s.title}`}
+                      />
+                    </div>
+                    <div className="sess-name-col">
+                      <span className={`sess-status ${statusCls(s.status)}`}>
+                        {s.status === 'running' && <span className="pulse-dot" />}
+                        {s.status}
+                      </span>
+                      <div className="sess-name-text">
+                        <b>{s.title}</b>
+                        <span>{s.id.slice(0, 12)}</span>
+                      </div>
+                    </div>
+                    <div className="mono-sm">{s.agent}</div>
+                    <div className="mono-sm">{s.msgs}</div>
+                    <div className="mono-sm">{s.tokens.toLocaleString()}</div>
+                    <div className="ctx-bar" title={`${Math.round(s.ctx * 100)}% of 200K`}>
+                      <span style={{ width: `${s.ctx * 100}%`, background: s.ctx > 0.7 ? '#d97b5c' : 'var(--accent)' }} />
+                      <em>{Math.round(s.ctx * 100)}%</em>
+                    </div>
+                    <div className="mono-sm">${s.cost.toFixed(2)}</div>
+                    <div className="mono-sm">{fmtTime(s.updatedAt || s.createdAt)}</div>
+                    <div className="sess-row-actions">
+                      <button
+                        type="button"
+                        className="sess-row-del"
+                        title="Delete session"
+                        aria-label={`Delete session ${s.title}`}
+                        onClick={(e) => { e.stopPropagation(); handleSingleDelete(s); }}
+                      >
+                        {TRASH_ICON}
+                      </button>
                     </div>
                   </div>
-                  <div className="mono-sm">{s.agent}</div>
-                  <div className="mono-sm">{s.msgs}</div>
-                  <div className="mono-sm">{s.tokens.toLocaleString()}</div>
-                  <div className="ctx-bar" title={`${Math.round(s.ctx * 100)}% of 200K`}>
-                    <span style={{ width: `${s.ctx * 100}%`, background: s.ctx > 0.7 ? '#d97b5c' : 'var(--accent)' }} />
-                    <em>{Math.round(s.ctx * 100)}%</em>
-                  </div>
-                  <div className="mono-sm">${s.cost.toFixed(2)}</div>
-                  <div className="mono-sm">{fmtTime(s.updatedAt || s.createdAt)}</div>
-                </button>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>

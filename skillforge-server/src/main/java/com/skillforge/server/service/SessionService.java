@@ -443,6 +443,109 @@ public class SessionService {
         return sessionRepository.save(session);
     }
 
+    public record DeleteSkipped(String id, String reason) {}
+
+    public record DeleteResult(int deleted, List<DeleteSkipped> skipped) {}
+
+    /**
+     * 单删 session。悲观锁防 TOCTOU：SELECT FOR UPDATE 后检查状态再删。
+     * 依赖 V18 的 ON DELETE CASCADE 级联清理 t_session_message / t_session_compaction_checkpoint。
+     */
+    @Transactional
+    public void deleteSession(String id) {
+        SessionEntity session = sessionRepository.findByIdForUpdate(id)
+                .orElseThrow(() -> new IllegalArgumentException("Session not found: " + id));
+        if ("running".equals(session.getRuntimeStatus())) {
+            throw new IllegalStateException("Cannot delete a running session");
+        }
+        Long userId = session.getUserId();
+        // 子 session 的 parent_session_id 无 FK CASCADE，先置 null 避免悬空引用
+        List<SessionEntity> children = sessionRepository.findByParentSessionId(id);
+        for (SessionEntity child : children) {
+            child.setParentSessionId(null);
+        }
+        sessionRepository.saveAll(children);
+        sessionRepository.deleteById(id);
+        scheduleDeletedBroadcast(userId, id);
+    }
+
+    /**
+     * 批量删除 session：能删的删，running 或非本用户的跳过，永不抛错。
+     * 若 ownerUserId 非 null，只删归属该用户的 session，其它视为 not_found（避免信息泄漏）。
+     */
+    @Transactional
+    public DeleteResult deleteSessions(List<String> ids, Long ownerUserId) {
+        if (ids == null || ids.isEmpty()) {
+            return new DeleteResult(0, Collections.emptyList());
+        }
+        // 批量加载，避免 N+1
+        Map<String, SessionEntity> sessionMap = new HashMap<>();
+        for (SessionEntity s : sessionRepository.findAllById(ids)) {
+            sessionMap.put(s.getId(), s);
+        }
+
+        List<DeleteSkipped> skipped = new ArrayList<>();
+        Map<String, Long> toDelete = new LinkedHashMap<>(); // sessionId → userId
+        for (String id : ids) {
+            if (id == null || id.isBlank()) {
+                skipped.add(new DeleteSkipped(id != null ? id : "", "invalid_id"));
+                continue;
+            }
+            SessionEntity session = sessionMap.get(id);
+            if (session == null) {
+                skipped.add(new DeleteSkipped(id, "not_found"));
+                continue;
+            }
+            if (ownerUserId != null && !ownerUserId.equals(session.getUserId())) {
+                skipped.add(new DeleteSkipped(id, "not_found"));
+                continue;
+            }
+            if ("running".equals(session.getRuntimeStatus())) {
+                skipped.add(new DeleteSkipped(id, "running"));
+                continue;
+            }
+            toDelete.put(id, session.getUserId());
+        }
+        if (!toDelete.isEmpty()) {
+            // 子 session 置 null，避免悬空引用
+            for (String id : toDelete.keySet()) {
+                List<SessionEntity> children = sessionRepository.findByParentSessionId(id);
+                for (SessionEntity child : children) {
+                    child.setParentSessionId(null);
+                }
+                sessionRepository.saveAll(children);
+            }
+            sessionRepository.deleteAllById(toDelete.keySet());
+            toDelete.forEach((sessionId, userId) -> scheduleDeletedBroadcast(userId, sessionId));
+        }
+        return new DeleteResult(toDelete.size(), skipped);
+    }
+
+    /** 在事务提交后广播 session_deleted，防止事务回滚时幽灵通知。 */
+    private void scheduleDeletedBroadcast(Long userId, String sessionId) {
+        if (broadcaster == null || userId == null) {
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(
+                new org.springframework.transaction.support.TransactionSynchronization() {
+                    @Override
+                    public void afterCommit() {
+                        broadcastSessionDeleted(userId, sessionId);
+                    }
+                });
+    }
+
+    private void broadcastSessionDeleted(Long userId, String sessionId) {
+        try {
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("type", "session_deleted");
+            payload.put("sessionId", sessionId);
+            broadcaster.userEvent(userId, payload);
+        } catch (Exception e) {
+            log.warn("session_deleted broadcast failed: sessionId={} err={}", sessionId, e.getMessage());
+        }
+    }
+
     public void archiveSession(String id) {
         SessionEntity session = getSession(id);
         session.setStatus("archived");
