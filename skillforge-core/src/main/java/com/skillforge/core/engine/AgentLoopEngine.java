@@ -1,8 +1,10 @@
 package com.skillforge.core.engine;
 
+import com.skillforge.core.compact.CompactableToolRegistry;
 import com.skillforge.core.compact.ContextCompactTool;
 import com.skillforge.core.compact.ContextCompactorCallback;
 import com.skillforge.core.compact.ContextCompactorCallback.CompactCallbackResult;
+import com.skillforge.core.compact.TimeBasedColdCleanup;
 import com.skillforge.core.compact.TokenEstimator;
 import com.skillforge.core.context.ContextProvider;
 import com.skillforge.core.context.SystemPromptBuilder;
@@ -293,6 +295,23 @@ public class AgentLoopEngine {
 
             // Drain any queued user messages into the conversation
             injectQueuedMessages(loopCtx, messages);
+
+            // Time-based cold cleanup: on first iteration, if session was idle, clear old tool results
+            if (loopCtx.getLoopCount() == 0 && loopCtx.getSessionIdleSeconds() >= 0) {
+                long idleThreshold = TimeBasedColdCleanup.DEFAULT_IDLE_THRESHOLD_SECONDS;
+                Object thresholdVal = agentDef.getConfig().get("cold_cleanup_idle_seconds");
+                if (thresholdVal instanceof Number n && n.longValue() > 0) {
+                    idleThreshold = n.longValue();
+                }
+                int keepRecent = TimeBasedColdCleanup.DEFAULT_KEEP_RECENT;
+                Object keepVal = agentDef.getConfig().get("cold_cleanup_keep_recent");
+                if (keepVal instanceof Number n && n.intValue() > 0) {
+                    keepRecent = n.intValue();
+                }
+                CompactableToolRegistry coldRegistry = CompactableToolRegistry.fromAgentConfig(agentDef.getConfig());
+                TimeBasedColdCleanup.apply(messages, loopCtx.getSessionIdleSeconds(),
+                        idleThreshold, keepRecent, coldRegistry);
+            }
 
             // a. B1/B2 safety net: 基于 TokenEstimator 的估算自动触发压缩
             //

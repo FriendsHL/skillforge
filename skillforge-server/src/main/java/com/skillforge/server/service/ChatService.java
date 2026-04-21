@@ -27,6 +27,7 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -340,6 +341,13 @@ public class ChatService {
             }
             if (preCtx.getMaxLoops() != 25) {
                 log.info("maxLoops override: {} for session={}", preCtx.getMaxLoops(), sessionId);
+            }
+
+            // Compute session idle duration for time-based cold cleanup (P9-3)
+            Instant lastActivity = freshSession.getLastUserMessageAt();
+            if (lastActivity != null) {
+                long idleSeconds = java.time.Duration.between(lastActivity, Instant.now()).getSeconds();
+                preCtx.setSessionIdleSeconds(Math.max(0, idleSeconds));
             }
 
             cancellationRegistry.register(sessionId, preCtx);

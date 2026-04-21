@@ -68,6 +68,13 @@ public class LoopContext {
     private Set<String> allowedToolNames;
 
     /**
+     * How long the session was idle before this run started, in seconds.
+     * -1 = unknown / not set (cold cleanup will not trigger).
+     * Set by the server layer (ChatService) from session.lastUserMessageAt.
+     */
+    private long sessionIdleSeconds = -1;
+
+    /**
      * Set by {@code LifecycleHookLoopAdapter} when a synchronous hook returns ABORT. The engine
      * checks this flag at iteration boundaries and exits cleanly. Kept separate from
      * {@link #cancelRequested} so observability can distinguish user-cancel vs. hook-abort.
@@ -352,6 +359,14 @@ public class LoopContext {
 
     public void setMaxLlmStreamTimeoutMs(long maxLlmStreamTimeoutMs) {
         this.maxLlmStreamTimeoutMs = maxLlmStreamTimeoutMs;
+    }
+
+    public long getSessionIdleSeconds() {
+        return sessionIdleSeconds;
+    }
+
+    public void setSessionIdleSeconds(long sessionIdleSeconds) {
+        this.sessionIdleSeconds = sessionIdleSeconds;
     }
 
     public boolean isAbortedByHook() {
