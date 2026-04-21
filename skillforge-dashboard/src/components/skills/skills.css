@@ -288,7 +288,10 @@
 .sf-drawer-tabs {
   display: flex;
   gap: 4px;
-  padding: 0 20px;
+  /* left aligns with head/body (24px) when the first tab's internal 12px padding is
+     added on top of this 12px — keeps click targets generous without drifting the
+     visible text baseline. */
+  padding: 0 12px;
   border-bottom: 1px solid var(--border-1);
   background: var(--bg-surface);
   overflow-x: auto;
