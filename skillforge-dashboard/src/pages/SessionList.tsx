@@ -2,7 +2,15 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Modal, message } from 'antd';
-import { getSessions, getSessionMessages, extractList, deleteSessions } from '../api';
+import {
+  getSessions,
+  getSessionMessages,
+  extractList,
+  deleteSessions,
+  getContextBreakdown,
+  type ContextBreakdown,
+  type ContextBreakdownSegment,
+} from '../api';
 import { useAuth } from '../contexts/AuthContext';
 import { ChannelBadge } from '../components/channels/ChannelBadge';
 import '../components/agents/agents.css';
@@ -560,62 +568,14 @@ function SessionDrawer({ session, tab, setTab, onClose, onOpenChat, userId }: {
 
         <div className="sf-drawer-body">
           {tab === 'turns' && (
-            <div className="turn-list">
-              {msgsLoading ? (
-                <div className="sf-empty-state">Loading messages…</div>
-              ) : messages.length === 0 ? (
-                <div className="sf-empty-state">No messages in this session.</div>
-              ) : (
-                messages.map((m, i) => {
-                  const isUser = m.role === 'user';
-                  const hasToolResults = (m.toolResults?.length ?? 0) > 0;
-                  const isToolResultOnly = isUser && hasToolResults && !m.text.trim();
-                  if (isToolResultOnly) return null;
-                  return (
-                    <div key={i} className="turn-row">
-                      <span className="turn-n">#{i + 1}</span>
-                      <div className="turn-body">
-                        <div className="turn-head">
-                          <span className={`turn-role role-${isUser ? 'user' : 'agent'}`}>
-                            {isUser ? 'user' : 'agent'}
-                          </span>
-                        </div>
-                        {m.text && <div className="turn-text">{m.text}</div>}
-                        {(m.toolUses?.length ?? 0) > 0 && (
-                          <div className="turn-tools">
-                            {m.toolUses!.map((t, j) => (
-                              <span key={j} className="turn-tool-chip">{t.name}</span>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })
-              )}
-            </div>
+            <TurnsView messages={messages} loading={msgsLoading} agentName={session.agent} />
           )}
           {tab === 'context' && (
-            <div className="ctx-panel">
-              <div className="ctx-big">
-                <div className="ctx-ring" style={{ '--v': session.ctx } as React.CSSProperties}>
-                  <span>{Math.round(session.ctx * 100)}<em>%</em></span>
-                </div>
-                <div>
-                  <div className="ctx-lbl">Context window</div>
-                  <div className="ctx-val">{session.tokens.toLocaleString()} / 200K</div>
-                  <p className="ctx-hint">
-                    {session.ctx > 0.7 ? 'Compaction recommended before next long task.' : 'Plenty of headroom remaining.'}
-                  </p>
-                </div>
-              </div>
-              <div className="ctx-breakdown">
-                <div><span>system prompt</span><em>8.2K</em></div>
-                <div><span>agent + skills</span><em>12.4K</em></div>
-                <div><span>conversation</span><em>{session.tokens.toLocaleString()}</em></div>
-                <div><span>tool results</span><em>—</em></div>
-              </div>
-            </div>
+            <ContextView
+              sessionId={session.id}
+              userId={userId}
+              lifetimeTokens={session.tokens}
+            />
           )}
           {tab === 'raw' && (
             <pre className="sf-code-block">{JSON.stringify(session.raw, null, 2)}</pre>
@@ -623,6 +583,259 @@ function SessionDrawer({ session, tab, setTab, onClose, onOpenChat, userId }: {
         </div>
       </aside>
     </>
+  );
+}
+
+function fmtTok(n: number): string {
+  if (n >= 1000) return `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}K`;
+  return n.toLocaleString();
+}
+
+function truncate(s: string, max = 80): string {
+  if (!s) return '';
+  return s.length <= max ? s : `${s.slice(0, max)}…`;
+}
+
+interface TurnsViewProps {
+  messages: MessageItem[];
+  loading: boolean;
+  agentName: string;
+}
+
+function TurnsView({ messages, loading, agentName }: TurnsViewProps) {
+  if (loading) return <div className="sf-empty-state">Loading messages…</div>;
+  if (messages.length === 0)
+    return <div className="sf-empty-state">No messages in this session.</div>;
+
+  // Build a map tool_use_id → result for inline rendering under the calling turn.
+  const resultsByUseId = new Map<string, { content: string; isError: boolean }>();
+  for (const m of messages) {
+    if (m.toolResults) {
+      for (const r of m.toolResults) {
+        if (r.toolUseId) resultsByUseId.set(r.toolUseId, { content: r.content, isError: r.isError });
+      }
+    }
+  }
+
+  const visibleTurns = messages
+    .map((m, i) => ({ m, i }))
+    .filter(({ m }) => {
+      const hasText = m.text.trim().length > 0;
+      const hasTools = (m.toolUses?.length ?? 0) > 0;
+      const hasResults = (m.toolResults?.length ?? 0) > 0;
+      // hide user messages that are only tool_results — they get rendered under the agent call
+      if (m.role === 'user' && !hasText && hasResults) return false;
+      return hasText || hasTools;
+    });
+
+  return (
+    <div className="turns-chat">
+      {visibleTurns.map(({ m, i }) => {
+        const isUser = m.role === 'user';
+        const label = isUser ? 'You' : agentName || 'Agent';
+        return (
+          <div key={i} className={`tc-msg ${isUser ? 'tc-msg--user' : 'tc-msg--agent'}`}>
+            <div className="tc-msg-avatar" aria-hidden="true">
+              {isUser ? 'U' : 'A'}
+            </div>
+            <div className="tc-msg-body">
+              <div className="tc-msg-head">
+                <span className="tc-msg-name">{label}</span>
+                <span className="tc-msg-seq">#{i + 1}</span>
+              </div>
+              {m.text && <div className="tc-msg-text">{m.text}</div>}
+              {(m.toolUses?.length ?? 0) > 0 && (
+                <div className="tc-tool-list">
+                  {m.toolUses!.map((t, j) => {
+                    const res = t.id ? resultsByUseId.get(t.id) : undefined;
+                    return (
+                      <div
+                        key={`${t.id || t.name}-${j}`}
+                        className={`tc-tool ${res?.isError ? 'tc-tool--err' : ''}`}
+                      >
+                        <div className="tc-tool-head">
+                          <span className="tc-tool-dot" aria-hidden="true" />
+                          <span className="tc-tool-name">{t.name || 'tool'}</span>
+                          {res && (
+                            <span className="tc-tool-status">
+                              {res.isError ? 'error' : 'ok'}
+                            </span>
+                          )}
+                        </div>
+                        {res && (
+                          <div className="tc-tool-result">{truncate(res.content, 200)}</div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+interface ContextViewProps {
+  sessionId: string;
+  userId: number;
+  lifetimeTokens: number;
+}
+
+function ContextView({ sessionId, userId, lifetimeTokens }: ContextViewProps) {
+  const { data, isLoading, isError, refetch } = useQuery<ContextBreakdown>({
+    queryKey: ['context-breakdown', sessionId, userId],
+    queryFn: async () => {
+      const res = await getContextBreakdown(sessionId, userId);
+      return res.data;
+    },
+    staleTime: 15_000,
+  });
+
+  if (isLoading) return <div className="sf-empty-state">Estimating context…</div>;
+  if (isError || !data) {
+    return (
+      <div className="sf-empty-state">
+        Failed to load context breakdown.{' '}
+        <button type="button" className="btn-ghost-sf" onClick={() => refetch()}>
+          Retry
+        </button>
+      </div>
+    );
+  }
+
+  const pct = data.pct;
+  const ringPct = Math.min(100, Math.max(0, pct));
+  const hint =
+    pct >= 80
+      ? 'Compaction recommended before the next long task.'
+      : pct >= 50
+        ? 'Moderate utilisation — monitor new turns.'
+        : 'Plenty of headroom remaining.';
+
+  return (
+    <div className="ctx-panel-v2">
+      <div className="ctx-v2-big">
+        <div className="ctx-v2-ring" style={{ '--v': ringPct / 100 } as React.CSSProperties}>
+          <span>
+            {ringPct}
+            <em>%</em>
+          </span>
+        </div>
+        <div className="ctx-v2-summary">
+          <div className="ctx-v2-lbl">Current context window</div>
+          <div className="ctx-v2-val">
+            {fmtTok(data.total)}{' '}
+            <span className="ctx-v2-val-sub">/ {fmtTok(data.windowLimit)}</span>
+          </div>
+          <p className="ctx-v2-hint">{hint}</p>
+        </div>
+      </div>
+
+      <ContextSegments segments={data.segments} total={data.total} />
+
+      <div className="ctx-v2-lifetime">
+        <div className="ctx-v2-lifetime-row">
+          <span>Lifetime charged tokens</span>
+          <em>{lifetimeTokens.toLocaleString()}</em>
+        </div>
+        <p className="ctx-v2-note">
+          Estimated with a lightweight heuristic (±10%). Tokens in the current window
+          may be lower than lifetime totals because earlier turns have been compacted or
+          dropped.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function ContextSegments({
+  segments,
+  total,
+}: {
+  segments: ContextBreakdownSegment[];
+  total: number;
+}) {
+  const [open, setOpen] = useState<Set<string>>(
+    () => new Set(['system_prompt', 'messages']),
+  );
+  const toggle = (key: string) =>
+    setOpen((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+
+  const colorOf: Record<string, string> = {
+    system_prompt: '#6366f1',
+    tool_schemas: '#8b5cf6',
+    messages: '#22c55e',
+  };
+
+  return (
+    <div className="ctx-v2-segments">
+      {total > 0 && (
+        <div className="ctx-v2-bar" role="img" aria-label="Context token breakdown">
+          {segments.map((s) => {
+            const w = (s.tokens / total) * 100;
+            if (w <= 0) return null;
+            return (
+              <div
+                key={s.key}
+                title={`${s.label} · ${s.tokens.toLocaleString()} tok (${w.toFixed(1)}%)`}
+                style={{ width: `${w}%`, background: colorOf[s.key] ?? '#64748b' }}
+              />
+            );
+          })}
+        </div>
+      )}
+      <div className="ctx-v2-seg-list">
+        {segments.map((s) => {
+          const p = total > 0 ? (s.tokens / total) * 100 : 0;
+          const hasChildren = Array.isArray(s.children) && s.children.length > 0;
+          const isOpen = open.has(s.key);
+          return (
+            <div key={s.key} className="ctx-v2-seg">
+              <button
+                type="button"
+                className="ctx-v2-seg-row"
+                onClick={() => hasChildren && toggle(s.key)}
+                disabled={!hasChildren}
+                aria-expanded={hasChildren ? isOpen : undefined}
+              >
+                <span
+                  className="ctx-v2-seg-dot"
+                  style={{ background: colorOf[s.key] ?? '#64748b' }}
+                />
+                <span className="ctx-v2-seg-label">
+                  {hasChildren && <span className="ctx-v2-seg-caret">{isOpen ? '▾' : '▸'}</span>}
+                  {s.label}
+                </span>
+                <span className="ctx-v2-seg-tok">{fmtTok(s.tokens)}</span>
+                <span className="ctx-v2-seg-pct">{p.toFixed(1)}%</span>
+              </button>
+              {hasChildren && isOpen && s.children && (
+                <div className="ctx-v2-children">
+                  {s.children.map((c) => {
+                    const cp = total > 0 ? (c.tokens / total) * 100 : 0;
+                    return (
+                      <div key={c.key} className="ctx-v2-child">
+                        <span className="ctx-v2-child-label">{c.label}</span>
+                        <span className="ctx-v2-child-tok">{fmtTok(c.tokens)}</span>
+                        <span className="ctx-v2-child-pct">{cp.toFixed(1)}%</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
