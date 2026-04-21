@@ -204,6 +204,28 @@ public class MemoryService {
     @Transactional
     public String getMemoriesForPrompt(Long userId, String taskContext) {
         List<Long> injectedIds = new ArrayList<>();
+        String rendered = renderMemoriesForPrompt(userId, taskContext, injectedIds);
+        if (!injectedIds.isEmpty()) {
+            Instant now = Instant.now();
+            for (Long id : injectedIds) {
+                memoryRepository.incrementRecallCount(id, now);
+            }
+        }
+        return rendered;
+    }
+
+    /**
+     * Render the memories-for-prompt block without bumping recall counts. For read-only
+     * callers (e.g. context-breakdown estimation) — returns the same text a real
+     * prompt-injection call would produce, but with zero side effects.
+     */
+    @Transactional(readOnly = true)
+    public String previewMemoriesForPrompt(Long userId, String taskContext) {
+        return renderMemoriesForPrompt(userId, taskContext, new ArrayList<>());
+    }
+
+    private String renderMemoriesForPrompt(Long userId, String taskContext,
+                                           List<Long> injectedIds) {
         StringBuilder sb = new StringBuilder();
 
         // Always inject preferences and feedback (time-based, most relevant for behavior)
@@ -227,12 +249,6 @@ public class MemoryService {
             if (byType.containsKey("reference")) kpr.addAll(byType.get("reference"));
             kpr.sort(Comparator.comparing(MemoryEntity::getUpdatedAt).reversed());
             appendTypeMemories(sb, kpr.subList(0, Math.min(10, kpr.size())), "Knowledge & Context", 10, injectedIds);
-        }
-
-        // Update recall counts for injected memories
-        Instant now = Instant.now();
-        for (Long id : injectedIds) {
-            memoryRepository.incrementRecallCount(id, now);
         }
 
         return sb.toString();

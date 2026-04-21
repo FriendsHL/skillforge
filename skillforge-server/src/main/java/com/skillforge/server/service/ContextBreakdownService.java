@@ -19,6 +19,7 @@ import com.skillforge.server.entity.SessionEntity;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -79,10 +80,11 @@ public class ContextBreakdownService {
         this.objectMapper = objectMapper;
     }
 
-    public ContextBreakdownDto breakdown(String sessionId, Long userId) {
-        SessionEntity session = sessionService.getSession(sessionId);
+    @Transactional(readOnly = true)
+    public ContextBreakdownDto breakdown(SessionEntity session, Long userId) {
         AgentEntity agentEntity = agentService.getAgent(session.getAgentId());
         AgentDefinition agentDef = agentService.toAgentDefinition(agentEntity);
+        String sessionId = session.getId();
 
         List<Segment> systemPromptChildren = buildSystemPromptSegments(agentDef, userId, session);
         long systemPromptTotal = sumTokens(systemPromptChildren);
@@ -167,7 +169,10 @@ public class ContextBreakdownService {
         Map<String, Object> cfg = agentDef.getConfig();
         boolean skipMemory = cfg != null && Boolean.TRUE.equals(cfg.get("skip_memory"));
         if (!skipMemory) {
-            String memories = safeProviderCall(() -> memoryService.getMemoriesForPrompt(userId));
+            // previewMemoriesForPrompt renders the same block but skips the recall-count UPDATE
+            // that getMemoriesForPrompt does — the estimation request is read-only and must not
+            // pollute ranking signals.
+            String memories = safeProviderCall(() -> memoryService.previewMemoriesForPrompt(userId, null));
             if (isNotBlank(memories)) {
                 out.add(Segment.leaf("user_memories", "User memories",
                         TokenEstimator.estimateString(memories)));
@@ -470,7 +475,8 @@ public class ContextBreakdownService {
         try {
             return sup.get();
         } catch (RuntimeException ex) {
-            log.debug("context provider callback failed", ex);
+            // Log only the exception class — user memories / CLAUDE.md may surface PII in messages.
+            log.debug("context provider callback failed: {}", ex.getClass().getSimpleName());
             return null;
         }
     }

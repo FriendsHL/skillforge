@@ -502,7 +502,7 @@ function ContextTab({
       <div
         style={{
           background: 'var(--bg-elev)',
-          border: '1px solid var(--border-1)',
+          border: '1px solid var(--border-1, rgba(255,255,255,0.08))',
           borderRadius: 'var(--radius)',
           padding: 14,
         }}

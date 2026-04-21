@@ -280,7 +280,7 @@ public class ChatController {
         if (!check.getStatusCode().is2xxSuccessful()) {
             return ResponseEntity.status(check.getStatusCode()).build();
         }
-        return ResponseEntity.ok(contextBreakdownService.breakdown(id, userId));
+        return ResponseEntity.ok(contextBreakdownService.breakdown(check.getBody(), userId));
     }
 
     @GetMapping("/sessions/{id}/messages")

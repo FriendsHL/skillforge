@@ -116,7 +116,7 @@ export interface ContextBreakdownSegment {
   key: string;
   label: string;
   tokens: number;
-  children?: ContextBreakdownSegment[] | null;
+  children?: ContextBreakdownSegment[];
 }
 export interface ContextBreakdown {
   sessionId: string;
@@ -125,10 +125,48 @@ export interface ContextBreakdown {
   pct: number;
   segments: ContextBreakdownSegment[];
 }
-export const getContextBreakdown = (sessionId: string, userId: number) =>
-  api.get<ContextBreakdown>(`/chat/sessions/${sessionId}/context-breakdown`, {
-    params: { userId },
-  });
+interface RawBreakdownSegment {
+  key: string;
+  label: string;
+  tokens: number;
+  children?: RawBreakdownSegment[] | null;
+}
+interface RawBreakdown {
+  sessionId: string;
+  total: number;
+  windowLimit: number;
+  pct: number;
+  segments: RawBreakdownSegment[];
+}
+
+function normalizeSegments(segs: RawBreakdownSegment[]): ContextBreakdownSegment[] {
+  return segs.map((s) => ({
+    key: s.key,
+    label: s.label,
+    tokens: s.tokens,
+    children: s.children == null ? undefined : normalizeSegments(s.children),
+  }));
+}
+
+export const getContextBreakdown = async (
+  sessionId: string,
+  userId: number,
+): Promise<{ data: ContextBreakdown }> => {
+  const res = await api.get<RawBreakdown>(
+    `/chat/sessions/${sessionId}/context-breakdown`,
+    { params: { userId } },
+  );
+  const raw = res.data;
+  return {
+    data: {
+      sessionId: raw.sessionId,
+      total: raw.total,
+      windowLimit: raw.windowLimit,
+      pct: raw.pct,
+      segments: normalizeSegments(raw.segments),
+    },
+  };
+};
 export interface SessionCompactionCheckpoint {
   id: string;
   sessionId: string;
