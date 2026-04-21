@@ -98,8 +98,16 @@
   font: inherit;
   font-size: var(--font-size-sm);
   color: inherit;
+  /* box-sizing + width:100% ensures .sess-row and .sess-table-h share the
+     same content-area — otherwise content-box + width:100% overflows by the
+     horizontal padding (32px) and the fr tracks no longer line up. */
+  box-sizing: border-box;
   width: 100%;
   transition: background var(--transition-base);
+}
+.sess-table-h {
+  box-sizing: border-box;
+  width: 100%;
 }
 .sess-row:hover { background: var(--bg-hover); }
 .sess-row:focus-visible {
