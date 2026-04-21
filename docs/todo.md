@@ -66,12 +66,12 @@
 
 | 子任务 | 对应 Gap | 说明 |
 | --- | --- | --- |
-| P9-1 Compactable 工具白名单 | G11 | 新建 `CompactableToolRegistry`，只有 Bash/FileRead/FileWrite/Grep/Glob/WebFetch 的 result 参与压缩，Memory/SubAgent 等不动；白名单可 agent 级别覆盖 |
+| ~~P9-1 Compactable 工具白名单~~ ✅ | G11 | `CompactableToolRegistry`（默认白名单 11 个工具）+ `LightCompactStrategy` Rule 1 白名单过滤 + `CompactionService` per-agent config 支持 + 25 个测试全绿。**前端 TODO**：AgentDrawer 新增 "Advanced" tab，可视化编辑 `compactable_tools`（AgentDto 需先暴露 `config` 字段） |
 | P9-2 Per-message 聚合预算 + 归档持久化 | G1+G2 | 参考 `enforceToolResultBudget`：单条 user message 的 tool_result 总量超 200K chars 时，按大小降序归档到 `t_tool_result_archive` 表，消息替换为 2KB preview + 引用 ID；可选新增 `ToolResultRetrieveSkill` 让模型按需读取 |
-| P9-3 Time-based 冷清理 | G3 | 参考 `maybeTimeBasedMicrocompact`：session 空闲超 N 分钟后，清理旧 compactable tool result 为 `[Old tool result content cleared]`，保留最近 N 个 |
+| ~~P9-3 Time-based 冷清理~~ ✅ | G3 | `TimeBasedColdCleanup` 静态工具类 + `LoopContext.sessionIdleSeconds` + `AgentLoopEngine` 首次迭代触发 + `ChatService` 从 `lastUserMessageAt` 计算空闲时长；默认 5 分钟阈值 / 保留最近 5 个 / agent config 可覆盖 `cold_cleanup_idle_seconds` + `cold_cleanup_keep_recent`；12 个测试全绿 |
 | P9-4 Partial compact 支持 | G5 | `FullCompactStrategy` 新增 `compactUpTo`（压缩头保留尾）和 `compactFrom`（压缩尾保留头）；`ContextCompactTool` 扩展 `level=partial_head/partial_tail` |
 | P9-5 Post-compact 上下文恢复 | G6 | Full compact 后自动注入最近操作的文件摘要（5 个文件 / 50K token 预算）+ 活跃 skill 上下文 + pending tasks |
-| P9-6 Session Memory 零 LLM 压缩 | G4 | 依赖 P8。用已提取的 memory 替代 LLM 摘要（保留最近 N 条消息 minTokens 10K / minMessages 5）；不够时降级到 LLM full compact |
+| ~~P9-6 Session Memory 零 LLM 压缩~~ ✅ | G4 | `SessionMemoryCompactStrategy`（零 LLM，用 `MemoryService.previewMemoriesForPrompt` 替代 LLM 摘要）+ `CompactionService` Phase 1.5 优先尝试 memory compact，失败降级 LLM；minMessages=5 / maxTokens=40K；8 个测试全绿 |
 | P9-7 Token 估算增强 | G10 | 集成 jtokkit 本地精确计数（cl100k_base）；关键决策点可选调 API 确认；缓存已计算的消息 token 数做增量计算 |
 
 ---
