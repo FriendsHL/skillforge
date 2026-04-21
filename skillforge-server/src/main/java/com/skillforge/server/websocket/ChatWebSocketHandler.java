@@ -39,8 +39,24 @@ public class ChatWebSocketHandler extends TextWebSocketHandler implements ChatEv
     /** Per-session buffered reply text for channel-originated turns. */
     private final Map<String, ChannelTurnContext> channelContexts = new ConcurrentHashMap<>();
 
-    /** Holds the turn's platformMessageId + accumulating reply text between deltas. */
-    private record ChannelTurnContext(String platformMessageId, StringBuilder text) {}
+    /**
+     * Tracks a channel turn across potentially multiple LLM streams.
+     * {@code currentText} accumulates deltas for the in-progress stream.
+     * {@code finalText} snapshots the last completed stream so that
+     * {@code sessionStatus("idle")} can publish the full final answer.
+     * {@code ackReactionId} holds the typing-indicator reaction ID to remove before replying.
+     */
+    private static final class ChannelTurnContext {
+        final String platformMessageId;
+        final String ackReactionId; // nullable
+        final StringBuilder currentText = new StringBuilder();
+        volatile String finalText = null;
+
+        ChannelTurnContext(String platformMessageId, String ackReactionId) {
+            this.platformMessageId = platformMessageId;
+            this.ackReactionId = ackReactionId;
+        }
+    }
 
     // findAndRegisterModules() picks up jackson-datatype-jsr310 (already on classpath via
     // spring-boot-starter-web) so LocalDateTime / Instant in payloads serialize cleanly.
@@ -69,8 +85,8 @@ public class ChatWebSocketHandler extends TextWebSocketHandler implements ChatEv
      * {@link #assistantStreamEnd} fires we can emit a {@link ChannelSessionOutputEvent}
      * carrying the accumulated reply text back to the message gateway.
      */
-    public void registerChannelTurn(String sessionId, String platformMessageId) {
-        channelContexts.put(sessionId, new ChannelTurnContext(platformMessageId, new StringBuilder()));
+    public void registerChannelTurn(String sessionId, String platformMessageId, String ackReactionId) {
+        channelContexts.put(sessionId, new ChannelTurnContext(platformMessageId, ackReactionId));
     }
 
     @Override
@@ -146,6 +162,17 @@ public class ChatWebSocketHandler extends TextWebSocketHandler implements ChatEv
         payload.put("step", step);
         payload.put("error", error);
         broadcast(sessionId, payload);
+
+        if ("idle".equals(status) || "error".equals(status)) {
+            ChannelTurnContext ctx = channelContexts.remove(sessionId);
+            if (ctx != null && "idle".equals(status)) {
+                String replyText = ctx.finalText;
+                if (replyText != null && !replyText.isBlank()) {
+                    eventPublisher.publishEvent(new ChannelSessionOutputEvent(
+                            sessionId, ctx.platformMessageId, ctx.ackReactionId, replyText));
+                }
+            }
+        }
     }
 
     @Override
@@ -212,8 +239,8 @@ public class ChatWebSocketHandler extends TextWebSocketHandler implements ChatEv
 
         ChannelTurnContext ctx = channelContexts.get(sessionId);
         if (ctx != null && text != null) {
-            synchronized (ctx.text()) {
-                ctx.text().append(text);
+            synchronized (ctx.currentText) {
+                ctx.currentText.append(text);
             }
         }
     }
@@ -225,15 +252,14 @@ public class ChatWebSocketHandler extends TextWebSocketHandler implements ChatEv
         payload.put("sessionId", sessionId);
         broadcast(sessionId, payload);
 
-        ChannelTurnContext ctx = channelContexts.remove(sessionId);
+        // Snapshot the completed stream's text and reset the accumulator.
+        // The channel event is emitted from sessionStatus("idle") so that the reply
+        // contains the full final answer, not just an intermediate planning step.
+        ChannelTurnContext ctx = channelContexts.get(sessionId);
         if (ctx != null) {
-            String replyText;
-            synchronized (ctx.text()) {
-                replyText = ctx.text().toString();
-            }
-            if (!replyText.isBlank()) {
-                eventPublisher.publishEvent(new ChannelSessionOutputEvent(
-                        sessionId, ctx.platformMessageId(), replyText));
+            synchronized (ctx.currentText) {
+                ctx.finalText = ctx.currentText.toString();
+                ctx.currentText.setLength(0);
             }
         }
     }

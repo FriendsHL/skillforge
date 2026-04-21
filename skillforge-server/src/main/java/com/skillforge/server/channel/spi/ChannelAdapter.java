@@ -43,6 +43,19 @@ public interface ChannelAdapter {
      */
     DeliveryResult deliver(ChannelReply reply, ChannelConfigDecrypted config);
 
+    /**
+     * Add a visual acknowledgement (e.g. Typing reaction) to the user's message.
+     * Returns a non-null ack ID that can be passed to {@link #removeAck} when the reply is ready.
+     * Fire-and-forget — failure is non-fatal, null means unsupported or failed.
+     */
+    default String sendAck(ChannelMessage msg, ChannelConfigDecrypted config) { return null; }
+
+    /**
+     * Remove the acknowledgement added by {@link #sendAck} (e.g. remove Typing reaction).
+     * Called just before delivering the final reply. Fire-and-forget — failure is non-fatal.
+     */
+    default void removeAck(String platformMessageId, String ackId, ChannelConfigDecrypted config) {}
+
     /** Delivery HTTP timeout (ms). Default 10s. */
     default long deliveryTimeoutMs() { return 10_000L; }
 

@@ -9,7 +9,6 @@ import com.skillforge.server.repository.UserIdentityMappingRepository;
 import com.skillforge.server.service.SessionService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -46,7 +45,10 @@ public class ChannelConversationResolver {
 
     /**
      * Find or create an active (platform, conversationId) → sessionId mapping.
-     * Uses PESSIMISTIC_WRITE; on rare race the unique index catches it and we retry once.
+     * Uses PESSIMISTIC_WRITE to serialize concurrent "none exists → create" races.
+     * On unique constraint violation, the exception propagates so the caller can
+     * retry in a fresh transaction (retrying in the same poisoned Hibernate session
+     * would throw HibernateAssertionFailure).
      */
     @Transactional
     public SessionRouteResult resolveSession(
@@ -66,38 +68,22 @@ public class ChannelConversationResolver {
                 Long fallbackUserId = mappedUserId != null ? mappedUserId : SessionService.DEFAULT_CHANNEL_USER_ID;
                 return new SessionRouteResult(sessionId, false, fallbackUserId);
             }
-            existing.get().setClosedAt(Instant.now());
-            conversationRepo.save(existing.get());
+            conversationRepo.closeById(existing.get().getId(), Instant.now());
         }
 
-        try {
-            String newSessionId = sessionService.createChannelSession(
-                    config.defaultAgentId(), buildSessionTitle(msg), mappedUserId);
-            ChannelConversationEntity newConv = new ChannelConversationEntity();
-            newConv.setPlatform(msg.platform());
-            newConv.setConversationId(msg.conversationId());
-            newConv.setSessionId(newSessionId);
-            newConv.setChannelConfigId(config.id());
-            conversationRepo.save(newConv);
-            Long sessionUserId = sessionService.getSession(newSessionId).getUserId();
-            Long effectiveUserId = sessionUserId != null
-                    ? sessionUserId
-                    : (mappedUserId != null ? mappedUserId : SessionService.DEFAULT_CHANNEL_USER_ID);
-            return new SessionRouteResult(newSessionId, true, effectiveUserId);
-        } catch (DataIntegrityViolationException race) {
-            // uq_ch_conv_active caught a concurrent creator — fall back to the
-            // winning row. Won't recurse because it's now visible.
-            log.warn("Concurrent conversation creation hit unique constraint, retrying lookup");
-            ChannelConversationEntity winner = conversationRepo
-                    .findActiveForUpdate(msg.platform(), msg.conversationId())
-                    .orElseThrow(() -> race);
-            String winnerSessionId = winner.getSessionId();
-            Long sessionUserId = sessionService.getSession(winnerSessionId).getUserId();
-            Long effectiveUserId = sessionUserId != null
-                    ? sessionUserId
-                    : (mappedUserId != null ? mappedUserId : SessionService.DEFAULT_CHANNEL_USER_ID);
-            return new SessionRouteResult(winnerSessionId, false, effectiveUserId);
-        }
+        String newSessionId = sessionService.createChannelSession(
+                config.defaultAgentId(), buildSessionTitle(msg), mappedUserId);
+        ChannelConversationEntity newConv = new ChannelConversationEntity();
+        newConv.setPlatform(msg.platform());
+        newConv.setConversationId(msg.conversationId());
+        newConv.setSessionId(newSessionId);
+        newConv.setChannelConfigId(config.id());
+        conversationRepo.save(newConv);
+        Long sessionUserId = sessionService.getSession(newSessionId).getUserId();
+        Long effectiveUserId = sessionUserId != null
+                ? sessionUserId
+                : (mappedUserId != null ? mappedUserId : SessionService.DEFAULT_CHANNEL_USER_ID);
+        return new SessionRouteResult(newSessionId, true, effectiveUserId);
     }
 
     /** Map platform user → SkillForge user; unknown = first-contact, null means anonymous. */

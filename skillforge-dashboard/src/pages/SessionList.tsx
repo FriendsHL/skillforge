@@ -45,7 +45,7 @@ function normalizeSession(raw: Record<string, unknown>): SessionRow {
   const title = (raw.title as string) || `Session ${id.slice(0, 8)}`;
   const agent = (raw.agentName as string) || String(raw.agentId || 'unknown');
   const msgs = Number(raw.messageCount || 0);
-  const tokens = Number(raw.totalTokens || 0);
+  const tokens = Number(raw.totalInputTokens || 0) + Number(raw.totalOutputTokens || 0);
   const ctx = Math.min(tokens / 200000, 1);
   const cost = tokens * 0.000003;
   const turns = Math.ceil(msgs / 2);

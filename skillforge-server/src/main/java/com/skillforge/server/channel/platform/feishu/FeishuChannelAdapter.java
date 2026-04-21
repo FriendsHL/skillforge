@@ -89,6 +89,16 @@ public class FeishuChannelAdapter implements ChannelAdapter, ChannelPushConnecto
     }
 
     @Override
+    public String sendAck(ChannelMessage msg, ChannelConfigDecrypted config) {
+        return client.addReaction(msg.platformMessageId(), "Typing", config);
+    }
+
+    @Override
+    public void removeAck(String platformMessageId, String ackId, ChannelConfigDecrypted config) {
+        client.removeReaction(platformMessageId, ackId, config);
+    }
+
+    @Override
     public void start(ChannelConfigDecrypted config) {
         wsConnector.start(config);
     }

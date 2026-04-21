@@ -34,6 +34,8 @@ public class FeishuClient {
             "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal";
     private static final String SEND_MESSAGE_URL =
             "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id";
+    private static final String REACTION_URL_TEMPLATE =
+            "https://open.feishu.cn/open-apis/im/v1/messages/%s/reactions";
     private static final String WS_ENDPOINT_URL =
             "https://open.feishu.cn/callback/ws/endpoint";
 
@@ -140,6 +142,79 @@ public class FeishuClient {
                         + " msg=" + json.path("msg").asText(""));
             }
             return json.path("tenant_access_token").asText();
+        }
+    }
+
+    /**
+     * Add a reaction emoji to a message. Returns the reaction_id on success, null on failure.
+     * Fire-and-forget style — does not throw.
+     */
+    public String addReaction(String messageId, String emojiType, ChannelConfigDecrypted config) {
+        String token;
+        try {
+            token = getAccessToken(config);
+        } catch (RuntimeException e) {
+            log.warn("Feishu addReaction skipped — token error: {}", e.getMessage());
+            return null;
+        }
+
+        String payload;
+        try {
+            payload = objectMapper.writeValueAsString(
+                    Map.of("reaction_type", Map.of("emoji_type", emojiType)));
+        } catch (Exception e) {
+            log.warn("Feishu addReaction skipped — serialize error: {}", e.getMessage());
+            return null;
+        }
+
+        Request req = new Request.Builder()
+                .url(String.format(REACTION_URL_TEMPLATE, messageId))
+                .header("Authorization", "Bearer " + token)
+                .post(RequestBody.create(payload, JSON))
+                .build();
+
+        try (Response resp = http.newCall(req).execute()) {
+            ResponseBody rb = resp.body();
+            String body = rb != null ? rb.string() : "";
+            if (!resp.isSuccessful()) {
+                log.debug("Feishu addReaction non-2xx {}: {}", resp.code(), body);
+                return null;
+            }
+            JsonNode json = objectMapper.readTree(body);
+            if (json.path("code").asInt(-1) != 0) {
+                log.debug("Feishu addReaction api error {}: {}", json.path("code").asInt(), json.path("msg").asText());
+                return null;
+            }
+            return json.path("data").path("reaction_id").asText(null);
+        } catch (java.io.IOException e) {
+            log.debug("Feishu addReaction failed: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /** Remove a previously added reaction. Fire-and-forget — does not throw. */
+    public void removeReaction(String messageId, String reactionId, ChannelConfigDecrypted config) {
+        String token;
+        try {
+            token = getAccessToken(config);
+        } catch (RuntimeException e) {
+            log.debug("Feishu removeReaction skipped — token error: {}", e.getMessage());
+            return;
+        }
+
+        String url = String.format(REACTION_URL_TEMPLATE, messageId) + "/" + reactionId;
+        Request req = new Request.Builder()
+                .url(url)
+                .header("Authorization", "Bearer " + token)
+                .delete()
+                .build();
+
+        try (Response resp = http.newCall(req).execute()) {
+            if (!resp.isSuccessful()) {
+                log.debug("Feishu removeReaction non-2xx: {}", resp.code());
+            }
+        } catch (java.io.IOException e) {
+            log.debug("Feishu removeReaction failed: {}", e.getMessage());
         }
     }
 

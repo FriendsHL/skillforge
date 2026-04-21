@@ -1,17 +1,13 @@
 # SkillForge 已知 Bug / 待修问题
 
-> 更新于：2026-04-20
+> 更新于：2026-04-21
 > 格式：严重度 = P0（阻断）/ P1（影响体验）/ P2（低优）
 
 ---
 
 ## 开放中
 
-| #   | 标题 | 严重度 | 发现日期 | 备注 |
-| --- | --- | --- | --- | --- |
-| 1 | Session 列表中的 tokens、context、cost 等字段没有数据 | P1 | 2026-04-20 | 需排查列表聚合接口与前端字段映射是否回归 |
-| 2 | Evals 页面看不到评测数据集，失败原因与待优化点信息缺失 | P0 | 2026-04-20 | 当前无法完整定位评测质量与失败原因 |
-| 3 | Evals 测试集中缺少“将 session 信息加入”入口按钮 | P1 | 2026-04-20 | 需确认按钮逻辑是否被移除或受开关/权限影响 |
+（当前无开放 bug）
 
 ---
 
@@ -31,3 +27,9 @@
 | 10  | Evals 运行中选择 Agent 的下拉框与设计稿不一致               | 2026-04-20 | `Eval.tsx` 将原生 `<select>` 替换为 Ant Design `<Select>`，跟随主题样式 |
 | 11  | Trace 详情中各工具时间条纵向间距偏近                       | 2026-04-20 | `traces.css` `.tr-span-row` padding 从 `6px 12px` 改为 `10px 12px` |
 | 12  | Trace 详情整体耗时文案被截断，仅能看见首段数字                  | 2026-04-20 | `traces.css` 给 `.tr-stat-v` 加 `white-space: nowrap`，`.tr-stats-bar` 加 `flex-wrap: wrap`，`.tr-stat` 加 `min-width: 0` |
+| 13  | Session 列表中的 tokens、context、cost 等字段没有数据 | 2026-04-21 | `SessionList.tsx` `normalizeSession` 将 `raw.totalTokens` 改为 `totalInputTokens + totalOutputTokens`，对齐后端实际字段名 |
+| 14  | Evals 页面看不到评测数据集，失败原因与待优化点信息缺失 | 2026-04-21 | `Eval.tsx` EvalDrawer Cases 标签补充：run 级 errorMessage alert、scenario 级 errorMessage/attribution 列、improvementSuggestions 区块 |
+| 15  | Evals 测试集中缺少"将 session 信息加入"入口按钮 | 2026-04-21 | `Eval.tsx` EvalDrawer 新增 Scenarios 标签，集成已有 `ScenarioDraftPanel` 组件（含"Extract from Sessions"入口） |
+| 16  | 飞书聊天中仅展示"要做的事情"一句，未返回最终结果 | 2026-04-21 | `ChatWebSocketHandler.java` 将 channel 回复从 `assistantStreamEnd` 延迟到 `sessionStatus("idle")`；`ChannelTurnContext` 改为在每次 streamEnd 时快照 `finalText`，idle 时发送最后一次 LLM stream 的完整文本 |
+| 17  | 飞书消息路由崩溃（HibernateAssertionFailure）导致用户发消息永远无回复 | 2026-04-21 | 根因：Hibernate ActionQueue 先 INSERT 后 UPDATE，partial unique index 未释放引发约束冲突，catch 块在同一中毒 session 里重试触发 HibernateAssertionFailure；改用 `@Modifying @Query closeById` 直接执行 JPQL UPDATE，绕过 ActionQueue 顺序；`ChannelSessionRouter` 在非事务上下文里重试 resolveSession |
+| 18  | 飞书收到消息无任何即时反馈 | 2026-04-21 | 收到消息后调用飞书 reaction API 加 Typing 表情（`sendAck`），回复发出前自动移除（`removeAck`）；通过 `ChannelSessionOutputEvent.ackReactionId` 跨异步边界传递 reaction ID |

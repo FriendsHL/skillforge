@@ -1,11 +1,15 @@
 package com.skillforge.server.channel.router;
 
+import com.skillforge.server.channel.registry.ChannelAdapterRegistry;
 import com.skillforge.server.channel.spi.ChannelConfigDecrypted;
 import com.skillforge.server.channel.spi.ChannelMessage;
 import com.skillforge.server.service.ChatService;
 import com.skillforge.server.websocket.ChatWebSocketHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
@@ -29,14 +33,18 @@ public class ChannelSessionRouter {
     private final ChannelConversationResolver resolver;
     private final ChatService chatService;
     private final ChatWebSocketHandler chatWebSocketHandler;
+    private final ChannelAdapterRegistry adapterRegistry;
 
+    @Autowired
     public ChannelSessionRouter(
             ChannelConversationResolver resolver,
             ChatService chatService,
-            ChatWebSocketHandler chatWebSocketHandler) {
+            ChatWebSocketHandler chatWebSocketHandler,
+            @Lazy ChannelAdapterRegistry adapterRegistry) {
         this.resolver = resolver;
         this.chatService = chatService;
         this.chatWebSocketHandler = chatWebSocketHandler;
+        this.adapterRegistry = adapterRegistry;
     }
 
     @Async("channelRouterExecutor")
@@ -51,12 +59,28 @@ public class ChannelSessionRouter {
 
     private void routeInternal(ChannelMessage msg, ChannelConfigDecrypted config) {
         Long mappedUserId = resolver.resolveUser(msg);
-        SessionRouteResult route = resolver.resolveSession(msg, config, mappedUserId);
+        // resolveSession is @Transactional; retrying here (outside that transaction)
+        // gives a fresh Hibernate session — required because a poisoned session from a
+        // DataIntegrityViolationException cannot be reused within the same transaction.
+        SessionRouteResult route;
+        try {
+            route = resolver.resolveSession(msg, config, mappedUserId);
+        } catch (DataIntegrityViolationException race) {
+            log.warn("Concurrent conversation creation hit unique constraint, retrying [{}] conv [{}]",
+                    msg.platform(), msg.conversationId());
+            route = resolver.resolveSession(msg, config, mappedUserId);
+        }
+
+        // Add typing-indicator reaction; reactionId is carried through to the listener
+        // which removes it just before delivering the final reply.
+        String ackReactionId = adapterRegistry.get(msg.platform())
+                .map(adapter -> adapter.sendAck(msg, config))
+                .orElse(null);
 
         // Register per-turn context before triggering the loop, so
-        // assistantStreamEnd finds the correct platformMessageId.
+        // sessionStatus("idle") finds the correct platformMessageId and ackReactionId.
         chatWebSocketHandler.registerChannelTurn(
-                route.sessionId(), msg.platformMessageId());
+                route.sessionId(), msg.platformMessageId(), ackReactionId);
 
         String text = msg.text() != null ? msg.text() : "";
         chatService.chatAsync(route.sessionId(), text, route.skillforgeUserId());

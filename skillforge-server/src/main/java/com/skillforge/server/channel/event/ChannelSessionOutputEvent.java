@@ -8,5 +8,6 @@ package com.skillforge.server.channel.event;
 public record ChannelSessionOutputEvent(
         String sessionId,
         String platformMessageId,
+        String ackReactionId,   // nullable; reaction to remove before delivering reply
         String replyText
 ) {}

@@ -60,6 +60,11 @@ public class ChannelReplyEventListener {
             return;
         }
 
+        // Remove the typing-indicator reaction before sending the reply.
+        if (event.ackReactionId() != null) {
+            adapter.get().removeAck(event.platformMessageId(), event.ackReactionId(), config.get());
+        }
+
         ChannelReply reply = new ChannelReply(
                 event.platformMessageId(),
                 platform,

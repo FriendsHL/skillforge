@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Select } from 'antd';
 import { getEvalRuns, getEvalRun, triggerEvalRun, getAgents, extractList } from '../api';
 import { useAuth } from '../contexts/AuthContext';
+import ScenarioDraftPanel from '../components/ScenarioDraftPanel';
 import '../components/agents/agents.css';
 import '../components/evals/evals.css';
 import '../components/skills/skills.css';
@@ -35,8 +36,13 @@ interface EvalRow {
 
 interface ScenarioResult {
   scenarioId: string;
+  name?: string;
   status: string;
   compositeScore?: number;
+  errorMessage?: string;
+  attribution?: string;
+  judgeRationale?: string;
+  agentFinalOutput?: string;
 }
 
 function normalizeEval(raw: Record<string, unknown>, agents: Record<string, unknown>[]): EvalRow {
@@ -280,6 +286,7 @@ function EvalDrawer({ evalRow, tab, setTab, onClose, onRun }: {
   const tabs = [
     { id: 'cases', label: 'Cases' },
     { id: 'history', label: 'History' },
+    { id: 'scenarios', label: 'Scenarios' },
     { id: 'config', label: 'Config' },
   ];
 
@@ -321,6 +328,11 @@ function EvalDrawer({ evalRow, tab, setTab, onClose, onRun }: {
         <div className="sf-drawer-body">
           {tab === 'cases' && (
             <div>
+              {(runDetail as Record<string, unknown>)?.errorMessage && (
+                <div style={{ marginBottom: 12, padding: '10px 14px', background: 'var(--error-bg, #2a1010)', border: '1px solid var(--error-border, #5c2020)', borderRadius: 6, fontSize: 12, color: 'var(--error-fg, #d97b5c)', fontFamily: 'var(--font-mono)' }}>
+                  {String((runDetail as Record<string, unknown>).errorMessage)}
+                </div>
+              )}
               <div className="sf-section-h" style={{ marginBottom: 10 }}>
                 {scenarios.length} scenarios
               </div>
@@ -334,12 +346,15 @@ function EvalDrawer({ evalRow, tab, setTab, onClose, onRun }: {
                         <th style={{ textAlign: 'left', padding: '8px 12px', fontFamily: 'var(--font-mono)', fontSize: 10, fontWeight: 600, color: 'var(--fg-4)', letterSpacing: '0.08em', textTransform: 'uppercase', borderBottom: '1px solid var(--border-1)' }}>Scenario</th>
                         <th style={{ textAlign: 'left', padding: '8px 12px', fontFamily: 'var(--font-mono)', fontSize: 10, fontWeight: 600, color: 'var(--fg-4)', letterSpacing: '0.08em', textTransform: 'uppercase', borderBottom: '1px solid var(--border-1)' }}>Status</th>
                         <th style={{ textAlign: 'right', padding: '8px 12px', fontFamily: 'var(--font-mono)', fontSize: 10, fontWeight: 600, color: 'var(--fg-4)', letterSpacing: '0.08em', textTransform: 'uppercase', borderBottom: '1px solid var(--border-1)' }}>Score</th>
+                        <th style={{ textAlign: 'left', padding: '8px 12px', fontFamily: 'var(--font-mono)', fontSize: 10, fontWeight: 600, color: 'var(--fg-4)', letterSpacing: '0.08em', textTransform: 'uppercase', borderBottom: '1px solid var(--border-1)' }}>Details</th>
                       </tr>
                     </thead>
                     <tbody>
                       {scenarios.map(s => (
                         <tr key={s.scenarioId} style={{ borderBottom: '1px solid var(--border-1)' }}>
-                          <td style={{ padding: '10px 12px', fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--fg-2)' }}>{s.scenarioId}</td>
+                          <td style={{ padding: '10px 12px', fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--fg-2)' }}>
+                            {s.name || s.scenarioId}
+                          </td>
                           <td style={{ padding: '10px 12px' }}>
                             <span className={`sess-status s-${s.status === 'PASS' ? 'idle' : s.status === 'TIMEOUT' ? 'waiting' : 'error'}`}>
                               {s.status}
@@ -348,10 +363,28 @@ function EvalDrawer({ evalRow, tab, setTab, onClose, onRun }: {
                           <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 500, color: scoreColor((s.compositeScore ?? 0) / 100) }}>
                             {s.compositeScore != null ? `${Math.round(s.compositeScore)}%` : '—'}
                           </td>
+                          <td style={{ padding: '10px 12px', fontSize: 11, color: 'var(--fg-4)', fontFamily: 'var(--font-mono)', maxWidth: 240 }}>
+                            {s.errorMessage ? (
+                              <span style={{ color: 'var(--error-fg, #d97b5c)' }}>{s.errorMessage}</span>
+                            ) : s.attribution && s.attribution !== 'NONE' ? (
+                              <span style={{ opacity: 0.7 }}>{s.attribution.toLowerCase().replace(/_/g, ' ')}</span>
+                            ) : null}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
+                </div>
+              )}
+              {Array.isArray((runDetail as Record<string, unknown>)?.improvementSuggestions) &&
+                ((runDetail as Record<string, unknown>).improvementSuggestions as unknown[]).length > 0 && (
+                <div style={{ marginTop: 20 }}>
+                  <div className="sf-section-h" style={{ marginBottom: 8 }}>Improvement Suggestions</div>
+                  <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, color: 'var(--fg-3)', lineHeight: 1.7 }}>
+                    {((runDetail as Record<string, unknown>).improvementSuggestions as (string | Record<string, unknown>)[]).map((s, i) => (
+                      <li key={i}>{typeof s === 'object' && s !== null ? String(s.suggestion ?? s.category ?? JSON.stringify(s)) : s}</li>
+                    ))}
+                  </ul>
                 </div>
               )}
             </div>
@@ -363,6 +396,9 @@ function EvalDrawer({ evalRow, tab, setTab, onClose, onRun }: {
                 Historical runs will appear here as more evals are executed.
               </div>
             </div>
+          )}
+          {tab === 'scenarios' && (
+            <ScenarioDraftPanel agentId={evalRow.agentId} />
           )}
           {tab === 'config' && (
             <pre className="sf-code-block">{JSON.stringify(evalRow.raw, null, 2)}</pre>
