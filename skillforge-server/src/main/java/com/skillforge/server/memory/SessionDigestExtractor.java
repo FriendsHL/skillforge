@@ -1,6 +1,7 @@
 package com.skillforge.server.memory;
 
 import com.skillforge.core.model.Message;
+import com.skillforge.server.config.MemoryProperties;
 import com.skillforge.server.entity.ActivityLogEntity;
 import com.skillforge.server.entity.SessionEntity;
 import com.skillforge.server.repository.SessionRepository;
@@ -29,17 +30,23 @@ public class SessionDigestExtractor {
     private final ActivityLogService activityLogService;
     private final MemoryService memoryService;
     private final MemoryConsolidator memoryConsolidator;
+    private final MemoryProperties memoryProperties;
+    private final LlmMemoryExtractor llmMemoryExtractor;
 
     public SessionDigestExtractor(SessionRepository sessionRepository,
                                   SessionService sessionService,
                                   ActivityLogService activityLogService,
                                   MemoryService memoryService,
-                                  MemoryConsolidator memoryConsolidator) {
+                                  MemoryConsolidator memoryConsolidator,
+                                  MemoryProperties memoryProperties,
+                                  LlmMemoryExtractor llmMemoryExtractor) {
         this.sessionRepository = sessionRepository;
         this.sessionService = sessionService;
         this.activityLogService = activityLogService;
         this.memoryService = memoryService;
         this.memoryConsolidator = memoryConsolidator;
+        this.memoryProperties = memoryProperties;
+        this.llmMemoryExtractor = llmMemoryExtractor;
     }
 
     /**
@@ -108,7 +115,29 @@ public class SessionDigestExtractor {
             return;
         }
 
-        // 2. Build activity summary
+        // 2. Get conversation messages (needed by both modes)
+        List<Message> messages = sessionService.getSessionMessages(session.getId());
+
+        // 3. Delegate based on extraction mode
+        if (memoryProperties.isLlmMode()) {
+            try {
+                int count = llmMemoryExtractor.extract(session, activities, messages);
+                log.info("LLM extraction produced {} memories for session={}",
+                        count, session.getId());
+                return;
+            } catch (Exception e) {
+                log.warn("LLM extraction failed for session={}, falling back to rule-based: {}",
+                        session.getId(), e.getMessage());
+            }
+        }
+
+        // Rule-based extraction (Phase 2 — default or fallback)
+        extractRuleBased(session, activities, messages);
+    }
+
+    private void extractRuleBased(SessionEntity session,
+                                   List<ActivityLogEntity> activities,
+                                   List<Message> messages) {
         StringBuilder summary = new StringBuilder();
         summary.append("Session ID: ").append(session.getId()).append("\n");
         summary.append("Title: ").append(session.getTitle()).append("\n");
@@ -117,7 +146,7 @@ public class SessionDigestExtractor {
         for (ActivityLogEntity a : activities) {
             summary.append("- [").append(a.getToolName()).append("] ");
             if (a.getInputSummary() != null) summary.append(a.getInputSummary());
-            summary.append(" → ").append(a.isSuccess() ? "OK" : "FAIL");
+            summary.append(" -> ").append(a.isSuccess() ? "OK" : "FAIL");
             if (a.getOutputSummary() != null && !a.getOutputSummary().isEmpty()) {
                 summary.append(" | ").append(a.getOutputSummary(), 0,
                         Math.min(100, a.getOutputSummary().length()));
@@ -125,8 +154,6 @@ public class SessionDigestExtractor {
             summary.append("\n");
         }
 
-        // 3. Get conversation highlights (last 10 messages with text)
-        List<Message> messages = sessionService.getSessionMessages(session.getId());
         summary.append("\n## Conversation Highlights\n\n");
         int msgCount = 0;
         for (int i = messages.size() - 1; i >= 0 && msgCount < 10; i--) {
@@ -139,7 +166,6 @@ public class SessionDigestExtractor {
             }
         }
 
-        // 4. Store as a knowledge memory (Phase 2 simplified — Phase 3 will use LLM extraction)
         String title = "Session digest: " + (session.getTitle() != null
                 ? session.getTitle()
                 : session.getId().substring(0, Math.min(8, session.getId().length())));

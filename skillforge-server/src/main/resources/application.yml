@@ -67,6 +67,12 @@ skillforge:
         # max-retries: 1              # retries on SocketTimeoutException only,
         #                             # does NOT apply to streaming (chatStream)
 
+  # Memory extraction configuration
+  memory:
+    extraction-mode: rule          # "rule" (Phase 2 rules) or "llm" (Phase 3 LLM extraction)
+    # extraction-provider:         # null = use default LLM provider
+    # max-conversation-chars: 8000 # truncation limit for LLM input
+
   # Embedding provider for memory vector search (disabled by default for dev)
   embedding:
     enabled: false

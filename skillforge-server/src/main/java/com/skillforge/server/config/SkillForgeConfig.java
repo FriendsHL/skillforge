@@ -76,7 +76,8 @@ import java.util.concurrent.TimeUnit;
         LlmProperties.class,
         ClawHubProperties.class,
         LifecycleHooksScriptProperties.class,
-        SessionMessageStoreProperties.class
+        SessionMessageStoreProperties.class,
+        MemoryProperties.class
 })
 public class SkillForgeConfig {
 
