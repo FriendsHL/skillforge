@@ -111,6 +111,24 @@ export const compactSession = (sessionId: string, level: 'full', userId: number,
   api.post(`/chat/sessions/${sessionId}/compact`, { level, reason }, { params: { userId } });
 export const getCompactions = (sessionId: string, userId: number) =>
   api.get(`/chat/sessions/${sessionId}/compactions`, { params: { userId } });
+
+export interface ContextBreakdownSegment {
+  key: string;
+  label: string;
+  tokens: number;
+  children?: ContextBreakdownSegment[] | null;
+}
+export interface ContextBreakdown {
+  sessionId: string;
+  total: number;
+  windowLimit: number;
+  pct: number;
+  segments: ContextBreakdownSegment[];
+}
+export const getContextBreakdown = (sessionId: string, userId: number) =>
+  api.get<ContextBreakdown>(`/chat/sessions/${sessionId}/context-breakdown`, {
+    params: { userId },
+  });
 export interface SessionCompactionCheckpoint {
   id: string;
   sessionId: string;

@@ -6,6 +6,7 @@ import com.skillforge.server.dto.ChatRequest;
 import com.skillforge.server.dto.SessionCompactionCheckpointDto;
 import com.skillforge.server.dto.CreateSessionRequest;
 import com.skillforge.server.dto.SessionMessageDto;
+import com.skillforge.server.dto.ContextBreakdownDto;
 import com.skillforge.server.entity.ChannelConversationEntity;
 import com.skillforge.server.entity.CompactionEventEntity;
 import com.skillforge.server.entity.SessionEntity;
@@ -13,6 +14,7 @@ import com.skillforge.server.dto.SessionReplayDto;
 import com.skillforge.server.repository.ChannelConversationRepository;
 import com.skillforge.server.service.ChatService;
 import com.skillforge.server.service.CompactionService;
+import com.skillforge.server.service.ContextBreakdownService;
 import com.skillforge.server.service.ReplayService;
 import com.skillforge.server.service.SessionService;
 import com.skillforge.server.subagent.SubAgentRegistry;
@@ -53,6 +55,7 @@ public class ChatController {
     private final CompactionService compactionService;
     private final ReplayService replayService;
     private final ChannelConversationRepository channelConversationRepository;
+    private final ContextBreakdownService contextBreakdownService;
 
     public ChatController(ChatService chatService,
                           SessionService sessionService,
@@ -61,7 +64,8 @@ public class ChatController {
                           CancellationRegistry cancellationRegistry,
                           CompactionService compactionService,
                           ReplayService replayService,
-                          ChannelConversationRepository channelConversationRepository) {
+                          ChannelConversationRepository channelConversationRepository,
+                          ContextBreakdownService contextBreakdownService) {
         this.chatService = chatService;
         this.sessionService = sessionService;
         this.pendingAskRegistry = pendingAskRegistry;
@@ -70,6 +74,7 @@ public class ChatController {
         this.compactionService = compactionService;
         this.replayService = replayService;
         this.channelConversationRepository = channelConversationRepository;
+        this.contextBreakdownService = contextBreakdownService;
     }
 
     /**
@@ -261,6 +266,21 @@ public class ChatController {
             enrichChannelPlatform(resp.getBody());
         }
         return resp;
+    }
+
+    /**
+     * Estimated breakdown of the tokens currently occupying this session's context window.
+     * Values are approximate (TokenEstimator ±10%); used by the right-rail Context panel.
+     */
+    @GetMapping("/sessions/{id}/context-breakdown")
+    public ResponseEntity<ContextBreakdownDto> getContextBreakdown(
+            @PathVariable String id,
+            @RequestParam(required = false) Long userId) {
+        ResponseEntity<SessionEntity> check = requireOwnedSession(id, userId);
+        if (!check.getStatusCode().is2xxSuccessful()) {
+            return ResponseEntity.status(check.getStatusCode()).build();
+        }
+        return ResponseEntity.ok(contextBreakdownService.breakdown(id, userId));
     }
 
     @GetMapping("/sessions/{id}/messages")

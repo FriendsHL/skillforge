@@ -1,6 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { getSubAgentRuns } from '../../api';
+import {
+  getSubAgentRuns,
+  getContextBreakdown,
+  type ContextBreakdown,
+  type ContextBreakdownSegment,
+} from '../../api';
 import { IconCompact } from './ChatIcons';
 
 interface InflightTool {
@@ -407,26 +412,93 @@ function SubAgentTab({ sessionId, userId }: { sessionId?: string | null; userId?
   );
 }
 
+// Palette for top-level segments in the stacked bar — mapped by key.
+const SEGMENT_COLORS: Record<string, string> = {
+  system_prompt: '#6366f1',
+  tool_schemas: '#8b5cf6',
+  messages: '#22c55e',
+};
+const FALLBACK_COLOR = '#64748b';
+
+function colorFor(key: string): string {
+  return SEGMENT_COLORS[key] ?? FALLBACK_COLOR;
+}
+
+function fmtTokens(n: number): string {
+  if (n >= 1000) return `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}K`;
+  return n.toLocaleString();
+}
+
 function ContextTab({
-  tokenUsage,
+  sessionId,
+  userId,
+  cumulativeTokens,
   compaction,
   onCompactClick,
   compacting,
 }: {
-  tokenUsage?: TokenUsage;
+  sessionId?: string | null;
+  userId?: number;
+  cumulativeTokens?: { input: number; output: number };
   compaction?: CompactionSummary;
   onCompactClick?: () => void;
   compacting?: boolean;
 }) {
-  const used = tokenUsage?.used ?? 0;
-  const total = tokenUsage?.total ?? 200000;
-  const pct = total > 0 ? Math.min(100, Math.round((used / total) * 100)) : 0;
+  const [expanded, setExpanded] = useState<Set<string>>(
+    () => new Set(['system_prompt', 'messages']),
+  );
+
+  const { data, isLoading, isError, refetch, isFetching } = useQuery<ContextBreakdown>({
+    queryKey: ['context-breakdown', sessionId, userId],
+    queryFn: async () => {
+      if (!sessionId || userId === undefined) {
+        throw new Error('missing session / user');
+      }
+      const res = await getContextBreakdown(sessionId, userId);
+      return res.data;
+    },
+    enabled: Boolean(sessionId && userId !== undefined),
+    staleTime: 15_000,
+  });
+
+  const toggle = (key: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const total = data?.total ?? 0;
+  const windowLimit = data?.windowLimit ?? 0;
+  const pct = data?.pct ?? 0;
+  const segments: ContextBreakdownSegment[] = data?.segments ?? [];
 
   return (
     <div>
       <div className="rail-section-title">
-        <span>Context budget</span>
+        <span>Current context window</span>
+        <button
+          type="button"
+          onClick={() => refetch()}
+          disabled={isFetching}
+          style={{
+            background: 'transparent',
+            border: 0,
+            color: 'var(--fg-4)',
+            cursor: isFetching ? 'default' : 'pointer',
+            fontSize: 10,
+            fontFamily: 'var(--font-mono)',
+            letterSpacing: '0.08em',
+            textTransform: 'uppercase',
+          }}
+          title="Recompute breakdown"
+        >
+          {isFetching ? 'refreshing…' : 'refresh'}
+        </button>
       </div>
+
       <div
         style={{
           background: 'var(--bg-elev)',
@@ -435,73 +507,104 @@ function ContextTab({
           padding: 14,
         }}
       >
-        <div
-          style={{
-            fontFamily: 'var(--font-serif)',
-            fontSize: 26,
-            fontWeight: 500,
-            letterSpacing: '-0.01em',
-          }}
-        >
-          {used.toLocaleString()}{' '}
-          <span style={{ color: 'var(--fg-4)', fontSize: 14 }}>
-            / {total.toLocaleString()}
-          </span>
-        </div>
-        <div
-          style={{
-            fontFamily: 'var(--font-mono)',
-            fontSize: 10,
-            color: 'var(--fg-4)',
-            marginTop: 2,
-            textTransform: 'uppercase',
-            letterSpacing: '0.08em',
-          }}
-        >
-          Tokens used · {pct}%
-        </div>
-        <div
-          style={{
-            height: 6,
-            background: 'var(--bg-hover)',
-            borderRadius: 3,
-            marginTop: 10,
-            overflow: 'hidden',
-          }}
-        >
-          <div
-            style={{ width: `${pct}%`, height: '100%', background: 'var(--accent)' }}
-          />
-        </div>
-        {tokenUsage?.breakdown && tokenUsage.breakdown.length > 0 && (
-          <div
-            style={{
-              marginTop: 16,
-              display: 'grid',
-              gridTemplateColumns: '1fr 1fr',
-              gap: 10,
-              fontFamily: 'var(--font-mono)',
-              fontSize: 11,
-              color: 'var(--fg-2)',
-            }}
-          >
-            {tokenUsage.breakdown.map((b) => (
-              <div key={b.label}>
-                <div
-                  style={{
-                    color: 'var(--fg-4)',
-                    fontSize: 10,
-                    textTransform: 'uppercase',
-                  }}
-                >
-                  {b.label}
-                </div>
-                {b.value.toLocaleString()}
-              </div>
-            ))}
+        {isLoading && (
+          <div style={{ fontSize: 12, color: 'var(--fg-4)' }}>Estimating…</div>
+        )}
+        {isError && (
+          <div style={{ fontSize: 12, color: 'var(--err, #ef4444)' }}>
+            Failed to load breakdown.{' '}
+            <button
+              type="button"
+              onClick={() => refetch()}
+              style={{
+                background: 'transparent',
+                border: 0,
+                color: 'var(--accent)',
+                cursor: 'pointer',
+                padding: 0,
+                font: 'inherit',
+              }}
+            >
+              Retry
+            </button>
           </div>
         )}
+        {data && (
+          <>
+            <div
+              style={{
+                fontFamily: 'var(--font-serif)',
+                fontSize: 26,
+                fontWeight: 500,
+                letterSpacing: '-0.01em',
+              }}
+            >
+              {fmtTokens(total)}{' '}
+              <span style={{ color: 'var(--fg-4)', fontSize: 14 }}>
+                / {fmtTokens(windowLimit)}
+              </span>
+            </div>
+            <div
+              style={{
+                fontFamily: 'var(--font-mono)',
+                fontSize: 10,
+                color: 'var(--fg-4)',
+                marginTop: 2,
+                textTransform: 'uppercase',
+                letterSpacing: '0.08em',
+              }}
+            >
+              Estimated · {pct}% of window
+            </div>
+            <StackedBar segments={segments} total={total} />
+            <SegmentList
+              segments={segments}
+              total={total}
+              expanded={expanded}
+              onToggle={toggle}
+            />
+            <p
+              style={{
+                marginTop: 10,
+                fontSize: 10,
+                color: 'var(--fg-4)',
+                lineHeight: 1.5,
+              }}
+            >
+              Tokens estimated with a lightweight heuristic (CJK ≈ 1 tok/char, else
+              ~3.5 char/tok); accuracy is ±10%.
+            </p>
+          </>
+        )}
       </div>
+
+      {cumulativeTokens && (
+        <div style={{ marginTop: 16 }}>
+          <div className="rail-section-title">
+            <span>Lifetime usage</span>
+          </div>
+          <div
+            style={{
+              fontSize: 12,
+              color: 'var(--fg-2)',
+              lineHeight: 1.6,
+              fontFamily: 'var(--font-mono)',
+            }}
+          >
+            <div>
+              <span style={{ color: 'var(--fg-4)' }}>input&nbsp;&nbsp;</span>
+              {cumulativeTokens.input.toLocaleString()}
+            </div>
+            <div>
+              <span style={{ color: 'var(--fg-4)' }}>output&nbsp;</span>
+              {cumulativeTokens.output.toLocaleString()}
+            </div>
+            <div style={{ color: 'var(--fg-4)', fontSize: 10, marginTop: 4 }}>
+              Charged across the whole session history.
+            </div>
+          </div>
+        </div>
+      )}
 
       {compaction && (
         <div style={{ marginTop: 16 }}>
@@ -528,6 +631,203 @@ function ContextTab({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function StackedBar({
+  segments,
+  total,
+}: {
+  segments: ContextBreakdownSegment[];
+  total: number;
+}) {
+  if (total <= 0) return null;
+  return (
+    <div
+      role="img"
+      aria-label="Context token breakdown"
+      style={{
+        marginTop: 12,
+        display: 'flex',
+        height: 10,
+        width: '100%',
+        borderRadius: 4,
+        overflow: 'hidden',
+        background: 'var(--bg-hover)',
+      }}
+    >
+      {segments.map((s) => {
+        const w = (s.tokens / total) * 100;
+        if (w <= 0) return null;
+        return (
+          <div
+            key={s.key}
+            title={`${s.label} · ${s.tokens.toLocaleString()} tok (${w.toFixed(1)}%)`}
+            style={{
+              width: `${w}%`,
+              background: colorFor(s.key),
+            }}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+function SegmentList({
+  segments,
+  total,
+  expanded,
+  onToggle,
+}: {
+  segments: ContextBreakdownSegment[];
+  total: number;
+  expanded: Set<string>;
+  onToggle: (key: string) => void;
+}) {
+  const idPrefix = useId();
+  return (
+    <div style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {segments.map((s) => {
+        const pct = total > 0 ? (s.tokens / total) * 100 : 0;
+        const hasChildren = Array.isArray(s.children) && s.children.length > 0;
+        const isOpen = expanded.has(s.key);
+        const panelId = `${idPrefix}-${s.key}`;
+        return (
+          <div key={s.key}>
+            <button
+              type="button"
+              onClick={() => hasChildren && onToggle(s.key)}
+              disabled={!hasChildren}
+              style={{
+                cursor: hasChildren ? 'pointer' : 'default',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                width: '100%',
+                background: 'transparent',
+                border: 0,
+                padding: 0,
+                color: 'inherit',
+                textAlign: 'left',
+                font: 'inherit',
+                outlineOffset: 2,
+              }}
+              aria-expanded={hasChildren ? isOpen : undefined}
+              aria-controls={hasChildren ? panelId : undefined}
+            >
+              <span
+                style={{
+                  width: 8,
+                  height: 8,
+                  borderRadius: 2,
+                  background: colorFor(s.key),
+                  flexShrink: 0,
+                }}
+              />
+              <span
+                style={{
+                  fontSize: 12,
+                  color: 'var(--fg-2)',
+                  flex: 1,
+                  minWidth: 0,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {hasChildren && (
+                  <span
+                    style={{
+                      fontFamily: 'var(--font-mono)',
+                      fontSize: 9,
+                      color: 'var(--fg-4)',
+                      marginRight: 6,
+                    }}
+                  >
+                    {isOpen ? '▾' : '▸'}
+                  </span>
+                )}
+                {s.label}
+              </span>
+              <span
+                style={{
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: 11,
+                  color: 'var(--fg-3)',
+                  flexShrink: 0,
+                }}
+              >
+                {fmtTokens(s.tokens)}
+              </span>
+              <span
+                style={{
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: 10,
+                  color: 'var(--fg-4)',
+                  flexShrink: 0,
+                  minWidth: 36,
+                  textAlign: 'right',
+                }}
+              >
+                {pct.toFixed(1)}%
+              </span>
+            </button>
+            {hasChildren && isOpen && s.children && (
+              <div
+                id={panelId}
+                style={{
+                  marginTop: 6,
+                  marginLeft: 16,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 4,
+                  borderLeft: '1px solid var(--border-1, rgba(255,255,255,0.08))',
+                  paddingLeft: 10,
+                }}
+              >
+                {s.children.map((c) => {
+                  const cPct = total > 0 ? (c.tokens / total) * 100 : 0;
+                  return (
+                    <div
+                      key={c.key}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 8,
+                        fontSize: 11,
+                        color: 'var(--fg-3)',
+                      }}
+                    >
+                      <span style={{ flex: 1, minWidth: 0 }}>{c.label}</span>
+                      <span
+                        style={{
+                          fontFamily: 'var(--font-mono)',
+                          color: 'var(--fg-3)',
+                        }}
+                      >
+                        {fmtTokens(c.tokens)}
+                      </span>
+                      <span
+                        style={{
+                          fontFamily: 'var(--font-mono)',
+                          color: 'var(--fg-4)',
+                          fontSize: 10,
+                          minWidth: 36,
+                          textAlign: 'right',
+                        }}
+                      >
+                        {cPct.toFixed(1)}%
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -604,7 +904,18 @@ function RightRail({
         )}
         {tab === 'context' && (
           <ContextTab
-            tokenUsage={tokenUsage}
+            sessionId={sessionId}
+            userId={userId}
+            cumulativeTokens={
+              tokenUsage && tokenUsage.breakdown
+                ? {
+                    input:
+                      tokenUsage.breakdown.find((b) => b.label === 'input')?.value ?? 0,
+                    output:
+                      tokenUsage.breakdown.find((b) => b.label === 'output')?.value ?? 0,
+                  }
+                : undefined
+            }
             compaction={compaction}
             onCompactClick={onCompactClick}
             compacting={compacting}
