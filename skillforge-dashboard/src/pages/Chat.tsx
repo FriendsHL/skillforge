@@ -14,6 +14,7 @@ import RightRail, {
 } from '../components/chat/RightRail';
 import { Chip, Seg } from '../components/chat/primitives';
 import { IconChat, IconCompact, IconReplay } from '../components/chat/ChatIcons';
+import { ChannelBadge } from '../components/channels/ChannelBadge';
 import {
   getAgents,
   createSession,
@@ -583,9 +584,19 @@ const Chat: React.FC = () => {
     tokensReclaimed: totalTokensReclaimed,
   };
 
+  const totalInputTokens = Number(
+    (activeSession as { totalInputTokens?: number } | undefined)?.totalInputTokens ?? 0,
+  );
+  const totalOutputTokens = Number(
+    (activeSession as { totalOutputTokens?: number } | undefined)?.totalOutputTokens ?? 0,
+  );
   const tokenUsage = {
-    used: activeSession?.totalTokens ?? 0,
+    used: totalInputTokens + totalOutputTokens,
     total: DEFAULT_CONTEXT_WINDOW_TOKENS,
+    breakdown: [
+      { label: 'input', value: totalInputTokens },
+      { label: 'output', value: totalOutputTokens },
+    ],
   };
 
   return (
@@ -624,7 +635,17 @@ const Chat: React.FC = () => {
                     </>
                   )}
                   <span className="sep">·</span>
-                  <span>depth {sessionDepth}</span>
+                  <ChannelBadge
+                    platform={
+                      (activeSession?.channelPlatform as string | null | undefined) ?? 'web'
+                    }
+                  />
+                  {sessionDepth > 0 && (
+                    <>
+                      <span className="sep">·</span>
+                      <span>depth {sessionDepth}</span>
+                    </>
+                  )}
                   {collabHandle && (
                     <>
                       <span className="sep">·</span>

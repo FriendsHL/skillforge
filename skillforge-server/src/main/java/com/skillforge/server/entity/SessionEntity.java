@@ -5,6 +5,7 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.EntityListeners;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import jakarta.persistence.Transient;
 import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.annotation.LastModifiedDate;
 import org.springframework.data.jpa.domain.support.AuditingEntityListener;
@@ -119,6 +120,14 @@ public class SessionEntity {
 
     @LastModifiedDate
     private LocalDateTime updatedAt;
+
+    /**
+     * 来源渠道标识（web / feishu / telegram / ...），由 controller 在返回前从
+     * {@link com.skillforge.server.entity.ChannelConversationEntity} 注入；
+     * 未绑定任何 channel 的 session 默认视为 "web"。非持久化字段。
+     */
+    @Transient
+    private String channelPlatform;
 
     public SessionEntity() {
     }
@@ -361,5 +370,13 @@ public class SessionEntity {
 
     public void setUpdatedAt(LocalDateTime updatedAt) {
         this.updatedAt = updatedAt;
+    }
+
+    public String getChannelPlatform() {
+        return channelPlatform;
+    }
+
+    public void setChannelPlatform(String channelPlatform) {
+        this.channelPlatform = channelPlatform;
     }
 }

@@ -11,6 +11,8 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 
 public interface ChannelConversationRepository
@@ -31,6 +33,15 @@ public interface ChannelConversationRepository
     int closeById(@Param("id") Long id, @Param("closedAt") Instant closedAt);
 
     Optional<ChannelConversationEntity> findBySessionIdAndClosedAtIsNull(String sessionId);
+
+    /**
+     * 批量查询一组 session 对应的 channel conversation 行（包含 active + closed），
+     * 用于在列表接口里一次性注入 channelPlatform，避免 N+1。
+     * 未绑定 channel 的 session 不会出现在返回结果里。
+     */
+    @Query("SELECT c FROM ChannelConversationEntity c WHERE c.sessionId IN :sessionIds")
+    List<ChannelConversationEntity> findBySessionIdIn(
+            @Param("sessionIds") Collection<String> sessionIds);
 
     Page<ChannelConversationEntity> findByPlatformOrderByCreatedAtDesc(String platform, Pageable pageable);
 

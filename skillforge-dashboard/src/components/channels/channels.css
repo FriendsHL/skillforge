@@ -285,6 +285,41 @@
 .platform-dot--mock { background: #6366f1; }
 .platform-dot--unknown { background: rgba(255, 255, 255, 0.25); }
 
+/* ── Channel badge (compact pill used in chat header / session rows) ── */
+.channel-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 7px;
+  font-size: 10.5px;
+  line-height: 1.4;
+  border-radius: 999px;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--fg-3, rgba(255, 255, 255, 0.7));
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.channel-badge-label {
+  font-family: var(--font-mono, ui-monospace, 'JetBrains Mono', monospace);
+  letter-spacing: 0.01em;
+}
+
+.channel-badge-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* Web = neutral / outline look to signal the default channel */
+.channel-badge-dot--web {
+  border: 1px solid currentColor;
+  background: transparent;
+  opacity: 0.7;
+}
+
 /* ── Error text ──────────────────────────────────────────── */
 .delivery-error-text {
   font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;

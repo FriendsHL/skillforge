@@ -69,7 +69,7 @@
 }
 .sess-table-h {
   display: grid;
-  grid-template-columns: 2.2fr 1fr 0.6fr 0.7fr 1fr 0.6fr 0.8fr;
+  grid-template-columns: 2.2fr 1fr 0.65fr 0.6fr 0.7fr 1fr 0.6fr 0.8fr;
   gap: 12px;
   padding: 10px 16px;
   background: var(--bg-hover);
@@ -82,11 +82,11 @@
 }
 .sess-table-with-select .sess-table-h,
 .sess-table-with-select .sess-row {
-  grid-template-columns: 32px 2.2fr 1fr 0.6fr 0.7fr 1fr 0.6fr 0.8fr 36px;
+  grid-template-columns: 32px 2.2fr 1fr 0.65fr 0.6fr 0.7fr 1fr 0.6fr 0.8fr 36px;
 }
 .sess-row {
   display: grid;
-  grid-template-columns: 2.2fr 1fr 0.6fr 0.7fr 1fr 0.6fr 0.8fr;
+  grid-template-columns: 2.2fr 1fr 0.65fr 0.6fr 0.7fr 1fr 0.6fr 0.8fr;
   gap: 12px;
   padding: 12px 16px;
   align-items: center;

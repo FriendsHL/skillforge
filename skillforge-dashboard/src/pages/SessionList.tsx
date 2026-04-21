@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Modal, message } from 'antd';
 import { getSessions, getSessionMessages, extractList, deleteSessions } from '../api';
 import { useAuth } from '../contexts/AuthContext';
+import { ChannelBadge } from '../components/channels/ChannelBadge';
 import '../components/agents/agents.css';
 import '../components/sessions/sessions.css';
 import '../components/skills/skills.css';
@@ -35,6 +36,7 @@ interface SessionRow {
   ctx: number;
   cost: number;
   turns: number;
+  channel: string;
   createdAt: string;
   updatedAt: string;
   raw: Record<string, unknown>;
@@ -51,6 +53,7 @@ function normalizeSession(raw: Record<string, unknown>): SessionRow {
   const turns = Math.ceil(msgs / 2);
   let status = String(raw.runtimeStatus || 'idle');
   if (status === 'waiting_user') status = 'waiting';
+  const channel = String(raw.channelPlatform || 'web').toLowerCase() || 'web';
   return {
     id,
     title,
@@ -62,6 +65,7 @@ function normalizeSession(raw: Record<string, unknown>): SessionRow {
     ctx,
     cost,
     turns,
+    channel,
     createdAt: String(raw.createdAt || ''),
     updatedAt: String(raw.updatedAt || ''),
     raw,
@@ -128,6 +132,7 @@ const SessionList: React.FC = () => {
   const [q, setQ] = useState('');
   const [filterStatus, setFilterStatus] = useState<string | null>(null);
   const [filterAgent, setFilterAgent] = useState<string | null>(null);
+  const [filterChannel, setFilterChannel] = useState<string | null>(null);
   const [open, setOpen] = useState<SessionRow | null>(null);
   const [drawerTab, setDrawerTab] = useState('turns');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
@@ -143,6 +148,7 @@ const SessionList: React.FC = () => {
 
   const all = useMemo<SessionRow[]>(() => rawSessions.map(normalizeSession), [rawSessions]);
   const agents = useMemo(() => Array.from(new Set(all.map(s => s.agent))).sort(), [all]);
+  const channels = useMemo(() => Array.from(new Set(all.map(s => s.channel))).sort(), [all]);
 
   const rows = useMemo(() => {
     return all.filter(s => {
@@ -152,12 +158,14 @@ const SessionList: React.FC = () => {
       }
       if (filterStatus && s.status !== filterStatus) return false;
       if (filterAgent && s.agent !== filterAgent) return false;
+      if (filterChannel && s.channel !== filterChannel) return false;
       return true;
     });
-  }, [all, q, filterStatus, filterAgent]);
+  }, [all, q, filterStatus, filterAgent, filterChannel]);
 
   const toggleStatus = (v: string) => setFilterStatus(s => s === v ? null : v);
   const toggleAgent = (v: string) => setFilterAgent(a => a === v ? null : v);
+  const toggleChannel = (v: string) => setFilterChannel(c => c === v ? null : v);
 
   // Drop stale selections when the underlying list updates (e.g. after delete / WS refresh)
   useEffect(() => {
@@ -299,6 +307,11 @@ const SessionList: React.FC = () => {
         {agents.map(a => (
           <FilterItem key={a} label={a} count={all.filter(x => x.agent === a).length} active={filterAgent === a} onClick={() => toggleAgent(a)} />
         ))}
+
+        <div className="agents-filters-h">Channel</div>
+        {channels.map(c => (
+          <FilterItem key={c} label={c} count={all.filter(x => x.channel === c).length} active={filterChannel === c} onClick={() => toggleChannel(c)} />
+        ))}
       </aside>
 
       <section className="agents-main">
@@ -352,6 +365,7 @@ const SessionList: React.FC = () => {
                 </div>
                 <div>Session</div>
                 <div>Agent</div>
+                <div>Channel</div>
                 <div>Msgs</div>
                 <div>Tokens</div>
                 <div>Context</div>
@@ -396,6 +410,7 @@ const SessionList: React.FC = () => {
                       </div>
                     </div>
                     <div className="mono-sm">{s.agent}</div>
+                    <div><ChannelBadge platform={s.channel} /></div>
                     <div className="mono-sm">{s.msgs}</div>
                     <div className="mono-sm">{s.tokens.toLocaleString()}</div>
                     <div className="ctx-bar" title={`${Math.round(s.ctx * 100)}% of 200K`}>

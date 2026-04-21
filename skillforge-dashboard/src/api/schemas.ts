@@ -30,6 +30,7 @@ export const SessionSchema = z.object({
   runtimeStatus: z.enum(['idle', 'running', 'error', 'waiting_user', 'compacting']).optional(),
   runtimeStep: z.string().optional().nullable(),
   runtimeError: z.string().optional().nullable(),
+  channelPlatform: z.string().optional().nullable(),
   createdAt: z.string().optional().nullable(),
   updatedAt: z.string().optional().nullable(),
 }).passthrough();

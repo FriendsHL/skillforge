@@ -6,9 +6,11 @@ import com.skillforge.server.dto.ChatRequest;
 import com.skillforge.server.dto.SessionCompactionCheckpointDto;
 import com.skillforge.server.dto.CreateSessionRequest;
 import com.skillforge.server.dto.SessionMessageDto;
+import com.skillforge.server.entity.ChannelConversationEntity;
 import com.skillforge.server.entity.CompactionEventEntity;
 import com.skillforge.server.entity.SessionEntity;
 import com.skillforge.server.dto.SessionReplayDto;
+import com.skillforge.server.repository.ChannelConversationRepository;
 import com.skillforge.server.service.ChatService;
 import com.skillforge.server.service.CompactionService;
 import com.skillforge.server.service.ReplayService;
@@ -29,14 +31,19 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/api/chat")
 public class ChatController {
+
+    /** 默认渠道：没有 channel conversation 绑定的 session 视为 web。 */
+    private static final String DEFAULT_CHANNEL_PLATFORM = "web";
 
     private final ChatService chatService;
     private final SessionService sessionService;
@@ -45,6 +52,7 @@ public class ChatController {
     private final CancellationRegistry cancellationRegistry;
     private final CompactionService compactionService;
     private final ReplayService replayService;
+    private final ChannelConversationRepository channelConversationRepository;
 
     public ChatController(ChatService chatService,
                           SessionService sessionService,
@@ -52,7 +60,8 @@ public class ChatController {
                           SubAgentRegistry subAgentRegistry,
                           CancellationRegistry cancellationRegistry,
                           CompactionService compactionService,
-                          ReplayService replayService) {
+                          ReplayService replayService,
+                          ChannelConversationRepository channelConversationRepository) {
         this.chatService = chatService;
         this.sessionService = sessionService;
         this.pendingAskRegistry = pendingAskRegistry;
@@ -60,6 +69,44 @@ public class ChatController {
         this.cancellationRegistry = cancellationRegistry;
         this.compactionService = compactionService;
         this.replayService = replayService;
+        this.channelConversationRepository = channelConversationRepository;
+    }
+
+    /**
+     * 为 session 列表批量注入 channelPlatform（"web"/"feishu"/...）。
+     * active 行优先，没有 active 行才 fall back 到最近的 closed 行。
+     */
+    private void enrichChannelPlatform(List<SessionEntity> sessions) {
+        if (sessions == null || sessions.isEmpty()) return;
+        List<String> sessionIds = sessions.stream()
+                .map(SessionEntity::getId)
+                .filter(id -> id != null && !id.isEmpty())
+                .collect(Collectors.toList());
+        if (sessionIds.isEmpty()) {
+            sessions.forEach(s -> s.setChannelPlatform(DEFAULT_CHANNEL_PLATFORM));
+            return;
+        }
+        List<ChannelConversationEntity> convs =
+                channelConversationRepository.findBySessionIdIn(sessionIds);
+        Map<String, String> platformBySessionId = new HashMap<>();
+        Map<String, Boolean> activeBySessionId = new HashMap<>();
+        for (ChannelConversationEntity c : convs) {
+            String sid = c.getSessionId();
+            boolean isActive = c.getClosedAt() == null;
+            // active 行优先；已记录 active 就不被 closed 行覆盖
+            if (Boolean.TRUE.equals(activeBySessionId.get(sid))) continue;
+            platformBySessionId.put(sid, c.getPlatform());
+            if (isActive) activeBySessionId.put(sid, true);
+        }
+        for (SessionEntity s : sessions) {
+            String p = platformBySessionId.getOrDefault(s.getId(), DEFAULT_CHANNEL_PLATFORM);
+            s.setChannelPlatform(p);
+        }
+    }
+
+    private void enrichChannelPlatform(SessionEntity session) {
+        if (session == null) return;
+        enrichChannelPlatform(Collections.singletonList(session));
     }
 
     /**
@@ -202,13 +249,18 @@ public class ChatController {
     @GetMapping("/sessions")
     public ResponseEntity<List<SessionEntity>> listSessions(@RequestParam Long userId) {
         List<SessionEntity> sessions = sessionService.listUserSessions(userId);
+        enrichChannelPlatform(sessions);
         return ResponseEntity.ok(sessions);
     }
 
     @GetMapping("/sessions/{id}")
     public ResponseEntity<SessionEntity> getSession(@PathVariable String id,
                                                      @RequestParam(required = false) Long userId) {
-        return requireOwnedSession(id, userId);
+        ResponseEntity<SessionEntity> resp = requireOwnedSession(id, userId);
+        if (resp.getStatusCode().is2xxSuccessful()) {
+            enrichChannelPlatform(resp.getBody());
+        }
+        return resp;
     }
 
     @GetMapping("/sessions/{id}/messages")

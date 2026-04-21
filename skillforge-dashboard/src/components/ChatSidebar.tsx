@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { IconPlus, IconTeam } from './chat/ChatIcons';
+import { ChannelBadge } from './channels/ChannelBadge';
 
 interface AgentLite {
   id: number;
@@ -17,6 +18,7 @@ interface SessionLite {
   collabRunId?: string | null;
   messageCount?: number | null;
   updatedAt?: string | null;
+  channelPlatform?: string | null;
   [key: string]: unknown;
 }
 
@@ -97,6 +99,8 @@ function ChatSidebar({
       s.title && s.title !== 'New Session'
         ? s.title
         : `Session ${sid.slice(0, 8)}`;
+    const channel = (s.channelPlatform as string | null | undefined) ?? 'web';
+    const isNonWeb = channel && channel.toLowerCase() !== 'web';
     return (
       <button
         key={sid}
@@ -114,6 +118,12 @@ function ChatSidebar({
           <span>{title}</span>
         </div>
         <div className="session-sub">
+          {isNonWeb && (
+            <>
+              <ChannelBadge platform={channel} variant="dot" />
+              <span className="dot">·</span>
+            </>
+          )}
           {typeof s.messageCount === 'number' && (
             <>
               <span>{s.messageCount} msgs</span>
