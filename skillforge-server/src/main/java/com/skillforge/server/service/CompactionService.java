@@ -1,9 +1,11 @@
 package com.skillforge.server.service;
 
+import com.skillforge.core.compact.CompactableToolRegistry;
 import com.skillforge.core.compact.CompactResult;
 import com.skillforge.core.compact.ContextCompactorCallback;
 import com.skillforge.core.compact.FullCompactStrategy;
 import com.skillforge.core.compact.LightCompactStrategy;
+import com.skillforge.core.compact.SessionMemoryCompactStrategy;
 import com.skillforge.core.compact.TokenEstimator;
 import com.skillforge.core.engine.ChatEventBroadcaster;
 import com.skillforge.core.llm.LlmProvider;
@@ -84,7 +86,9 @@ public class CompactionService implements ContextCompactorCallback {
     private final LlmProviderFactory llmProviderFactory;
     private final LlmProperties llmProperties;
     private final ChatEventBroadcaster broadcaster;
+    private final SessionMemoryCompactStrategy sessionMemoryCompactStrategy = new SessionMemoryCompactStrategy();
     private AgentRepository agentRepository;
+    private MemoryService memoryService;
 
     private final Object[] sessionLocks;
 
@@ -132,6 +136,12 @@ public class CompactionService implements ContextCompactorCallback {
     @Autowired(required = false)
     public void setAgentRepository(AgentRepository agentRepository) {
         this.agentRepository = agentRepository;
+    }
+
+    /** Optional: for session memory compact (P9-6). */
+    @Autowired(required = false)
+    public void setMemoryService(MemoryService memoryService) {
+        this.memoryService = memoryService;
     }
 
     /**
@@ -281,7 +291,8 @@ public class CompactionService implements ContextCompactorCallback {
 
                 List<Message> messages = sessionService.getContextMessages(sessionId);
                 int contextWindow = resolveContextWindowForSession(session);
-                CompactResult result = lightStrategy.apply(messages, contextWindow);
+                CompactableToolRegistry registry = resolveToolRegistryForSession(session);
+                CompactResult result = lightStrategy.apply(messages, contextWindow, registry);
 
                 if (result == null || isTrulyNoOp(result)) {
                     log.info("light compact no-op (not persisted): sessionId={} source={}", sessionId, source);
@@ -314,7 +325,8 @@ public class CompactionService implements ContextCompactorCallback {
                 }
 
                 int contextWindow = resolveContextWindowForSession(session);
-                CompactResult result = lightStrategy.apply(current, contextWindow);
+                CompactableToolRegistry registry = resolveToolRegistryForSession(session);
+                CompactResult result = lightStrategy.apply(current, contextWindow, registry);
 
                 if (result == null || isTrulyNoOp(result)) {
                     log.info("callback light compact no-op: sessionId={}", sessionId);
@@ -342,6 +354,7 @@ public class CompactionService implements ContextCompactorCallback {
         // ── Phase 1: guard + boundary detection, under stripe lock ──────────────
         FullCompactStrategy.PreparedCompact prep;
         LlmProvider provider;
+        SessionEntity sessionForMemoryCompact = null; // hoisted for Phase 1.5
 
         synchronized (lockFor(sessionId)) {
             if (!fullCompactInFlight.add(sessionId)) {
@@ -392,11 +405,46 @@ public class CompactionService implements ContextCompactorCallback {
                 }
                 // Phase 1 complete — stripe lock releases at end of synchronized block.
                 // fullCompactInFlight keeps deduplication active through Phase 2.
+                sessionForMemoryCompact = session;
                 phase1Success = true;
             } finally {
                 if (!phase1Success) {
                     fullCompactInFlight.remove(sessionId);
                 }
+            }
+        }
+
+        // ── Phase 1.5: attempt session memory compact (zero-LLM) ────────────────
+        if (memoryService != null && sessionForMemoryCompact != null
+                && sessionForMemoryCompact.getUserId() != null) {
+            try {
+                String memorySummary = memoryService.previewMemoriesForPrompt(
+                        sessionForMemoryCompact.getUserId(), null);
+                if (memorySummary != null && !memorySummary.isBlank()) {
+                    CompactResult memoryResult = sessionMemoryCompactStrategy.tryCompact(
+                            prep, memorySummary,
+                            SessionMemoryCompactStrategy.DEFAULT_MAX_TOKENS,
+                            SessionMemoryCompactStrategy.DEFAULT_MIN_MESSAGES);
+                    if (memoryResult != null && !isTrulyNoOp(memoryResult)) {
+                        // Memory compact succeeded — skip Phase 2 (LLM), go to Phase 3
+                        final CompactResult finalMemResult = memoryResult;
+                        final CompactionEventEntity[] savedEvt = {null};
+                        try {
+                            synchronized (lockFor(sessionId)) {
+                                runInTransaction(() ->
+                                        savedEvt[0] = persistCompactResult(sessionId, "full", source, reason, finalMemResult)
+                                );
+                            }
+                        } finally {
+                            fullCompactInFlight.remove(sessionId);
+                        }
+                        log.info("sessionMemoryCompact succeeded: sessionId={} source={} reclaimed={} tokens",
+                                sessionId, source, memoryResult.getTokensReclaimed());
+                        return new FullCompactOutcome(savedEvt[0], memoryResult);
+                    }
+                }
+            } catch (Exception e) {
+                log.warn("sessionMemoryCompact failed, falling back to LLM: sessionId={}", sessionId, e);
             }
         }
 
@@ -690,6 +738,28 @@ public class CompactionService implements ContextCompactorCallback {
                     session.getId(), e);
         }
         return ModelConfig.DEFAULT_CONTEXT_WINDOW_TOKENS;
+    }
+
+    /**
+     * Resolve per-agent CompactableToolRegistry from agent config JSON.
+     * Falls back to default whitelist if agent has no override.
+     */
+    CompactableToolRegistry resolveToolRegistryForSession(SessionEntity session) {
+        try {
+            if (agentRepository != null && session.getAgentId() != null) {
+                AgentEntity agent = agentRepository.findById(session.getAgentId()).orElse(null);
+                if (agent != null && agent.getConfig() != null && !agent.getConfig().isBlank()) {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> configMap = new com.fasterxml.jackson.databind.ObjectMapper()
+                            .readValue(agent.getConfig(), Map.class);
+                    return CompactableToolRegistry.fromAgentConfig(configMap);
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Failed to resolve compactable tools for session {}, using defaults",
+                    session.getId(), e);
+        }
+        return new CompactableToolRegistry();
     }
 
     private CompactionEventEntity buildEvent(String sessionId, String level, String source,

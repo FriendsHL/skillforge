@@ -7,8 +7,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -34,6 +36,16 @@ public class LightCompactStrategy {
 
     private static final Logger log = LoggerFactory.getLogger(LightCompactStrategy.class);
 
+    private final CompactableToolRegistry toolRegistry;
+
+    public LightCompactStrategy() {
+        this.toolRegistry = new CompactableToolRegistry();
+    }
+
+    public LightCompactStrategy(CompactableToolRegistry toolRegistry) {
+        this.toolRegistry = toolRegistry != null ? toolRegistry : new CompactableToolRegistry();
+    }
+
     public static final int PROTECTION_WINDOW = 5;
     public static final int LARGE_TOOL_OUTPUT_BYTES = 5 * 1024;
     public static final int TRUNCATE_HEAD_LINES = 10;
@@ -45,9 +57,18 @@ public class LightCompactStrategy {
     private static final double TARGET_ABSOLUTE_RATIO = 0.30;
 
     public CompactResult apply(List<Message> messages, int contextWindowTokens) {
+        return apply(messages, contextWindowTokens, this.toolRegistry);
+    }
+
+    /**
+     * Apply light compaction with a per-call registry override (e.g. per-agent whitelist).
+     */
+    public CompactResult apply(List<Message> messages, int contextWindowTokens,
+                               CompactableToolRegistry registry) {
         if (messages == null || messages.isEmpty()) {
             return new CompactResult(messages, 0, 0, 0, 0, new ArrayList<>());
         }
+        CompactableToolRegistry effectiveRegistry = registry != null ? registry : this.toolRegistry;
         int beforeTokens = TokenEstimator.estimate(messages);
         int beforeCount = messages.size();
         List<String> applied = new ArrayList<>();
@@ -56,8 +77,11 @@ public class LightCompactStrategy {
         List<Message> working = new ArrayList<>(messages);
         int protectFrom = Math.max(0, working.size() - PROTECTION_WINDOW);
 
-        // Rule 1: truncate large tool outputs
-        int truncated = truncateLargeToolOutputs(working, protectFrom);
+        // Build toolUseId → toolName index for whitelist checking
+        Map<String, String> toolUseIdToName = buildToolUseIdToNameIndex(working);
+
+        // Rule 1: truncate large tool outputs (only for whitelisted tools)
+        int truncated = truncateLargeToolOutputs(working, protectFrom, toolUseIdToName, effectiveRegistry);
         if (truncated > 0) {
             applied.add("truncate-large-tool-output");
         }
@@ -123,9 +147,40 @@ public class LightCompactStrategy {
         return true;
     }
 
+    // ==================== Index builder ====================
+
+    /**
+     * Scan all messages to build a toolUseId → toolName index.
+     * Handles both {@link ContentBlock} and raw {@link Map} forms.
+     */
+    private Map<String, String> buildToolUseIdToNameIndex(List<Message> messages) {
+        Map<String, String> index = new HashMap<>();
+        for (Message m : messages) {
+            if (!(m.getContent() instanceof List<?> blocks)) continue;
+            for (Object o : blocks) {
+                if (o instanceof ContentBlock cb) {
+                    if ("tool_use".equals(cb.getType()) && cb.getId() != null && cb.getName() != null) {
+                        index.put(cb.getId(), cb.getName());
+                    }
+                } else if (o instanceof Map<?, ?> map) {
+                    if ("tool_use".equals(map.get("type"))) {
+                        Object id = map.get("id");
+                        Object name = map.get("name");
+                        if (id instanceof String sid && name instanceof String sname) {
+                            index.put(sid, sname);
+                        }
+                    }
+                }
+            }
+        }
+        return index;
+    }
+
     // ==================== Rule 1 ====================
 
-    private int truncateLargeToolOutputs(List<Message> working, int protectFrom) {
+    private int truncateLargeToolOutputs(List<Message> working, int protectFrom,
+                                         Map<String, String> toolUseIdToName,
+                                         CompactableToolRegistry registry) {
         int count = 0;
         for (int i = 0; i < Math.min(working.size(), protectFrom); i++) {
             Message m = working.get(i);
@@ -135,6 +190,9 @@ public class LightCompactStrategy {
                 Object o = blocks.get(j);
                 if (!(o instanceof ContentBlock cb)) continue;
                 if (!"tool_result".equals(cb.getType())) continue;
+                // Check whitelist: skip non-compactable tools
+                String toolName = toolUseIdToName.get(cb.getToolUseId());
+                if (!registry.isCompactable(toolName)) continue;
                 String content = cb.getContent();
                 if (content == null) continue;
                 int byteLen = content.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;

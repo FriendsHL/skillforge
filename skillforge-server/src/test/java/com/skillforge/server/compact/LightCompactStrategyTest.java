@@ -1,5 +1,6 @@
 package com.skillforge.server.compact;
 
+import com.skillforge.core.compact.CompactableToolRegistry;
 import com.skillforge.core.compact.CompactResult;
 import com.skillforge.core.compact.LightCompactStrategy;
 import com.skillforge.core.model.ContentBlock;
@@ -11,6 +12,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -235,7 +237,141 @@ class LightCompactStrategyTest {
         }
     }
 
+    // ---- whitelist tests (P9-1) ----
+
+    @Test
+    void skips_truncation_for_memory_tool() {
+        List<Message> msgs = new ArrayList<>();
+        for (int i = 0; i < 3; i++) msgs.add(filler("pad " + i));
+        // tool_use named "Memory" — should NOT be truncated
+        msgs.add(assistantToolUse("t1", "Memory", Map.of("action", "search")));
+        StringBuilder big = new StringBuilder();
+        for (int i = 0; i < 6000; i++) big.append("memory line ").append(i).append("\n");
+        String originalContent = big.toString();
+        msgs.add(toolResult("t1", originalContent, false));
+        for (int i = 0; i < 6; i++) msgs.add(filler("tail " + i));
+
+        CompactResult r = strategy.apply(msgs, 32000);
+
+        ContentBlock tr = findToolResultForId(r.getMessages(), "t1");
+        assertThat(tr).isNotNull();
+        assertThat(tr.getContent()).isEqualTo(originalContent);
+        assertThat(tr.getContent()).doesNotContain("[truncated");
+    }
+
+    @Test
+    void skips_truncation_for_subagent_tool() {
+        List<Message> msgs = new ArrayList<>();
+        for (int i = 0; i < 3; i++) msgs.add(filler("pad " + i));
+        msgs.add(assistantToolUse("t1", "SubAgent", Map.of("task", "analyze")));
+        StringBuilder big = new StringBuilder();
+        for (int i = 0; i < 6000; i++) big.append("subagent line ").append(i).append("\n");
+        String originalContent = big.toString();
+        msgs.add(toolResult("t1", originalContent, false));
+        for (int i = 0; i < 6; i++) msgs.add(filler("tail " + i));
+
+        CompactResult r = strategy.apply(msgs, 32000);
+
+        ContentBlock tr = findToolResultForId(r.getMessages(), "t1");
+        assertThat(tr).isNotNull();
+        assertThat(tr.getContent()).isEqualTo(originalContent);
+    }
+
+    @Test
+    void truncates_whitelisted_tool_grep() {
+        List<Message> msgs = new ArrayList<>();
+        for (int i = 0; i < 3; i++) msgs.add(filler("pad " + i));
+        msgs.add(assistantToolUse("t1", "Grep", Map.of("pattern", ".*")));
+        StringBuilder big = new StringBuilder();
+        for (int i = 0; i < 6000; i++) big.append("match ").append(i).append("\n");
+        msgs.add(toolResult("t1", big.toString(), false));
+        for (int i = 0; i < 6; i++) msgs.add(filler("tail " + i));
+
+        CompactResult r = strategy.apply(msgs, 32000);
+
+        assertThat(r.getStrategiesApplied()).contains("truncate-large-tool-output");
+        ContentBlock tr = findToolResultForId(r.getMessages(), "t1");
+        assertThat(tr).isNotNull();
+        assertThat(tr.getContent()).contains("[truncated");
+    }
+
+    @Test
+    void skips_truncation_when_tool_use_id_not_found_in_index() {
+        // Orphan tool_result with no matching tool_use — safe default: don't truncate
+        List<Message> msgs = new ArrayList<>();
+        for (int i = 0; i < 3; i++) msgs.add(filler("pad " + i));
+        // No assistantToolUse for "orphan_id"
+        StringBuilder big = new StringBuilder();
+        for (int i = 0; i < 6000; i++) big.append("orphan line ").append(i).append("\n");
+        String originalContent = big.toString();
+        msgs.add(toolResult("orphan_id", originalContent, false));
+        for (int i = 0; i < 6; i++) msgs.add(filler("tail " + i));
+
+        CompactResult r = strategy.apply(msgs, 32000);
+
+        ContentBlock tr = findToolResultForId(r.getMessages(), "orphan_id");
+        assertThat(tr).isNotNull();
+        assertThat(tr.getContent()).isEqualTo(originalContent);
+    }
+
+    @Test
+    void custom_registry_restricts_truncation() {
+        // Registry that only includes "Bash" — Grep should NOT be truncated
+        CompactableToolRegistry custom = new CompactableToolRegistry(Set.of("Bash"));
+        LightCompactStrategy customStrategy = new LightCompactStrategy(custom);
+
+        List<Message> msgs = new ArrayList<>();
+        for (int i = 0; i < 3; i++) msgs.add(filler("pad " + i));
+        msgs.add(assistantToolUse("t1", "Grep", Map.of("pattern", ".*")));
+        StringBuilder big = new StringBuilder();
+        for (int i = 0; i < 6000; i++) big.append("match ").append(i).append("\n");
+        String originalContent = big.toString();
+        msgs.add(toolResult("t1", originalContent, false));
+        for (int i = 0; i < 6; i++) msgs.add(filler("tail " + i));
+
+        CompactResult r = customStrategy.apply(msgs, 32000);
+
+        ContentBlock tr = findToolResultForId(r.getMessages(), "t1");
+        assertThat(tr).isNotNull();
+        assertThat(tr.getContent()).isEqualTo(originalContent); // not truncated
+    }
+
+    @Test
+    void per_call_registry_override_works() {
+        // Default strategy (has Grep in whitelist), but per-call override excludes it
+        CompactableToolRegistry override = new CompactableToolRegistry(Set.of("Bash"));
+
+        List<Message> msgs = new ArrayList<>();
+        for (int i = 0; i < 3; i++) msgs.add(filler("pad " + i));
+        msgs.add(assistantToolUse("t1", "Grep", Map.of("pattern", ".*")));
+        StringBuilder big = new StringBuilder();
+        for (int i = 0; i < 6000; i++) big.append("match ").append(i).append("\n");
+        String originalContent = big.toString();
+        msgs.add(toolResult("t1", originalContent, false));
+        for (int i = 0; i < 6; i++) msgs.add(filler("tail " + i));
+
+        CompactResult r = strategy.apply(msgs, 32000, override);
+
+        ContentBlock tr = findToolResultForId(r.getMessages(), "t1");
+        assertThat(tr).isNotNull();
+        assertThat(tr.getContent()).isEqualTo(originalContent); // not truncated by override
+    }
+
     // ---- helpers ----
+
+    private ContentBlock findToolResultForId(List<Message> msgs, String toolUseId) {
+        for (Message m : msgs) {
+            if (m.getContent() instanceof List<?> blocks) {
+                for (Object o : blocks) {
+                    if (o instanceof ContentBlock cb && "tool_result".equals(cb.getType())
+                            && toolUseId.equals(cb.getToolUseId())) {
+                        return cb;
+                    }
+                }
+            }
+        }
+        return null;
+    }
 
     private ContentBlock findFirstToolResult(List<Message> msgs) {
         for (Message m : msgs) {

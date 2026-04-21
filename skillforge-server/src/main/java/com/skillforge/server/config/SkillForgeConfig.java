@@ -2,6 +2,7 @@ package com.skillforge.server.config;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillforge.core.context.BehaviorRuleRegistry;
+import com.skillforge.core.compact.CompactableToolRegistry;
 import com.skillforge.core.compact.ContextCompactorCallback;
 import com.skillforge.core.compact.FullCompactStrategy;
 import com.skillforge.core.compact.LightCompactStrategy;
@@ -317,8 +318,13 @@ public class SkillForgeConfig {
     }
 
     @Bean
-    public LightCompactStrategy lightCompactStrategy() {
-        return new LightCompactStrategy();
+    public CompactableToolRegistry compactableToolRegistry() {
+        return new CompactableToolRegistry();
+    }
+
+    @Bean
+    public LightCompactStrategy lightCompactStrategy(CompactableToolRegistry compactableToolRegistry) {
+        return new LightCompactStrategy(compactableToolRegistry);
     }
 
     @Bean
