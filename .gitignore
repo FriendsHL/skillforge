@@ -7,3 +7,6 @@ data/
 *.jar
 *.log
 .claude/worktrees/
+
+# Obsidian
+docs/.obsidian/
