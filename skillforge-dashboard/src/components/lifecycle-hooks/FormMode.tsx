@@ -39,6 +39,8 @@ import {
   TIMEOUT_MAX_SECONDS,
   TIMEOUT_MIN_SECONDS,
   allowedFailurePolicies,
+  buildDefaultEntry,
+  buildDefaultHandler,
   type HookEntry,
   type HookHandler,
   type HookHandlerType,
@@ -759,27 +761,6 @@ function formatPolicyLabel(policy: FailurePolicy): string {
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
-
-function buildDefaultEntry(): HookEntry {
-  return {
-    handler: { type: 'skill', skillName: '' },
-    timeoutSeconds: TIMEOUT_DEFAULT_SECONDS,
-    failurePolicy: 'CONTINUE',
-    async: false,
-    _id: crypto.randomUUID(),
-  };
-}
-
-function buildDefaultHandler(type: HookHandlerType): HookHandler {
-  switch (type) {
-    case 'skill':
-      return { type: 'skill', skillName: '' };
-    case 'script':
-      return { type: 'script', scriptLang: 'bash', scriptBody: '' };
-    case 'method':
-      return { type: 'method', methodRef: '', args: {} };
-  }
-}
 
 /**
  * Produce a new LifecycleHooksConfig with the given entry list written at

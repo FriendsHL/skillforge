@@ -1,11 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { InputNumber, Select, message } from 'antd';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { updateAgent, getTools, getSkills, getLifecycleHookMethods, extractList, type UpdateAgentRequest, type BehaviorRuleConfig } from '../../api';
+import { updateAgent, getTools, getSkills, extractList, type UpdateAgentRequest, type BehaviorRuleConfig } from '../../api';
 import type { AgentDto } from '../../api/schemas';
 import { initials, guessRole } from './AgentCard';
 import BehaviorRulesEditor from '../BehaviorRulesEditor';
 import { useBehaviorRules } from '../../hooks/useBehaviorRules';
+import LifecycleHooksEditor, { type LifecycleHooksEditorHandle } from '../LifecycleHooksEditor';
+import { countHookEntries, migrateLegacyFlat } from '../../constants/lifecycleHooks';
 
 // TODO: extract modelOptions to shared constants (duplicated from pages/AgentList.tsx)
 const MODEL_OPTIONS = [
@@ -17,26 +19,6 @@ const MODEL_OPTIONS = [
   { label: 'openai:gpt-4o', value: 'openai:gpt-4o' },
   { label: 'claude:claude-sonnet-4-20250514', value: 'claude:claude-sonnet-4-20250514' },
 ];
-
-interface HookEventMeta { id: string; phase: string; desc: string; abort: boolean }
-interface HookTypeMeta { id: string; desc: string }
-
-const HOOK_EVENTS: HookEventMeta[] = [
-  { id: 'SessionStart',     phase: 'lifecycle', desc: 'Runs once when a new session spins up. Seed context, fetch state.',       abort: true  },
-  { id: 'UserPromptSubmit', phase: 'input',     desc: 'Before the prompt hits the model. Filter, enrich, reject unsafe input.', abort: true  },
-  { id: 'PreToolUse',       phase: 'tool',      desc: 'Fires before any tool call. Validate args, rate-limit, deny.',           abort: true  },
-  { id: 'PostToolUse',      phase: 'tool',      desc: 'After a tool returns. Inspect, log, post-process the result.',           abort: false },
-  { id: 'PostResponse',     phase: 'output',    desc: 'After the model finishes a turn. Grade, store, notify.',                 abort: false },
-  { id: 'SessionEnd',       phase: 'lifecycle', desc: 'When the session closes. Flush logs, emit metrics, notify channels.',    abort: false },
-];
-const HOOK_EVENT_BY_ID = Object.fromEntries(HOOK_EVENTS.map(e => [e.id, e]));
-
-const HOOK_TYPES: HookTypeMeta[] = [
-  { id: 'skill',   desc: 'Call a named skill in the skill registry.' },
-  { id: 'method',  desc: 'Invoke a built-in method (http.notify, log.file, feishu.notify…).' },
-  { id: 'command', desc: 'Shell out to a script or binary.' },
-];
-const HOOK_TYPE_BY_ID = Object.fromEntries(HOOK_TYPES.map(t => [t.id, t]));
 
 const CLOSE_ICON = (
   <svg width={14} height={14} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
@@ -55,11 +37,6 @@ const COPY_ICON = (
 );
 const PLAY_ICON = (
   <svg width={11} height={11} viewBox="0 0 16 16" fill="currentColor"><path d="M4 3l10 5-10 5z" /></svg>
-);
-const CHEVRON_DOWN = (
-  <svg width={10} height={10} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M4 6l4 4 4-4" />
-  </svg>
 );
 
 function parseArr(raw: unknown): string[] {
@@ -85,39 +62,6 @@ function parseBehaviorRulesConfig(raw: unknown): BehaviorRuleConfig | null {
   } catch { return null; }
 }
 
-interface HookItem { event: string; name: string; type: string; description?: string; abortOnError?: boolean }
-
-function parseHooks(raw: unknown): HookItem[] {
-  if (!raw) return [];
-  try {
-    let data = typeof raw === 'string' ? JSON.parse(raw) : raw;
-    if (data && typeof data === 'object' && 'hooks' in data) {
-      data = (data as Record<string, unknown>).hooks;
-    }
-    if (Array.isArray(data)) return data as HookItem[];
-    if (data && typeof data === 'object') {
-      const result: HookItem[] = [];
-      for (const [event, handlers] of Object.entries(data as Record<string, unknown>)) {
-        if (Array.isArray(handlers)) {
-          for (const h of handlers) {
-            if (h && typeof h === 'object') {
-              const entry = h as Record<string, unknown>;
-              const handler = entry.handler as Record<string, string> | undefined;
-              const name = handler?.skill || handler?.method || handler?.command
-                || (entry as Record<string, string>).skill || (entry as Record<string, string>).method || (entry as Record<string, string>).command || 'unknown';
-              const type = (handler?.skill || (entry as Record<string, string>).skill) ? 'skill'
-                : (handler?.method || (entry as Record<string, string>).method) ? 'method' : 'command';
-              result.push({ event, name: String(name), type });
-            }
-          }
-        }
-      }
-      return result;
-    }
-  } catch { /* ignore */ }
-  return [];
-}
-
 function useClickOutside(ref: React.RefObject<HTMLElement | null>, handler: () => void) {
   useEffect(() => {
     const h = (e: MouseEvent) => {
@@ -128,172 +72,7 @@ function useClickOutside(ref: React.RefObject<HTMLElement | null>, handler: () =
   }, [ref, handler]);
 }
 
-function HookEventPicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  const close = useCallback(() => setOpen(false), []);
-  useClickOutside(ref, close);
-  const cur = HOOK_EVENT_BY_ID[value] || HOOK_EVENTS[0];
-  return (
-    <div className="hook-picker-sf" ref={ref}>
-      <button type="button" className={`hook-picker-btn-sf event ${open ? 'open' : ''}`} onClick={() => setOpen(o => !o)}>
-        <span className={`phase-dot-sf ph-${cur.phase}`} />
-        <span className="hook-picker-label">{cur.id}</span>
-        {CHEVRON_DOWN}
-      </button>
-      {open && (
-        <div className="hook-pop-sf" role="listbox">
-          <div className="hook-pop-head-sf">Lifecycle event</div>
-          {HOOK_EVENTS.map(e => (
-            <button
-              key={e.id}
-              type="button"
-              className={`hook-pop-item-sf ${e.id === value ? 'on' : ''}`}
-              onClick={() => { onChange(e.id); setOpen(false); }}
-            >
-              <div className="hook-pop-item-top-sf">
-                <span className={`phase-dot-sf ph-${e.phase}`} />
-                <span className="hook-pop-item-name-sf">{e.id}</span>
-                {e.abort && <span className="hook-abort-tag-sf">CAN ABORT</span>}
-              </div>
-              <div className="hook-pop-item-desc-sf">{e.desc}</div>
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function HookTypePicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  const close = useCallback(() => setOpen(false), []);
-  useClickOutside(ref, close);
-  const cur = HOOK_TYPE_BY_ID[value] || HOOK_TYPES[0];
-  return (
-    <div className="hook-picker-sf" ref={ref}>
-      <button type="button" className={`hook-picker-btn-sf type type-${cur.id} ${open ? 'open' : ''}`} onClick={() => setOpen(o => !o)}>
-        <span className="hook-picker-label">{cur.id}</span>
-        {CHEVRON_DOWN}
-      </button>
-      {open && (
-        <div className="hook-pop-sf" role="listbox">
-          <div className="hook-pop-head-sf">Handler type</div>
-          {HOOK_TYPES.map(t => (
-            <button
-              key={t.id}
-              type="button"
-              className={`hook-pop-item-sf ${t.id === value ? 'on' : ''}`}
-              onClick={() => { onChange(t.id); setOpen(false); }}
-            >
-              <div className="hook-pop-item-top-sf">
-                <span className={`type-pill-sf type-${t.id}`}>{t.id}</span>
-              </div>
-              <div className="hook-pop-item-desc-sf">{t.desc}</div>
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-const COMMON_COMMANDS: CatalogItem[] = [
-  { id: 'bash', desc: 'Execute a shell script' },
-  { id: 'curl', desc: 'HTTP request via CLI' },
-  { id: 'node', desc: 'Run Node.js script' },
-  { id: 'python', desc: 'Run Python script' },
-  { id: 'git', desc: 'Git operations' },
-  { id: 'docker', desc: 'Docker CLI' },
-  { id: 'npm', desc: 'Node package manager' },
-  { id: 'pnpm', desc: 'Fast Node package manager' },
-  { id: 'npx', desc: 'Execute npm package binaries' },
-  { id: 'make', desc: 'Run Makefile targets' },
-];
-
 interface CatalogItem { id: string; desc?: string; tag?: string }
-
-function HookHandlerPicker({ value, type, onChange, skillCatalog, methodCatalog }: {
-  value: string;
-  type: string;
-  onChange: (v: string) => void;
-  skillCatalog: CatalogItem[];
-  methodCatalog: CatalogItem[];
-}) {
-  const [open, setOpen] = useState(false);
-  const [q, setQ] = useState('');
-  const ref = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const close = useCallback(() => setOpen(false), []);
-  useClickOutside(ref, close);
-
-  useEffect(() => {
-    if (open) setTimeout(() => inputRef.current?.focus(), 20);
-  }, [open]);
-
-  const catalog = type === 'skill' ? skillCatalog : type === 'method' ? methodCatalog : COMMON_COMMANDS;
-  const ql = q.trim().toLowerCase();
-  const filtered = ql
-    ? catalog.filter(c => c.id.toLowerCase().includes(ql) || (c.desc || '').toLowerCase().includes(ql))
-    : catalog;
-
-  return (
-    <div className="hook-handler-picker-sf" ref={ref}>
-      <button
-        type="button"
-        className={`hook-handler-btn-sf ${open ? 'open' : ''} ${value ? 'has-val' : ''}`}
-        onClick={() => setOpen(o => !o)}
-        title={value || `Pick a ${type}`}
-      >
-        <span style={{ color: 'var(--fg-4)', fontFamily: 'var(--font-mono)', fontSize: 11 }}>→</span>
-        <span className="hook-handler-val">{value || `pick ${type}…`}</span>
-        {CHEVRON_DOWN}
-      </button>
-      {open && (
-        <div className="hook-pop-sf handler-pop" role="listbox">
-          <div className="attach-pop-head-sf">
-            <input
-              ref={inputRef}
-              className="attach-pop-search-sf"
-              placeholder={`Search ${type}s…`}
-              value={q}
-              onChange={e => setQ(e.target.value)}
-              onKeyDown={e => {
-                if (e.key === 'Enter' && q.trim()) {
-                  onChange(q.trim());
-                  setQ('');
-                  setOpen(false);
-                }
-              }}
-            />
-            <span className="attach-pop-count-sf">{filtered.length}</span>
-          </div>
-          <div className="attach-pop-list-sf" style={{ maxHeight: 200 }}>
-            {filtered.length === 0 && (
-              <div className="attach-pop-empty-sf">
-                {q ? <span>No match. Press <b>Enter</b> to use "{q}".</span> : `No ${type}s available.`}
-              </div>
-            )}
-            {filtered.map(c => (
-              <button
-                key={c.id}
-                type="button"
-                className={`attach-pop-item-sf ${c.id === value ? 'on' : ''}`}
-                onClick={() => { onChange(c.id); setQ(''); setOpen(false); }}
-              >
-                <div className="attach-pop-item-top-sf">
-                  <span className="attach-pop-item-name-sf">{c.id}</span>
-                </div>
-                {c.desc && <div className="attach-pop-item-desc-sf">{c.desc}</div>}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
 
 function AttachPicker({ kind, catalog, attached, onPick }: {
   kind: string;
@@ -399,12 +178,70 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
     rulesBaselineRef.current !== null &&
     rulesBaselineRef.current !== JSON.stringify(rulesCtl.config);
 
-  // Hooks
-  const initialHooks = useMemo<HookItem[]>(
-    () => parseHooks(agent.lifecycleHooks),
+  // Hooks — schema-aware editor (P13-2).
+  // `migratedInitial.json` is the rawJson seed passed into LifecycleHooksEditor.
+  // We compute it once per agent.id (legacy migration is pure) and only fire
+  // the migration toast once after the editor has latched a baseline.
+  const migratedInitial = useMemo(
+    () => migrateLegacyFlat(agent.lifecycleHooks ?? null),
     [agent.lifecycleHooks],
   );
-  const [hooks, setHooks] = useState<HookItem[]>(initialHooks);
+  const hooksEditorRef = useRef<LifecycleHooksEditorHandle>(null);
+  const [liveRawJson, setLiveRawJson] = useState<string>('');
+  const [baselineJson, setBaselineJson] = useState<string | null>(null);
+  const hooksErrorsRef = useRef<string[]>([]);
+  const [hooksHasErrors, setHooksHasErrors] = useState<boolean>(false);
+  const migrationToastFiredRef = useRef<boolean>(false);
+
+  // Reset hook-editor state synchronously when the drawer is re-pointed at a
+  // different agent without being unmounted first (AgentList uses
+  // `setOpenAgent(newAgent)` without a null hop — see pages/AgentList.tsx).
+  // A useEffect reset would race the child's remount-time onRawJsonChange
+  // emission (child effects fire before parent effects), leaving baselineJson
+  // stuck on the previous agent. The render-phase reset pattern is documented
+  // at https://react.dev/reference/react/useState#storing-information-from-previous-renders
+  const prevAgentIdRef = useRef<number>(agent.id);
+  if (prevAgentIdRef.current !== agent.id) {
+    prevAgentIdRef.current = agent.id;
+    setBaselineJson(null);
+    setLiveRawJson('');
+    setHooksHasErrors(false);
+    hooksErrorsRef.current = [];
+    migrationToastFiredRef.current = false;
+  }
+
+  const handleHooksRawJsonChange = useCallback((raw: string) => {
+    setLiveRawJson(raw);
+    // Latch baseline once on first emission (editor-mount-time snapshot).
+    setBaselineJson((prev) => (prev === null ? raw : prev));
+  }, []);
+
+  const handleHooksErrorsChange = useCallback((errors: string[]) => {
+    hooksErrorsRef.current = errors;
+    setHooksHasErrors(errors.length > 0);
+  }, []);
+
+  // Fire migration warning toast once per agent open, after baseline latches.
+  useEffect(() => {
+    if (migrationToastFiredRef.current) return;
+    if (baselineJson === null) return; // wait for first onRawJsonChange
+    migrationToastFiredRef.current = true;
+    const { migratedCount, droppedCount, reasons } = migratedInitial;
+    if (migratedCount + droppedCount > 0) {
+      message.warning(
+        `Migrated ${migratedCount} legacy hook ${migratedCount === 1 ? 'entry' : 'entries'}; ` +
+          `dropped ${droppedCount}. Review before saving.`,
+      );
+      if (reasons.length > 0) {
+        // Surface dropped-reason detail to the user as a secondary info toast
+        // rather than a console log (project rule bans console.* in prod code).
+        message.info(`Hook migration details: ${reasons.join('; ')}`);
+      }
+    }
+  }, [baselineJson, migratedInitial]);
+
+  const hooksDirty = baselineJson !== null && liveRawJson !== baselineJson;
+  const hooksCount = useMemo(() => countHookEntries(liveRawJson), [liveRawJson]);
 
   const [testInput, setTestInput] = useState('');
   const [testOut, setTestOut] = useState<string | null>(null);
@@ -452,19 +289,6 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
   const toolCatalogItems = useMemo<CatalogItem[]>(
     () => toolsCatalog.map(t => ({ id: String(t.name), desc: t.description ? String(t.description) : undefined, tag: t.category ? String(t.category) : undefined })),
     [toolsCatalog],
-  );
-
-  const { data: rawMethods = [] } = useQuery({
-    queryKey: ['lifecycle-hook-methods'],
-    queryFn: () => getLifecycleHookMethods().then(res => Array.isArray(res.data) ? res.data : []),
-    staleTime: 120_000,
-  });
-  const methodCatalogItems = useMemo<CatalogItem[]>(
-    () => rawMethods.map((m) => ({
-      id: m.ref,
-      desc: m.description || m.displayName,
-    })),
-    [rawMethods],
   );
 
   const addSkill = (id: string) => setSkills(s => [...s, id]);
@@ -537,11 +361,29 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
     updateMutation.mutate({ id: agent.id, payload: withPublic(partial) });
   };
 
-  const addHook = () => {
-    setHooks(h => [...h, { event: 'PreToolUse', name: 'new-hook', type: 'skill' }]);
+  const handleSaveHooks = () => {
+    if (hooksErrorsRef.current.length > 0) return;
+    const snapshot = liveRawJson;
+    updateMutation.mutate(
+      {
+        id: agent.id,
+        payload: withPublic({ lifecycleHooks: snapshot }),
+      },
+      {
+        onSuccess: () => {
+          // Re-latch baseline without remounting the editor; preserves mode +
+          // internal expansion state so Save feels like a no-op in the UI.
+          setBaselineJson(snapshot);
+        },
+      },
+    );
   };
-  const removeHook = (i: number) => setHooks(h => h.filter((_, j) => j !== i));
-  const updateHook = (i: number, patch: Partial<HookItem>) => setHooks(h => h.map((x, j) => j === i ? { ...x, ...patch } : x));
+
+  const handleRevertHooks = () => {
+    if (baselineJson === null) return;
+    hooksEditorRef.current?.setRawJson(baselineJson);
+    setLiveRawJson(baselineJson);
+  };
 
   const runTest = () => {
     setTesting(true);
@@ -560,7 +402,7 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
     { id: 'overview', label: 'Overview' },
     { id: 'prompts', label: 'Prompts' },
     { id: 'rules', label: 'Rules', badge: rulesBadge },
-    { id: 'hooks', label: 'Hooks', badge: hooks.length },
+    { id: 'hooks', label: 'Hooks', badge: hooksCount },
     { id: 'toolsSkills', label: 'Tools & Skills', badge: skills.length + tools.length },
     { id: 'test', label: 'Test' },
   ];
@@ -649,7 +491,7 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
                 <div className="spec-h"><h3>Configuration</h3></div>
                 <div className="overview-grid" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
                   <div className="overview-card"><div className="overview-k">Rules</div><div className="overview-v">{rulesBadge}</div></div>
-                  <div className="overview-card"><div className="overview-k">Hooks</div><div className="overview-v">{hooks.length}</div></div>
+                  <div className="overview-card"><div className="overview-k">Hooks</div><div className="overview-v">{hooksCount}</div></div>
                   <div className="overview-card"><div className="overview-k">Skills</div><div className="overview-v">{skills.length}</div></div>
                 </div>
               </div>
@@ -728,79 +570,39 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
           {tab === 'hooks' && (
             <>
               <div className="spec-h">
-                <h3>Lifecycle hooks — {hooks.length}</h3>
-                <div className="spec-h-actions">
-                  <button className="btn-ghost-sf" onClick={addHook}>{PLUS_ICON} Add hook</button>
-                </div>
+                <h3>Lifecycle hooks — {hooksCount}</h3>
               </div>
-              <div className="hooks-list-sf">
-                <div className="hook-head-sf">
-                  <span>event</span>
-                  <span>handler</span>
-                  <span>type</span>
-                  <span />
-                </div>
-                {hooks.map((h, i) => {
-                  const meta = HOOK_EVENT_BY_ID[h.event];
-                  return (
-                    <div key={i} className="hook-entry-sf">
-                      <div className="hook-row-sf">
-                        <HookEventPicker value={h.event} onChange={(v) => updateHook(i, { event: v })} />
-                        <HookHandlerPicker
-                          value={h.name}
-                          type={h.type}
-                          onChange={(v) => updateHook(i, { name: v })}
-                          skillCatalog={skillCatalogItems}
-                          methodCatalog={methodCatalogItems}
-                        />
-                        <HookTypePicker value={h.type} onChange={(v) => updateHook(i, { type: v })} />
-                        <button className="hook-del-sf" onClick={() => removeHook(i)} title="Remove">{CLOSE_ICON}</button>
-                      </div>
-                      <div className="hook-config-sf">
-                        <div className="hook-config-row-sf">
-                          <input
-                            className="hook-desc-input-sf"
-                            value={h.description || ''}
-                            onChange={(e) => updateHook(i, { description: e.target.value })}
-                            placeholder="Description (optional)"
-                          />
-                        </div>
-                        {meta?.abort && (
-                          <label className="hook-toggle-sf">
-                            <input
-                              type="checkbox"
-                              checked={h.abortOnError ?? false}
-                              onChange={(e) => updateHook(i, { abortOnError: e.target.checked })}
-                            />
-                            <span>Abort on error</span>
-                          </label>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-                {hooks.length === 0 && (
-                  <div className="empty-state-sf" style={{ padding: '32px 20px' }}>
-                    <div style={{ fontSize: 13, color: 'var(--fg-2)', marginBottom: 12 }}>
-                      Lifecycle hooks let you run code at key points during an agent session — before/after tool calls, on user input, at session start/end.
-                    </div>
-                    <button className="btn-ghost-sf" onClick={addHook} style={{ margin: '0 auto' }}>{PLUS_ICON} Add your first hook</button>
-                  </div>
-                )}
-              </div>
-              {/* Hooks Save is disabled: parseHooks flattens the backend
-                  HookHandler discriminated-union schema (type: skill/script/method
-                  with skillName / scriptBody+scriptLang / methodRef, plus
-                  timeoutSeconds / failurePolicy / async / displayName) into a
-                  lossy {event, name, type} shape. Re-enable when the
-                  schema-aware hook editor lands (see follow-up PR). */}
+              <LifecycleHooksEditor
+                key={agent.id}
+                ref={hooksEditorRef}
+                initialJson={migratedInitial.json}
+                skills={skillsCatalog.map((s) => ({
+                  name: String(s.name),
+                  description: s.description ? String(s.description) : undefined,
+                }))}
+                agentId={String(agent.id)}
+                onRawJsonChange={handleHooksRawJsonChange}
+                onErrorsChange={handleHooksErrorsChange}
+              />
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
                 <button
-                  className="btn-primary-sf"
-                  disabled
-                  title="Hooks editor is read-only until schema-aware editor ships. Edit hooks via API for now."
+                  className="btn-ghost-sf"
+                  onClick={handleRevertHooks}
+                  disabled={!hooksDirty || updateMutation.isPending}
                 >
-                  Save (disabled — see follow-up)
+                  Revert
+                </button>
+                <button
+                  className="btn-primary-sf"
+                  onClick={handleSaveHooks}
+                  disabled={!hooksDirty || hooksHasErrors || updateMutation.isPending}
+                  title={
+                    hooksHasErrors
+                      ? 'Fix JSON validation errors before saving.'
+                      : undefined
+                  }
+                >
+                  {hooksHasErrors ? 'Fix JSON first' : hooksDirty ? 'Save' : 'Saved'}
                 </button>
               </div>
             </>

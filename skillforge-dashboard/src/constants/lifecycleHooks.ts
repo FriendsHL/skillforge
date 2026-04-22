@@ -286,3 +286,256 @@ export function safeParseHooksJson(raw: string): JsonParseResult {
 export function stringifyHooks(config: LifecycleHooksConfig): string {
   return JSON.stringify(config, (key, value) => (key === '_id' ? undefined : value), 2);
 }
+
+// ─── Factories (moved from FormMode so migrateLegacyFlat shares defaults) ───
+
+/** Generate a UI-only identifier for entries. Falls back when `crypto.randomUUID` is unavailable. */
+function generateEntryId(): string {
+  try {
+    const c = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
+    if (c && typeof c.randomUUID === 'function') return c.randomUUID();
+  } catch {
+    // fall through
+  }
+  return `id-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+export function buildDefaultHandler(type: HookHandlerType): HookHandler {
+  switch (type) {
+    case 'skill':
+      return { type: 'skill', skillName: '' };
+    case 'script':
+      return { type: 'script', scriptLang: 'bash', scriptBody: '' };
+    case 'method':
+      return { type: 'method', methodRef: '', args: {} };
+  }
+}
+
+export function buildDefaultEntry(): HookEntry {
+  return {
+    handler: buildDefaultHandler('skill'),
+    timeoutSeconds: TIMEOUT_DEFAULT_SECONDS,
+    failurePolicy: 'CONTINUE',
+    async: false,
+    _id: generateEntryId(),
+  };
+}
+
+// ─── Counting ───────────────────────────────────────────────────────────────
+
+/**
+ * Return the total number of hook entries across all events in a rawJson string.
+ * Returns 0 on invalid JSON, legacy flat shapes (since those need migration),
+ * or on parse errors.
+ */
+export function countHookEntries(raw: string | null | undefined): number {
+  if (!raw) return 0;
+  const { parsed } = safeParseHooksJson(raw);
+  if (!parsed) return 0;
+  return LIFECYCLE_HOOK_EVENT_IDS.reduce(
+    (sum, id) => sum + (parsed.hooks[id]?.length ?? 0),
+    0,
+  );
+}
+
+// ─── Legacy flat-shape migration ────────────────────────────────────────────
+
+const LIFECYCLE_HOOK_EVENT_SET = new Set<string>(LIFECYCLE_HOOK_EVENT_IDS);
+
+export interface LegacyMigrationResult {
+  /** JSON string to drop into rawJson. Canonical shape on success; unchanged raw on unparseable. */
+  json: string;
+  /** Number of legacy flat entries successfully migrated. */
+  migratedCount: number;
+  /** Number of legacy flat entries dropped (script bodies, unknown events, unsupported types). */
+  droppedCount: number;
+  /** Human-readable reasons, one per dropped entry. */
+  reasons: string[];
+}
+
+type LegacyFlatEntry = {
+  event?: unknown;
+  name?: unknown;
+  type?: unknown;
+  description?: unknown;
+  abortOnError?: unknown;
+};
+
+/**
+ * Migrate legacy flat-shape lifecycle hooks (AgentDrawer pre-P13-2 format) to
+ * the canonical `{version, hooks}` discriminated-union schema.
+ *
+ * Rules:
+ *   - null / empty → EMPTY_HOOKS_JSON, no counts
+ *   - unparseable JSON → returned as-is (JSON mode can surface errors)
+ *   - already canonical (`{version, hooks}`) → returned re-stringified, no counts
+ *   - flat array or `{hooks: [...]}` → attempt per-entry migration
+ *     - `type === 'skill'` + known event → handler `{type:'skill', skillName: name}`
+ *     - `type === 'method'` + known event → handler `{type:'method', methodRef: name, args:{}}`
+ *     - `type === 'script'` → DROPPED (no scriptBody available; explicit over-injection avoids saving TODO placeholders)
+ *     - `type === 'command'` → DROPPED (unsupported)
+ *     - unknown event id → DROPPED
+ *   - all migrated entries receive canonical defaults (30s timeout, CONTINUE, async=false)
+ */
+export function migrateLegacyFlat(raw: string | null | undefined): LegacyMigrationResult {
+  if (!raw) {
+    return { json: EMPTY_HOOKS_JSON, migratedCount: 0, droppedCount: 0, reasons: [] };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { json: raw, migratedCount: 0, droppedCount: 0, reasons: [] };
+  }
+
+  // Already canonical (version=1 + hooks is object with only known events)?
+  // Re-stringify (normalizes whitespace) and return.
+  if (isCanonicalShape(parsed)) {
+    try {
+      return {
+        json: JSON.stringify(parsed, null, 2),
+        migratedCount: 0,
+        droppedCount: 0,
+        reasons: [],
+      };
+    } catch {
+      return { json: raw, migratedCount: 0, droppedCount: 0, reasons: [] };
+    }
+  }
+
+  // Canonical-shaped but has unknown event keys mixed in (e.g. PreToolUse
+  // from a stale schema). Keep known-event entries, drop the rest with
+  // reasons — otherwise Zod silently strips them on next parse.
+  if (isCanonicalLikeWithUnknownEvents(parsed)) {
+    const hooksRaw = (parsed as { hooks: Record<string, unknown> }).hooks;
+    const hooks = emptyHooksMap();
+    const reasons: string[] = [];
+    let droppedCount = 0;
+    for (const [key, value] of Object.entries(hooksRaw)) {
+      if (LIFECYCLE_HOOK_EVENT_SET.has(key)) {
+        if (Array.isArray(value)) {
+          // Preserve entries as-is; Zod will re-validate downstream.
+          hooks[key as LifecycleHookEventId] = value as HookEntry[];
+        }
+      } else {
+        const count = Array.isArray(value) ? value.length : 1;
+        droppedCount += count;
+        reasons.push(
+          `unknown event "${key}" (${count} ${count === 1 ? 'entry' : 'entries'})`,
+        );
+      }
+    }
+    const config: LifecycleHooksConfig = { version: 1, hooks };
+    return {
+      json: stringifyHooks(config),
+      migratedCount: 0,
+      droppedCount,
+      reasons,
+    };
+  }
+
+  // Extract the flat array from either `[…]` or `{hooks: […]}`.
+  let flat: LegacyFlatEntry[] | null = null;
+  if (Array.isArray(parsed)) {
+    flat = parsed as LegacyFlatEntry[];
+  } else if (parsed && typeof parsed === 'object') {
+    const maybe = (parsed as Record<string, unknown>).hooks;
+    if (Array.isArray(maybe)) flat = maybe as LegacyFlatEntry[];
+  }
+
+  if (!flat) {
+    // Unknown shape — hand back original so the user can fix in JSON mode.
+    return { json: raw, migratedCount: 0, droppedCount: 0, reasons: [] };
+  }
+
+  const hooks = emptyHooksMap();
+  const reasons: string[] = [];
+  let migratedCount = 0;
+  let droppedCount = 0;
+
+  for (const entry of flat) {
+    const eventRaw = typeof entry.event === 'string' ? entry.event : '';
+    const nameRaw = typeof entry.name === 'string' ? entry.name : '';
+    const typeRaw = typeof entry.type === 'string' ? entry.type : '';
+
+    if (!LIFECYCLE_HOOK_EVENT_SET.has(eventRaw)) {
+      droppedCount += 1;
+      reasons.push(`unknown event "${eventRaw || '(missing)'}"`);
+      continue;
+    }
+    const eventId = eventRaw as LifecycleHookEventId;
+
+    if (typeRaw === 'script') {
+      droppedCount += 1;
+      reasons.push(`legacy flat entry has no scriptBody (event=${eventId}, name=${nameRaw})`);
+      continue;
+    }
+    if (typeRaw !== 'skill' && typeRaw !== 'method') {
+      droppedCount += 1;
+      reasons.push(`unsupported type "${typeRaw || '(missing)'}" (event=${eventId})`);
+      continue;
+    }
+
+    const handler: HookHandler =
+      typeRaw === 'skill'
+        ? { type: 'skill', skillName: nameRaw }
+        : { type: 'method', methodRef: nameRaw, args: {} };
+
+    // Factory single-source: spread defaults from buildDefaultEntry so the
+    // timeout / failurePolicy / async values stay in lockstep with the form
+    // "add entry" defaults. Overwrite handler.
+    const migrated: HookEntry = {
+      ...buildDefaultEntry(),
+      handler,
+    };
+    // Drop the UI-only _id from the baseline output. stringifyHooks below
+    // strips it, but also unset here so the in-memory shape is clean.
+    delete migrated._id;
+    hooks[eventId].push(migrated);
+    migratedCount += 1;
+  }
+
+  const config: LifecycleHooksConfig = { version: 1, hooks };
+  return {
+    json: stringifyHooks(config),
+    migratedCount,
+    droppedCount,
+    reasons,
+  };
+}
+
+function emptyHooksMap(): Record<LifecycleHookEventId, HookEntry[]> {
+  // Derived from LIFECYCLE_HOOK_EVENT_IDS so adding a new event in one place
+  // propagates here automatically.
+  return Object.fromEntries(
+    LIFECYCLE_HOOK_EVENT_IDS.map((id) => [id, [] as HookEntry[]]),
+  ) as Record<LifecycleHookEventId, HookEntry[]>;
+}
+
+function isCanonicalLikeWithUnknownEvents(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const obj = value as Record<string, unknown>;
+  if (obj.version !== 1) return false;
+  const hooks = obj.hooks;
+  if (!hooks || typeof hooks !== 'object' || Array.isArray(hooks)) return false;
+  // At least one key must be unknown; otherwise this would be strictly canonical.
+  for (const key of Object.keys(hooks)) {
+    if (!LIFECYCLE_HOOK_EVENT_SET.has(key)) return true;
+  }
+  return false;
+}
+
+function isCanonicalShape(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const obj = value as Record<string, unknown>;
+  if (obj.version !== 1) return false;
+  const hooks = obj.hooks;
+  if (!hooks || typeof hooks !== 'object' || Array.isArray(hooks)) return false;
+  // Every key in hooks must be a known event — if any isn't (e.g. PreToolUse
+  // from a stale data version), treat as non-canonical so migrateLegacyFlat
+  // can route entries through the drop-with-reason path.
+  for (const key of Object.keys(hooks)) {
+    if (!LIFECYCLE_HOOK_EVENT_SET.has(key)) return false;
+  }
+  return true;
+}

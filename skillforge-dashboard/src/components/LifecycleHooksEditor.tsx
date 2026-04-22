@@ -1,4 +1,4 @@
-import { forwardRef, useCallback, useImperativeHandle } from 'react';
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef } from 'react';
 import { Radio, message, Tooltip } from 'antd';
 import {
   AppstoreOutlined,
@@ -26,16 +26,28 @@ interface LifecycleHooksEditorProps {
   skills: SkillOption[];
   /** Agent id — needed for dry-run test button. */
   agentId: string | null;
+  /**
+   * Emitted whenever the internal rawJson changes, including the first render
+   * (so the parent can latch a baseline for dirty comparison without reading
+   * the imperative handle every render).
+   */
+  onRawJsonChange?: (raw: string) => void;
+  /** Emitted whenever validation errors change. Parent typically stores in a ref. */
+  onErrorsChange?: (errors: string[]) => void;
 }
 
 /**
  * Imperative handle exposed to the parent (AgentList). The parent reads the
  * live `rawJson` + `errors` at save-time instead of mirroring them into its
  * own state, which avoids an extra render round-trip per keystroke.
+ *
+ * `setRawJson` lets the parent drive the editor (e.g. Revert restores the
+ * baseline JSON without remounting the editor).
  */
 export interface LifecycleHooksEditorHandle {
   rawJson: string;
   errors: string[];
+  setRawJson: (next: string) => void;
 }
 
 /**
@@ -49,7 +61,7 @@ export interface LifecycleHooksEditorHandle {
  * See docs/design-n3-lifecycle-hooks.md §5.2.
  */
 const LifecycleHooksEditor = forwardRef<LifecycleHooksEditorHandle, LifecycleHooksEditorProps>(
-  ({ initialJson, skills, agentId }, ref) => {
+  ({ initialJson, skills, agentId, onRawJsonChange, onErrorsChange }, ref) => {
     const {
       rawJson,
       mode,
@@ -67,9 +79,29 @@ const LifecycleHooksEditor = forwardRef<LifecycleHooksEditorHandle, LifecycleHoo
 
     useImperativeHandle(
       ref,
-      () => ({ rawJson, errors }),
-      [rawJson, errors],
+      () => ({ rawJson, errors, setRawJson }),
+      [rawJson, errors, setRawJson],
     );
+
+    // Ref-mirror the callbacks so we don't need to re-fire the effect when the
+    // parent passes an unstable callback identity (common React pitfall).
+    // The effect below depends only on rawJson / errors.
+    const onRawJsonChangeRef = useRef(onRawJsonChange);
+    const onErrorsChangeRef = useRef(onErrorsChange);
+    useEffect(() => {
+      onRawJsonChangeRef.current = onRawJsonChange;
+    }, [onRawJsonChange]);
+    useEffect(() => {
+      onErrorsChangeRef.current = onErrorsChange;
+    }, [onErrorsChange]);
+
+    useEffect(() => {
+      onRawJsonChangeRef.current?.(rawJson);
+    }, [rawJson]);
+
+    useEffect(() => {
+      onErrorsChangeRef.current?.(errors);
+    }, [errors]);
 
     const handleApplyPreset = useCallback(
       (config: LifecycleHooksConfig, presetName: string) => {

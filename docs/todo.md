@@ -1,6 +1,6 @@
 # SkillForge 待办任务
 
-> 更新于：2026-04-21 晚
+> 更新于：2026-04-22
 
 ---
 
@@ -99,6 +99,75 @@
 | P11-2 SubAgentSkill 增强 | 支持按 agent name（不仅 agentId）调用；调用前自动校验目标 Agent 存在且可用 |
 | P11-3 Agent 能力描述 | AgentEntity 增加 capabilities/tags 字段，便于语义化发现（如 "coding"、"search"、"feishu"） |
 | P11-4 调用权限控制 | 配置哪些 Agent 可被其他 Agent 发现和调用（visibility: public/private）；防止循环调用检测 |
+
+---
+
+### P12 — 定时任务（Scheduled Tasks）
+
+> 目标：① 用户可为 Agent 配置 cron / 一次性定时触发（例："每天 9:00 拉飞书群日报推 channel"），到点自动起 session；② 平台内置后台周期作业（记忆提取、cold cleanup、skill 进化、eval 回归、SubAgentRunSweeper 等）统一注册到同一调度器，在 UI 中可见且可手动触发，只读不可删。
+
+#### 现状盘点（2026-04-22）
+
+当前 SkillForge 用的是 **Spring 原生 `@Scheduled` + `@EnableScheduling`**，没有 Quartz。已知定时/后台任务：
+
+| 任务 | 机制 | 频率 | 备注 |
+| --- | --- | --- | --- |
+| `SessionDigestExtractor` 批处理 | `@Scheduled(cron)` | 每天 3:00 | 兜底批处理；主路径已改为 session-end `@Async` 即时触发（#7） |
+| `SubAgentRunSweeper` | `@Scheduled(fixedDelay)` | 60s | 超时子 agent 清理 |
+| `ReplyDeliveryService` poll | `@Scheduled(fixedDelay)` | 30s / 120s | 两个定时器：投递重试 + 过期清理 |
+| `MemoryEmbeddingWorker` | `@Async` + afterCommit | 事件触发 | 非周期性 |
+| P9-3 cold cleanup | `AgentLoopEngine` 首次迭代检查 | 进 loop 触发 | 非周期性 |
+| P1 skill 进化 / P2-6 scenario draft | 手动 / session-end 事件 | 当前不是周期任务 | P12 如需让它们变周期任务，顺带接入 |
+
+#### 关键设计选择
+
+**1）调度器选型：Spring `@Scheduled` 还是 Quartz？**
+
+Spring `@Scheduled` 够用前提：单机、秒级、不需要运行时动态增删触发器、不需要 misfire 补跑。以下任一成立才值得上 Quartz：
+- 需要多节点部署（Quartz JDBC store 自带 cluster 锁）
+- 需要"错过了要补跑"（misfire policy）
+- 需要运行时动态增删触发器（user 型任务必需）
+
+**结论**：**user 型任务走 `ThreadPoolTaskScheduler` 动态调度**（`schedule(Runnable, Trigger)` + DB 持久化元数据，应用启动时从 DB 全量重新注册）。除非明确要做 cluster，否则不引 Quartz。
+
+**2）system 型任务如何"上架"？两条路：**
+
+- **轻量路线（推荐初版）**：保留现有 5 处 `@Scheduled` 注解不动，只额外写一张 **`SystemJobRegistry`** 把它们的元信息（bean + method + cron 字符串 + 描述）声明出来；UI `/schedules` 页面从 registry 读展示，"手动触发"按钮本质就是反射调 bean 方法。**改动小，但 cron 修改需要重启；UI 上只读不可编辑。**
+- **彻底路线（V2）**：全改成动态调度（DB 里存 cron，统一调度器按 DB 触发），现有 `@Scheduled` 注解全拆掉。**灵活但要动现有稳定代码**，P12 首版先不做。
+
+#### 子任务拆分
+
+| 子任务 | 说明 |
+| --- | --- |
+| P12-1 Schedule 实体 + CRUD | `t_scheduled_task`（id/name/kind=user\|system/cronExpr/oneShotAt/timezone/agentId/promptTemplate/channelTarget/enabled/misfirePolicy/concurrencyPolicy/nextFireAt/lastFireAt/status）+ Flyway migration + `ScheduledTaskService` CRUD + REST API；`kind=system` 行不进此表（走 `SystemJobRegistry`），本表只存 user 型任务 |
+| P12-2 动态调度器内核 | `UserTaskScheduler`：基于 `ThreadPoolTaskScheduler` + `CronTrigger`；应用启动时从 DB 全量 register；CRUD 操作后同步 schedule/unschedule；触发时调用 `ChatService.chatAsync` 起 session；`misfirePolicy`（fire-now / skip）+ `concurrencyPolicy`（skip-if-running / queue / parallel）；shutdown 优雅等待 |
+| P12-3 SystemJobRegistry | 新建 `SystemJobRegistry`：声明式注册现有 5 个 `@Scheduled` 任务（`SessionDigestExtractor` / `SubAgentRunSweeper` / `ReplyDeliveryService`×2）+ P1 skill 进化 + P2-6 scenario draft 等可选系统任务；每项含 name/description/cronOrFixedDelay/beanRef/methodRef；UI 查这个 registry 做展示 |
+| P12-4 执行历史 + 可观测 | `t_scheduled_task_run`（taskId/kind/triggeredAt/finishedAt/status=success\|failure\|skipped\|timeout/errorMessage/triggeredSessionId）；user 型任务每次调度写一行；system 型任务 AOP 切面拦截 `@Scheduled` 方法也写一行；和 TraceSpan 关联（user 型 session 可跳转） |
+| P12-5 前端 /schedules 页面 | 任务列表（user/system 两 tab）+ cron 表达式编辑器（含"下 5 次触发时间"预览）+ 新建/编辑 drawer（选 Agent + prompt 模板 + channel 目标）+ 启停 toggle + 手动 trigger 按钮 + 执行历史时间线；system tab 只读（加锁图标）只展示 + 手动触发，不可改 cron |
+| P12-6 可靠性 + 权限 | 超时强制 kill（复用 AgentLoopEngine 超时机制）+ 失败告警（连续 N 次失败通过 Lifecycle Hook / channel 推送）+ user 型任务仅创建者可编辑 + system 型任务手动触发需 admin 权限 + `/health` 暴露调度器状态（当前活跃 task 数 / 上次调度延迟） |
+
+#### 后续演进（V2，不列入本期）
+
+- 多节点部署时切 Quartz JDBC store，或自研 PG advisory lock + `SKIP LOCKED` 抢 claim
+- 系统任务彻底路线：cron 从 DB 读，`@Scheduled` 注解全部拆除
+
+---
+
+### P13 — Agent 编辑 UI follow-up
+
+> 背景：Full Pipeline `agent-drawer-wire-up`（2026-04-22）交付 AgentDrawer 接入 BehaviorRulesEditor + per-tab Save + partial-PUT 后端修复。本节列出该轮未覆盖、有明确优先级的后续项。
+
+| 子任务 | 优先级 | 说明 |
+| --- | --- | --- |
+| P13-1 Custom rule 加 severity（方向 A）| 高 | `BehaviorRuleConfig.customRules: string[]` → `Array<{severity: 'MUST' \| 'SHOULD' \| 'MAY', text: string}>`。前端：`useBehaviorRules` + `BehaviorRulesEditor` custom section UI（加 severity 下拉）。后端：`AgentDefinition.BehaviorRulesConfig.customRules` 类型变更 + `SystemPromptBuilder.appendBehaviorRules` 按 severity 分组注入 + Jackson 向后兼容 deserializer（老数据 `"text"` 自动升级为 `{severity:'SHOULD', text}`）。Full Pipeline 跨前后端，~180 行 |
+| P13-2 Hook 编辑器重写（schema-aware）| 高 | 当前 `parseHooks` 把后端 `HookHandler` 的 discriminated-union schema 拍平成 `{event, name, type}` 丢信息；本轮已把 Hooks tab Save 按钮禁用。重写 `HookItem` 为 discriminated union（`SkillItem {skillName}` / `ScriptItem {scriptLang, scriptBody}` / `MethodItem {methodRef}`），UI 按 type 渲染对应字段（script 要 textarea + lang 下拉），保留 entry-level `timeoutSeconds / failurePolicy / async / displayName`。Full Pipeline 前端为主，~300 行 |
+| P13-3 AgentEntity#isPublic → Boolean 包装 | 中 | 彻底干掉 AgentDrawer 里的 `withPublic` workaround。需要 Entity 字段类型变更 + schema migration（PG/H2 兼容）+ 所有 `agent.isPublic()` 调用点改 `Boolean.TRUE.equals(agent.getIsPublic())`，并在 `AgentService.updateAgent` 对 `getIsPublic()` 加 null guard。独立 PR |
+| P13-4 AgentServiceTest 补测试 | 中 | 当前只有 1 条 partial-preserve 测试。补：(a) 404 not-found 抛出、(b) full-payload all fields replaced、(c) all-null payload 不变、(d) isPublic=true 现行 regression 行为锁定。小 |
+| P13-5 前端 3 个 pre-existing TS 错修复 | 低 | `Eval.tsx:331` ReactNode unknown / `SkillList.tsx:1189,1242` undefined `busy` — 这三个 build error 早于本轮，本轮未在 scope 内。每个几行 |
+| P13-6 MODEL_OPTIONS 提到共享常量 | 低 | `AgentDrawer.tsx` 和 `pages/AgentList.tsx` 各自硬编码相同 7 项。抽到 `src/constants/models.ts`，两处共享。当前已带 TODO 注释 |
+| P13-7 `RuntimeException` → `AgentNotFoundException` | 低 | `AgentService.updateAgent` 和 `getAgent` 用 `orElseThrow(() -> new RuntimeException(...))`，违反 `.claude/rules/java.md` 约定的命名异常。新增 `AgentNotFoundException extends RuntimeException` 替换两处 |
+| P13-8 updateAgent 审计日志 | 低 | security-reviewer 指出：partial PUT 现在成功后没留任何痕迹，`systemPrompt`/`lifecycleHooks`/`behaviorRules` 改动无法事后追溯。至少 `log.info("Agent {} updated: fields={}", id, nonNullFieldNames)` |
+| P13-9 `/api/agents/*` rate limit | 低 | 无速率限制；系统型/多端部署时建议上 Bucket4j 或 Redis token bucket。独立话题，非本需求紧迫 |
 
 ---
 
