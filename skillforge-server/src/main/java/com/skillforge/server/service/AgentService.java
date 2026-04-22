@@ -16,6 +16,7 @@ import com.skillforge.server.repository.AgentRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -52,32 +53,37 @@ public class AgentService {
         return agentRepository.save(agent);
     }
 
-    // WARNING: This method manually copies each field. When adding new fields
-    // to AgentEntity, you MUST add the corresponding setter here, or updates
-    // will silently lose data.
+    // Partial update: null fields in the payload mean "don't change". Only non-null
+    // fields overwrite. Exception: isPublic is a primitive boolean, so it's always
+    // written — callers that send partial payloads should include isPublic or accept
+    // its reset to false. When adding new fields to AgentEntity, add a null-guarded
+    // setter here.
+    @Transactional
     public AgentEntity updateAgent(Long id, AgentEntity updated) {
         validateLifecycleHooksSize(updated);
         validateLifecycleHooksSemantics(updated);
         AgentEntity existing = agentRepository.findById(id)
                 .orElseThrow(() -> new RuntimeException("Agent not found: " + id));
-        existing.setName(updated.getName());
-        existing.setDescription(updated.getDescription());
-        existing.setModelId(updated.getModelId());
-        existing.setSystemPrompt(updated.getSystemPrompt());
-        existing.setSkillIds(updated.getSkillIds());
-        existing.setToolIds(updated.getToolIds());
-        existing.setConfig(updated.getConfig());
-        existing.setSoulPrompt(updated.getSoulPrompt());
-        existing.setToolsPrompt(updated.getToolsPrompt());
-        existing.setBehaviorRules(updated.getBehaviorRules());
-        existing.setLifecycleHooks(updated.getLifecycleHooks());
-        existing.setOwnerId(updated.getOwnerId());
+        if (updated.getName() != null) existing.setName(updated.getName());
+        if (updated.getDescription() != null) existing.setDescription(updated.getDescription());
+        if (updated.getModelId() != null) existing.setModelId(updated.getModelId());
+        if (updated.getSystemPrompt() != null) existing.setSystemPrompt(updated.getSystemPrompt());
+        if (updated.getSkillIds() != null) existing.setSkillIds(updated.getSkillIds());
+        if (updated.getToolIds() != null) existing.setToolIds(updated.getToolIds());
+        if (updated.getConfig() != null) existing.setConfig(updated.getConfig());
+        if (updated.getSoulPrompt() != null) existing.setSoulPrompt(updated.getSoulPrompt());
+        if (updated.getToolsPrompt() != null) existing.setToolsPrompt(updated.getToolsPrompt());
+        if (updated.getBehaviorRules() != null) existing.setBehaviorRules(updated.getBehaviorRules());
+        if (updated.getLifecycleHooks() != null) existing.setLifecycleHooks(updated.getLifecycleHooks());
+        if (updated.getOwnerId() != null) existing.setOwnerId(updated.getOwnerId());
+        if (updated.getStatus() != null) existing.setStatus(updated.getStatus());
+        if (updated.getMaxLoops() != null) existing.setMaxLoops(updated.getMaxLoops());
+        if (updated.getExecutionMode() != null) existing.setExecutionMode(updated.getExecutionMode());
+        // NOTE: isPublic is a primitive boolean on AgentEntity; cannot distinguish "unset"
+        // from "false" without changing the entity field type. Keep current behavior for
+        // this field — PUT always writes it. Changing this is deferred to a separate PR
+        // that evaluates switching the field to Boolean.
         existing.setPublic(updated.isPublic());
-        existing.setStatus(updated.getStatus());
-        existing.setMaxLoops(updated.getMaxLoops());
-        if (updated.getExecutionMode() != null) {
-            existing.setExecutionMode(updated.getExecutionMode());
-        }
         return agentRepository.save(existing);
     }
 
