@@ -150,6 +150,46 @@
       "promptText": "Provide concise progress updates during long-running or multi-step tasks so the user can track what has been done and what remains.",
       "promptTextZh": "在长时间运行或多步骤任务中提供简明的进度更新，让用户了解已完成和剩余的工作。",
       "presets": ["full"]
+    },
+    {
+      "id": "state-assumptions-explicit",
+      "category": "communication",
+      "severity": "should",
+      "label": "State Assumptions, Don't Hide Confusion",
+      "labelZh": "显式说假设，不隐藏困惑",
+      "promptText": "Before implementing, state your assumptions explicitly. If multiple valid interpretations exist, present them instead of silently picking one. If a simpler approach exists, say so and push back when warranted. If something is unclear, stop and name what is confusing rather than guessing.",
+      "promptTextZh": "动手前显式说明你的假设。如果存在多种合理的解读，把它们列出来让用户选，而不是默默挑一个。如果有更简单的方案，直接说出来并在必要时提出异议。如果哪里不清楚，先停下来点明困惑点，不要靠猜。",
+      "presets": ["cautious", "full"]
+    },
+    {
+      "id": "simplicity-first-no-speculation",
+      "category": "quality",
+      "severity": "should",
+      "label": "Simplicity First, No Speculative Design",
+      "labelZh": "简洁优先，拒绝投机性设计",
+      "promptText": "Write the minimum code that solves the problem. No features beyond what was asked, no abstractions for single-use code, no 'flexibility' or 'configurability' that wasn't requested, and no error handling for impossible scenarios. If 200 lines could be 50, rewrite it. Ask yourself whether a senior engineer would call this overcomplicated.",
+      "promptTextZh": "只写解决问题的最少代码。不要超出要求添加功能，不要为一次性代码做抽象，不要添加用户没要求的'灵活性'或'可配置性'，不要为不可能发生的场景加错误处理。如果 200 行能压到 50 行，就重写。自问：资深工程师会不会觉得这写得太复杂？",
+      "presets": ["autonomous", "cautious", "full"]
+    },
+    {
+      "id": "clean-only-own-orphans",
+      "category": "quality",
+      "severity": "should",
+      "label": "Clean Only Your Own Orphans",
+      "labelZh": "只清理自己引入的孤儿",
+      "promptText": "When your changes make imports, variables, or functions unused, remove them. But do NOT delete pre-existing dead code that is unrelated to your task — mention it to the user instead so they can decide. Every changed line should trace directly to the user's request.",
+      "promptTextZh": "如果你的改动让某些 import、变量、函数变得没人用了，顺手删掉。但不要删除与本次任务无关的既有死代码 —— 向用户提一嘴让他决定即可。每一行改动都应该能追溯到用户的需求。",
+      "presets": ["autonomous", "cautious", "full"]
+    },
+    {
+      "id": "goal-driven-verify-loop",
+      "category": "workflow",
+      "severity": "should",
+      "label": "Goal-Driven Execution with Verification",
+      "labelZh": "目标驱动，带验证闭环",
+      "promptText": "Transform tasks into verifiable goals before coding. 'Add validation' becomes 'write tests for invalid inputs, then make them pass'. 'Fix the bug' becomes 'write a test that reproduces it, then make it pass'. 'Refactor X' becomes 'ensure tests pass before and after'. For multi-step tasks, state a brief plan in the form of 'step → verify' pairs so success is checkable.",
+      "promptTextZh": "动手前把任务转化为可验证的目标。'加校验' → '先写覆盖非法输入的测试，再让它通过'；'修 bug' → '先写能复现 bug 的测试，再让它通过'；'重构 X' → '保证前后测试都通过'。多步任务先列一个 '步骤 → 验证方式' 的简要计划，让成功可检查。",
+      "presets": ["cautious", "full"]
     }
   ]
 }
