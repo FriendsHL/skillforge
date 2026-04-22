@@ -63,9 +63,18 @@ export function useChatWsEventHandler(deps: WsEventHandlerDeps) {
       if (evt.type === 'session_status') {
         setRuntimeStatus(((evt.status as string) ?? 'idle') as RuntimeStatus);
         setRuntimeStep((evt.step as string) ?? '');
-        setRuntimeError((evt.error as string) ?? '');
+        const errorDetail = (evt.error as string) ?? '';
+        setRuntimeError(errorDetail);
         if (evt.status !== 'waiting_user') {
           setPendingAsk(null);
+        }
+        if (evt.status === 'error' && errorDetail) {
+          // 保留 console.error：前端 UI 只显示简短文案（"Agent loop failed"），
+          // 详细栈帧通过 DevTools 控制台暴露给用户/运维追溯根因。
+          // 项目前端当前无统一 logger，直接用 console.error 符合现状。
+          console.error(
+            `[Session ${(evt.sessionId as string) ?? 'unknown'}] Agent loop failed:\n${errorDetail}`,
+          );
         }
         if (evt.status === 'idle' || evt.status === 'error') {
           setInflightTools({});

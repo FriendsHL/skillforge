@@ -21,6 +21,7 @@ import com.skillforge.server.repository.ModelUsageRepository;
 import com.skillforge.server.memory.SessionDigestExtractor;
 import com.skillforge.server.subagent.CollabRunService;
 import com.skillforge.server.subagent.SubAgentRegistry;
+import com.skillforge.server.util.StackTraceFormatter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -447,17 +448,21 @@ public class ChatService {
             finalStatus = "error";
             // Generic, non-leaking message for client-facing surfaces.
             // Full exception detail is captured in the server log above.
+            // 简要错误（用于 finalMessage / assistant-facing message 兜底）保持不变；
+            // runtime_error 和 WS error 字段改成完整异常详情，便于追溯根因。
             String safeError = "Agent loop failed";
+            // errorDetail 仅包含原始异常栈文本，前缀由前端/消费方自行组装（避免双层前缀）。
+            String errorDetail = StackTraceFormatter.format(e, 10);
             finalMessage = safeError;
             try {
                 SessionEntity s = sessionService.getSession(sessionId);
                 s.setCompletedAt(java.time.Instant.now());
                 s.setRuntimeStatus("error");
                 s.setRuntimeStep(null);
-                s.setRuntimeError(safeError);
+                s.setRuntimeError(errorDetail);
                 sessionService.saveSession(s);
                 if (broadcaster != null) {
-                    broadcaster.sessionStatus(sessionId, "error", null, safeError);
+                    broadcaster.sessionStatus(sessionId, "error", null, errorDetail);
                     broadcaster.userEvent(s.getUserId(), sessionUpdatedPayload(s, s.getMessageCount()));
                 }
                 // SessionEnd hook on error path as well (reason=error)
