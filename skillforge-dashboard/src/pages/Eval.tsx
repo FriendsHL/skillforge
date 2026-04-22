@@ -328,7 +328,7 @@ function EvalDrawer({ evalRow, tab, setTab, onClose, onRun }: {
         <div className="sf-drawer-body">
           {tab === 'cases' && (
             <div>
-              {(runDetail as Record<string, unknown>)?.errorMessage && (
+              {Boolean((runDetail as Record<string, unknown>)?.errorMessage) && (
                 <div style={{ marginBottom: 12, padding: '10px 14px', background: 'var(--error-bg, #2a1010)', border: '1px solid var(--error-border, #5c2020)', borderRadius: 6, fontSize: 12, color: 'var(--error-fg, #d97b5c)', fontFamily: 'var(--font-mono)' }}>
                   {String((runDetail as Record<string, unknown>).errorMessage)}
                 </div>

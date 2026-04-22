@@ -8,17 +8,7 @@ import BehaviorRulesEditor from '../BehaviorRulesEditor';
 import { useBehaviorRules } from '../../hooks/useBehaviorRules';
 import LifecycleHooksEditor, { type LifecycleHooksEditorHandle } from '../LifecycleHooksEditor';
 import { countHookEntries, migrateLegacyFlat } from '../../constants/lifecycleHooks';
-
-// TODO: extract modelOptions to shared constants (duplicated from pages/AgentList.tsx)
-const MODEL_OPTIONS = [
-  { label: 'bailian:qwen3.5-plus', value: 'bailian:qwen3.5-plus' },
-  { label: 'bailian:qwen3-max-2026-01-23', value: 'bailian:qwen3-max-2026-01-23' },
-  { label: 'bailian:qwen3-coder-next', value: 'bailian:qwen3-coder-next' },
-  { label: 'bailian:glm-5', value: 'bailian:glm-5' },
-  { label: 'openai:deepseek-chat', value: 'openai:deepseek-chat' },
-  { label: 'openai:gpt-4o', value: 'openai:gpt-4o' },
-  { label: 'claude:claude-sonnet-4-20250514', value: 'claude:claude-sonnet-4-20250514' },
-];
+import { useLlmModels } from '../../hooks/useLlmModels';
 
 const CLOSE_ICON = (
   <svg width={14} height={14} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
@@ -149,6 +139,7 @@ interface AgentDrawerProps {
 
 const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
   const queryClient = useQueryClient();
+  const { options: modelOptions } = useLlmModels();
   const [tab, setTab] = useState('overview');
   const [mdFile, setMdFile] = useState<'AGENT.md' | 'SOUL.md' | 'MEMORY.md'>('AGENT.md');
   const [dirty, setDirty] = useState<Record<string, boolean>>({});
@@ -454,7 +445,7 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
                   <Select
                     size="small"
                     value={modelIdDraft || undefined}
-                    options={MODEL_OPTIONS}
+                    options={modelOptions.map((o) => ({ label: o.label, value: o.id }))}
                     onChange={(v) => setModelIdDraft(v)}
                     placeholder="default"
                     style={{ width: '100%', marginTop: 4 }}

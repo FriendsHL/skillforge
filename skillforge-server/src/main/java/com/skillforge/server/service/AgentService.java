@@ -12,6 +12,7 @@ import com.skillforge.core.engine.hook.HookHandler;
 import com.skillforge.core.engine.hook.LifecycleHooksConfig;
 import com.skillforge.core.model.AgentDefinition;
 import com.skillforge.server.entity.AgentEntity;
+import com.skillforge.server.exception.AgentNotFoundException;
 import com.skillforge.server.repository.AgentRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -63,7 +64,7 @@ public class AgentService {
         validateLifecycleHooksSize(updated);
         validateLifecycleHooksSemantics(updated);
         AgentEntity existing = agentRepository.findById(id)
-                .orElseThrow(() -> new RuntimeException("Agent not found: " + id));
+                .orElseThrow(() -> new AgentNotFoundException(id));
         if (updated.getName() != null) existing.setName(updated.getName());
         if (updated.getDescription() != null) existing.setDescription(updated.getDescription());
         if (updated.getModelId() != null) existing.setModelId(updated.getModelId());
@@ -84,7 +85,37 @@ public class AgentService {
         // this field — PUT always writes it. Changing this is deferred to a separate PR
         // that evaluates switching the field to Boolean.
         existing.setPublic(updated.isPublic());
-        return agentRepository.save(existing);
+        AgentEntity saved = agentRepository.save(existing);
+        log.info("Agent {} updated: fields={}", id, nonNullFieldNames(updated));
+        return saved;
+    }
+
+    /**
+     * Collect the list of fields that were non-null in the update payload. Only emits field
+     * names (never values) — systemPrompt / behaviorRules / lifecycleHooks may contain
+     * user-supplied content that could leak secrets. isPublic is a primitive boolean and
+     * is always written, so it's always included.
+     */
+    private static List<String> nonNullFieldNames(AgentEntity a) {
+        List<String> fields = new ArrayList<>();
+        if (a.getName() != null) fields.add("name");
+        if (a.getDescription() != null) fields.add("description");
+        if (a.getModelId() != null) fields.add("modelId");
+        if (a.getSystemPrompt() != null) fields.add("systemPrompt");
+        if (a.getSkillIds() != null) fields.add("skillIds");
+        if (a.getToolIds() != null) fields.add("toolIds");
+        if (a.getConfig() != null) fields.add("config");
+        if (a.getSoulPrompt() != null) fields.add("soulPrompt");
+        if (a.getToolsPrompt() != null) fields.add("toolsPrompt");
+        if (a.getBehaviorRules() != null) fields.add("behaviorRules");
+        if (a.getLifecycleHooks() != null) fields.add("lifecycleHooks");
+        if (a.getOwnerId() != null) fields.add("ownerId");
+        if (a.getStatus() != null) fields.add("status");
+        if (a.getMaxLoops() != null) fields.add("maxLoops");
+        if (a.getExecutionMode() != null) fields.add("executionMode");
+        // isPublic is primitive; always written (see updateAgent note)
+        fields.add("isPublic");
+        return fields;
     }
 
     public void deleteAgent(Long id) {
@@ -150,7 +181,7 @@ public class AgentService {
 
     public AgentEntity getAgent(Long id) {
         return agentRepository.findById(id)
-                .orElseThrow(() -> new RuntimeException("Agent not found: " + id));
+                .orElseThrow(() -> new AgentNotFoundException(id));
     }
 
     public List<AgentEntity> listAgents(Long ownerId) {

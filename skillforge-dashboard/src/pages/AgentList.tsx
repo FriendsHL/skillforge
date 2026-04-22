@@ -6,18 +6,9 @@ import { AgentSchema, safeParseList, type AgentDto } from '../api/schemas';
 import AgentCard, { initials, parseCount, guessRole } from '../components/agents/AgentCard';
 import AgentDrawer from '../components/agents/AgentDrawer';
 import '../components/agents/agents.css';
+import { useLlmModels } from '../hooks/useLlmModels';
 
 const { TextArea } = Input;
-
-const modelOptions = [
-  { label: 'bailian:qwen3.5-plus', value: 'bailian:qwen3.5-plus' },
-  { label: 'bailian:qwen3-max-2026-01-23', value: 'bailian:qwen3-max-2026-01-23' },
-  { label: 'bailian:qwen3-coder-next', value: 'bailian:qwen3-coder-next' },
-  { label: 'bailian:glm-5', value: 'bailian:glm-5' },
-  { label: 'openai:deepseek-chat', value: 'openai:deepseek-chat' },
-  { label: 'openai:gpt-4o', value: 'openai:gpt-4o' },
-  { label: 'claude:claude-sonnet-4-20250514', value: 'claude:claude-sonnet-4-20250514' },
-];
 
 const GRID_ICON = (
   <svg width={12} height={12} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4">
@@ -85,6 +76,7 @@ function AgentsTable({ rows, onOpen }: { rows: AgentDto[]; onOpen: (a: AgentDto)
 
 const AgentList: React.FC = () => {
   const queryClient = useQueryClient();
+  const { options: modelOptionsData } = useLlmModels();
   const [view, setView] = useState<'grid' | 'table'>('grid');
   const [q, setQ] = useState('');
   const [filter, setFilter] = useState<FilterState>({ model: null, role: null });
@@ -292,7 +284,7 @@ const AgentList: React.FC = () => {
             <TextArea rows={2} />
           </Form.Item>
           <Form.Item name="modelId" label="Model" rules={[{ required: true, message: 'Please select a model' }]}>
-            <Select options={modelOptions} placeholder="Select model" showSearch optionFilterProp="label" />
+            <Select options={modelOptionsData.map((o) => ({ label: o.label, value: o.id }))} placeholder="Select model" showSearch optionFilterProp="label" />
           </Form.Item>
           <Form.Item name="executionMode" label="Execution Mode" initialValue="ask">
             <Select

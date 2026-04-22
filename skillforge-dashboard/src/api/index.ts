@@ -1,4 +1,5 @@
 import axios from 'axios';
+import type { ModelOption } from '../constants/models';
 
 const api = axios.create({ baseURL: '/api' });
 
@@ -73,6 +74,9 @@ export const getAgent = (id: number) => api.get(`/agents/${id}`);
 export const createAgent = (data: CreateAgentRequest) => api.post('/agents', data);
 export const updateAgent = (id: number, data: UpdateAgentRequest) => api.put(`/agents/${id}`, data);
 export const deleteAgent = (id: number) => api.delete(`/agents/${id}`);
+
+// LLM models
+export const getLlmModels = () => api.get<ModelOption[]>('/llm/models');
 
 // Session API
 export const createSession = (data: { userId: number; agentId: number }) => api.post('/chat/sessions', data);

@@ -1186,7 +1186,7 @@ const SkillEvolutionPanel: React.FC<SkillEvolutionPanelProps> = ({ skillId, agen
   });
 
   const inProgress = latest?.status === 'PENDING' || latest?.status === 'RUNNING';
-  const disabled = busy || !currentUserId || inProgress;
+  const disabled = evolveMutation.isPending || !currentUserId || inProgress;
 
   return (
     <div style={{
@@ -1239,7 +1239,7 @@ const SkillEvolutionPanel: React.FC<SkillEvolutionPanelProps> = ({ skillId, agen
           style={{ fontSize: 11, padding: '3px 10px' }}
           title="Generate an improved SKILL.md via LLM and trigger an A/B test"
         >
-          {busy ? 'Starting…' : inProgress ? 'Running…' : 'Evolve Skill'}
+          {evolveMutation.isPending ? 'Starting…' : inProgress ? 'Running…' : 'Evolve Skill'}
         </button>
         {flash && <span style={{ fontSize: 11, color: 'var(--accent, #6366f1)' }}>{flash}</span>}
       </div>
