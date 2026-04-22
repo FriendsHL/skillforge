@@ -52,6 +52,7 @@ mvn test
 
 | 文件 | 触发路径 | 覆盖内容 |
 |------|---------|---------|
+| `.claude/rules/pipeline.md` | 所有非 trivial 开发任务 | Full Pipeline 对抗循环（Plan/Review 3 轮全 Opus）+ 对抗约束 A/B/C（self-check、severity checklist、nit 折叠） |
 | `.claude/rules/java.md` | `**/*.java` | ObjectMapper footgun、时间字段、构造器注入、@Transactional、Skill/LlmProvider 扩展、测试、安全 |
 | `.claude/rules/frontend.md` | `**/*.tsx` / `**/*.ts` | API 类型、WebSocket cleanup、流式渲染节流、组件规范、状态管理、Ant Design 使用 |
 | `.claude/rules/design.md` | `**/*.tsx` / `**/*.css` | 设计质量标准、Anti-template、SkillForge 视觉风格方向 |
