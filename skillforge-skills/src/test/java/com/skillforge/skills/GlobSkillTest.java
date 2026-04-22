@@ -83,4 +83,15 @@ class GlobSkillTest {
         assertTrue(result.isSuccess());
         assertTrue(result.getOutput().contains("No files matched pattern"));
     }
+
+    @Test
+    @DisplayName("workingDirectory 为 null 且无 path 参数时不抛 NPE，回退到 JVM 工作目录")
+    void execute_nullWorkingDirectory_fallsBackToSystemUserDir() {
+        GlobSkill skill = new GlobSkill();
+        SkillContext context = new SkillContext(null, "s-null-wd", 1L);
+
+        SkillResult result = skill.execute(Map.of("pattern", "*.nonexistent_xyz"), context);
+
+        assertTrue(result.isSuccess(), "应成功而非 NPE：" + result.getError());
+    }
 }

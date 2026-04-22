@@ -881,7 +881,9 @@ public class AgentLoopEngine {
                 rootSpan.end();
                 traceCollector.record(rootSpan);
             }
-            return buildResult(loopCtx, messages, limitMsg, toolCallRecords);
+            LoopResult maxLoopsResult = buildResult(loopCtx, messages, limitMsg, toolCallRecords);
+            maxLoopsResult.setStatus("max_loops_reached");
+            return maxLoopsResult;
         }
 
         // 7. 执行所有 LoopHook.afterLoop()

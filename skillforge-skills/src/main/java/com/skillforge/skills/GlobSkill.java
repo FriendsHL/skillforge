@@ -64,6 +64,9 @@ public class GlobSkill implements Skill {
             if (searchPath == null || searchPath.isBlank()) {
                 searchPath = context.getWorkingDirectory();
             }
+            if (searchPath == null || searchPath.isBlank()) {
+                searchPath = System.getProperty("user.dir");
+            }
 
             Path root = Path.of(searchPath);
             if (!Files.isDirectory(root)) {

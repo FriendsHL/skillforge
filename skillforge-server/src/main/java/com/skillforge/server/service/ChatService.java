@@ -376,6 +376,22 @@ public class ChatService {
                 }
                 log.info("Appended {} remaining queued messages after loop end: sessionId={}", remaining.size(), sessionId);
             }
+
+            // 三种静默退出：把 finalMessage 作为 assistant 消息追加，让用户看到原因
+            String resultStatus = result.getStatus();
+            boolean isSilentExit = "token_budget_exceeded".equals(resultStatus)
+                    || "duration_exceeded".equals(resultStatus)
+                    || "max_loops_reached".equals(resultStatus);
+            if (isSilentExit && finalMessage != null && !finalMessage.isBlank()) {
+                finalStatus = resultStatus;   // ← 同步 finalStatus，确保 subAgentRegistry 和 SessionEnd hook 收到正确 reason
+                Message notifyMsg = Message.assistant(finalMessage);
+                finalMessages.add(notifyMsg);
+                if (broadcaster != null) {
+                    broadcaster.messageAppended(sessionId, notifyMsg);
+                }
+                log.info("Silent exit notified to user: status={}, sessionId={}", resultStatus, sessionId);
+            }
+
             cancellationRegistry.unregister(sessionId);
 
             // 保存最终 messages(engine 已经把 user msg + 之后所有消息组装好了)
