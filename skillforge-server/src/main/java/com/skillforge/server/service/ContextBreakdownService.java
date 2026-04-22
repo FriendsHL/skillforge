@@ -10,8 +10,8 @@ import com.skillforge.core.model.ContentBlock;
 import com.skillforge.core.model.Message;
 import com.skillforge.core.model.SkillDefinition;
 import com.skillforge.core.model.ToolSchema;
-import com.skillforge.core.skill.Skill;
 import com.skillforge.core.skill.SkillRegistry;
+import com.skillforge.core.skill.Tool;
 import com.skillforge.server.dto.ContextBreakdownDto;
 import com.skillforge.server.dto.ContextBreakdownDto.Segment;
 import com.skillforge.server.entity.AgentEntity;
@@ -257,10 +257,10 @@ public class ContextBreakdownService {
     // ───────────────────────────── tool schemas ─────────────────────────────
 
     private long estimateToolSchemasTokens() {
-        Collection<Skill> skills = skillRegistry.getAllSkills();
+        Collection<Tool> skills = skillRegistry.getAllTools();
         if (skills == null || skills.isEmpty()) return 0L;
         long total = 0L;
-        for (Skill s : skills) {
+        for (Tool s : skills) {
             ToolSchema schema;
             try {
                 schema = s.getToolSchema();

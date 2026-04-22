@@ -29,6 +29,10 @@ public class AgentEntity {
     @Column(columnDefinition = "TEXT")
     private String description;
 
+    /** Agent role used for UI grouping / semantics (e.g. leader, reviewer). */
+    @Column(length = 64)
+    private String role;
+
     private String modelId;
 
     @Column(columnDefinition = "TEXT")
@@ -111,6 +115,14 @@ public class AgentEntity {
 
     public void setDescription(String description) {
         this.description = description;
+    }
+
+    public String getRole() {
+        return role;
+    }
+
+    public void setRole(String role) {
+        this.role = role;
     }
 
     public String getModelId() {

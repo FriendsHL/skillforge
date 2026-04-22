@@ -49,6 +49,7 @@ class AgentServiceTest {
         existing.setId(1L);
         existing.setName("Original Name");
         existing.setDescription("Original Description");
+        existing.setRole("leader");
         existing.setModelId("claude");
         existing.setSystemPrompt("original prompt");
         existing.setBehaviorRules(null);
@@ -64,6 +65,7 @@ class AgentServiceTest {
         // Assert: only behaviorRules changed, other fields untouched
         assertThat(result.getName()).isEqualTo("Original Name");
         assertThat(result.getDescription()).isEqualTo("Original Description");
+        assertThat(result.getRole()).isEqualTo("leader");
         assertThat(result.getModelId()).isEqualTo("claude");
         assertThat(result.getSystemPrompt()).isEqualTo("original prompt");
         assertThat(result.getBehaviorRules()).contains("minimal-change");
@@ -94,6 +96,7 @@ class AgentServiceTest {
         existing.setId(2L);
         existing.setName("old-name");
         existing.setDescription("old-desc");
+        existing.setRole("leader");
         existing.setModelId("old-model");
         existing.setSystemPrompt("old-sys");
         existing.setSkillIds("[\"old-skill\"]");
@@ -116,6 +119,7 @@ class AgentServiceTest {
         var full = new AgentEntity();
         full.setName("new-name");
         full.setDescription("new-desc");
+        full.setRole("reviewer");
         full.setModelId("new-model");
         full.setSystemPrompt("new-sys");
         full.setSkillIds("[\"new-skill\"]");
@@ -136,6 +140,7 @@ class AgentServiceTest {
         // Assert: every field reflects the new payload
         assertThat(result.getName()).isEqualTo("new-name");
         assertThat(result.getDescription()).isEqualTo("new-desc");
+        assertThat(result.getRole()).isEqualTo("reviewer");
         assertThat(result.getModelId()).isEqualTo("new-model");
         assertThat(result.getSystemPrompt()).isEqualTo("new-sys");
         assertThat(result.getSkillIds()).isEqualTo("[\"new-skill\"]");
@@ -160,6 +165,7 @@ class AgentServiceTest {
         existing.setId(3L);
         existing.setName("keep-name");
         existing.setDescription("keep-desc");
+        existing.setRole("leader");
         existing.setModelId("keep-model");
         existing.setSystemPrompt("keep-sys");
         existing.setBehaviorRules("{\"builtinRuleIds\":[\"keep\"],\"customRules\":[]}");
@@ -178,6 +184,7 @@ class AgentServiceTest {
         // Assert: all nullable fields preserved
         assertThat(result.getName()).isEqualTo("keep-name");
         assertThat(result.getDescription()).isEqualTo("keep-desc");
+        assertThat(result.getRole()).isEqualTo("leader");
         assertThat(result.getModelId()).isEqualTo("keep-model");
         assertThat(result.getSystemPrompt()).isEqualTo("keep-sys");
         assertThat(result.getBehaviorRules()).contains("keep");
@@ -189,5 +196,24 @@ class AgentServiceTest {
         // Lock this documented current behavior — changing it is deferred to a
         // separate PR that might switch the field to Boolean.
         assertThat(result.isPublic()).isFalse();
+    }
+
+    @Test
+    @DisplayName("updateAgent sets role to null when payload role is blank")
+    void updateAgent_blankRole_clearsRole() {
+        var existing = new AgentEntity();
+        existing.setId(4L);
+        existing.setName("keep-name");
+        existing.setRole("reviewer");
+        existing.setPublic(true);
+
+        when(agentRepository.findById(4L)).thenReturn(Optional.of(existing));
+        when(agentRepository.save(any(AgentEntity.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        var patch = new AgentEntity();
+        patch.setRole("   ");
+
+        var result = agentService.updateAgent(4L, patch);
+        assertThat(result.getRole()).isNull();
     }
 }

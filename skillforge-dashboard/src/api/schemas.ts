@@ -5,6 +5,7 @@ export const AgentSchema = z.object({
   id: z.number(),
   name: z.string(),
   description: z.string().optional().nullable(),
+  role: z.string().optional().nullable(),
   systemPrompt: z.string().optional().nullable(),
   soulPrompt: z.string().optional().nullable(),
   toolsPrompt: z.string().optional().nullable(),

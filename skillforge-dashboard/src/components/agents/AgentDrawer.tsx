@@ -10,6 +10,13 @@ import LifecycleHooksEditor, { type LifecycleHooksEditorHandle } from '../Lifecy
 import { countHookEntries, migrateLegacyFlat } from '../../constants/lifecycleHooks';
 import { useLlmModels } from '../../hooks/useLlmModels';
 
+const ROLE_OPTIONS = [
+  { label: 'leader', value: 'leader' },
+  { label: 'reviewer', value: 'reviewer' },
+  { label: 'judge', value: 'judge' },
+  { label: 'writer', value: 'writer' },
+];
+
 const CLOSE_ICON = (
   <svg width={14} height={14} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
     <path d="M4 4l8 8M12 4l-8 8" />
@@ -238,7 +245,8 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
   const [testOut, setTestOut] = useState<string | null>(null);
   const [testing, setTesting] = useState(false);
 
-  const role = guessRole(agent);
+  const inferredRole = guessRole(agent);
+  const [roleDraft, setRoleDraft] = useState<string>((agent.role || '').toString());
   const initialSkills = useMemo(() => parseArr(agent.skillIds), [agent.skillIds]);
   const initialTools = useMemo(() => parseArr(agent.toolIds), [agent.toolIds]);
   const [skills, setSkills] = useState<string[]>(initialSkills);
@@ -255,11 +263,17 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
   );
   const initialMaxLoops =
     typeof agentWithExtras.maxLoops === 'number' ? agentWithExtras.maxLoops : null;
+  useEffect(() => {
+    setModelIdDraft(agent.modelId || '');
+    setRoleDraft((agent.role || '').toString());
+    setMaxLoopsDraft(typeof agentWithExtras.maxLoops === 'number' ? agentWithExtras.maxLoops : null);
+  }, [agent.id]);
   // Exclude clear-only maxLoops transitions: UpdateAgentRequest.maxLoops is
   // `number | undefined`, so a null draft can't be explicitly sent to clear the
   // server value. Without this guard, Save would fire a false success toast.
   const overviewDirty =
     (agent.modelId || '') !== modelIdDraft ||
+    ((agent.role || '') !== roleDraft) ||
     (maxLoopsDraft !== null && initialMaxLoops !== maxLoopsDraft);
 
   const { data: skillsCatalog = [] } = useQuery({
@@ -268,7 +282,18 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
     staleTime: 60_000,
   });
   const skillCatalogItems = useMemo<CatalogItem[]>(
-    () => skillsCatalog.map(s => ({ id: String(s.name), desc: s.description ? String(s.description) : undefined, tag: s.kind ? String(s.kind) : undefined })),
+    () => skillsCatalog.map((s) => {
+      const requiredTools = s.requiredTools ? String(s.requiredTools) : '';
+      const desc = [
+        s.description ? String(s.description) : '',
+        requiredTools ? `tools: ${requiredTools}` : '',
+      ].filter(Boolean).join(' | ');
+      return {
+        id: String(s.name),
+        desc: desc || undefined,
+        tag: s.kind ? String(s.kind) : undefined,
+      };
+    }),
     [skillsCatalog],
   );
 
@@ -280,6 +305,35 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
   const toolCatalogItems = useMemo<CatalogItem[]>(
     () => toolsCatalog.map(t => ({ id: String(t.name), desc: t.description ? String(t.description) : undefined, tag: t.category ? String(t.category) : undefined })),
     [toolsCatalog],
+  );
+  const toolDescMap = useMemo(() => {
+    const m = new Map<string, string>();
+    toolsCatalog.forEach((t) => {
+      const name = String(t.name || '');
+      const desc = t.description ? String(t.description) : '';
+      if (name) m.set(name, desc);
+    });
+    return m;
+  }, [toolsCatalog]);
+  const skillCatalogItemsWithToolDetails = useMemo<CatalogItem[]>(
+    () => skillCatalogItems.map((item) => {
+      const raw = item.desc || '';
+      const marker = 'tools: ';
+      const idx = raw.indexOf(marker);
+      if (idx < 0) return item;
+      const toolsPart = raw.slice(idx + marker.length).split('|')[0].trim();
+      const toolIds = toolsPart.split(',').map((x) => x.trim()).filter(Boolean);
+      const toolDetails = toolIds
+        .map((toolId) => {
+          const desc = toolDescMap.get(toolId);
+          return desc ? `${toolId}: ${desc}` : toolId;
+        })
+        .join('; ');
+      if (!toolDetails) return item;
+      const mergedDesc = `${raw} | tool details: ${toolDetails}`;
+      return { ...item, desc: mergedDesc };
+    }),
+    [skillCatalogItems, toolDescMap],
   );
 
   const addSkill = (id: string) => setSkills(s => [...s, id]);
@@ -345,6 +399,7 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
   const handleSaveOverview = () => {
     const partial: UpdateAgentRequest = {
       modelId: modelIdDraft || undefined,
+      role: roleDraft,
     };
     if (maxLoopsDraft !== null && maxLoopsDraft !== undefined) {
       partial.maxLoops = maxLoopsDraft;
@@ -404,7 +459,7 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
       <div className="agent-drawer" role="dialog" aria-label={`${agent.name} details`}>
         <div className="agent-drawer-head">
           <div className="agent-drawer-head-row">
-            <div className={`agent-mark ${role}`} style={{ width: 40, height: 40, fontSize: 18 }}>
+            <div className={`agent-mark ${inferredRole}`} style={{ width: 40, height: 40, fontSize: 18 }}>
               {initials(agent.name)}
             </div>
             <div style={{ minWidth: 0 }}>
@@ -466,7 +521,20 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
                   />
                 </div>
                 <div className="overview-card"><div className="overview-k">Mode</div><div className="overview-v mono">{mode}</div></div>
-                <div className="overview-card"><div className="overview-k">Role (inferred)</div><div className="overview-v mono">{role}</div></div>
+                <div className="overview-card">
+                  <div className="overview-k">Role</div>
+                  <Select
+                    size="small"
+                    value={roleDraft || undefined}
+                    options={ROLE_OPTIONS}
+                    onChange={(v) => setRoleDraft(v ?? '')}
+                    placeholder={inferredRole}
+                    style={{ width: '100%', marginTop: 4 }}
+                    allowClear
+                    showSearch
+                    optionFilterProp="label"
+                  />
+                </div>
                 <div className="overview-card"><div className="overview-k">ID</div><div className="overview-v mono">{agent.id}</div></div>
               </div>
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
@@ -612,7 +680,7 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
                       <button className="chip-pill-x-sf" onClick={() => removeSkill(s)} title="Remove">{CLOSE_ICON}</button>
                     </span>
                   ))}
-                  <AttachPicker kind="skill" catalog={skillCatalogItems} attached={skills} onPick={addSkill} />
+                  <AttachPicker kind="skill" catalog={skillCatalogItemsWithToolDetails} attached={skills} onPick={addSkill} />
                 </div>
               </div>
               <div className="spec-block">

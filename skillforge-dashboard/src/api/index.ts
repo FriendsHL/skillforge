@@ -53,6 +53,7 @@ export function extractList<T>(res: { data: T[] | { data: T[] } | unknown }): T[
 export interface CreateAgentRequest {
   name: string;
   description?: string;
+  role?: string;
   systemPrompt?: string;
   soulPrompt?: string;
   toolsPrompt?: string;

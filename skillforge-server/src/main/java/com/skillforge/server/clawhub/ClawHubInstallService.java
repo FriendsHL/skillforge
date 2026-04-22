@@ -94,7 +94,7 @@ public class ClawHubInstallService {
         if (existing.isPresent()) {
             return InstallOutcome.failure("A skill with name " + slug + " already exists from another source.");
         }
-        if (skillRegistry.getSkill(slug).isPresent()) {
+        if (skillRegistry.getTool(slug).isPresent()) {
             return InstallOutcome.failure("Skill name " + slug + " conflicts with a built-in tool");
         }
 

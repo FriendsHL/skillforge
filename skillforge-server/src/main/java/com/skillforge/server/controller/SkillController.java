@@ -107,15 +107,15 @@ public class SkillController {
      */
     @GetMapping("/builtin")
     public ResponseEntity<List<Map<String, Object>>> listBuiltinSkills() {
-        List<Map<String, Object>> builtins = skillRegistry.getAllSkills().stream()
-                .map(skill -> {
+        List<Map<String, Object>> builtins = skillRegistry.getAllTools().stream()
+                .map(tool -> {
                     Map<String, Object> info = new HashMap<>();
-                    info.put("name", skill.getName());
-                    info.put("description", skill.getDescription());
-                    info.put("readOnly", skill.isReadOnly());
+                    info.put("name", tool.getName());
+                    info.put("description", tool.getDescription());
+                    info.put("readOnly", tool.isReadOnly());
                     info.put("type", "builtin");
-                    if (skill.getToolSchema() != null) {
-                        info.put("toolSchema", skill.getToolSchema());
+                    if (tool.getToolSchema() != null) {
+                        info.put("toolSchema", tool.getToolSchema());
                     }
                     return info;
                 })

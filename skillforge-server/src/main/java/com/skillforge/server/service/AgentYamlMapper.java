@@ -86,6 +86,7 @@ public class AgentYamlMapper {
         }
         a.setName(name.toString());
         if (m.get("description") != null) a.setDescription(m.get("description").toString());
+        if (m.get("role") != null) a.setRole(m.get("role").toString());
         if (m.get("modelId") != null) a.setModelId(m.get("modelId").toString());
         if (m.get("systemPrompt") != null) a.setSystemPrompt(m.get("systemPrompt").toString());
         if (m.get("soulPrompt") != null) a.setSoulPrompt(m.get("soulPrompt").toString());
@@ -162,6 +163,7 @@ public class AgentYamlMapper {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("name", entity.getName());
         if (entity.getDescription() != null) m.put("description", entity.getDescription());
+        if (entity.getRole() != null) m.put("role", entity.getRole());
         if (entity.getModelId() != null) m.put("modelId", entity.getModelId());
         if (entity.getExecutionMode() != null) m.put("executionMode", entity.getExecutionMode());
         m.put("public", entity.isPublic());

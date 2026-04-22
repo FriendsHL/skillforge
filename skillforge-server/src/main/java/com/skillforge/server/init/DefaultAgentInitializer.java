@@ -2,8 +2,8 @@ package com.skillforge.server.init;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.skillforge.core.skill.Skill;
 import com.skillforge.core.skill.SkillRegistry;
+import com.skillforge.core.skill.Tool;
 import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.repository.AgentRepository;
 import org.slf4j.Logger;
@@ -41,8 +41,8 @@ public class DefaultAgentInitializer implements ApplicationRunner {
             return;
         }
 
-        List<String> skillNames = skillRegistry.getAllSkills().stream()
-                .map(Skill::getName)
+        List<String> skillNames = skillRegistry.getAllTools().stream()
+                .map(Tool::getName)
                 // 默认 Main Assistant 不直接绑 subAgent (没有可委派的子 agent)
                 .filter(n -> !"subAgent".equalsIgnoreCase(n))
                 .sorted()

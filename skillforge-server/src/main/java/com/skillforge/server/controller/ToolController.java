@@ -1,7 +1,7 @@
 package com.skillforge.server.controller;
 
-import com.skillforge.core.skill.Skill;
 import com.skillforge.core.skill.SkillRegistry;
+import com.skillforge.core.skill.Tool;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -31,15 +31,15 @@ public class ToolController {
      */
     @GetMapping
     public ResponseEntity<List<Map<String, Object>>> listTools() {
-        List<Map<String, Object>> tools = skillRegistry.getAllSkills().stream()
-                .map(skill -> {
+        List<Map<String, Object>> tools = skillRegistry.getAllTools().stream()
+                .map(tool -> {
                     Map<String, Object> info = new HashMap<>();
-                    info.put("name", skill.getName());
-                    info.put("description", skill.getDescription());
-                    info.put("readOnly", skill.isReadOnly());
+                    info.put("name", tool.getName());
+                    info.put("description", tool.getDescription());
+                    info.put("readOnly", tool.isReadOnly());
                     info.put("type", "builtin");
-                    if (skill.getToolSchema() != null) {
-                        info.put("toolSchema", skill.getToolSchema());
+                    if (tool.getToolSchema() != null) {
+                        info.put("toolSchema", tool.getToolSchema());
                     }
                     return info;
                 })

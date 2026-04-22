@@ -2,7 +2,9 @@ package com.skillforge.server.config;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -54,6 +56,11 @@ public class LlmProperties {
         private String apiKey;
         private String baseUrl;
         private String model;
+        /**
+         * Optional selectable models for UI/model picker.
+         * Empty means fallback to the single {@link #model}.
+         */
+        private List<String> models = new ArrayList<>();
         /** Optional read timeout override (seconds). Null = use ModelConfig default. */
         private Integer readTimeoutSeconds;
         /** Optional max retries override (on SocketTimeoutException only). Null = use ModelConfig default. */
@@ -115,6 +122,14 @@ public class LlmProperties {
 
         public void setModel(String model) {
             this.model = model;
+        }
+
+        public List<String> getModels() {
+            return models;
+        }
+
+        public void setModels(List<String> models) {
+            this.models = models != null ? models : new ArrayList<>();
         }
     }
 }

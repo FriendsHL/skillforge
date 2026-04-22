@@ -114,17 +114,17 @@ public class SkillForgeConfig {
     @Bean
     public SkillRegistry skillRegistry(MemoryService memoryService, EmbeddingService embeddingService) {
         SkillRegistry registry = new SkillRegistry();
-        registry.register(new BashSkill());
-        registry.register(new FileReadSkill());
-        registry.register(new FileWriteSkill());
-        registry.register(new FileEditSkill());
-        registry.register(new GlobSkill());
-        registry.register(new GrepSkill());
-        registry.register(new MemorySkill(memoryService));
-        registry.register(new MemorySearchSkill(memoryService, embeddingService));
-        registry.register(new MemoryDetailSkill(memoryService));
-        registry.register(new WebFetchSkill());
-        registry.register(new WebSearchSkill());
+        registry.registerTool(new BashSkill());
+        registry.registerTool(new FileReadSkill());
+        registry.registerTool(new FileWriteSkill());
+        registry.registerTool(new FileEditSkill());
+        registry.registerTool(new GlobSkill());
+        registry.registerTool(new GrepSkill());
+        registry.registerTool(new MemorySkill(memoryService));
+        registry.registerTool(new MemorySearchSkill(memoryService, embeddingService));
+        registry.registerTool(new MemoryDetailSkill(memoryService));
+        registry.registerTool(new WebFetchSkill());
+        registry.registerTool(new WebSearchSkill());
         return registry;
     }
 
@@ -135,7 +135,7 @@ public class SkillForgeConfig {
     @Bean
     public CodeSandboxSkill codeSandboxSkill(SkillRegistry skillRegistry) {
         CodeSandboxSkill skill = new CodeSandboxSkill();
-        skillRegistry.register(skill);
+        skillRegistry.registerTool(skill);
         log.info("Registered CodeSandboxSkill into SkillRegistry");
         return skill;
     }
@@ -150,7 +150,7 @@ public class SkillForgeConfig {
         String providerName = llmProperties.getDefaultProvider() != null
                 ? llmProperties.getDefaultProvider() : "claude";
         CodeReviewSkill skill = new CodeReviewSkill(llmProviderFactory, providerName);
-        skillRegistry.register(skill);
+        skillRegistry.registerTool(skill);
         log.info("Registered CodeReviewSkill into SkillRegistry (provider={})", providerName);
         return skill;
     }
@@ -164,7 +164,7 @@ public class SkillForgeConfig {
                                                                ObjectMapper objectMapper,
                                                                SkillRegistry skillRegistry) {
         RegisterScriptMethodSkill skill = new RegisterScriptMethodSkill(scriptMethodService, objectMapper);
-        skillRegistry.register(skill);
+        skillRegistry.registerTool(skill);
         log.info("Registered RegisterScriptMethodSkill into SkillRegistry");
         return skill;
     }
@@ -179,7 +179,7 @@ public class SkillForgeConfig {
                                                                    ObjectMapper objectMapper,
                                                                    SkillRegistry skillRegistry) {
         RegisterCompiledMethodSkill skill = new RegisterCompiledMethodSkill(compiledMethodService, objectMapper);
-        skillRegistry.register(skill);
+        skillRegistry.registerTool(skill);
         log.info("Registered RegisterCompiledMethodSkill into SkillRegistry");
         return skill;
     }
@@ -187,7 +187,7 @@ public class SkillForgeConfig {
     @Bean
     public TodoWriteSkill todoWriteSkill(TodoStore todoStore, SkillRegistry skillRegistry) {
         TodoWriteSkill skill = new TodoWriteSkill(todoStore);
-        skillRegistry.register(skill);
+        skillRegistry.registerTool(skill);
         log.info("Registered TodoWriteSkill into SkillRegistry");
         return skill;
     }
@@ -206,7 +206,7 @@ public class SkillForgeConfig {
                                        SubAgentRegistry subAgentRegistry,
                                        SkillRegistry skillRegistry) {
         SubAgentSkill skill = new SubAgentSkill(agentService, sessionService, chatService, subAgentRegistry);
-        skillRegistry.register(skill);
+        skillRegistry.registerTool(skill);
         log.info("Registered SubAgentSkill into SkillRegistry");
         return skill;
     }
@@ -219,7 +219,7 @@ public class SkillForgeConfig {
                                            CollabRunService collabRunService,
                                            SkillRegistry skillRegistry) {
         TeamCreateSkill skill = new TeamCreateSkill(sessionService, collabRunService);
-        skillRegistry.register(skill);
+        skillRegistry.registerTool(skill);
         log.info("Registered TeamCreateSkill into SkillRegistry");
         return skill;
     }
@@ -232,7 +232,7 @@ public class SkillForgeConfig {
                                        AgentRoster agentRoster,
                                        SkillRegistry skillRegistry) {
         TeamListSkill skill = new TeamListSkill(sessionService, agentRoster);
-        skillRegistry.register(skill);
+        skillRegistry.registerTool(skill);
         log.info("Registered TeamListSkill into SkillRegistry");
         return skill;
     }
@@ -247,7 +247,7 @@ public class SkillForgeConfig {
                                        CancellationRegistry cancellationRegistry,
                                        SkillRegistry skillRegistry) {
         TeamKillSkill skill = new TeamKillSkill(sessionService, agentRoster, collabRunService, cancellationRegistry);
-        skillRegistry.register(skill);
+        skillRegistry.registerTool(skill);
         log.info("Registered TeamKillSkill into SkillRegistry");
         return skill;
     }
@@ -263,7 +263,7 @@ public class SkillForgeConfig {
                                        com.skillforge.core.engine.TraceCollector traceCollector,
                                        SkillRegistry skillRegistry) {
         TeamSendSkill skill = new TeamSendSkill(sessionService, agentRoster, subAgentRegistry, broadcaster, traceCollector);
-        skillRegistry.register(skill);
+        skillRegistry.registerTool(skill);
         log.info("Registered TeamSendSkill into SkillRegistry");
         return skill;
     }

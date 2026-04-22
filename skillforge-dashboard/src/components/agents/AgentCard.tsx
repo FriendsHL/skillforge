@@ -74,6 +74,8 @@ function Sparkline({ seed = 7, hotAt = 4 }: { seed?: number; hotAt?: number }) {
 }
 
 function guessRole(agent: AgentDto): string {
+  const explicitRole = typeof agent.role === 'string' ? agent.role.trim().toLowerCase() : '';
+  if (explicitRole) return explicitRole;
   const name = (agent.name || '').toLowerCase();
   const desc = (agent.description || '').toLowerCase();
   const combined = name + ' ' + desc;

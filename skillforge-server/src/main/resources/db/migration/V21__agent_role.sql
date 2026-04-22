@@ -1,0 +1,3 @@
+ALTER TABLE t_agent
+    ADD COLUMN IF NOT EXISTS role VARCHAR(64);
+

@@ -22,6 +22,7 @@ import com.skillforge.core.skill.Skill;
 import com.skillforge.core.skill.SkillContext;
 import com.skillforge.core.skill.SkillRegistry;
 import com.skillforge.core.skill.SkillResult;
+import com.skillforge.core.skill.Tool;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -967,15 +968,15 @@ public class AgentLoopEngine {
 
         // 内置 Skill (filter out excluded skills for depth-aware multi-agent collab,
         // and apply allowedToolNames whitelist if configured)
-        for (Skill skill : skillRegistry.getAllSkills()) {
-            if (excludedSkillNames != null && excludedSkillNames.contains(skill.getName())) {
+        for (Tool tool : skillRegistry.getAllTools()) {
+            if (excludedSkillNames != null && excludedSkillNames.contains(tool.getName())) {
                 continue;
             }
             if (allowedToolNames != null && !allowedToolNames.isEmpty()
-                    && !allowedToolNames.contains(skill.getName())) {
+                    && !allowedToolNames.contains(tool.getName())) {
                 continue;
             }
-            ToolSchema schema = skill.getToolSchema();
+            ToolSchema schema = tool.getToolSchema();
             if (schema != null) {
                 tools.add(schema);
             }
@@ -1233,9 +1234,9 @@ public class AgentLoopEngine {
             }
 
             // 检查是否为内置 Skill
-            Optional<Skill> skillOpt = skillRegistry.getSkill(skillName);
-            if (skillOpt.isPresent()) {
-                Skill skill = skillOpt.get();
+            Optional<Tool> toolOpt = skillRegistry.getTool(skillName);
+            if (toolOpt.isPresent()) {
+                Tool tool = toolOpt.get();
                 SkillContext skillContext = new SkillContext(
                         loopContext.getWorkingDirectory(),
                         loopContext.getSessionId(),
@@ -1255,7 +1256,7 @@ public class AgentLoopEngine {
                 }
 
                 // 执行 Skill
-                SkillResult result = skill.execute(processedInput, skillContext);
+                SkillResult result = tool.execute(processedInput, skillContext);
                 long duration = System.currentTimeMillis() - startTime;
 
                 // 执行 SkillHook.afterSkillExecute()
@@ -1270,7 +1271,7 @@ public class AgentLoopEngine {
                 String output = result.isSuccess() ? result.getOutput() : result.getError();
                 output = ToolResultTruncator.truncate(output);
                 toolCallRecords.add(new ToolCallRecord(skillName, input, output, result.isSuccess(), duration, startTime));
-                log.debug("Skill '{}' executed, success={}, duration={}ms", skillName, result.isSuccess(), duration);
+                log.debug("Tool '{}' executed, success={}, duration={}ms", skillName, result.isSuccess(), duration);
                 return Message.toolResult(toolUseId, output, !result.isSuccess());
             }
 

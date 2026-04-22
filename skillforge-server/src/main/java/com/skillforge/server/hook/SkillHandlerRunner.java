@@ -4,10 +4,10 @@ import com.skillforge.core.engine.hook.HandlerRunner;
 import com.skillforge.core.engine.hook.HookExecutionContext;
 import com.skillforge.core.engine.hook.HookHandler;
 import com.skillforge.core.engine.hook.HookRunResult;
-import com.skillforge.core.skill.Skill;
 import com.skillforge.core.skill.SkillContext;
 import com.skillforge.core.skill.SkillRegistry;
 import com.skillforge.core.skill.SkillResult;
+import com.skillforge.core.skill.Tool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -48,12 +48,12 @@ public class SkillHandlerRunner implements HandlerRunner<HookHandler.SkillHandle
         if (skillName == null || skillName.isBlank()) {
             return HookRunResult.failure("skill_name_missing", System.currentTimeMillis() - t0);
         }
-        Optional<Skill> skillOpt = skillRegistry.getSkill(skillName);
-        if (skillOpt.isEmpty()) {
+        Optional<Tool> toolOpt = skillRegistry.getTool(skillName);
+        if (toolOpt.isEmpty()) {
             log.warn("Lifecycle hook skill not found: '{}' (session={})", skillName, ctx.sessionId());
             return HookRunResult.failure("skill_not_found:" + skillName, System.currentTimeMillis() - t0);
         }
-        Skill skill = skillOpt.get();
+        Tool tool = toolOpt.get();
 
         // Merge static handler.args with runtime input; runtime wins on collisions.
         Map<String, Object> merged = new HashMap<>();
@@ -64,7 +64,7 @@ public class SkillHandlerRunner implements HandlerRunner<HookHandler.SkillHandle
         SkillContext skillCtx = new SkillContext(null, ctx.sessionId(), ctx.userId());
 
         try {
-            SkillResult result = skill.execute(merged, skillCtx);
+            SkillResult result = tool.execute(merged, skillCtx);
             long dur = System.currentTimeMillis() - t0;
             if (result == null) {
                 return HookRunResult.failure("skill_returned_null", dur);

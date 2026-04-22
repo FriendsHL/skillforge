@@ -169,6 +169,7 @@ Spring `@Scheduled` 够用前提：单机、秒级、不需要运行时动态增
 | ~~P13-8 updateAgent 审计日志~~ ✅ | 低 | 2026-04-22 Full Pipeline 完成（P13 follow-up batch）。`AgentService.updateAgent` 在 `save()` 之后 `log.info("Agent {} updated: fields={}", id, nonNullFieldNames(updated))`，只列非 null 字段名不打印值（防泄露）；Review round 1 的 warning W1（日志时机）已修：日志放在 save 之后避免 save 失败时日志谎报 |
 | P13-9 `/api/agents/*` rate limit | 低 | 无速率限制；系统型/多端部署时建议上 Bucket4j 或 Redis token bucket。独立话题，非本需求紧迫 |
 | ~~P13-10 后端驱动 model options（吸收 P13-6）~~ ✅ | 低 | 2026-04-22 Full Pipeline 完成（P13 follow-up batch）。新建 `LlmModelsController` 暴露 `GET /api/llm/models`（record `ModelOption{id,label,provider,model,isDefault}`，从 `LlmProperties.providers` 派生）；前端新建 `src/constants/models.ts`（`ModelOption` interface + `FALLBACK_MODEL_OPTIONS`）+ `hooks/useLlmModels.ts`（TanStack Query，失败降级 fallback，staleTime 5min）；`AgentDrawer.tsx` + `pages/AgentList.tsx` 两处硬编码 `MODEL_OPTIONS`/`modelOptions` 全部替换为 hook。agent-browser e2e 验证 /agents Model 下拉真实显示后端 3 项（非硬编码 7 项）|
+| ~~P13-11 Agent 配置链路对齐（Tool/Skill 语义 + Role 可编辑 + 多模型扩展）~~ ✅ | 高 | 2026-04-22 完成。新增 `Tool` 抽象并在 `SkillRegistry` 增加 `registerTool/getTool/getAllTools`（保留 `Skill` 兼容层），`AgentLoopEngine`/`ToolController`/`SkillController`/Hook runner 等路径改为按 Tool 语义工作；`LlmProperties.ProviderConfig` 新增 `models` 列表并扩展 `/api/llm/models` 返回多模型（不再固定每 provider 1 个）；`AgentEntity` 新增 `role` 字段 + `V21__agent_role.sql` migration，前后端创建/编辑链路打通并支持清空；Agent 创建与编辑 UI 在 skill 选择项展示 `requiredTools` 及 tool 说明，减少配置歧义。验证：前端 `npm test` 38/38 通过、`npm run build` 通过，后端 `AgentServiceTest` 通过。 |
 
 ---
 

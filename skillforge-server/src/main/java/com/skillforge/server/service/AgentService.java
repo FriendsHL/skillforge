@@ -67,6 +67,10 @@ public class AgentService {
                 .orElseThrow(() -> new AgentNotFoundException(id));
         if (updated.getName() != null) existing.setName(updated.getName());
         if (updated.getDescription() != null) existing.setDescription(updated.getDescription());
+        if (updated.getRole() != null) {
+            String role = updated.getRole().trim();
+            existing.setRole(role.isEmpty() ? null : role);
+        }
         if (updated.getModelId() != null) existing.setModelId(updated.getModelId());
         if (updated.getSystemPrompt() != null) existing.setSystemPrompt(updated.getSystemPrompt());
         if (updated.getSkillIds() != null) existing.setSkillIds(updated.getSkillIds());
@@ -100,6 +104,7 @@ public class AgentService {
         List<String> fields = new ArrayList<>();
         if (a.getName() != null) fields.add("name");
         if (a.getDescription() != null) fields.add("description");
+        if (a.getRole() != null) fields.add("role");
         if (a.getModelId() != null) fields.add("modelId");
         if (a.getSystemPrompt() != null) fields.add("systemPrompt");
         if (a.getSkillIds() != null) fields.add("skillIds");
@@ -203,6 +208,9 @@ public class AgentService {
         def.setId(String.valueOf(entity.getId()));
         def.setName(entity.getName());
         def.setDescription(entity.getDescription());
+        if (entity.getRole() != null && !entity.getRole().isBlank()) {
+            def.getConfig().put("role", entity.getRole());
+        }
         def.setModelId(entity.getModelId());
         def.setSystemPrompt(entity.getSystemPrompt());
         def.setSoulPrompt(entity.getSoulPrompt());

@@ -27,6 +27,13 @@ const PLUS_ICON = (
   </svg>
 );
 
+const ROLE_OPTIONS = [
+  { label: 'leader', value: 'leader' },
+  { label: 'reviewer', value: 'reviewer' },
+  { label: 'judge', value: 'judge' },
+  { label: 'writer', value: 'writer' },
+];
+
 interface FilterState {
   model: string | null;
   role: string | null;
@@ -110,11 +117,35 @@ const AgentList: React.FC = () => {
     queryFn: () => getSkills().then((res) => extractList<Record<string, unknown>>(res)),
   });
   const skillOptions = useMemo(
-    () => skills.map((s: Record<string, unknown>) => ({
-      label: s.description ? `${s.name} — ${s.description}` : String(s.name),
-      value: String(s.name),
-    })),
-    [skills],
+    () => {
+      const toolDescMap = new Map<string, string>();
+      tools.forEach((t: Record<string, unknown>) => {
+        const name = String(t.name || '');
+        const desc = t.description ? String(t.description) : '';
+        if (name) toolDescMap.set(name, desc);
+      });
+      return skills.map((s: Record<string, unknown>) => {
+        const requiredTools = s.requiredTools ? String(s.requiredTools) : '';
+        const toolDetails = requiredTools
+          .split(',')
+          .map((x) => x.trim())
+          .filter(Boolean)
+          .map((toolId) => {
+            const desc = toolDescMap.get(toolId);
+            return desc ? `${toolId}: ${desc}` : toolId;
+          })
+          .join('; ');
+        return {
+          label: [
+            s.description ? `${s.name} — ${s.description}` : String(s.name),
+            requiredTools ? `[tools: ${requiredTools}]` : '',
+            toolDetails ? `[tool details: ${toolDetails}]` : '',
+          ].filter(Boolean).join(' '),
+          value: String(s.name),
+        };
+      });
+    },
+    [skills, tools],
   );
 
   const createMutation = useMutation({
@@ -165,6 +196,7 @@ const AgentList: React.FC = () => {
       const values = await form.validateFields();
       const payload: CreateAgentRequest = {
         ...values,
+        role: values.role || undefined,
         skillIds: JSON.stringify(values.skillIds ?? []),
         toolIds: JSON.stringify(values.toolIds ?? []),
       };
@@ -282,6 +314,15 @@ const AgentList: React.FC = () => {
           </Form.Item>
           <Form.Item name="description" label="Description">
             <TextArea rows={2} />
+          </Form.Item>
+          <Form.Item name="role" label="Role">
+            <Select
+              options={ROLE_OPTIONS}
+              placeholder="Select role (optional)"
+              allowClear
+              showSearch
+              optionFilterProp="label"
+            />
           </Form.Item>
           <Form.Item name="modelId" label="Model" rules={[{ required: true, message: 'Please select a model' }]}>
             <Select options={modelOptionsData.map((o) => ({ label: o.label, value: o.id }))} placeholder="Select model" showSearch optionFilterProp="label" />

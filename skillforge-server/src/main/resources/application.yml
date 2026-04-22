@@ -50,18 +50,26 @@ skillforge:
         api-key: ${ANTHROPIC_API_KEY:}
         base-url: https://api.anthropic.com
         model: claude-sonnet-4-20250514
+        models:
+          - claude-sonnet-4-20250514
         context-window-tokens: 200000   # claude-sonnet-4 / claude-3.x = 200K
       openai:
         type: openai
         api-key: ${DEEPSEEK_API_KEY:}
         base-url: https://api.deepseek.com
         model: deepseek-chat
+        models:
+          - deepseek-chat
         # context-window-tokens: 64000  # deepseek-chat; resolved automatically via model map if unset
       bailian:
         type: openai
         api-key: ${DASHSCOPE_API_KEY:}
         base-url: https://coding.dashscope.aliyuncs.com
         model: qwen3.5-plus
+        models:
+          - qwen3.5-plus
+          - qwen3-max-2026-01-23
+          - qwen3-coder-next
         # Optional per-provider tuning (defaults: 60s / 1 retry)
         # read-timeout-seconds: 60    # raise for slow models; non-stream chat only
         # max-retries: 1              # retries on SocketTimeoutException only,
