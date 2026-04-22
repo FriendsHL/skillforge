@@ -9,16 +9,20 @@
 Most agent frameworks are Python-based, single-provider, and designed for prototyping. SkillForge is built for **production Java/Spring teams** that need:
 
 - **Multi-provider LLM** — swap between Claude, DeepSeek, Bailian/DashScope, vLLM, Ollama without code changes
-- **Real agent orchestration** — not just chains, but tree and network topologies with persistent state
+- **Multi-channel gateway** — one agent answers via Web, CLI, Feishu (WebSocket or webhook), Telegram; `ChannelAdapter` SPI extends to WeChat/Discord/Slack/iMessage with zero framework changes
+- **Real agent orchestration** — not just chains, but tree (SubAgent) and network (TeamCreate/Send) topologies with persistent state
 - **Self-improving agents** — automated eval, prompt A/B testing, and promotion pipelines
 - **Full observability** — Langfuse-style traces, session replay, model usage dashboards
-- **Safety guardrails** — command blocklists, path traversal prevention, anti-runaway loop detection
+- **Safety guardrails** — configurable lifecycle hooks, command blocklists, path-traversal prevention, anti-runaway loop detection
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│   React + Ant Design Dashboard    │    CLI Module       │
+│   Dashboard   │   CLI    │   Feishu    │   Telegram     │
+├─────────────────────────────────────────────────────────┤
+│              Channel Gateway                            │
+│   ChannelAdapter SPI │ 3-phase delivery tx │ dedup      │
 ├─────────────────────────────────────────────────────────┤
 │              Entry Points                               │
 │   REST API   │   WebSocket (per-session + per-user)     │
@@ -26,19 +30,21 @@ Most agent frameworks are Python-based, single-provider, and designed for protot
 │              Spring Boot Server                         │
 │   Chat / Agent / Skill / Memory / Compaction            │
 │   SubAgent / Multi-Agent Collab / Eval Pipeline         │
+│   Lifecycle Hooks / Behavior Rules / Hook Methods       │
 ├─────────────────────────────────────────────────────────┤
-│              Agent Loop Engine                           │
-│   Message → LLM (streaming) → tool_use → Skill → loop  │
+│              Agent Loop Engine                          │
+│   Message → LLM (streaming) → tool_use → Tool → loop    │
 │   cancel + anti-runaway + context-compact + traces      │
 ├──────────────┬──────────────┬───────────────────────────┤
 │  LLM Layer   │ Tool & Skill │ Session & Hooks           │
 │  Claude      │ System Tools │ Session Mgmt              │
-│  OpenAI*     │ System Skills│ SafetyHook                │
-│  DeepSeek    │ User Skills  │ AskUser / Compact         │
-│  Bailian     │ Team Collab  │ Memory System             │
+│  OpenAI*     │ System Skills│ Lifecycle Hook Dispatcher │
+│  DeepSeek    │ User Skills  │ SafetyHook / AskUser      │
+│  Bailian     │ Hook Methods │ Compact / Memory          │
 ├──────────────┴──────────────┴───────────────────────────┤
 │              Storage                                    │
 │   Embedded PostgreSQL (dev) │ External PG (prod)        │
+│   + pgvector (memory) + Flyway migrations               │
 └─────────────────────────────────────────────────────────┘
 * OpenAI-compatible: works with DeepSeek, DashScope/Bailian,
   vLLM, Ollama, or any OpenAI-format endpoint.
@@ -69,10 +75,11 @@ skillforge/
 ├── skillforge-dashboard    # React dashboard: chat, sessions, agents, skills, traces,
 │                            #   session replay, memories, model usage, teams, eval
 ├── skillforge-cli          # CLI client: picocli + OkHttp, agent YAML import/export
-└── system-skills/          # File-based system skills (non-deletable)
+└── system-skills/          # File-based system skills (auto-loaded, non-deletable)
     ├── browser/            #   Browser automation via agent-browser CLI
     ├── clawhub/            #   ClawHub marketplace search + install
     ├── github/             #   GitHub API + gh CLI
+    ├── skill-creator/      #   Scaffold / edit / validate SKILL.md packages
     └── skillhub/           #   SkillHub marketplace
 ```
 
@@ -95,7 +102,60 @@ Inspired by Claude Code and OpenClaw:
 | **AGENT.md** | Per-agent | Core instructions (`systemPrompt`) |
 | **SOUL.md** | Per-agent | Persona & tone (optional) |
 | **TOOLS.md** | Per-agent | Custom tool usage rules (optional) |
+| **RULES.md** | Per-agent | Behavior rules (structured + free-form) |
 | **MEMORY.md** | Per-agent | Auto-injected from Memory system |
+
+### Multi-Channel Gateway
+
+One agent, many surfaces — a user message from Feishu, Telegram, or the web arrives at the **same** agent loop and the reply is delivered back to the originating channel:
+
+- **Pluggable `ChannelAdapter` SPI** — Spring auto-collects implementations; new platforms drop in with zero framework changes
+- **Feishu (Lark)** — both **WebSocket long-polling** (no public IP needed for dev) and webhook mode; SHA-256 event signature verification; mode-switch in the dashboard with graceful reconnect (exponential backoff + jitter)
+- **Telegram** — HTML parse mode with 4096-codepoint safe splitting
+- **3-phase delivery transaction** — `claimBatch` via `SELECT FOR UPDATE SKIP LOCKED`, `IN_FLIGHT` guard on first enqueue, `applyPrepared` → `persist` — survives crashes, no duplicate delivery under 30-second race windows
+- **Per-turn `platformMessageId` mapping** — a single session reply across multiple turns without unique-constraint collisions
+- **Dedup + retry + stale sweeper** — configurable retry policy, exponential backoff, expired-message cleanup
+- **Dashboard /channels page** — per-platform config, conversation list, delivery retry panel
+
+### Behavior Rules Layer
+
+Configurable rule library injected into the system prompt per-agent, governing agent conduct (what to do / what not to do):
+
+- **15 built-in rules** — `no-commit`, `no-push-without-approval`, `ask-before-delete`, `prefer-immutable`, and more
+- **Preset templates** — preset bundles for common agent shapes (coding / research / ops) in one click
+- **Custom rules** — per-agent free-form rules, XML-sandboxed to resist prompt injection
+- **Language-aware** — auto-detected locale, rule text localizes
+- **Deprecated chains** — old rules redirect to replacements without breaking existing agents
+
+### Lifecycle Hooks
+
+User-configurable hooks that fire at key points in the agent loop — same mental model as Claude Code hooks, plus a multi-entry chain per event:
+
+| Event | Use cases |
+|-------|-----------|
+| **SessionStart** | Inject context, load prior state, block under quota |
+| **UserPromptSubmit** | Enrich prompt with dynamic context, redact secrets, abort |
+| **PreToolUse** | Gate a tool call, rewrite arguments, require approval |
+| **PostToolUse** | Audit, telemetry, notify on failure |
+| **SessionEnd** | Summarize, tear down resources, ship transcripts |
+
+**Four handler types**:
+
+- **Skill** — invoke an existing skill (reuse logic)
+- **Script** — inline `bash` / `node` script; sandboxed, process-tree kill, output-size cap, `/tmp` symlink protection
+- **BuiltInMethod** — named helpers (`HttpPost`, `FeishuNotify`, `LogToFile`) with structured args; SSRF-hardened URL validator
+- **CompiledMethod** — compile a Java class at runtime (`javax.tools`) → approval workflow → `child-first` classloader isolation (delivered via the **Code Agent**)
+
+Hooks form a **chain per event** with independent `timeoutSeconds`, `failurePolicy` (CONTINUE / ABORT), `async`, and `SKIP_CHAIN` semantics. All execution traced to `LIFECYCLE_HOOK` spans for debugging.
+
+### Code Agent (Self-extending Hooks)
+
+An agent that can **write its own hook methods**. Phase 1-3 delivered:
+
+- **CodeSandboxSkill + CodeReviewSkill** — isolated execution sandbox with dangerous-command checker and sandboxed `HOME`
+- **ScriptMethod** — bash/node scripts take effect immediately
+- **CompiledMethod** — Java classes compiled in-process with a `FORBIDDEN_PATTERNS` safety scan, child-first classloader, and a `submit → compile → approve` workflow
+- **Dashboard HookMethods page** — dual tabs (script / compiled), detail drawer, approval actions
 
 ### SubAgent Orchestration (Tree Topology)
 
@@ -136,16 +196,31 @@ Persistent memory across sessions, scoped per user:
 
 - **5 memory types**: preference, knowledge, feedback, project, reference
 - **Type-slotted injection** into system prompt (8000 char cap)
-- **TF-IDF search ranking** with 30-day recency decay + recall frequency boost
-- **Auto-capture** via ActivityLogHook — records every tool call
-- **Daily extraction** (@Scheduled cron) — extracts memories from completed sessions
+- **Hybrid retrieval** — pgvector (`text-embedding-3-small`, 1536-d) + PostgreSQL `tsvector` full-text search, fused via **RRF**; graceful fallback to TF-IDF when pgvector unavailable
+- **Two extraction modes**:
+  - `rule` — fast heuristic `SessionDigestExtractor` (default)
+  - `llm` — `LlmMemoryExtractor` classifies entries into 5 types with importance scoring
+- **Session-end `@Async` extraction** — runs the moment a session completes (with `@Scheduled` daily cron as a safety net for orphans)
+- **Auto-capture** via `ActivityLogHook` — records every tool call
 - **Consolidation** — dedup + stale marking (30 days no recall + recallCount < 3)
+
+### Session Message Storage (Row-based, Immutable)
+
+**Core invariant: messages are append-only** — what the UI shows is the full history, compaction never loses old turns:
+
+- `t_session_message` row storage (replaced a single CLOB) with `seq_no` / `role` / `content_json` / `msg_type` / `metadata_json`
+- `getFullHistory` (UI) vs `getContextMessages` (LLM, reads `young-gen + summary + new messages` across compact boundaries)
+- Compaction inserts `COMPACT_BOUNDARY` + `SUMMARY` rows — old messages are **never deleted**
+- Supports checkpoint / branch / restore
 
 ### Context Compaction (JVM-GC Style)
 
-- **Light** — rule-based: truncate large outputs, dedup searches, fold failures (free)
-- **Full** — LLM-summarization preserving tool_use ↔ tool_result pairing
-- 6 trigger sources: token-budget safety net, idle-gap, LLM tool call, engine auto-trigger, manual API, waste detection
+- **Light** — rule-based: truncate large outputs, dedup searches, fold failures, **compactable-tool whitelist** (P9-1)
+- **Full** — LLM summarization preserving `tool_use ↔ tool_result` pairing, 3-phase split (guard → LLM (no lock) → persist) for concurrency
+- **Time-based cold cleanup** — prunes stale tool outputs after session idle threshold (P9-3)
+- **Session-memory compact** — zero-LLM fallback using `MemoryService.previewMemoriesForPrompt` (P9-6)
+- **6 trigger sources**: token-budget safety net, idle-gap, LLM tool call, engine auto-trigger, manual API, waste detection
+- **Context Breakdown API** — `GET /api/chat/sessions/{id}/context-breakdown` returns layered segment sizes (system prompt / tool schemas / messages) against the agent's real context window
 - All events recorded in `t_compaction_event` for audit
 
 ### Observability
@@ -243,23 +318,58 @@ Edit `skillforge-server/src/main/resources/application.yml`:
 ```yaml
 skillforge:
   llm:
-    default-provider: bailian    # or "claude", "openai"
+    default-provider: bailian            # or "claude", "openai"
     providers:
-      bailian:
+      bailian:                           # 通义千问 / DashScope
+        type: openai                     # OpenAI-compatible endpoint
         api-key: ${DASHSCOPE_API_KEY:}
         base-url: https://coding.dashscope.aliyuncs.com
-        model: qwen3.5-plus
+        model: qwen3.5-plus              # default model for this provider
+        models:                          # surfaced as dashboard model options
+          - qwen3.5-plus
+          - qwen3-max-2026-01-23
+          - qwen3-coder-next
       claude:
+        type: claude
         api-key: ${ANTHROPIC_API_KEY:}
         base-url: https://api.anthropic.com
         model: claude-sonnet-4-20250514
-      openai:
+        models:
+          - claude-sonnet-4-20250514
+        context-window-tokens: 200000
+      openai:                            # works with DeepSeek, vLLM, Ollama, etc.
+        type: openai
         api-key: ${DEEPSEEK_API_KEY:}
         base-url: https://api.deepseek.com
         model: deepseek-chat
+        models:
+          - deepseek-chat
+
+  # Memory extraction: "rule" (fast heuristic) | "llm" (semantic, 5-type classification)
+  memory:
+    extraction-mode: rule
+
+  # pgvector-backed vector search (off by default; enable with an embedding API key)
+  embedding:
+    enabled: false
+    api-key: ${EMBEDDING_API_KEY:}
+    base-url: https://api.openai.com
+    model: text-embedding-3-small
+    dimension: 1536
+
+# Lifecycle-hook script sandbox (only bash + node allowed; output capped)
+lifecycle:
+  hooks:
+    forbidden-skills: [SubAgent, TeamCreate, TeamSend, TeamKill]
+    script:
+      allowed-langs: [bash, node]
+      max-output-bytes: 65536
+      max-script-body-chars: 4096
 ```
 
 ## Tools & Skills
+
+> **Tool vs Skill**: a **Tool** is the unit an agent can *invoke* (has a schema + `execute` method); a **Skill** is a packaged capability (Java class or file-based SKILL.md) that may register one or more Tools. Every Skill is a Tool, but user-defined Skills can also be loaded without being bound to a specific Tool schema. Tool semantics were formalized in P13-11.
 
 ### System Tools (Java, always available)
 
@@ -271,14 +381,21 @@ skillforge:
 | **FileEdit** | Exact string replacement |
 | **Glob** | Find files by pattern |
 | **Grep** | Search contents by regex |
-| **Memory** | Persistent memory (5 types, TF-IDF search) |
+| **WebFetch** | Fetch URL content (size-capped) |
+| **WebSearch** | Web search |
+| **Memory** | Persistent memory CRUD (5 types) |
+| **MemorySearch** | Hybrid pgvector + FTS search over memories |
+| **MemoryDetail** | On-demand full memory body fetch |
+| **TodoWrite** | Per-session todo list for plan-driven agents |
 | **SubAgent** | Dispatch task to another agent (tree) |
 | **TeamCreate** | Spawn team member (network) |
-| **TeamSend** | Message peer/parent/broadcast |
+| **TeamSend** | Message peer / parent / broadcast |
 | **TeamList** | List team members |
 | **TeamKill** | Cancel member or team |
+| **RegisterScriptMethod** | Agent registers a new bash/node hook method |
+| **RegisterCompiledMethod** | Agent submits a Java hook method for compile + approval |
 
-### System Skills (file-based)
+### System Skills (file-based, non-deletable)
 
 | Skill | Description |
 |-------|-------------|
@@ -286,6 +403,7 @@ skillforge:
 | **ClawHub** | Marketplace search + install |
 | **GitHub** | GitHub API + `gh` CLI |
 | **SkillHub** | SkillHub marketplace |
+| **skill-creator** | Agent-authored skills: scaffold, edit, validate SKILL.md packages |
 
 ### Engine-internal Tools
 
@@ -293,6 +411,14 @@ skillforge:
 |------|-------------|
 | **ask_user** | Multiple-choice question (ask mode only) |
 | **compact_context** | Request light or full context compaction |
+
+### Lifecycle Hook Built-In Methods
+
+| Method | Description |
+|--------|-------------|
+| **HttpPost** | POST to a URL with SSRF-hardened validator (blocks loopback / link-local / IPv6 traps) |
+| **FeishuNotify** | Push to a Feishu group / bot |
+| **LogToFile** | Append to a project-scoped log file (per-path lock) |
 
 ## API Reference
 
@@ -312,12 +438,15 @@ skillforge:
 |--------|----------|-------------|
 | POST | `/api/chat/sessions` | Create session |
 | GET | `/api/chat/sessions?userId=1` | List user sessions |
+| DELETE | `/api/chat/sessions/{id}` | Delete session |
+| DELETE | `/api/chat/sessions` | Batch delete (`{ids: [...]}`, max 100) |
 | POST | `/api/chat/{sessionId}` | Send message (async, 202) |
 | POST | `/api/chat/{sessionId}/cancel` | Cancel running loop |
 | POST | `/api/chat/{sessionId}/answer` | Answer ask_user question |
 | PATCH | `/api/chat/sessions/{id}/mode` | Switch execution mode |
 | POST | `/api/chat/sessions/{id}/compact` | Manual context compact |
 | GET | `/api/chat/sessions/{id}/replay` | Structured session replay |
+| GET | `/api/chat/sessions/{id}/context-breakdown` | Live segment sizes vs context window |
 
 ### SubAgent & Collaboration
 
@@ -361,17 +490,45 @@ skillforge:
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/memories` | List memories |
-| GET | `/api/memories/search` | TF-IDF search |
+| GET | `/api/memories/search` | Hybrid (pgvector + FTS) search with RRF |
 | POST | `/api/memories` | Create memory |
 | PUT | `/api/memories/{id}` | Update memory |
 | DELETE | `/api/memories/{id}` | Delete memory |
+
+### Channels (Multi-Platform Gateway)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/channels` | List channel configs (Feishu / Telegram / …) |
+| POST | `/api/channels` | Create channel config |
+| PATCH | `/api/channels/{id}` | Update (e.g. switch Feishu mode: ws ↔ webhook) |
+| GET | `/api/channels/{id}/conversations` | List conversations routed to a channel |
+| POST | `/api/channels/deliveries/{id}/retry` | Retry a failed delivery |
+
+### Lifecycle Hooks & Hook Methods
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/lifecycle-hooks/events` | Available hook events + presets |
+| GET | `/api/lifecycle-hooks/methods` | List registered built-in / script / compiled methods |
+| POST | `/api/hook-methods/script` | Register a bash/node script method |
+| POST | `/api/hook-methods/compiled` | Submit a Java class for compile + approval |
+| POST | `/api/hook-methods/compiled/{id}/approve` | Approve a compiled method |
+| GET | `/api/behavior-rules` | List built-in behavior rules |
+| GET | `/api/behavior-rules/presets` | List preset rule bundles |
+
+### LLM
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/llm/models` | List available models per provider (backend-driven) |
 
 ### WebSocket
 
 | Endpoint | Description |
 |----------|-------------|
 | `/ws/chat/{sessionId}` | Session streaming: status, deltas, ask_user, collab events |
-| `/ws/users/{userId}` | User notifications: session CRUD events |
+| `/ws/users/{userId}` | User notifications: session CRUD + collab run events |
 
 ## CLI
 
@@ -405,28 +562,33 @@ my-skill.zip
 
 ### Delivered
 
-- Agent Loop engine with multi-provider LLM streaming
-- Tool & Skill system (Java tools + file-based skills + marketplace)
-- Dashboard (chat, sessions, agents, skills, traces, replay, memories, usage, teams, eval)
-- SubAgent orchestration (tree topology, persistent, recovery)
-- Multi-Agent Collaboration (network topology, roster, adjacency, cancel cascade)
-- Context compaction (light + full, 6 triggers, JVM-GC style)
-- Memory system (5 types, TF-IDF search, auto-extraction, consolidation)
-- Self-Improve Pipeline (eval runner, LLM judge, attribution, prompt A/B, scenario extraction)
-- Safety guardrails (command blocklist, path traversal, anti-runaway)
-- Observability (traces, session replay, model usage dashboard)
-- Auth MVP (local token auto-generation)
-- CLI module (YAML import/export, one-shot chat)
+- **Agent Loop engine** with multi-provider LLM streaming (Claude, OpenAI-compatible, DeepSeek, Bailian, vLLM, Ollama)
+- **Tool & Skill system** — Java tools + file-based SKILL.md packages + marketplace (ClawHub / SkillHub)
+- **Dashboard** — chat, sessions, agents, skills, traces, replay, memories, usage, teams, eval, channels, hook methods, schedules
+- **SubAgent orchestration** — tree topology, persistent across restarts, recovery + sweeper
+- **Multi-Agent Collaboration** — network topology, roster, adjacency policy, cascade cancel, lightContext (~30-50% token save)
+- **Context compaction** — light + full + time-based cold cleanup + session-memory compact + 6 trigger sources (JVM-GC style)
+- **Memory system** — 5 types, **pgvector + FTS hybrid retrieval (RRF)**, session-end `@Async` extraction, **LLM semantic extraction mode**, consolidation
+- **Self-Improve Pipeline** — eval runner, LLM judge (2×Haiku + Sonnet meta), 7×5 attribution matrix, prompt A/B auto-promotion (Δ≥15pp + 4-layer Goodhart safeguards), session→scenario extraction
+- **Session message storage** — row-based (`t_session_message`), append-only, checkpoint / branch / restore
+- **Skill self-evolution** — session → skill extraction, version management, A/B validation, auto-promotion/rollback
+- **Multi-channel gateway** — `ChannelAdapter` SPI, Feishu (WebSocket + webhook), Telegram, 3-phase delivery tx, retry/dedup, `/channels` dashboard
+- **Lifecycle Hooks** — SessionStart / UserPromptSubmit / PreToolUse / PostToolUse / SessionEnd with Skill / Script / BuiltInMethod / CompiledMethod handler types, chain execution, discriminated-union editor
+- **Behavior Rules** — 15 built-in rules + preset templates + per-agent custom rules (XML-sandboxed)
+- **Code Agent** — self-extending agent that writes its own hook methods, with compile + approval workflow
+- **Safety guardrails** — SafetySkillHook (command blocklist, path-traversal prevention) + agent-loop anti-runaway (token / duration / iteration budgets, no-progress detection, waste detection)
+- **Observability** — Langfuse-style traces, session replay, model usage dashboard, context breakdown API, channel visualization
+- **Auth MVP** — local token auto-generation
+- **CLI module** — picocli + OkHttp, YAML import/export, one-shot chat
 
 ### Planned
 
-- Memory vector search (pgvector + FTS hybrid retrieval)
-- Agent behavioral rules (configurable rule library)
-- Lifecycle hooks (session_start / post_tool_use / session_end)
-- Skill auto-generation from session analysis
-- Feishu/Lark messaging gateway
-- JWT authentication
-- Redis for multi-instance deployment
+- **Memory quality evals (P3)** — extraction snapshots, memory-attribution signals, auto-rollback on negative Δ
+- **Tool output fine-grained trimming (P9-2/4/5/7)** — per-message aggregate budget with on-disk archival, partial compaction (head/tail), post-compact context restoration, `jtokkit` local token counter
+- **Slash commands (P10)** — `/new`, `/compact`, `/clear`, `/model`, `/help` in the chat input
+- **Agent discovery + cross-agent calls (P11)** — `AgentDiscoverySkill`, call-by-name, visibility, cycle detection
+- **Scheduled tasks (P12)** — user-defined cron / one-shot triggers, system-job registry, unified `/schedules` UI, run history
+- **JWT authentication** and Redis-backed multi-instance deployment
 
 ## License
 
