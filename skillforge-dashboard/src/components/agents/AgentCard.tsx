@@ -31,15 +31,11 @@ function parseBehaviorRuleCount(raw: unknown): number {
   try {
     const cfg = typeof raw === 'string' ? JSON.parse(raw) : raw;
     if (cfg && typeof cfg === 'object') {
-      const overrides = cfg.ruleOverrides;
+      const builtin = cfg.builtinRuleIds;
       const custom = cfg.customRules;
       let count = 0;
-      if (overrides && typeof overrides === 'object') {
-        count += Object.values(overrides).filter((v) => v === true).length;
-      }
-      if (Array.isArray(custom)) {
-        count += custom.length;
-      }
+      if (Array.isArray(builtin)) count += builtin.length;
+      if (Array.isArray(custom)) count += custom.length;
       return count;
     }
   } catch { /* ignore */ }

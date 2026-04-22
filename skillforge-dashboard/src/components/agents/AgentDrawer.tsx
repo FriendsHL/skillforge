@@ -1,9 +1,22 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { message } from 'antd';
+import { InputNumber, Select, message } from 'antd';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { updateAgent, getTools, getSkills, getLifecycleHookMethods, extractList, type UpdateAgentRequest } from '../../api';
+import { updateAgent, getTools, getSkills, getLifecycleHookMethods, extractList, type UpdateAgentRequest, type BehaviorRuleConfig } from '../../api';
 import type { AgentDto } from '../../api/schemas';
 import { initials, guessRole } from './AgentCard';
+import BehaviorRulesEditor from '../BehaviorRulesEditor';
+import { useBehaviorRules } from '../../hooks/useBehaviorRules';
+
+// TODO: extract modelOptions to shared constants (duplicated from pages/AgentList.tsx)
+const MODEL_OPTIONS = [
+  { label: 'bailian:qwen3.5-plus', value: 'bailian:qwen3.5-plus' },
+  { label: 'bailian:qwen3-max-2026-01-23', value: 'bailian:qwen3-max-2026-01-23' },
+  { label: 'bailian:qwen3-coder-next', value: 'bailian:qwen3-coder-next' },
+  { label: 'bailian:glm-5', value: 'bailian:glm-5' },
+  { label: 'openai:deepseek-chat', value: 'openai:deepseek-chat' },
+  { label: 'openai:gpt-4o', value: 'openai:gpt-4o' },
+  { label: 'claude:claude-sonnet-4-20250514', value: 'claude:claude-sonnet-4-20250514' },
+];
 
 interface HookEventMeta { id: string; phase: string; desc: string; abort: boolean }
 interface HookTypeMeta { id: string; desc: string }
@@ -58,34 +71,18 @@ function parseArr(raw: unknown): string[] {
   return [];
 }
 
-interface RuleItem { kind: string; text: string; group: string }
-
-function parseRules(raw: unknown): RuleItem[] {
-  if (!raw) return [];
+function parseBehaviorRulesConfig(raw: unknown): BehaviorRuleConfig | null {
+  if (!raw) return null;
   try {
     const cfg = typeof raw === 'string' ? JSON.parse(raw) : raw;
-    if (!cfg || typeof cfg !== 'object') return [];
-    const rules: RuleItem[] = [];
-    const overrides = (cfg as Record<string, unknown>).ruleOverrides;
-    if (overrides && typeof overrides === 'object') {
-      for (const [key, val] of Object.entries(overrides)) {
-        if (val === true) rules.push({ kind: 'MUST', text: key, group: 'preset' });
-      }
-    }
+    if (!cfg || typeof cfg !== 'object') return null;
+    const builtin = (cfg as Record<string, unknown>).builtinRuleIds;
     const custom = (cfg as Record<string, unknown>).customRules;
-    if (Array.isArray(custom)) {
-      for (const c of custom) {
-        if (c && typeof c === 'object') {
-          rules.push({
-            kind: (c as Record<string, string>).severity ?? 'SHOULD',
-            text: (c as Record<string, string>).text ?? String(c),
-            group: 'custom',
-          });
-        }
-      }
-    }
-    return rules;
-  } catch { return []; }
+    if (!Array.isArray(builtin) || !Array.isArray(custom)) return null;
+    const builtinIds = builtin.filter((x): x is string => typeof x === 'string');
+    const customStrs = custom.filter((x): x is string => typeof x === 'string');
+    return { builtinRuleIds: builtinIds, customRules: customStrs };
+  } catch { return null; }
 }
 
 interface HookItem { event: string; name: string; type: string; description?: string; abortOnError?: boolean }
@@ -383,17 +380,59 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
   });
   const [mode, setMode] = useState(agent.executionMode || 'ask');
 
-  const [rules, setRules] = useState<RuleItem[]>(() => parseRules(agent.behaviorRules));
-  const [hooks, setHooks] = useState<HookItem[]>(() => parseHooks(agent.lifecycleHooks));
+  // Rules — use BehaviorRulesEditor via useBehaviorRules hook
+  const initialRulesConfig = useMemo(
+    () => parseBehaviorRulesConfig(agent.behaviorRules),
+    [agent.behaviorRules],
+  );
+  const rulesCtl = useBehaviorRules(initialRulesConfig, mode);
+  // Latch dirty baseline only after useBehaviorRules finishes loading. When
+  // initialRulesConfig=null, the hook auto-applies a default preset once builtin
+  // rules load — comparing against an empty baseline would always show dirty.
+  const rulesBaselineRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (rulesBaselineRef.current === null && !rulesCtl.isLoading) {
+      rulesBaselineRef.current = JSON.stringify(rulesCtl.config);
+    }
+  }, [rulesCtl.isLoading, rulesCtl.config]);
+  const rulesDirty =
+    rulesBaselineRef.current !== null &&
+    rulesBaselineRef.current !== JSON.stringify(rulesCtl.config);
+
+  // Hooks
+  const initialHooks = useMemo<HookItem[]>(
+    () => parseHooks(agent.lifecycleHooks),
+    [agent.lifecycleHooks],
+  );
+  const [hooks, setHooks] = useState<HookItem[]>(initialHooks);
 
   const [testInput, setTestInput] = useState('');
   const [testOut, setTestOut] = useState<string | null>(null);
   const [testing, setTesting] = useState(false);
-  const [editing, setEditing] = useState<number | null>(null);
 
   const role = guessRole(agent);
-  const [skills, setSkills] = useState<string[]>(() => parseArr(agent.skillIds));
-  const [tools, setTools] = useState<string[]>(() => parseArr(agent.toolIds));
+  const initialSkills = useMemo(() => parseArr(agent.skillIds), [agent.skillIds]);
+  const initialTools = useMemo(() => parseArr(agent.toolIds), [agent.toolIds]);
+  const [skills, setSkills] = useState<string[]>(initialSkills);
+  const [tools, setTools] = useState<string[]>(initialTools);
+  const toolsSkillsDirty =
+    JSON.stringify(skills) !== JSON.stringify(initialSkills) ||
+    JSON.stringify(tools) !== JSON.stringify(initialTools);
+
+  // Overview — model + maxLoops edit
+  const agentWithExtras = agent as AgentDto & { maxLoops?: number | null };
+  const [modelIdDraft, setModelIdDraft] = useState<string>(agent.modelId || '');
+  const [maxLoopsDraft, setMaxLoopsDraft] = useState<number | null>(
+    typeof agentWithExtras.maxLoops === 'number' ? agentWithExtras.maxLoops : null,
+  );
+  const initialMaxLoops =
+    typeof agentWithExtras.maxLoops === 'number' ? agentWithExtras.maxLoops : null;
+  // Exclude clear-only maxLoops transitions: UpdateAgentRequest.maxLoops is
+  // `number | undefined`, so a null draft can't be explicitly sent to clear the
+  // server value. Without this guard, Save would fire a false success toast.
+  const overviewDirty =
+    (agent.modelId || '') !== modelIdDraft ||
+    (maxLoopsDraft !== null && initialMaxLoops !== maxLoopsDraft);
 
   const { data: skillsCatalog = [] } = useQuery({
     queryKey: ['skills'],
@@ -421,8 +460,8 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
     staleTime: 120_000,
   });
   const methodCatalogItems = useMemo<CatalogItem[]>(
-    () => rawMethods.map((m: { name: string; displayName?: string; description?: string }) => ({
-      id: m.name,
+    () => rawMethods.map((m) => ({
+      id: m.ref,
       desc: m.description || m.displayName,
     })),
     [rawMethods],
@@ -448,29 +487,55 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
     onError: () => message.error('Failed to update agent'),
   });
 
+  // Preserve primitive `public` flag across partial PUTs. Backend AgentEntity#isPublic
+  // is a primitive boolean — `updateAgent` always writes it (can't distinguish "unset"
+  // from `false`). Without spreading the current value, every partial save silently
+  // flips public agents to private. Remove when AgentEntity.isPublic becomes Boolean.
+  const withPublic = (partial: UpdateAgentRequest): UpdateAgentRequest => {
+    const extended = agent as AgentDto & { public?: boolean };
+    return { ...partial, public: extended.public ?? false } as UpdateAgentRequest;
+  };
+
   const handleSavePrompts = () => {
-    const payload: UpdateAgentRequest = {
+    updateMutation.mutate({ id: agent.id, payload: withPublic({
       systemPrompt: promptDraft['AGENT.md'],
       soulPrompt: promptDraft['SOUL.md'],
-    };
-    updateMutation.mutate({ id: agent.id, payload });
+    })});
     setDirty({});
   };
 
   const handleModeChange = (newMode: 'ask' | 'auto') => {
     setMode(newMode);
-    updateMutation.mutate({ id: agent.id, payload: { executionMode: newMode } });
+    updateMutation.mutate({ id: agent.id, payload: withPublic({ executionMode: newMode }) });
   };
 
-  const addRule = () => {
-    setRules(r => [...r, { kind: 'SHOULD', text: 'New rule — click to edit', group: 'custom' }]);
+  const handleSaveRules = () => {
+    rulesBaselineRef.current = null; // re-latch baseline after server re-fetch
+    updateMutation.mutate({
+      id: agent.id,
+      payload: withPublic({ behaviorRules: JSON.stringify(rulesCtl.config) }),
+    });
   };
-  const removeRule = (i: number) => setRules(r => r.filter((_, j) => j !== i));
-  const cycleKind = (i: number) => {
-    const kinds = ['MUST', 'MUST NOT', 'SHOULD'];
-    setRules(r => r.map((x, j) => j === i ? { ...x, kind: kinds[(kinds.indexOf(x.kind) + 1) % kinds.length] } : x));
+
+  const handleSaveToolsSkills = () => {
+    updateMutation.mutate({
+      id: agent.id,
+      payload: withPublic({
+        skillIds: JSON.stringify(skills),
+        toolIds: JSON.stringify(tools),
+      }),
+    });
   };
-  const updateRuleText = (i: number, text: string) => setRules(r => r.map((x, j) => j === i ? { ...x, text } : x));
+
+  const handleSaveOverview = () => {
+    const partial: UpdateAgentRequest = {
+      modelId: modelIdDraft || undefined,
+    };
+    if (maxLoopsDraft !== null && maxLoopsDraft !== undefined) {
+      partial.maxLoops = maxLoopsDraft;
+    }
+    updateMutation.mutate({ id: agent.id, payload: withPublic(partial) });
+  };
 
   const addHook = () => {
     setHooks(h => [...h, { event: 'PreToolUse', name: 'new-hook', type: 'skill' }]);
@@ -490,10 +555,11 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
     }, 22);
   };
 
+  const rulesBadge = rulesCtl.config.builtinRuleIds.length + rulesCtl.config.customRules.length;
   const tabs = [
     { id: 'overview', label: 'Overview' },
     { id: 'prompts', label: 'Prompts' },
-    { id: 'rules', label: 'Rules', badge: rules.length },
+    { id: 'rules', label: 'Rules', badge: rulesBadge },
     { id: 'hooks', label: 'Hooks', badge: hooks.length },
     { id: 'toolsSkills', label: 'Tools & Skills', badge: skills.length + tools.length },
     { id: 'test', label: 'Test' },
@@ -541,15 +607,48 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
                 </p>
               )}
               <div className="overview-grid">
-                <div className="overview-card"><div className="overview-k">Model</div><div className="overview-v mono">{agent.modelId || '—'}</div></div>
+                <div className="overview-card">
+                  <div className="overview-k">Model</div>
+                  <Select
+                    size="small"
+                    value={modelIdDraft || undefined}
+                    options={MODEL_OPTIONS}
+                    onChange={(v) => setModelIdDraft(v)}
+                    placeholder="default"
+                    style={{ width: '100%', marginTop: 4 }}
+                    showSearch
+                    optionFilterProp="label"
+                  />
+                </div>
+                <div className="overview-card">
+                  <div className="overview-k">Max Loops</div>
+                  <InputNumber
+                    size="small"
+                    min={1}
+                    max={200}
+                    value={maxLoopsDraft ?? undefined}
+                    onChange={(v) => setMaxLoopsDraft(typeof v === 'number' ? v : null)}
+                    placeholder="default"  /* clearing reverts to default; cannot save explicit null via API */
+                    style={{ width: '100%', marginTop: 4 }}
+                  />
+                </div>
                 <div className="overview-card"><div className="overview-k">Mode</div><div className="overview-v mono">{mode}</div></div>
                 <div className="overview-card"><div className="overview-k">Role (inferred)</div><div className="overview-v mono">{role}</div></div>
                 <div className="overview-card"><div className="overview-k">ID</div><div className="overview-v mono">{agent.id}</div></div>
               </div>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
+                <button
+                  className="btn-primary-sf"
+                  onClick={handleSaveOverview}
+                  disabled={!overviewDirty || updateMutation.isPending}
+                >
+                  {overviewDirty ? 'Save' : 'Saved'}
+                </button>
+              </div>
               <div className="spec-block">
                 <div className="spec-h"><h3>Configuration</h3></div>
                 <div className="overview-grid" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
-                  <div className="overview-card"><div className="overview-k">Rules</div><div className="overview-v">{rules.length}</div></div>
+                  <div className="overview-card"><div className="overview-k">Rules</div><div className="overview-v">{rulesBadge}</div></div>
                   <div className="overview-card"><div className="overview-k">Hooks</div><div className="overview-v">{hooks.length}</div></div>
                   <div className="overview-card"><div className="overview-k">Skills</div><div className="overview-v">{skills.length}</div></div>
                 </div>
@@ -603,62 +702,26 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
 
           {tab === 'rules' && (
             <>
-              <div className="spec-h">
-                <h3>Behavior rules — {rules.length}</h3>
-                <div className="spec-h-actions">
-                  <button className="btn-ghost-sf" onClick={addRule}>{PLUS_ICON} Add rule</button>
-                </div>
+              <BehaviorRulesEditor
+                groupedRules={rulesCtl.groupedRules}
+                templateId={rulesCtl.templateId}
+                customRules={rulesCtl.config.customRules}
+                isLoading={rulesCtl.isLoading}
+                onApplyTemplate={rulesCtl.applyTemplate}
+                onToggleRule={rulesCtl.toggleRule}
+                onAddCustomRule={rulesCtl.addCustomRule}
+                onRemoveCustomRule={rulesCtl.removeCustomRule}
+                onUpdateCustomRule={rulesCtl.updateCustomRule}
+              />
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
+                <button
+                  className="btn-primary-sf"
+                  onClick={handleSaveRules}
+                  disabled={!rulesDirty || updateMutation.isPending}
+                >
+                  {rulesDirty ? 'Save' : 'Saved'}
+                </button>
               </div>
-              <div className="rules-hint">
-                <span><span className="rule-kind-sf rule-kind-inline MUST">MUST</span> strict requirement</span>
-                <span><span className="rule-kind-sf rule-kind-inline MUST-NOT">MUST NOT</span> forbidden</span>
-                <span><span className="rule-kind-sf rule-kind-inline SHOULD">SHOULD</span> preferred</span>
-              </div>
-              {rules.length === 0 ? (
-                <div className="empty-state-sf">
-                  No rules yet. Click <b>Add rule</b> to create one.
-                </div>
-              ) : (
-                (() => {
-                  const groups = Array.from(new Set(rules.map(r => r.group)));
-                  return groups.map(g => (
-                    <div key={g} className="rule-group-block">
-                      <div className="rule-group-label">
-                        <span className="rule-group-btn">{g}</span>
-                        <span className="rule-group-count">{rules.filter(r => r.group === g).length}</span>
-                      </div>
-                      <div className="rules-list-sf">
-                        {rules.map((r, i) => r.group === g && (
-                          <div key={i} className="rule-row-sf">
-                            <button
-                              className={`rule-kind-sf ${r.kind.replace(' ', '-')}`}
-                              onClick={() => cycleKind(i)}
-                              title="click to cycle"
-                            >
-                              {r.kind}
-                            </button>
-                            {editing === i ? (
-                              <textarea
-                                autoFocus
-                                className="rule-edit-input-sf"
-                                defaultValue={r.text}
-                                onBlur={(e) => { updateRuleText(i, e.target.value.trim() || r.text); setEditing(null); }}
-                                onKeyDown={(e) => {
-                                  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); (e.target as HTMLTextAreaElement).blur(); }
-                                  if (e.key === 'Escape') setEditing(null);
-                                }}
-                              />
-                            ) : (
-                              <div className="rule-text-sf" onClick={() => setEditing(i)} title="click to edit">{r.text}</div>
-                            )}
-                            <button className="rule-del-sf" onClick={() => removeRule(i)} title="Remove">{CLOSE_ICON}</button>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ));
-                })()
-              )}
             </>
           )}
 
@@ -725,6 +788,21 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
                   </div>
                 )}
               </div>
+              {/* Hooks Save is disabled: parseHooks flattens the backend
+                  HookHandler discriminated-union schema (type: skill/script/method
+                  with skillName / scriptBody+scriptLang / methodRef, plus
+                  timeoutSeconds / failurePolicy / async / displayName) into a
+                  lossy {event, name, type} shape. Re-enable when the
+                  schema-aware hook editor lands (see follow-up PR). */}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
+                <button
+                  className="btn-primary-sf"
+                  disabled
+                  title="Hooks editor is read-only until schema-aware editor ships. Edit hooks via API for now."
+                >
+                  Save (disabled — see follow-up)
+                </button>
+              </div>
             </>
           )}
 
@@ -758,6 +836,15 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
                   ))}
                   <AttachPicker kind="tool" catalog={toolCatalogItems} attached={tools} onPick={addTool} />
                 </div>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
+                <button
+                  className="btn-primary-sf"
+                  onClick={handleSaveToolsSkills}
+                  disabled={!toolsSkillsDirty || updateMutation.isPending}
+                >
+                  {toolsSkillsDirty ? 'Save' : 'Saved'}
+                </button>
               </div>
             </>
           )}

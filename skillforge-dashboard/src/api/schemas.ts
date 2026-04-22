@@ -16,6 +16,9 @@ export const AgentSchema = z.object({
   // hooks (useBehaviorRules / useLifecycleHooks) parse them client-side.
   behaviorRules: z.string().optional().nullable(),
   lifecycleHooks: z.string().optional().nullable(),
+  // Surface `public` flag so the drawer can preserve it across partial PUTs
+  // (AgentEntity#isPublic is primitive boolean — backend always overwrites it).
+  public: z.boolean().optional(),
 });
 export type AgentDto = z.infer<typeof AgentSchema>;
 
