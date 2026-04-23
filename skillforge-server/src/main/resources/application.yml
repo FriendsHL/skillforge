@@ -71,7 +71,7 @@ skillforge:
           - qwen3-max-2026-01-23
           - qwen3-coder-next
         # Optional per-provider tuning (defaults: 60s / 1 retry)
-        # read-timeout-seconds: 60    # raise for slow models; non-stream chat only
+        read-timeout-seconds: 240     # qwen thinking mode + 1082 proxy buffering can idle > 60s; applies to stream too
         # max-retries: 1              # retries on SocketTimeoutException only,
         #                             # does NOT apply to streaming (chatStream)
 

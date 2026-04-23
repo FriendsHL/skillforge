@@ -23,7 +23,9 @@
 | **Sprint 4** | P12 定时任务（收窄首版） | 3-4 周 | user 型调度最小集；SystemJobRegistry + P12-6 → V2 |
 | **Sprint 5** | P9-4 · P9-5（需 design doc 先行） | 按需 | P9-5 依赖 P9-4；P9-5 需先明确"最近文件"数据来源 |
 | **Sprint 6** | P10 斜杠命令（收窄 4 条） | 5-8 天 | 从 Sprint 1 降级；/compact 只做 full；/model 只改 session 级 |
+| **🔥 穿插** | Compact Breaker 误触 + LLM Stream 抗抖（BUG-A/B/C/D/E/E-bis） | Full Pipeline | 2026-04-23 三个 session 连续中断触发；breaker 被 no-op 错误打开 + stream/non-stream readTimeout 共享 + ConnectException 无 retry；已先改 yml 止血（240s） |
 | **🔒 穿插** | SEC-1 Channel 配置 AES-GCM 加密 | 1-2 天 | 代码扫描发现明文存储安全问题，P12 前修复 |
+| **🔒 穿插** | SEC-2 系统 Hook 存储分离与保护 | Full Pipeline | 当前无系统 hook 概念且无校验，curl / JSON 模式可删任意 hook；方案 A 存储分离 vs B source 标记 |
 | **🧹 穿插** | DEBT-1 SkillList.tsx 拆分（47K 单文件） | 3-5 天 | 低优先级，下次动 SkillList 前先拆 |
 | **V2** | P14 · P3-2/4 · P15-3/4/6 · P11-3 · P12-3/6 · P10-4/5 · P13-9 | 推迟 | 见底部 V2 推迟池 |
 
@@ -196,6 +198,28 @@
 
 ---
 
+### 🔥 引擎稳定性 — Compact Breaker 误触 + LLM Stream 抗抖（触碰核心文件，Full Pipeline，单 PR）
+
+> **触发事件**：2026-04-23 下午连续 3 个 session 中断——
+> - `cec1cd60`：breaker 错误 open（no-op/idempotency 3 次被当 failure）→ session 全程无法 compact；同时 `Read timed out`（loop 12，qwen thinking idle > 60s）+ `ConnectException /127.0.0.1:1082`（VPN 抖动 ~30s）
+> - `02112e8f`：`Read timed out`（60s 默认）
+> - `3c0d05d9`：`ConnectException /127.0.0.1:1082`（VPN 抖动，30s 内自愈，但 chatStream 不 retry 就 fail 整个 loop）
+>
+> **环境约束（不可回避）**：本机 DashScope 域名被 VPN 劫持到 `198.18.0.45 / utun4`，不走 VPN 物理上连不到 qwen；所以 "绕过 VPN" 不是选项，必须代码层抗抖。
+>
+> **已止血（无需 Pipeline）**：`application.yml:74` bailian `read-timeout-seconds: 60 → 240` 已启用（2026-04-23，commit 暂未 push）。
+
+| 子任务 | 说明 |
+| --- | --- |
+| **BUG-A** Breaker 误触修复（blocker） | `AgentLoopEngine.java` 3 个 compact 触发点（:352-353 soft / :374-376 hard / :463-465 preemptive）都把 `cr.performed == false` 当 failure 累加。实际 `CompactionService` 的 `noOp` 包含 "session not found" / "idempotency guard" / "strategy returned no-op" / "full compact no-op or in-flight" 多种正常 skip 情形。修：只有**真正抛 Exception** 才 `incrementCompactFailures`，`performed==false` 视为中性。cec1cd60 实证：连续 3 次 no-op/idempotent skip 后 breaker 错误 open，session 整段跑在无压缩状态 |
+| **BUG-B** Breaker 自动重置（warning） | `AgentLoopEngine.java:383-386` 一旦 `>=3` 后永远 skip，没有 time-based half-open。修：最后一次失败后 N 秒（建议 60s）允许试一次；或下一次 user turn 入口重置计数 |
+| **BUG-C** Compact 失败日志补 stacktrace（warning） | `AgentLoopEngine.java:356-357 / :379-380 / :468-469` 都是 `log.warn(..., e.getMessage())`，**没 stacktrace**，WARN 级。改 `log.error(..., e)` 带完整堆栈；+ `CompactionService` 内部失败路径（如 LLM 超时、解析失败）自行加 ERROR 日志，不依赖调用方 |
+| **BUG-D** OpenAiProvider SSE 截断 observability（info） | `OpenAiProvider.java:525-528` 已有 try/catch + `input=Map.of()` 兜底（所以不崩），但前端/trace 完全不知道 "tool_call input 是残缺的"。加：解析失败时通过 handler 发一个可识别 error 类型（或结构化 warning 事件），让 trace / 前端能看到截断信号 |
+| **BUG-E** Stream 与 non-stream 共用 HttpClient（blocker） | `OpenAiProvider.java:44-58` / `ClaudeProvider.java:46-58` 构造时一个 `OkHttpClient` 被 non-stream `chat()` 和 stream `chatStream()` 共享，readTimeout 对两者意义完全不同（non-stream=总耗时；stream=相邻 chunk idle）。修：构造两个 client，stream 用更长/无限 idle timeout（参考 `FeishuWsConnector:208` 的 `readTimeout(Duration.ZERO)` 用法）；修正 `application.yml:74` 注释 "non-stream chat only"（事实上 stream 也用）；修正 `application.yml:75-76` `max-retries` 注释（stream 不 apply 是现状，但 ConnectException 类可以 retry，见 BUG-E-bis）|
+| **BUG-E-bis** ChatStream 对 ConnectException 短重试（blocker，从 3c0d05d9 直接触发） | 项目 footgun #3 "chatStream 不重试" 是针对**已推 delta** 的 SocketTimeoutException，但对 `ConnectException` / `SSLHandshakeException` / 握手前失败**不适用**——连接没建立，delta 根本没推，retry 安全。修：`OpenAiProvider.chatStream` / `ClaudeProvider.chatStream` 区分异常位置，握手前 retry 1-2 次（间隔 2-5s），握手后不 retry。VPN 抖动（1082 typical 30s 内自愈）期间就不会 fail 整个 agent loop |
+
+---
+
 ### 🔒 安全修复 — Channel 配置明文存储（穿插，独立 PR）
 
 > **代码扫描发现**：`ChannelConfigEntity` / `ChannelConfigService` 有明文 TODO 注释："AES-GCM 加密存储，目前为明文 JSON"。Channel 配置中存有飞书/Telegram 的 Bot Token、Secret 等敏感字段，当前全部明文写入数据库。这是一个安全问题，应在 P12 之前修复（P12 上线后会有更多定时任务 channel 配置写入）。
@@ -203,6 +227,19 @@
 | 子任务 | 说明 |
 | --- | --- |
 | **SEC-1** Channel 配置 AES-GCM 加密 | `ChannelConfigService` 存储前加密敏感字段（appSecret / botToken / encryptKey）；读取时解密；密钥从环境变量注入；对已存在明文数据做一次性迁移脚本；约 1-2 天 |
+
+---
+
+### 🔒 系统 Hook 保护（穿插，触碰核心文件，需 Full Pipeline）
+
+> **发现时间**：2026-04-23，讨论 "session 结束自动 memory 压缩" 类系统 hook 时发现。**当前 SkillForge 根本没有 "系统 hook" 概念**：`HookEntry` 无 `source` / `isSystem` 字段，`AgentService.updateAgent` 对 lifecycleHooks 只校验大小/语义（`AgentService.java:63-95`），收到 PUT 就无条件 `setLifecycleHooks()` 覆盖。前端 `JsonMode.tsx` 是个 TextArea，用户可以把 hooks 全删了保存。所以未来如果把系统 hook 当默认值塞进 `agent.lifecycleHooks`，**用户 curl 或 UI JSON 模式都能绕过删掉**，UI 屏蔽只是装饰。
+>
+> 需求同时包含：UI 要把系统 hook **显示但锁定**（灰卡 + `系统` 徽章，不提供编辑/删除；可折叠分组避免拥挤），让用户知道后台在做什么，保住透明度。
+
+| 子任务 | 说明 |
+| --- | --- |
+| **SEC-2** 系统 Hook 存储与保护架构 | **优先方案 A（存储分离）**：系统 hook 不存进 `agent.lifecycleHooks`，新增 `SystemHookRegistry`（代码内注册 or 独立表），`HookDispatcher` / `AgentLoopEngine` 执行时合并 user + system；用户配置面只有 user hook，删不掉是因为压根不在那。**备选方案 B**：`HookEntry` 加 `source: "system"\|"user"`，`AgentService.updateAgent` 做 diff 校验 system 条目不变。触碰核心文件 (`HookEntry` / `AgentService` / `AgentLoopEngine` hook dispatcher) + 前后端都要动 → **Full Pipeline**。Plan 阶段让 Planner 出 A/B 对比 |
+| **SEC-2-fe** LifecycleHooksEditor 展示系统 hook | 折叠分组 "系统 Hooks (N)" + 灰色只读卡片 + `系统` 徽章；JSON 模式如果保留，需要保证系统 hook 不在用户可编辑的 JSON 范围内（配合 SEC-2-A 架构）或编辑器强制只读段（配合 B 架构） |
 
 ---
 
