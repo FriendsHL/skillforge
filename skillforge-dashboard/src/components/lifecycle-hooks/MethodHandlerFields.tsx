@@ -24,6 +24,7 @@ const MethodHandlerFields: React.FC<MethodHandlerFieldsProps> = ({ handler, meth
       methods.map((m) => ({
         label: m.displayName,
         value: m.ref,
+        description: m.description ?? '',
       })),
     [methods],
   );
@@ -65,6 +66,18 @@ const MethodHandlerFields: React.FC<MethodHandlerFieldsProps> = ({ handler, meth
               optionFilterProp="label"
               status={isEmpty ? 'error' : undefined}
               style={{ width: '100%' }}
+              popupClassName="sf-hooks-method-select-popup"
+              optionRender={(option) => {
+                const opt = option.data as { label: string; value: string; description: string };
+                return (
+                  <div className="sf-hooks-select-option">
+                    <span className="sf-hooks-select-option-label">{opt.label}</span>
+                    {opt.description && (
+                      <span className="sf-hooks-select-option-desc">{opt.description}</span>
+                    )}
+                  </div>
+                );
+              }}
             />
             {isEmpty && (
               <Typography.Text type="danger" className="sf-hooks-field-error">

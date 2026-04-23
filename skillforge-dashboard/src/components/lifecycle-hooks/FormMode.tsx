@@ -1,6 +1,7 @@
 import React, { useCallback, useMemo, useState } from 'react';
 import {
   Card,
+  Collapse,
   Radio,
   Select,
   Switch,
@@ -23,6 +24,7 @@ import {
   DeleteOutlined,
   PlusOutlined,
   PlayCircleOutlined,
+  SettingOutlined,
 } from '@ant-design/icons';
 import { useMutation } from '@tanstack/react-query';
 import { dryRunHook, type BuiltInMethodDto, type DryRunResponse } from '../../api';
@@ -376,7 +378,7 @@ const EntryRow: React.FC<EntryRowProps> = ({
   );
 
   return (
-    <div className="sf-hooks-entry-row">
+    <div className="sf-hooks-entry-row" data-handler-type={handlerType}>
       <div className="sf-hooks-entry-row-header">
         <div className="sf-hooks-entry-row-title">
           <span className="sf-hooks-entry-badge">
@@ -458,7 +460,21 @@ const EntryRow: React.FC<EntryRowProps> = ({
           />
         )}
 
-        <CommonFields entry={entry} eventId={eventId} onUpdate={handleUpdateField} />
+        <Collapse
+          size="small"
+          items={[
+            {
+              key: 'advanced',
+              label: (
+                <span className="sf-hooks-advanced-label">
+                  <SettingOutlined />
+                  <span>Advanced Options</span>
+                </span>
+              ),
+              children: <CommonFields entry={entry} eventId={eventId} onUpdate={handleUpdateField} />,
+            },
+          ]}
+        />
       </div>
 
       <DryRunResultModal
@@ -580,8 +596,9 @@ const SkillHandlerFields: React.FC<{
   const options = useMemo(
     () =>
       skills.map((s) => ({
-        label: s.description ? `${s.name} — ${s.description}` : s.name,
+        label: s.name,
         value: s.name,
+        description: s.description ?? '',
       })),
     [skills],
   );
@@ -607,6 +624,18 @@ const SkillHandlerFields: React.FC<{
             optionFilterProp="label"
             status={isEmpty ? 'error' : undefined}
             style={{ width: '100%' }}
+            popupClassName="sf-hooks-skill-select-popup"
+            optionRender={(option) => {
+              const opt = option.data as { label: string; value: string; description: string };
+              return (
+                <div className="sf-hooks-select-option">
+                  <span className="sf-hooks-select-option-label">{opt.label}</span>
+                  {opt.description && (
+                    <span className="sf-hooks-select-option-desc">{opt.description}</span>
+                  )}
+                </div>
+              );
+            }}
           />
           {isEmpty && (
             <Typography.Text type="danger" className="sf-hooks-field-error">

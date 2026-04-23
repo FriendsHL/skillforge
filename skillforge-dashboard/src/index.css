@@ -642,6 +642,51 @@ body {
   font-size: var(--font-size-xs);
 }
 
+/* ─── Shared select dropdown option (Skill / Method) ─────────────────────── */
+
+.sf-hooks-select-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px 0;
+}
+
+.sf-hooks-select-option-label {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text-primary);
+  line-height: 1.3;
+}
+
+.sf-hooks-select-option-desc {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Antd v6 popup overrides for lifecycle hook selects */
+.sf-hooks-skill-select-popup .ant-select-item,
+.sf-hooks-method-select-popup .ant-select-item {
+  padding: 8px 12px !important;
+  min-height: auto !important;
+  line-height: 1.4 !important;
+  border-radius: var(--radius-sm);
+  margin: 2px 4px;
+}
+
+.sf-hooks-skill-select-popup .ant-select-item-option:hover,
+.sf-hooks-method-select-popup .ant-select-item-option:hover {
+  background: var(--bg-hover);
+}
+
+.sf-hooks-skill-select-popup .ant-select-item-option-selected .sf-hooks-select-option-label,
+.sf-hooks-method-select-popup .ant-select-item-option-selected .sf-hooks-select-option-label {
+  color: var(--accent-primary);
+}
+
 .sf-hooks-form-error-title {
   font-weight: 500;
   margin-bottom: var(--sp-2);
@@ -829,15 +874,50 @@ body {
   flex-direction: column;
   gap: var(--sp-3);
   padding: var(--sp-3);
+  padding-left: var(--sp-3);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   background: color-mix(in oklab, var(--bg-sidebar) 60%, transparent);
-  transition: border-color var(--transition-base), background-color var(--transition-base);
+  transition: border-color var(--transition-base), background-color var(--transition-base),
+              box-shadow var(--transition-base), transform var(--transition-base);
+  position: relative;
+}
+
+/* Left color bar by handler type */
+.sf-hooks-entry-row::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: 0 2px 2px 0;
+  transition: opacity var(--transition-base);
+}
+
+.sf-hooks-entry-row[data-handler-type="skill"]::before {
+  background: #52c41a;
+}
+
+.sf-hooks-entry-row[data-handler-type="script"]::before {
+  background: #1890ff;
+}
+
+.sf-hooks-entry-row[data-handler-type="method"]::before {
+  background: #722ed1;
 }
 
 .sf-hooks-entry-row:hover {
   border-color: var(--border-medium);
   background: var(--bg-sidebar);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
+/* Focused / editing state: border highlight */
+.sf-hooks-entry-row:focus-within {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent-primary) 15%, transparent);
 }
 
 .sf-hooks-entry-row-header {
@@ -927,6 +1007,23 @@ body {
 .sf-hooks-entry-add:hover:not([disabled]) {
   color: var(--accent-primary);
   border-color: var(--accent-primary);
+}
+
+/* ─── Advanced options collapse ────────────────────────────────────────────── */
+
+.sf-hooks-advanced-label {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.sf-hooks-advanced-label .anticon {
+  font-size: 11px;
 }
 
 /* ─── Script handler fields (P1) ─────────────────────────────────────────── */

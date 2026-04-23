@@ -148,7 +148,7 @@ export const MAX_SCRIPT_BODY_BYTES = 4096;
 
 const skillHandlerSchema = z.object({
   type: z.literal('skill'),
-  skillName: z.string().min(1, 'skillName is required'),
+  skillName: z.string(),
   args: z.record(z.string(), z.unknown()).optional(),
 });
 
@@ -157,14 +157,13 @@ const scriptHandlerSchema = z.object({
   scriptLang: z.enum(['bash', 'node']),
   scriptBody: z
     .string()
-    .min(1, 'scriptBody is required')
     .max(MAX_SCRIPT_BODY_BYTES, 'scriptBody too large (max 4KB)'),
   args: z.record(z.string(), z.unknown()).optional(),
 });
 
 const methodHandlerSchema = z.object({
   type: z.literal('method'),
-  methodRef: z.string().min(1, 'methodRef is required'),
+  methodRef: z.string(),
   args: z.record(z.string(), z.unknown()).optional(),
 });
 
