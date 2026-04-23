@@ -111,14 +111,16 @@ class ChatServiceB3OrderingTest {
         when(sessionService.getSession("sid")).thenReturn(session);
         when(agentService.getAgent(1L)).thenReturn(agent);
         when(sessionService.getSessionMessages("sid")).thenReturn(new ArrayList<>());
+        when(sessionService.getContextMessages("sid")).thenReturn(new ArrayList<>());
+        when(sessionService.getFullHistory("sid")).thenReturn(new ArrayList<>());
 
         chatService.chatAsync("sid", "hello again", 7L);
 
         // InOrder: compactionService.compact(...,"engine-gap",...) comes strictly before
-        // sessionService.saveSessionMessages(...)
+        // sessionService.appendNormalMessages(...)
         InOrder io = inOrder(compactionService, sessionService);
         io.verify(compactionService).compact(eq("sid"), eq("light"), eq("engine-gap"), anyString());
-        io.verify(sessionService).saveSessionMessages(eq("sid"), any());
+        io.verify(sessionService).appendNormalMessages(eq("sid"), any());
     }
 
     @Test
@@ -131,6 +133,8 @@ class ChatServiceB3OrderingTest {
         when(sessionService.getSession("sid")).thenReturn(session);
         when(agentService.getAgent(1L)).thenReturn(agent);
         when(sessionService.getSessionMessages("sid")).thenReturn(new ArrayList<>());
+        when(sessionService.getContextMessages("sid")).thenReturn(new ArrayList<>());
+        when(sessionService.getFullHistory("sid")).thenReturn(new ArrayList<>());
 
         chatService.chatAsync("sid", "hi", 7L);
 
@@ -150,6 +154,8 @@ class ChatServiceB3OrderingTest {
         when(sessionService.getSession("sid")).thenReturn(session);
         when(agentService.getAgent(1L)).thenReturn(agent);
         when(sessionService.getSessionMessages("sid")).thenReturn(new ArrayList<>());
+        when(sessionService.getContextMessages("sid")).thenReturn(new ArrayList<>());
+        when(sessionService.getFullHistory("sid")).thenReturn(new ArrayList<>());
 
         chatService.chatAsync("sid", "child msg", 7L);
 
@@ -167,6 +173,8 @@ class ChatServiceB3OrderingTest {
         when(sessionService.getSession("sid")).thenReturn(session);
         when(agentService.getAgent(1L)).thenReturn(agent);
         when(sessionService.getSessionMessages("sid")).thenReturn(new ArrayList<>());
+        when(sessionService.getContextMessages("sid")).thenReturn(new ArrayList<>());
+        when(sessionService.getFullHistory("sid")).thenReturn(new ArrayList<>());
 
         chatService.chatAsync("sid", "hi", 7L);
 

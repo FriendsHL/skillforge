@@ -152,6 +152,8 @@ class ChatServiceLifecycleHookTest {
         def.setName("A");
         when(agentService.toAgentDefinition(agent)).thenReturn(def);
         when(sessionService.getSessionMessages("sess-1")).thenReturn(new java.util.ArrayList<>());
+        when(sessionService.getContextMessages("sess-1")).thenReturn(new java.util.ArrayList<>());
+        when(sessionService.getFullHistory("sess-1")).thenReturn(new java.util.ArrayList<>());
 
         chatService.chatAsync("sess-1", "hello", 7L);
 
@@ -175,6 +177,8 @@ class ChatServiceLifecycleHookTest {
         def.setLifecycleHooks(new LifecycleHooksConfig());
         when(agentService.toAgentDefinition(agent)).thenReturn(def);
         when(sessionService.getSessionMessages("sess-2")).thenReturn(new java.util.ArrayList<>());
+        when(sessionService.getContextMessages("sess-2")).thenReturn(new java.util.ArrayList<>());
+        when(sessionService.getFullHistory("sess-2")).thenReturn(new java.util.ArrayList<>());
 
         chatService.chatAsync("sess-2", "forbidden", 7L);
 
@@ -196,6 +200,8 @@ class ChatServiceLifecycleHookTest {
         var prior = new java.util.ArrayList<com.skillforge.core.model.Message>();
         prior.add(com.skillforge.core.model.Message.user("earlier"));
         when(sessionService.getSessionMessages("sess-3")).thenReturn(prior);
+        when(sessionService.getContextMessages("sess-3")).thenReturn(prior);
+        when(sessionService.getFullHistory("sess-3")).thenReturn(prior);
 
         chatService.chatAsync("sess-3", "next turn", 7L);
 

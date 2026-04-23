@@ -100,6 +100,8 @@ class CompactionServiceTest {
         });
         when(sessionService.getSessionMessages(anyString())).thenAnswer(inv ->
                 new ArrayList<>(messagesStore.getOrDefault(inv.getArgument(0), new ArrayList<>())));
+        when(sessionService.getContextMessages(anyString())).thenAnswer(inv ->
+                new ArrayList<>(messagesStore.getOrDefault(inv.getArgument(0), new ArrayList<>())));
         org.mockito.Mockito.doAnswer(inv -> {
             String id = inv.getArgument(0);
             @SuppressWarnings("unchecked")
