@@ -1,6 +1,7 @@
 package com.skillforge.server.controller;
 
 import com.skillforge.server.entity.AgentEntity;
+import com.skillforge.server.exception.AgentNotFoundException;
 import com.skillforge.server.service.AgentService;
 import com.skillforge.server.service.AgentYamlMapper;
 import org.springframework.http.MediaType;
@@ -91,11 +92,14 @@ public class AgentController {
      */
     @GetMapping(value = "/{id}/export", produces = "application/yaml; charset=utf-8")
     public ResponseEntity<String> exportAgent(@PathVariable Long id) {
-        // AgentNotFoundException carries @ResponseStatus(404); Spring maps it automatically.
-        AgentEntity agent = agentService.getAgent(id);
-        String yaml = AgentYamlMapper.toYaml(agent);
-        return ResponseEntity.ok()
-                .contentType(MediaType.parseMediaType("application/yaml; charset=utf-8"))
-                .body(yaml);
+        try {
+            AgentEntity agent = agentService.getAgent(id);
+            String yaml = AgentYamlMapper.toYaml(agent);
+            return ResponseEntity.ok()
+                    .contentType(MediaType.parseMediaType("application/yaml; charset=utf-8"))
+                    .body(yaml);
+        } catch (AgentNotFoundException e) {
+            return ResponseEntity.notFound().build();
+        }
     }
 }

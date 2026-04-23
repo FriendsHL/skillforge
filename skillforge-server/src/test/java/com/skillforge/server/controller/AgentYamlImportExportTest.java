@@ -1,6 +1,7 @@
 package com.skillforge.server.controller;
 
 import com.skillforge.server.entity.AgentEntity;
+import com.skillforge.server.exception.AgentNotFoundException;
 import com.skillforge.server.service.AgentService;
 import com.skillforge.server.service.AgentYamlMapper;
 import org.junit.jupiter.api.Test;
@@ -102,7 +103,7 @@ class AgentYamlImportExportTest {
     @Test
     void exportReturns404WhenAgentMissing() {
         AgentService svc = mock(AgentService.class);
-        when(svc.getAgent(999L)).thenThrow(new RuntimeException("Agent not found: 999"));
+        when(svc.getAgent(999L)).thenThrow(new AgentNotFoundException(999L));
         AgentController controller = new AgentController(svc);
         ResponseEntity<String> resp = controller.exportAgent(999L);
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
