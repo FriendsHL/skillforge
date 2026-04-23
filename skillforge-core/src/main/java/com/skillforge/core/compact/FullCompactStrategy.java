@@ -65,6 +65,11 @@ public class FullCompactStrategy {
             "- Decisions made and their rationale\n" +
             "- TODOs, open questions, and constraints\n" +
             "- Any commitments or follow-ups promised\n" +
+            "- For any tool_use that was emitted but did NOT yet return a tool_result " +
+            "(pending execution), preserve the tool name AND the complete input arguments " +
+            "VERBATIM. Do NOT summarize file contents, scripts, paths, or string literals " +
+            "inside FileWrite / FileEdit / Bash inputs — keep them byte-for-byte. The agent " +
+            "needs the full payload to retry the call after compaction.\n" +
             "Prioritize recent context over older history.";
 
     public CompactResult apply(List<Message> messages, int contextWindowTokens,

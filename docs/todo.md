@@ -14,7 +14,7 @@
 
 | Sprint | 内容 | 预估 | 核心判断 |
 | --- | --- | --- | --- |
-| **🔥 紧急** | ~~ENG-1~~ · ~~ENG-2~~ · P9-5-lite | 1-2 天 | 由 session 9347f84c 真实事故触发；阻断 Design Agent 长任务；ENG-1 + ENG-2 已完成 2026-04-23 |
+| ~~**🔥 紧急**~~ | ~~ENG-1~~ · ~~ENG-2~~ · ~~P9-5-lite~~ | 1-2 天 | 由 session 9347f84c 真实事故触发；阻断 Design Agent 长任务；**全部完成 2026-04-23** |
 | **Sprint 1** | P9-7 · P3-1 · P3-3 · P13-3 ~~· P13-4~~ | 2-3 天 | 零依赖防腐；P13-4 代码扫描确认已完成；实际比估算省力 |
 | **Sprint 2a** | P11（收窄）+ P13-1 | 5-7 天 | AgentDiscovery + SubAgent 按 name + visibility；去掉 capabilities/tags |
 | **Sprint 2b** | P15（最小闭环） | 3-5 天 | GetTrace + GetSessionMessages + Analyzer seed；跑真实 case 验证后再扩 |
@@ -43,7 +43,7 @@
 | --- | --- | --- |
 | ~~**ENG-1**~~ `SkillResult.errorType` + `detectWaste` 区分 validation/execution ✅ 2026-04-23 | `SkillResult.ErrorType` enum (VALIDATION/EXECUTION) + `validationError(msg)` 工厂；`ContentBlock.errorType` 字段 + `Message.toolResult` 重载；`AgentLoopEngine` 工具调用结果传播 errorType + `IllegalArgumentException` 单独 catch 标 VALIDATION；`detectWaste` 重写：VALIDATION 在所有规则中视为中性（不增计数 / 不重置已积累 execution 计数 / rule 3 identical-tool-use 也跳过 VALIDATION 调用）；FileEditSkill / FileWriteSkill 的 required 字段缺失改用 `validationError()`。新增 `AgentLoopEngineWasteDetectTest`（5 用例含 9347f84c 回归）。293 测试 0 failure | 治本 bugs#7（当时治标抬阈值 B1 0.40→0.60） |
 | ~~**ENG-2**~~ `AgentLoopEngine.executeToolCall` 前置 required-param 校验 + retry hint ✅ 2026-04-23 | `findMissingRequiredFields(tool, input)` 从 `ToolSchema.inputSchema.required` 提取必填字段，校验 input 中 key 存在 + 非 null（空字符串/blank 留给 skill 自身判断）。`executeToolCall` 在 SkillHook.beforeSkillExecute 之后、`tool.execute` 之前插入校验，缺字段时直接返回结构化 hint：`"[RETRY NEEDED] FileWrite missing required argument(s): file_path, content. Re-emit the tool call with all required fields populated."`，标 VALIDATION（与 ENG-1 协同：不触发 detectWaste compaction）。新增 `AgentLoopEnginePreValidationTest`（6 用例：全填 / 9347f84c 空 input / null 值 / 空字符串放行 / schema 无 required / 防御 null）。299 测试 0 failure | 新条目 |
-| **P9-5-lite** Compaction prompt 保留 pending FileWrite/FileEdit input | `CompactionService` 的 compact prompt 加一行约束：「If the agent was about to execute FileWrite or FileEdit, preserve the exact `file_path` and full `new_string`/`new content` in the summary — do not summarize the file content itself.」不动数据来源、不引入新依赖。**P9-5 完整版（5 文件摘要 + 活跃 skill 上下文 + 完整 pending tasks）保持 V2 排期不变**。约 0.5 天 | 切割自 P9-5（Sprint 5 / V2） |
+| ~~**P9-5-lite**~~ Compaction prompt 保留 pending FileWrite/FileEdit input ✅ 2026-04-23 | `FullCompactStrategy.SUMMARY_SYSTEM_PROMPT` 在 "MUST preserve" 列表新增一条约束：任何 emit 但未拿到 tool_result 的 pending tool_use，必须 verbatim 保留 tool name + 完整 input arguments，不允许 summarize 任何 FileWrite / FileEdit / Bash 的字符串内容。43 个 compact + engine 测试全绿。**P9-5 完整版（5 文件摘要 + 活跃 skill 上下文 + 完整 pending tasks）保持 V2 排期不变** | 切割自 P9-5（Sprint 5 / V2） |
 
 > **测试要补**：除单元测试外，需用真实 session 复现：构造一个 LLM 准备写 800 行文件的场景，强行触发 full compaction，验证 LLM 恢复后能拿到完整 file content 而不是空 input。
 
