@@ -1109,6 +1109,29 @@ public class AgentLoopEngine {
     }
 
     /**
+     * 提取 Tool 的 required 字段, 检查 input 中是否齐备。
+     * 仅检查 key 存在 + 值非 null; 空字符串/blank 检查留给 skill 自身（语义因 skill 而异,
+     * 例如 FileWrite 接受 "" 作为合法 content, 但 file_path 不允许 blank）。
+     * <p>Package-private for unit testing.
+     */
+    static List<String> findMissingRequiredFields(Tool tool, Map<String, Object> input) {
+        if (tool == null) return Collections.emptyList();
+        ToolSchema schema = tool.getToolSchema();
+        if (schema == null || schema.getInputSchema() == null) return Collections.emptyList();
+        Object req = schema.getInputSchema().get("required");
+        if (!(req instanceof List<?> reqList)) return Collections.emptyList();
+        Map<String, Object> safeInput = input != null ? input : Collections.emptyMap();
+        List<String> missing = new ArrayList<>();
+        for (Object o : reqList) {
+            if (!(o instanceof String key)) continue;
+            if (!safeInput.containsKey(key) || safeInput.get(key) == null) {
+                missing.add(key);
+            }
+        }
+        return missing;
+    }
+
+    /**
      * 检测消息流是否有浪费信号, 用于 B1 触发 light 压缩。
      * <p>Package-private for unit testing the validation/execution error split.
      * <p>VALIDATION 类错误（LLM 入参缺失/不合法）在所有规则中都被视为"中性"信号:
@@ -1277,6 +1300,20 @@ public class AgentLoopEngine {
                         toolCallRecords.add(new ToolCallRecord(skillName, input, errorMsg, false, duration, startTime));
                         return Message.toolResult(toolUseId, errorMsg, true);
                     }
+                }
+
+                // 必填参数前置校验：在 skill 执行前检查 schema 中 required 字段是否齐备。
+                // 给 LLM 一个一次性列出所有缺失字段的结构化 retry hint, 而不是让它一次试一个。
+                // 标记为 VALIDATION 类, 不会触发 detectWaste compaction(参见 ENG-1)。
+                List<String> missingRequired = findMissingRequiredFields(tool, processedInput);
+                if (!missingRequired.isEmpty()) {
+                    long duration = System.currentTimeMillis() - startTime;
+                    String hint = "[RETRY NEEDED] " + skillName
+                            + " missing required argument(s): " + String.join(", ", missingRequired)
+                            + ". Re-emit the tool call with all required fields populated.";
+                    toolCallRecords.add(new ToolCallRecord(skillName, input, hint, false, duration, startTime));
+                    log.warn("Pre-validation rejected '{}': missing required {}", skillName, missingRequired);
+                    return Message.toolResult(toolUseId, hint, true, SkillResult.ErrorType.VALIDATION.name());
                 }
 
                 // 执行 Skill
