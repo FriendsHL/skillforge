@@ -56,11 +56,11 @@ public class FileWriteSkill implements Skill {
         try {
             String filePath = (String) input.get("file_path");
             if (filePath == null || filePath.isBlank()) {
-                return SkillResult.error("file_path is required");
+                return SkillResult.validationError("file_path is required");
             }
             String content = (String) input.get("content");
             if (content == null) {
-                return SkillResult.error("content is required");
+                return SkillResult.validationError("content is required");
             }
 
             Path path = Path.of(filePath);

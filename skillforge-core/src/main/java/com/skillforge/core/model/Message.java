@@ -63,9 +63,16 @@ public class Message {
      * 创建 tool_result 消息（role=user，content 为 tool_result 块列表）。
      */
     public static Message toolResult(String toolUseId, String content, boolean isError) {
+        return toolResult(toolUseId, content, isError, null);
+    }
+
+    /**
+     * 创建带错误子类型的 tool_result 消息。
+     */
+    public static Message toolResult(String toolUseId, String content, boolean isError, String errorType) {
         Message msg = new Message();
         msg.setRole(Role.USER);
-        ContentBlock block = ContentBlock.toolResult(toolUseId, content, isError);
+        ContentBlock block = ContentBlock.toolResult(toolUseId, content, isError, errorType);
         msg.setContent(Collections.singletonList(block));
         return msg;
     }

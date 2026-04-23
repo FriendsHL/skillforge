@@ -27,6 +27,15 @@ public class ContentBlock {
     private String content;
     @JsonProperty("is_error")
     private Boolean isError;
+    /**
+     * 错误子类型，仅 is_error=true 时有意义。
+     * 取值与 {@code com.skillforge.core.skill.SkillResult.ErrorType} 一致字符串
+     * （"VALIDATION" / "EXECUTION"），保留 String 而非枚举以保证向后兼容反序列化。
+     * 不向 LLM provider 上行（Anthropic/OpenAI 协议无此字段），仅在引擎内部消费
+     * （如 detectWaste 区分 LLM 入参错误 vs 真实执行失败）。
+     */
+    @JsonProperty("error_type")
+    private String errorType;
 
     public ContentBlock() {
     }
@@ -57,11 +66,19 @@ public class ContentBlock {
      * 创建 tool_result 内容块。
      */
     public static ContentBlock toolResult(String toolUseId, String content, boolean isError) {
+        return toolResult(toolUseId, content, isError, null);
+    }
+
+    /**
+     * 创建带错误子类型的 tool_result 内容块。
+     */
+    public static ContentBlock toolResult(String toolUseId, String content, boolean isError, String errorType) {
         ContentBlock block = new ContentBlock();
         block.setType("tool_result");
         block.setToolUseId(toolUseId);
         block.setContent(content);
         block.setIsError(isError);
+        block.setErrorType(errorType);
         return block;
     }
 
@@ -127,5 +144,13 @@ public class ContentBlock {
 
     public void setIsError(Boolean isError) {
         this.isError = isError;
+    }
+
+    public String getErrorType() {
+        return errorType;
+    }
+
+    public void setErrorType(String errorType) {
+        this.errorType = errorType;
     }
 }

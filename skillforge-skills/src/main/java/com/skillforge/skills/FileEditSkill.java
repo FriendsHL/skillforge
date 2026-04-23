@@ -65,15 +65,15 @@ public class FileEditSkill implements Skill {
         try {
             String filePath = (String) input.get("file_path");
             if (filePath == null || filePath.isBlank()) {
-                return SkillResult.error("file_path is required");
+                return SkillResult.validationError("file_path is required");
             }
             String oldString = (String) input.get("old_string");
             if (oldString == null) {
-                return SkillResult.error("old_string is required");
+                return SkillResult.validationError("old_string is required");
             }
             String newString = (String) input.get("new_string");
             if (newString == null) {
-                return SkillResult.error("new_string is required");
+                return SkillResult.validationError("new_string is required");
             }
 
             boolean replaceAll = false;

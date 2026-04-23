@@ -3,6 +3,7 @@
 > 更新于：2026-04-23
 > **对抗整理**：Analyst + Challenger 双 Agent 评审 + Claude 仲裁（2026-04-23）
 > **代码扫描校准**：全量代码现状核查后二次修正（2026-04-23）
+> **🔥 紧急条目新增**：ENG-1 / ENG-2 / P9-5-lite，由 session `9347f84c` 真实事故触发（2026-04-23）
 > P 编号保留历史，**不代表当前优先级**；以 Sprint 顺序为准。
 
 ---
@@ -13,6 +14,7 @@
 
 | Sprint | 内容 | 预估 | 核心判断 |
 | --- | --- | --- | --- |
+| **🔥 紧急** | ~~ENG-1~~ · ENG-2 · P9-5-lite | 1-2 天 | 由 session 9347f84c 真实事故触发；阻断 Design Agent 长任务；ENG-1 已完成 2026-04-23 |
 | **Sprint 1** | P9-7 · P3-1 · P3-3 · P13-3 ~~· P13-4~~ | 2-3 天 | 零依赖防腐；P13-4 代码扫描确认已完成；实际比估算省力 |
 | **Sprint 2a** | P11（收窄）+ P13-1 | 5-7 天 | AgentDiscovery + SubAgent 按 name + visibility；去掉 capabilities/tags |
 | **Sprint 2b** | P15（最小闭环） | 3-5 天 | GetTrace + GetSessionMessages + Analyzer seed；跑真实 case 验证后再扩 |
@@ -26,6 +28,24 @@
 | **V2** | P14 · P3-2/4 · P15-3/4/6 · P11-3 · P12-3/6 · P10-4/5 · P13-9 | 推迟 | 见底部 V2 推迟池 |
 
 > **工期修正说明**：Analyst 对 P12 给出"1-2 周"，Challenger 实测拆解后为 3-4 周（时区/夏令时/concurrencyPolicy/前端 cron 编辑器是主要坑）。P10 "1-2 天"实测 5-8 天（`/compact` 触碰 CompactionService 核心文件 + Full Pipeline）。
+
+---
+
+### 🔥 紧急 — Agent Loop 引擎修复（Sprint 1 前置，1-2 天）
+
+> **触发事件**：session `9347f84c`（Design Agent 改造 dashboard）在 `4 light · 2 full · -77.0K tok` 之后，准备重写 802 行的 `FormMode.tsx` 时，连续 3 次 tool_use 的 input 退化为 `{}`，全部返回 `"file_path is required"`，最后 LLM 返回空字符串静默退出。
+>
+> **链路**：full compaction 丢失 pending FileWrite 内容 → LLM 生成空参数 → 3 次 validation 错误被 `detectWaste` 当 consecutive error → 又触发 B1 compaction → context 二次坍塌 → idle 退出。
+>
+> **状态**：Sprint 1 前置，全部走 Full Pipeline（触碰 `AgentLoopEngine.java` / `CompactionService.java` 两个核心文件）。
+
+| 子任务 | 说明 | 关联 |
+| --- | --- | --- |
+| ~~**ENG-1**~~ `SkillResult.errorType` + `detectWaste` 区分 validation/execution ✅ 2026-04-23 | `SkillResult.ErrorType` enum (VALIDATION/EXECUTION) + `validationError(msg)` 工厂；`ContentBlock.errorType` 字段 + `Message.toolResult` 重载；`AgentLoopEngine` 工具调用结果传播 errorType + `IllegalArgumentException` 单独 catch 标 VALIDATION；`detectWaste` 重写：VALIDATION 在所有规则中视为中性（不增计数 / 不重置已积累 execution 计数 / rule 3 identical-tool-use 也跳过 VALIDATION 调用）；FileEditSkill / FileWriteSkill 的 required 字段缺失改用 `validationError()`。新增 `AgentLoopEngineWasteDetectTest`（5 用例含 9347f84c 回归）。293 测试 0 failure | 治本 bugs#7（当时治标抬阈值 B1 0.40→0.60） |
+| **ENG-2** `AgentLoopEngine.executeToolCall` 前置 required-param 校验 + retry hint | 在调用 skill executor 前检测 tool_use input 是否缺必填字段（empty 或 missing required keys），缺时直接构造 VALIDATION 类 tool_result：`"[RETRY NEEDED] FileEdit missing required: file_path, old_string, new_string. Re-emit the tool call with full arguments."`，不进 skill 执行。让 LLM 有结构化重试机会而不是在 skill 层撞 `IllegalArgumentException`。补 `AgentLoopEngineTest`：mock 空 input tool_use 验证 pre-validation 路径。约 0.5 天 | 新条目 |
+| **P9-5-lite** Compaction prompt 保留 pending FileWrite/FileEdit input | `CompactionService` 的 compact prompt 加一行约束：「If the agent was about to execute FileWrite or FileEdit, preserve the exact `file_path` and full `new_string`/`new content` in the summary — do not summarize the file content itself.」不动数据来源、不引入新依赖。**P9-5 完整版（5 文件摘要 + 活跃 skill 上下文 + 完整 pending tasks）保持 V2 排期不变**。约 0.5 天 | 切割自 P9-5（Sprint 5 / V2） |
+
+> **测试要补**：除单元测试外，需用真实 session 复现：构造一个 LLM 准备写 800 行文件的场景，强行触发 full compaction，验证 LLM 恢复后能拿到完整 file content 而不是空 input。
 
 ---
 
@@ -129,7 +149,7 @@
 | 子任务 | 说明 |
 | --- | --- |
 | **P9-4** Partial compact 支持 | `FullCompactStrategy` 新增 `compactUpTo`（压缩头保留尾）和 `compactFrom`（压缩尾保留头）；`ContextCompactTool` 扩展 `level=partial_head/partial_tail` |
-| **P9-5** Post-compact 上下文恢复 | Full compact 后自动注入最近操作的文件摘要（5 个文件 / 50K token 预算）+ 活跃 skill 上下文 + pending tasks；**需先完成 design doc 明确"最近操作文件"数据来源后再开工** |
+| **P9-5** Post-compact 上下文恢复 | Full compact 后自动注入最近操作的文件摘要（5 个文件 / 50K token 预算）+ 活跃 skill 上下文 + pending tasks；**需先完成 design doc 明确"最近操作文件"数据来源后再开工**。**注**：pending FileWrite/FileEdit input 保留这一最小子项已被 P9-5-lite 切到「🔥 紧急」前置完成，本任务排期时不要重复 |
 
 ---
 

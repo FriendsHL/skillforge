@@ -1110,52 +1110,74 @@ public class AgentLoopEngine {
 
     /**
      * 检测消息流是否有浪费信号, 用于 B1 触发 light 压缩。
+     * <p>Package-private for unit testing the validation/execution error split.
+     * <p>VALIDATION 类错误（LLM 入参缺失/不合法）在所有规则中都被视为"中性"信号:
+     * 既不计入 consecutive error 计数, 也不参与 identical tool_use 计数,
+     * 且**不重置**已积累的 execution error 计数。原因: VALIDATION 应通过结构化
+     * retry 恢复, 触发 compaction 反而会形成 "压缩 → LLM 失忆 → 更多 validation
+     * error → 再压缩" 的正反馈 (SkillForge session 9347f84c 真实事故)。
      */
-    private boolean detectWaste(List<Message> messages) {
+    boolean detectWaste(List<Message> messages) {
         if (messages == null || messages.size() < 2) return false;
-        // 1) 任一 tool_result content > 5KB
-        // 2) 3+ 连续 is_error=true tool_result
-        int consecutiveErrors = 0;
+
+        // 第一轮: 收集所有获得 VALIDATION 错误的 tool_use_id, 用于规则 3 跳过
+        java.util.Set<String> validationToolUseIds = new java.util.HashSet<>();
         for (Message m : messages) {
-            if (m.getContent() instanceof List<?> blocks) {
-                boolean hasError = false;
-                boolean hasToolResult = false;
-                for (Object o : blocks) {
-                    if (!(o instanceof ContentBlock cb)) continue;
-                    if ("tool_result".equals(cb.getType())) {
-                        hasToolResult = true;
-                        String c = cb.getContent();
-                        if (c != null && c.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 5 * 1024) {
-                            return true;
-                        }
-                        if (Boolean.TRUE.equals(cb.getIsError())) hasError = true;
-                    }
-                }
-                if (hasToolResult && hasError) {
-                    consecutiveErrors++;
-                    if (consecutiveErrors >= 3) return true;
-                } else if (hasToolResult) {
-                    consecutiveErrors = 0;
+            if (!(m.getContent() instanceof List<?> blocks)) continue;
+            for (Object o : blocks) {
+                if (!(o instanceof ContentBlock cb)) continue;
+                if (!"tool_result".equals(cb.getType())) continue;
+                if (Boolean.TRUE.equals(cb.getIsError())
+                        && SkillResult.ErrorType.VALIDATION.name().equals(cb.getErrorType())
+                        && cb.getToolUseId() != null) {
+                    validationToolUseIds.add(cb.getToolUseId());
                 }
             }
         }
-        // 3) 3+ 连续相同 tool_use (name + input hash)
+
+        // 规则 1 + 2: 5KB 超长 tool_result / 3+ 连续 EXECUTION 错误
+        int consecutiveErrors = 0;
+        for (Message m : messages) {
+            if (!(m.getContent() instanceof List<?> blocks)) continue;
+            for (Object o : blocks) {
+                if (!(o instanceof ContentBlock cb)) continue;
+                if (!"tool_result".equals(cb.getType())) continue;
+
+                String c = cb.getContent();
+                if (c != null && c.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 5 * 1024) {
+                    return true;
+                }
+
+                boolean isErr = Boolean.TRUE.equals(cb.getIsError());
+                boolean isValidation = SkillResult.ErrorType.VALIDATION.name().equals(cb.getErrorType());
+                if (isErr && !isValidation) {
+                    consecutiveErrors++;
+                    if (consecutiveErrors >= 3) return true;
+                } else if (!isErr) {
+                    consecutiveErrors = 0;
+                }
+                // VALIDATION error → 既不增也不减, 跳过
+            }
+        }
+
+        // 规则 3: 3+ 连续相同 tool_use (name + input hash); 跳过获得 VALIDATION 错误的调用
         String lastSig = null;
         int consecutiveSame = 1;
         for (Message m : messages) {
-            if (m.getContent() instanceof List<?> blocks) {
-                for (Object o : blocks) {
-                    if (o instanceof ContentBlock cb && "tool_use".equals(cb.getType())) {
-                        String sig = (cb.getName() != null ? cb.getName() : "") + "#"
-                                + (cb.getInput() != null ? cb.getInput().toString().hashCode() : 0);
-                        if (sig.equals(lastSig)) {
-                            consecutiveSame++;
-                            if (consecutiveSame >= 3) return true;
-                        } else {
-                            consecutiveSame = 1;
-                            lastSig = sig;
-                        }
-                    }
+            if (!(m.getContent() instanceof List<?> blocks)) continue;
+            for (Object o : blocks) {
+                if (!(o instanceof ContentBlock cb)) continue;
+                if (!"tool_use".equals(cb.getType())) continue;
+                if (validationToolUseIds.contains(cb.getId())) continue;
+
+                String sig = (cb.getName() != null ? cb.getName() : "") + "#"
+                        + (cb.getInput() != null ? cb.getInput().toString().hashCode() : 0);
+                if (sig.equals(lastSig)) {
+                    consecutiveSame++;
+                    if (consecutiveSame >= 3) return true;
+                } else {
+                    consecutiveSame = 1;
+                    lastSig = sig;
                 }
             }
         }
@@ -1274,7 +1296,10 @@ public class AgentLoopEngine {
                 output = ToolResultTruncator.truncate(output);
                 toolCallRecords.add(new ToolCallRecord(skillName, input, output, result.isSuccess(), duration, startTime));
                 log.debug("Tool '{}' executed, success={}, duration={}ms", skillName, result.isSuccess(), duration);
-                return Message.toolResult(toolUseId, output, !result.isSuccess());
+                String errorType = (!result.isSuccess() && result.getErrorType() != null)
+                        ? result.getErrorType().name()
+                        : null;
+                return Message.toolResult(toolUseId, output, !result.isSuccess(), errorType);
             }
 
             // 找不到 Skill
@@ -1284,6 +1309,14 @@ public class AgentLoopEngine {
             log.warn("Skill '{}' not found in registry", skillName);
             return Message.toolResult(toolUseId, errorMsg, true);
 
+        } catch (IllegalArgumentException e) {
+            // 入参验证失败（skill 主动抛 IAE）。归类为 VALIDATION，避免被 detectWaste
+            // 当作 execution failure 触发不必要的 compaction。
+            long duration = System.currentTimeMillis() - startTime;
+            String errorMsg = "Invalid arguments: " + e.getMessage();
+            toolCallRecords.add(new ToolCallRecord(skillName, input, errorMsg, false, duration, startTime));
+            log.warn("Skill '{}' rejected invalid arguments: {}", skillName, e.getMessage());
+            return Message.toolResult(toolUseId, errorMsg, true, SkillResult.ErrorType.VALIDATION.name());
         } catch (Exception e) {
             // 异常不中断循环，返回 error tool_result
             long duration = System.currentTimeMillis() - startTime;
