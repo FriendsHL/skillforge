@@ -16,6 +16,7 @@ import { ChannelBadge } from '../components/channels/ChannelBadge';
 import '../components/agents/agents.css';
 import '../components/sessions/sessions.css';
 import '../components/skills/skills.css';
+import MarkdownRenderer from '../components/MarkdownRenderer';
 
 const CLOSE_ICON = (
   <svg width={14} height={14} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
@@ -591,11 +592,6 @@ function fmtTok(n: number): string {
   return n.toLocaleString();
 }
 
-function truncate(s: string, max = 80): string {
-  if (!s) return '';
-  return s.length <= max ? s : `${s.slice(0, max)}…`;
-}
-
 interface TurnsViewProps {
   messages: MessageItem[];
   loading: boolean;
@@ -643,7 +639,11 @@ function TurnsView({ messages, loading, agentName }: TurnsViewProps) {
                 <span className="tc-msg-name">{label}</span>
                 <span className="tc-msg-seq">#{i + 1}</span>
               </div>
-              {m.text && <div className="tc-msg-text">{m.text}</div>}
+              {m.text && (
+                <div className="tc-msg-text">
+                  <MarkdownRenderer content={m.text} />
+                </div>
+              )}
               {(m.toolUses?.length ?? 0) > 0 && (
                 <div className="tc-tool-list">
                   {m.toolUses!.map((t, j) => {
@@ -663,7 +663,9 @@ function TurnsView({ messages, loading, agentName }: TurnsViewProps) {
                           )}
                         </div>
                         {res && (
-                          <div className="tc-tool-result">{truncate(res.content, 200)}</div>
+                          <div className="tc-tool-result">
+                            <MarkdownRenderer content={res.content} />
+                          </div>
                         )}
                       </div>
                     );

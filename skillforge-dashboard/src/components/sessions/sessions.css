@@ -420,9 +420,7 @@
   font-size: 13.5px;
   line-height: 1.6;
   color: var(--fg-1);
-  white-space: pre-wrap;
   word-break: break-word;
-  max-height: 260px;
   overflow-y: auto;
   border: 1px solid var(--border-1, rgba(255, 255, 255, 0.08));
 }
@@ -487,14 +485,12 @@
 }
 .tc-tool-result {
   padding: 6px 10px 10px;
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.5;
   color: var(--fg-3);
   border-top: 1px dashed var(--border-1, rgba(255, 255, 255, 0.08));
-  white-space: pre-wrap;
   word-break: break-word;
-  max-height: 120px;
+  max-height: 300px;
   overflow-y: auto;
 }
 
