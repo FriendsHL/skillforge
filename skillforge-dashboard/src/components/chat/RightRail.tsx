@@ -68,7 +68,7 @@ interface RightRailProps {
   compacting?: boolean;
 }
 
-type Tab = 'team' | 'activity' | 'subagent' | 'context';
+type Tab = 'context' | 'activity' | 'subagent' | 'team';
 
 const formatElapsed = (ms: number): string => {
   const s = Math.max(0, Math.floor(ms / 1000));
@@ -857,10 +857,10 @@ function RightRail({
       <div className="rail-tabs">
         <button
           type="button"
-          className={`rail-tab ${tab === 'team' ? 'on' : ''}`}
-          onClick={() => setTab('team')}
+          className={`rail-tab ${tab === 'context' ? 'on' : ''}`}
+          onClick={() => setTab('context')}
         >
-          Team <span className="count">{collabMembers.length}</span>
+          Context
         </button>
         <button
           type="button"
@@ -878,30 +878,13 @@ function RightRail({
         </button>
         <button
           type="button"
-          className={`rail-tab ${tab === 'context' ? 'on' : ''}`}
-          onClick={() => setTab('context')}
+          className={`rail-tab ${tab === 'team' ? 'on' : ''}`}
+          onClick={() => setTab('team')}
         >
-          Context
+          Team <span className="count">{collabMembers.length}</span>
         </button>
       </div>
       <div className="rail-body">
-        {tab === 'team' && (
-          <TeamTab
-            members={collabMembers}
-            collabHandle={collabHandle}
-            collabRunId={collabRunId}
-            collabLeaderSessionId={collabLeaderSessionId}
-            swimSpans={swimSpans}
-            currentSessionId={currentSessionId}
-            peerMessages={peerMessages}
-          />
-        )}
-        {tab === 'activity' && (
-          <ActivityTab inflightTools={inflightTools} runtimeStatus={runtimeStatus} />
-        )}
-        {tab === 'subagent' && (
-          <SubAgentTab sessionId={sessionId} userId={userId} />
-        )}
         {tab === 'context' && (
           <ContextTab
             sessionId={sessionId}
@@ -919,6 +902,23 @@ function RightRail({
             compaction={compaction}
             onCompactClick={onCompactClick}
             compacting={compacting}
+          />
+        )}
+        {tab === 'activity' && (
+          <ActivityTab inflightTools={inflightTools} runtimeStatus={runtimeStatus} />
+        )}
+        {tab === 'subagent' && (
+          <SubAgentTab sessionId={sessionId} userId={userId} />
+        )}
+        {tab === 'team' && (
+          <TeamTab
+            members={collabMembers}
+            collabHandle={collabHandle}
+            collabRunId={collabRunId}
+            collabLeaderSessionId={collabLeaderSessionId}
+            swimSpans={swimSpans}
+            currentSessionId={currentSessionId}
+            peerMessages={peerMessages}
           />
         )}
       </div>
