@@ -697,6 +697,7 @@ public class SessionService {
                 content = sanitizePrunedContent(content);
             }
             message.setContent(content);
+            message.setReasoningContent(e.getReasoningContent());
             Map<String, Object> metadata = new HashMap<>(readMapJsonSafely(e.getMetadataJson()));
             if (e.getPrunedAt() != null) {
                 metadata.put("pruned", true);
@@ -897,6 +898,7 @@ public class SessionService {
             e.setRole(toRoleString(append.message()));
             e.setMsgType(append.msgType());
             e.setContentJson(writeJsonSafely(append.message().getContent()));
+            e.setReasoningContent(append.message().getReasoningContent());
             e.setMetadataJson(writeJsonSafely(append.metadata()));
             e.setCreatedAt(now);
             entities.add(e);

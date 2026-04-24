@@ -54,6 +54,10 @@ public class SessionMessageEntity {
     @Column(name = "metadata_json", columnDefinition = "TEXT")
     private String metadataJson;
 
+    /** OpenAI 兼容 provider thinking 模式下的推理内容；带 tool_use 的下一轮必须原样回传，否则 API 400。 */
+    @Column(name = "reasoning_content", columnDefinition = "TEXT")
+    private String reasoningContent;
+
     /** 预留给后续工具输出裁剪：非空表示该消息已被裁剪。 */
     @Column(name = "pruned_at")
     private Instant prunedAt;
@@ -119,6 +123,14 @@ public class SessionMessageEntity {
 
     public void setMetadataJson(String metadataJson) {
         this.metadataJson = metadataJson;
+    }
+
+    public String getReasoningContent() {
+        return reasoningContent;
+    }
+
+    public void setReasoningContent(String reasoningContent) {
+        this.reasoningContent = reasoningContent;
     }
 
     public Instant getPrunedAt() {
