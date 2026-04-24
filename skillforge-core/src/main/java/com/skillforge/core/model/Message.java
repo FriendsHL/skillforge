@@ -36,6 +36,10 @@ public class Message {
      */
     private Object content;
 
+    /** DeepSeek thinking 模式的推理内容，必须原样回传给 API。 */
+    @JsonProperty("reasoning_content")
+    private String reasoningContent;
+
     public Message() {
     }
 
@@ -130,6 +134,14 @@ public class Message {
             }
         }
         return result;
+    }
+
+    public String getReasoningContent() {
+        return reasoningContent;
+    }
+
+    public void setReasoningContent(String reasoningContent) {
+        this.reasoningContent = reasoningContent;
     }
 
     public Role getRole() {

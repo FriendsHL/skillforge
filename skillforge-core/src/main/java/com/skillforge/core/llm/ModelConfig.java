@@ -41,6 +41,7 @@ public class ModelConfig {
         m.put("deepseek-chat",         64_000);
         m.put("deepseek-coder",        64_000);
         m.put("deepseek-r1",          128_000);
+        m.put("deepseek-v4-pro",      128_000);
         // Alibaba Qwen (conservative; override via YAML for exact values)
         m.put("qwen",                  32_000);
         // Gemini

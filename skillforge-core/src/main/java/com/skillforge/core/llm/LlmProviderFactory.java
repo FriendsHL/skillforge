@@ -52,7 +52,7 @@ public class LlmProviderFactory {
                     config.getReadTimeoutSeconds(),
                     config.getMaxRetries()
             );
-            case "openai" -> new OpenAiProvider(
+            case "openai", "deepseek" -> new OpenAiProvider(
                     config.getApiKey(),
                     config.getBaseUrl(),
                     config.getModel(),

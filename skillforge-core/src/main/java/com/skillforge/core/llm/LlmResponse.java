@@ -11,6 +11,7 @@ import java.util.List;
 public class LlmResponse {
 
     private String content;
+    private String reasoningContent;
     private List<ToolUseBlock> toolUseBlocks = new ArrayList<>();
     private String stopReason;
     private Usage usage;
@@ -31,6 +32,14 @@ public class LlmResponse {
 
     public void setContent(String content) {
         this.content = content;
+    }
+
+    public String getReasoningContent() {
+        return reasoningContent;
+    }
+
+    public void setReasoningContent(String reasoningContent) {
+        this.reasoningContent = reasoningContent;
     }
 
     public List<ToolUseBlock> getToolUseBlocks() {
