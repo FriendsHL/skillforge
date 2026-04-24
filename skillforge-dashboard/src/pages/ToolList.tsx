@@ -4,6 +4,7 @@ import { getTools, extractList } from '../api';
 import '../components/agents/agents.css';
 import '../components/skills/skills.css';
 import '../components/tools/tools.css';
+import JsonViewer from '../components/JsonViewer';
 
 const CLOSE_ICON = (
   <svg width={14} height={14} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
@@ -190,6 +191,24 @@ function FilterItem({ label, count, active, onClick }: { label: string; count: n
   );
 }
 
+function SafeJsonViewer({ data }: { data: unknown }) {
+  try {
+    JSON.stringify(data);
+    // Extract input_schema if present, so we show only the schema definition
+    // (name/description are already shown in the drawer header)
+    const schema = (data && typeof data === 'object' && 'input_schema' in (data as Record<string, unknown>))
+      ? (data as Record<string, unknown>).input_schema
+      : data;
+    return <JsonViewer data={schema} />;
+  } catch {
+    return (
+      <pre className="sf-code-block" style={{ borderRadius: '0 0 var(--radius-md) var(--radius-md)' }}>
+        Unable to render schema: invalid JSON structure.
+      </pre>
+    );
+  }
+}
+
 function ToolDrawer({ tool, tab, setTab, onClose }: {
   tool: ToolRow;
   tab: string;
@@ -246,9 +265,19 @@ function ToolDrawer({ tool, tab, setTab, onClose }: {
                 <>
                   <div className="sf-code-bar">
                     <span>{tool.name}.json</span>
-                    <button className="sf-mini-btn" style={{ marginLeft: 'auto' }}>{COPY_ICON} copy</button>
+                    <button
+                      className="sf-mini-btn"
+                      style={{ marginLeft: 'auto' }}
+                      onClick={() => {
+                        try {
+                          navigator.clipboard.writeText(JSON.stringify(tool.toolSchema, null, 2));
+                        } catch { /* ignore */ }
+                      }}
+                    >
+                      {COPY_ICON} copy
+                    </button>
                   </div>
-                  <pre className="sf-code-block">{JSON.stringify(tool.toolSchema, null, 2)}</pre>
+                  <SafeJsonViewer data={tool.toolSchema} />
                 </>
               ) : (
                 <div className="sf-empty-state">No schema available for this tool.</div>

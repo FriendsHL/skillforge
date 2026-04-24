@@ -1,0 +1,215 @@
+/* ── JSON Viewer (theme-aware) ───────────────────────────── */
+
+/* Light theme (default) */
+:root {
+  --jv-bg: #f5f3ec;
+  --jv-bg-hover: #ebe7dd;
+  --jv-bg-highlight: rgba(37, 99, 235, 0.06);
+  --jv-text: #2d2a24;
+  --jv-key: #1a56db;
+  --jv-string: #15803d;
+  --jv-number: #c2410c;
+  --jv-boolean: #7c3aed;
+  --jv-null: #78716c;
+  --jv-bracket: #78716c;
+  --jv-punct: #a8a29e;
+  --jv-summary: #a8a29e;
+  --jv-ln: #d1cdc4;
+  --jv-ln-hover: #a8a29e;
+  --jv-guide: #e2ded3;
+  --jv-guide-hover: #d4cfc2;
+  --jv-toggle: #a8a29e;
+  --jv-toggle-hover: #57534e;
+  --jv-toggle-bg: rgba(0, 0, 0, 0.04);
+  --jv-scrollbar-thumb: rgba(0, 0, 0, 0.08);
+  --jv-scrollbar-thumb-hover: rgba(0, 0, 0, 0.14);
+  --jv-border: var(--border-1, #e0dbcf);
+}
+
+/* Dark theme */
+[data-theme="dark"] {
+  --jv-bg: #191a1d;
+  --jv-bg-hover: rgba(255, 255, 255, 0.025);
+  --jv-bg-highlight: rgba(122, 162, 247, 0.07);
+  --jv-text: #cdc9c0;
+  --jv-key: #7aa2f7;
+  --jv-string: #9ece6a;
+  --jv-number: #e0af68;
+  --jv-boolean: #bb9af7;
+  --jv-null: #565f89;
+  --jv-bracket: #c0a36e;
+  --jv-punct: #4a4d58;
+  --jv-summary: #4a4d58;
+  --jv-ln: #3d3f48;
+  --jv-ln-hover: #555768;
+  --jv-guide: rgba(255, 255, 255, 0.045);
+  --jv-guide-hover: rgba(255, 255, 255, 0.08);
+  --jv-toggle: #4a4d58;
+  --jv-toggle-hover: #8a8fa0;
+  --jv-toggle-bg: rgba(255, 255, 255, 0.05);
+  --jv-scrollbar-thumb: rgba(255, 255, 255, 0.08);
+  --jv-scrollbar-thumb-hover: rgba(255, 255, 255, 0.14);
+  --jv-border: var(--border-1, #2b2823);
+}
+
+/* ── Root container ──────────────────────────────────────── */
+.jv-root {
+  background: var(--jv-bg);
+  border: 1px solid var(--jv-border);
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+  font-family: var(--font-mono, 'SF Mono', 'JetBrains Mono', 'Fira Code', monospace);
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--jv-text);
+  max-height: 520px;
+  overflow-y: auto;
+  padding: 8px 0;
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+/* ── Line ────────────────────────────────────────────────── */
+.jv-line {
+  display: flex;
+  align-items: baseline;
+  position: relative;
+  min-height: 24px;
+  padding: 0 16px 0 0;
+  white-space: nowrap;
+  transition: background 0.1s ease;
+}
+.jv-line:hover {
+  background: var(--jv-bg-hover);
+}
+.jv-line.jv-clickable {
+  cursor: pointer;
+}
+
+/* ── Bracket pair highlight ──────────────────────────────── */
+.jv-line.jv-highlight {
+  background: var(--jv-bg-highlight);
+}
+
+/* ── Indent guides ───────────────────────────────────────── */
+.jv-guide {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--jv-guide);
+  pointer-events: none;
+  z-index: 0;
+}
+.jv-line:hover .jv-guide {
+  background: var(--jv-guide-hover);
+}
+
+/* ── Line numbers ────────────────────────────────────────── */
+.jv-ln {
+  display: inline-block;
+  min-width: 32px;
+  margin-right: 12px;
+  text-align: right;
+  font-size: 11px;
+  color: var(--jv-ln);
+  user-select: none;
+  flex-shrink: 0;
+  position: relative;
+  z-index: 1;
+}
+.jv-line:hover .jv-ln {
+  color: var(--jv-ln-hover);
+}
+
+/* ── Content area ────────────────────────────────────────── */
+.jv-content {
+  position: relative;
+  z-index: 1;
+}
+
+/* ── Toggle arrow ────────────────────────────────────────── */
+.jv-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  margin-right: 2px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--jv-toggle);
+  cursor: pointer;
+  border-radius: 3px;
+  transition: color 0.15s, background 0.15s;
+  position: relative;
+  z-index: 2;
+}
+.jv-toggle:hover {
+  color: var(--jv-toggle-hover);
+  background: var(--jv-toggle-bg);
+}
+.jv-toggle svg {
+  transition: transform 0.18s ease;
+}
+.jv-toggle svg.jv-collapsed {
+  transform: rotate(0deg);
+}
+.jv-toggle svg:not(.jv-collapsed) {
+  transform: rotate(90deg);
+}
+
+/* ── Syntax tokens ───────────────────────────────────────── */
+.jv-key {
+  color: var(--jv-key);
+}
+.jv-colon {
+  color: var(--jv-punct);
+  margin-right: 1px;
+}
+.jv-bracket {
+  color: var(--jv-bracket);
+}
+.jv-comma {
+  color: var(--jv-punct);
+}
+.jv-summary {
+  color: var(--jv-summary);
+  font-style: italic;
+  font-size: 11px;
+  margin-left: 6px;
+  user-select: none;
+}
+
+/* Value type colors */
+.jv-val {
+  font-weight: 450;
+}
+.jv-val-string {
+  color: var(--jv-string);
+}
+.jv-val-number {
+  color: var(--jv-number);
+}
+.jv-val-boolean {
+  color: var(--jv-boolean);
+}
+.jv-val-null {
+  color: var(--jv-null);
+  font-style: italic;
+}
+
+/* ── Scrollbar ───────────────────────────────────────────── */
+.jv-root::-webkit-scrollbar {
+  width: 7px;
+}
+.jv-root::-webkit-scrollbar-track {
+  background: transparent;
+}
+.jv-root::-webkit-scrollbar-thumb {
+  background: var(--jv-scrollbar-thumb);
+  border-radius: 4px;
+}
+.jv-root::-webkit-scrollbar-thumb:hover {
+  background: var(--jv-scrollbar-thumb-hover);
+}
