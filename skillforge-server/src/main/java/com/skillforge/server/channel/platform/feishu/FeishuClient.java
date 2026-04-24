@@ -2,6 +2,7 @@ package com.skillforge.server.channel.platform.feishu;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.skillforge.core.engine.confirm.ConfirmationPromptPayload;
 import com.skillforge.server.channel.spi.ChannelConfigDecrypted;
 import com.skillforge.server.channel.spi.ChannelReply;
 import com.skillforge.server.channel.spi.DeliveryResult;
@@ -275,6 +276,112 @@ public class FeishuClient {
         } catch (java.io.IOException e) {
             return DeliveryResult.retry(0, e.getMessage());
         }
+    }
+
+    /**
+     * Send an install-confirmation interactive card. Carries action buttons whose
+     * {@code value} payload is parsed by {@code ChannelCardActionController} after
+     * strict signature verification.
+     *
+     * @param chatId feishu chat_id (open_chat_id) resolved from {@code ChannelConversationEntity}
+     */
+    public DeliveryResult sendInteractiveAction(String chatId,
+                                                ConfirmationPromptPayload payload,
+                                                ChannelConfigDecrypted config) {
+        if (chatId == null || chatId.isBlank()) {
+            return DeliveryResult.failed("chatId is blank");
+        }
+        if (payload == null) {
+            return DeliveryResult.failed("payload is null");
+        }
+        String token;
+        try {
+            token = getAccessToken(config);
+        } catch (RuntimeException e) {
+            return DeliveryResult.retry(0, e.getMessage());
+        }
+
+        String preview = payload.commandPreview() == null ? "" : payload.commandPreview();
+        String target = payload.installTarget() == null ? "" : payload.installTarget();
+        String tool = payload.installTool() == null ? "" : payload.installTool();
+
+        java.util.List<Map<String, Object>> elements = new java.util.ArrayList<>();
+        elements.add(Map.of("tag", "markdown",
+                "content", "**Agent wants to run:** `" + escapeMd(preview) + "`"));
+        elements.add(Map.of("tag", "markdown",
+                "content", "**Tool:** " + escapeMd(tool) + "\n**Target:** `" + escapeMd(target) + "`"));
+        elements.add(Map.of("tag", "markdown",
+                "content", "_Approving this will also allow sub-agents and team members to install the **same target** without re-prompting. Installing a different target will prompt again._"));
+        elements.add(Map.of("tag", "hr"));
+
+        // Approve / Deny buttons — value payload round-trips through card-action callback.
+        java.util.List<Map<String, Object>> actions = new java.util.ArrayList<>();
+        actions.add(Map.of(
+                "tag", "button",
+                "text", Map.of("tag", "plain_text", "content", "✅ Approve"),
+                "type", "primary",
+                "value", Map.of("confirmationId", payload.confirmationId(), "decision", "approved")));
+        actions.add(Map.of(
+                "tag", "button",
+                "text", Map.of("tag", "plain_text", "content", "❌ Deny"),
+                "type", "danger",
+                "value", Map.of("confirmationId", payload.confirmationId(), "decision", "denied")));
+        elements.add(Map.of("tag", "action", "actions", actions));
+        elements.add(Map.of("tag", "note", "elements", java.util.List.of(
+                Map.of("tag", "plain_text",
+                        "content", "Only the requester can approve. Expires in 30 min."))));
+
+        Map<String, Object> card = new LinkedHashMap<>();
+        card.put("header", Map.of("title", Map.of(
+                "tag", "plain_text",
+                "content", payload.title() != null ? payload.title() : "Install confirmation")));
+        card.put("elements", elements);
+
+        Map<String, Object> sendBody = new LinkedHashMap<>();
+        sendBody.put("receive_id", chatId);
+        sendBody.put("msg_type", "interactive");
+        try {
+            sendBody.put("content", objectMapper.writeValueAsString(card));
+        } catch (Exception e) {
+            return DeliveryResult.failed("serialize card: " + e.getMessage());
+        }
+
+        String json;
+        try {
+            json = objectMapper.writeValueAsString(sendBody);
+        } catch (Exception e) {
+            return DeliveryResult.failed("serialize body: " + e.getMessage());
+        }
+
+        Request req = new Request.Builder()
+                .url(SEND_MESSAGE_URL)
+                .header("Authorization", "Bearer " + token)
+                .post(RequestBody.create(json, JSON))
+                .build();
+
+        try (Response resp = http.newCall(req).execute()) {
+            ResponseBody rb = resp.body();
+            String bodyText = rb != null ? rb.string() : "";
+            if (!resp.isSuccessful()) {
+                long retry = parseRetryAfter(resp.header("Retry-After"));
+                if (resp.code() == 429) return DeliveryResult.retry(retry, "rate limited");
+                if (resp.code() >= 500) return DeliveryResult.retry(retry, "http " + resp.code());
+                return DeliveryResult.failed("http " + resp.code() + ": " + bodyText);
+            }
+            JsonNode nodeJson = objectMapper.readTree(bodyText);
+            int code = nodeJson.path("code").asInt(-1);
+            if (code == 0) return DeliveryResult.ok();
+            if (code == 11215) return DeliveryResult.retry(1000,
+                    "feishu code 11215: " + nodeJson.path("msg").asText(""));
+            return DeliveryResult.failed("feishu code " + code + ": " + nodeJson.path("msg").asText(""));
+        } catch (java.io.IOException e) {
+            return DeliveryResult.retry(0, e.getMessage());
+        }
+    }
+
+    private static String escapeMd(String s) {
+        // Conservative escape for card markdown: backticks / pipes would break the template.
+        return s == null ? "" : s.replace("`", "\\`").replace("|", "\\|");
     }
 
     private long parseRetryAfter(String header) {

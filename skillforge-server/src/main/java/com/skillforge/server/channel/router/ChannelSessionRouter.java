@@ -80,7 +80,7 @@ public class ChannelSessionRouter {
         // Register per-turn context before triggering the loop, so
         // sessionStatus("idle") finds the correct platformMessageId and ackReactionId.
         chatWebSocketHandler.registerChannelTurn(
-                route.sessionId(), msg.platformMessageId(), ackReactionId);
+                route.sessionId(), msg.platformMessageId(), ackReactionId, msg.platformUserId());
 
         String text = msg.text() != null ? msg.text() : "";
         chatService.chatAsync(route.sessionId(), text, route.skillforgeUserId());

@@ -49,12 +49,15 @@ public class ChatWebSocketHandler extends TextWebSocketHandler implements ChatEv
     private static final class ChannelTurnContext {
         final String platformMessageId;
         final String ackReactionId; // nullable
+        /** Platform sender id (feishu open_id) — used by install confirmation for multi-user auth. */
+        final String triggererOpenId; // nullable
         final StringBuilder currentText = new StringBuilder();
         volatile String finalText = null;
 
-        ChannelTurnContext(String platformMessageId, String ackReactionId) {
+        ChannelTurnContext(String platformMessageId, String ackReactionId, String triggererOpenId) {
             this.platformMessageId = platformMessageId;
             this.ackReactionId = ackReactionId;
+            this.triggererOpenId = triggererOpenId;
         }
     }
 
@@ -86,7 +89,26 @@ public class ChatWebSocketHandler extends TextWebSocketHandler implements ChatEv
      * carrying the accumulated reply text back to the message gateway.
      */
     public void registerChannelTurn(String sessionId, String platformMessageId, String ackReactionId) {
-        channelContexts.put(sessionId, new ChannelTurnContext(platformMessageId, ackReactionId));
+        registerChannelTurn(sessionId, platformMessageId, ackReactionId, null);
+    }
+
+    /**
+     * Extended overload that also captures the platform sender id (feishu open_id). Used by
+     * install confirmation flow for multi-user chat authorization (only the triggerer can
+     * approve their own install request).
+     */
+    public void registerChannelTurn(String sessionId, String platformMessageId, String ackReactionId,
+                                    String triggererOpenId) {
+        channelContexts.put(sessionId, new ChannelTurnContext(platformMessageId, ackReactionId, triggererOpenId));
+    }
+
+    /**
+     * Returns the platform sender id (feishu open_id) for the current per-session channel turn,
+     * or {@code null} if this session is not in a channel-originated turn.
+     */
+    public String getCurrentTriggererOpenId(String sessionId) {
+        ChannelTurnContext ctx = channelContexts.get(sessionId);
+        return ctx != null ? ctx.triggererOpenId : null;
     }
 
     @Override
@@ -191,6 +213,16 @@ public class ChatWebSocketHandler extends TextWebSocketHandler implements ChatEv
         payload.put("sessionId", sessionId);
         payload.put("messages", messages);
         broadcast(sessionId, payload);
+    }
+
+    @Override
+    public void confirmationRequired(String sessionId,
+            com.skillforge.core.engine.confirm.ConfirmationPromptPayload payload) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("type", "confirmation_required");
+        out.put("sessionId", sessionId);
+        out.put("payload", payload);
+        broadcast(sessionId, out);
     }
 
     @Override

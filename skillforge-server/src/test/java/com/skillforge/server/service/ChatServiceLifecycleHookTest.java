@@ -123,7 +123,10 @@ class ChatServiceLifecycleHookTest {
         chatService = new ChatService(agentService, sessionService, skillRegistry,
                 agentLoopEngine, modelUsageRepository, broadcaster, chatLoopExecutor,
                 sessionTitleService, subAgentRegistry, cancellationRegistry, compactionService,
-                null, null, new ObjectMapper(), null, dispatcher);
+                null, null, new ObjectMapper(), null, dispatcher,
+                new com.skillforge.core.engine.confirm.SessionConfirmCache(),
+                new com.skillforge.core.engine.confirm.PendingConfirmationRegistry(),
+                sid -> sid);
     }
 
     private SessionEntity freshSession(String id) {

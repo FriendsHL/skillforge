@@ -313,6 +313,16 @@ public class SkillForgeConfig {
     }
 
     @Bean
+    public com.skillforge.core.engine.confirm.PendingConfirmationRegistry pendingConfirmationRegistry() {
+        return new com.skillforge.core.engine.confirm.PendingConfirmationRegistry();
+    }
+
+    @Bean
+    public com.skillforge.core.engine.confirm.SessionConfirmCache sessionConfirmCache() {
+        return new com.skillforge.core.engine.confirm.SessionConfirmCache();
+    }
+
+    @Bean
     public CancellationRegistry cancellationRegistry() {
         return new CancellationRegistry();
     }
@@ -371,12 +381,16 @@ public class SkillForgeConfig {
                                            LifecycleHookLoopAdapter lifecycleHookLoopAdapter,
                                            LifecycleHookSkillAdapter lifecycleHookSkillAdapter,
                                            com.skillforge.server.service.MemoryService memoryService,
-                           UserConfigService userConfigService) {
+                                           UserConfigService userConfigService,
+                                           com.skillforge.core.engine.confirm.SessionConfirmCache sessionConfirmCache,
+                                           com.skillforge.core.engine.confirm.RootSessionLookup rootSessionLookup,
+                                           com.skillforge.core.engine.confirm.ConfirmationPrompter confirmationPrompter) {
         String defaultProvider = llmProperties.getDefaultProvider() != null
                 ? llmProperties.getDefaultProvider() : "claude";
         AgentLoopEngine engine = new AgentLoopEngine(llmProviderFactory, defaultProvider, skillRegistry,
                 List.of(lifecycleHookLoopAdapter),
-                List.of(new SafetySkillHook(), activityLogHook, lifecycleHookSkillAdapter),
+                List.of(new SafetySkillHook(sessionConfirmCache, rootSessionLookup),
+                        activityLogHook, lifecycleHookSkillAdapter),
                 List.of(environmentContextProvider));
         engine.setBroadcaster(broadcaster);
         engine.setPendingAskRegistry(pendingAskRegistry);
@@ -384,6 +398,9 @@ public class SkillForgeConfig {
         engine.setTraceCollector(traceCollector);
         engine.setMemoryProvider(userId -> memoryService.getMemoriesForPrompt(userId));
         engine.setClaudeMdProvider(userId -> userConfigService.getClaudeMd(userId));
+        engine.setConfirmationPrompter(confirmationPrompter);
+        engine.setSessionConfirmCache(sessionConfirmCache);
+        engine.setRootSessionLookup(rootSessionLookup);
         return engine;
     }
 

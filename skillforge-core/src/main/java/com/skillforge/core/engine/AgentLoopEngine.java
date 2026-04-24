@@ -8,6 +8,12 @@ import com.skillforge.core.compact.TimeBasedColdCleanup;
 import com.skillforge.core.compact.TokenEstimator;
 import com.skillforge.core.context.ContextProvider;
 import com.skillforge.core.context.SystemPromptBuilder;
+import com.skillforge.core.engine.confirm.ChannelUnavailableException;
+import com.skillforge.core.engine.confirm.ConfirmationPrompter;
+import com.skillforge.core.engine.confirm.Decision;
+import com.skillforge.core.engine.confirm.InstallTargetParser;
+import com.skillforge.core.engine.confirm.RootSessionLookup;
+import com.skillforge.core.engine.confirm.SessionConfirmCache;
 import com.skillforge.core.llm.LlmProvider;
 import com.skillforge.core.llm.LlmProviderFactory;
 import com.skillforge.core.llm.LlmRequest;
@@ -72,6 +78,14 @@ public class AgentLoopEngine {
     private ContextCompactorCallback compactorCallback;
     /** 可选:链路追踪收集器。null 时不记录 span。 */
     private TraceCollector traceCollector;
+    /** 可选:install confirmation prompter。null 时 install 命令走 SafetyHook fail-closed。 */
+    private ConfirmationPrompter confirmationPrompter;
+    /** 可选:会话级 install 授权缓存(per root session)。 */
+    private SessionConfirmCache sessionConfirmCache;
+    /** 可选:root session 解析(白名单继承)。null 时退化为 sessionId 自身作为 root。 */
+    private RootSessionLookup rootSessionLookup;
+    /** install confirmation 等待超时,单位秒(默认 30 min,与 ask_user 同性质)。 */
+    private long installConfirmTimeoutSeconds = 30 * 60L;
     /** 可选:记忆提供者。接受 userId 返回记忆 markdown 字符串,拼接到 system prompt 末尾。 */
     private java.util.function.Function<Long, String> memoryProvider;
     private java.util.function.Function<Long, String> claudeMdProvider;
@@ -111,6 +125,24 @@ public class AgentLoopEngine {
 
     public void setTraceCollector(TraceCollector traceCollector) {
         this.traceCollector = traceCollector;
+    }
+
+    public void setConfirmationPrompter(ConfirmationPrompter confirmationPrompter) {
+        this.confirmationPrompter = confirmationPrompter;
+    }
+
+    public void setSessionConfirmCache(SessionConfirmCache sessionConfirmCache) {
+        this.sessionConfirmCache = sessionConfirmCache;
+    }
+
+    public void setRootSessionLookup(RootSessionLookup rootSessionLookup) {
+        this.rootSessionLookup = rootSessionLookup;
+    }
+
+    public void setInstallConfirmTimeoutSeconds(long installConfirmTimeoutSeconds) {
+        if (installConfirmTimeoutSeconds > 0) {
+            this.installConfirmTimeoutSeconds = installConfirmTimeoutSeconds;
+        }
     }
 
     public void setMemoryProvider(java.util.function.Function<Long, String> memoryProvider) {
@@ -743,6 +775,21 @@ public class AgentLoopEngine {
                         askSpan.end();
                         traceCollector.record(askSpan);
                     }
+                } else if (isInstallRequiringConfirmation(block)) {
+                    long icStart = System.currentTimeMillis();
+                    Message result = handleInstallConfirmation(block, loopCtx, toolCallRecords);
+                    askResults.put(i, result);
+                    if (traceCollector != null && rootSpan != null) {
+                        TraceSpan icSpan = new TraceSpan("INSTALL_CONFIRM", "install_confirmation");
+                        icSpan.setSessionId(sessionId);
+                        icSpan.setParentSpanId(rootSpan.getId());
+                        icSpan.setIterationIndex(loopCtx.getLoopCount());
+                        icSpan.setStartTimeMs(icStart);
+                        icSpan.setInput(block.getInput() != null ? block.getInput().toString() : "");
+                        icSpan.setOutput(result.getTextContent());
+                        icSpan.end();
+                        traceCollector.record(icSpan);
+                    }
                 } else if (ContextCompactTool.NAME.equals(block.getName())) {
                     long compactStart = System.currentTimeMillis();
                     Message result = handleCompactContext(block, loopCtx);
@@ -1115,8 +1162,8 @@ public class AgentLoopEngine {
             }
         }
 
-        pendingAskRegistry.register(event.askId);
         String sessionId = loopContext.getSessionId();
+        pendingAskRegistry.register(event.askId, sessionId);
 
         log.info("ask_user invoked: sessionId={}, askId={}, question={}", sessionId, event.askId, question);
 
@@ -1144,6 +1191,171 @@ public class AgentLoopEngine {
 
     private static String sanitizePromptValue(String value) {
         return value == null ? null : value.replaceAll("[\r\n\t]", " ").trim();
+    }
+
+    // ================== install confirmation dispatch branch ==================
+
+    /**
+     * True iff this tool_use is a {@code Bash} command matching one of
+     * {@link DangerousCommandChecker#CONFIRMATION_REQUIRED_PATTERNS}. Matches whether or
+     * not the user has already approved this root/tool/target (cache check lives in
+     * {@link #handleInstallConfirmation} so the handler can short-circuit through the
+     * same code path — keeps main-thread dispatch 分支一致,降低分支错配概率).
+     */
+    boolean isInstallRequiringConfirmation(ToolUseBlock block) {
+        if (block == null || !"Bash".equals(block.getName())) return false;
+        Map<String, Object> input = block.getInput();
+        if (input == null) return false;
+        Object cmd = input.get("command");
+        if (cmd == null) return false;
+        String command = cmd.toString();
+        for (java.util.regex.Pattern p : DangerousCommandChecker.CONFIRMATION_REQUIRED_PATTERNS) {
+            if (p.matcher(command).find()) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Main-thread handler for install-pattern tool_use. Runs on the engine loop thread,
+     * NOT in {@code supplyAsync} — so the 120s {@code allOf} ceiling does not apply.
+     *
+     * <p>Guarantees 1:1 tool_use ↔ tool_result pairing in all branches
+     * (APPROVED / DENIED / TIMEOUT / ChannelUnavailable / any other Exception).
+     */
+    Message handleInstallConfirmation(ToolUseBlock block, LoopContext loopCtx,
+                                      List<ToolCallRecord> toolCallRecords) {
+        String sid = loopCtx.getSessionId();
+        String toolUseId = block.getId();
+        Map<String, Object> input = block.getInput() != null ? block.getInput() : Collections.emptyMap();
+        String command = String.valueOf(input.getOrDefault("command", ""));
+
+        // (b.1) 入口互斥:同 turn 已经有 ask_user pending → 直接 error,LLM 下一轮自决
+        if (pendingAskRegistry != null && pendingAskRegistry.hasPendingForSession(sid)) {
+            return Message.toolResult(toolUseId,
+                    "Install confirmation cannot start while ask_user is pending; "
+                            + "LLM should re-emit after the ask is answered.", true);
+        }
+
+        InstallTargetParser.Parsed parsed = InstallTargetParser.parse(command);
+        String installTool = parsed.toolName();
+        String installTarget = parsed.installTarget();
+
+        // r3:白名单继承 — 所有 cache 读写都用 root sessionId
+        String rootSid = resolveRootSessionIdCached(sid, loopCtx);
+
+        // 已授权直接放行,走主线程同步 executeToolCall
+        if (sessionConfirmCache != null
+                && sessionConfirmCache.isApproved(rootSid, installTool, installTarget)) {
+            log.info("Install cache hit: rootSid={} tool={} target={}", rootSid, installTool, installTarget);
+            return runInstallSyncWithBroadcast(block, loopCtx, toolCallRecords);
+        }
+
+        // 无 prompter 配置 → 保守 fail-closed(同 SafetySkillHook 的 null path)
+        if (confirmationPrompter == null) {
+            log.warn("Install confirmation prompter not configured; rejecting fail-closed sid={}", sid);
+            return Message.toolResult(toolUseId,
+                    "Install confirmation is not available in this runtime; please re-run after enabling it.", true);
+        }
+
+        try {
+            Decision d = confirmationPrompter.prompt(new ConfirmationPrompter.ConfirmationRequest(
+                    sid, loopCtx.getUserId(), toolUseId, installTool, installTarget, command,
+                    /* triggererOpenId 由 prompter 从 per-turn context 取 */ null,
+                    installConfirmTimeoutSeconds));
+            if (d == Decision.APPROVED) {
+                if (sessionConfirmCache != null) {
+                    sessionConfirmCache.approve(rootSid, installTool, installTarget);
+                }
+                return runInstallSyncWithBroadcast(block, loopCtx, toolCallRecords);
+            }
+            String previewCmd = truncateForResult(command);
+            return Message.toolResult(toolUseId,
+                    d == Decision.DENIED
+                            ? "User denied install of " + installTool + " target=" + installTarget
+                                    + ": " + previewCmd
+                            : "Install confirmation timed out for " + installTool
+                                    + " target=" + installTarget,
+                    true);
+        } catch (ChannelUnavailableException ce) {
+            log.warn("Install confirmation channel unavailable sid={}: {}", sid, ce.getMessage());
+            return Message.toolResult(toolUseId, ce.getMessage(), true);
+        } catch (Exception ex) {
+            log.error("Install confirmation flow error sid={}", sid, ex);
+            return Message.toolResult(toolUseId,
+                    "Install confirmation failed: " + ex.getMessage(), true);
+        } finally {
+            // W2 修:finally 带条件回拨 — 只有没有其它 latch 挂在本 session 时才广播 running
+            if (broadcaster != null && sid != null
+                    && (pendingAskRegistry == null || !pendingAskRegistry.hasPendingForSession(sid))) {
+                broadcaster.sessionStatus(sid, "running", null, null);
+            }
+        }
+    }
+
+    /**
+     * Execute the approved install command on the engine main thread, emitting
+     * {@code toolStarted} / {@code toolFinished} to keep parity with the {@code supplyAsync}
+     * branch's UX events. Reuses {@link #executeToolCall} so SkillHook / truncation /
+     * {@code toolCallRecords} behavior is identical to the normal path.
+     */
+    private Message runInstallSyncWithBroadcast(ToolUseBlock block, LoopContext loopCtx,
+                                                List<ToolCallRecord> toolCallRecords) {
+        String sid = loopCtx.getSessionId();
+        long start = System.currentTimeMillis();
+        if (broadcaster != null && sid != null) {
+            broadcaster.toolStarted(sid, block.getId(), block.getName(), block.getInput());
+        }
+        Message r = null;
+        String status = "success";
+        String errorMsg = null;
+        try {
+            r = executeToolCall(block, loopCtx, toolCallRecords);
+            if (r != null && r.getContent() instanceof java.util.List<?> blocks) {
+                for (Object o : blocks) {
+                    if (o instanceof com.skillforge.core.model.ContentBlock cb
+                            && Boolean.TRUE.equals(cb.getIsError())) {
+                        status = "error";
+                        errorMsg = String.valueOf(cb.getContent());
+                        break;
+                    }
+                }
+            }
+            return r;
+        } catch (Exception e) {
+            status = "error";
+            errorMsg = e.getMessage();
+            return Message.toolResult(block.getId(),
+                    "Tool execution error: " + e.getMessage(), true);
+        } finally {
+            long dur = System.currentTimeMillis() - start;
+            loopCtx.recordToolCall(block.getName());
+            if (broadcaster != null && sid != null) {
+                broadcaster.toolFinished(sid, block.getId(), status, dur, errorMsg);
+            }
+        }
+    }
+
+    /** W11: cache root sessionId in the per-loop LoopContext to avoid repeated DB lookups. */
+    private String resolveRootSessionIdCached(String sid, LoopContext loopCtx) {
+        if (sid == null) return null;
+        if (rootSessionLookup == null) return sid;
+        String cached = loopCtx.getRootSessionIdCache();
+        if (cached != null) return cached;
+        String resolved;
+        try {
+            resolved = rootSessionLookup.resolveRoot(sid);
+        } catch (RuntimeException e) {
+            log.warn("RootSessionLookup.resolveRoot({}) threw; falling back to self: {}", sid, e.toString());
+            resolved = sid;
+        }
+        if (resolved == null) resolved = sid;
+        loopCtx.setRootSessionIdCache(resolved);
+        return resolved;
+    }
+
+    private static String truncateForResult(String s) {
+        if (s == null) return "";
+        return s.length() <= 120 ? s : s.substring(0, 120) + "…";
     }
 
     /**

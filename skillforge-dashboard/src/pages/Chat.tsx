@@ -7,6 +7,7 @@ import CompactionHistoryModal from '../components/CompactionHistoryModal';
 import CheckpointModal from '../components/CheckpointModal';
 import RuntimeBanner from '../components/RuntimeBanner';
 import PendingAskCard from '../components/PendingAskCard';
+import InstallConfirmationCard from '../components/InstallConfirmationCard';
 import ChatSidebar from '../components/ChatSidebar';
 import RightRail, {
   type CollabMember,
@@ -32,7 +33,10 @@ import {
   branchFromCheckpoint,
   restoreFromCheckpoint,
   getCollabRunMembers,
+  submitConfirmation,
   extractList,
+  type ConfirmationDecision,
+  type ConfirmationPromptPayload,
   type SessionCompactionCheckpoint,
 } from '../api';
 import { z } from 'zod';
@@ -93,6 +97,8 @@ const Chat: React.FC = () => {
   const [runtimeError, setRuntimeError] = useState<string>('');
   const [executionMode, setExecutionModeState] = useState<ExecutionMode>('ask');
   const [pendingAsk, setPendingAsk] = useState<PendingAsk | null>(null);
+  const [pendingConfirm, setPendingConfirm] = useState<ConfirmationPromptPayload | null>(null);
+  const [confirmSubmitting, setConfirmSubmitting] = useState<ConfirmationDecision | null>(null);
   const [otherInput, setOtherInput] = useState('');
   const [cancelling, setCancelling] = useState(false);
   const [lightCompactCount, setLightCompactCount] = useState(0);
@@ -173,6 +179,8 @@ const Chat: React.FC = () => {
 
   useEffect(() => {
     setPendingAsk(null);
+    setPendingConfirm(null);
+    setConfirmSubmitting(null);
     setRuntimeError('');
     setCancelling(false);
     setViewMode('chat');
@@ -216,6 +224,7 @@ const Chat: React.FC = () => {
     setRuntimeStep,
     setRuntimeError,
     setPendingAsk,
+    setPendingConfirm,
     setInflightTools,
     setStreamingText,
     setStreamingToolInputs,
@@ -351,6 +360,34 @@ const Chat: React.FC = () => {
     }
   };
 
+  const handleConfirmDecision = async (decision: ConfirmationDecision) => {
+    if (!pendingConfirm || !activeSessionId || confirmSubmitting) return;
+    setConfirmSubmitting(decision);
+    try {
+      await submitConfirmation(
+        activeSessionId,
+        pendingConfirm.confirmationId,
+        decision,
+        userId,
+      );
+      // Optimistically clear the card; backend will also emit session_status
+      // transitioning out of waiting_user which redundantly clears it via
+      // useChatWsEventHandler.
+      setPendingConfirm(null);
+    } catch (e: unknown) {
+      const status = (e as { response?: { status?: number } })?.response?.status;
+      if (status === 409 || status === 404) {
+        // Already handled (expired / processed) — drop the card silently.
+        message.info('Confirmation already handled');
+        setPendingConfirm(null);
+      } else {
+        message.error('Failed to submit decision');
+      }
+    } finally {
+      setConfirmSubmitting(null);
+    }
+  };
+
   const handleModeChange = async (mode: ExecutionMode) => {
     if (!activeSessionId) {
       setExecutionModeState(mode);
@@ -365,7 +402,12 @@ const Chat: React.FC = () => {
     }
   };
 
-  const inputDisabled = runtimeStatus === 'waiting_user';
+  // §8 定义：runtimeStatus === 'waiting_user' 且 pendingAsk/pendingConfirm 任一非空时 disable。
+  // 两 latch 用 OR 连接是防御 —— 后端 B3 fix 已保证两者不并存，但事件顺序抖动时
+  // 前端至少不会放行输入。
+  const inputDisabled =
+    runtimeStatus === 'waiting_user' &&
+    (pendingAsk != null || pendingConfirm != null);
 
   const combinedInflightTools = useMemo(() => {
     const merged: Record<string, InflightTool> = {};
@@ -734,6 +776,14 @@ const Chat: React.FC = () => {
                     otherInput={otherInput}
                     onOtherInputChange={setOtherInput}
                     onAnswer={handleAnswerAsk}
+                  />
+                )}
+                {pendingConfirm && (
+                  <InstallConfirmationCard
+                    payload={pendingConfirm}
+                    submitting={confirmSubmitting != null}
+                    submittingDecision={confirmSubmitting}
+                    onDecision={handleConfirmDecision}
                   />
                 )}
                 <ChatWindow

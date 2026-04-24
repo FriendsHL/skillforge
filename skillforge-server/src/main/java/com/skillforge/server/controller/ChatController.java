@@ -2,6 +2,8 @@ package com.skillforge.server.controller;
 
 import com.skillforge.core.engine.CancellationRegistry;
 import com.skillforge.core.engine.PendingAskRegistry;
+import com.skillforge.core.engine.confirm.Decision;
+import com.skillforge.core.engine.confirm.PendingConfirmationRegistry;
 import com.skillforge.server.dto.ChatRequest;
 import com.skillforge.server.dto.SessionCompactionCheckpointDto;
 import com.skillforge.server.dto.CreateSessionRequest;
@@ -50,6 +52,7 @@ public class ChatController {
     private final ChatService chatService;
     private final SessionService sessionService;
     private final PendingAskRegistry pendingAskRegistry;
+    private final PendingConfirmationRegistry pendingConfirmationRegistry;
     private final SubAgentRegistry subAgentRegistry;
     private final CancellationRegistry cancellationRegistry;
     private final CompactionService compactionService;
@@ -60,6 +63,7 @@ public class ChatController {
     public ChatController(ChatService chatService,
                           SessionService sessionService,
                           PendingAskRegistry pendingAskRegistry,
+                          PendingConfirmationRegistry pendingConfirmationRegistry,
                           SubAgentRegistry subAgentRegistry,
                           CancellationRegistry cancellationRegistry,
                           CompactionService compactionService,
@@ -69,6 +73,7 @@ public class ChatController {
         this.chatService = chatService;
         this.sessionService = sessionService;
         this.pendingAskRegistry = pendingAskRegistry;
+        this.pendingConfirmationRegistry = pendingConfirmationRegistry;
         this.subAgentRegistry = subAgentRegistry;
         this.cancellationRegistry = cancellationRegistry;
         this.compactionService = compactionService;
@@ -186,11 +191,58 @@ public class ChatController {
             return ResponseEntity.status(check.getStatusCode()).build();
         }
         boolean ok = cancellationRegistry.cancel(sessionId);
+        // Additionally wake any pending install confirmation so the engine main thread
+        // exits its latch immediately instead of waiting up to 30 min.
+        try {
+            pendingConfirmationRegistry.completeAllForSession(sessionId, Decision.DENIED);
+        } catch (Exception ignored) {
+        }
         if (!ok) {
             return ResponseEntity.status(HttpStatus.CONFLICT)
                     .body(Map.of("error", "No running loop for this session"));
         }
         return ResponseEntity.ok(Map.of("status", "cancelling"));
+    }
+
+    /**
+     * 前端回答 install confirmation 卡片 (approve / deny)。
+     * Body: { confirmationId: string, decision: "approved" | "denied", userId: number }
+     */
+    @PostMapping("/{sessionId}/confirmation")
+    public ResponseEntity<Map<String, Object>> confirm(@PathVariable String sessionId,
+                                                       @RequestBody Map<String, Object> body) {
+        Object userIdObj = body.get("userId");
+        Long userId = null;
+        if (userIdObj instanceof Number) {
+            userId = ((Number) userIdObj).longValue();
+        } else if (userIdObj instanceof String) {
+            try { userId = Long.parseLong((String) userIdObj); } catch (NumberFormatException ignored) {}
+        }
+        ResponseEntity<SessionEntity> check = requireOwnedSession(sessionId, userId);
+        if (!check.getStatusCode().is2xxSuccessful()) {
+            return ResponseEntity.status(check.getStatusCode()).build();
+        }
+        Object cid = body.get("confirmationId");
+        Object dec = body.get("decision");
+        if (cid == null || dec == null) {
+            return ResponseEntity.badRequest()
+                    .body(Map.of("error", "confirmationId and decision required"));
+        }
+        Decision decision;
+        try {
+            decision = Decision.fromJson(dec.toString());
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", "invalid decision: " + dec));
+        }
+        if (decision == Decision.TIMEOUT) {
+            return ResponseEntity.badRequest().body(Map.of("error", "TIMEOUT is reserved for server"));
+        }
+        boolean ok = pendingConfirmationRegistry.complete(cid.toString(), decision, null);
+        if (!ok) {
+            return ResponseEntity.status(HttpStatus.GONE)
+                    .body(Map.of("error", "confirmation has expired or does not exist"));
+        }
+        return ResponseEntity.ok(Map.of("status", "ok"));
     }
 
     /**

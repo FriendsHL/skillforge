@@ -1,5 +1,6 @@
 package com.skillforge.core.engine;
 
+import com.skillforge.core.engine.confirm.ConfirmationPromptPayload;
 import com.skillforge.core.model.Message;
 
 import java.util.List;
@@ -24,6 +25,11 @@ public interface ChatEventBroadcaster {
 
     /** 广播 ask_user 事件,前端据此弹出回答面板。 */
     void askUser(String sessionId, AskUserEvent event);
+
+    /** 广播 install 确认弹卡事件,前端据此渲染 InstallConfirmationCard。 */
+    default void confirmationRequired(String sessionId, ConfirmationPromptPayload payload) {
+        // no-op default
+    }
 
     /** 工具开始执行(用于前端展示进行中卡片)。 */
     default void toolStarted(String sessionId, String toolUseId, String name, Map<String, Object> input) {

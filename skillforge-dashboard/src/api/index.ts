@@ -104,6 +104,42 @@ export const cancelChat = (sessionId: string, userId: number) =>
   api.post(`/chat/${sessionId}/cancel`, null, { params: { userId } });
 export const answerAsk = (sessionId: string, askId: string, answer: string, userId: number) =>
   api.post(`/chat/${sessionId}/answer`, { askId, answer, userId });
+
+// ─── Install Confirmation ──────────────────────────────────────────────────
+// Payload for WS event `confirmation_required` (mirrors backend
+// `ConfirmationPromptPayload` — see docs/design-install-confirmation-flow.md §2.7 / §8.A).
+export interface ConfirmationChoice {
+  id: string;
+  label: string;
+  /** Semantic variant so the UI can style approve/deny distinctly. */
+  variant?: 'approve' | 'deny';
+  description?: string;
+}
+
+export interface ConfirmationPromptPayload {
+  confirmationId: string;
+  sessionId: string;
+  /** Normalized install tool name: 'clawhub' | 'skillhub' | 'skill-hub' | 'multiple' | 'unknown'. */
+  installTool: string;
+  /** Parsed target package name; '*' when unparseable or multi-install (forces re-prompt). */
+  installTarget: string;
+  commandPreview: string;
+  title: string;
+  description: string;
+  choices: ConfirmationChoice[];
+  /** ISO-8601 timestamp for when the prompt expires. */
+  expiresAt: string;
+}
+
+export type ConfirmationDecision = 'APPROVED' | 'DENIED';
+
+export const submitConfirmation = (
+  sessionId: string,
+  confirmationId: string,
+  decision: ConfirmationDecision,
+  userId: number,
+) => api.post(`/chat/${sessionId}/confirmation`, { confirmationId, decision, userId });
+
 export const setSessionMode = (sessionId: string, mode: 'ask' | 'auto', userId: number) =>
   api.patch(`/chat/sessions/${sessionId}/mode`, { mode }, { params: { userId } });
 export const getSession = (sessionId: string, userId: number) =>

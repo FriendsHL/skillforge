@@ -1,5 +1,9 @@
 import { useCallback, useRef } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
+import type {
+  ConfirmationChoice,
+  ConfirmationPromptPayload,
+} from '../api';
 import type { InflightTool, StreamingToolInput } from './useChatMessages';
 import type { RuntimeStatus } from './useChatSession';
 
@@ -26,6 +30,7 @@ export interface WsEventHandlerDeps {
   setRuntimeStep: Dispatch<SetStateAction<string>>;
   setRuntimeError: Dispatch<SetStateAction<string>>;
   setPendingAsk: Dispatch<SetStateAction<PendingAsk | null>>;
+  setPendingConfirm: Dispatch<SetStateAction<ConfirmationPromptPayload | null>>;
   setInflightTools: Dispatch<SetStateAction<Record<string, InflightTool>>>;
   setStreamingText: Dispatch<SetStateAction<string>>;
   setStreamingToolInputs: Dispatch<SetStateAction<Record<string, StreamingToolInput>>>;
@@ -43,6 +48,7 @@ export function useChatWsEventHandler(deps: WsEventHandlerDeps) {
     setRuntimeStep,
     setRuntimeError,
     setPendingAsk,
+    setPendingConfirm,
     setInflightTools,
     setStreamingText,
     setStreamingToolInputs,
@@ -67,6 +73,7 @@ export function useChatWsEventHandler(deps: WsEventHandlerDeps) {
         setRuntimeError(errorDetail);
         if (evt.status !== 'waiting_user') {
           setPendingAsk(null);
+          setPendingConfirm(null);
         }
         if (evt.status === 'error' && errorDetail) {
           // 保留 console.error：前端 UI 只显示简短文案（"Agent loop failed"），
@@ -130,6 +137,37 @@ export function useChatWsEventHandler(deps: WsEventHandlerDeps) {
           allowOther: evt.allowOther !== false,
         });
         setOtherInput('');
+      } else if (evt.type === 'confirmation_required') {
+        // Install confirmation — fields are delivered flat on the event,
+        // mirroring ask_user convention. See docs §2.A + §8.A.
+        const payload = (evt.payload as Partial<ConfirmationPromptPayload> | undefined) ?? {};
+        const confirmationId = (evt.confirmationId as string | undefined) ?? payload.confirmationId;
+        if (!confirmationId) return;
+        const sessionId = (evt.sessionId as string | undefined) ?? payload.sessionId ?? '';
+        const installTool = (evt.installTool as string | undefined) ?? payload.installTool ?? 'unknown';
+        const installTarget = (evt.installTarget as string | undefined) ?? payload.installTarget ?? '*';
+        const commandPreview = (evt.commandPreview as string | undefined) ?? payload.commandPreview ?? '';
+        const title = (evt.title as string | undefined) ?? payload.title ?? 'Install confirmation required';
+        const description = (evt.description as string | undefined) ?? payload.description ?? '';
+        const rawChoices = (evt.choices ?? payload.choices) as ConfirmationChoice[] | undefined;
+        const choices: ConfirmationChoice[] = Array.isArray(rawChoices) && rawChoices.length > 0
+          ? rawChoices
+          : [
+              { id: 'deny', label: 'Deny', variant: 'deny' },
+              { id: 'approve', label: 'Approve', variant: 'approve' },
+            ];
+        const expiresAt = (evt.expiresAt as string | undefined) ?? payload.expiresAt ?? '';
+        setPendingConfirm({
+          confirmationId,
+          sessionId,
+          installTool,
+          installTarget,
+          commandPreview,
+          title,
+          description,
+          choices,
+          expiresAt,
+        });
       } else if (evt.type === 'tool_started') {
         const toolUseId = evt.toolUseId as string;
         const name = evt.name as string;
@@ -198,6 +236,7 @@ export function useChatWsEventHandler(deps: WsEventHandlerDeps) {
       setRuntimeStep,
       setRuntimeError,
       setPendingAsk,
+      setPendingConfirm,
       setInflightTools,
       setStreamingText,
       setStreamingToolInputs,

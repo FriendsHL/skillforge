@@ -87,7 +87,10 @@ class ChatServiceB3OrderingTest {
                 agentLoopEngine, modelUsageRepository, broadcaster, chatLoopExecutor,
                 sessionTitleService, subAgentRegistry, cancellationRegistry, compactionService,
                 null, null, new com.fasterxml.jackson.databind.ObjectMapper(), null,
-                new com.skillforge.server.hook.NoopLifecycleHookDispatcher());
+                new com.skillforge.server.hook.NoopLifecycleHookDispatcher(),
+                new com.skillforge.core.engine.confirm.SessionConfirmCache(),
+                new com.skillforge.core.engine.confirm.PendingConfirmationRegistry(),
+                sid -> sid);
     }
 
     private SessionEntity sessionWithGap(String id, long gapHours, int msgCount) {

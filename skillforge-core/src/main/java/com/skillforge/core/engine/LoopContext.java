@@ -89,6 +89,13 @@ public class LoopContext {
     /** Optional human-readable reason set alongside {@link #abortedByHook}. */
     private volatile String abortedByHookReason;
 
+    /**
+     * W11 micro-optimization: cached root-session resolution for install confirmation.
+     * Populated on first lookup, reused for subsequent install commands within the same loop.
+     * {@code transient} (never persisted) — start-of-loop value is {@code null}.
+     */
+    private transient String rootSessionIdCache;
+
     public LoopContext() {
         this.messages = new ArrayList<>();
         this.maxLoops = 25;
@@ -405,5 +412,13 @@ public class LoopContext {
     public void markAbortedByHook(String reason) {
         this.abortedByHook = true;
         this.abortedByHookReason = reason;
+    }
+
+    public String getRootSessionIdCache() {
+        return rootSessionIdCache;
+    }
+
+    public void setRootSessionIdCache(String rootSessionIdCache) {
+        this.rootSessionIdCache = rootSessionIdCache;
     }
 }

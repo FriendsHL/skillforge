@@ -1,5 +1,8 @@
 package com.skillforge.core.engine;
 
+import com.skillforge.core.engine.confirm.InstallTargetParser;
+import com.skillforge.core.engine.confirm.RootSessionLookup;
+import com.skillforge.core.engine.confirm.SessionConfirmCache;
 import com.skillforge.core.skill.SkillContext;
 import com.skillforge.core.skill.SkillResult;
 import org.slf4j.Logger;
@@ -13,6 +16,14 @@ import java.util.regex.Pattern;
 
 /**
  * Safety interceptor hook that blocks dangerous commands and file operations.
+ *
+ * <p>r2 重构:install-pattern 命令不再由本 hook 阻塞 —— engine 在 dispatch 循环里
+ * 用专门的 install confirmation 分支处理(主线程阻塞等用户决策,不入 supplyAsync)。
+ * 此 hook 现在只做两件事:
+ * <ol>
+ *   <li>install 命令 cache 命中 → 放行</li>
+ *   <li>install 命令 cache 未命中 → fail-closed(防御 engine gate 缺失的情况)</li>
+ * </ol>
  */
 public class SafetySkillHook implements SkillHook {
 
@@ -22,7 +33,7 @@ public class SafetySkillHook implements SkillHook {
     private static final List<Pattern> CONFIRMATION_REQUIRED_PATTERNS =
             DangerousCommandChecker.CONFIRMATION_REQUIRED_PATTERNS;
 
-    /** 危险模式共享：保证 Bash Skill 与 ScriptHandlerRunner 扫描规则一致。 */
+    /** 危险模式共享:保证 Bash Skill 与 ScriptHandlerRunner 扫描规则一致。 */
     private static final List<Pattern> DANGEROUS_PATTERNS = DangerousCommandChecker.DANGEROUS_PATTERNS;
 
     private static final List<String> PROTECTED_SYSTEM_DIRS = List.of(
@@ -45,6 +56,23 @@ public class SafetySkillHook implements SkillHook {
             HOME_DIR + "/.ssh/id_dsa"
     );
 
+    /**
+     * r2:install cache + root resolver 通过构造器注入。null 时 install 命令一律 fail-closed
+     * (保持历史行为 "拦截 → null → engine 返 error tool_result"),与旧版 SafetySkillHook 等价。
+     */
+    private final SessionConfirmCache sessionConfirmCache;
+    private final RootSessionLookup rootSessionLookup;
+
+    /** 无参构造器:用于没有 confirm 基础设施的测试 / 独立场景(等价 legacy 行为)。 */
+    public SafetySkillHook() {
+        this(null, null);
+    }
+
+    public SafetySkillHook(SessionConfirmCache sessionConfirmCache, RootSessionLookup rootSessionLookup) {
+        this.sessionConfirmCache = sessionConfirmCache;
+        this.rootSessionLookup = rootSessionLookup;
+    }
+
     @Override
     public Map<String, Object> beforeSkillExecute(String skillName, Map<String, Object> input, SkillContext context) {
         if (input == null) {
@@ -53,7 +81,7 @@ public class SafetySkillHook implements SkillHook {
 
         switch (skillName) {
             case "Bash":
-                return checkBashSafety(input);
+                return checkBashSafety(input, context);
             case "FileWrite":
             case "FileEdit":
                 return checkWritePathSafety(skillName, input);
@@ -70,18 +98,30 @@ public class SafetySkillHook implements SkillHook {
         log.info("[SafetyHook] Skill executed: skillName={}, status={}", skillName, status);
     }
 
-    private Map<String, Object> checkBashSafety(Map<String, Object> input) {
+    private Map<String, Object> checkBashSafety(Map<String, Object> input, SkillContext context) {
         Object commandObj = input.get("command");
         if (commandObj == null) {
             return input;
         }
         String command = commandObj.toString();
 
-        // 高风险安装命令 → 阻止执行，返回提示要求用 ask_user 确认
         for (Pattern pattern : CONFIRMATION_REQUIRED_PATTERNS) {
             if (pattern.matcher(command).find()) {
-                log.warn("[SafetyHook] Blocked install command requiring confirmation: {}", command);
-                return null; // 返回 null 阻止执行，engine 会返回错误提示
+                // engine 主线程 install confirmation 分支已经决策过,cache 命中即放行
+                InstallTargetParser.Parsed parsed = InstallTargetParser.parse(command);
+                String sid = context != null ? context.getSessionId() : null;
+                String rootSid = resolveRoot(sid);
+                if (sessionConfirmCache != null && rootSid != null
+                        && sessionConfirmCache.isApproved(rootSid,
+                                parsed.toolName(), parsed.installTarget())) {
+                    return input;
+                }
+                // 防御:engine 未经 install confirmation 分支直接调到了这里 — 不应发生,fail-closed
+                log.error("[SafetyHook] install pattern reached SafetyHook without engine gate; "
+                        + "rejecting fail-closed: rootSid={} tool={} target={} cmd={}",
+                        rootSid, parsed.toolName(), parsed.installTarget(),
+                        command.length() > 120 ? command.substring(0, 120) + "…" : command);
+                return null;
             }
         }
 
@@ -92,6 +132,18 @@ public class SafetySkillHook implements SkillHook {
             }
         }
         return input;
+    }
+
+    private String resolveRoot(String sid) {
+        if (sid == null) return null;
+        if (rootSessionLookup == null) return sid;
+        try {
+            String r = rootSessionLookup.resolveRoot(sid);
+            return r != null ? r : sid;
+        } catch (RuntimeException e) {
+            log.warn("[SafetyHook] rootSessionLookup failed for sid={}: {}", sid, e.toString());
+            return sid;
+        }
     }
 
     private Map<String, Object> checkWritePathSafety(String skillName, Map<String, Object> input) {

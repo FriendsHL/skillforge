@@ -7,6 +7,10 @@ import com.skillforge.core.engine.CancellationRegistry;
 import com.skillforge.core.engine.ChatEventBroadcaster;
 import com.skillforge.core.engine.LoopContext;
 import com.skillforge.core.engine.LoopResult;
+import com.skillforge.core.engine.confirm.Decision;
+import com.skillforge.core.engine.confirm.PendingConfirmationRegistry;
+import com.skillforge.core.engine.confirm.RootSessionLookup;
+import com.skillforge.core.engine.confirm.SessionConfirmCache;
 import com.skillforge.core.engine.hook.LifecycleHookDispatcher;
 import com.skillforge.core.model.AgentDefinition;
 import com.skillforge.core.model.Message;
@@ -59,6 +63,9 @@ public class ChatService {
     private final ObjectMapper objectMapper;
     private final SessionDigestExtractor sessionDigestExtractor;
     private final LifecycleHookDispatcher lifecycleHookDispatcher;
+    private final SessionConfirmCache sessionConfirmCache;
+    private final PendingConfirmationRegistry pendingConfirmationRegistry;
+    private final RootSessionLookup rootSessionLookup;
 
     public ChatService(AgentService agentService,
                        SessionService sessionService,
@@ -75,7 +82,10 @@ public class ChatService {
                        CollabRunService collabRunService,
                        ObjectMapper objectMapper,
                        SessionDigestExtractor sessionDigestExtractor,
-                       LifecycleHookDispatcher lifecycleHookDispatcher) {
+                       LifecycleHookDispatcher lifecycleHookDispatcher,
+                       SessionConfirmCache sessionConfirmCache,
+                       PendingConfirmationRegistry pendingConfirmationRegistry,
+                       RootSessionLookup rootSessionLookup) {
         this.agentService = agentService;
         this.sessionService = sessionService;
         this.skillRegistry = skillRegistry;
@@ -92,6 +102,9 @@ public class ChatService {
         this.objectMapper = objectMapper;
         this.sessionDigestExtractor = sessionDigestExtractor;
         this.lifecycleHookDispatcher = lifecycleHookDispatcher;
+        this.sessionConfirmCache = sessionConfirmCache;
+        this.pendingConfirmationRegistry = pendingConfirmationRegistry;
+        this.rootSessionLookup = rootSessionLookup;
     }
 
     /**
@@ -496,6 +509,27 @@ public class ChatService {
             // Ensure CancellationRegistry is cleaned up (may already be done in happy path)
             try {
                 cancellationRegistry.unregister(sessionId);
+            } catch (Exception ignored) {
+            }
+            // Wake any pending install confirmation for this session (cancel cascade).
+            // Safe to always invoke — no-op when no pending confirmation exists.
+            try {
+                if (pendingConfirmationRegistry != null) {
+                    pendingConfirmationRegistry.completeAllForSession(sessionId, Decision.DENIED);
+                }
+            } catch (Exception ignored) {
+            }
+            // r3: only a true root session clears its install-confirm cache. Child sessions
+            // inherit the root's approvals and must not wipe them on their own loop end.
+            try {
+                if (sessionConfirmCache != null) {
+                    String rootSid = rootSessionLookup != null
+                            ? rootSessionLookup.resolveRoot(sessionId)
+                            : sessionId;
+                    if (sessionId != null && sessionId.equals(rootSid)) {
+                        sessionConfirmCache.clear(rootSid);
+                    }
+                }
             } catch (Exception ignored) {
             }
             // SubAgent 回调钩子:如果这是子 session,把结果 push 到父;如果这是父,drain 等待中的子结果
