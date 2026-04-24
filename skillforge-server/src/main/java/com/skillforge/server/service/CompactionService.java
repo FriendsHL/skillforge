@@ -455,7 +455,11 @@ public class CompactionService implements ContextCompactorCallback {
         } catch (Exception e) {
             fullCompactInFlight.remove(sessionId);
             log.error("fullCompact Phase 2 LLM call failed: sessionId={}", sessionId, e);
-            return null;
+            // BUG-A prerequisite: rethrow so the engine's catch increments the breaker.
+            // Returning null here would surface as performed=false (no-op), which under the
+            // BUG-A fix is treated as neutral and would leave a real LLM failure invisible
+            // to the circuit breaker.
+            throw new RuntimeException("fullCompact Phase 2 failed for sessionId=" + sessionId, e);
         }
 
         if (result == null || isTrulyNoOp(result)) {
@@ -796,7 +800,8 @@ public class CompactionService implements ContextCompactorCallback {
             payload.put("updatedAt", s.getUpdatedAt());
             broadcaster.userEvent(s.getUserId(), payload);
         } catch (Exception t) {
-            log.debug("compact broadcastUpdated skipped: {}", t.getMessage());
+            // Broadcast failure is non-fatal; keep stacktrace for debugging.
+            log.debug("compact broadcastUpdated skipped", t);
         }
     }
 

@@ -76,4 +76,16 @@ public interface LlmStreamHandler {
     default void onToolUseEnd(String toolUseId, Map<String, Object> parsedInput) {
         // no-op
     }
+
+    /**
+     * Provider 在流式处理过程中发现可观测警告时调用。
+     * 当前用途：tool_use input JSON 解析失败后的兜底截断事件（{@code warning.tool_input_truncated}）。
+     * 引擎侧实现把这些 warning 写入 LLM_CALL span 的 attributes，供前端 / 日志排障。
+     *
+     * @param key   warning 名称；约定以 {@code "warning."} 前缀命名
+     * @param value 任意可序列化对象（String / Boolean / Number / Map）
+     */
+    default void onWarning(String key, Object value) {
+        // no-op
+    }
 }

@@ -48,6 +48,11 @@ public class AgentLoopEngine {
 
     private static final Logger log = LoggerFactory.getLogger(AgentLoopEngine.class);
 
+    /** Compact breaker trips after this many consecutive real failures (exceptions). */
+    static final int BREAKER_TRIP_THRESHOLD = 3;
+    /** After breaker trips, allow one half-open retry once this window has elapsed. */
+    static final long BREAKER_HALF_OPEN_WINDOW_MS = 60_000L;
+
     private final LlmProviderFactory llmProviderFactory;
     private final String defaultProviderName;
     private final SkillRegistry skillRegistry;
@@ -206,6 +211,11 @@ public class AgentLoopEngine {
         // 确保 context 引用是 effectively final（beforeLoop 可能替换了 context 对象）
         final LoopContext loopCtx = context;
 
+        // BUG-B: user-turn entry — every new user message is a fresh chance for compaction.
+        // Clear any breaker state carried over from the previous turn so recovery does not
+        // depend solely on the 60s half-open window.
+        loopCtx.resetCompactFailures();
+
         // 4. 构建 system prompt（注入全局 CLAUDE.md）
         String claudeMd = claudeMdProvider != null ? claudeMdProvider.apply(userId) : null;
         List<SkillDefinition> skillDefs = new ArrayList<>(skillRegistry.getAllSkillDefinitions());
@@ -326,7 +336,7 @@ public class AgentLoopEngine {
             // 通常下降不再满足触发. 这保证了 "B2 只在 B1 执行后触发"
             // 且"每个 iteration 至多一次完整 B1→B2 序列".
             boolean b1RanInThisIteration = false;
-            if (compactorCallback != null && loopCtx.getConsecutiveCompactFailures() < 3) {
+            if (compactorCallback != null && isCompactBreakerAllowing(loopCtx)) {
                 int estTokens = TokenEstimator.estimate(messages);
                 double ratio = contextWindowTokens > 0 ? (double) estTokens / contextWindowTokens : 0;
                 boolean waste = detectWaste(messages);
@@ -348,13 +358,14 @@ public class AgentLoopEngine {
                             ratio = contextWindowTokens > 0 ? (double) estTokens / contextWindowTokens : 0;
                             log.info("engine-soft light compact done: sessionId={}, reclaimed={} tokens, new ratio={}",
                                     loopCtx.getSessionId(), cr.tokensReclaimed, String.format("%.2f", ratio));
-                        } else {
-                            loopCtx.incrementCompactFailures();
                         }
+                        // BUG-A: performed=false (idempotency / no-op / in-flight / session not found)
+                        // is a neutral signal — neither increment nor reset breaker state.
                     } catch (Exception e) {
-                        loopCtx.incrementCompactFailures();
-                        log.warn("engine-soft compact failed (consecutive failures: {}): {}",
-                                loopCtx.getConsecutiveCompactFailures(), e.getMessage());
+                        recordCompactFailure(loopCtx);
+                        // BUG-C: log.error with stacktrace (was warn + e.getMessage() only)
+                        log.error("engine-soft compact failed (consecutive failures: {})",
+                                loopCtx.getConsecutiveCompactFailures(), e);
                     }
                 }
                 // B2: B1 刚跑过 (无论实际 performed 还是 no-op) 且 ratio 仍 > 0.80 → 升级到 full
@@ -371,18 +382,18 @@ public class AgentLoopEngine {
                             loopCtx.markCompactedThisIteration();
                             log.info("engine-hard full compact done: sessionId={}, reclaimed={} tokens",
                                     loopCtx.getSessionId(), cr.tokensReclaimed);
-                        } else {
-                            loopCtx.incrementCompactFailures();
                         }
+                        // BUG-A: performed=false is neutral.
                     } catch (Exception e) {
-                        loopCtx.incrementCompactFailures();
-                        log.warn("engine-hard compact failed (consecutive failures: {}): {}",
-                                loopCtx.getConsecutiveCompactFailures(), e.getMessage());
+                        recordCompactFailure(loopCtx);
+                        log.error("engine-hard compact failed (consecutive failures: {})",
+                                loopCtx.getConsecutiveCompactFailures(), e);
                     }
                 }
-            } else if (compactorCallback != null && loopCtx.getConsecutiveCompactFailures() >= 3) {
-                log.warn("Skipping compact: circuit breaker open after {} consecutive failures",
-                        loopCtx.getConsecutiveCompactFailures());
+            } else if (compactorCallback != null) {
+                long openedMsAgo = System.currentTimeMillis() - loopCtx.getCompactBreakerOpenedAt();
+                log.warn("Skipping compact: circuit breaker open after {} consecutive failures (opened {}ms ago, half-open window {}ms)",
+                        loopCtx.getConsecutiveCompactFailures(), openedMsAgo, BREAKER_HALF_OPEN_WINDOW_MS);
             }
 
             // b. 构建 LlmRequest — P-4/P-5 通过 system prompt 后缀注入，避免破坏 user/assistant 交替
@@ -444,7 +455,7 @@ public class AgentLoopEngine {
             request.setTemperature(agentDef.getTemperature());
 
             // Preemptive compaction: last-resort check before LLM call
-            if (compactorCallback != null && loopCtx.getConsecutiveCompactFailures() < 3) {
+            if (compactorCallback != null && isCompactBreakerAllowing(loopCtx)) {
                 int estTokens = TokenEstimator.estimate(messages);
                 double ratio = contextWindowTokens > 0 ? (double) estTokens / contextWindowTokens : 0;
                 if (ratio > 0.85) {
@@ -460,13 +471,12 @@ public class AgentLoopEngine {
                             loopCtx.resetCompactFailures();
                             request.setMessages(messages);
                             log.info("Preemptive compaction done: reclaimed {} tokens", cr.tokensReclaimed);
-                        } else {
-                            loopCtx.incrementCompactFailures();
                         }
+                        // BUG-A: performed=false is neutral.
                     } catch (Exception e) {
-                        loopCtx.incrementCompactFailures();
-                        log.warn("Preemptive compaction failed (consecutive failures: {}): {}",
-                                loopCtx.getConsecutiveCompactFailures(), e.getMessage());
+                        recordCompactFailure(loopCtx);
+                        log.error("Preemptive compaction failed (consecutive failures: {})",
+                                loopCtx.getConsecutiveCompactFailures(), e);
                     }
                 }
             }
@@ -477,6 +487,8 @@ public class AgentLoopEngine {
             final java.util.concurrent.atomic.AtomicReference<Throwable> errHolder = new java.util.concurrent.atomic.AtomicReference<>();
             final java.util.concurrent.CountDownLatch streamDone = new java.util.concurrent.CountDownLatch(1);
             final String broadcastSid = loopCtx.getSessionId();
+            // BUG-D: collect provider-emitted warnings and attach them to the LLM_CALL span.
+            final java.util.Map<String, Object> streamWarnings = new java.util.concurrent.ConcurrentHashMap<>();
             try {
                 // 流式 tool_use 分片需要记住 name(按 toolUseId 维度)才能广播 toolUseDelta
                 final java.util.Map<String, String> streamToolNames = new java.util.concurrent.ConcurrentHashMap<>();
@@ -530,6 +542,15 @@ public class AgentLoopEngine {
                             broadcaster.assistantStreamEnd(broadcastSid);
                         }
                         streamDone.countDown();
+                    }
+                    @Override public void onWarning(String key, Object value) {
+                        // BUG-D: accumulate provider warnings; written to LLM_CALL span attributes below.
+                        if (key != null && value != null) {
+                            streamWarnings.put(key, value);
+                            // W2 fix: include sessionId for log correlation in multi-session deployments.
+                            log.warn("LLM stream warning: sessionId={}, iteration={}, {}={}",
+                                    broadcastSid, loopCtx.getLoopCount(), key, value);
+                        }
                     }
                 });
                 // A-2: 整体 300s 超时兜底
@@ -597,7 +618,13 @@ public class AgentLoopEngine {
                                     continue; // retry
                                 }
                             } catch (Exception e) {
-                                log.warn("max_tokens compact failed: {}", e.getMessage());
+                                // BUG-A consistency: every real compact-path exception counts toward the
+                                // breaker, regardless of which trigger invoked compactFull. Without this
+                                // the max_tokens-recovery path would silently mask repeated LLM failures.
+                                recordCompactFailure(loopCtx);
+                                // BUG-C: log.error with stacktrace
+                                log.error("max_tokens compact failed (consecutive failures: {})",
+                                        loopCtx.getConsecutiveCompactFailures(), e);
                             }
                         }
                     }
@@ -658,6 +685,13 @@ public class AgentLoopEngine {
                     llmOutput.append("]");
                 }
                 llmSpan.setOutput(llmOutput.toString());
+                // BUG-D: copy any provider-emitted stream warnings to span attributes
+                // (e.g. {@code warning.tool_input_truncated}).
+                if (!streamWarnings.isEmpty()) {
+                    for (Map.Entry<String, Object> w : streamWarnings.entrySet()) {
+                        llmSpan.putAttribute(w.getKey(), w.getValue());
+                    }
+                }
                 llmSpan.setSuccess(true);
                 traceCollector.record(llmSpan);
             }
@@ -1012,6 +1046,10 @@ public class AgentLoopEngine {
         Message msg = new Message();
         msg.setRole(Message.Role.ASSISTANT);
 
+        if (response.getReasoningContent() != null && !response.getReasoningContent().isEmpty()) {
+            msg.setReasoningContent(response.getReasoningContent());
+        }
+
         List<ToolUseBlock> toolUseBlocks = response.getToolUseBlocks();
         if (toolUseBlocks == null || toolUseBlocks.isEmpty()) {
             // 纯文本响应
@@ -1106,6 +1144,43 @@ public class AgentLoopEngine {
 
     private static String sanitizePromptValue(String value) {
         return value == null ? null : value.replaceAll("[\r\n\t]", " ").trim();
+    }
+
+    /**
+     * BUG-B: compact breaker state machine.
+     * <ul>
+     *   <li>closed (failures &lt; threshold) → allow</li>
+     *   <li>open within half-open window → deny (skip compact, log at breaker branch)</li>
+     *   <li>open beyond window → allow one half-open probe; success calls
+     *       {@code resetCompactFailures()} and closes the breaker, failure calls
+     *       {@link #recordCompactFailure(LoopContext)} which refreshes the open timestamp
+     *       and restarts the window</li>
+     * </ul>
+     * Package-private so tests can verify the state machine directly.
+     */
+    static boolean isCompactBreakerAllowing(LoopContext ctx) {
+        if (ctx.getConsecutiveCompactFailures() < BREAKER_TRIP_THRESHOLD) {
+            return true;
+        }
+        long openedAt = ctx.getCompactBreakerOpenedAt();
+        if (openedAt <= 0L) {
+            // Safety fallback: counter is at/above threshold but timestamp was not recorded.
+            // Treat as closed so we do not block recovery on inconsistent state.
+            return true;
+        }
+        return (System.currentTimeMillis() - openedAt) > BREAKER_HALF_OPEN_WINDOW_MS;
+    }
+
+    /**
+     * BUG-A/B: record a real compact failure. Increments the failure counter and refreshes
+     * the breaker-open timestamp whenever the threshold is crossed (so half-open probe
+     * failures restart the 60s window rather than allowing immediate re-probing).
+     */
+    static void recordCompactFailure(LoopContext ctx) {
+        ctx.incrementCompactFailures();
+        if (ctx.getConsecutiveCompactFailures() >= BREAKER_TRIP_THRESHOLD) {
+            ctx.refreshCompactBreakerOpenedAt();
+        }
     }
 
     /**

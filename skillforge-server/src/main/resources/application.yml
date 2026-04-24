@@ -53,13 +53,14 @@ skillforge:
         models:
           - claude-sonnet-4-20250514
         context-window-tokens: 200000   # claude-sonnet-4 / claude-3.x = 200K
-      openai:
-        type: openai
+      deepseek:
+        type: deepseek
         api-key: ${DEEPSEEK_API_KEY:}
         base-url: https://api.deepseek.com
         model: deepseek-chat
         models:
           - deepseek-chat
+          - deepseek-v4-pro
         # context-window-tokens: 64000  # deepseek-chat; resolved automatically via model map if unset
       bailian:
         type: openai
@@ -71,9 +72,15 @@ skillforge:
           - qwen3-max-2026-01-23
           - qwen3-coder-next
         # Optional per-provider tuning (defaults: 60s / 1 retry)
-        read-timeout-seconds: 240     # qwen thinking mode + 1082 proxy buffering can idle > 60s; applies to stream too
-        # max-retries: 1              # retries on SocketTimeoutException only,
-        #                             # does NOT apply to streaming (chatStream)
+        # Stream and non-stream use separate OkHttpClient instances (BUG-E) but currently share
+        # this same timeout value; the split lets either path be tuned independently in the future.
+        #   - non-stream chat(): readTimeout bounds total response time.
+        #   - stream chatStream(): readTimeout bounds inter-chunk idle (qwen thinking + proxy buffering can idle > 60s).
+        read-timeout-seconds: 240
+        # max-retries: 1              # Non-stream chat() only: retries on SocketTimeoutException.
+        #                             # Stream chatStream() does NOT use this; it has a dedicated
+        #                             # handshake-phase retry on ConnectException / SSLHandshakeException
+        #                             # (2 attempts with 2-5s exponential backoff + jitter).
 
   # Memory extraction configuration
   memory:

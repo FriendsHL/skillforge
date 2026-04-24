@@ -13,11 +13,14 @@ import okhttp3.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.net.ssl.SSLHandshakeException;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.net.ConnectException;
 import java.net.SocketTimeoutException;
 import java.util.*;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -29,11 +32,21 @@ public class ClaudeProvider implements LlmProvider {
     private static final MediaType JSON_MEDIA_TYPE = MediaType.get("application/json; charset=utf-8");
     private static final String ANTHROPIC_VERSION = "2023-06-01";
 
+    /** BUG-E-bis: chatStream handshake-phase retry count. */
+    private static final int STREAM_MAX_HANDSHAKE_RETRIES = 2;
+    /** Backoff base (ms); jitter ±20% applied on top. */
+    private static final long[] STREAM_HANDSHAKE_BACKOFF_MS = {2000L, 5000L};
+
     private final String apiKey;
     private final String baseUrl;
     private final String defaultModel;
     private final int maxRetries;
+    /** Non-stream path (chat): readTimeout bounds total response time. */
     private final OkHttpClient httpClient;
+    /**
+     * BUG-E: Stream path (chatStream). See {@link OpenAiProvider} for rationale.
+     */
+    private final OkHttpClient streamHttpClient;
     private final ObjectMapper objectMapper;
 
     public ClaudeProvider(String apiKey, String baseUrl, String defaultModel) {
@@ -50,6 +63,11 @@ public class ClaudeProvider implements LlmProvider {
         this.maxRetries = Math.max(0, maxRetries);
         this.objectMapper = new ObjectMapper().findAndRegisterModules().disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
         this.httpClient = new OkHttpClient.Builder()
+                .connectTimeout(10, TimeUnit.SECONDS)
+                .readTimeout(readTimeoutSeconds, TimeUnit.SECONDS)
+                .writeTimeout(30, TimeUnit.SECONDS)
+                .build();
+        this.streamHttpClient = new OkHttpClient.Builder()
                 .connectTimeout(10, TimeUnit.SECONDS)
                 .readTimeout(readTimeoutSeconds, TimeUnit.SECONDS)
                 .writeTimeout(30, TimeUnit.SECONDS)
@@ -109,11 +127,18 @@ public class ClaudeProvider implements LlmProvider {
     @Override
     public void chatStream(LlmRequest request, LlmStreamHandler handler) {
         String model = request.getModel() != null ? request.getModel() : defaultModel;
-        Call call = null;
+        String requestBody;
         try {
-            String requestBody = buildRequestBody(request, model, true);
-            log.debug("Claude stream request: model={}", model);
+            requestBody = buildRequestBody(request, model, true);
+        } catch (Exception e) {
+            handler.onError(e);
+            return;
+        }
+        log.debug("Claude stream request: model={}", model);
 
+        // BUG-E / BUG-E-bis: handshake-phase retry loop. See OpenAiProvider.chatStream for details.
+        int handshakeAttempt = 0;
+        while (true) {
             Request httpRequest = new Request.Builder()
                     .url(baseUrl + "/v1/messages")
                     .addHeader("x-api-key", apiKey)
@@ -121,28 +146,64 @@ public class ClaudeProvider implements LlmProvider {
                     .addHeader("content-type", "application/json")
                     .post(RequestBody.create(requestBody, JSON_MEDIA_TYPE))
                     .build();
-
-            call = httpClient.newCall(httpRequest);
+            Call call = streamHttpClient.newCall(httpRequest);
             handler.onStreamStart(call::cancel);
+            if (handler.isCancelled()) {
+                handler.onStreamStart(null);
+                handler.onError(new IOException("stream cancelled before handshake"));
+                return;
+            }
 
-            try (Response response = call.execute()) {
-                if (!response.isSuccessful()) {
-                    String errorBody = response.body() != null ? response.body().string() : "no body";
-                    handler.onError(new RuntimeException(
-                            "Claude API error: HTTP " + response.code() + " - " + errorBody));
+            Response response;
+            try {
+                response = call.execute();  // handshake barrier
+            } catch (ConnectException | SSLHandshakeException preHandshake) {
+                handler.onStreamStart(null);
+                if (handshakeAttempt >= STREAM_MAX_HANDSHAKE_RETRIES || handler.isCancelled()) {
+                    handler.onError(preHandshake);
                     return;
                 }
+                long base = STREAM_HANDSHAKE_BACKOFF_MS[handshakeAttempt];
+                double jitterFactor = 1.0 + (ThreadLocalRandom.current().nextDouble() * 0.4 - 0.2);
+                long sleepMs = Math.max(100L, (long) (base * jitterFactor));
+                log.warn("Claude chatStream pre-handshake {} (attempt {}/{}), retrying in {}ms: {}",
+                        preHandshake.getClass().getSimpleName(), handshakeAttempt + 1,
+                        STREAM_MAX_HANDSHAKE_RETRIES, sleepMs, preHandshake.getMessage());
+                try {
+                    Thread.sleep(sleepMs);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    handler.onError(ie);
+                    return;
+                }
+                handshakeAttempt++;
+                continue;
+            } catch (Exception other) {
+                handler.onStreamStart(null);
+                if (handler.isCancelled()) {
+                    log.debug("Claude stream cancelled during handshake");
+                }
+                handler.onError(other);
+                return;
+            }
 
-                processSSEStream(response, handler);
+            try (Response r = response) {
+                if (!r.isSuccessful()) {
+                    String errorBody = r.body() != null ? r.body().string() : "no body";
+                    handler.onError(new RuntimeException(
+                            "Claude API error: HTTP " + r.code() + " - " + errorBody));
+                    return;
+                }
+                processSSEStream(r, handler);
+            } catch (Exception postHandshake) {
+                if (handler.isCancelled()) {
+                    log.debug("Claude stream cancelled after handshake");
+                }
+                handler.onError(postHandshake);
+            } finally {
+                handler.onStreamStart(null);
             }
-        } catch (Exception e) {
-            if (handler.isCancelled()) {
-                log.debug("Claude stream cancelled");
-            }
-            // 即使是 cancel 引起的异常也要调 onError,确保 engine 的 CountDownLatch 释放
-            handler.onError(e);
-        } finally {
-            handler.onStreamStart(null);
+            return;
         }
     }
 

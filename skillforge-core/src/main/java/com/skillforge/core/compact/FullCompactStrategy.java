@@ -325,19 +325,20 @@ public class FullCompactStrategy {
     }
 
     private String callLlm(LlmProvider provider, String modelId, String windowText) {
-        try {
-            LlmRequest req = new LlmRequest();
-            req.setSystemPrompt(SUMMARY_SYSTEM_PROMPT);
-            req.setMessages(Collections.singletonList(
-                    Message.user("Please summarize the following conversation history:\n\n" + windowText)));
-            req.setModel(modelId);
-            req.setMaxTokens(MAX_SUMMARY_TOKENS + 200);
-            req.setTemperature(0.2);
-            LlmResponse resp = provider.chat(req);
-            return resp != null ? resp.getContent() : null;
-        } catch (Exception e) {
-            log.error("FullCompactStrategy: LLM summarization call failed", e);
-            return null;
-        }
+        // BUG-A / BUG-A prerequisite: previously this catch swallowed the exception and
+        // returned null, which upstream treated as a normal "empty summary" no-op.
+        // Under the BUG-A fix (performed=false is neutral, not a failure), a real LLM
+        // backend failure would never increment the engine's compact breaker — the
+        // breaker would never open. Rethrow so CompactionService Phase 2 catches,
+        // rethrows with session context, and the engine records a real failure.
+        LlmRequest req = new LlmRequest();
+        req.setSystemPrompt(SUMMARY_SYSTEM_PROMPT);
+        req.setMessages(Collections.singletonList(
+                Message.user("Please summarize the following conversation history:\n\n" + windowText)));
+        req.setModel(modelId);
+        req.setMaxTokens(MAX_SUMMARY_TOKENS + 200);
+        req.setTemperature(0.2);
+        LlmResponse resp = provider.chat(req);
+        return resp != null ? resp.getContent() : null;
     }
 }

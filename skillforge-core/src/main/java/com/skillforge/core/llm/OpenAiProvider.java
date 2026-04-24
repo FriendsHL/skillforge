@@ -14,11 +14,14 @@ import okhttp3.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.net.ssl.SSLHandshakeException;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.net.ConnectException;
 import java.net.SocketTimeoutException;
 import java.util.*;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -30,11 +33,24 @@ public class OpenAiProvider implements LlmProvider {
     private static final Logger log = LoggerFactory.getLogger(OpenAiProvider.class);
     private static final MediaType JSON_MEDIA_TYPE = MediaType.get("application/json; charset=utf-8");
 
+    /** BUG-E-bis: chatStream handshake-phase retry count (ConnectException / SSLHandshakeException only). */
+    private static final int STREAM_MAX_HANDSHAKE_RETRIES = 2;
+    /** Backoff base (ms) for attempt 1 and attempt 2; jitter ±20% applied on top. */
+    private static final long[] STREAM_HANDSHAKE_BACKOFF_MS = {2000L, 5000L};
+
     private final String apiKey;
     private final String baseUrl;
     private final String defaultModel;
     private final int maxRetries;
+    /** Non-stream path (chat): readTimeout bounds total response time. */
     private final OkHttpClient httpClient;
+    /**
+     * BUG-E: Stream path (chatStream): dedicated client so readTimeout is scoped to
+     * inter-chunk idle rather than shared with non-stream total-response semantics.
+     * Currently configured identically to {@link #httpClient}; kept separate so either
+     * timeout can be tuned independently in future.
+     */
+    private final OkHttpClient streamHttpClient;
     private final ObjectMapper objectMapper;
 
     public OpenAiProvider(String apiKey, String baseUrl, String defaultModel) {
@@ -51,6 +67,11 @@ public class OpenAiProvider implements LlmProvider {
         this.maxRetries = Math.max(0, maxRetries);
         this.objectMapper = new ObjectMapper().findAndRegisterModules().disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
         this.httpClient = new OkHttpClient.Builder()
+                .connectTimeout(10, TimeUnit.SECONDS)
+                .readTimeout(readTimeoutSeconds, TimeUnit.SECONDS)
+                .writeTimeout(30, TimeUnit.SECONDS)
+                .build();
+        this.streamHttpClient = new OkHttpClient.Builder()
                 .connectTimeout(10, TimeUnit.SECONDS)
                 .readTimeout(readTimeoutSeconds, TimeUnit.SECONDS)
                 .writeTimeout(30, TimeUnit.SECONDS)
@@ -109,39 +130,88 @@ public class OpenAiProvider implements LlmProvider {
     @Override
     public void chatStream(LlmRequest request, LlmStreamHandler handler) {
         String model = request.getModel() != null ? request.getModel() : defaultModel;
-        Call call = null;
+        String requestBody;
         try {
-            String requestBody = buildRequestBody(request, model, true);
-            log.debug("OpenAI stream request: model={}", model);
+            requestBody = buildRequestBody(request, model, true);
+        } catch (Exception e) {
+            handler.onError(e);
+            return;
+        }
+        log.debug("OpenAI stream request: model={}", model);
 
+        // BUG-E / BUG-E-bis: handshake-phase retry loop.
+        // Only Call.execute() synchronous failures on ConnectException /
+        // SSLHandshakeException trigger a retry. Once execute() returns a Response, any
+        // body-read error is delivered once to onError — retrying post-handshake would
+        // duplicate already-delivered deltas (project footgun #3).
+        int handshakeAttempt = 0;
+        while (true) {
             Request httpRequest = new Request.Builder()
                     .url(baseUrl + "/v1/chat/completions")
                     .addHeader("Authorization", "Bearer " + apiKey)
                     .addHeader("Content-Type", "application/json")
                     .post(RequestBody.create(requestBody, JSON_MEDIA_TYPE))
                     .build();
-
-            call = httpClient.newCall(httpRequest);
+            Call call = streamHttpClient.newCall(httpRequest);
             handler.onStreamStart(call::cancel);
+            if (handler.isCancelled()) {
+                handler.onStreamStart(null);
+                handler.onError(new IOException("stream cancelled before handshake"));
+                return;
+            }
 
-            try (Response response = call.execute()) {
-                if (!response.isSuccessful()) {
-                    String errorBody = response.body() != null ? response.body().string() : "no body";
-                    handler.onError(new RuntimeException(
-                            "OpenAI API error: HTTP " + response.code() + " - " + errorBody));
+            Response response;
+            try {
+                response = call.execute();  // handshake barrier
+            } catch (ConnectException | SSLHandshakeException preHandshake) {
+                handler.onStreamStart(null);
+                if (handshakeAttempt >= STREAM_MAX_HANDSHAKE_RETRIES || handler.isCancelled()) {
+                    handler.onError(preHandshake);
                     return;
                 }
+                long base = STREAM_HANDSHAKE_BACKOFF_MS[handshakeAttempt];
+                double jitterFactor = 1.0 + (ThreadLocalRandom.current().nextDouble() * 0.4 - 0.2);
+                long sleepMs = Math.max(100L, (long) (base * jitterFactor));
+                log.warn("OpenAI chatStream pre-handshake {} (attempt {}/{}), retrying in {}ms: {}",
+                        preHandshake.getClass().getSimpleName(), handshakeAttempt + 1,
+                        STREAM_MAX_HANDSHAKE_RETRIES, sleepMs, preHandshake.getMessage());
+                try {
+                    Thread.sleep(sleepMs);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    handler.onError(ie);
+                    return;
+                }
+                handshakeAttempt++;
+                continue;
+            } catch (Exception other) {
+                // SocketTimeoutException / UnknownHostException / any other IOException → no retry
+                handler.onStreamStart(null);
+                if (handler.isCancelled()) {
+                    log.debug("OpenAI stream cancelled during handshake");
+                }
+                handler.onError(other);
+                return;
+            }
 
-                processSSEStream(response, handler);
+            // Handshake succeeded: from here on, no retry under any circumstance.
+            try (Response r = response) {
+                if (!r.isSuccessful()) {
+                    String errorBody = r.body() != null ? r.body().string() : "no body";
+                    handler.onError(new RuntimeException(
+                            "OpenAI API error: HTTP " + r.code() + " - " + errorBody));
+                    return;
+                }
+                processSSEStream(r, handler);
+            } catch (Exception postHandshake) {
+                if (handler.isCancelled()) {
+                    log.debug("OpenAI stream cancelled after handshake");
+                }
+                handler.onError(postHandshake);
+            } finally {
+                handler.onStreamStart(null);
             }
-        } catch (Exception e) {
-            if (handler.isCancelled()) {
-                log.debug("OpenAI stream cancelled");
-            }
-            // 即使是 cancel 引起的异常也要调 onError,确保 engine 的 CountDownLatch 释放
-            handler.onError(e);
-        } finally {
-            handler.onStreamStart(null);
+            return;
         }
     }
 
@@ -240,6 +310,11 @@ public class OpenAiProvider implements LlmProvider {
                 ObjectNode assistantMsg = objectMapper.createObjectNode();
                 assistantMsg.put("role", "assistant");
 
+                // Must pass reasoning_content back when present (DeepSeek/Qwen thinking mode requirement)
+                if (msg.getReasoningContent() != null && !msg.getReasoningContent().isEmpty()) {
+                    assistantMsg.put("reasoning_content", msg.getReasoningContent());
+                }
+
                 String textContent = msg.getTextContent();
                 if (textContent != null && !textContent.isEmpty()) {
                     assistantMsg.put("content", textContent);
@@ -271,6 +346,12 @@ public class OpenAiProvider implements LlmProvider {
                 ObjectNode simpleMsg = objectMapper.createObjectNode();
                 String roleStr = role == Message.Role.ASSISTANT ? "assistant" : "user";
                 simpleMsg.put("role", roleStr);
+                // Must pass reasoning_content back when present (DeepSeek/Qwen thinking mode requirement)
+                if (role == Message.Role.ASSISTANT
+                        && msg.getReasoningContent() != null
+                        && !msg.getReasoningContent().isEmpty()) {
+                    simpleMsg.put("reasoning_content", msg.getReasoningContent());
+                }
                 simpleMsg.put("content", content instanceof String ? (String) content : msg.getTextContent());
                 messagesNode.add(simpleMsg);
             }
@@ -291,6 +372,12 @@ public class OpenAiProvider implements LlmProvider {
             // text content
             String content = message.path("content").asText(null);
             llmResponse.setContent(content != null ? content : "");
+
+            // reasoning_content (DeepSeek / Qwen thinking mode)
+            String reasoningContent = message.path("reasoning_content").asText(null);
+            if (reasoningContent != null && !reasoningContent.isEmpty()) {
+                llmResponse.setReasoningContent(reasoningContent);
+            }
 
             // finish_reason -> stopReason mapping
             String finishReason = firstChoice.path("finish_reason").asText("stop");
@@ -352,6 +439,7 @@ public class OpenAiProvider implements LlmProvider {
     @SuppressWarnings("unchecked")
     private void processSSEStream(Response response, LlmStreamHandler handler) throws IOException {
         StringBuilder fullText = new StringBuilder();
+        StringBuilder fullReasoning = new StringBuilder();
         List<ToolUseBlock> toolUseBlocks = new ArrayList<>();
         String stopReason = "end_turn";
         LlmResponse.Usage capturedUsage = null;
@@ -384,6 +472,9 @@ public class OpenAiProvider implements LlmProvider {
 
                     LlmResponse fullResponse = new LlmResponse();
                     fullResponse.setContent(fullText.toString());
+                    if (!fullReasoning.isEmpty()) {
+                        fullResponse.setReasoningContent(fullReasoning.toString());
+                    }
                     fullResponse.setToolUseBlocks(toolUseBlocks);
                     fullResponse.setStopReason(stopReason);
                     fullResponse.setUsage(capturedUsage);
@@ -430,11 +521,11 @@ public class OpenAiProvider implements LlmProvider {
                     handler.onText(text);
                 }
                 // reasoning_content delta (Qwen 3.5+ / DeepSeek thinking mode)
-                // Stream thinking text to frontend so user sees activity, but don't
-                // append to fullText (thinking is not part of the final response)
+                // Stream to frontend and accumulate for round-trip back to the API.
                 if (delta.has("reasoning_content") && !delta.path("reasoning_content").isNull()) {
                     String reasoning = delta.path("reasoning_content").asText();
                     if (reasoning != null && !reasoning.isEmpty()) {
+                        fullReasoning.append(reasoning);
                         handler.onText(reasoning);
                     }
                 }
@@ -491,6 +582,9 @@ public class OpenAiProvider implements LlmProvider {
 
         LlmResponse fullResponse = new LlmResponse();
         fullResponse.setContent(fullText.toString());
+        if (!fullReasoning.isEmpty()) {
+            fullResponse.setReasoningContent(fullReasoning.toString());
+        }
         fullResponse.setToolUseBlocks(toolUseBlocks);
         fullResponse.setStopReason(stopReason);
         fullResponse.setUsage(capturedUsage);
@@ -523,8 +617,18 @@ public class OpenAiProvider implements LlmProvider {
             try {
                 input = objectMapper.readValue(argsJson.isEmpty() ? "{}" : argsJson, Map.class);
             } catch (JsonProcessingException e) {
-                log.warn("Failed to parse streamed tool arguments: {}", argsJson, e);
+                log.warn("Failed to parse streamed tool arguments (truncated / malformed): toolUseId={}, rawLen={}",
+                        id, argsJson.length(), e);
                 input = Map.of();
+                // BUG-D: surface the truncation event via handler.onWarning so the engine
+                // can attach it to the LLM_CALL trace span. Without this the Map.of()
+                // fallback is silent and downstream sees a valid-but-empty tool_use.
+                handler.onWarning("warning.tool_input_truncated", Boolean.TRUE);
+                handler.onWarning("warning.tool_use_id", id != null ? id : "");
+                handler.onWarning("warning.tool_name", name != null ? name : "");
+                String preview = argsJson.length() > 200
+                        ? argsJson.substring(0, 200) + "..." : argsJson;
+                handler.onWarning("warning.raw_args_preview", preview);
             }
 
             ToolUseBlock block = new ToolUseBlock(id, name, input);

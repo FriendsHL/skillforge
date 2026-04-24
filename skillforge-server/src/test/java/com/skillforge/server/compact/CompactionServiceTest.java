@@ -542,4 +542,29 @@ class CompactionServiceTest {
         assertThat(t1Done.get()).isTrue();
         assertThat(t1NonNull.get()).isTrue(); // t1 should have succeeded
     }
+
+    /**
+     * BUG-A prerequisite: Phase 2 LLM failure must be rethrown so the engine's catch
+     * counts it toward the breaker. Returning null previously made it look like a
+     * neutral no-op under the BUG-A fix, hiding real failures from the breaker.
+     */
+    @Test
+    void fullCompact_phase2LlmException_rethrows_soEngineCanCountBreaker() {
+        seedSession("sBreaker", 30, 0, "idle");
+        seedMessages("sBreaker");
+
+        LlmProvider boomProvider = new LlmProvider() {
+            @Override public String getName() { return "boom"; }
+            @Override public LlmResponse chat(LlmRequest request) {
+                throw new RuntimeException("simulated LLM backend failure");
+            }
+            @Override public void chatStream(LlmRequest request, LlmStreamHandler handler) { }
+        };
+        when(llmProviderFactory.getProvider("mock")).thenReturn(boomProvider);
+
+        // BUG-A contract: rethrown as RuntimeException with sessionId in the message.
+        assertThatThrownBy(() -> service.compact("sBreaker", "full", "engine-hard", "test"))
+                .isInstanceOf(RuntimeException.class)
+                .hasMessageContaining("sBreaker");
+    }
 }

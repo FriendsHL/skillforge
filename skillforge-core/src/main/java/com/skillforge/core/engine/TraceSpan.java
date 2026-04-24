@@ -1,5 +1,7 @@
 package com.skillforge.core.engine;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -33,6 +35,11 @@ public class TraceSpan {
     private boolean success;
     private String error;
     private String toolUseId;
+    /**
+     * Optional free-form attributes (BUG-D observability). Lazy-initialized; iteration order is
+     * insertion order (LinkedHashMap) so the JSON serialization stays deterministic.
+     */
+    private Map<String, Object> attributes;
 
     public TraceSpan() {
         this.id = UUID.randomUUID().toString();
@@ -105,4 +112,18 @@ public class TraceSpan {
 
     public String getToolUseId() { return toolUseId; }
     public void setToolUseId(String toolUseId) { this.toolUseId = toolUseId; }
+
+    public Map<String, Object> getAttributes() { return attributes; }
+    public void setAttributes(Map<String, Object> attributes) { this.attributes = attributes; }
+
+    /** Insert or overwrite a single attribute. Lazy-initializes the underlying map. */
+    public void putAttribute(String key, Object value) {
+        if (key == null) {
+            return;
+        }
+        if (attributes == null) {
+            attributes = new LinkedHashMap<>();
+        }
+        attributes.put(key, value);
+    }
 }

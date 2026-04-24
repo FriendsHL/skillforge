@@ -55,6 +55,12 @@ public class LoopContext {
     /** Consecutive compact failures for circuit breaker. */
     private int consecutiveCompactFailures = 0;
 
+    /**
+     * Epoch-millis when the compact breaker opened (failures >= threshold). 0 = closed.
+     * See AgentLoopEngine#BREAKER_HALF_OPEN_WINDOW_MS for the half-open retry window.
+     */
+    private volatile long compactBreakerOpenedAt = 0L;
+
     /** For eval mode: override ClaudeProvider's default 300s stream timeout. -1 = use default. */
     private long maxLlmStreamTimeoutMs = -1;
 
@@ -347,10 +353,20 @@ public class LoopContext {
 
     public void resetCompactFailures() {
         this.consecutiveCompactFailures = 0;
+        this.compactBreakerOpenedAt = 0L;
     }
 
     public int getConsecutiveCompactFailures() {
         return consecutiveCompactFailures;
+    }
+
+    public long getCompactBreakerOpenedAt() {
+        return compactBreakerOpenedAt;
+    }
+
+    /** Record/refresh the breaker-open timestamp. Called after each failure that crosses the threshold. */
+    public void refreshCompactBreakerOpenedAt() {
+        this.compactBreakerOpenedAt = System.currentTimeMillis();
     }
 
     public long getMaxLlmStreamTimeoutMs() {
