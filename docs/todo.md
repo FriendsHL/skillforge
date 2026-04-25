@@ -23,7 +23,7 @@
 | **Sprint 4** | P12 定时任务（收窄首版） | 3-4 周 | user 型调度最小集；SystemJobRegistry + P12-6 → V2 |
 | **Sprint 5** | P9-4 · P9-5（需 design doc 先行） | 按需 | P9-5 依赖 P9-4；P9-5 需先明确"最近文件"数据来源 |
 | **Sprint 6** | P10 斜杠命令（收窄 4 条） | 5-8 天 | 从 Sprint 1 降级；/compact 只做 full；/model 只改 session 级 |
-| **🔥 穿插** | Compact Breaker 误触 + LLM Stream 抗抖（BUG-A/B/C/D/E/E-bis） | Full Pipeline | 2026-04-23 三个 session 连续中断触发；breaker 被 no-op 错误打开 + stream/non-stream readTimeout 共享 + ConnectException 无 retry；已先改 yml 止血（240s） |
+| ~~**🔥 穿插**~~ | ~~Compact Breaker 误触 + LLM Stream 抗抖（BUG-A/B/C/D/E/E-bis）~~ | ~~Full Pipeline~~ | ✅ 2026-04-24 完成（commit `121e8dc`）；Full Pipeline 运行 + 额外捕获 `FullCompactStrategy.callLlm` 吞异常的更深 root cause |
 | **🔒 穿插** | SEC-1 Channel 配置 AES-GCM 加密 | 1-2 天 | 代码扫描发现明文存储安全问题，P12 前修复 |
 | **🔒 穿插** | SEC-2 系统 Hook 存储分离与保护 | Full Pipeline | 当前无系统 hook 概念且无校验，curl / JSON 模式可删任意 hook；方案 A 存储分离 vs B source 标记 |
 | **🧹 穿插** | DEBT-1 SkillList.tsx 拆分（47K 单文件） | 3-5 天 | 低优先级，下次动 SkillList 前先拆 |
@@ -198,7 +198,26 @@
 
 ---
 
-### 🔥 引擎稳定性 — Compact Breaker 误触 + LLM Stream 抗抖（触碰核心文件，Full Pipeline，单 PR）
+### 🧹 LLM Provider 观测性 / DX（穿插，~1 天，独立 PR）
+
+> 由 2026-04-24 reasoning_content 修复过程中的两点用户反馈触发，非 blocker：
+
+- **缺 api-key 应 fail-fast + 友好错误**：当前 `OpenAiProvider` / `ClaudeProvider` 构造器拿到空字符串 apiKey 仍继续跑，加 `Authorization: Bearer ` 头打出去，上游 HTTP 401 回来才暴露（"auth header format should be Bearer sk-..."），排查陡峭。改：构造器 / `chat` / `chatStream` 入口校验 apiKey 非空非空白，空就抛 `IllegalStateException("Provider '<name>' missing api-key — set ${ENV_VAR} and restart.")`，异常带 provider 名 + 需要的 env var 名。
+- **"OpenAI API error" 误导**：`OpenAiProvider` 一个类服务于 OpenAI / DeepSeek / DashScope / vLLM / Ollama 等所有 OpenAI 兼容后端，但错误字符串硬编码为 `"OpenAI API error: HTTP ..."`（`OpenAiProvider.java:123, 202`），用 DeepSeek 被上游拒时日志/UI/stack 仍显示 "OpenAI"。改：构造器多收一个 `providerDisplayName`（"deepseek" / "dashscope" / "bailian" / "openai" / "vllm" / "ollama"），`getName()` 返回它，错误字符串改用它；`LlmProviderFactory:55` 构造时透传 `config.getProviderName()`。架构上更彻底的做法是抽 `DeepSeekProvider extends OpenAiProvider` 或独立 `ThinkingMessageAdapter` 把 `reasoning_content` 逻辑从 `OpenAiProvider` 剥出去，让非 thinking provider 不背这段代码。此项可选。
+
+---
+
+### ~~🔥 引擎稳定性 — Compact Breaker 误触 + LLM Stream 抗抖~~ ✅ 已完成（2026-04-24，commit `121e8dc`）
+
+> 详见底部「已完成」表格 2026-04-24 行。
+>
+> **Follow-up（非 block，独立 PR，见 `/tmp/nits-followup-engine-stability-v1.md`）**：
+> ① E-bis MockWebServer retry 单测补齐（`connectException_succeedsOnSecondAttempt` / `postHandshakeException_doesNotRetry` 等 7 个场景）；
+> ② BUG-D `onWarning → TraceSpan.attributes` 端到端测试；
+> ③ Dashboard Traces 页显示 TraceSpan `attributes` 面板让 truncation warning 可视。
+
+<details>
+<summary>历史子任务描述（原 plan 触发背景，仅作复盘参考）</summary>
 
 > **触发事件**：2026-04-23 下午连续 3 个 session 中断——
 > - `cec1cd60`：breaker 错误 open（no-op/idempotency 3 次被当 failure）→ session 全程无法 compact；同时 `Read timed out`（loop 12，qwen thinking idle > 60s）+ `ConnectException /127.0.0.1:1082`（VPN 抖动 ~30s）
@@ -217,6 +236,8 @@
 | **BUG-D** OpenAiProvider SSE 截断 observability（info） | `OpenAiProvider.java:525-528` 已有 try/catch + `input=Map.of()` 兜底（所以不崩），但前端/trace 完全不知道 "tool_call input 是残缺的"。加：解析失败时通过 handler 发一个可识别 error 类型（或结构化 warning 事件），让 trace / 前端能看到截断信号 |
 | **BUG-E** Stream 与 non-stream 共用 HttpClient（blocker） | `OpenAiProvider.java:44-58` / `ClaudeProvider.java:46-58` 构造时一个 `OkHttpClient` 被 non-stream `chat()` 和 stream `chatStream()` 共享，readTimeout 对两者意义完全不同（non-stream=总耗时；stream=相邻 chunk idle）。修：构造两个 client，stream 用更长/无限 idle timeout（参考 `FeishuWsConnector:208` 的 `readTimeout(Duration.ZERO)` 用法）；修正 `application.yml:74` 注释 "non-stream chat only"（事实上 stream 也用）；修正 `application.yml:75-76` `max-retries` 注释（stream 不 apply 是现状，但 ConnectException 类可以 retry，见 BUG-E-bis）|
 | **BUG-E-bis** ChatStream 对 ConnectException 短重试（blocker，从 3c0d05d9 直接触发） | 项目 footgun #3 "chatStream 不重试" 是针对**已推 delta** 的 SocketTimeoutException，但对 `ConnectException` / `SSLHandshakeException` / 握手前失败**不适用**——连接没建立，delta 根本没推，retry 安全。修：`OpenAiProvider.chatStream` / `ClaudeProvider.chatStream` 区分异常位置，握手前 retry 1-2 次（间隔 2-5s），握手后不 retry。VPN 抖动（1082 typical 30s 内自愈）期间就不会 fail 整个 agent loop |
+
+</details>
 
 ---
 
@@ -295,6 +316,8 @@
 
 | 任务                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | 完成日期                                                                                                                                                                                                                                                                                                                    |            |
 | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| fix(session-store) 持久化 `Message.reasoning_content`：OpenAI 兼容 provider（DashScope/Qwen/DeepSeek）thinking 模式下，assistant 带 tool_use 时下一轮必须原样回传 `reasoning_content`，否则 API 返回 HTTP 400；in-memory 链路已 OK（`OpenAiProvider` SSE 累积 → `LlmResponse` → `AgentLoopEngine.buildAssistantMessage`），但持久化 / 重载丢失。**V22 migration** 加 `t_session_message.reasoning_content TEXT NULL` 列；`SessionMessageEntity` 加 `reasoningContent` 字段（`@Column(name="reasoning_content", columnDefinition="TEXT")` + getter/setter）；`SessionService.appendRowsOnce` + `toStoredMessages` 两处单行补全读/写（所有 write / rewrite / compaction 收敛到 `appendRowsOnce`，改一处覆盖全部）；新增 `SessionServiceReasoningContentIT`（4 个 case：NORMAL with / NORMAL without / mixed batch / SUMMARY-via-appendRowsOnce round-trip）。Full Pipeline 跑通（Planner + Plan-Reviewer PASS，0 blocker / 5 warning / 3 nit → W1/W2 折进 Dev；Backend Reviewer PASS，0 blocker / 2 warning / 3 nit）。Phase 4 verify：`mvn -pl skillforge-server compile` 通过；310/310 non-IT 测试绿；Docker daemon 不可用跳过 IT（既有环境问题，`SessionRepositoryIT` 同症）；重启 server（zonky embedded PG 14.10）Flyway 成功应用 V22 + Hibernate `ddl-auto: validate` 通过 | 2026-04-24 | |
+| 🔥 引擎稳定性（Compact Breaker 误触 + LLM Stream 抗抖，commit `121e8dc`）：**BUG-A** performed=false 不再累加 breaker（cec1cd60 根因），+ 额外修复 `FullCompactStrategy.callLlm` 吞异常 root cause（plan 漏的，Phase 3 reviewer 发现）；**BUG-B** 60s time-based half-open + user turn 入口无条件 `resetCompactFailures()`（LoopContext `compactBreakerOpenedAt` 字段 + `AgentLoopEngine.recordCompactFailure` helper）；**BUG-C** 5 处 compact-path catch 从 `log.warn(e.getMessage())` 升到 `log.error(msg, e)` 带 stacktrace（engine 3 处 + max_tokens compact + CompactionService broadcastUpdated）；**BUG-D** `LlmStreamHandler.onWarning(key,value)` default method + `TraceSpan.attributes` Map + OpenAiProvider SSE tool_use parse fail 发 4 个 warning key → engine 聚合写 LLM_CALL span attributes + 带 sessionId 的 log.warn；**BUG-E** OpenAiProvider/ClaudeProvider 构造器拆分 `httpClient`（non-stream）/ `streamHttpClient`（stream）两个 OkHttpClient；**BUG-E-bis** `chatStream` 握手前 ConnectException/SSLHandshakeException 短重试（2 次 / 2s→5s 退避 / ±20% jitter / `Call.execute()` 返回后一律不 retry 防 delta 重复）；application.yml 注释修正。Full Pipeline 运行（planner/reviewer agent 响应延迟 1h+ 导致主会话接手实施 + self-judge；但 reviewer round 1 仍发现 plan 和主会话都漏的 `callLlm` 吞异常深层 bug）。新增测试 12 个（AgentLoopEngineBreakerTest 9 + ProviderHttpClientSplitTest 2 + CompactionServiceTest rethrow 1）；mvn test -Dtest='!*IT' 364 / 0 failures | 2026-04-24 | |
 | P8 记忆 LLM 提取（P8-1~P8-4 全部完成）：新增 `LlmMemoryExtractor` 组件，LLM 分析 session 对话历史输出结构化记忆条目（type/title/content/importance）；`ExtractedMemoryEntry` record 解析 LLM JSON 输出（含 markdown fence 剥离 + 类型/重要性校验）；`MemoryProperties` 配置类（`extraction-mode: rule\|llm`、`extraction-provider`、`max-conversation-chars`）；`SessionDigestExtractor` 按模式分流 + LLM 失败自动降级到规则式提取；prompt 模板含 5 类记忆分类（knowledge/preference/feedback/project/reference）+ 3 级重要性 + 已有记忆标题去重上下文；importance 编码在 tags（`auto-extract,llm,importance:high`）免 migration；19 个单元测试全绿（JDK proxy + 手动 stub 绕过 Java 25 Mockito 限制） | 2026-04-21 | |
 | Session 批量删除：`DELETE /api/chat/sessions/{id}`（单删）+ `DELETE /api/chat/sessions` body `{ids}`（批删，上限 100）；悲观锁（SELECT FOR UPDATE）防 TOCTOU、WS 广播移到 AFTER_COMMIT 防幽灵通知、删前 null 子 session parentSessionId 防悬空引用、findAllById 消除 N+1；前端 SessionList 新增复选框列 + 批量操作栏（slide-in 动画）+ 行 hover 删除按钮；skipped running 会话保持选中状态；Full Pipeline（2 dev + 2 reviewer + judge） | 2026-04-21 | |
 | Session 来源渠道可视化：`SessionEntity` 加 `@Transient channelPlatform` + `ChannelConversationRepository.findBySessionIdIn` 批量注入（active 行优先，default "web"）；前端新增 `ChannelBadge` 组件（chip/dot 两态），Chat crumb 展示渠道徽章（depth 0 自动隐藏）、ChatSidebar 非 web 行加色点、SessionList 新增 Channel 列 + 侧栏过滤器 | 2026-04-21 | |
