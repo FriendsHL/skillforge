@@ -75,6 +75,20 @@ public class AgentEntity {
     @Column(length = 16)
     private String executionMode = "ask";
 
+    /**
+     * Agent-level thinking-mode override ({@code auto}/{@code enabled}/{@code disabled};
+     * null == auto). See {@link com.skillforge.core.model.ThinkingMode}. V23 migration.
+     */
+    @Column(name = "thinking_mode", length = 16)
+    private String thinkingMode;
+
+    /**
+     * Reasoning-effort hint for reasoning-capable families ({@code low}/{@code medium}/
+     * {@code high}/{@code max}; null == provider default). V23 migration.
+     */
+    @Column(name = "reasoning_effort", length = 16)
+    private String reasoningEffort;
+
     @Column(length = 36)
     private String activePromptVersionId;
 
@@ -235,6 +249,22 @@ public class AgentEntity {
 
     public void setExecutionMode(String executionMode) {
         this.executionMode = executionMode;
+    }
+
+    public String getThinkingMode() {
+        return thinkingMode;
+    }
+
+    public void setThinkingMode(String thinkingMode) {
+        this.thinkingMode = thinkingMode;
+    }
+
+    public String getReasoningEffort() {
+        return reasoningEffort;
+    }
+
+    public void setReasoningEffort(String reasoningEffort) {
+        this.reasoningEffort = reasoningEffort;
     }
 
     public LocalDateTime getCreatedAt() {

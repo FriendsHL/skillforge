@@ -1,6 +1,8 @@
 package com.skillforge.core.llm;
 
 import com.skillforge.core.model.Message;
+import com.skillforge.core.model.ReasoningEffort;
+import com.skillforge.core.model.ThinkingMode;
 import com.skillforge.core.model.ToolSchema;
 
 import java.util.ArrayList;
@@ -17,6 +19,10 @@ public class LlmRequest {
     private String model;
     private int maxTokens = 4096;
     private double temperature = 0.7;
+    /** Agent-level thinking-mode override. Null or AUTO = provider default. */
+    private ThinkingMode thinkingMode;
+    /** Reasoning-effort hint for reasoning-capable families. Null = provider default. */
+    private ReasoningEffort reasoningEffort;
 
     public LlmRequest() {
     }
@@ -67,5 +73,21 @@ public class LlmRequest {
 
     public void setTemperature(double temperature) {
         this.temperature = temperature;
+    }
+
+    public ThinkingMode getThinkingMode() {
+        return thinkingMode;
+    }
+
+    public void setThinkingMode(ThinkingMode thinkingMode) {
+        this.thinkingMode = thinkingMode;
+    }
+
+    public ReasoningEffort getReasoningEffort() {
+        return reasoningEffort;
+    }
+
+    public void setReasoningEffort(ReasoningEffort reasoningEffort) {
+        this.reasoningEffort = reasoningEffort;
     }
 }

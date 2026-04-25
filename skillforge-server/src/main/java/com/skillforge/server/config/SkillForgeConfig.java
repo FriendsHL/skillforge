@@ -297,11 +297,19 @@ public class SkillForgeConfig {
             if (providerConfig.getContextWindowTokens() != null) {
                 modelConfig.setContextWindowTokens(providerConfig.getContextWindowTokens());
             }
-            factory.getProvider(modelConfig);
-            log.info("Registered LLM provider: name={}, type={}, baseUrl={}, readTimeoutSec={}, maxRetries={}, contextWindowTokens={}",
-                    name, providerConfig.getType(), providerConfig.getBaseUrl(),
-                    modelConfig.getReadTimeoutSeconds(), modelConfig.getMaxRetries(),
-                    modelConfig.getContextWindowTokens());
+            try {
+                factory.getProvider(modelConfig);
+                log.info("Registered LLM provider: name={}, type={}, baseUrl={}, readTimeoutSec={}, maxRetries={}, contextWindowTokens={}",
+                        name, providerConfig.getType(), providerConfig.getBaseUrl(),
+                        modelConfig.getReadTimeoutSeconds(), modelConfig.getMaxRetries(),
+                        modelConfig.getContextWindowTokens());
+            } catch (IllegalStateException e) {
+                // API key missing for this provider — skip registration so the app still starts.
+                // Agents that pick this provider's models will fall back to the default provider
+                // (see AgentLoopEngine.resolveProvider). Configure the corresponding env var
+                // to enable this provider.
+                log.warn("Skipped LLM provider '{}': {}", name, e.getMessage());
+            }
         }
 
         return factory;

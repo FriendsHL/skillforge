@@ -485,6 +485,8 @@ public class AgentLoopEngine {
             request.setModel(actualModelId);
             request.setMaxTokens(agentDef.getMaxTokens());
             request.setTemperature(agentDef.getTemperature());
+            request.setThinkingMode(agentDef.getThinkingMode());
+            request.setReasoningEffort(agentDef.getReasoningEffort());
 
             // Preemptive compaction: last-resort check before LLM call
             if (compactorCallback != null && isCompactBreakerAllowing(loopCtx)) {

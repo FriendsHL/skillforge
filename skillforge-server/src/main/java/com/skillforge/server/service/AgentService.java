@@ -11,6 +11,8 @@ import com.skillforge.core.engine.hook.HookEvent;
 import com.skillforge.core.engine.hook.HookHandler;
 import com.skillforge.core.engine.hook.LifecycleHooksConfig;
 import com.skillforge.core.model.AgentDefinition;
+import com.skillforge.core.model.ReasoningEffort;
+import com.skillforge.core.model.ThinkingMode;
 import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.exception.AgentNotFoundException;
 import com.skillforge.server.repository.AgentRepository;
@@ -84,6 +86,8 @@ public class AgentService {
         if (updated.getStatus() != null) existing.setStatus(updated.getStatus());
         if (updated.getMaxLoops() != null) existing.setMaxLoops(updated.getMaxLoops());
         if (updated.getExecutionMode() != null) existing.setExecutionMode(updated.getExecutionMode());
+        if (updated.getThinkingMode() != null) existing.setThinkingMode(updated.getThinkingMode());
+        if (updated.getReasoningEffort() != null) existing.setReasoningEffort(updated.getReasoningEffort());
         // NOTE: isPublic is a primitive boolean on AgentEntity; cannot distinguish "unset"
         // from "false" without changing the entity field type. Keep current behavior for
         // this field — PUT always writes it. Changing this is deferred to a separate PR
@@ -118,6 +122,8 @@ public class AgentService {
         if (a.getStatus() != null) fields.add("status");
         if (a.getMaxLoops() != null) fields.add("maxLoops");
         if (a.getExecutionMode() != null) fields.add("executionMode");
+        if (a.getThinkingMode() != null) fields.add("thinkingMode");
+        if (a.getReasoningEffort() != null) fields.add("reasoningEffort");
         // isPublic is primitive; always written (see updateAgent note)
         fields.add("isPublic");
         return fields;
@@ -256,6 +262,20 @@ public class AgentService {
         // Pass agent-level maxLoops into config map
         if (entity.getMaxLoops() != null) {
             def.getConfig().put("max_loops", entity.getMaxLoops());
+        }
+
+        // Per-agent thinking-mode / reasoning-effort overrides (null = provider default).
+        if (entity.getThinkingMode() != null) {
+            ThinkingMode tm = ThinkingMode.fromString(entity.getThinkingMode());
+            if (tm != null) {
+                def.setThinkingMode(tm);
+            }
+        }
+        if (entity.getReasoningEffort() != null) {
+            ReasoningEffort re = ReasoningEffort.fromString(entity.getReasoningEffort());
+            if (re != null) {
+                def.setReasoningEffort(re);
+            }
         }
 
         // Parse behaviorRules JSON -> BehaviorRulesConfig, then resolve prompt texts

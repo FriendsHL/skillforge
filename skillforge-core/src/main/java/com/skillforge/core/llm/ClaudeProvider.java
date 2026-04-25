@@ -57,7 +57,12 @@ public class ClaudeProvider implements LlmProvider {
 
     public ClaudeProvider(String apiKey, String baseUrl, String defaultModel,
                           int readTimeoutSeconds, int maxRetries) {
-        this.apiKey = Objects.requireNonNull(apiKey, "apiKey must not be null");
+        if (apiKey == null || apiKey.isBlank()) {
+            throw new IllegalStateException(
+                    "LLM provider 'claude' is missing its API key — "
+                            + "set the ANTHROPIC_API_KEY environment variable and restart.");
+        }
+        this.apiKey = apiKey;
         this.baseUrl = baseUrl != null ? baseUrl : "https://api.anthropic.com";
         this.defaultModel = defaultModel != null ? defaultModel : "claude-sonnet-4-20250514";
         this.maxRetries = Math.max(0, maxRetries);

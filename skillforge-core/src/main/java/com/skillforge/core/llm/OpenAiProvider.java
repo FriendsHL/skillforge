@@ -8,6 +8,8 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.skillforge.core.model.ContentBlock;
 import com.skillforge.core.model.Message;
+import com.skillforge.core.model.ReasoningEffort;
+import com.skillforge.core.model.ThinkingMode;
 import com.skillforge.core.model.ToolSchema;
 import com.skillforge.core.model.ToolUseBlock;
 import okhttp3.*;
@@ -41,6 +43,8 @@ public class OpenAiProvider implements LlmProvider {
     private final String apiKey;
     private final String baseUrl;
     private final String defaultModel;
+    /** User-visible provider name ("bailian", "deepseek", …) for logs and error strings. */
+    private final String providerDisplayName;
     private final int maxRetries;
     /** Non-stream path (chat): readTimeout bounds total response time. */
     private final OkHttpClient httpClient;
@@ -53,17 +57,52 @@ public class OpenAiProvider implements LlmProvider {
     private final OkHttpClient streamHttpClient;
     private final ObjectMapper objectMapper;
 
+    /** Legacy 3-arg ctor — kept as a deprecated shim; prefer the 7-arg ctor below. */
+    @Deprecated
     public OpenAiProvider(String apiKey, String baseUrl, String defaultModel) {
-        this(apiKey, baseUrl, defaultModel,
+        this(apiKey, baseUrl, defaultModel, "openai", null,
                 ModelConfig.DEFAULT_READ_TIMEOUT_SECONDS,
                 ModelConfig.DEFAULT_MAX_RETRIES);
     }
 
+    /** Legacy 5-arg ctor — kept as a deprecated shim; prefer the 7-arg ctor below. */
+    @Deprecated
     public OpenAiProvider(String apiKey, String baseUrl, String defaultModel,
                           int readTimeoutSeconds, int maxRetries) {
-        this.apiKey = Objects.requireNonNull(apiKey, "apiKey must not be null");
+        this(apiKey, baseUrl, defaultModel, "openai", null, readTimeoutSeconds, maxRetries);
+    }
+
+    /**
+     * Canonical constructor.
+     *
+     * @param apiKey              upstream API key; blank / null fails fast with a diagnostic
+     * @param baseUrl             provider base URL (e.g. https://api.deepseek.com)
+     * @param defaultModel        fallback model when {@link LlmRequest#getModel()} is null
+     * @param providerDisplayName user-visible provider name used in logs / error messages
+     *                            ("bailian", "deepseek", "openai", …)
+     * @param envVarName          hint for the env var that carries the key (for error messages);
+     *                            may be null, then a generic hint is emitted
+     * @param readTimeoutSeconds  OkHttp read timeout
+     * @param maxRetries          non-stream SocketTimeout retries
+     */
+    public OpenAiProvider(String apiKey, String baseUrl, String defaultModel,
+                          String providerDisplayName, String envVarName,
+                          int readTimeoutSeconds, int maxRetries) {
+        if (providerDisplayName == null || providerDisplayName.isBlank()) {
+            throw new IllegalStateException("providerDisplayName must not be blank");
+        }
+        if (apiKey == null || apiKey.isBlank()) {
+            String envHint = (envVarName != null && !envVarName.isBlank())
+                    ? "the " + envVarName
+                    : "the provider-specific API key";
+            throw new IllegalStateException(
+                    "LLM provider '" + providerDisplayName + "' is missing its API key — "
+                            + "set " + envHint + " environment variable and restart.");
+        }
+        this.apiKey = apiKey;
         this.baseUrl = baseUrl != null ? baseUrl : "https://api.openai.com";
         this.defaultModel = defaultModel != null ? defaultModel : "gpt-4o";
+        this.providerDisplayName = providerDisplayName;
         this.maxRetries = Math.max(0, maxRetries);
         this.objectMapper = new ObjectMapper().findAndRegisterModules().disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
         this.httpClient = new OkHttpClient.Builder()
@@ -80,7 +119,7 @@ public class OpenAiProvider implements LlmProvider {
 
     @Override
     public String getName() {
-        return "openai";
+        return providerDisplayName;
     }
 
     @Override
@@ -95,12 +134,12 @@ public class OpenAiProvider implements LlmProvider {
             } catch (SocketTimeoutException ste) {
                 if (attempt >= maxRetries) {
                     throw new RuntimeException(
-                            "OpenAI API read timeout after " + (attempt + 1) + " attempt(s)", ste);
+                            providerDisplayName + " API read timeout after " + (attempt + 1) + " attempt(s)", ste);
                 }
                 attempt++;
-                log.warn("OpenAI read timeout, retrying {}/{}", attempt, maxRetries);
+                log.warn("{} read timeout, retrying {}/{}", providerDisplayName, attempt, maxRetries);
             } catch (IOException e) {
-                throw new RuntimeException("Failed to call OpenAI API", e);
+                throw new RuntimeException("Failed to call " + providerDisplayName + " API", e);
             }
         }
     }
@@ -108,7 +147,7 @@ public class OpenAiProvider implements LlmProvider {
     private LlmResponse doChat(LlmRequest request) throws IOException {
         String model = request.getModel() != null ? request.getModel() : defaultModel;
         String requestBody = buildRequestBody(request, model, false);
-        log.debug("OpenAI chat request: model={}, messages={}", model, request.getMessages().size());
+        log.debug("{} chat request: model={}, messages={}", providerDisplayName, model, request.getMessages().size());
 
         Request httpRequest = new Request.Builder()
                 .url(baseUrl + "/v1/chat/completions")
@@ -120,7 +159,7 @@ public class OpenAiProvider implements LlmProvider {
         try (Response response = httpClient.newCall(httpRequest).execute()) {
             if (!response.isSuccessful()) {
                 String errorBody = response.body() != null ? response.body().string() : "no body";
-                throw new RuntimeException("OpenAI API error: HTTP " + response.code() + " - " + errorBody);
+                throw new RuntimeException(providerDisplayName + " API error: HTTP " + response.code() + " - " + errorBody);
             }
             String responseBody = response.body().string();
             return parseResponse(responseBody);
@@ -137,7 +176,7 @@ public class OpenAiProvider implements LlmProvider {
             handler.onError(e);
             return;
         }
-        log.debug("OpenAI stream request: model={}", model);
+        log.debug("{} stream request: model={}", providerDisplayName, model);
 
         // BUG-E / BUG-E-bis: handshake-phase retry loop.
         // Only Call.execute() synchronous failures on ConnectException /
@@ -172,7 +211,8 @@ public class OpenAiProvider implements LlmProvider {
                 long base = STREAM_HANDSHAKE_BACKOFF_MS[handshakeAttempt];
                 double jitterFactor = 1.0 + (ThreadLocalRandom.current().nextDouble() * 0.4 - 0.2);
                 long sleepMs = Math.max(100L, (long) (base * jitterFactor));
-                log.warn("OpenAI chatStream pre-handshake {} (attempt {}/{}), retrying in {}ms: {}",
+                log.warn("{} chatStream pre-handshake {} (attempt {}/{}), retrying in {}ms: {}",
+                        providerDisplayName,
                         preHandshake.getClass().getSimpleName(), handshakeAttempt + 1,
                         STREAM_MAX_HANDSHAKE_RETRIES, sleepMs, preHandshake.getMessage());
                 try {
@@ -199,7 +239,7 @@ public class OpenAiProvider implements LlmProvider {
                 if (!r.isSuccessful()) {
                     String errorBody = r.body() != null ? r.body().string() : "no body";
                     handler.onError(new RuntimeException(
-                            "OpenAI API error: HTTP " + r.code() + " - " + errorBody));
+                            providerDisplayName + " API error: HTTP " + r.code() + " - " + errorBody));
                     return;
                 }
                 processSSEStream(r, handler);
@@ -232,6 +272,38 @@ public class OpenAiProvider implements LlmProvider {
             root.set("stream_options", streamOptions);
         }
 
+        // Resolve the protocol family from the request's actual model — a single provider
+        // instance can serve multiple model families (e.g. bailian hosts qwen + glm-5).
+        ProviderProtocolFamily family = ProviderProtocolFamilyResolver.resolve(model);
+
+        // --- Thinking-mode toggle (top-level; extra_body is silently dropped by qwen / deepseek). ---
+        ThinkingMode mode = request.getThinkingMode();
+        if (mode != null && mode != ThinkingMode.AUTO) {
+            if (family.supportsThinkingToggle) {
+                switch (family.thinkingFieldDialect) {
+                    case QWEN_ENABLE_THINKING ->
+                            root.put("enable_thinking", mode == ThinkingMode.ENABLED);
+                    case DEEPSEEK_V4_THINKING -> {
+                        ObjectNode thinking = objectMapper.createObjectNode();
+                        thinking.put("type", mode == ThinkingMode.ENABLED ? "enabled" : "disabled");
+                        root.set("thinking", thinking);
+                    }
+                    case NONE -> { /* unreachable when supportsThinkingToggle=true */ }
+                }
+            } else {
+                // Operators asked for a toggle on a family that ignores it — log once so it's
+                // visible without being noisy (debug).
+                log.debug("thinkingMode={} requested for model '{}' (family {}); ignored (family does not support toggle)",
+                        mode, model, family);
+            }
+        }
+
+        // --- reasoning_effort (top-level OpenAI standard; accepted by deepseek-v4 + o1/o3). ---
+        ReasoningEffort effort = request.getReasoningEffort();
+        if (effort != null && family.supportsReasoningEffort) {
+            root.put("reasoning_effort", effort.wireValue());
+        }
+
         // messages - OpenAI puts system prompt as first message
         ArrayNode messagesNode = root.putArray("messages");
 
@@ -242,7 +314,7 @@ public class OpenAiProvider implements LlmProvider {
             messagesNode.add(systemMsg);
         }
 
-        convertMessages(request.getMessages(), messagesNode);
+        convertMessages(request.getMessages(), messagesNode, family);
 
         // tools
         if (request.getTools() != null && !request.getTools().isEmpty()) {
@@ -264,9 +336,12 @@ public class OpenAiProvider implements LlmProvider {
 
     /**
      * 将 SkillForge 内部 Message 列表转换为 OpenAI messages 格式。
+     * {@code family} drives per-family {@code reasoning_content} replay rules (see
+     * {@link #resolveReplayReasoningContent} and plan §4.3).
      */
     @SuppressWarnings("unchecked")
-    private void convertMessages(List<Message> messages, ArrayNode messagesNode) {
+    private void convertMessages(List<Message> messages, ArrayNode messagesNode,
+                                 ProviderProtocolFamily family) {
         for (Message msg : messages) {
             Object content = msg.getContent();
             Message.Role role = msg.getRole();
@@ -310,9 +385,15 @@ public class OpenAiProvider implements LlmProvider {
                 ObjectNode assistantMsg = objectMapper.createObjectNode();
                 assistantMsg.put("role", "assistant");
 
-                // Must pass reasoning_content back when present (DeepSeek/Qwen thinking mode requirement)
-                if (msg.getReasoningContent() != null && !msg.getReasoningContent().isEmpty()) {
-                    assistantMsg.put("reasoning_content", msg.getReasoningContent());
+                // Must compute tool-call presence BEFORE the reasoning_content emit decision,
+                // because the helper needs hasToolCalls (plan reviewer W3).
+                List<ToolUseBlock> toolUseBlocks = msg.getToolUseBlocks();
+                boolean hasToolCalls = !toolUseBlocks.isEmpty();
+
+                // Emit reasoning_content per family-specific rules (plan D5 / §4.3).
+                String replayReasoning = resolveReplayReasoningContent(msg, role, hasToolCalls, family);
+                if (replayReasoning != null) {
+                    assistantMsg.put("reasoning_content", replayReasoning);
                 }
 
                 String textContent = msg.getTextContent();
@@ -320,8 +401,7 @@ public class OpenAiProvider implements LlmProvider {
                     assistantMsg.put("content", textContent);
                 }
 
-                List<ToolUseBlock> toolUseBlocks = msg.getToolUseBlocks();
-                if (!toolUseBlocks.isEmpty()) {
+                if (hasToolCalls) {
                     ArrayNode toolCallsNode = assistantMsg.putArray("tool_calls");
                     for (ToolUseBlock toolUse : toolUseBlocks) {
                         ObjectNode callNode = objectMapper.createObjectNode();
@@ -346,16 +426,70 @@ public class OpenAiProvider implements LlmProvider {
                 ObjectNode simpleMsg = objectMapper.createObjectNode();
                 String roleStr = role == Message.Role.ASSISTANT ? "assistant" : "user";
                 simpleMsg.put("role", roleStr);
-                // Must pass reasoning_content back when present (DeepSeek/Qwen thinking mode requirement)
-                if (role == Message.Role.ASSISTANT
-                        && msg.getReasoningContent() != null
-                        && !msg.getReasoningContent().isEmpty()) {
-                    simpleMsg.put("reasoning_content", msg.getReasoningContent());
+                // Simple-text branch has no tool_calls (hasToolCalls=false). Helper already
+                // role-gates emission (only ASSISTANT).
+                String replayReasoning = resolveReplayReasoningContent(msg, role, false, family);
+                if (replayReasoning != null) {
+                    simpleMsg.put("reasoning_content", replayReasoning);
                 }
                 simpleMsg.put("content", content instanceof String ? (String) content : msg.getTextContent());
                 messagesNode.add(simpleMsg);
             }
         }
+    }
+
+    /**
+     * Decide whether to emit {@code reasoning_content} on an assistant message being
+     * replayed. Returns the exact string to write (possibly {@code ""}), or {@code null}
+     * when the field should be omitted.
+     *
+     * <p>Design goal: preserve V22 shipped behavior (emit stored reasoning_content when
+     * non-empty for any assistant message) on every family EXCEPT
+     * {@link ProviderProtocolFamily#DEEPSEEK_REASONER_LEGACY}, where per DeepSeek docs the
+     * field must be dropped. {@code DEEPSEEK_REASONER_LEGACY} is not present in
+     * {@code FALLBACK_MODEL_OPTIONS}; the drop is doc-based, not live-tested (plan reviewer
+     * W2 acknowledged).</p>
+     *
+     * <p>New rule (plan D5 / Step 0 re-verification): when a tool-call assistant is being
+     * replayed to a family that requires replay ({@code DEEPSEEK_V4} or
+     * {@code QWEN_DASHSCOPE}) and stored {@code reasoning_content} is null/empty, emit
+     * {@code ""} as fallback — deepseek-v4 returns HTTP 400 "must be passed back" otherwise.</p>
+     *
+     * @param msg           the message being serialised
+     * @param role          explicit role to gate emission (only ASSISTANT emits; user messages
+     *                      that happen to carry reasoning_content are never forwarded)
+     * @param hasToolCalls  whether the assistant message contains tool_calls
+     * @param family        protocol family of the target model
+     */
+    private String resolveReplayReasoningContent(Message msg, Message.Role role,
+                                                 boolean hasToolCalls,
+                                                 ProviderProtocolFamily family) {
+        // Role guard (reviewer W4): only ASSISTANT messages may ever emit reasoning_content.
+        if (role != Message.Role.ASSISTANT) {
+            return null;
+        }
+        // (a) Legacy R1-style: reasoning_content must be dropped on replay, always.
+        if (family.dropsReasoningContentOnReplay) {
+            return null;
+        }
+
+        String stored = msg.getReasoningContent();
+        boolean storedPresent = stored != null && !stored.isEmpty();
+
+        if (storedPresent) {
+            // V22 path preserved: emit stored content whenever present.
+            return stored;
+        }
+
+        // (b) Empty/null stored. Only emit "" fallback when the assistant message has
+        //     tool_calls AND the family rejects omission on replay (DEEPSEEK_V4 proven 400;
+        //     QWEN_DASHSCOPE is tolerant but we emit "" for symmetry and future-proofing).
+        if (hasToolCalls && family.requiresReasoningContentReplay) {
+            return "";
+        }
+
+        // Otherwise omit the field (identical to V22 null/empty branch).
+        return null;
     }
 
     // ----- Response parsing -----
@@ -415,7 +549,8 @@ public class OpenAiProvider implements LlmProvider {
             llmResponse.setUsage(usage);
         }
 
-        log.debug("OpenAI response: stopReason={}, toolUseBlocks={}, textLength={}",
+        log.debug("{} response: stopReason={}, toolUseBlocks={}, textLength={}",
+                providerDisplayName,
                 llmResponse.getStopReason(), llmResponse.getToolUseBlocks().size(),
                 llmResponse.getContent().length());
 

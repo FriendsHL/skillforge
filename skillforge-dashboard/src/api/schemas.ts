@@ -20,8 +20,17 @@ export const AgentSchema = z.object({
   // Surface `public` flag so the drawer can preserve it across partial PUTs
   // (AgentEntity#isPublic is primitive boolean — backend always overwrites it).
   public: z.boolean().optional(),
+  // Thinking Mode v1 (see docs/design-thinking-mode.md). Both fields are
+  // optional and nullable so GET from older server builds that don't yet
+  // persist these columns round-trips without schema strip.
+  thinkingMode: z.enum(['auto', 'enabled', 'disabled']).optional().nullable(),
+  reasoningEffort: z.enum(['low', 'medium', 'high', 'max']).optional().nullable(),
 });
 export type AgentDto = z.infer<typeof AgentSchema>;
+
+/** Enumerated types re-exported for consumers (AgentDrawer, tests). */
+export type ThinkingMode = 'auto' | 'enabled' | 'disabled';
+export type ReasoningEffort = 'low' | 'medium' | 'high' | 'max';
 
 // --- Session schema ---
 export const SessionSchema = z.object({

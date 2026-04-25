@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { InputNumber, Select, message } from 'antd';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { updateAgent, getTools, getSkills, extractList, type UpdateAgentRequest, type BehaviorRuleConfig } from '../../api';
-import type { AgentDto } from '../../api/schemas';
+import type { AgentDto, ThinkingMode, ReasoningEffort } from '../../api/schemas';
 import { initials, guessRole } from './AgentCard';
 import BehaviorRulesEditor from '../BehaviorRulesEditor';
 import { useBehaviorRules } from '../../hooks/useBehaviorRules';
@@ -255,7 +255,7 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
     JSON.stringify(skills) !== JSON.stringify(initialSkills) ||
     JSON.stringify(tools) !== JSON.stringify(initialTools);
 
-  // Overview — model + maxLoops edit
+  // Overview — model + maxLoops + thinking edit
   const agentWithExtras = agent as AgentDto & { maxLoops?: number | null };
   const [modelIdDraft, setModelIdDraft] = useState<string>(agent.modelId || '');
   const [maxLoopsDraft, setMaxLoopsDraft] = useState<number | null>(
@@ -263,18 +263,44 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
   );
   const initialMaxLoops =
     typeof agentWithExtras.maxLoops === 'number' ? agentWithExtras.maxLoops : null;
+  // Thinking Mode v1. Server default is 'auto' — treat null/undefined as such
+  // so old agents persisted before V23 migration round-trip cleanly. AgentSchema
+  // narrows these to the enum unions, so no type assertion is needed.
+  const initialThinkingMode: ThinkingMode = agent.thinkingMode ?? 'auto';
+  const initialReasoningEffort: ReasoningEffort | null = agent.reasoningEffort ?? null;
+  const [thinkingModeDraft, setThinkingModeDraft] = useState<ThinkingMode>(initialThinkingMode);
+  const [reasoningEffortDraft, setReasoningEffortDraft] = useState<ReasoningEffort | null>(
+    initialReasoningEffort,
+  );
   useEffect(() => {
     setModelIdDraft(agent.modelId || '');
     setRoleDraft((agent.role || '').toString());
     setMaxLoopsDraft(typeof agentWithExtras.maxLoops === 'number' ? agentWithExtras.maxLoops : null);
+    setThinkingModeDraft(agent.thinkingMode ?? 'auto');
+    setReasoningEffortDraft(agent.reasoningEffort ?? null);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agent.id]);
+
+  // Derive capability flags from the currently selected model. When the model
+  // has no capability entry (fallback table missing it) we treat both flags as
+  // `false` — this keeps the Thinking/Effort controls safely disabled rather
+  // than leaking a non-functional UI affordance.
+  const selectedModelMeta = useMemo(
+    () => modelOptions.find((o) => o.id === modelIdDraft) ?? null,
+    [modelOptions, modelIdDraft],
+  );
+  const supportsThinking = selectedModelMeta?.supportsThinking ?? false;
+  const supportsEffort = selectedModelMeta?.supportsReasoningEffort ?? false;
+
   // Exclude clear-only maxLoops transitions: UpdateAgentRequest.maxLoops is
   // `number | undefined`, so a null draft can't be explicitly sent to clear the
   // server value. Without this guard, Save would fire a false success toast.
   const overviewDirty =
     (agent.modelId || '') !== modelIdDraft ||
     ((agent.role || '') !== roleDraft) ||
-    (maxLoopsDraft !== null && initialMaxLoops !== maxLoopsDraft);
+    (maxLoopsDraft !== null && initialMaxLoops !== maxLoopsDraft) ||
+    initialThinkingMode !== thinkingModeDraft ||
+    initialReasoningEffort !== reasoningEffortDraft;
 
   const { data: skillsCatalog = [] } = useQuery({
     queryKey: ['skills'],
@@ -360,10 +386,10 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
   // is a primitive boolean — `updateAgent` always writes it (can't distinguish "unset"
   // from `false`). Without spreading the current value, every partial save silently
   // flips public agents to private. Remove when AgentEntity.isPublic becomes Boolean.
-  const withPublic = (partial: UpdateAgentRequest): UpdateAgentRequest => {
-    const extended = agent as AgentDto & { public?: boolean };
-    return { ...partial, public: extended.public ?? false } as UpdateAgentRequest;
-  };
+  const withPublic = (partial: UpdateAgentRequest): UpdateAgentRequest => ({
+    ...partial,
+    public: agent.public ?? false,
+  });
 
   const handleSavePrompts = () => {
     updateMutation.mutate({ id: agent.id, payload: withPublic({
@@ -400,9 +426,16 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
     const partial: UpdateAgentRequest = {
       modelId: modelIdDraft || undefined,
       role: roleDraft,
+      thinkingMode: thinkingModeDraft,
     };
     if (maxLoopsDraft !== null && maxLoopsDraft !== undefined) {
       partial.maxLoops = maxLoopsDraft;
+    }
+    // Always send `reasoningEffort` when present (even if the selected model no
+    // longer supports it) — plan §5.3 preserves draft on model switch; server
+    // tolerates the field and simply won't forward it for unsupported families.
+    if (reasoningEffortDraft !== null) {
+      partial.reasoningEffort = reasoningEffortDraft;
     }
     updateMutation.mutate({ id: agent.id, payload: withPublic(partial) });
   };
@@ -518,6 +551,51 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
                     onChange={(v) => setMaxLoopsDraft(typeof v === 'number' ? v : null)}
                     placeholder="default"  /* clearing reverts to default; cannot save explicit null via API */
                     style={{ width: '100%', marginTop: 4 }}
+                  />
+                </div>
+                <div className="overview-card">
+                  <div className="overview-k">Thinking</div>
+                  <Select<ThinkingMode>
+                    size="small"
+                    value={thinkingModeDraft}
+                    options={[
+                      { label: 'Auto (provider default)', value: 'auto' },
+                      { label: 'Enabled',  value: 'enabled',  disabled: !supportsThinking },
+                      { label: 'Disabled', value: 'disabled', disabled: !supportsThinking },
+                    ]}
+                    onChange={(v) => setThinkingModeDraft(v)}
+                    style={{ width: '100%', marginTop: 4 }}
+                    disabled={!supportsThinking}
+                    title={
+                      supportsThinking
+                        ? undefined
+                        : 'Selected model does not expose a thinking toggle; value is retained but inactive.'
+                    }
+                    data-testid="thinking-mode-select"
+                  />
+                </div>
+                <div className="overview-card">
+                  <div className="overview-k">Reasoning effort</div>
+                  <Select<ReasoningEffort | undefined>
+                    size="small"
+                    value={reasoningEffortDraft ?? undefined}
+                    allowClear
+                    options={[
+                      { label: 'low',    value: 'low' },
+                      { label: 'medium', value: 'medium' },
+                      { label: 'high',   value: 'high' },
+                      { label: 'max',    value: 'max' },
+                    ]}
+                    onChange={(v) => setReasoningEffortDraft(v ?? null)}
+                    placeholder="default"
+                    style={{ width: '100%', marginTop: 4 }}
+                    disabled={!supportsEffort}
+                    title={
+                      supportsEffort
+                        ? 'low/medium may be remapped by the provider.'
+                        : 'Selected model does not support reasoning effort; value is retained but inactive.'
+                    }
+                    data-testid="reasoning-effort-select"
                   />
                 </div>
                 <div className="overview-card"><div className="overview-k">Mode</div><div className="overview-v mono">{mode}</div></div>

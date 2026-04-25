@@ -92,6 +92,8 @@ public class AgentYamlMapper {
         if (m.get("soulPrompt") != null) a.setSoulPrompt(m.get("soulPrompt").toString());
         if (m.get("toolsPrompt") != null) a.setToolsPrompt(m.get("toolsPrompt").toString());
         if (m.get("executionMode") != null) a.setExecutionMode(m.get("executionMode").toString());
+        if (m.get("thinkingMode") != null) a.setThinkingMode(m.get("thinkingMode").toString());
+        if (m.get("reasoningEffort") != null) a.setReasoningEffort(m.get("reasoningEffort").toString());
         Object pub = m.get("public");
         if (pub instanceof Boolean) a.setPublic((Boolean) pub);
         else if (pub != null) a.setPublic(Boolean.parseBoolean(pub.toString()));
@@ -166,6 +168,15 @@ public class AgentYamlMapper {
         if (entity.getRole() != null) m.put("role", entity.getRole());
         if (entity.getModelId() != null) m.put("modelId", entity.getModelId());
         if (entity.getExecutionMode() != null) m.put("executionMode", entity.getExecutionMode());
+        // Filter out "auto" per plan D11 — only explicit enabled/disabled appear in YAML
+        // (reviewer W8). Null and "auto" are semantically equivalent and both stay off the wire.
+        String thinkingModeValue = entity.getThinkingMode();
+        if (thinkingModeValue != null && !thinkingModeValue.isBlank() && !"auto".equalsIgnoreCase(thinkingModeValue)) {
+            m.put("thinkingMode", thinkingModeValue);
+        }
+        if (entity.getReasoningEffort() != null && !entity.getReasoningEffort().isBlank()) {
+            m.put("reasoningEffort", entity.getReasoningEffort());
+        }
         m.put("public", entity.isPublic());
         if (entity.getSystemPrompt() != null) m.put("systemPrompt", entity.getSystemPrompt());
         if (entity.getSoulPrompt() != null) m.put("soulPrompt", entity.getSoulPrompt());

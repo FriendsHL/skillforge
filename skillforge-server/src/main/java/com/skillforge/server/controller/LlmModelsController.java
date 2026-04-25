@@ -1,5 +1,7 @@
 package com.skillforge.server.controller;
 
+import com.skillforge.core.llm.ProviderProtocolFamily;
+import com.skillforge.core.llm.ProviderProtocolFamilyResolver;
 import com.skillforge.server.config.LlmProperties;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -8,6 +10,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 
@@ -26,7 +29,15 @@ public class LlmModelsController {
         this.llmProperties = llmProperties;
     }
 
-    public record ModelOption(String id, String label, String provider, String model, boolean isDefault) {}
+    public record ModelOption(
+            String id,
+            String label,
+            String provider,
+            String model,
+            boolean isDefault,
+            boolean supportsThinking,
+            boolean supportsReasoningEffort,
+            String protocolFamily) {}
 
     @GetMapping("/models")
     public ResponseEntity<List<ModelOption>> listModels() {
@@ -53,10 +64,31 @@ public class LlmModelsController {
                                 String id = providerName + ":" + model;
                                 boolean isDefault = providerName.equals(defaultProvider)
                                         && model.equals(provider.getModel());
-                                return new ModelOption(id, id, providerName, model, isDefault);
+                                ProviderProtocolFamily family = resolveFamilyForDisplay(providerName, model);
+                                return new ModelOption(
+                                        id,
+                                        id,
+                                        providerName,
+                                        model,
+                                        isDefault,
+                                        family.supportsThinkingToggle,
+                                        family.supportsReasoningEffort,
+                                        family.name().toLowerCase(Locale.ROOT));
                             });
                 })
                 .toList();
         return ResponseEntity.ok(options);
+    }
+
+    /**
+     * Classify the model for UI capability flags. Claude models go through
+     * {@code ClaudeProvider}, never {@code OpenAiProvider}; they have no thinking toggle
+     * today, so the resolver's {@code CLAUDE} classification already yields the right flags.
+     */
+    private ProviderProtocolFamily resolveFamilyForDisplay(String providerName, String model) {
+        if ("claude".equalsIgnoreCase(providerName)) {
+            return ProviderProtocolFamily.CLAUDE;
+        }
+        return ProviderProtocolFamilyResolver.resolve(model);
     }
 }

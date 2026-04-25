@@ -1,5 +1,6 @@
 package com.skillforge.core.llm;
 
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -44,6 +45,10 @@ public class LlmProviderFactory {
 
     private LlmProvider createProvider(ModelConfig config) {
         String type = resolveType(config);
+        String displayName = (config.getProviderName() != null && !config.getProviderName().isBlank())
+                ? config.getProviderName()
+                : type;
+        String envHint = resolveEnvVarHint(displayName);
         return switch (type) {
             case "claude" -> new ClaudeProvider(
                     config.getApiKey(),
@@ -56,6 +61,8 @@ public class LlmProviderFactory {
                     config.getApiKey(),
                     config.getBaseUrl(),
                     config.getModel(),
+                    displayName,
+                    envHint,
                     config.getReadTimeoutSeconds(),
                     config.getMaxRetries()
             );
@@ -75,5 +82,31 @@ public class LlmProviderFactory {
             return type;
         }
         return config.getProviderName();
+    }
+
+    /**
+     * Best-effort hint for the env var that carries the API key. Used purely in the
+     * fail-fast diagnostic message; not a source of truth. Spring {@code @Value}
+     * placeholders are not reflectable at runtime, so we keep a small hand-maintained
+     * mapping here. Unknown provider names fall back to
+     * {@code <UPPER>_API_KEY}.
+     */
+    private static String resolveEnvVarHint(String providerName) {
+        if (providerName == null || providerName.isBlank()) {
+            return null;
+        }
+        switch (providerName.toLowerCase(Locale.ROOT)) {
+            case "bailian":
+                return "DASHSCOPE_API_KEY";
+            case "deepseek":
+                return "DEEPSEEK_API_KEY";
+            case "claude":
+            case "anthropic":
+                return "ANTHROPIC_API_KEY";
+            case "openai":
+                return "OPENAI_API_KEY";
+            default:
+                return providerName.toUpperCase(Locale.ROOT).replace('-', '_') + "_API_KEY";
+        }
     }
 }

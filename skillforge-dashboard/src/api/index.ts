@@ -64,10 +64,17 @@ export interface CreateAgentRequest {
   toolIds?: string;
   behaviorRules?: string;
   lifecycleHooks?: string;
+  /** Thinking Mode v1 — `auto` preserves the provider's default behaviour. */
+  thinkingMode?: 'auto' | 'enabled' | 'disabled';
+  /** Only honoured by models whose protocolFamily exposes reasoning effort (see ModelOption). */
+  reasoningEffort?: 'low' | 'medium' | 'high' | 'max';
 }
 
 export interface UpdateAgentRequest extends Partial<CreateAgentRequest> {
   id?: number;
+  // `public` mirrors AgentEntity#isPublic; surfaced here because AgentDrawer
+  // must re-send it on every partial PUT to avoid flipping visible agents.
+  public?: boolean;
 }
 
 export const getAgents = () => api.get('/agents');

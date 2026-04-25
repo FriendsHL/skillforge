@@ -2,6 +2,9 @@ package com.skillforge.server.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillforge.core.context.BehaviorRuleRegistry;
+import com.skillforge.core.model.AgentDefinition;
+import com.skillforge.core.model.ReasoningEffort;
+import com.skillforge.core.model.ThinkingMode;
 import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.exception.AgentNotFoundException;
 import com.skillforge.server.repository.AgentRepository;
@@ -215,5 +218,68 @@ class AgentServiceTest {
 
         var result = agentService.updateAgent(4L, patch);
         assertThat(result.getRole()).isNull();
+    }
+
+    @Test
+    @DisplayName("updateAgent sets thinkingMode and reasoningEffort when payload non-null")
+    void updateAgent_setsThinkingAndEffort() {
+        var existing = new AgentEntity();
+        existing.setId(10L);
+        existing.setName("x");
+        when(agentRepository.findById(10L)).thenReturn(Optional.of(existing));
+        when(agentRepository.save(any(AgentEntity.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        var patch = new AgentEntity();
+        patch.setThinkingMode("enabled");
+        patch.setReasoningEffort("high");
+
+        var result = agentService.updateAgent(10L, patch);
+        assertThat(result.getThinkingMode()).isEqualTo("enabled");
+        assertThat(result.getReasoningEffort()).isEqualTo("high");
+    }
+
+    @Test
+    @DisplayName("updateAgent null thinkingMode preserves existing value")
+    void updateAgent_nullThinking_preservesExisting() {
+        var existing = new AgentEntity();
+        existing.setId(11L);
+        existing.setName("x");
+        existing.setThinkingMode("disabled");
+        existing.setReasoningEffort("low");
+        when(agentRepository.findById(11L)).thenReturn(Optional.of(existing));
+        when(agentRepository.save(any(AgentEntity.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        var patch = new AgentEntity();
+        patch.setName("renamed");
+
+        var result = agentService.updateAgent(11L, patch);
+        assertThat(result.getThinkingMode()).isEqualTo("disabled");
+        assertThat(result.getReasoningEffort()).isEqualTo("low");
+    }
+
+    @Test
+    @DisplayName("toAgentDefinition maps thinkingMode and reasoningEffort enums")
+    void toAgentDefinition_mapsThinkingAndEffort() {
+        var entity = new AgentEntity();
+        entity.setId(20L);
+        entity.setName("x");
+        entity.setThinkingMode("enabled");
+        entity.setReasoningEffort("high");
+
+        AgentDefinition def = agentService.toAgentDefinition(entity);
+        assertThat(def.getThinkingMode()).isEqualTo(ThinkingMode.ENABLED);
+        assertThat(def.getReasoningEffort()).isEqualTo(ReasoningEffort.HIGH);
+    }
+
+    @Test
+    @DisplayName("toAgentDefinition leaves thinkingMode null when DB column null")
+    void toAgentDefinition_nullDb_nullEnum() {
+        var entity = new AgentEntity();
+        entity.setId(21L);
+        entity.setName("x");
+
+        AgentDefinition def = agentService.toAgentDefinition(entity);
+        assertThat(def.getThinkingMode()).isNull();
+        assertThat(def.getReasoningEffort()).isNull();
     }
 }

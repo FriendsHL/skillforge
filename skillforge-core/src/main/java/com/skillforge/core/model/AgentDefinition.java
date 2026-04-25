@@ -41,6 +41,14 @@ public class AgentDefinition {
     @JsonProperty("behavior_rules")
     private BehaviorRulesConfig behaviorRules;
 
+    /** Per-agent thinking-mode override; null / AUTO = provider default. */
+    @JsonProperty("thinking_mode")
+    private ThinkingMode thinkingMode;
+
+    /** Per-agent reasoning-effort override for reasoning-capable families. */
+    @JsonProperty("reasoning_effort")
+    private ReasoningEffort reasoningEffort;
+
     /** Resolved prompt texts from builtin rules, populated by server layer. Not serialized. */
     @JsonIgnore
     private List<String> resolvedBehaviorRules = new ArrayList<>();
@@ -205,5 +213,21 @@ public class AgentDefinition {
 
     public void setLifecycleHooks(LifecycleHooksConfig lifecycleHooks) {
         this.lifecycleHooks = lifecycleHooks;
+    }
+
+    public ThinkingMode getThinkingMode() {
+        return thinkingMode;
+    }
+
+    public void setThinkingMode(ThinkingMode thinkingMode) {
+        this.thinkingMode = thinkingMode;
+    }
+
+    public ReasoningEffort getReasoningEffort() {
+        return reasoningEffort;
+    }
+
+    public void setReasoningEffort(ReasoningEffort reasoningEffort) {
+        this.reasoningEffort = reasoningEffort;
     }
 }
