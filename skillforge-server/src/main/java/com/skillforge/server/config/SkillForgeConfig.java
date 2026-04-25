@@ -15,6 +15,8 @@ import com.skillforge.core.engine.SafetySkillHook;
 import com.skillforge.core.engine.hook.LifecycleHookDispatcher;
 import com.skillforge.server.hook.LifecycleHookLoopAdapter;
 import com.skillforge.server.hook.LifecycleHookSkillAdapter;
+import com.skillforge.server.hook.GetAgentHooksTool;
+import com.skillforge.server.hook.ProposeHookBindingTool;
 import com.skillforge.core.llm.EmbeddingProvider;
 import com.skillforge.core.llm.LlmProviderFactory;
 import com.skillforge.core.llm.ModelConfig;
@@ -47,8 +49,11 @@ import com.skillforge.server.tool.TeamKillTool;
 import com.skillforge.server.tool.TeamListTool;
 import com.skillforge.server.tool.TeamSendTool;
 import com.skillforge.server.service.AgentService;
+import com.skillforge.server.service.AgentAuthoredHookService;
+import com.skillforge.server.service.AgentTargetResolver;
 import com.skillforge.server.service.ChatService;
 import com.skillforge.server.service.EmbeddingService;
+import com.skillforge.server.service.LifecycleHookViewService;
 import com.skillforge.server.service.MemoryService;
 import com.skillforge.server.service.SessionService;
 import com.skillforge.server.service.UserConfigService;
@@ -181,6 +186,28 @@ public class SkillForgeConfig {
         RegisterCompiledMethodTool tool = new RegisterCompiledMethodTool(compiledMethodService, objectMapper);
         skillRegistry.registerTool(tool);
         log.info("Registered RegisterCompiledMethodTool into SkillRegistry");
+        return tool;
+    }
+
+    @Bean
+    public GetAgentHooksTool getAgentHooksTool(AgentTargetResolver targetResolver,
+                                               LifecycleHookViewService viewService,
+                                               ObjectMapper objectMapper,
+                                               SkillRegistry skillRegistry) {
+        GetAgentHooksTool tool = new GetAgentHooksTool(targetResolver, viewService, objectMapper);
+        skillRegistry.registerTool(tool);
+        log.info("Registered GetAgentHooksTool into SkillRegistry");
+        return tool;
+    }
+
+    @Bean
+    public ProposeHookBindingTool proposeHookBindingTool(AgentTargetResolver targetResolver,
+                                                         AgentAuthoredHookService agentAuthoredHookService,
+                                                         ObjectMapper objectMapper,
+                                                         SkillRegistry skillRegistry) {
+        ProposeHookBindingTool tool = new ProposeHookBindingTool(targetResolver, agentAuthoredHookService, objectMapper);
+        skillRegistry.registerTool(tool);
+        log.info("Registered ProposeHookBindingTool into SkillRegistry");
         return tool;
     }
 

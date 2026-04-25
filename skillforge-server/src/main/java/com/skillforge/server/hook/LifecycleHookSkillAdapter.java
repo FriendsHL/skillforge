@@ -59,7 +59,7 @@ public class LifecycleHookSkillAdapter implements SkillHook {
         if (context == null || context.getSessionId() == null) return;
         try {
             var agentDef = agentDefResolver.resolveForSession(context.getSessionId());
-            if (agentDef == null || agentDef.getLifecycleHooks() == null) return;
+            if (agentDef == null) return;
             // Defensive copy: prevent the hook handler from mutating the live skill input map
             // and accidentally affecting downstream Skill execution. Map.copyOf would NPE on
             // null values, which Skill inputs may legitimately contain — use HashMap + unmodifiableMap.

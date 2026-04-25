@@ -69,14 +69,31 @@ public class LifecycleHookDispatcherImpl implements LifecycleHookDispatcher {
     private final Map<Class<? extends HookHandler>, HandlerRunner<?>> runners;
     private final Executor hookExecutor;
     private final TraceCollector traceCollector;
+    private final LifecycleHookCompositionService compositionService;
     private final Set<String> forbiddenSkills;
 
     @org.springframework.beans.factory.annotation.Autowired
     public LifecycleHookDispatcherImpl(List<HandlerRunner<?>> runners,
                                        @Qualifier("hookExecutor") Executor hookExecutor,
                                        TraceCollector traceCollector,
+                                       LifecycleHookCompositionService compositionService,
                                        @Value("${lifecycle.hooks.forbidden-skills:SubAgent,TeamCreate,TeamSend,TeamKill}")
                                        List<String> forbiddenSkills) {
+        this(runners, hookExecutor, traceCollector, forbiddenSkills, compositionService);
+    }
+
+    public LifecycleHookDispatcherImpl(List<HandlerRunner<?>> runners,
+                                       Executor hookExecutor,
+                                       TraceCollector traceCollector,
+                                       List<String> forbiddenSkills) {
+        this(runners, hookExecutor, traceCollector, forbiddenSkills, null);
+    }
+
+    private LifecycleHookDispatcherImpl(List<HandlerRunner<?>> runners,
+                                        Executor hookExecutor,
+                                        TraceCollector traceCollector,
+                                        List<String> forbiddenSkills,
+                                        LifecycleHookCompositionService compositionService) {
         Map<Class<? extends HookHandler>, HandlerRunner<?>> map = new HashMap<>();
         for (HandlerRunner<?> r : runners) {
             map.put(r.handlerType(), r);
@@ -84,6 +101,7 @@ public class LifecycleHookDispatcherImpl implements LifecycleHookDispatcher {
         this.runners = Map.copyOf(map);
         this.hookExecutor = hookExecutor;
         this.traceCollector = traceCollector;
+        this.compositionService = compositionService;
         this.forbiddenSkills = forbiddenSkills != null ? Set.copyOf(forbiddenSkills) : Set.of();
         log.info("LifecycleHookDispatcher initialized: {} runner(s) {}, forbiddenSkills={}",
                 map.size(), map.keySet(), this.forbiddenSkills);
@@ -120,19 +138,18 @@ public class LifecycleHookDispatcherImpl implements LifecycleHookDispatcher {
             return new DispatchOutcome(true, List.of());
         }
 
-        LifecycleHooksConfig cfg = agentDef.getLifecycleHooks();
-        if (cfg == null) return new DispatchOutcome(true, List.of());
-        List<HookEntry> entries = cfg.entriesFor(event);
+        List<EffectiveHook> entries = effectiveHooks(event, agentDef);
         if (entries.isEmpty()) return new DispatchOutcome(true, List.of());
 
         List<HookRunResult> syncResults = new ArrayList<>();
         // P1: iterate every entry, honoring ChainDecision.
         for (int i = 0; i < entries.size(); i++) {
-            HookEntry entry = entries.get(i);
+            EffectiveHook hook = entries.get(i);
+            HookEntry entry = hook != null ? hook.entry() : null;
             if (entry == null || entry.getHandler() == null) {
                 continue;
             }
-            HookRunResult result = runEntry(event, entry, i, input, sessionId, userId);
+            HookRunResult result = runEntry(event, hook, i, input, sessionId, userId);
             if (result == null) {
                 // Runner routing bug — defensive default
                 continue;
@@ -156,11 +173,12 @@ public class LifecycleHookDispatcherImpl implements LifecycleHookDispatcher {
      * Run a single entry and compute its {@link ChainDecision}. Never throws.
      */
     private HookRunResult runEntry(HookEvent event,
-                                   HookEntry entry,
+                                   EffectiveHook effectiveHook,
                                    int entryIndex,
                                    Map<String, Object> input,
                                    String sessionId,
                                    Long userId) {
+        HookEntry entry = effectiveHook.entry();
         HookHandler handler = entry.getHandler();
         FailurePolicy policy = entry.getFailurePolicy() != null ? entry.getFailurePolicy() : FailurePolicy.CONTINUE;
         int timeoutSec = clampTimeout(entry.getTimeoutSeconds());
@@ -173,7 +191,7 @@ public class LifecycleHookDispatcherImpl implements LifecycleHookDispatcher {
             HookRunResult failed = HookRunResult.failure("forbidden_skill:" + sh.getSkillName(), 0);
             ChainDecision decision = chainDecisionFor(false, policy, entry.isAsync());
             failed = failed.withChainDecision(decision);
-            traceHook(event, entry, entryIndex, sessionId, failed, "forbidden_skill", 0);
+            traceHook(event, effectiveHook, entryIndex, sessionId, failed, "forbidden_skill", 0);
             return failed;
         }
 
@@ -194,7 +212,7 @@ public class LifecycleHookDispatcherImpl implements LifecycleHookDispatcher {
                     handler.getClass().getSimpleName());
             ChainDecision decision = chainDecisionFor(false, policy, entry.isAsync());
             HookRunResult failed = new HookRunResult(false, null, "runner_not_implemented", 0, decision);
-            traceHook(event, entry, entryIndex, sessionId, failed, "runner_not_implemented", 0);
+            traceHook(event, effectiveHook, entryIndex, sessionId, failed, "runner_not_implemented", 0);
             return failed;
         }
 
@@ -207,10 +225,11 @@ public class LifecycleHookDispatcherImpl implements LifecycleHookDispatcher {
         hookDepth.set(previousDepth + 1);
         try {
             if (entry.isAsync()) {
-                runAsync(event, entry, entryIndex, runner, handler, input, execCtx, timeoutSec, previousDepth + 1);
+                runAsync(event, effectiveHook, entryIndex, runner, handler, input, execCtx, timeoutSec,
+                        previousDepth + 1);
                 return new HookRunResult(true, null, null, 0, ChainDecision.CONTINUE);
             }
-            return runSync(event, entry, entryIndex, runner, handler, input, execCtx, timeoutSec, policy,
+            return runSync(event, effectiveHook, entryIndex, runner, handler, input, execCtx, timeoutSec, policy,
                     previousDepth + 1);
         } finally {
             if (previousDepth == 0) {
@@ -222,7 +241,7 @@ public class LifecycleHookDispatcherImpl implements LifecycleHookDispatcher {
     }
 
     private void runAsync(HookEvent event,
-                          HookEntry entry,
+                          EffectiveHook effectiveHook,
                           int entryIndex,
                           HandlerRunner<HookHandler> runner,
                           HookHandler handler,
@@ -231,6 +250,7 @@ public class LifecycleHookDispatcherImpl implements LifecycleHookDispatcher {
                           int timeoutSec,
                           int propagatedDepth) {
         long t0 = System.currentTimeMillis();
+        HookEntry entry = effectiveHook.entry();
         CompletableFuture<HookRunResult> fut;
         try {
             fut = CompletableFuture.supplyAsync(
@@ -241,7 +261,7 @@ public class LifecycleHookDispatcherImpl implements LifecycleHookDispatcher {
             log.warn("Async lifecycle hook {} rejected by executor (handler={}); pool saturated",
                     event, describe(handler));
             HookRunResult rejected = HookRunResult.failure("executor_rejected", 0);
-            traceHook(event, entry, entryIndex, execCtx.sessionId(), rejected, "executor_rejected", 0);
+            traceHook(event, effectiveHook, entryIndex, execCtx.sessionId(), rejected, "executor_rejected", 0);
             return;
         }
         fut.whenComplete((r, ex) -> {
@@ -250,19 +270,19 @@ public class LifecycleHookDispatcherImpl implements LifecycleHookDispatcher {
                 String reason = ex.getCause() instanceof TimeoutException
                         ? "timeout" : "async_error:" + ex.getClass().getSimpleName();
                 HookRunResult failed = HookRunResult.failure(reason, dur);
-                traceHook(event, entry, entryIndex, execCtx.sessionId(), failed, reason, dur);
+                traceHook(event, effectiveHook, entryIndex, execCtx.sessionId(), failed, reason, dur);
             } else if (r != null) {
                 String reason = r.success() ? "ok" : "handler_error";
-                traceHook(event, entry, entryIndex, execCtx.sessionId(), r, reason, dur);
+                traceHook(event, effectiveHook, entryIndex, execCtx.sessionId(), r, reason, dur);
             } else {
                 HookRunResult failed = HookRunResult.failure("null_result", dur);
-                traceHook(event, entry, entryIndex, execCtx.sessionId(), failed, "null_result", dur);
+                traceHook(event, effectiveHook, entryIndex, execCtx.sessionId(), failed, "null_result", dur);
             }
         });
     }
 
     private HookRunResult runSync(HookEvent event,
-                                  HookEntry entry,
+                                  EffectiveHook effectiveHook,
                                   int entryIndex,
                                   HandlerRunner<HookHandler> runner,
                                   HookHandler handler,
@@ -272,6 +292,7 @@ public class LifecycleHookDispatcherImpl implements LifecycleHookDispatcher {
                                   FailurePolicy policy,
                                   int propagatedDepth) {
         long t0 = System.currentTimeMillis();
+        HookEntry entry = effectiveHook.entry();
         CompletableFuture<HookRunResult> fut;
         try {
             fut = CompletableFuture.supplyAsync(
@@ -282,7 +303,7 @@ public class LifecycleHookDispatcherImpl implements LifecycleHookDispatcher {
                     event, describe(handler));
             ChainDecision decision = chainDecisionFor(false, policy, false);
             HookRunResult rejected = new HookRunResult(false, null, "executor_rejected", 0, decision);
-            traceHook(event, entry, entryIndex, execCtx.sessionId(), rejected, "executor_rejected", 0);
+            traceHook(event, effectiveHook, entryIndex, execCtx.sessionId(), rejected, "executor_rejected", 0);
             return rejected;
         }
         try {
@@ -291,13 +312,13 @@ public class LifecycleHookDispatcherImpl implements LifecycleHookDispatcher {
             if (result == null) {
                 ChainDecision decision = chainDecisionFor(false, policy, false);
                 HookRunResult nullResult = new HookRunResult(false, null, "null_result", dur, decision);
-                traceHook(event, entry, entryIndex, execCtx.sessionId(), nullResult, "null_result", dur);
+                traceHook(event, effectiveHook, entryIndex, execCtx.sessionId(), nullResult, "null_result", dur);
                 return nullResult;
             }
             ChainDecision decision = chainDecisionFor(result.success(), policy, false);
             HookRunResult decorated = result.withChainDecision(decision);
             String reason = result.success() ? "ok" : "handler_error";
-            traceHook(event, entry, entryIndex, execCtx.sessionId(), decorated, reason, dur);
+            traceHook(event, effectiveHook, entryIndex, execCtx.sessionId(), decorated, reason, dur);
             return decorated;
         } catch (TimeoutException e) {
             fut.cancel(true);
@@ -305,7 +326,7 @@ public class LifecycleHookDispatcherImpl implements LifecycleHookDispatcher {
             log.warn("Lifecycle hook {} timed out after {}s (handler={})", event, timeoutSec, describe(handler));
             ChainDecision decision = chainDecisionFor(false, policy, false);
             HookRunResult timedOut = new HookRunResult(false, null, "timeout", dur, decision);
-            traceHook(event, entry, entryIndex, execCtx.sessionId(), timedOut, "timeout", dur);
+            traceHook(event, effectiveHook, entryIndex, execCtx.sessionId(), timedOut, "timeout", dur);
             return timedOut;
         } catch (ExecutionException e) {
             long dur = System.currentTimeMillis() - t0;
@@ -314,14 +335,14 @@ public class LifecycleHookDispatcherImpl implements LifecycleHookDispatcher {
             ChainDecision decision = chainDecisionFor(false, policy, false);
             String reason = "exception:" + cause.getClass().getSimpleName();
             HookRunResult failed = new HookRunResult(false, null, reason, dur, decision);
-            traceHook(event, entry, entryIndex, execCtx.sessionId(), failed, reason, dur);
+            traceHook(event, effectiveHook, entryIndex, execCtx.sessionId(), failed, reason, dur);
             return failed;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             long dur = System.currentTimeMillis() - t0;
             ChainDecision decision = chainDecisionFor(false, policy, false);
             HookRunResult interrupted = new HookRunResult(false, null, "interrupted", dur, decision);
-            traceHook(event, entry, entryIndex, execCtx.sessionId(), interrupted, "interrupted", dur);
+            traceHook(event, effectiveHook, entryIndex, execCtx.sessionId(), interrupted, "interrupted", dur);
             return interrupted;
         }
     }
@@ -367,13 +388,33 @@ public class LifecycleHookDispatcherImpl implements LifecycleHookDispatcher {
         return rawTimeoutSec;
     }
 
+    private List<EffectiveHook> effectiveHooks(HookEvent event, AgentDefinition agentDef) {
+        if (compositionService != null) {
+            return compositionService.dispatchableHooks(agentDef, event);
+        }
+        LifecycleHooksConfig cfg = agentDef.getLifecycleHooks();
+        if (cfg == null) return List.of();
+        List<HookEntry> entries = cfg.entriesFor(event);
+        if (entries.isEmpty()) return List.of();
+        List<EffectiveHook> result = new ArrayList<>();
+        for (int i = 0; i < entries.size(); i++) {
+            HookEntry entry = entries.get(i);
+            if (entry != null && entry.getHandler() != null) {
+                result.add(EffectiveHook.user(event, entry, i));
+            }
+        }
+        return result;
+    }
+
     private void traceHook(HookEvent event,
-                           HookEntry entry,
+                           EffectiveHook effectiveHook,
                            int entryIndex,
                            String sessionId,
                            HookRunResult result,
                            String reason,
                            long durationMs) {
+        HookEntry entry = effectiveHook.entry();
+        recordAgentHookExecution(effectiveHook, result, reason);
         if (traceCollector == null) return;
         try {
             TraceSpan span = new TraceSpan("LIFECYCLE_HOOK", event.wireName());
@@ -384,9 +425,18 @@ public class LifecycleHookDispatcherImpl implements LifecycleHookDispatcher {
             boolean success = result != null && result.success();
             span.setSuccess(success);
             if (!success) span.setError(reason);
+            span.putAttribute("hook.source", effectiveHook.source().name().toLowerCase());
+            span.putAttribute("hook.source_id", effectiveHook.sourceId());
+            if (effectiveHook.authorAgentId() != null) {
+                span.putAttribute("hook.author_agent_id", effectiveHook.authorAgentId());
+            }
             // Per-entry annotation — never embed scriptBody (handled in describe()).
             String input = describe(entry.getHandler())
                     + "|idx=" + entryIndex
+                    + "|source=" + effectiveHook.source().name()
+                    + "|sourceId=" + effectiveHook.sourceId()
+                    + "|authorAgentId=" + (effectiveHook.authorAgentId() != null
+                            ? effectiveHook.authorAgentId() : "")
                     + "|type=" + handlerTypeKey(entry.getHandler())
                     + "|chainDecision=" + (result != null && result.chainDecision() != null
                             ? result.chainDecision().name() : "CONTINUE")
@@ -401,6 +451,19 @@ public class LifecycleHookDispatcherImpl implements LifecycleHookDispatcher {
             traceCollector.record(span);
         } catch (Exception e) {
             log.debug("Failed to record LIFECYCLE_HOOK trace span (non-fatal): {}", e.toString());
+        }
+    }
+
+    private void recordAgentHookExecution(EffectiveHook hook, HookRunResult result, String reason) {
+        if (compositionService == null || hook == null || hook.agentAuthoredHookId() == null) {
+            return;
+        }
+        try {
+            boolean success = result != null && result.success();
+            compositionService.recordExecution(hook, success, success ? null : reason);
+        } catch (RuntimeException e) {
+            log.debug("Failed to update agent-authored hook execution stats id={}: {}",
+                    hook.agentAuthoredHookId(), e.toString());
         }
     }
 

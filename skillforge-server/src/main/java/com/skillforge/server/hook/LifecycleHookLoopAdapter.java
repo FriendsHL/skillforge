@@ -55,7 +55,7 @@ public class LifecycleHookLoopAdapter implements LoopHook {
     public LoopContext beforeLoop(LoopContext context) {
         if (context == null) return null;
         AgentDefinition agentDef = context.getAgentDefinition();
-        if (agentDef == null || agentDef.getLifecycleHooks() == null) {
+        if (agentDef == null) {
             return context;
         }
         try {
@@ -81,7 +81,7 @@ public class LifecycleHookLoopAdapter implements LoopHook {
     public void afterLoop(LoopContext context, LlmResponse finalResponse) {
         if (context == null) return;
         AgentDefinition agentDef = context.getAgentDefinition();
-        if (agentDef == null || agentDef.getLifecycleHooks() == null) return;
+        if (agentDef == null) return;
         try {
             String text = finalResponse != null ? finalResponse.getContent() : null;
             dispatcher.fireStop(

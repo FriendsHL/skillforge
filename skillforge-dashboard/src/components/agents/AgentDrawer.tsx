@@ -6,8 +6,8 @@ import type { AgentDto, ThinkingMode, ReasoningEffort } from '../../api/schemas'
 import { initials, guessRole } from './AgentCard';
 import BehaviorRulesEditor from '../BehaviorRulesEditor';
 import { useBehaviorRules } from '../../hooks/useBehaviorRules';
-import LifecycleHooksEditor, { type LifecycleHooksEditorHandle } from '../LifecycleHooksEditor';
-import { countHookEntries, migrateLegacyFlat } from '../../constants/lifecycleHooks';
+import LifecycleHooksPanel from '../LifecycleHooksPanel';
+import { countHookEntries } from '../../constants/lifecycleHooks';
 import { useLlmModels } from '../../hooks/useLlmModels';
 
 const ROLE_OPTIONS = [
@@ -176,71 +176,6 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
     rulesBaselineRef.current !== null &&
     rulesBaselineRef.current !== JSON.stringify(rulesCtl.config);
 
-  // Hooks — schema-aware editor (P13-2).
-  // `migratedInitial.json` is the rawJson seed passed into LifecycleHooksEditor.
-  // We compute it once per agent.id (legacy migration is pure) and only fire
-  // the migration toast once after the editor has latched a baseline.
-  const migratedInitial = useMemo(
-    () => migrateLegacyFlat(agent.lifecycleHooks ?? null),
-    [agent.lifecycleHooks],
-  );
-  const hooksEditorRef = useRef<LifecycleHooksEditorHandle>(null);
-  const [liveRawJson, setLiveRawJson] = useState<string>('');
-  const [baselineJson, setBaselineJson] = useState<string | null>(null);
-  const hooksErrorsRef = useRef<string[]>([]);
-  const [hooksHasErrors, setHooksHasErrors] = useState<boolean>(false);
-  const migrationToastFiredRef = useRef<boolean>(false);
-
-  // Reset hook-editor state synchronously when the drawer is re-pointed at a
-  // different agent without being unmounted first (AgentList uses
-  // `setOpenAgent(newAgent)` without a null hop — see pages/AgentList.tsx).
-  // A useEffect reset would race the child's remount-time onRawJsonChange
-  // emission (child effects fire before parent effects), leaving baselineJson
-  // stuck on the previous agent. The render-phase reset pattern is documented
-  // at https://react.dev/reference/react/useState#storing-information-from-previous-renders
-  const prevAgentIdRef = useRef<number>(agent.id);
-  if (prevAgentIdRef.current !== agent.id) {
-    prevAgentIdRef.current = agent.id;
-    setBaselineJson(null);
-    setLiveRawJson('');
-    setHooksHasErrors(false);
-    hooksErrorsRef.current = [];
-    migrationToastFiredRef.current = false;
-  }
-
-  const handleHooksRawJsonChange = useCallback((raw: string) => {
-    setLiveRawJson(raw);
-    // Latch baseline once on first emission (editor-mount-time snapshot).
-    setBaselineJson((prev) => (prev === null ? raw : prev));
-  }, []);
-
-  const handleHooksErrorsChange = useCallback((errors: string[]) => {
-    hooksErrorsRef.current = errors;
-    setHooksHasErrors(errors.length > 0);
-  }, []);
-
-  // Fire migration warning toast once per agent open, after baseline latches.
-  useEffect(() => {
-    if (migrationToastFiredRef.current) return;
-    if (baselineJson === null) return; // wait for first onRawJsonChange
-    migrationToastFiredRef.current = true;
-    const { migratedCount, droppedCount, reasons } = migratedInitial;
-    if (migratedCount + droppedCount > 0) {
-      message.warning(
-        `Migrated ${migratedCount} legacy hook ${migratedCount === 1 ? 'entry' : 'entries'}; ` +
-          `dropped ${droppedCount}. Review before saving.`,
-      );
-      if (reasons.length > 0) {
-        // Surface dropped-reason detail to the user as a secondary info toast
-        // rather than a console log (project rule bans console.* in prod code).
-        message.info(`Hook migration details: ${reasons.join('; ')}`);
-      }
-    }
-  }, [baselineJson, migratedInitial]);
-
-  const hooksDirty = baselineJson !== null && liveRawJson !== baselineJson;
-  const hooksCount = useMemo(() => countHookEntries(liveRawJson), [liveRawJson]);
-
   const [testInput, setTestInput] = useState('');
   const [testOut, setTestOut] = useState<string | null>(null);
   const [testing, setTesting] = useState(false);
@@ -254,6 +189,7 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
   const toolsSkillsDirty =
     JSON.stringify(skills) !== JSON.stringify(initialSkills) ||
     JSON.stringify(tools) !== JSON.stringify(initialTools);
+  const hooksCount = useMemo(() => countHookEntries(agent.lifecycleHooks), [agent.lifecycleHooks]);
 
   // Overview — model + maxLoops + thinking edit
   const agentWithExtras = agent as AgentDto & { maxLoops?: number | null };
@@ -438,30 +374,6 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
       partial.reasoningEffort = reasoningEffortDraft;
     }
     updateMutation.mutate({ id: agent.id, payload: withPublic(partial) });
-  };
-
-  const handleSaveHooks = () => {
-    if (hooksErrorsRef.current.length > 0) return;
-    const snapshot = liveRawJson;
-    updateMutation.mutate(
-      {
-        id: agent.id,
-        payload: withPublic({ lifecycleHooks: snapshot }),
-      },
-      {
-        onSuccess: () => {
-          // Re-latch baseline without remounting the editor; preserves mode +
-          // internal expansion state so Save feels like a no-op in the UI.
-          setBaselineJson(snapshot);
-        },
-      },
-    );
-  };
-
-  const handleRevertHooks = () => {
-    if (baselineJson === null) return;
-    hooksEditorRef.current?.setRawJson(baselineJson);
-    setLiveRawJson(baselineJson);
   };
 
   const runTest = () => {
@@ -705,44 +617,14 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
           )}
 
           {tab === 'hooks' && (
-            <>
-              <div className="spec-h">
-                <h3>Lifecycle hooks — {hooksCount}</h3>
-              </div>
-              <LifecycleHooksEditor
-                key={agent.id}
-                ref={hooksEditorRef}
-                initialJson={migratedInitial.json}
-                skills={skillsCatalog.map((s) => ({
-                  name: String(s.name),
-                  description: s.description ? String(s.description) : undefined,
-                }))}
-                agentId={String(agent.id)}
-                onRawJsonChange={handleHooksRawJsonChange}
-                onErrorsChange={handleHooksErrorsChange}
-              />
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
-                <button
-                  className="btn-ghost-sf"
-                  onClick={handleRevertHooks}
-                  disabled={!hooksDirty || updateMutation.isPending}
-                >
-                  Revert
-                </button>
-                <button
-                  className="btn-primary-sf"
-                  onClick={handleSaveHooks}
-                  disabled={!hooksDirty || hooksHasErrors || updateMutation.isPending}
-                  title={
-                    hooksHasErrors
-                      ? 'Fix JSON validation errors before saving.'
-                      : undefined
-                  }
-                >
-                  {hooksHasErrors ? 'Fix JSON first' : hooksDirty ? 'Save' : 'Saved'}
-                </button>
-              </div>
-            </>
+            <LifecycleHooksPanel
+              agentId={agent.id}
+              fallbackRawJson={agent.lifecycleHooks}
+              skills={skillsCatalog.map((s) => ({
+                name: String(s.name),
+                description: s.description ? String(s.description) : undefined,
+              }))}
+            />
           )}
 
           {tab === 'toolsSkills' && (

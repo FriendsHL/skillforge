@@ -98,6 +98,20 @@ public class AgentService {
         return saved;
     }
 
+    @Transactional
+    public AgentEntity updateLifecycleHooks(Long id, String lifecycleHooksJson) {
+        AgentEntity probe = new AgentEntity();
+        probe.setLifecycleHooks(lifecycleHooksJson);
+        validateLifecycleHooksSize(probe);
+        validateLifecycleHooksSemantics(probe);
+        AgentEntity existing = agentRepository.findById(id)
+                .orElseThrow(() -> new AgentNotFoundException(id));
+        existing.setLifecycleHooks(lifecycleHooksJson);
+        AgentEntity saved = agentRepository.save(existing);
+        log.info("Agent {} updated: fields=[lifecycleHooks]", id);
+        return saved;
+    }
+
     /**
      * Collect the list of fields that were non-null in the update payload. Only emits field
      * names (never values) — systemPrompt / behaviorRules / lifecycleHooks may contain

@@ -4,6 +4,8 @@ import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.exception.AgentNotFoundException;
 import com.skillforge.server.service.AgentService;
 import com.skillforge.server.service.AgentYamlMapper;
+import com.skillforge.server.service.LifecycleHookViewService;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -24,9 +26,18 @@ import java.util.Map;
 public class AgentController {
 
     private final AgentService agentService;
+    private final LifecycleHookViewService lifecycleHookViewService;
 
-    public AgentController(AgentService agentService) {
+    @Autowired
+    public AgentController(AgentService agentService,
+                           LifecycleHookViewService lifecycleHookViewService) {
         this.agentService = agentService;
+        this.lifecycleHookViewService = lifecycleHookViewService;
+    }
+
+    /** Test-only convenience constructor for controller tests that don't exercise hook views. */
+    AgentController(AgentService agentService) {
+        this(agentService, null);
     }
 
     @GetMapping
@@ -40,6 +51,33 @@ public class AgentController {
     public ResponseEntity<AgentEntity> getAgent(@PathVariable Long id) {
         AgentEntity agent = agentService.getAgent(id);
         return ResponseEntity.ok(agent);
+    }
+
+    @GetMapping("/{id}/hooks")
+    public ResponseEntity<?> getAgentHooks(@PathVariable Long id) {
+        try {
+            if (lifecycleHookViewService == null) {
+                return ResponseEntity.status(501).body(Map.of("error", "lifecycle hook view service unavailable"));
+            }
+            return ResponseEntity.ok(lifecycleHookViewService.getAgentHooks(id));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @PutMapping("/{id}/hooks/user")
+    public ResponseEntity<?> updateUserHooks(@PathVariable Long id,
+                                             @RequestBody Map<String, Object> body) {
+        try {
+            if (lifecycleHookViewService == null) {
+                return ResponseEntity.status(501).body(Map.of("error", "lifecycle hook view service unavailable"));
+            }
+            Object raw = body.get("rawJson");
+            agentService.updateLifecycleHooks(id, raw != null ? raw.toString() : null);
+            return ResponseEntity.ok(lifecycleHookViewService.getAgentHooks(id).get("user"));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
     }
 
     @PostMapping

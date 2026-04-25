@@ -15,6 +15,8 @@ import com.skillforge.core.engine.hook.HookRunResult;
 import com.skillforge.core.engine.hook.LifecycleHooksConfig;
 import com.skillforge.core.model.AgentDefinition;
 import com.skillforge.core.skill.SkillRegistry;
+import com.skillforge.server.entity.AgentAuthoredHookEntity;
+import com.skillforge.server.service.AgentAuthoredHookService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -107,6 +109,29 @@ class LifecycleHookDispatcherTest {
         }
     }
 
+    private static final class FakeAgentHookService extends AgentAuthoredHookService {
+        private final HookEntry entry;
+
+        private FakeAgentHookService(HookEntry entry) {
+            super(null, null);
+            this.entry = entry;
+        }
+
+        @Override
+        public List<AgentAuthoredHookEntity> findDispatchable(Long targetAgentId, HookEvent event) {
+            AgentAuthoredHookEntity row = new AgentAuthoredHookEntity();
+            row.setId(7L);
+            row.setAuthorAgentId(99L);
+            row.setReviewState(AgentAuthoredHookEntity.STATE_APPROVED);
+            return List.of(row);
+        }
+
+        @Override
+        public HookEntry toHookEntry(AgentAuthoredHookEntity entity) {
+            return entry;
+        }
+    }
+
     @Test
     @DisplayName("dispatch returns true when agent has no hook config")
     void dispatch_noHookConfig_returnsTrue() {
@@ -115,6 +140,32 @@ class LifecycleHookDispatcherTest {
         def.setId("1");
         boolean result = dispatcher.dispatch(HookEvent.SESSION_START, Map.of(), def, "s1", 99L);
         assertThat(result).isTrue();
+    }
+
+    @Test
+    @DisplayName("composition-backed dispatch runs hooks even when user config is null")
+    void dispatch_compositionBacked_runsWithoutUserConfig() {
+        StubRunner runner = new StubRunner(HookRunResult.ok("done", 0), 0, null);
+        HookEntry agentHook = entry(new HookHandler.SkillHandler("X"), 5, FailurePolicy.CONTINUE, false);
+        LifecycleHookCompositionService composition = new LifecycleHookCompositionService(
+                new SystemHookRegistry(List.of()),
+                new FakeAgentHookService(agentHook));
+        LifecycleHookDispatcherImpl dispatcher = new LifecycleHookDispatcherImpl(
+                List.of(runner), executor, traceCollector, composition, List.of());
+        AgentDefinition def = new AgentDefinition();
+        def.setId("42");
+        def.setLifecycleHooks(null);
+
+        boolean result = dispatcher.dispatch(HookEvent.USER_PROMPT_SUBMIT, Map.of(), def, "s1", 99L);
+
+        assertThat(result).isTrue();
+        assertThat(runner.calls).hasValue(1);
+        assertThat(collected).hasSize(1);
+        assertThat(collected.get(0).getInput()).contains("source=AGENT", "sourceId=agent:7");
+        assertThat(collected.get(0).getAttributes())
+                .containsEntry("hook.source", "agent")
+                .containsEntry("hook.source_id", "agent:7")
+                .containsEntry("hook.author_agent_id", 99L);
     }
 
     @Test
