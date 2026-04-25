@@ -3,7 +3,7 @@ package com.skillforge.server.config;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
- * BrowserSkill 相关配置。
+ * BrowserTool 相关配置。
  * <p>
  * 配置示例:
  * <pre>

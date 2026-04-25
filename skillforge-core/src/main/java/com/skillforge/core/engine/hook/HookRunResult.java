@@ -2,7 +2,7 @@ package com.skillforge.core.engine.hook;
 
 /**
  * Handler execution result, intentionally decoupled from {@code SkillResult}:
- * not every handler runs a Skill (P1/P2 runners invoke scripts / builtin methods).
+ * not every handler runs a Tool (P1/P2 runners invoke scripts / builtin methods).
  *
  * <p>{@link #chainDecision} is filled in by the dispatcher after computing
  * {@code (success, entry.failurePolicy)} — runners do not populate it and should use the

@@ -32,7 +32,7 @@ import java.util.UUID;
  *  6. 否则发 ask_user 让用户最终确认(即使在 auto 模式)
  *  7. 用户同意 -> 调用 SkillPackageLoader 解压注册 + 持久化 SkillEntity
  *
- * 这个 service 在 ClawHubSkill 的 execute() 里被调用,会同步阻塞,
+ * 这个 service 在 ClawHubTool 的 execute() 里被调用,会同步阻塞,
  * 借用现有 PendingAskRegistry 实现 ask_user 暂停语义。
  */
 @Service

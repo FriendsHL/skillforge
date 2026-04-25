@@ -12,7 +12,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Agent 定义，包含模型、提示词、关联的 Skill 等配置。
+ * Agent 定义，包含模型、提示词、关联的 Skill / Tool 等配置。
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class AgentDefinition {

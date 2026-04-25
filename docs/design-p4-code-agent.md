@@ -91,8 +91,8 @@ CREATE INDEX idx_compiled_method_status ON t_compiled_method(status);
 ## 分 Phase 交付
 
 ### Phase 1：Code Sandbox + Code Review + 基础设施
-- `CodeSandboxSkill`（skillforge-skills）：隔离执行 bash/node 代码
-- `CodeReviewSkill`（skillforge-skills）：调用 LLM 审查代码
+- `CodeSandboxSkill`（skillforge-tools）：隔离执行 bash/node 代码
+- `CodeReviewSkill`（skillforge-tools）：调用 LLM 审查代码
 - V10 migration（t_script_method）
 - `ScriptMethodEntity` + Repository
 - `BuiltInMethodRegistry` 改为可变（register/unregister）

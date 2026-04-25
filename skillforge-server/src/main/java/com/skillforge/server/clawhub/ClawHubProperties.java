@@ -12,7 +12,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 @ConfigurationProperties(prefix = "clawhub")
 public class ClawHubProperties {
 
-    /** 是否启用 ClawHub 集成。关闭后 ClawHubSkill 仍然注册但调用会被拒绝。 */
+    /** 是否启用 ClawHub 集成。关闭后 ClawHubTool 仍然注册但调用会被拒绝。 */
     private boolean enabled = true;
 
     /** API base URL。默认 https://clawhub.ai */

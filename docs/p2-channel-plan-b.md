@@ -88,7 +88,7 @@ skillforge-server/src/main/java/com/skillforge/server/
 ```
 skillforge-core   (Skill SPI, AgentLoop)
       ↑
-skillforge-skills (Skill 实现)
+skillforge-tools (Skill 实现)
       ↑
 skillforge-server (REST + JPA + WebSocket + channel/* 所有逻辑)
 ```

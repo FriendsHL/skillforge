@@ -14,7 +14,7 @@ import com.skillforge.server.entity.PromptAbRunEntity;
 import com.skillforge.server.entity.PromptVersionEntity;
 import com.skillforge.server.eval.EvalEngineFactory;
 import com.skillforge.server.eval.EvalJudgeOutput;
-import com.skillforge.server.eval.EvalJudgeSkill;
+import com.skillforge.server.eval.EvalJudgeTool;
 import com.skillforge.server.eval.ScenarioRunResult;
 import com.skillforge.server.eval.sandbox.SandboxSkillRegistryFactory;
 import com.skillforge.server.eval.scenario.EvalScenario;
@@ -48,7 +48,7 @@ public class AbEvalPipeline {
     private final ScenarioLoader scenarioLoader;
     private final SandboxSkillRegistryFactory sandboxFactory;
     private final EvalEngineFactory evalEngineFactory;
-    private final EvalJudgeSkill evalJudgeSkill;
+    private final EvalJudgeTool evalJudgeTool;
     private final PromptAbRunRepository promptAbRunRepository;
     private final PromptVersionRepository promptVersionRepository;
     private final AgentService agentService;
@@ -59,7 +59,7 @@ public class AbEvalPipeline {
     public AbEvalPipeline(ScenarioLoader scenarioLoader,
                            SandboxSkillRegistryFactory sandboxFactory,
                            EvalEngineFactory evalEngineFactory,
-                           EvalJudgeSkill evalJudgeSkill,
+                           EvalJudgeTool evalJudgeTool,
                            PromptAbRunRepository promptAbRunRepository,
                            PromptVersionRepository promptVersionRepository,
                            AgentService agentService,
@@ -69,7 +69,7 @@ public class AbEvalPipeline {
         this.scenarioLoader = scenarioLoader;
         this.sandboxFactory = sandboxFactory;
         this.evalEngineFactory = evalEngineFactory;
-        this.evalJudgeSkill = evalJudgeSkill;
+        this.evalJudgeTool = evalJudgeTool;
         this.promptAbRunRepository = promptAbRunRepository;
         this.promptVersionRepository = promptVersionRepository;
         this.agentService = agentService;
@@ -111,7 +111,7 @@ public class AbEvalPipeline {
             log.info("AB eval scenario: {} ({})", scenario.getId(), scenario.getName());
             try {
                 ScenarioRunResult runResult = runSingleScenario(abRun.getId(), scenario, candidateDef);
-                EvalJudgeOutput judgeOutput = evalJudgeSkill.judge(scenario, runResult);
+                EvalJudgeOutput judgeOutput = evalJudgeTool.judge(scenario, runResult);
 
                 // Look up baseline status for this scenario
                 String baselineStatus = lookupBaselineStatus(baselineRun, scenario.getId());

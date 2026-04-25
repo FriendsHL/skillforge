@@ -139,39 +139,41 @@ public class SessionService {
 
 ---
 
-## Skill 接口实现规范
+## Tool 接口实现规范
 
-新增 Skill 必须实现 `com.skillforge.core.skill.Skill` 接口：
+> 术语说明：原 `Skill` 接口（deprecated alias）已删除。SkillForge 里 "Tool" 指 Java 内置 function-calling 工具（A 类）；"Skill" 仅保留给 zip 包资产（B 类，如 `SkillDefinition` / `SkillRegistry` / `SkillPackageLoader` / `SkillContext` / `SkillResult` 等核心 API surface 命名）。
+
+新增 Tool 必须实现 `com.skillforge.core.skill.Tool` 接口：
 
 ```java
-public class MySkill implements Skill {
+public class MyTool implements Tool {
 
-    private static final Logger log = LoggerFactory.getLogger(MySkill.class);
+    private static final Logger log = LoggerFactory.getLogger(MyTool.class);
 
     // 依赖通过构造器注入，不用 @Autowired
     private final SomeDependency dep;
 
-    public MySkill(SomeDependency dep) {
+    public MyTool(SomeDependency dep) {
         this.dep = dep;
     }
 
     @Override
-    public String getName() { return "MySkill"; }   // 全局唯一，驼峰
+    public String getName() { return "MyTool"; }   // 全局唯一，驼峰
 
     @Override
     public String getDescription() { return "..."; } // 清晰描述用途，LLM 会读这个
 
     @Override
-    public ToolSchema getSchema() { ... }
+    public ToolSchema getToolSchema() { ... }
 
     @Override
-    public SkillResult execute(SkillContext ctx) { ... }
+    public SkillResult execute(Map<String, Object> input, SkillContext context) { ... }
 }
 ```
 
 - `getName()` 返回值全局唯一，用 PascalCase
 - `getDescription()` 面向 LLM，要准确描述功能和使用时机
-- 在 `SystemSkillLoader` 中注册新 Skill
+- 在 `SkillForgeConfig` 中通过 `skillRegistry.registerTool(new MyTool(...))` 注册（注意：`SystemSkillLoader` 装载的是 B 类 zip 包资产，不是 Java Tool）
 
 ---
 
@@ -230,7 +232,7 @@ public SessionEntity getSession(String id) {
 
 - API Key / 密钥从环境变量或 `application.yml` 读取，**绝不硬编码**
 - 日志中不打印 API Key、用户 token、会话内容等敏感信息
-- 用户输入（Skill 参数、Chat 内容）在执行系统命令前必须校验，防止命令注入
+- 用户输入（Tool 参数、Chat 内容）在执行系统命令前必须校验，防止命令注入
 - JPQL / 原生 SQL 使用参数化查询，禁止字符串拼接
 
 ---

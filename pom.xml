@@ -21,7 +21,7 @@
 
     <modules>
         <module>skillforge-core</module>
-        <module>skillforge-skills</module>
+        <module>skillforge-tools</module>
         <module>skillforge-server</module>
         <module>skillforge-cli</module>
     </modules>
@@ -49,7 +49,7 @@
             </dependency>
             <dependency>
                 <groupId>com.skillforge</groupId>
-                <artifactId>skillforge-skills</artifactId>
+                <artifactId>skillforge-tools</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>

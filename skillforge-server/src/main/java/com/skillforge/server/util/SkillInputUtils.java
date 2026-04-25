@@ -1,7 +1,7 @@
 package com.skillforge.server.util;
 
 /**
- * Shared input parsing utilities for Skill implementations.
+ * Shared input parsing utilities for Tool implementations.
  */
 public final class SkillInputUtils {
 

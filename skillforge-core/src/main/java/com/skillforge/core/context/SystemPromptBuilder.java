@@ -8,7 +8,7 @@ import java.util.Map;
 import java.util.regex.Pattern;
 
 /**
- * 系统提示词构建器，将 Agent 定义、Skill 列表和上下文整合为完整的 system prompt。
+ * 系统提示词构建器，将 Agent 定义、Tool 列表和上下文整合为完整的 system prompt。
  */
 public class SystemPromptBuilder {
 

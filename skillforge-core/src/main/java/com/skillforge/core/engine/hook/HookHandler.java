@@ -13,7 +13,7 @@ import java.util.Map;
  *
  * <p>The {@code type} discriminator determines which subtype is used:
  * <ul>
- *   <li>{@code "skill"} — {@link SkillHandler} — run a registered Skill</li>
+ *   <li>{@code "skill"} — {@link SkillHandler} — run a registered Tool</li>
  *   <li>{@code "script"} — {@link ScriptHandler} — run an inline script (P1)</li>
  *   <li>{@code "method"} — {@link MethodHandler} — invoke a platform-builtin method (P2)</li>
  * </ul>
@@ -43,7 +43,7 @@ public abstract class HookHandler {
         this.args = args != null ? args : new HashMap<>();
     }
 
-    /** Run a registered Skill as the hook handler. */
+    /** Run a registered Tool as the hook handler. */
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class SkillHandler extends HookHandler {
         private String skillName;

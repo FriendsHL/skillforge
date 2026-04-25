@@ -256,7 +256,7 @@ public class MemoryService {
 
     /**
      * Append memories ranked by semantic similarity to the task context.
-     * Uses hybrid search (FTS + Vector) with RRF fusion, similar to MemorySearchSkill.
+     * Uses hybrid search (FTS + Vector) with RRF fusion, similar to MemorySearchTool.
      */
     private void appendSemanticallyRankedMemories(
             StringBuilder sb,

@@ -458,7 +458,7 @@ public class SubAgentRegistry {
     // ============ 数据结构 ============
 
     /**
-     * DTO,镜像 SubAgentRunEntity —— SubAgentSkill 和测试都直接读这些字段。
+     * DTO,镜像 SubAgentRunEntity —— SubAgentTool 和测试都直接读这些字段。
      * 保留为 POJO 是为了不在 skill 代码里暴露 JPA entity。
      */
     public static class SubAgentRun {

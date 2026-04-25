@@ -3,7 +3,7 @@ package com.skillforge.core.engine;
 import java.util.Map;
 
 /**
- * 工具调用记录，用于追踪每次 Skill 调用的详细信息。
+ * 工具调用记录，用于追踪每次 Tool 调用的详细信息。
  */
 public class ToolCallRecord {
 

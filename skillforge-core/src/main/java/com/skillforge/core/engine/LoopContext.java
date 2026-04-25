@@ -67,7 +67,7 @@ public class LoopContext {
     /** Thread-safe queue for user messages sent while the loop is running. */
     private final ConcurrentLinkedQueue<String> pendingUserMessages = new ConcurrentLinkedQueue<>();
 
-    /** Skill names to exclude from the tool list (depth-aware filtering for multi-agent collab). */
+    /** Tool names to exclude from the tool list (depth-aware filtering for multi-agent collab). */
     private Set<String> excludedSkillNames = Collections.emptySet();
 
     /** Tool names this agent is allowed to use. Null = all tools allowed. */

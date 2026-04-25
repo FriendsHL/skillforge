@@ -22,10 +22,10 @@ public class SandboxSkillRegistryFactory {
         Files.createDirectories(sandboxRoot);
 
         SkillRegistry sandbox = new SkillRegistry();
-        sandbox.registerTool(new SandboxedFileReadSkill(sandboxRoot));
-        sandbox.registerTool(new SandboxedFileWriteSkill(sandboxRoot));
-        sandbox.registerTool(new SandboxedGrepSkill(sandboxRoot));
-        sandbox.registerTool(new SandboxedGlobSkill(sandboxRoot));
+        sandbox.registerTool(new SandboxedFileReadTool(sandboxRoot));
+        sandbox.registerTool(new SandboxedFileWriteTool(sandboxRoot));
+        sandbox.registerTool(new SandboxedGrepTool(sandboxRoot));
+        sandbox.registerTool(new SandboxedGlobTool(sandboxRoot));
         return sandbox;
     }
 

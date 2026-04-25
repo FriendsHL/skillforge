@@ -43,7 +43,7 @@
 ```
 skillforge/
 ├── skillforge-core          # [修改] 新增 MessageChannel SPI、WebhookRequest、InboundMessageRouter、规范化数据模型
-├── skillforge-skills        # [不变]
+├── skillforge-tools        # [不变]
 ├── skillforge-server        # [修改] 实现 InboundMessageRouter、ChannelGatewayService、OutboxPoller、Entity、Flyway V17
 ├── skillforge-channels      # [新增] 所有平台实现 + WebhookController（仅依赖 core，不含 Poller）
 │   ├── pom.xml
@@ -63,7 +63,7 @@ skillforge/
 ```xml
 <modules>
     <module>skillforge-core</module>
-    <module>skillforge-skills</module>
+    <module>skillforge-tools</module>
     <module>skillforge-channels</module>   <!-- 新增，必须在 skillforge-server 前 -->
     <module>skillforge-server</module>
     <module>skillforge-cli</module>

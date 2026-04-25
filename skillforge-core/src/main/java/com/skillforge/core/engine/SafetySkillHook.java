@@ -33,7 +33,7 @@ public class SafetySkillHook implements SkillHook {
     private static final List<Pattern> CONFIRMATION_REQUIRED_PATTERNS =
             DangerousCommandChecker.CONFIRMATION_REQUIRED_PATTERNS;
 
-    /** 危险模式共享:保证 Bash Skill 与 ScriptHandlerRunner 扫描规则一致。 */
+    /** 危险模式共享:保证 Bash Tool 与 ScriptHandlerRunner 扫描规则一致。 */
     private static final List<Pattern> DANGEROUS_PATTERNS = DangerousCommandChecker.DANGEROUS_PATTERNS;
 
     private static final List<String> PROTECTED_SYSTEM_DIRS = List.of(
@@ -95,7 +95,7 @@ public class SafetySkillHook implements SkillHook {
     @Override
     public void afterSkillExecute(String skillName, Map<String, Object> input, SkillResult result, SkillContext context) {
         String status = result != null && result.isSuccess() ? "success" : "fail";
-        log.info("[SafetyHook] Skill executed: skillName={}, status={}", skillName, status);
+        log.info("[SafetyHook] Tool executed: skillName={}, status={}", skillName, status);
     }
 
     private Map<String, Object> checkBashSafety(Map<String, Object> input, SkillContext context) {

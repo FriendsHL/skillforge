@@ -29,8 +29,8 @@ public class EvalOrchestrator {
     private static final Logger log = LoggerFactory.getLogger(EvalOrchestrator.class);
 
     private final ScenarioLoader scenarioLoader;
-    private final ScenarioRunnerSkill scenarioRunner;
-    private final EvalJudgeSkill evalJudge;
+    private final ScenarioRunnerTool scenarioRunner;
+    private final EvalJudgeTool evalJudge;
     private final EvalRunRepository evalRunRepository;
     private final CollabRunRepository collabRunRepository;
     private final AgentService agentService;
@@ -38,8 +38,8 @@ public class EvalOrchestrator {
     private final ChatEventBroadcaster broadcaster;
 
     public EvalOrchestrator(ScenarioLoader scenarioLoader,
-                            ScenarioRunnerSkill scenarioRunner,
-                            EvalJudgeSkill evalJudge,
+                            ScenarioRunnerTool scenarioRunner,
+                            EvalJudgeTool evalJudge,
                             EvalRunRepository evalRunRepository,
                             CollabRunRepository collabRunRepository,
                             AgentService agentService,

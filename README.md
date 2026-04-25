@@ -68,7 +68,7 @@ Most agent frameworks are Python-based, single-provider, and designed for protot
 skillforge/
 ├── skillforge-core         # Agent Loop engine, LLM abstraction, Skill system,
 │                            #   Hooks, Cancellation, Context Compaction, TraceCollector
-├── skillforge-skills       # System Tools: Bash, FileRead, FileWrite, FileEdit,
+├── skillforge-tools        # System Tools: Bash, FileRead, FileWrite, FileEdit,
 │                            #   Glob, Grep, Memory, SubAgent, Team*
 ├── skillforge-server       # Spring Boot server: REST API, JPA entities, services,
 │                            #   WebSocket, Multi-Agent Collab, Memory, Eval Pipeline
@@ -290,7 +290,7 @@ Server starts at `http://localhost:8080` with embedded PostgreSQL on port 15432.
 
 ```bash
 # From repo root — FIRST install upstream modules into your local ~/.m2,
-# otherwise skillforge-server can't resolve skillforge-core / skillforge-skills
+# otherwise skillforge-server can't resolve skillforge-core / skillforge-tools
 mvn install -DskipTests
 
 # Then run server from the server module

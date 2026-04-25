@@ -9,7 +9,6 @@ import com.skillforge.core.llm.LlmProviderFactory;
 import com.skillforge.core.model.ContentBlock;
 import com.skillforge.core.model.Message;
 import com.skillforge.core.model.ToolUseBlock;
-import com.skillforge.core.skill.Skill;
 import com.skillforge.core.skill.SkillContext;
 import com.skillforge.core.skill.SkillRegistry;
 import com.skillforge.core.skill.SkillResult;

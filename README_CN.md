@@ -68,7 +68,7 @@
 skillforge/
 ├── skillforge-core         # Agent Loop 引擎、LLM 抽象、Skill 系统、
 │                            #   Hook、取消、上下文压缩、Trace 采集
-├── skillforge-skills       # 系统工具：Bash, FileRead, FileWrite, FileEdit,
+├── skillforge-tools        # 系统工具：Bash, FileRead, FileWrite, FileEdit,
 │                            #   Glob, Grep, Memory, SubAgent, Team*
 ├── skillforge-server       # Spring Boot 服务：REST API, JPA 实体, 服务层,
 │                            #   WebSocket, 多 Agent 协作, 记忆系统, 评测流水线
@@ -290,7 +290,7 @@ java -jar skillforge-server/target/skillforge-server-1.0.0-SNAPSHOT.jar
 
 ```bash
 # 在仓库根目录 —— 先 install 把上游模块发到本地 ~/.m2，
-# 否则 skillforge-server 解析不到 skillforge-core / skillforge-skills
+# 否则 skillforge-server 解析不到 skillforge-core / skillforge-tools
 mvn install -DskipTests
 
 # 然后在 server 子模块启动

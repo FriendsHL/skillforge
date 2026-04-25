@@ -11,7 +11,7 @@ import java.util.UUID;
  * <ul>
  *   <li>AGENT_LOOP — 一次完整的用户请求 → loop 执行</li>
  *   <li>LLM_CALL — 单次 LLM 调用（一个 iteration 的模型推理）</li>
- *   <li>TOOL_CALL — 工具/Skill 执行</li>
+ *   <li>TOOL_CALL — 工具/Tool 执行</li>
  *   <li>ASK_USER — ask_user 阻塞等待用户回答</li>
  *   <li>COMPACT — 上下文压缩操作</li>
  * </ul>

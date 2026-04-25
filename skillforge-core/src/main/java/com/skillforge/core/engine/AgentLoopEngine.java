@@ -24,7 +24,6 @@ import com.skillforge.core.model.Message;
 import com.skillforge.core.model.SkillDefinition;
 import com.skillforge.core.model.ToolSchema;
 import com.skillforge.core.model.ToolUseBlock;
-import com.skillforge.core.skill.Skill;
 import com.skillforge.core.skill.SkillContext;
 import com.skillforge.core.skill.SkillRegistry;
 import com.skillforge.core.skill.SkillResult;
@@ -45,7 +44,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.stream.Collectors;
 
 /**
- * Agent Loop 核心引擎，驱动 LLM 与 Skill 的交互循环。
+ * Agent Loop 核心引擎，驱动 LLM 与 Tool 的交互循环。
  * <p>
  * 核心流程：接收用户消息 -> 调用 LLM -> 处理 tool_use -> 返回 tool_result -> 再次调用 LLM，
  * 直到 LLM 返回纯文本响应或达到最大循环次数。
@@ -274,7 +273,7 @@ public class AgentLoopEngine {
             }
         }
 
-        // 5. 收集 tools: 内置 Skill 的 ToolSchema + SkillDefinition 的描述 + (可选) ask_user + compact_context
+        // 5. 收集 tools: 内置 Tool 的 ToolSchema + SkillDefinition 的描述 + (可选) ask_user + compact_context
         List<ToolSchema> tools = collectTools(loopCtx.getExecutionMode(), loopCtx.getExcludedSkillNames(), loopCtx.getAllowedToolNames());
         final int contextWindowTokens = resolveContextWindow(agentDef);
 
@@ -1045,13 +1044,13 @@ public class AgentLoopEngine {
     }
 
     /**
-     * 收集所有可用的工具 schema：内置 Skill + SkillDefinition + (可选) ask_user。
+     * 收集所有可用的工具 schema：内置 Tool + SkillDefinition + (可选) ask_user。
      */
     private List<ToolSchema> collectTools(String executionMode, java.util.Set<String> excludedSkillNames,
                                              java.util.Set<String> allowedToolNames) {
         List<ToolSchema> tools = new ArrayList<>();
 
-        // 内置 Skill (filter out excluded skills for depth-aware multi-agent collab,
+        // 内置 Tool (filter out excluded skills for depth-aware multi-agent collab,
         // and apply allowedToolNames whitelist if configured)
         for (Tool tool : skillRegistry.getAllTools()) {
             if (excludedSkillNames != null && excludedSkillNames.contains(tool.getName())) {
@@ -1067,7 +1066,7 @@ public class AgentLoopEngine {
             }
         }
 
-        // SkillDefinition (zip 包 Skill) — 生成简单的 ToolSchema
+        // SkillDefinition (zip 包 Tool) — 生成简单的 ToolSchema
         for (SkillDefinition def : skillRegistry.getAllSkillDefinitions()) {
             Map<String, Object> inputSchema = new HashMap<>();
             inputSchema.put("type", "object");
@@ -1557,7 +1556,7 @@ public class AgentLoopEngine {
         log.debug("Executing tool call: skill={}, id={}", skillName, toolUseId);
 
         try {
-            // 检查是否为 SkillDefinition (zip 包 Skill)
+            // 检查是否为 SkillDefinition (zip 包 Tool)
             Optional<SkillDefinition> skillDefOpt = skillRegistry.getSkillDefinition(skillName);
             if (skillDefOpt.isPresent()) {
                 // SkillDefinition 不走 execute()，直接返回 promptContent
@@ -1569,7 +1568,7 @@ public class AgentLoopEngine {
                 return Message.toolResult(toolUseId, content, false);
             }
 
-            // 检查是否为内置 Skill
+            // 检查是否为内置 Tool
             Optional<Tool> toolOpt = skillRegistry.getTool(skillName);
             if (toolOpt.isPresent()) {
                 Tool tool = toolOpt.get();
@@ -1585,7 +1584,7 @@ public class AgentLoopEngine {
                     if (processedInput == null) {
                         log.warn("SkillHook rejected execution of skill '{}'", skillName);
                         long duration = System.currentTimeMillis() - startTime;
-                        String errorMsg = "Skill execution rejected by hook";
+                        String errorMsg = "Tool execution rejected by hook";
                         toolCallRecords.add(new ToolCallRecord(skillName, input, errorMsg, false, duration, startTime));
                         return Message.toolResult(toolUseId, errorMsg, true);
                     }
@@ -1605,7 +1604,7 @@ public class AgentLoopEngine {
                     return Message.toolResult(toolUseId, hint, true, SkillResult.ErrorType.VALIDATION.name());
                 }
 
-                // 执行 Skill
+                // 执行 Tool
                 SkillResult result = tool.execute(processedInput, skillContext);
                 long duration = System.currentTimeMillis() - startTime;
 
@@ -1628,11 +1627,11 @@ public class AgentLoopEngine {
                 return Message.toolResult(toolUseId, output, !result.isSuccess(), errorType);
             }
 
-            // 找不到 Skill
+            // 找不到 Tool
             long duration = System.currentTimeMillis() - startTime;
             String errorMsg = "Unknown skill: " + skillName;
             toolCallRecords.add(new ToolCallRecord(skillName, input, errorMsg, false, duration, startTime));
-            log.warn("Skill '{}' not found in registry", skillName);
+            log.warn("Tool '{}' not found in registry", skillName);
             return Message.toolResult(toolUseId, errorMsg, true);
 
         } catch (IllegalArgumentException e) {
@@ -1641,14 +1640,14 @@ public class AgentLoopEngine {
             long duration = System.currentTimeMillis() - startTime;
             String errorMsg = "Invalid arguments: " + e.getMessage();
             toolCallRecords.add(new ToolCallRecord(skillName, input, errorMsg, false, duration, startTime));
-            log.warn("Skill '{}' rejected invalid arguments: {}", skillName, e.getMessage());
+            log.warn("Tool '{}' rejected invalid arguments: {}", skillName, e.getMessage());
             return Message.toolResult(toolUseId, errorMsg, true, SkillResult.ErrorType.VALIDATION.name());
         } catch (Exception e) {
             // 异常不中断循环，返回 error tool_result
             long duration = System.currentTimeMillis() - startTime;
-            String errorMsg = "Skill execution error: " + e.getMessage();
+            String errorMsg = "Tool execution error: " + e.getMessage();
             toolCallRecords.add(new ToolCallRecord(skillName, input, errorMsg, false, duration, startTime));
-            log.error("Skill '{}' threw exception", skillName, e);
+            log.error("Tool '{}' threw exception", skillName, e);
             return Message.toolResult(toolUseId, errorMsg, true);
         }
     }

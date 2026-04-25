@@ -21,31 +21,31 @@ import com.skillforge.core.llm.ModelConfig;
 import com.skillforge.core.llm.OpenAiEmbeddingProvider;
 import com.skillforge.core.skill.SkillPackageLoader;
 import com.skillforge.core.skill.SkillRegistry;
-import com.skillforge.skills.BashSkill;
-import com.skillforge.skills.CodeReviewSkill;
-import com.skillforge.skills.CodeSandboxSkill;
-import com.skillforge.skills.FileEditSkill;
-import com.skillforge.skills.FileReadSkill;
-import com.skillforge.skills.FileWriteSkill;
-import com.skillforge.skills.GlobSkill;
-import com.skillforge.skills.GrepSkill;
-import com.skillforge.skills.WebFetchSkill;
-import com.skillforge.skills.WebSearchSkill;
+import com.skillforge.tools.BashTool;
+import com.skillforge.tools.CodeReviewTool;
+import com.skillforge.tools.CodeSandboxTool;
+import com.skillforge.tools.FileEditTool;
+import com.skillforge.tools.FileReadTool;
+import com.skillforge.tools.FileWriteTool;
+import com.skillforge.tools.GlobTool;
+import com.skillforge.tools.GrepTool;
+import com.skillforge.tools.WebFetchTool;
+import com.skillforge.tools.WebSearchTool;
 import com.skillforge.server.code.CompiledMethodService;
-import com.skillforge.server.code.RegisterCompiledMethodSkill;
-import com.skillforge.server.code.RegisterScriptMethodSkill;
+import com.skillforge.server.code.RegisterCompiledMethodTool;
+import com.skillforge.server.code.RegisterScriptMethodTool;
 import com.skillforge.server.code.ScriptMethodService;
 import com.skillforge.server.skill.TodoStore;
-import com.skillforge.server.skill.TodoWriteSkill;
+import com.skillforge.server.tool.TodoWriteTool;
 import com.skillforge.server.clawhub.ClawHubProperties;
-import com.skillforge.server.skill.MemoryDetailSkill;
-import com.skillforge.server.skill.MemorySearchSkill;
-import com.skillforge.server.skill.MemorySkill;
-import com.skillforge.server.skill.SubAgentSkill;
-import com.skillforge.server.skill.TeamCreateSkill;
-import com.skillforge.server.skill.TeamKillSkill;
-import com.skillforge.server.skill.TeamListSkill;
-import com.skillforge.server.skill.TeamSendSkill;
+import com.skillforge.server.tool.MemoryDetailTool;
+import com.skillforge.server.tool.MemorySearchTool;
+import com.skillforge.server.tool.MemoryTool;
+import com.skillforge.server.tool.SubAgentTool;
+import com.skillforge.server.tool.TeamCreateTool;
+import com.skillforge.server.tool.TeamKillTool;
+import com.skillforge.server.tool.TeamListTool;
+import com.skillforge.server.tool.TeamSendTool;
 import com.skillforge.server.service.AgentService;
 import com.skillforge.server.service.ChatService;
 import com.skillforge.server.service.EmbeddingService;
@@ -114,158 +114,158 @@ public class SkillForgeConfig {
     @Bean
     public SkillRegistry skillRegistry(MemoryService memoryService, EmbeddingService embeddingService) {
         SkillRegistry registry = new SkillRegistry();
-        registry.registerTool(new BashSkill());
-        registry.registerTool(new FileReadSkill());
-        registry.registerTool(new FileWriteSkill());
-        registry.registerTool(new FileEditSkill());
-        registry.registerTool(new GlobSkill());
-        registry.registerTool(new GrepSkill());
-        registry.registerTool(new MemorySkill(memoryService));
-        registry.registerTool(new MemorySearchSkill(memoryService, embeddingService));
-        registry.registerTool(new MemoryDetailSkill(memoryService));
-        registry.registerTool(new WebFetchSkill());
-        registry.registerTool(new WebSearchSkill());
+        registry.registerTool(new BashTool());
+        registry.registerTool(new FileReadTool());
+        registry.registerTool(new FileWriteTool());
+        registry.registerTool(new FileEditTool());
+        registry.registerTool(new GlobTool());
+        registry.registerTool(new GrepTool());
+        registry.registerTool(new MemoryTool(memoryService));
+        registry.registerTool(new MemorySearchTool(memoryService, embeddingService));
+        registry.registerTool(new MemoryDetailTool(memoryService));
+        registry.registerTool(new WebFetchTool());
+        registry.registerTool(new WebSearchTool());
         return registry;
     }
 
     /**
-     * CodeSandboxSkill — lets Code Agent test-run bash/node/java snippets in an isolated sandbox
+     * CodeSandboxTool — lets Code Agent test-run bash/node/java snippets in an isolated sandbox
      * before registering them as hook methods.
      */
     @Bean
-    public CodeSandboxSkill codeSandboxSkill(SkillRegistry skillRegistry) {
-        CodeSandboxSkill skill = new CodeSandboxSkill();
-        skillRegistry.registerTool(skill);
-        log.info("Registered CodeSandboxSkill into SkillRegistry");
-        return skill;
+    public CodeSandboxTool codeSandboxTool(SkillRegistry skillRegistry) {
+        CodeSandboxTool tool = new CodeSandboxTool();
+        skillRegistry.registerTool(tool);
+        log.info("Registered CodeSandboxTool into SkillRegistry");
+        return tool;
     }
 
     /**
-     * CodeReviewSkill — delegates code review to an LLM provider.
+     * CodeReviewTool — delegates code review to an LLM provider.
      */
     @Bean
-    public CodeReviewSkill codeReviewSkill(LlmProviderFactory llmProviderFactory,
+    public CodeReviewTool codeReviewTool(LlmProviderFactory llmProviderFactory,
                                            LlmProperties llmProperties,
                                            SkillRegistry skillRegistry) {
         String providerName = llmProperties.getDefaultProvider() != null
                 ? llmProperties.getDefaultProvider() : "claude";
-        CodeReviewSkill skill = new CodeReviewSkill(llmProviderFactory, providerName);
-        skillRegistry.registerTool(skill);
-        log.info("Registered CodeReviewSkill into SkillRegistry (provider={})", providerName);
-        return skill;
+        CodeReviewTool tool = new CodeReviewTool(llmProviderFactory, providerName);
+        skillRegistry.registerTool(tool);
+        log.info("Registered CodeReviewTool into SkillRegistry (provider={})", providerName);
+        return tool;
     }
 
     /**
-     * RegisterScriptMethodSkill — lets Code Agent persist a bash/node script as an
+     * RegisterScriptMethodTool — lets Code Agent persist a bash/node script as an
      * {@code agent.*} hook method and register it at runtime.
      */
     @Bean
-    public RegisterScriptMethodSkill registerScriptMethodSkill(ScriptMethodService scriptMethodService,
+    public RegisterScriptMethodTool registerScriptMethodTool(ScriptMethodService scriptMethodService,
                                                                ObjectMapper objectMapper,
                                                                SkillRegistry skillRegistry) {
-        RegisterScriptMethodSkill skill = new RegisterScriptMethodSkill(scriptMethodService, objectMapper);
-        skillRegistry.registerTool(skill);
-        log.info("Registered RegisterScriptMethodSkill into SkillRegistry");
-        return skill;
+        RegisterScriptMethodTool tool = new RegisterScriptMethodTool(scriptMethodService, objectMapper);
+        skillRegistry.registerTool(tool);
+        log.info("Registered RegisterScriptMethodTool into SkillRegistry");
+        return tool;
     }
 
     /**
-     * RegisterCompiledMethodSkill — lets Code Agent submit a Java class that implements
+     * RegisterCompiledMethodTool — lets Code Agent submit a Java class that implements
      * {@code BuiltInMethod}; source is compiled in-process and stored for human approval before
      * being loaded into the runtime registry.
      */
     @Bean
-    public RegisterCompiledMethodSkill registerCompiledMethodSkill(CompiledMethodService compiledMethodService,
+    public RegisterCompiledMethodTool registerCompiledMethodTool(CompiledMethodService compiledMethodService,
                                                                    ObjectMapper objectMapper,
                                                                    SkillRegistry skillRegistry) {
-        RegisterCompiledMethodSkill skill = new RegisterCompiledMethodSkill(compiledMethodService, objectMapper);
-        skillRegistry.registerTool(skill);
-        log.info("Registered RegisterCompiledMethodSkill into SkillRegistry");
-        return skill;
+        RegisterCompiledMethodTool tool = new RegisterCompiledMethodTool(compiledMethodService, objectMapper);
+        skillRegistry.registerTool(tool);
+        log.info("Registered RegisterCompiledMethodTool into SkillRegistry");
+        return tool;
     }
 
     @Bean
-    public TodoWriteSkill todoWriteSkill(TodoStore todoStore, SkillRegistry skillRegistry) {
-        TodoWriteSkill skill = new TodoWriteSkill(todoStore);
-        skillRegistry.registerTool(skill);
-        log.info("Registered TodoWriteSkill into SkillRegistry");
-        return skill;
+    public TodoWriteTool todoWriteTool(TodoStore todoStore, SkillRegistry skillRegistry) {
+        TodoWriteTool tool = new TodoWriteTool(todoStore);
+        skillRegistry.registerTool(tool);
+        log.info("Registered TodoWriteTool into SkillRegistry");
+        return tool;
     }
 
-    // ClawHubSkill 已迁移为 system-skills/clawhub/ 文件化 Skill，
+    // ClawHubTool 已迁移为 system-skills/clawhub/ 文件化 Skill，
     // 由 SystemSkillLoader 在启动时自动加载，不再需要 Java bean 注册。
 
     /**
-     * SubAgentSkill — 异步派发任务给另一个 agentId 指向的子 Agent。
-     * ChatService 用 @Lazy 打破 ChatService ↔ SubAgentRegistry ↔ SubAgentSkill 依赖环。
+     * SubAgentTool — 异步派发任务给另一个 agentId 指向的子 Agent。
+     * ChatService 用 @Lazy 打破 ChatService ↔ SubAgentRegistry ↔ SubAgentTool 依赖环。
      */
     @Bean
-    public SubAgentSkill subAgentSkill(AgentService agentService,
+    public SubAgentTool subAgentTool(AgentService agentService,
                                        SessionService sessionService,
                                        @Lazy ChatService chatService,
                                        SubAgentRegistry subAgentRegistry,
                                        SkillRegistry skillRegistry) {
-        SubAgentSkill skill = new SubAgentSkill(agentService, sessionService, chatService, subAgentRegistry);
-        skillRegistry.registerTool(skill);
-        log.info("Registered SubAgentSkill into SkillRegistry");
-        return skill;
+        SubAgentTool tool = new SubAgentTool(agentService, sessionService, chatService, subAgentRegistry);
+        skillRegistry.registerTool(tool);
+        log.info("Registered SubAgentTool into SkillRegistry");
+        return tool;
     }
 
     /**
-     * TeamCreateSkill — spawn a team member in a multi-agent collaboration run.
+     * TeamCreateTool — spawn a team member in a multi-agent collaboration run.
      */
     @Bean
-    public TeamCreateSkill teamCreateSkill(SessionService sessionService,
+    public TeamCreateTool teamCreateTool(SessionService sessionService,
                                            CollabRunService collabRunService,
                                            SkillRegistry skillRegistry) {
-        TeamCreateSkill skill = new TeamCreateSkill(sessionService, collabRunService);
-        skillRegistry.registerTool(skill);
-        log.info("Registered TeamCreateSkill into SkillRegistry");
-        return skill;
+        TeamCreateTool tool = new TeamCreateTool(sessionService, collabRunService);
+        skillRegistry.registerTool(tool);
+        log.info("Registered TeamCreateTool into SkillRegistry");
+        return tool;
     }
 
     /**
-     * TeamListSkill — list team members in the current collaboration run.
+     * TeamListTool — list team members in the current collaboration run.
      */
     @Bean
-    public TeamListSkill teamListSkill(SessionService sessionService,
+    public TeamListTool teamListTool(SessionService sessionService,
                                        AgentRoster agentRoster,
                                        SkillRegistry skillRegistry) {
-        TeamListSkill skill = new TeamListSkill(sessionService, agentRoster);
-        skillRegistry.registerTool(skill);
-        log.info("Registered TeamListSkill into SkillRegistry");
-        return skill;
+        TeamListTool tool = new TeamListTool(sessionService, agentRoster);
+        skillRegistry.registerTool(tool);
+        log.info("Registered TeamListTool into SkillRegistry");
+        return tool;
     }
 
     /**
-     * TeamKillSkill — cancel a running team member or the entire collab run.
+     * TeamKillTool — cancel a running team member or the entire collab run.
      */
     @Bean
-    public TeamKillSkill teamKillSkill(SessionService sessionService,
+    public TeamKillTool teamKillTool(SessionService sessionService,
                                        AgentRoster agentRoster,
                                        CollabRunService collabRunService,
                                        CancellationRegistry cancellationRegistry,
                                        SkillRegistry skillRegistry) {
-        TeamKillSkill skill = new TeamKillSkill(sessionService, agentRoster, collabRunService, cancellationRegistry);
-        skillRegistry.registerTool(skill);
-        log.info("Registered TeamKillSkill into SkillRegistry");
-        return skill;
+        TeamKillTool tool = new TeamKillTool(sessionService, agentRoster, collabRunService, cancellationRegistry);
+        skillRegistry.registerTool(tool);
+        log.info("Registered TeamKillTool into SkillRegistry");
+        return tool;
     }
 
     /**
-     * TeamSendSkill — send peer messages between team members in a collaboration run.
+     * TeamSendTool — send peer messages between team members in a collaboration run.
      */
     @Bean
-    public TeamSendSkill teamSendSkill(SessionService sessionService,
+    public TeamSendTool teamSendTool(SessionService sessionService,
                                        AgentRoster agentRoster,
                                        SubAgentRegistry subAgentRegistry,
                                        ChatEventBroadcaster broadcaster,
                                        com.skillforge.core.engine.TraceCollector traceCollector,
                                        SkillRegistry skillRegistry) {
-        TeamSendSkill skill = new TeamSendSkill(sessionService, agentRoster, subAgentRegistry, broadcaster, traceCollector);
-        skillRegistry.registerTool(skill);
-        log.info("Registered TeamSendSkill into SkillRegistry");
-        return skill;
+        TeamSendTool tool = new TeamSendTool(sessionService, agentRoster, subAgentRegistry, broadcaster, traceCollector);
+        skillRegistry.registerTool(tool);
+        log.info("Registered TeamSendTool into SkillRegistry");
+        return tool;
     }
 
     @Bean

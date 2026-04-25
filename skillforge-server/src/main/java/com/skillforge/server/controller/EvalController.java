@@ -39,7 +39,7 @@ public class EvalController {
     private final EvalSessionRepository evalSessionRepository;
     private final ObjectMapper objectMapper;
     // Use evalOrchestratorExecutor (not evalLoopExecutor) to prevent nested-pool deadlock:
-    // evalLoopExecutor is used by ScenarioRunnerSkill for inner scenario runs;
+    // evalLoopExecutor is used by ScenarioRunnerTool for inner scenario runs;
     // using it here for outer runEval tasks would cause both pools to block on each other.
     private final ExecutorService evalOrchestratorExecutor;
     private final ScenarioLoader scenarioLoader;
