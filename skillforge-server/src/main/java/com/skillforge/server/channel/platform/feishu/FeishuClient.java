@@ -304,14 +304,24 @@ public class FeishuClient {
         String preview = payload.commandPreview() == null ? "" : payload.commandPreview();
         String target = payload.installTarget() == null ? "" : payload.installTarget();
         String tool = payload.installTool() == null ? "" : payload.installTool();
+        boolean createAgent = "CreateAgent".equals(tool);
 
         java.util.List<Map<String, Object>> elements = new java.util.ArrayList<>();
-        elements.add(Map.of("tag", "markdown",
-                "content", "**Agent wants to run:** `" + escapeMd(preview) + "`"));
-        elements.add(Map.of("tag", "markdown",
-                "content", "**Tool:** " + escapeMd(tool) + "\n**Target:** `" + escapeMd(target) + "`"));
-        elements.add(Map.of("tag", "markdown",
-                "content", "_Approving this will also allow sub-agents and team members to install the **same target** without re-prompting. Installing a different target will prompt again._"));
+        if (createAgent) {
+            elements.add(Map.of("tag", "markdown",
+                    "content", "**Agent wants to create:** `" + escapeMd(target) + "`"));
+            elements.add(Map.of("tag", "markdown",
+                    "content", payload.description() != null ? escapeMd(payload.description()) : ""));
+            elements.add(Map.of("tag", "markdown",
+                    "content", "**Requested configuration:** `" + escapeMd(preview) + "`"));
+        } else {
+            elements.add(Map.of("tag", "markdown",
+                    "content", "**Agent wants to run:** `" + escapeMd(preview) + "`"));
+            elements.add(Map.of("tag", "markdown",
+                    "content", "**Tool:** " + escapeMd(tool) + "\n**Target:** `" + escapeMd(target) + "`"));
+            elements.add(Map.of("tag", "markdown",
+                    "content", "_Approving this will also allow sub-agents and team members to install the **same target** without re-prompting. Installing a different target will prompt again._"));
+        }
         elements.add(Map.of("tag", "hr"));
 
         // Approve / Deny buttons — value payload round-trips through card-action callback.

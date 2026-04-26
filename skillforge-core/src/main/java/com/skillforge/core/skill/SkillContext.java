@@ -8,6 +8,8 @@ public class SkillContext {
     private String workingDirectory;
     private String sessionId;
     private Long userId;
+    private String toolUseId;
+    private String approvalToken;
 
     public SkillContext() {
     }
@@ -40,5 +42,21 @@ public class SkillContext {
 
     public void setUserId(Long userId) {
         this.userId = userId;
+    }
+
+    public String getToolUseId() {
+        return toolUseId;
+    }
+
+    public void setToolUseId(String toolUseId) {
+        this.toolUseId = toolUseId;
+    }
+
+    public String getApprovalToken() {
+        return approvalToken;
+    }
+
+    public void setApprovalToken(String approvalToken) {
+        this.approvalToken = approvalToken;
     }
 }

@@ -44,6 +44,7 @@ import com.skillforge.server.tool.MemoryDetailTool;
 import com.skillforge.server.tool.MemorySearchTool;
 import com.skillforge.server.tool.MemoryTool;
 import com.skillforge.server.tool.AgentDiscoveryTool;
+import com.skillforge.server.tool.CreateAgentTool;
 import com.skillforge.server.tool.GetSessionMessagesTool;
 import com.skillforge.server.tool.GetTraceTool;
 import com.skillforge.server.tool.SubAgentTool;
@@ -52,6 +53,7 @@ import com.skillforge.server.tool.TeamKillTool;
 import com.skillforge.server.tool.TeamListTool;
 import com.skillforge.server.tool.TeamSendTool;
 import com.skillforge.server.service.AgentAuthoredHookService;
+import com.skillforge.server.service.AgentService;
 import com.skillforge.server.service.AgentTargetResolver;
 import com.skillforge.server.service.ChatService;
 import com.skillforge.server.service.EmbeddingService;
@@ -240,6 +242,17 @@ public class SkillForgeConfig {
     }
 
     @Bean
+    public CreateAgentTool createAgentTool(AgentService agentService,
+                                           ObjectMapper objectMapper,
+                                           com.skillforge.core.engine.confirm.ToolApprovalRegistry toolApprovalRegistry,
+                                           SkillRegistry skillRegistry) {
+        CreateAgentTool tool = new CreateAgentTool(agentService, objectMapper, toolApprovalRegistry);
+        skillRegistry.registerTool(tool);
+        log.info("Registered CreateAgentTool into SkillRegistry");
+        return tool;
+    }
+
+    @Bean
     public GetTraceTool getTraceTool(TraceSpanRepository traceSpanRepository,
                                      SessionService sessionService,
                                      ObjectMapper objectMapper,
@@ -392,6 +405,11 @@ public class SkillForgeConfig {
     }
 
     @Bean
+    public com.skillforge.core.engine.confirm.ToolApprovalRegistry toolApprovalRegistry() {
+        return new com.skillforge.core.engine.confirm.ToolApprovalRegistry();
+    }
+
+    @Bean
     public CancellationRegistry cancellationRegistry() {
         return new CancellationRegistry();
     }
@@ -452,6 +470,7 @@ public class SkillForgeConfig {
                                            com.skillforge.server.service.MemoryService memoryService,
                                            UserConfigService userConfigService,
                                            com.skillforge.core.engine.confirm.SessionConfirmCache sessionConfirmCache,
+                                           com.skillforge.core.engine.confirm.ToolApprovalRegistry toolApprovalRegistry,
                                            com.skillforge.core.engine.confirm.RootSessionLookup rootSessionLookup,
                                            com.skillforge.core.engine.confirm.ConfirmationPrompter confirmationPrompter) {
         String defaultProvider = llmProperties.getDefaultProvider() != null
@@ -469,6 +488,7 @@ public class SkillForgeConfig {
         engine.setClaudeMdProvider(userId -> userConfigService.getClaudeMd(userId));
         engine.setConfirmationPrompter(confirmationPrompter);
         engine.setSessionConfirmCache(sessionConfirmCache);
+        engine.setToolApprovalRegistry(toolApprovalRegistry);
         engine.setRootSessionLookup(rootSessionLookup);
         return engine;
     }

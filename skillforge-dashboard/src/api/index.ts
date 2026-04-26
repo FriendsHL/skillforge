@@ -113,22 +113,23 @@ export const answerAsk = (sessionId: string, askId: string, answer: string, user
   api.post(`/chat/${sessionId}/answer`, { askId, answer, userId });
 
 // ─── Install Confirmation ──────────────────────────────────────────────────
-// Payload for WS event `confirmation_required` (mirrors backend
-// `ConfirmationPromptPayload` — see docs/design-install-confirmation-flow.md §2.7 / §8.A).
+// Payload for WS event `confirmation_required` (mirrors backend `ConfirmationPromptPayload`).
 export interface ConfirmationChoice {
-  id: string;
+  id?: string;
+  value?: string;
   label: string;
   /** Semantic variant so the UI can style approve/deny distinctly. */
   variant?: 'approve' | 'deny';
+  style?: string;
   description?: string;
 }
 
 export interface ConfirmationPromptPayload {
   confirmationId: string;
   sessionId: string;
-  /** Normalized install tool name: 'clawhub' | 'skillhub' | 'skill-hub' | 'multiple' | 'unknown'. */
+  /** Operation/tool name, for example 'clawhub' or 'CreateAgent'. */
   installTool: string;
-  /** Parsed target package name; '*' when unparseable or multi-install (forces re-prompt). */
+  /** Operation target: package name for install, agent name for CreateAgent. */
   installTarget: string;
   commandPreview: string;
   title: string;

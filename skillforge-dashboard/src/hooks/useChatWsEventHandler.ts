@@ -138,8 +138,8 @@ export function useChatWsEventHandler(deps: WsEventHandlerDeps) {
         });
         setOtherInput('');
       } else if (evt.type === 'confirmation_required') {
-        // Install confirmation — fields are delivered flat on the event,
-        // mirroring ask_user convention. See docs §2.A + §8.A.
+        // Human confirmation — fields may be delivered flat on the event or
+        // nested under payload, mirroring ask_user convention.
         const payload = (evt.payload as Partial<ConfirmationPromptPayload> | undefined) ?? {};
         const confirmationId = (evt.confirmationId as string | undefined) ?? payload.confirmationId;
         if (!confirmationId) return;

@@ -30,7 +30,7 @@ public class TraceSpanEntity {
     @Column(length = 36)
     private String parentSpanId;
 
-    /** AGENT_LOOP / LLM_CALL / TOOL_CALL / ASK_USER / COMPACT */
+    /** AGENT_LOOP / LLM_CALL / TOOL_CALL / ASK_USER / COMPACT / INSTALL_CONFIRM / AGENT_CONFIRM */
     @Column(length = 16, nullable = false)
     private String spanType;
 

@@ -14,6 +14,7 @@ import com.skillforge.core.engine.confirm.Decision;
 import com.skillforge.core.engine.confirm.InstallTargetParser;
 import com.skillforge.core.engine.confirm.RootSessionLookup;
 import com.skillforge.core.engine.confirm.SessionConfirmCache;
+import com.skillforge.core.engine.confirm.ToolApprovalRegistry;
 import com.skillforge.core.llm.LlmProvider;
 import com.skillforge.core.llm.LlmProviderFactory;
 import com.skillforge.core.llm.LlmRequest;
@@ -85,6 +86,8 @@ public class AgentLoopEngine {
     private RootSessionLookup rootSessionLookup;
     /** install confirmation 等待超时,单位秒(默认 30 min,与 ask_user 同性质)。 */
     private long installConfirmTimeoutSeconds = 30 * 60L;
+    /** One-shot approval tokens for non-install tools that require human confirmation. */
+    private ToolApprovalRegistry toolApprovalRegistry;
     /** 可选:记忆提供者。接受 userId 返回记忆 markdown 字符串,拼接到 system prompt 末尾。 */
     private java.util.function.Function<Long, String> memoryProvider;
     private java.util.function.Function<Long, String> claudeMdProvider;
@@ -136,6 +139,10 @@ public class AgentLoopEngine {
 
     public void setRootSessionLookup(RootSessionLookup rootSessionLookup) {
         this.rootSessionLookup = rootSessionLookup;
+    }
+
+    public void setToolApprovalRegistry(ToolApprovalRegistry toolApprovalRegistry) {
+        this.toolApprovalRegistry = toolApprovalRegistry;
     }
 
     public void setInstallConfirmTimeoutSeconds(long installConfirmTimeoutSeconds) {
@@ -791,6 +798,21 @@ public class AgentLoopEngine {
                         icSpan.end();
                         traceCollector.record(icSpan);
                     }
+                } else if (isCreateAgentRequiringConfirmation(block)) {
+                    long confirmStart = System.currentTimeMillis();
+                    Message result = handleCreateAgentConfirmation(block, loopCtx, toolCallRecords);
+                    askResults.put(i, result);
+                    if (traceCollector != null && rootSpan != null) {
+                        TraceSpan confirmSpan = new TraceSpan("AGENT_CONFIRM", "create_agent_confirmation");
+                        confirmSpan.setSessionId(sessionId);
+                        confirmSpan.setParentSpanId(rootSpan.getId());
+                        confirmSpan.setIterationIndex(loopCtx.getLoopCount());
+                        confirmSpan.setStartTimeMs(confirmStart);
+                        confirmSpan.setInput(block.getInput() != null ? block.getInput().toString() : "");
+                        confirmSpan.setOutput(result.getTextContent());
+                        confirmSpan.end();
+                        traceCollector.record(confirmSpan);
+                    }
                 } else if (ContextCompactTool.NAME.equals(block.getName())) {
                     long compactStart = System.currentTimeMillis();
                     Message result = handleCompactContext(block, loopCtx);
@@ -1216,6 +1238,10 @@ public class AgentLoopEngine {
         return false;
     }
 
+    boolean isCreateAgentRequiringConfirmation(ToolUseBlock block) {
+        return block != null && "CreateAgent".equals(block.getName());
+    }
+
     /**
      * Main-thread handler for install-pattern tool_use. Runs on the engine loop thread,
      * NOT in {@code supplyAsync} — so the 120s {@code allOf} ceiling does not apply.
@@ -1293,6 +1319,77 @@ public class AgentLoopEngine {
         }
     }
 
+    Message handleCreateAgentConfirmation(ToolUseBlock block, LoopContext loopCtx,
+                                          List<ToolCallRecord> toolCallRecords) {
+        String sid = loopCtx.getSessionId();
+        String toolUseId = block.getId();
+        Map<String, Object> input = block.getInput() != null ? block.getInput() : Collections.emptyMap();
+
+        if (pendingAskRegistry != null && pendingAskRegistry.hasPendingForSession(sid)) {
+            return Message.toolResult(toolUseId,
+                    "CreateAgent confirmation cannot start while ask_user is pending; "
+                            + "LLM should re-emit after the ask is answered.", true);
+        }
+
+        Optional<Tool> toolOpt = skillRegistry.getTool(block.getName());
+        if (toolOpt.isEmpty()) {
+            return Message.toolResult(toolUseId, "CreateAgent tool is not registered", true);
+        }
+        List<String> missingRequired = findMissingRequiredFields(toolOpt.get(), input);
+        if (!missingRequired.isEmpty()) {
+            String hint = "[RETRY NEEDED] CreateAgent missing required argument(s): "
+                    + String.join(", ", missingRequired)
+                    + ". Re-emit the tool call with all required fields populated.";
+            return Message.toolResult(toolUseId, hint, true, SkillResult.ErrorType.VALIDATION.name());
+        }
+
+        if (confirmationPrompter == null) {
+            log.warn("CreateAgent confirmation prompter not configured; rejecting fail-closed sid={}", sid);
+            return Message.toolResult(toolUseId,
+                    "CreateAgent requires user approval, but confirmation is not available in this runtime.",
+                    true);
+        }
+        if (toolApprovalRegistry == null) {
+            log.warn("CreateAgent approval registry not configured; rejecting fail-closed sid={}", sid);
+            return Message.toolResult(toolUseId,
+                    "CreateAgent approval registry is not configured; cannot create agent safely.",
+                    true);
+        }
+
+        String agentName = stringValue(input.get("name"));
+        if (agentName == null || agentName.isBlank()) {
+            agentName = "*";
+        }
+        String preview = mapToJson(input);
+        try {
+            Decision d = confirmationPrompter.prompt(new ConfirmationPrompter.ConfirmationRequest(
+                    sid, loopCtx.getUserId(), toolUseId, "CreateAgent", agentName, preview,
+                    null, installConfirmTimeoutSeconds));
+            if (d == Decision.APPROVED) {
+                String token = toolApprovalRegistry.issue(
+                        sid, block.getName(), toolUseId, java.time.Duration.ofMinutes(5));
+                return runToolSyncWithBroadcast(block, loopCtx, toolCallRecords, token);
+            }
+            return Message.toolResult(toolUseId,
+                    d == Decision.DENIED
+                            ? "User denied CreateAgent for name=" + agentName
+                            : "CreateAgent confirmation timed out for name=" + agentName,
+                    true);
+        } catch (ChannelUnavailableException ce) {
+            log.warn("CreateAgent confirmation channel unavailable sid={}: {}", sid, ce.getMessage());
+            return Message.toolResult(toolUseId, ce.getMessage(), true);
+        } catch (Exception ex) {
+            log.error("CreateAgent confirmation flow error sid={}", sid, ex);
+            return Message.toolResult(toolUseId,
+                    "CreateAgent confirmation failed: " + ex.getMessage(), true);
+        } finally {
+            if (broadcaster != null && sid != null
+                    && (pendingAskRegistry == null || !pendingAskRegistry.hasPendingForSession(sid))) {
+                broadcaster.sessionStatus(sid, "running", null, null);
+            }
+        }
+    }
+
     /**
      * Execute the approved install command on the engine main thread, emitting
      * {@code toolStarted} / {@code toolFinished} to keep parity with the {@code supplyAsync}
@@ -1301,6 +1398,12 @@ public class AgentLoopEngine {
      */
     private Message runInstallSyncWithBroadcast(ToolUseBlock block, LoopContext loopCtx,
                                                 List<ToolCallRecord> toolCallRecords) {
+        return runToolSyncWithBroadcast(block, loopCtx, toolCallRecords, null);
+    }
+
+    private Message runToolSyncWithBroadcast(ToolUseBlock block, LoopContext loopCtx,
+                                             List<ToolCallRecord> toolCallRecords,
+                                             String approvalToken) {
         String sid = loopCtx.getSessionId();
         long start = System.currentTimeMillis();
         if (broadcaster != null && sid != null) {
@@ -1310,7 +1413,7 @@ public class AgentLoopEngine {
         String status = "success";
         String errorMsg = null;
         try {
-            r = executeToolCall(block, loopCtx, toolCallRecords);
+            r = executeToolCall(block, loopCtx, toolCallRecords, approvalToken);
             if (r != null && r.getContent() instanceof java.util.List<?> blocks) {
                 for (Object o : blocks) {
                     if (o instanceof com.skillforge.core.model.ContentBlock cb
@@ -1357,6 +1460,10 @@ public class AgentLoopEngine {
     private static String truncateForResult(String s) {
         if (s == null) return "";
         return s.length() <= 120 ? s : s.substring(0, 120) + "…";
+    }
+
+    private static String stringValue(Object value) {
+        return value != null ? value.toString() : null;
     }
 
     /**
@@ -1548,6 +1655,12 @@ public class AgentLoopEngine {
      */
     private Message executeToolCall(ToolUseBlock block, LoopContext loopContext,
                                     List<ToolCallRecord> toolCallRecords) {
+        return executeToolCall(block, loopContext, toolCallRecords, null);
+    }
+
+    private Message executeToolCall(ToolUseBlock block, LoopContext loopContext,
+                                    List<ToolCallRecord> toolCallRecords,
+                                    String approvalToken) {
         String skillName = block.getName();
         String toolUseId = block.getId();
         Map<String, Object> input = block.getInput() != null ? block.getInput() : Collections.emptyMap();
@@ -1576,6 +1689,8 @@ public class AgentLoopEngine {
                         loopContext.getWorkingDirectory(),
                         loopContext.getSessionId(),
                         loopContext.getUserId());
+                skillContext.setToolUseId(toolUseId);
+                skillContext.setApprovalToken(approvalToken);
 
                 // 执行 SkillHook.beforeSkillExecute()
                 Map<String, Object> processedInput = input;

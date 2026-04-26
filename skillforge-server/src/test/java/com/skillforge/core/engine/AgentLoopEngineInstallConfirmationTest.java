@@ -5,6 +5,7 @@ import com.skillforge.core.engine.confirm.ConfirmationPrompter;
 import com.skillforge.core.engine.confirm.Decision;
 import com.skillforge.core.engine.confirm.RootSessionLookup;
 import com.skillforge.core.engine.confirm.SessionConfirmCache;
+import com.skillforge.core.engine.confirm.ToolApprovalRegistry;
 import com.skillforge.core.llm.LlmProviderFactory;
 import com.skillforge.core.model.ContentBlock;
 import com.skillforge.core.model.Message;
@@ -76,6 +77,20 @@ class AgentLoopEngineInstallConfirmationTest {
         return engine;
     }
 
+    private AgentLoopEngine newCreateAgentEngine(Tool createAgentTool,
+                                                 ConfirmationPrompter prompter,
+                                                 ToolApprovalRegistry approvalRegistry) {
+        SkillRegistry registry = new SkillRegistry();
+        registry.registerTool(createAgentTool);
+        AgentLoopEngine engine = new AgentLoopEngine(
+                new LlmProviderFactory(), "unused", registry,
+                Collections.emptyList(), Collections.emptyList(), Collections.emptyList());
+        engine.setConfirmationPrompter(prompter);
+        engine.setToolApprovalRegistry(approvalRegistry);
+        engine.setPendingAskRegistry(new PendingAskRegistry());
+        return engine;
+    }
+
     private LoopContext ctx(String sid) {
         LoopContext c = new LoopContext();
         c.setSessionId(sid);
@@ -87,6 +102,10 @@ class AgentLoopEngineInstallConfirmationTest {
     private ToolUseBlock installBlock(String cmd) {
         return new ToolUseBlock(UUID.randomUUID().toString(), "Bash",
                 Map.of("command", cmd));
+    }
+
+    private ToolUseBlock createAgentBlock(String name) {
+        return new ToolUseBlock(UUID.randomUUID().toString(), "CreateAgent", Map.of("name", name));
     }
 
     @Test
@@ -104,6 +123,78 @@ class AgentLoopEngineInstallConfirmationTest {
         assertThat(skill.calls.get()).isEqualTo(1);
         assertThat(isError(r)).isFalse();
         assertThat(cache.isApproved("s1", "clawhub", "obsidian")).isTrue();
+    }
+
+    @Test
+    @DisplayName("CreateAgent APPROVED: engine injects one-shot approval token before execution")
+    void createAgentApprovedInjectsApprovalToken() {
+        ToolApprovalRegistry approvalRegistry = new ToolApprovalRegistry();
+        AtomicInteger calls = new AtomicInteger();
+        Tool createAgentTool = new Tool() {
+            @Override public String getName() { return "CreateAgent"; }
+            @Override public String getDescription() { return "test create agent"; }
+            @Override public ToolSchema getToolSchema() {
+                ToolSchema s = new ToolSchema();
+                s.setName("CreateAgent");
+                s.setDescription("test");
+                s.setInputSchema(Map.of(
+                        "type", "object",
+                        "properties", Map.of("name", Map.of("type", "string")),
+                        "required", List.of("name")));
+                return s;
+            }
+            @Override public SkillResult execute(Map<String, Object> input, SkillContext context) {
+                boolean approved = approvalRegistry.consume(
+                        context.getApprovalToken(), context.getSessionId(), getName(), context.getToolUseId());
+                if (!approved) {
+                    return SkillResult.error("missing approval");
+                }
+                calls.incrementAndGet();
+                return SkillResult.success("created " + input.get("name"));
+            }
+        };
+        AgentLoopEngine engine = newCreateAgentEngine(createAgentTool, req -> Decision.APPROVED, approvalRegistry);
+
+        Message r = engine.handleCreateAgentConfirmation(
+                createAgentBlock("Session Analyzer"), ctx("s1"), new CopyOnWriteArrayList<>());
+
+        assertThat(calls.get()).isEqualTo(1);
+        assertThat(isError(r)).isFalse();
+        assertThat(textOf(r)).contains("created Session Analyzer");
+        assertThat(approvalRegistry.size()).isZero();
+    }
+
+    @Test
+    @DisplayName("CreateAgent DENIED: tool is not executed")
+    void createAgentDeniedDoesNotExecute() {
+        ToolApprovalRegistry approvalRegistry = new ToolApprovalRegistry();
+        AtomicInteger calls = new AtomicInteger();
+        Tool createAgentTool = new Tool() {
+            @Override public String getName() { return "CreateAgent"; }
+            @Override public String getDescription() { return "test create agent"; }
+            @Override public ToolSchema getToolSchema() {
+                ToolSchema s = new ToolSchema();
+                s.setName("CreateAgent");
+                s.setDescription("test");
+                s.setInputSchema(Map.of(
+                        "type", "object",
+                        "properties", Map.of("name", Map.of("type", "string")),
+                        "required", List.of("name")));
+                return s;
+            }
+            @Override public SkillResult execute(Map<String, Object> input, SkillContext context) {
+                calls.incrementAndGet();
+                return SkillResult.success("created");
+            }
+        };
+        AgentLoopEngine engine = newCreateAgentEngine(createAgentTool, req -> Decision.DENIED, approvalRegistry);
+
+        Message r = engine.handleCreateAgentConfirmation(
+                createAgentBlock("Denied Agent"), ctx("s1"), new CopyOnWriteArrayList<>());
+
+        assertThat(calls.get()).isZero();
+        assertThat(isError(r)).isTrue();
+        assertThat(textOf(r)).contains("User denied CreateAgent");
     }
 
     @Test

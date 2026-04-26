@@ -1,11 +1,11 @@
 package com.skillforge.core.engine.confirm;
 
 /**
- * SPI:推送 install-confirmation prompt 给用户, 阻塞等待 Decision.
+ * SPI:推送 human-confirmation prompt 给用户, 阻塞等待 Decision.
  *
  * <p>严禁在 {@code SkillHook} 内调用 —— 仅
  * {@link com.skillforge.core.engine.AgentLoopEngine#handleInstallConfirmation
- * AgentLoopEngine.handleInstallConfirmation} 允许调用.
+ * AgentLoopEngine main-thread confirmation branches} 允许调用.
  * 原因:engine 主线程分支才有 1:1 tool_use↔tool_result 守恒,SkillHook 走 supplyAsync
  * 会遇到 120s allOf timeout.
  */
@@ -23,8 +23,10 @@ public interface ConfirmationPrompter {
     Decision prompt(ConfirmationRequest request);
 
     /**
-     * Input to {@link #prompt}. {@code triggererOpenId} is only populated for feishu turns
-     * (captured by {@code ChannelSessionRouter} at message ingress).
+     * Input to {@link #prompt}. Field names retain the original install-confirmation naming
+     * for wire compatibility; non-install tools may pass their operation and target through
+     * {@code installTool}/{@code installTarget}. {@code triggererOpenId} is only populated
+     * for feishu turns (captured by {@code ChannelSessionRouter} at message ingress).
      */
     record ConfirmationRequest(
             String sessionId,

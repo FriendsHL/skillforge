@@ -16,9 +16,11 @@ interface InstallConfirmationCardProps {
 function choiceToDecision(choice: ConfirmationChoice): ConfirmationDecision | null {
   if (choice.variant === 'approve') return 'APPROVED';
   if (choice.variant === 'deny') return 'DENIED';
+  if (choice.style === 'primary') return 'APPROVED';
+  if (choice.style === 'danger') return 'DENIED';
   // Fallback: derive from id / label so the card still works if backend
   // omits `variant` in the payload.
-  const hay = `${choice.id} ${choice.label}`.toLowerCase();
+  const hay = `${choice.id ?? choice.value ?? ''} ${choice.label}`.toLowerCase();
   if (/approve|allow|yes|accept|确认|允许|同意/.test(hay)) return 'APPROVED';
   if (/deny|reject|no|cancel|拒绝|取消/.test(hay)) return 'DENIED';
   return null;
@@ -30,10 +32,12 @@ function InstallConfirmationCard({
   submittingDecision,
   onDecision,
 }: InstallConfirmationCardProps) {
+  const isCreateAgent = payload.installTool === 'CreateAgent';
   const needsWarnBanner =
-    payload.installTarget === '*' ||
-    payload.installTool === 'multiple' ||
-    payload.installTool === 'unknown';
+    !isCreateAgent &&
+    (payload.installTarget === '*' ||
+      payload.installTool === 'multiple' ||
+      payload.installTool === 'unknown');
 
   // Normalize choices to guaranteed approve / deny buttons. If backend sends
   // extra choices we render them pass-through, but we always guarantee the two
@@ -45,26 +49,26 @@ function InstallConfirmationCard({
     <div
       className="confirm-card"
       role="dialog"
-      aria-label="Install confirmation required"
+      aria-label={isCreateAgent ? 'Agent creation approval required' : 'Install confirmation required'}
     >
       <div className="confirm-header">
         <span className="confirm-header-dot" aria-hidden="true" />
-        Install confirmation
+        {isCreateAgent ? 'Agent creation approval' : 'Install confirmation'}
       </div>
       <div className="confirm-title">{payload.title}</div>
       <div className="confirm-meta">
-        tool: <strong>{payload.installTool}</strong>
+        {isCreateAgent ? 'action' : 'tool'}: <strong>{payload.installTool}</strong>
         <span className="confirm-meta-sep">·</span>
-        target: <code className="confirm-target">{payload.installTarget}</code>
+        {isCreateAgent ? 'agent' : 'target'}: <code className="confirm-target">{payload.installTarget}</code>
         <span className="confirm-meta-sep">·</span>
-        <span className="confirm-meta-dim">session-only</span>
+        <span className="confirm-meta-dim">{isCreateAgent ? 'one-time approval' : 'session-only'}</span>
       </div>
 
       {payload.description && (
         <div className="confirm-desc">{payload.description}</div>
       )}
 
-      <pre className="confirm-cmd" aria-label="command preview">
+      <pre className="confirm-cmd" aria-label={isCreateAgent ? 'request preview' : 'command preview'}>
         <code>{payload.commandPreview}</code>
       </pre>
 
@@ -77,11 +81,18 @@ function InstallConfirmationCard({
         </div>
       )}
 
-      <div className="confirm-scope-note">
-        Approving this will also allow sub-agents and team members spawned from
-        this session to install the <strong>same target</strong> without
-        re-prompting. Installing a different target will prompt you again.
-      </div>
+      {isCreateAgent ? (
+        <div className="confirm-scope-note">
+          Approving this creates one active Agent owned by the current user. The
+          approval token is single-use and cannot be reused by hooks or later tool calls.
+        </div>
+      ) : (
+        <div className="confirm-scope-note">
+          Approving this will also allow sub-agents and team members spawned from
+          this session to install the <strong>same target</strong> without
+          re-prompting. Installing a different target will prompt you again.
+        </div>
+      )}
 
       <div className="confirm-actions">
         <button

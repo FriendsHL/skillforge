@@ -149,6 +149,21 @@ public class DefaultConfirmationPrompter implements ConfirmationPrompter {
         if (preview != null && preview.length() > 240) {
             preview = preview.substring(0, 240) + "…";
         }
+        if ("CreateAgent".equals(pc.installTool())) {
+            return new ConfirmationPromptPayload(
+                    pc.confirmationId(),
+                    pc.sessionId(),
+                    pc.installTool(),
+                    pc.installTarget(),
+                    preview,
+                    "Create Agent approval",
+                    "The agent wants to create a new active Agent named `" + pc.installTarget()
+                            + "`. Review the requested configuration before approving.",
+                    List.of(
+                            new ConfirmationPromptPayload.ConfirmationChoice("approved", "Create Agent", "primary"),
+                            new ConfirmationPromptPayload.ConfirmationChoice("denied", "Deny", "danger")),
+                    Instant.now().plusSeconds(pc.timeoutSeconds()));
+        }
         String description;
         if ("*".equals(pc.installTarget()) || "multiple".equals(pc.installTool())
                 || "unknown".equals(pc.installTool())) {
