@@ -1,5 +1,6 @@
 import { useEffect, useId, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
 import {
   getSubAgentRuns,
   getContextBreakdown,
@@ -325,29 +326,43 @@ interface SubAgentRun {
   status: string;
   task: string;
   spawnedAt: string;
+  childSessionId?: string;
+  finalMessage?: string;
+  completedAt?: string;
 }
 
 function normalizeSubRun(raw: Record<string, unknown>): SubAgentRun {
   return {
-    id: String(raw.sessionId || raw.id || ''),
-    name: String(raw.agentName || raw.name || 'SubAgent'),
+    id: String(raw.runId || raw.sessionId || raw.id || ''),
+    name: String(raw.agentName || raw.childAgentName || raw.name || 'SubAgent'),
     status: String(raw.status || raw.runtimeStatus || 'unknown'),
     task: String(raw.task || raw.title || ''),
     spawnedAt: String(raw.createdAt || raw.spawnedAt || ''),
+    childSessionId: raw.childSessionId ? String(raw.childSessionId) : undefined,
+    finalMessage: raw.finalMessage ? String(raw.finalMessage) : undefined,
+    completedAt: raw.completedAt ? String(raw.completedAt) : undefined,
   };
 }
 
 const STATUS_COLORS: Record<string, { bg: string; fg: string }> = {
   running:  { bg: 'rgba(74,122,168,0.12)', fg: '#4a7aa8' },
+  RUNNING:  { bg: 'rgba(74,122,168,0.12)', fg: '#4a7aa8' },
   idle:     { bg: 'rgba(92,138,74,0.12)',  fg: '#5c8a4a' },
   completed:{ bg: 'var(--bg-hover)',        fg: 'var(--fg-3)' },
+  COMPLETED:{ bg: 'var(--bg-hover)',        fg: 'var(--fg-3)' },
   done:     { bg: 'var(--bg-hover)',        fg: 'var(--fg-3)' },
   error:    { bg: 'rgba(184,65,47,0.10)',  fg: '#b84130' },
+  FAILED:   { bg: 'rgba(184,65,47,0.10)',  fg: '#b84130' },
   waiting:  { bg: 'rgba(212,154,58,0.12)', fg: '#d49a3a' },
   waiting_user: { bg: 'rgba(212,154,58,0.12)', fg: '#d49a3a' },
 };
 
+const RUNNING_STATUSES = new Set(['running', 'RUNNING', 'in_progress']);
+
 function SubAgentTab({ sessionId, userId }: { sessionId?: string | null; userId?: number }) {
+  const navigate = useNavigate();
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+
   const { data: rawRuns = [] } = useQuery({
     queryKey: ['subagent-runs', sessionId],
     queryFn: () => getSubAgentRuns(sessionId!, userId!).then(res => {
@@ -359,6 +374,15 @@ function SubAgentTab({ sessionId, userId }: { sessionId?: string | null; userId?
   });
 
   const runs = (rawRuns as Record<string, unknown>[]).map(normalizeSubRun);
+
+  function toggleExpand(id: string, e: React.MouseEvent) {
+    e.stopPropagation();
+    setExpandedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
 
   if (runs.length === 0) {
     return (
@@ -374,40 +398,74 @@ function SubAgentTab({ sessionId, userId }: { sessionId?: string | null; userId?
         <span>Sub-agents</span>
         <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--fg-4)' }}>{runs.length}</span>
       </div>
-      {runs.map(r => (
-        <div key={r.id} className="lane-item-rd" style={{ cursor: 'default' }}>
-          <div className="lane-head">
-            <span className="lane-name">{r.name}</span>
-            <span style={{
-              fontFamily: 'var(--font-mono)', fontSize: 10, padding: '2px 7px',
-              borderRadius: 'var(--radius-pill, 99px)', letterSpacing: '0.04em',
-              background: (STATUS_COLORS[r.status] || STATUS_COLORS.done).bg,
-              color: (STATUS_COLORS[r.status] || STATUS_COLORS.done).fg,
-            }}>
-              {r.status}
-            </span>
+      {runs.map(r => {
+        const isRunning = RUNNING_STATUSES.has(r.status);
+        const isExpanded = expandedIds.has(r.id);
+        const color = STATUS_COLORS[r.status] || STATUS_COLORS.done;
+        const hasChild = !!r.childSessionId;
+
+        return (
+          <div
+            key={r.id}
+            className={`lane-item-rd sa-item ${isRunning ? 'sa-item--running' : ''} ${hasChild ? 'sa-item--clickable' : ''}`}
+            onClick={() => { if (hasChild) navigate(`/chat/${r.childSessionId}`); }}
+          >
+            <div className="lane-head">
+              <span className="lane-name">{r.name}</span>
+              <span style={{
+                fontFamily: 'var(--font-mono)', fontSize: 10, padding: '2px 7px',
+                borderRadius: 'var(--radius-pill, 99px)', letterSpacing: '0.04em',
+                background: color.bg,
+                color: color.fg,
+              }}>
+                {r.status}
+              </span>
+              {r.spawnedAt && (
+                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--fg-4)', flexShrink: 0 }}>
+                  {new Date(r.spawnedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </span>
+              )}
+            </div>
+
+            {/* Task summary */}
+            {r.task && (
+              <div className="sa-task" onClick={(e) => toggleExpand(r.id, e)}>
+                <span className="sa-task-text">{r.task}</span>
+                <span className={`sa-expand-icon ${isExpanded ? 'sa-expand-icon--open' : ''}`}>▾</span>
+              </div>
+            )}
+
+            {/* Progress bar for running */}
+            {isRunning && (
+              <div className="lane-progress" style={{ marginTop: 6 }}>
+                <div className="lane-progress-bar" />
+              </div>
+            )}
+
+            {/* Expanded details */}
+            {isExpanded && r.finalMessage && (
+              <div className="sa-detail">
+                <div className="sa-detail-label">Result</div>
+                <div className="sa-detail-text">{r.finalMessage}</div>
+              </div>
+            )}
+            {isExpanded && !r.finalMessage && isRunning && (
+              <div className="sa-detail">
+                <div className="sa-detail-text" style={{ opacity: 0.5, fontStyle: 'italic' }}>
+                  Working…
+                </div>
+              </div>
+            )}
+
+            {/* Click hint */}
+            {hasChild && !isExpanded && (
+              <div className="sa-hint">
+                {isRunning ? 'View session →' : 'Open session →'}
+              </div>
+            )}
           </div>
-          {r.task && (
-            <div style={{
-              marginTop: 4,
-              fontSize: 12,
-              color: 'var(--fg-2)',
-              lineHeight: 1.4,
-              display: '-webkit-box',
-              WebkitLineClamp: 2,
-              WebkitBoxOrient: 'vertical' as const,
-              overflow: 'hidden',
-            }}>
-              {r.task}
-            </div>
-          )}
-          {r.spawnedAt && (
-            <div style={{ marginTop: 4, fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--fg-4)' }}>
-              {new Date(r.spawnedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-            </div>
-          )}
-        </div>
-      ))}
+        );
+      })}
     </>
   );
 }

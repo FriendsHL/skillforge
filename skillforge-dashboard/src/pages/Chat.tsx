@@ -166,7 +166,17 @@ const Chat: React.FC = () => {
         const list = safeParseList(SessionSchema, extractList<unknown>(res)).filter(
           (s) => Number(s.agentId) === selectedAgent,
         );
+        // Sort newest first
+        list.sort((a, b) => {
+          const ta = new Date(a.updatedAt || a.createdAt || 0).getTime();
+          const tb = new Date(b.updatedAt || b.createdAt || 0).getTime();
+          return tb - ta;
+        });
         setSessions(list);
+        // Auto-select most recent session if none is active
+        if (list.length > 0) {
+          setActiveSessionId((prev) => prev ?? String(list[0].id));
+        }
       })
       .catch(() => {})
       .finally(() => {
