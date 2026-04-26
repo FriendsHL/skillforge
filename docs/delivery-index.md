@@ -20,6 +20,7 @@
 
 | 完成日期 | 交付项 | 技术方案 | 辅助文档 | 验证 / commit / migration |
 | --- | --- | --- | --- | --- |
+| 2026-04-26 | P15-4 Agent 配置自省 + UpdateAgent：`GetAgentConfig`、`AgentDiscovery` 增强、带一次确认的 `UpdateAgent` | 无独立方案；属于 P11/P15 自省工具补齐，并复用 [design-sec2-hook-source-protection.md](design-sec2-hook-source-protection.md) 的 hook 来源隔离边界 | [todo.md](todo.md) | 本次提交；`mvn -pl skillforge-server -am -DskipTests compile`；`UpdateAgentToolTest` + `AgentLoopEngineInstallConfirmationTest` 16/16；server 重启确认工具注册 |
 | 2026-04-26 | Agent 管理与内置模板 SQL 化收口：`CreateAgent` Tool、Code/Main Agent Flyway seed、Main Assistant leader config | 无独立方案；确认流复用 [design-install-confirmation-flow.md](design-install-confirmation-flow.md) 的 human confirmation pattern | [todo.md](todo.md) | `e22609c` / `3243759` / `d9d82a3` / `3542fa6`；`V26` / `V27` / `V28`；418 non-IT server tests；本地 DB 已到 v28 |
 | 2026-04-26 | BUG-F Compact 摘要存储重构，修复 mixed user/tool_result 导致 OpenAI-compatible provider 400 | 无独立方案；关联 [design-p6-session-message-storage.md](design-p6-session-message-storage.md)、[design-p9-tool-result-compaction.md](design-p9-tool-result-compaction.md) | [bugs.md](bugs.md)、[todo.md](todo.md) | `e9b48f3`；370 unit tests；server 重启验证 |
 | 2026-04-26 | Sprint 1：P9-7 token 估算、P3-1/P3-3 memory snapshot、P13-3 清理 | [design-p9-tool-result-compaction.md](design-p9-tool-result-compaction.md) 覆盖 P9 方向；其余为防腐补丁，无独立方案 | [todo.md](todo.md) | `621f417` / `f4773c3`；397 non-IT server tests |

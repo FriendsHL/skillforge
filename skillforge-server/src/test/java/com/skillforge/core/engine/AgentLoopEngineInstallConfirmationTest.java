@@ -108,6 +108,11 @@ class AgentLoopEngineInstallConfirmationTest {
         return new ToolUseBlock(UUID.randomUUID().toString(), "CreateAgent", Map.of("name", name));
     }
 
+    private ToolUseBlock updateAgentBlock(long agentId) {
+        return new ToolUseBlock(UUID.randomUUID().toString(), "UpdateAgent",
+                Map.of("targetAgentId", agentId, "patch", Map.of("description", "updated")));
+    }
+
     @Test
     @DisplayName("APPROVED: executeToolCall runs, cache is populated, tool_result success")
     void approvedRunsBash() {
@@ -195,6 +200,46 @@ class AgentLoopEngineInstallConfirmationTest {
         assertThat(calls.get()).isZero();
         assertThat(isError(r)).isTrue();
         assertThat(textOf(r)).contains("User denied CreateAgent");
+    }
+
+    @Test
+    @DisplayName("UpdateAgent APPROVED: engine injects one-shot approval token before execution")
+    void updateAgentApprovedInjectsApprovalToken() {
+        ToolApprovalRegistry approvalRegistry = new ToolApprovalRegistry();
+        AtomicInteger calls = new AtomicInteger();
+        Tool updateAgentTool = new Tool() {
+            @Override public String getName() { return "UpdateAgent"; }
+            @Override public String getDescription() { return "test update agent"; }
+            @Override public ToolSchema getToolSchema() {
+                ToolSchema s = new ToolSchema();
+                s.setName("UpdateAgent");
+                s.setDescription("test");
+                s.setInputSchema(Map.of(
+                        "type", "object",
+                        "properties", Map.of(
+                                "targetAgentId", Map.of("type", "integer"),
+                                "patch", Map.of("type", "object"))));
+                return s;
+            }
+            @Override public SkillResult execute(Map<String, Object> input, SkillContext context) {
+                boolean approved = approvalRegistry.consume(
+                        context.getApprovalToken(), context.getSessionId(), getName(), context.getToolUseId());
+                if (!approved) {
+                    return SkillResult.error("missing approval");
+                }
+                calls.incrementAndGet();
+                return SkillResult.success("updated " + input.get("targetAgentId"));
+            }
+        };
+        AgentLoopEngine engine = newCreateAgentEngine(updateAgentTool, req -> Decision.APPROVED, approvalRegistry);
+
+        Message r = engine.handleCreateAgentConfirmation(
+                updateAgentBlock(42), ctx("s1"), new CopyOnWriteArrayList<>());
+
+        assertThat(calls.get()).isEqualTo(1);
+        assertThat(isError(r)).isFalse();
+        assertThat(textOf(r)).contains("updated 42");
+        assertThat(approvalRegistry.size()).isZero();
     }
 
     @Test

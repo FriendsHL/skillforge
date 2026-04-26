@@ -164,6 +164,21 @@ public class DefaultConfirmationPrompter implements ConfirmationPrompter {
                             new ConfirmationPromptPayload.ConfirmationChoice("denied", "Deny", "danger")),
                     Instant.now().plusSeconds(pc.timeoutSeconds()));
         }
+        if ("UpdateAgent".equals(pc.installTool())) {
+            return new ConfirmationPromptPayload(
+                    pc.confirmationId(),
+                    pc.sessionId(),
+                    pc.installTool(),
+                    pc.installTarget(),
+                    preview,
+                    "Update Agent approval",
+                    "The agent wants to update Agent `" + pc.installTarget()
+                            + "`. Agent-authored hook proposals, if any, will remain pending for separate review.",
+                    List.of(
+                            new ConfirmationPromptPayload.ConfirmationChoice("approved", "Update Agent", "primary"),
+                            new ConfirmationPromptPayload.ConfirmationChoice("denied", "Deny", "danger")),
+                    Instant.now().plusSeconds(pc.timeoutSeconds()));
+        }
         String description;
         if ("*".equals(pc.installTarget()) || "multiple".equals(pc.installTool())
                 || "unknown".equals(pc.installTool())) {

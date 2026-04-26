@@ -798,12 +798,15 @@ public class AgentLoopEngine {
                         icSpan.end();
                         traceCollector.record(icSpan);
                     }
-                } else if (isCreateAgentRequiringConfirmation(block)) {
+                } else if (isAgentMutationRequiringConfirmation(block)) {
                     long confirmStart = System.currentTimeMillis();
                     Message result = handleCreateAgentConfirmation(block, loopCtx, toolCallRecords);
                     askResults.put(i, result);
                     if (traceCollector != null && rootSpan != null) {
-                        TraceSpan confirmSpan = new TraceSpan("AGENT_CONFIRM", "create_agent_confirmation");
+                        String confirmName = "UpdateAgent".equals(block.getName())
+                                ? "update_agent_confirmation"
+                                : "create_agent_confirmation";
+                        TraceSpan confirmSpan = new TraceSpan("AGENT_CONFIRM", confirmName);
                         confirmSpan.setSessionId(sessionId);
                         confirmSpan.setParentSpanId(rootSpan.getId());
                         confirmSpan.setIterationIndex(loopCtx.getLoopCount());
@@ -1242,6 +1245,11 @@ public class AgentLoopEngine {
         return block != null && "CreateAgent".equals(block.getName());
     }
 
+    boolean isAgentMutationRequiringConfirmation(ToolUseBlock block) {
+        if (block == null) return false;
+        return "CreateAgent".equals(block.getName()) || "UpdateAgent".equals(block.getName());
+    }
+
     /**
      * Main-thread handler for install-pattern tool_use. Runs on the engine loop thread,
      * NOT in {@code supplyAsync} — so the 120s {@code allOf} ceiling does not apply.
@@ -1323,47 +1331,45 @@ public class AgentLoopEngine {
                                           List<ToolCallRecord> toolCallRecords) {
         String sid = loopCtx.getSessionId();
         String toolUseId = block.getId();
+        String toolName = block.getName();
         Map<String, Object> input = block.getInput() != null ? block.getInput() : Collections.emptyMap();
 
         if (pendingAskRegistry != null && pendingAskRegistry.hasPendingForSession(sid)) {
             return Message.toolResult(toolUseId,
-                    "CreateAgent confirmation cannot start while ask_user is pending; "
+                    toolName + " confirmation cannot start while ask_user is pending; "
                             + "LLM should re-emit after the ask is answered.", true);
         }
 
         Optional<Tool> toolOpt = skillRegistry.getTool(block.getName());
         if (toolOpt.isEmpty()) {
-            return Message.toolResult(toolUseId, "CreateAgent tool is not registered", true);
+            return Message.toolResult(toolUseId, toolName + " tool is not registered", true);
         }
         List<String> missingRequired = findMissingRequiredFields(toolOpt.get(), input);
         if (!missingRequired.isEmpty()) {
-            String hint = "[RETRY NEEDED] CreateAgent missing required argument(s): "
+            String hint = "[RETRY NEEDED] " + toolName + " missing required argument(s): "
                     + String.join(", ", missingRequired)
                     + ". Re-emit the tool call with all required fields populated.";
             return Message.toolResult(toolUseId, hint, true, SkillResult.ErrorType.VALIDATION.name());
         }
 
         if (confirmationPrompter == null) {
-            log.warn("CreateAgent confirmation prompter not configured; rejecting fail-closed sid={}", sid);
+            log.warn("{} confirmation prompter not configured; rejecting fail-closed sid={}", toolName, sid);
             return Message.toolResult(toolUseId,
-                    "CreateAgent requires user approval, but confirmation is not available in this runtime.",
+                    toolName + " requires user approval, but confirmation is not available in this runtime.",
                     true);
         }
         if (toolApprovalRegistry == null) {
-            log.warn("CreateAgent approval registry not configured; rejecting fail-closed sid={}", sid);
+            log.warn("{} approval registry not configured; rejecting fail-closed sid={}", toolName, sid);
             return Message.toolResult(toolUseId,
-                    "CreateAgent approval registry is not configured; cannot create agent safely.",
+                    toolName + " approval registry is not configured; cannot mutate agent safely.",
                     true);
         }
 
-        String agentName = stringValue(input.get("name"));
-        if (agentName == null || agentName.isBlank()) {
-            agentName = "*";
-        }
+        String targetLabel = agentMutationTargetLabel(toolName, input);
         String preview = mapToJson(input);
         try {
             Decision d = confirmationPrompter.prompt(new ConfirmationPrompter.ConfirmationRequest(
-                    sid, loopCtx.getUserId(), toolUseId, "CreateAgent", agentName, preview,
+                    sid, loopCtx.getUserId(), toolUseId, toolName, targetLabel, preview,
                     null, installConfirmTimeoutSeconds));
             if (d == Decision.APPROVED) {
                 String token = toolApprovalRegistry.issue(
@@ -1372,22 +1378,35 @@ public class AgentLoopEngine {
             }
             return Message.toolResult(toolUseId,
                     d == Decision.DENIED
-                            ? "User denied CreateAgent for name=" + agentName
-                            : "CreateAgent confirmation timed out for name=" + agentName,
+                            ? "User denied " + toolName + " for target=" + targetLabel
+                            : toolName + " confirmation timed out for target=" + targetLabel,
                     true);
         } catch (ChannelUnavailableException ce) {
-            log.warn("CreateAgent confirmation channel unavailable sid={}: {}", sid, ce.getMessage());
+            log.warn("{} confirmation channel unavailable sid={}: {}", toolName, sid, ce.getMessage());
             return Message.toolResult(toolUseId, ce.getMessage(), true);
         } catch (Exception ex) {
-            log.error("CreateAgent confirmation flow error sid={}", sid, ex);
+            log.error("{} confirmation flow error sid={}", toolName, sid, ex);
             return Message.toolResult(toolUseId,
-                    "CreateAgent confirmation failed: " + ex.getMessage(), true);
+                    toolName + " confirmation failed: " + ex.getMessage(), true);
         } finally {
             if (broadcaster != null && sid != null
                     && (pendingAskRegistry == null || !pendingAskRegistry.hasPendingForSession(sid))) {
                 broadcaster.sessionStatus(sid, "running", null, null);
             }
         }
+    }
+
+    private static String agentMutationTargetLabel(String toolName, Map<String, Object> input) {
+        if ("CreateAgent".equals(toolName)) {
+            String name = stringValue(input.get("name"));
+            return name == null || name.isBlank() ? "*" : name;
+        }
+        String id = stringValue(input.get("targetAgentId"));
+        if (id != null && !id.isBlank()) {
+            return "#" + id;
+        }
+        String name = stringValue(input.get("targetAgentName"));
+        return name == null || name.isBlank() ? "current" : name;
     }
 
     /**

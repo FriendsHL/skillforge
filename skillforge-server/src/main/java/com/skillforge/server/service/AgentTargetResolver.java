@@ -45,6 +45,18 @@ public class AgentTargetResolver {
     }
 
     @Transactional(readOnly = true)
+    public AgentEntity resolveEditableTarget(String sessionId, Long userId, Object targetAgentId, Object targetAgentName) {
+        Long authorAgentId = authorAgentIdForSession(sessionId);
+        AgentEntity author = agentRepository.findById(authorAgentId)
+                .orElseThrow(() -> new IllegalArgumentException("author agent not found: id=" + authorAgentId));
+        AgentEntity target = resolveEditableTarget(author, userId, targetAgentId, targetAgentName);
+        if (!isEditable(author, userId, target)) {
+            throw new IllegalArgumentException("target agent is not editable: id=" + target.getId());
+        }
+        return target;
+    }
+
+    @Transactional(readOnly = true)
     public List<AgentEntity> listVisibleTargets(String sessionId, String query) {
         Long authorAgentId = authorAgentIdForSession(sessionId);
         AgentEntity author = agentRepository.findById(authorAgentId)
@@ -90,6 +102,37 @@ public class AgentTargetResolver {
         return author;
     }
 
+    private AgentEntity resolveEditableTarget(AgentEntity author, Long userId, Object targetAgentId, Object targetAgentName) {
+        if (targetAgentId != null) {
+            Long id = toLong(targetAgentId, "targetAgentId");
+            return agentRepository.findById(id)
+                    .orElseThrow(() -> new IllegalArgumentException("target agent not found: id=" + id));
+        }
+        String name = targetAgentName != null ? targetAgentName.toString().trim() : null;
+        if (name != null && !name.isBlank()) {
+            List<AgentEntity> editable = agentRepository.findAll().stream()
+                    .filter(a -> isEditable(author, userId, a))
+                    .toList();
+            List<AgentEntity> matches = editable.stream()
+                    .filter(a -> a.getName() != null && a.getName().equalsIgnoreCase(name))
+                    .toList();
+            if (matches.isEmpty()) {
+                String needle = name.toLowerCase(Locale.ROOT);
+                matches = editable.stream()
+                        .filter(a -> matchesQuery(a, needle))
+                        .toList();
+            }
+            if (matches.isEmpty()) {
+                throw new IllegalArgumentException("editable target agent not found: name=" + name);
+            }
+            if (matches.size() > 1) {
+                throw new IllegalArgumentException("targetAgentName is ambiguous: " + name);
+            }
+            return matches.get(0);
+        }
+        return author;
+    }
+
     public static boolean isVisible(AgentEntity author, AgentEntity target) {
         if (author == null || target == null) {
             return false;
@@ -105,6 +148,21 @@ public class AgentTargetResolver {
         }
         Long authorOwner = author.getOwnerId();
         Long targetOwner = target.getOwnerId();
+        return authorOwner != null && authorOwner.equals(targetOwner);
+    }
+
+    public static boolean isEditable(AgentEntity author, Long userId, AgentEntity target) {
+        if (author == null || target == null) {
+            return false;
+        }
+        if (author.getId() != null && author.getId().equals(target.getId())) {
+            return true;
+        }
+        Long targetOwner = target.getOwnerId();
+        if (userId != null && targetOwner != null && targetOwner.equals(userId)) {
+            return true;
+        }
+        Long authorOwner = author.getOwnerId();
         return authorOwner != null && authorOwner.equals(targetOwner);
     }
 

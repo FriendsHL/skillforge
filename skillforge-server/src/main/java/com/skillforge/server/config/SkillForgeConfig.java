@@ -45,6 +45,7 @@ import com.skillforge.server.tool.MemorySearchTool;
 import com.skillforge.server.tool.MemoryTool;
 import com.skillforge.server.tool.AgentDiscoveryTool;
 import com.skillforge.server.tool.CreateAgentTool;
+import com.skillforge.server.tool.GetAgentConfigTool;
 import com.skillforge.server.tool.GetSessionMessagesTool;
 import com.skillforge.server.tool.GetTraceTool;
 import com.skillforge.server.tool.SubAgentTool;
@@ -52,7 +53,9 @@ import com.skillforge.server.tool.TeamCreateTool;
 import com.skillforge.server.tool.TeamKillTool;
 import com.skillforge.server.tool.TeamListTool;
 import com.skillforge.server.tool.TeamSendTool;
+import com.skillforge.server.tool.UpdateAgentTool;
 import com.skillforge.server.service.AgentAuthoredHookService;
+import com.skillforge.server.service.AgentMutationService;
 import com.skillforge.server.service.AgentService;
 import com.skillforge.server.service.AgentTargetResolver;
 import com.skillforge.server.service.ChatService;
@@ -242,6 +245,16 @@ public class SkillForgeConfig {
     }
 
     @Bean
+    public GetAgentConfigTool getAgentConfigTool(AgentTargetResolver targetResolver,
+                                                 ObjectMapper objectMapper,
+                                                 SkillRegistry skillRegistry) {
+        GetAgentConfigTool tool = new GetAgentConfigTool(targetResolver, objectMapper);
+        skillRegistry.registerTool(tool);
+        log.info("Registered GetAgentConfigTool into SkillRegistry");
+        return tool;
+    }
+
+    @Bean
     public CreateAgentTool createAgentTool(AgentService agentService,
                                            ObjectMapper objectMapper,
                                            com.skillforge.core.engine.confirm.ToolApprovalRegistry toolApprovalRegistry,
@@ -249,6 +262,18 @@ public class SkillForgeConfig {
         CreateAgentTool tool = new CreateAgentTool(agentService, objectMapper, toolApprovalRegistry);
         skillRegistry.registerTool(tool);
         log.info("Registered CreateAgentTool into SkillRegistry");
+        return tool;
+    }
+
+    @Bean
+    public UpdateAgentTool updateAgentTool(AgentTargetResolver targetResolver,
+                                           AgentMutationService mutationService,
+                                           ObjectMapper objectMapper,
+                                           com.skillforge.core.engine.confirm.ToolApprovalRegistry toolApprovalRegistry,
+                                           SkillRegistry skillRegistry) {
+        UpdateAgentTool tool = new UpdateAgentTool(targetResolver, mutationService, objectMapper, toolApprovalRegistry);
+        skillRegistry.registerTool(tool);
+        log.info("Registered UpdateAgentTool into SkillRegistry");
         return tool;
     }
 

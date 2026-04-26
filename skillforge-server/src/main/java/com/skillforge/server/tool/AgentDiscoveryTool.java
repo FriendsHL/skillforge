@@ -23,6 +23,7 @@ import java.util.Map;
 public class AgentDiscoveryTool implements Tool {
 
     private static final Logger log = LoggerFactory.getLogger(AgentDiscoveryTool.class);
+    private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {};
 
     private final AgentTargetResolver targetResolver;
     private final ObjectMapper objectMapper;
@@ -88,9 +89,23 @@ public class AgentDiscoveryTool implements Tool {
         dto.put("id", agent.getId());
         dto.put("name", agent.getName());
         dto.put("description", agent.getDescription());
+        dto.put("role", agent.getRole());
+        dto.put("modelId", agent.getModelId());
         dto.put("visibility", Boolean.TRUE.equals(agent.isPublic()) ? "public" : "private");
+        dto.put("status", agent.getStatus());
+        dto.put("ownerId", agent.getOwnerId());
         dto.put("skills", parseStringList(agent.getSkillIds()));
         dto.put("tools", parseStringList(agent.getToolIds()));
+        dto.put("config", parseObject(agent.getConfig()));
+        dto.put("behaviorRules", parseObject(agent.getBehaviorRules()));
+        dto.put("maxLoops", agent.getMaxLoops());
+        dto.put("executionMode", agent.getExecutionMode());
+        dto.put("thinkingMode", agent.getThinkingMode());
+        dto.put("reasoningEffort", agent.getReasoningEffort());
+        dto.put("hasSystemPrompt", agent.getSystemPrompt() != null && !agent.getSystemPrompt().isBlank());
+        dto.put("hasSoulPrompt", agent.getSoulPrompt() != null && !agent.getSoulPrompt().isBlank());
+        dto.put("hasToolsPrompt", agent.getToolsPrompt() != null && !agent.getToolsPrompt().isBlank());
+        dto.put("hasUserLifecycleHooks", agent.getLifecycleHooks() != null && !agent.getLifecycleHooks().isBlank());
         return dto;
     }
 
@@ -109,6 +124,17 @@ public class AgentDiscoveryTool implements Tool {
             return out;
         } catch (JsonProcessingException e) {
             return List.of();
+        }
+    }
+
+    private Map<String, Object> parseObject(String rawJson) {
+        if (rawJson == null || rawJson.isBlank()) {
+            return Map.of();
+        }
+        try {
+            return objectMapper.readValue(rawJson, MAP_TYPE);
+        } catch (JsonProcessingException e) {
+            return Map.of();
         }
     }
 }
