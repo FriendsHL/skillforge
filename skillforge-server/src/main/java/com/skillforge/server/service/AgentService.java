@@ -221,9 +221,6 @@ public class AgentService {
         def.setId(String.valueOf(entity.getId()));
         def.setName(entity.getName());
         def.setDescription(entity.getDescription());
-        if (entity.getRole() != null && !entity.getRole().isBlank()) {
-            def.getConfig().put("role", entity.getRole());
-        }
         def.setModelId(entity.getModelId());
         def.setSystemPrompt(entity.getSystemPrompt());
         def.setSoulPrompt(entity.getSoulPrompt());
@@ -241,20 +238,7 @@ public class AgentService {
             }
         }
 
-        // 解析 toolIds JSON → 放入 config.tool_ids
-        if (entity.getToolIds() != null && !entity.getToolIds().isBlank()) {
-            try {
-                List<String> toolIdList = objectMapper.readValue(entity.getToolIds(),
-                        new TypeReference<List<String>>() {});
-                if (!toolIdList.isEmpty()) {
-                    def.getConfig().put("tool_ids", toolIdList);
-                }
-            } catch (JsonProcessingException e) {
-                log.warn("Failed to parse toolIds JSON: {}", entity.getToolIds(), e);
-            }
-        }
-
-        // 解析 config JSON
+        // 解析 config JSON as base runtime config; typed fields below are authoritative.
         if (entity.getConfig() != null && !entity.getConfig().isBlank()) {
             try {
                 Map<String, Object> configMap = objectMapper.readValue(entity.getConfig(),
@@ -263,6 +247,25 @@ public class AgentService {
             } catch (JsonProcessingException e) {
                 log.warn("Failed to parse config JSON: {}", entity.getConfig(), e);
                 def.setConfig(new HashMap<>());
+            }
+        }
+
+        if (entity.getRole() != null && !entity.getRole().isBlank()) {
+            def.getConfig().put("role", entity.getRole());
+        }
+
+        // 解析 toolIds JSON → 放入 config.tool_ids. UI/API toolIds is the source of truth.
+        if (entity.getToolIds() != null && !entity.getToolIds().isBlank()) {
+            try {
+                List<String> toolIdList = objectMapper.readValue(entity.getToolIds(),
+                        new TypeReference<List<String>>() {});
+                if (!toolIdList.isEmpty()) {
+                    def.getConfig().put("tool_ids", toolIdList);
+                } else {
+                    def.getConfig().remove("tool_ids");
+                }
+            } catch (JsonProcessingException e) {
+                log.warn("Failed to parse toolIds JSON: {}", entity.getToolIds(), e);
             }
         }
 

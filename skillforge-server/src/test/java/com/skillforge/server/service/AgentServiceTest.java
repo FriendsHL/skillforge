@@ -15,6 +15,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -277,6 +278,36 @@ class AgentServiceTest {
         AgentDefinition def = agentService.toAgentDefinition(entity);
         assertThat(def.getThinkingMode()).isEqualTo(ThinkingMode.ENABLED);
         assertThat(def.getReasoningEffort()).isEqualTo(ReasoningEffort.HIGH);
+    }
+
+    @Test
+    @DisplayName("toAgentDefinition lets toolIds override config tool_ids")
+    void toAgentDefinition_toolIdsOverrideConfigToolIds() {
+        var entity = new AgentEntity();
+        entity.setId(24L);
+        entity.setName("analyzer");
+        entity.setConfig("{\"temperature\":0.2,\"tool_ids\":[\"OldTool\"]}");
+        entity.setToolIds("[\"GetSessionMessages\",\"GetTrace\",\"GetAgentConfig\"]");
+
+        AgentDefinition def = agentService.toAgentDefinition(entity);
+
+        assertThat(def.getConfig().get("temperature")).isEqualTo(0.2);
+        assertThat((List<Object>) def.getConfig().get("tool_ids"))
+                .containsExactly("GetSessionMessages", "GetTrace", "GetAgentConfig");
+    }
+
+    @Test
+    @DisplayName("toAgentDefinition empty toolIds clears legacy config tool_ids")
+    void toAgentDefinition_emptyToolIdsClearsConfigToolIds() {
+        var entity = new AgentEntity();
+        entity.setId(25L);
+        entity.setName("all-tools-agent");
+        entity.setConfig("{\"tool_ids\":[\"OldTool\"]}");
+        entity.setToolIds("[]");
+
+        AgentDefinition def = agentService.toAgentDefinition(entity);
+
+        assertThat(def.getConfig()).doesNotContainKey("tool_ids");
     }
 
     @Test
