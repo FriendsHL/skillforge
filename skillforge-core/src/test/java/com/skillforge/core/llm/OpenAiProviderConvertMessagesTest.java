@@ -186,4 +186,53 @@ class OpenAiProviderConvertMessagesTest {
         assertThat(ms.get(0).path("role").asText()).isEqualTo("tool");
         assertThat(ms.get(0).path("tool_call_id").asText()).isEqualTo("Y");
     }
+
+    @Test
+    @DisplayName("tool_result with missing or blank tool_use_id → replayed as user text, not role:tool")
+    void invalidToolResultIds_replayedAsText() throws Exception {
+        Map<String, Object> missingId = new LinkedHashMap<>();
+        missingId.put("type", "tool_result");
+        missingId.put("content", "missing id result");
+
+        Map<String, Object> blankId = new LinkedHashMap<>();
+        blankId.put("type", "tool_result");
+        blankId.put("tool_use_id", "");
+        blankId.put("content", "blank id result");
+
+        Message msg = userBlocks(missingId, blankId);
+        JsonNode b = body(reqWith(msg));
+
+        List<JsonNode> ms = nonSystemMessages(b);
+        assertThat(ms).hasSize(1);
+        assertThat(ms.get(0).path("role").asText()).isEqualTo("user");
+        assertThat(ms.get(0).path("content").asText())
+                .contains("Tool result replayed as text")
+                .contains("missing id result")
+                .contains("blank id result");
+        assertThat(b.toString()).doesNotContain("\"role\":\"tool\"");
+        assertThat(b.toString()).doesNotContain("\"tool_call_id\":\"\"");
+        assertThat(b.toString()).doesNotContain("\"tool_call_id\":\"null\"");
+    }
+
+    @Test
+    @DisplayName("assistant tool_use with missing id → no blank-id tool_calls emitted")
+    void assistantToolUseMissingId_noBlankToolCallsEmitted() throws Exception {
+        Map<String, Object> invalidToolUse = new LinkedHashMap<>();
+        invalidToolUse.put("type", "tool_use");
+        invalidToolUse.put("name", "GetTrace");
+        invalidToolUse.put("input", Map.of("action", "list_traces"));
+
+        Message assistant = userBlocks(invalidToolUse);
+        assistant.setRole(Message.Role.ASSISTANT);
+
+        JsonNode b = body(reqWith(assistant));
+
+        List<JsonNode> ms = nonSystemMessages(b);
+        assertThat(ms).hasSize(1);
+        assertThat(ms.get(0).path("role").asText()).isEqualTo("assistant");
+        assertThat(ms.get(0).has("tool_calls")).isFalse();
+        assertThat(ms.get(0).path("content").asText()).isEmpty();
+        assertThat(b.toString()).doesNotContain("\"tool_call_id\":\"\"");
+        assertThat(b.toString()).doesNotContain("\"id\":\"\"");
+    }
 }

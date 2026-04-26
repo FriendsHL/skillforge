@@ -20,7 +20,7 @@
 | ~~**🔥 紧急**~~ | ~~ENG-1~~ · ~~ENG-2~~ · ~~P9-5-lite~~                                                   | 1-2 天             | 由 session 9347f84c 真实事故触发；阻断 Design Agent 长任务；**全部完成 2026-04-23**                                                                                                                                           |
 | ~~**🔥 紧急**~~ | ~~**BUG-F** Compact 摘要存储重构（向 Claude Code / OpenClaw 看齐）~~ ✅ 2026-04-26 commit `e9b48f3` | 1-1.5 天           | 由 session `acbced3f` DeepSeek 撞 `Duplicate value for 'tool_call_id'` HTTP 400 触发；**Full Pipeline 通过**：Plan r1 PASS（1W）+ Code r1 PASS（5W，0 blocker）；370 unit tests 全绿；用户授权跳过 live curl，server 重启成功即视为 e2e 通过 |
 | ~~**Sprint 1**~~  | ~~P9-7~~ · ~~P3-1~~ · ~~P3-3~~ · ~~P13-3~~ · ~~P13-4~~ ✅ 2026-04-26                 | 2-3 天             | 零依赖防腐；P13-4 代码扫描确认已完成；P9-7 已完成 commit `621f417`；P3-1/P3-3/P13-3 已完成 commit `f4773c3`，397 个非 IT server tests 全绿；完整 suite 仅 Docker/Testcontainers IT 受本机环境阻塞                                                                 |
-| **Sprint 2**  | ~~P11（收窄）+ P13-1~~ → ~~P15-1/P15-2/P15-4 + UpdateAgent~~ → P15-5（Analyzer seed）                 | 8-12 天            | PR1 已完成 2026-04-26：AgentDiscovery + name resolver + public/private visibility + custom rule severity；PR2 已完成 P15-1/P15-2：GetTrace + GetSessionMessages，413 个非 IT server tests 全绿；补充完成 GetAgentConfig + AgentDiscovery 增强 + 带一次确认的 UpdateAgent。下一步只剩 P15-5 Flyway seed |
+| ~~**Sprint 2**~~  | ~~P11（收窄）+ P13-1~~ → ~~P15-1/P15-2/P15-4 + UpdateAgent~~                                  | 8-12 天            | PR1 已完成 2026-04-26：AgentDiscovery + name resolver + public/private visibility + custom rule severity；PR2 已完成 P15-1/P15-2：GetTrace + GetSessionMessages，413 个非 IT server tests 全绿；补充完成 GetAgentConfig + AgentDiscovery 增强 + 带一次确认的 UpdateAgent。P15-5 seed 取消：Analyzer Agent 已手工创建，不再内置 Flyway seed |
 | **Sprint 3**  | P9-2 长对话 tool 归档（独立 PR）                                                                 | ~2 周              | 触碰核心文件，Full Pipeline；真实用户长 session 慢性病                                                                                                                                                                      |
 | **⚠️ 前置决策**   | Cost Dashboard · PG 备份 · 多用户权限 design doc                                               | 决策先行              | Sprint 4 开工前必须有答案，否则 P12 上线即踩坑                                                                                                                                                                              |
 | **Sprint 4**  | P12 定时任务（收窄首版）                                                                          | 3-4 周             | user 型调度最小集；SystemJobRegistry + P12-6 → V2                                                                                                                                                                  |
@@ -28,10 +28,10 @@
 | **Sprint 6**  | P10 斜杠命令（收窄 4 条）                                                                        | 5-8 天             | 从 Sprint 1 降级；/compact 只做 full；/model 只改 session 级                                                                                                                                                          |
 | ~~**🔥 穿插**~~ | ~~Compact Breaker 误触 + LLM Stream 抗抖（BUG-A/B/C/D/E/E-bis）~~                             | ~~Full Pipeline~~ | ✅ 2026-04-24 完成（commit `121e8dc`）；Full Pipeline 运行 + 额外捕获 `FullCompactStrategy.callLlm` 吞异常的更深 root cause                                                                                                   |
 | ~~**🧠 穿插**~~ | ~~thinking-mode-v1（per-agent thinkingMode + reasoningEffort + provider 协议感知 + DX）~~     | ~~Full Pipeline~~ | ✅ 2026-04-25 完成（commit `55969db`）；Plan r1 PASS + Review r1 catch B1 测试造假 → r2 PASS + Phase 4 hotfix 跳过未配置 provider                                                                                          |
-| **🔒 穿插**     | SEC-1 Channel 配置 AES-GCM 加密                                                             | 1-2 天             | 代码扫描发现明文存储安全问题，P12 前修复                                                                                                                                                                                      |
+| **🔒 穿插**     | SEC-1 Channel 配置 AES-GCM 加密                                                             | 1-2 天             | 重要不紧急；当前单机/本地使用暂缓，等多端部署或 P12 正式上线前重评                                                                                                                                                                                      |
 | ~~**🔒 穿插**~~ | ~~SEC-2 Hook Source Protection + Agent-authored Hook Binding V1~~                       | ~~Full Pipeline~~ | ✅ 2026-04-25 完成：system / user / agent-authored 三源隔离；Hook 查询 Tool + Agent 提交绑定 Tool；审批后 dispatch；补齐 builtin allowlist 与 reviewer 身份不信任约束                                                                     |
 | **🧹 穿插**     | DEBT-1 SkillList.tsx 拆分（47K 单文件）                                                        | 3-5 天             | 低优先级，下次动 SkillList 前先拆                                                                                                                                                                                      |
-| **V2**        | P14 · P3-2/4 · P15-3/4/6 · P11-3 · P12-3/6 · P10-4/5 · P13-9                            | 推迟                | 见底部 V2 推迟池                                                                                                                                                                                                  |
+| **V2**        | P14 · P3-2/4 · P15-3/6 · P12-3/6 · P10-4/5 · P13-9                                      | 推迟                | 见底部 V2 推迟池                                                                                                                                                                                                  |
 
 > **工期修正说明**：Analyst 对 P12 给出"1-2 周"，Challenger 实测拆解后为 3-4 周（时区/夏令时/concurrencyPolicy/前端 cron 编辑器是主要坑）。P10 "1-2 天"实测 5-8 天（`/compact` 触碰 CompactionService 核心文件 + Full Pipeline）。
 
@@ -131,7 +131,7 @@
 
 #### ~~PR 1 — P11 Agent 发现与跨 Agent 调用（收窄）~~ ✅ 已完成（2026-04-26）
 
-> 收窄范围：去掉 P11-3 capabilities/tags（当前 agent 数 < 10，name 模糊查找够用，tag 系统是过度设计）。P13-1 custom rule severity 并入本 PR，共享 agent 后端改动节奏。
+> 收窄范围：去掉 capabilities/tags（当前 agent 数 < 10，name 模糊查找够用，tag 系统是过度设计，不再单独追踪）。P13-1 custom rule severity 并入本 PR，共享 agent 后端改动节奏。
 >
 > **完成说明（2026-04-26）**：新增 `AgentDiscovery` 工具；`SubAgent` 支持 `agentName` 解析并做可见性 / active 校验；当前 session lineage 内递归派发会被拒绝；Agent UI 增加 public/private visibility 配置；自定义 behavior rule 升级为 `{severity,text}` 并兼容旧 string。验证：`mvn -pl skillforge-server -am test -Dtest='!*IT'` 407 tests 全绿；`npm run build` 通过。
 
@@ -140,14 +140,13 @@
 | ~~**P11-1**~~ AgentDiscoverySkill ✅ 2026-04-26 | 新增 Java Tool `AgentDiscovery` 并注册到 `SkillRegistry`；按当前 session author 过滤可见 Agent，返回 JSON `{count, agents:[id,name,description,visibility,skills,tools]}`；`query` 支持 name/description/id 模糊过滤 |
 | ~~**P11-2**~~ SubAgentSkill 增强 ✅ 2026-04-26 | `SubAgent.dispatch` 支持 `agentName`；target resolver 先精确匹配 name，再唯一模糊匹配；调用前校验 target 存在、active 且对当前 author 可见 |
 | ~~**P11-4**~~ 调用权限控制 ✅ 2026-04-26 | 复用 `is_public` 映射 public/private；可见性规则：自己 / public / 同 owner private；前端 Agent create/drawer 可配置 visibility；SubAgent 阻止当前 parent lineage 中重复调用同一 agent，避免 A→B→A / self dispatch 循环 |
-| ~~**P11-3**~~ capabilities/tags | **→ V2**（见 V2 推迟池） |
 | ~~**P13-1**~~ Custom rule severity（并入） ✅ 2026-04-26 | `BehaviorRuleConfig.customRules` 从 `string[]` 升级为 `Array<{severity:'MUST'\|'SHOULD'\|'MAY', text:string}>`；前端 custom rule 新增 severity 下拉；后端 `AgentDefinition.BehaviorRulesConfig` 加 Jackson 向后兼容 deserializer，旧 `"text"` 自动升级为 `{severity:'SHOULD', text}`；`SystemPromptBuilder` 按 MUST/SHOULD/MAY 分组注入 |
 
 ---
 
 #### PR 2 — P15 Agent 自省技能层（最小闭环，3-5 天）
 
-> 目标：把平台查询类 REST API 包成 Skill，让任意 Agent 能查自身的 Trace / Session 数据；内置一个 Session Analyzer Agent 辅助分析工具选择质量。首版只做最小可验证闭环，跑 1-2 个真实 session 人工评价输出质量后再决定是否扩展 P15-3/4/6。
+> 目标：把平台查询类 REST API 包成 Skill，让任意 Agent 能查自身的 Trace / Session 数据；Session Analyzer Agent 辅助分析工具选择质量。首版只做最小可验证闭环，跑 1-2 个真实 session 人工评价输出质量后再决定是否扩展 P15-3/6。
 >
 > **依赖**：必须等 PR 1（P11）合入后再开工。Analyzer Agent 需要查 agent 自身配置时直接用 `AgentDiscoverySkill`，避免临时方案。
 >
@@ -159,7 +158,7 @@
 | ~~**P15-2** GetSessionMessagesTool~~ ✅ 2026-04-26 | 新增 Skill：按 sessionId 拉消息历史（role/content/toolCalls），支持 `limit` 控制返回条数（默认 20、硬上限 100）和 `maxContentChars`；通过 `SessionService.getFullHistoryDtos` 复用消息行存储 |
 | ~~**P15-4** GetAgentConfigTool~~ ✅ 2026-04-26 | 新增只读 Skill：按当前 session author 的可见性解析目标 agent，返回 prompts、skills/tools、config、behaviorRules、user lifecycle hooks 原始 JSON、execution/thinking/reasoning/maxLoops 等完整配置；`AgentDiscovery` 同步补充 modelId/role/status/owner/config/rules/thinking/reasoning/maxLoops 与 hook/prompt presence flag，供 Analyzer 先轻量发现、再按需深查 |
 | ~~**P15-extra** UpdateAgentTool~~ ✅ 2026-04-26 | 新增需人工一次确认的 Agent 更新 Skill：复用 `ToolApprovalRegistry` approval token；`AgentTargetResolver.resolveEditableTarget` 只允许自己、同 owner、作者 owner 等权限边界内编辑；支持普通配置 patch + `hookChanges.userLifecycleHooks` + `hookChanges.agentAuthoredProposals` 同事务提交；禁止直接写 `lifecycleHooks` / approved agent-authored hooks，agent-authored hook 只能创建 PENDING 提案，维持 SEC-2 三源隔离 |
-| **P15-5** Session Analyzer Agent seed | Flyway migration 种子数据：预配置 Agent（name="Session Analyzer"，绑定 GetTraceTool + GetSessionMessagesTool，system prompt 分析工具选择质量：是否用了过重的工具完成轻量任务 / 是否遗漏更高效工具 / 循环次数是否合理，输出结构化建议 `{issue, actual_tool, better_tool, reason, confidence}`）；手动触发，文本输出，**无前端 tab** |
+| ~~**P15-5**~~ Session Analyzer Agent seed | **取消**：Analyzer Agent 已手工创建，不再需要 Flyway migration 内置种子；保留手动触发、文本输出的使用方式 |
 | ~~**P15-3**~~ GetEvalRunTool | **→ V2**：Analyzer MVP 不需要读 eval run；当前 eval 数据量小，分析价值有限 |
 | ~~**P15-6**~~ 分析结果落库 + 前端 Analysis tab | **→ V2**：首版文本输出到 session 即可；落库 + UI tab 等验证有价值后再投 |
 
@@ -313,9 +312,9 @@
 
 ---
 
-### 🔒 安全修复 — Channel 配置明文存储（穿插，独立 PR）
+### 🔒 安全修复 — Channel 配置明文存储（重要不紧急，暂缓）
 
-> **代码扫描发现**：`ChannelConfigEntity` / `ChannelConfigService` 有明文 TODO 注释："AES-GCM 加密存储，目前为明文 JSON"。Channel 配置中存有飞书/Telegram 的 Bot Token、Secret 等敏感字段，当前全部明文写入数据库。这是一个安全问题，应在 P12 之前修复（P12 上线后会有更多定时任务 channel 配置写入）。
+> **代码扫描发现**：`ChannelConfigEntity` / `ChannelConfigService` 有明文 TODO 注释："AES-GCM 加密存储，目前为明文 JSON"。Channel 配置中存有飞书/Telegram 的 Bot Token、Secret 等敏感字段，当前全部明文写入数据库。这是安全上应该补的底座项，但当前单机/本地使用场景下属于重要不紧急，暂缓；等多端部署、共享环境或 P12 正式上线前再重评。
 
 | 子任务 | 说明 |
 | --- | --- |
@@ -374,7 +373,6 @@
 | **P3-4** 记忆质量闭环 | 依赖 P3-2 | P3-2 就位后 |
 | **P15-3** GetEvalRunTool | Analyzer MVP 不需要；eval 数据量小，分析价值有限 | P15 MVP 验证有价值后 |
 | **P15-6** 分析结果落库 + 前端 tab | 首版文本输出够用；工程量与首版价值不匹配 | P15 MVP 验证有价值后 |
-| **P11-3** capabilities/tags | agent 数量 < 10，name 查找够用；tag 系统过度设计 | agent 数量 ≥ 20 时 |
 | **P12-3** SystemJobRegistry | 首版保留 `@Scheduled` 注解不动 | 有 UI 可观测 system job 的真实需求 |
 | **P12-6** 告警推送 + admin 权限分离 | 先让调度器跑起来 | 多端部署 / 多用户场景 |
 | **P10-4** 自定义 slash command | 4 条命令覆盖 90% 用例 | 有明确自定义需求 |

@@ -367,6 +367,8 @@ public class OpenAiProvider implements LlmProvider {
                     // are silently dropped — without this filter they would be emitted
                     // as role:tool with tool_call_id="null", which DeepSeek rejects
                     // with HTTP 400 "Duplicate value for 'tool_call_id'".
+                    List<String> invalidToolResults = new ArrayList<>();
+                    Set<String> emittedToolResultIds = new HashSet<>();
                     for (Object obj : blocks) {
                         boolean isToolResult;
                         if (obj instanceof ContentBlock cb) {
@@ -379,16 +381,28 @@ public class OpenAiProvider implements LlmProvider {
                         if (!isToolResult) {
                             continue;
                         }
+                        String toolUseId = toolResultId(obj);
+                        if (!isUsableToolCallId(toolUseId) || !emittedToolResultIds.add(toolUseId)) {
+                            invalidToolResults.add(toolResultAsText(obj));
+                            continue;
+                        }
                         ObjectNode toolMsg = objectMapper.createObjectNode();
                         toolMsg.put("role", "tool");
                         if (obj instanceof ContentBlock block) {
-                            toolMsg.put("tool_call_id", block.getToolUseId());
+                            toolMsg.put("tool_call_id", toolUseId);
                             toolMsg.put("content", block.getContent() != null ? block.getContent() : "");
                         } else if (obj instanceof Map<?, ?> map) {
-                            toolMsg.put("tool_call_id", String.valueOf(map.get("tool_use_id")));
+                            toolMsg.put("tool_call_id", toolUseId);
                             toolMsg.put("content", map.get("content") != null ? String.valueOf(map.get("content")) : "");
                         }
                         messagesNode.add(toolMsg);
+                    }
+                    if (!invalidToolResults.isEmpty()) {
+                        ObjectNode userMsg = objectMapper.createObjectNode();
+                        userMsg.put("role", "user");
+                        userMsg.put("content", "[Tool result replayed as text because its tool_call_id was missing or duplicated]\n"
+                                + String.join("\n\n", invalidToolResults));
+                        messagesNode.add(userMsg);
                     }
                 } else {
                     // Regular user message with content blocks - extract text
@@ -406,7 +420,8 @@ public class OpenAiProvider implements LlmProvider {
                 // Must compute tool-call presence BEFORE the reasoning_content emit decision,
                 // because the helper needs hasToolCalls (plan reviewer W3).
                 List<ToolUseBlock> toolUseBlocks = msg.getToolUseBlocks();
-                boolean hasToolCalls = !toolUseBlocks.isEmpty();
+                List<ToolUseBlock> validToolUseBlocks = validToolUseBlocks(toolUseBlocks);
+                boolean hasToolCalls = !validToolUseBlocks.isEmpty();
 
                 // Emit reasoning_content per family-specific rules (plan D5 / §4.3).
                 String replayReasoning = resolveReplayReasoningContent(msg, role, hasToolCalls, family);
@@ -417,11 +432,13 @@ public class OpenAiProvider implements LlmProvider {
                 String textContent = msg.getTextContent();
                 if (textContent != null && !textContent.isEmpty()) {
                     assistantMsg.put("content", textContent);
+                } else if (!hasToolCalls) {
+                    assistantMsg.put("content", "");
                 }
 
                 if (hasToolCalls) {
                     ArrayNode toolCallsNode = assistantMsg.putArray("tool_calls");
-                    for (ToolUseBlock toolUse : toolUseBlocks) {
+                    for (ToolUseBlock toolUse : validToolUseBlocks) {
                         ObjectNode callNode = objectMapper.createObjectNode();
                         callNode.put("id", toolUse.getId());
                         callNode.put("type", "function");
@@ -454,6 +471,53 @@ public class OpenAiProvider implements LlmProvider {
                 messagesNode.add(simpleMsg);
             }
         }
+    }
+
+    private List<ToolUseBlock> validToolUseBlocks(List<ToolUseBlock> toolUseBlocks) {
+        if (toolUseBlocks == null || toolUseBlocks.isEmpty()) {
+            return List.of();
+        }
+        List<ToolUseBlock> out = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+        for (ToolUseBlock block : toolUseBlocks) {
+            if (block == null || !isUsableToolCallId(block.getId()) || !seen.add(block.getId())) {
+                continue;
+            }
+            out.add(block);
+        }
+        return out;
+    }
+
+    private static boolean isUsableToolCallId(String id) {
+        return id != null && !id.isBlank() && !"null".equalsIgnoreCase(id);
+    }
+
+    private static String toolResultId(Object obj) {
+        if (obj instanceof ContentBlock block) {
+            return block.getToolUseId();
+        }
+        if (obj instanceof Map<?, ?> map) {
+            Object snake = map.get("tool_use_id");
+            if (snake != null) {
+                return snake.toString();
+            }
+            Object camel = map.get("toolUseId");
+            return camel != null ? camel.toString() : null;
+        }
+        return null;
+    }
+
+    private static String toolResultAsText(Object obj) {
+        String id = toolResultId(obj);
+        String content = "";
+        if (obj instanceof ContentBlock block) {
+            content = block.getContent() != null ? block.getContent() : "";
+        } else if (obj instanceof Map<?, ?> map) {
+            Object raw = map.get("content");
+            content = raw != null ? raw.toString() : "";
+        }
+        String label = isUsableToolCallId(id) ? id : "<missing>";
+        return "tool_call_id=" + label + "\n" + content;
     }
 
     /**

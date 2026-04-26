@@ -3034,6 +3034,15 @@ html[data-density="spacious"] { --density: 1; }
 }
 .node-status.running { background: rgba(107, 143, 79, 0.14); color: var(--ok); }
 .node-status.completed { background: rgba(74, 122, 168, 0.14); color: var(--info); }
+
+/* Node flash on new peer message */
+.cond-node.flashing {
+  animation: nodeFlash 0.8s ease-out;
+}
+@keyframes nodeFlash {
+  0% { box-shadow: 0 0 0 2px var(--accent); background: color-mix(in oklab, var(--accent) 10%, var(--bg-card)); }
+  100% { box-shadow: 0 0 0 0px var(--accent); background: var(--bg-card); }
+}
 .node-status.idle { background: var(--bg-hover); color: var(--fg-3); }
 .node-status.error { background: rgba(184, 65, 47, 0.14); color: var(--err); }
 
@@ -3172,6 +3181,64 @@ html[data-density="spacious"] { --density: 1; }
 .peer-row.broadcast {
   background: color-mix(in oklab, var(--accent) 14%, transparent);
 }
+
+/* --- Peer message log (flowing) --- */
+.peer-head-right {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.peer-legend {
+  font-size: 9px;
+  color: var(--fg-4);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  text-transform: none;
+  letter-spacing: normal;
+}
+.peer-legend-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  display: inline-block;
+}
+.peer-legend-dot--bc {
+  background: var(--info);
+}
+.peer-body--log {
+  max-height: 240px;
+  overflow-y: auto;
+  padding: 8px 0;
+}
+.peer-row--log {
+  padding: 5px 14px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-2);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: background 0.3s, border-color 0.3s;
+  border-left: 3px solid transparent;
+}
+.peer-row--log.broadcast {
+  border-left-color: var(--info);
+}
+.peer-row--new {
+  animation: peerIn 0.5s ease-out;
+}
+.peer-row--new:not(.broadcast) {
+  border-left-color: var(--accent);
+}
+@keyframes peerIn {
+  0% { background: color-mix(in oklab, var(--accent) 18%, transparent); }
+  100% { background: transparent; }
+}
+.peer-arrow--from { color: var(--fg-1); font-weight: 500; }
+.peer-arrow--to { color: var(--accent); font-weight: 500; }
+.peer-arrow-icon { color: var(--fg-4); font-size: 12px; width: 20px; text-align: center; flex-shrink: 0; }
+.peer-row--log .peer-time { color: var(--fg-4); flex-shrink: 0; }
 
 /* Activity lane */
 .lane-item-rd {

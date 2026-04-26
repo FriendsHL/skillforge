@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -146,10 +146,14 @@ function ActivityTab({
   );
 }
 
-function SwimRiver({ spans }: { spans: SwimSpan[] }) {
+function SwimRiver({ spans, members }: { spans: SwimSpan[]; members: CollabMember[] }) {
   if (!spans.length) return null;
   const maxTime = Math.max(...spans.map((s) => s.start + s.dur));
   const sessionsList = Array.from(new Set(spans.map((s) => s.session)));
+  const sessionLabel = (sess: string) => {
+    const m = members.find((x) => x.sessionId === sess);
+    return m ? m.handle : sess.slice(0, 8);
+  };
   const colors: Record<string, string> = {
     LLM_CALL: 'var(--op-think)',
     TOOL_CALL: 'var(--op-exec)',
@@ -172,27 +176,40 @@ function SwimRiver({ spans }: { spans: SwimSpan[] }) {
           </div>
         ))}
       </div>
-      {sessionsList.map((sess) => (
-        <div key={sess} className="swim-lane">
-          <div className="swim-lane-label">{sess}</div>
-          <div className="swim-track">
-            {spans
-              .filter((s) => s.session === sess)
-              .map((s, i) => (
-                <div
-                  key={i}
-                  className="swim-span"
-                  title={`${s.type} · ${s.dur}s`}
-                  style={{
-                    left: `${(s.start / maxTime) * 100}%`,
-                    width: `${(s.dur / maxTime) * 100}%`,
-                    background: colors[s.type] ?? 'var(--fg-4)',
-                  }}
-                />
-              ))}
+      {sessionsList.map((sess) => {
+        const m = members.find((x) => x.sessionId === sess);
+        return (
+          <div key={sess} className="swim-lane">
+            <div className="swim-lane-label" title={sess}>
+              {sessionLabel(sess)}
+            </div>
+            <div className="swim-track">
+              {spans
+                .filter((s) => s.session === sess)
+                .map((s, i) => {
+                  const peerInfo = (s as SwimSpan & { toHandle?: string; isBroadcast?: boolean }); 
+                  const tooltip = peerInfo.toHandle
+                    ? `${peerInfo.fromHandle || sess} → ${peerInfo.toHandle}`
+                    : `${s.type} · ${s.dur.toFixed(1)}s`;
+                  const roleColor = m ? `var(--role-${m.role ?? 'assistant'}, var(--accent))` : colors[s.type] ?? 'var(--fg-4)';
+                  return (
+                    <div
+                      key={i}
+                      className="swim-span"
+                      title={tooltip}
+                      style={{
+                        left: `${(s.start / maxTime) * 100}%`,
+                        width: `${Math.max(s.dur / maxTime * 100, 1.5)}%`,
+                        background: roleColor,
+                        borderRadius: 2,
+                      }}
+                    />
+                  );
+                })}
+            </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -214,6 +231,28 @@ function TeamTab({
   currentSessionId?: string | null;
   peerMessages: PeerMessage[];
 }) {
+  const [flashNodes, setFlashNodes] = useState<Set<string>>(new Set());
+  const prevMsgCount = useRef(peerMessages.length);
+
+  // Flash nodes when new peer messages arrive
+  useEffect(() => {
+    if (peerMessages.length > prevMsgCount.current && peerMessages.length > 0) {
+      const latest = peerMessages[peerMessages.length - 1];
+      const ids = new Set<string>();
+      const fromM = members.find((m) => m.handle === latest.fromHandle);
+      if (fromM) ids.add(fromM.sessionId);
+      if (!latest.isBroadcast) {
+        const toM = members.find((m) => m.handle === latest.toHandle);
+        if (toM) ids.add(toM.sessionId);
+      }
+      setFlashNodes(ids);
+      const timer = setTimeout(() => setFlashNodes(new Set()), 800);
+      prevMsgCount.current = peerMessages.length;
+      return () => clearTimeout(timer);
+    }
+    prevMsgCount.current = peerMessages.length;
+  }, [peerMessages.length]);
+
   if (!collabRunId || members.length === 0) {
     return (
       <div className="rail-empty-rd">
@@ -231,6 +270,31 @@ function TeamTab({
   };
   const runStatus = stats.running > 0 ? 'running' : 'completed';
 
+  // Build swim spans from peer messages if no swimSpans provided
+  const effectiveSwimSpans: SwimSpan[] = swimSpans && swimSpans.length > 0
+    ? swimSpans
+    : peerMessages.length > 0
+      ? (() => {
+          const firstTs = peerMessages[0].timestamp
+            ? new Date(peerMessages[0].timestamp).getTime()
+            : Date.now();
+          return peerMessages.map((pm) => {
+            const ts = pm.timestamp ? new Date(pm.timestamp).getTime() : Date.now();
+            const offset = Math.max(0, (ts - firstTs) / 1000);
+            const fromM = members.find((m) => m.handle === pm.fromHandle);
+            return {
+              session: fromM?.sessionId ?? pm.fromHandle,
+              type: 'PEER_MESSAGE' as const,
+              start: offset,
+              dur: 0.4,
+              fromHandle: pm.fromHandle,
+              toHandle: pm.toHandle,
+              isBroadcast: pm.isBroadcast,
+            } as SwimSpan & { fromHandle?: string; toHandle?: string; isBroadcast?: boolean };
+          });
+        })()
+      : [];
+
   return (
     <>
       <div className="conductor">
@@ -247,16 +311,19 @@ function TeamTab({
             <span className="blob" /> {runStatus}
           </div>
         </div>
+
+        {/* Node graph */}
         <div className="cond-graph">
           {members.map((m) => {
             const role = (m.role ?? 'assistant') as string;
             const active =
               m.sessionId === currentSessionId ||
               (!!collabLeaderSessionId && m.sessionId === collabLeaderSessionId && !currentSessionId);
+            const flashing = flashNodes.has(m.sessionId);
             return (
               <div
                 key={m.sessionId}
-                className={`cond-node depth-${Math.min(m.depth, 2)} ${active ? 'active' : ''}`}
+                className={`cond-node depth-${Math.min(m.depth, 2)} ${active ? 'active' : ''} ${flashing ? 'flashing' : ''}`}
               >
                 <div
                   className="role-chip"
@@ -271,7 +338,13 @@ function TeamTab({
             );
           })}
         </div>
-        {swimSpans && swimSpans.length > 0 && <SwimRiver spans={swimSpans} />}
+
+        {/* Swim river (now data-driven from peer messages) */}
+        {effectiveSwimSpans.length > 0 && (
+          <SwimRiver spans={effectiveSwimSpans} members={members} />
+        )}
+
+        {/* Stats */}
         <div className="cond-footer">
           <span>
             <strong>{stats.total}</strong> members
@@ -285,34 +358,44 @@ function TeamTab({
         </div>
       </div>
 
+      {/* Peer message log — prominent, living */}
       {peerMessages.length > 0 && (
         <div className="peer-card">
           <div className="peer-head">
-            <span>Peer messages</span>
-            <span>{peerMessages.length}</span>
+            <span>Messages</span>
+            <div className="peer-head-right">
+              <span className="peer-legend">
+                <span className="peer-legend-dot" /> direct
+              </span>
+              <span className="peer-legend">
+                <span className="peer-legend-dot peer-legend-dot--bc" /> broadcast
+              </span>
+            </div>
           </div>
-          <div className="peer-body">
-            {peerMessages.map((m, i) => (
-              <div key={i} className={`peer-row ${m.isBroadcast ? 'broadcast' : ''}`}>
-                {m.timestamp && (
+          <div className="peer-body peer-body--log">
+            {peerMessages.slice(-30).reverse().map((m, i) => {
+              const isNew = i === 0; // newest is first in reversed order
+              return (
+                <div key={`${m.timestamp}-${i}`} className={`peer-row peer-row--log ${m.isBroadcast ? 'broadcast' : ''} ${isNew ? 'peer-row--new' : ''}`}>
                   <span className="peer-time">
-                    {new Date(m.timestamp).toLocaleTimeString([], {
-                      hour: '2-digit',
-                      minute: '2-digit',
-                      second: '2-digit',
-                    })}
+                    {m.timestamp
+                      ? new Date(m.timestamp).toLocaleTimeString([], {
+                          hour: '2-digit',
+                          minute: '2-digit',
+                          second: '2-digit',
+                        })
+                      : ''}
                   </span>
-                )}
-                <span className="peer-from">{m.fromHandle}</span>
-                <span className="peer-arrow">→</span>
-                <span className="peer-from">
-                  {m.toHandle === '*' ? 'all' : m.toHandle}
-                </span>
-                {m.isBroadcast && (
-                  <span style={{ color: 'var(--info)', fontSize: 10 }}>(broadcast)</span>
-                )}
-              </div>
-            ))}
+                  <span className="peer-arrow peer-arrow--from">{m.fromHandle}</span>
+                  <span className="peer-arrow-icon">
+                    {m.isBroadcast ? '📢' : '→'}
+                  </span>
+                  <span className="peer-arrow peer-arrow--to">
+                    {m.isBroadcast ? 'all' : m.toHandle}
+                  </span>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
