@@ -111,7 +111,7 @@ CREATE INDEX idx_compiled_method_status ON t_compiled_method(status);
 - `RegisterCompiledMethodSkill`
 
 ### Phase 3：Code Agent Template + 前端
-- `CodeAgentInitializer`：种子 Code Agent 模板（existsByName + DataIntegrityViolationException 防并发）
+- Flyway seed：种子 Code Agent 模板（`INSERT ... WHERE NOT EXISTS`，与 Design Agent 保持一致）
 - Code Skill Pack：`["Bash","FileRead","FileWrite","Glob","Grep","CodeSandbox","CodeReview","RegisterScriptMethod","RegisterCompiledMethod"]`
 - System prompt：内置选择规则（脚本 vs Java）
 - 前端 `HookMethods.tsx`：`/hooks` 路由，双 Tab（Script Methods / Compiled Methods），grid/table 视图切换，detail drawer，approval/reject/compile 操作，手动创建 ScriptMethod 弹窗

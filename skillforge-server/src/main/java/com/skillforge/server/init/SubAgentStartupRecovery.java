@@ -28,7 +28,7 @@ import java.util.Optional;
  *  - child.runtimeStatus == idle/err  → 子 loop 跑完但 finally 钩子没触发,走 registry 恢复路径
  *  - child 不存在                      → mark CANCELLED 并通知父
  *
- * 放在 @Order(100) 晚于 DefaultAgentInitializer,保证 Spring 全部 bean 就位。
+ * 放在 @Order(100) 运行,保证 Spring 全部 bean 就位后再恢复运行中的子 Agent。
  */
 @Component
 @Order(100)
