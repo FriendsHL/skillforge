@@ -1,10 +1,11 @@
 # SkillForge 待办任务
 
-> 更新于：2026-04-25
+> 更新于：2026-04-26
 > **对抗整理**：Analyst + Challenger 双 Agent 评审 + Claude 仲裁（2026-04-23）
 > **代码扫描校准**：全量代码现状核查后二次修正（2026-04-23）
 > **🔥 紧急条目新增**：ENG-1 / ENG-2 / P9-5-lite，由 session `9347f84c` 真实事故触发（2026-04-23）
 > **SEC-2 范围调整**：V1 不收窄，纳入 agent-authored hook 查询 / 提交绑定闭环（2026-04-25）
+> **🔥 紧急条目完成**：BUG-F Compact 摘要存储重构 ✅ 已完成（2026-04-26，commit `e9b48f3`）
 > P 编号保留历史，**不代表当前优先级**；以 Sprint 顺序为准。
 
 ---
@@ -16,6 +17,7 @@
 | Sprint | 内容 | 预估 | 核心判断 |
 | --- | --- | --- | --- |
 | ~~**🔥 紧急**~~ | ~~ENG-1~~ · ~~ENG-2~~ · ~~P9-5-lite~~ | 1-2 天 | 由 session 9347f84c 真实事故触发；阻断 Design Agent 长任务；**全部完成 2026-04-23** |
+| ~~**🔥 紧急**~~ | ~~**BUG-F** Compact 摘要存储重构（向 Claude Code / OpenClaw 看齐）~~ ✅ 2026-04-26 commit `e9b48f3` | 1-1.5 天 | 由 session `acbced3f` DeepSeek 撞 `Duplicate value for 'tool_call_id'` HTTP 400 触发；**Full Pipeline 通过**：Plan r1 PASS（1W）+ Code r1 PASS（5W，0 blocker）；370 unit tests 全绿；用户授权跳过 live curl，server 重启成功即视为 e2e 通过 |
 | **Sprint 1** | P9-7 · P3-1 · P3-3 · P13-3 ~~· P13-4~~ | 2-3 天 | 零依赖防腐；P13-4 代码扫描确认已完成；实际比估算省力 |
 | **Sprint 2a** | P11（收窄）+ P13-1 | 5-7 天 | AgentDiscovery + SubAgent 按 name + visibility；去掉 capabilities/tags |
 | **Sprint 2b** | P15（最小闭环） | 3-5 天 | GetTrace + GetSessionMessages + Analyzer seed；跑真实 case 验证后再扩 |
@@ -50,6 +52,58 @@
 | ~~**P9-5-lite**~~ Compaction prompt 保留 pending FileWrite/FileEdit input ✅ 2026-04-23 | `FullCompactStrategy.SUMMARY_SYSTEM_PROMPT` 在 "MUST preserve" 列表新增一条约束：任何 emit 但未拿到 tool_result 的 pending tool_use，必须 verbatim 保留 tool name + 完整 input arguments，不允许 summarize 任何 FileWrite / FileEdit / Bash 的字符串内容。43 个 compact + engine 测试全绿。**P9-5 完整版（5 文件摘要 + 活跃 skill 上下文 + 完整 pending tasks）保持 V2 排期不变** | 切割自 P9-5（Sprint 5 / V2） |
 
 > **测试要补**：除单元测试外，需用真实 session 复现：构造一个 LLM 准备写 800 行文件的场景，强行触发 full compaction，验证 LLM 恢复后能拿到完整 file content 而不是空 input。
+
+---
+
+### ~~🔥 紧急 — BUG-F Compact 摘要存储重构~~ ✅ 已完成（2026-04-26，commit `e9b48f3`）
+
+> **触发事件**：session `acbced3f` 通过飞书 channel 持续聊天，某轮 full compaction 之后所有后续消息（包括手机端发送）都返回 HTTP 400 ：
+> ```
+> deepseek API error: HTTP 400 - {"error":{"message":"Duplicate value for 'tool_call_id' of in message[4]","type":"invalid_request_error",...}}
+> ```
+> 飞书移动端无 UI 路径新建 / 切换 session，用户被完全卡死。
+>
+> **Root cause（两个 bug 叠加，与 reasoning_content 无关）**：
+> 1. `FullCompactStrategy.mergeSummaryIntoUser`（`FullCompactStrategy.java:217-228`）：当 young-gen 第一条 user 消息是 tool_result 形态（`List<ContentBlock>` 含 tool_result）时，把 summary text block 塞进同一条 user message 最前，构造出 **mixed user message** = `[text(summary), tool_result(A), ...]`。设计本意是"防 Anthropic/Gemini 两条连续 user invalid payload"，但**没区分"真正的 user 消息"和"内部用 user 装的工具结果"**。
+> 2. `OpenAiProvider.convertMessages`（`OpenAiProvider.java:362-374`）：检测到 user message 含 tool_result block 时进入特殊分支，**遍历所有 block 不过滤类型**全部当 `role:tool` 翻译；text block 没有 `toolUseId` → `tool_call_id=null`/`"null"` 字面量；多个非 tool_result block 同一 message 或多条这种 message 累积 → DeepSeek 看到重复 `tool_call_id` → 400。
+>
+> **链路**：full compact 在 tool_result 形态 boundary 之后切割 → mergeSummaryIntoUser 制造 mixed message 写进 `t_session_message` → reload 时永久重现 → OpenAiProvider 翻译时 text block 被当作空 `tool_call_id` 的 `role:tool` 输出 → DeepSeek 400 → session 无法恢复（重启 / 删字段 / `/reset` 状态机都救不了，DB 里那条坏 message 永远在）。**任何走 OpenAI 兼容协议的 provider 都会撞**（DeepSeek / vLLM / Ollama / 阿里云 / 自建网关），Claude 协议保留 user message 整体不展开 role:tool 所以不撞。
+>
+> **方案选型对比（2026-04-26 讨论结论）**：
+> - ❌ 方案 A：翻译层 skip 非 tool_result block —— 摘要丢失，模型失忆被 compact 掉的对话
+> - ❌ 方案 B：摘要拼到第一个 tool_result content 前缀 —— 治标，摘要变工具回复，结构污染
+> - ❌ 方案 C：摘要进 system prompt suffix —— prompt cache 全失效（system prompt 是大多数 provider cache anchor），且语义边界混淆
+> - ✅ **方案 D（向 Claude Code / OpenClaw 看齐）**：摘要作为**单独 user message** 插入 messages 列表前部，不再 merge 到现有消息。Claude Code `buildPostCompactMessages()` 顺序 = `boundaryMarker → summaryMessages(user) → messagesToKeep → ...`；OpenClaw `buildSessionContext()` 同结构。证据：现代 Claude / OpenAI / DeepSeek 协议接受连续 user message（OpenClaw `firstKeptEntryId` 可指向 tool_result，业界生产证据），SkillForge 当前注释"防 Anthropic/Gemini invalid payload"是**过度防御**。
+>
+> **状态**：Sprint 1 前置，**必须 Full Pipeline**（触碰 `FullCompactStrategy.java` / `OpenAiProvider.java` / `SessionService.java` 三个核心文件清单成员；TeamCreate → Plan 对抗循环 → BE Dev → 双 Reviewer 对抗循环 → Judge → Phase 4 verify & commit）。
+>
+> **完成说明（2026-04-26，commit `e9b48f3`）**：
+> - **方案落地**：删除 `FullCompactStrategy` / `SessionMemoryCompactStrategy` 的 `mergeSummaryIntoUser` 合并分支，统一插入独立 `Message.user(summaryPrefix)` 作为 compacted list 第一条
+> - **关键发现（双 Reviewer 找出，单从 todo.md 不可推）**：仅做 BUG-F-1 不够——`CompactionService.persistCompactResult` 写 SUMMARY 行 role 必须从 `SYSTEM` 改为 `USER`，否则 `messageEquals` 比较 role 字段 false → `prefixLen=0` → 触发 fallback rewrite → mixed user message 仍以 NORMAL 行落库，BUG 不消失。这是 BUG-F-2 的真实必要性
+> - **同时发现并修复**：`extractSummaryText` 的 `indexOf("\n\n---\n\n")` 分支必须删——否则 LLM summary 含 markdown 水平线时 DB 内容 ≠ engine 内存 String 字节级一致，`messageEquals` 仍 false 触发 fallback rewrite
+> - **MSG_TYPE 决策**：未新增 `MSG_TYPE_COMPACT_SUMMARY`，复用已有的 `MSG_TYPE_SUMMARY`（YAGNI；plan §1.5-B 偏离 todo.md 原文经 Reviewer 同意）
+> - **OpenAiProvider 防御层**：`convertMessages` hasToolResult 分支加 type filter，跳过非 tool_result block；同时合并文本到首个 tool_result content 前缀以保留 acbced3f 类老 session 的 summary 内容（不丢数据）
+> - **未动文件**：`LightCompactStrategy` / `ClaudeProvider` / `AgentLoopEngine` / V18 migration / SessionService getContextMessages 主体（Plan 核实后均无需改）
+> - **Pipeline 数据**：Plan r1（Java PASS 1W / DB FAIL 4W → Judge 重判 PASS）；Code r1（Java PASS 3W / DB PASS 2W → Judge 重判 PASS，0 blocker）；370 unit tests 全绿（`CompactPersistenceIT` / `SessionRepositoryIT` 因本机 Docker daemon 未启动 pending）
+> - **Phase 4 实操**：用户授权跳过 live curl recovery；server 重启验证（kill PID 19885 → mvn package + spring-boot:run → Tomcat 8.4 秒启动成功）等价 sanity；用户飞书端事后验证 acbced3f 是否恢复
+> - **Phase 3 r1 follow-ups（5 条）**：tracked in `/tmp/nits-followup-bug-f-compact-summary.md`（IT 串联缺口 / `captor.atLeastOnce` 脆弱 / `CompactPersistenceIT` 缺 `JavaTimeModule` / 弱断言注释升级 / mockito `times(1)` 显式约束）；非阻断，按需另起单子追
+
+| 子任务 | 说明 | 关联 |
+| --- | --- | --- |
+| ~~**BUG-F-1**~~ `FullCompactStrategy` 删除 mergeSummaryIntoUser 合并分支 ✅ | 删除 `FullCompactStrategy.mergeSummaryIntoUser` + `SessionMemoryCompactStrategy.mergeSummaryIntoUser`；`apply()` / `applyPrepared()` / `tryCompact()` 三条路径无条件插入 `Message.user(summaryPrefix)` 为 compacted[0] | 治本 |
+| ~~**BUG-F-2**~~ 摘要持久化 role 改 USER + extractSummaryText 简化 ✅ | `persistCompactResult` line 514 `summary.setRole(Message.Role.USER)`；`extractSummaryText` 删 indexOf 分支直接 return s（保证 DB 与 engine 内存 String 字节级一致 → messageEquals true → prefixLen ≥ 1 走 delta 路径，不触发 fallback rewrite）；MSG_TYPE 复用 `MSG_TYPE_SUMMARY` 不新增 | Reviewer 找出 |
+| ~~**BUG-F-3**~~ `OpenAiProvider.convertMessages` 翻译层防御性过滤 ✅ | hasToolResult 分支加 type filter：ContentBlock 和 Map 形态都跳过非 tool_result；text 内容合并到首个 tool_result content 前缀（不丢摘要数据）；ClaudeProvider 不动（Anthropic 协议原生支持 mixed user blocks） | 防御 |
+| ~~**BUG-F-4**~~ 验证 acbced3f 自动恢复 ⚠️ 跳过 | 用户授权跳过 live curl；server 重启成功即视为 e2e 通过；用户后续在飞书端实际验证 | Phase 4 |
+| ~~**BUG-F-5**~~ 单测 + 集成测试 ✅ | `FullCompactStrategyTest` 三种 young-gen[0] case + `mergeSummaryIntoUser` 反射防回归 + `SessionMemoryCompactStrategyTest` 同结构 + 新建 `OpenAiProviderConvertMessagesTest`（ContentBlock + Map 形态 + body 扫描 `tool_call_id:"null"`）+ 新建 `CompactPersistenceIT` round-trip + acbced3f 形态 reload + `CompactionServiceTest` SUMMARY role=USER 锁定。370 unit tests, 0 failures | — |
+
+> **不在本次范围**：
+> - **`t_session_compaction_checkpoint` 表完全用起来**（branch / restore 能力）：本次只用 boundary marker 保证消息行可识别，不做断点恢复 UI / API。如需要可作为后续独立任务。
+> - **P9-5 完整版（5 文件摘要 + 活跃 skill 上下文 + 完整 pending tasks）**：仍然按 V2 排期。BUG-F 只解决"摘要存储位置"的协议正确性问题，不扩 P9-5 的内容范围。
+>
+> **P10 优先级重评估（基于 BUG-F 修复后）**：
+> - **`/new`** 仍然有用 ⭐⭐⭐：飞书移动端无 UI 阻断需求，独立价值不变；保留原 P10 排期 / Sprint 6
+> - ~~**`/reset`** 状态复位~~：BUG-F 修复后 `acbced3f` 类卡死 session 自动恢复，**`/reset` 不再需要急做**；如果未来再有"消息历史污染"类 bug 才考虑做
+> - **`/model`** 临时切模型：BUG-F 修复后不再需要"切 Claude 避坑"，保持原 P10 排期 / Sprint 6
 
 ---
 
