@@ -6,7 +6,7 @@ import com.skillforge.core.skill.SkillContext;
 import com.skillforge.core.skill.SkillResult;
 import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.SessionEntity;
-import com.skillforge.server.service.AgentService;
+import com.skillforge.server.service.AgentTargetResolver;
 import com.skillforge.server.service.ChatService;
 import com.skillforge.server.service.SessionService;
 import com.skillforge.server.subagent.SubAgentRegistry;
@@ -31,16 +31,16 @@ public class SubAgentTool implements Tool {
 
     private static final Logger log = LoggerFactory.getLogger(SubAgentTool.class);
 
-    private final AgentService agentService;
+    private final AgentTargetResolver targetResolver;
     private final SessionService sessionService;
     private final ChatService chatService;
     private final SubAgentRegistry registry;
 
-    public SubAgentTool(AgentService agentService,
+    public SubAgentTool(AgentTargetResolver targetResolver,
                          SessionService sessionService,
                          ChatService chatService,
                          SubAgentRegistry registry) {
-        this.agentService = agentService;
+        this.targetResolver = targetResolver;
         this.sessionService = sessionService;
         this.chatService = chatService;
         this.registry = registry;
@@ -74,7 +74,11 @@ public class SubAgentTool implements Tool {
         ));
         properties.put("agentId", Map.of(
                 "type", "integer",
-                "description", "Target child agent ID (required for dispatch)"
+                "description", "Target child agent ID (provide either agentId or agentName for dispatch)"
+        ));
+        properties.put("agentName", Map.of(
+                "type", "string",
+                "description", "Target child agent name. Exact match is preferred; a unique fuzzy match is accepted."
         ));
         properties.put("task", Map.of(
                 "type", "string",
@@ -115,10 +119,10 @@ public class SubAgentTool implements Tool {
 
     private SkillResult handleDispatch(Map<String, Object> input, SkillContext context) {
         Object agentIdObj = input.get("agentId");
-        if (agentIdObj == null) {
-            return SkillResult.error("agentId is required for dispatch");
+        Object agentNameObj = input.get("agentName");
+        if (agentIdObj == null && (agentNameObj == null || agentNameObj.toString().isBlank())) {
+            return SkillResult.error("agentId or agentName is required for dispatch");
         }
-        long agentId = ((Number) agentIdObj).longValue();
 
         String task = (String) input.get("task");
         if (task == null || task.isBlank()) {
@@ -133,9 +137,14 @@ public class SubAgentTool implements Tool {
 
         AgentEntity targetAgent;
         try {
-            targetAgent = agentService.getAgent(agentId);
+            targetAgent = targetResolver.resolveVisibleTarget(parentSessionId, agentIdObj, agentNameObj);
         } catch (Exception e) {
-            return SkillResult.error("Target agent not found: id=" + agentId);
+            return SkillResult.error("Target agent cannot be resolved: " + e.getMessage());
+        }
+        long agentId = targetAgent.getId();
+        String recursion = detectRecursiveDispatch(parent, agentId);
+        if (recursion != null) {
+            return SkillResult.error(recursion);
         }
 
         // 1. 注册 run(深度/并发限制检查)
@@ -167,6 +176,26 @@ public class SubAgentTool implements Tool {
                 + "The child is running asynchronously. Its result will arrive automatically as a user message "
                 + "in a subsequent turn — do NOT poll or wait.";
         return SkillResult.success(msg);
+    }
+
+    private String detectRecursiveDispatch(SessionEntity parent, Long targetAgentId) {
+        SessionEntity cursor = parent;
+        while (cursor != null) {
+            if (targetAgentId != null && targetAgentId.equals(cursor.getAgentId())) {
+                return "SubAgent spawn rejected: recursive agent dispatch would call agentId="
+                        + targetAgentId + " again in the current session lineage";
+            }
+            String parentId = cursor.getParentSessionId();
+            if (parentId == null || parentId.isBlank()) {
+                break;
+            }
+            try {
+                cursor = sessionService.getSession(parentId);
+            } catch (Exception e) {
+                break;
+            }
+        }
+        return null;
     }
 
     private SkillResult handleList(SkillContext context) {

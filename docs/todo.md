@@ -18,8 +18,8 @@
 | ------------- | --------------------------------------------------------------------------------------- | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | ~~**🔥 紧急**~~ | ~~ENG-1~~ · ~~ENG-2~~ · ~~P9-5-lite~~                                                   | 1-2 天             | 由 session 9347f84c 真实事故触发；阻断 Design Agent 长任务；**全部完成 2026-04-23**                                                                                                                                           |
 | ~~**🔥 紧急**~~ | ~~**BUG-F** Compact 摘要存储重构（向 Claude Code / OpenClaw 看齐）~~ ✅ 2026-04-26 commit `e9b48f3` | 1-1.5 天           | 由 session `acbced3f` DeepSeek 撞 `Duplicate value for 'tool_call_id'` HTTP 400 触发；**Full Pipeline 通过**：Plan r1 PASS（1W）+ Code r1 PASS（5W，0 blocker）；370 unit tests 全绿；用户授权跳过 live curl，server 重启成功即视为 e2e 通过 |
-| **Sprint 1**  | ~~P9-7~~ · P3-1 · P3-3 · P13-3 ~~· P13-4~~                                              | 2-3 天             | 零依赖防腐；P13-4 代码扫描确认已完成；P9-7 已完成 2026-04-26 commit `621f417`；实际比估算省力                                                                                                                                          |
-| **Sprint 2**  | P11（收窄）+ P13-1 → P15（最小闭环）                                                              | 8-12 天            | 同 Sprint 内分两次 PR：先 P11（AgentDiscovery + name resolver + visibility schema）作为基础，再 P15（GetTrace + GetSessionMessages + Analyzer seed 直接复用 P11-1）。共用一次 architectural 思考，物理拆 PR 让 Full Pipeline reviewer 注意力集中 |
+| ~~**Sprint 1**~~  | ~~P9-7~~ · ~~P3-1~~ · ~~P3-3~~ · ~~P13-3~~ · ~~P13-4~~ ✅ 2026-04-26                 | 2-3 天             | 零依赖防腐；P13-4 代码扫描确认已完成；P9-7 已完成 commit `621f417`；P3-1/P3-3/P13-3 已完成 commit `f4773c3`，397 个非 IT server tests 全绿；完整 suite 仅 Docker/Testcontainers IT 受本机环境阻塞                                                                 |
+| **Sprint 2**  | ~~P11（收窄）+ P13-1~~ → ~~P15-1/P15-2~~ → P15-5（Analyzer seed）                                   | 8-12 天            | PR1 已完成 2026-04-26：AgentDiscovery + name resolver + public/private visibility + custom rule severity；PR2 已完成 P15-1/P15-2：GetTrace + GetSessionMessages，413 个非 IT server tests 全绿。下一步只剩 P15-5 Flyway seed |
 | **Sprint 3**  | P9-2 长对话 tool 归档（独立 PR）                                                                 | ~2 周              | 触碰核心文件，Full Pipeline；真实用户长 session 慢性病                                                                                                                                                                      |
 | **⚠️ 前置决策**   | Cost Dashboard · PG 备份 · 多用户权限 design doc                                               | 决策先行              | Sprint 4 开工前必须有答案，否则 P12 上线即踩坑                                                                                                                                                                              |
 | **Sprint 4**  | P12 定时任务（收窄首版）                                                                          | 3-4 周             | user 型调度最小集；SystemJobRegistry + P12-6 → V2                                                                                                                                                                  |
@@ -106,16 +106,18 @@
 
 ---
 
-### Sprint 1 — 零依赖防腐（4-6 天）
+### ~~Sprint 1 — 零依赖防腐~~ ✅ 已完成（2026-04-26）
 
 > 全部无强依赖、独立 PR、即刻可开工。P8 LLM 记忆提取刚上线，快照是必要防腐；token 估算精度影响所有用户体验；P13 workaround 清理降低后续改动摩擦。
+>
+> **完成说明（2026-04-26，commit `f4773c3`）**：P3-1/P3-3/P13-3 已完成；`mvn -pl skillforge-server test -Dtest='!*IT'` 在 Java 17 下 397 tests 全绿；完整 `mvn -pl skillforge-server test` 仅 3 个 Docker/Testcontainers IT 因本机 Docker daemon 不可用失败。
 
 | 子任务 | 来源 | 实际工作量（代码扫描后） |
 | --- | --- | --- |
 | ~~**P9-7**~~ jtokkit token 估算增强 ✅ 2026-04-26 commit `621f417` | P9 | TokenEstimator 替换为 jtokkit 1.1.0 cl100k_base + `countTokensOrdinary`（防 `<|endoftext|>` 字面量 UnsupportedOperationException）+ `newLazyEncodingRegistry`（省 ~30MB）+ WeakHashMap identity cache。28 个调用点零改动，阈值常量未动（**阈值回调留作独立 follow-up ticket**）。Full Pipeline 跑通：Plan skipped（brief unique），Review r1 PASS（Judge 把 B-1 cache race / W-1 ordinary underestimate 都降级为 nit）。17 单测 + 385 全 server 单测全绿。Phase 4 verify 期间主会话 `mvn -pl skillforge-server test` 漏带 `-am` 命中 stale `.class` 误报 NPE，dev 反驳后主会话 `clean install` 复跑确认 17/17，是 verify 流程问题不是 dev 问题。Nit follow-up 4 条 in `/tmp/nits-followup-p9-7.md` |
-| **P3-1** 记忆快照 | P3 | 每次记忆提取前打快照（extraction_batch_id）；支持按 batch 回滚；P8 上线后的质量基础设施，防止脏数据不可回滚。约 1 天 |
-| **P3-3** 记忆影响归因扩展 | P3 | AttributionEngine 7×5 矩阵已完整实现；只需新增两个枚举（`MEMORY_INTERFERENCE` / `MEMORY_MISSING`）+ 两个信号（memorySkillCalled / memoryResultEmpty）。约 0.5 天，比预期省力 |
-| **P13-3** AgentEntity#isPublic → Boolean 包装 | P13 | 当前是 primitive `boolean`，需改为 `Boolean` 包装类 + schema migration（PG/H2 兼容）+ 所有调用点加 `Boolean.TRUE.equals()` 判断。约 0.5-1 天 |
+| ~~**P3-1**~~ 记忆快照 ✅ 2026-04-26 | P3 | `t_memory.extraction_batch_id` + `t_memory_snapshot` 快照表 + `MemoryService.beginExtractionBatch/rollbackExtractionBatch` + `POST /api/memories/rollback`；提取前按 batch 快照当前用户记忆，回滚时恢复快照并删除本 batch 新增记忆 |
+| ~~**P3-3**~~ 记忆影响归因扩展 ✅ 2026-04-26 | P3 | AttributionEngine 扩展为 9×7：新增 `MEMORY_INTERFERENCE` / `MEMORY_MISSING` 两类归因与 `memorySkillCalled` / `memoryResultEmpty` 信号；Scenario/Judge/AB eval 路径统一采集 tool call 信号并在 EvalRun/API 暴露计数 |
+| ~~**P13-3**~~ AgentEntity#isPublic → Boolean 包装 ✅ 2026-04-26 | P13 | `AgentEntity.isPublic` 改 `Boolean`；create 默认 false，partial update 省略 public 时保持原值；公开性判断统一 `Boolean.TRUE.equals()`；Flyway migration 放宽 `is_public` 非空约束 |
 | ~~**P13-4**~~ AgentServiceTest 补测试 | P13 | **代码扫描发现已完成**：AgentServiceTest 现有 5 个测试（404/full-payload/all-null/isPublic/blankRole），覆盖 todo 要求的全部场景。**划掉** |
 
 ---
@@ -126,17 +128,19 @@
 >
 > **PR 顺序**：先 P11（含 AgentDiscovery + name resolver + visibility schema migration）作为基础设施 → 再 P15（Analyzer 直接复用 P11-1 AgentDiscoverySkill，不用临时凑查 agent 的方案）。
 
-#### PR 1 — P11 Agent 发现与跨 Agent 调用（收窄，5-7 天）
+#### ~~PR 1 — P11 Agent 发现与跨 Agent 调用（收窄）~~ ✅ 已完成（2026-04-26）
 
 > 收窄范围：去掉 P11-3 capabilities/tags（当前 agent 数 < 10，name 模糊查找够用，tag 系统是过度设计）。P13-1 custom rule severity 并入本 PR，共享 agent 后端改动节奏。
+>
+> **完成说明（2026-04-26）**：新增 `AgentDiscovery` 工具；`SubAgent` 支持 `agentName` 解析并做可见性 / active 校验；当前 session lineage 内递归派发会被拒绝；Agent UI 增加 public/private visibility 配置；自定义 behavior rule 升级为 `{severity,text}` 并兼容旧 string。验证：`mvn -pl skillforge-server -am test -Dtest='!*IT'` 407 tests 全绿；`npm run build` 通过。
 
 | 子任务 | 说明 |
 | --- | --- |
-| **P11-1** AgentDiscoverySkill | 新增 Skill，Agent 可查询平台所有可用 Agent 列表（返回 id/name/description/skills）；支持按名称模糊过滤 |
-| **P11-2** SubAgentSkill 增强 | 支持按 agent name（不仅 agentId）调用；调用前自动校验目标 Agent 存在且可用 |
-| **P11-4** 调用权限控制 | visibility: public/private 两值（不做 internal 第三类、不做 tags）；循环调用检测；配置哪些 Agent 可被发现和调用 |
+| ~~**P11-1**~~ AgentDiscoverySkill ✅ 2026-04-26 | 新增 Java Tool `AgentDiscovery` 并注册到 `SkillRegistry`；按当前 session author 过滤可见 Agent，返回 JSON `{count, agents:[id,name,description,visibility,skills,tools]}`；`query` 支持 name/description/id 模糊过滤 |
+| ~~**P11-2**~~ SubAgentSkill 增强 ✅ 2026-04-26 | `SubAgent.dispatch` 支持 `agentName`；target resolver 先精确匹配 name，再唯一模糊匹配；调用前校验 target 存在、active 且对当前 author 可见 |
+| ~~**P11-4**~~ 调用权限控制 ✅ 2026-04-26 | 复用 `is_public` 映射 public/private；可见性规则：自己 / public / 同 owner private；前端 Agent create/drawer 可配置 visibility；SubAgent 阻止当前 parent lineage 中重复调用同一 agent，避免 A→B→A / self dispatch 循环 |
 | ~~**P11-3**~~ capabilities/tags | **→ V2**（见 V2 推迟池） |
-| **P13-1** Custom rule severity（并入） | `BehaviorRuleConfig.customRules: string[]` → `Array<{severity: 'MUST' \| 'SHOULD' \| 'MAY', text: string}>`。前端：`useBehaviorRules` + `BehaviorRulesEditor` custom section UI（加 severity 下拉）。后端：`AgentDefinition.BehaviorRulesConfig.customRules` 类型变更 + `SystemPromptBuilder.appendBehaviorRules` 按 severity 分组注入 + Jackson 向后兼容 deserializer（老数据 `"text"` 自动升级为 `{severity:'SHOULD', text}`） |
+| ~~**P13-1**~~ Custom rule severity（并入） ✅ 2026-04-26 | `BehaviorRuleConfig.customRules` 从 `string[]` 升级为 `Array<{severity:'MUST'\|'SHOULD'\|'MAY', text:string}>`；前端 custom rule 新增 severity 下拉；后端 `AgentDefinition.BehaviorRulesConfig` 加 Jackson 向后兼容 deserializer，旧 `"text"` 自动升级为 `{severity:'SHOULD', text}`；`SystemPromptBuilder` 按 MUST/SHOULD/MAY 分组注入 |
 
 ---
 
@@ -145,11 +149,13 @@
 > 目标：把平台查询类 REST API 包成 Skill，让任意 Agent 能查自身的 Trace / Session 数据；内置一个 Session Analyzer Agent 辅助分析工具选择质量。首版只做最小可验证闭环，跑 1-2 个真实 session 人工评价输出质量后再决定是否扩展 P15-3/4/6。
 >
 > **依赖**：必须等 PR 1（P11）合入后再开工。Analyzer Agent 需要查 agent 自身配置时直接用 `AgentDiscoverySkill`，避免临时方案。
+>
+> **进度（2026-04-26）**：P15-1/P15-2 已完成；`GetTrace` / `GetSessionMessages` 注册进 `SkillRegistry`，均做当前 session 默认值、同用户 session 访问校验、输出裁剪。新增 6 个工具单测；`mvn -pl skillforge-server -am test -Dtest='!*IT'` 413 tests 全绿。
 
 | 子任务 | 说明 |
 | --- | --- |
-| **P15-1** GetTraceTool | 新增 Skill：`action=list_traces`（按 sessionId 列 trace 摘要）或 `action=get_trace`（按 traceId 拉完整 span 树：AGENT_LOOP → LLM_CALL → TOOL_CALL）；输出裁剪到 `maxSpans=30`，input/output 各截断 500 chars 防 context 爆；复用现有 `TraceSpanRepository` |
-| **P15-2** GetSessionMessagesTool | 新增 Skill：按 sessionId 拉消息历史（role/content/toolCalls），支持 `limit` 控制返回条数；复用现有 `SessionMessageRepository` |
+| ~~**P15-1** GetTraceTool~~ ✅ 2026-04-26 | 新增 Skill：`action=list_traces`（按 sessionId 列 trace 摘要）或 `action=get_trace`（按 traceId 拉 span 树）；`maxSpans` 默认 30、硬上限 100，input/output/error 做裁剪；复用现有 `TraceSpanRepository`；输出时间统一 ISO 字符串 |
+| ~~**P15-2** GetSessionMessagesTool~~ ✅ 2026-04-26 | 新增 Skill：按 sessionId 拉消息历史（role/content/toolCalls），支持 `limit` 控制返回条数（默认 20、硬上限 100）和 `maxContentChars`；通过 `SessionService.getFullHistoryDtos` 复用消息行存储 |
 | **P15-5** Session Analyzer Agent seed | Flyway migration 种子数据：预配置 Agent（name="Session Analyzer"，绑定 GetTraceTool + GetSessionMessagesTool，system prompt 分析工具选择质量：是否用了过重的工具完成轻量任务 / 是否遗漏更高效工具 / 循环次数是否合理，输出结构化建议 `{issue, actual_tool, better_tool, reason, confidence}`）；手动触发，文本输出，**无前端 tab** |
 | ~~**P15-3**~~ GetEvalRunTool | **→ V2**：Analyzer MVP 不需要读 eval run；当前 eval 数据量小，分析价值有限 |
 | ~~**P15-4**~~ GetAgentConfigTool | **→ V2**：与 P11-1 AgentDiscoverySkill 功能重叠，P11 排期时合并实现 |

@@ -4,8 +4,14 @@ import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.databind.DeserializationContext;
+import com.fasterxml.jackson.databind.JsonDeserializer;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import com.skillforge.core.engine.hook.LifecycleHooksConfig;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -68,7 +74,9 @@ public class AgentDefinition {
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class BehaviorRulesConfig {
         private List<String> builtinRuleIds = new ArrayList<>();
-        private List<String> customRules = new ArrayList<>();
+
+        @JsonDeserialize(contentUsing = CustomRuleDeserializer.class)
+        private List<CustomRule> customRules = new ArrayList<>();
 
         public BehaviorRulesConfig() {}
 
@@ -76,9 +84,65 @@ public class AgentDefinition {
         public void setBuiltinRuleIds(List<String> builtinRuleIds) {
             this.builtinRuleIds = builtinRuleIds != null ? builtinRuleIds : new ArrayList<>();
         }
-        public List<String> getCustomRules() { return customRules; }
-        public void setCustomRules(List<String> customRules) {
+        public List<CustomRule> getCustomRules() { return customRules; }
+        public void setCustomRules(List<CustomRule> customRules) {
             this.customRules = customRules != null ? customRules : new ArrayList<>();
+        }
+
+        @JsonIgnoreProperties(ignoreUnknown = true)
+        public static class CustomRule {
+            private Severity severity = Severity.SHOULD;
+            private String text;
+
+            public CustomRule() {}
+
+            public CustomRule(Severity severity, String text) {
+                this.severity = severity != null ? severity : Severity.SHOULD;
+                this.text = text;
+            }
+
+            public Severity getSeverity() { return severity; }
+            public void setSeverity(Severity severity) {
+                this.severity = severity != null ? severity : Severity.SHOULD;
+            }
+            public String getText() { return text; }
+            public void setText(String text) { this.text = text; }
+        }
+
+        public enum Severity {
+            MUST,
+            SHOULD,
+            MAY;
+
+            public static Severity fromString(String value) {
+                if (value == null || value.isBlank()) {
+                    return SHOULD;
+                }
+                try {
+                    return Severity.valueOf(value.trim().toUpperCase());
+                } catch (IllegalArgumentException e) {
+                    return SHOULD;
+                }
+            }
+        }
+
+        public static class CustomRuleDeserializer extends JsonDeserializer<CustomRule> {
+            @Override
+            public CustomRule deserialize(JsonParser p, DeserializationContext ctxt) throws IOException {
+                JsonNode node = p.getCodec().readTree(p);
+                if (node == null || node.isNull()) {
+                    return new CustomRule();
+                }
+                if (node.isTextual()) {
+                    return new CustomRule(Severity.SHOULD, node.asText());
+                }
+                if (node.isObject()) {
+                    Severity severity = Severity.fromString(node.path("severity").asText(null));
+                    String text = node.path("text").asText("");
+                    return new CustomRule(severity, text);
+                }
+                return new CustomRule(Severity.SHOULD, node.asText(""));
+            }
         }
     }
 

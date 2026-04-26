@@ -523,7 +523,13 @@ body {
 }
 
 .sf-rules-custom-item--editing {
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: 92px 1fr auto;
+  align-items: flex-start;
+}
+
+.sf-rules-custom-severity {
+  width: 92px;
 }
 
 .sf-rules-custom-text {
@@ -545,6 +551,9 @@ body {
 
 .sf-rules-custom-add {
   margin-top: var(--sp-2);
+  display: grid;
+  grid-template-columns: 92px 1fr;
+  gap: var(--sp-2);
 }
 
 .sf-rules-custom-input {

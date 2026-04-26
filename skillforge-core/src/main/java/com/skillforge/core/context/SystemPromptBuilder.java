@@ -3,6 +3,7 @@ package com.skillforge.core.context;
 import com.skillforge.core.model.AgentDefinition;
 import com.skillforge.core.model.SkillDefinition;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
@@ -115,7 +116,8 @@ public class SystemPromptBuilder {
         boolean hasBuiltin = resolved != null && !resolved.isEmpty();
 
         AgentDefinition.BehaviorRulesConfig config = agentDefinition.getBehaviorRules();
-        List<String> customRules = config != null ? config.getCustomRules() : null;
+        List<AgentDefinition.BehaviorRulesConfig.CustomRule> customRules =
+                config != null ? config.getCustomRules() : null;
         boolean hasCustom = customRules != null && !customRules.isEmpty();
 
         if (!hasBuiltin && !hasCustom) return;
@@ -135,13 +137,37 @@ public class SystemPromptBuilder {
         if (hasCustom) {
             sb.append("<user-configured-guidelines>\n");
             sb.append("The agent creator has configured the following custom behavior guidelines:\n");
-            for (String rule : customRules) {
-                String sanitized = sanitizeCustomRule(rule);
-                if (!sanitized.isBlank()) {
-                    sb.append("- ").append(sanitized).append("\n");
-                }
-            }
+            appendCustomRuleGroup(sb, "MUST", customRules,
+                    AgentDefinition.BehaviorRulesConfig.Severity.MUST);
+            appendCustomRuleGroup(sb, "SHOULD", customRules,
+                    AgentDefinition.BehaviorRulesConfig.Severity.SHOULD);
+            appendCustomRuleGroup(sb, "MAY", customRules,
+                    AgentDefinition.BehaviorRulesConfig.Severity.MAY);
             sb.append("</user-configured-guidelines>\n\n");
+        }
+    }
+
+    private static void appendCustomRuleGroup(
+            StringBuilder sb,
+            String label,
+            List<AgentDefinition.BehaviorRulesConfig.CustomRule> customRules,
+            AgentDefinition.BehaviorRulesConfig.Severity severity) {
+        List<String> sanitizedRules = new ArrayList<>();
+        for (AgentDefinition.BehaviorRulesConfig.CustomRule rule : customRules) {
+            if (rule == null || rule.getSeverity() != severity) {
+                continue;
+            }
+            String sanitized = sanitizeCustomRule(rule.getText());
+            if (!sanitized.isBlank()) {
+                sanitizedRules.add(sanitized);
+            }
+        }
+        if (sanitizedRules.isEmpty()) {
+            return;
+        }
+        sb.append(label).append(":\n");
+        for (String rule : sanitizedRules) {
+            sb.append("- ").append(rule).append("\n");
         }
     }
 

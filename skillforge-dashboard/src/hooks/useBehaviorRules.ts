@@ -1,6 +1,11 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { getBehaviorRules, type BehaviorRule, type BehaviorRuleConfig } from '../api';
+import {
+  getBehaviorRules,
+  type BehaviorRule,
+  type BehaviorRuleConfig,
+  type CustomRuleSeverity,
+} from '../api';
 import {
   CATEGORY_META,
   SEVERITY_ORDER,
@@ -30,11 +35,11 @@ interface UseBehaviorRulesReturn {
   /** Toggle a single rule on/off */
   toggleRule: (ruleId: string, enabled: boolean) => void;
   /** Add a custom rule */
-  addCustomRule: (text: string) => void;
+  addCustomRule: (text: string, severity?: CustomRuleSeverity) => void;
   /** Remove a custom rule by index */
   removeCustomRule: (index: number) => void;
   /** Update a custom rule at index */
-  updateCustomRule: (index: number, text: string) => void;
+  updateCustomRule: (index: number, text: string, severity?: CustomRuleSeverity) => void;
   /** Set config from external source (e.g., when editing an agent) */
   setConfig: (config: BehaviorRuleConfig) => void;
   /** Whether the builtin rules are still loading */
@@ -131,12 +136,12 @@ export function useBehaviorRules(
     setTemplateId('custom');
   }, []);
 
-  const addCustomRule = useCallback((text: string) => {
+  const addCustomRule = useCallback((text: string, severity: CustomRuleSeverity = 'SHOULD') => {
     const trimmed = text.trim();
     if (!trimmed) return;
     setConfigState((prev) => ({
       ...prev,
-      customRules: [...prev.customRules, trimmed],
+      customRules: [...prev.customRules, { severity, text: trimmed }],
     }));
   }, []);
 
@@ -147,10 +152,12 @@ export function useBehaviorRules(
     }));
   }, []);
 
-  const updateCustomRule = useCallback((index: number, text: string) => {
+  const updateCustomRule = useCallback((index: number, text: string, severity?: CustomRuleSeverity) => {
     setConfigState((prev) => ({
       ...prev,
-      customRules: prev.customRules.map((r, i) => (i === index ? text.trim() : r)),
+      customRules: prev.customRules.map((r, i) => (
+        i === index ? { severity: severity ?? r.severity, text: text.trim() } : r
+      )),
     }));
   }, []);
 

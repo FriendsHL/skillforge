@@ -43,12 +43,14 @@ import com.skillforge.server.clawhub.ClawHubProperties;
 import com.skillforge.server.tool.MemoryDetailTool;
 import com.skillforge.server.tool.MemorySearchTool;
 import com.skillforge.server.tool.MemoryTool;
+import com.skillforge.server.tool.AgentDiscoveryTool;
+import com.skillforge.server.tool.GetSessionMessagesTool;
+import com.skillforge.server.tool.GetTraceTool;
 import com.skillforge.server.tool.SubAgentTool;
 import com.skillforge.server.tool.TeamCreateTool;
 import com.skillforge.server.tool.TeamKillTool;
 import com.skillforge.server.tool.TeamListTool;
 import com.skillforge.server.tool.TeamSendTool;
-import com.skillforge.server.service.AgentService;
 import com.skillforge.server.service.AgentAuthoredHookService;
 import com.skillforge.server.service.AgentTargetResolver;
 import com.skillforge.server.service.ChatService;
@@ -57,6 +59,7 @@ import com.skillforge.server.service.LifecycleHookViewService;
 import com.skillforge.server.service.MemoryService;
 import com.skillforge.server.service.SessionService;
 import com.skillforge.server.service.UserConfigService;
+import com.skillforge.server.repository.TraceSpanRepository;
 import com.skillforge.server.subagent.AgentRoster;
 import com.skillforge.server.subagent.CollabRunService;
 import com.skillforge.server.subagent.SubAgentRegistry;
@@ -227,12 +230,43 @@ public class SkillForgeConfig {
      * ChatService 用 @Lazy 打破 ChatService ↔ SubAgentRegistry ↔ SubAgentTool 依赖环。
      */
     @Bean
-    public SubAgentTool subAgentTool(AgentService agentService,
+    public AgentDiscoveryTool agentDiscoveryTool(AgentTargetResolver targetResolver,
+                                                 ObjectMapper objectMapper,
+                                                 SkillRegistry skillRegistry) {
+        AgentDiscoveryTool tool = new AgentDiscoveryTool(targetResolver, objectMapper);
+        skillRegistry.registerTool(tool);
+        log.info("Registered AgentDiscoveryTool into SkillRegistry");
+        return tool;
+    }
+
+    @Bean
+    public GetTraceTool getTraceTool(TraceSpanRepository traceSpanRepository,
+                                     SessionService sessionService,
+                                     ObjectMapper objectMapper,
+                                     SkillRegistry skillRegistry) {
+        GetTraceTool tool = new GetTraceTool(traceSpanRepository, sessionService, objectMapper);
+        skillRegistry.registerTool(tool);
+        log.info("Registered GetTraceTool into SkillRegistry");
+        return tool;
+    }
+
+    @Bean
+    public GetSessionMessagesTool getSessionMessagesTool(SessionService sessionService,
+                                                         ObjectMapper objectMapper,
+                                                         SkillRegistry skillRegistry) {
+        GetSessionMessagesTool tool = new GetSessionMessagesTool(sessionService, objectMapper);
+        skillRegistry.registerTool(tool);
+        log.info("Registered GetSessionMessagesTool into SkillRegistry");
+        return tool;
+    }
+
+    @Bean
+    public SubAgentTool subAgentTool(AgentTargetResolver targetResolver,
                                        SessionService sessionService,
                                        @Lazy ChatService chatService,
                                        SubAgentRegistry subAgentRegistry,
                                        SkillRegistry skillRegistry) {
-        SubAgentTool tool = new SubAgentTool(agentService, sessionService, chatService, subAgentRegistry);
+        SubAgentTool tool = new SubAgentTool(targetResolver, sessionService, chatService, subAgentRegistry);
         skillRegistry.registerTool(tool);
         log.info("Registered SubAgentTool into SkillRegistry");
         return tool;

@@ -128,6 +128,8 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({ agent, onOpen }) => {
         <span className="agent-meta-tag">{toolCount === 0 ? 'all' : toolCount} tools</span>
         <span className="agent-meta-dot" />
         <span className="agent-meta-tag">{mode}</span>
+        <span className="agent-meta-dot" />
+        <span className="agent-meta-tag">{agent.public ? 'public' : 'private'}</span>
         <span style={{ marginLeft: 'auto' }}>
           <Sparkline seed={agent.id * 3} hotAt={6} />
         </span>

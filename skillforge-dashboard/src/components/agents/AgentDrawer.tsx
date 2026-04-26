@@ -1,7 +1,16 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { InputNumber, Select, message } from 'antd';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { updateAgent, getTools, getSkills, extractList, type UpdateAgentRequest, type BehaviorRuleConfig } from '../../api';
+import {
+  updateAgent,
+  getTools,
+  getSkills,
+  extractList,
+  type UpdateAgentRequest,
+  type BehaviorRuleConfig,
+  type CustomBehaviorRule,
+  type CustomRuleSeverity,
+} from '../../api';
 import type { AgentDto, ThinkingMode, ReasoningEffort } from '../../api/schemas';
 import { initials, guessRole } from './AgentCard';
 import BehaviorRulesEditor from '../BehaviorRulesEditor';
@@ -54,9 +63,24 @@ function parseBehaviorRulesConfig(raw: unknown): BehaviorRuleConfig | null {
     const custom = (cfg as Record<string, unknown>).customRules;
     if (!Array.isArray(builtin) || !Array.isArray(custom)) return null;
     const builtinIds = builtin.filter((x): x is string => typeof x === 'string');
-    const customStrs = custom.filter((x): x is string => typeof x === 'string');
-    return { builtinRuleIds: builtinIds, customRules: customStrs };
+    const customRules = custom.map(normalizeCustomRule).filter((x): x is CustomBehaviorRule => x !== null);
+    return { builtinRuleIds: builtinIds, customRules };
   } catch { return null; }
+}
+
+function normalizeCustomRule(raw: unknown): CustomBehaviorRule | null {
+  if (typeof raw === 'string') {
+    const text = raw.trim();
+    return text ? { severity: 'SHOULD', text } : null;
+  }
+  if (!raw || typeof raw !== 'object') return null;
+  const obj = raw as Record<string, unknown>;
+  const text = typeof obj.text === 'string' ? obj.text.trim() : '';
+  if (!text) return null;
+  const rawSeverity = typeof obj.severity === 'string' ? obj.severity.toUpperCase() : 'SHOULD';
+  const severity: CustomRuleSeverity =
+    rawSeverity === 'MUST' || rawSeverity === 'MAY' ? rawSeverity : 'SHOULD';
+  return { severity, text };
 }
 
 function useClickOutside(ref: React.RefObject<HTMLElement | null>, handler: () => void) {
@@ -194,6 +218,7 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
   // Overview — model + maxLoops + thinking edit
   const agentWithExtras = agent as AgentDto & { maxLoops?: number | null };
   const [modelIdDraft, setModelIdDraft] = useState<string>(agent.modelId || '');
+  const [publicDraft, setPublicDraft] = useState<boolean>(agent.public ?? false);
   const [maxLoopsDraft, setMaxLoopsDraft] = useState<number | null>(
     typeof agentWithExtras.maxLoops === 'number' ? agentWithExtras.maxLoops : null,
   );
@@ -210,6 +235,7 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
   );
   useEffect(() => {
     setModelIdDraft(agent.modelId || '');
+    setPublicDraft(agent.public ?? false);
     setRoleDraft((agent.role || '').toString());
     setMaxLoopsDraft(typeof agentWithExtras.maxLoops === 'number' ? agentWithExtras.maxLoops : null);
     setThinkingModeDraft(agent.thinkingMode ?? 'auto');
@@ -233,6 +259,7 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
   // server value. Without this guard, Save would fire a false success toast.
   const overviewDirty =
     (agent.modelId || '') !== modelIdDraft ||
+    (agent.public ?? false) !== publicDraft ||
     ((agent.role || '') !== roleDraft) ||
     (maxLoopsDraft !== null && initialMaxLoops !== maxLoopsDraft) ||
     initialThinkingMode !== thinkingModeDraft ||
@@ -318,43 +345,34 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
     onError: () => message.error('Failed to update agent'),
   });
 
-  // Preserve primitive `public` flag across partial PUTs. Backend AgentEntity#isPublic
-  // is a primitive boolean — `updateAgent` always writes it (can't distinguish "unset"
-  // from `false`). Without spreading the current value, every partial save silently
-  // flips public agents to private. Remove when AgentEntity.isPublic becomes Boolean.
-  const withPublic = (partial: UpdateAgentRequest): UpdateAgentRequest => ({
-    ...partial,
-    public: agent.public ?? false,
-  });
-
   const handleSavePrompts = () => {
-    updateMutation.mutate({ id: agent.id, payload: withPublic({
+    updateMutation.mutate({ id: agent.id, payload: {
       systemPrompt: promptDraft['AGENT.md'],
       soulPrompt: promptDraft['SOUL.md'],
-    })});
+    }});
     setDirty({});
   };
 
   const handleModeChange = (newMode: 'ask' | 'auto') => {
     setMode(newMode);
-    updateMutation.mutate({ id: agent.id, payload: withPublic({ executionMode: newMode }) });
+    updateMutation.mutate({ id: agent.id, payload: { executionMode: newMode } });
   };
 
   const handleSaveRules = () => {
     rulesBaselineRef.current = null; // re-latch baseline after server re-fetch
     updateMutation.mutate({
       id: agent.id,
-      payload: withPublic({ behaviorRules: JSON.stringify(rulesCtl.config) }),
+      payload: { behaviorRules: JSON.stringify(rulesCtl.config) },
     });
   };
 
   const handleSaveToolsSkills = () => {
     updateMutation.mutate({
       id: agent.id,
-      payload: withPublic({
+      payload: {
         skillIds: JSON.stringify(skills),
         toolIds: JSON.stringify(tools),
-      }),
+      },
     });
   };
 
@@ -362,6 +380,7 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
     const partial: UpdateAgentRequest = {
       modelId: modelIdDraft || undefined,
       role: roleDraft,
+      public: publicDraft,
       thinkingMode: thinkingModeDraft,
     };
     if (maxLoopsDraft !== null && maxLoopsDraft !== undefined) {
@@ -373,7 +392,7 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
     if (reasoningEffortDraft !== null) {
       partial.reasoningEffort = reasoningEffortDraft;
     }
-    updateMutation.mutate({ id: agent.id, payload: withPublic(partial) });
+    updateMutation.mutate({ id: agent.id, payload: partial });
   };
 
   const runTest = () => {
@@ -511,6 +530,19 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
                   />
                 </div>
                 <div className="overview-card"><div className="overview-k">Mode</div><div className="overview-v mono">{mode}</div></div>
+                <div className="overview-card">
+                  <div className="overview-k">Visibility</div>
+                  <Select
+                    size="small"
+                    value={publicDraft ? 'public' : 'private'}
+                    options={[
+                      { label: 'private', value: 'private' },
+                      { label: 'public', value: 'public' },
+                    ]}
+                    onChange={(v) => setPublicDraft(v === 'public')}
+                    style={{ width: '100%', marginTop: 4 }}
+                  />
+                </div>
                 <div className="overview-card">
                   <div className="overview-k">Role</div>
                   <Select

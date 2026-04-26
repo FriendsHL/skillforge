@@ -7,7 +7,9 @@ import com.skillforge.server.repository.SessionRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
 
 @Service
 public class AgentTargetResolver {
@@ -35,14 +37,29 @@ public class AgentTargetResolver {
         Long authorAgentId = authorAgentIdForSession(sessionId);
         AgentEntity author = agentRepository.findById(authorAgentId)
                 .orElseThrow(() -> new IllegalArgumentException("author agent not found: id=" + authorAgentId));
-        AgentEntity target = resolveTarget(authorAgentId, targetAgentId, targetAgentName);
+        AgentEntity target = resolveTarget(author, targetAgentId, targetAgentName);
         if (!isVisible(author, target)) {
             throw new IllegalArgumentException("target agent is not visible: id=" + target.getId());
         }
         return target;
     }
 
-    private AgentEntity resolveTarget(Long defaultAgentId, Object targetAgentId, Object targetAgentName) {
+    @Transactional(readOnly = true)
+    public List<AgentEntity> listVisibleTargets(String sessionId, String query) {
+        Long authorAgentId = authorAgentIdForSession(sessionId);
+        AgentEntity author = agentRepository.findById(authorAgentId)
+                .orElseThrow(() -> new IllegalArgumentException("author agent not found: id=" + authorAgentId));
+        String q = query != null ? query.trim().toLowerCase(Locale.ROOT) : "";
+        return agentRepository.findAll().stream()
+                .filter(target -> isVisible(author, target))
+                .filter(target -> q.isBlank() || matchesQuery(target, q))
+                .sorted(Comparator
+                        .comparing((AgentEntity a) -> !authorAgentId.equals(a.getId()))
+                        .thenComparing(a -> safeLower(a.getName())))
+                .toList();
+    }
+
+    private AgentEntity resolveTarget(AgentEntity author, Object targetAgentId, Object targetAgentName) {
         if (targetAgentId != null) {
             Long id = toLong(targetAgentId, "targetAgentId");
             return agentRepository.findById(id)
@@ -50,9 +67,18 @@ public class AgentTargetResolver {
         }
         String name = targetAgentName != null ? targetAgentName.toString().trim() : null;
         if (name != null && !name.isBlank()) {
-            List<AgentEntity> matches = agentRepository.findAll().stream()
+            List<AgentEntity> visible = agentRepository.findAll().stream()
+                    .filter(a -> isVisible(author, a))
+                    .toList();
+            List<AgentEntity> matches = visible.stream()
                     .filter(a -> a.getName() != null && a.getName().equalsIgnoreCase(name))
                     .toList();
+            if (matches.isEmpty()) {
+                String needle = name.toLowerCase(Locale.ROOT);
+                matches = visible.stream()
+                        .filter(a -> matchesQuery(a, needle))
+                        .toList();
+            }
             if (matches.isEmpty()) {
                 throw new IllegalArgumentException("target agent not found: name=" + name);
             }
@@ -61,11 +87,10 @@ public class AgentTargetResolver {
             }
             return matches.get(0);
         }
-        return agentRepository.findById(defaultAgentId)
-                .orElseThrow(() -> new IllegalArgumentException("author agent not found: id=" + defaultAgentId));
+        return author;
     }
 
-    private static boolean isVisible(AgentEntity author, AgentEntity target) {
+    public static boolean isVisible(AgentEntity author, AgentEntity target) {
         if (author == null || target == null) {
             return false;
         }
@@ -81,6 +106,19 @@ public class AgentTargetResolver {
         Long authorOwner = author.getOwnerId();
         Long targetOwner = target.getOwnerId();
         return authorOwner != null && authorOwner.equals(targetOwner);
+    }
+
+    private static boolean matchesQuery(AgentEntity target, String q) {
+        if (target == null || q == null || q.isBlank()) {
+            return true;
+        }
+        return safeLower(target.getName()).contains(q)
+                || safeLower(target.getDescription()).contains(q)
+                || String.valueOf(target.getId()).equals(q);
+    }
+
+    private static String safeLower(String value) {
+        return value == null ? "" : value.toLowerCase(Locale.ROOT);
     }
 
     private static Long toLong(Object value, String label) {

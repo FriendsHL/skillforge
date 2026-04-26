@@ -62,6 +62,7 @@ export interface CreateAgentRequest {
   maxLoops?: number;
   skillIds?: string;
   toolIds?: string;
+  public?: boolean;
   behaviorRules?: string;
   lifecycleHooks?: string;
   /** Thinking Mode v1 — `auto` preserves the provider's default behaviour. */
@@ -443,9 +444,16 @@ export interface BehaviorRulePresetResponse {
   ruleIds: string[];
 }
 
+export type CustomRuleSeverity = 'MUST' | 'SHOULD' | 'MAY';
+
+export interface CustomBehaviorRule {
+  severity: CustomRuleSeverity;
+  text: string;
+}
+
 export interface BehaviorRuleConfig {
   builtinRuleIds: string[];
-  customRules: string[];
+  customRules: CustomBehaviorRule[];
 }
 
 export const getBehaviorRules = () =>

@@ -18,7 +18,6 @@ export const AgentSchema = z.object({
   behaviorRules: z.string().optional().nullable(),
   lifecycleHooks: z.string().optional().nullable(),
   // Surface `public` flag for visibility edits; omitted values preserve current state.
-  // (AgentEntity#isPublic is primitive boolean — backend always overwrites it).
   public: z.boolean().optional(),
   // Thinking Mode v1 (see docs/design-thinking-mode.md). Both fields are
   // optional and nullable so GET from older server builds that don't yet

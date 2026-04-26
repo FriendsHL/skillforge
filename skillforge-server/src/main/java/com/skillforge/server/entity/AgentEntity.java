@@ -55,7 +55,7 @@ public class AgentEntity {
     @Column(columnDefinition = "TEXT")
     private String toolsPrompt;
 
-    /** JSON: {"builtinRuleIds":["rule-id",...],"customRules":["text",...]} */
+    /** JSON: {"builtinRuleIds":["rule-id",...],"customRules":[{"severity":"SHOULD","text":"..."}]} */
     @Column(columnDefinition = "TEXT")
     private String behaviorRules;
 

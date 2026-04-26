@@ -194,9 +194,11 @@ const AgentList: React.FC = () => {
   const handleCreate = async () => {
     try {
       const values = await form.validateFields();
+      const { visibility, ...rest } = values;
       const payload: CreateAgentRequest = {
-        ...values,
+        ...rest,
         role: values.role || undefined,
+        public: visibility === 'public',
         skillIds: JSON.stringify(values.skillIds ?? []),
         toolIds: JSON.stringify(values.toolIds ?? []),
       };
@@ -332,6 +334,14 @@ const AgentList: React.FC = () => {
               options={[
                 { label: 'ask — confirms before acting', value: 'ask' },
                 { label: 'auto — autonomous execution', value: 'auto' },
+              ]}
+            />
+          </Form.Item>
+          <Form.Item name="visibility" label="Visibility" initialValue="private">
+            <Select
+              options={[
+                { label: 'private — visible only to same owner', value: 'private' },
+                { label: 'public — discoverable and callable by other agents', value: 'public' },
               ]}
             />
           </Form.Item>

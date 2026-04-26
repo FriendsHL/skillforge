@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Collapse, Switch, Radio, Tooltip, Input, Button, Space, Empty } from 'antd';
+import { Collapse, Switch, Radio, Tooltip, Input, Button, Space, Empty, Select } from 'antd';
 import {
   SafetyCertificateOutlined,
   CodeOutlined,
@@ -13,11 +13,17 @@ import {
 } from '@ant-design/icons';
 import { RULE_TEMPLATES, CATEGORY_META, type RuleTemplateId } from '../constants/behaviorRules';
 import type { GroupedCategory } from '../hooks/useBehaviorRules';
+import type { CustomBehaviorRule, CustomRuleSeverity } from '../api';
 
 const { TextArea } = Input;
 
 const MAX_CUSTOM_RULES = 10;
 const MAX_CUSTOM_RULE_LENGTH = 500;
+const CUSTOM_SEVERITY_OPTIONS: Array<{ label: string; value: CustomRuleSeverity }> = [
+  { label: 'MUST', value: 'MUST' },
+  { label: 'SHOULD', value: 'SHOULD' },
+  { label: 'MAY', value: 'MAY' },
+];
 
 const CATEGORY_ICONS: Record<string, React.ReactNode> = {
   safety: <SafetyCertificateOutlined />,
@@ -29,46 +35,55 @@ const CATEGORY_ICONS: Record<string, React.ReactNode> = {
 interface BehaviorRulesEditorProps {
   groupedRules: GroupedCategory[];
   templateId: RuleTemplateId;
-  customRules: string[];
+  customRules: CustomBehaviorRule[];
   isLoading: boolean;
   onApplyTemplate: (id: Exclude<RuleTemplateId, 'custom'>) => void;
   onToggleRule: (ruleId: string, enabled: boolean) => void;
-  onAddCustomRule: (text: string) => void;
+  onAddCustomRule: (text: string, severity?: CustomRuleSeverity) => void;
   onRemoveCustomRule: (index: number) => void;
-  onUpdateCustomRule: (index: number, text: string) => void;
+  onUpdateCustomRule: (index: number, text: string, severity?: CustomRuleSeverity) => void;
 }
 
 /** Inline editable custom rule row */
 function CustomRuleItem({
-  text,
+  rule,
   index,
   onUpdate,
   onRemove,
 }: {
-  text: string;
+  rule: CustomBehaviorRule;
   index: number;
-  onUpdate: (index: number, text: string) => void;
+  onUpdate: (index: number, text: string, severity?: CustomRuleSeverity) => void;
   onRemove: (index: number) => void;
 }) {
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(text);
+  const [draft, setDraft] = useState(rule.text);
+  const [severity, setSeverity] = useState<CustomRuleSeverity>(rule.severity || 'SHOULD');
 
   const save = () => {
     const trimmed = draft.trim();
     if (trimmed) {
-      onUpdate(index, trimmed);
+      onUpdate(index, trimmed, severity);
     }
     setEditing(false);
   };
 
   const cancel = () => {
-    setDraft(text);
+    setDraft(rule.text);
+    setSeverity(rule.severity || 'SHOULD');
     setEditing(false);
   };
 
   if (editing) {
     return (
       <div className="sf-rules-custom-item sf-rules-custom-item--editing">
+        <Select<CustomRuleSeverity>
+          size="small"
+          value={severity}
+          options={CUSTOM_SEVERITY_OPTIONS}
+          onChange={setSeverity}
+          className="sf-rules-custom-severity"
+        />
         <TextArea
           autoSize={{ minRows: 1, maxRows: 4 }}
           value={draft}
@@ -91,13 +106,20 @@ function CustomRuleItem({
 
   return (
     <div className="sf-rules-custom-item">
-      <span className="sf-rules-custom-text">{text}</span>
+      <span className={`sf-rules-severity sf-rules-severity--${rule.severity.toLowerCase()}`}>
+        {rule.severity}
+      </span>
+      <span className="sf-rules-custom-text">{rule.text}</span>
       <Space size={4} className="sf-rules-custom-actions">
         <Button
           type="text"
           size="small"
           icon={<EditOutlined />}
-          onClick={() => { setDraft(text); setEditing(true); }}
+          onClick={() => {
+            setDraft(rule.text);
+            setSeverity(rule.severity || 'SHOULD');
+            setEditing(true);
+          }}
         />
         <Button
           type="text"
@@ -123,11 +145,12 @@ const BehaviorRulesEditor: React.FC<BehaviorRulesEditorProps> = ({
   onUpdateCustomRule,
 }) => {
   const [newRuleText, setNewRuleText] = useState('');
+  const [newRuleSeverity, setNewRuleSeverity] = useState<CustomRuleSeverity>('SHOULD');
 
   const handleAddRule = () => {
     const trimmed = newRuleText.trim();
     if (!trimmed) return;
-    onAddCustomRule(trimmed);
+    onAddCustomRule(trimmed, newRuleSeverity);
     setNewRuleText('');
   };
 
@@ -214,10 +237,10 @@ const BehaviorRulesEditor: React.FC<BehaviorRulesEditorProps> = ({
             {customRules.length}/{MAX_CUSTOM_RULES}
           </span>
         </div>
-        {customRules.map((text, i) => (
+        {customRules.map((rule, i) => (
           <CustomRuleItem
             key={i}
-            text={text}
+            rule={rule}
             index={i}
             onUpdate={onUpdateCustomRule}
             onRemove={onRemoveCustomRule}
@@ -225,6 +248,13 @@ const BehaviorRulesEditor: React.FC<BehaviorRulesEditorProps> = ({
         ))}
         {customRules.length < MAX_CUSTOM_RULES && (
           <div className="sf-rules-custom-add">
+            <Select<CustomRuleSeverity>
+              size="small"
+              value={newRuleSeverity}
+              options={CUSTOM_SEVERITY_OPTIONS}
+              onChange={setNewRuleSeverity}
+              className="sf-rules-custom-severity"
+            />
             <Input
               value={newRuleText}
               onChange={(e) => setNewRuleText(e.target.value.slice(0, MAX_CUSTOM_RULE_LENGTH))}

@@ -280,6 +280,44 @@ class AgentServiceTest {
     }
 
     @Test
+    @DisplayName("toAgentDefinition upgrades legacy custom behavior rule strings to SHOULD")
+    void toAgentDefinition_upgradesLegacyCustomRules() {
+        var entity = new AgentEntity();
+        entity.setId(22L);
+        entity.setName("x");
+        entity.setBehaviorRules("{\"builtinRuleIds\":[],\"customRules\":[\"keep it short\"]}");
+
+        AgentDefinition def = agentService.toAgentDefinition(entity);
+
+        assertThat(def.getBehaviorRules().getCustomRules()).hasSize(1);
+        var rule = def.getBehaviorRules().getCustomRules().get(0);
+        assertThat(rule.getSeverity()).isEqualTo(AgentDefinition.BehaviorRulesConfig.Severity.SHOULD);
+        assertThat(rule.getText()).isEqualTo("keep it short");
+    }
+
+    @Test
+    @DisplayName("toAgentDefinition parses structured custom behavior rules")
+    void toAgentDefinition_parsesStructuredCustomRules() {
+        var entity = new AgentEntity();
+        entity.setId(23L);
+        entity.setName("x");
+        entity.setBehaviorRules("""
+                {"builtinRuleIds":[],"customRules":[
+                  {"severity":"MUST","text":"always cite files"},
+                  {"severity":"MAY","text":"suggest followups"}
+                ]}
+                """);
+
+        AgentDefinition def = agentService.toAgentDefinition(entity);
+
+        assertThat(def.getBehaviorRules().getCustomRules())
+                .extracting(AgentDefinition.BehaviorRulesConfig.CustomRule::getSeverity)
+                .containsExactly(
+                        AgentDefinition.BehaviorRulesConfig.Severity.MUST,
+                        AgentDefinition.BehaviorRulesConfig.Severity.MAY);
+    }
+
+    @Test
     @DisplayName("toAgentDefinition leaves thinkingMode null when DB column null")
     void toAgentDefinition_nullDb_nullEnum() {
         var entity = new AgentEntity();

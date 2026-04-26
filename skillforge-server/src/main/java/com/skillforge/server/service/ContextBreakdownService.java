@@ -197,7 +197,8 @@ public class ContextBreakdownService {
     private String renderBehaviorRulesBlock(AgentDefinition agentDef) {
         List<String> resolved = agentDef.getResolvedBehaviorRules();
         AgentDefinition.BehaviorRulesConfig cfg = agentDef.getBehaviorRules();
-        List<String> custom = cfg != null ? cfg.getCustomRules() : null;
+        List<AgentDefinition.BehaviorRulesConfig.CustomRule> custom =
+                cfg != null ? cfg.getCustomRules() : null;
 
         boolean hasBuiltin = resolved != null && !resolved.isEmpty();
         boolean hasCustom = custom != null && !custom.isEmpty();
@@ -214,12 +215,33 @@ public class ContextBreakdownService {
         }
         if (hasCustom) {
             sb.append("<user-configured-guidelines>\n");
-            for (String r : custom) {
-                if (isNotBlank(r)) sb.append("- ").append(r).append("\n");
-            }
+            appendCustomRuleGroup(sb, "MUST", custom,
+                    AgentDefinition.BehaviorRulesConfig.Severity.MUST);
+            appendCustomRuleGroup(sb, "SHOULD", custom,
+                    AgentDefinition.BehaviorRulesConfig.Severity.SHOULD);
+            appendCustomRuleGroup(sb, "MAY", custom,
+                    AgentDefinition.BehaviorRulesConfig.Severity.MAY);
             sb.append("</user-configured-guidelines>\n");
         }
         return sb.toString();
+    }
+
+    private void appendCustomRuleGroup(
+            StringBuilder sb,
+            String label,
+            List<AgentDefinition.BehaviorRulesConfig.CustomRule> custom,
+            AgentDefinition.BehaviorRulesConfig.Severity severity) {
+        boolean wroteHeader = false;
+        for (AgentDefinition.BehaviorRulesConfig.CustomRule r : custom) {
+            if (r == null || r.getSeverity() != severity || !isNotBlank(r.getText())) {
+                continue;
+            }
+            if (!wroteHeader) {
+                sb.append(label).append(":\n");
+                wroteHeader = true;
+            }
+            sb.append("- ").append(r.getText()).append("\n");
+        }
     }
 
     private String renderContextProvidersBlock() {
