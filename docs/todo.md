@@ -6,6 +6,7 @@
 > **🔥 紧急条目新增**：ENG-1 / ENG-2 / P9-5-lite，由 session `9347f84c` 真实事故触发（2026-04-23）
 > **SEC-2 范围调整**：V1 不收窄，纳入 agent-authored hook 查询 / 提交绑定闭环（2026-04-25）
 > **🔥 紧急条目完成**：BUG-F Compact 摘要存储重构 ✅ 已完成（2026-04-26，commit `e9b48f3`）
+> **交付索引**：已完成事项、技术方案、完成日期、commit / migration 统一维护在 [delivery-index.md](delivery-index.md)。完成任务时必须同步更新该索引。
 > P 编号保留历史，**不代表当前优先级**；以 Sprint 顺序为准。
 
 ---
