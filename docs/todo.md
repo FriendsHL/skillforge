@@ -18,7 +18,7 @@
 | --- | --- | --- | --- |
 | ~~**🔥 紧急**~~ | ~~ENG-1~~ · ~~ENG-2~~ · ~~P9-5-lite~~ | 1-2 天 | 由 session 9347f84c 真实事故触发；阻断 Design Agent 长任务；**全部完成 2026-04-23** |
 | ~~**🔥 紧急**~~ | ~~**BUG-F** Compact 摘要存储重构（向 Claude Code / OpenClaw 看齐）~~ ✅ 2026-04-26 commit `e9b48f3` | 1-1.5 天 | 由 session `acbced3f` DeepSeek 撞 `Duplicate value for 'tool_call_id'` HTTP 400 触发；**Full Pipeline 通过**：Plan r1 PASS（1W）+ Code r1 PASS（5W，0 blocker）；370 unit tests 全绿；用户授权跳过 live curl，server 重启成功即视为 e2e 通过 |
-| **Sprint 1** | P9-7 · P3-1 · P3-3 · P13-3 ~~· P13-4~~ | 2-3 天 | 零依赖防腐；P13-4 代码扫描确认已完成；实际比估算省力 |
+| **Sprint 1** | ~~P9-7~~ · P3-1 · P3-3 · P13-3 ~~· P13-4~~ | 2-3 天 | 零依赖防腐；P13-4 代码扫描确认已完成；P9-7 已完成 2026-04-26 commit `621f417`；实际比估算省力 |
 | **Sprint 2a** | P11（收窄）+ P13-1 | 5-7 天 | AgentDiscovery + SubAgent 按 name + visibility；去掉 capabilities/tags |
 | **Sprint 2b** | P15（最小闭环） | 3-5 天 | GetTrace + GetSessionMessages + Analyzer seed；跑真实 case 验证后再扩 |
 | **Sprint 3** | P9-2 长对话 tool 归档（独立 PR） | ~2 周 | 触碰核心文件，Full Pipeline；真实用户长 session 慢性病 |
@@ -113,7 +113,7 @@
 
 | 子任务 | 来源 | 实际工作量（代码扫描后） |
 | --- | --- | --- |
-| **P9-7** jtokkit token 估算增强 | P9 | jtokkit 已在 pom.xml 引入，TokenEstimator 已有估算框架；主要工作是在关键决策点（压缩触发判断）切换到 jtokkit 精确计数 + 增量缓存。比预期省力，约 0.5-1 天 |
+| ~~**P9-7**~~ jtokkit token 估算增强 ✅ 2026-04-26 commit `621f417` | P9 | TokenEstimator 替换为 jtokkit 1.1.0 cl100k_base + `countTokensOrdinary`（防 `<|endoftext|>` 字面量 UnsupportedOperationException）+ `newLazyEncodingRegistry`（省 ~30MB）+ WeakHashMap identity cache。28 个调用点零改动，阈值常量未动（**阈值回调留作独立 follow-up ticket**）。Full Pipeline 跑通：Plan skipped（brief unique），Review r1 PASS（Judge 把 B-1 cache race / W-1 ordinary underestimate 都降级为 nit）。17 单测 + 385 全 server 单测全绿。Phase 4 verify 期间主会话 `mvn -pl skillforge-server test` 漏带 `-am` 命中 stale `.class` 误报 NPE，dev 反驳后主会话 `clean install` 复跑确认 17/17，是 verify 流程问题不是 dev 问题。Nit follow-up 4 条 in `/tmp/nits-followup-p9-7.md` |
 | **P3-1** 记忆快照 | P3 | 每次记忆提取前打快照（extraction_batch_id）；支持按 batch 回滚；P8 上线后的质量基础设施，防止脏数据不可回滚。约 1 天 |
 | **P3-3** 记忆影响归因扩展 | P3 | AttributionEngine 7×5 矩阵已完整实现；只需新增两个枚举（`MEMORY_INTERFERENCE` / `MEMORY_MISSING`）+ 两个信号（memorySkillCalled / memoryResultEmpty）。约 0.5 天，比预期省力 |
 | **P13-3** AgentEntity#isPublic → Boolean 包装 | P13 | 当前是 primitive `boolean`，需改为 `Boolean` 包装类 + schema migration（PG/H2 兼容）+ 所有调用点加 `Boolean.TRUE.equals()` 判断。约 0.5-1 天 |
