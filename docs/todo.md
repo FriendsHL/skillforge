@@ -14,24 +14,23 @@
 
 ### 📋 执行顺序总览
 
-| Sprint | 内容 | 预估 | 核心判断 |
-| --- | --- | --- | --- |
-| ~~**🔥 紧急**~~ | ~~ENG-1~~ · ~~ENG-2~~ · ~~P9-5-lite~~ | 1-2 天 | 由 session 9347f84c 真实事故触发；阻断 Design Agent 长任务；**全部完成 2026-04-23** |
-| ~~**🔥 紧急**~~ | ~~**BUG-F** Compact 摘要存储重构（向 Claude Code / OpenClaw 看齐）~~ ✅ 2026-04-26 commit `e9b48f3` | 1-1.5 天 | 由 session `acbced3f` DeepSeek 撞 `Duplicate value for 'tool_call_id'` HTTP 400 触发；**Full Pipeline 通过**：Plan r1 PASS（1W）+ Code r1 PASS（5W，0 blocker）；370 unit tests 全绿；用户授权跳过 live curl，server 重启成功即视为 e2e 通过 |
-| **Sprint 1** | ~~P9-7~~ · P3-1 · P3-3 · P13-3 ~~· P13-4~~ | 2-3 天 | 零依赖防腐；P13-4 代码扫描确认已完成；P9-7 已完成 2026-04-26 commit `621f417`；实际比估算省力 |
-| **Sprint 2a** | P11（收窄）+ P13-1 | 5-7 天 | AgentDiscovery + SubAgent 按 name + visibility；去掉 capabilities/tags |
-| **Sprint 2b** | P15（最小闭环） | 3-5 天 | GetTrace + GetSessionMessages + Analyzer seed；跑真实 case 验证后再扩 |
-| **Sprint 3** | P9-2 长对话 tool 归档（独立 PR） | ~2 周 | 触碰核心文件，Full Pipeline；真实用户长 session 慢性病 |
-| **⚠️ 前置决策** | Cost Dashboard · PG 备份 · 多用户权限 design doc | 决策先行 | Sprint 4 开工前必须有答案，否则 P12 上线即踩坑 |
-| **Sprint 4** | P12 定时任务（收窄首版） | 3-4 周 | user 型调度最小集；SystemJobRegistry + P12-6 → V2 |
-| **Sprint 5** | P9-4 · P9-5（需 design doc 先行） | 按需 | P9-5 依赖 P9-4；P9-5 需先明确"最近文件"数据来源 |
-| **Sprint 6** | P10 斜杠命令（收窄 4 条） | 5-8 天 | 从 Sprint 1 降级；/compact 只做 full；/model 只改 session 级 |
-| ~~**🔥 穿插**~~ | ~~Compact Breaker 误触 + LLM Stream 抗抖（BUG-A/B/C/D/E/E-bis）~~ | ~~Full Pipeline~~ | ✅ 2026-04-24 完成（commit `121e8dc`）；Full Pipeline 运行 + 额外捕获 `FullCompactStrategy.callLlm` 吞异常的更深 root cause |
-| ~~**🧠 穿插**~~ | ~~thinking-mode-v1（per-agent thinkingMode + reasoningEffort + provider 协议感知 + DX）~~ | ~~Full Pipeline~~ | ✅ 2026-04-25 完成（commit `55969db`）；Plan r1 PASS + Review r1 catch B1 测试造假 → r2 PASS + Phase 4 hotfix 跳过未配置 provider |
-| **🔒 穿插** | SEC-1 Channel 配置 AES-GCM 加密 | 1-2 天 | 代码扫描发现明文存储安全问题，P12 前修复 |
-| ~~**🔒 穿插**~~ | ~~SEC-2 Hook Source Protection + Agent-authored Hook Binding V1~~ | ~~Full Pipeline~~ | ✅ 2026-04-25 完成：system / user / agent-authored 三源隔离；Hook 查询 Tool + Agent 提交绑定 Tool；审批后 dispatch；补齐 builtin allowlist 与 reviewer 身份不信任约束 |
-| **🧹 穿插** | DEBT-1 SkillList.tsx 拆分（47K 单文件） | 3-5 天 | 低优先级，下次动 SkillList 前先拆 |
-| **V2** | P14 · P3-2/4 · P15-3/4/6 · P11-3 · P12-3/6 · P10-4/5 · P13-9 | 推迟 | 见底部 V2 推迟池 |
+| Sprint        | 内容                                                                                      | 预估                | 核心判断                                                                                                                                                                                                        |
+| ------------- | --------------------------------------------------------------------------------------- | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ~~**🔥 紧急**~~ | ~~ENG-1~~ · ~~ENG-2~~ · ~~P9-5-lite~~                                                   | 1-2 天             | 由 session 9347f84c 真实事故触发；阻断 Design Agent 长任务；**全部完成 2026-04-23**                                                                                                                                           |
+| ~~**🔥 紧急**~~ | ~~**BUG-F** Compact 摘要存储重构（向 Claude Code / OpenClaw 看齐）~~ ✅ 2026-04-26 commit `e9b48f3` | 1-1.5 天           | 由 session `acbced3f` DeepSeek 撞 `Duplicate value for 'tool_call_id'` HTTP 400 触发；**Full Pipeline 通过**：Plan r1 PASS（1W）+ Code r1 PASS（5W，0 blocker）；370 unit tests 全绿；用户授权跳过 live curl，server 重启成功即视为 e2e 通过 |
+| **Sprint 1**  | ~~P9-7~~ · P3-1 · P3-3 · P13-3 ~~· P13-4~~                                              | 2-3 天             | 零依赖防腐；P13-4 代码扫描确认已完成；P9-7 已完成 2026-04-26 commit `621f417`；实际比估算省力                                                                                                                                          |
+| **Sprint 2**  | P11（收窄）+ P13-1 → P15（最小闭环）                                                              | 8-12 天            | 同 Sprint 内分两次 PR：先 P11（AgentDiscovery + name resolver + visibility schema）作为基础，再 P15（GetTrace + GetSessionMessages + Analyzer seed 直接复用 P11-1）。共用一次 architectural 思考，物理拆 PR 让 Full Pipeline reviewer 注意力集中 |
+| **Sprint 3**  | P9-2 长对话 tool 归档（独立 PR）                                                                 | ~2 周              | 触碰核心文件，Full Pipeline；真实用户长 session 慢性病                                                                                                                                                                      |
+| **⚠️ 前置决策**   | Cost Dashboard · PG 备份 · 多用户权限 design doc                                               | 决策先行              | Sprint 4 开工前必须有答案，否则 P12 上线即踩坑                                                                                                                                                                              |
+| **Sprint 4**  | P12 定时任务（收窄首版）                                                                          | 3-4 周             | user 型调度最小集；SystemJobRegistry + P12-6 → V2                                                                                                                                                                  |
+| **Sprint 5**  | P9-4 · P9-5（需 design doc 先行）                                                            | 按需                | P9-5 依赖 P9-4；P9-5 需先明确"最近文件"数据来源                                                                                                                                                                            |
+| **Sprint 6**  | P10 斜杠命令（收窄 4 条）                                                                        | 5-8 天             | 从 Sprint 1 降级；/compact 只做 full；/model 只改 session 级                                                                                                                                                          |
+| ~~**🔥 穿插**~~ | ~~Compact Breaker 误触 + LLM Stream 抗抖（BUG-A/B/C/D/E/E-bis）~~                             | ~~Full Pipeline~~ | ✅ 2026-04-24 完成（commit `121e8dc`）；Full Pipeline 运行 + 额外捕获 `FullCompactStrategy.callLlm` 吞异常的更深 root cause                                                                                                   |
+| ~~**🧠 穿插**~~ | ~~thinking-mode-v1（per-agent thinkingMode + reasoningEffort + provider 协议感知 + DX）~~     | ~~Full Pipeline~~ | ✅ 2026-04-25 完成（commit `55969db`）；Plan r1 PASS + Review r1 catch B1 测试造假 → r2 PASS + Phase 4 hotfix 跳过未配置 provider                                                                                          |
+| **🔒 穿插**     | SEC-1 Channel 配置 AES-GCM 加密                                                             | 1-2 天             | 代码扫描发现明文存储安全问题，P12 前修复                                                                                                                                                                                      |
+| ~~**🔒 穿插**~~ | ~~SEC-2 Hook Source Protection + Agent-authored Hook Binding V1~~                       | ~~Full Pipeline~~ | ✅ 2026-04-25 完成：system / user / agent-authored 三源隔离；Hook 查询 Tool + Agent 提交绑定 Tool；审批后 dispatch；补齐 builtin allowlist 与 reviewer 身份不信任约束                                                                     |
+| **🧹 穿插**     | DEBT-1 SkillList.tsx 拆分（47K 单文件）                                                        | 3-5 天             | 低优先级，下次动 SkillList 前先拆                                                                                                                                                                                      |
+| **V2**        | P14 · P3-2/4 · P15-3/4/6 · P11-3 · P12-3/6 · P10-4/5 · P13-9                            | 推迟                | 见底部 V2 推迟池                                                                                                                                                                                                  |
 
 > **工期修正说明**：Analyst 对 P12 给出"1-2 周"，Challenger 实测拆解后为 3-4 周（时区/夏令时/concurrencyPolicy/前端 cron 编辑器是主要坑）。P10 "1-2 天"实测 5-8 天（`/compact` 触碰 CompactionService 核心文件 + Full Pipeline）。
 
@@ -121,9 +120,15 @@
 
 ---
 
-### Sprint 2a — P11 Agent 发现与跨 Agent 调用（收窄，5-7 天）
+### Sprint 2 — P11 Agent 发现/调用 + P15 Agent 自省（合并 Sprint，8-12 天，分两次 PR）
 
-> 收窄范围：去掉 P11-3 capabilities/tags（当前 agent 数 < 10，name 模糊查找够用，tag 系统是过度设计）。P13-1 custom rule severity 并入本 Sprint，共享 agent 后端改动节奏。
+> **节奏**：同一 Sprint 内分两次 PR 做完，P11 → P15。两者技术栈高度重合（都是新增 Tool / SkillRegistry 注册 / Agent 调用），合并到同一 Sprint 共用一次 architectural 思考；物理上拆 PR 让每次 Full Pipeline reviewer 注意力集中、避免单 PR 跨范围太广 blocker 卡整批 ship。
+>
+> **PR 顺序**：先 P11（含 AgentDiscovery + name resolver + visibility schema migration）作为基础设施 → 再 P15（Analyzer 直接复用 P11-1 AgentDiscoverySkill，不用临时凑查 agent 的方案）。
+
+#### PR 1 — P11 Agent 发现与跨 Agent 调用（收窄，5-7 天）
+
+> 收窄范围：去掉 P11-3 capabilities/tags（当前 agent 数 < 10，name 模糊查找够用，tag 系统是过度设计）。P13-1 custom rule severity 并入本 PR，共享 agent 后端改动节奏。
 
 | 子任务 | 说明 |
 | --- | --- |
@@ -135,9 +140,11 @@
 
 ---
 
-### Sprint 2b — P15 Agent 自省技能层（最小闭环，3-5 天）
+#### PR 2 — P15 Agent 自省技能层（最小闭环，3-5 天）
 
 > 目标：把平台查询类 REST API 包成 Skill，让任意 Agent 能查自身的 Trace / Session 数据；内置一个 Session Analyzer Agent 辅助分析工具选择质量。首版只做最小可验证闭环，跑 1-2 个真实 session 人工评价输出质量后再决定是否扩展 P15-3/4/6。
+>
+> **依赖**：必须等 PR 1（P11）合入后再开工。Analyzer Agent 需要查 agent 自身配置时直接用 `AgentDiscoverySkill`，避免临时方案。
 
 | 子任务 | 说明 |
 | --- | --- |
