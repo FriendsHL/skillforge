@@ -381,6 +381,7 @@
 | **P9-5** "活跃 skill 上下文 + pending tasks" 注入部分 | 文件摘要是核心，其他两项价值存疑；需 design doc 先行 | P9-4 上线收到数据后重评 |
 | **thinking-mode V2 — Reasoning Effort allowClear null-save** | 当前 `<Select allowClear>` + null-filter merge 在 backend 是 silent preserve(plan §2 V2 推迟);UX 上 Save 按钮重新激活但实际不持久化,已 W1 known limitation | 有"清空"真实需求时 |
 | **thinking-mode V2 — `resolveProvider` friendly error** | `AgentLoopEngine.resolveProvider` 当 agent 配 missing-key provider 时 silently fallback 到 default,用户不知用错模型;改成 throw friendly `IllegalStateException("provider X not configured, set ENV or pick another model")` | 任何 user-visible 模型混用导致体验问题 |
+| **thinking-mode V2 — 跨 Provider 切换历史消息兼容** | 2026-04-26 真实切换 qwen3.5 → deepseek-v4 后，DeepSeek 返回 `Duplicate value for 'tool_call_id' of in message[4]`；初步判断是历史 Qwen 阶段 tool/result 消息里存在空/重复/旧形态 `tool_call_id`，Qwen 容忍但 DeepSeek 严格拒绝。先记录不改代码；后续需 Full Pipeline 评估在 `OpenAiProvider` 翻译层、session 边界或 provider switch 时做唯一性校验 / 降级 replay，并确保不绕过 BUG-F 已修复的摘要语义 | 再次出现跨模型切换导致 OpenAI-compatible payload 400，或准备做 session 级 `/model` |
 | **thinking-mode V2 — Embedding provider fail-fast** | Plan §6 W5,本次 commit 漏改;当前 `EmbeddingService` 构造器空 key 也是静默继续,与 LLM provider 不一致 | Embedding 真用了导致 401 时 |
 | **thinking-mode V2 — `reasoning_effort=max` 真机验证** | Plan §10 W7,文档说 `xhigh→max`,但本次只用 high curl 验证过,max 走文档 | deepseek-v4 高 effort 真实业务场景 |
 
