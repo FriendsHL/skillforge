@@ -177,7 +177,7 @@ public class AgentYamlMapper {
         if (entity.getReasoningEffort() != null && !entity.getReasoningEffort().isBlank()) {
             m.put("reasoningEffort", entity.getReasoningEffort());
         }
-        m.put("public", entity.isPublic());
+        m.put("public", Boolean.TRUE.equals(entity.isPublic()));
         if (entity.getSystemPrompt() != null) m.put("systemPrompt", entity.getSystemPrompt());
         if (entity.getSoulPrompt() != null) m.put("soulPrompt", entity.getSoulPrompt());
         if (entity.getToolsPrompt() != null) m.put("toolsPrompt", entity.getToolsPrompt());

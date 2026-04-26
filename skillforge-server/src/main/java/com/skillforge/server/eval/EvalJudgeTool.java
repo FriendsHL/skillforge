@@ -52,6 +52,8 @@ public class EvalJudgeTool {
                     .taskCompletionOraclePass(false)
                     .hitLoopLimit("TIMEOUT".equals(runResult.getStatus()))
                     .skillExecutionFailed(runResult.isSkillExecutionFailed())
+                    .memorySkillCalled(runResult.isMemorySkillCalled())
+                    .memoryResultEmpty(runResult.isMemoryResultEmpty())
                     .build();
             output.setAttribution(attributionEngine.compute(signals));
             return output;
@@ -97,6 +99,8 @@ public class EvalJudgeTool {
                 .nearPassOracle(nearPass)
                 .outputFormatCorrect(outcomeScore > 0)
                 .slowExecution(runResult.getExecutionTimeMs() > scenario.getPerformanceThresholdMs())
+                .memorySkillCalled(runResult.isMemorySkillCalled())
+                .memoryResultEmpty(runResult.isMemoryResultEmpty())
                 .build();
         output.setAttribution(attributionEngine.compute(signals));
 

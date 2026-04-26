@@ -21,6 +21,8 @@ public interface MemoryRepository extends JpaRepository<MemoryEntity, Long> {
 
     List<MemoryEntity> findByUserIdAndTitle(Long userId, String title);
 
+    List<MemoryEntity> findByExtractionBatchIdAndUserId(String extractionBatchId, Long userId);
+
     @Modifying
     @org.springframework.transaction.annotation.Transactional
     @Query("UPDATE MemoryEntity m SET m.recallCount = m.recallCount + 1, m.lastRecalledAt = :now WHERE m.id = :id")

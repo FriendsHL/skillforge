@@ -7,5 +7,7 @@ public enum FailureAttribution {
     PROMPT_QUALITY,
     CONTEXT_OVERFLOW,
     PERFORMANCE,
+    MEMORY_INTERFERENCE,
+    MEMORY_MISSING,
     VETO_EXCEPTION
 }

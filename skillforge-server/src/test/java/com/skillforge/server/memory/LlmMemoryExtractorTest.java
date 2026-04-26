@@ -105,13 +105,20 @@ class LlmMemoryExtractorTest {
         private final List<MemoryEntity> existingMemories;
 
         RecordingMemoryService(List<MemoryEntity> existingMemories) {
-            super(null, null, null);
+            super(null, null, null, null);
             this.existingMemories = existingMemories;
         }
 
         @Override
         public void createMemoryIfNotDuplicate(Long userId, String type, String title, String content, String tags) {
             createdMemories.add(new String[]{userId.toString(), type, title, content, tags});
+        }
+
+        @Override
+        public void createMemoryIfNotDuplicate(Long userId, String type, String title,
+                                               String content, String tags,
+                                               String extractionBatchId) {
+            createdMemories.add(new String[]{userId.toString(), type, title, content, tags, extractionBatchId});
         }
 
         @Override

@@ -64,6 +64,10 @@ public class EvalRunEntity {
 
     private int attrPerformance;
 
+    private int attrMemoryInterference;
+
+    private int attrMemoryMissing;
+
     @Enumerated(EnumType.STRING)
     @Column(length = 32)
     private FailureAttribution primaryAttribution;
@@ -139,6 +143,12 @@ public class EvalRunEntity {
 
     public int getAttrPerformance() { return attrPerformance; }
     public void setAttrPerformance(int attrPerformance) { this.attrPerformance = attrPerformance; }
+
+    public int getAttrMemoryInterference() { return attrMemoryInterference; }
+    public void setAttrMemoryInterference(int attrMemoryInterference) { this.attrMemoryInterference = attrMemoryInterference; }
+
+    public int getAttrMemoryMissing() { return attrMemoryMissing; }
+    public void setAttrMemoryMissing(int attrMemoryMissing) { this.attrMemoryMissing = attrMemoryMissing; }
 
     public FailureAttribution getPrimaryAttribution() { return primaryAttribution; }
     public void setPrimaryAttribution(FailureAttribution primaryAttribution) { this.primaryAttribution = primaryAttribution; }

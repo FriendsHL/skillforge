@@ -2,26 +2,26 @@ package com.skillforge.server.entity;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
-import jakarta.persistence.EntityListeners;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
-import org.springframework.data.annotation.CreatedDate;
-import org.springframework.data.annotation.LastModifiedDate;
-import org.springframework.data.jpa.domain.support.AuditingEntityListener;
 
 import java.time.Instant;
 import java.time.LocalDateTime;
 
 @Entity
-@Table(name = "t_memory")
-@EntityListeners(AuditingEntityListener.class)
-public class MemoryEntity {
+@Table(name = "t_memory_snapshot")
+public class MemorySnapshotEntity {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
+
+    @Column(length = 36, nullable = false)
+    private String extractionBatchId;
+
+    private Long memoryId;
 
     private Long userId;
 
@@ -35,20 +35,19 @@ public class MemoryEntity {
     private String tags;
 
     @Column(length = 36)
-    private String extractionBatchId;
+    private String sourceExtractionBatchId;
 
-    @Column(columnDefinition = "INT DEFAULT 0")
-    private int recallCount = 0;
+    private int recallCount;
 
     private Instant lastRecalledAt;
 
-    @CreatedDate
-    private LocalDateTime createdAt;
+    private LocalDateTime memoryCreatedAt;
 
-    @LastModifiedDate
-    private LocalDateTime updatedAt;
+    private LocalDateTime memoryUpdatedAt;
 
-    public MemoryEntity() {
+    private Instant snapshotAt;
+
+    public MemorySnapshotEntity() {
     }
 
     public Long getId() {
@@ -57,6 +56,22 @@ public class MemoryEntity {
 
     public void setId(Long id) {
         this.id = id;
+    }
+
+    public String getExtractionBatchId() {
+        return extractionBatchId;
+    }
+
+    public void setExtractionBatchId(String extractionBatchId) {
+        this.extractionBatchId = extractionBatchId;
+    }
+
+    public Long getMemoryId() {
+        return memoryId;
+    }
+
+    public void setMemoryId(Long memoryId) {
+        this.memoryId = memoryId;
     }
 
     public Long getUserId() {
@@ -99,12 +114,12 @@ public class MemoryEntity {
         this.tags = tags;
     }
 
-    public String getExtractionBatchId() {
-        return extractionBatchId;
+    public String getSourceExtractionBatchId() {
+        return sourceExtractionBatchId;
     }
 
-    public void setExtractionBatchId(String extractionBatchId) {
-        this.extractionBatchId = extractionBatchId;
+    public void setSourceExtractionBatchId(String sourceExtractionBatchId) {
+        this.sourceExtractionBatchId = sourceExtractionBatchId;
     }
 
     public int getRecallCount() {
@@ -123,19 +138,27 @@ public class MemoryEntity {
         this.lastRecalledAt = lastRecalledAt;
     }
 
-    public LocalDateTime getCreatedAt() {
-        return createdAt;
+    public LocalDateTime getMemoryCreatedAt() {
+        return memoryCreatedAt;
     }
 
-    public void setCreatedAt(LocalDateTime createdAt) {
-        this.createdAt = createdAt;
+    public void setMemoryCreatedAt(LocalDateTime memoryCreatedAt) {
+        this.memoryCreatedAt = memoryCreatedAt;
     }
 
-    public LocalDateTime getUpdatedAt() {
-        return updatedAt;
+    public LocalDateTime getMemoryUpdatedAt() {
+        return memoryUpdatedAt;
     }
 
-    public void setUpdatedAt(LocalDateTime updatedAt) {
-        this.updatedAt = updatedAt;
+    public void setMemoryUpdatedAt(LocalDateTime memoryUpdatedAt) {
+        this.memoryUpdatedAt = memoryUpdatedAt;
+    }
+
+    public Instant getSnapshotAt() {
+        return snapshotAt;
+    }
+
+    public void setSnapshotAt(Instant snapshotAt) {
+        this.snapshotAt = snapshotAt;
     }
 }

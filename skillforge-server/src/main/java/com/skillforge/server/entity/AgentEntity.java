@@ -1,5 +1,6 @@
 package com.skillforge.server.entity;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EntityListeners;
@@ -64,7 +65,7 @@ public class AgentEntity {
 
     private Long ownerId;
 
-    private boolean isPublic = false;
+    private Boolean isPublic;
 
     private String status = "active";
 
@@ -219,11 +220,13 @@ public class AgentEntity {
         this.ownerId = ownerId;
     }
 
-    public boolean isPublic() {
+    @JsonProperty("public")
+    public Boolean isPublic() {
         return isPublic;
     }
 
-    public void setPublic(boolean isPublic) {
+    @JsonProperty("public")
+    public void setPublic(Boolean isPublic) {
         this.isPublic = isPublic;
     }
 

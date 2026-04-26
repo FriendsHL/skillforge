@@ -111,6 +111,11 @@ public class LlmMemoryExtractor {
      * @return number of memories created
      */
     public int extract(SessionEntity session, List<ActivityLogEntity> activities, List<Message> messages) {
+        return extract(session, activities, messages, null);
+    }
+
+    public int extract(SessionEntity session, List<ActivityLogEntity> activities, List<Message> messages,
+                       String extractionBatchId) {
         String providerName = resolveProviderName();
         LlmProvider provider = llmProviderFactory.getProvider(providerName);
         if (provider == null) {
@@ -129,7 +134,7 @@ public class LlmMemoryExtractor {
         }
 
         List<ExtractedMemoryEntry> entries = parseResponse(content);
-        return storeEntries(session.getUserId(), entries);
+        return storeEntries(session.getUserId(), entries, extractionBatchId);
     }
 
     private String resolveProviderName() {
@@ -251,7 +256,7 @@ public class LlmMemoryExtractor {
         return true;
     }
 
-    private int storeEntries(Long userId, List<ExtractedMemoryEntry> entries) {
+    private int storeEntries(Long userId, List<ExtractedMemoryEntry> entries, String extractionBatchId) {
         int stored = 0;
         for (ExtractedMemoryEntry entry : entries) {
             try {
@@ -261,7 +266,7 @@ public class LlmMemoryExtractor {
                 String importance = entry.importance() != null ? entry.importance().toLowerCase() : "medium";
                 String tags = "auto-extract,llm,importance:" + importance;
 
-                memoryService.createMemoryIfNotDuplicate(userId, type, title, content, tags);
+                memoryService.createMemoryIfNotDuplicate(userId, type, title, content, tags, extractionBatchId);
                 stored++;
             } catch (Exception e) {
                 log.warn("LlmMemoryExtractor: failed to store entry title={}: {}",

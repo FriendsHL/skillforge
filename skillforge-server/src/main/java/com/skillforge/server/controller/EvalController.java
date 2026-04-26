@@ -186,6 +186,8 @@ public class EvalController {
         map.put("attrPromptQuality", run.getAttrPromptQuality());
         map.put("attrContextOverflow", run.getAttrContextOverflow());
         map.put("attrPerformance", run.getAttrPerformance());
+        map.put("attrMemoryInterference", run.getAttrMemoryInterference());
+        map.put("attrMemoryMissing", run.getAttrMemoryMissing());
         map.put("startedAt", run.getStartedAt());
         map.put("completedAt", run.getCompletedAt());
         return map;

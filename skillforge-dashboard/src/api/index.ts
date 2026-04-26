@@ -72,8 +72,7 @@ export interface CreateAgentRequest {
 
 export interface UpdateAgentRequest extends Partial<CreateAgentRequest> {
   id?: number;
-  // `public` mirrors AgentEntity#isPublic; surfaced here because AgentDrawer
-  // must re-send it on every partial PUT to avoid flipping visible agents.
+  // `public` mirrors AgentEntity#isPublic; omitted values preserve existing visibility.
   public?: boolean;
 }
 

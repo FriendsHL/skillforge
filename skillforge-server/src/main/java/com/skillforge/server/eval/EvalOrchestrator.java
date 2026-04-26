@@ -205,6 +205,8 @@ public class EvalOrchestrator {
             evalRun.setAttrPromptQuality(attrHistogram.getOrDefault(FailureAttribution.PROMPT_QUALITY, 0));
             evalRun.setAttrContextOverflow(attrHistogram.getOrDefault(FailureAttribution.CONTEXT_OVERFLOW, 0));
             evalRun.setAttrPerformance(attrHistogram.getOrDefault(FailureAttribution.PERFORMANCE, 0));
+            evalRun.setAttrMemoryInterference(attrHistogram.getOrDefault(FailureAttribution.MEMORY_INTERFERENCE, 0));
+            evalRun.setAttrMemoryMissing(attrHistogram.getOrDefault(FailureAttribution.MEMORY_MISSING, 0));
             evalRun.setConsecutiveDeclineCount(consecutiveDecline);
             evalRun.setCompletedAt(Instant.now());
 
@@ -268,7 +270,9 @@ public class EvalOrchestrator {
                 FailureAttribution.SKILL_EXECUTION_FAILURE, "Check skill input validation and error handling",
                 FailureAttribution.SKILL_MISSING, "Review if required tools are registered in the skill registry",
                 FailureAttribution.CONTEXT_OVERFLOW, "Consider reducing max_loops or breaking tasks into smaller steps",
-                FailureAttribution.PERFORMANCE, "Optimize tool execution speed or increase performance thresholds"
+                FailureAttribution.PERFORMANCE, "Optimize tool execution speed or increase performance thresholds",
+                FailureAttribution.MEMORY_INTERFERENCE, "Inspect recalled memories for stale or conflicting context",
+                FailureAttribution.MEMORY_MISSING, "Add or refresh memories needed by these scenarios"
         );
 
         histogram.entrySet().stream()

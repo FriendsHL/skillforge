@@ -64,6 +64,18 @@ public class MemoryController {
         return ResponseEntity.ok().build();
     }
 
+    @PostMapping("/rollback")
+    public ResponseEntity<Map<String, Object>> rollbackExtractionBatch(
+            @RequestParam Long userId,
+            @RequestParam String batchId) {
+        MemoryService.RollbackResult result = memoryService.rollbackExtractionBatch(batchId, userId);
+        return ResponseEntity.ok(Map.of(
+                "status", "rolled_back",
+                "batchId", batchId,
+                "restored", result.restored(),
+                "deleted", result.deleted()));
+    }
+
     /**
      * Manually trigger memory extraction for a specific session.
      * Intended for development/testing — fires the same async extraction that

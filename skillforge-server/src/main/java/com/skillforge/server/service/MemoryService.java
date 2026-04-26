@@ -2,7 +2,9 @@ package com.skillforge.server.service;
 
 import com.skillforge.server.dto.MemorySearchResult;
 import com.skillforge.server.entity.MemoryEntity;
+import com.skillforge.server.entity.MemorySnapshotEntity;
 import com.skillforge.server.repository.MemoryRepository;
+import com.skillforge.server.repository.MemorySnapshotRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -21,6 +23,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 @Service
@@ -29,11 +32,16 @@ public class MemoryService {
     private static final Logger log = LoggerFactory.getLogger(MemoryService.class);
 
     private final MemoryRepository memoryRepository;
+    private final MemorySnapshotRepository memorySnapshotRepository;
     private final MemoryEmbeddingWorker embeddingWorker;
     private final EmbeddingService embeddingService;
 
-    public MemoryService(MemoryRepository memoryRepository, MemoryEmbeddingWorker embeddingWorker, EmbeddingService embeddingService) {
+    public MemoryService(MemoryRepository memoryRepository,
+                         MemorySnapshotRepository memorySnapshotRepository,
+                         MemoryEmbeddingWorker embeddingWorker,
+                         EmbeddingService embeddingService) {
         this.memoryRepository = memoryRepository;
+        this.memorySnapshotRepository = memorySnapshotRepository;
         this.embeddingWorker = embeddingWorker;
         this.embeddingService = embeddingService;
     }
@@ -51,6 +59,7 @@ public class MemoryService {
 
     @Transactional
     public MemoryEntity createMemory(MemoryEntity memory) {
+        memory.setExtractionBatchId(null);
         MemoryEntity saved = memoryRepository.save(memory);
         scheduleEmbeddingAfterCommit(saved);
         return saved;
@@ -64,6 +73,7 @@ public class MemoryService {
         existing.setTitle(memory.getTitle());
         existing.setContent(memory.getContent());
         existing.setTags(memory.getTags());
+        existing.setExtractionBatchId(null);
         MemoryEntity saved = memoryRepository.save(existing);
         scheduleEmbeddingAfterCommit(saved);
         return saved;
@@ -118,6 +128,11 @@ public class MemoryService {
     private void scheduleEmbeddingAfterCommit(MemoryEntity saved) {
         String text = buildEmbedText(saved);
         Long memoryId = saved.getId();
+        if (embeddingWorker == null) return;
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            embeddingWorker.triggerEmbeddingAsync(memoryId, text);
+            return;
+        }
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {
@@ -132,11 +147,20 @@ public class MemoryService {
 
     @Transactional
     public void createMemoryIfNotDuplicate(Long userId, String type, String title, String content, String tags) {
+        createMemoryIfNotDuplicate(userId, type, title, content, tags, null);
+    }
+
+    @Transactional
+    public void createMemoryIfNotDuplicate(Long userId, String type, String title,
+                                           String content, String tags,
+                                           String extractionBatchId) {
         List<MemoryEntity> existing = memoryRepository.findByUserIdAndTitle(userId, title);
         if (!existing.isEmpty()) {
             MemoryEntity e = existing.get(0);
+            e.setType(type);
             e.setContent(content);
             e.setTags(tags);
+            e.setExtractionBatchId(normalizeBatchId(extractionBatchId));
             MemoryEntity saved = memoryRepository.save(e);
             scheduleEmbeddingAfterCommit(saved);
             return;
@@ -147,9 +171,99 @@ public class MemoryService {
         entity.setTitle(title);
         entity.setContent(content);
         entity.setTags(tags);
+        entity.setExtractionBatchId(normalizeBatchId(extractionBatchId));
         MemoryEntity saved = memoryRepository.save(entity);
         scheduleEmbeddingAfterCommit(saved);
     }
+
+    @Transactional
+    public String beginExtractionBatch(Long userId) {
+        if (userId == null) {
+            throw new IllegalArgumentException("userId is required");
+        }
+        String batchId = UUID.randomUUID().toString();
+        Instant snapshotAt = Instant.now();
+        List<MemorySnapshotEntity> snapshots = memoryRepository.findByUserId(userId).stream()
+                .map(memory -> toSnapshot(batchId, snapshotAt, memory))
+                .toList();
+        if (!snapshots.isEmpty()) {
+            memorySnapshotRepository.saveAll(snapshots);
+        }
+        return batchId;
+    }
+
+    @Transactional
+    public RollbackResult rollbackExtractionBatch(String extractionBatchId, Long userId) {
+        String batchId = normalizeBatchId(extractionBatchId);
+        if (batchId == null || userId == null) {
+            return new RollbackResult(0, 0);
+        }
+
+        Map<Long, MemorySnapshotEntity> snapshotsByMemoryId = memorySnapshotRepository
+                .findByExtractionBatchIdAndUserId(batchId, userId)
+                .stream()
+                .filter(snapshot -> snapshot.getMemoryId() != null)
+                .collect(Collectors.toMap(
+                        MemorySnapshotEntity::getMemoryId,
+                        snapshot -> snapshot,
+                        (left, right) -> left));
+
+        int restored = 0;
+        int deleted = 0;
+        List<MemoryEntity> batchMemories = memoryRepository.findByExtractionBatchIdAndUserId(batchId, userId);
+        for (MemoryEntity memory : batchMemories) {
+            MemorySnapshotEntity snapshot = snapshotsByMemoryId.get(memory.getId());
+            if (snapshot == null) {
+                memoryRepository.delete(memory);
+                deleted++;
+                continue;
+            }
+            restoreFromSnapshot(memory, snapshot);
+            MemoryEntity saved = memoryRepository.save(memory);
+            scheduleEmbeddingAfterCommit(saved);
+            restored++;
+        }
+        return new RollbackResult(restored, deleted);
+    }
+
+    private static MemorySnapshotEntity toSnapshot(String batchId, Instant snapshotAt, MemoryEntity memory) {
+        MemorySnapshotEntity snapshot = new MemorySnapshotEntity();
+        snapshot.setExtractionBatchId(batchId);
+        snapshot.setMemoryId(memory.getId());
+        snapshot.setUserId(memory.getUserId());
+        snapshot.setType(memory.getType());
+        snapshot.setTitle(memory.getTitle());
+        snapshot.setContent(memory.getContent());
+        snapshot.setTags(memory.getTags());
+        snapshot.setSourceExtractionBatchId(memory.getExtractionBatchId());
+        snapshot.setRecallCount(memory.getRecallCount());
+        snapshot.setLastRecalledAt(memory.getLastRecalledAt());
+        snapshot.setMemoryCreatedAt(memory.getCreatedAt());
+        snapshot.setMemoryUpdatedAt(memory.getUpdatedAt());
+        snapshot.setSnapshotAt(snapshotAt);
+        return snapshot;
+    }
+
+    private static void restoreFromSnapshot(MemoryEntity memory, MemorySnapshotEntity snapshot) {
+        memory.setType(snapshot.getType());
+        memory.setTitle(snapshot.getTitle());
+        memory.setContent(snapshot.getContent());
+        memory.setTags(snapshot.getTags());
+        memory.setExtractionBatchId(snapshot.getSourceExtractionBatchId());
+        memory.setRecallCount(snapshot.getRecallCount());
+        memory.setLastRecalledAt(snapshot.getLastRecalledAt());
+        memory.setCreatedAt(snapshot.getMemoryCreatedAt());
+        memory.setUpdatedAt(snapshot.getMemoryUpdatedAt());
+    }
+
+    private static String normalizeBatchId(String extractionBatchId) {
+        if (extractionBatchId == null || extractionBatchId.isBlank()) {
+            return null;
+        }
+        return extractionBatchId.trim();
+    }
+
+    public record RollbackResult(int restored, int deleted) {}
 
     public List<MemoryEntity> searchWithRanking(Long userId, String query) {
         if (query == null || query.isBlank()) return listMemories(userId, null);

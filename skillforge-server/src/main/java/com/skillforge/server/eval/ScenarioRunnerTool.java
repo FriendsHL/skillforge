@@ -4,7 +4,6 @@ import com.skillforge.core.engine.AgentLoopEngine;
 import com.skillforge.core.engine.ChatEventBroadcaster;
 import com.skillforge.core.engine.LoopContext;
 import com.skillforge.core.engine.LoopResult;
-import com.skillforge.core.engine.ToolCallRecord;
 import com.skillforge.core.model.AgentDefinition;
 import com.skillforge.core.skill.SkillRegistry;
 import com.skillforge.server.entity.EvalSessionEntity;
@@ -190,15 +189,7 @@ public class ScenarioRunnerTool {
             result.setOutputTokens(loopResult.getTotalOutputTokens());
             result.setExecutionTimeMs(executionTimeMs);
 
-            // Detect skill execution failures from tool call records
-            if (loopResult.getToolCalls() != null) {
-                for (ToolCallRecord record : loopResult.getToolCalls()) {
-                    if (!record.isSuccess()) {
-                        result.setSkillExecutionFailed(true);
-                        break;
-                    }
-                }
-            }
+            result.applyToolCallSignals(loopResult.getToolCalls());
 
             // Status will be set later by EvalJudgeTool based on oracle scoring
             result.setStatus("PENDING_JUDGE");

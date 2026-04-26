@@ -1,6 +1,14 @@
 package com.skillforge.server.eval;
 
+import com.skillforge.core.engine.ToolCallRecord;
+
+import java.util.List;
+import java.util.Locale;
+import java.util.Set;
+
 public class ScenarioRunResult {
+
+    private static final Set<String> MEMORY_TOOL_NAMES = Set.of("Memory", "memory_search", "memory_detail");
 
     private String scenarioId;
     private String status;    // PASS | FAIL | VETO | TIMEOUT | ERROR
@@ -12,6 +20,8 @@ public class ScenarioRunResult {
     private String agentFinalOutput;
     private boolean skillExecutionFailed;
     private boolean skillOutputWasMalformed;
+    private boolean memorySkillCalled;
+    private boolean memoryResultEmpty;
     private boolean engineThrewException;
     private String errorMessage;
 
@@ -79,9 +89,41 @@ public class ScenarioRunResult {
     public boolean isSkillOutputWasMalformed() { return skillOutputWasMalformed; }
     public void setSkillOutputWasMalformed(boolean skillOutputWasMalformed) { this.skillOutputWasMalformed = skillOutputWasMalformed; }
 
+    public boolean isMemorySkillCalled() { return memorySkillCalled; }
+    public void setMemorySkillCalled(boolean memorySkillCalled) { this.memorySkillCalled = memorySkillCalled; }
+
+    public boolean isMemoryResultEmpty() { return memoryResultEmpty; }
+    public void setMemoryResultEmpty(boolean memoryResultEmpty) { this.memoryResultEmpty = memoryResultEmpty; }
+
     public boolean isEngineThrewException() { return engineThrewException; }
     public void setEngineThrewException(boolean engineThrewException) { this.engineThrewException = engineThrewException; }
 
     public String getErrorMessage() { return errorMessage; }
     public void setErrorMessage(String errorMessage) { this.errorMessage = errorMessage; }
+
+    public void applyToolCallSignals(List<ToolCallRecord> toolCalls) {
+        if (toolCalls == null) return;
+        for (ToolCallRecord record : toolCalls) {
+            if (record == null) continue;
+            if (!record.isSuccess()) {
+                skillExecutionFailed = true;
+            }
+            if (isMemoryTool(record.getSkillName())) {
+                memorySkillCalled = true;
+                if (isEmptyMemoryResult(record.getOutput())) {
+                    memoryResultEmpty = true;
+                }
+            }
+        }
+    }
+
+    private static boolean isMemoryTool(String skillName) {
+        return skillName != null && MEMORY_TOOL_NAMES.contains(skillName);
+    }
+
+    private static boolean isEmptyMemoryResult(String output) {
+        if (output == null || output.isBlank()) return true;
+        String normalized = output.toLowerCase(Locale.ROOT);
+        return normalized.contains("no memories found") || normalized.contains("memory not found");
+    }
 }

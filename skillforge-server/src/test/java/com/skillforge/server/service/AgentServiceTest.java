@@ -75,6 +75,18 @@ class AgentServiceTest {
     }
 
     @Test
+    @DisplayName("createAgent defaults null isPublic to false")
+    void createAgent_nullPublic_defaultsFalse() {
+        var agent = new AgentEntity();
+        agent.setName("new");
+        when(agentRepository.save(any(AgentEntity.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        AgentEntity result = agentService.createAgent(agent);
+
+        assertThat(result.isPublic()).isFalse();
+    }
+
+    @Test
     @DisplayName("updateAgent throws AgentNotFoundException when id missing")
     void updateAgent_notFound_throwsAgentNotFoundException() {
         // Arrange: repository returns empty for the requested id
@@ -161,7 +173,7 @@ class AgentServiceTest {
     }
 
     @Test
-    @DisplayName("updateAgent all-null payload preserves existing; isPublic is primitive and always written")
+    @DisplayName("updateAgent all-null payload preserves existing including isPublic")
     void updateAgent_allNullPayload_preservesExisting() {
         // Arrange: existing with isPublic=true and populated strings
         var existing = new AgentEntity();
@@ -179,7 +191,7 @@ class AgentServiceTest {
         when(agentRepository.findById(3L)).thenReturn(Optional.of(existing));
         when(agentRepository.save(any(AgentEntity.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        // Act: payload leaves all nullable fields null; primitive isPublic defaults to false
+        // Act: payload leaves all fields null.
         var empty = new AgentEntity();
 
         var result = agentService.updateAgent(3L, empty);
@@ -194,11 +206,7 @@ class AgentServiceTest {
         assertThat(result.getStatus()).isEqualTo("active");
         assertThat(result.getMaxLoops()).isEqualTo(7);
 
-        // isPublic is a primitive: we cannot distinguish "unset" from "false",
-        // so the default (false) in the empty payload DOES overwrite existing.
-        // Lock this documented current behavior — changing it is deferred to a
-        // separate PR that might switch the field to Boolean.
-        assertThat(result.isPublic()).isFalse();
+        assertThat(result.isPublic()).isTrue();
     }
 
     @Test

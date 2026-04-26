@@ -117,13 +117,14 @@ public class SessionDigestExtractor {
 
         // 2. Get conversation messages (needed by both modes)
         List<Message> messages = sessionService.getSessionMessages(session.getId());
+        String extractionBatchId = memoryService.beginExtractionBatch(session.getUserId());
 
         // 3. Delegate based on extraction mode
         if (memoryProperties.isLlmMode()) {
             try {
-                int count = llmMemoryExtractor.extract(session, activities, messages);
-                log.info("LLM extraction produced {} memories for session={}",
-                        count, session.getId());
+                int count = llmMemoryExtractor.extract(session, activities, messages, extractionBatchId);
+                log.info("LLM extraction produced {} memories for session={} batch={}",
+                        count, session.getId(), extractionBatchId);
                 return;
             } catch (Exception e) {
                 log.warn("LLM extraction failed for session={}, falling back to rule-based: {}",
@@ -132,12 +133,13 @@ public class SessionDigestExtractor {
         }
 
         // Rule-based extraction (Phase 2 — default or fallback)
-        extractRuleBased(session, activities, messages);
+        extractRuleBased(session, activities, messages, extractionBatchId);
     }
 
     private void extractRuleBased(SessionEntity session,
                                    List<ActivityLogEntity> activities,
-                                   List<Message> messages) {
+                                   List<Message> messages,
+                                   String extractionBatchId) {
         StringBuilder summary = new StringBuilder();
         summary.append("Session ID: ").append(session.getId()).append("\n");
         summary.append("Title: ").append(session.getTitle()).append("\n");
@@ -175,7 +177,7 @@ public class SessionDigestExtractor {
         }
 
         memoryService.createMemoryIfNotDuplicate(
-                session.getUserId(), "knowledge", title, content, "auto-extract"
+                session.getUserId(), "knowledge", title, content, "auto-extract", extractionBatchId
         );
     }
 

@@ -53,13 +53,12 @@ public class AgentService {
     public AgentEntity createAgent(AgentEntity agent) {
         validateLifecycleHooksSize(agent);
         validateLifecycleHooksSemantics(agent);
+        if (agent.isPublic() == null) agent.setPublic(false);
         return agentRepository.save(agent);
     }
 
     // Partial update: null fields in the payload mean "don't change". Only non-null
-    // fields overwrite. Exception: isPublic is a primitive boolean, so it's always
-    // written — callers that send partial payloads should include isPublic or accept
-    // its reset to false. When adding new fields to AgentEntity, add a null-guarded
+    // fields overwrite. When adding new fields to AgentEntity, add a null-guarded
     // setter here.
     @Transactional
     public AgentEntity updateAgent(Long id, AgentEntity updated) {
@@ -88,11 +87,7 @@ public class AgentService {
         if (updated.getExecutionMode() != null) existing.setExecutionMode(updated.getExecutionMode());
         if (updated.getThinkingMode() != null) existing.setThinkingMode(updated.getThinkingMode());
         if (updated.getReasoningEffort() != null) existing.setReasoningEffort(updated.getReasoningEffort());
-        // NOTE: isPublic is a primitive boolean on AgentEntity; cannot distinguish "unset"
-        // from "false" without changing the entity field type. Keep current behavior for
-        // this field — PUT always writes it. Changing this is deferred to a separate PR
-        // that evaluates switching the field to Boolean.
-        existing.setPublic(updated.isPublic());
+        if (updated.isPublic() != null) existing.setPublic(updated.isPublic());
         AgentEntity saved = agentRepository.save(existing);
         log.info("Agent {} updated: fields={}", id, nonNullFieldNames(updated));
         return saved;
@@ -115,8 +110,7 @@ public class AgentService {
     /**
      * Collect the list of fields that were non-null in the update payload. Only emits field
      * names (never values) — systemPrompt / behaviorRules / lifecycleHooks may contain
-     * user-supplied content that could leak secrets. isPublic is a primitive boolean and
-     * is always written, so it's always included.
+     * user-supplied content that could leak secrets.
      */
     private static List<String> nonNullFieldNames(AgentEntity a) {
         List<String> fields = new ArrayList<>();
@@ -138,8 +132,7 @@ public class AgentService {
         if (a.getExecutionMode() != null) fields.add("executionMode");
         if (a.getThinkingMode() != null) fields.add("thinkingMode");
         if (a.getReasoningEffort() != null) fields.add("reasoningEffort");
-        // isPublic is primitive; always written (see updateAgent note)
-        fields.add("isPublic");
+        if (a.isPublic() != null) fields.add("isPublic");
         return fields;
     }
 

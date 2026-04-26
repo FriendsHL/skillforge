@@ -75,7 +75,7 @@ public class AgentTargetResolver {
         if (author.getId() != null && author.getId().equals(target.getId())) {
             return true;
         }
-        if (target.isPublic()) {
+        if (Boolean.TRUE.equals(target.isPublic())) {
             return true;
         }
         Long authorOwner = author.getOwnerId();

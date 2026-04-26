@@ -10,6 +10,8 @@ public class EvalSignals {
     private boolean nearPassOracle;
     private boolean outputFormatCorrect;
     private boolean slowExecution;
+    private boolean memorySkillCalled;
+    private boolean memoryResultEmpty;
 
     public EvalSignals() {
     }
@@ -18,6 +20,16 @@ public class EvalSignals {
                        boolean skillExecutionFailed, boolean skillOutputWasMalformed,
                        boolean hitLoopLimit, boolean nearPassOracle,
                        boolean outputFormatCorrect, boolean slowExecution) {
+        this(engineThrewException, taskCompletionOraclePass, skillExecutionFailed,
+                skillOutputWasMalformed, hitLoopLimit, nearPassOracle,
+                outputFormatCorrect, slowExecution, false, false);
+    }
+
+    public EvalSignals(boolean engineThrewException, boolean taskCompletionOraclePass,
+                       boolean skillExecutionFailed, boolean skillOutputWasMalformed,
+                       boolean hitLoopLimit, boolean nearPassOracle,
+                       boolean outputFormatCorrect, boolean slowExecution,
+                       boolean memorySkillCalled, boolean memoryResultEmpty) {
         this.engineThrewException = engineThrewException;
         this.taskCompletionOraclePass = taskCompletionOraclePass;
         this.skillExecutionFailed = skillExecutionFailed;
@@ -26,6 +38,8 @@ public class EvalSignals {
         this.nearPassOracle = nearPassOracle;
         this.outputFormatCorrect = outputFormatCorrect;
         this.slowExecution = slowExecution;
+        this.memorySkillCalled = memorySkillCalled;
+        this.memoryResultEmpty = memoryResultEmpty;
     }
 
     public static Builder builder() {
@@ -56,6 +70,12 @@ public class EvalSignals {
     public boolean isSlowExecution() { return slowExecution; }
     public void setSlowExecution(boolean slowExecution) { this.slowExecution = slowExecution; }
 
+    public boolean isMemorySkillCalled() { return memorySkillCalled; }
+    public void setMemorySkillCalled(boolean memorySkillCalled) { this.memorySkillCalled = memorySkillCalled; }
+
+    public boolean isMemoryResultEmpty() { return memoryResultEmpty; }
+    public void setMemoryResultEmpty(boolean memoryResultEmpty) { this.memoryResultEmpty = memoryResultEmpty; }
+
     public static class Builder {
         private boolean engineThrewException;
         private boolean taskCompletionOraclePass;
@@ -65,6 +85,8 @@ public class EvalSignals {
         private boolean nearPassOracle;
         private boolean outputFormatCorrect = true;
         private boolean slowExecution;
+        private boolean memorySkillCalled;
+        private boolean memoryResultEmpty;
 
         public Builder engineThrewException(boolean v) { this.engineThrewException = v; return this; }
         public Builder taskCompletionOraclePass(boolean v) { this.taskCompletionOraclePass = v; return this; }
@@ -74,11 +96,14 @@ public class EvalSignals {
         public Builder nearPassOracle(boolean v) { this.nearPassOracle = v; return this; }
         public Builder outputFormatCorrect(boolean v) { this.outputFormatCorrect = v; return this; }
         public Builder slowExecution(boolean v) { this.slowExecution = v; return this; }
+        public Builder memorySkillCalled(boolean v) { this.memorySkillCalled = v; return this; }
+        public Builder memoryResultEmpty(boolean v) { this.memoryResultEmpty = v; return this; }
 
         public EvalSignals build() {
             return new EvalSignals(engineThrewException, taskCompletionOraclePass,
                     skillExecutionFailed, skillOutputWasMalformed,
-                    hitLoopLimit, nearPassOracle, outputFormatCorrect, slowExecution);
+                    hitLoopLimit, nearPassOracle, outputFormatCorrect, slowExecution,
+                    memorySkillCalled, memoryResultEmpty);
         }
     }
 }

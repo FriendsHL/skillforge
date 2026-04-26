@@ -83,10 +83,22 @@ class SessionDigestExtractorTest {
             }
         };
 
-        MemoryService memoryService = new MemoryService(null, null, null) {
+        MemoryService memoryService = new MemoryService(null, null, null, null) {
+            @Override
+            public String beginExtractionBatch(Long userId) {
+                return "batch-test";
+            }
+
             @Override
             public void createMemoryIfNotDuplicate(Long userId, String type, String title, String content, String tags) {
                 createdMemories.add(new String[]{userId.toString(), type, title, content, tags});
+            }
+
+            @Override
+            public void createMemoryIfNotDuplicate(Long userId, String type, String title,
+                                                   String content, String tags,
+                                                   String extractionBatchId) {
+                createdMemories.add(new String[]{userId.toString(), type, title, content, tags, extractionBatchId});
             }
         };
 
@@ -99,7 +111,8 @@ class SessionDigestExtractorTest {
 
         LlmMemoryExtractor llmMemoryExtractor = new LlmMemoryExtractor(null, null, null, null, null) {
             @Override
-            public int extract(SessionEntity session, List<ActivityLogEntity> acts, List<Message> msgs) {
+            public int extract(SessionEntity session, List<ActivityLogEntity> acts, List<Message> msgs,
+                               String extractionBatchId) {
                 llmExtractorCalled = true;
                 if (llmExtractorThrow != null) throw llmExtractorThrow;
                 return llmExtractorReturnCount;

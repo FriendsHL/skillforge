@@ -387,12 +387,7 @@ public class SkillAbEvalService {
             result.setExecutionTimeMs(executionTimeMs);
             result.setStatus("PENDING_JUDGE");
 
-            if (loopResult.getToolCalls() != null) {
-                loopResult.getToolCalls().stream()
-                        .filter(tc -> !tc.isSuccess())
-                        .findFirst()
-                        .ifPresent(tc -> result.setSkillExecutionFailed(true));
-            }
+            result.applyToolCallSignals(loopResult.getToolCalls());
             return result;
         } catch (Exception e) {
             log.error("Skill AB eval single scenario failed: {}", scenario.getId(), e);
