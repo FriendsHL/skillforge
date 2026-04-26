@@ -506,7 +506,12 @@ public class CompactionService implements ContextCompactorCallback {
             boundary.setRole(Message.Role.SYSTEM);
             boundary.setContent("Conversation compacted");
             Message summary = new Message();
-            summary.setRole(Message.Role.SYSTEM);
+            // BUG-F-2: SUMMARY row role MUST be USER, not SYSTEM.
+            // Engine-side compacted layout puts the summary as Message.user(...),
+            // so DB must mirror that — otherwise messageEquals returns false on
+            // reload and triggers fallback rewrite (writing every message again
+            // and dropping the SUMMARY msg_type marker into a NORMAL row).
+            summary.setRole(Message.Role.USER);
             summary.setContent(summaryText);
             Map<String, Object> boundaryMeta = new HashMap<>();
             int compactedCount = result.getBeforeMessageCount() - result.getAfterMessageCount();
@@ -592,13 +597,35 @@ public class CompactionService implements ContextCompactorCallback {
         }
         Message first = compactedMessages.get(0);
         Object content = first.getContent();
+        // After BUG-F-1, the first compacted message is always Message.user(summaryPrefix)
+        // — content is a String. The legacy `\n\n---\n\n` split branch is removed:
+        // mergeSummaryIntoUser is gone, so no merged String form can exist. Keeping
+        // the indexOf split would silently corrupt LLM-produced summaries that happen
+        // to contain a markdown horizontal rule, breaking DB messageEquals on reload.
         if (content instanceof String s) {
-            final String sep = "\n\n---\n\n";
-            int sepIdx = s.indexOf(sep);
-            if (sepIdx > 0) {
-                return s.substring(0, sepIdx);
-            }
             return s;
+        }
+        // Defensive: if some upstream regression sends a List form, extract any
+        // text-form content rather than throwing. We do not aim for perfect recovery
+        // here — the post-BUG-F-1 invariant is String content.
+        if (content instanceof List<?> blocks) {
+            StringBuilder sb = new StringBuilder();
+            for (Object o : blocks) {
+                if (o instanceof com.skillforge.core.model.ContentBlock cb
+                        && "text".equals(cb.getType()) && cb.getText() != null) {
+                    if (!sb.isEmpty()) sb.append('\n');
+                    sb.append(cb.getText());
+                } else if (o instanceof Map<?, ?> map && "text".equals(map.get("type"))) {
+                    Object t = map.get("text");
+                    if (t != null) {
+                        if (!sb.isEmpty()) sb.append('\n');
+                        sb.append(t);
+                    }
+                }
+            }
+            if (!sb.isEmpty()) {
+                return sb.toString();
+            }
         }
         return "Summary unavailable";
     }

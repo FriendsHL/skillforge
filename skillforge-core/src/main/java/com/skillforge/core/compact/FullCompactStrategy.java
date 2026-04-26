@@ -118,22 +118,12 @@ public class FullCompactStrategy {
         String summaryPrefix = "[Context summary from " + window.size() + " messages compacted at "
                 + Instant.now() + "]\n" + summary.trim();
 
+        // Summary is always emitted as a *standalone* user message followed by the
+        // unmodified young-gen (matches Claude Code / OpenClaw layout). Modern
+        // Claude / OpenAI / DeepSeek accept consecutive user messages.
         List<Message> compacted = new ArrayList<>(youngGen.size() + 1);
-
-        // 防"两条连续 user"消息: 若 young-gen 第一条是 user, 把摘要合并到它前面而不是单独插一条;
-        // 否则正常插入为 user 消息 (因为是"之前对话的背景"角色上契合 user).
-        if (!youngGen.isEmpty() && youngGen.get(0).getRole() == Message.Role.USER) {
-            Message originalFirst = youngGen.get(0);
-            Message merged = mergeSummaryIntoUser(originalFirst, summaryPrefix);
-            compacted.add(merged);
-            for (int i = 1; i < youngGen.size(); i++) {
-                compacted.add(youngGen.get(i));
-            }
-        } else {
-            Message synthetic = Message.user(summaryPrefix);
-            compacted.add(synthetic);
-            compacted.addAll(youngGen);
-        }
+        compacted.add(Message.user(summaryPrefix));
+        compacted.addAll(youngGen);
 
         int afterTokens = TokenEstimator.estimate(compacted);
         List<String> applied = new ArrayList<>();
@@ -188,18 +178,10 @@ public class FullCompactStrategy {
         }
         String summaryPrefix = "[Context summary from " + prep.window().size()
                 + " messages compacted at " + Instant.now() + "]\n" + summary.trim();
+        // Same standalone-summary layout as apply().
         List<Message> compacted = new ArrayList<>(prep.youngGen().size() + 1);
-        if (!prep.youngGen().isEmpty() && prep.youngGen().get(0).getRole() == Message.Role.USER) {
-            Message originalFirst = prep.youngGen().get(0);
-            Message merged = mergeSummaryIntoUser(originalFirst, summaryPrefix);
-            compacted.add(merged);
-            for (int i = 1; i < prep.youngGen().size(); i++) {
-                compacted.add(prep.youngGen().get(i));
-            }
-        } else {
-            compacted.add(Message.user(summaryPrefix));
-            compacted.addAll(prep.youngGen());
-        }
+        compacted.add(Message.user(summaryPrefix));
+        compacted.addAll(prep.youngGen());
         int afterTokens = TokenEstimator.estimate(compacted);
         List<String> applied = new ArrayList<>();
         applied.add("llm-summary");
@@ -208,29 +190,6 @@ public class FullCompactStrategy {
     }
 
     // ── private helpers ───────────────────────────────────────────────────────
-
-    /**
-     * 把摘要作为前缀合并到 young-gen 第一条 user 消息里, 避免连续两条 user role 触发
-     * Anthropic/Gemini 的 invalid payload 校验。
-     */
-    @SuppressWarnings("unchecked")
-    private Message mergeSummaryIntoUser(Message originalFirst, String summaryPrefix) {
-        Object content = originalFirst.getContent();
-        Message merged = new Message();
-        merged.setRole(Message.Role.USER);
-        if (content instanceof String s) {
-            merged.setContent(summaryPrefix + "\n\n---\n\n" + s);
-        } else if (content instanceof List<?> blocks) {
-            // tool_result 形态的 user 消息: 不方便 inline prefix, 改成插入一个 text 块在最前
-            List<Object> newBlocks = new ArrayList<>();
-            newBlocks.add(ContentBlock.text(summaryPrefix));
-            newBlocks.addAll((List<Object>) blocks);
-            merged.setContent(newBlocks);
-        } else {
-            merged.setContent(summaryPrefix);
-        }
-        return merged;
-    }
 
     /**
      * 向左寻找一个不会切割 tool_use/tool_result 配对的边界。

@@ -133,26 +133,34 @@ class FullCompactStrategyTest {
     }
 
     @Test
-    void merges_summary_into_first_user_when_young_gen_starts_with_user() {
-        // All filler messages are role=user, so young-gen's first message is user.
-        // With fix #7, we must NOT prepend a separate user message (that would be two
-        // consecutive user messages). We should merge the summary into the first user.
+    void emits_standalone_summary_when_young_gen_starts_with_user_text() {
+        // BUG-F-1: summary is ALWAYS a standalone user message, never merged into the
+        // first young-gen entry. Layout matches Claude Code / OpenClaw — modern
+        // providers accept consecutive user messages.
         List<Message> msgs = new ArrayList<>();
         for (int i = 0; i < 30; i++) msgs.add(Message.user("msg " + i));
 
         CompactResult r = strategy.apply(msgs, 32000, mockProvider, null);
 
-        // Size must be 20 (not 21): young-gen of 20, first merged with summary.
-        assertThat(r.getMessages()).hasSize(20);
+        // Size: 1 summary + 20 young-gen = 21 (NOT 20 — no merge)
+        assertThat(r.getMessages()).hasSize(21);
+
         Message first = r.getMessages().get(0);
         assertThat(first.getRole()).isEqualTo(Message.Role.USER);
         assertThat(first.getContent()).isInstanceOf(String.class);
         String content = (String) first.getContent();
         assertThat(content).startsWith("[Context summary from ");
         assertThat(content).contains("SUMMARY");
-        // Contains the original first young-gen message content too
-        assertThat(content).contains("msg 10");
-        // Result size = 20 (merged, not 21)
+        // Summary string must NOT contain the first young-gen content (no merge)
+        assertThat(content).doesNotContain("msg 10");
+        // No legacy `\n\n---\n\n` separator anywhere — that was the merge marker
+        assertThat(content).doesNotContain("\n\n---\n\n");
+
+        // Second message is the first of young-gen, unchanged
+        Message second = r.getMessages().get(1);
+        assertThat(second.getRole()).isEqualTo(Message.Role.USER);
+        assertThat(second.getContent()).isEqualTo("msg 10");
+
         assertThat(r.getStrategiesApplied()).containsExactly("llm-summary");
     }
 
@@ -161,7 +169,7 @@ class FullCompactStrategyTest {
         // First half filler users; at split, young-gen first message is assistant text.
         // Layout: 10 users + 20 assistant texts. With YOUNG_GEN_KEEP=20, rightEdge=10 (user).
         // Young-gen = [10, 30) which starts with assistant.
-        // So the summary should be INSERTED as a standalone user message, not merged.
+        // BUG-F-1: summary is always a standalone user message (matches both code paths now).
         List<Message> msgs = new ArrayList<>();
         for (int i = 0; i < 10; i++) msgs.add(Message.user("u " + i));
         for (int i = 0; i < 20; i++) msgs.add(assistantText("a " + i));
@@ -176,6 +184,71 @@ class FullCompactStrategyTest {
         // Second message is the first of young-gen, unchanged
         assertThat(r.getMessages().get(1).getRole()).isEqualTo(Message.Role.ASSISTANT);
         assertThat(((String) r.getMessages().get(1).getContent())).isEqualTo("a 0");
+    }
+
+    /**
+     * BUG-F-1: when young-gen first entry is a tool_result-form user message, it MUST
+     * NOT have the summary text-block prepended into its blocks list. The compacted
+     * layout must be [Message.user(summary), tool_result-form-user, ...] with the
+     * tool_result message preserved byte-for-byte.
+     *
+     * <p>Constructs a young-gen-leading tool_result by hand-rolling the message list
+     * and calling {@code applyPrepared} directly (bypasses boundary check, simulating
+     * legacy session shapes).
+     */
+    @Test
+    void preserves_tool_result_form_first_youngGen_unmodified() {
+        List<Message> youngGen = new ArrayList<>();
+        Message toolResultUser = new Message();
+        toolResultUser.setRole(Message.Role.USER);
+        toolResultUser.setContent(List.of(ContentBlock.toolResult("tx", "result-payload", false)));
+        youngGen.add(toolResultUser);
+        for (int i = 0; i < 19; i++) youngGen.add(assistantText("yg " + i));
+
+        // window: any non-empty list
+        List<Message> window = new ArrayList<>();
+        for (int i = 0; i < 10; i++) window.add(Message.user("win " + i));
+
+        FullCompactStrategy.PreparedCompact prep = new FullCompactStrategy.PreparedCompact(
+                /*rightEdge=*/10, window, youngGen,
+                /*beforeTokens=*/100, /*beforeCount=*/30);
+
+        CompactResult r = strategy.applyPrepared(prep, mockProvider, null);
+        assertThat(r).isNotNull();
+        // 1 summary + 20 young-gen (1 tool_result + 19 assistantText)
+        assertThat(r.getMessages()).hasSize(21);
+
+        // [0] = summary user (String content)
+        Message first = r.getMessages().get(0);
+        assertThat(first.getRole()).isEqualTo(Message.Role.USER);
+        assertThat(first.getContent()).isInstanceOf(String.class);
+        assertThat((String) first.getContent()).startsWith("[Context summary from ");
+
+        // [1] = original tool_result-form user, content list unchanged in length and shape
+        Message second = r.getMessages().get(1);
+        assertThat(second.getRole()).isEqualTo(Message.Role.USER);
+        assertThat(second.getContent()).isInstanceOf(List.class);
+        @SuppressWarnings("unchecked")
+        List<Object> blocks = (List<Object>) second.getContent();
+        assertThat(blocks).hasSize(1);  // no text block prepended
+        assertThat(blocks.get(0)).isInstanceOf(ContentBlock.class);
+        ContentBlock cb = (ContentBlock) blocks.get(0);
+        assertThat(cb.getType()).isEqualTo("tool_result");
+        assertThat(cb.getToolUseId()).isEqualTo("tx");
+        assertThat(cb.getContent()).isEqualTo("result-payload");
+    }
+
+    /** Regression: mergeSummaryIntoUser was deleted (BUG-F-1). */
+    @Test
+    void mergeSummaryIntoUser_method_is_removed() {
+        boolean found = false;
+        for (java.lang.reflect.Method m : FullCompactStrategy.class.getDeclaredMethods()) {
+            if ("mergeSummaryIntoUser".equals(m.getName())) {
+                found = true;
+                break;
+            }
+        }
+        assertThat(found).as("mergeSummaryIntoUser must be removed (BUG-F-1)").isFalse();
     }
 
     /**

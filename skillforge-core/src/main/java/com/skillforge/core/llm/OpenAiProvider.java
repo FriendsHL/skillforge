@@ -360,7 +360,25 @@ public class OpenAiProvider implements LlmProvider {
                 }
 
                 if (hasToolResult) {
+                    // BUG-F-3 defensive type filter: only emit role:tool for actual
+                    // tool_result blocks. text / image / tool_use / etc. blocks that
+                    // got mixed into a tool_result-form user message (e.g. acbced3f
+                    // legacy data produced by the deleted mergeSummaryIntoUser path)
+                    // are silently dropped — without this filter they would be emitted
+                    // as role:tool with tool_call_id="null", which DeepSeek rejects
+                    // with HTTP 400 "Duplicate value for 'tool_call_id'".
                     for (Object obj : blocks) {
+                        boolean isToolResult;
+                        if (obj instanceof ContentBlock cb) {
+                            isToolResult = "tool_result".equals(cb.getType());
+                        } else if (obj instanceof Map<?, ?> map) {
+                            isToolResult = "tool_result".equals(map.get("type"));
+                        } else {
+                            isToolResult = false;
+                        }
+                        if (!isToolResult) {
+                            continue;
+                        }
                         ObjectNode toolMsg = objectMapper.createObjectNode();
                         toolMsg.put("role", "tool");
                         if (obj instanceof ContentBlock block) {

@@ -1,6 +1,5 @@
 package com.skillforge.core.compact;
 
-import com.skillforge.core.model.ContentBlock;
 import com.skillforge.core.model.Message;
 
 import org.slf4j.Logger;
@@ -63,19 +62,12 @@ public class SessionMemoryCompactStrategy {
         String summaryPrefix = "[Session memory summary from " + prep.window().size()
                 + " messages compacted at " + Instant.now() + "]\n" + memorySummary.trim();
 
-        // Assemble compacted messages: summary + young-gen
+        // Assemble compacted messages: standalone summary user message + unmodified young-gen.
+        // (Matches FullCompactStrategy / Claude Code / OpenClaw layout. Modern providers
+        // accept consecutive user messages.)
         List<Message> compacted = new ArrayList<>(youngGen.size() + 1);
-        if (!youngGen.isEmpty() && youngGen.get(0).getRole() == Message.Role.USER) {
-            // Merge summary into the first user message to avoid consecutive user messages
-            Message merged = mergeSummaryIntoUser(youngGen.get(0), summaryPrefix);
-            compacted.add(merged);
-            for (int i = 1; i < youngGen.size(); i++) {
-                compacted.add(youngGen.get(i));
-            }
-        } else {
-            compacted.add(Message.user(summaryPrefix));
-            compacted.addAll(youngGen);
-        }
+        compacted.add(Message.user(summaryPrefix));
+        compacted.addAll(youngGen);
 
         int afterTokens = TokenEstimator.estimate(compacted);
         if (afterTokens > effectiveMaxTokens) {
@@ -88,23 +80,5 @@ public class SessionMemoryCompactStrategy {
         applied.add("session-memory");
         return new CompactResult(compacted, prep.beforeTokens(), afterTokens,
                 prep.beforeCount(), compacted.size(), applied);
-    }
-
-    @SuppressWarnings("unchecked")
-    private Message mergeSummaryIntoUser(Message originalFirst, String summaryPrefix) {
-        Object content = originalFirst.getContent();
-        Message merged = new Message();
-        merged.setRole(Message.Role.USER);
-        if (content instanceof String s) {
-            merged.setContent(summaryPrefix + "\n\n---\n\n" + s);
-        } else if (content instanceof List<?> blocks) {
-            List<Object> newBlocks = new ArrayList<>();
-            newBlocks.add(ContentBlock.text(summaryPrefix));
-            newBlocks.addAll((List<Object>) blocks);
-            merged.setContent(newBlocks);
-        } else {
-            merged.setContent(summaryPrefix);
-        }
-        return merged;
     }
 }

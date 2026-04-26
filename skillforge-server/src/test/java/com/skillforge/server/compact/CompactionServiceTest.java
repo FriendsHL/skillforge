@@ -39,6 +39,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -312,6 +314,42 @@ class CompactionServiceTest {
         assertThat(event).isNotNull();
         assertThat(event.getStrategiesApplied()).isEqualTo("llm-summary");
         verify(checkpointRepository).save(any());
+    }
+
+    /**
+     * BUG-F-2: SUMMARY row role MUST be USER (not SYSTEM). The boundary marker row
+     * stays SYSTEM, and the persistence-time {@code AppendMessage} batch order is
+     * [BOUNDARY, SUMMARY, ...young-gen] with the right roles.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    void full_compact_persists_summary_row_as_user_role() {
+        seedSession("sSummary", 30, 0, "idle");
+        seedMessages("sSummary");
+
+        org.mockito.ArgumentCaptor<List<SessionService.AppendMessage>> captor =
+                org.mockito.ArgumentCaptor.forClass(List.class);
+
+        CompactionEventEntity event = service.compact("sSummary", "full", "engine-hard", "summary-role-check");
+        assertThat(event).isNotNull();
+
+        verify(sessionService, atLeastOnce()).appendMessages(eq("sSummary"), captor.capture());
+        List<SessionService.AppendMessage> appended = captor.getValue();
+
+        // First two entries: boundary then summary
+        assertThat(appended.size()).isGreaterThanOrEqualTo(2);
+        SessionService.AppendMessage boundaryRow = appended.get(0);
+        SessionService.AppendMessage summaryRow = appended.get(1);
+
+        assertThat(boundaryRow.msgType()).isEqualTo(SessionService.MSG_TYPE_COMPACT_BOUNDARY);
+        // Boundary keeps SYSTEM role (it's an internal marker, never sent to provider)
+        assertThat(boundaryRow.message().getRole()).isEqualTo(Message.Role.SYSTEM);
+
+        assertThat(summaryRow.msgType()).isEqualTo(SessionService.MSG_TYPE_SUMMARY);
+        // Summary row role MUST be USER (BUG-F-2): mirrors engine-side Message.user(...)
+        assertThat(summaryRow.message().getRole()).isEqualTo(Message.Role.USER);
+        // Summary content is a String (post BUG-F-1 invariant)
+        assertThat(summaryRow.message().getContent()).isInstanceOf(String.class);
     }
 
     /**

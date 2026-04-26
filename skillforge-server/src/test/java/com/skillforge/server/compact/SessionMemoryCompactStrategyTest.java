@@ -133,19 +133,71 @@ class SessionMemoryCompactStrategyTest {
     }
 
     @Test
-    void tryCompact_mergesSummaryIntoFirstUserMessage() {
+    void tryCompact_emitsStandaloneSummaryUserMessage() {
+        // BUG-F-1: summary is ALWAYS a standalone user message, never merged into
+        // the first young-gen entry — even if young-gen[0] is role=USER.
         List<Message> msgs = buildLargeConversation(15);
         FullCompactStrategy.PreparedCompact prep = prepareFrom(msgs);
         assertThat(prep).isNotNull();
-        // The young-gen likely starts with a user message
-        if (prep.youngGen().get(0).getRole() == Message.Role.USER) {
-            CompactResult result = strategy.tryCompact(prep, "Memory content here", 0, 0);
-            assertThat(result).isNotNull();
-            // First message should contain both the summary and the original user content
-            String firstText = extractText(result.getMessages().get(0));
-            assertThat(firstText).contains("Session memory summary");
-            assertThat(firstText).contains("Memory content here");
-        }
+
+        CompactResult result = strategy.tryCompact(prep, "Memory content here", 0, 0);
+        assertThat(result).isNotNull();
+
+        // [0] must be a standalone user message containing ONLY the summary.
+        Message summary = result.getMessages().get(0);
+        assertThat(summary.getRole()).isEqualTo(Message.Role.USER);
+        assertThat(summary.getContent()).isInstanceOf(String.class);
+        String summaryText = (String) summary.getContent();
+        assertThat(summaryText).contains("Session memory summary");
+        assertThat(summaryText).contains("Memory content here");
+        // No legacy `\n\n---\n\n` merge separator
+        assertThat(summaryText).doesNotContain("\n\n---\n\n");
+
+        // [1] must be young-gen[0] preserved byte-for-byte (not modified by merge).
+        Message firstYoungGen = result.getMessages().get(1);
+        Message originalFirst = prep.youngGen().get(0);
+        assertThat(firstYoungGen.getRole()).isEqualTo(originalFirst.getRole());
+        assertThat(firstYoungGen.getContent()).isEqualTo(originalFirst.getContent());
+
+        // Total size = 1 summary + young-gen size
+        assertThat(result.getMessages()).hasSize(prep.youngGen().size() + 1);
+    }
+
+    /** BUG-F-1 regression: summary must remain standalone for tool_result-form young-gen[0]. */
+    @Test
+    void tryCompact_preservesToolResultFormFirstYoungGen() {
+        // Manually construct a prep where young-gen[0] is a tool_result-form user message.
+        List<Message> youngGen = new ArrayList<>();
+        Message toolResultUser = new Message();
+        toolResultUser.setRole(Message.Role.USER);
+        toolResultUser.setContent(List.of(ContentBlock.toolResult("ty", "yg-payload", false)));
+        youngGen.add(toolResultUser);
+        for (int i = 0; i < 9; i++) youngGen.add(assistantText("yg-text " + i));
+
+        List<Message> window = new ArrayList<>();
+        for (int i = 0; i < 8; i++) window.add(filler("win " + i));
+
+        FullCompactStrategy.PreparedCompact prep = new FullCompactStrategy.PreparedCompact(
+                /*rightEdge=*/8, window, youngGen,
+                /*beforeTokens=*/200, /*beforeCount=*/18);
+
+        CompactResult result = strategy.tryCompact(prep, "memory text", 0, 0);
+        assertThat(result).isNotNull();
+
+        // Summary is standalone
+        Message summary = result.getMessages().get(0);
+        assertThat(summary.getContent()).isInstanceOf(String.class);
+
+        // First young-gen preserved byte-for-byte: 1 block, content == "yg-payload"
+        Message firstYg = result.getMessages().get(1);
+        assertThat(firstYg.getContent()).isInstanceOf(List.class);
+        @SuppressWarnings("unchecked")
+        List<Object> blocks = (List<Object>) firstYg.getContent();
+        assertThat(blocks).hasSize(1);
+        assertThat(blocks.get(0)).isInstanceOf(ContentBlock.class);
+        ContentBlock cb = (ContentBlock) blocks.get(0);
+        assertThat(cb.getType()).isEqualTo("tool_result");
+        assertThat(cb.getContent()).isEqualTo("yg-payload");
     }
 
     @Test
