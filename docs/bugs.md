@@ -1,13 +1,18 @@
 # SkillForge 已知 Bug / 待修问题
 
-> 更新于：2026-04-22
+> 更新于：2026-04-27
 > 格式：严重度 = P0（阻断）/ P1（影响体验）/ P2（低优）
 
 ---
 
 ## 开放中
 
-（当前无开放 bug）
+| #   | 严重度 | 标题 | 现象 / 影响 | 建议方向 |
+| --- | --- | --- | --- | --- |
+| 25  | P1 | Traces 页面检索接口不支持通过 sessionId 模糊查询 | 只能用完整 sessionId 或其它条件定位 trace；排查时通常只有 sessionId 前缀，导致 trace 检索效率很低 | 后端 trace 列表查询支持 sessionId 前缀 / contains 模糊匹配；前端搜索框提示支持 sessionId 前缀 |
+| 26  | P1 | Chat 页面只展示 sessionId 前缀，复制后无法用于查询 session 的 Tool | Chat 页面多处只露出 sessionId 前几个字符；Agent 使用 `GetSessionMessages` 等查询 session 的 Tool 时需要完整 sessionId，前缀无法命中 | 前端提供完整 sessionId 的复制入口 / tooltip；或 Tool 支持同用户范围内唯一前缀解析，并在多命中时返回候选项 |
+| 27  | P2 | 同一 session 内连续更新 agent prompt 时需要重复用户确认 | 用户已在当前 session 确认过一次 agent prompt 更新，再次调整仍会触发确认，影响迭代效率 | 将确认授权按 session + agent + update 类型设置短期有效期，或支持一次确认覆盖同一轮 prompt-only 后续修改 |
+| 28  | P2 | 审核卡片需要优化 | 当前审核卡片难以快速判断来源、变更内容、风险点和影响范围；确认 / 拒绝动作不够突出 | 增加来源信息、变更摘要 / diff、风险提示和更清晰的 Approve / Edit / Discard 操作；长内容默认折叠并支持展开 |
 
 ---
 
