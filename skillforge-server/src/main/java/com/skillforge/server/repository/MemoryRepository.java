@@ -71,6 +71,24 @@ public interface MemoryRepository extends JpaRepository<MemoryEntity, Long> {
             @Param("embedding") String embedding,
             @Param("limit") int limit);
 
+    // Add-time dedup recall: same user + same type + ACTIVE only. Uses cosine distance.
+    @Query(value = """
+        SELECT id, type, title, content, tags, recall_count,
+               (embedding <=> CAST(:embedding AS vector)) AS distance
+        FROM t_memory
+        WHERE user_id = :userId
+          AND type = :type
+          AND status = 'ACTIVE'
+          AND embedding IS NOT NULL
+        ORDER BY distance ASC
+        LIMIT :limit
+        """, nativeQuery = true)
+    List<Object[]> findByVectorAndType(
+            @Param("userId") Long userId,
+            @Param("type") String type,
+            @Param("embedding") String embedding,
+            @Param("limit") int limit);
+
     // Async update embedding column
     @Modifying
     @org.springframework.transaction.annotation.Transactional

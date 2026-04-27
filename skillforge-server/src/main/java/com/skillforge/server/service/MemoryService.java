@@ -1,11 +1,13 @@
 package com.skillforge.server.service;
 
 import com.skillforge.core.engine.MemoryInjection;
+import com.skillforge.server.config.MemoryProperties;
 import com.skillforge.server.dto.MemorySearchResult;
 import com.skillforge.server.entity.MemoryEntity;
 import com.skillforge.server.entity.MemorySnapshotEntity;
 import com.skillforge.server.repository.MemoryRepository;
 import com.skillforge.server.repository.MemorySnapshotRepository;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -17,6 +19,7 @@ import com.skillforge.server.util.VectorUtils;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.AbstractMap;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -34,11 +37,13 @@ import java.util.stream.Collectors;
 public class MemoryService {
 
     private static final Logger log = LoggerFactory.getLogger(MemoryService.class);
+    private static final int DEDUP_NEIGHBOR_LIMIT = 3;
 
     private final MemoryRepository memoryRepository;
     private final MemorySnapshotRepository memorySnapshotRepository;
     private final MemoryEmbeddingWorker embeddingWorker;
     private final EmbeddingService embeddingService;
+    private MemoryProperties memoryProperties = new MemoryProperties();
 
     public MemoryService(MemoryRepository memoryRepository,
                          MemorySnapshotRepository memorySnapshotRepository,
@@ -48,6 +53,11 @@ public class MemoryService {
         this.memorySnapshotRepository = memorySnapshotRepository;
         this.embeddingWorker = embeddingWorker;
         this.embeddingService = embeddingService;
+    }
+
+    @Autowired(required = false)
+    public void setMemoryProperties(MemoryProperties memoryProperties) {
+        this.memoryProperties = memoryProperties != null ? memoryProperties : new MemoryProperties();
     }
 
     public List<MemoryEntity> listMemories(Long userId, String type) {
@@ -129,10 +139,15 @@ public class MemoryService {
     }
 
     private String buildEmbedText(MemoryEntity m) {
+        if (m == null) return "";
+        return buildEmbedText(m.getTitle(), m.getContent(), m.getTags());
+    }
+
+    private String buildEmbedText(String title, String content, String tags) {
         StringBuilder sb = new StringBuilder();
-        if (m.getTitle() != null) sb.append(m.getTitle()).append("\n");
-        if (m.getContent() != null) sb.append(m.getContent());
-        if (m.getTags() != null) sb.append("\nTags: ").append(m.getTags());
+        if (title != null) sb.append(title).append("\n");
+        if (content != null) sb.append(content);
+        if (tags != null) sb.append("\nTags: ").append(tags);
         return sb.toString();
     }
 
@@ -172,24 +187,220 @@ public class MemoryService {
                                            String extractionBatchId) {
         List<MemoryEntity> existing = memoryRepository.findByUserIdAndTitle(userId, title);
         if (!existing.isEmpty()) {
-            MemoryEntity e = existing.get(0);
-            e.setType(type);
-            e.setContent(content);
-            e.setTags(tags);
-            e.setExtractionBatchId(normalizeBatchId(extractionBatchId));
-            MemoryEntity saved = memoryRepository.save(e);
-            scheduleEmbeddingAfterCommit(saved);
+            updateExistingMemory(existing.get(0), type, title, content, tags, extractionBatchId, Optional.empty());
             return;
         }
+
+        Optional<float[]> embedding = embedForDedup(title, content);
+        if (embedding.isPresent()) {
+            Optional<MemorySearchResult> neighbor = findNearestActiveMemoryByType(userId, type, embedding.get());
+            if (neighbor.isPresent()) {
+                double similarity = 1.0d - neighbor.get().score();
+                double updateThreshold = memoryProperties.getDedup().getCosineUpdateThreshold();
+                double mergeThreshold = memoryProperties.getDedup().getCosineMergeThreshold();
+
+                if (similarity >= updateThreshold) {
+                    MemoryEntity target = memoryRepository.findById(neighbor.get().memoryId()).orElse(null);
+                    if (target != null) {
+                        updateExistingMemory(target, type, title, content, tags, extractionBatchId, embedding);
+                        return;
+                    }
+                } else if (similarity >= mergeThreshold) {
+                    MemoryEntity target = memoryRepository.findById(neighbor.get().memoryId()).orElse(null);
+                    if (target != null) {
+                        mergeIntoExistingMemory(target, type, title, content, tags, extractionBatchId);
+                        return;
+                    }
+                }
+            }
+        }
+
         MemoryEntity entity = new MemoryEntity();
         entity.setUserId(userId);
-        entity.setType(type);
+        entity.setType(normalizeType(type));
         entity.setTitle(title);
         entity.setContent(content);
         entity.setTags(tags);
+        entity.setImportance(extractImportance(tags));
         entity.setExtractionBatchId(normalizeBatchId(extractionBatchId));
         MemoryEntity saved = memoryRepository.save(entity);
+        persistKnownEmbeddingOrSchedule(saved, embedding);
+    }
+
+    private Optional<float[]> embedForDedup(String title, String content) {
+        if (embeddingService == null) {
+            return Optional.empty();
+        }
+        String text = buildEmbedText(title, content, null);
+        if (text.isBlank()) {
+            return Optional.empty();
+        }
+        return embeddingService.embed(text);
+    }
+
+    private Optional<MemorySearchResult> findNearestActiveMemoryByType(Long userId, String type, float[] embedding) {
+        try {
+            return memoryRepository.findByVectorAndType(
+                            userId,
+                            normalizeType(type),
+                            VectorUtils.toVectorString(embedding),
+                            DEDUP_NEIGHBOR_LIMIT)
+                    .stream()
+                    .map(this::toSearchResult)
+                    .findFirst();
+        } catch (Exception e) {
+            log.warn("Memory dedup vector lookup failed for userId={} type={}: {}",
+                    userId, type, e.getMessage());
+            return Optional.empty();
+        }
+    }
+
+    private void updateExistingMemory(MemoryEntity target,
+                                      String type,
+                                      String title,
+                                      String content,
+                                      String tags,
+                                      String extractionBatchId,
+                                      Optional<float[]> knownEmbedding) {
+        target.setType(normalizeType(type));
+        target.setTitle(title);
+        target.setContent(content);
+        target.setTags(tags);
+        target.setImportance(maxImportance(target.getImportance(), extractImportance(tags)));
+        target.setExtractionBatchId(normalizeBatchId(extractionBatchId));
+        reviveMemory(target);
+        MemoryEntity saved = memoryRepository.save(target);
+        persistKnownEmbeddingOrSchedule(saved, knownEmbedding);
+    }
+
+    private void mergeIntoExistingMemory(MemoryEntity target,
+                                         String type,
+                                         String title,
+                                         String content,
+                                         String tags,
+                                         String extractionBatchId) {
+        target.setType(normalizeType(type));
+        target.setContent(appendMergedContent(target.getContent(), title, content));
+        target.setTags(mergeCsvTags(target.getTags(), tags));
+        target.setImportance(maxImportance(target.getImportance(), extractImportance(tags)));
+        target.setExtractionBatchId(normalizeBatchId(extractionBatchId));
+        reviveMemory(target);
+        MemoryEntity saved = memoryRepository.save(target);
         scheduleEmbeddingAfterCommit(saved);
+    }
+
+    private static void reviveMemory(MemoryEntity target) {
+        target.setStatus("ACTIVE");
+        target.setArchivedAt(null);
+    }
+
+    private void persistKnownEmbeddingOrSchedule(MemoryEntity saved, Optional<float[]> knownEmbedding) {
+        if (knownEmbedding.isPresent() && saved.getId() != null) {
+            persistEmbeddingAfterCommit(saved.getId(), VectorUtils.toVectorString(knownEmbedding.get()));
+            return;
+        }
+        scheduleEmbeddingAfterCommit(saved);
+    }
+
+    private void persistEmbeddingAfterCommit(Long memoryId, String embedding) {
+        if (memoryId == null || embedding == null || embedding.isBlank()) {
+            return;
+        }
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            memoryRepository.updateEmbedding(memoryId, embedding);
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                memoryRepository.updateEmbedding(memoryId, embedding);
+            }
+        });
+    }
+
+    private static String appendMergedContent(String existingContent, String incomingTitle, String incomingContent) {
+        StringBuilder sb = new StringBuilder();
+        if (existingContent != null && !existingContent.isBlank()) {
+            sb.append(existingContent.stripTrailing());
+        }
+        if (!sb.isEmpty()) {
+            sb.append("\n---\n");
+        }
+        sb.append("[merged from \"")
+                .append(incomingTitle != null ? incomingTitle : "untitled")
+                .append("\" at ")
+                .append(DateTimeFormatter.ISO_INSTANT.format(Instant.now()))
+                .append("]\n");
+        if (incomingContent != null) {
+            sb.append(incomingContent);
+        }
+        return sb.toString();
+    }
+
+    private static String mergeCsvTags(String existingTags, String incomingTags) {
+        LinkedHashSet<String> tags = new LinkedHashSet<>();
+        addCsvTags(tags, existingTags);
+        addCsvTags(tags, incomingTags);
+        return String.join(",", tags);
+    }
+
+    private static void addCsvTags(Set<String> tags, String csv) {
+        if (csv == null || csv.isBlank()) {
+            return;
+        }
+        for (String raw : csv.split(",")) {
+            String tag = raw.trim();
+            if (!tag.isBlank()) {
+                tags.add(tag);
+            }
+        }
+    }
+
+    private static String normalizeType(String type) {
+        return type != null && !type.isBlank() ? type.toLowerCase() : "knowledge";
+    }
+
+    private static String extractImportance(String tags) {
+        if (tags == null || tags.isBlank()) {
+            return "medium";
+        }
+        for (String raw : tags.split(",")) {
+            String tag = raw.trim().toLowerCase();
+            if (tag.equals("importance:high")) {
+                return "high";
+            }
+            if (tag.equals("importance:medium")) {
+                return "medium";
+            }
+            if (tag.equals("importance:low")) {
+                return "low";
+            }
+        }
+        return "medium";
+    }
+
+    private static String maxImportance(String left, String right) {
+        return importanceRank(left) >= importanceRank(right) ? normalizeImportance(left) : normalizeImportance(right);
+    }
+
+    private static int importanceRank(String importance) {
+        return switch (normalizeImportance(importance)) {
+            case "high" -> 3;
+            case "medium" -> 2;
+            case "low" -> 1;
+            default -> 2;
+        };
+    }
+
+    private static String normalizeImportance(String importance) {
+        if (importance == null) {
+            return "medium";
+        }
+        return switch (importance.toLowerCase()) {
+            case "high" -> "high";
+            case "low" -> "low";
+            default -> "medium";
+        };
     }
 
     @Transactional

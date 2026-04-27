@@ -1,5 +1,6 @@
 package com.skillforge.server.service;
 
+import com.skillforge.server.config.MemoryProperties;
 import com.skillforge.server.entity.MemoryEntity;
 import com.skillforge.server.entity.MemorySnapshotEntity;
 import com.skillforge.server.repository.MemoryRepository;
@@ -26,8 +27,12 @@ class MemoryServiceTest {
     private final List<MemoryEntity> deletedMemories = new ArrayList<>();
     private final List<MemorySnapshotEntity> savedSnapshots = new ArrayList<>();
     private final List<MemorySnapshotEntity> batchSnapshots = new ArrayList<>();
+    private final List<Object[]> vectorRows = new ArrayList<>();
+    private final List<String> persistedEmbeddings = new ArrayList<>();
 
     private MemoryEntity findByIdResult;
+    private int vectorLookupCount;
+    private MemoryRepository memoryRepository;
     private MemoryService memoryService;
 
     @BeforeEach
@@ -39,16 +44,31 @@ class MemoryServiceTest {
         deletedMemories.clear();
         savedSnapshots.clear();
         batchSnapshots.clear();
+        vectorRows.clear();
+        persistedEmbeddings.clear();
         findByIdResult = null;
+        vectorLookupCount = 0;
 
-        MemoryRepository memoryRepository = (MemoryRepository) Proxy.newProxyInstance(
+        memoryRepository = (MemoryRepository) Proxy.newProxyInstance(
                 getClass().getClassLoader(),
                 new Class[]{MemoryRepository.class},
                 (proxy, method, args) -> switch (method.getName()) {
                     case "findByUserId" -> memoriesForUser;
                     case "findByUserIdAndTitle" -> titleMatches;
-                    case "findById" -> Optional.ofNullable(findByIdResult);
+                    case "findById" -> {
+                        Long id = (Long) args[0];
+                        MemoryEntity found = findByIdResult != null ? findByIdResult : findMemoryById(id);
+                        yield Optional.ofNullable(found);
+                    }
                     case "findByExtractionBatchIdAndUserId" -> batchMemories;
+                    case "findByVectorAndType" -> {
+                        vectorLookupCount++;
+                        yield vectorRows;
+                    }
+                    case "updateEmbedding" -> {
+                        persistedEmbeddings.add((String) args[1]);
+                        yield null;
+                    }
                     case "save" -> {
                         MemoryEntity saved = (MemoryEntity) args[0];
                         savedMemories.add(saved);
@@ -116,13 +136,127 @@ class MemoryServiceTest {
     @DisplayName("createMemoryIfNotDuplicate marks updated memory with extraction batch")
     void createMemoryIfNotDuplicate_existingMemory_setsBatchId() {
         MemoryEntity existing = memory(7L, 1L, "knowledge", "title", "old");
+        existing.setImportance("high");
         titleMatches.add(existing);
 
-        memoryService.createMemoryIfNotDuplicate(1L, "project", "title", "new", "auto-extract", "batch-1");
+        memoryService.createMemoryIfNotDuplicate(
+                1L, "project", "title", "new", "auto-extract,importance:low", "batch-1");
 
         assertThat(existing.getType()).isEqualTo("project");
         assertThat(existing.getContent()).isEqualTo("new");
+        assertThat(existing.getImportance()).isEqualTo("high");
         assertThat(existing.getExtractionBatchId()).isEqualTo("batch-1");
+    }
+
+    @Test
+    @DisplayName("Memory v2 PR-4: same-title dedup revives non-active memory")
+    void createMemoryIfNotDuplicate_sameTitleRevivesNonActiveMemory() {
+        MemoryEntity existing = memory(7L, 1L, "knowledge", "title", "old");
+        existing.setStatus("ARCHIVED");
+        existing.setArchivedAt(Instant.parse("2026-04-26T01:02:03Z"));
+        titleMatches.add(existing);
+
+        memoryService.createMemoryIfNotDuplicate(
+                1L, "knowledge", "title", "new", "auto-extract,importance:high", "batch-1");
+
+        assertThat(existing.getStatus()).isEqualTo("ACTIVE");
+        assertThat(existing.getArchivedAt()).isNull();
+        assertThat(existing.getContent()).isEqualTo("new");
+        assertThat(existing.getImportance()).isEqualTo("high");
+    }
+
+    @Test
+    @DisplayName("Memory v2 PR-4: cosine >= update threshold updates nearest active same-type memory")
+    void createMemoryIfNotDuplicate_highCosine_updatesNearest() {
+        memoryService = memoryServiceWithEmbedding(Optional.of(new float[]{0.1f, 0.2f}));
+        MemoryEntity existing = memory(7L, 1L, "preference", "old title", "old content");
+        existing.setImportance("low");
+        memoriesForUser.add(existing);
+        vectorRows.add(row(7L, "preference", "old title", "old content", 0.03));
+
+        memoryService.createMemoryIfNotDuplicate(
+                1L,
+                "preference",
+                "new title",
+                "new content",
+                "auto-extract,llm,importance:high",
+                "batch-1");
+
+        assertThat(existing.getTitle()).isEqualTo("new title");
+        assertThat(existing.getContent()).isEqualTo("new content");
+        assertThat(existing.getImportance()).isEqualTo("high");
+        assertThat(existing.getExtractionBatchId()).isEqualTo("batch-1");
+        assertThat(savedMemories).containsExactly(existing);
+        assertThat(vectorLookupCount).isEqualTo(1);
+        assertThat(persistedEmbeddings).containsExactly("[0.1,0.2]");
+    }
+
+    @Test
+    @DisplayName("Memory v2 PR-4: cosine between merge/update thresholds appends content and keeps max importance")
+    void createMemoryIfNotDuplicate_midCosine_mergesIntoNearest() {
+        memoryService = memoryServiceWithEmbedding(Optional.of(new float[]{0.4f, 0.5f}));
+        MemoryEntity existing = memory(7L, 1L, "project", "existing project", "old context");
+        existing.setTags("auto-extract,importance:medium");
+        existing.setImportance("medium");
+        memoriesForUser.add(existing);
+        vectorRows.add(row(7L, "project", "existing project", "old context", 0.10));
+
+        memoryService.createMemoryIfNotDuplicate(
+                1L,
+                "project",
+                "new project note",
+                "new context",
+                "llm,importance:high",
+                "batch-2");
+
+        assertThat(existing.getTitle()).isEqualTo("existing project");
+        assertThat(existing.getContent())
+                .contains("old context")
+                .contains("[merged from \"new project note\"")
+                .contains("new context");
+        assertThat(existing.getTags()).contains("auto-extract", "llm", "importance:medium", "importance:high");
+        assertThat(existing.getImportance()).isEqualTo("high");
+        assertThat(existing.getExtractionBatchId()).isEqualTo("batch-2");
+        assertThat(savedMemories).containsExactly(existing);
+        assertThat(persistedEmbeddings).isEmpty();
+    }
+
+    @Test
+    @DisplayName("Memory v2 PR-4: cosine below merge threshold creates new memory")
+    void createMemoryIfNotDuplicate_lowCosine_addsNewMemory() {
+        memoryService = memoryServiceWithEmbedding(Optional.of(new float[]{0.7f, 0.8f}));
+        MemoryEntity existing = memory(7L, 1L, "knowledge", "existing", "old");
+        memoriesForUser.add(existing);
+        vectorRows.add(row(7L, "knowledge", "existing", "old", 0.20));
+
+        memoryService.createMemoryIfNotDuplicate(
+                1L,
+                "knowledge",
+                "new title",
+                "new content",
+                "auto-extract,llm,importance:low",
+                "batch-3");
+
+        assertThat(savedMemories).hasSize(1);
+        MemoryEntity created = savedMemories.get(0);
+        assertThat(created).isNotSameAs(existing);
+        assertThat(created.getTitle()).isEqualTo("new title");
+        assertThat(created.getImportance()).isEqualTo("low");
+        assertThat(created.getExtractionBatchId()).isEqualTo("batch-3");
+    }
+
+    @Test
+    @DisplayName("Memory v2 PR-4: embedding unavailable falls back to title-only dedup + ADD")
+    void createMemoryIfNotDuplicate_embeddingUnavailable_addsWithoutVectorLookup() {
+        memoryService = memoryServiceWithEmbedding(Optional.empty());
+
+        memoryService.createMemoryIfNotDuplicate(
+                1L, "knowledge", "new title", "new content", "auto-extract", "batch-4");
+
+        assertThat(vectorLookupCount).isZero();
+        assertThat(savedMemories).hasSize(1);
+        assertThat(savedMemories.get(0).getTitle()).isEqualTo("new title");
+        assertThat(savedMemories.get(0).getImportance()).isEqualTo("medium");
     }
 
     @Test
@@ -229,6 +363,41 @@ class MemoryServiceTest {
         memory.setTitle(title);
         memory.setContent(content);
         return memory;
+    }
+
+    private MemoryService memoryServiceWithEmbedding(Optional<float[]> embedding) {
+        MemoryService service = new MemoryService(
+                memoryRepository,
+                null,
+                null,
+                new EmbeddingService(null) {
+                    @Override
+                    public Optional<float[]> embed(String text) {
+                        return embedding;
+                    }
+                });
+        service.setMemoryProperties(new MemoryProperties());
+        return service;
+    }
+
+    private MemoryEntity findMemoryById(Long id) {
+        return concatMemories().stream()
+                .filter(memory -> id != null && id.equals(memory.getId()))
+                .findFirst()
+                .orElse(null);
+    }
+
+    private List<MemoryEntity> concatMemories() {
+        List<MemoryEntity> all = new ArrayList<>();
+        all.addAll(memoriesForUser);
+        all.addAll(titleMatches);
+        all.addAll(batchMemories);
+        all.addAll(savedMemories);
+        return all;
+    }
+
+    private static Object[] row(Long id, String type, String title, String content, double distance) {
+        return new Object[]{id, type, title, content, null, 0, distance};
     }
 
     private static MemorySnapshotEntity snapshot(Long memoryId, Long userId, String type,
