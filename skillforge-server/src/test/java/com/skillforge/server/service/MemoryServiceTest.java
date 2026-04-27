@@ -25,6 +25,7 @@ class MemoryServiceTest {
     private final List<MemoryEntity> batchMemories = new ArrayList<>();
     private final List<MemoryEntity> savedMemories = new ArrayList<>();
     private final List<MemoryEntity> deletedMemories = new ArrayList<>();
+    private final List<Long> deletedMemoryIds = new ArrayList<>();
     private final List<MemorySnapshotEntity> savedSnapshots = new ArrayList<>();
     private final List<MemorySnapshotEntity> batchSnapshots = new ArrayList<>();
     private final List<Object[]> vectorRows = new ArrayList<>();
@@ -42,6 +43,7 @@ class MemoryServiceTest {
         batchMemories.clear();
         savedMemories.clear();
         deletedMemories.clear();
+        deletedMemoryIds.clear();
         savedSnapshots.clear();
         batchSnapshots.clear();
         vectorRows.clear();
@@ -54,7 +56,19 @@ class MemoryServiceTest {
                 new Class[]{MemoryRepository.class},
                 (proxy, method, args) -> switch (method.getName()) {
                     case "findByUserId" -> memoriesForUser;
+                    case "findByUserIdAndStatusOrderByUpdatedAtDesc" -> concatMemories().stream()
+                            .filter(memory -> args[0].equals(memory.getUserId()))
+                            .filter(memory -> args[1].equals(memory.getStatus()))
+                            .toList();
+                    case "countByUserIdAndStatus" -> concatMemories().stream()
+                            .filter(memory -> args[0].equals(memory.getUserId()))
+                            .filter(memory -> args[1].equals(memory.getStatus()))
+                            .count();
                     case "findByUserIdAndTitle" -> titleMatches;
+                    case "findByUserIdAndContentContaining" -> concatMemories().stream()
+                            .filter(memory -> args[0].equals(memory.getUserId()))
+                            .filter(memory -> memory.getContent() != null && memory.getContent().contains((String) args[1]))
+                            .toList();
                     case "findById" -> {
                         Long id = (Long) args[0];
                         MemoryEntity found = findByIdResult != null ? findByIdResult : findMemoryById(id);
@@ -76,6 +90,10 @@ class MemoryServiceTest {
                     }
                     case "delete" -> {
                         deletedMemories.add((MemoryEntity) args[0]);
+                        yield null;
+                    }
+                    case "deleteById" -> {
+                        deletedMemoryIds.add((Long) args[0]);
                         yield null;
                     }
                     default -> null;
@@ -353,6 +371,128 @@ class MemoryServiceTest {
         assertThat(result.restored()).isZero();
         assertThat(result.deleted()).isZero();
         assertThat(savedMemories).isEmpty();
+    }
+
+    @Test
+    @DisplayName("listMemories filters by status when provided")
+    void listMemories_filtersByStatus() {
+        MemoryEntity active = memory(1L, 1L, "knowledge", "active", "a");
+        active.setStatus("ACTIVE");
+        MemoryEntity archived = memory(2L, 1L, "knowledge", "archived", "b");
+        archived.setStatus("ARCHIVED");
+        memoriesForUser.add(active);
+        memoriesForUser.add(archived);
+
+        List<MemoryEntity> result = memoryService.listMemories(1L, null, "ARCHIVED");
+
+        assertThat(result).containsExactly(archived);
+    }
+
+    @Test
+    @DisplayName("batchArchive marks ACTIVE memories archived and sets archivedAt")
+    void batchArchive_marksArchived() {
+        MemoryEntity first = memory(1L, 1L, "knowledge", "one", "a");
+        first.setStatus("ACTIVE");
+        MemoryEntity second = memory(2L, 1L, "knowledge", "two", "b");
+        second.setStatus("STALE");
+        memoriesForUser.add(first);
+        memoriesForUser.add(second);
+
+        int changed = memoryService.batchArchive(List.of(1L, 2L), 1L);
+
+        assertThat(changed).isEqualTo(2);
+        assertThat(first.getStatus()).isEqualTo("ARCHIVED");
+        assertThat(first.getArchivedAt()).isNotNull();
+        assertThat(second.getStatus()).isEqualTo("ARCHIVED");
+        assertThat(second.getArchivedAt()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("batchRestore revives archived memories back to ACTIVE")
+    void batchRestore_revivesArchived() {
+        MemoryEntity archived = memory(1L, 1L, "knowledge", "one", "a");
+        archived.setStatus("ARCHIVED");
+        archived.setArchivedAt(Instant.parse("2026-04-26T00:00:00Z"));
+        memoriesForUser.add(archived);
+
+        int changed = memoryService.batchRestore(List.of(1L), 1L);
+
+        assertThat(changed).isEqualTo(1);
+        assertThat(archived.getStatus()).isEqualTo("ACTIVE");
+        assertThat(archived.getArchivedAt()).isNull();
+    }
+
+    @Test
+    @DisplayName("updateStatus supports ACTIVE/STALE/ARCHIVED lifecycle transitions")
+    void updateStatus_supportsLifecycleTransitions() {
+        MemoryEntity memory = memory(1L, 1L, "knowledge", "one", "a");
+        memory.setStatus("ACTIVE");
+        memoriesForUser.add(memory);
+
+        int stale = memoryService.updateStatus(1L, 1L, "STALE");
+        int archived = memoryService.updateStatus(1L, 1L, "ARCHIVED");
+        int active = memoryService.updateStatus(1L, 1L, "ACTIVE");
+
+        assertThat(stale).isEqualTo(1);
+        assertThat(archived).isEqualTo(1);
+        assertThat(active).isEqualTo(1);
+        assertThat(memory.getStatus()).isEqualTo("ACTIVE");
+        assertThat(memory.getArchivedAt()).isNull();
+    }
+
+    @Test
+    @DisplayName("batchUpdateStatus marks selected memories stale")
+    void batchUpdateStatus_marksSelectedMemoriesStale() {
+        MemoryEntity first = memory(1L, 1L, "knowledge", "one", "a");
+        first.setStatus("ACTIVE");
+        MemoryEntity second = memory(2L, 1L, "knowledge", "two", "b");
+        second.setStatus("ACTIVE");
+        memoriesForUser.add(first);
+        memoriesForUser.add(second);
+
+        int changed = memoryService.batchUpdateStatus(List.of(1L, 2L), 1L, "STALE");
+
+        assertThat(changed).isEqualTo(2);
+        assertThat(first.getStatus()).isEqualTo("STALE");
+        assertThat(second.getStatus()).isEqualTo("STALE");
+    }
+
+    @Test
+    @DisplayName("batchDelete deletes only owned memories")
+    void batchDelete_deletesOwnedMemories() {
+        MemoryEntity owned = memory(1L, 1L, "knowledge", "one", "a");
+        MemoryEntity foreign = memory(2L, 2L, "knowledge", "two", "b");
+        memoriesForUser.add(owned);
+        memoriesForUser.add(foreign);
+
+        int changed = memoryService.batchDelete(List.of(1L, 2L), 1L);
+
+        assertThat(changed).isEqualTo(1);
+        assertThat(deletedMemoryIds).containsExactly(1L);
+    }
+
+    @Test
+    @DisplayName("stats returns active stale archived counts and configured cap")
+    void getStats_returnsCountsAndCap() {
+        MemoryEntity active = memory(1L, 1L, "knowledge", "active", "a");
+        active.setStatus("ACTIVE");
+        MemoryEntity stale = memory(2L, 1L, "knowledge", "stale", "b");
+        stale.setStatus("STALE");
+        MemoryEntity archived = memory(3L, 1L, "knowledge", "archived", "c");
+        archived.setStatus("ARCHIVED");
+        memoriesForUser.add(active);
+        memoriesForUser.add(stale);
+        memoriesForUser.add(archived);
+        MemoryProperties properties = new MemoryProperties();
+        properties.getEviction().setMaxActivePerUser(1500);
+        memoryService.setMemoryProperties(properties);
+
+        MemoryService.MemoryStats stats = memoryService.getStats(1L);
+
+        assertThat(stats.active()).isEqualTo(1);
+        assertThat(stats.stale()).isEqualTo(1);
+        assertThat(stats.archived()).isEqualTo(1);
+        assertThat(stats.capacityCap()).isEqualTo(1500);
     }
 
     private static MemoryEntity memory(Long id, Long userId, String type, String title, String content) {

@@ -1,6 +1,6 @@
 # SkillForge 交付索引
 
-> 更新于：2026-04-26
+> 更新于：2026-04-27
 > 目的：把“已完成事项 / 技术方案文档 / 完成日期 / commit / migration”集中到一个索引，`docs/todo.md` 只负责排期和状态。
 
 ---
@@ -20,6 +20,7 @@
 
 | 完成日期 | 交付项 | 技术方案 | 辅助文档 | 验证 / commit / migration |
 | --- | --- | --- | --- | --- |
+| 2026-04-27 | Memory v2（PR-1 ~ PR-5）：`V29` schema、L0/L1 task-aware recall、增量抽取 cursor、embedding add-time dedup、状态机/淘汰/UI 收口 | [design-memory-v2.md](design-memory-v2.md) | [todo.md](todo.md) | `9f36b59` / `8330d32` / `86703ed` / `96676b9` + 当前 workspace PR-5 收尾；`V29`; `mvn -pl skillforge-server -am -Dtest=MemoryConsolidatorTest,MemoryServiceTest -Dsurefire.failIfNoSpecifiedTests=false test` 24/24；`skillforge-dashboard npm run build` |
 | 2026-04-26 | P15-4 Agent 配置自省 + UpdateAgent：`GetAgentConfig`、`AgentDiscovery` 增强、带一次确认的 `UpdateAgent` | 无独立方案；属于 P11/P15 自省工具补齐，并复用 [design-sec2-hook-source-protection.md](design-sec2-hook-source-protection.md) 的 hook 来源隔离边界 | [todo.md](todo.md) | 本次提交；`mvn -pl skillforge-server -am -DskipTests compile`；`UpdateAgentToolTest` + `AgentLoopEngineInstallConfirmationTest` 16/16；server 重启确认工具注册 |
 | 2026-04-26 | Agent 管理与内置模板 SQL 化收口：`CreateAgent` Tool、Code/Main Agent Flyway seed、Main Assistant leader config | 无独立方案；确认流复用 [design-install-confirmation-flow.md](design-install-confirmation-flow.md) 的 human confirmation pattern | [todo.md](todo.md) | `e22609c` / `3243759` / `d9d82a3` / `3542fa6`；`V26` / `V27` / `V28`；418 non-IT server tests；本地 DB 已到 v28 |
 | 2026-04-26 | BUG-F Compact 摘要存储重构，修复 mixed user/tool_result 导致 OpenAI-compatible provider 400 | 无独立方案；关联 [design-p6-session-message-storage.md](design-p6-session-message-storage.md)、[design-p9-tool-result-compaction.md](design-p9-tool-result-compaction.md) | [bugs.md](bugs.md)、[todo.md](todo.md) | `e9b48f3`；370 unit tests；server 重启验证 |
@@ -67,6 +68,7 @@
 | [design-self-improve-pipeline.md](design-self-improve-pipeline.md) | Self-Improve / Eval / Scenario 主方案 | 已交付主线，仍作为后续 eval/skill evolution 参考 |
 | [design-eval-methodology.md](design-eval-methodology.md) | Eval 方法论 | 参考文档 |
 | [design-memory-vector-search.md](design-memory-vector-search.md) | N1 Memory 向量检索 | 已交付 |
+| [design-memory-v2.md](design-memory-v2.md) | Memory v2 写入 / 召回 / 淘汰一体化重构 | 已交付 |
 | [design-n2-behavioral-rules.md](design-n2-behavioral-rules.md) | N2 行为规则 | 已交付 |
 | [design-n3-lifecycle-hooks.md](design-n3-lifecycle-hooks.md) | N3 P0/P2 Lifecycle Hooks 总方案 | 已交付，后续 hook 相关继续复用 |
 | [design-n3-p1.md](design-n3-p1.md) | N3 P1 最终实施方案 | 已交付 |

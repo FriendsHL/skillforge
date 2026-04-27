@@ -27,6 +27,8 @@ public interface MemoryRepository extends JpaRepository<MemoryEntity, Long> {
      */
     List<MemoryEntity> findByUserIdAndStatusOrderByUpdatedAtDesc(Long userId, String status);
 
+    long countByUserIdAndStatus(Long userId, String status);
+
     List<MemoryEntity> findByUserIdAndTitle(Long userId, String title);
 
     List<MemoryEntity> findByExtractionBatchIdAndUserId(String extractionBatchId, Long userId);

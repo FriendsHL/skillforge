@@ -96,6 +96,11 @@ skillforge:
     dedup:
       cosine-update-threshold: 0.95
       cosine-merge-threshold: 0.85
+    eviction:
+      stale-after-days: 30
+      archive-after-days: 60
+      delete-after-days: 90
+      max-active-per-user: 1500
 
   # Embedding provider for memory vector search (disabled by default for dev)
   embedding:

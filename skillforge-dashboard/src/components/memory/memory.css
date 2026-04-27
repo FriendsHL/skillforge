@@ -124,3 +124,132 @@
   font-style: normal;
   font-weight: 500;
 }
+
+.mem-banner {
+  margin-bottom: 12px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in oklab, var(--accent, #4a7aa8) 30%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in oklab, var(--accent, #4a7aa8) 10%, var(--bg-surface));
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.mem-toolbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.mem-tabs {
+  display: inline-flex;
+  gap: 6px;
+  padding: 4px;
+  border: 1px solid var(--border-1);
+  border-radius: 999px;
+  background: var(--bg-surface);
+}
+
+.mem-tab {
+  border: 0;
+  background: transparent;
+  color: var(--fg-3);
+  padding: 7px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.mem-tab.on {
+  background: var(--bg-hover);
+  color: var(--fg-1);
+}
+
+.mem-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mem-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--fg-3);
+}
+
+.mem-sort select {
+  border: 1px solid var(--border-1);
+  background: var(--bg-surface);
+  color: var(--fg-2);
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+
+.mem-bulkbar {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.mem-selectall {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--fg-2);
+}
+
+.mem-bulk-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.sf-mini-btn.danger {
+  color: var(--color-err, #d95c5c);
+}
+
+.mem-status,
+.mem-importance {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 999px;
+  text-transform: lowercase;
+  white-space: nowrap;
+}
+
+.mem-status--active { background: rgba(92, 138, 74, 0.12); color: #5c8a4a; }
+.mem-status--stale { background: rgba(212, 154, 58, 0.12); color: #b17d16; }
+.mem-status--archived { background: rgba(160, 164, 176, 0.18); color: #7a7f8f; }
+
+.mem-importance--high { background: rgba(200, 76, 76, 0.12); color: #c84c4c; }
+.mem-importance--medium { background: rgba(74, 122, 168, 0.12); color: #4a7aa8; }
+.mem-importance--low { background: rgba(160, 164, 176, 0.18); color: #7a7f8f; }
+
+.mem-card-inline-actions {
+  margin-top: 10px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+@media (max-width: 900px) {
+  .mem-banner,
+  .mem-toolbar,
+  .mem-bulkbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}

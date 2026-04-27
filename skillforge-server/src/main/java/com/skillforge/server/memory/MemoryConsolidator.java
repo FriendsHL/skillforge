@@ -1,17 +1,17 @@
 package com.skillforge.server.memory;
 
 import com.skillforge.server.entity.MemoryEntity;
+import com.skillforge.server.config.MemoryProperties;
 import com.skillforge.server.repository.MemoryRepository;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
-import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
+import java.util.Comparator;
 import java.util.List;
-import java.util.Map;
-import java.util.stream.Collectors;
 
 @Component
 public class MemoryConsolidator {
@@ -19,47 +19,116 @@ public class MemoryConsolidator {
     private static final Logger log = LoggerFactory.getLogger(MemoryConsolidator.class);
 
     private final MemoryRepository memoryRepository;
+    private MemoryProperties memoryProperties = new MemoryProperties();
 
     public MemoryConsolidator(MemoryRepository memoryRepository) {
         this.memoryRepository = memoryRepository;
     }
 
+    @Autowired(required = false)
+    public void setMemoryProperties(MemoryProperties memoryProperties) {
+        this.memoryProperties = memoryProperties != null ? memoryProperties : new MemoryProperties();
+    }
+
     /**
-     * Consolidate memories for a user: deduplicate by title and mark stale entries.
+     * Memory v2 PR-5: status lifecycle sweep + capacity enforcement.
      */
     public void consolidate(Long userId) {
+        if (memoryRepository == null || userId == null) {
+            return;
+        }
         List<MemoryEntity> all = memoryRepository.findByUserIdOrderByUpdatedAtDesc(userId);
-
-        // 1. Deduplicate: same title → keep the newest, delete the rest
-        Map<String, List<MemoryEntity>> byTitle = all.stream()
-                .filter(m -> m.getTitle() != null)
-                .collect(Collectors.groupingBy(MemoryEntity::getTitle));
-
-        for (Map.Entry<String, List<MemoryEntity>> entry : byTitle.entrySet()) {
-            List<MemoryEntity> dups = entry.getValue();
-            if (dups.size() > 1) {
-                // List is already ordered by updatedAt desc, so first is newest
-                for (int i = 1; i < dups.size(); i++) {
-                    memoryRepository.delete(dups.get(i));
-                }
-                log.info("Merged {} duplicate memories with title '{}'", dups.size() - 1, entry.getKey());
-            }
+        if (all.isEmpty()) {
+            return;
         }
-
-        // 2. Mark stale: 30 days without recall + recallCount < 3
-        Instant thirtyDaysAgo = Instant.now().minus(30, ChronoUnit.DAYS);
-        for (MemoryEntity m : all) {
-            if (m.getRecallCount() < 3
-                    && (m.getLastRecalledAt() == null || m.getLastRecalledAt().isBefore(thirtyDaysAgo))
-                    && m.getCreatedAt() != null
-                    && m.getCreatedAt().atZone(ZoneId.systemDefault()).toInstant().isBefore(thirtyDaysAgo)) {
-                String tags = m.getTags() != null ? m.getTags() : "";
-                if (!tags.contains("stale")) {
-                    m.setTags(tags.isEmpty() ? "stale" : tags + ",stale");
-                    memoryRepository.save(m);
-                    log.info("Marked memory as stale: id={}, title={}", m.getId(), m.getTitle());
-                }
+        Instant now = Instant.now();
+        for (MemoryEntity memory : all) {
+            if (isExpiredArchived(memory, now)) {
+                memoryRepository.delete(memory);
+                log.info("Deleted expired archived memory: id={}, title={}", memory.getId(), memory.getTitle());
+                continue;
             }
+            memory.setLastScore(scoreMemory(memory, now));
+            memory.setLastScoredAt(now);
+            transitionStatus(memory, now);
+            memoryRepository.save(memory);
         }
+        enforceCapacity(all);
+    }
+
+    private void enforceCapacity(List<MemoryEntity> all) {
+        int cap = memoryProperties.getEviction().getMaxActivePerUser();
+        List<MemoryEntity> active = all.stream()
+                .filter(memory -> "ACTIVE".equals(memory.getStatus()))
+                .sorted(Comparator
+                        .comparing(MemoryEntity::getLastScore, Comparator.nullsLast(Double::compareTo))
+                        .thenComparing(MemoryEntity::getUpdatedAt, Comparator.nullsLast(Comparator.naturalOrder())))
+                .toList();
+        if (active.size() <= cap) {
+            return;
+        }
+        int overflow = active.size() - cap;
+        for (int i = 0; i < overflow; i++) {
+            MemoryEntity demoted = active.get(i);
+            demoted.setStatus("STALE");
+            demoted.setArchivedAt(null);
+            memoryRepository.save(demoted);
+            log.info("Demoted memory due to capacity pressure: id={}, title={}, score={}",
+                    demoted.getId(), demoted.getTitle(), demoted.getLastScore());
+        }
+    }
+
+    private void transitionStatus(MemoryEntity memory, Instant now) {
+        long ageDays = ageDays(memory, now);
+        if (!"ARCHIVED".equals(memory.getStatus())
+                && ageDays >= memoryProperties.getEviction().getArchiveAfterDays()) {
+            memory.setStatus("ARCHIVED");
+            if (memory.getArchivedAt() == null) {
+                memory.setArchivedAt(now);
+            }
+            return;
+        }
+        if ("ACTIVE".equals(memory.getStatus())
+                && ageDays >= memoryProperties.getEviction().getStaleAfterDays()
+                && memory.getRecallCount() < 3) {
+            memory.setStatus("STALE");
+            memory.setArchivedAt(null);
+        }
+    }
+
+    private boolean isExpiredArchived(MemoryEntity memory, Instant now) {
+        if (!"ARCHIVED".equals(memory.getStatus()) || memory.getArchivedAt() == null) {
+            return false;
+        }
+        return memory.getArchivedAt()
+                .isBefore(now.minus(memoryProperties.getEviction().getDeleteAfterDays(), ChronoUnit.DAYS));
+    }
+
+    private static long ageDays(MemoryEntity memory, Instant now) {
+        Instant anchor = memory.getLastRecalledAt();
+        if (anchor == null && memory.getCreatedAt() != null) {
+            anchor = memory.getCreatedAt().atZone(java.time.ZoneId.systemDefault()).toInstant();
+        }
+        if (anchor == null) {
+            return 0;
+        }
+        long days = ChronoUnit.DAYS.between(anchor, now);
+        return Math.max(days, 0);
+    }
+
+    private static double scoreMemory(MemoryEntity memory, Instant now) {
+        double importanceScore = switch (memory.getImportance() == null ? "medium" : memory.getImportance()) {
+            case "high" -> 1.0;
+            case "low" -> 0.3;
+            default -> 0.6;
+        };
+        long ageDays = ageDays(memory, now);
+        double recencyScore = Math.exp(-ageDays / 30.0);
+        double recallScore = Math.log(1 + Math.max(memory.getRecallCount(), 0)) / Math.log(11);
+        double freshnessScore = 0.5 + 0.5 * recencyScore;
+        double usageScore = 0.3 + 0.7 * recallScore;
+        return 0.45 * importanceScore
+                + 0.35 * freshnessScore
+                + 0.20 * usageScore;
     }
 }

@@ -384,8 +384,17 @@ export const getSkillEvolution = (evolutionRunId: string) =>
   api.get<SkillEvolutionRun>(`/skills/evolution/${evolutionRunId}`);
 
 // Memory API
-export const getMemories = (userId: number, type?: string) =>
-  api.get('/memories', { params: { userId, type } });
+export type MemoryLifecycleStatus = 'ACTIVE' | 'STALE' | 'ARCHIVED';
+
+export interface MemoryStats {
+  active: number;
+  stale: number;
+  archived: number;
+  capacityCap: number;
+}
+
+export const getMemories = (userId: number, type?: string, status?: MemoryLifecycleStatus) =>
+  api.get('/memories', { params: { userId, type, status } });
 export const searchMemories = (userId: number, keyword: string) =>
   api.get('/memories/search', { params: { userId, keyword } });
 export interface CreateMemoryRequest {
@@ -404,6 +413,18 @@ export interface UpdateMemoryRequest {
 export const createMemory = (data: CreateMemoryRequest) => api.post('/memories', data);
 export const updateMemory = (id: number, data: UpdateMemoryRequest) => api.put(`/memories/${id}`, data);
 export const deleteMemory = (id: number) => api.delete(`/memories/${id}`);
+export const updateMemoryStatus = (id: number, userId: number, status: MemoryLifecycleStatus) =>
+  api.patch(`/memories/${id}/status`, { status }, { params: { userId } });
+export const batchArchiveMemories = (userId: number, ids: number[]) =>
+  api.post('/memories/batch-archive', { ids }, { params: { userId } });
+export const batchRestoreMemories = (userId: number, ids: number[]) =>
+  api.post('/memories/batch-restore', { ids }, { params: { userId } });
+export const batchUpdateMemoryStatus = (userId: number, ids: number[], status: MemoryLifecycleStatus) =>
+  api.post('/memories/batch-status', { ids, status }, { params: { userId } });
+export const batchDeleteMemories = (userId: number, ids: number[]) =>
+  api.delete('/memories/batch', { data: { ids }, params: { userId } });
+export const getMemoryStats = (userId: number) =>
+  api.get<MemoryStats>('/memories/stats', { params: { userId } });
 
 // User Config API
 export const getClaudeMd = (userId: number) => api.get('/user-config/claude-md', { params: { userId } });

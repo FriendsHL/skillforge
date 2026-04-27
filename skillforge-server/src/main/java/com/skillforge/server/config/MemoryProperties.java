@@ -20,6 +20,11 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  *     dedup:
  *       cosine-update-threshold: 0.95
  *       cosine-merge-threshold: 0.85
+ *     eviction:
+ *       stale-after-days: 30
+ *       archive-after-days: 60
+ *       delete-after-days: 90
+ *       max-active-per-user: 1500
  * </pre>
  */
 @ConfigurationProperties(prefix = "skillforge.memory")
@@ -30,6 +35,7 @@ public class MemoryProperties {
     private int maxConversationChars = 8000;
     private Extraction extraction = new Extraction();
     private Dedup dedup = new Dedup();
+    private Eviction eviction = new Eviction();
 
     public String getExtractionMode() {
         return extractionMode;
@@ -69,6 +75,14 @@ public class MemoryProperties {
 
     public void setDedup(Dedup dedup) {
         this.dedup = dedup != null ? dedup : new Dedup();
+    }
+
+    public Eviction getEviction() {
+        return eviction;
+    }
+
+    public void setEviction(Eviction eviction) {
+        this.eviction = eviction != null ? eviction : new Eviction();
     }
 
     public boolean isLlmMode() {
@@ -141,6 +155,45 @@ public class MemoryProperties {
 
         public void setCosineMergeThreshold(double cosineMergeThreshold) {
             this.cosineMergeThreshold = cosineMergeThreshold;
+        }
+    }
+
+    public static class Eviction {
+        private int staleAfterDays = 30;
+        private int archiveAfterDays = 60;
+        private int deleteAfterDays = 90;
+        private int maxActivePerUser = 1500;
+
+        public int getStaleAfterDays() {
+            return staleAfterDays;
+        }
+
+        public void setStaleAfterDays(int staleAfterDays) {
+            this.staleAfterDays = staleAfterDays;
+        }
+
+        public int getArchiveAfterDays() {
+            return archiveAfterDays;
+        }
+
+        public void setArchiveAfterDays(int archiveAfterDays) {
+            this.archiveAfterDays = archiveAfterDays;
+        }
+
+        public int getDeleteAfterDays() {
+            return deleteAfterDays;
+        }
+
+        public void setDeleteAfterDays(int deleteAfterDays) {
+            this.deleteAfterDays = deleteAfterDays;
+        }
+
+        public int getMaxActivePerUser() {
+            return maxActivePerUser;
+        }
+
+        public void setMaxActivePerUser(int maxActivePerUser) {
+            this.maxActivePerUser = maxActivePerUser;
         }
     }
 }

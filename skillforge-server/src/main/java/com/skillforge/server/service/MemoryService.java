@@ -61,10 +61,24 @@ public class MemoryService {
     }
 
     public List<MemoryEntity> listMemories(Long userId, String type) {
-        if (type != null && !type.isBlank()) {
-            return memoryRepository.findByUserIdAndType(userId, type);
+        return listMemories(userId, type, null);
+    }
+
+    public List<MemoryEntity> listMemories(Long userId, String type, String status) {
+        List<MemoryEntity> base;
+        if (status != null && !status.isBlank()) {
+            base = memoryRepository.findByUserIdAndStatusOrderByUpdatedAtDesc(userId, normalizeStatus(status));
+        } else if (type != null && !type.isBlank()) {
+            base = memoryRepository.findByUserIdAndType(userId, type);
+        } else {
+            base = memoryRepository.findByUserId(userId);
         }
-        return memoryRepository.findByUserId(userId);
+        if (type == null || type.isBlank()) {
+            return base;
+        }
+        return base.stream()
+                .filter(memory -> type.equalsIgnoreCase(memory.getType()))
+                .toList();
     }
 
     /**
@@ -174,6 +188,59 @@ public class MemoryService {
 
     public void deleteMemory(Long id) {
         memoryRepository.deleteById(id);
+    }
+
+    @Transactional
+    public int updateStatus(Long id, Long userId, String status) {
+        if (id == null || userId == null || status == null || status.isBlank()) {
+            return 0;
+        }
+        MemoryEntity memory = memoryRepository.findById(id).orElse(null);
+        if (memory == null || !userId.equals(memory.getUserId())) {
+            return 0;
+        }
+        applyStatus(memory, normalizeStatus(status));
+        memoryRepository.save(memory);
+        return 1;
+    }
+
+    @Transactional
+    public int batchArchive(List<Long> ids, Long userId) {
+        return batchUpdateStatus(ids, userId, "ARCHIVED");
+    }
+
+    @Transactional
+    public int batchRestore(List<Long> ids, Long userId) {
+        return batchUpdateStatus(ids, userId, "ACTIVE");
+    }
+
+    @Transactional
+    public int batchUpdateStatus(List<Long> ids, Long userId, String status) {
+        return updateStatuses(ids, userId, status);
+    }
+
+    @Transactional
+    public int batchDelete(List<Long> ids, Long userId) {
+        if (ids == null || ids.isEmpty() || userId == null) {
+            return 0;
+        }
+        int changed = 0;
+        for (Long id : ids) {
+            MemoryEntity memory = memoryRepository.findById(id).orElse(null);
+            if (memory == null || !userId.equals(memory.getUserId())) {
+                continue;
+            }
+            memoryRepository.deleteById(id);
+            changed++;
+        }
+        return changed;
+    }
+
+    public MemoryStats getStats(Long userId) {
+        long active = memoryRepository.countByUserIdAndStatus(userId, "ACTIVE");
+        long stale = memoryRepository.countByUserIdAndStatus(userId, "STALE");
+        long archived = memoryRepository.countByUserIdAndStatus(userId, "ARCHIVED");
+        return new MemoryStats(active, stale, archived, memoryProperties.getEviction().getMaxActivePerUser());
     }
 
     @Transactional
@@ -360,6 +427,46 @@ public class MemoryService {
         return type != null && !type.isBlank() ? type.toLowerCase() : "knowledge";
     }
 
+    private int updateStatuses(List<Long> ids, Long userId, String status) {
+        if (ids == null || ids.isEmpty() || userId == null) {
+            return 0;
+        }
+        int changed = 0;
+        for (Long id : ids) {
+            MemoryEntity memory = memoryRepository.findById(id).orElse(null);
+            if (memory == null || !userId.equals(memory.getUserId())) {
+                continue;
+            }
+            applyStatus(memory, status);
+            memoryRepository.save(memory);
+            changed++;
+        }
+        return changed;
+    }
+
+    private static void applyStatus(MemoryEntity memory, String status) {
+        String normalized = normalizeStatus(status);
+        memory.setStatus(normalized);
+        if ("ARCHIVED".equals(normalized)) {
+            if (memory.getArchivedAt() == null) {
+                memory.setArchivedAt(Instant.now());
+            }
+        } else {
+            memory.setArchivedAt(null);
+        }
+    }
+
+    private static String normalizeStatus(String status) {
+        if (status == null) {
+            return "ACTIVE";
+        }
+        return switch (status.trim().toUpperCase()) {
+            case "STALE" -> "STALE";
+            case "ARCHIVED" -> "ARCHIVED";
+            default -> "ACTIVE";
+        };
+    }
+
     private static String extractImportance(String tags) {
         if (tags == null || tags.isBlank()) {
             return "medium";
@@ -509,6 +616,7 @@ public class MemoryService {
     }
 
     public record RollbackResult(int restored, int deleted) {}
+    public record MemoryStats(long active, long stale, long archived, int capacityCap) {}
 
     public List<MemoryEntity> searchWithRanking(Long userId, String query) {
         if (query == null || query.isBlank()) return listMemories(userId, null);
