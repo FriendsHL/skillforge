@@ -11,10 +11,12 @@ import com.skillforge.server.util.SkillInputUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -93,16 +95,27 @@ public class MemorySearchTool implements Tool {
                 return SkillResult.error("userId and query are required");
             }
 
-            // FTS recall (always executed)
+            // FTS recall (always executed) — status='ACTIVE' filter is enforced inside the SQL.
             List<MemorySearchResult> ftsResults = memoryService.searchByFts(userId, query, FTS_LIMIT);
 
-            // Vector recall (executed when embedding is available)
+            // Vector recall (executed when embedding is available) — status='ACTIVE' enforced in SQL.
             List<MemorySearchResult> vectorResults = embeddingService.embed(query)
                     .map(vec -> memoryService.searchByVector(userId, vec, VEC_LIMIT))
                     .orElse(List.of());
 
-            // RRF merge
-            List<MemorySearchResult> merged = mergeWithRrf(ftsResults, vectorResults, topK);
+            // Memory v2 (PR-2): exclude memories already injected into the system prompt by
+            // memoryProvider (L0 + L1) — avoids double-presenting the same content. Forwarded
+            // through SkillContext from LoopContext.injectedMemoryIds. Always non-null (engine
+            // sets emptySet by default), so RRF still runs identically when nothing was injected.
+            Set<Long> excludeIds = context != null && context.getInjectedMemoryIds() != null
+                    ? context.getInjectedMemoryIds()
+                    : Collections.emptySet();
+
+            // RRF merge with filter-then-limit: rank candidates by RRF score, then drop excluded
+            // ids, THEN take topK. This guarantees that even when the top of RRF overlaps heavily
+            // with the L0/L1 injection, deeper candidates surface — instead of returning a
+            // shorter-than-topK result by accident.
+            List<MemorySearchResult> merged = mergeWithRrf(ftsResults, vectorResults, topK, excludeIds);
 
             if (merged.isEmpty()) {
                 return SkillResult.success("No memories found for: " + query);
@@ -122,11 +135,17 @@ public class MemorySearchTool implements Tool {
 
     /**
      * Reciprocal Rank Fusion: merge FTS and vector results into a unified ranking.
+     * <p>
+     * Memory v2 (PR-2): {@code excludeIds} drops already-injected memories AFTER RRF
+     * scoring but BEFORE the topK limit (filter-then-limit, "writing B"). This way the
+     * deeper RRF candidates can surface to fill the topK slot when the top overlaps with
+     * the L0/L1 injection. Pass {@link Collections#emptySet()} for "no exclusion".
      */
     private List<MemorySearchResult> mergeWithRrf(
             List<MemorySearchResult> ftsResults,
             List<MemorySearchResult> vectorResults,
-            int topK) {
+            int topK,
+            Set<Long> excludeIds) {
 
         Map<Long, Double> scores = new HashMap<>();
 
@@ -144,8 +163,10 @@ public class MemorySearchTool implements Tool {
         ftsResults.forEach(r -> byId.put(r.memoryId(), r));
         vectorResults.forEach(r -> byId.putIfAbsent(r.memoryId(), r));
 
+        Set<Long> drop = excludeIds != null ? excludeIds : Collections.emptySet();
         return scores.entrySet().stream()
                 .sorted(Map.Entry.<Long, Double>comparingByValue().reversed())
+                .filter(e -> !drop.contains(e.getKey()))
                 .limit(topK)
                 .map(e -> byId.get(e.getKey()).withScore(e.getValue()))
                 .toList();

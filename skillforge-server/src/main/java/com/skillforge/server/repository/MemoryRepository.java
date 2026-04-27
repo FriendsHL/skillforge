@@ -19,6 +19,14 @@ public interface MemoryRepository extends JpaRepository<MemoryEntity, Long> {
 
     List<MemoryEntity> findByUserIdOrderByUpdatedAtDesc(Long userId);
 
+    /**
+     * Memory v2 (PR-2): status-aware variant used by L0/L1 prompt-injection paths.
+     * Caller passes {@code "ACTIVE"} so STALE/ARCHIVED memories never reach the prompt.
+     * Recency ordering matches {@link #findByUserIdOrderByUpdatedAtDesc} for L0
+     * (preference + feedback) and L1 fallback (taskContext null/blank).
+     */
+    List<MemoryEntity> findByUserIdAndStatusOrderByUpdatedAtDesc(Long userId, String status);
+
     List<MemoryEntity> findByUserIdAndTitle(Long userId, String title);
 
     List<MemoryEntity> findByExtractionBatchIdAndUserId(String extractionBatchId, Long userId);
@@ -28,12 +36,15 @@ public interface MemoryRepository extends JpaRepository<MemoryEntity, Long> {
     @Query("UPDATE MemoryEntity m SET m.recallCount = m.recallCount + 1, m.lastRecalledAt = :now WHERE m.id = :id")
     void incrementRecallCount(@Param("id") Long id, @Param("now") Instant now);
 
-    // FTS recall: tsvector @@ plainto_tsquery ('simple' dictionary, Chinese/English compatible)
+    // FTS recall: tsvector @@ plainto_tsquery ('simple' dictionary, Chinese/English compatible).
+    // Memory v2 (PR-2): AND status='ACTIVE' filter — STALE/ARCHIVED rows must never appear in
+    // recall results (memory_search tool + L1 hybrid both go through this).
     @Query(value = """
         SELECT id, type, title, content, tags, recall_count,
                ts_rank(search_vector, plainto_tsquery('simple', :query)) AS rank
         FROM t_memory
         WHERE user_id = :userId
+          AND status = 'ACTIVE'
           AND search_vector @@ plainto_tsquery('simple', :query)
         ORDER BY rank DESC
         LIMIT :limit
@@ -43,12 +54,14 @@ public interface MemoryRepository extends JpaRepository<MemoryEntity, Long> {
             @Param("query") String query,
             @Param("limit") int limit);
 
-    // Vector recall: cosine distance (<=> lower is closer)
+    // Vector recall: cosine distance (<=> lower is closer).
+    // Memory v2 (PR-2): AND status='ACTIVE' filter — same rationale as findByFts.
     @Query(value = """
         SELECT id, type, title, content, tags, recall_count,
                (embedding <=> CAST(:embedding AS vector)) AS distance
         FROM t_memory
         WHERE user_id = :userId
+          AND status = 'ACTIVE'
           AND embedding IS NOT NULL
         ORDER BY distance ASC
         LIMIT :limit

@@ -170,8 +170,8 @@ public class ContextBreakdownService {
         boolean skipMemory = cfg != null && Boolean.TRUE.equals(cfg.get("skip_memory"));
         if (!skipMemory) {
             // previewMemoriesForPrompt renders the same block but skips the recall-count UPDATE
-            // that getMemoriesForPrompt does — the estimation request is read-only and must not
-            // pollute ranking signals.
+            // that getMemoriesForPromptInjection does — the estimation request is read-only and
+            // must not pollute ranking signals.
             String memories = safeProviderCall(() -> memoryService.previewMemoriesForPrompt(userId, null));
             if (isNotBlank(memories)) {
                 out.add(Segment.leaf("user_memories", "User memories",

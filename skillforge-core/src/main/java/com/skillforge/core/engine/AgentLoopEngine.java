@@ -88,8 +88,14 @@ public class AgentLoopEngine {
     private long installConfirmTimeoutSeconds = 30 * 60L;
     /** One-shot approval tokens for non-install tools that require human confirmation. */
     private ToolApprovalRegistry toolApprovalRegistry;
-    /** 可选:记忆提供者。接受 userId 返回记忆 markdown 字符串,拼接到 system prompt 末尾。 */
-    private java.util.function.Function<Long, String> memoryProvider;
+    /**
+     * 可选:记忆提供者。接受 (userId, taskContext) 返回 {@link MemoryInjection} (text + injected ids),
+     * text 拼接到 system prompt 末尾;injectedIds 写入 LoopContext 供下游 tool (memory_search) 排重。
+     * <p>
+     * Memory v2 (PR-2): 签名由 {@code Function<Long,String>} 升级为 BiFunction 以支持 task-aware
+     * L0/L1 分层召回。{@code taskContext} 为当前用户消息 (engine 调用 {@code run(...)} 的第 2 参数)。
+     */
+    private java.util.function.BiFunction<Long, String, MemoryInjection> memoryProvider;
     private java.util.function.Function<Long, String> claudeMdProvider;
     /** 默认 context window, 单位 token。从 AgentDefinition config 覆盖。 */
     private int defaultContextWindowTokens = 32000;
@@ -151,7 +157,7 @@ public class AgentLoopEngine {
         }
     }
 
-    public void setMemoryProvider(java.util.function.Function<Long, String> memoryProvider) {
+    public void setMemoryProvider(java.util.function.BiFunction<Long, String, MemoryInjection> memoryProvider) {
         this.memoryProvider = memoryProvider;
     }
 
@@ -272,11 +278,17 @@ public class AgentLoopEngine {
         }
 
         // 4.1 注入用户记忆到 system prompt (skip if lightContext / skip_memory flag set)
+        // Memory v2 (PR-2): provider 现在是 BiFunction(userId, taskContext) → MemoryInjection。
+        // taskContext = userMessage (当前用户消息) 让 L1 hybrid recall 用得上 task-aware 排序。
+        // injectedIds 写入 loopCtx 让下游 memory_search tool 能排重 (避免 prompt + tool 重复呈现)。
         boolean skipMemory = Boolean.TRUE.equals(agentDef.getConfig().get("skip_memory"));
         if (memoryProvider != null && !skipMemory) {
-            String memories = memoryProvider.apply(userId);
-            if (memories != null && !memories.isBlank()) {
-                systemPrompt = systemPrompt + "\n\n## User Memories\n\n" + memories;
+            MemoryInjection mi = memoryProvider.apply(userId, userMessage);
+            if (mi != null && mi.text() != null && !mi.text().isBlank()) {
+                systemPrompt = systemPrompt + "\n\n## User Memories\n\n" + mi.text();
+            }
+            if (mi != null && mi.injectedIds() != null && !mi.injectedIds().isEmpty()) {
+                loopCtx.setInjectedMemoryIds(mi.injectedIds());
             }
         }
 
@@ -1710,6 +1722,9 @@ public class AgentLoopEngine {
                         loopContext.getUserId());
                 skillContext.setToolUseId(toolUseId);
                 skillContext.setApprovalToken(approvalToken);
+                // Memory v2 (PR-2): forward already-injected memory ids so tools (memory_search)
+                // can exclude them from results — avoids double-presenting the same memory.
+                skillContext.setInjectedMemoryIds(loopContext.getInjectedMemoryIds());
 
                 // 执行 SkillHook.beforeSkillExecute()
                 Map<String, Object> processedInput = input;

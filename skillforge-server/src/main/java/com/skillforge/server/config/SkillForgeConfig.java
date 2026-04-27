@@ -509,7 +509,10 @@ public class SkillForgeConfig {
         engine.setPendingAskRegistry(pendingAskRegistry);
         engine.setCompactorCallback(compactorCallback);
         engine.setTraceCollector(traceCollector);
-        engine.setMemoryProvider(userId -> memoryService.getMemoriesForPrompt(userId));
+        // Memory v2 (PR-2): BiFunction provider — taskContext = current user message lets
+        // L1 hybrid recall pick semantically relevant knowledge/project/reference memories.
+        engine.setMemoryProvider((userId, taskContext) ->
+                memoryService.getMemoriesForPromptInjection(userId, taskContext));
         engine.setClaudeMdProvider(userId -> userConfigService.getClaudeMd(userId));
         engine.setConfirmationPrompter(confirmationPrompter);
         engine.setSessionConfirmCache(sessionConfirmCache);

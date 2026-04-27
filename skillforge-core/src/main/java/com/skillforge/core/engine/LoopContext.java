@@ -96,6 +96,16 @@ public class LoopContext {
      */
     private transient String rootSessionIdCache;
 
+    /**
+     * Memory v2 (PR-2): ids of memories that the {@code memoryProvider} injected into the
+     * system prompt at loop start. Forwarded into {@link com.skillforge.core.skill.SkillContext}
+     * on every tool dispatch so tools like {@code memory_search} can exclude already-injected
+     * memories from their results (avoids double-presenting the same content). Defaults to an
+     * immutable empty set; populated by {@link AgentLoopEngine} after calling
+     * {@code memoryProvider.apply(userId, userMessage)}.
+     */
+    private Set<Long> injectedMemoryIds = Collections.emptySet();
+
     public LoopContext() {
         this.messages = new ArrayList<>();
         this.maxLoops = 25;
@@ -420,5 +430,24 @@ public class LoopContext {
 
     public void setRootSessionIdCache(String rootSessionIdCache) {
         this.rootSessionIdCache = rootSessionIdCache;
+    }
+
+    /**
+     * Memory v2 (PR-2): returns the ids of memories injected into the system prompt at loop
+     * start. Always returns a non-null, immutable view to defend against caller mutation.
+     */
+    public Set<Long> getInjectedMemoryIds() {
+        return injectedMemoryIds;
+    }
+
+    /**
+     * Memory v2 (PR-2): sets the ids of memories injected into the system prompt. {@code null}
+     * input collapses to an immutable empty set. Stored as an immutable {@link Set#copyOf}
+     * snapshot so subsequent caller mutations cannot leak in.
+     */
+    public void setInjectedMemoryIds(Set<Long> injectedMemoryIds) {
+        this.injectedMemoryIds = injectedMemoryIds == null
+                ? Collections.emptySet()
+                : Set.copyOf(injectedMemoryIds);
     }
 }
