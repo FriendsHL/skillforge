@@ -1,6 +1,6 @@
 # SkillForge 待办任务
 
-> 更新于：2026-04-26
+> 更新于：2026-04-27
 > **对抗整理**：Analyst + Challenger 双 Agent 评审 + Claude 仲裁（2026-04-23）
 > **代码扫描校准**：全量代码现状核查后二次修正（2026-04-23）
 > **🔥 紧急条目新增**：ENG-1 / ENG-2 / P9-5-lite，由 session `9347f84c` 真实事故触发（2026-04-23）
@@ -19,10 +19,12 @@
 | ------------- | --------------------------------------------------------------------------------------- | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | ~~**🔥 紧急**~~ | ~~ENG-1~~ · ~~ENG-2~~ · ~~P9-5-lite~~                                                   | 1-2 天             | 由 session 9347f84c 真实事故触发；阻断 Design Agent 长任务；**全部完成 2026-04-23**                                                                                                                                           |
 | ~~**🔥 紧急**~~ | ~~**BUG-F** Compact 摘要存储重构（向 Claude Code / OpenClaw 看齐）~~ ✅ 2026-04-26 commit `e9b48f3` | 1-1.5 天           | 由 session `acbced3f` DeepSeek 撞 `Duplicate value for 'tool_call_id'` HTTP 400 触发；**Full Pipeline 通过**：Plan r1 PASS（1W）+ Code r1 PASS（5W，0 blocker）；370 unit tests 全绿；用户授权跳过 live curl，server 重启成功即视为 e2e 通过 |
+| **🔥 穿插**     | **BUG-G** dangling assistant tool_call 历史防腐 + stopReason/toolUse 一致性修复                  | 1-2 天             | 由 session `d0863201` DeepSeek 撞 `assistant message with tool_calls must be followed by tool messages` HTTP 400 触发；现场已用 synthetic tool_result 修复单 session，后续需做发送前防腐 + 引擎根因修复 |
 | ~~**Sprint 1**~~  | ~~P9-7~~ · ~~P3-1~~ · ~~P3-3~~ · ~~P13-3~~ · ~~P13-4~~ ✅ 2026-04-26                 | 2-3 天             | 零依赖防腐；P13-4 代码扫描确认已完成；P9-7 已完成 commit `621f417`；P3-1/P3-3/P13-3 已完成 commit `f4773c3`，397 个非 IT server tests 全绿；完整 suite 仅 Docker/Testcontainers IT 受本机环境阻塞                                                                 |
 | ~~**Sprint 2**~~  | ~~P11（收窄）+ P13-1~~ → ~~P15-1/P15-2/P15-4 + UpdateAgent~~                                  | 8-12 天            | PR1 已完成 2026-04-26：AgentDiscovery + name resolver + public/private visibility + custom rule severity；PR2 已完成 P15-1/P15-2：GetTrace + GetSessionMessages，413 个非 IT server tests 全绿；补充完成 GetAgentConfig + AgentDiscovery 增强 + 带一次确认的 UpdateAgent。P15-5 seed 取消：Analyzer Agent 已手工创建，不再内置 Flyway seed |
+| **🧩 穿插**     | P1 Skill 自动生成补完：SKILL.md 物化 + registry 重启恢复 + agent-scoped 生效 + telemetry + draft 去重          | 3-5 天             | 当前 skill draft approve 只写 DB-only `SkillEntity`；上传/ClawHub 等用户 skill 重启后也不恢复 registry；agent 绑定 skillIds 未实际限制可用 skill；usage 信号未自动采集。见下方 P1-FU |
 | **Sprint 3**  | P9-2 长对话 tool 归档（独立 PR）                                                                 | ~2 周              | 触碰核心文件，Full Pipeline；真实用户长 session 慢性病                                                                                                                                                                      |
-| **🧠 Memory v2** | MEM-1 ~ MEM-5 写入 / 召回 / 淘汰一体化重构                                                       | 13-18 天           | design 已锁定 [design-memory-v2.md](design-memory-v2.md)，决策见该 doc §6；触碰核心文件清单（`MemoryService` / `AgentLoopEngine` / `LlmMemoryExtractor` / Flyway），全程 Full Pipeline；执行顺序 PR-1 schema → PR-2 召回 → PR-3 触发 → PR-4 dedup → PR-5 状态机+UI |
+| ~~**🧠 Memory v2**~~ ✅ 2026-04-27 | ~~MEM-1 ~ MEM-5 写入 / 召回 / 淘汰一体化重构~~                                                       | ~~13-18 天~~           | PR-1 `V29 schema + snapshot/rollback 基线`（`9f36b59`）→ PR-2 `ACTIVE 过滤 + L0/L1 task-aware recall + MemorySearch 排重`（`8330d32`）→ PR-3 `增量抽取 cursor / idle scanner / cooldown`（`86703ed`）→ PR-4 `embedding add-time dedup`（`96676b9`）→ PR-5 `ACTIVE/STALE/ARCHIVED 状态机、容量淘汰、batch status API、/memories tabs + batch actions + restore + capacity banner`（本地已验证，待后续提交）；聚焦验证：`MemoryConsolidatorTest` + `MemoryServiceTest` 24/24 通过，dashboard `npm run build` 通过 |
 | **⚠️ 前置决策**   | Cost Dashboard · PG 备份 · 多用户权限 design doc                                               | 决策先行              | Sprint 4 开工前必须有答案，否则 P12 上线即踩坑                                                                                                                                                                              |
 | **Sprint 4**  | P12 定时任务（收窄首版）                                                                          | 3-4 周             | user 型调度最小集；SystemJobRegistry + P12-6 → V2                                                                                                                                                                  |
 | **Sprint 5**  | P9-4 · P9-5（需 design doc 先行）                                                            | 按需                | P9-5 依赖 P9-4；P9-5 需先明确"最近文件"数据来源                                                                                                                                                                            |
@@ -108,6 +110,33 @@
 
 ---
 
+### 🔥 待排期 — BUG-G dangling assistant tool_call 防腐（1-2 天）
+
+> **触发事件**：session `d0863201-30c0-4582-82eb-2fcc2255bdfa` 在 DeepSeek 下一轮请求时报 HTTP 400：
+> ```
+> An assistant message with 'tool_calls' must be followed by tool messages responding to each 'tool_call_id'
+> ```
+>
+> **现场确认（2026-04-27）**：同一 session 当天复现两次，均为 assistant `FileEdit` tool_use 后缺少对应 tool_result：
+> - 第一次：seq=499 是 assistant `FileEdit` tool_use（`tool_use_id=call_00_5Cafu9m0L08drkiNKSqdkuiq`），后面直接接用户消息。已插入 synthetic error `tool_result` 到 seq=500，原用户消息顺延，session runtime 从 `error` 改回 `idle`。
+> - 第二次：seq=506 是 assistant `FileEdit` tool_use（`tool_use_id=call_00_3pHcLijqaswMwjznsyGK8yL6`），seq=507 直接是用户消息 `替换怎么样了？`。已插入 synthetic error `tool_result` 到 seq=507，原用户消息顺延到 seq=508，session runtime 从 `error` 改回 `idle`。修复后 pairing scan：`assistant_tool_turns=211 missing_turns=0`。
+>
+> **根因链路**：
+> 1. `OpenAiProvider.processSSEStream` 会在 stream 结束时 `finalizeToolCalls(...)`，只要累积到 `tool_calls` delta，就会生成 `ToolUseBlock`；这两次 `FileEdit` 的 input 都是 `{}`，说明 tool call 参数很可能未完整收齐或结束态异常。
+> 2. `AgentLoopEngine.buildAssistantMessage(response)` 只要 `response.toolUseBlocks` 非空，就会把 assistant 保存为带 `tool_use` 的消息。
+> 3. 但工具执行分支只看 `response.isToolUse()`；而 `LlmResponse.isToolUse()` 只判断 `stopReason == "tool_use"`。当 provider 解析到了 `toolUseBlocks`，但 `finish_reason` 未映射成 `tool_use`（仍是 `end_turn` / 缺失）时，引擎会把 tool_use 写入历史，却按普通文本结束，不执行工具、不补 tool_result。
+> 4. 下一轮 `OpenAiProvider.convertMessages` 会把历史 assistant `tool_use` 转成 OpenAI-compatible payload 的 `assistant.tool_calls`；但其后紧跟普通 user 消息而不是 `role=tool`，DeepSeek 严格校验后返回 HTTP 400。
+>
+> **临时修复流程**：定位最后一个 dangling assistant `tool_use` → 在其后插入 `role=user` / `type=tool_result` / `is_error=true` 的 synthetic result → 顺延后续 `seq_no` → 清空 `runtime_error` 并置 `runtime_status=idle` → 跑 pairing scan 确认 `missing_turns=0`。这只能修单 session 数据，不能防止再次发生。
+
+| 子任务 | 说明 | 验收 |
+| --- | --- | --- |
+| **BUG-G-1** OpenAI-compatible 发送前历史防腐（方案 3） | 在 `OpenAiProvider.convertMessages` 或其前置 sanitizer 中校验 OpenAI 消息协议：assistant `tool_calls` 后必须紧跟覆盖每个 `tool_call_id` 的 `role=tool` 消息。发现缺失时，不再原样发送非法 payload；可将 dangling assistant tool_use 降级为普通 assistant 文本，并追加一条 user 文本说明该 tool call was interrupted / missing result，避免 provider 400 | 构造 `assistant(tool_calls:A) -> user(text)` 历史时，请求体不包含非法未配对 `tool_calls`；DeepSeek/OpenAI-compatible 不再 400；测试覆盖 ContentBlock 和 DB 反序列化 Map 两种形态 |
+| **BUG-G-2** toolUseBlocks 与 stopReason 一致性修复（方案 4） | 修引擎根因：当 `LlmResponse.toolUseBlocks` 存在有效 tool_use 时，`isToolUse()` 应返回 true，或 provider 在 finalize streamed tool_calls 后强制 `stopReason=tool_use`。同时过滤空 id/name 的 invalid tool_use，保证进入执行分支的一定能生成 1:1 tool_result | provider 返回 `toolUseBlocks` 但 stopReason 缺失/`end_turn` 时，engine 仍执行工具并补齐 tool_result；不会再持久化 dangling assistant tool_call；新增 AgentLoopEngine/OpenAiProvider 单测 |
+| **BUG-G-3** 失败路径持久化保护 | 在 runLoop error/cancel/max-loop 等路径加不变量校验：最终落库前如果尾部存在未配对 assistant tool_use，必须补 synthetic error tool_result 或将其降级为文本，避免异常中断把坏尾巴永久写入 DB | 任意异常退出后，`t_session_message` 中 assistant tool_use/tool_result 配对完整；session 可继续发送下一轮，不需要手工 DB 修复 |
+
+---
+
 ### ~~Sprint 1 — 零依赖防腐~~ ✅ 已完成（2026-04-26）
 
 > 全部无强依赖、独立 PR、即刻可开工。P8 LLM 记忆提取刚上线，快照是必要防腐；token 估算精度影响所有用户体验；P13 workaround 清理降低后续改动摩擦。
@@ -167,6 +196,30 @@
 - **→ P11**：P15-4 GetAgentConfigTool 已与 P11-1 AgentDiscoverySkill 分层：Discovery 做轻量列表与 presence flag，GetAgentConfig 做单 agent 深查
 - **→ P14**：Analyzer 发现的"应该用 A 但用了 B"case，可一键转为 P14 eval scenario
 - **→ P3**：记忆质量分析可复用 GetSessionMessagesTool
+
+---
+
+### 🧩 P1 Skill 生命周期统一重构（方案 C，待排期，5-8 天）
+
+> **架构决策（2026-04-27）**：P1-FU 不再走补丁式修补，统一采用 **方案 C（Skill Control Plane）**。  
+> 核心原则：  
+> 1) `system skill` 与 `user skill` 只是来源分类；两者都是同一种 skill package（`SKILL.md` + 可选 references/scripts），不再保留"DB-only skill"路径。  
+> 2) 运行时不再依赖 registry 全量注入；每次会话先计算 `SessionSkillView`（本次会话唯一可用 skill 清单），引擎只认该快照。  
+> 3) system skill 按 agent 单独开关，默认全启用，记录 disabled 列表；system skill 不可删除。  
+> 4) `skillIds` 为空时只注入 system skills（受该 agent 的 disabledSystemSkills 影响），不注入用户 skills。
+>
+> **现状问题（2026-04-27 扫描）**：当前 skill 生命周期割裂在 DB / 文件 / 内存 registry 三份状态；`AgentLoopEngine` 仍会注入 registry 全量 `SkillDefinition`；`SkillDefinition` 调用不自动记 usage；Skill 页面仍有 `DEFAULT_SOURCE_AGENT_ID=1` 和 owner=1 硬编码；A/B 未传 `agentId` 会 400。以下子任务必须以同一闭环交付。
+
+| 子任务 | 说明 | 验收 |
+| --- | --- | --- |
+| **P1-C-1** Skill Artifact 统一模型（去 DB-only） | 明确 skill 的标准载体为 package：`SKILL.md` 必需，references/scripts 可选。`approveDraft` 不再只写 `SkillEntity`；必须生成目录 `data/skills/{ownerId}/{skillId}/` + `SKILL.md`，并通过 `SkillPackageLoader.loadFromDirectory` 校验后发布。失败时事务回滚并清理目录，禁止半成功 | draft approve 后一定存在可读 `SKILL.md` 与 `skillPath`；重启后可恢复；不会出现 UI 有 skill 但磁盘无包 |
+| **P1-C-2** Skill 生成链路改为 Extractor → Generator（skill-creator）→ Validator | session 提取阶段只产出结构化草稿（why/what/triggers/tools/prompt intent）；真正 `SKILL.md` 生成走 `skill-creator` system skill 模板化生成，再经 `SkillPackageLoader` 校验。提取 skill 默认 `source=extracted`、`system=false`、owner=当前用户 | 生成物符合 Claude-style skill 包；提取得到的是用户业务 skill（非 system）；非法 frontmatter/缺文件在发布前被拦截 |
+| **P1-C-3** Agent 级 Skill Binding + System Toggle 独立字段 | `t_agent` 新增 `disabled_system_skills`（JSON array，默认空=全启用）；不与 `skillIds` 混用。`skillIds` 仅绑定用户 skills；system skills 由 `allSystem - disabledSystemSkills` 决定。system skill 不可删除但可按 agent toggle | 同一 system skill 在 A agent 关闭、B agent 开启时行为独立；新建 agent 默认 system 全启；删除 system skill API 返回禁止 |
+| **P1-C-4** SessionSkillView 运行时快照与统一授权 | 新增 `SessionSkillView`/resolver：在 `ChatService` 启 loop 前计算允许 skill 集；`SystemPromptBuilder`、`collectTools`、`executeToolCall`、`ContextBreakdownService` 全部用同一视图。禁止 registry 全量注入兜底 | prompt skills 列表、tool schema、真实可执行集三者一致；未绑定/被禁用 skill 调用返回 not allowed；`skillIds` 为空仅有 system |
+| **P1-C-5** 启动恢复改为“按 Artifact 重建运行态” | 新增 user-skill loader：启动时扫描 DB 中有效 `skillPath` 的非 system skills 重新注册；坏包只告警不阻断启动。system skill 同名优先，冲突用户 skill 标记异常 | 上传/ClawHub/extracted/evolved skills 重启后可恢复；坏目录不会拖垮服务；冲突可观测 |
+| **P1-C-6** Skill telemetry 统一自动采集 | 在 `SkillDefinition` 执行分支自动记 usage/success（按 skill id 记录，不依赖 REST 手工上报）；定义 success/failure/disabled/not-allowed 计数语义 | `usage_count/success_count` 随真实调用变化；Skill 成功率不再长期 0；A/B 与 Evolution 的 before 指标可信 |
+| **P1-C-7** Skill 页面去硬编码 + 参数闭环 | 移除 `DEFAULT_SOURCE_AGENT_ID=1` 和 owner=1 硬编码；Skill 页面新增 agent selector。Extract/A-B/Evolution 必传 agentId；上传/提取/评审 owner 默认当前登录用户，后端不信任前端 owner | A/B 不再 400；不同 agent 提取范围正确；不同用户不会写到 owner=1；UI 能解释“请选择来源 agent” |
+| **P1-C-8** Draft 候选去重与合并建议前置 | 去重前置到候选阶段：name canonicalize + triggers/tools overlap + text similarity。高相似默认折叠，中相似给 merge 建议；approve 阶段仅做并发与唯一性防护 | 连续 Extract 不再刷重复草稿；候选卡片有 similarity/merge 建议；用户显式“仍创建”可保留 |
 
 ---
 
