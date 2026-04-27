@@ -24,6 +24,7 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * LlmMemoryExtractor unit tests.
@@ -125,6 +126,11 @@ class LlmMemoryExtractorTest {
         public List<MemoryEntity> listMemories(Long userId, String type) {
             return existingMemories;
         }
+
+        @Override
+        public List<MemoryEntity> listActiveMemoriesForExtractionContext(Long userId) {
+            return existingMemories;
+        }
     }
 
     // --- Extract tests ---
@@ -165,15 +171,16 @@ class LlmMemoryExtractorTest {
         }
 
         @Test
-        @DisplayName("returns 0 when provider is not available")
-        void extract_noProvider_returnsZero() {
+        @DisplayName("throws when provider is not available so caller can retry or fall back")
+        void extract_noProvider_throws() {
             LlmProviderFactory factory = new LlmProviderFactory(); // no provider registered
             RecordingMemoryService memService = new RecordingMemoryService(List.of());
 
             LlmMemoryExtractor extractor = buildExtractor(factory, memService);
-            int count = extractor.extract(makeSession(), makeActivities(), makeMessages());
 
-            assertThat(count).isZero();
+            assertThatThrownBy(() -> extractor.extract(makeSession(), makeActivities(), makeMessages()))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("No LLM provider available");
             assertThat(memService.createdMemories).isEmpty();
         }
 
@@ -244,6 +251,7 @@ class LlmMemoryExtractorTest {
         void extract_existingMemories_includedInPrompt() {
             MemoryEntity existing = new MemoryEntity();
             existing.setTitle("Known pattern: retry logic");
+            existing.setContent("Use short retries for transient provider errors.");
 
             StubProvider provider = new StubProvider("[]");
             LlmProviderFactory factory = new LlmProviderFactory();
@@ -255,7 +263,25 @@ class LlmMemoryExtractorTest {
 
             String userMsg = provider.capturedRequest.getMessages().get(0).getTextContent();
             assertThat(userMsg).contains("Known pattern: retry logic");
+            assertThat(userMsg).contains("Use short retries for transient provider errors.");
             assertThat(userMsg).contains("do NOT duplicate");
+        }
+
+        @Test
+        @DisplayName("includes incremental seq range in prompt")
+        void extract_incrementalSeqRange_includedInPrompt() {
+            StubProvider provider = new StubProvider("[]");
+            LlmProviderFactory factory = new LlmProviderFactory();
+            factory.registerProvider("test-provider", provider);
+            RecordingMemoryService memService = new RecordingMemoryService(List.of());
+
+            LlmMemoryExtractor extractor = buildExtractor(factory, memService);
+            extractor.extract(makeSession(), makeActivities(), makeMessages(), "batch-1", 12L, 20L);
+
+            String userMsg = provider.capturedRequest.getMessages().get(0).getTextContent();
+            assertThat(userMsg).contains("Extraction mode: incremental");
+            assertThat(userMsg).contains("Message seq range: 12..20");
+            assertThat(userMsg).contains("only messages not previously extracted");
         }
     }
 

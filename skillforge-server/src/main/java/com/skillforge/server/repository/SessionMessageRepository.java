@@ -24,6 +24,9 @@ public interface SessionMessageRepository extends JpaRepository<SessionMessageEn
 
     Optional<SessionMessageEntity> findTopBySessionIdOrderBySeqNoDesc(String sessionId);
 
+    Optional<SessionMessageEntity> findTopBySessionIdAndMsgTypeAndPrunedAtIsNullOrderBySeqNoDesc(
+            String sessionId, String msgType);
+
     Page<SessionMessageEntity> findBySessionIdAndSeqNoGreaterThanEqualOrderBySeqNoAsc(
             String sessionId, long seqNo, Pageable pageable);
 
@@ -35,4 +38,10 @@ public interface SessionMessageRepository extends JpaRepository<SessionMessageEn
 
     Page<SessionMessageEntity> findBySessionIdAndPrunedAtIsNullAndSeqNoGreaterThanOrderBySeqNoAsc(
             String sessionId, long seqNo, Pageable pageable);
+
+    Page<SessionMessageEntity> findBySessionIdAndMsgTypeAndPrunedAtIsNullAndSeqNoGreaterThanOrderBySeqNoAsc(
+            String sessionId, String msgType, long seqNo, Pageable pageable);
+
+    long countBySessionIdAndRoleAndMsgTypeAndPrunedAtIsNullAndSeqNoGreaterThan(
+            String sessionId, String role, String msgType, long seqNo);
 }

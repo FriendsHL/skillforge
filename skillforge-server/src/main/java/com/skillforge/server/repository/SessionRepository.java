@@ -41,7 +41,43 @@ public interface SessionRepository extends JpaRepository<SessionEntity, String> 
      */
     List<SessionEntity> findByLastUserMessageAtIsNull();
 
-    List<SessionEntity> findByCompletedAtIsNotNullAndDigestExtractedAtIsNull();
+    @Query("""
+            SELECT s FROM SessionEntity s
+            WHERE s.parentSessionId IS NULL
+              AND s.lastUserMessageAt IS NOT NULL
+              AND s.lastUserMessageAt < :cutoff
+              AND (s.runtimeStatus IS NULL OR s.runtimeStatus IN ('idle', 'waiting_user'))
+              AND EXISTS (
+                SELECT 1 FROM SessionMessageEntity m
+                WHERE m.sessionId = s.id
+                  AND m.msgType = 'NORMAL'
+                  AND m.prunedAt IS NULL
+                  AND m.seqNo > s.lastExtractedMessageSeq
+              )
+            ORDER BY s.lastUserMessageAt ASC
+            """)
+    List<SessionEntity> findIdleExtractionCandidates(
+            @Param("cutoff") java.time.Instant cutoff,
+            Pageable pageable);
+
+    @Query("""
+            SELECT s FROM SessionEntity s
+            WHERE s.parentSessionId IS NULL
+              AND s.completedAt IS NOT NULL
+              AND (s.runtimeStatus IS NULL OR s.runtimeStatus IN ('idle', 'waiting_user'))
+              AND (s.digestExtractedAt IS NULL OR s.digestExtractedAt < :digestCutoff)
+              AND EXISTS (
+                SELECT 1 FROM SessionMessageEntity m
+                WHERE m.sessionId = s.id
+                  AND m.msgType = 'NORMAL'
+                  AND m.prunedAt IS NULL
+                  AND m.seqNo > s.lastExtractedMessageSeq
+              )
+            ORDER BY s.completedAt ASC
+            """)
+    List<SessionEntity> findDailyExtractionCandidates(
+            @Param("digestCutoff") java.time.Instant digestCutoff,
+            Pageable pageable);
 
     List<SessionEntity> findByCollabRunId(String collabRunId);
 

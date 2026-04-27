@@ -220,6 +220,79 @@ public class SessionService {
     }
 
     /**
+     * Memory v2 PR-3: load NORMAL, unpruned row-store messages after an extraction cursor.
+     * The cursor is exclusive and uses {@code t_session_message.seq_no}. Legacy CLOB
+     * fallback treats list indexes as seq numbers for dev/test compatibility.
+     */
+    @Transactional(readOnly = true)
+    public List<StoredMessage> getNormalHistoryRecordsAfterSeq(String id, long seqNoExclusive) {
+        if (storeProperties != null && storeProperties.isRowReadEnabled() && sessionMessageRepository != null) {
+            List<SessionMessageEntity> rows = new ArrayList<>();
+            int page = 0;
+            while (true) {
+                Page<SessionMessageEntity> p = sessionMessageRepository
+                        .findBySessionIdAndMsgTypeAndPrunedAtIsNullAndSeqNoGreaterThanOrderBySeqNoAsc(
+                                id, MSG_TYPE_NORMAL, seqNoExclusive, PageRequest.of(page, 500));
+                if (p.isEmpty()) {
+                    break;
+                }
+                rows.addAll(p.getContent());
+                if (!p.hasNext()) {
+                    break;
+                }
+                page++;
+            }
+            return toStoredMessages(rows);
+        }
+
+        List<Message> legacy = readLegacyMessagesJson(id);
+        List<StoredMessage> out = new ArrayList<>();
+        for (int i = 0; i < legacy.size(); i++) {
+            if (i > seqNoExclusive) {
+                out.add(new StoredMessage(i, MSG_TYPE_NORMAL, Collections.emptyMap(), legacy.get(i)));
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Latest NORMAL, unpruned message seq for Memory v2 incremental extraction.
+     * Returns {@code -1} when no extractable row exists.
+     */
+    @Transactional(readOnly = true)
+    public long getLatestNormalSeqNo(String id) {
+        if (storeProperties != null && storeProperties.isRowReadEnabled() && sessionMessageRepository != null) {
+            return sessionMessageRepository
+                    .findTopBySessionIdAndMsgTypeAndPrunedAtIsNullOrderBySeqNoDesc(id, MSG_TYPE_NORMAL)
+                    .map(SessionMessageEntity::getSeqNo)
+                    .orElse(-1L);
+        }
+        return readLegacyMessagesJson(id).size() - 1L;
+    }
+
+    /**
+     * Count new user turns after the extraction cursor. Used by PR-3 to avoid
+     * locking a session forever after a too-short early attempt, and to trigger
+     * long-running sessions once enough unextracted user turns accumulate.
+     */
+    @Transactional(readOnly = true)
+    public long countUserNormalMessagesAfterSeq(String id, long seqNoExclusive) {
+        if (storeProperties != null && storeProperties.isRowReadEnabled() && sessionMessageRepository != null) {
+            return sessionMessageRepository
+                    .countBySessionIdAndRoleAndMsgTypeAndPrunedAtIsNullAndSeqNoGreaterThan(
+                            id, "user", MSG_TYPE_NORMAL, seqNoExclusive);
+        }
+        long count = 0;
+        List<Message> legacy = readLegacyMessagesJson(id);
+        for (int i = 0; i < legacy.size(); i++) {
+            if (i > seqNoExclusive && legacy.get(i).getRole() == Message.Role.USER) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    /**
      * 用于 UI：返回结构化历史（含 msgType / metadata / seqNo）。
      */
     @Transactional(readOnly = true)

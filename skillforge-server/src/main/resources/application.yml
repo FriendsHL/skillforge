@@ -87,6 +87,15 @@ skillforge:
     extraction-mode: rule          # "rule" (Phase 2 rules) or "llm" (Phase 3 LLM extraction)
     # extraction-provider:         # null = use default LLM provider
     # max-conversation-chars: 8000 # truncation limit for LLM input
+    extraction:
+      idle-window-minutes: 30
+      idle-scanner-interval-minutes: 10
+      max-unextracted-turns: 30
+      cooldown-minutes: 5
+      empty-result-cooldown-minutes: 15
+    dedup:
+      cosine-update-threshold: 0.95
+      cosine-merge-threshold: 0.85
 
   # Embedding provider for memory vector search (disabled by default for dev)
   embedding:

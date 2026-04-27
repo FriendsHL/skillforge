@@ -57,6 +57,18 @@ public class MemoryService {
         return memoryRepository.findByUserId(userId);
     }
 
+    /**
+     * Memory v2 PR-3: context passed to the incremental extractor must only use
+     * ACTIVE memories; STALE/ARCHIVED rows are invisible to extraction prompts.
+     */
+    @Transactional(readOnly = true)
+    public List<MemoryEntity> listActiveMemoriesForExtractionContext(Long userId) {
+        if (userId == null) {
+            return List.of();
+        }
+        return memoryRepository.findByUserIdAndStatusOrderByUpdatedAtDesc(userId, "ACTIVE");
+    }
+
     public List<MemoryEntity> searchMemories(Long userId, String keyword) {
         return memoryRepository.findByUserIdAndContentContaining(userId, keyword);
     }

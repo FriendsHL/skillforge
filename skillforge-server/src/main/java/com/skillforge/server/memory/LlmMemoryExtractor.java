@@ -22,7 +22,6 @@ import java.util.List;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 
 /**
  * LLM-based memory extractor (Phase 3).
@@ -41,6 +40,8 @@ public class LlmMemoryExtractor {
     private static final Pattern MARKDOWN_FENCE = Pattern.compile("```(?:json)?\\s*\\n?(.*?)\\n?```", Pattern.DOTALL);
     private static final int MAX_TITLE_LENGTH = 120;
     private static final int MAX_CONTENT_LENGTH = 2000;
+    private static final int EXISTING_MEMORY_CONTEXT_LIMIT = 30;
+    private static final int EXISTING_MEMORY_CONTENT_PREVIEW_CHARS = 100;
 
     private static final String SYSTEM_PROMPT = """
             You are a memory extraction specialist for an AI agent platform. Your job is to analyze \
@@ -82,7 +83,9 @@ public class LlmMemoryExtractor {
             5. Focus on insights that would be lost if the conversation were deleted.
             6. Title should be unique and descriptive enough to identify the memory.
             7. Content should be concise but complete — 1-3 sentences max.
-            8. If the session has no meaningful extractable information, output an empty array: []""";
+            8. If the session has no meaningful extractable information, output an empty array: []
+            9. The conversation may be an incremental segment rather than the full session. Use the
+               Existing Active Memories section as continuity context, but do NOT emit duplicates.""";
 
     private final LlmProviderFactory llmProviderFactory;
     private final LlmProperties llmProperties;
@@ -116,14 +119,22 @@ public class LlmMemoryExtractor {
 
     public int extract(SessionEntity session, List<ActivityLogEntity> activities, List<Message> messages,
                        String extractionBatchId) {
+        return extract(session, activities, messages, extractionBatchId, -1L, -1L);
+    }
+
+    public int extract(SessionEntity session,
+                       List<ActivityLogEntity> activities,
+                       List<Message> messages,
+                       String extractionBatchId,
+                       long fromSeq,
+                       long toSeq) {
         String providerName = resolveProviderName();
         LlmProvider provider = llmProviderFactory.getProvider(providerName);
         if (provider == null) {
-            log.error("LlmMemoryExtractor: no provider available for name={}", providerName);
-            return 0;
+            throw new IllegalStateException("No LLM provider available for memory extraction: " + providerName);
         }
 
-        String userMessage = buildUserMessage(session, activities, messages);
+        String userMessage = buildUserMessage(session, activities, messages, fromSeq, toSeq);
         LlmRequest request = buildRequest(userMessage);
         LlmResponse response = provider.chat(request);
 
@@ -148,7 +159,9 @@ public class LlmMemoryExtractor {
 
     private String buildUserMessage(SessionEntity session,
                                      List<ActivityLogEntity> activities,
-                                     List<Message> messages) {
+                                     List<Message> messages,
+                                     long fromSeq,
+                                     long toSeq) {
         StringBuilder sb = new StringBuilder();
         sb.append("## Session Metadata\n\n");
         sb.append("- Session ID: ").append(session.getId()).append("\n");
@@ -157,6 +170,11 @@ public class LlmMemoryExtractor {
         }
         sb.append("- Message count: ").append(messages.size()).append("\n");
         sb.append("- Tool calls: ").append(activities.size()).append("\n\n");
+        if (fromSeq >= 0 && toSeq >= fromSeq) {
+            sb.append("- Extraction mode: incremental\n");
+            sb.append("- Message seq range: ").append(fromSeq).append("..").append(toSeq).append("\n");
+            sb.append("- Note: conversation history below contains only messages not previously extracted.\n\n");
+        }
 
         // Activity summary (compact)
         if (!activities.isEmpty()) {
@@ -192,15 +210,24 @@ public class LlmMemoryExtractor {
             charBudget -= line.length();
         }
 
-        // Existing memories context for deduplication
-        List<MemoryEntity> existing = memoryService.listMemories(session.getUserId(), null);
+        // Existing ACTIVE memories provide continuity for incremental extraction and deduplication.
+        List<MemoryEntity> existing = memoryService.listActiveMemoriesForExtractionContext(session.getUserId());
         if (!existing.isEmpty()) {
-            sb.append("## Existing Memories (do NOT duplicate these)\n\n");
-            String titles = existing.stream()
-                    .map(MemoryEntity::getTitle)
-                    .filter(t -> t != null && !t.isBlank())
-                    .collect(Collectors.joining(", "));
-            sb.append(titles).append("\n");
+            sb.append("## Existing Active Memories (context; do NOT duplicate these)\n\n");
+            existing.stream()
+                    .limit(EXISTING_MEMORY_CONTEXT_LIMIT)
+                    .forEach(memory -> {
+                        String title = memory.getTitle();
+                        if (title == null || title.isBlank()) {
+                            return;
+                        }
+                        sb.append("- ").append(title);
+                        String content = memory.getContent();
+                        if (content != null && !content.isBlank()) {
+                            sb.append(": ").append(truncate(content, EXISTING_MEMORY_CONTENT_PREVIEW_CHARS));
+                        }
+                        sb.append("\n");
+                    });
         }
 
         return sb.toString();
