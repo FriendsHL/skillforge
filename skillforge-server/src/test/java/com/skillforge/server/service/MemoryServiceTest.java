@@ -160,6 +160,58 @@ class MemoryServiceTest {
     }
 
     @Test
+    @DisplayName("beginExtractionBatch carries Memory v2 status / importance / score into snapshot")
+    void beginExtractionBatch_carriesMemoryV2Fields() {
+        MemoryEntity existing = memory(7L, 1L, "knowledge", "old", "content");
+        existing.setStatus("STALE");
+        existing.setImportance("high");
+        existing.setLastScore(0.42);
+        existing.setLastScoredAt(Instant.parse("2026-04-26T00:00:00Z"));
+        existing.setArchivedAt(Instant.parse("2026-04-25T00:00:00Z"));
+        memoriesForUser.add(existing);
+
+        memoryService.beginExtractionBatch(1L);
+
+        assertThat(savedSnapshots).hasSize(1);
+        MemorySnapshotEntity snapshot = savedSnapshots.get(0);
+        assertThat(snapshot.getStatus()).isEqualTo("STALE");
+        assertThat(snapshot.getImportance()).isEqualTo("high");
+        assertThat(snapshot.getLastScore()).isEqualTo(0.42);
+        assertThat(snapshot.getLastScoredAt()).isEqualTo(Instant.parse("2026-04-26T00:00:00Z"));
+        assertThat(snapshot.getArchivedAt()).isEqualTo(Instant.parse("2026-04-25T00:00:00Z"));
+    }
+
+    @Test
+    @DisplayName("rollbackExtractionBatch restores Memory v2 status / importance / score fields")
+    void rollbackExtractionBatch_restoresMemoryV2Fields() {
+        MemoryEntity changed = memory(7L, 1L, "project", "title", "new");
+        changed.setExtractionBatchId("batch-1");
+        // Simulate post-batch state: status promoted, importance bumped, score recomputed
+        changed.setStatus("ACTIVE");
+        changed.setImportance("low");
+        changed.setLastScore(0.1);
+        changed.setLastScoredAt(Instant.parse("2026-04-27T10:00:00Z"));
+        batchMemories.add(changed);
+
+        MemorySnapshotEntity snap = snapshot(7L, 1L, "knowledge", "title", "old", "previous-batch");
+        snap.setStatus("STALE");
+        snap.setImportance("high");
+        snap.setLastScore(0.9);
+        snap.setLastScoredAt(Instant.parse("2026-04-26T00:00:00Z"));
+        snap.setArchivedAt(Instant.parse("2026-04-25T00:00:00Z"));
+        batchSnapshots.add(snap);
+
+        MemoryService.RollbackResult result = memoryService.rollbackExtractionBatch("batch-1", 1L);
+
+        assertThat(result.restored()).isEqualTo(1);
+        assertThat(changed.getStatus()).isEqualTo("STALE");
+        assertThat(changed.getImportance()).isEqualTo("high");
+        assertThat(changed.getLastScore()).isEqualTo(0.9);
+        assertThat(changed.getLastScoredAt()).isEqualTo(Instant.parse("2026-04-26T00:00:00Z"));
+        assertThat(changed.getArchivedAt()).isEqualTo(Instant.parse("2026-04-25T00:00:00Z"));
+    }
+
+    @Test
     @DisplayName("rollbackExtractionBatch ignores blank batch id")
     void rollbackExtractionBatch_blankBatchId_noops() {
         MemoryService.RollbackResult result = memoryService.rollbackExtractionBatch("   ", 1L);

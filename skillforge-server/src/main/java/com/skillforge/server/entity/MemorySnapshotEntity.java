@@ -41,6 +41,27 @@ public class MemorySnapshotEntity {
 
     private Instant lastRecalledAt;
 
+    /**
+     * Memory v2 (V29) lifecycle / scoring fields. Mirroring them on the snapshot table is
+     * required so {@link com.skillforge.server.service.MemoryService#rollbackExtractionBatch}
+     * can restore the full pre-batch state — without this, rolling back a batch that touched
+     * status / importance / score would silently reset those fields to defaults.
+     */
+    @Column(length = 16, nullable = false)
+    private String status = "ACTIVE";
+
+    @Column(name = "archived_at")
+    private Instant archivedAt;
+
+    @Column(length = 8, nullable = false)
+    private String importance = "medium";
+
+    @Column(name = "last_score")
+    private Double lastScore;
+
+    @Column(name = "last_scored_at")
+    private Instant lastScoredAt;
+
     private LocalDateTime memoryCreatedAt;
 
     private LocalDateTime memoryUpdatedAt;
@@ -136,6 +157,46 @@ public class MemorySnapshotEntity {
 
     public void setLastRecalledAt(Instant lastRecalledAt) {
         this.lastRecalledAt = lastRecalledAt;
+    }
+
+    public String getStatus() {
+        return status;
+    }
+
+    public void setStatus(String status) {
+        this.status = status;
+    }
+
+    public Instant getArchivedAt() {
+        return archivedAt;
+    }
+
+    public void setArchivedAt(Instant archivedAt) {
+        this.archivedAt = archivedAt;
+    }
+
+    public String getImportance() {
+        return importance;
+    }
+
+    public void setImportance(String importance) {
+        this.importance = importance;
+    }
+
+    public Double getLastScore() {
+        return lastScore;
+    }
+
+    public void setLastScore(Double lastScore) {
+        this.lastScore = lastScore;
+    }
+
+    public Instant getLastScoredAt() {
+        return lastScoredAt;
+    }
+
+    public void setLastScoredAt(Instant lastScoredAt) {
+        this.lastScoredAt = lastScoredAt;
     }
 
     public LocalDateTime getMemoryCreatedAt() {

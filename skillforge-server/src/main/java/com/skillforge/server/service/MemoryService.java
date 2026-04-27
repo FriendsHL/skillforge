@@ -238,6 +238,14 @@ public class MemoryService {
         snapshot.setSourceExtractionBatchId(memory.getExtractionBatchId());
         snapshot.setRecallCount(memory.getRecallCount());
         snapshot.setLastRecalledAt(memory.getLastRecalledAt());
+        // Memory v2 (V29): mirror lifecycle / scoring fields so rollback can restore them.
+        // Defensive defaults match V29's column DEFAULTs in case the entity was constructed
+        // outside the JPA managed path (e.g. raw JDBC).
+        snapshot.setStatus(memory.getStatus() != null ? memory.getStatus() : "ACTIVE");
+        snapshot.setArchivedAt(memory.getArchivedAt());
+        snapshot.setImportance(memory.getImportance() != null ? memory.getImportance() : "medium");
+        snapshot.setLastScore(memory.getLastScore());
+        snapshot.setLastScoredAt(memory.getLastScoredAt());
         snapshot.setMemoryCreatedAt(memory.getCreatedAt());
         snapshot.setMemoryUpdatedAt(memory.getUpdatedAt());
         snapshot.setSnapshotAt(snapshotAt);
@@ -252,6 +260,16 @@ public class MemoryService {
         memory.setExtractionBatchId(snapshot.getSourceExtractionBatchId());
         memory.setRecallCount(snapshot.getRecallCount());
         memory.setLastRecalledAt(snapshot.getLastRecalledAt());
+        // Memory v2 (V29): restore lifecycle / scoring fields.
+        // Defensive default for snapshots constructed in-memory before being persisted;
+        // post-V29 DB-loaded snapshots already have non-null status/importance via the
+        // V29 step 5b backfill (which mirrors live t_memory state onto pre-existing
+        // snapshot rows).
+        memory.setStatus(snapshot.getStatus() != null ? snapshot.getStatus() : "ACTIVE");
+        memory.setArchivedAt(snapshot.getArchivedAt());
+        memory.setImportance(snapshot.getImportance() != null ? snapshot.getImportance() : "medium");
+        memory.setLastScore(snapshot.getLastScore());
+        memory.setLastScoredAt(snapshot.getLastScoredAt());
         memory.setCreatedAt(snapshot.getMemoryCreatedAt());
         memory.setUpdatedAt(snapshot.getMemoryUpdatedAt());
     }

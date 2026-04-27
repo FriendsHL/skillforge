@@ -42,6 +42,32 @@ public class MemoryEntity {
 
     private Instant lastRecalledAt;
 
+    /**
+     * Lifecycle status: ACTIVE (default) → STALE → ARCHIVED → physical delete.
+     * Migration V29 introduces this column with default 'ACTIVE' so existing
+     * memories keep current visibility. PR-2 will start filtering on it.
+     */
+    @Column(length = 16, nullable = false)
+    private String status = "ACTIVE";
+
+    /** Set when status transitions to ARCHIVED; used to age out after 90 days (PR-5). */
+    @Column(name = "archived_at")
+    private Instant archivedAt;
+
+    /**
+     * Importance promoted from the legacy {@code tags = "importance:*"} CSV token
+     * to a dedicated column. Default 'medium' matches the legacy fallback.
+     */
+    @Column(length = 8, nullable = false)
+    private String importance = "medium";
+
+    /** Cached score from the most recent eviction sweep (PR-5); null until first scoring. */
+    @Column(name = "last_score")
+    private Double lastScore;
+
+    @Column(name = "last_scored_at")
+    private Instant lastScoredAt;
+
     @CreatedDate
     private LocalDateTime createdAt;
 
@@ -121,6 +147,46 @@ public class MemoryEntity {
 
     public void setLastRecalledAt(Instant lastRecalledAt) {
         this.lastRecalledAt = lastRecalledAt;
+    }
+
+    public String getStatus() {
+        return status;
+    }
+
+    public void setStatus(String status) {
+        this.status = status;
+    }
+
+    public Instant getArchivedAt() {
+        return archivedAt;
+    }
+
+    public void setArchivedAt(Instant archivedAt) {
+        this.archivedAt = archivedAt;
+    }
+
+    public String getImportance() {
+        return importance;
+    }
+
+    public void setImportance(String importance) {
+        this.importance = importance;
+    }
+
+    public Double getLastScore() {
+        return lastScore;
+    }
+
+    public void setLastScore(Double lastScore) {
+        this.lastScore = lastScore;
+    }
+
+    public Instant getLastScoredAt() {
+        return lastScoredAt;
+    }
+
+    public void setLastScoredAt(Instant lastScoredAt) {
+        this.lastScoredAt = lastScoredAt;
     }
 
     public LocalDateTime getCreatedAt() {

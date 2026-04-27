@@ -112,8 +112,24 @@ public class SessionEntity {
     /** Loop 执行完毕的时间(正常/取消/异常都设置) */
     private Instant completedAt;
 
-    /** 会话摘要已被 digest 提取的时间(用于增量记忆提取) */
+    /**
+     * 最后一次抽取时间（成功或空结果都更新），可重复刷新。
+     *
+     * <p>历史语义是"终身锁"（非空即跳过后续抽取）。Memory v2 PR-3 起将以
+     * {@link #lastExtractedMessageSeq} 与 {@code t_session_message.seq_no} 的
+     * 大小关系判定是否需要再次抽取，本字段仅作为"上次抽取时间"做冷却 / 观测用途，
+     * 但 PR-1 不动现有读写方为前向兼容，仅更新注释。
+     */
     private Instant digestExtractedAt;
+
+    /**
+     * 增量抽取游标：已经被 digest 提取过的最大 {@code t_session_message.seq_no}。
+     *
+     * <p>类型必须与 {@code SessionMessageEntity#seqNo (long)} 对齐，避免溢出和签名不一致。
+     * 0 表示从未做过增量抽取（V29 默认值，向后兼容旧 session）。PR-3 才会消费它。
+     */
+    @Column(name = "last_extracted_message_seq", nullable = false)
+    private long lastExtractedMessageSeq = 0L;
 
     @CreatedDate
     private LocalDateTime createdAt;
@@ -354,6 +370,14 @@ public class SessionEntity {
 
     public void setDigestExtractedAt(Instant digestExtractedAt) {
         this.digestExtractedAt = digestExtractedAt;
+    }
+
+    public long getLastExtractedMessageSeq() {
+        return lastExtractedMessageSeq;
+    }
+
+    public void setLastExtractedMessageSeq(long lastExtractedMessageSeq) {
+        this.lastExtractedMessageSeq = lastExtractedMessageSeq;
     }
 
     public LocalDateTime getCreatedAt() {
