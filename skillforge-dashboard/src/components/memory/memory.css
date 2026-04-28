@@ -2,8 +2,22 @@
 
 .memory-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  gap: var(--sp-5);
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--sp-4);
+}
+
+/* Responsive Grid Adjustments */
+@media (max-width: 1440px) {
+  .memory-grid {
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  }
+}
+
+@media (max-width: 1024px) {
+  .memory-grid {
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: var(--sp-3);
+  }
 }
 
 .mem-card {
@@ -386,13 +400,12 @@
 
 @media (max-width: 900px) {
   .memory-grid {
-    grid-template-columns: 1fr;
-    gap: var(--sp-4);
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
   }
   
   .mem-banner,
   .mem-toolbar,
-  .mem-bulkbar {
+  .mem-floating-island {
     flex-direction: column;
     align-items: stretch;
   }
@@ -403,6 +416,17 @@
   
   .mem-key {
     font-size: 14px;
+  }
+
+  .agents-head {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .agents-head-actions {
+    width: 100%;
+    justify-content: flex-end;
   }
 }
 

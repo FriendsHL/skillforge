@@ -9,6 +9,55 @@
   overflow: hidden;
 }
 
+/* Responsive Layout for smaller screens */
+@media (max-width: 1024px) {
+  .agents-view {
+    grid-template-columns: 200px 1fr;
+  }
+  .agents-filters {
+    padding: 16px 12px;
+  }
+}
+
+@media (max-width: 768px) {
+  .agents-view {
+    grid-template-columns: 1fr;
+    height: auto;
+    overflow-y: auto;
+  }
+
+  .agents-filters {
+    border-right: none;
+    border-bottom: 1px solid var(--border-1);
+    padding: 12px 16px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: center;
+  }
+
+  .agents-filters-h {
+    margin: 0;
+    width: 100%;
+    display: none; /* Hide section headers in compact mode */
+  }
+
+  .agents-search {
+    width: 100%;
+    order: -1;
+  }
+
+  .filter-item {
+    width: auto;
+    font-size: 12px;
+    padding: 4px 8px;
+  }
+
+  .agents-main {
+    overflow: visible;
+  }
+}
+
 /* Left filter rail */
 .agents-filters {
   padding: 20px 16px 20px 24px;
