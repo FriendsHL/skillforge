@@ -250,18 +250,45 @@
 | 子任务 | 说明 |
 | --- | --- |
 | **OBS-1-1** Session × Trace 统一视图 | Dashboard 新增（或合并现有 Session/Trace 两页为）"Session Detail" 视图：左侧消息时间线（user / assistant / tool_use / tool_result），每条消息可展开下挂的 LLM call / Tool exec span，按时间对齐；保持现有 Trace 列表入口的同时，从 Session 直接跳到对应 trace |
-| **OBS-1-2** LLM span 完整 payload 落库 | TraceSpan 当前 `input` / `output` 字段就有截断；新增专用持久化（如 `t_llm_call_payload` 大对象表，主键 spanId）记录每次 LLM 调用的**完整** request body（messages 数组、tools schema、reasoning 配置等）+ 完整 response body（含 SSE 重组后的最终 message），不做截断；只在 query 时按需懒加载 |
+| **OBS-1-2** LLM span 完整 payload 落库 | 新建 `t_llm_trace` + `t_llm_span` 两表（PG，参考 Langfuse / Opik schema），不在原 `t_trace_span` 上扩；`input` / `output` 用 TEXT + 32KB 软截断 + `*_blob_ref` 指向文件系统落 raw payload；`usage` / `cost` 用 JSONB 字段，命名抄 OTel `gen_ai.usage.*` semantic convention（不发明字段名）；写入与 query 全部走新增的 `LlmTraceStore` interface（见下方"存储抽象层"），不暴露 SQL / JSONB 操作给 caller |
 | **OBS-1-3** UI Payload Viewer | Span 详情面板新增"Raw Request / Raw Response" tab：JSON 折叠 + 关键词搜索 + 一键复制 + size badge；超过阈值（如 1MB）走分块流式渲染防卡顿；敏感字段（api-key、Authorization header 等）落库前剥离 |
 | **OBS-1-4** 压缩验证视角 | 对 `compact` 类 LLM call（summary 生成）在 UI 标记特殊徽章；可对比"压缩前消息列表"vs"压缩后实际发给模型的 messages"，让用户直观判断 summary 质量与边界切割是否合理；同时 trace 元数据带上 compact 的 strategy / boundary index / reason |
 | **OBS-1-5** Provider quirk 诊断信号 | 已知问题（reasoning_content 缺失、tool_call_id 重复、dangling tool_use）在 UI 自动检测并红字标注，给出文档锚点（指向 `docs/llm-provider-quirks.md` 对应章节）|
 
+> **存储抽象层**（OBS-1-2 必带）：所有 trace 写入 / 查询走 `LlmTraceStore` interface（method 见下），**禁止 controller / service 直接写 SQL** 或暴露 ResultSet / JSONB / SQL 片段。本期只交付 `PgLlmTraceStore` 实现；未来切 ClickHouse 时新增 `ClickHouseLlmTraceStore` impl + 一次性 ETL 即可，不动业务代码。
+>
+> ```java
+> public interface LlmTraceStore {
+>     void writeTrace(LlmTrace t);
+>     void writeSpan(LlmSpan s);
+>     void writeBlob(String blobRef, byte[] payload);
+>     Optional<LlmTrace> getTrace(String traceId);
+>     List<LlmSpan> getSpans(String traceId);
+>     Optional<byte[]> getBlob(String blobRef);
+> }
+> ```
+>
+> **存储引擎选择**（2026-04-28 决策）：当前用 **PostgreSQL（embedded zonky-PG 14）**，不引 ClickHouse。理由：
+> - SkillForge 当前单用户 / 单机 / 低并发；OBS-1 主查询是"按 trace_id JOIN 拉 span 树 / 按 span_id 拉单 row payload"——纯点查，PG 的强项，不是 CH 的 OLAP 战场
+> - 引 CH 等于多一份 docker-compose 依赖 + 失去 Flyway + 启动时间多 5-30s + 备份 / 监控全要重做，**单用户阶段成本远超收益**
+> - schema 只有 2 表 + payload 走文件系统（blob_ref 不走 DB），未来真切 CH 时 ETL 成本上限 ~1 周（rows 走 `pg_dump → INSERT`，payload 文件原地不动）
+>
+> **触发切 CH 的条件**（满足任一即重评估）：
+> - `t_llm_span` 行数 > 5M 且按 trace_id 查询 P95 > 100ms
+> - 出现真实跨 trace 聚合分析需求（如"过去 7 天 token 用量按 model 分组"）
+> - SkillForge 接入多机 / 多用户 / 高并发部署
+>
+> **不做双写或运行时切换**：配置只决定单一 active backend；切换走"停服 → 跑 ETL → 改配置 → 起服"流程，一辈子可能就走 1 次
+>
+> **设计参考**：[research-docs/llm-trace-storage-research.md](../../research-docs/llm-trace-storage-research.md)（Langfuse / Opik / LangSmith / Coze Loop 4 家 schema 对比 + OTel `gen_ai.*` semantic convention 字段命名依据）
+>
 > **不在本次范围**：
 > - 跨 session 全文检索 / 流量重放 / 自动告警 → V2
 > - LLM call 录制为 eval scenario → 与 P14 协同时再考虑
 >
-> **存储与脱敏**：完整 payload 表会显著增长 DB 体积，需要保留期策略（如 30 天后归档/丢弃）+ 脱敏管道，方案在 design doc 阶段定。
+> **保留期与脱敏**：默认保留 30 天（参考 Opik 默认）；保留期可配置（用户单机 dev 模式 100 天也无压力）；脱敏管道：`api-key` / `Authorization` / `bearer` 类敏感字段在 `LlmTraceStore.writeBlob` 入口做 regex 剥离，**绝不落 raw 文件**
 >
-> **与 P15 关系**：P15 GetTraceTool 仍保留裁剪输出给 Agent 用（节省 token）；OBS-1 的完整 payload 是给**人**看的旁路通道，二者不互相替代。
+> **与 P15 关系**：P15 GetTraceTool 仍保留裁剪输出给 Agent 用（节省 token）；OBS-1 的完整 payload 是给**人**看的旁路通道，二者不互相替代
 
 ---
 
