@@ -48,13 +48,25 @@ class OpenAiProviderThinkingTest {
     // ---------- QWEN_DASHSCOPE ----------
 
     @Test
-    @DisplayName("qwen auto / no effort → no thinking fields emitted")
-    void qwen_auto_noFieldsEmitted() throws Exception {
+    @DisplayName("qwen auto / no effort → enable_thinking defaults to false (avoid reasoning_content leak)")
+    void qwen_auto_defaultsThinkingFalse() throws Exception {
         LlmRequest req = simpleRequest();
         JsonNode b = body(req, "qwen3.5-plus");
-        assertThat(b.has("enable_thinking")).isFalse();
+        // DashScope's qwen endpoint defaults enable_thinking=true when omitted; that emits
+        // reasoning_content the agent loop can't compose into a final answer. We override.
+        assertThat(b.get("enable_thinking").isBoolean()).isTrue();
+        assertThat(b.get("enable_thinking").asBoolean()).isFalse();
         assertThat(b.has("thinking")).isFalse();
         assertThat(b.has("reasoning_effort")).isFalse();
+    }
+
+    @Test
+    @DisplayName("qwen mode=AUTO → still defaults enable_thinking=false")
+    void qwen_modeAuto_defaultsThinkingFalse() throws Exception {
+        LlmRequest req = simpleRequest();
+        req.setThinkingMode(ThinkingMode.AUTO);
+        JsonNode b = body(req, "qwen3.5-plus");
+        assertThat(b.get("enable_thinking").asBoolean()).isFalse();
     }
 
     @Test
