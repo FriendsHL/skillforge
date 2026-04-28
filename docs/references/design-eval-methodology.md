@@ -1,7 +1,7 @@
 # SkillForge 评测方法论 — Eval & Attribution
 
 > 记录于：2026-04-20
-> 关联文档：[design-self-improve-pipeline.md](./design-self-improve-pipeline.md)
+> 关联文档：[P1 Self-Improve 技术方案](../requirements/archive/2026-04-20-P1-self-improve-pipeline/tech-design.md)
 
 ---
 

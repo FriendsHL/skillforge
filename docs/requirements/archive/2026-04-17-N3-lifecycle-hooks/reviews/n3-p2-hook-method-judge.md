@@ -1,6 +1,6 @@
 # N3-P2 Judge Verdict
 
-Reviewed: `docs/n3-p2-hook-method-review-a.md` (Backend/Java) and `docs/n3-p2-hook-method-review-b.md` (Frontend/TypeScript).
+Reviewed: `n3-p2-hook-method-review-a.md` (Backend/Java) and `n3-p2-hook-method-review-b.md` (Frontend/TypeScript).
 
 ---
 

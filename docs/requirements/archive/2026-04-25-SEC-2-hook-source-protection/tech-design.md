@@ -2,7 +2,7 @@
 
 > **状态**：已实现（2026-04-25）。此前会话中断时仍标为“无代码改动”，实际本轮已完成三源隔离、agent-authored hook 绑定/审批闭环、前端三段展示，并补齐安全约束。
 > **背景**：SEC-2 安全条目（todo.md SEC-2），V1 已调整为不收窄。
-> **关联**：N3 Lifecycle Hook 体系（`docs/design-n3-lifecycle-hooks.md`）、P1 Skill 自进化、P4 Code Agent CompiledMethod 审批流、P11 Agent 发现与权限、P15 自省工具层。
+> **关联**：N3 Lifecycle Hook 体系（`../2026-04-17-N3-lifecycle-hooks/tech-design.md`）、P1 Skill 自进化、P4 Code Agent CompiledMethod 审批流、P11 Agent 发现与权限、P15 自省工具层。
 
 ---
 

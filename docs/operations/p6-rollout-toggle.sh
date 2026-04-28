@@ -2,12 +2,12 @@
 set -euo pipefail
 
 # 用法:
-#   ./docs/p6-rollout-toggle.sh phase-a
-#   ./docs/p6-rollout-toggle.sh phase-b
-#   ./docs/p6-rollout-toggle.sh rollback-read
-#   ./docs/p6-rollout-toggle.sh rollback-all
+#   ./docs/operations/p6-rollout-toggle.sh phase-a
+#   ./docs/operations/p6-rollout-toggle.sh phase-b
+#   ./docs/operations/p6-rollout-toggle.sh rollback-read
+#   ./docs/operations/p6-rollout-toggle.sh rollback-all
 
-ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 CFG_FILE="${ROOT_DIR}/skillforge-server/src/main/resources/application.yml"
 
 if [[ ! -f "${CFG_FILE}" ]]; then

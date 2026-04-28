@@ -2,7 +2,7 @@
 
 > Judge: claude-sonnet-4-6 | Date: 2026-04-17
 > Sources: java-reviewer (backend) + typescript-reviewer (frontend) + security-reviewer
-> Design authority: `docs/design-n3-p1.md`
+> Design authority: `../tech-design.md`
 
 ---
 

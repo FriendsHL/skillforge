@@ -4,8 +4,8 @@
 > 创建于: 2026-04-27
 > 范围: 不仅是退出/淘汰，包含写入触发时机 + 抽取去重 + 召回路径 + 状态机 + 评分模型 + 前端 UI 全栈
 > 关联:
-> - [docs/design-memory-vector-search.md](design-memory-vector-search.md) — N1 FTS+pgvector 现状（保留）
-> - [docs/todo.md](todo.md) — 排期入口
+> - [N1 Memory 向量检索技术方案](../../../requirements/archive/2026-04-16-N1-memory-vector-search/tech-design.md) — N1 FTS+pgvector 现状（保留）
+> - [docs/todo.md](../../../todo.md) — 排期入口
 >
 > **本 doc 是 self-contained 方案。读完 §0 + §3 + §6 即可决策。**
 
@@ -814,7 +814,7 @@ PR-5 状态机 + 淘汰 + UI
 
 决策已落 §6 Final Decisions。开发顺序：PR-1 → PR-2 → PR-3 → PR-4 → PR-5（D9=B）。
 所有 PR 强制 Full Pipeline（触碰核心文件清单成员：`MemoryService` / `AgentLoopEngine` / `LlmMemoryExtractor` / `SessionService` / Flyway migration）。
-排期入口在 [todo.md](todo.md) 的 Sprint 池。
+排期入口在 [todo.md](../../../todo.md) 的 Sprint 池。
 
 ---
 

@@ -1,7 +1,7 @@
 # N3 P1 最终实施方案
 
 > 生成日期：2026-04-17
-> 来源：Plan A（MVP 视角，`docs/n3-p1-lifecycle-hook-plan-a.md`）+ Plan B（安全视角，`docs/n3-p1-lifecycle-hook-plan-b.md`）+ Reviewer A（可行性，`docs/n3-p1-lifecycle-hook-review-a.md`）+ Reviewer B（安全/正确性，`docs/n3-p1-lifecycle-hook-review-b.md`）+ team-lead consolidation
+> 来源：Plan A（MVP 视角，`reviews/n3-p1-lifecycle-hook-plan-a.md`）+ Plan B（安全视角，`reviews/n3-p1-lifecycle-hook-plan-b.md`）+ Reviewer A（可行性，`reviews/n3-p1-lifecycle-hook-review-a.md`）+ Reviewer B（安全/正确性，`reviews/n3-p1-lifecycle-hook-review-b.md`）+ team-lead consolidation
 
 ---
 
