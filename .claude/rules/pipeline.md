@@ -308,6 +308,8 @@ reviewer prompt 的"每条打 severity"章节必须用严格 checklist：
 - [ ] 数据落库：curl API 查 DB 实际值（不能只信"按钮变绿"）
 - [ ] 回滚测试：如有 Revert / Undo，走一次
 - [ ] 测试与 build：dev 自己跑过，Claude 再 `npm run build` / `mvn test` 校一次
+- [ ] **PRD 决策回写**：Plan 阶段 ratify 的"草拟"决策更新为"已定"；实现中超出原方案的决策补回 `prd.md` / `tech-design.md`，避免下次读 PRD 仍是 stale 草拟
+- [ ] **完成事实归档**：`docs/delivery-index.md` 增加交付行（ID / 日期 / commit / migration / 关键验证）；需求包从 `requirements/active/` 移到 `requirements/archive/<yyyy-MM-dd>-<ID>-<slug>/`；`docs/todo.md` 队列行移到"最近完成"
 - [ ] commit 前等用户批准（用户 durable 授权过的不需要）
 
 ---
