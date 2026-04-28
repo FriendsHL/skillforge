@@ -10,7 +10,7 @@ public class ModelConfig {
 
     public static final int DEFAULT_READ_TIMEOUT_SECONDS = 60;
     public static final int DEFAULT_MAX_RETRIES = 1;
-    public static final int DEFAULT_CONTEXT_WINDOW_TOKENS = 32000;
+    public static final int DEFAULT_CONTEXT_WINDOW_TOKENS = 128_000;
 
     /**
      * Known context window sizes for common models.

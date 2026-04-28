@@ -71,6 +71,10 @@ skillforge:
           - qwen3.5-plus
           - qwen3-max-2026-01-23
           - qwen3-coder-next
+          - qwen3.6-plus
+          - glm-5
+          - kimi-k2.5
+          - MiniMax-M2.5
         # Optional per-provider tuning (defaults: 60s / 1 retry)
         # Stream and non-stream use separate OkHttpClient instances (BUG-E) but currently share
         # this same timeout value; the split lets either path be tuned independently in the future.
