@@ -299,39 +299,97 @@ const MemoryList: React.FC = () => {
         </div>
 
         {selectedIds.length > 0 && (
-          <div className="mem-bulkbar">
-            <label className="mem-selectall">
-              <input
-                type="checkbox"
-                checked={allSelected}
-                onChange={() => setSelectedIds(allSelected ? [] : rows.map(row => row.id))}
-              />
-              <span>{selectedIds.length} selected</span>
-            </label>
-            <div className="mem-bulk-actions">
+          <div className="mem-floating-island visible">
+            <span className="mem-island-count">{selectedIds.length} selected</span>
+            <div className="mem-island-actions">
               {statusTab === 'ACTIVE' && (
                 <>
-                  <button className="sf-mini-btn" disabled={busy} onClick={() => batchStatusMut.mutate({ ids: selectedIds, status: 'STALE' })}>Mark stale</button>
-                  <button className="sf-mini-btn" disabled={busy} onClick={() => batchArchiveMut.mutate(selectedIds)}>Archive</button>
+                  <button 
+                    className="sf-mini-btn" 
+                    title="Mark as stale"
+                    disabled={busy} 
+                    onClick={() => batchStatusMut.mutate({ ids: selectedIds, status: 'STALE' })}
+                  >
+                    Stale
+                  </button>
+                  <button 
+                    className="sf-mini-btn" 
+                    title="Archive memories"
+                    disabled={busy} 
+                    onClick={() => batchArchiveMut.mutate(selectedIds)}
+                  >
+                    Archive
+                  </button>
                 </>
               )}
               {statusTab === 'STALE' && (
                 <>
-                  <button className="sf-mini-btn" disabled={busy} onClick={() => batchStatusMut.mutate({ ids: selectedIds, status: 'ACTIVE' })}>Mark active</button>
-                  <button className="sf-mini-btn" disabled={busy} onClick={() => batchArchiveMut.mutate(selectedIds)}>Archive</button>
+                  <button 
+                    className="sf-mini-btn" 
+                    title="Mark as active"
+                    disabled={busy} 
+                    onClick={() => batchStatusMut.mutate({ ids: selectedIds, status: 'ACTIVE' })}
+                  >
+                    Active
+                  </button>
+                  <button 
+                    className="sf-mini-btn" 
+                    title="Archive memories"
+                    disabled={busy} 
+                    onClick={() => batchArchiveMut.mutate(selectedIds)}
+                  >
+                    Archive
+                  </button>
                 </>
               )}
               {statusTab === 'ARCHIVED' && (
-                <button className="sf-mini-btn" disabled={busy} onClick={() => batchRestoreMut.mutate(selectedIds)}>Restore</button>
+                <button 
+                  className="sf-mini-btn" 
+                  title="Restore to active"
+                  disabled={busy} 
+                  onClick={() => batchRestoreMut.mutate(selectedIds)}
+                >
+                  Restore
+                </button>
               )}
-              <button className="sf-mini-btn danger" disabled={busy} onClick={() => batchDeleteMut.mutate(selectedIds)}>Delete</button>
+              <button 
+                className="sf-mini-btn danger" 
+                title="Delete permanently"
+                disabled={busy} 
+                onClick={() => batchDeleteMut.mutate(selectedIds)}
+              >
+                Delete
+              </button>
             </div>
           </div>
         )}
 
         <div className="agents-body">
           {rows.length === 0 ? (
-            <div className="sf-empty-state">No memories match your filters.</div>
+            <div className="sf-empty-state">
+              <div style={{ fontSize: '48px', marginBottom: '16px', opacity: 0.3 }}>🧠</div>
+              <h3 style={{ margin: '0 0 8px', fontWeight: 600, color: 'var(--text-primary)' }}>
+                {activeSearch || filterScope || filterKind ? 'No memories match your filters' : 'No memories yet'}
+              </h3>
+              <p style={{ margin: '0 0 16px', color: 'var(--text-secondary)', fontSize: '14px', lineHeight: 1.5 }}>
+                {activeSearch || filterScope || filterKind 
+                  ? 'Try adjusting your search or filter criteria.'
+                  : 'Memories help agents remember your preferences, context, and important information.'}
+              </p>
+              {(activeSearch || filterScope || filterKind) && (
+                <button 
+                  className="btn-ghost-sf"
+                  onClick={() => {
+                    setQ('');
+                    setActiveSearch('');
+                    setFilterScope(null);
+                    setFilterKind(null);
+                  }}
+                >
+                  Clear all filters
+                </button>
+              )}
+            </div>
           ) : (
             <div className="memory-grid">
               {rows.map(m => (
@@ -343,19 +401,24 @@ const MemoryList: React.FC = () => {
                       onChange={() => toggleSelected(m.id)}
                       onClick={e => e.stopPropagation()}
                     />
-                    <span className={`mem-scope scope-${m.scope}`}>{m.scope}</span>
-                    <span className={`mem-status mem-status--${m.status.toLowerCase()}`}>{m.status.toLowerCase()}</span>
-                    <span className={`mem-importance mem-importance--${m.importance}`}>{m.importance}</span>
-                    <span className="mem-kind">{m.kind}</span>
+                    <div className="mem-header-info">
+                      <span className={`mem-scope scope-${m.scope}`}>{m.scope}</span>
+                      <span className="mem-kind">{m.kind}</span>
+                    </div>
                   </div>
-                  <div className="mem-key">{m.key}</div>
+                  
+                  <div className="mem-meta-inline">
+                    <span className={`mem-tag mem-status--${m.status.toLowerCase()}`}>{m.status}</span>
+                    <span className={`mem-tag mem-importance--${m.importance}`}>{m.importance}</span>
+                    <span className="mem-key">{m.key}</span>
+                  </div>
+
                   <div className="mem-val">{m.value}</div>
+                  
                   <div className="mem-foot">
-                    <span>score <b>{m.score == null ? '—' : m.score.toFixed(2)}</b></span>
-                    <span>·</span>
-                    <span>recall <b>{m.hits}</b></span>
-                    <span>·</span>
-                    <span>updated {m.updated}</span>
+                    <span className="mem-time" title={`Updated: ${m.updated}`}>{m.updated}</span>
+                    <span className="mem-stat">score <b>{m.score == null ? '—' : m.score.toFixed(2)}</b></span>
+                    <span className="mem-stat">recall <b>{m.hits}</b></span>
                   </div>
                   {m.status === 'ARCHIVED' && (
                     <div className="mem-card-inline-actions">
