@@ -22,7 +22,7 @@
 | **🔥 穿插**     | **BUG-G** dangling assistant tool_call 历史防腐 + stopReason/toolUse 一致性修复                  | 1-2 天             | `d0863201` / `ff457c2d` 触发；BUG-G-2 已本地修复：qwen 流式空 id/name 不覆盖首包有效 tool_call 身份 + toolUseBlocks 结构优先；BUG-G-1 发送前历史防腐、BUG-G-3 失败路径尾部不变量仍待补 |
 | ~~**Sprint 1**~~  | ~~P9-7~~ · ~~P3-1~~ · ~~P3-3~~ · ~~P13-3~~ · ~~P13-4~~ ✅ 2026-04-26                 | 2-3 天             | 零依赖防腐；P13-4 代码扫描确认已完成；P9-7 已完成 commit `621f417`；P3-1/P3-3/P13-3 已完成 commit `f4773c3`，397 个非 IT server tests 全绿；完整 suite 仅 Docker/Testcontainers IT 受本机环境阻塞                                                                 |
 | ~~**Sprint 2**~~  | ~~P11（收窄）+ P13-1~~ → ~~P15-1/P15-2/P15-4 + UpdateAgent~~                                  | 8-12 天            | PR1 已完成 2026-04-26：AgentDiscovery + name resolver + public/private visibility + custom rule severity；PR2 已完成 P15-1/P15-2：GetTrace + GetSessionMessages，413 个非 IT server tests 全绿；补充完成 GetAgentConfig + AgentDiscovery 增强 + 带一次确认的 UpdateAgent。P15-5 seed 取消：Analyzer Agent 已手工创建，不再内置 Flyway seed |
-| **🧩 P1 重构**  | P1 Skill 生命周期统一（方案 C，Skill Control Plane）                                          | 5-8 天             | 2026-04-27 决策切方案 C：Artifact 统一模型 + SessionSkillView + system skill toggle + 启动恢复 + telemetry 自动采集 + Skill 页去硬编码 + Draft 去重；八子任务一体闭环 |
+| ~~**🧩 P1 重构**~~ ✅ 2026-04-28 commit `555bdba` | ~~P1 Skill 生命周期统一（方案 C，Skill Control Plane）~~                                          | ~~5-8 天~~             | Plan r2 PASS（7 必修全 Resolved）+ Code r2 PASS（5 blockers + 2 强制 warning 全 Resolved）；服务启动 0 upsertSystemSkillRow failed warn + t_skill is_system 5 行；508 单测 + 40 新 case（仅 V29 IT Docker 环境失败）+ FE 12/12；同 PR 顺手合并 fix/bug-g-tool-call-invariant 分支 |
 | **🔍 OBS-1**   | Session × Trace 合并视图 + LLM call 完整 payload 落库 + UI Raw Viewer + 压缩验证视角            | 待估期             | 用户需直接看 LLM 完整 request body 来判断压缩是否合理；当前排查过度依赖 Analyzer Agent；与 P15 Tool 层裁剪互补                                                                                                                       |
 | **Sprint 3**  | P9-2 长对话 tool 归档（独立 PR）                                                                 | ~2 周              | 触碰核心文件，Full Pipeline；真实用户长 session 慢性病                                                                                                                                                                      |
 | ~~**🧠 Memory v2**~~ ✅ 2026-04-27 | ~~MEM-1 ~ MEM-5 写入 / 召回 / 淘汰一体化重构~~                                                       | ~~13-18 天~~           | PR-1 `V29 schema + snapshot/rollback 基线`（`9f36b59`）→ PR-2 `ACTIVE 过滤 + L0/L1 task-aware recall + MemorySearch 排重`（`8330d32`）→ PR-3 `增量抽取 cursor / idle scanner / cooldown`（`86703ed`）→ PR-4 `embedding add-time dedup`（`96676b9`）→ PR-5 `ACTIVE/STALE/ARCHIVED 状态机、容量淘汰、batch status API、/memories tabs + batch actions + restore + capacity banner`（本地已验证，待后续提交）；聚焦验证：`MemoryConsolidatorTest` + `MemoryServiceTest` 24/24 通过，dashboard `npm run build` 通过 |
@@ -207,7 +207,7 @@
 
 ---
 
-### 🧩 P1 Skill 生命周期统一重构（方案 C，待排期，5-8 天）
+### ~~🧩 P1 Skill 生命周期统一重构（方案 C）~~ ✅ 已完成（2026-04-28，commit `555bdba`）
 
 > **架构决策（2026-04-27）**：P1-FU 不再走补丁式修补，统一采用 **方案 C（Skill Control Plane）**。  
 > 核心原则：  
