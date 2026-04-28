@@ -55,7 +55,7 @@ Most agent frameworks are Python-based, single-provider, and designed for protot
 | Layer | Technology |
 |-------|-----------|
 | Backend | Spring Boot 3.2, Java 17, JPA / Hibernate, Flyway |
-| Frontend | React 18, Ant Design, Vite, TypeScript, TanStack Query |
+| Frontend | React 19, Ant Design 6, Vite 8, TypeScript 5.9, TanStack Query |
 | Database | Embedded PostgreSQL (zero-install dev), external PostgreSQL (prod) |
 | Realtime | WebSocket — per-session streaming + per-user notifications |
 | LLM | Multi-provider: Claude, OpenAI-compatible (DeepSeek, DashScope/Bailian, vLLM, Ollama) |
@@ -69,11 +69,13 @@ skillforge/
 ├── skillforge-core         # Agent Loop engine, LLM abstraction, Skill system,
 │                            #   Hooks, Cancellation, Context Compaction, TraceCollector
 ├── skillforge-tools        # System Tools: Bash, FileRead, FileWrite, FileEdit,
-│                            #   Glob, Grep, Memory, SubAgent, Team*
+│                            #   Glob, Grep, WebFetch, WebSearch, Memory,
+│                            #   SubAgent, Team*, Register*Method
 ├── skillforge-server       # Spring Boot server: REST API, JPA entities, services,
 │                            #   WebSocket, Multi-Agent Collab, Memory, Eval Pipeline
-├── skillforge-dashboard    # React dashboard: chat, sessions, agents, skills, traces,
-│                            #   session replay, memories, model usage, teams, eval
+├── skillforge-dashboard    # React dashboard: login, chat, sessions, agents, tools,
+│                            #   skills, traces, replay, memories, usage, teams,
+│                            #   eval, channels, hook methods
 ├── skillforge-cli          # CLI client: picocli + OkHttp, agent YAML import/export
 └── system-skills/          # File-based system skills (auto-loaded, non-deletable)
     ├── browser/            #   Browser automation via agent-browser CLI
@@ -104,6 +106,14 @@ Inspired by Claude Code and OpenClaw:
 | **TOOLS.md** | Per-agent | Custom tool usage rules (optional) |
 | **RULES.md** | Per-agent | Behavior rules (structured + free-form) |
 | **MEMORY.md** | Per-agent | Auto-injected from Memory system |
+
+### Agent & Model Controls
+
+- **Local-token auth** — the dashboard has a `/login` route backed by `/api/auth/local-token` and Bearer-token verification for the authenticated `/api` surface.
+- **Backend-driven model catalog** — `GET /api/llm/models` exposes provider/model options to the dashboard instead of hard-coding model lists in the UI.
+- **Per-agent runtime controls** — `modelId`, visibility, execution mode, max loop count, selected tools/skills, behavior rules, lifecycle hooks, and prompt sections can be configured per agent.
+- **Thinking mode / reasoning effort** — agents can opt into provider-aware `thinkingMode` and `reasoningEffort`; the OpenAI-compatible adapter preserves or drops `reasoning_content` according to each provider family.
+- **YAML import/export** — agents can be versioned as files through the API and CLI.
 
 ### Multi-Channel Gateway
 
@@ -190,6 +200,15 @@ Automated eval and prompt optimization:
 - **Session→Scenario Extraction** — LLM analyzes completed sessions to generate eval scenarios, with a review UI (Approve/Edit/Discard)
 - **Dashboard** — real-time eval run monitoring, detail drawer with per-scenario results
 
+### Skill Evolution
+
+The platform can turn repeated session patterns into reusable Skill packages:
+
+- **Session→Skill draft extraction** — propose SKILL.md drafts from an agent's completed work, then approve or discard them in the dashboard
+- **Skill versioning** — fork existing skills, inspect version chains, and keep generated variants tied to their parent skill
+- **Skill A/B validation** — compare a candidate skill against the baseline on eval scenarios before promotion
+- **Usage telemetry** — record skill success/failure signals that feed future evolution decisions
+
 ### Memory System
 
 Persistent memory across sessions, scoped per user:
@@ -200,9 +219,10 @@ Persistent memory across sessions, scoped per user:
 - **Two extraction modes**:
   - `rule` — fast heuristic `SessionDigestExtractor` (default)
   - `llm` — `LlmMemoryExtractor` classifies entries into 5 types with importance scoring
-- **Session-end `@Async` extraction** — runs the moment a session completes (with `@Scheduled` daily cron as a safety net for orphans)
+- **Idle-window extraction** — an idle scanner extracts recent turns once a session has been quiet long enough, with cooldowns and max-turn bounds
 - **Auto-capture** via `ActivityLogHook` — records every tool call
-- **Consolidation** — dedup + stale marking (30 days no recall + recallCount < 3)
+- **Lifecycle management** — `ACTIVE` / `STALE` / `ARCHIVED` statuses, batch archive/restore/delete, capacity limits, stale/archive/delete windows
+- **Quality controls** — memory snapshots, visibility/attribution fields, rollback and refresh APIs
 
 ### Session Message Storage (Row-based, Immutable)
 
@@ -318,9 +338,9 @@ Edit `skillforge-server/src/main/resources/application.yml`:
 ```yaml
 skillforge:
   llm:
-    default-provider: bailian            # or "claude", "openai"
+    default-provider: bailian            # or "claude", "deepseek", "openai"
     providers:
-      bailian:                           # 通义千问 / DashScope
+      bailian:                           # Qwen / DashScope
         type: openai                     # OpenAI-compatible endpoint
         api-key: ${DASHSCOPE_API_KEY:}
         base-url: https://coding.dashscope.aliyuncs.com
@@ -329,6 +349,10 @@ skillforge:
           - qwen3.5-plus
           - qwen3-max-2026-01-23
           - qwen3-coder-next
+          - qwen3.6-plus
+          - glm-5
+          - kimi-k2.5
+          - MiniMax-M2.5
       claude:
         type: claude
         api-key: ${ANTHROPIC_API_KEY:}
@@ -337,17 +361,33 @@ skillforge:
         models:
           - claude-sonnet-4-20250514
         context-window-tokens: 200000
-      openai:                            # works with DeepSeek, vLLM, Ollama, etc.
-        type: openai
+      deepseek:
+        type: deepseek
         api-key: ${DEEPSEEK_API_KEY:}
         base-url: https://api.deepseek.com
         model: deepseek-chat
         models:
           - deepseek-chat
+          - deepseek-v4-pro
+      openai:                            # works with vLLM, Ollama, etc.
+        type: openai
+        api-key: ${OPENAI_API_KEY:}
+        base-url: https://api.openai.com
+        model: gpt-4.1
+        models:
+          - gpt-4.1
 
   # Memory extraction: "rule" (fast heuristic) | "llm" (semantic, 5-type classification)
   memory:
     extraction-mode: rule
+    extraction:
+      idle-window-minutes: 30
+      idle-scanner-interval-minutes: 10
+    eviction:
+      stale-after-days: 30
+      archive-after-days: 60
+      delete-after-days: 90
+      max-active-per-user: 1500
 
   # pgvector-backed vector search (off by default; enable with an embedding API key)
   embedding:
@@ -365,6 +405,11 @@ lifecycle:
       allowed-langs: [bash, node]
       max-output-bytes: 65536
       max-script-body-chars: 4096
+
+clawhub:
+  enabled: true
+  require-ask-user: true
+  install-dir: ./data/skills/clawhub
 ```
 
 ## Tools & Skills
@@ -428,9 +473,22 @@ lifecycle:
 |--------|----------|-------------|
 | GET | `/api/agents` | List all agents |
 | GET | `/api/agents/{id}` | Get agent detail |
+| GET | `/api/agents/{id}/hooks` | Effective system / user / agent-authored hooks |
 | POST | `/api/agents` | Create agent |
+| POST | `/api/agents/import` | Import agent YAML |
 | PUT | `/api/agents/{id}` | Update agent |
+| PUT | `/api/agents/{id}/hooks/user` | Replace user hook JSON for an agent |
 | DELETE | `/api/agents/{id}` | Delete agent |
+| GET | `/api/agents/{id}/export` | Export agent YAML |
+| GET | `/api/agents/{id}/hook-history` | Recent lifecycle hook execution spans |
+| POST | `/api/agents/{id}/hooks/test` | Dry-run a lifecycle hook entry |
+| POST | `/api/agents/{id}/prompt-improve` | Start prompt A/B improvement |
+| GET | `/api/agents/{id}/prompt-versions` | List prompt versions |
+| POST | `/api/agents/{id}/prompt-versions/{versionId}/rollback` | Roll back prompt version |
+| POST | `/api/agents/{id}/scenario-drafts` | Extract eval scenario drafts |
+| GET | `/api/agents/{id}/scenario-drafts` | List scenario drafts |
+| PATCH | `/api/agents/scenario-drafts/{id}` | Approve / discard scenario draft |
+| POST | `/api/agents/{id}/skill-drafts` | Extract skill drafts |
 
 ### Chat & Sessions
 
@@ -438,13 +496,21 @@ lifecycle:
 |--------|----------|-------------|
 | POST | `/api/chat/sessions` | Create session |
 | GET | `/api/chat/sessions?userId=1` | List user sessions |
+| GET | `/api/chat/sessions/{id}` | Session detail |
+| GET | `/api/chat/sessions/{id}/messages` | Full message history |
 | DELETE | `/api/chat/sessions/{id}` | Delete session |
 | DELETE | `/api/chat/sessions` | Batch delete (`{ids: [...]}`, max 100) |
 | POST | `/api/chat/{sessionId}` | Send message (async, 202) |
 | POST | `/api/chat/{sessionId}/cancel` | Cancel running loop |
 | POST | `/api/chat/{sessionId}/answer` | Answer ask_user question |
+| POST | `/api/chat/{sessionId}/confirmation` | Approve / deny confirmation prompts |
 | PATCH | `/api/chat/sessions/{id}/mode` | Switch execution mode |
 | POST | `/api/chat/sessions/{id}/compact` | Manual context compact |
+| GET | `/api/chat/sessions/{id}/compactions` | Compaction event history |
+| GET | `/api/chat/sessions/{id}/checkpoints` | List compact checkpoints |
+| POST | `/api/chat/sessions/{id}/checkpoints/{checkpointId}/branch` | Branch from checkpoint |
+| POST | `/api/chat/sessions/{id}/checkpoints/{checkpointId}/restore` | Restore checkpoint |
+| POST | `/api/chat/sessions/{id}/prune-tools` | Prune old tool outputs |
 | GET | `/api/chat/sessions/{id}/replay` | Structured session replay |
 | GET | `/api/chat/sessions/{id}/context-breakdown` | Live segment sizes vs context window |
 
@@ -454,7 +520,11 @@ lifecycle:
 |--------|----------|-------------|
 | GET | `/api/chat/sessions/{id}/children` | List child sessions |
 | GET | `/api/chat/sessions/{id}/subagent-runs` | List SubAgent runs |
+| GET | `/api/collab-runs` | List collaboration runs |
 | GET | `/api/collab-runs/{id}/members` | List collab members |
+| GET | `/api/collab-runs/{id}/messages` | Collab message feed |
+| GET | `/api/collab-runs/{id}/traces` | Collab trace list |
+| GET | `/api/collab-runs/{id}/summary` | Collab summary |
 
 ### Eval Pipeline
 
@@ -470,7 +540,16 @@ lifecycle:
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/skills` | List all skills |
+| GET | `/api/skills/builtin` | List built-in system skills |
+| GET | `/api/skills/{id}/detail` | Skill detail |
+| GET | `/api/skills/{id}/versions` | Version chain |
 | POST | `/api/skills/upload` | Upload skill zip |
+| POST | `/api/skills/{id}/fork` | Fork a skill |
+| POST | `/api/skills/{id}/abtest` | Start skill A/B validation |
+| POST | `/api/skills/{id}/evolve` | Start skill evolution |
+| POST | `/api/skills/{id}/usage` | Record skill usage outcome |
+| GET | `/api/skill-drafts` | List generated skill drafts |
+| PATCH | `/api/skill-drafts/{id}` | Approve or discard a skill draft |
 | DELETE | `/api/skills/{id}` | Delete user skill |
 | PUT | `/api/skills/{id}/toggle` | Toggle skill |
 
@@ -491,31 +570,64 @@ lifecycle:
 |--------|----------|-------------|
 | GET | `/api/memories` | List memories |
 | GET | `/api/memories/search` | Hybrid (pgvector + FTS) search with RRF |
+| GET | `/api/memories/stats` | Active / stale / archived counts |
 | POST | `/api/memories` | Create memory |
+| POST | `/api/memories/batch-archive` | Archive selected memories |
+| POST | `/api/memories/batch-restore` | Restore selected memories |
+| POST | `/api/memories/batch-status` | Set lifecycle status in bulk |
+| POST | `/api/memories/rollback` | Roll back memory state |
+| POST | `/api/memories/refresh` | Refresh memory extraction state |
 | PUT | `/api/memories/{id}` | Update memory |
+| PATCH | `/api/memories/{id}/status` | Update lifecycle status |
 | DELETE | `/api/memories/{id}` | Delete memory |
+| DELETE | `/api/memories/batch` | Delete selected memories |
 
 ### Channels (Multi-Platform Gateway)
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/channels` | List channel configs (Feishu / Telegram / …) |
-| POST | `/api/channels` | Create channel config |
-| PATCH | `/api/channels/{id}` | Update (e.g. switch Feishu mode: ws ↔ webhook) |
-| GET | `/api/channels/{id}/conversations` | List conversations routed to a channel |
-| POST | `/api/channels/deliveries/{id}/retry` | Retry a failed delivery |
+| GET | `/api/channel-configs` | List channel configs (Feishu / Telegram / …) |
+| GET | `/api/channel-configs/platforms` | List registered channel adapters |
+| GET | `/api/channel-configs/{id}/test` | Test channel credentials |
+| POST | `/api/channel-configs` | Create channel config |
+| PATCH | `/api/channel-configs/{id}` | Update config (Feishu mode changes require restart) |
+| DELETE | `/api/channel-configs/{id}` | Delete channel config |
+| POST | `/api/channel-deliveries/{id}/retry` | Requeue a failed / pending delivery |
+| POST | `/api/channel-deliveries/{id}/drop` | Mark a delivery as terminally failed |
+| POST | `/api/channels/{platform}/webhook` | Incoming channel webhook |
+| POST | `/api/channels/feishu/card-action` | Feishu interactive card callback |
 
 ### Lifecycle Hooks & Hook Methods
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/lifecycle-hooks/events` | Available hook events + presets |
+| GET | `/api/lifecycle-hooks/presets` | Hook preset configs |
 | GET | `/api/lifecycle-hooks/methods` | List registered built-in / script / compiled methods |
-| POST | `/api/hook-methods/script` | Register a bash/node script method |
-| POST | `/api/hook-methods/compiled` | Submit a Java class for compile + approval |
-| POST | `/api/hook-methods/compiled/{id}/approve` | Approve a compiled method |
+| GET | `/api/script-methods` | List script hook methods |
+| POST | `/api/script-methods` | Register a bash/node script method |
+| PUT | `/api/script-methods/{id}` | Update script method |
+| POST | `/api/script-methods/{id}/enable` | Enable / disable script method |
+| GET | `/api/compiled-methods` | List compiled hook methods |
+| POST | `/api/compiled-methods` | Submit Java source for review |
+| POST | `/api/compiled-methods/{id}/compile` | Compile submitted Java source |
+| POST | `/api/compiled-methods/{id}/approve` | Approve compiled method |
+| POST | `/api/compiled-methods/{id}/reject` | Reject compiled method |
+| POST | `/api/agent-authored-hooks/{id}/approve` | Approve agent-authored hook binding |
+| POST | `/api/agent-authored-hooks/{id}/reject` | Reject agent-authored hook binding |
+| PATCH | `/api/agent-authored-hooks/{id}/enabled` | Enable / disable approved agent-authored hook |
 | GET | `/api/behavior-rules` | List built-in behavior rules |
 | GET | `/api/behavior-rules/presets` | List preset rule bundles |
+
+### Auth, Tools & User Config
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/auth/local-token` | Issue local development token |
+| POST | `/api/auth/verify` | Verify Bearer token |
+| GET | `/api/tools` | List Java function-calling tools |
+| GET | `/api/user-config/claude-md` | Read user-level CLAUDE.md |
+| PUT | `/api/user-config/claude-md` | Save user-level CLAUDE.md |
 
 ### LLM
 
@@ -564,11 +676,11 @@ my-skill.zip
 
 - **Agent Loop engine** with multi-provider LLM streaming (Claude, OpenAI-compatible, DeepSeek, Bailian, vLLM, Ollama)
 - **Tool & Skill system** — Java tools + file-based SKILL.md packages + marketplace (ClawHub / SkillHub)
-- **Dashboard** — chat, sessions, agents, skills, traces, replay, memories, usage, teams, eval, channels, hook methods, schedules
+- **Dashboard** — login, chat, sessions, agents, tools, skills, traces, replay, memories, usage, teams, eval, channels, hook methods
 - **SubAgent orchestration** — tree topology, persistent across restarts, recovery + sweeper
 - **Multi-Agent Collaboration** — network topology, roster, adjacency policy, cascade cancel, lightContext (~30-50% token save)
 - **Context compaction** — light + full + time-based cold cleanup + session-memory compact + 6 trigger sources (JVM-GC style)
-- **Memory system** — 5 types, **pgvector + FTS hybrid retrieval (RRF)**, session-end `@Async` extraction, **LLM semantic extraction mode**, consolidation
+- **Memory system** — 5 types, **pgvector + FTS hybrid retrieval (RRF)**, idle-window extraction, **LLM semantic extraction mode**, lifecycle status, batch operations, rollback/refresh
 - **Self-Improve Pipeline** — eval runner, LLM judge (2×Haiku + Sonnet meta), 7×5 attribution matrix, prompt A/B auto-promotion (Δ≥15pp + 4-layer Goodhart safeguards), session→scenario extraction
 - **Session message storage** — row-based (`t_session_message`), append-only, checkpoint / branch / restore
 - **Skill self-evolution** — session → skill extraction, version management, A/B validation, auto-promotion/rollback
@@ -578,12 +690,12 @@ my-skill.zip
 - **Code Agent** — self-extending agent that writes its own hook methods, with compile + approval workflow
 - **Safety guardrails** — SafetySkillHook (command blocklist, path-traversal prevention) + agent-loop anti-runaway (token / duration / iteration budgets, no-progress detection, waste detection)
 - **Observability** — Langfuse-style traces, session replay, model usage dashboard, context breakdown API, channel visualization
-- **Auth MVP** — local token auto-generation
+- **Auth MVP** — local token login, Bearer-token verification, protected dashboard routes
 - **CLI module** — picocli + OkHttp, YAML import/export, one-shot chat
 
 ### Planned
 
-- **Memory quality evals (P3)** — extraction snapshots, memory-attribution signals, auto-rollback on negative Δ
+- **Memory quality evals (P3)** — broader quality scoring and auto-rollback policy after negative Δ
 - **Tool output fine-grained trimming (P9-2/4/5/7)** — per-message aggregate budget with on-disk archival, partial compaction (head/tail), post-compact context restoration, `jtokkit` local token counter
 - **Slash commands (P10)** — `/new`, `/compact`, `/clear`, `/model`, `/help` in the chat input
 - **Agent discovery + cross-agent calls (P11)** — `AgentDiscoverySkill`, call-by-name, visibility, cycle detection

@@ -55,7 +55,7 @@
 | 层级 | 技术 |
 |------|------|
 | 后端 | Spring Boot 3.2, Java 17, JPA / Hibernate, Flyway |
-| 前端 | React 18, Ant Design, Vite, TypeScript, TanStack Query |
+| 前端 | React 19, Ant Design 6, Vite 8, TypeScript 5.9, TanStack Query |
 | 数据库 | 内嵌 PostgreSQL（开发零配置）, 外部 PostgreSQL（生产） |
 | 实时通信 | WebSocket — 会话级流式推送 + 用户级通知 |
 | LLM | 多 Provider：Claude, OpenAI 兼容（DeepSeek, 通义千问/百炼, vLLM, Ollama） |
@@ -69,11 +69,13 @@ skillforge/
 ├── skillforge-core         # Agent Loop 引擎、LLM 抽象、Skill 系统、
 │                            #   Hook、取消、上下文压缩、Trace 采集
 ├── skillforge-tools        # 系统工具：Bash, FileRead, FileWrite, FileEdit,
-│                            #   Glob, Grep, Memory, SubAgent, Team*
+│                            #   Glob, Grep, WebFetch, WebSearch, Memory,
+│                            #   SubAgent, Team*, Register*Method
 ├── skillforge-server       # Spring Boot 服务：REST API, JPA 实体, 服务层,
 │                            #   WebSocket, 多 Agent 协作, 记忆系统, 评测流水线
-├── skillforge-dashboard    # React 仪表盘：聊天, 会话, Agent, Skill, Trace,
-│                            #   会话回放, 记忆, 模型用量, 团队, 评测
+├── skillforge-dashboard    # React 仪表盘：登录, 聊天, 会话, Agent, Tool,
+│                            #   Skill, Trace, 会话回放, 记忆, 模型用量,
+│                            #   团队, 评测, 渠道, Hook Method
 ├── skillforge-cli          # CLI 客户端：picocli + OkHttp, Agent YAML 导入/导出
 └── system-skills/          # 文件型系统 Skill（启动时自动加载，不可删除）
     ├── browser/            #   浏览器自动化（agent-browser CLI）
@@ -104,6 +106,14 @@ skillforge/
 | **TOOLS.md** | 单个 Agent | 自定义工具使用规则（可选） |
 | **RULES.md** | 单个 Agent | 行为规范（结构化 + 自由条目） |
 | **MEMORY.md** | 单个 Agent | 从记忆系统自动注入 |
+
+### Agent & 模型控制
+
+- **本地 token 登录** — 仪表盘提供 `/login` 页面，通过 `/api/auth/local-token` 获取本地 token，并对受保护的 `/api` 请求做 Bearer token 校验。
+- **后端驱动模型列表** — `GET /api/llm/models` 将 Provider / Model 选项交给后端维护，前端不再硬编码模型列表。
+- **按 Agent 配运行参数** — `modelId`、可见性、执行模式、最大循环次数、工具/Skill 选择、行为规范、Lifecycle Hook、Prompt 分段都可按 Agent 配置。
+- **Thinking mode / reasoning effort** — Agent 可配置 provider-aware 的 `thinkingMode` 和 `reasoningEffort`；OpenAI 兼容适配层会按 Provider family 保留或丢弃 `reasoning_content`。
+- **YAML 导入/导出** — Agent 可通过 API 和 CLI 以 YAML 文件形式版本化管理。
 
 ### 多渠道消息网关
 
@@ -190,6 +200,15 @@ skillforge/
 - **Session→场景提取** — LLM 分析已完成会话生成评测场景，配有 Review UI（通过/编辑/丢弃）
 - **仪表盘** — 实时评测运行监控，详情抽屉展示每场景结果
 
+### Skill 自进化
+
+平台可以把反复出现的会话模式沉淀成可复用的 Skill 包：
+
+- **Session→Skill 草稿提取** — 从 Agent 已完成工作中生成 SKILL.md 草稿，并在仪表盘中审批或丢弃
+- **Skill 版本管理** — Fork 现有 Skill、查看版本链，并保留生成变体与父 Skill 的关系
+- **Skill A/B 验证** — 在评测场景上比较候选 Skill 与基线效果，再决定是否晋升
+- **使用遥测** — 记录 Skill 调用成功/失败信号，供后续演化决策使用
+
 ### 记忆系统
 
 跨会话持久记忆，按用户隔离：
@@ -200,9 +219,10 @@ skillforge/
 - **两种提取模式**：
   - `rule` — 规则启发式 `SessionDigestExtractor`（默认，快）
   - `llm` — `LlmMemoryExtractor` 按 5 种类型分类 + 重要性打分
-- **Session 结束 `@Async` 即时提取** — session 完成那一刻触发（`@Scheduled` 每日 cron 作为兜底扫孤儿）
+- **空闲窗口提取** — session 安静一段时间后由 idle scanner 抽取近期轮次，带 cooldown 和最大轮次数限制
 - **自动采集** — `ActivityLogHook` 记录每次工具调用
-- **整合去重** — 标题去重 + 过期标记（30 天未召回 + recallCount < 3）
+- **生命周期管理** — `ACTIVE` / `STALE` / `ARCHIVED` 状态、批量归档/恢复/删除、容量上限、stale/archive/delete 窗口
+- **质量控制** — 记忆快照、可见性/归因字段、rollback 与 refresh API
 
 ### 会话消息存储（行存储，append-only）
 
@@ -317,7 +337,7 @@ npm run dev    # Vite 开发服务器 http://localhost:3000，代理到 :8080
 ```yaml
 skillforge:
   llm:
-    default-provider: bailian            # 或 "claude"、"openai"
+    default-provider: bailian            # 或 "claude"、"deepseek"、"openai"
     providers:
       bailian:                           # 通义千问 / DashScope
         type: openai                     # OpenAI 兼容端点
@@ -328,6 +348,10 @@ skillforge:
           - qwen3.5-plus
           - qwen3-max-2026-01-23
           - qwen3-coder-next
+          - qwen3.6-plus
+          - glm-5
+          - kimi-k2.5
+          - MiniMax-M2.5
       claude:
         type: claude
         api-key: ${ANTHROPIC_API_KEY:}
@@ -336,17 +360,33 @@ skillforge:
         models:
           - claude-sonnet-4-20250514
         context-window-tokens: 200000
-      openai:                            # 也能接 DeepSeek、vLLM、Ollama 等
-        type: openai
+      deepseek:
+        type: deepseek
         api-key: ${DEEPSEEK_API_KEY:}
         base-url: https://api.deepseek.com
         model: deepseek-chat
         models:
           - deepseek-chat
+          - deepseek-v4-pro
+      openai:                            # 也能接 vLLM、Ollama 等
+        type: openai
+        api-key: ${OPENAI_API_KEY:}
+        base-url: https://api.openai.com
+        model: gpt-4.1
+        models:
+          - gpt-4.1
 
   # 记忆提取：rule（快速启发式）| llm（语义化，5 类分类）
   memory:
     extraction-mode: rule
+    extraction:
+      idle-window-minutes: 30
+      idle-scanner-interval-minutes: 10
+    eviction:
+      stale-after-days: 30
+      archive-after-days: 60
+      delete-after-days: 90
+      max-active-per-user: 1500
 
   # pgvector 向量检索（默认关闭，需要 embedding API key 才启用）
   embedding:
@@ -364,6 +404,11 @@ lifecycle:
       allowed-langs: [bash, node]
       max-output-bytes: 65536
       max-script-body-chars: 4096
+
+clawhub:
+  enabled: true
+  require-ask-user: true
+  install-dir: ./data/skills/clawhub
 ```
 
 ## 工具 & Skill
@@ -427,9 +472,22 @@ lifecycle:
 |------|------|------|
 | GET | `/api/agents` | 列出所有 Agent |
 | GET | `/api/agents/{id}` | 获取 Agent 详情 |
+| GET | `/api/agents/{id}/hooks` | 查看 system / user / agent-authored 合并后的 Hook |
 | POST | `/api/agents` | 创建 Agent |
+| POST | `/api/agents/import` | 导入 Agent YAML |
 | PUT | `/api/agents/{id}` | 更新 Agent |
+| PUT | `/api/agents/{id}/hooks/user` | 替换该 Agent 的用户 Hook JSON |
 | DELETE | `/api/agents/{id}` | 删除 Agent |
+| GET | `/api/agents/{id}/export` | 导出 Agent YAML |
+| GET | `/api/agents/{id}/hook-history` | 查看近期 Lifecycle Hook 执行 span |
+| POST | `/api/agents/{id}/hooks/test` | Dry-run 一个 Lifecycle Hook entry |
+| POST | `/api/agents/{id}/prompt-improve` | 启动 Prompt A/B 优化 |
+| GET | `/api/agents/{id}/prompt-versions` | 列出 Prompt 版本 |
+| POST | `/api/agents/{id}/prompt-versions/{versionId}/rollback` | 回滚 Prompt 版本 |
+| POST | `/api/agents/{id}/scenario-drafts` | 提取评测场景草稿 |
+| GET | `/api/agents/{id}/scenario-drafts` | 列出评测场景草稿 |
+| PATCH | `/api/agents/scenario-drafts/{id}` | 审批 / 丢弃评测场景草稿 |
+| POST | `/api/agents/{id}/skill-drafts` | 提取 Skill 草稿 |
 
 ### 聊天 & 会话
 
@@ -437,13 +495,21 @@ lifecycle:
 |------|------|------|
 | POST | `/api/chat/sessions` | 创建会话 |
 | GET | `/api/chat/sessions?userId=1` | 列出用户会话 |
+| GET | `/api/chat/sessions/{id}` | 会话详情 |
+| GET | `/api/chat/sessions/{id}/messages` | 完整消息历史 |
 | DELETE | `/api/chat/sessions/{id}` | 删除单个会话 |
 | DELETE | `/api/chat/sessions` | 批量删除（`{ids: [...]}`，上限 100） |
 | POST | `/api/chat/{sessionId}` | 发送消息（异步，202） |
 | POST | `/api/chat/{sessionId}/cancel` | 取消运行中的循环 |
 | POST | `/api/chat/{sessionId}/answer` | 回答 ask_user 问题 |
+| POST | `/api/chat/{sessionId}/confirmation` | 审批 / 拒绝确认提示 |
 | PATCH | `/api/chat/sessions/{id}/mode` | 切换执行模式 |
 | POST | `/api/chat/sessions/{id}/compact` | 手动上下文压缩 |
+| GET | `/api/chat/sessions/{id}/compactions` | 压缩事件历史 |
+| GET | `/api/chat/sessions/{id}/checkpoints` | 列出压缩 checkpoint |
+| POST | `/api/chat/sessions/{id}/checkpoints/{checkpointId}/branch` | 从 checkpoint 创建分支 |
+| POST | `/api/chat/sessions/{id}/checkpoints/{checkpointId}/restore` | 恢复 checkpoint |
+| POST | `/api/chat/sessions/{id}/prune-tools` | 修剪旧工具输出 |
 | GET | `/api/chat/sessions/{id}/replay` | 结构化会话回放 |
 | GET | `/api/chat/sessions/{id}/context-breakdown` | 各段 token 占比 vs context window |
 
@@ -453,7 +519,11 @@ lifecycle:
 |------|------|------|
 | GET | `/api/chat/sessions/{id}/children` | 列出子会话 |
 | GET | `/api/chat/sessions/{id}/subagent-runs` | 列出 SubAgent 运行 |
+| GET | `/api/collab-runs` | 列出协作运行 |
 | GET | `/api/collab-runs/{id}/members` | 列出协作成员 |
+| GET | `/api/collab-runs/{id}/messages` | 协作消息流 |
+| GET | `/api/collab-runs/{id}/traces` | 协作 Trace 列表 |
+| GET | `/api/collab-runs/{id}/summary` | 协作摘要 |
 
 ### 评测流水线
 
@@ -469,7 +539,16 @@ lifecycle:
 | 方法 | 端点 | 说明 |
 |------|------|------|
 | GET | `/api/skills` | 列出所有 Skill |
+| GET | `/api/skills/builtin` | 列出内置系统 Skill |
+| GET | `/api/skills/{id}/detail` | Skill 详情 |
+| GET | `/api/skills/{id}/versions` | Skill 版本链 |
 | POST | `/api/skills/upload` | 上传 Skill zip 包 |
+| POST | `/api/skills/{id}/fork` | Fork Skill |
+| POST | `/api/skills/{id}/abtest` | 启动 Skill A/B 验证 |
+| POST | `/api/skills/{id}/evolve` | 启动 Skill 演化 |
+| POST | `/api/skills/{id}/usage` | 记录 Skill 使用结果 |
+| GET | `/api/skill-drafts` | 列出生成的 Skill 草稿 |
+| PATCH | `/api/skill-drafts/{id}` | 审批或丢弃 Skill 草稿 |
 | DELETE | `/api/skills/{id}` | 删除用户 Skill |
 | PUT | `/api/skills/{id}/toggle` | 启用/禁用 Skill |
 
@@ -490,31 +569,64 @@ lifecycle:
 |------|------|------|
 | GET | `/api/memories` | 列出记忆 |
 | GET | `/api/memories/search` | 混合检索（pgvector + FTS 通过 RRF 融合） |
+| GET | `/api/memories/stats` | active / stale / archived 统计 |
 | POST | `/api/memories` | 创建记忆 |
+| POST | `/api/memories/batch-archive` | 批量归档记忆 |
+| POST | `/api/memories/batch-restore` | 批量恢复记忆 |
+| POST | `/api/memories/batch-status` | 批量设置生命周期状态 |
+| POST | `/api/memories/rollback` | 回滚记忆状态 |
+| POST | `/api/memories/refresh` | 刷新记忆提取状态 |
 | PUT | `/api/memories/{id}` | 更新记忆 |
+| PATCH | `/api/memories/{id}/status` | 更新生命周期状态 |
 | DELETE | `/api/memories/{id}` | 删除记忆 |
+| DELETE | `/api/memories/batch` | 批量删除记忆 |
 
 ### 渠道网关
 
 | 方法 | 端点 | 说明 |
 |------|------|------|
-| GET | `/api/channels` | 列出渠道配置（飞书 / Telegram / …） |
-| POST | `/api/channels` | 创建渠道配置 |
-| PATCH | `/api/channels/{id}` | 更新配置（如飞书 ws ↔ webhook 模式切换） |
-| GET | `/api/channels/{id}/conversations` | 列出路由到该渠道的对话 |
-| POST | `/api/channels/deliveries/{id}/retry` | 重试失败的投递 |
+| GET | `/api/channel-configs` | 列出渠道配置（飞书 / Telegram / …） |
+| GET | `/api/channel-configs/platforms` | 列出已注册的渠道适配器 |
+| GET | `/api/channel-configs/{id}/test` | 测试渠道凭证 |
+| POST | `/api/channel-configs` | 创建渠道配置 |
+| PATCH | `/api/channel-configs/{id}` | 更新渠道配置（飞书模式变化需重启） |
+| DELETE | `/api/channel-configs/{id}` | 删除渠道配置 |
+| POST | `/api/channel-deliveries/{id}/retry` | 重新入队失败 / 待投递消息 |
+| POST | `/api/channel-deliveries/{id}/drop` | 将投递标记为终态失败 |
+| POST | `/api/channels/{platform}/webhook` | 渠道入站 webhook |
+| POST | `/api/channels/feishu/card-action` | 飞书交互卡片回调 |
 
 ### Lifecycle Hook & Hook Method
 
 | 方法 | 端点 | 说明 |
 |------|------|------|
 | GET | `/api/lifecycle-hooks/events` | 可用 Hook 事件 + 预设 |
+| GET | `/api/lifecycle-hooks/presets` | Hook 预设配置 |
 | GET | `/api/lifecycle-hooks/methods` | 列出已注册的 built-in / script / compiled 方法 |
-| POST | `/api/hook-methods/script` | 注册 bash/node 脚本方法 |
-| POST | `/api/hook-methods/compiled` | 提交 Java 类走编译 + 审批 |
-| POST | `/api/hook-methods/compiled/{id}/approve` | 审批通过 compiled 方法 |
+| GET | `/api/script-methods` | 列出脚本 Hook Method |
+| POST | `/api/script-methods` | 注册 bash/node 脚本方法 |
+| PUT | `/api/script-methods/{id}` | 更新脚本方法 |
+| POST | `/api/script-methods/{id}/enable` | 启用 / 禁用脚本方法 |
+| GET | `/api/compiled-methods` | 列出 compiled Hook Method |
+| POST | `/api/compiled-methods` | 提交 Java 源码进入审批 |
+| POST | `/api/compiled-methods/{id}/compile` | 编译 Java 源码 |
+| POST | `/api/compiled-methods/{id}/approve` | 审批通过 compiled 方法 |
+| POST | `/api/compiled-methods/{id}/reject` | 拒绝 compiled 方法 |
+| POST | `/api/agent-authored-hooks/{id}/approve` | 审批 agent-authored Hook 绑定 |
+| POST | `/api/agent-authored-hooks/{id}/reject` | 拒绝 agent-authored Hook 绑定 |
+| PATCH | `/api/agent-authored-hooks/{id}/enabled` | 启用 / 禁用已审批的 agent-authored Hook |
 | GET | `/api/behavior-rules` | 列出内置行为规范 |
 | GET | `/api/behavior-rules/presets` | 列出预设规范模板 |
+
+### 认证、Tool & 用户配置
+
+| 方法 | 端点 | 说明 |
+|------|------|------|
+| GET | `/api/auth/local-token` | 签发本地开发 token |
+| POST | `/api/auth/verify` | 校验 Bearer token |
+| GET | `/api/tools` | 列出 Java function-calling 工具 |
+| GET | `/api/user-config/claude-md` | 读取用户级 CLAUDE.md |
+| PUT | `/api/user-config/claude-md` | 保存用户级 CLAUDE.md |
 
 ### LLM
 
@@ -563,11 +675,11 @@ my-skill.zip
 
 - **Agent Loop 引擎** + 多 Provider LLM 流式（Claude、OpenAI 兼容、DeepSeek、百炼、vLLM、Ollama）
 - **工具 & Skill 系统** — Java 工具 + 文件型 SKILL.md 包 + 市场安装（ClawHub / SkillHub）
-- **仪表盘** — 聊天、会话、Agent、Skill、Trace、回放、记忆、用量、团队、评测、渠道、Hook Method、计划任务
+- **仪表盘** — 登录、聊天、会话、Agent、Tool、Skill、Trace、回放、记忆、用量、团队、评测、渠道、Hook Method
 - **SubAgent 编排** — 树形拓扑，跨重启持久化，启动恢复 + 超时清扫
 - **多 Agent 协作** — 网状拓扑，花名册，邻接策略，级联取消，lightContext（节省 ~30-50% token）
 - **上下文压缩** — light + full + time-based cold cleanup + session-memory 零 LLM 压缩，6 种触发源（JVM-GC 风格）
-- **记忆系统** — 5 种类型，**pgvector + FTS 混合召回（RRF 融合）**，session 结束 `@Async` 即时提取，**LLM 语义提取模式**，整合去重
+- **记忆系统** — 5 种类型，**pgvector + FTS 混合召回（RRF 融合）**，空闲窗口提取，**LLM 语义提取模式**，生命周期状态，批量操作，rollback/refresh
 - **自进化流水线** — 评测执行器、LLM 评委（2×Haiku + Sonnet 元评委）、7×5 归因矩阵、Prompt A/B 自动晋升（Δ≥15pp + 4 层 Goodhart 防护）、Session→场景提取
 - **会话消息行存储** — `t_session_message` append-only，checkpoint / branch / restore
 - **Skill 自进化** — Session → Skill 提取、版本管理、A/B 验证、自动晋升/回滚
@@ -577,12 +689,12 @@ my-skill.zip
 - **Code Agent** — 能给自己写 Hook Method 的 Agent，含编译 + 审批流
 - **安全护栏** — SafetySkillHook（命令黑名单、路径穿越防护）+ Agent Loop 防失控（token / 时长 / 迭代预算，无进展检测，浪费检测）
 - **可观测性** — Langfuse 风格 Trace、会话回放、模型用量仪表盘、Context Breakdown API、渠道可视化
-- **Auth MVP** — 本地 token 自动生成
+- **Auth MVP** — 本地 token 登录、Bearer token 校验、受保护的仪表盘路由
 - **CLI 模块** — picocli + OkHttp、YAML 导入/导出、一次性聊天
 
 ### 规划中
 
-- **记忆质量评估（P3）** — 提取快照、记忆归因信号、Δ 为负自动回滚
+- **记忆质量评估（P3）** — 更完整的质量评分与负向 Δ 自动回滚策略
 - **Tool 输出精细裁剪（P9-2/4/5/7）** — 单条消息聚合预算 + 归档持久化、partial 压缩（保头/保尾）、压缩后上下文恢复、`jtokkit` 本地 token 精确计数
 - **斜杠命令（P10）** — 聊天框 `/new`、`/compact`、`/clear`、`/model`、`/help`
 - **Agent 发现 + 跨 Agent 调用（P11）** — `AgentDiscoverySkill`、按 name 调用、可见性、循环调用检测
