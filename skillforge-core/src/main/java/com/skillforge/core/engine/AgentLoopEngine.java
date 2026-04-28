@@ -728,10 +728,10 @@ public class AgentLoopEngine {
                 if (response.getContent() != null && !response.getContent().isEmpty()) {
                     llmOutput.append(response.getContent());
                 }
-                if (response.isToolUse() && response.getToolUseBlocks() != null) {
+                if (response.isToolUse() && response.getValidToolUseBlocks() != null) {
                     if (!llmOutput.isEmpty()) llmOutput.append("\n");
                     llmOutput.append("[tool_use: ");
-                    llmOutput.append(response.getToolUseBlocks().stream()
+                    llmOutput.append(response.getValidToolUseBlocks().stream()
                             .map(b -> b.getName())
                             .collect(Collectors.joining(", ")));
                     llmOutput.append("]");
@@ -772,7 +772,7 @@ public class AgentLoopEngine {
             }
 
             // 处理 tool_use: 先把 ask_user / compact_context 从列表里拆出来走特殊分支,其余并行执行
-            List<ToolUseBlock> toolUseBlocks = response.getToolUseBlocks();
+            List<ToolUseBlock> toolUseBlocks = response.getValidToolUseBlocks();
             log.info("Processing {} tool call(s) at loop {}", toolUseBlocks.size(), loopCtx.getLoopCount() + 1);
 
             List<CompletableFuture<Message>> futures = new ArrayList<>();
@@ -1135,7 +1135,7 @@ public class AgentLoopEngine {
             msg.setReasoningContent(response.getReasoningContent());
         }
 
-        List<ToolUseBlock> toolUseBlocks = response.getToolUseBlocks();
+        List<ToolUseBlock> toolUseBlocks = response.getValidToolUseBlocks();
         if (toolUseBlocks == null || toolUseBlocks.isEmpty()) {
             // 纯文本响应
             msg.setContent(response.getContent());

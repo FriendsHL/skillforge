@@ -761,14 +761,20 @@ public class OpenAiProvider implements LlmProvider {
 
                         // id is present only in the first chunk for this index
                         if (callDelta.has("id") && callDelta.path("id").isTextual()) {
-                            toolCallIds.put(index, callDelta.path("id").asText());
+                            String idDelta = callDelta.path("id").asText();
+                            if (idDelta != null && !idDelta.isBlank()) {
+                                toolCallIds.put(index, idDelta);
+                            }
                         }
 
                         JsonNode funcDelta = callDelta.path("function");
                         String argsFragment = null;
                         if (!funcDelta.isMissingNode()) {
                             if (funcDelta.has("name") && funcDelta.path("name").isTextual()) {
-                                toolCallNames.put(index, funcDelta.path("name").asText());
+                                String nameDelta = funcDelta.path("name").asText();
+                                if (nameDelta != null && !nameDelta.isBlank()) {
+                                    toolCallNames.put(index, nameDelta);
+                                }
                             }
                             if (funcDelta.has("arguments") && funcDelta.path("arguments").isTextual()) {
                                 argsFragment = funcDelta.path("arguments").asText();

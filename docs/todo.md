@@ -19,7 +19,7 @@
 | ------------- | --------------------------------------------------------------------------------------- | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | ~~**🔥 紧急**~~ | ~~ENG-1~~ · ~~ENG-2~~ · ~~P9-5-lite~~                                                   | 1-2 天             | 由 session 9347f84c 真实事故触发；阻断 Design Agent 长任务；**全部完成 2026-04-23**                                                                                                                                           |
 | ~~**🔥 紧急**~~ | ~~**BUG-F** Compact 摘要存储重构（向 Claude Code / OpenClaw 看齐）~~ ✅ 2026-04-26 commit `e9b48f3` | 1-1.5 天           | 由 session `acbced3f` DeepSeek 撞 `Duplicate value for 'tool_call_id'` HTTP 400 触发；**Full Pipeline 通过**：Plan r1 PASS（1W）+ Code r1 PASS（5W，0 blocker）；370 unit tests 全绿；用户授权跳过 live curl，server 重启成功即视为 e2e 通过 |
-| **🔥 穿插**     | **BUG-G** dangling assistant tool_call 历史防腐 + stopReason/toolUse 一致性修复                  | 1-2 天             | 由 session `d0863201` DeepSeek 撞 `assistant message with tool_calls must be followed by tool messages` HTTP 400 触发；现场已用 synthetic tool_result 修复单 session，后续需做发送前防腐 + 引擎根因修复 |
+| **🔥 穿插**     | **BUG-G** dangling assistant tool_call 历史防腐 + stopReason/toolUse 一致性修复                  | 1-2 天             | `d0863201` / `ff457c2d` 触发；BUG-G-2 已本地修复：qwen 流式空 id/name 不覆盖首包有效 tool_call 身份 + toolUseBlocks 结构优先；BUG-G-1 发送前历史防腐、BUG-G-3 失败路径尾部不变量仍待补 |
 | ~~**Sprint 1**~~  | ~~P9-7~~ · ~~P3-1~~ · ~~P3-3~~ · ~~P13-3~~ · ~~P13-4~~ ✅ 2026-04-26                 | 2-3 天             | 零依赖防腐；P13-4 代码扫描确认已完成；P9-7 已完成 commit `621f417`；P3-1/P3-3/P13-3 已完成 commit `f4773c3`，397 个非 IT server tests 全绿；完整 suite 仅 Docker/Testcontainers IT 受本机环境阻塞                                                                 |
 | ~~**Sprint 2**~~  | ~~P11（收窄）+ P13-1~~ → ~~P15-1/P15-2/P15-4 + UpdateAgent~~                                  | 8-12 天            | PR1 已完成 2026-04-26：AgentDiscovery + name resolver + public/private visibility + custom rule severity；PR2 已完成 P15-1/P15-2：GetTrace + GetSessionMessages，413 个非 IT server tests 全绿；补充完成 GetAgentConfig + AgentDiscovery 增强 + 带一次确认的 UpdateAgent。P15-5 seed 取消：Analyzer Agent 已手工创建，不再内置 Flyway seed |
 | **🧩 穿插**     | P1 Skill 自动生成补完：SKILL.md 物化 + registry 重启恢复 + agent-scoped 生效 + telemetry + draft 去重          | 3-5 天             | 当前 skill draft approve 只写 DB-only `SkillEntity`；上传/ClawHub 等用户 skill 重启后也不恢复 registry；agent 绑定 skillIds 未实际限制可用 skill；usage 信号未自动采集。见下方 P1-FU |
@@ -110,7 +110,7 @@
 
 ---
 
-### 🔥 待排期 — BUG-G dangling assistant tool_call 防腐（1-2 天）
+### 🔥 进行中 — BUG-G dangling assistant tool_call 防腐（BUG-G-2 已修，BUG-G-1/3 待补）
 
 > **触发事件**：session `d0863201-30c0-4582-82eb-2fcc2255bdfa` 在 DeepSeek 下一轮请求时报 HTTP 400：
 > ```
@@ -127,12 +127,19 @@
 > 3. 但工具执行分支只看 `response.isToolUse()`；而 `LlmResponse.isToolUse()` 只判断 `stopReason == "tool_use"`。当 provider 解析到了 `toolUseBlocks`，但 `finish_reason` 未映射成 `tool_use`（仍是 `end_turn` / 缺失）时，引擎会把 tool_use 写入历史，却按普通文本结束，不执行工具、不补 tool_result。
 > 4. 下一轮 `OpenAiProvider.convertMessages` 会把历史 assistant `tool_use` 转成 OpenAI-compatible payload 的 `assistant.tool_calls`；但其后紧跟普通 user 消息而不是 `role=tool`，DeepSeek 严格校验后返回 HTTP 400。
 >
+> **2026-04-28 真实根因补充（session `ff457c2d-af13-479c-b906-fc4a9f85bdb5`）**：
+> - 为排查临时加本地完整 payload dump（不纳入最终代码）后确认：完整 request 只有 system + user 两条 message，`tools` 中包含 `WebFetch`；不是 prompt / memory / skill 选择导致。
+> - qwen3.5-plus / qwen3.6-plus SSE 首段 `tool_calls[0].id` 正确为 `call_1c92880586144bbf932ac619`，后续 arguments delta 可能继续携带 `id:""` / `function.name:""`；旧解析逻辑无条件 `put(index, id/name)`，会把有效 id/name 覆盖成空串。
+> - 空 id/name 会被 `LlmResponse.validToolUseBlocks()` 过滤，导致 `response.isToolUse()` 为 false；AgentLoop 只展示模型文本（如“我来用 WebFetch...”），但不执行工具，trace 中也没有 `TOOL_CALL` span。
+> - 当前最小修复：OpenAI-compatible stream 增量合并时，空白 `id` / `function.name` 不再覆盖已收集值；`LlmResponse.isToolUse()` 改为结构优先；`AgentLoopEngine` 执行和落库使用过滤后的有效 tool_use blocks。新增 `OpenAiProviderStreamToolCallTest`、`LlmResponseTest`、`AgentLoopEngineToolUseInvariantTest`。
+> - 已刻意回滚/暂缓 `OpenAiProvider.convertMessages` 发送前 pending assistant tool_call 防腐状态机，避免把 qwen 修复和历史防腐混在一个提交里；该能力保留为 BUG-G-1 后续独立任务。
+>
 > **临时修复流程**：定位最后一个 dangling assistant `tool_use` → 在其后插入 `role=user` / `type=tool_result` / `is_error=true` 的 synthetic result → 顺延后续 `seq_no` → 清空 `runtime_error` 并置 `runtime_status=idle` → 跑 pairing scan 确认 `missing_turns=0`。这只能修单 session 数据，不能防止再次发生。
 
 | 子任务 | 说明 | 验收 |
 | --- | --- | --- |
-| **BUG-G-1** OpenAI-compatible 发送前历史防腐（方案 3） | 在 `OpenAiProvider.convertMessages` 或其前置 sanitizer 中校验 OpenAI 消息协议：assistant `tool_calls` 后必须紧跟覆盖每个 `tool_call_id` 的 `role=tool` 消息。发现缺失时，不再原样发送非法 payload；可将 dangling assistant tool_use 降级为普通 assistant 文本，并追加一条 user 文本说明该 tool call was interrupted / missing result，避免 provider 400 | 构造 `assistant(tool_calls:A) -> user(text)` 历史时，请求体不包含非法未配对 `tool_calls`；DeepSeek/OpenAI-compatible 不再 400；测试覆盖 ContentBlock 和 DB 反序列化 Map 两种形态 |
-| **BUG-G-2** toolUseBlocks 与 stopReason 一致性修复（方案 4） | 修引擎根因：当 `LlmResponse.toolUseBlocks` 存在有效 tool_use 时，`isToolUse()` 应返回 true，或 provider 在 finalize streamed tool_calls 后强制 `stopReason=tool_use`。同时过滤空 id/name 的 invalid tool_use，保证进入执行分支的一定能生成 1:1 tool_result | provider 返回 `toolUseBlocks` 但 stopReason 缺失/`end_turn` 时，engine 仍执行工具并补齐 tool_result；不会再持久化 dangling assistant tool_call；新增 AgentLoopEngine/OpenAiProvider 单测 |
+| **BUG-G-1** OpenAI-compatible 发送前历史防腐（方案 3） | 在 `OpenAiProvider.convertMessages` 或其前置 sanitizer 中校验 OpenAI 消息协议：assistant `tool_calls` 后必须紧跟覆盖每个 `tool_call_id` 的 `role=tool` 消息。发现缺失时，不再原样发送非法 payload；可将 dangling assistant tool_use 降级为普通 assistant 文本，并追加一条 user 文本说明该 tool call was interrupted / missing result，避免 provider 400 | 构造 `assistant(tool_calls:A) -> user(text)` 历史时，请求体不包含非法未配对 `tool_calls`；DeepSeek/OpenAI-compatible 不再 400；测试覆盖 ContentBlock 和 DB 反序列化 Map 两种形态。**暂缓为后续独立任务** |
+| ~~**BUG-G-2** toolUseBlocks 与 stopReason 一致性修复（方案 4）~~ ✅ 2026-04-28 | `LlmResponse.isToolUse()` 改为结构优先：存在有效 tool_use block 即进入工具执行；过滤空 id/name 和重复 id；qwen 流式解析修复为空白 delta 不覆盖已收集 id/name；`AgentLoopEngine` 使用有效 tool_use blocks 执行和落库 | `LlmResponseTest` + `OpenAiProviderStreamToolCallTest` + `AgentLoopEngineToolUseInvariantTest` 覆盖 stopReason 缺失/`end_turn` 但有有效 tool_use、无效空 id/name 过滤、qwen 空 id/name delta 复现 |
 | **BUG-G-3** 失败路径持久化保护 | 在 runLoop error/cancel/max-loop 等路径加不变量校验：最终落库前如果尾部存在未配对 assistant tool_use，必须补 synthetic error tool_result 或将其降级为文本，避免异常中断把坏尾巴永久写入 DB | 任意异常退出后，`t_session_message` 中 assistant tool_use/tool_result 配对完整；session 可继续发送下一轮，不需要手工 DB 修复 |
 
 ---
