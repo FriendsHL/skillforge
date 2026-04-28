@@ -2115,10 +2115,71 @@ html[data-density="spacious"] { --density: 1; }
   padding: 18px 28px 14px;
   border-bottom: 1px solid var(--border-1);
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: space-between;
-  gap: 20px;
-  flex-wrap: wrap;
+  gap: 16px;
+  flex-wrap: nowrap;
+}
+
+.session-header > div:first-child {
+  min-width: 0;
+  flex: 1;
+}
+
+@media (max-width: 1100px) {
+  .session-header {
+    padding: 14px 20px 10px;
+    gap: 12px;
+  }
+  
+  .session-title-big {
+    font-size: 20px;
+  }
+  
+  .session-crumbs {
+    font-size: 10px;
+    margin-top: 4px;
+  }
+  
+  .session-actions {
+    flex-shrink: 0;
+    gap: 4px;
+  }
+  
+  .chip {
+    padding: 3px 6px;
+    font-size: 10px;
+  }
+  
+  .seg button {
+    padding: 4px 8px;
+    font-size: 11px;
+  }
+}
+
+@media (max-width: 767px) {
+  .session-header {
+    padding: 12px 16px 8px;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  
+  .session-header > div:first-child {
+    width: 100%;
+    flex: none;
+  }
+  
+  .session-actions {
+    width: 100%;
+    justify-content: flex-start;
+    overflow-x: auto;
+    padding-bottom: 2px;
+    -webkit-overflow-scrolling: touch;
+  }
+  
+  .session-actions::-webkit-scrollbar {
+    display: none;
+  }
 }
 .session-title-big {
   font-family: var(--font-serif);
