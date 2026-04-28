@@ -124,6 +124,30 @@
 
 ## 三、Full Pipeline 如何执行（How）
 
+### 前置：开启 Agent Teams（一次性）
+
+Full Pipeline 依赖 `TeamCreate` / `TeamDelete` / `SendMessage` 三个 agent team 工具。这是 Claude Code 的 experimental feature，默认未开启。
+
+**如果可用工具列表里看不到 `TeamCreate`**（或调用时报 schema 不存在），按下面任一层级开启 env flag：
+
+| 位置 | 影响范围 | 何时选 |
+|---|---|---|
+| `~/.claude/settings.json` | 全部项目 | 推荐，跟项目无关的 harness 开关 |
+| `<project>/.claude/settings.json` | 协作者也开 | 想强制队友都用 |
+| `<project>/.claude/settings.local.json` | 仅本机本项目 | 只想本机试一下 |
+
+JSON 顶层加：
+
+```json
+{
+  "env": {
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+  }
+}
+```
+
+**改完必须退出 Claude Code 重新进**，env 变量在启动时读取，热加载不生效。重进后可用工具列表里应该能看到 `TeamCreate` / `TeamDelete` / `SendMessage`。
+
 ### 完整流程
 
 ```
