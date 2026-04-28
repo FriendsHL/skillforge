@@ -69,6 +69,8 @@ export interface CreateAgentRequest {
   thinkingMode?: 'auto' | 'enabled' | 'disabled';
   /** Only honoured by models whose protocolFamily exposes reasoning effort (see ModelOption). */
   reasoningEffort?: 'low' | 'medium' | 'high' | 'max';
+  /** P1 Skill Control Plane: JSON-array string of system-skill names this agent has opted out of. */
+  disabledSystemSkills?: string;
 }
 
 export interface UpdateAgentRequest extends Partial<CreateAgentRequest> {
@@ -281,18 +283,22 @@ export const getTraceSpans = (traceId: string) => api.get(`/traces/${traceId}/sp
 export const getTools = () => api.get('/tools');
 
 // Skill API
-export const getSkills = () => api.get('/skills');
+// P1 (B-1): all write endpoints take `userId` query param, mirroring chat API
+// (no `ownerId` from the FE). BE writes SkillEntity.ownerId from the userId.
+export const getSkills = (isSystem?: boolean) =>
+  api.get('/skills', isSystem === undefined ? undefined : { params: { isSystem } });
 export const getBuiltinSkills = () => api.get('/skills/builtin');
-export const uploadSkill = (file: File, ownerId: number) => {
+export const uploadSkill = (file: File, userId: number) => {
   const form = new FormData();
   form.append('file', file);
-  form.append('ownerId', String(ownerId));
-  return api.post('/skills/upload', form);
+  // BE controller now reads userId via @RequestParam (B-1 收口) — see plan §8.
+  return api.post('/skills/upload', form, { params: { userId } });
 };
-export const deleteSkill = (id: number) => api.delete(`/skills/${id}`);
+export const deleteSkill = (id: number, userId: number) =>
+  api.delete(`/skills/${id}`, { params: { userId } });
 export const getSkillDetail = (id: number | string) => api.get(`/skills/${id}/detail`);
-export const toggleSkill = (id: number, enabled: boolean) =>
-  api.put(`/skills/${id}/toggle?enabled=${enabled}`);
+export const toggleSkill = (id: number, enabled: boolean, userId: number) =>
+  api.put(`/skills/${id}/toggle`, null, { params: { enabled, userId } });
 
 export interface SkillVersionEntry {
   id: number;
@@ -309,8 +315,8 @@ export interface SkillVersionEntry {
 export const getSkillVersionChain = (id: number | string) =>
   api.get<SkillVersionEntry[]>(`/skills/${id}/versions`);
 
-export const forkSkill = (id: number | string, ownerId: number) =>
-  api.post<SkillVersionEntry>(`/skills/${id}/fork?ownerId=${ownerId}`);
+export const forkSkill = (id: number | string, userId: number) =>
+  api.post<SkillVersionEntry>(`/skills/${id}/fork`, null, { params: { userId } });
 
 export const recordSkillUsage = (id: number | string, success: boolean) =>
   api.post(`/skills/${id}/usage?success=${success}`);
@@ -878,6 +884,12 @@ export interface SkillDraft {
   createdAt: string;
   reviewedAt?: string;
   reviewedBy?: number;
+  // P1 §9 dedup signal: 0..1 jaccard/levenshtein blend; populated when BE
+  // detects a candidate that is likely a duplicate of an existing skill.
+  similarity?: number;
+  // Existing skill name/id this draft is most similar to, when similarity is set.
+  mergeCandidateId?: string;
+  mergeCandidateName?: string;
 }
 
 export interface SkillExtractionStartResult {
@@ -886,13 +898,37 @@ export interface SkillExtractionStartResult {
   message?: string;
 }
 
-export const triggerSkillExtraction = (agentId: number | string, ownerId: number) =>
-  api.post<SkillExtractionStartResult>(`/agents/${agentId}/skill-drafts?ownerId=${ownerId}`);
+// P1 (B-1): all skill-draft endpoints take `userId` query param.
+export const triggerSkillExtraction = (agentId: number | string, userId: number) =>
+  api.post<SkillExtractionStartResult>(`/agents/${agentId}/skill-drafts`, null, {
+    params: { userId },
+  });
 
-export const getSkillDrafts = (ownerId: number) =>
-  api.get<SkillDraft[]>(`/skill-drafts?ownerId=${ownerId}`);
+export const getSkillDrafts = (userId: number) =>
+  api.get<SkillDraft[]>('/skill-drafts', { params: { userId } });
 
-export const reviewSkillDraft = (id: string, action: 'approve' | 'discard', reviewedBy: number) =>
-  api.patch<SkillDraft>(`/skill-drafts/${id}`, { action, reviewedBy });
+/**
+ * Review a draft. `forceCreate=true` is required by the backend when the
+ * candidate has high similarity (≥0.85) to an existing skill — the modal
+ * confirmation flow sets it after the operator explicitly acknowledges
+ * the duplicate (P1-C-8).
+ *
+ * NOTE on body field naming: BE reads `reviewedBy` (legacy stable contract,
+ * see SkillDraftController.reviewDraft) — keep the FE field name as
+ * `reviewedBy` even though semantically it is the acting user id. Renaming
+ * to `userId` here would 400 every approve/discard until BE catches up
+ * (Code Judge r1 B-FE-1).
+ */
+export const reviewSkillDraft = (
+  id: string,
+  action: 'approve' | 'discard',
+  userId: number,
+  options?: { forceCreate?: boolean },
+) =>
+  api.patch<SkillDraft>(`/skill-drafts/${id}`, {
+    action,
+    reviewedBy: userId,
+    forceCreate: options?.forceCreate ?? false,
+  });
 
 export default api;

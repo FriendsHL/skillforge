@@ -13,10 +13,15 @@ public class SkillResult {
      * 不应被 detectWaste 当作 execution failure 计入 consecutive error，
      * 否则会触发不必要的 compaction 把上下文越压越小、形成正反馈）。
      * EXECUTION 表示 skill 执行阶段的真实失败（IO、外部系统、业务规则）。
+     * NOT_ALLOWED 表示该 skill 不在当前 agent 的 SessionSkillView 授权范围内
+     * （system skill 被 agent 禁用 / user skill 不属于该 agent）。语义上是"本 session 永久无解"，
+     * 与 VALIDATION（"补字段下次能过"）区分。{@code detectWaste} / {@code reduceLoopWaste}
+     * 把 NOT_ALLOWED 当 EXECUTION 同等对待 —— 重复同一 NOT_ALLOWED 进入压缩 / abort 候选。
      */
     public enum ErrorType {
         VALIDATION,
-        EXECUTION
+        EXECUTION,
+        NOT_ALLOWED
     }
 
     private boolean success;

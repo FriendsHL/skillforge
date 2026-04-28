@@ -2,7 +2,6 @@ import React, { useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { getSkillDetail } from '../../api';
 import type { SkillRow, SkillDetailData } from './types';
-import { DEFAULT_SOURCE_AGENT_ID } from './types';
 import { CLOSE_ICON, COPY_ICON } from './icons';
 import { SkillAbPanel } from './SkillAbPanel';
 import { SkillEvolutionPanel } from './SkillEvolutionPanel';
@@ -15,10 +14,15 @@ interface SkillDrawerProps {
   onToggle: (id: number | string, enabled: boolean) => void;
   onDelete: (id: number | string) => void;
   currentUserId?: number;
+  /**
+   * P1-C-7: source agent chosen on the SkillList page header. When null the
+   * Evolution panel renders a hint instead of starting a run.
+   */
+  sourceAgentId: number | null;
 }
 
 export const SkillDrawer: React.FC<SkillDrawerProps> = ({
-  skill, tab, setTab, onClose, onToggle, onDelete, currentUserId,
+  skill, tab, setTab, onClose, onToggle, onDelete, currentUserId, sourceAgentId,
 }) => {
   const { data: detail, isLoading } = useQuery<SkillDetailData>({
     queryKey: ['skill-detail', skill.id],
@@ -77,6 +81,9 @@ export const SkillDrawer: React.FC<SkillDrawerProps> = ({
               {skill.usageCount != null && skill.usageCount > 0 && (
                 <div style={{ fontSize: 11, color: 'var(--fg-4, #8a8a93)', marginTop: 4 }}>
                   {skill.usageCount} uses · {skill.successCount ?? 0} succeeded
+                  {(skill.failureCount ?? 0) > 0 && (
+                    <> · {skill.failureCount} failed</>
+                  )}
                   <span style={{ marginLeft: 6 }}>
                     ({Math.round(((skill.successCount ?? 0) / skill.usageCount) * 100)}% success)
                   </span>
@@ -85,11 +92,26 @@ export const SkillDrawer: React.FC<SkillDrawerProps> = ({
               {showAbPanel && typeof skill.id === 'number' && (
                 <>
                   <SkillAbPanel skillId={skill.id} />
-                  <SkillEvolutionPanel
-                    skillId={skill.id}
-                    agentId={DEFAULT_SOURCE_AGENT_ID}
-                    currentUserId={currentUserId}
-                  />
+                  {sourceAgentId != null ? (
+                    <SkillEvolutionPanel
+                      skillId={skill.id}
+                      agentId={sourceAgentId}
+                      currentUserId={currentUserId}
+                    />
+                  ) : (
+                    <div
+                      style={{
+                        marginTop: 10,
+                        paddingTop: 10,
+                        borderTop: '1px solid var(--border-subtle, #2a2a31)',
+                        fontSize: 11,
+                        color: 'var(--fg-4, #8a8a93)',
+                      }}
+                    >
+                      <span style={{ fontWeight: 600, color: 'var(--fg-3, #a8a8b1)' }}>Evolution</span>{' '}
+                      — pick a source agent on the Skills header to enable.
+                    </div>
+                  )}
                 </>
               )}
             </div>

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { InputNumber, Select, message } from 'antd';
+import { InputNumber, Select, Switch, message } from 'antd';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   updateAgent,
@@ -52,6 +52,14 @@ function parseArr(raw: unknown): string[] {
     try { const a = JSON.parse(raw); return Array.isArray(a) ? a.map(String) : []; } catch { return []; }
   }
   return [];
+}
+
+/**
+ * P1-C-3: agent.disabledSystemSkills is a JSON-array string of system-skill
+ * names this agent has opted out of. Tolerates null / "" / "[]" (footgun #4).
+ */
+function parseDisabledSystemSkills(raw: unknown): string[] {
+  return parseArr(raw);
 }
 
 function parseBehaviorRulesConfig(raw: unknown): BehaviorRuleConfig | null {
@@ -208,11 +216,19 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
   const [roleDraft, setRoleDraft] = useState<string>((agent.role || '').toString());
   const initialSkills = useMemo(() => parseArr(agent.skillIds), [agent.skillIds]);
   const initialTools = useMemo(() => parseArr(agent.toolIds), [agent.toolIds]);
+  const initialDisabledSystem = useMemo(
+    () => parseDisabledSystemSkills(agent.disabledSystemSkills),
+    [agent.disabledSystemSkills],
+  );
   const [skills, setSkills] = useState<string[]>(initialSkills);
   const [tools, setTools] = useState<string[]>(initialTools);
+  // P1-C-3: tracked as the *disabled* set (matches the persisted column),
+  // rendered as enable/disable toggles in the System Skills panel.
+  const [disabledSystem, setDisabledSystem] = useState<string[]>(initialDisabledSystem);
   const toolsSkillsDirty =
     JSON.stringify(skills) !== JSON.stringify(initialSkills) ||
-    JSON.stringify(tools) !== JSON.stringify(initialTools);
+    JSON.stringify(tools) !== JSON.stringify(initialTools) ||
+    JSON.stringify([...disabledSystem].sort()) !== JSON.stringify([...initialDisabledSystem].sort());
   const hooksCount = useMemo(() => countHookEntries(agent.lifecycleHooks), [agent.lifecycleHooks]);
 
   // Overview — model + maxLoops + thinking edit
@@ -270,6 +286,42 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
     queryFn: () => getSkills().then(res => extractList<Record<string, unknown>>(res)),
     staleTime: 60_000,
   });
+
+  // P1-C-3: dedicated query for the system-skill universe; backend exposes
+  // `?isSystem=true` filter on the skills list (W-1). Falls back to deriving
+  // from the global skill catalog when the BE has not been deployed yet —
+  // this lets the FE ship without blocking on BE-Dev.
+  const { data: systemSkillsRaw = [] } = useQuery({
+    queryKey: ['skills', 'system'],
+    queryFn: () =>
+      getSkills(true)
+        .then(res => extractList<Record<string, unknown>>(res))
+        .catch(() => [] as Record<string, unknown>[]),
+    staleTime: 60_000,
+  });
+  const systemSkillNames = useMemo<string[]>(() => {
+    const fromFiltered = systemSkillsRaw
+      .filter(s => s.system === true || s.source === 'system')
+      .map(s => String(s.name || ''))
+      .filter(Boolean);
+    if (fromFiltered.length > 0) return fromFiltered;
+    // Fallback: derive from the unfiltered skill catalog so the toggle UI
+    // still works against an older BE that hasn't shipped the filter yet.
+    return skillsCatalog
+      .filter(s => s.system === true || s.source === 'system')
+      .map(s => String(s.name || ''))
+      .filter(Boolean);
+  }, [systemSkillsRaw, skillsCatalog]);
+  const systemSkillDescMap = useMemo(() => {
+    const m = new Map<string, string>();
+    [...systemSkillsRaw, ...skillsCatalog].forEach((s) => {
+      const name = String(s.name || '');
+      if (!name || m.has(name)) return;
+      const desc = s.description ? String(s.description) : '';
+      m.set(name, desc);
+    });
+    return m;
+  }, [systemSkillsRaw, skillsCatalog]);
   const skillCatalogItems = useMemo<CatalogItem[]>(
     () => skillsCatalog.map((s) => {
       const requiredTools = s.requiredTools ? String(s.requiredTools) : '';
@@ -367,12 +419,22 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
   };
 
   const handleSaveToolsSkills = () => {
+    // P1-C-3: persisted as the *disabled* names (not enabled). Reviewer
+    // self-check footgun: do NOT send `enabled - selectedNames` here.
     updateMutation.mutate({
       id: agent.id,
       payload: {
         skillIds: JSON.stringify(skills),
         toolIds: JSON.stringify(tools),
+        disabledSystemSkills: JSON.stringify(disabledSystem),
       },
+    });
+  };
+
+  const toggleSystemSkill = (name: string, enable: boolean) => {
+    setDisabledSystem(prev => {
+      if (enable) return prev.filter(n => n !== name);
+      return prev.includes(name) ? prev : [...prev, name];
     });
   };
 
@@ -675,6 +737,75 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
                   <AttachPicker kind="skill" catalog={skillCatalogItemsWithToolDetails} attached={skills} onPick={addSkill} />
                 </div>
               </div>
+              {/* P1-C-3: System Skills toggle panel — independent of SEC-2 hooks
+                  three-source structure (handled in LifecycleHooksPanel). */}
+              <div className="spec-block" data-testid="system-skills-panel">
+                <div className="spec-h">
+                  <h3>
+                    System Skills{' '}
+                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--fg-4)' }}>
+                      — {Math.max(0, systemSkillNames.length - disabledSystem.length)} / {systemSkillNames.length} enabled
+                    </span>
+                  </h3>
+                </div>
+                {systemSkillNames.length === 0 ? (
+                  <div style={{ color: 'var(--fg-3)', fontSize: 13 }}>
+                    No system skills available yet.
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {systemSkillNames.map(name => {
+                      const enabled = !disabledSystem.includes(name);
+                      const desc = systemSkillDescMap.get(name);
+                      return (
+                        <div
+                          key={name}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            gap: 12,
+                            padding: '8px 10px',
+                            border: '1px solid var(--border-subtle, #2a2a31)',
+                            borderRadius: 6,
+                            background: 'var(--bg-primary, #0f0f10)',
+                          }}
+                        >
+                          <div style={{ minWidth: 0 }}>
+                            <div
+                              style={{
+                                fontFamily: 'var(--font-mono, monospace)',
+                                fontSize: 13,
+                                color: 'var(--text-primary, #e7e7ea)',
+                              }}
+                            >
+                              {name}
+                            </div>
+                            {desc && (
+                              <div
+                                style={{
+                                  fontSize: 11,
+                                  color: 'var(--fg-4, #8a8a93)',
+                                  marginTop: 2,
+                                }}
+                              >
+                                {desc}
+                              </div>
+                            )}
+                          </div>
+                          <Switch
+                            size="small"
+                            checked={enabled}
+                            onChange={(checked) => toggleSystemSkill(name, checked)}
+                            data-testid={`system-skill-toggle-${name}`}
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
               <div className="spec-block">
                 <div className="spec-h">
                   <h3>Tools <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--fg-4)' }}>— {tools.length === 0 ? 'all' : tools.length}</span></h3>

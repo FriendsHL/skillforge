@@ -1,10 +1,12 @@
 package com.skillforge.server.controller;
 
 import com.skillforge.server.entity.SkillDraftEntity;
+import com.skillforge.server.improve.HighSimilarityRejectedException;
 import com.skillforge.server.improve.SkillDraftService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -36,12 +38,17 @@ public class SkillDraftController {
         this.coordinatorExecutor = coordinatorExecutor;
     }
 
+    /**
+     * Plan r2 §8 — userId required (was {@code ownerId} with default=0). agentId stays as
+     * a path variable. The BE writes ownerId from the validated userId — never accepts an
+     * ownerId input from FE.
+     */
     @PostMapping("/agents/{agentId}/skill-drafts")
     public ResponseEntity<Map<String, Object>> triggerExtraction(
             @PathVariable Long agentId,
-            @RequestParam(name = "ownerId", required = false, defaultValue = "0") Long ownerId) {
+            @RequestParam(name = "userId", required = true) Long userId) {
 
-        if (skillDraftService.hasPendingDrafts(ownerId)) {
+        if (skillDraftService.hasPendingDrafts(userId)) {
             return ResponseEntity.ok(Map.of(
                     "status", "already_has_drafts",
                     "message", "Review or discard existing drafts first"
@@ -50,7 +57,7 @@ public class SkillDraftController {
 
         coordinatorExecutor.submit(() -> {
             try {
-                skillDraftService.extractFromRecentSessions(agentId, ownerId);
+                skillDraftService.extractFromRecentSessions(agentId, userId);
             } catch (Exception e) {
                 log.error("Async skill draft extraction failed for agent {}: {}", agentId, e.getMessage(), e);
             }
@@ -62,10 +69,11 @@ public class SkillDraftController {
         ));
     }
 
+    /** Plan r2 §8 — userId required. */
     @GetMapping("/skill-drafts")
     public ResponseEntity<List<Map<String, Object>>> listDrafts(
-            @RequestParam(name = "ownerId", required = false, defaultValue = "0") Long ownerId) {
-        List<Map<String, Object>> result = skillDraftService.getDrafts(ownerId)
+            @RequestParam(name = "userId", required = true) Long userId) {
+        List<Map<String, Object>> result = skillDraftService.getDrafts(userId)
                 .stream().map(this::toMap).collect(Collectors.toList());
         return ResponseEntity.ok(result);
     }
@@ -77,14 +85,22 @@ public class SkillDraftController {
 
         Object actionObj = body.get("action");
         String action = actionObj != null ? actionObj.toString() : null;
+        // Plan r2 §8 — reviewedBy required; reject default=0 silent fallback.
         Long reviewedBy = body.containsKey("reviewedBy") && body.get("reviewedBy") != null
                 ? Long.parseLong(body.get("reviewedBy").toString())
-                : 0L;
+                : null;
+        if (reviewedBy == null) {
+            return ResponseEntity.badRequest().body(Map.of("error", "reviewedBy is required"));
+        }
+        // Plan r2 §9 + Code Judge r1 B-FE-2 — forceCreate bypasses the high-similarity
+        // gate after the FE Modal.confirm flow gets explicit operator acknowledgement.
+        boolean forceCreate = body.containsKey("forceCreate")
+                && Boolean.parseBoolean(String.valueOf(body.get("forceCreate")));
 
         try {
             SkillDraftEntity result;
             if ("approve".equals(action)) {
-                result = skillDraftService.approveDraft(id, reviewedBy);
+                result = skillDraftService.approveDraft(id, reviewedBy, forceCreate);
             } else if ("discard".equals(action)) {
                 result = skillDraftService.discardDraft(id, reviewedBy);
             } else {
@@ -92,6 +108,15 @@ public class SkillDraftController {
                         .body(Map.of("error", "action must be 'approve' or 'discard'"));
             }
             return ResponseEntity.ok(toMap(result));
+        } catch (HighSimilarityRejectedException e) {
+            // 409 Conflict — FE distinguishes this from generic 400; drives Modal.confirm.
+            Map<String, Object> errBody = new LinkedHashMap<>();
+            errBody.put("error", e.getMessage());
+            errBody.put("code", "HIGH_SIMILARITY");
+            errBody.put("similarity", e.getSimilarity());
+            errBody.put("mergeCandidateId", e.getCandidateId());
+            errBody.put("mergeCandidateName", e.getCandidateName());
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(errBody);
         } catch (RuntimeException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
@@ -113,6 +138,10 @@ public class SkillDraftController {
         map.put("createdAt", entity.getCreatedAt());
         map.put("reviewedAt", entity.getReviewedAt());
         map.put("reviewedBy", entity.getReviewedBy());
+        // Plan r2 §9 + Code Judge r1 B-FE-3 — surface dedupe metadata to FE.
+        map.put("similarity", entity.getSimilarity());
+        map.put("mergeCandidateId", entity.getMergeCandidateId());
+        map.put("mergeCandidateName", entity.getMergeCandidateName());
         return map;
     }
 }

@@ -1,16 +1,17 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { message } from 'antd';
+import { Modal, Select, Tooltip, message } from 'antd';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   getSkills, uploadSkill, deleteSkill,
   toggleSkill, extractList,
   getSkillDrafts, triggerSkillExtraction, reviewSkillDraft,
+  getAgents,
   type SkillDraft,
 } from '../api';
 import { useAuth } from '../contexts/AuthContext';
 import '../components/agents/agents.css';
 import '../components/skills/skills.css';
-import { DEFAULT_SOURCE_AGENT_ID, type SkillRow } from '../components/skills/types';
+import type { SkillRow } from '../components/skills/types';
 import { normalizeSkill } from '../components/skills/utils';
 import { BOLT_ICON, PLUS_ICON } from '../components/skills/icons';
 import { FilterItem } from '../components/skills/FilterItem';
@@ -20,10 +21,20 @@ import { SkillDrawer } from '../components/skills/SkillDrawer';
 import { NewSkillModal } from '../components/skills/NewSkillModal';
 import { SkillDraftsSection } from '../components/skills/SkillDraftPanel';
 
+interface AgentRow {
+  id: number;
+  name: string;
+}
+
+/** P1-C-8 dedup: above this similarity score the BE flags the candidate as a near-duplicate. */
+const HIGH_SIMILARITY_THRESHOLD = 0.85;
+
 const SkillList: React.FC = () => {
   const queryClient = useQueryClient();
   const { userId: currentUserId } = useAuth();
-  const currentAgentId = DEFAULT_SOURCE_AGENT_ID;
+  // P1-C-7: page-level state replaces DEFAULT_SOURCE_AGENT_ID. Until the user
+  // picks one, extract / A-B / evolution actions are disabled with a tooltip.
+  const [selectedAgentId, setSelectedAgentId] = useState<number | null>(null);
   const [view, setView] = useState<'grid' | 'table'>('grid');
   const [q, setQ] = useState('');
   const [filterStatus, setFilterStatus] = useState<string | null>(null);
@@ -39,6 +50,23 @@ const SkillList: React.FC = () => {
     queryFn: () => getSkills().then(res => extractList<Record<string, unknown>>(res)),
   });
 
+  // Agent catalog for the source-agent selector. We don't yet have a shared
+  // useAgents hook (CLAUDE.md frontend rule §"文件组织" — extract when reused).
+  const { data: agentRows = [] } = useQuery<AgentRow[]>({
+    queryKey: ['agents-min'],
+    queryFn: () =>
+      getAgents().then((res) => {
+        const list = extractList<Record<string, unknown>>(res);
+        return list
+          .map((a): AgentRow | null => {
+            if (a.id == null || a.name == null) return null;
+            return { id: Number(a.id), name: String(a.name) };
+          })
+          .filter((a): a is AgentRow => a !== null);
+      }),
+    staleTime: 60_000,
+  });
+
   const { data: draftsData } = useQuery({
     queryKey: ['skill-drafts', currentUserId],
     queryFn: () => getSkillDrafts(currentUserId).then(r => r.data),
@@ -48,13 +76,17 @@ const SkillList: React.FC = () => {
   const pendingDrafts = useMemo(() => drafts.filter(d => d.status === 'draft'), [drafts]);
 
   const approveMutation = useMutation({
-    mutationFn: (id: string) => reviewSkillDraft(id, 'approve', currentUserId),
+    mutationFn: (vars: { id: string; forceCreate?: boolean }) =>
+      reviewSkillDraft(vars.id, 'approve', currentUserId, { forceCreate: vars.forceCreate }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['skill-drafts'] });
       queryClient.invalidateQueries({ queryKey: ['skills'] });
       message.success('Skill approved');
     },
-    onError: () => message.error('Failed to approve draft'),
+    onError: (err: unknown) => {
+      const e = err as { response?: { data?: { error?: string } } };
+      message.error(e.response?.data?.error || 'Failed to approve draft');
+    },
   });
 
   const discardMutation = useMutation({
@@ -66,11 +98,44 @@ const SkillList: React.FC = () => {
     onError: () => message.error('Failed to discard draft'),
   });
 
+  /**
+   * Approve handler: when the BE flags a near-duplicate (similarity ≥ 0.85),
+   * confirm with the operator and only then send `forceCreate=true` (P1-C-8).
+   */
+  const handleApproveDraft = (id: string) => {
+    const draft = drafts.find(d => d.id === id);
+    const similarity = draft?.similarity ?? 0;
+    if (draft && similarity >= HIGH_SIMILARITY_THRESHOLD) {
+      Modal.confirm({
+        title: 'Possible duplicate skill',
+        content: (
+          <div>
+            <p>
+              Skill <strong>{draft.name}</strong> looks similar to existing skill{' '}
+              <strong>{draft.mergeCandidateName ?? draft.mergeCandidateId ?? 'unknown'}</strong>{' '}
+              (similarity {Math.round(similarity * 100)}%).
+            </p>
+            <p>Create anyway?</p>
+          </div>
+        ),
+        okText: 'Create anyway',
+        cancelText: 'Cancel',
+        okButtonProps: { danger: true },
+        onOk: () => approveMutation.mutate({ id, forceCreate: true }),
+      });
+      return;
+    }
+    approveMutation.mutate({ id });
+  };
+
   const handleExtract = async () => {
-    if (!currentAgentId) { message.warning('Select an agent first'); return; }
+    if (!selectedAgentId) {
+      message.warning('Select a source agent first');
+      return;
+    }
     setExtracting(true);
     try {
-      const res = await triggerSkillExtraction(currentAgentId, currentUserId);
+      const res = await triggerSkillExtraction(selectedAgentId, currentUserId);
       if (res.data.status === 'already_has_drafts') {
         message.info(`${res.data.count ?? 0} pending draft(s) already waiting for review`);
       } else {
@@ -128,17 +193,26 @@ const SkillList: React.FC = () => {
   };
 
   const deleteMutation = useMutation({
-    mutationFn: (id: number) => deleteSkill(id),
+    mutationFn: (id: number) => deleteSkill(id, currentUserId),
     onSuccess: () => { message.success('Skill deleted'); queryClient.invalidateQueries({ queryKey: ['skills'] }); },
-    onError: () => message.error('Failed to delete'),
+    onError: (err: unknown) => {
+      const e = err as { response?: { data?: { error?: string }; status?: number } };
+      // BE returns 403 when attempting to delete a system skill (P1-C-8 BE收口).
+      if (e.response?.status === 403) {
+        message.error(e.response?.data?.error || 'System skills cannot be deleted');
+      } else {
+        message.error(e.response?.data?.error || 'Failed to delete');
+      }
+    },
   });
   const toggleMutation = useMutation({
-    mutationFn: ({ id, enabled }: { id: number; enabled: boolean }) => toggleSkill(id, enabled),
+    mutationFn: ({ id, enabled }: { id: number; enabled: boolean }) =>
+      toggleSkill(id, enabled, currentUserId),
     onSuccess: (_, v) => { message.success(v.enabled ? 'Enabled' : 'Disabled'); queryClient.invalidateQueries({ queryKey: ['skills'] }); },
     onError: () => message.error('Toggle failed'),
   });
   const uploadMutation = useMutation({
-    mutationFn: (file: File) => uploadSkill(file, 1),
+    mutationFn: (file: File) => uploadSkill(file, currentUserId),
     onSuccess: () => { message.success('Skill uploaded'); queryClient.invalidateQueries({ queryKey: ['skills'] }); setCreating(false); },
     onError: (err: unknown) => {
       const e = err as { response?: { data?: { error?: string } } };
@@ -147,6 +221,8 @@ const SkillList: React.FC = () => {
   });
 
   const openDetail = (s: SkillRow) => { setOpen(s); setDrawerTab('readme'); };
+
+  const noAgentTooltip = 'Pick a source agent first';
 
   return (
     <div className="agents-view">
@@ -172,6 +248,20 @@ const SkillList: React.FC = () => {
             <p className="agents-head-sub">{rows.length} of {all.length} · reusable building blocks for agents</p>
           </div>
           <div className="agents-head-actions">
+            {/* P1-C-7: source-agent selector replaces hardcoded agentId=1.
+                Disables extract / A-B / evolution until set. */}
+            <Select<number>
+              size="small"
+              style={{ minWidth: 180 }}
+              placeholder="Source agent…"
+              value={selectedAgentId ?? undefined}
+              onChange={(v) => setSelectedAgentId(v ?? null)}
+              options={agentRows.map(a => ({ label: a.name, value: a.id }))}
+              showSearch
+              optionFilterProp="label"
+              allowClear
+              data-testid="source-agent-select"
+            />
             <div className="view-seg">
               <button className={view === 'grid' ? 'on' : ''} onClick={() => setView('grid')}>Grid</button>
               <button className={view === 'table' ? 'on' : ''} onClick={() => setView('table')}>Table</button>
@@ -189,15 +279,17 @@ const SkillList: React.FC = () => {
                 {pendingDrafts.length} pending draft{pendingDrafts.length > 1 ? 's' : ''}
               </button>
             )}
-            <button
-              className="btn-ghost-sf"
-              style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
-              onClick={handleExtract}
-              disabled={extracting}
-              title="Extract new skill drafts from recent sessions"
-            >
-              {BOLT_ICON} {extracting ? 'Extracting…' : 'Extract from Sessions'}
-            </button>
+            <Tooltip title={!selectedAgentId ? noAgentTooltip : 'Extract new skill drafts from recent sessions'}>
+              <button
+                className="btn-ghost-sf"
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+                onClick={handleExtract}
+                disabled={extracting || !selectedAgentId}
+                data-testid="extract-btn"
+              >
+                {BOLT_ICON} {extracting ? 'Extracting…' : 'Extract from Sessions'}
+              </button>
+            </Tooltip>
             <button className="btn-primary-sf" onClick={() => setCreating(true)}>{PLUS_ICON} New skill</button>
           </div>
         </header>
@@ -207,9 +299,11 @@ const SkillList: React.FC = () => {
             drafts={drafts}
             pendingCount={pendingDrafts.length}
             onClose={() => setDraftsOpen(false)}
-            onApprove={(id) => approveMutation.mutate(id)}
+            onApprove={handleApproveDraft}
             onDiscard={(id) => discardMutation.mutate(id)}
-            approvingId={approveMutation.isPending ? approveMutation.variables ?? null : null}
+            approvingId={
+              approveMutation.isPending ? approveMutation.variables?.id ?? null : null
+            }
             discardingId={discardMutation.isPending ? discardMutation.variables ?? null : null}
           />
         )}
@@ -239,6 +333,7 @@ const SkillList: React.FC = () => {
           onToggle={(id, en) => toggleMutation.mutate({ id: id as number, enabled: en })}
           onDelete={(id) => { deleteMutation.mutate(id as number); setOpen(null); }}
           currentUserId={currentUserId}
+          sourceAgentId={selectedAgentId}
         />
       )}
 

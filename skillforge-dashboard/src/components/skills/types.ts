@@ -1,7 +1,7 @@
-// TODO(P1-1 follow-up): source agentId from an agent selector or route context.
-// Current SkillList is a global page with no agent scope — placeholder until a
-// picker lands (tracked in docs/design-self-improve-pipeline.md).
-export const DEFAULT_SOURCE_AGENT_ID = 1;
+// P1-C-7 (B-1): the legacy `DEFAULT_SOURCE_AGENT_ID = 1` placeholder has been
+// removed. SkillList now requires the operator to pick a source agent from a
+// selector before extract / A-B / evolution actions are enabled. Skill API
+// writes inject `userId` from `useAuth()`, mirroring the chat API contract.
 
 export interface SkillRow {
   id: number | string;
@@ -20,6 +20,8 @@ export interface SkillRow {
   parentSkillId?: number;
   usageCount?: number;
   successCount?: number;
+  /** P1-C-6 telemetry: counted via SkillEntity.failureCount; absent for older rows. */
+  failureCount?: number;
 }
 
 export interface SkillDetailData {

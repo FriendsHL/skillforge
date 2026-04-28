@@ -42,6 +42,15 @@ public class AgentEntity {
     @Column(columnDefinition = "TEXT")
     private String skillIds;
 
+    /**
+     * JSON array of system skill names this agent has explicitly disabled.
+     * Empty / "[]" = all system skills enabled. Added by V31 migration.
+     * <p>Stored as JSON array string (matches {@link #skillIds} convention) to avoid
+     * introducing a join table — see plan §2.
+     */
+    @Column(name = "disabled_system_skills", columnDefinition = "TEXT", nullable = false)
+    private String disabledSystemSkills = "[]";
+
     /** JSON array of Tool names this agent can use. Null/empty = all tools available. */
     @Column(columnDefinition = "TEXT")
     private String toolIds;
@@ -162,6 +171,14 @@ public class AgentEntity {
 
     public void setSkillIds(String skillIds) {
         this.skillIds = skillIds;
+    }
+
+    public String getDisabledSystemSkills() {
+        return disabledSystemSkills;
+    }
+
+    public void setDisabledSystemSkills(String disabledSystemSkills) {
+        this.disabledSystemSkills = disabledSystemSkills != null ? disabledSystemSkills : "[]";
     }
 
     public String getToolIds() {

@@ -2,6 +2,39 @@ import React, { useState } from 'react';
 import type { SkillDraft } from '../../api';
 import { CHEVRON_ICON } from './icons';
 
+/**
+ * P1-C-8 dedup thresholds (per plan §9):
+ *   ≥ 0.85   → high-similarity (red badge, approve gated by confirm modal)
+ *   0.60-0.85 → suggest-merge (amber badge, approve unblocked)
+ *   < 0.60   → no badge
+ */
+const HIGH_SIMILARITY = 0.85;
+const SUGGEST_MERGE_SIMILARITY = 0.60;
+
+interface SimilarityBadgeStyle {
+  background: string;
+  color: string;
+  label: string;
+}
+
+function similarityStyle(sim: number, mergeName: string | undefined): SimilarityBadgeStyle | null {
+  if (sim >= HIGH_SIMILARITY) {
+    return {
+      background: 'rgba(240,97,109,0.14)',
+      color: '#f0616d',
+      label: `High similarity ${Math.round(sim * 100)}%${mergeName ? ` · ${mergeName}` : ''}`,
+    };
+  }
+  if (sim >= SUGGEST_MERGE_SIMILARITY) {
+    return {
+      background: 'rgba(255,159,67,0.14)',
+      color: '#ff9f43',
+      label: `Suggest merge ${Math.round(sim * 100)}%${mergeName ? ` · ${mergeName}` : ''}`,
+    };
+  }
+  return null;
+}
+
 interface SkillDraftsSectionProps {
   drafts: SkillDraft[];
   pendingCount: number;
@@ -86,6 +119,10 @@ const SkillDraftCard: React.FC<SkillDraftCardProps> = React.memo(
     const [showRationale, setShowRationale] = useState(false);
     const triggers = (draft.triggers ?? '').split(',').map(t => t.trim()).filter(Boolean);
 
+    const simBadge = draft.similarity != null
+      ? similarityStyle(draft.similarity, draft.mergeCandidateName ?? draft.mergeCandidateId)
+      : null;
+
     return (
       <div
         style={{
@@ -108,6 +145,22 @@ const SkillDraftCard: React.FC<SkillDraftCardProps> = React.memo(
             >
               {draft.name}
             </span>
+            {simBadge && (
+              <span
+                data-testid="similarity-badge"
+                style={{
+                  fontSize: 10,
+                  padding: '1px 7px',
+                  borderRadius: 10,
+                  background: simBadge.background,
+                  color: simBadge.color,
+                  fontFamily: 'var(--font-mono, monospace)',
+                  fontWeight: 600,
+                }}
+              >
+                {simBadge.label}
+              </span>
+            )}
             {triggers.slice(0, 3).map(t => (
               <span
                 key={t}

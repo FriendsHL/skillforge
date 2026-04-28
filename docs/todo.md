@@ -22,7 +22,8 @@
 | **🔥 穿插**     | **BUG-G** dangling assistant tool_call 历史防腐 + stopReason/toolUse 一致性修复                  | 1-2 天             | `d0863201` / `ff457c2d` 触发；BUG-G-2 已本地修复：qwen 流式空 id/name 不覆盖首包有效 tool_call 身份 + toolUseBlocks 结构优先；BUG-G-1 发送前历史防腐、BUG-G-3 失败路径尾部不变量仍待补 |
 | ~~**Sprint 1**~~  | ~~P9-7~~ · ~~P3-1~~ · ~~P3-3~~ · ~~P13-3~~ · ~~P13-4~~ ✅ 2026-04-26                 | 2-3 天             | 零依赖防腐；P13-4 代码扫描确认已完成；P9-7 已完成 commit `621f417`；P3-1/P3-3/P13-3 已完成 commit `f4773c3`，397 个非 IT server tests 全绿；完整 suite 仅 Docker/Testcontainers IT 受本机环境阻塞                                                                 |
 | ~~**Sprint 2**~~  | ~~P11（收窄）+ P13-1~~ → ~~P15-1/P15-2/P15-4 + UpdateAgent~~                                  | 8-12 天            | PR1 已完成 2026-04-26：AgentDiscovery + name resolver + public/private visibility + custom rule severity；PR2 已完成 P15-1/P15-2：GetTrace + GetSessionMessages，413 个非 IT server tests 全绿；补充完成 GetAgentConfig + AgentDiscovery 增强 + 带一次确认的 UpdateAgent。P15-5 seed 取消：Analyzer Agent 已手工创建，不再内置 Flyway seed |
-| **🧩 穿插**     | P1 Skill 自动生成补完：SKILL.md 物化 + registry 重启恢复 + agent-scoped 生效 + telemetry + draft 去重          | 3-5 天             | 当前 skill draft approve 只写 DB-only `SkillEntity`；上传/ClawHub 等用户 skill 重启后也不恢复 registry；agent 绑定 skillIds 未实际限制可用 skill；usage 信号未自动采集。见下方 P1-FU |
+| **🧩 P1 重构**  | P1 Skill 生命周期统一（方案 C，Skill Control Plane）                                          | 5-8 天             | 2026-04-27 决策切方案 C：Artifact 统一模型 + SessionSkillView + system skill toggle + 启动恢复 + telemetry 自动采集 + Skill 页去硬编码 + Draft 去重；八子任务一体闭环 |
+| **🔍 OBS-1**   | Session × Trace 合并视图 + LLM call 完整 payload 落库 + UI Raw Viewer + 压缩验证视角            | 待估期             | 用户需直接看 LLM 完整 request body 来判断压缩是否合理；当前排查过度依赖 Analyzer Agent；与 P15 Tool 层裁剪互补                                                                                                                       |
 | **Sprint 3**  | P9-2 长对话 tool 归档（独立 PR）                                                                 | ~2 周              | 触碰核心文件，Full Pipeline；真实用户长 session 慢性病                                                                                                                                                                      |
 | ~~**🧠 Memory v2**~~ ✅ 2026-04-27 | ~~MEM-1 ~ MEM-5 写入 / 召回 / 淘汰一体化重构~~                                                       | ~~13-18 天~~           | PR-1 `V29 schema + snapshot/rollback 基线`（`9f36b59`）→ PR-2 `ACTIVE 过滤 + L0/L1 task-aware recall + MemorySearch 排重`（`8330d32`）→ PR-3 `增量抽取 cursor / idle scanner / cooldown`（`86703ed`）→ PR-4 `embedding add-time dedup`（`96676b9`）→ PR-5 `ACTIVE/STALE/ARCHIVED 状态机、容量淘汰、batch status API、/memories tabs + batch actions + restore + capacity banner`（本地已验证，待后续提交）；聚焦验证：`MemoryConsolidatorTest` + `MemoryServiceTest` 24/24 通过，dashboard `npm run build` 通过 |
 | **⚠️ 前置决策**   | Cost Dashboard · PG 备份 · 多用户权限 design doc                                               | 决策先行              | Sprint 4 开工前必须有答案，否则 P12 上线即踩坑                                                                                                                                                                              |
@@ -237,6 +238,30 @@
 | 子任务 | 说明 |
 | --- | --- |
 | **P9-2** Per-message 聚合预算 + 归档持久化 | 单条 user message 的 tool_result 总量超 200K chars 时，按大小降序归档到 `t_tool_result_archive` 表，消息替换为 2KB preview + 引用 ID；可选新增 `ToolResultRetrieveSkill` 让模型按需读取 |
+
+---
+
+### 🔍 OBS-1 Session × Trace 合并 + Trace 详情完整化（待排期，2026-04-28 新增）
+
+> **触发动机**：当前排查链路过度依赖 Analyzer Agent（P15），但用户也需要直接看原始 LLM 请求/响应来判断"压缩后回传给模型的内容是否合理"——例如 BUG-F / BUG-G / 跨 provider 切换 这类问题，最终都得看一个完整的 LLM request body 才能定性。Trace 页当前对 input/output 做了裁剪（P15-1 GetTraceTool `maxSpans=30 / 输入输出截断` 是 Tool 层裁剪，UI 端也有截断），LLM 调用的真实 payload 看不全；同时 Session 页和 Trace 页是分离的，排查时需要在两个页面间跳转拼接。
+>
+> **目标**：让用户在一个视图里同时看到对话流水（session messages）和底层执行栈（trace spans）——会话级时间线为主，点开任意 LLM / Tool span 能拉到**未截断**的完整 request body 与 response body（哪怕 100K+ JSON），方便直接验证压缩内容、tool_calls 配对、reasoning_content 形态等。
+
+| 子任务 | 说明 |
+| --- | --- |
+| **OBS-1-1** Session × Trace 统一视图 | Dashboard 新增（或合并现有 Session/Trace 两页为）"Session Detail" 视图：左侧消息时间线（user / assistant / tool_use / tool_result），每条消息可展开下挂的 LLM call / Tool exec span，按时间对齐；保持现有 Trace 列表入口的同时，从 Session 直接跳到对应 trace |
+| **OBS-1-2** LLM span 完整 payload 落库 | TraceSpan 当前 `input` / `output` 字段就有截断；新增专用持久化（如 `t_llm_call_payload` 大对象表，主键 spanId）记录每次 LLM 调用的**完整** request body（messages 数组、tools schema、reasoning 配置等）+ 完整 response body（含 SSE 重组后的最终 message），不做截断；只在 query 时按需懒加载 |
+| **OBS-1-3** UI Payload Viewer | Span 详情面板新增"Raw Request / Raw Response" tab：JSON 折叠 + 关键词搜索 + 一键复制 + size badge；超过阈值（如 1MB）走分块流式渲染防卡顿；敏感字段（api-key、Authorization header 等）落库前剥离 |
+| **OBS-1-4** 压缩验证视角 | 对 `compact` 类 LLM call（summary 生成）在 UI 标记特殊徽章；可对比"压缩前消息列表"vs"压缩后实际发给模型的 messages"，让用户直观判断 summary 质量与边界切割是否合理；同时 trace 元数据带上 compact 的 strategy / boundary index / reason |
+| **OBS-1-5** Provider quirk 诊断信号 | 已知问题（reasoning_content 缺失、tool_call_id 重复、dangling tool_use）在 UI 自动检测并红字标注，给出文档锚点（指向 `docs/llm-provider-quirks.md` 对应章节）|
+
+> **不在本次范围**：
+> - 跨 session 全文检索 / 流量重放 / 自动告警 → V2
+> - LLM call 录制为 eval scenario → 与 P14 协同时再考虑
+>
+> **存储与脱敏**：完整 payload 表会显著增长 DB 体积，需要保留期策略（如 30 天后归档/丢弃）+ 脱敏管道，方案在 design doc 阶段定。
+>
+> **与 P15 关系**：P15 GetTraceTool 仍保留裁剪输出给 Agent 用（节省 token）；OBS-1 的完整 payload 是给**人**看的旁路通道，二者不互相替代。
 
 ---
 

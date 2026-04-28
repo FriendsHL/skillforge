@@ -77,6 +77,19 @@ public class SkillEntity {
     @Column(nullable = false)
     private long successCount = 0;
 
+    /** Failure tally — added by V31 migration alongside success_count. */
+    @Column(name = "failure_count", nullable = false)
+    private long failureCount = 0;
+
+    /**
+     * System skill flag — true for built-in skills loaded by SystemSkillLoader from
+     * {@code system-skills/} directory. System rows have {@code owner_id = NULL} and
+     * cannot be deleted through the user-facing DELETE endpoint (returns 403).
+     * Added by V31 migration.
+     */
+    @Column(name = "is_system", nullable = false)
+    private boolean isSystem = false;
+
     public SkillEntity() {
     }
 
@@ -230,5 +243,21 @@ public class SkillEntity {
 
     public void setSuccessCount(long successCount) {
         this.successCount = successCount;
+    }
+
+    public long getFailureCount() {
+        return failureCount;
+    }
+
+    public void setFailureCount(long failureCount) {
+        this.failureCount = failureCount;
+    }
+
+    public boolean isSystem() {
+        return isSystem;
+    }
+
+    public void setSystem(boolean isSystem) {
+        this.isSystem = isSystem;
     }
 }

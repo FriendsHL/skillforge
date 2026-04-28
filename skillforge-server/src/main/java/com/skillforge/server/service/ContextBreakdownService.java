@@ -12,6 +12,8 @@ import com.skillforge.core.model.SkillDefinition;
 import com.skillforge.core.model.ToolSchema;
 import com.skillforge.core.skill.SkillRegistry;
 import com.skillforge.core.skill.Tool;
+import com.skillforge.core.skill.view.SessionSkillResolver;
+import com.skillforge.core.skill.view.SessionSkillView;
 import com.skillforge.server.dto.ContextBreakdownDto;
 import com.skillforge.server.dto.ContextBreakdownDto.Segment;
 import com.skillforge.server.entity.AgentEntity;
@@ -63,6 +65,8 @@ public class ContextBreakdownService {
     private final UserConfigService userConfigService;
     private final List<ContextProvider> contextProviders;
     private final ObjectMapper objectMapper;
+    /** Plan r2 §5 — view 接管 skill 列表渲染（修复 B-BE-3 残留 getAllSkillDefinitions）。 */
+    private final SessionSkillResolver sessionSkillResolver;
 
     public ContextBreakdownService(AgentService agentService,
                                    SessionService sessionService,
@@ -70,7 +74,8 @@ public class ContextBreakdownService {
                                    MemoryService memoryService,
                                    UserConfigService userConfigService,
                                    List<ContextProvider> contextProviders,
-                                   ObjectMapper objectMapper) {
+                                   ObjectMapper objectMapper,
+                                   SessionSkillResolver sessionSkillResolver) {
         this.agentService = agentService;
         this.sessionService = sessionService;
         this.skillRegistry = skillRegistry;
@@ -78,6 +83,7 @@ public class ContextBreakdownService {
         this.userConfigService = userConfigService;
         this.contextProviders = contextProviders != null ? contextProviders : List.of();
         this.objectMapper = objectMapper;
+        this.sessionSkillResolver = sessionSkillResolver;
     }
 
     @Transactional(readOnly = true)
@@ -140,7 +146,7 @@ public class ContextBreakdownService {
         out.add(Segment.leaf("tools_md", "TOOLS.md / Guidelines",
                 TokenEstimator.estimateString(toolsText)));
 
-        String skillsBlock = renderSkillsListBlock();
+        String skillsBlock = renderSkillsListBlock(agentDef);
         if (!skillsBlock.isEmpty()) {
             out.add(Segment.leaf("skills_list", "Skills list",
                     TokenEstimator.estimateString(skillsBlock)));
@@ -182,8 +188,23 @@ public class ContextBreakdownService {
         return out;
     }
 
-    private String renderSkillsListBlock() {
-        Collection<SkillDefinition> defs = skillRegistry.getAllSkillDefinitions();
+    /**
+     * Plan r2 §5 — list only the skills authorised for this session (matches what
+     * AgentLoopEngine actually injects into the system prompt). Resolver failure /
+     * absent agent → fall back to {@link SessionSkillView#EMPTY} (fail-secure).
+     * <p>Package-private for {@code ContextBreakdownServiceTest}.
+     */
+    String renderSkillsListBlock(AgentDefinition agentDef) {
+        Collection<SkillDefinition> defs;
+        try {
+            SessionSkillView view = sessionSkillResolver != null
+                    ? sessionSkillResolver.resolveFor(agentDef)
+                    : SessionSkillView.EMPTY;
+            defs = view != null ? view.all() : List.of();
+        } catch (Exception e) {
+            log.warn("renderSkillsListBlock: resolver failed, treating as empty: {}", e.getMessage());
+            defs = List.of();
+        }
         if (defs == null || defs.isEmpty()) return "";
         StringBuilder sb = new StringBuilder();
         sb.append("## Available Skills\n\n");

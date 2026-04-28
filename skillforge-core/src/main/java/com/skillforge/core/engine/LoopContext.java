@@ -2,6 +2,7 @@ package com.skillforge.core.engine;
 
 import com.skillforge.core.model.AgentDefinition;
 import com.skillforge.core.model.Message;
+import com.skillforge.core.skill.view.SessionSkillView;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -105,6 +106,23 @@ public class LoopContext {
      * {@code memoryProvider.apply(userId, userMessage)}.
      */
     private Set<Long> injectedMemoryIds = Collections.emptySet();
+
+    /**
+     * Plan r2 §5: per-session skill 授权视图（system + user 包级 skills）。
+     * 引擎 collectTools 的 SkillDefinition 段、executeToolCall 的 skill 查找都从这里读。
+     * <p>{@code null} 仅出现在未注入的旧调用路径（向后兼容）；引擎处理时按"无授权 skill 包"语义。
+     */
+    private SessionSkillView skillView;
+
+    /**
+     * Plan r2 §5 B-4：第 N 次 NOT_ALLOWED 触发反 hijack 短路时由 executeToolCall 置 true。
+     * 主循环每个 tool_use round 末尾识别 → 立刻终止本 turn，避免 LLM 死循环烧 token。
+     * 跨 turn 累计；session 关闭时随 LoopContext 释放。
+     */
+    private volatile boolean abortToolUse = false;
+
+    /** Per-skill NOT_ALLOWED 计数（B-4 反 hijack）。跨 turn 累计。 */
+    private final ConcurrentHashMap<String, Integer> notAllowedCount = new ConcurrentHashMap<>();
 
     public LoopContext() {
         this.messages = new ArrayList<>();
@@ -449,5 +467,38 @@ public class LoopContext {
         this.injectedMemoryIds = injectedMemoryIds == null
                 ? Collections.emptySet()
                 : Set.copyOf(injectedMemoryIds);
+    }
+
+    /** Plan r2 §5: per-session skill 授权视图（可能为 null on legacy callers）。 */
+    public SessionSkillView getSkillView() {
+        return skillView;
+    }
+
+    public void setSkillView(SessionSkillView skillView) {
+        this.skillView = skillView;
+    }
+
+    /** Plan r2 §5 B-4: 引擎主循环每 tool_use round 末尾检查；true → 终止本 turn。 */
+    public boolean isAbortToolUse() {
+        return abortToolUse;
+    }
+
+    public void setAbortToolUse(boolean abortToolUse) {
+        this.abortToolUse = abortToolUse;
+    }
+
+    /**
+     * 累加并返回某 skill 的 NOT_ALLOWED 累积次数（含本次）。线程安全。
+     * 第 2 次起 executeToolCall 触发 abortToolUse=true。
+     */
+    public int incrementNotAllowedCount(String skillName) {
+        if (skillName == null) return 0;
+        return notAllowedCount.merge(skillName, 1, Integer::sum);
+    }
+
+    /** @return current NOT_ALLOWED count for a skill (0 if never seen). */
+    public int getNotAllowedCount(String skillName) {
+        if (skillName == null) return 0;
+        return notAllowedCount.getOrDefault(skillName, 0);
     }
 }

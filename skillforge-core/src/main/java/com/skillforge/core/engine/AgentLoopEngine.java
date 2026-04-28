@@ -99,6 +99,26 @@ public class AgentLoopEngine {
     private java.util.function.Function<Long, String> claudeMdProvider;
     /** 默认 context window, 单位 token。从 AgentDefinition config 覆盖。 */
     private int defaultContextWindowTokens = 32000;
+    /**
+     * Plan r2 §7 — telemetry recorder. Server 注入 SkillService::recordUsage 的引用。
+     * Engine 在 executeToolCall 的所有 return 路径之前调用，覆盖 7 个注入点：
+     * <ol>
+     *   <li>SkillDefinition 早 return（r1 漏检的关键点）</li>
+     *   <li>Tool 末尾</li>
+     *   <li>missing-required（VALIDATION）</li>
+     *   <li>NOT_ALLOWED 短路（含反 hijack）</li>
+     *   <li>Hook 拒绝</li>
+     *   <li>顶层 catch 异常兜底</li>
+     *   <li>unknown skill 路径</li>
+     * </ol>
+     * null 时 noop（向后兼容；测试 / cli 模式下不强制依赖 server）。
+     */
+    private SkillTelemetryRecorder skillTelemetryRecorder;
+    /**
+     * Plan r2 §5 — session skill view resolver。run() 入口 resolveFor(agent) 后注入到
+     * LoopContext，引擎其余路径只读 view。null → 引擎按"无授权 skill 包"语义降级。
+     */
+    private com.skillforge.core.skill.view.SessionSkillResolver sessionSkillResolver;
 
     public AgentLoopEngine(LlmProviderFactory llmProviderFactory,
                            String defaultProviderName,
@@ -168,6 +188,30 @@ public class AgentLoopEngine {
     public void setDefaultContextWindowTokens(int defaultContextWindowTokens) {
         if (defaultContextWindowTokens > 0) {
             this.defaultContextWindowTokens = defaultContextWindowTokens;
+        }
+    }
+
+    /** Plan r2 §7 — wire server-side telemetry recorder. */
+    public void setSkillTelemetryRecorder(SkillTelemetryRecorder skillTelemetryRecorder) {
+        this.skillTelemetryRecorder = skillTelemetryRecorder;
+    }
+
+    /** Plan r2 §5 — wire server-side {@link com.skillforge.core.skill.view.SessionSkillResolver}. */
+    public void setSessionSkillResolver(com.skillforge.core.skill.view.SessionSkillResolver sessionSkillResolver) {
+        this.sessionSkillResolver = sessionSkillResolver;
+    }
+
+    /**
+     * Plan r2 §7 — unified telemetry entry point. Wraps the recorder in a try/catch so
+     * any failure in the server-side telemetry path can never bubble up and break a
+     * tool call. {@code null}-safe (no-op when recorder not wired).
+     */
+    private void recordTelemetry(String skillName, boolean success, String errorType) {
+        if (skillTelemetryRecorder == null) return;
+        try {
+            skillTelemetryRecorder.record(skillName, success, errorType);
+        } catch (Exception e) {
+            log.warn("recordTelemetry failed for skill={}: {}", skillName, e.getMessage());
         }
     }
 
@@ -260,9 +304,15 @@ public class AgentLoopEngine {
         // depend solely on the 60s half-open window.
         loopCtx.resetCompactFailures();
 
+        // Plan r2 §5: resolve per-session skill view (system + user packages, minus disabled).
+        // Inject into LoopContext so collectTools / executeToolCall can read from it.
+        // If resolver is not wired (legacy / test paths), preserve old "all skill defs" behavior
+        // by leaving skillView null and falling back to skillRegistry.getAllSkillDefinitions().
+        ensureSkillViewResolved(loopCtx, agentDef);
+
         // 4. 构建 system prompt（注入全局 CLAUDE.md）
         String claudeMd = claudeMdProvider != null ? claudeMdProvider.apply(userId) : null;
-        List<SkillDefinition> skillDefs = new ArrayList<>(skillRegistry.getAllSkillDefinitions());
+        List<SkillDefinition> skillDefs = resolveVisibleSkillDefs(loopCtx);
         String systemPrompt = new SystemPromptBuilder(agentDef, skillDefs, contextProviders).build(claudeMd);
 
         // 4.0.1 注入 Session Context (userId / sessionId) — 让 Agent 自动知道当前用户/会话
@@ -293,7 +343,8 @@ public class AgentLoopEngine {
         }
 
         // 5. 收集 tools: 内置 Tool 的 ToolSchema + SkillDefinition 的描述 + (可选) ask_user + compact_context
-        List<ToolSchema> tools = collectTools(loopCtx.getExecutionMode(), loopCtx.getExcludedSkillNames(), loopCtx.getAllowedToolNames());
+        List<ToolSchema> tools = collectTools(loopCtx, loopCtx.getExecutionMode(),
+                loopCtx.getExcludedSkillNames(), loopCtx.getAllowedToolNames());
         final int contextWindowTokens = resolveContextWindow(agentDef);
 
         // 追踪工具调用记录
@@ -948,6 +999,15 @@ public class AgentLoopEngine {
 
             // f. loopCount++
             loopCtx.incrementLoopCount();
+
+            // Plan r2 §5 (B-4) — abortToolUse short-circuit. If executeToolCall denied
+            // the same skill twice with NOT_ALLOWED in this session, exit the turn now
+            // (avoids LLM burning more tokens looping on the denied skill).
+            if (loopCtx.isAbortToolUse()) {
+                log.info("AgentLoop aborted by NOT_ALLOWED hijack-protection at loop {}",
+                        loopCtx.getLoopCount());
+                break;
+            }
         }
 
         // 取消退出
@@ -1081,14 +1141,62 @@ public class AgentLoopEngine {
     }
 
     /**
-     * 收集所有可用的工具 schema：内置 Tool + SkillDefinition + (可选) ask_user。
+     * Plan r2 §5 + W-BE-3 fail-secure — resolve the SkillView for this session and inject
+     * into LoopContext. Resolver returning {@code null} or throwing collapses to
+     * {@link com.skillforge.core.skill.view.SessionSkillView#EMPTY} so a broken resolver
+     * cannot bypass authorisation by falling through to the registry-wide list.
+     * <p>Idempotent: skips work if {@code loopCtx.getSkillView()} is already set or no
+     * resolver is wired. Package-private for unit test access.
      */
-    private List<ToolSchema> collectTools(String executionMode, java.util.Set<String> excludedSkillNames,
-                                             java.util.Set<String> allowedToolNames) {
+    void ensureSkillViewResolved(LoopContext loopCtx,
+                                 com.skillforge.core.model.AgentDefinition agentDef) {
+        if (loopCtx == null || sessionSkillResolver == null || loopCtx.getSkillView() != null) {
+            return;
+        }
+        try {
+            com.skillforge.core.skill.view.SessionSkillView view =
+                    sessionSkillResolver.resolveFor(agentDef);
+            loopCtx.setSkillView(view != null
+                    ? view
+                    : com.skillforge.core.skill.view.SessionSkillView.EMPTY);
+        } catch (Exception e) {
+            log.warn("SessionSkillResolver failed; falling back to EMPTY view (fail-secure): {}",
+                    e.getMessage());
+            loopCtx.setSkillView(com.skillforge.core.skill.view.SessionSkillView.EMPTY);
+        }
+    }
+
+    /**
+     * Plan r2 §5 — resolve the SkillDefinition list that THIS session is allowed to see.
+     * Reads from {@code LoopContext.skillView} when wired (production path).
+     * Falls back to {@code skillRegistry.getAllSkillDefinitions()} when not (legacy / test).
+     * <p>Always returns a fresh, mutable list (callers may add to it elsewhere).
+     */
+    private List<SkillDefinition> resolveVisibleSkillDefs(LoopContext loopCtx) {
+        com.skillforge.core.skill.view.SessionSkillView view = loopCtx != null ? loopCtx.getSkillView() : null;
+        if (view != null) {
+            return new ArrayList<>(view.all());
+        }
+        return new ArrayList<>(skillRegistry.getAllSkillDefinitions());
+    }
+
+    /**
+     * 收集所有可用的工具 schema：内置 Tool + SkillDefinition + (可选) ask_user。
+     * <p>Plan r2 §5 (B-3) 边界：
+     * <ul>
+     *   <li>L1092 内置 Tool 段保持原状 — 只受 excludedSkillNames / allowedToolNames 过滤；
+     *       view 不管内置 Tool。</li>
+     *   <li>SkillDefinition 段改读 LoopContext.skillView.all() —
+     *       view 已经在解析时排除 disabled_system_skills，调用方不再叠加 excludedSkillNames。</li>
+     * </ul>
+     */
+    private List<ToolSchema> collectTools(LoopContext loopCtx, String executionMode,
+                                          java.util.Set<String> excludedSkillNames,
+                                          java.util.Set<String> allowedToolNames) {
         List<ToolSchema> tools = new ArrayList<>();
 
         // 内置 Tool (filter out excluded skills for depth-aware multi-agent collab,
-        // and apply allowedToolNames whitelist if configured)
+        // and apply allowedToolNames whitelist if configured) — view 不影响这一段。
         for (Tool tool : skillRegistry.getAllTools()) {
             if (excludedSkillNames != null && excludedSkillNames.contains(tool.getName())) {
                 continue;
@@ -1103,8 +1211,9 @@ public class AgentLoopEngine {
             }
         }
 
-        // SkillDefinition (zip 包 Tool) — 生成简单的 ToolSchema
-        for (SkillDefinition def : skillRegistry.getAllSkillDefinitions()) {
+        // SkillDefinition (zip 包 Skill) — 来自 SessionSkillView（plan r2 §5）。
+        // view 在解析阶段已应用 disabled_system_skills；这里不再叠加 excludedSkillNames。
+        for (SkillDefinition def : resolveVisibleSkillDefs(loopCtx)) {
             Map<String, Object> inputSchema = new HashMap<>();
             inputSchema.put("type", "object");
             inputSchema.put("properties", Collections.emptyMap());
@@ -1689,9 +1798,11 @@ public class AgentLoopEngine {
         return executeToolCall(block, loopContext, toolCallRecords, null);
     }
 
-    private Message executeToolCall(ToolUseBlock block, LoopContext loopContext,
-                                    List<ToolCallRecord> toolCallRecords,
-                                    String approvalToken) {
+    // Package-private for AgentLoopEngineTelemetryTest / NotAllowedHijackShortCircuitTest
+    // (Plan r2 W-BE-1: cover all 7 telemetry return paths + B-4 hijack short-circuit).
+    Message executeToolCall(ToolUseBlock block, LoopContext loopContext,
+                            List<ToolCallRecord> toolCallRecords,
+                            String approvalToken) {
         String skillName = block.getName();
         String toolUseId = block.getId();
         Map<String, Object> input = block.getInput() != null ? block.getInput() : Collections.emptyMap();
@@ -1700,8 +1811,39 @@ public class AgentLoopEngine {
         log.debug("Executing tool call: skill={}, id={}", skillName, toolUseId);
 
         try {
+            // Plan r2 §5 (B-4) — view 授权前置检查（反 hijack 短路）。
+            // 仅对 NON-built-in name 生效；built-in Tool / 引擎特殊 tool（ask_user / compact_context）
+            // 不进 view，直接走原路径。
+            boolean isBuiltinTool = skillRegistry.getTool(skillName).isPresent();
+            boolean isEngineSpecial = AskUserTool.NAME.equals(skillName)
+                    || ContextCompactTool.NAME.equals(skillName);
+            com.skillforge.core.skill.view.SessionSkillView view = loopContext != null
+                    ? loopContext.getSkillView() : null;
+            if (!isBuiltinTool && !isEngineSpecial && view != null && !view.isAllowed(skillName)) {
+                int notAllowedCount = loopContext.incrementNotAllowedCount(skillName);
+                String hint;
+                long denyDuration = System.currentTimeMillis() - startTime;
+                if (notAllowedCount >= 2) {
+                    loopContext.setAbortToolUse(true);
+                    hint = "[ABORTED] skill '" + skillName + "' is not allowed for this agent. "
+                            + "Repeated calls (n=" + notAllowedCount + ") detected — aborting tool_use loop. "
+                            + "Stop attempting to call this skill.";
+                } else {
+                    hint = "[NOT ALLOWED] skill '" + skillName + "' is not available for this agent. "
+                            + "Stop calling it; choose from the available skill list.";
+                }
+                toolCallRecords.add(new ToolCallRecord(skillName, input, hint, false, denyDuration, startTime));
+                log.warn("NOT_ALLOWED short-circuit: skill={}, count={}", skillName, notAllowedCount);
+                recordTelemetry(skillName, false, SkillResult.ErrorType.NOT_ALLOWED.name());
+                return Message.toolResult(toolUseId, hint, true,
+                        SkillResult.ErrorType.NOT_ALLOWED.name());
+            }
+
             // 检查是否为 SkillDefinition (zip 包 Tool)
-            Optional<SkillDefinition> skillDefOpt = skillRegistry.getSkillDefinition(skillName);
+            // Plan r2 §5: 优先从 view 取（含授权解析），fallback 到 registry 仅在 view 未注入时。
+            Optional<SkillDefinition> skillDefOpt = (view != null)
+                    ? view.resolve(skillName)
+                    : skillRegistry.getSkillDefinition(skillName);
             if (skillDefOpt.isPresent()) {
                 // SkillDefinition 不走 execute()，直接返回 promptContent
                 SkillDefinition skillDef = skillDefOpt.get();
@@ -1709,6 +1851,8 @@ public class AgentLoopEngine {
                 long duration = System.currentTimeMillis() - startTime;
                 toolCallRecords.add(new ToolCallRecord(skillName, input, content, true, duration, startTime));
                 log.debug("SkillDefinition '{}' returned promptContent, duration={}ms", skillName, duration);
+                // Plan r2 §7 (B-2 critical injection point — r1 missed this branch).
+                recordTelemetry(skillName, true, null);
                 return Message.toolResult(toolUseId, content, false);
             }
 
@@ -1735,6 +1879,7 @@ public class AgentLoopEngine {
                         long duration = System.currentTimeMillis() - startTime;
                         String errorMsg = "Tool execution rejected by hook";
                         toolCallRecords.add(new ToolCallRecord(skillName, input, errorMsg, false, duration, startTime));
+                        recordTelemetry(skillName, false, SkillResult.ErrorType.EXECUTION.name());
                         return Message.toolResult(toolUseId, errorMsg, true);
                     }
                 }
@@ -1750,6 +1895,7 @@ public class AgentLoopEngine {
                             + ". Re-emit the tool call with all required fields populated.";
                     toolCallRecords.add(new ToolCallRecord(skillName, input, hint, false, duration, startTime));
                     log.warn("Pre-validation rejected '{}': missing required {}", skillName, missingRequired);
+                    recordTelemetry(skillName, false, SkillResult.ErrorType.VALIDATION.name());
                     return Message.toolResult(toolUseId, hint, true, SkillResult.ErrorType.VALIDATION.name());
                 }
 
@@ -1773,6 +1919,7 @@ public class AgentLoopEngine {
                 String errorType = (!result.isSuccess() && result.getErrorType() != null)
                         ? result.getErrorType().name()
                         : null;
+                recordTelemetry(skillName, result.isSuccess(), errorType);
                 return Message.toolResult(toolUseId, output, !result.isSuccess(), errorType);
             }
 
@@ -1781,6 +1928,7 @@ public class AgentLoopEngine {
             String errorMsg = "Unknown skill: " + skillName;
             toolCallRecords.add(new ToolCallRecord(skillName, input, errorMsg, false, duration, startTime));
             log.warn("Tool '{}' not found in registry", skillName);
+            recordTelemetry(skillName, false, SkillResult.ErrorType.EXECUTION.name());
             return Message.toolResult(toolUseId, errorMsg, true);
 
         } catch (IllegalArgumentException e) {
@@ -1790,6 +1938,7 @@ public class AgentLoopEngine {
             String errorMsg = "Invalid arguments: " + e.getMessage();
             toolCallRecords.add(new ToolCallRecord(skillName, input, errorMsg, false, duration, startTime));
             log.warn("Tool '{}' rejected invalid arguments: {}", skillName, e.getMessage());
+            recordTelemetry(skillName, false, SkillResult.ErrorType.VALIDATION.name());
             return Message.toolResult(toolUseId, errorMsg, true, SkillResult.ErrorType.VALIDATION.name());
         } catch (Exception e) {
             // 异常不中断循环，返回 error tool_result
@@ -1797,6 +1946,7 @@ public class AgentLoopEngine {
             String errorMsg = "Tool execution error: " + e.getMessage();
             toolCallRecords.add(new ToolCallRecord(skillName, input, errorMsg, false, duration, startTime));
             log.error("Tool '{}' threw exception", skillName, e);
+            recordTelemetry(skillName, false, SkillResult.ErrorType.EXECUTION.name());
             return Message.toolResult(toolUseId, errorMsg, true);
         }
     }

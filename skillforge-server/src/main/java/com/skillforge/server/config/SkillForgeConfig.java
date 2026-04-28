@@ -497,7 +497,9 @@ public class SkillForgeConfig {
                                            com.skillforge.core.engine.confirm.SessionConfirmCache sessionConfirmCache,
                                            com.skillforge.core.engine.confirm.ToolApprovalRegistry toolApprovalRegistry,
                                            com.skillforge.core.engine.confirm.RootSessionLookup rootSessionLookup,
-                                           com.skillforge.core.engine.confirm.ConfirmationPrompter confirmationPrompter) {
+                                           com.skillforge.core.engine.confirm.ConfirmationPrompter confirmationPrompter,
+                                           com.skillforge.core.skill.view.SessionSkillResolver sessionSkillResolver,
+                                           com.skillforge.server.service.SkillService skillService) {
         String defaultProvider = llmProperties.getDefaultProvider() != null
                 ? llmProperties.getDefaultProvider() : "claude";
         AgentLoopEngine engine = new AgentLoopEngine(llmProviderFactory, defaultProvider, skillRegistry,
@@ -518,6 +520,9 @@ public class SkillForgeConfig {
         engine.setSessionConfirmCache(sessionConfirmCache);
         engine.setToolApprovalRegistry(toolApprovalRegistry);
         engine.setRootSessionLookup(rootSessionLookup);
+        // Plan r2 §5 + §7: wire skill control plane.
+        engine.setSessionSkillResolver(sessionSkillResolver);
+        engine.setSkillTelemetryRecorder(skillService::recordUsage);
         return engine;
     }
 

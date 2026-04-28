@@ -47,6 +47,24 @@ public class SkillDraftEntity {
 
     private Long skillId;
 
+    /**
+     * Plan r2 §9 + Code Judge r1 B-FE-3 — pre-save dedupe similarity score (0..1).
+     * Populated by {@code SkillDraftService.extractFromRecentSessions} when the
+     * candidate has a non-trivial similarity to an existing skill or sibling draft.
+     * <p>FE uses this to colour the row (orange ≥ 0.60 = "merge?", red ≥ 0.85 = "duplicate")
+     * and gate the Modal.confirm + forceCreate flow.
+     */
+    @Column(name = "similarity")
+    private Double similarity;
+
+    /** Plan r2 §9 — id of the matched skill or draft (informational; no FK). */
+    @Column(name = "merge_candidate_id")
+    private Long mergeCandidateId;
+
+    /** Plan r2 §9 — name of the matched skill / draft (used for FE display). */
+    @Column(name = "merge_candidate_name", length = 256)
+    private String mergeCandidateName;
+
     @CreatedDate
     private Instant createdAt;
 
@@ -167,5 +185,29 @@ public class SkillDraftEntity {
 
     public void setReviewedBy(Long reviewedBy) {
         this.reviewedBy = reviewedBy;
+    }
+
+    public Double getSimilarity() {
+        return similarity;
+    }
+
+    public void setSimilarity(Double similarity) {
+        this.similarity = similarity;
+    }
+
+    public Long getMergeCandidateId() {
+        return mergeCandidateId;
+    }
+
+    public void setMergeCandidateId(Long mergeCandidateId) {
+        this.mergeCandidateId = mergeCandidateId;
+    }
+
+    public String getMergeCandidateName() {
+        return mergeCandidateName;
+    }
+
+    public void setMergeCandidateName(String mergeCandidateName) {
+        this.mergeCandidateName = mergeCandidateName;
     }
 }

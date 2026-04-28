@@ -121,6 +121,16 @@ public class SkillService {
         return skillRepository.findByIsPublicTrue();
     }
 
+    /** Plan r2 §8 W-1 — DB-direct system skill listing for the {@code ?isSystem=true} filter. */
+    public List<SkillEntity> listSystemSkills() {
+        return skillRepository.findByIsSystem(true);
+    }
+
+    /** Plan r2 §8 — used by SkillController DELETE to defend against numeric system-row deletes. */
+    public java.util.Optional<SkillEntity> findById(Long id) {
+        return skillRepository.findById(id);
+    }
+
     /**
      * 删除 Skill，包括文件和数据库记录。
      */
@@ -280,6 +290,36 @@ public class SkillService {
     @Transactional
     public void recordUsage(Long skillId, boolean success) {
         skillRepository.incrementUsage(skillId, success ? 1 : 0);
+    }
+
+    /**
+     * Plan r2 §7 — telemetry overload. Atomic UPDATE by skill name to avoid JPA dirty-check
+     * lost-update under concurrent tool execution.
+     * <p>If no t_skill row exists for {@code skillName} (e.g. the call was a built-in Java Tool
+     * that has no row), this method silently no-ops (debug log only). All exceptions are
+     * swallowed and logged at WARN — telemetry MUST NOT cause tool calls to fail.
+     *
+     * @param skillName name of the skill (matches {@code t_skill.name})
+     * @param success   whether the call succeeded
+     * @param errorType {@code null} when success=true; otherwise one of
+     *                  {@code VALIDATION / EXECUTION / NOT_ALLOWED} (currently only logged,
+     *                  not partitioned per-error in the schema — see plan §7).
+     */
+    @Transactional
+    public void recordUsage(String skillName, boolean success, String errorType) {
+        if (skillName == null || skillName.isBlank()) {
+            return;
+        }
+        try {
+            int updated = skillRepository.incrementUsageByName(skillName, success ? 1 : 0, success ? 0 : 1);
+            if (updated == 0) {
+                log.debug("recordUsage skip: no t_skill row for name={} (likely built-in Tool)", skillName);
+            } else if (!success) {
+                log.debug("Recorded skill failure: name={}, errorType={}", skillName, errorType);
+            }
+        } catch (Exception e) {
+            log.warn("recordUsage failed for skill={}: {}", skillName, e.getMessage());
+        }
     }
 
     /**

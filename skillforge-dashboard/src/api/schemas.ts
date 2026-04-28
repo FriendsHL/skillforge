@@ -17,6 +17,9 @@ export const AgentSchema = z.object({
   // hooks (useBehaviorRules / useLifecycleHooks) parse them client-side.
   behaviorRules: z.string().optional().nullable(),
   lifecycleHooks: z.string().optional().nullable(),
+  // P1 Skill Control Plane: JSON array of system-skill names this agent has opted out of.
+  // Stored as a JSON string by the backend; UI parses to string[] in the System Skills toggle.
+  disabledSystemSkills: z.string().optional().nullable(),
   // Surface `public` flag for visibility edits; omitted values preserve current state.
   public: z.boolean().optional(),
   // Thinking Mode v1 (see docs/design-thinking-mode.md). Both fields are

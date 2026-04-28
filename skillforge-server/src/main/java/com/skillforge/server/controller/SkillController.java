@@ -49,12 +49,30 @@ public class SkillController {
     /**
      * 返回所有 Skill（system + user），合并 SkillRegistry 中的 system SkillDefinition
      * 和数据库中的 user skill。System skill 同名时优先，跳过数据库中的重复。
+     * <p>Plan r2 §8 W-1：支持 {@code ?isSystem=true|false} 过滤，DB 直查。
      */
     @GetMapping
     public ResponseEntity<List<Map<String, Object>>> listSkills(
-            @RequestParam(value = "ownerId", required = false) Long ownerId) {
+            @RequestParam(value = "userId", required = false) Long userId,
+            @RequestParam(value = "isSystem", required = false) Boolean isSystem) {
 
-        // 1. 收集 system skill definitions
+        // Plan r2 §8 W-1 — explicit isSystem filter goes through DB directly.
+        if (Boolean.TRUE.equals(isSystem)) {
+            List<Map<String, Object>> sys = skillService.listSystemSkills().stream()
+                    .map(SkillController::toMapForSystemRow).collect(Collectors.toList());
+            return ResponseEntity.ok(sys);
+        }
+        if (Boolean.FALSE.equals(isSystem)) {
+            List<SkillEntity> userSkills = userId != null
+                    ? skillService.listSkills(userId)
+                    : skillService.listAllSkills().stream()
+                            .filter(s -> !s.isSystem()).collect(Collectors.toList());
+            List<Map<String, Object>> result = userSkills.stream()
+                    .map(SkillController::toMapForUserRow).collect(Collectors.toList());
+            return ResponseEntity.ok(result);
+        }
+
+        // Default behavior — same as before (registry + DB merged).
         List<Map<String, Object>> result = new ArrayList<>();
         Set<String> systemSkillNames = new java.util.HashSet<>();
 
@@ -73,33 +91,47 @@ public class SkillController {
             }
         }
 
-        // 2. 收集 user skills from DB，跳过与 system skill 同名的
         List<SkillEntity> dbSkills;
-        if (ownerId != null) {
-            dbSkills = skillService.listSkills(ownerId);
+        if (userId != null) {
+            dbSkills = skillService.listSkills(userId);
         } else {
             dbSkills = skillService.listAllSkills();
         }
         for (SkillEntity entity : dbSkills) {
-            if (systemSkillNames.contains(entity.getName())) {
-                continue; // system 版本优先，跳过数据库中的同名 skill
+            if (entity.isSystem()) {
+                continue; // already covered by registry pass above
             }
-            Map<String, Object> item = new HashMap<>();
-            item.put("id", entity.getId());
-            item.put("name", entity.getName());
-            item.put("description", entity.getDescription());
-            item.put("requiredTools", entity.getRequiredTools());
-            item.put("enabled", entity.isEnabled());
-            item.put("system", false);
-            item.put("source", entity.getSource());
-            item.put("semver", entity.getSemver());
-            item.put("parentSkillId", entity.getParentSkillId());
-            item.put("usageCount", entity.getUsageCount());
-            item.put("successCount", entity.getSuccessCount());
-            result.add(item);
+            if (systemSkillNames.contains(entity.getName())) {
+                continue; // system 版本优先，跳过数据库中的同名 user skill
+            }
+            result.add(toMapForUserRow(entity));
         }
 
         return ResponseEntity.ok(result);
+    }
+
+    private static Map<String, Object> toMapForUserRow(SkillEntity entity) {
+        Map<String, Object> item = new HashMap<>();
+        item.put("id", entity.getId());
+        item.put("name", entity.getName());
+        item.put("description", entity.getDescription());
+        item.put("requiredTools", entity.getRequiredTools());
+        item.put("enabled", entity.isEnabled());
+        item.put("system", entity.isSystem());
+        item.put("source", entity.getSource());
+        item.put("semver", entity.getSemver());
+        item.put("parentSkillId", entity.getParentSkillId());
+        item.put("usageCount", entity.getUsageCount());
+        item.put("successCount", entity.getSuccessCount());
+        item.put("failureCount", entity.getFailureCount());
+        return item;
+    }
+
+    private static Map<String, Object> toMapForSystemRow(SkillEntity entity) {
+        Map<String, Object> item = toMapForUserRow(entity);
+        item.put("system", true);
+        item.put("source", "system");
+        return item;
     }
 
     /**
@@ -166,12 +198,14 @@ public class SkillController {
         return ResponseEntity.ok(skillService.getSkillPromptContent(id));
     }
 
+    /** Plan r2 §8 — userId required (no defaultValue=0 fallback). */
     @PostMapping("/upload")
     public ResponseEntity<?> uploadSkill(
             @RequestParam("file") MultipartFile file,
-            @RequestParam(value = "ownerId", defaultValue = "0") Long ownerId) {
+            @RequestParam(value = "userId", required = true) Long userId) {
         try {
-            SkillEntity saved = skillService.uploadSkill(file, ownerId);
+            // BE writes ownerId from the validated userId — never accepts ownerId from FE.
+            SkillEntity saved = skillService.uploadSkill(file, userId);
             return ResponseEntity.ok(saved);
         } catch (RuntimeException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
@@ -186,16 +220,23 @@ public class SkillController {
 
     /**
      * 删除 Skill。System skill 禁止删除，返回 403。
+     * <p>Plan r2 §8 — both the legacy "system-{name}" path AND any numeric id whose row has
+     * {@code is_system=true} must return 403.
      */
     @DeleteMapping("/{id}")
     public ResponseEntity<?> deleteSkill(@PathVariable String id) {
-        // System skill 的 id 格式为 "system-xxx"
         if (id.startsWith("system-")) {
             return ResponseEntity.status(HttpStatus.FORBIDDEN)
                     .body(Map.of("error", "System skills cannot be deleted"));
         }
         try {
-            skillService.deleteSkill(Long.parseLong(id));
+            Long numericId = Long.parseLong(id);
+            // Defense in depth: even with numeric id, refuse delete if row is is_system.
+            if (skillService.findById(numericId).map(SkillEntity::isSystem).orElse(false)) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                        .body(Map.of("error", "System skills cannot be deleted"));
+            }
+            skillService.deleteSkill(numericId);
             return ResponseEntity.ok().build();
         } catch (NumberFormatException e) {
             return ResponseEntity.badRequest().body(Map.of("error", "Invalid skill id: " + id));
@@ -226,12 +267,15 @@ public class SkillController {
         }
     }
 
-    /** Fork a skill to create a new disabled variant for A/B testing (P1-3). */
+    /**
+     * Fork a skill to create a new disabled variant for A/B testing (P1-3).
+     * Plan r2 §8 — userId required.
+     */
     @PostMapping("/{id}/fork")
     public ResponseEntity<?> forkSkill(@PathVariable Long id,
-                                       @RequestParam(value = "ownerId", defaultValue = "0") Long ownerId) {
+                                       @RequestParam(value = "userId", required = true) Long userId) {
         try {
-            SkillEntity forked = skillService.forkSkill(id, ownerId);
+            SkillEntity forked = skillService.forkSkill(id, userId);
             Map<String, Object> m = new java.util.LinkedHashMap<>();
             m.put("id", forked.getId());
             m.put("name", forked.getName());
@@ -247,7 +291,10 @@ public class SkillController {
         }
     }
 
-    /** Start an A/B test between parentSkillId (baseline) and candidateSkillId (fork). */
+    /**
+     * Start an A/B test between parentSkillId (baseline) and candidateSkillId (fork).
+     * Plan r2 §8 — agentId required (validated below; missing → 400).
+     */
     @PostMapping("/{id}/abtest")
     public ResponseEntity<?> startAbTest(@PathVariable Long id,
                                           @RequestBody Map<String, Object> body) {
@@ -258,12 +305,15 @@ public class SkillController {
         String baselineEvalRunId = body.containsKey("baselineEvalRunId")
                 ? body.get("baselineEvalRunId").toString() : null;
         Long triggeredByUserId = body.containsKey("triggeredByUserId") && body.get("triggeredByUserId") != null
-                ? Long.parseLong(body.get("triggeredByUserId").toString()) : 0L;
+                ? Long.parseLong(body.get("triggeredByUserId").toString()) : null;
         if (candidateSkillId == null) {
             return ResponseEntity.badRequest().body(Map.of("error", "candidateSkillId is required"));
         }
         if (agentId == null || agentId.isBlank()) {
             return ResponseEntity.badRequest().body(Map.of("error", "agentId is required"));
+        }
+        if (triggeredByUserId == null) {
+            return ResponseEntity.badRequest().body(Map.of("error", "triggeredByUserId is required"));
         }
         try {
             SkillAbRunEntity abRun = skillAbEvalService.createAndTrigger(
@@ -306,7 +356,10 @@ public class SkillController {
         return m;
     }
 
-    /** Start skill evolution — generates improved SKILL.md and triggers A/B test. */
+    /**
+     * Start skill evolution — generates improved SKILL.md and triggers A/B test.
+     * Plan r2 §8 — agentId / triggeredByUserId required.
+     */
     @PostMapping("/{id}/evolve")
     public ResponseEntity<?> evolveSkill(@PathVariable Long id,
                                           @RequestBody Map<String, Object> body) {
@@ -316,6 +369,9 @@ public class SkillController {
                 ? Long.parseLong(body.get("triggeredByUserId").toString()) : null;
         if (agentId == null || agentId.isBlank()) {
             return ResponseEntity.badRequest().body(Map.of("error", "agentId is required"));
+        }
+        if (triggeredByUserId == null) {
+            return ResponseEntity.badRequest().body(Map.of("error", "triggeredByUserId is required"));
         }
         try {
             SkillEvolutionRunEntity run = skillEvolutionService.createAndTrigger(id, agentId, triggeredByUserId);
