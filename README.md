@@ -310,8 +310,12 @@ Server starts at `http://localhost:8080` with embedded PostgreSQL on port 15432.
 
 ```bash
 # From repo root — FIRST install upstream modules into your local ~/.m2,
-# otherwise skillforge-server can't resolve skillforge-core / skillforge-tools
-mvn install -DskipTests
+# otherwise skillforge-server can't resolve skillforge-core / skillforge-tools.
+# Faster: only install the upstream modules the server actually depends on.
+mvn -pl skillforge-core,skillforge-tools -am install -DskipTests
+
+# (Slower alternative, installs every module:)
+# mvn install -DskipTests
 
 # Then run server from the server module
 cd skillforge-server
@@ -319,9 +323,14 @@ mvn spring-boot:run
 ```
 
 > Running `mvn spring-boot:run` directly inside `skillforge-server` **without the
-> root `mvn install` step** will fail with `找不到符号: 类 BehaviorRuleRegistry`
-> (or similar) because the other modules haven't been published to your local
-> Maven repo yet. One-shot alternative: `mvn -pl skillforge-server -am spring-boot:run` from root.
+> upstream `mvn install` step** fails with one of these (same root cause, different
+> phase):
+> - Dependency resolution: `Could not resolve dependencies ... Could not find artifact com.skillforge:skillforge-tools:jar:1.0.0-SNAPSHOT`
+> - Compilation: `找不到符号: 类 BehaviorRuleRegistry` (or similar)
+>
+> Both mean the sibling modules haven't been published to your local Maven repo
+> yet. One-shot alternative that does the whole graph in a single command:
+> `mvn -pl skillforge-server -am spring-boot:run` from root.
 
 ### Dashboard Development
 

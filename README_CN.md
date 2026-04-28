@@ -310,17 +310,25 @@ java -jar skillforge-server/target/skillforge-server-1.0.0-SNAPSHOT.jar
 
 ```bash
 # 在仓库根目录 —— 先 install 把上游模块发到本地 ~/.m2，
-# 否则 skillforge-server 解析不到 skillforge-core / skillforge-tools
-mvn install -DskipTests
+# 否则 skillforge-server 解析不到 skillforge-core / skillforge-tools。
+# 更快：只 install server 真正依赖的上游模块。
+mvn -pl skillforge-core,skillforge-tools -am install -DskipTests
+
+# （较慢替代方案，install 全部模块：）
+# mvn install -DskipTests
 
 # 然后在 server 子模块启动
 cd skillforge-server
 mvn spring-boot:run
 ```
 
-> 直接进 `skillforge-server` 跑 `mvn spring-boot:run` 而**跳过根目录 `mvn install`**，
-> 会报 `找不到符号: 类 BehaviorRuleRegistry` 之类编译错误 —— 因为其他子模块还没发到本地仓库。
-> 一条命令等价写法：在根目录执行 `mvn -pl skillforge-server -am spring-boot:run`。
+> 直接进 `skillforge-server` 跑 `mvn spring-boot:run` 而**跳过上游 `mvn install`**，
+> 会以下面任一形式失败（同一根因，不同阶段）：
+> - 依赖解析期：`Could not resolve dependencies ... Could not find artifact com.skillforge:skillforge-tools:jar:1.0.0-SNAPSHOT`
+> - 编译期：`找不到符号: 类 BehaviorRuleRegistry` 之类
+>
+> 两者都说明兄弟模块还没发布到本地 Maven 仓库。一条命令完成整张依赖图的等价写法：
+> 在根目录执行 `mvn -pl skillforge-server -am spring-boot:run`。
 
 ### 前端开发
 
