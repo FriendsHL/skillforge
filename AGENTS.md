@@ -12,6 +12,17 @@ These rules are the Codex-local working version of the SkillForge development st
 - For non-trivial SkillForge development, use a Full review mindset: plan, implement, review, verify, then commit only with user approval.
 - Solo-level exceptions: single-line changes, pure comments/docs, config constants, mechanical rename/move, or pure function edits already locked by strong unit tests.
 
+## Requirement Docs Reading Rules
+
+- Before starting any non-trivial requirement, implementation, or review task, read `docs/README.md` first to find the relevant requirement package.
+- Read `docs/todo.md` only to confirm the current queue, blocker, priority, and the linked requirement package. Do not treat `todo.md` as the source of detailed requirements.
+- For a linked requirement package, open `index.md` first. It is the package entry and should point to the exact MRD / PRD / technical design files needed for the task.
+- Before implementation, read `prd.md` and `tech-design.md` for that requirement. Read `mrd.md` only when original user intent, constraints, or unresolved product questions are unclear.
+- For Lite requirements, `index.md` is sufficient if it contains user request, acceptance points, implementation notes, and verification.
+- Do not read every archived requirement by default. Only open `docs/requirements/archive/<yyyy-MM-dd>-<ID>-<slug>/` when the current requirement links to it, the code area depends on it, or the user explicitly asks.
+- Completed delivery facts live in `docs/delivery-index.md`; use it to verify dates, commits, migrations, and shipped scope.
+- If `docs/README.md`, `docs/todo.md`, and a requirement package disagree, prefer the requirement package for scope details, prefer `delivery-index.md` for completed facts, and flag the inconsistency before implementing.
+
 ## Codex Full Pipeline
 
 This is the Codex translation of `.claude/rules/pipeline.md`.
