@@ -1,6 +1,6 @@
 # SkillForge Bug Queue
 
-> 更新于：2026-04-29（BUG-25 / BUG-26 由 OBS-1 + session-detail 重构落地解决）
+> 更新于：2026-04-29（BUG-25 / BUG-26 修复；BUG-29 降 P2；BUG-30 / BUG-31 合并进 MSG-1 需求包草稿）
 > 规则：这里独立维护体验类小 bug 和待修问题；不等同于 `todo.md` 当前执行队列。
 
 ## 使用边界
@@ -25,9 +25,9 @@
 | --- | --- | --- | --- | --- | --- | --- |
 | BUG-27 | P2 | Agent 配置 / 确认流 | open | 同一 session 内连续更新 agent prompt 时需要重复用户确认 | 用户已在当前 session 确认过一次 agent prompt 更新，再次调整仍会触发确认，影响迭代效率 | 将确认授权按 session + agent + update 类型设置短期有效期，或支持一次确认覆盖同一轮 prompt-only 后续修改 |
 | BUG-28 | P2 | 审核卡片 / UX | open | 审核卡片需要优化 | 当前审核卡片难以快速判断来源、变更内容、风险点和影响范围；确认 / 拒绝动作不够突出 | 增加来源信息、变更摘要 / diff、风险提示和更清晰的 Approve / Edit / Discard 操作；长内容默认折叠并支持展开 |
-| BUG-29 | P1 | Chat / Team | open | Chat 页面 Team 运行时右侧 Agent 列表不可点击 | Team 运行过程中，右侧 Team 面板能展示当前有几个 agent，但具体 agent 项不能点击，无法快速进入对应子 agent / subagent 详情或查看运行上下文 | 前端 Team 面板将 agent 项做成可交互入口；点击后定位对应 agent 详情、子会话或 trace；不可用状态需给出明确 disabled 原因 |
-| BUG-30 | P1 | Chat / Team | open | Subagent 返回消息被渲染成用户消息 | TeamResult / subagent 返回结果在 Chat 消息流中被归类或展示成用户返回的消息，例如 `[TeamResult handle=... collabRunId=...]` 后的结果角色不正确，导致对话归因混乱 | 检查后端消息 role / type 持久化与前端 `normalizeMessages`、消息分组逻辑；TeamResult / subagent output 应以 assistant / agent 结果样式展示，并保留 handle、collabRunId、sessionId 等元数据 |
-| BUG-31 | P1 | Chat / ask_user | open | ask_user 卡片在 WS 重连后丢失，用户无法继续回答 | session `91aa7cf0...` 中 ask_user 已在后端 `PendingAskRegistry.await()` 等待，但前端因 WebSocket 断开 / 重连后丢失临时 ask 卡片，导致用户无法选择；后续普通消息只会被 enqueue 到 running session，不能释放 pending ask | 后端提供当前 pending ask 查询 / replay 能力，或 Chat 页面重连后从 session runtime 状态恢复 ask_user 卡片；前端在 `waiting_user` 状态但无卡片时显示可恢复提示 |
+| BUG-29 | P2 | Chat / Team | open | Chat 页面 Team 运行时右侧 Agent 列表不可点击 | Team 运行过程中，右侧 Team 面板能展示当前有几个 agent，但具体 agent 项不能点击 | 2026-04-29 评估：Chat 主流里 subagent 卡片已有跳子 session 入口，右侧 Team 面板加点击是冗余入口；降 P2 暂不修，等出现明确差异化诉求再重评 |
+| BUG-30 | P1 | Chat / Team | tracked | Subagent 返回消息被渲染成用户消息 | TeamResult / subagent 返回结果在 Chat 消息流中被归类或展示成用户返回的消息，例如 `[TeamResult handle=... collabRunId=...]` 后的结果角色不正确，导致对话归因混乱 | 合并进 [MSG-1 需求包草稿](requirements/active/MSG-1-message-typing/index.md)：通过 `t_session_messages.message_type` 字段 + 前端按 type 分发渲染解决；2026-04-30 讨论方向 |
+| BUG-31 | P1 | Chat / ask_user | tracked | ask_user 卡片在 WS 重连后丢失，用户无法继续回答 | session `91aa7cf0...` 中 ask_user 已在后端 `PendingAskRegistry.await()` 等待，但前端因 WebSocket 断开 / 重连后丢失临时 ask 卡片，导致用户无法选择 | 合并进 [MSG-1 需求包草稿](requirements/active/MSG-1-message-typing/index.md)：把 ask_user 卡片持久化进消息流（`message_type='ask_user'`），用户答复后置 `answered_at` 标记 disabled；2026-04-30 讨论方向 |
 
 ## 待分流
 
