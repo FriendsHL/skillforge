@@ -1,6 +1,6 @@
 # SkillForge Bug Queue
 
-> 更新于：2026-04-29
+> 更新于：2026-04-29（BUG-25 / BUG-26 由 OBS-1 + session-detail 重构落地解决）
 > 规则：这里独立维护体验类小 bug 和待修问题；不等同于 `todo.md` 当前执行队列。
 
 ## 使用边界
@@ -23,8 +23,6 @@
 
 | ID | 严重度 | 领域 | 状态 | 标题 | 现象 / 影响 | 下一步 |
 | --- | --- | --- | --- | --- | --- | --- |
-| BUG-25 | P1 | Traces / 检索 | open | Traces 页面检索接口不支持通过 sessionId 模糊查询 | 只能用完整 sessionId 或其它条件定位 trace；排查时通常只有 sessionId 前缀，导致 trace 检索效率很低 | 后端 trace 列表查询支持 sessionId 前缀 / contains 模糊匹配；前端搜索框提示支持 sessionId 前缀 |
-| BUG-26 | P1 | Chat / Session | open | Chat 页面只展示 sessionId 前缀，复制后无法用于查询 session 的 Tool | Chat 页面多处只露出 sessionId 前几个字符；Agent 使用 `GetSessionMessages` 等查询 session 的 Tool 时需要完整 sessionId，前缀无法命中 | 前端提供完整 sessionId 的复制入口 / tooltip；或 Tool 支持同用户范围内唯一前缀解析，并在多命中时返回候选项 |
 | BUG-27 | P2 | Agent 配置 / 确认流 | open | 同一 session 内连续更新 agent prompt 时需要重复用户确认 | 用户已在当前 session 确认过一次 agent prompt 更新，再次调整仍会触发确认，影响迭代效率 | 将确认授权按 session + agent + update 类型设置短期有效期，或支持一次确认覆盖同一轮 prompt-only 后续修改 |
 | BUG-28 | P2 | 审核卡片 / UX | open | 审核卡片需要优化 | 当前审核卡片难以快速判断来源、变更内容、风险点和影响范围；确认 / 拒绝动作不够突出 | 增加来源信息、变更摘要 / diff、风险提示和更清晰的 Approve / Edit / Discard 操作；长内容默认折叠并支持展开 |
 | BUG-29 | P1 | Chat / Team | open | Chat 页面 Team 运行时右侧 Agent 列表不可点击 | Team 运行过程中，右侧 Team 面板能展示当前有几个 agent，但具体 agent 项不能点击，无法快速进入对应子 agent / subagent 详情或查看运行上下文 | 前端 Team 面板将 agent 项做成可交互入口；点击后定位对应 agent 详情、子会话或 trace；不可用状态需给出明确 disabled 原因 |
@@ -45,6 +43,8 @@
 
 | ID | 修复日期 | 标题 | 交付 / 记录 |
 | --- | --- | --- | --- |
+| BUG-26 | 2026-04-29 | Chat 页面只展示 sessionId 前缀，复制后无法用于查询 session 的 Tool | [历史修复记录](references/bug-history-2026-04-29.md#bug-26) |
+| BUG-25 | 2026-04-29 | Traces 页面检索接口不支持通过 sessionId 模糊查询 | [历史修复记录](references/bug-history-2026-04-29.md#bug-25) |
 | BUG-24 | 2026-04-21 | Sessions 列表页 TOKENS / CONTEXT / COST / LAST 列和 header 错位 | [历史修复记录](references/bug-history-2026-04-21.md#bug-24) |
 | BUG-23 | 2026-04-21 | Session 详情 drawer 的 title / tabs / body 三行左缘未对齐 | [历史修复记录](references/bug-history-2026-04-21.md#bug-23) |
 | BUG-22 | 2026-04-21 | Session 详情页 Context tab 显示 391K/200K | [历史修复记录](references/bug-history-2026-04-21.md#bug-22) |
