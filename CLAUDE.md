@@ -53,10 +53,10 @@ mvn test
 | 文件 | 触发路径 | 覆盖内容 |
 |------|---------|---------|
 | `.claude/rules/docs-reading.md` | 任何非 trivial 任务开工前 | docs 阅读顺序（README → todo → 需求包 index → prd/tech-design），archive 不默认扫，delivery-index 为完成事实唯一来源 |
-| `.claude/rules/think-before-coding.md` | 任何非 trivial 任务开工前 / 进行中 | 暴露假设、多解读端出、更简方案 push back、困惑就停；不顺手删无关 dead code（Karpathy 4 原则中 SkillForge 未覆盖的部分） |
+| `.claude/rules/think-before-coding.md` | 任何非 trivial 任务开工前 / 进行中 | 暴露假设、多解读端出、更简方案 push back、困惑就停；不顺手删无关 dead code；重大设计决策 HARD-GATE + spec self-review checklist |
 | `.claude/rules/verification-before-completion.md` | 任何 claim "通过 / 完成 / 修好了" 之前 | Iron Law：no completion claims without fresh verification evidence；Gate Function 5 步；常见 claim → 必须证据表 |
 | `.claude/rules/systematic-debugging.md` | 任何技术问题（bug / test fail / 性能 / 集成）之前 | 4 阶段（root cause → pattern → hypothesis → fix）+ 多组件取证模板（HTTP→Service→LLM→SSE→JPA 5 层）+ 3-fix 失败质疑架构 |
-| `.claude/rules/pipeline.md` | 所有非 trivial 开发任务 | 4 档划分（Solo / Light / **Mid** / Full）；红灯 Full / 默认 Mid（1 轮对抗不循环）/ Solo 例外；对抗约束 A/B/C；Reviewer Sonnet + Judge Opus（2026-04-30 调整） |
+| `.claude/rules/pipeline.md` | 所有非 trivial 开发任务 | 4 档划分（Solo / Light / **Mid** / Full）；红灯 Full / 默认 Mid（1 轮对抗不循环）/ Solo 例外；对抗约束 A/B/C；Reviewer 两阶段（spec → quality）；Dev 4 状态分诊（DONE/CONCERNS/NEEDS_CONTEXT/BLOCKED）；Reviewer Sonnet + Judge Opus |
 | `.claude/rules/context-budget.md` | 加新 rule/agent/command 后 / 每 2-3 周定期 | system prompt 加载量 audit：inventory → 分桶 → 优化建议；SkillForge 当前组件清单基线 |
 | `.claude/rules/pipeline-meta.md` | **不自动加载**，维护 pipeline 时再读 | 流水线演进观察 / ROI 判断 / 迁移到新项目 |
 | `.claude/rules/java.md` | `**/*.java` | ObjectMapper footgun、时间字段、构造器注入、@Transactional、Skill/LlmProvider 扩展、测试、安全 |

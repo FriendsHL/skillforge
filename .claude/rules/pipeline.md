@@ -225,6 +225,17 @@ TeamCreate("feature-name")
     - **默认跳过**（直接进 Dev）：brief 完整唯一 / 普通 bug 修复 / 已有模式扩展 / **大多数任务**
     - 必启用：多种合理实现方向 / 迁移范围不明 / 上轮 reviewer 发现"架构方向不对"
 
+11. **Reviewer 两阶段评审**（来自 superpowers/subagent-driven-development）：每个 reviewer report 必须**先 Spec 后 Quality**：
+    - **Stage 1 — Spec Compliance**：对照 plan / brief / 验收点，每条 ✓ / ✗ 列出。**"要的没做"或"做了 plan 没要求的（scope creep）"= blocker**
+    - **Stage 2 — Code Quality**：仅在 Stage 1 通过的前提下，按对抗约束 B 的 severity checklist 评通用代码质量
+    - 不允许 Stage 1 ✗ 时直接跳到 Stage 2 评 quality（避免"代码很美但功能没做"）
+
+12. **Dev 4 状态分诊**（来自 superpowers/subagent-driven-development）：每个 dev 完成 `SendMessage` 给 Claude 主会话时**显式声明 4 种状态之一**：
+    - **DONE**：完成无保留 → 进 reviewer
+    - **DONE_WITH_CONCERNS**：完成但有疑虑（写在 message 里）。读 concerns，若涉及正确性 / scope 则**先解决再 review**；仅 observation（"这个文件越来越大"）则记下，进 reviewer
+    - **NEEDS_CONTEXT**：缺关键信息没法继续。Claude 主会话补 context 后用 `SendMessage` 给**原 dev**（不开新 dev，保留上下文）
+    - **BLOCKED**：完成不了。Claude 主会话评估：(a) context 问题 → 补 context 重发；(b) reasoning 不够 → 单次升 Opus 重发；(c) 任务太大 → 拆小后重发；(d) plan 错 → 回主会话升级用户决策。**永远不要忽略 BLOCKED 让原 dev 不变 retry**
+
 ### 对抗约束 A / B / C（Mid 和 Full 共用）
 
 > 2026-04-22 P13-2 首跑后固化。Mid 和 Full 都强制使用。

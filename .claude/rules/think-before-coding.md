@@ -18,6 +18,31 @@
 
 > 与 system prompt "exploratory questions 先给推荐再实施" 的区别：那条只覆盖"how should we…"这种探索性提问；本条覆盖**任何指令**只要存在歧义都要先暴露。
 
+## 重大设计决策的 HARD-GATE（来自 superpowers/brainstorming）
+
+> **适用范围**：brief >800 字 / 红灯触发 Full 档 / 涉及核心文件清单的任务。Mid 档普通 bug 修复 / UI 调整不适用。
+
+**不准在没有"设计文档 + 用户批准"前 implement**，即使任务看起来很简单。
+
+最小设计文档（写在需求包 `prd.md` / `tech-design.md` 或 Plan 文件里）：
+- 目标 / 验收点
+- 2-3 种实现路径，带 tradeoff
+- 推荐路径 + 理由
+- 最可能踩坑的边界 / 隐性 invariant
+
+**反模式："这个任务太简单不需要 design"** —— "简单"项目恰恰是 unexamined assumptions 浪费工作最多的地方。短设计也是设计，但必须有用户批准。
+
+## Spec self-review checklist（设计文档写完自检）
+
+设计文档（`prd.md` / `tech-design.md` / Plan 文件）写完之后，走一遍：
+
+1. **Placeholder scan** —— 还有 "TBD / TODO / 待定 / ?" 吗？补完或显式标"暂留"
+2. **内部一致性** —— 各章节是否互相矛盾？架构和 feature description 对得上吗？
+3. **Scope check** —— 这个范围一份 plan 能搞完吗？大了就拆 sub-projects（每个 sub-project 单独 spec → plan → implement）
+4. **Ambiguity check** —— 任何需求是不是有两种合理解读？挑一个 + 显式写明
+
+发现问题 **inline 改**，不需要再过一轮 review，改完给用户。
+
 ## 任务进行中 1 条
 
 5. **不顺手清理无关 dead code** —— 任务过程中发现 unused import / 过期注释 / dead branch / 看着别扭的命名，**mention 给用户，不要顺手删进 commit**（除非用户原始任务就是清理）
