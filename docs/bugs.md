@@ -29,6 +29,7 @@
 | BUG-28 | P2 | 审核卡片 / UX | open | 审核卡片需要优化 | 当前审核卡片难以快速判断来源、变更内容、风险点和影响范围；确认 / 拒绝动作不够突出 | 增加来源信息、变更摘要 / diff、风险提示和更清晰的 Approve / Edit / Discard 操作；长内容默认折叠并支持展开 |
 | BUG-29 | P1 | Chat / Team | open | Chat 页面 Team 运行时右侧 Agent 列表不可点击 | Team 运行过程中，右侧 Team 面板能展示当前有几个 agent，但具体 agent 项不能点击，无法快速进入对应子 agent / subagent 详情或查看运行上下文 | 前端 Team 面板将 agent 项做成可交互入口；点击后定位对应 agent 详情、子会话或 trace；不可用状态需给出明确 disabled 原因 |
 | BUG-30 | P1 | Chat / Team | open | Subagent 返回消息被渲染成用户消息 | TeamResult / subagent 返回结果在 Chat 消息流中被归类或展示成用户返回的消息，例如 `[TeamResult handle=... collabRunId=...]` 后的结果角色不正确，导致对话归因混乱 | 检查后端消息 role / type 持久化与前端 `normalizeMessages`、消息分组逻辑；TeamResult / subagent output 应以 assistant / agent 结果样式展示，并保留 handle、collabRunId、sessionId 等元数据 |
+| BUG-31 | P1 | Chat / ask_user | open | ask_user 卡片在 WS 重连后丢失，用户无法继续回答 | session `91aa7cf0...` 中 ask_user 已在后端 `PendingAskRegistry.await()` 等待，但前端因 WebSocket 断开 / 重连后丢失临时 ask 卡片，导致用户无法选择；后续普通消息只会被 enqueue 到 running session，不能释放 pending ask | 后端提供当前 pending ask 查询 / replay 能力，或 Chat 页面重连后从 session runtime 状态恢复 ask_user 卡片；前端在 `waiting_user` 状态但无卡片时显示可恢复提示 |
 
 ## 待分流
 
