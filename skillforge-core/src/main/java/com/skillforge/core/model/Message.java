@@ -94,11 +94,25 @@ public class Message {
             StringBuilder sb = new StringBuilder();
             for (Object obj : blocks) {
                 String text = null;
-                if (obj instanceof ContentBlock block && "text".equals(block.getType())) {
-                    text = block.getText();
-                } else if (obj instanceof Map<?, ?> map && "text".equals(map.get("type"))) {
-                    Object t = map.get("text");
-                    text = t != null ? t.toString() : null;
+                if (obj instanceof ContentBlock block) {
+                    // "text" blocks store content in `text`; "tool_result" blocks store
+                    // it in `content`. Without the tool_result branch every TOOL_CALL
+                    // trace span persisted with output="" because AgentLoopEngine reads
+                    // from getTextContent().
+                    if ("text".equals(block.getType())) {
+                        text = block.getText();
+                    } else if ("tool_result".equals(block.getType()) && block.getContent() != null) {
+                        text = extractToolResultText(block.getContent());
+                    }
+                } else if (obj instanceof Map<?, ?> map) {
+                    Object type = map.get("type");
+                    if ("text".equals(type)) {
+                        Object t = map.get("text");
+                        text = t != null ? t.toString() : null;
+                    } else if ("tool_result".equals(type)) {
+                        Object c = map.get("content");
+                        text = c != null ? extractToolResultText(c) : null;
+                    }
                 }
                 if (text != null) {
                     if (!sb.isEmpty()) {
@@ -110,6 +124,42 @@ public class Message {
             return sb.toString();
         }
         return "";
+    }
+
+    /**
+     * BE-W5: extract textual content from a tool_result block's {@code content} field,
+     * which may be a {@link String} (single-step tools) or a {@link List} of nested
+     * blocks (multi-step / SubAgent tools that return {@code List<ContentBlock>}).
+     *
+     * <p>Without this branch a List-shaped tool_result fell through to {@code String.valueOf}
+     * which produced "[com.skillforge.core.model.ContentBlock@...]" garbage, polluting
+     * {@code trace_span.output} for affected calls.
+     */
+    private static String extractToolResultText(Object content) {
+        if (content == null) return null;
+        if (content instanceof String s) {
+            return s;
+        }
+        if (content instanceof List<?> list) {
+            StringBuilder inner = new StringBuilder();
+            for (Object sub : list) {
+                String piece = null;
+                if (sub instanceof ContentBlock subBlock && "text".equals(subBlock.getType())) {
+                    piece = subBlock.getText();
+                } else if (sub instanceof Map<?, ?> subMap && "text".equals(subMap.get("type"))) {
+                    Object t = subMap.get("text");
+                    piece = t != null ? t.toString() : null;
+                }
+                if (piece != null) {
+                    if (!inner.isEmpty()) inner.append("\n");
+                    inner.append(piece);
+                }
+            }
+            return inner.toString();
+        }
+        // Fallback for primitives / unknown shapes; preserves prior behaviour for
+        // anything we haven't explicitly modelled.
+        return String.valueOf(content);
     }
 
     /**
