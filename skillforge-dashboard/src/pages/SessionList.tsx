@@ -299,7 +299,11 @@ const SessionList: React.FC = () => {
     };
   }, [userId, queryClient, SESSIONS_KEY]);
 
-  const openDetail = (s: SessionRow) => { setOpen(s); setDrawerTab('turns'); };
+  // OBS-1 §8.1: row click navigates to the new session detail page (with merged
+  // LLM + Tool span timeline). The legacy drawer is reachable via the dedicated
+  // row icon below for users who only want a quick metadata peek.
+  const openDetail = (s: SessionRow) => { navigate(`/sessions/${s.id}`); };
+  const openDrawer = (s: SessionRow) => { setOpen(s); setDrawerTab('turns'); };
 
   return (
     <div className="agents-view">
@@ -429,6 +433,15 @@ const SessionList: React.FC = () => {
                     <div className="mono-sm">${s.cost.toFixed(2)}</div>
                     <div className="mono-sm">{fmtTime(s.updatedAt || s.createdAt)}</div>
                     <div className="sess-row-actions">
+                      <button
+                        type="button"
+                        className="sess-row-del"
+                        title="Quick peek (drawer)"
+                        aria-label={`Quick peek session ${s.title}`}
+                        onClick={(e) => { e.stopPropagation(); openDrawer(s); }}
+                      >
+                        {EXT_ICON}
+                      </button>
                       <button
                         type="button"
                         className="sess-row-del"

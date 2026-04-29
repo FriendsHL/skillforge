@@ -1,5 +1,7 @@
 package com.skillforge.core.llm;
 
+import com.skillforge.core.llm.observer.LlmCallObserverRegistry;
+
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -10,6 +12,26 @@ import java.util.concurrent.ConcurrentHashMap;
 public class LlmProviderFactory {
 
     private final Map<String, LlmProvider> providers = new ConcurrentHashMap<>();
+    /** OBS-1: optional observer registry passed through to providers. */
+    private LlmCallObserverRegistry observerRegistry = LlmCallObserverRegistry.NO_OP;
+
+    /** OBS-1: setter injection so server can wire after construction without changing
+     *  core's constructor surface. */
+    public void setObserverRegistry(LlmCallObserverRegistry registry) {
+        this.observerRegistry = registry == null ? LlmCallObserverRegistry.NO_OP : registry;
+        // Apply to already-cached providers (idempotent).
+        for (LlmProvider p : providers.values()) {
+            applyObserverRegistry(p);
+        }
+    }
+
+    private void applyObserverRegistry(LlmProvider p) {
+        if (p instanceof ClaudeProvider c) {
+            c.setObserverRegistry(observerRegistry);
+        } else if (p instanceof OpenAiProvider o) {
+            o.setObserverRegistry(observerRegistry);
+        }
+    }
 
     /**
      * 根据配置获取或创建 LlmProvider。
@@ -20,7 +42,11 @@ public class LlmProviderFactory {
      * @throws IllegalArgumentException 不支持的 provider 类型
      */
     public LlmProvider getProvider(ModelConfig config) {
-        return providers.computeIfAbsent(config.getProviderName(), name -> createProvider(config));
+        return providers.computeIfAbsent(config.getProviderName(), name -> {
+            LlmProvider created = createProvider(config);
+            applyObserverRegistry(created);
+            return created;
+        });
     }
 
     /**
@@ -40,6 +66,7 @@ public class LlmProviderFactory {
      * @param provider LlmProvider 实例
      */
     public void registerProvider(String name, LlmProvider provider) {
+        applyObserverRegistry(provider);
         providers.put(name, provider);
     }
 

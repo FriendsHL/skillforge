@@ -1,5 +1,7 @@
 package com.skillforge.core.llm;
 
+import com.skillforge.core.llm.observer.LlmCallContext;
+
 /**
  * 统一的 LLM 提供商接口，抽象不同 LLM API 的差异。
  */
@@ -25,4 +27,22 @@ public interface LlmProvider {
      * @param handler 流式回调处理器
      */
     void chatStream(LlmRequest request, LlmStreamHandler handler);
+
+    /**
+     * 带 observer 上下文的同步调用。新签名；旧签名 default 委托。
+     *
+     * @since OBS-1
+     */
+    default LlmResponse chat(LlmRequest request, LlmCallContext ctx) {
+        return chat(request);
+    }
+
+    /**
+     * 带 observer 上下文的流式调用。新签名；旧签名 default 委托。
+     *
+     * @since OBS-1
+     */
+    default void chatStream(LlmRequest request, LlmCallContext ctx, LlmStreamHandler handler) {
+        chatStream(request, handler);
+    }
 }

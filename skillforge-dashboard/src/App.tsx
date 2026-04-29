@@ -5,6 +5,7 @@ import AgentList from './pages/AgentList';
 import SkillList from './pages/SkillList';
 import ToolList from './pages/ToolList';
 import SessionList from './pages/SessionList';
+import SessionDetail from './pages/SessionDetail';
 import Chat from './pages/Chat';
 import MemoryList from './pages/MemoryList';
 import ModelUsage from './pages/ModelUsage';
@@ -37,6 +38,7 @@ function App() {
             <Route path="skills" element={<ErrorBoundary context="Skills"><SkillList /></ErrorBoundary>} />
             <Route path="tools" element={<ErrorBoundary context="Tools"><ToolList /></ErrorBoundary>} />
             <Route path="sessions" element={<ErrorBoundary context="Sessions"><SessionList /></ErrorBoundary>} />
+            <Route path="sessions/:id" element={<ErrorBoundary context="SessionDetail"><SessionDetail /></ErrorBoundary>} />
             <Route path="memories" element={<ErrorBoundary context="Memories"><MemoryList /></ErrorBoundary>} />
             <Route path="usage" element={<ErrorBoundary context="Model Usage"><ModelUsage /></ErrorBoundary>} />
             <Route path="traces" element={<ErrorBoundary context="Traces"><Traces /></ErrorBoundary>} />

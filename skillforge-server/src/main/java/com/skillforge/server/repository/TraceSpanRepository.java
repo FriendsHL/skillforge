@@ -17,6 +17,13 @@ public interface TraceSpanRepository extends JpaRepository<TraceSpanEntity, Stri
     /** 查询某个 session 的所有 span，按 startTime 正序（用于构建完整 trace 树）。 */
     List<TraceSpanEntity> findBySessionIdOrderByStartTimeAsc(String sessionId);
 
+    /** OBS-1 §7.3 — 查询某 session 内某 spanType（如 TOOL_CALL），可选 since 过滤。 */
+    List<TraceSpanEntity> findBySessionIdAndSpanTypeAndStartTimeGreaterThanEqualOrderByStartTimeAsc(
+            String sessionId, String spanType, java.time.Instant since);
+
+    List<TraceSpanEntity> findBySessionIdAndSpanTypeOrderByStartTimeAsc(
+            String sessionId, String spanType);
+
     /** 查询某个 parent span 下的所有子 span，按 startTime 正序。 */
     List<TraceSpanEntity> findByParentSpanIdOrderByStartTimeAsc(String parentSpanId);
 

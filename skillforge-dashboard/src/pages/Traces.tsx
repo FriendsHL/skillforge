@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { getTraces, getTraceSpans, extractList } from '../api';
 import '../components/traces/traces.css';
@@ -9,6 +10,8 @@ interface TraceRun {
   name: string;
   title: string;
   session: string;
+  /** Full session id (un-truncated) for cross-page navigation. */
+  sessionFullId: string;
   agent: string;
   status: 'ok' | 'error';
   totalMs: number;
@@ -42,11 +45,13 @@ function normalizeRun(raw: Record<string, unknown>): TraceRun {
   const tokensOut = Number(raw.outputTokens || 0);
   const inputStr = String(raw.input || '');
   const title = inputStr.length > 50 ? inputStr.slice(0, 50) + '…' : inputStr;
+  const sessionFullId = String(raw.sessionId || '');
   return {
     id: String(raw.traceId || ''),
     name: String(raw.name || 'Agent loop'),
     title: title || String(raw.name || 'Agent loop'),
-    session: String(raw.sessionId || '').slice(0, 12),
+    session: sessionFullId.slice(0, 12),
+    sessionFullId,
     agent: String(raw.agentName || raw.name || 'agent'),
     status: raw.success === false ? 'error' : 'ok',
     totalMs: Number(raw.durationMs || 0),
@@ -234,6 +239,15 @@ function RunHeader({ run }: { run: TraceRun }) {
             <span>{run.at}</span>
           </div>
         </div>
+        {run.sessionFullId && (
+          <Link
+            to={`/sessions/${run.sessionFullId}`}
+            className="btn-ghost-sf"
+            title="Open this trace's session in the merged LLM/Tool view"
+          >
+            🔬 在 Session 视图打开
+          </Link>
+        )}
       </div>
       <div className="tr-stats-bar">
         <StatItem label="Latency" value={fmtMs(run.totalMs)} />

@@ -29,6 +29,27 @@ public interface SessionRepository extends JpaRepository<SessionEntity, String> 
 
     List<SessionEntity> findByParentSessionId(String parentSessionId);
 
+    /**
+     * OBS-1 §7.4 R3-WN2 — fallback resolver path for SubAgent TOOL_CALL spans whose
+     * output text didn't carry the expected "  childSessionId: <uuid>\n" line.
+     *
+     * <p>NOTE: {@code SessionEntity.createdAt} is {@code LocalDateTime} (java.md footgun #2,
+     * historical). Resolver converts the span's {@code Instant startTime} to LocalDateTime
+     * via {@code ZoneId.systemDefault()} at the call boundary; server deployment assumes UTC
+     * (see plan §3.5 / application.yml comment).
+     */
+    Optional<SessionEntity> findFirstByParentSessionIdAndCreatedAtGreaterThanEqualOrderByCreatedAtAsc(
+            String parentSessionId, java.time.LocalDateTime minCreatedAt);
+
+    /**
+     * OBS-1 W-R3-N2-a — batch-resolver fallback for {@code SessionSpansService}.
+     * Used to collapse N+1 fallback queries when many SubAgent TOOL_CALL spans miss the
+     * primary regex path; service-side dedupes by (parentSessionId, createdAt) ordering.
+     */
+    List<SessionEntity> findByParentSessionIdInAndCreatedAtGreaterThanEqual(
+            java.util.Collection<String> parentSessionIds,
+            java.time.LocalDateTime minCreatedAt);
+
     long countByParentSessionIdAndRuntimeStatus(String parentSessionId, String runtimeStatus);
 
     /**

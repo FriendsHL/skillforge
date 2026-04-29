@@ -19,6 +19,7 @@ import com.skillforge.core.llm.LlmProvider;
 import com.skillforge.core.llm.LlmProviderFactory;
 import com.skillforge.core.llm.LlmRequest;
 import com.skillforge.core.llm.LlmResponse;
+import com.skillforge.core.llm.observer.LlmCallContext;
 import com.skillforge.core.model.AgentDefinition;
 import com.skillforge.core.model.ContentBlock;
 import com.skillforge.core.model.Message;
@@ -119,6 +120,13 @@ public class AgentLoopEngine {
      * LoopContext，引擎其余路径只读 view。null → 引擎按"无授权 skill 包"语义降级。
      */
     private com.skillforge.core.skill.view.SessionSkillResolver sessionSkillResolver;
+
+    /** OBS-1 helper: AgentDefinition.id is String; observability layer wants Long agentId.
+     *  Returns null for non-numeric ids (e.g. seeded agents that use slug ids). */
+    private static Long parseAgentIdSafe(String idStr) {
+        if (idStr == null || idStr.isBlank()) return null;
+        try { return Long.parseLong(idStr); } catch (NumberFormatException nfe) { return null; }
+    }
 
     public AgentLoopEngine(LlmProviderFactory llmProviderFactory,
                            String defaultProviderName,
@@ -595,7 +603,20 @@ public class AgentLoopEngine {
             try {
                 // 流式 tool_use 分片需要记住 name(按 toolUseId 维度)才能广播 toolUseDelta
                 final java.util.Map<String, String> streamToolNames = new java.util.concurrent.ConcurrentHashMap<>();
-                llmProvider.chatStream(request, new com.skillforge.core.llm.LlmStreamHandler() {
+                // OBS-1 §4.2: build LlmCallContext per LLM call (new spanId each iteration);
+                // traceId = AGENT_LOOP root span id so all LLM calls within one run share trace.
+                LlmCallContext llmCtx = LlmCallContext.builder()
+                        .traceId(rootSpan != null ? rootSpan.getId() : null)
+                        .parentSpanId(rootSpan != null ? rootSpan.getId() : null)
+                        .sessionId(sessionId)
+                        .agentId(agentDef.getId() != null ? parseAgentIdSafe(agentDef.getId()) : null)
+                        .userId(userId)
+                        .providerName(llmProvider.getName())
+                        .modelId(actualModelId)
+                        .iterationIndex(loopCtx.getLoopCount())
+                        .stream(true)
+                        .build();
+                llmProvider.chatStream(request, llmCtx, new com.skillforge.core.llm.LlmStreamHandler() {
                     @Override public void onStreamStart(Runnable cancelAction) {
                         if (cancelAction != null) {
                             loopCtx.setStreamCanceller(cancelAction);

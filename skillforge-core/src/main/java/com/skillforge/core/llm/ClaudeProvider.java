@@ -6,6 +6,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.skillforge.core.llm.observer.LlmCallContext;
+import com.skillforge.core.llm.observer.LlmCallObserverRegistry;
+import com.skillforge.core.llm.observer.RawHttpRequest;
+import com.skillforge.core.llm.observer.RawHttpResponse;
+import com.skillforge.core.llm.observer.RawStreamCapture;
+import com.skillforge.core.llm.observer.SafeObservers;
 import com.skillforge.core.model.Message;
 import com.skillforge.core.model.ToolSchema;
 import com.skillforge.core.model.ToolUseBlock;
@@ -48,6 +54,9 @@ public class ClaudeProvider implements LlmProvider {
      */
     private final OkHttpClient streamHttpClient;
     private final ObjectMapper objectMapper;
+    /** OBS-1: optional observer registry; defaults to NO_OP — providers can be created
+     *  without server-side wiring (e.g. tests) with zero overhead. */
+    private LlmCallObserverRegistry observerRegistry = LlmCallObserverRegistry.NO_OP;
 
     public ClaudeProvider(String apiKey, String baseUrl, String defaultModel) {
         this(apiKey, baseUrl, defaultModel,
@@ -82,6 +91,75 @@ public class ClaudeProvider implements LlmProvider {
     @Override
     public String getName() {
         return "claude";
+    }
+
+    /** OBS-1: setter injection for observer registry; null → NO_OP. */
+    public void setObserverRegistry(LlmCallObserverRegistry registry) {
+        this.observerRegistry = registry == null ? LlmCallObserverRegistry.NO_OP : registry;
+    }
+
+    @Override
+    public LlmResponse chat(LlmRequest request, LlmCallContext ctx) {
+        // OBS-1 §4.3 non-stream lifecycle: beforeCall fires once OUTSIDE the
+        // SocketTimeoutException retry loop; afterCall on terminal success; onError on
+        // terminal failure (retry exhausted / non-timeout IOException).
+        String model = request.getModel() != null ? request.getModel() : defaultModel;
+        byte[] reqBody;
+        try {
+            reqBody = buildRequestBody(request, model, false).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        } catch (JsonProcessingException e) {
+            SafeObservers.notifyError(observerRegistry, ctx, e, null);
+            throw new RuntimeException("Failed to build Claude request body", e);
+        }
+        RawHttpRequest snap = new RawHttpRequest(
+                "POST", baseUrl + "/v1/messages",
+                Map.of("anthropic-version", ANTHROPIC_VERSION, "content-type", "application/json"),
+                reqBody, "application/json");
+        SafeObservers.notifyBefore(observerRegistry, ctx, snap);
+
+        int attempt = 0;
+        while (true) {
+            try {
+                LlmResponse parsed = doChatBody(reqBody, model);
+                RawHttpResponse respSnap = new RawHttpResponse(200, Map.of(),
+                        new byte[0], "application/json");
+                SafeObservers.notifyAfter(observerRegistry, ctx, respSnap, parsed);
+                return parsed;
+            } catch (SocketTimeoutException ste) {
+                if (attempt >= maxRetries) {
+                    RuntimeException re = new RuntimeException(
+                            "Claude API read timeout after " + (attempt + 1) + " attempt(s)", ste);
+                    SafeObservers.notifyError(observerRegistry, ctx, re, null);
+                    throw re;
+                }
+                attempt++;
+                log.warn("Claude read timeout, retrying {}/{}", attempt, maxRetries);
+            } catch (IOException e) {
+                RuntimeException re = new RuntimeException("Failed to call Claude API", e);
+                SafeObservers.notifyError(observerRegistry, ctx, re, null);
+                throw re;
+            }
+        }
+    }
+
+    /** Internal: execute a single non-stream attempt with a pre-built body. */
+    private LlmResponse doChatBody(byte[] requestBody, String model) throws IOException {
+        log.debug("Claude chat request: model={}", model);
+        Request httpRequest = new Request.Builder()
+                .url(baseUrl + "/v1/messages")
+                .addHeader("x-api-key", apiKey)
+                .addHeader("anthropic-version", ANTHROPIC_VERSION)
+                .addHeader("content-type", "application/json")
+                .post(RequestBody.create(requestBody, JSON_MEDIA_TYPE))
+                .build();
+        try (Response response = httpClient.newCall(httpRequest).execute()) {
+            if (!response.isSuccessful()) {
+                String errorBody = response.body() != null ? response.body().string() : "no body";
+                throw new RuntimeException("Claude API error: HTTP " + response.code() + " - " + errorBody);
+            }
+            String responseBody = response.body().string();
+            return parseResponse(responseBody);
+        }
     }
 
     @Override
@@ -131,17 +209,32 @@ public class ClaudeProvider implements LlmProvider {
 
     @Override
     public void chatStream(LlmRequest request, LlmStreamHandler handler) {
+        chatStream(request, LlmCallContext.empty(), handler);
+    }
+
+    @Override
+    public void chatStream(LlmRequest request, LlmCallContext ctx, LlmStreamHandler handler) {
         String model = request.getModel() != null ? request.getModel() : defaultModel;
         String requestBody;
         try {
             requestBody = buildRequestBody(request, model, true);
         } catch (Exception e) {
+            SafeObservers.notifyError(observerRegistry, ctx, e, null);
             handler.onError(e);
             return;
         }
         log.debug("Claude stream request: model={}", model);
 
+        // OBS-1 §4.2: beforeCall fires once OUTSIDE the handshake retry loop.
+        byte[] requestBodyBytes = requestBody.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        RawHttpRequest reqSnap = new RawHttpRequest(
+                "POST", baseUrl + "/v1/messages",
+                Map.of("anthropic-version", ANTHROPIC_VERSION, "content-type", "application/json"),
+                requestBodyBytes, "application/json");
+        SafeObservers.notifyBefore(observerRegistry, ctx, reqSnap);
+
         // BUG-E / BUG-E-bis: handshake-phase retry loop. See OpenAiProvider.chatStream for details.
+        // OBS-1 §4.2 invariant: observer hooks NOT called during handshake retry; only at terminal.
         int handshakeAttempt = 0;
         while (true) {
             Request httpRequest = new Request.Builder()
@@ -155,7 +248,9 @@ public class ClaudeProvider implements LlmProvider {
             handler.onStreamStart(call::cancel);
             if (handler.isCancelled()) {
                 handler.onStreamStart(null);
-                handler.onError(new IOException("stream cancelled before handshake"));
+                IOException cancelEx = new IOException("stream cancelled before handshake");
+                SafeObservers.notifyError(observerRegistry, ctx, cancelEx, null);
+                handler.onError(cancelEx);
                 return;
             }
 
@@ -165,6 +260,7 @@ public class ClaudeProvider implements LlmProvider {
             } catch (ConnectException | SSLHandshakeException preHandshake) {
                 handler.onStreamStart(null);
                 if (handshakeAttempt >= STREAM_MAX_HANDSHAKE_RETRIES || handler.isCancelled()) {
+                    SafeObservers.notifyError(observerRegistry, ctx, preHandshake, null);
                     handler.onError(preHandshake);
                     return;
                 }
@@ -178,6 +274,7 @@ public class ClaudeProvider implements LlmProvider {
                     Thread.sleep(sleepMs);
                 } catch (InterruptedException ie) {
                     Thread.currentThread().interrupt();
+                    SafeObservers.notifyError(observerRegistry, ctx, ie, null);
                     handler.onError(ie);
                     return;
                 }
@@ -188,22 +285,29 @@ public class ClaudeProvider implements LlmProvider {
                 if (handler.isCancelled()) {
                     log.debug("Claude stream cancelled during handshake");
                 }
+                SafeObservers.notifyError(observerRegistry, ctx, other, null);
                 handler.onError(other);
                 return;
             }
 
+            // Handshake succeeded — set up SSE buf for observer capture (5 MB cap).
+            ObservedStreamHandler observed = new ObservedStreamHandler(handler, ctx, observerRegistry, objectMapper);
             try (Response r = response) {
                 if (!r.isSuccessful()) {
                     String errorBody = r.body() != null ? r.body().string() : "no body";
-                    handler.onError(new RuntimeException(
-                            "Claude API error: HTTP " + r.code() + " - " + errorBody));
+                    RuntimeException ex = new RuntimeException(
+                            "Claude API error: HTTP " + r.code() + " - " + errorBody);
+                    SafeObservers.notifyError(observerRegistry, ctx, ex, null);
+                    handler.onError(ex);
                     return;
                 }
-                processSSEStream(r, handler);
+                processSSEStream(r, observed);
             } catch (Exception postHandshake) {
                 if (handler.isCancelled()) {
                     log.debug("Claude stream cancelled after handshake");
                 }
+                SafeObservers.notifyError(observerRegistry, ctx,
+                        postHandshake, observed.snapshot());
                 handler.onError(postHandshake);
             } finally {
                 handler.onStreamStart(null);
@@ -314,6 +418,7 @@ public class ClaudeProvider implements LlmProvider {
         String currentToolName = null;
         StringBuilder currentToolInputJson = new StringBuilder();
 
+        ObservedStreamHandler observed = handler instanceof ObservedStreamHandler osh ? osh : null;
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(response.body().byteStream()))) {
             String line;
@@ -322,6 +427,7 @@ public class ClaudeProvider implements LlmProvider {
                     log.debug("Claude SSE loop cancelled between lines");
                     break;
                 }
+                if (observed != null) observed.appendSseLine(line);
                 if (line.startsWith("data: ")) {
                     String data = line.substring(6).trim();
                     if (data.isEmpty() || "[DONE]".equals(data)) {
@@ -438,5 +544,108 @@ public class ClaudeProvider implements LlmProvider {
         fullResponse.setUsage(usage);
 
         handler.onComplete(fullResponse);
+    }
+
+    /**
+     * OBS-1: decorator that captures SSE bytes (5 MB cap) and fires terminal observer
+     * hooks ({@code onStreamComplete} or {@code onError}) once. Per plan §4.2, observer
+     * is exposed only at handshake terminal — handshake retries do not call hooks.
+     */
+    public static final class ObservedStreamHandler implements LlmStreamHandler {
+        private static final long SSE_BUF_CAP_BYTES = 5L * 1024L * 1024L;
+
+        private final LlmStreamHandler inner;
+        private final LlmCallContext ctx;
+        private final LlmCallObserverRegistry registry;
+        private final ObjectMapper objectMapper;
+        private final java.io.ByteArrayOutputStream sseBuf = new java.io.ByteArrayOutputStream();
+        private boolean sseTruncated;
+        private long sseByteCount;
+        private boolean terminalFired;
+
+        /**
+         * Preferred constructor — accepts the provider's pre-configured ObjectMapper so we
+         * avoid {@code new ObjectMapper()} on every onComplete (footgun #1: missing JavaTimeModule)
+         * and the per-call CPU/memory cost of repeated module discovery.
+         */
+        public ObservedStreamHandler(LlmStreamHandler inner, LlmCallContext ctx,
+                                     LlmCallObserverRegistry registry, ObjectMapper objectMapper) {
+            this.inner = inner;
+            this.ctx = ctx;
+            this.registry = registry == null ? LlmCallObserverRegistry.NO_OP : registry;
+            this.objectMapper = objectMapper != null ? objectMapper
+                    : new ObjectMapper().findAndRegisterModules()
+                            .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+        }
+
+        /** Legacy constructor retained for backwards-compat tests; prefer the 4-arg form. */
+        public ObservedStreamHandler(LlmStreamHandler inner, LlmCallContext ctx,
+                                     LlmCallObserverRegistry registry) {
+            this(inner, ctx, registry, null);
+        }
+
+        public void appendSseLine(String line) {
+            if (line == null) return;
+            byte[] bytes = (line + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            sseByteCount += bytes.length;
+            if (sseTruncated) return;
+            if (sseBuf.size() + bytes.length > SSE_BUF_CAP_BYTES) {
+                sseTruncated = true;
+                int remaining = (int) Math.max(0, SSE_BUF_CAP_BYTES - sseBuf.size());
+                if (remaining > 0) sseBuf.write(bytes, 0, Math.min(remaining, bytes.length));
+                return;
+            }
+            sseBuf.write(bytes, 0, bytes.length);
+            // OBS-1 §4.2: onStreamChunk fires only for "data: ..." lines (the SSE payload),
+            // not for "event:" / blank lines (kept in raw SSE buf for replay fidelity).
+            if (line.startsWith("data: ")) {
+                SafeObservers.notifyStreamChunk(registry, ctx, line.substring(6));
+            }
+        }
+
+        public RawStreamCapture snapshot() {
+            return new RawStreamCapture(sseBuf.toByteArray(), new byte[0],
+                    sseTruncated, sseByteCount);
+        }
+
+        @Override public void onStreamStart(Runnable cancelAction) { inner.onStreamStart(cancelAction); }
+        @Override public boolean isCancelled() { return inner.isCancelled(); }
+        @Override public void onText(String text) { inner.onText(text); }
+        @Override public void onToolUseStart(String toolUseId, String name) { inner.onToolUseStart(toolUseId, name); }
+        @Override public void onToolUseInputDelta(String toolUseId, String jsonFragment) {
+            inner.onToolUseInputDelta(toolUseId, jsonFragment);
+        }
+        @Override public void onToolUseEnd(String toolUseId, Map<String, Object> parsedInput) {
+            inner.onToolUseEnd(toolUseId, parsedInput);
+        }
+        @Override public void onToolUse(ToolUseBlock block) { inner.onToolUse(block); }
+        @Override public void onWarning(String key, Object value) { inner.onWarning(key, value); }
+
+        @Override
+        public void onComplete(LlmResponse fullResponse) {
+            if (!terminalFired) {
+                terminalFired = true;
+                byte[] accumulatedJson = new byte[0];
+                try {
+                    // Best-effort: serialize the parsed response so blob can be replayed.
+                    // BE-W1: reuse the provider's ObjectMapper (footgun #1 + CPU cost) instead
+                    // of constructing a fresh one per onComplete.
+                    accumulatedJson = objectMapper.writeValueAsBytes(fullResponse);
+                } catch (Exception ignore) { /* leave empty */ }
+                RawStreamCapture cap = new RawStreamCapture(sseBuf.toByteArray(),
+                        accumulatedJson, sseTruncated, sseByteCount);
+                SafeObservers.notifyStreamComplete(registry, ctx, cap, fullResponse);
+            }
+            inner.onComplete(fullResponse);
+        }
+
+        @Override
+        public void onError(Throwable error) {
+            if (!terminalFired) {
+                terminalFired = true;
+                SafeObservers.notifyError(registry, ctx, error, snapshot());
+            }
+            inner.onError(error);
+        }
     }
 }

@@ -6,6 +6,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.skillforge.core.llm.observer.LlmCallContext;
+import com.skillforge.core.llm.observer.LlmCallObserverRegistry;
+import com.skillforge.core.llm.observer.RawHttpRequest;
+import com.skillforge.core.llm.observer.RawHttpResponse;
+import com.skillforge.core.llm.observer.RawStreamCapture;
+import com.skillforge.core.llm.observer.SafeObservers;
 import com.skillforge.core.model.ContentBlock;
 import com.skillforge.core.model.Message;
 import com.skillforge.core.model.ReasoningEffort;
@@ -56,6 +62,8 @@ public class OpenAiProvider implements LlmProvider {
      */
     private final OkHttpClient streamHttpClient;
     private final ObjectMapper objectMapper;
+    /** OBS-1: optional observer registry (defaults to NO_OP). */
+    private LlmCallObserverRegistry observerRegistry = LlmCallObserverRegistry.NO_OP;
 
     /** Legacy 3-arg ctor — kept as a deprecated shim; prefer the 7-arg ctor below. */
     @Deprecated
@@ -122,6 +130,74 @@ public class OpenAiProvider implements LlmProvider {
         return providerDisplayName;
     }
 
+    /** OBS-1: setter injection for observer registry; null → NO_OP. */
+    public void setObserverRegistry(LlmCallObserverRegistry registry) {
+        this.observerRegistry = registry == null ? LlmCallObserverRegistry.NO_OP : registry;
+    }
+
+    @Override
+    public LlmResponse chat(LlmRequest request, LlmCallContext ctx) {
+        // OBS-1 §4.3 non-stream lifecycle: beforeCall once OUTSIDE retry loop.
+        String model = request.getModel() != null ? request.getModel() : defaultModel;
+        byte[] reqBody;
+        try {
+            reqBody = buildRequestBody(request, model, false).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        } catch (JsonProcessingException e) {
+            SafeObservers.notifyError(observerRegistry, ctx, e, null);
+            throw new RuntimeException("Failed to build " + providerDisplayName + " request body", e);
+        }
+        RawHttpRequest snap = new RawHttpRequest(
+                "POST", baseUrl + "/v1/chat/completions",
+                Map.of("Content-Type", "application/json"),
+                reqBody, "application/json");
+        SafeObservers.notifyBefore(observerRegistry, ctx, snap);
+
+        int attempt = 0;
+        while (true) {
+            try {
+                LlmResponse parsed = doChatBody(reqBody, model);
+                RawHttpResponse respSnap = new RawHttpResponse(200, Map.of(),
+                        new byte[0], "application/json");
+                SafeObservers.notifyAfter(observerRegistry, ctx, respSnap, parsed);
+                return parsed;
+            } catch (SocketTimeoutException ste) {
+                if (attempt >= maxRetries) {
+                    RuntimeException re = new RuntimeException(providerDisplayName
+                            + " API read timeout after " + (attempt + 1) + " attempt(s)", ste);
+                    SafeObservers.notifyError(observerRegistry, ctx, re, null);
+                    throw re;
+                }
+                attempt++;
+                log.warn("{} read timeout, retrying {}/{}", providerDisplayName, attempt, maxRetries);
+            } catch (IOException e) {
+                RuntimeException re = new RuntimeException(
+                        "Failed to call " + providerDisplayName + " API", e);
+                SafeObservers.notifyError(observerRegistry, ctx, re, null);
+                throw re;
+            }
+        }
+    }
+
+    /** Internal: execute a single non-stream attempt with a pre-built body. */
+    private LlmResponse doChatBody(byte[] requestBody, String model) throws IOException {
+        log.debug("{} chat request: model={}", providerDisplayName, model);
+        Request httpRequest = new Request.Builder()
+                .url(baseUrl + "/v1/chat/completions")
+                .addHeader("Authorization", "Bearer " + apiKey)
+                .addHeader("Content-Type", "application/json")
+                .post(RequestBody.create(requestBody, JSON_MEDIA_TYPE))
+                .build();
+        try (Response response = httpClient.newCall(httpRequest).execute()) {
+            if (!response.isSuccessful()) {
+                String errorBody = response.body() != null ? response.body().string() : "no body";
+                throw new RuntimeException(providerDisplayName + " API error: HTTP "
+                        + response.code() + " - " + errorBody);
+            }
+            String responseBody = response.body().string();
+            return parseResponse(responseBody);
+        }
+    }
+
     @Override
     public LlmResponse chat(LlmRequest request) {
         // Retry ONLY on SocketTimeoutException. Non-timeout IO / HTTP errors fail fast.
@@ -168,21 +244,36 @@ public class OpenAiProvider implements LlmProvider {
 
     @Override
     public void chatStream(LlmRequest request, LlmStreamHandler handler) {
+        chatStream(request, LlmCallContext.empty(), handler);
+    }
+
+    @Override
+    public void chatStream(LlmRequest request, LlmCallContext ctx, LlmStreamHandler handler) {
         String model = request.getModel() != null ? request.getModel() : defaultModel;
         String requestBody;
         try {
             requestBody = buildRequestBody(request, model, true);
         } catch (Exception e) {
+            SafeObservers.notifyError(observerRegistry, ctx, e, null);
             handler.onError(e);
             return;
         }
         log.debug("{} stream request: model={}", providerDisplayName, model);
+
+        // OBS-1 §4.2: beforeCall fires once OUTSIDE the handshake retry loop.
+        byte[] requestBodyBytes = requestBody.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        RawHttpRequest reqSnap = new RawHttpRequest(
+                "POST", baseUrl + "/v1/chat/completions",
+                Map.of("Content-Type", "application/json"),
+                requestBodyBytes, "application/json");
+        SafeObservers.notifyBefore(observerRegistry, ctx, reqSnap);
 
         // BUG-E / BUG-E-bis: handshake-phase retry loop.
         // Only Call.execute() synchronous failures on ConnectException /
         // SSLHandshakeException trigger a retry. Once execute() returns a Response, any
         // body-read error is delivered once to onError — retrying post-handshake would
         // duplicate already-delivered deltas (project footgun #3).
+        // OBS-1 §4.2 invariant: observer hooks NOT called during handshake retry; only at terminal.
         int handshakeAttempt = 0;
         while (true) {
             Request httpRequest = new Request.Builder()
@@ -195,7 +286,9 @@ public class OpenAiProvider implements LlmProvider {
             handler.onStreamStart(call::cancel);
             if (handler.isCancelled()) {
                 handler.onStreamStart(null);
-                handler.onError(new IOException("stream cancelled before handshake"));
+                IOException cancelEx = new IOException("stream cancelled before handshake");
+                SafeObservers.notifyError(observerRegistry, ctx, cancelEx, null);
+                handler.onError(cancelEx);
                 return;
             }
 
@@ -205,6 +298,7 @@ public class OpenAiProvider implements LlmProvider {
             } catch (ConnectException | SSLHandshakeException preHandshake) {
                 handler.onStreamStart(null);
                 if (handshakeAttempt >= STREAM_MAX_HANDSHAKE_RETRIES || handler.isCancelled()) {
+                    SafeObservers.notifyError(observerRegistry, ctx, preHandshake, null);
                     handler.onError(preHandshake);
                     return;
                 }
@@ -219,6 +313,7 @@ public class OpenAiProvider implements LlmProvider {
                     Thread.sleep(sleepMs);
                 } catch (InterruptedException ie) {
                     Thread.currentThread().interrupt();
+                    SafeObservers.notifyError(observerRegistry, ctx, ie, null);
                     handler.onError(ie);
                     return;
                 }
@@ -230,23 +325,30 @@ public class OpenAiProvider implements LlmProvider {
                 if (handler.isCancelled()) {
                     log.debug("OpenAI stream cancelled during handshake");
                 }
+                SafeObservers.notifyError(observerRegistry, ctx, other, null);
                 handler.onError(other);
                 return;
             }
 
-            // Handshake succeeded: from here on, no retry under any circumstance.
+            // Handshake succeeded — set up SSE buf for observer capture (5 MB cap).
+            ClaudeProvider.ObservedStreamHandler observed =
+                    new ClaudeProvider.ObservedStreamHandler(handler, ctx, observerRegistry, objectMapper);
             try (Response r = response) {
                 if (!r.isSuccessful()) {
                     String errorBody = r.body() != null ? r.body().string() : "no body";
-                    handler.onError(new RuntimeException(
-                            providerDisplayName + " API error: HTTP " + r.code() + " - " + errorBody));
+                    RuntimeException ex = new RuntimeException(
+                            providerDisplayName + " API error: HTTP " + r.code() + " - " + errorBody);
+                    SafeObservers.notifyError(observerRegistry, ctx, ex, null);
+                    handler.onError(ex);
                     return;
                 }
-                processSSEStream(r, handler);
+                processSSEStream(r, observed);
             } catch (Exception postHandshake) {
                 if (handler.isCancelled()) {
                     log.debug("OpenAI stream cancelled after handshake");
                 }
+                SafeObservers.notifyError(observerRegistry, ctx,
+                        postHandshake, observed.snapshot());
                 handler.onError(postHandshake);
             } finally {
                 handler.onStreamStart(null);
@@ -674,6 +776,8 @@ public class OpenAiProvider implements LlmProvider {
         // 记录每个 index 是否已经对 handler 发过 onToolUseStart(id + name 都已知)
         Set<Integer> startedIndices = new HashSet<>();
 
+        ClaudeProvider.ObservedStreamHandler observed =
+                handler instanceof ClaudeProvider.ObservedStreamHandler osh ? osh : null;
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(response.body().byteStream()))) {
             String line;
@@ -682,6 +786,7 @@ public class OpenAiProvider implements LlmProvider {
                     log.debug("OpenAI SSE loop cancelled between lines");
                     break;
                 }
+                if (observed != null) observed.appendSseLine(line);
                 if (!line.startsWith("data: ")) {
                     continue;
                 }

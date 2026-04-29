@@ -21,6 +21,16 @@ spring:
         format_sql: true
         dialect: org.hibernate.dialect.PostgreSQLDialect
 
+  jackson:
+    # OBS-1 W-R3-N2-b: server 部署假定 UTC (spring.jackson.time-zone=UTC + user.timezone=UTC)。
+    # SubagentSessionResolver 用 ZoneId.systemDefault() 转 Instant→LocalDateTime；
+    # 跨时区部署需要在 JVM 启动加 -Duser.timezone=UTC，确保 createdAt 比较正确。
+    time-zone: UTC
+    # OBS-1 footgun #6 hardening: tolerate unknown JSON fields so a future provider /
+    # legacy payload field rename does not crash deserialization in observer paths.
+    deserialization:
+      fail-on-unknown-properties: false
+
   flyway:
     enabled: true
     locations: classpath:db/migration
@@ -28,6 +38,22 @@ spring:
 
 # SkillForge configuration
 skillforge:
+  # OBS-1: LLM trace observability (plan §3.4 / §6.2 / §10.1)
+  observability:
+    blob:
+      root: ./data/llm-payloads        # FileSystemBlobStore root
+      read-concurrency: 20             # Semaphore for /spans/{id}/blob (R3-WN3)
+    retention:
+      cron: "0 30 3 * * *"             # daily 03:30 — drop blobs/spans older than 30d
+    etl:
+      legacy:
+        mode: off                       # off | flyway | java (R2-W5)
+                                        # 2026-04-29: one-shot ETL completed under
+                                        # mode=flyway (V36 deduped + R__ has NOT EXISTS
+                                        # guard). Switched back to off so subsequent
+                                        # restarts don't re-run the migration.
+        qwen-displayname: bailian      # bailian | dashscope (R2-B4 §3.3)
+
   session-message-store:
     row-read-enabled: true
     row-write-enabled: true

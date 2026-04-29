@@ -8,7 +8,11 @@ import org.springframework.scheduling.annotation.EnableAsync;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
 @SpringBootApplication(scanBasePackages = "com.skillforge")
-@EntityScan("com.skillforge.server.entity")
+@EntityScan({"com.skillforge.server.entity", "com.skillforge.observability.entity"})
+@org.springframework.data.jpa.repository.config.EnableJpaRepositories({
+        "com.skillforge.server.repository",
+        "com.skillforge.observability.repository"
+})
 @EnableJpaAuditing
 @EnableScheduling
 @EnableAsync
