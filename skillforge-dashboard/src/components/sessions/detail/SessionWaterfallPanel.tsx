@@ -8,6 +8,14 @@ interface TimelineMessage {
   text: string;
 }
 
+interface TraceRoot {
+  id: string;
+  name: string;
+  totalMs: number;
+  startTime: string;
+  status: 'ok' | 'error';
+}
+
 interface SessionWaterfallPanelProps {
   spans: SpanSummary[];
   messages: TimelineMessage[];
@@ -15,6 +23,14 @@ interface SessionWaterfallPanelProps {
   onSelectSpan: (span: SpanSummary) => void;
   /** Only show spans from this turn index. If null, show all. */
   turnIndex?: number | null;
+  /**
+   * If provided, render a root row at the top representing the whole agent
+   * call. Used as the time-scale basis so child spans render proportional to
+   * the full agent loop duration. Click acts as `onSelectRoot`.
+   */
+  traceRoot?: TraceRoot | null;
+  /** Called when the root row is clicked (clears any selected child span). */
+  onSelectRoot?: () => void;
 }
 
 interface WaterfallRow {
@@ -40,7 +56,7 @@ function tsOf(iso: string | null | undefined): number {
 
 function fmtMs(ms: number): string {
   if (ms < 1000) return ms + 'ms';
-  if (ms < 60000) return (ms / 1000).toFixed(1) + 's';
+  if (ms < 60000) return (ms / 1000).toFixed(2) + 's';
   return (ms / 60000).toFixed(1) + 'm';
 }
 
@@ -54,7 +70,7 @@ function isToolSpan(s: SpanSummary): s is ToolSpanSummary {
 
 function getSpanLabel(span: SpanSummary): string {
   if (isLlmSpan(span)) {
-    return span.modelId || 'LLM';
+    return span.model || 'LLM';
   }
   if (isToolSpan(span)) {
     return span.toolName || 'Tool';
@@ -76,64 +92,80 @@ function calculateRows(
   spans: SpanSummary[],
   messages: TimelineMessage[],
   filter: FilterState,
-  turnIndex?: number | null
-): { rows: WaterfallRow[]; totalMs: number; stats: { llm: number; tool: number; error: number; total: number } } {
-  // Stats from all spans (before filtering)
+  turnIndex?: number | null,
+  traceRoot?: TraceRoot | null,
+): {
+  rows: WaterfallRow[];
+  totalMs: number;
+  stats: { llm: number; tool: number; error: number; total: number };
+  baseStartMs: number;
+} {
   const allStats = {
-    llm: spans.filter(s => s.kind === 'llm').length,
-    tool: spans.filter(s => s.kind === 'tool').length,
-    error: spans.filter(s => getSpanError(s)).length,
+    llm: spans.filter((s) => s.kind === 'llm').length,
+    tool: spans.filter((s) => s.kind === 'tool').length,
+    error: spans.filter((s) => getSpanError(s)).length,
     total: spans.length,
   };
 
+  const traceStartMs = traceRoot ? tsOf(traceRoot.startTime) : 0;
+  const traceTotalMs = traceRoot && traceRoot.totalMs > 0 ? traceRoot.totalMs : 0;
+
   if (spans.length === 0) {
-    return { rows: [], totalMs: 0, stats: allStats };
+    return {
+      rows: [],
+      totalMs: traceTotalMs > 0 ? traceTotalMs : 0,
+      stats: allStats,
+      baseStartMs: traceStartMs,
+    };
   }
 
-  // Find turn boundaries from user messages
-  const userMsgs = messages.filter(m => m.role === 'user');
-  const userMsgTimes = userMsgs.map(m => tsOf(m.createdAt));
+  const userMsgs = messages.filter((m) => m.role === 'user');
+  const userMsgTimes = userMsgs.map((m) => tsOf(m.createdAt));
 
-  // Filter spans by turn if specified
   let spansInTurn = spans;
   if (turnIndex != null && userMsgTimes.length > 0) {
     const turnStart = userMsgTimes[turnIndex] ?? 0;
     const turnEnd = userMsgTimes[turnIndex + 1] ?? Infinity;
-    
-    spansInTurn = spans.filter(span => {
+    spansInTurn = spans.filter((span) => {
       const spanStart = tsOf(span.startedAt);
       return spanStart >= turnStart && spanStart < turnEnd;
     });
   }
 
   if (spansInTurn.length === 0) {
-    // Still return stats from all spans for filter chips
-    return { rows: [], totalMs: 100, stats: allStats };
+    return {
+      rows: [],
+      totalMs: traceTotalMs > 0 ? traceTotalMs : 100,
+      stats: allStats,
+      baseStartMs: traceStartMs,
+    };
   }
 
-  // Calculate time range for this turn
-  const starts = spansInTurn.map(s => tsOf(s.startedAt));
-  const minStart = Math.min(...starts);
-  const maxEnd = Math.max(...starts.map((s, i) => s + spansInTurn[i].latencyMs));
-  const totalTime = Math.max(maxEnd - minStart, 100);
+  const starts = spansInTurn.map((s) => tsOf(s.startedAt));
+  const baseStartMs = traceRoot && traceStartMs > 0 ? traceStartMs : Math.min(...starts);
+  let totalTime: number;
+  if (traceTotalMs > 0) {
+    totalTime = traceTotalMs;
+  } else {
+    const maxEnd = Math.max(...starts.map((s, i) => s + spansInTurn[i].latencyMs));
+    totalTime = Math.max(maxEnd - baseStartMs, 100);
+  }
 
-  // Build rows
-  const allRows: WaterfallRow[] = spansInTurn.map(span => ({
+  const allRows: WaterfallRow[] = spansInTurn.map((span) => ({
     span,
-    startOffsetMs: tsOf(span.startedAt) - minStart,
+    startOffsetMs: Math.max(0, tsOf(span.startedAt) - baseStartMs),
     durationMs: span.latencyMs,
     kind: span.kind as 'llm' | 'tool',
     label: getSpanLabel(span),
     hasError: getSpanError(span),
   }));
 
-  // Apply kind/error filter
-  const filteredRows = allRows.filter(row => {
+  const filteredRows = allRows.filter((row) => {
     if (filter.error) return row.hasError;
     return (filter.llm && row.kind === 'llm') || (filter.tool && row.kind === 'tool');
   });
 
-  return { rows: filteredRows, totalMs: totalTime, stats: allStats };
+  return { rows: filteredRows, totalMs: totalTime, stats: allStats, baseStartMs };
 }
 
 const SessionWaterfallPanel: React.FC<SessionWaterfallPanelProps> = ({
@@ -142,23 +174,27 @@ const SessionWaterfallPanel: React.FC<SessionWaterfallPanelProps> = ({
   selectedSpanId,
   onSelectSpan,
   turnIndex,
+  traceRoot,
+  onSelectRoot,
 }) => {
   const [filter, setFilter] = useState<FilterState>({ llm: true, tool: true, error: false });
 
   const { rows, totalMs, stats } = useMemo(
-    () => calculateRows(spans, messages, filter, turnIndex),
-    [spans, messages, filter, turnIndex]
+    () => calculateRows(spans, messages, filter, turnIndex, traceRoot),
+    [spans, messages, filter, turnIndex, traceRoot],
   );
+
+  const isRootSelected = traceRoot != null && selectedSpanId == null;
 
   const toggleFilter = (key: keyof FilterState) => {
     if (key === 'error') {
-      setFilter(prev => ({
+      setFilter((prev) => ({
         llm: prev.error ? true : false,
         tool: prev.error ? true : false,
         error: !prev.error,
       }));
     } else {
-      setFilter(prev => ({
+      setFilter((prev) => ({
         ...prev,
         [key]: !prev[key],
         error: false,
@@ -166,111 +202,134 @@ const SessionWaterfallPanel: React.FC<SessionWaterfallPanelProps> = ({
     }
   };
 
-  if (spans.length === 0) {
+  if (spans.length === 0 && traceRoot == null) {
     return (
-      <div className="obs-waterfall-panel obs-waterfall-panel--empty">
-        <div className="obs-empty-state">No spans in this session.</div>
+      <div className="tr-waterfall">
+        <div className="tr-empty">No spans in this session.</div>
       </div>
     );
   }
 
   return (
-    <div className="obs-waterfall-panel">
+    <div className="tr-waterfall">
+      {/* Header: name column + time scale aligned with bar track */}
+      <div className="tr-waterfall-h">
+        <div className="tr-waterfall-h-name">
+          {turnIndex != null ? `Turn ${turnIndex + 1}` : 'Spans'}
+        </div>
+        <div className="tr-waterfall-h-bar">
+          <div className="tr-timescale">
+            {[0, 0.25, 0.5, 0.75, 1].map((t) => (
+              <div key={t} className="tr-timescale-tick" style={{ left: `${t * 100}%` }}>
+                <span>{fmtMs(totalMs * t)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
       {/* Filter chips */}
-      <div className="obs-waterfall-filter">
+      <div className="tr-waterfall-filters">
         <button
           type="button"
-          className={`obs-filter-chip obs-filter-chip--llm ${filter.llm && !filter.error ? 'is-active' : ''}`}
+          className={`tr-chip sm ${filter.llm && !filter.error ? 'on' : ''}`}
           onClick={() => toggleFilter('llm')}
         >
-          <span className="obs-filter-chip-dot obs-filter-chip-dot--llm" />
-          LLM · {stats.llm}
+          llm · {stats.llm}
         </button>
         <button
           type="button"
-          className={`obs-filter-chip obs-filter-chip--tool ${filter.tool && !filter.error ? 'is-active' : ''}`}
+          className={`tr-chip sm ${filter.tool && !filter.error ? 'on' : ''}`}
           onClick={() => toggleFilter('tool')}
         >
-          <span className="obs-filter-chip-dot obs-filter-chip-dot--tool" />
-          Tool · {stats.tool}
+          tool · {stats.tool}
         </button>
         <button
           type="button"
-          className={`obs-filter-chip obs-filter-chip--error ${filter.error ? 'is-active' : ''}`}
+          className={`tr-chip sm err ${filter.error ? 'on' : ''}`}
           onClick={() => toggleFilter('error')}
         >
-          <span className="obs-filter-chip-dot obs-filter-chip-dot--error" />
-          Error · {stats.error}
+          err · {stats.error}
         </button>
-        <span className="obs-filter-chip-count mono-sm">
-          {rows.length} shown
-        </span>
+        <span className="tr-waterfall-filter-count mono-sm">{rows.length} shown</span>
       </div>
 
-      {/* Header with time scale */}
-      <div className="obs-waterfall-header">
-        <div className="obs-waterfall-header-label">
-          {turnIndex != null ? `Turn ${turnIndex + 1}` : 'Waterfall'}
-        </div>
-        <div className="obs-waterfall-timescale">
-          {[0, 0.25, 0.5, 0.75, 1].map(t => (
-            <div key={t} className="obs-waterfall-tick" style={{ left: `${t * 100}%` }}>
-              <span className="mono-sm">{fmtMs(totalMs * t)}</span>
+      {/* Body: root row + child span rows */}
+      <div className="tr-waterfall-body">
+        {traceRoot && (
+          <button
+            type="button"
+            className={`tr-span-row ${isRootSelected ? 'sel' : ''} ${traceRoot.status === 'error' ? 'err' : ''}`}
+            onClick={() => onSelectRoot?.()}
+          >
+            <div className="tr-span-name" style={{ paddingLeft: 4 }}>
+              <span className="tr-kind-tag k-agent">agent</span>
+              <span className="tr-span-label mono-sm">{traceRoot.name || 'Agent loop'}</span>
             </div>
-          ))}
-        </div>
-      </div>
+            <div className="tr-span-bar-track">
+              <div
+                className={`tr-span-bar k-agent ${traceRoot.status === 'error' ? 'err' : ''}`}
+                style={{ left: '0%', width: '100%' }}
+                title={`Total · ${fmtMs(traceRoot.totalMs)}`}
+              />
+              <span
+                className="tr-span-dur mono-sm"
+                style={{
+                  left: 'calc(100% - 4px)',
+                  transform: 'translateY(-50%) translateX(-100%)',
+                  color: 'rgba(255,255,255,0.92)',
+                }}
+              >
+                {fmtMs(traceRoot.totalMs)}
+              </span>
+            </div>
+          </button>
+        )}
 
-      {/* Rows */}
-      <div className="obs-waterfall-body">
         {rows.length === 0 ? (
-          <div className="obs-empty-state">
+          <div className="tr-empty">
             {turnIndex != null ? 'No spans in this turn.' : 'No spans match the filter.'}
           </div>
         ) : (
-          rows.map(row => {
+          rows.map((row) => {
             const pct = Math.max(0.5, (row.durationMs / totalMs) * 100);
             const left = (row.startOffsetMs / totalMs) * 100;
             const isSelected = row.span.spanId === selectedSpanId;
+            const endPct = left + pct;
+            const isNearEdge = endPct > 75;
 
             return (
               <button
                 key={row.span.spanId}
-                className={`obs-waterfall-row ${isSelected ? 'is-selected' : ''} ${row.hasError ? 'is-error' : ''}`}
-                onClick={() => onSelectSpan(row.span)}
                 type="button"
+                className={`tr-span-row ${isSelected ? 'sel' : ''} ${row.hasError ? 'err' : ''}`}
+                onClick={() => onSelectSpan(row.span)}
               >
-                {/* Label column */}
-                <div className="obs-waterfall-row-label">
-                  <span className={`obs-kind-tag obs-kind-tag--${row.kind}`}>
-                    {row.kind}
-                  </span>
-                  <span className="obs-waterfall-row-name mono-sm">{row.label}</span>
+                <div className="tr-span-name" style={{ paddingLeft: 4 + 18 }}>
+                  <span className="tr-tree-line" aria-hidden="true">└─</span>
+                  <span className={`tr-kind-tag k-${row.kind}`}>{row.kind}</span>
+                  <span className="tr-span-label mono-sm">{row.label}</span>
                 </div>
-
-                {/* Bar track */}
-                <div className="obs-waterfall-row-bar-track">
+                <div className="tr-span-bar-track">
                   <div
-                    className={`obs-waterfall-bar obs-waterfall-bar--${row.kind} ${row.hasError ? 'is-error' : ''}`}
+                    className={`tr-span-bar k-${row.kind} ${row.hasError ? 'err' : ''}`}
                     style={{ left: `${left}%`, width: `${pct}%` }}
                     title={`${row.label} · ${fmtMs(row.durationMs)}`}
                   />
-                  {/* Duration label */}
-                  {(() => {
-                    const endPct = left + pct;
-                    const isNearEdge = endPct > 70;
-                    return (
-                      <span
-                        className="obs-waterfall-row-dur mono-sm"
-                        style={isNearEdge
-                          ? { left: `calc(${endPct}% - 4px)`, transform: 'translateX(-100%)', color: 'rgba(255,255,255,0.9)' }
-                          : { left: `calc(${endPct}% + 4px)` }
-                        }
-                      >
-                        {fmtMs(row.durationMs)}
-                      </span>
-                    );
-                  })()}
+                  <span
+                    className="tr-span-dur mono-sm"
+                    style={
+                      isNearEdge
+                        ? {
+                            left: `calc(${endPct}% - 4px)`,
+                            transform: 'translateY(-50%) translateX(-100%)',
+                            color: 'rgba(255,255,255,0.88)',
+                          }
+                        : { left: `calc(${endPct}% + 4px)` }
+                    }
+                  >
+                    {fmtMs(row.durationMs)}
+                  </span>
                 </div>
               </button>
             );

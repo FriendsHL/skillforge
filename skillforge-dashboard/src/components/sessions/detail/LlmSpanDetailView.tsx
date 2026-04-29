@@ -53,6 +53,25 @@ const LlmSpanDetailView: React.FC<LlmSpanDetailViewProps> = ({ span }) => {
   const totalIn = span.inputTokens;
   const totalOut = span.outputTokens;
 
+  const fmtIso = (iso: string | null | undefined): string => {
+    if (!iso) return '—';
+    try {
+      const d = new Date(iso);
+      return d.toLocaleString('en-US', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        fractionalSecondDigits: 3,
+        hour12: false,
+      });
+    } catch {
+      return iso;
+    }
+  };
+
   // Build tabs list
   const tabs = [
     { key: 'meta', label: 'Meta' },
@@ -74,8 +93,8 @@ const LlmSpanDetailView: React.FC<LlmSpanDetailViewProps> = ({ span }) => {
         {activeTab === 'meta' && (
           <div className="obs-span-meta-grid">
             <div className="obs-span-meta-row">
-              <span className="obs-span-meta-k">provider</span>
-              <span className="obs-span-meta-v mono-sm">{data.provider ?? '—'}</span>
+              <span className="obs-span-meta-k">span.id</span>
+              <span className="obs-span-meta-v mono-sm">{data.spanId}</span>
             </div>
             <div className="obs-span-meta-row">
               <span className="obs-span-meta-k">model</span>
@@ -91,6 +110,10 @@ const LlmSpanDetailView: React.FC<LlmSpanDetailViewProps> = ({ span }) => {
             <div className="obs-span-meta-row">
               <span className="obs-span-meta-k">latency</span>
               <span className="obs-span-meta-v mono-sm">{data.latencyMs} ms</span>
+            </div>
+            <div className="obs-span-meta-row">
+              <span className="obs-span-meta-k">started</span>
+              <span className="obs-span-meta-v mono-sm">{fmtIso(data.startedAt)}</span>
             </div>
             {data.finishReason && (
               <div className="obs-span-meta-row">

@@ -25,13 +25,18 @@ interface TraceDetailPanelProps {
 
 function fmtMs(ms: number): string {
   if (ms < 1000) return ms + 'ms';
-  if (ms < 60000) return (ms / 1000).toFixed(1) + 's';
+  if (ms < 60000) return (ms / 1000).toFixed(2) + 's';
   return (ms / 60000).toFixed(1) + 'm';
 }
 
 function fmtTime(iso: string): string {
   if (!iso) return '';
   const d = new Date(iso);
+  const now = Date.now();
+  const diff = now - d.getTime();
+  if (diff < 60000) return 'just now';
+  if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
+  if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
   return d.toLocaleString('en-US', {
     month: 'short',
     day: 'numeric',
@@ -40,22 +45,33 @@ function fmtTime(iso: string): string {
   });
 }
 
+function copyText(text: string) {
+  if (typeof navigator !== 'undefined' && navigator.clipboard) {
+    navigator.clipboard.writeText(text).catch(() => {});
+  }
+}
+
 /**
  * Right pane that shows either:
  * - Trace overview (user input + assistant output) when no span selected
  * - Span detail (LLM/Tool input/output) when a span is selected
+ *
+ * Visual style mirrors the Traces tab `tr-span-detail` layout for consistency.
  */
 const TraceDetailPanel: React.FC<TraceDetailPanelProps> = ({ trace, span }) => {
-  // If span is selected, show span detail (components fetch their own data)
+  // Span selected → delegate to existing data-fetching detail views,
+  // wrapped in tr-span-detail so spacing/borders match the trace tab.
   if (span) {
     return (
-      <aside className="obs-trace-detail-panel">
-        <header className="obs-trace-detail-head">
-          <span className={`obs-kind-tag obs-kind-tag--${span.kind}`}>{span.kind}</span>
-          <span className="mono-sm obs-trace-detail-id">{span.spanId.slice(0, 12)}</span>
-          <span className="obs-trace-detail-when mono-sm">{fmtTime(span.startedAt)}</span>
-        </header>
-        <div className="obs-trace-detail-body">
+      <aside className="tr-span-detail">
+        <div className="tr-span-detail-h">
+          <div className="tr-span-detail-title">
+            <span className={`tr-kind-tag k-${span.kind}`}>{span.kind}</span>
+            <b className="mono-sm">{span.spanId.slice(0, 12)}</b>
+            <span className="kv-chip-sf">{fmtTime(span.startedAt)}</span>
+          </div>
+        </div>
+        <div className="tr-span-detail-body">
           {span.kind === 'llm' && (
             <LlmSpanDetailView key={span.spanId} span={span as any} />
           )}
@@ -67,77 +83,71 @@ const TraceDetailPanel: React.FC<TraceDetailPanelProps> = ({ trace, span }) => {
     );
   }
 
-  // If trace is selected but no span, show trace overview
+  // Trace selected → show full agent call overview (query + output).
   if (trace) {
+    const totalTokens = trace.tokensIn + trace.tokensOut;
     return (
-      <aside className="obs-trace-detail-panel">
-        <header className="obs-trace-detail-head">
-          <span className={`obs-trace-status-tag ${trace.status === 'ok' ? 'is-ok' : 'is-error'}`}>
-            {trace.status}
-          </span>
-          <span className="obs-trace-detail-name">{trace.name}</span>
-          <span className="obs-trace-detail-when mono-sm">{fmtTime(trace.startTime)}</span>
-        </header>
-
-        {/* Stats bar */}
-        <div className="obs-trace-stats-bar">
-          <div className="obs-trace-stat">
-            <span className="obs-trace-stat-label">Latency</span>
-            <span className="obs-trace-stat-value mono-sm">{fmtMs(trace.totalMs)}</span>
-          </div>
-          <div className="obs-trace-stat">
-            <span className="obs-trace-stat-label">Tokens</span>
-            <span className="obs-trace-stat-value mono-sm">
-              {trace.tokensIn + trace.tokensOut > 0 
-                ? `${trace.tokensIn.toLocaleString()} in / ${trace.tokensOut.toLocaleString()} out`
-                : '—'
-              }
+      <aside className="tr-span-detail">
+        <div className="tr-span-detail-h">
+          <div className="tr-span-detail-title">
+            <span className="tr-kind-tag k-agent">agent</span>
+            <b className="mono-sm">{trace.name || 'Agent loop'}</b>
+            <span
+              className="kv-chip-sf"
+              style={trace.status === 'error' ? { color: 'var(--color-err)' } : undefined}
+            >
+              {trace.status}
             </span>
+            <span className="kv-chip-sf">{fmtMs(trace.totalMs)}</span>
+            {totalTokens > 0 && (
+              <span className="kv-chip-sf">{totalTokens.toLocaleString()} tok</span>
+            )}
           </div>
-          <div className="obs-trace-stat">
-            <span className="obs-trace-stat-label">Model</span>
-            <span className="obs-trace-stat-value mono-sm">{trace.model || '—'}</span>
+          <div className="tr-run-header-sub">
+            <span>{trace.id.slice(0, 16)}</span>
+            <span>·</span>
+            <span>{fmtTime(trace.startTime)}</span>
+            {trace.model && trace.model !== '—' && (
+              <>
+                <span>·</span>
+                <span className="mono-sm">{trace.model}</span>
+              </>
+            )}
           </div>
         </div>
 
-        {/* Input/Output sections */}
-        <div className="obs-trace-detail-body">
-          {/* User Input */}
-          <div className="obs-trace-io-section">
-            <div className="obs-trace-io-header">
-              <span className="obs-trace-io-role obs-trace-io-role--user">User Input</span>
+        <div className="tr-span-detail-body">
+          {/* User query */}
+          <div className="tr-io-block">
+            <div className="tr-io-label">
+              <span>User query</span>
+              <button type="button" className="mini-btn" onClick={() => copyText(trace.input)}>
+                copy
+              </button>
             </div>
-            <div className="obs-trace-io-content">
-              {trace.input ? (
-                <pre className="obs-trace-io-pre">{trace.input}</pre>
-              ) : (
-                <div className="obs-trace-io-empty">No input recorded</div>
-              )}
-            </div>
+            <pre className="tr-io-pre">{trace.input || '—'}</pre>
           </div>
 
-          {/* Assistant Output */}
-          <div className="obs-trace-io-section">
-            <div className="obs-trace-io-header">
-              <span className="obs-trace-io-role obs-trace-io-role--assistant">Assistant Output</span>
+          {/* Assistant result */}
+          <div className="tr-io-block">
+            <div className="tr-io-label">
+              <span>Assistant result</span>
+              <button type="button" className="mini-btn" onClick={() => copyText(trace.output)}>
+                copy
+              </button>
             </div>
-            <div className="obs-trace-io-content">
-              {trace.output ? (
-                <pre className="obs-trace-io-pre">{trace.output}</pre>
-              ) : (
-                <div className="obs-trace-io-empty">No output recorded</div>
-              )}
-            </div>
+            <pre className={`tr-io-pre ${trace.status === 'error' ? 'err' : ''}`}>
+              {trace.output || '—'}
+            </pre>
           </div>
         </div>
       </aside>
     );
   }
 
-  // Nothing selected
   return (
-    <aside className="obs-trace-detail-panel obs-trace-detail-panel--empty">
-      <div className="obs-empty-state">Select a trace or span to view details.</div>
+    <aside className="tr-span-detail">
+      <div className="tr-empty">Select a trace or span to view details.</div>
     </aside>
   );
 };

@@ -4,9 +4,9 @@ interface TraceInfo {
   id: string;
   index: number;
   name: string;
-  title: string;       // 用户输入（截断）
-  input: string;       // 完整用户输入
-  output: string;      // assistant 输出
+  title: string; // 用户输入（截断）
+  input: string; // 完整用户输入
+  output: string; // assistant 输出
   status: 'ok' | 'error';
   totalMs: number;
   tokensIn: number;
@@ -25,12 +25,12 @@ interface TraceSidebarProps {
 
 function fmtMs(ms: number): string {
   if (ms < 1000) return ms + 'ms';
-  if (ms < 60000) return (ms / 1000).toFixed(1) + 's';
+  if (ms < 60000) return (ms / 1000).toFixed(2) + 's';
   return (ms / 60000).toFixed(1) + 'm';
 }
 
 function fmtTime(iso: string): string {
-  if (!iso) return '';
+  if (!iso) return '—';
   const d = new Date(iso);
   const now = Date.now();
   const diff = now - d.getTime();
@@ -47,64 +47,62 @@ const TraceSidebar: React.FC<TraceSidebarProps> = ({
 }) => {
   if (traces.length === 0) {
     return (
-      <div className="obs-trace-sidebar obs-trace-sidebar--empty">
-        <div className="obs-empty-state">No traces in this session.</div>
-      </div>
+      <aside className="tr-runs">
+        <div className="tr-runs-h">
+          <div className="tr-filter-chips">
+            <span className="tr-chip">traces · 0</span>
+          </div>
+        </div>
+        <div className="tr-empty">No traces in this session.</div>
+      </aside>
     );
   }
 
   return (
-    <div className="obs-trace-sidebar">
-      {/* Header */}
-      <div className="obs-trace-sidebar-header">
-        <span className="obs-trace-sidebar-title mono-sm">Traces</span>
-        <span className="obs-trace-sidebar-count mono-sm">{traces.length}</span>
+    <aside className="tr-runs">
+      <div className="tr-runs-h">
+        <div className="tr-filter-chips">
+          <span className="tr-chip on">traces · {traces.length}</span>
+        </div>
       </div>
-
-      {/* Trace list - similar to Traces page style */}
-      <div className="obs-trace-sidebar-list">
+      <div className="tr-runs-list">
         {traces.map((trace) => {
-          const isSelected = trace.id === selectedTraceId;
           const totalTokens = trace.tokensIn + trace.tokensOut;
-          
+          const isSelected = trace.id === selectedTraceId;
+
           return (
             <button
               key={trace.id}
               type="button"
-              className={`obs-trace-item ${isSelected ? 'is-selected' : ''} ${trace.status === 'error' ? 'is-error' : ''}`}
+              className={`tr-run ${isSelected ? 'sel' : ''} ${trace.status !== 'ok' ? 'err' : ''}`}
               onClick={() => onSelectTrace(trace.id)}
             >
-              {/* Top row: status dot + title */}
-              <div className="obs-trace-item-top">
-                <span className={`obs-trace-item-dot ${trace.status === 'ok' ? 'is-ok' : 'is-error'}`} />
-                <span className="obs-trace-item-title">{trace.title}</span>
+              <div className="tr-run-top">
+                <span className={`tr-dot ${trace.status === 'ok' ? 'ok' : 'err'}`} />
+                <span className="tr-run-name">{trace.title}</span>
               </div>
-
-              {/* Meta row: agent name */}
-              <div className="obs-trace-item-meta">
+              <div className="tr-run-meta">
                 <span className="mono-sm">{trace.name}</span>
               </div>
-
-              {/* Stats row */}
-              <div className="obs-trace-item-stats mono-sm">
-                <span>{fmtMs(trace.totalMs)}</span>
-                <span className="obs-trace-item-sep">·</span>
-                <span>{trace.llmCalls} LLM</span>
-                <span className="obs-trace-item-sep">·</span>
-                <span>{trace.toolCalls} Tool</span>
+              <div className="tr-run-stats">
+                <span className="mono-sm">{fmtMs(trace.totalMs)}</span>
+                <span className="tr-run-sep">·</span>
+                <span className="mono-sm">{trace.llmCalls} LLM</span>
+                <span className="tr-run-sep">·</span>
+                <span className="mono-sm">{trace.toolCalls} Tool</span>
                 {totalTokens > 0 && (
                   <>
-                    <span className="obs-trace-item-sep">·</span>
-                    <span>{totalTokens.toLocaleString()} tok</span>
+                    <span className="tr-run-sep">·</span>
+                    <span className="mono-sm">{totalTokens.toLocaleString()} tok</span>
                   </>
                 )}
-                <span className="obs-trace-item-when">{fmtTime(trace.startTime)}</span>
+                <span className="tr-run-when">{fmtTime(trace.startTime)}</span>
               </div>
             </button>
           );
         })}
       </div>
-    </div>
+    </aside>
   );
 };
 

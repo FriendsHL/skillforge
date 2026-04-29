@@ -1,13 +1,16 @@
 import React, { useMemo, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { getSession, getSessionMessages, getTraces, getSessionSpans } from '../api';
+import { getSession, getSessionMessages, getTraces, getTraceSpans, getSessionSpans } from '../api';
 import { useAuth } from '../contexts/AuthContext';
 import TraceSidebar, { type TraceInfo } from '../components/sessions/detail/TraceSidebar';
 import SessionWaterfallPanel from '../components/sessions/detail/SessionWaterfallPanel';
 import TraceDetailPanel, { type TraceOverview } from '../components/sessions/detail/TraceDetailPanel';
 import SessionStatsBar from '../components/sessions/detail/SessionStatsBar';
 import type { SpanSummary } from '../types/observability';
+import '../components/sessions/sessions.css';
+import '../components/skills/skills.css';
+import '../components/traces/traces.css';
 import '../components/sessions/detail/session-detail.css';
 
 interface RawMessage {
@@ -137,19 +140,35 @@ const SessionDetail: React.FC = () => {
   });
 
   const traces = useMemo<TraceInfo[]>(() => {
-    const data = tracesQuery.data ?? [];
-    // Sort by start time and reassign index
-    data.sort((a, b) => tsOf(a.startTime) - tsOf(b.startTime));
-    data.forEach((t, i) => t.index = i);
-    return data;
+    // Copy before sorting — tracesQuery.data is the cached array from
+    // React Query and must not be mutated in place.
+    const data = [...(tracesQuery.data ?? [])];
+    // Newest first.
+    data.sort((a, b) => tsOf(b.startTime) - tsOf(a.startTime));
+    return data.map((t, i) => ({ ...t, index: i }));
   }, [tracesQuery.data]);
 
-  // Auto-select latest trace
+  // Auto-select latest trace (now at index 0 after desc sort).
   useMemo(() => {
     if (traces.length > 0 && selectedTraceId === null) {
-      setSelectedTraceId(traces[traces.length - 1].id);
+      setSelectedTraceId(traces[0].id);
     }
   }, [traces, selectedTraceId]);
+
+  // Full input/output for the selected trace. The /api/traces list endpoint
+  // truncates input/output to 200 chars; /api/traces/{id}/spans returns the
+  // root span with full text. We only fetch when a trace is selected.
+  const selectedTraceFullQuery = useQuery({
+    queryKey: ['trace-spans', selectedTraceId],
+    queryFn: async () => {
+      if (!selectedTraceId) throw new Error('missing traceId');
+      const res = await getTraceSpans(selectedTraceId);
+      const data = res.data as { root?: Record<string, unknown> } | null;
+      return data?.root ?? null;
+    },
+    enabled: Boolean(selectedTraceId),
+    staleTime: 30_000,
+  });
 
   // Spans for this session (using observability API for correct span IDs)
   const sessionSpansQuery = useQuery({
@@ -223,16 +242,32 @@ const SessionDetail: React.FC = () => {
     return spans.find((s) => s.spanId === selectedSpanId) ?? null;
   }, [spans, selectedSpanId]);
 
-  // Get selected trace overview for right panel
+  // Spans belonging to the selected trace. Both /api/traces.traceId and the
+  // observability span feed share the AGENT_LOOP root span id (see
+  // AgentLoopEngine line 608-610 and SessionSpansService.toToolSummary), so
+  // filtering by traceId is safe.
+  const traceSpans = useMemo<SpanSummary[]>(() => {
+    if (!selectedTraceId) return [];
+    return spans.filter((s) => s.traceId === selectedTraceId);
+  }, [spans, selectedTraceId]);
+
+  // Get selected trace overview for right panel. Prefer the un-truncated
+  // input/output from /api/traces/{id}/spans (root span); fall back to the
+  // 200-char preview from the trace list while the full payload is loading.
   const selectedTraceOverview = useMemo<TraceOverview | null>(() => {
     if (!selectedTraceId) return null;
-    const trace = traces.find(t => t.id === selectedTraceId);
+    const trace = traces.find((t) => t.id === selectedTraceId);
     if (!trace) return null;
+    const fullRoot = selectedTraceFullQuery.data;
+    const fullInput =
+      fullRoot && typeof fullRoot.input === 'string' ? (fullRoot.input as string) : null;
+    const fullOutput =
+      fullRoot && typeof fullRoot.output === 'string' ? (fullRoot.output as string) : null;
     return {
       id: trace.id,
       name: trace.name,
-      input: trace.input,
-      output: trace.output,
+      input: fullInput ?? trace.input,
+      output: fullOutput ?? trace.output,
       status: trace.status,
       totalMs: trace.totalMs,
       tokensIn: trace.tokensIn,
@@ -240,7 +275,7 @@ const SessionDetail: React.FC = () => {
       model: trace.model,
       startTime: trace.startTime,
     };
-  }, [traces, selectedTraceId]);
+  }, [traces, selectedTraceId, selectedTraceFullQuery.data]);
 
   const sessionTitle =
     (sessionQuery.data?.title as string | undefined) ??
@@ -263,17 +298,19 @@ const SessionDetail: React.FC = () => {
         </button>
         <div className="obs-session-detail-title-block">
           <h1 className="obs-session-detail-title">{sessionTitle}</h1>
+          {sessionId && (
+            <div className="obs-session-detail-meta mono-sm">
+              <span>{sessionId}</span>
+            </div>
+          )}
         </div>
+        {sessionId && (
+          <SessionStatsBar
+            messages={messages}
+            spans={spans}
+          />
+        )}
       </header>
-
-      {/* Stats Bar */}
-      {sessionId && (
-        <SessionStatsBar
-          messages={messages}
-          spans={spans}
-          sessionId={sessionId}
-        />
-      )}
 
       {isError && (
         <div className="obs-empty-state">Failed to load session detail.</div>
@@ -293,10 +330,18 @@ const SessionDetail: React.FC = () => {
 
         {/* Middle: Waterfall for selected trace */}
         <SessionWaterfallPanel
-          spans={spans}
+          spans={traceSpans}
           messages={messages}
           selectedSpanId={selectedSpan?.spanId ?? null}
           onSelectSpan={(s) => setSelectedSpanId(s.spanId)}
+          traceRoot={selectedTraceOverview ? {
+            id: selectedTraceOverview.id,
+            name: selectedTraceOverview.name,
+            totalMs: selectedTraceOverview.totalMs,
+            startTime: selectedTraceOverview.startTime,
+            status: selectedTraceOverview.status,
+          } : null}
+          onSelectRoot={() => setSelectedSpanId(null)}
         />
 
         {/* Right: Trace/Span detail */}

@@ -5,7 +5,6 @@ import type { TimelineMessage } from './SessionTimelinePanel';
 interface SessionStatsBarProps {
   messages: TimelineMessage[];
   spans: SpanSummary[];
-  sessionId: string;
 }
 
 function formatMs(ms: number): string {
@@ -20,7 +19,7 @@ function formatTokens(n: number): string {
   return `${(n / 1000).toFixed(0)}k`;
 }
 
-const SessionStatsBar: React.FC<SessionStatsBarProps> = ({ messages, spans, sessionId }) => {
+const SessionStatsBar: React.FC<SessionStatsBarProps> = ({ messages, spans }) => {
   // Calculate stats
   const userMessages = messages.filter((m) => m.role === 'user').length;
   const assistantMessages = messages.filter((m) => m.role === 'assistant').length;
@@ -78,10 +77,6 @@ const SessionStatsBar: React.FC<SessionStatsBarProps> = ({ messages, spans, sess
           <span className="obs-stats-value obs-stats-err-count">{errorCount}</span>
         </div>
       )}
-
-      <div className="obs-stats-id">
-        <span className="mono-sm">{sessionId.slice(0, 12)}</span>
-      </div>
     </div>
   );
 };

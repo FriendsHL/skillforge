@@ -51,18 +51,13 @@
 
 /* ─────────────── Stats Bar ─────────────── */
 
+/* Stats bar is now rendered inside the page header, right-aligned next to
+   the back button + title. No separate background/border. */
 .obs-stats-bar {
   display: flex;
   align-items: center;
-  gap: 24px;
-  padding: 12px 20px 14px;
-  background: var(--bg-surface, #ffffff);
-  border-bottom: 1px solid var(--border-subtle, #e2ded3);
-}
-
-[data-theme="dark"] .obs-stats-bar {
-  background: var(--bg-surface, #221f1a);
-  border-bottom-color: var(--border-subtle, #2b2823);
+  gap: 20px;
+  margin-left: auto;
 }
 
 .obs-stats-item {
@@ -154,17 +149,20 @@
   color: #e89090;
 }
 
-.obs-stats-id {
-  margin-left: auto;
-  padding: 4px 8px;
-  background: var(--bg-hover, #eceae3);
-  border-radius: 4px;
+/* Session id moved to the page header (under the title) — see
+   .obs-session-detail-meta below. */
+
+.obs-session-detail-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
   font-size: 11px;
   color: var(--text-muted, #8a8780);
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
 }
 
-[data-theme="dark"] .obs-stats-id {
-  background: var(--bg-hover, #2c2923);
+[data-theme="dark"] .obs-session-detail-meta {
   color: var(--text-muted, #62605a);
 }
 
@@ -172,12 +170,46 @@
 
 .obs-session-detail-grid {
   display: grid;
-  grid-template-columns: 280px minmax(360px, 1fr) minmax(320px, 420px);
+  grid-template-columns: 320px minmax(440px, 1fr) 380px;
   gap: 0;
   flex: 1;
   min-height: 0;
   overflow: hidden;
   border-top: 1px solid var(--border-subtle, #e2ded3);
+}
+
+/* Filter chip toolbar between waterfall header and body. */
+.tr-waterfall-filters {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border-1);
+  background: var(--bg-base);
+}
+
+.tr-waterfall-filter-count {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--fg-4);
+}
+
+/* Override label-column width inside session detail so the bar track gets
+   more room when the middle pane is narrower than the trace tab. */
+.obs-session-detail-grid .tr-waterfall-h,
+.obs-session-detail-grid .tr-span-row {
+  grid-template-columns: 170px 1fr;
+}
+
+/* Slightly tighter row padding for denser session-level waterfalls. */
+.obs-session-detail-grid .tr-span-row {
+  padding: 9px 12px;
+}
+
+/* Selected root row uses the same accent treatment as a selected child. */
+.obs-session-detail-grid .tr-span-row.sel {
+  background: var(--bg-surface);
+  box-shadow: inset 3px 0 0 var(--accent);
 }
 
 [data-theme="dark"] .obs-session-detail-grid {
@@ -552,6 +584,11 @@
   color: #5c8a4a;
 }
 
+.obs-kind-tag--root {
+  background: rgba(217, 99, 58, 0.18);
+  color: #b94d22;
+}
+
 [data-theme="dark"] .obs-kind-tag--llm {
   background: rgba(138, 111, 179, 0.2);
   color: #b89ad8;
@@ -560,6 +597,11 @@
 [data-theme="dark"] .obs-kind-tag--tool {
   background: rgba(92, 138, 74, 0.2);
   color: #8fca8f;
+}
+
+[data-theme="dark"] .obs-kind-tag--root {
+  background: rgba(217, 99, 58, 0.28);
+  color: #f3a884;
 }
 
 /* ─────────────── Right Detail Panel ─────────────── */
@@ -1774,6 +1816,26 @@
   box-shadow: inset 3px 0 0 #b8412f;
 }
 
+/* Root row — represents the whole agent call (AGENT_LOOP). */
+.obs-waterfall-row--root {
+  background: var(--bg-elevated, #f6f3eb);
+  border-bottom: 1px solid var(--border-strong, #d4cfc2);
+}
+
+[data-theme="dark"] .obs-waterfall-row--root {
+  background: var(--bg-elevated, #1c1a16);
+  border-bottom-color: var(--border-strong, #3a352d);
+}
+
+.obs-waterfall-row--root .obs-waterfall-row-name {
+  font-weight: 600;
+  color: var(--text-primary, #1a1815);
+}
+
+[data-theme="dark"] .obs-waterfall-row--root .obs-waterfall-row-name {
+  color: var(--text-primary, #f7f5f0);
+}
+
 /* Row label */
 .obs-waterfall-row-label {
   display: flex;
@@ -1828,6 +1890,10 @@
   background: #5c8a4a;
 }
 
+.obs-waterfall-bar--root {
+  background: linear-gradient(90deg, rgba(217, 99, 58, 0.55), rgba(217, 99, 58, 0.85));
+}
+
 .obs-waterfall-bar.is-error {
   background: #b8412f !important;
 }
@@ -1838,6 +1904,10 @@
 
 [data-theme="dark"] .obs-waterfall-bar--tool {
   background: #8fca8f;
+}
+
+[data-theme="dark"] .obs-waterfall-bar--root {
+  background: linear-gradient(90deg, rgba(243, 168, 132, 0.55), rgba(243, 168, 132, 0.85));
 }
 
 [data-theme="dark"] .obs-waterfall-bar.is-error {
