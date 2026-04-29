@@ -1,6 +1,6 @@
 # SkillForge ToDo
 
-> 更新于：2026-04-29
+> 更新于：2026-04-30
 > 规则：这里只放当前执行状态；需求和方案细节放在链接的需求包中。
 > 旧版：重整前长版 ToDo 已保留在 [references/legacy-todo-2026-04-28.md](references/legacy-todo-2026-04-28.md)。
 
@@ -22,6 +22,7 @@
 | P12-PRE | Cost 可见性、embedded PG 备份、多用户 / 权限边界 | youren | P12 |
 | P9-4/P9-5 | compact 后“最近文件”的数据来源 | youren + agent | P9-5 设计 |
 | MSG-1 | message_type 持久化 vs 单表、ask_user role 选型、answered UX、是否同 wave 解 BUG-30 | youren | 进入 mrd / prd 编写（[草稿](requirements/active/MSG-1-message-typing/index.md)，2026-04-30 讨论） |
+| CTX-1 | 区分累计 token budget 与当前 context pressure；补全 preflight 估算 system/messages/tools/prompt，并优化超窗 compact/retry | youren + agent | 明天展开需求包与技术方案 |
 
 ## 最近完成
 

@@ -10,7 +10,7 @@ public class ModelConfig {
 
     public static final int DEFAULT_READ_TIMEOUT_SECONDS = 60;
     public static final int DEFAULT_MAX_RETRIES = 1;
-    public static final int DEFAULT_CONTEXT_WINDOW_TOKENS = 128_000;
+    public static final int DEFAULT_CONTEXT_WINDOW_TOKENS = 64_000;
 
     /**
      * Known context window sizes for common models.
@@ -42,6 +42,15 @@ public class ModelConfig {
         m.put("deepseek-coder",        64_000);
         m.put("deepseek-r1",          128_000);
         m.put("deepseek-v4-pro",      128_000);
+        // Alibaba Model Studio / Coding Plan published windows. Keep specific
+        // prefixes before generic "qwen".
+        m.put("qwen3.6-plus",       1_000_000);
+        m.put("qwen3.5-plus",       1_000_000);
+        m.put("qwen3-max",            262_144);
+        m.put("qwen3-coder-next",     262_144);
+        m.put("kimi-k2.5",            262_144);
+        m.put("glm-5",                202_752);
+        m.put("minimax-m2.5",         204_800);
         // Alibaba Qwen (conservative; override via YAML for exact values)
         m.put("qwen",                  32_000);
         // Gemini

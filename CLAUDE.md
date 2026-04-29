@@ -53,6 +53,7 @@ mvn test
 | 文件 | 触发路径 | 覆盖内容 |
 |------|---------|---------|
 | `.claude/rules/docs-reading.md` | 任何非 trivial 任务开工前 | docs 阅读顺序（README → todo → 需求包 index → prd/tech-design），archive 不默认扫，delivery-index 为完成事实唯一来源 |
+| `.claude/rules/think-before-coding.md` | 任何非 trivial 任务开工前 / 进行中 | 暴露假设、多解读端出、更简方案 push back、困惑就停；不顺手删无关 dead code（Karpathy 4 原则中 SkillForge 未覆盖的部分） |
 | `.claude/rules/pipeline.md` | 所有非 trivial 开发任务 | Full Pipeline 对抗循环（Plan/Review 3 轮全 Opus）+ 对抗约束 A/B/C（self-check、severity checklist、nit 折叠） |
 | `.claude/rules/java.md` | `**/*.java` | ObjectMapper footgun、时间字段、构造器注入、@Transactional、Skill/LlmProvider 扩展、测试、安全 |
 | `.claude/rules/frontend.md` | `**/*.tsx` / `**/*.ts` | API 类型、WebSocket cleanup、流式渲染节流、组件规范、状态管理、Ant Design 使用 |
