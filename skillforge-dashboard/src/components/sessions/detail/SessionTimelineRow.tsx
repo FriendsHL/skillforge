@@ -5,6 +5,8 @@ interface SessionTimelineRowProps {
   span: SpanSummary;
   selected: boolean;
   onSelect: (span: SpanSummary) => void;
+  /** Timeline bounds for time bar rendering */
+  timeRange?: { startMs: number; totalMs: number };
 }
 
 function shortenLabel(span: SpanSummary): string {
@@ -23,8 +25,31 @@ function statusTone(span: SpanSummary): 'ok' | 'err' | 'warn' {
   return span.success ? 'ok' : 'err';
 }
 
-const SessionTimelineRow: React.FC<SessionTimelineRowProps> = ({ span, selected, onSelect }) => {
+function tsOf(iso: string | null | undefined): number {
+  if (!iso) return 0;
+  const t = Date.parse(iso);
+  return Number.isFinite(t) ? t : 0;
+}
+
+const SessionTimelineRow: React.FC<SessionTimelineRowProps> = ({
+  span,
+  selected,
+  onSelect,
+  timeRange,
+}) => {
   const tone = statusTone(span);
+
+  // Calculate time bar position if timeRange is provided
+  let barLeft = 0;
+  let barWidth = 0;
+  if (timeRange && timeRange.totalMs > 0) {
+    const spanStart = tsOf(span.startedAt);
+    barLeft = Math.max(0, Math.min(100, ((spanStart - timeRange.startMs) / timeRange.totalMs) * 100));
+    // Scale latency to visual width (min 2%, max based on actual proportion)
+    const latencyRatio = span.latencyMs / timeRange.totalMs;
+    barWidth = Math.max(2, Math.min(100 - barLeft, latencyRatio * 100 * 3)); // *3 for visibility
+  }
+
   return (
     <button
       type="button"
@@ -34,6 +59,17 @@ const SessionTimelineRow: React.FC<SessionTimelineRowProps> = ({ span, selected,
     >
       <span className={`obs-kind-tag obs-kind-tag--${span.kind}`}>{span.kind}</span>
       <span className="obs-timeline-row-label mono-sm">{shortenLabel(span)}</span>
+      
+      {/* Time bar visualization */}
+      {timeRange && timeRange.totalMs > 0 && (
+        <div className="obs-timeline-row-bar-track">
+          <div
+            className={`obs-timeline-row-bar obs-timeline-row-bar--${span.kind} ${tone === 'err' ? 'obs-timeline-row-bar--err' : ''}`}
+            style={{ left: `${barLeft}%`, width: `${barWidth}%` }}
+          />
+        </div>
+      )}
+      
       <span className="obs-timeline-row-meta mono-sm">{span.latencyMs}ms</span>
       {span.kind === 'llm' && (
         <span className="obs-timeline-row-meta mono-sm">
