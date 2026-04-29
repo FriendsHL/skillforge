@@ -65,9 +65,9 @@ mvn test
 | 目录 | 触发路径 | 内容来源 |
 |------|---------|---------|
 | `.claude/rules/java/` | `**/*.java` | ECC Java rules：代码风格、测试、设计模式、安全 |
-| `.claude/rules/web/` | `**/*.tsx` / `**/*.ts` / `**/*.css` | ECC Web rules：编码风格、性能、设计质量、安全 |
+| `.claude/rules/web/` | `**/*.tsx` / `**/*.ts` / `**/*.css` | ECC Web rules：编码风格、性能、设计质量、安全。**注意**：`web/design-quality.md` 和 `web/performance.md` 主要面向 marketing 公网站，SkillForge 是 dashboard 项目，文件顶部已标注 SkillForge override；冲突时以 [`design.md`](.claude/rules/design.md) / [`frontend.md`](.claude/rules/frontend.md) 为准 |
 | `.claude/rules/typescript/` | `**/*.ts` / `**/*.tsx` | ECC TypeScript rules：类型安全、模式、安全 |
-| `.claude/rules/common/` | `**/*` | ECC 通用规则：代码规范、代码审查、Git 工作流、性能、安全 |
+| `.claude/rules/common/` | `**/*` | ECC 通用规则。**被 SkillForge 项目规则覆盖**：① `common/performance.md` 模型选型表（Haiku/Sonnet/Opus）→ 走 [`pipeline.md`](.claude/rules/pipeline.md) 第四节 Reviewer Sonnet + Judge Opus；② `common/development-workflow.md` 研究流程 → 走 `pipeline.md` 整体流程 |
 
 ### Agents（按需调用）
 

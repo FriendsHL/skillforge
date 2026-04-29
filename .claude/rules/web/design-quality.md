@@ -1,5 +1,12 @@
 > This file extends [common/patterns.md](../common/patterns.md) with web-specific design-quality guidance.
 
+> **SkillForge override (2026-04-30)**：本文件主要面向 marketing 公网站。SkillForge 是 Ant Design 后台 dashboard，**仅以下章节适用**：
+> - ✅ Anti-Template Policy（Banned Patterns / Required Qualities）—— 通用，dashboard 也要避免"sidebar+cards+charts 无视角"
+> - ✅ Component Checklist —— 通用 hover/focus/active 状态质量
+> - ❌ **Worthwhile Style Directions**（Scrollytelling / Neo-brutalism / 3D / Retro-futurism）—— dashboard 不适用
+>
+> **SkillForge 设计风格 / 视觉方向以 [`.claude/rules/design.md`](../design.md) 为准，本文件冲突时让位**。
+
 # Web Design Quality Standards
 
 ## Anti-Template Policy

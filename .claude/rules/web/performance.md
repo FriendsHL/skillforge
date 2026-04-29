@@ -1,5 +1,14 @@
 > This file extends [common/performance.md](../common/performance.md) with web-specific performance content.
 
+> **SkillForge override (2026-04-30)**：本文件主要面向 marketing 公网站。SkillForge 是后台 dashboard（用户登录后才用），**仅以下章节适用**：
+> - ✅ Core Web Vitals（INP / CLS 通用，但 LCP/FCP 目标值不严格按 marketing 标准卡）
+> - ✅ Bundle Budget 中 **App page** 行（< 300kb gzipped）—— Landing / Microsite 行不适用
+> - ✅ Image Optimization（图片尺寸 / lazy loading 通用）
+> - ✅ Animation Performance（compositor-friendly props 通用）
+> - ✅ Performance Checklist（通用）
+> - ❌ Loading Strategy 第 2 条 "Preload hero image" —— dashboard 没 hero
+> - ❌ Font Loading "Max two font families" —— dashboard 走 Ant Design 默认字体栈，无需 custom fonts
+
 # Web Performance Rules
 
 ## Core Web Vitals Targets
