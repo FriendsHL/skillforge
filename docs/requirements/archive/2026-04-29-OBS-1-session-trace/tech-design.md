@@ -301,4 +301,56 @@ P15 GetTraceTool 继续保留裁剪输出给 Agent 用。OBS-1 的完整 payload
 
 ## 评审记录
 
-当前还未跑对抗评审。实现前必须走 Full Pipeline。
+**Plan 阶段**（3 轮对抗循环 PASS）：
+- R1 → FAIL（4 真 blocker：B1 Tool span 通路 / B2 chatStream 握手 retry 与 observer 重复触发 / B3 t_llm_trace upsert 幂等 / B4 ProviderName 维度紊乱）
+- R2 → FAIL（W-N2 SubAgent 字段位置升 blocker / W-N6 `@Bean ObjectMapper` 抑制 auto-config 升 blocker）
+- R3 → PASS（修复 W-N2 改 SubagentSessionId 到 ToolSpan + 改用 `Jackson2ObjectMapperBuilderCustomizer`）
+
+**Code review 阶段**（2 轮，第 3 轮用户决定跳过直接交付）：
+- R1 → FAIL（4 真 blocker：BE-B1 Semaphore 4 条 404 早返回不释放 / BE-B2 12 个 plan 测试缺失 / FE-B-USER-1 auto-select spans[0] / FE-B1 SpanDetailPanel 缺 key={span.spanId}）
+- R2 → FAIL（BE-W6 user_id 过滤缺失升 blocker，三层兜底全无）
+- R3 → 用户验收（修了 W6 + W1-W5 顺手 warning + 跳过 R3 复审）
+
+## 交付补丁（plan 之外）
+
+实施过程发现的 plan 漏判 / 现有代码 bug：
+
+1. **`LlmSpanEntity` JSONB 列缺类型注解**（critical）
+   - 现象：`PSQLException: column "attributes_json" is of type jsonb but expression is of type character varying`，每次 LLM call 写库 100% 失败，被 PRD 验收 #6 的"trace 持久化失败不影响主调用"路径**正常吞掉** → 静默丢失
+   - Root cause：plan §3.2 schema 用了 JSONB，但 entity 字段 `private String attributesJson;` 没注 `@JdbcTypeCode(SqlTypes.JSON)`。Hibernate 6 默认走 VARCHAR 路径
+   - Fix：`LlmSpanEntity.usageJson` + `attributesJson` 都加 `@JdbcTypeCode(SqlTypes.JSON)`
+   - 教训：JSONB column + Hibernate 6 是可重复的 footgun，应在 plan §3.5 footgun 清单里加入
+
+2. **`LlmObservabilityConfig` 与 Flyway 循环依赖**
+   - 现象：Spring Boot 3.0+ 默认禁循环依赖，启动失败
+   - 链路：`Flyway` → `LlmObservabilityConfig` → `LlmCallObserverRegistry` → `TraceLlmCallObserver` → `PgLlmTraceStore` → `LlmTraceRepository` → `EntityManagerFactory` → `Flyway`
+   - Fix：把 `FlywayConfigurationCustomizer` bean 拆到独立的 `ObservabilityFlywayConfig`（无构造器依赖），断开循环
+
+3. **R__migrate_legacy_llm_call.sql GUC 路径无设值代码**
+   - 现象：mode=flyway 时 SQL 仍走 ELSE 分支不跑 ETL
+   - Root cause：plan 设计用 PG GUC `skillforge.etl_legacy_mode`，但没人写 `SET` 该 GUC 的代码
+   - Fix：SQL 改用 Flyway 已注入的 `${etl_mode}` placeholder 直接判断
+
+4. **ETL 与 live observer 双写造成重复**
+   - 现象：每个新 LLM call 在 `t_llm_span` 里出现两次（source=live + source=legacy）
+   - Root cause：plan §3.4 设计的"双写 3-6 月作为 rollback 安全网"叠加 ETL 没区分 pre/post-OBS-1
+   - Fix：V36（5s 窗口 dedup，已应用） + V37（1s + iteration_index 收窄，retighten） + R__ NOT EXISTS guard 防未来重入
+
+5. **`Message.getTextContent()` 不识别 `tool_result` 类型**（pre-existing bug）
+   - 现象：所有历史 + 新的 TOOL_CALL trace span `output` 列永远是空字符串
+   - Root cause：`getTextContent()` 只识别 `block.type=="text"`，但 `ContentBlock.toolResult()` 造的是 `type="tool_result"`，content 在 `block.getContent()` 不在 `block.getText()`
+   - Fix：`Message.getTextContent()` 加 `tool_result` 分支 + `extractToolResultText` helper 处理 String/List<ContentBlock>/List<Map> 三种 content 形态
+
+6. **OBS-1 4 个 controller 缺 user_id 过滤**（auth bypass）
+   - 现象：任何已认证用户可猜 sessionId 访问他人 LLM/Tool span 数据
+   - Root cause：plan §6.3 / §7.3 明文要求 user_id 过滤，但 backend dev 实现时 controller 只取 `@PathVariable sessionId`，service 层无 userId 参数；项目无 Spring Security filter 兜底
+   - Fix：4 个 controller 加 `@RequestParam Long userId` + 复用 `ChatController.requireOwnedSession` 模式（提取为 `ObservabilityOwnershipGuard` helper）；service 加 userId 防御性双校验；前端 `api/index.ts` 4 个 OBS-1 函数签名加 userId
+   - 测试：`SessionSpansAuthIT` 17 用例覆盖 4 controller × {200/403/400/404}
+
+## Follow-up（不阻塞交付，留给后续 PR）
+
+- BE-W1 完整 `@SpringBootTest+TestRestTemplate HttpIT`（项目无 SpringBootTest infra，留 follow-up）
+- 8 个 plan §9.1/§9.2 应修测试（SubagentSessionResolverTest / HeaderSanitizerTest / FileSystemBlobStoreTest / BlobPathTraversalIT / TraceLlmCallObserverTest / ProviderNameAlignmentTest / LlmTraceControllerIT / OpsObserverWiredIT / BlobStreamingIT / BlobReadConcurrencyLimitIT）
+- `SpanDetailPanel.crossSpanIsolation.test.tsx` fixture 类型与 LlmSpanSummary interface 不匹配（tsconfig 排除测试）
+- `t_llm_span.user_id` 列 + SQL 层 user_id 过滤（如需 service-to-service 调用，纯 session 校验不够）
+- OBS-1-4（compact 验证视角）+ OBS-1-5（provider quirk 检测）按 PRD V2 规划

@@ -66,14 +66,14 @@ OBS-1 要解决的是人的可观测性，不替代 P15 面向 Agent 的裁剪 t
 
 | # | 决策点 | 选择 | 状态 |
 | --- | --- | --- | --- |
-| Q1 | 流式 SSE 落库形态 | 累加后 JSON 落 DB 摘要路径，raw SSE 落 blob，方便排查 chunk 边界问题。 | 草拟 |
-| Q2 | blob 触发阈值 | 都落 blob：DB 永远只存 32KB 摘要 + blob_ref，UI 体验一致，DB row 体积可预测。 | 草拟 |
+| Q1 | 流式 SSE 落库形态 | 累加后 JSON 落 DB 摘要路径，raw SSE 落 blob，方便排查 chunk 边界问题。 | 已定 |
+| Q2 | blob 触发阈值 | 都落 blob：DB 永远只存 32KB 摘要 + blob_ref，UI 体验一致，DB row 体积可预测。 | 已定 |
 | Q3 | 旧 `t_trace_span` 处理 | 一次性 ETL + `source` 字段标记，消除 fallback 路径。 | 已定 |
-| Q4 | trace_id 体系 | 复用现有 trace_id，保持全链路约定。 | 草拟 |
-| Q5 | UI 落位 | 改造现有 Sessions 页；Traces 页保留。 | 草拟 |
-| Q6 | 保留期 + 清理 | 30 天 + cron 每日清理过期 blob 和 DB row，清理失败 warn 不抛。 | 草拟 |
-| Q7 | 脱敏 | 仅 HTTP headers 层剥离；request body 不主动扫。 | 草拟 |
-| Q8 | SubAgent 展示 | 父 session span 显示“跳转到子 session”，嵌套树 V2。 | 草拟 |
+| Q4 | trace_id 体系 | 复用现有 trace_id，保持全链路约定。 | 已定 |
+| Q5 | UI 落位 | 改造现有 Sessions 页；Traces 页保留。 | 已定 |
+| Q6 | 保留期 + 清理 | 30 天 + cron 每日清理过期 blob 和 DB row，清理失败 warn 不抛。 | 已定 |
+| Q7 | 脱敏 | 仅 HTTP headers 层剥离；request body 不主动扫。 | 已定 |
+| Q8 | SubAgent 展示 | 父 session span 显示“跳转到子 session”，嵌套树 V2。 | 已定 |
 | 其他 | 物理隔离 | 独立 maven module `skillforge-observability`。 | 已定 |
 | 其他 | LlmProvider 周边 | Observer 模式，不用 AOP。 | 已定 |
 | 其他 | PG backup 是否带 payload | 不带；payload 文件丢失只影响 raw 查看，DB 摘要仍可用。 | 已定 |
@@ -90,14 +90,14 @@ OBS-1 要解决的是人的可观测性，不替代 P15 面向 Agent 的裁剪 t
 
 ## 验收标准
 
-- [ ] Session detail 能展示消息时间线和关联 LLM / Tool span。
-- [ ] LLM span 不加载完整 blob 时也能显示 request / response 摘要。
-- [ ] live span 可以按需加载完整 request / response payload。
-- [ ] legacy span 禁用完整 payload 加载，并清楚说明原因。
-- [ ] P15 GetTraceTool 仍保持裁剪、token-safe。
-- [ ] trace 持久化失败不会影响主 LLM 调用。
-- [ ] SubAgent span 能跳转到子 session。
-- [ ] HTTP header 中的敏感字段不会落库。
+- [x] Session detail 能展示消息时间线和关联 LLM / Tool span。 _(SessionDetail.tsx + SessionTimelinePanel, 用户实测 2026-04-29)_
+- [x] LLM span 不加载完整 blob 时也能显示 request / response 摘要。 _(LlmSpanDetail.inputSummary / outputSummary 32KB 摘要直渲)_
+- [x] live span 可以按需加载完整 request / response payload。 _(PayloadViewer 按钮触发 GET /api/observability/spans/{id}/blob)_
+- [x] legacy span 禁用完整 payload 加载，并清楚说明原因。 _(blob_status='legacy' 时 PayloadViewer 按钮 disabled + 文案"历史 session 无 raw payload")_
+- [x] P15 GetTraceTool 仍保持裁剪、token-safe。 _(未触碰 GetTraceTool 实现路径，用 OBS-1 旁路通道)_
+- [x] trace 持久化失败不会影响主 LLM 调用。 _(observability/server 双层测试覆盖：LlmTraceStoreFailDoesNotBlockChatTest store throw → handler.onComplete 收完整响应 + inFlightCount=0)_
+- [x] SubAgent span 能跳转到子 session。 _(SubagentJumpLink 在 ToolSpanDetailView 渲染，SubagentSessionResolver 双源解析 output text + parent_session_id 反查)_
+- [x] HTTP header 中的敏感字段不会落库。 _(HeaderSanitizer DROP_HEADERS 覆盖 authorization / x-api-key / Bearer 等 9 个 header；header redact)_
 
 ## 依赖
 
@@ -115,6 +115,6 @@ OBS-1 要解决的是人的可观测性，不替代 P15 面向 Agent 的裁剪 t
 
 ## 开工前置
 
-- [ ] 确认 Q1 / Q2 / Q4 / Q5 / Q6 / Q7 / Q8 草拟决策。
-- [ ] 执行 `SELECT count(*) FROM t_trace_span WHERE span_type='LLM_CALL'` 验证数据量。
+- [x] 确认 Q1 / Q2 / Q4 / Q5 / Q6 / Q7 / Q8 草拟决策。 _(2026-04-29 全部接受 default)_
+- [x] 执行 `SELECT count(*) FROM t_trace_span WHERE span_type='LLM_CALL'` 验证数据量。 _(实施时实际数据量 ~104 sessions，远低于 50 万阈值，直接走 mode=flyway 一次性迁移；之后 mode 切回 off)_
 - [ ] Full Pipeline 进入 plan 对抗循环；OBS-1 是新基础设施，schema 和接口设计必须 reviewer 把关。

@@ -1,6 +1,6 @@
 # SkillForge 交付索引
 
-> 更新于：2026-04-28
+> 更新于：2026-04-29
 > 目的：集中维护已完成交付事实。`docs/todo.md` 只记录当前执行状态。
 
 ---
@@ -20,6 +20,7 @@
 
 | 完成日期 | 交付项 | 技术方案 | 辅助文档 | 验证 / commit / migration |
 | --- | --- | --- | --- | --- |
+| 2026-04-29 | OBS-1 Session × Trace 合并详情视图：新建 `skillforge-observability` module（`LlmTraceStore` / `BlobStore` / `TraceLlmCallObserver` / `ObservabilityJacksonConfig` / `LegacyLlmCallEtlService`）+ 4 个 server controller（`SessionSpansController` / `LlmSpanController` / `ToolSpanController` / `LlmTraceController`）+ `SessionSpansService` / `SubagentSessionResolver` / `ObservabilityOwnershipGuard` + dashboard `SessionDetail` / `SessionTimelinePanel` / `SpanDetailPanel` / `LlmSpanDetailView` / `ToolSpanDetailView` / `PayloadViewer` / `SubagentJumpLink`；同步修 6 处 plan 外补丁（JSONB `@JdbcTypeCode`、Cycle dependency split、ETL placeholder、V36/V37 dedup、Message.getTextContent tool_result、4 controller user_id 过滤） | [OBS-1 技术方案](requirements/archive/2026-04-29-OBS-1-session-trace/tech-design.md) | [ToDo](todo.md)、Plan/Review/Judge 文档系列在 `/tmp/plan-r{1,2,3}.md` + `/tmp/review-{be,fe,judge}-r{1,2}.md`（保留作审计） | 待 commit；`V33` / `V35` / `V36` / `V37` + `R__migrate_legacy_llm_call.sql`；core 111 tests + observability 5 tests + server 539+ tests；用户 dashboard 实测 cross-user 403 + 数据展示 + Tool output 渲染 |
 | 2026-04-27 | Memory v2（PR-1 ~ PR-5）：`V29` schema、L0/L1 task-aware recall、增量抽取 cursor、embedding add-time dedup、状态机/淘汰/UI 收口 | [Memory v2 技术方案](requirements/archive/2026-04-27-MEMORY-v2/tech-design.md) | [ToDo](todo.md) | `9f36b59` / `8330d32` / `86703ed` / `96676b9` + 当前 workspace PR-5 收尾；`V29`; `mvn -pl skillforge-server -am -Dtest=MemoryConsolidatorTest,MemoryServiceTest -Dsurefire.failIfNoSpecifiedTests=false test` 24/24；`skillforge-dashboard npm run build` |
 | 2026-04-26 | P15-4 Agent 配置自省 + UpdateAgent：`GetAgentConfig`、`AgentDiscovery` 增强、带一次确认的 `UpdateAgent` | 无独立方案；属于 P11/P15 自省工具补齐，并复用 [SEC-2 技术方案](requirements/archive/2026-04-25-SEC-2-hook-source-protection/tech-design.md) 的 hook 来源隔离边界 | [ToDo](todo.md) | 本次提交；`mvn -pl skillforge-server -am -DskipTests compile`；`UpdateAgentToolTest` + `AgentLoopEngineInstallConfirmationTest` 16/16；server 重启确认工具注册 |
 | 2026-04-26 | Agent 管理与内置模板 SQL 化收口：`CreateAgent` Tool、Code/Main Agent Flyway seed、Main Assistant leader config | 无独立方案；确认流复用 [Install Confirmation 技术方案](requirements/archive/2026-04-26-INSTALL-confirmation-flow/tech-design.md) 的 human confirmation pattern | [ToDo](todo.md) | `e22609c` / `3243759` / `d9d82a3` / `3542fa6`；`V26` / `V27` / `V28`；418 non-IT server tests；本地 DB 已到 v28 |

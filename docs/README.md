@@ -20,7 +20,7 @@
 | ID | 标题 | 状态 | 需求包 | MRD | PRD | 技术方案 | 交付 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | P12-PRE | Sprint 4 前置决策 | ready | [需求包](requirements/active/P12-preflight-decisions/index.md) | - | - | - | - |
-| OBS-1 | Session x Trace 合并详情视图 | prd-ready | [需求包](requirements/active/OBS-1-session-trace/index.md) | [MRD](requirements/active/OBS-1-session-trace/mrd.md) | [PRD](requirements/active/OBS-1-session-trace/prd.md) | [方案](requirements/active/OBS-1-session-trace/tech-design.md) | - |
+| P1-D | Skill Root 与 Catalog 收口 | design-draft | [需求包](requirements/active/P1-D-skill-root-catalog-convergence/index.md) | [MRD](requirements/active/P1-D-skill-root-catalog-convergence/mrd.md) | [PRD](requirements/active/P1-D-skill-root-catalog-convergence/prd.md) | [方案](requirements/active/P1-D-skill-root-catalog-convergence/tech-design.md) | - |
 | P9-2 | Tool Result 归档 | prd-ready | [需求包](requirements/active/P9-2-tool-result-archive/index.md) | [MRD](requirements/active/P9-2-tool-result-archive/mrd.md) | [PRD](requirements/active/P9-2-tool-result-archive/prd.md) | [方案](requirements/active/P9-2-tool-result-archive/tech-design.md) | - |
 | P12 | 定时任务 MVP | prd-ready | [需求包](requirements/active/P12-scheduled-tasks/index.md) | [MRD](requirements/active/P12-scheduled-tasks/mrd.md) | [PRD](requirements/active/P12-scheduled-tasks/prd.md) | [方案](requirements/active/P12-scheduled-tasks/tech-design.md) | - |
 | P9-4/P9-5 | Partial compact + post-compact 恢复 | prd-draft | [需求包](requirements/active/P9-4-P9-5-compaction-recovery/index.md) | [MRD](requirements/active/P9-4-P9-5-compaction-recovery/mrd.md) | [PRD](requirements/active/P9-4-P9-5-compaction-recovery/prd.md) | [方案](requirements/active/P9-4-P9-5-compaction-recovery/tech-design.md) | - |
@@ -42,6 +42,7 @@
 | P6 | 消息行存储 | [需求包](requirements/archive/2026-04-21-P6-session-message-storage/index.md) | [方案](requirements/archive/2026-04-21-P6-session-message-storage/tech-design.md) |
 | SEC-2 | Hook Source Protection | [需求包](requirements/archive/2026-04-25-SEC-2-hook-source-protection/index.md) | [方案](requirements/archive/2026-04-25-SEC-2-hook-source-protection/tech-design.md) |
 | Memory v2 | 写入 / 召回 / 淘汰 | [需求包](requirements/archive/2026-04-27-MEMORY-v2/index.md) | [方案](requirements/archive/2026-04-27-MEMORY-v2/tech-design.md) |
+| OBS-1 | Session x Trace 合并详情视图 | [需求包](requirements/archive/2026-04-29-OBS-1-session-trace/index.md) | [方案](requirements/archive/2026-04-29-OBS-1-session-trace/tech-design.md) |
 | P5 | 前端体验优化 | [需求包](requirements/archive/2026-04-19-P5-frontend-optimization/index.md) | [方案](requirements/archive/2026-04-19-P5-frontend-optimization/tech-design.md) |
 | P2 | Channel Gateway | [需求包](requirements/archive/2026-04-20-P2-channel-gateway/index.md) | [方案](requirements/archive/2026-04-20-P2-channel-gateway/tech-design.md) |
 | P4 | Code Agent | [需求包](requirements/archive/2026-04-19-P4-code-agent/index.md) | [方案](requirements/archive/2026-04-19-P4-code-agent/tech-design.md) |

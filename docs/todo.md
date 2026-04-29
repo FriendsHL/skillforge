@@ -1,6 +1,6 @@
 # SkillForge ToDo
 
-> 更新于：2026-04-28
+> 更新于：2026-04-29
 > 规则：这里只放当前执行状态；需求和方案细节放在链接的需求包中。
 > 旧版：重整前长版 ToDo 已保留在 [references/legacy-todo-2026-04-28.md](references/legacy-todo-2026-04-28.md)。
 
@@ -9,7 +9,7 @@
 | 顺序  | ID        | 标题                                | 模式   | 状态        | 优先级 | 风险   | 文档                                                        | 下一步                                   |
 | --- | --------- | --------------------------------- | ---- | --------- | --- | ---- | --------------------------------------------------------- | ------------------------------------- |
 | 1   | P12-PRE   | Sprint 4 前置决策                     | Lite | ready     | P0  | Solo | [需求包](requirements/active/P12-preflight-decisions/index.md)       | 决定 Cost Dashboard、PG 备份、多用户权限边界       |
-| 2   | OBS-1     | Session x Trace 合并详情视图            | Full | prd-ready | P1  | Full | [需求包](requirements/active/OBS-1-session-trace/index.md)           | 确认草拟决策，然后进入 Full Pipeline 技术评审        |
+| 2   | P1-D      | Skill Root 与 Catalog 收口            | Full | design-draft | P1  | Full | [需求包](requirements/active/P1-D-skill-root-catalog-convergence/index.md) | 审核技术方案，确认后进入 Full Pipeline plan |
 | 3   | P9-2      | Tool Result 归档                    | Full | prd-ready | P1  | Full | [需求包](requirements/active/P9-2-tool-result-archive/index.md)      | 作为 Sprint 3 启动 Full Pipeline plan     |
 | 4   | P12       | 定时任务 MVP                          | Full | prd-ready | P1  | Full | [需求包](requirements/active/P12-scheduled-tasks/index.md)           | 等 P12-PRE 决策完成后进入设计评审                 |
 | 5   | P9-4/P9-5 | Partial compact + post-compact 恢复 | Full | prd-draft | P2  | Full | [需求包](requirements/active/P9-4-P9-5-compaction-recovery/index.md) | 先决定“最近文件”数据来源                         |
@@ -20,19 +20,18 @@
 | ID | 待决策 | 负责人 | 阻塞项 |
 | --- | --- | --- | --- |
 | P12-PRE | Cost 可见性、embedded PG 备份、多用户 / 权限边界 | youren | P12 |
-| OBS-1 | 确认 Q1/Q2/Q4/Q5/Q6/Q7/Q8 技术决策草案 | youren | OBS-1 技术方案批准 |
 | P9-4/P9-5 | compact 后“最近文件”的数据来源 | youren + agent | P9-5 设计 |
 
 ## 最近完成
 
 | ID | 完成日期 | Commit | 交付 |
 | --- | --- | --- | --- |
+| OBS-1 | 2026-04-29 | 见交付索引 | [交付索引](delivery-index.md) |
 | P1-C | 2026-04-28 | `555bdba` | [交付索引](delivery-index.md) |
 | Memory v2 | 2026-04-27 | `9f36b59`, `8330d32`, `86703ed`, `96676b9` | [交付索引](delivery-index.md) |
 | BUG-F | 2026-04-26 | `e9b48f3` | [交付索引](delivery-index.md) |
 | SEC-2 | 2026-04-25 | 见交付索引 | [交付索引](delivery-index.md) |
 | thinking-mode-v1 | 2026-04-25 | `55969db` | [交付索引](delivery-index.md) |
-| Engine stability | 2026-04-24 | `121e8dc` | [交付索引](delivery-index.md) |
 
 ## 暂缓
 
@@ -45,6 +44,7 @@
 | P15-3/P15-6 | Analyzer MVP 暂不需要 eval run 读取或分析 tab 落库 | Analyzer MVP 证明有持续价值 | deferred package TBD |
 | P12-3/P12-6 | 超出 P12 MVP 范围 | 需要 system job UI 或高级可靠性 | [P12](requirements/active/P12-scheduled-tasks/index.md) |
 | P10-4/P10-5 | 四条命令 MVP 已覆盖主要场景 | 出现明确自定义命令或 help menu 需求 | [P10](requirements/active/P10-slash-commands/index.md) |
+| OBS-1-4/OBS-1-5 | OBS-1 MVP 上线后再看 compact 验证视角 + provider quirk 自动诊断的真实使用 | 看到真实 raw payload 后用户提出明确需求 | [OBS-1 PRD](requirements/archive/2026-04-29-OBS-1-session-trace/prd.md) |
 
 ## 阅读规则
 
