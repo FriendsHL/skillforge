@@ -176,7 +176,7 @@ const SessionDetail: React.FC = () => {
     queryFn: async () => {
       if (!sessionId || !userId) throw new Error('missing sessionId or userId');
       const res = await getSessionSpans(sessionId, userId);
-      const data = res.data as { spans?: Record<string, unknown>[]; hasMore?: boolean };
+      const data = res.data;
       return Array.isArray(data.spans) ? data.spans : [];
     },
     enabled: Boolean(sessionId && userId),
@@ -187,8 +187,7 @@ const SessionDetail: React.FC = () => {
   const spans = useMemo<SpanSummary[]>(() => {
     const rawSpans = sessionSpansQuery.data ?? [];
     return rawSpans.map((raw) => {
-      const kind = raw.kind as string;
-      if (kind === 'llm') {
+      if (raw.kind === 'llm') {
         return {
           kind: 'llm',
           spanId: String(raw.spanId || ''),

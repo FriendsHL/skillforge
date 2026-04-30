@@ -154,7 +154,6 @@ const MemoryList: React.FC = () => {
   const toggleKind = (v: string) => setFilterKind(k => k === v ? null : v);
   const handleSearch = () => setActiveSearch(q.trim());
   const openEdit = (m: MemoryRow) => { setOpen(m); setEditVal(m.value); };
-  const allSelected = rows.length > 0 && selectedIds.length === rows.length;
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ['memories', userId] });

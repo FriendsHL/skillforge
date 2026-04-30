@@ -187,7 +187,7 @@ function SwimRiver({ spans, members }: { spans: SwimSpan[]; members: CollabMembe
               {spans
                 .filter((s) => s.session === sess)
                 .map((s, i) => {
-                  const peerInfo = (s as SwimSpan & { toHandle?: string; isBroadcast?: boolean }); 
+                  const peerInfo = (s as SwimSpan & { fromHandle?: string; toHandle?: string; isBroadcast?: boolean }); 
                   const tooltip = peerInfo.toHandle
                     ? `${peerInfo.fromHandle || sess} → ${peerInfo.toHandle}`
                     : `${s.type} · ${s.dur.toFixed(1)}s`;
