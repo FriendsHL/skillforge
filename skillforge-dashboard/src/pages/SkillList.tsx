@@ -1,12 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Modal, Select, Tooltip, message } from 'antd';
+import { Button, Modal, Select, Tooltip, message } from 'antd';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   getSkills, uploadSkill, deleteSkill,
   toggleSkill, extractList,
   getSkillDrafts, triggerSkillExtraction, reviewSkillDraft,
   getAgents,
+  rescanSkills,
   type SkillDraft,
+  type RescanReport,
 } from '../api';
 import { useAuth } from '../contexts/AuthContext';
 import '../components/agents/agents.css';
@@ -44,6 +46,7 @@ const SkillList: React.FC = () => {
   const [creating, setCreating] = useState(false);
   const [draftsOpen, setDraftsOpen] = useState(false);
   const [extracting, setExtracting] = useState(false);
+  const [rescanning, setRescanning] = useState(false);
 
   const { data: rawSkills = [] } = useQuery({
     queryKey: ['skills'],
@@ -126,6 +129,43 @@ const SkillList: React.FC = () => {
       return;
     }
     approveMutation.mutate({ id });
+  };
+
+  /**
+   * P1-D rescan: trigger a synchronous filesystem reconciliation and surface
+   * the report. We use Modal.info (not message.success) so the multi-line
+   * summary stays on screen long enough for the operator to read each count
+   * — auto-dismissing toasts hide too quickly for diagnostic data.
+   */
+  const handleRescan = async () => {
+    setRescanning(true);
+    try {
+      const res = await rescanSkills();
+      const report: RescanReport = res.data;
+      Modal.info({
+        title: 'Skills rescanned',
+        content: (
+          <div data-testid="rescan-report">
+            <p style={{ marginTop: 0 }}>Filesystem reconciliation complete:</p>
+            <ul style={{ paddingLeft: 18, marginBottom: 0 }}>
+              <li><strong>{report.created}</strong> created</li>
+              <li><strong>{report.updated}</strong> updated</li>
+              <li><strong>{report.missing}</strong> missing</li>
+              <li><strong>{report.invalid}</strong> invalid</li>
+              <li><strong>{report.shadowed}</strong> shadowed</li>
+              <li><strong>{report.disabledDuplicates}</strong> duplicates auto-disabled</li>
+            </ul>
+          </div>
+        ),
+        okText: 'Close',
+      });
+      queryClient.invalidateQueries({ queryKey: ['skills'] });
+    } catch (err: unknown) {
+      const e = err as { response?: { data?: { error?: string } } };
+      message.error(e.response?.data?.error || 'Failed to rescan skills');
+    } finally {
+      setRescanning(false);
+    }
   };
 
   const handleExtract = async () => {
@@ -289,6 +329,16 @@ const SkillList: React.FC = () => {
               >
                 {BOLT_ICON} {extracting ? 'Extracting…' : 'Extract from Sessions'}
               </button>
+            </Tooltip>
+            <Tooltip title="Reconcile skills against the on-disk skills directory and report missing / shadowed / invalid entries">
+              <Button
+                size="small"
+                onClick={handleRescan}
+                loading={rescanning}
+                data-testid="rescan-btn"
+              >
+                Rescan
+              </Button>
             </Tooltip>
             <button className="btn-primary-sf" onClick={() => setCreating(true)}>{PLUS_ICON} New skill</button>
           </div>

@@ -11,6 +11,9 @@ import com.skillforge.server.entity.SkillEvolutionRunEntity;
 import com.skillforge.server.repository.SkillEvolutionRunRepository;
 import com.skillforge.server.repository.SkillRepository;
 import com.skillforge.server.service.SkillService;
+import com.skillforge.server.skill.AllocationContext;
+import com.skillforge.server.skill.SkillSource;
+import com.skillforge.server.skill.SkillStorageService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -55,6 +58,7 @@ public class SkillEvolutionService {
     private final SkillService skillService;
     private final LlmProviderFactory llmProviderFactory;
     private final ExecutorService evolutionExecutor;
+    private final SkillStorageService skillStorageService;
     private final String defaultProviderName;
 
     public SkillEvolutionService(SkillRepository skillRepository,
@@ -63,13 +67,15 @@ public class SkillEvolutionService {
                                  SkillService skillService,
                                  LlmProviderFactory llmProviderFactory,
                                  LlmProperties llmProperties,
-                                 @Qualifier("skillEvolutionExecutor") ExecutorService evolutionExecutor) {
+                                 @Qualifier("skillEvolutionExecutor") ExecutorService evolutionExecutor,
+                                 SkillStorageService skillStorageService) {
         this.skillRepository = skillRepository;
         this.evolutionRunRepository = evolutionRunRepository;
         this.skillAbEvalService = skillAbEvalService;
         this.skillService = skillService;
         this.llmProviderFactory = llmProviderFactory;
         this.evolutionExecutor = evolutionExecutor;
+        this.skillStorageService = skillStorageService;
         this.defaultProviderName = llmProperties.getDefaultProvider() != null
                 ? llmProperties.getDefaultProvider() : "claude";
     }
@@ -241,8 +247,17 @@ public class SkillEvolutionService {
 
     private Path prepareForkDirectory(SkillEntity parent, SkillEntity forkedSkill) throws IOException {
         Path parentDir = Path.of(parent.getSkillPath()).toAbsolutePath().normalize();
-        Path anchor = parentDir.getParent() != null ? parentDir.getParent() : parentDir;
-        Path newDir = anchor.resolve("evolved-" + forkedSkill.getId());
+        // P1-D: place forks under the unified runtime root via SkillStorageService rather
+        // than next to the parent (which lived under unpredictable legacy paths).
+        Long ownerIdRaw = parent.getOwnerId();
+        String ownerId = ownerIdRaw != null ? ownerIdRaw.toString() : "system";
+        String parentSkillId = parent.getId() != null ? parent.getId().toString() : "unknown";
+        String uuid = forkedSkill.getId() != null
+                ? forkedSkill.getId().toString()
+                : UUID.randomUUID().toString();
+        Path newDir = skillStorageService.allocate(
+                SkillSource.EVOLUTION_FORK,
+                AllocationContext.forEvolutionFork(ownerId, parentSkillId, uuid));
         Files.createDirectories(newDir);
         if (Files.isDirectory(parentDir)) {
             copyDirectory(parentDir, newDir);

@@ -1,4 +1,18 @@
-import type { SkillRow } from './types';
+import type { SkillRow, SkillArtifactStatus } from './types';
+
+const ARTIFACT_STATUSES: ReadonlySet<SkillArtifactStatus> = new Set([
+  'active',
+  'missing',
+  'invalid',
+  'shadowed',
+]);
+
+function parseArtifactStatus(raw: unknown): SkillArtifactStatus | undefined {
+  if (typeof raw !== 'string') return undefined;
+  return ARTIFACT_STATUSES.has(raw as SkillArtifactStatus)
+    ? (raw as SkillArtifactStatus)
+    : undefined;
+}
 
 export function guessLang(name: string): string {
   const lower = name.toLowerCase();
@@ -20,7 +34,23 @@ export function deriveTags(row: Record<string, unknown>): string[] {
 
 export function normalizeSkill(raw: Record<string, unknown>): SkillRow {
   const name = String(raw.name || '');
-  const isSystem = raw.system === true || raw.source === 'system';
+  // P1-D: backend `source` is now a provenance string ("upload" / "skill-creator"
+  // / etc.), no longer the binary 'system'|'custom'. Determine system-ness from
+  // the `isSystem` boolean (preferred) or the legacy `system` boolean. The
+  // legacy `source === 'system'` fallback is retained only for older payloads
+  // still in the cache during rollout.
+  const isSystem =
+    raw.isSystem === true ||
+    raw.system === true ||
+    raw.source === 'system';
+  const originSource = typeof raw.source === 'string' ? raw.source : undefined;
+  const typeRaw = raw.type;
+  const type: SkillRow['type'] =
+    typeRaw === 'system' || typeRaw === 'runtime'
+      ? typeRaw
+      : isSystem
+        ? 'system'
+        : 'runtime';
   return {
     id: raw.id != null ? raw.id as number : name,
     name,
@@ -39,6 +69,15 @@ export function normalizeSkill(raw: Record<string, unknown>): SkillRow {
     usageCount: raw.usageCount != null ? Number(raw.usageCount) : undefined,
     successCount: raw.successCount != null ? Number(raw.successCount) : undefined,
     failureCount: raw.failureCount != null ? Number(raw.failureCount) : undefined,
+    // P1-D governance fields. `artifactStatus` defaults to 'active' for legacy
+    // rows missing this field (matches backend SkillDto.from default).
+    isSystem,
+    artifactStatus: parseArtifactStatus(raw.artifactStatus) ?? 'active',
+    skillPath: typeof raw.skillPath === 'string' ? raw.skillPath : undefined,
+    shadowedBy: typeof raw.shadowedBy === 'string' ? raw.shadowedBy : undefined,
+    lastScannedAt: typeof raw.lastScannedAt === 'string' ? raw.lastScannedAt : undefined,
+    originSource,
+    type,
   };
 }
 

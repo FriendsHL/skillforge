@@ -11,6 +11,7 @@ import com.skillforge.server.repository.SessionRepository;
 import com.skillforge.server.repository.SkillDraftRepository;
 import com.skillforge.server.repository.SkillRepository;
 import com.skillforge.server.skill.SkillCreatorService;
+import com.skillforge.server.skill.SkillStorageService;
 import com.skillforge.server.websocket.UserWebSocketHandler;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -56,6 +57,7 @@ class SkillDraftServiceApproveDraftTest {
     @Mock private LlmProviderFactory llmProviderFactory;
     @Mock private UserWebSocketHandler userWebSocketHandler;
     @Mock private SkillRegistry skillRegistry;
+    @Mock private SkillStorageService skillStorageService;
 
     private SkillDraftService service;
 
@@ -69,7 +71,10 @@ class SkillDraftServiceApproveDraftTest {
         service = new SkillDraftService(
                 sessionRepository, skillDraftRepository, skillRepository,
                 llmProviderFactory, new ObjectMapper(), props,
-                userWebSocketHandler, creatorService, packageLoader, skillRegistry);
+                userWebSocketHandler, creatorService, packageLoader, skillRegistry,
+                skillStorageService);
+        // Tests use the legacy 2-layer skillsDir override; SkillStorageService is unused
+        // when skillsDir is set, so the @Mock above stays at no-op default.
         service.setSkillsDir(tmp.toString());
     }
 

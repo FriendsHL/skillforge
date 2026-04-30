@@ -90,6 +90,39 @@ public class SkillEntity {
     @Column(name = "is_system", nullable = false)
     private boolean isSystem = false;
 
+    /**
+     * SHA-256 (or equivalent) hash of the canonical SKILL.md content; used by
+     * {@code SkillCatalogReconciler} to detect on-disk artifact changes between
+     * startups. Added by V33 migration. Nullable for legacy rows; populated on
+     * first reconcile pass.
+     */
+    @Column(length = 128)
+    private String contentHash;
+
+    /**
+     * Last time the artifact was scanned by SystemSkillLoader / UserSkillLoader
+     * / SkillCatalogReconciler. Added by V33 migration. Persisted as TIMESTAMP,
+     * mapped to {@link Instant} per java.md footgun #2 (new fields use Instant).
+     */
+    @Column(name = "last_scanned_at")
+    private Instant lastScannedAt;
+
+    /**
+     * Artifact governance status. One of {@code active / missing / invalid /
+     * shadowed}. Default {@code active}. Added by V33 migration.
+     */
+    @Column(name = "artifact_status", length = 32, nullable = false)
+    private String artifactStatus = "active";
+
+    /**
+     * When {@code artifact_status='shadowed'}, identifies the winner shadowing
+     * this row. Format: {@code system:<name>} for system-vs-runtime conflicts,
+     * {@code runtime:<id>} for runtime-vs-runtime. Null otherwise. Added by V33
+     * migration.
+     */
+    @Column(name = "shadowed_by", length = 255)
+    private String shadowedBy;
+
     public SkillEntity() {
     }
 
@@ -259,5 +292,37 @@ public class SkillEntity {
 
     public void setSystem(boolean isSystem) {
         this.isSystem = isSystem;
+    }
+
+    public String getContentHash() {
+        return contentHash;
+    }
+
+    public void setContentHash(String contentHash) {
+        this.contentHash = contentHash;
+    }
+
+    public Instant getLastScannedAt() {
+        return lastScannedAt;
+    }
+
+    public void setLastScannedAt(Instant lastScannedAt) {
+        this.lastScannedAt = lastScannedAt;
+    }
+
+    public String getArtifactStatus() {
+        return artifactStatus;
+    }
+
+    public void setArtifactStatus(String artifactStatus) {
+        this.artifactStatus = artifactStatus;
+    }
+
+    public String getShadowedBy() {
+        return shadowedBy;
+    }
+
+    public void setShadowedBy(String shadowedBy) {
+        this.shadowedBy = shadowedBy;
     }
 }

@@ -5,6 +5,9 @@ import com.skillforge.core.skill.SkillPackageLoader;
 import com.skillforge.core.skill.SkillRegistry;
 import com.skillforge.server.entity.SkillEntity;
 import com.skillforge.server.repository.SkillRepository;
+import com.skillforge.server.skill.AllocationContext;
+import com.skillforge.server.skill.SkillSource;
+import com.skillforge.server.skill.SkillStorageService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -32,26 +35,29 @@ public class SkillService {
     private final SkillRepository skillRepository;
     private final SkillRegistry skillRegistry;
     private final SkillPackageLoader skillPackageLoader;
-
-    @Value("${skillforge.skills-dir:./data/skills}")
-    private String skillsDir;
+    private final SkillStorageService skillStorageService;
 
     public SkillService(SkillRepository skillRepository,
                         SkillRegistry skillRegistry,
-                        SkillPackageLoader skillPackageLoader) {
+                        SkillPackageLoader skillPackageLoader,
+                        SkillStorageService skillStorageService) {
         this.skillRepository = skillRepository;
         this.skillRegistry = skillRegistry;
         this.skillPackageLoader = skillPackageLoader;
+        this.skillStorageService = skillStorageService;
     }
 
     /**
      * 上传并注册 Skill zip 包。
-     * 1. 生成 skillId
-     * 2. 创建目标目录: {skillsDir}/{ownerId}/{skillId}/
+     * 1. 生成 skillId (uuid)
+     * 2. 通过 SkillStorageService 分配统一 runtime root 路径:
+     *    {runtimeRoot}/upload/{ownerId}/{skillId}/
      * 3. 调用 SkillPackageLoader 解压解析
-     * 4. 保存 SkillEntity 到数据库
+     * 4. 保存 SkillEntity 到数据库 (source=upload, skillPath=绝对路径)
      * 5. 注册到 SkillRegistry
      * 6. 返回 SkillEntity
+     *
+     * 失败回滚: I/O / 解析失败 → 清理目录, 不写 DB; DB 写失败 → 同样清理目录。
      */
     public SkillEntity uploadSkill(MultipartFile file, Long ownerId) {
         if (file == null || file.isEmpty()) {
@@ -59,7 +65,9 @@ public class SkillService {
         }
 
         String skillId = UUID.randomUUID().toString();
-        Path targetDir = Path.of(skillsDir, String.valueOf(ownerId), skillId);
+        Path targetDir = skillStorageService.allocate(
+                SkillSource.UPLOAD,
+                AllocationContext.forUpload(String.valueOf(ownerId), skillId));
 
         try {
             // 解压并解析
@@ -74,6 +82,7 @@ public class SkillService {
             entity.setSkillPath(targetDir.toAbsolutePath().toString());
             entity.setOwnerId(ownerId);
             entity.setPublic(definition.isPublic());
+            entity.setSource(SkillSource.UPLOAD.wireName());
 
             // triggers 和 requiredTools 存为逗号分隔字符串
             if (definition.getTriggers() != null && !definition.getTriggers().isEmpty()) {
@@ -84,12 +93,23 @@ public class SkillService {
             }
 
             // 保存到数据库
-            SkillEntity saved = skillRepository.save(entity);
+            SkillEntity saved;
+            try {
+                saved = skillRepository.save(entity);
+            } catch (RuntimeException dbEx) {
+                deleteDirectoryQuietly(targetDir);
+                throw dbEx;
+            }
             log.info("Skill saved to database: id={}, name={}", saved.getId(), saved.getName());
 
-            // 注册到 SkillRegistry
-            skillRegistry.registerSkillDefinition(definition);
-            log.info("Skill registered to SkillRegistry: name={}", definition.getName());
+            // 注册到 SkillRegistry — 失败仅记日志，DB+磁盘已提交，下次启动/rescan 可恢复
+            try {
+                skillRegistry.registerSkillDefinition(definition);
+                log.info("Skill registered to SkillRegistry: name={}", definition.getName());
+            } catch (RuntimeException registryEx) {
+                log.error("Failed to register skill into registry (DB+disk preserved): name={}",
+                        definition.getName(), registryEx);
+            }
 
             return saved;
 

@@ -17,11 +17,13 @@ import com.skillforge.server.entity.SkillEntity;
 import com.skillforge.server.repository.SessionRepository;
 import com.skillforge.server.repository.SkillDraftRepository;
 import com.skillforge.server.repository.SkillRepository;
+import com.skillforge.server.skill.AllocationContext;
 import com.skillforge.server.skill.SkillCreatorService;
+import com.skillforge.server.skill.SkillSource;
+import com.skillforge.server.skill.SkillStorageService;
 import com.skillforge.server.websocket.UserWebSocketHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -66,10 +68,16 @@ public class SkillDraftService {
     private final SkillCreatorService skillCreatorService;
     private final SkillPackageLoader skillPackageLoader;
     private final SkillRegistry skillRegistry;
+    private final SkillStorageService skillStorageService;
     private final String defaultProviderName;
 
-    @Value("${skillforge.skills-dir:./data/skills}")
-    private String skillsDir;
+    /**
+     * Test-only override for the artifact root directory. {@code null} in production —
+     * SkillStorageService.allocate() is the source of truth. {@link #setSkillsDir(String)}
+     * preserves the legacy 2-layer {@code <skillsDir>/<ownerId>/<skillId>} layout used by
+     * SkillDraftServiceApproveDraftTest fixtures.
+     */
+    private String skillsDir = null;
 
     public SkillDraftService(SessionRepository sessionRepository,
                              SkillDraftRepository skillDraftRepository,
@@ -80,7 +88,8 @@ public class SkillDraftService {
                              UserWebSocketHandler userWebSocketHandler,
                              SkillCreatorService skillCreatorService,
                              SkillPackageLoader skillPackageLoader,
-                             SkillRegistry skillRegistry) {
+                             SkillRegistry skillRegistry,
+                             SkillStorageService skillStorageService) {
         this.sessionRepository = sessionRepository;
         this.skillDraftRepository = skillDraftRepository;
         this.skillRepository = skillRepository;
@@ -90,6 +99,7 @@ public class SkillDraftService {
         this.skillCreatorService = skillCreatorService;
         this.skillPackageLoader = skillPackageLoader;
         this.skillRegistry = skillRegistry;
+        this.skillStorageService = skillStorageService;
         this.defaultProviderName = llmProperties.getDefaultProvider() != null
                 ? llmProperties.getDefaultProvider() : "claude";
     }
@@ -291,8 +301,14 @@ public class SkillDraftService {
         // (avoid coupling artifact dir name to DB IDENTITY which doesn't exist until save).
         Long ownerIdForPath = draft.getOwnerId() != null ? draft.getOwnerId() : 0L;
         String skillId = UUID.randomUUID().toString();
-        Path targetDir = Path.of(skillsDir, String.valueOf(ownerIdForPath), skillId)
-                .toAbsolutePath().normalize();
+        // P1-D: prefer SkillStorageService for runtime path; fall back to legacy
+        // 2-layer skillsDir override only when set by tests (setSkillsDir).
+        Path targetDir = (skillsDir != null && !skillsDir.isBlank())
+                ? Path.of(skillsDir, String.valueOf(ownerIdForPath), skillId)
+                        .toAbsolutePath().normalize()
+                : skillStorageService.allocate(SkillSource.DRAFT_APPROVE,
+                        AllocationContext.forDraftApprove(
+                                String.valueOf(ownerIdForPath), skillId));
 
         // STEP 3+4: render artifact + validate. Any failure → cleanup + RETHROW (case C).
         SkillDefinition validatedDef;
@@ -312,7 +328,7 @@ public class SkillDraftService {
         entity.setTriggers(draft.getTriggers());
         entity.setRequiredTools(draft.getRequiredTools());
         entity.setOwnerId(draft.getOwnerId());
-        entity.setSource("extracted");
+        entity.setSource(SkillSource.DRAFT_APPROVE.wireName());
         entity.setEnabled(true);
         entity.setRiskLevel("low");
         entity.setSystem(false);

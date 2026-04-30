@@ -8,6 +8,9 @@ import com.skillforge.server.entity.SkillEvolutionRunEntity;
 import com.skillforge.server.improve.SkillAbEvalService;
 import com.skillforge.server.improve.SkillEvolutionService;
 import com.skillforge.server.service.SkillService;
+import com.skillforge.server.skill.RescanReport;
+import com.skillforge.server.skill.SkillCatalogReconciler;
+import com.skillforge.server.skill.UserSkillLoader;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -36,14 +39,20 @@ public class SkillController {
     private final SkillRegistry skillRegistry;
     private final SkillAbEvalService skillAbEvalService;
     private final SkillEvolutionService skillEvolutionService;
+    private final SkillCatalogReconciler reconciler;
+    private final UserSkillLoader userSkillLoader;
 
     public SkillController(SkillService skillService, SkillRegistry skillRegistry,
                            SkillAbEvalService skillAbEvalService,
-                           SkillEvolutionService skillEvolutionService) {
+                           SkillEvolutionService skillEvolutionService,
+                           SkillCatalogReconciler reconciler,
+                           UserSkillLoader userSkillLoader) {
         this.skillService = skillService;
         this.skillRegistry = skillRegistry;
         this.skillAbEvalService = skillAbEvalService;
         this.skillEvolutionService = skillEvolutionService;
+        this.reconciler = reconciler;
+        this.userSkillLoader = userSkillLoader;
     }
 
     /**
@@ -118,18 +127,29 @@ public class SkillController {
         item.put("requiredTools", entity.getRequiredTools());
         item.put("enabled", entity.isEnabled());
         item.put("system", entity.isSystem());
+        // Plan r2 §8 W-1 — alias for FE that prefers `isSystem` (matches DTO field name).
+        item.put("isSystem", entity.isSystem());
         item.put("source", entity.getSource());
         item.put("semver", entity.getSemver());
         item.put("parentSkillId", entity.getParentSkillId());
         item.put("usageCount", entity.getUsageCount());
         item.put("successCount", entity.getSuccessCount());
         item.put("failureCount", entity.getFailureCount());
+        // P1-D §T8 — governance fields for FE catalog UI (artifactStatus, skillPath,
+        // shadowedBy, lastScannedAt). artifactStatus defaults to "active" when null
+        // (legacy rows pre-V33 may not have it set).
+        item.put("artifactStatus", entity.getArtifactStatus() != null
+                ? entity.getArtifactStatus() : "active");
+        item.put("skillPath", entity.getSkillPath());
+        item.put("shadowedBy", entity.getShadowedBy());
+        item.put("lastScannedAt", entity.getLastScannedAt());
         return item;
     }
 
     private static Map<String, Object> toMapForSystemRow(SkillEntity entity) {
         Map<String, Object> item = toMapForUserRow(entity);
         item.put("system", true);
+        item.put("isSystem", true);
         item.put("source", "system");
         return item;
     }
@@ -425,5 +445,35 @@ public class SkillController {
         } catch (RuntimeException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
+    }
+
+    /**
+     * P1-D §T7 — Manual rescan: force a full reconcile of system + runtime roots
+     * with t_skill, then re-register enabled rows in {@link SkillRegistry}. Returns
+     * a {@link RescanReport} (created/updated/missing/invalid/shadowed/disabledDuplicates).
+     *
+     * <p>Idempotent: safe to call multiple times; running after the periodic
+     * startup reconcile is the supported way to pick up out-of-band disk writes
+     * without restarting the server.
+     */
+    @PostMapping("/rescan")
+    public ResponseEntity<Map<String, Object>> rescan() {
+        RescanReport report = reconciler.fullRescan();
+        // Re-register registry. UserSkillLoader.loadAll triggers reconcile internally,
+        // but since we just ran fullRescan, the second reconcile is a near-no-op (hash
+        // unchanged). We still call it to ensure registry is in sync with t_skill.
+        try {
+            userSkillLoader.loadAll();
+        } catch (Exception ignored) {
+            // logged inside loadAll
+        }
+        Map<String, Object> body = new java.util.LinkedHashMap<>();
+        body.put("created", report.created());
+        body.put("updated", report.updated());
+        body.put("missing", report.missing());
+        body.put("invalid", report.invalid());
+        body.put("shadowed", report.shadowed());
+        body.put("disabledDuplicates", report.disabledDuplicates());
+        return ResponseEntity.ok(body);
     }
 }

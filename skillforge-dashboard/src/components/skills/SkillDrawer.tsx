@@ -1,10 +1,12 @@
 import React, { useEffect } from 'react';
+import { Tag, Tooltip } from 'antd';
 import { useQuery } from '@tanstack/react-query';
 import { getSkillDetail } from '../../api';
 import type { SkillRow, SkillDetailData } from './types';
 import { CLOSE_ICON, COPY_ICON } from './icons';
 import { SkillAbPanel } from './SkillAbPanel';
 import { SkillEvolutionPanel } from './SkillEvolutionPanel';
+import { timeAgo } from './utils';
 
 interface SkillDrawerProps {
   skill: SkillRow;
@@ -116,7 +118,13 @@ export const SkillDrawer: React.FC<SkillDrawerProps> = ({
               )}
             </div>
             <div className="sf-drawer-actions">
-              {!skill.system && (
+              {/*
+                P1-D system-skill governance: system skills must remain visible
+                in the drawer (operators still need to inspect them) but the
+                Disable / Delete actions are removed; the backend rejects them
+                anyway (fail-secure 403 from T7).
+              */}
+              {!skill.system ? (
                 <>
                   <button className="btn-ghost-sf" onClick={() => onToggle(skill.id, !skill.enabled)}>
                     {skill.enabled ? 'Disable' : 'Enable'}
@@ -125,17 +133,97 @@ export const SkillDrawer: React.FC<SkillDrawerProps> = ({
                     Delete
                   </button>
                 </>
+              ) : (
+                // Ant Design Tooltip footgun: a disabled native <button> swallows
+                // pointer events so the tooltip never fires. Wrap in a span so
+                // the hover lands on the wrapper instead.
+                <Tooltip title="System skill 不可删除">
+                  <span style={{ display: 'inline-block', cursor: 'not-allowed' }}>
+                    <button
+                      className="btn-ghost-sf"
+                      style={{ color: 'var(--color-err)', opacity: 0.45, pointerEvents: 'none' }}
+                      disabled
+                      aria-disabled="true"
+                      data-testid="system-delete-disabled"
+                    >
+                      Delete
+                    </button>
+                  </span>
+                </Tooltip>
               )}
             </div>
             <button className="sf-drawer-close" onClick={onClose} title="Close (Esc)">{CLOSE_ICON}</button>
           </div>
           <div className="sf-drawer-badges">
             <span className={`skill-lang-sf lang-${skill.lang}`}>{skill.lang}</span>
-            <span className={`skill-source-sf src-${skill.source}`}>{skill.source}</span>
+            <span className={`skill-source-sf src-${skill.source}`}>{skill.originSource ?? skill.source}</span>
             <span className={`status-pill-sf ${skill.enabled ? 's-ok' : 's-draft'}`}>
               <span className="status-dot-sf" /> {skill.enabled ? 'active' : 'disabled'}
             </span>
+            {skill.isSystem && (
+              <Tag color="blue" style={{ marginInlineEnd: 0, textTransform: 'lowercase' }}>system</Tag>
+            )}
+            {skill.artifactStatus && skill.artifactStatus !== 'active' && (
+              <Tooltip title={skill.shadowedBy ? `Shadowed by ${skill.shadowedBy}` : undefined}>
+                <Tag
+                  color={
+                    skill.artifactStatus === 'missing' ? 'orange'
+                    : skill.artifactStatus === 'invalid' ? 'error'
+                    : 'gold'
+                  }
+                  style={{ marginInlineEnd: 0, textTransform: 'lowercase' }}
+                >
+                  {skill.artifactStatus}
+                </Tag>
+              </Tooltip>
+            )}
           </div>
+          {(skill.skillPath || skill.shadowedBy || skill.lastScannedAt) && (
+            <dl
+              data-testid="governance-meta"
+              style={{
+                margin: '10px 0 0',
+                padding: '10px 0 0',
+                borderTop: '1px solid var(--border-subtle, #2a2a31)',
+                display: 'grid',
+                gridTemplateColumns: 'max-content 1fr',
+                rowGap: 4,
+                columnGap: 12,
+                fontSize: 11,
+                color: 'var(--fg-4, #8a8a93)',
+              }}
+            >
+              {skill.skillPath && (
+                <>
+                  <dt style={{ fontWeight: 600, color: 'var(--fg-3, #a8a8b1)' }}>Path</dt>
+                  <dd
+                    style={{
+                      margin: 0,
+                      fontFamily: 'var(--font-mono, monospace)',
+                      wordBreak: 'break-all',
+                    }}
+                  >
+                    {skill.skillPath}
+                  </dd>
+                </>
+              )}
+              {skill.shadowedBy && (
+                <>
+                  <dt style={{ fontWeight: 600, color: 'var(--fg-3, #a8a8b1)' }}>Shadowed by</dt>
+                  <dd style={{ margin: 0, fontFamily: 'var(--font-mono, monospace)' }}>{skill.shadowedBy}</dd>
+                </>
+              )}
+              {skill.lastScannedAt && (
+                <>
+                  <dt style={{ fontWeight: 600, color: 'var(--fg-3, #a8a8b1)' }}>Last scanned</dt>
+                  <dd style={{ margin: 0 }}>
+                    {timeAgo(skill.lastScannedAt)}
+                    <span style={{ marginLeft: 6, opacity: 0.6 }}>({skill.lastScannedAt})</span>
+                  </dd>
+                </>
+              )}
+            </dl>
+          )}
         </div>
 
         <nav className="sf-drawer-tabs">

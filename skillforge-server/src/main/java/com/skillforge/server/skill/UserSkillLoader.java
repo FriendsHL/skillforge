@@ -7,9 +7,7 @@ import com.skillforge.server.entity.SkillEntity;
 import com.skillforge.server.repository.SkillRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -18,7 +16,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
-import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /**
@@ -41,25 +38,55 @@ public class UserSkillLoader {
     private final SkillRepository skillRepository;
     private final SkillRegistry skillRegistry;
     private final SkillPackageLoader packageLoader;
+    private final SkillForgeHomeResolver homeResolver;
+    private final SkillCatalogReconciler reconciler;
 
-    @Value("${skillforge.skills-dir:./data/skills}")
-    private String skillsDir;
+    /**
+     * Test-only override for the runtime root used by the orphan dir scan.
+     * {@code null} in production — {@link SkillForgeHomeResolver#getRuntimeRoot()}
+     * is the source of truth.
+     */
+    private String skillsDir = null;
 
     public UserSkillLoader(SkillRepository skillRepository,
                            SkillRegistry skillRegistry,
-                           SkillPackageLoader packageLoader) {
+                           SkillPackageLoader packageLoader,
+                           SkillForgeHomeResolver homeResolver,
+                           SkillCatalogReconciler reconciler) {
         this.skillRepository = skillRepository;
         this.skillRegistry = skillRegistry;
         this.packageLoader = packageLoader;
+        this.homeResolver = homeResolver;
+        this.reconciler = reconciler;
     }
 
     /**
      * Reload all user skills from t_skill into SkillRegistry.
-     * <p>Read-only transaction — we don't mutate DB rows here. Registry mutation is in-memory
-     * and not subject to transaction semantics.
+     * <p>P1-D §T6 — first delegates to {@link SkillCatalogReconciler} so the runtime root
+     * is reconciled with t_skill (creates new rows for newfound artifacts, marks
+     * missing/invalid, resolves same-name conflicts) before re-registering enabled rows.
+     * <p>Registry mutation is in-memory and not subject to transaction semantics; the
+     * reconciler runs its own transactional units inside.
      */
-    @Transactional(readOnly = true)
     public void loadAll() {
+        try {
+            RescanReport runtimeReport = reconciler.reconcileRuntime();
+            RescanReport conflictReport = reconciler.resolveConflicts();
+            log.info("UserSkillLoader runtime reconcile: {} | conflicts: {}",
+                    runtimeReport, conflictReport);
+        } catch (Exception e) {
+            log.error("UserSkillLoader: reconcile failed (skipping reconcile, will register "
+                    + "from existing rows): {}", e.getMessage(), e);
+        }
+        registerEnabledRuntimeRows();
+    }
+
+    /**
+     * Re-register enabled non-system rows into {@link SkillRegistry}. Each repository
+     * call is independently transactional via Spring Data's auto-{@code @Transactional};
+     * we don't need an outer tx since the registry mutation is in-memory.
+     */
+    private void registerEnabledRuntimeRows() {
         int registered = 0;
         int skipped = 0;
         Set<String> registeredAbsPaths = new HashSet<>();
@@ -120,12 +147,15 @@ public class UserSkillLoader {
     }
 
     /**
-     * Plan r2 §3 case A — orphan directory scan. After approveDraft step 5 fails, the artifact
-     * directory was written but the t_skill row never persisted (transaction rollback). Such
-     * directories are detectable here and surfaced via WARN. We do NOT auto-delete (avoid wiping
-     * dirs an operator may be inspecting).
-     * <p>Also includes paths from non-system t_skill rows we already iterated (regardless of enabled),
-     * to surface dirs that exist but are owned by a disabled / orphaned row.
+     * Plan r2 §3 case A + P1-D §T6 — orphan directory scan. After approveDraft step 5
+     * fails, the artifact directory was written but the t_skill row never persisted
+     * (transaction rollback). Such directories are detectable here and surfaced via
+     * WARN. We do NOT auto-delete (avoid wiping dirs an operator may be inspecting).
+     *
+     * <p>P1-D: the runtime root is now 3-layer ({@code type/ownerId/uuid}) instead of
+     * the legacy 2-layer ({@code ownerId/uuid}). We walk for SKILL.md leaves rather
+     * than assuming a fixed depth — this also handles legacy 2-layer artifacts the
+     * reconciler may have left in place. Walk depth capped at 6 to bound IO.
      */
     private void scanOrphanDirs(Set<String> registeredAbsPaths) {
         // Include disabled non-system skills' paths so we don't false-flag them as orphans.
@@ -137,23 +167,25 @@ public class UserSkillLoader {
             }
         }
 
-        Path root = Path.of(skillsDir).toAbsolutePath().normalize();
+        Path root = (skillsDir != null && !skillsDir.isBlank())
+                ? Path.of(skillsDir).toAbsolutePath().normalize()
+                : homeResolver.getRuntimeRoot();
         if (!Files.isDirectory(root)) {
             return;
         }
-        try (Stream<Path> ownerDirs = Files.list(root)) {
-            ownerDirs.filter(Files::isDirectory).forEach(ownerDir -> {
-                try (Stream<Path> skillDirs = Files.list(ownerDir)) {
-                    skillDirs.filter(Files::isDirectory).forEach(skillDir -> {
-                        String absPath = skillDir.toAbsolutePath().normalize().toString();
+        try (Stream<Path> walker = Files.walk(root, 6)) {
+            walker.filter(p -> Files.isRegularFile(p)
+                            && (p.getFileName().toString().equals("SKILL.md")
+                                || p.getFileName().toString().equals("skill.md")))
+                    .map(Path::getParent)
+                    .filter(Objects::nonNull)
+                    .map(p -> p.toAbsolutePath().normalize().toString())
+                    .distinct()
+                    .forEach(absPath -> {
                         if (!knownPaths.contains(absPath)) {
                             log.warn("Orphan skill dir (no t_skill row pointing to it): {}", absPath);
                         }
                     });
-                } catch (IOException ignored) {
-                    // Best-effort: skip unreadable owner dirs.
-                }
-            });
         } catch (IOException e) {
             log.warn("Orphan dir scan failed (non-fatal): {}", e.getMessage());
         }
@@ -161,11 +193,11 @@ public class UserSkillLoader {
 
     /** Visible for tests. */
     public String getSkillsDir() {
-        return skillsDir;
+        return skillsDir != null ? skillsDir : homeResolver.getRuntimeRoot().toString();
     }
 
-    /** Visible for tests. */
+    /** Visible for tests — overrides runtime root for orphan dir scan. */
     public void setSkillsDir(String skillsDir) {
-        this.skillsDir = Objects.requireNonNullElse(skillsDir, "./data/skills");
+        this.skillsDir = skillsDir;
     }
 }

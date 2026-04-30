@@ -1,6 +1,6 @@
 # SkillForge ToDo
 
-> 更新于：2026-04-30(CTX-1 交付)
+> 更新于：2026-04-30(P1-D 交付)
 > 规则：这里只放当前执行状态；需求和方案细节放在链接的需求包中。
 > 旧版：重整前长版 ToDo 已保留在 [references/legacy-todo-2026-04-28.md](references/legacy-todo-2026-04-28.md)。
 
@@ -9,7 +9,6 @@
 | 顺序  | ID        | 标题                                | 模式   | 状态        | 优先级 | 风险   | 文档                                                        | 下一步                                   |
 | --- | --------- | --------------------------------- | ---- | --------- | --- | ---- | --------------------------------------------------------- | ------------------------------------- |
 | 1   | P12-PRE   | Sprint 4 前置决策                     | Lite | ready     | P0  | Solo | [需求包](requirements/active/P12-preflight-decisions/index.md)       | 决定 Cost Dashboard、PG 备份、多用户权限边界       |
-| 2   | P1-D      | Skill Root 与 Catalog 收口            | Full | design-draft | P1  | Full | [需求包](requirements/active/P1-D-skill-root-catalog-convergence/index.md) | 审核技术方案，确认后进入 Full Pipeline plan |
 | 3   | P9-2      | Tool Result 归档                    | Full | prd-ready | P1  | Full | [需求包](requirements/active/P9-2-tool-result-archive/index.md)      | 作为 Sprint 3 启动 Full Pipeline plan     |
 | 4   | P12       | 定时任务 MVP                          | Full | prd-ready | P1  | Full | [需求包](requirements/active/P12-scheduled-tasks/index.md)           | 等 P12-PRE 决策完成后进入设计评审                 |
 | 5   | P9-4/P9-5 | Partial compact + post-compact 恢复 | Full | prd-draft | P2  | Full | [需求包](requirements/active/P9-4-P9-5-compaction-recovery/index.md) | 先决定“最近文件”数据来源                         |
@@ -27,7 +26,8 @@
 
 | ID | 完成日期 | Commit | 交付 |
 | --- | --- | --- | --- |
-| CTX-1 | 2026-04-30 | 待 commit | [交付索引](delivery-index.md) |
+| P1-D | 2026-04-30 | 待 commit | [交付索引](delivery-index.md) |
+| CTX-1 | 2026-04-30 | `1de1fe1` | [交付索引](delivery-index.md) |
 | OBS-1 | 2026-04-29 | 见交付索引 | [交付索引](delivery-index.md) |
 | P1-C | 2026-04-28 | `555bdba` | [交付索引](delivery-index.md) |
 | Memory v2 | 2026-04-27 | `9f36b59`, `8330d32`, `86703ed`, `96676b9` | [交付索引](delivery-index.md) |

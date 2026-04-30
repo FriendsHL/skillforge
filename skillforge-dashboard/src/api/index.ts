@@ -338,6 +338,28 @@ export const getTools = () => api.get('/tools');
 // (no `ownerId` from the FE). BE writes SkillEntity.ownerId from the userId.
 export const getSkills = (isSystem?: boolean) =>
   api.get('/skills', isSystem === undefined ? undefined : { params: { isSystem } });
+
+/**
+ * P1-D rescan report — counts produced by `POST /api/skills/rescan` after the
+ * backend reconciles the on-disk skills directory with the registry.
+ */
+export interface RescanReport {
+  /** Skills newly inserted into the registry from disk. */
+  created: number;
+  /** Existing skills whose metadata or path changed. */
+  updated: number;
+  /** Skills present in the registry but whose artifact directory is gone. */
+  missing: number;
+  /** Skills whose on-disk artifact failed validation (corrupt SKILL.md, etc.). */
+  invalid: number;
+  /** Skills shadowed by a same-name peer earlier in the resolution order. */
+  shadowed: number;
+  /** Same-name duplicates that the rescan auto-disabled to enforce uniqueness. */
+  disabledDuplicates: number;
+}
+
+/** P1-D: trigger a synchronous filesystem rescan and return the reconciliation report. */
+export const rescanSkills = () => api.post<RescanReport>('/skills/rescan');
 export const getBuiltinSkills = () => api.get('/skills/builtin');
 export const uploadSkill = (file: File, userId: number) => {
   const form = new FormData();

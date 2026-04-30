@@ -30,6 +30,19 @@ public interface SkillRepository extends JpaRepository<SkillEntity, Long> {
     /** Plan r2 §8 W-1: list filter by is_system. */
     List<SkillEntity> findByIsSystem(boolean isSystem);
 
+    /** P1-D §T5: compat tuple for runtime path-not-matched fallback (4-tuple, see plan). */
+    Optional<SkillEntity> findFirstByIsSystemFalseAndOwnerIdAndNameAndSource(
+            Long ownerId, String name, String source);
+
+    /** P1-D §T5: locate row by exact skill_path string (after normalize, callers supply both raw and normalized variants). */
+    Optional<SkillEntity> findFirstBySkillPath(String skillPath);
+
+    /** P1-D §T5: enumerate runtime rows with a given name (used for runtime-vs-runtime conflict resolution). */
+    List<SkillEntity> findByIsSystemFalseAndName(String name);
+
+    /** P1-D §T5: enumerate runtime rows by source (used for compat fallback when path mismatched). */
+    List<SkillEntity> findByIsSystemFalseAndSource(String source);
+
     /**
      * Plan r2 §7 — atomic counter update by skill name. Avoids JPA dirty-check
      * lost-update under concurrent tool execution. Returns rows updated (0 if no

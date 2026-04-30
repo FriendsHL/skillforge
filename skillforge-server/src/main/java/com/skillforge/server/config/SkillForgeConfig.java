@@ -39,7 +39,6 @@ import com.skillforge.server.code.RegisterScriptMethodTool;
 import com.skillforge.server.code.ScriptMethodService;
 import com.skillforge.server.skill.TodoStore;
 import com.skillforge.server.tool.TodoWriteTool;
-import com.skillforge.server.clawhub.ClawHubProperties;
 import com.skillforge.server.tool.MemoryDetailTool;
 import com.skillforge.server.tool.MemorySearchTool;
 import com.skillforge.server.tool.MemoryTool;
@@ -88,7 +87,6 @@ import java.util.concurrent.TimeUnit;
 @Configuration
 @EnableConfigurationProperties({
         LlmProperties.class,
-        ClawHubProperties.class,
         LifecycleHooksScriptProperties.class,
         SessionMessageStoreProperties.class,
         MemoryProperties.class
@@ -227,8 +225,8 @@ public class SkillForgeConfig {
         return tool;
     }
 
-    // ClawHubTool 已迁移为 system-skills/clawhub/ 文件化 Skill，
-    // 由 SystemSkillLoader 在启动时自动加载，不再需要 Java bean 注册。
+    // ClawHub Java 链路（ClawHubTool / ClawHubInstallService 等）已于 P1-D 删除，
+    // 由 system-skills/clawhub/ 文件化 Skill 接管（机制 B）。
 
     /**
      * SubAgentTool — 异步派发任务给另一个 agentId 指向的子 Agent。
