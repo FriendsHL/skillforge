@@ -9,7 +9,6 @@
 | 顺序  | ID        | 标题                                | 模式   | 状态        | 优先级 | 风险   | 文档                                                        | 下一步                                   |
 | --- | --------- | --------------------------------- | ---- | --------- | --- | ---- | --------------------------------------------------------- | ------------------------------------- |
 | 1   | P12-PRE   | Sprint 4 前置决策                     | Lite | ready     | P0  | Solo | [需求包](requirements/active/P12-preflight-decisions/index.md)       | 决定 Cost Dashboard、PG 备份、多用户权限边界       |
-| 1a  | SKILL-LOAD | Skill Loader Tool                    | Full | in-progress | P1 | Full | [需求包](requirements/active/SKILL-LOAD-skill-loader-tool/index.md) | 隔离 worktree 中实现并验证 |
 | 3   | P9-2      | Tool Result 归档                    | Full | prd-ready | P1  | Full | [需求包](requirements/active/P9-2-tool-result-archive/index.md)      | 作为 Sprint 3 启动 Full Pipeline plan     |
 | 4   | P12       | 定时任务 MVP                          | Full | prd-ready | P1  | Full | [需求包](requirements/active/P12-scheduled-tasks/index.md)           | 等 P12-PRE 决策完成后进入设计评审                 |
 | 5   | P9-4/P9-5 | Partial compact + post-compact 恢复 | Full | prd-draft | P2  | Full | [需求包](requirements/active/P9-4-P9-5-compaction-recovery/index.md) | 先决定“最近文件”数据来源                         |
@@ -27,7 +26,8 @@
 
 | ID | 完成日期 | Commit | 交付 |
 | --- | --- | --- | --- |
-| P1-D | 2026-04-30 | 待 commit | [交付索引](delivery-index.md) |
+| SKILL-LOAD | 2026-04-30 | `8d1fb45`(merged via `d74e01c`) | [交付索引](delivery-index.md) |
+| P1-D | 2026-04-30 | `6b19439` + `223e5a8`(V33→V38 fix) | [交付索引](delivery-index.md) |
 | CTX-1 | 2026-04-30 | `1de1fe1` | [交付索引](delivery-index.md) |
 | OBS-1 | 2026-04-29 | 见交付索引 | [交付索引](delivery-index.md) |
 | P1-C | 2026-04-28 | `555bdba` | [交付索引](delivery-index.md) |
