@@ -136,6 +136,12 @@ public class AgentLoopEngine {
      */
     private com.skillforge.core.skill.view.SessionSkillResolver sessionSkillResolver;
 
+    /**
+     * P9-2: request-time tool_result aggregate budget (chars). 0 / 负数禁用 budgeter。
+     * 默认 200K，与持久化归档 per-message 预算同量级。可由 agent config "request_tool_result_budget_chars" 覆盖。
+     */
+    private int defaultRequestToolResultBudgetChars = ToolResultRequestBudgeter.DEFAULT_REQUEST_AGGREGATE_CHARS;
+
     /** OBS-1 helper: AgentDefinition.id is String; observability layer wants Long agentId.
      *  Returns null for non-numeric ids (e.g. seeded agents that use slug ids). */
     private static Long parseAgentIdSafe(String idStr) {
@@ -233,6 +239,13 @@ public class AgentLoopEngine {
     /** Plan r2 §5 — wire server-side {@link com.skillforge.core.skill.view.SessionSkillResolver}. */
     public void setSessionSkillResolver(com.skillforge.core.skill.view.SessionSkillResolver sessionSkillResolver) {
         this.sessionSkillResolver = sessionSkillResolver;
+    }
+
+    /**
+     * P9-2 — override default request-time tool_result aggregate budget. 0/负数禁用 budgeter。
+     */
+    public void setDefaultRequestToolResultBudgetChars(int defaultRequestToolResultBudgetChars) {
+        this.defaultRequestToolResultBudgetChars = defaultRequestToolResultBudgetChars;
     }
 
     /**
@@ -405,8 +418,26 @@ public class AgentLoopEngine {
         boolean cancelled = false;
         boolean budgetExceeded = false;
         boolean durationExceeded = false;
-        int maxTokensRetryCount = 0;
+        boolean maxTokensExhausted = false;
+        // P9-2: 单 turn 内最多触发一次 max_tokens 恢复（参考 Claude Code query.ts:1104,1157
+        // 的 hasAttemptedReactiveCompact），避免 "压缩 → 续写 → 再超 → 再压缩" 死循环。
+        boolean hasAttemptedMaxTokensRecovery = false;
+        // P9-2: max_input_tokens 改为 opt-in。enforce_max_input_tokens=true 才硬停。
+        // 默认情况下，长任务能否继续完全由 provider context window + 单 turn max_tokens 决定。
+        long maxInputTokens = 500000;
+        Object maxTokVal = agentDef.getConfig().get("max_input_tokens");
+        if (maxTokVal instanceof Number) maxInputTokens = ((Number) maxTokVal).longValue();
+        boolean enforceMaxInputTokens = Boolean.TRUE.equals(
+                agentDef.getConfig().get("enforce_max_input_tokens"));
+        // P9-2: request-time tool_result aggregate budget. 可由 agent config 覆盖；0/负数禁用。
+        int requestToolResultBudgetChars = defaultRequestToolResultBudgetChars;
+        Object reqBudgetVal = agentDef.getConfig().get("request_tool_result_budget_chars");
+        if (reqBudgetVal instanceof Number n) {
+            requestToolResultBudgetChars = n.intValue();
+        }
         while (loopCtx.getLoopCount() < loopCtx.getMaxLoops()) {
+            // P9-2 (Judge FIX-1): reset per-iteration — per-turn 语义；防死循环只保护单次 LLM call 的 continuation
+            hasAttemptedMaxTokensRecovery = false;
             // 取消检查(每次迭代开头)
             if (loopCtx.isCancelled()) {
                 log.info("AgentLoop cancelled at loop {} (pre-iteration)", loopCtx.getLoopCount() + 1);
@@ -414,12 +445,10 @@ public class AgentLoopEngine {
                 break;
             }
 
-            // Token budget check
-            long maxInputTokens = 500000;
-            Object maxTokVal = agentDef.getConfig().get("max_input_tokens");
-            if (maxTokVal instanceof Number) maxInputTokens = ((Number) maxTokVal).longValue();
-            if (loopCtx.getTotalInputTokens() > maxInputTokens) {
-                log.warn("Token budget exceeded: {} > {}", loopCtx.getTotalInputTokens(), maxInputTokens);
+            // P9-2: Token budget check is opt-in. Default: telemetry only, do not abort the loop.
+            if (enforceMaxInputTokens && loopCtx.getTotalInputTokens() > maxInputTokens) {
+                log.warn("Token budget exceeded (enforce_max_input_tokens=true): {} > {}",
+                        loopCtx.getTotalInputTokens(), maxInputTokens);
                 budgetExceeded = true;
                 break;
             }
@@ -566,8 +595,9 @@ public class AgentLoopEngine {
                     }
                 }
             }
-            // Stop hook: approaching token budget
-            if (loopCtx.getTotalInputTokens() > maxInputTokens * 0.8) {
+            // P9-2: Stop hook only when enforce_max_input_tokens is opt-in. 否则 budget 不强制
+            // 阻断长任务，提醒模型 wrap up 反而误导。
+            if (enforceMaxInputTokens && loopCtx.getTotalInputTokens() > maxInputTokens * 0.8) {
                 promptSuffix.append("\n\n[NOTICE] You have consumed "
                         + loopCtx.getTotalInputTokens() + "/" + maxInputTokens
                         + " input tokens. Consider wrapping up soon.");
@@ -599,13 +629,30 @@ public class AgentLoopEngine {
             request.setThinkingMode(agentDef.getThinkingMode());
             request.setReasoningEffort(agentDef.getReasoningEffort());
 
+            // P9-2: request-time tool_result aggregate budgeter — produce ephemeral, deep-copied
+            // messages list with oversized tool_results trimmed to head/tail preview. Original
+            // `messages` (loop state, persistence, broadcast) untouched.
+            ToolResultRequestBudgeter.Result budgetResult = ToolResultRequestBudgeter.apply(
+                    messages, requestToolResultBudgetChars);
+            request.setMessages(budgetResult.messages);
+            if (budgetResult.wasTrimmed()) {
+                log.info("request-time tool_result trim: sessionId={}, original={} chars, retained={} chars, trimmed={}/{} blocks",
+                        loopCtx.getSessionId(),
+                        budgetResult.originalAggregateChars,
+                        budgetResult.retainedAggregateChars,
+                        budgetResult.trimmedCount,
+                        budgetResult.totalToolResultCount);
+            }
+
             // Preemptive compaction: last-resort check before LLM call.
             // CTX-1 — uses the same RequestTokenEstimator envelope (incl. promptSuffix that
             // was just appended in `request.setSystemPrompt`) and the per-provider preemptive
             // ratio. Reading from the just-built request keeps a single source of truth.
+            // P9-2: estimator must operate on the trimmed request messages, otherwise estimate
+            // and real provider input diverge.
             if (compactorCallback != null && isCompactBreakerAllowing(loopCtx)) {
                 int estTokens = RequestTokenEstimator.estimate(
-                        request.getSystemPrompt(), messages, tools, request.getMaxTokens(), jsonMapper);
+                        request.getSystemPrompt(), request.getMessages(), tools, request.getMaxTokens(), jsonMapper);
                 double ratio = contextWindowTokens > 0 ? (double) estTokens / contextWindowTokens : 0;
                 if (ratio > thresholds.getPreemptiveRatio()) {
                     log.info("Preemptive compaction triggered: ratio={}, estTokens={}, window={}, threshold={}",
@@ -620,7 +667,9 @@ public class AgentLoopEngine {
                             messages = cr.messages;
                             loopCtx.setMessages(messages);
                             loopCtx.resetCompactFailures();
-                            request.setMessages(messages);
+                            // P9-2: re-budget after compaction since `messages` changed.
+                            budgetResult = ToolResultRequestBudgeter.apply(messages, requestToolResultBudgetChars);
+                            request.setMessages(budgetResult.messages);
                             log.info("Preemptive compaction done: reclaimed {} tokens", cr.tokensReclaimed);
                         }
                         // BUG-A: performed=false is neutral.
@@ -779,7 +828,10 @@ public class AgentLoopEngine {
                     loopCtx.resetCompactFailures();
                     messages = cr.messages;
                     loopCtx.setMessages(messages);
-                    request.setMessages(messages);
+                    // P9-2: re-apply request-time budgeter to the compacted messages so the
+                    // retried chatStream call sees the same trimming envelope as the initial attempt.
+                    budgetResult = ToolResultRequestBudgeter.apply(messages, requestToolResultBudgetChars);
+                    request.setMessages(budgetResult.messages);
                     retriedOverflow = true;
                     log.info("Post-overflow compactFull done: reclaimed {} tokens, retrying chatStream",
                             cr.tokensReclaimed);
@@ -809,47 +861,47 @@ public class AgentLoopEngine {
                 loopCtx.addOutputTokens(iterOutputTokens);
             }
 
-            // max_tokens recovery: detect truncated output and retry
+            // P9-2: max_tokens 恢复 — 单 turn 内最多 1 次，采用 continuation 语义而不是重发同一请求。
+            // 续写请求基于裁剪后的 request messages，追加 assistant partial text + 内部 user 指令；
+            // 不带 tools，避免续写时开启新 tool_use 分支。续写成功 → response.content 拼接 → 主流程
+            // 当成正常 response 处理。续写本身再触发 max_tokens 或已经触发过一次 → 直接进入失败路径，
+            // 不再尝试 compact / 续写，避免 "压缩 → 续写 → 再超 → 再压缩" 死循环。
             String stopReason = response.getStopReason();
             if ("length".equals(stopReason) || "max_tokens".equals(stopReason)) {
-                maxTokensRetryCount++;
-                if (maxTokensRetryCount <= 2) {
-                    if (maxTokensRetryCount == 1) {
-                        // First attempt: escalate max_output_tokens
-                        int escalatedMaxTokens = Math.min(agentDef.getMaxTokens() * 4, 16384);
-                        log.info("max_tokens hit, escalating to {} (attempt {})", escalatedMaxTokens, maxTokensRetryCount);
-                        request.setMaxTokens(escalatedMaxTokens);
-                        continue; // retry — loopCount not incremented
-                    } else {
-                        // Second attempt: compact + retry
-                        log.info("max_tokens hit again, trying compact + retry (attempt {})", maxTokensRetryCount);
-                        if (compactorCallback != null) {
-                            try {
-                                CompactCallbackResult cr = compactorCallback.compactFull(
-                                        loopCtx.getSessionId(), messages, "engine-max-tokens",
-                                        "max_tokens recovery: output truncated");
-                                if (cr != null && cr.performed) {
-                                    messages = cr.messages;
-                                    loopCtx.setMessages(messages);
-                                    continue; // retry
-                                }
-                            } catch (Exception e) {
-                                // BUG-A consistency: every real compact-path exception counts toward the
-                                // breaker, regardless of which trigger invoked compactFull. Without this
-                                // the max_tokens-recovery path would silently mask repeated LLM failures.
-                                recordCompactFailure(loopCtx);
-                                // BUG-C: log.error with stacktrace
-                                log.error("max_tokens compact failed (consecutive failures: {})",
-                                        loopCtx.getConsecutiveCompactFailures(), e);
-                            }
-                        }
-                    }
+                if (hasAttemptedMaxTokensRecovery) {
+                    log.warn("max_tokens recovery exhausted (already attempted once this turn); marking failure");
+                    maxTokensExhausted = true;
+                    break;
                 }
-                // Exhausted retries or compact failed — fall through to normal processing
-                log.warn("max_tokens recovery exhausted after {} attempts", maxTokensRetryCount);
-            } else {
-                // Reset counter on successful non-truncated response
-                maxTokensRetryCount = 0;
+                hasAttemptedMaxTokensRecovery = true;
+                String partial = response.getContent() != null ? response.getContent() : "";
+                LlmResponse continued = attemptMaxTokensContinuation(
+                        request, partial, llmProvider, actualModelId, agentDef,
+                        rootSpan, sessionId, userId, loopCtx);
+                if (continued == null) {
+                    log.warn("max_tokens continuation failed; marking failure");
+                    maxTokensExhausted = true;
+                    break;
+                }
+                String contStop = continued.getStopReason();
+                if ("length".equals(contStop) || "max_tokens".equals(contStop)) {
+                    log.warn("max_tokens continuation also returned max_tokens; recovery exhausted");
+                    maxTokensExhausted = true;
+                    break;
+                }
+                // Merge continuation: text content concatenated; usage accumulates; tools stripped
+                // in continuation request so no tool_use blocks expected.
+                String mergedContent = partial + (continued.getContent() != null ? continued.getContent() : "");
+                response.setContent(mergedContent);
+                response.setStopReason(contStop != null ? contStop : "end_turn");
+                if (continued.getUsage() != null) {
+                    int contIn = continued.getUsage().getInputTokens();
+                    int contOut = continued.getUsage().getOutputTokens();
+                    loopCtx.addInputTokens(contIn);
+                    loopCtx.addOutputTokens(contOut);
+                    log.info("max_tokens continuation merged: extra input={} extra output={} chars",
+                            contIn, contOut);
+                }
             }
 
             // Trace: LLM_CALL span
@@ -865,11 +917,14 @@ public class AgentLoopEngine {
                 llmSpan.setIterationIndex(loopCtx.getLoopCount());
                 llmSpan.setInputTokens(iterInputTokens);
                 llmSpan.setOutputTokens(iterOutputTokens);
-                // input: structured summary of messages
+                // P9-2: input summary reflects the trimmed request messages actually sent.
+                // Source of truth = request.getMessages() (post-budgeter, post-compact).
+                List<Message> tracedMessages = request.getMessages() != null
+                        ? request.getMessages() : messages;
                 StringBuilder llmInputSummary = new StringBuilder();
-                llmInputSummary.append("messages: ").append(messages.size());
-                for (int mi = messages.size() - 1; mi >= 0; mi--) {
-                    Message m = messages.get(mi);
+                llmInputSummary.append("messages: ").append(tracedMessages.size());
+                for (int mi = tracedMessages.size() - 1; mi >= 0; mi--) {
+                    Message m = tracedMessages.get(mi);
                     if (m.getRole() == Message.Role.USER) {
                         String txt = m.getTextContent();
                         if (txt != null && !txt.isBlank()) {
@@ -886,7 +941,29 @@ public class AgentLoopEngine {
                         break;
                     }
                 }
+                // P9-2: include request-time trim metadata so dashboards can detect aggregate
+                // pressure events at LLM_CALL granularity (raw chars vs retained chars).
+                if (budgetResult != null) {
+                    llmInputSummary.append(" | tool_result_chars: ")
+                            .append(budgetResult.retainedAggregateChars)
+                            .append("/")
+                            .append(budgetResult.originalAggregateChars);
+                    if (budgetResult.wasTrimmed()) {
+                        llmInputSummary.append(" | trimmed: ")
+                                .append(budgetResult.trimmedCount)
+                                .append("/")
+                                .append(budgetResult.totalToolResultCount);
+                    }
+                }
                 llmSpan.setInput(llmInputSummary.toString());
+                if (budgetResult != null && budgetResult.wasTrimmed()) {
+                    llmSpan.putAttribute("request_tool_result_trim.original_chars",
+                            budgetResult.originalAggregateChars);
+                    llmSpan.putAttribute("request_tool_result_trim.retained_chars",
+                            budgetResult.retainedAggregateChars);
+                    llmSpan.putAttribute("request_tool_result_trim.trimmed_count",
+                            budgetResult.trimmedCount);
+                }
                 // output: LLM 的文本回复 + tool_use 名称列表
                 StringBuilder llmOutput = new StringBuilder();
                 if (response.getContent() != null && !response.getContent().isEmpty()) {
@@ -1139,12 +1216,21 @@ public class AgentLoopEngine {
             return result;
         }
 
-        // Budget / duration exceeded exits
-        if (budgetExceeded || durationExceeded) {
-            String reason = budgetExceeded ? "token_budget_exceeded" : "duration_exceeded";
-            String msg = budgetExceeded
-                    ? "Token budget exceeded (" + loopCtx.getTotalInputTokens() + " tokens). Providing best answer with current information."
-                    : "Duration limit exceeded (" + (loopCtx.getElapsedMs() / 1000) + "s). Providing best answer with current information.";
+        // Budget / duration / max_tokens exhausted exits
+        if (budgetExceeded || durationExceeded || maxTokensExhausted) {
+            String reason;
+            String msg;
+            if (maxTokensExhausted) {
+                reason = "max_tokens_exhausted";
+                msg = "Output truncated and continuation recovery exhausted within this turn. "
+                        + "The model could not finish its response within the allowed output budget.";
+            } else if (budgetExceeded) {
+                reason = "token_budget_exceeded";
+                msg = "Token budget exceeded (" + loopCtx.getTotalInputTokens() + " tokens). Providing best answer with current information.";
+            } else {
+                reason = "duration_exceeded";
+                msg = "Duration limit exceeded (" + (loopCtx.getElapsedMs() / 1000) + "s). Providing best answer with current information.";
+            }
             LoopResult result = buildResult(loopCtx, messages, msg, toolCallRecords);
             result.setStatus(reason);
             if (traceCollector != null && rootSpan != null) {
@@ -1235,6 +1321,124 @@ public class AgentLoopEngine {
             throw new IllegalStateException("Default LLM provider '" + defaultProviderName + "' is not configured");
         }
         return defaultProvider;
+    }
+
+    /**
+     * P9-2 — max_tokens 续写：构造一个新的 LlmRequest（基于裁剪后的 request messages）+
+     * assistant partial text + 内部 user 续写指令；不带 tools，避免续写时开新 tool_use 分支。
+     *
+     * <p>本方法仅做"按当前 request 的快照续写一次"。如果续写过程中 provider 出错（IOException /
+     * cancellation 等），返回 {@code null} 让上层把它当作恢复失败处理。
+     *
+     * @return continuation 响应（含输出 text + stopReason + usage）；失败返回 null。
+     */
+    private LlmResponse attemptMaxTokensContinuation(LlmRequest originalRequest,
+                                                     String partialText,
+                                                     LlmProvider llmProvider,
+                                                     String actualModelId,
+                                                     AgentDefinition agentDef,
+                                                     TraceSpan rootSpan,
+                                                     String sessionId,
+                                                     Long userId,
+                                                     LoopContext loopCtx) {
+        if (originalRequest == null || llmProvider == null) {
+            return null;
+        }
+        // P9-2: continuation requires non-empty assistant partial text. If LLM hit max_tokens
+        // before producing any text (e.g. mid tool_use streaming), continuation can't run
+        // — adding two consecutive user messages would violate role alternation.
+        if (partialText == null || partialText.isEmpty()) {
+            log.warn("max_tokens continuation skipped: no partial assistant text (max_tokens hit before text production)");
+            return null;
+        }
+        log.info("Attempting max_tokens continuation: sessionId={} partialChars={}",
+                sessionId, partialText.length());
+        // Build continuation message list = trimmed request messages + assistant partial + user continue.
+        List<Message> base = originalRequest.getMessages();
+        List<Message> contMessages = new ArrayList<>(base != null ? base : Collections.emptyList());
+        contMessages.add(Message.assistant(partialText));
+        contMessages.add(Message.user(
+                "Continue exactly from the previous assistant response. "
+                        + "Do not repeat text already written. Do not invoke any tools."));
+
+        LlmRequest contRequest = new LlmRequest();
+        contRequest.setSystemPrompt(originalRequest.getSystemPrompt());
+        contRequest.setMessages(contMessages);
+        // Strip tools so the continuation focuses on text completion.
+        contRequest.setTools(Collections.emptyList());
+        contRequest.setModel(actualModelId);
+        // Escalate max_tokens for the continuation (cap at 16K) so it has room to finish.
+        int agentMaxTokens = agentDef.getMaxTokens();
+        int continuationMaxTokens = Math.min(Math.max(agentMaxTokens, 4096) * 4, 16384);
+        contRequest.setMaxTokens(continuationMaxTokens);
+        contRequest.setTemperature(agentDef.getTemperature());
+        contRequest.setThinkingMode(agentDef.getThinkingMode());
+        contRequest.setReasoningEffort(agentDef.getReasoningEffort());
+
+        final java.util.concurrent.atomic.AtomicReference<LlmResponse> respHolder =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        final java.util.concurrent.atomic.AtomicReference<Throwable> errHolder =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        final java.util.concurrent.CountDownLatch streamDone = new java.util.concurrent.CountDownLatch(1);
+        final String broadcastSid = loopCtx.getSessionId();
+        try {
+            LlmCallContext llmCtx = LlmCallContext.builder()
+                    .traceId(rootSpan != null ? rootSpan.getId() : null)
+                    .parentSpanId(rootSpan != null ? rootSpan.getId() : null)
+                    .sessionId(sessionId)
+                    .agentId(agentDef.getId() != null ? parseAgentIdSafe(agentDef.getId()) : null)
+                    .userId(userId)
+                    .providerName(llmProvider.getName())
+                    .modelId(actualModelId)
+                    .iterationIndex(loopCtx.getLoopCount())
+                    .stream(true)
+                    .build();
+            llmProvider.chatStream(contRequest, llmCtx, new com.skillforge.core.llm.LlmStreamHandler() {
+                @Override public boolean isCancelled() {
+                    return loopCtx.isCancelled();
+                }
+                @Override public void onText(String text) {
+                    // Stream continuation deltas to the same UI assistant pane so users
+                    // see the response continue rather than restart.
+                    if (broadcaster != null && broadcastSid != null && text != null && !text.isEmpty()) {
+                        broadcaster.assistantDelta(broadcastSid, text);
+                        broadcaster.textDelta(broadcastSid, text);
+                    }
+                }
+                @Override public void onToolUse(com.skillforge.core.model.ToolUseBlock block) {
+                    // Continuation request omits tools; if the provider still emits a tool_use
+                    // we ignore it (the merged response will be assembled from text only).
+                }
+                @Override public void onComplete(LlmResponse fullResponse) {
+                    respHolder.set(fullResponse);
+                    if (broadcaster != null && broadcastSid != null) {
+                        broadcaster.assistantStreamEnd(broadcastSid);
+                    }
+                    streamDone.countDown();
+                }
+                @Override public void onError(Throwable error) {
+                    errHolder.set(error);
+                    if (broadcaster != null && broadcastSid != null) {
+                        broadcaster.assistantStreamEnd(broadcastSid);
+                    }
+                    streamDone.countDown();
+                }
+            });
+            boolean completed = streamDone.await(300, java.util.concurrent.TimeUnit.SECONDS);
+            if (!completed) {
+                log.warn("max_tokens continuation timed out after 300s: sessionId={}", sessionId);
+                return null;
+            }
+        } catch (Exception e) {
+            log.warn("max_tokens continuation chatStream failed: sessionId={}", sessionId, e);
+            return null;
+        }
+        if (errHolder.get() != null) {
+            log.warn("max_tokens continuation returned error: sessionId={} err={}",
+                    sessionId, errHolder.get().toString());
+            return null;
+        }
+        return respHolder.get();
     }
 
     /**

@@ -65,6 +65,13 @@ public class SessionService {
      */
     private ChatEventBroadcaster broadcaster;
 
+    /**
+     * P9-2: tool_result 归档服务。setter 注入避免引入循环依赖（ToolResultArchiveService
+     * 只依赖 archive repository，但保持 setter 注入与 broadcaster 一致，方便单元测试用 null
+     * 启用 SessionService 而不强制注入归档依赖）。
+     */
+    private ToolResultArchiveService toolResultArchiveService;
+
     public SessionService(SessionRepository sessionRepository,
                           SessionMessageRepository sessionMessageRepository,
                           AgentRepository agentRepository,
@@ -92,6 +99,11 @@ public class SessionService {
     @Autowired(required = false)
     public void setBroadcaster(ChatEventBroadcaster broadcaster) {
         this.broadcaster = broadcaster;
+    }
+
+    @Autowired(required = false)
+    public void setToolResultArchiveService(ToolResultArchiveService toolResultArchiveService) {
+        this.toolResultArchiveService = toolResultArchiveService;
     }
 
     private Map<String, Object> toListProjection(SessionEntity s) {
@@ -320,6 +332,11 @@ public class SessionService {
 
     /**
      * 用于 LLM：如果存在最近一个 COMPACT_BOUNDARY，则仅返回边界后的上下文（不含 boundary 本身）。
+     *
+     * <p>P9-2: 在返回前应用 tool_result 归档替换（lookup-then-substitute + 必要时 idempotent
+     * upsert）。归档决策对同一 (session_id, tool_use_id) 幂等不翻转：已归档过的 tool_result
+     * 永远以 preview 形式呈现给 LLM；未归档但本次聚合超预算的会按 size 降序归档大块到表，
+     * 后续 turn 再读取时自动命中 preview 路径。失败 / 未启用时回退到原逻辑（保留原文）。
      */
     @Transactional(readOnly = true)
     public List<Message> getContextMessages(String id) {
@@ -336,7 +353,24 @@ public class SessionService {
         for (int i = start; i < records.size(); i++) {
             out.add(records.get(i).message());
         }
-        return out;
+        return applyArchiveSafely(id, out);
+    }
+
+    /**
+     * P9-2: 调用 ToolResultArchiveService 应用归档替换。归档服务标注 REQUIRES_NEW 事务，
+     * 即便从 readOnly 上下文调用也会启用独立写事务。失败 fallback 到原 messages，
+     * 保证 P9-2 故障时不破坏现有 chat loop（明确失败由 service 内部 log.warn）。
+     */
+    private List<Message> applyArchiveSafely(String sessionId, List<Message> messages) {
+        if (toolResultArchiveService == null || messages == null || messages.isEmpty()) {
+            return messages;
+        }
+        try {
+            return toolResultArchiveService.applyArchive(sessionId, messages);
+        } catch (Exception e) {
+            log.warn("Tool result archive apply failed, returning original messages: sessionId={}", sessionId, e);
+            return messages;
+        }
     }
 
     public long appendMessages(String id, List<AppendMessage> messages) {

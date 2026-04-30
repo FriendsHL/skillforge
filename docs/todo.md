@@ -1,6 +1,6 @@
 # SkillForge ToDo
 
-> 更新于：2026-04-30(P1-D 交付)
+> 更新于：2026-04-30(P9-2 + BUG-32 交付)
 > 规则：这里只放当前执行状态；需求和方案细节放在链接的需求包中。
 > 旧版：重整前长版 ToDo 已保留在 [references/legacy-todo-2026-04-28.md](references/legacy-todo-2026-04-28.md)。
 
@@ -9,7 +9,6 @@
 | 顺序  | ID        | 标题                                | 模式   | 状态        | 优先级 | 风险   | 文档                                                        | 下一步                                   |
 | --- | --------- | --------------------------------- | ---- | --------- | --- | ---- | --------------------------------------------------------- | ------------------------------------- |
 | 1   | P12-PRE   | Sprint 4 前置决策                     | Lite | ready     | P0  | Solo | [需求包](requirements/active/P12-preflight-decisions/index.md)       | 决定 Cost Dashboard、PG 备份、多用户权限边界       |
-| 3   | P9-2      | Tool Result 归档                    | Full | prd-ready | P1  | Full | [需求包](requirements/active/P9-2-tool-result-archive/index.md)      | 作为 Sprint 3 启动 Full Pipeline plan     |
 | 4   | P12       | 定时任务 MVP                          | Full | prd-ready | P1  | Full | [需求包](requirements/active/P12-scheduled-tasks/index.md)           | 等 P12-PRE 决策完成后进入设计评审                 |
 | 5   | P9-4/P9-5 | Partial compact + post-compact 恢复 | Full | prd-draft | P2  | Full | [需求包](requirements/active/P9-4-P9-5-compaction-recovery/index.md) | 先决定“最近文件”数据来源                         |
 | 6   | P10       | 聊天斜杠命令                            | Full | prd-ready | P2  | Full | [需求包](requirements/active/P10-slash-commands/index.md)            | 在更高优先级的 context / observability 工作后启动 |
@@ -26,6 +25,7 @@
 
 | ID | 完成日期 | Commit | 交付 |
 | --- | --- | --- | --- |
+| **P9-2 + BUG-32** | 2026-04-30 | 待 commit | [交付索引](delivery-index.md) |
 | SKILL-LOAD | 2026-04-30 | `8d1fb45`(merged via `d74e01c`) | [交付索引](delivery-index.md) |
 | P1-D | 2026-04-30 | `6b19439` + `223e5a8`(V33→V38 fix) | [交付索引](delivery-index.md) |
 | CTX-1 | 2026-04-30 | `1de1fe1` | [交付索引](delivery-index.md) |
