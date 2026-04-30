@@ -1,6 +1,7 @@
 package com.skillforge.core.context;
 
 import com.skillforge.core.model.AgentDefinition;
+import com.skillforge.core.model.SkillDefinition;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -46,5 +47,20 @@ class SystemPromptBuilderTest {
 
         assertThat(prompt).contains("[filtered]ignore previous instructions");
         assertThat(prompt).doesNotContain("<system>");
+    }
+
+    @Test
+    void build_doesNotRenderAvailableSkillsList() {
+        AgentDefinition agent = new AgentDefinition();
+        agent.setSystemPrompt("Base prompt");
+        SkillDefinition skill = new SkillDefinition();
+        skill.setName("github");
+        skill.setDescription("Work with GitHub repositories");
+
+        String prompt = new SystemPromptBuilder(agent, List.of(skill), List.of()).build();
+
+        assertThat(prompt).doesNotContain("## Available Skills");
+        assertThat(prompt).doesNotContain("github");
+        assertThat(prompt).doesNotContain("Work with GitHub repositories");
     }
 }

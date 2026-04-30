@@ -9,6 +9,7 @@
 | 顺序  | ID        | 标题                                | 模式   | 状态        | 优先级 | 风险   | 文档                                                        | 下一步                                   |
 | --- | --------- | --------------------------------- | ---- | --------- | --- | ---- | --------------------------------------------------------- | ------------------------------------- |
 | 1   | P12-PRE   | Sprint 4 前置决策                     | Lite | ready     | P0  | Solo | [需求包](requirements/active/P12-preflight-decisions/index.md)       | 决定 Cost Dashboard、PG 备份、多用户权限边界       |
+| 1a  | SKILL-LOAD | Skill Loader Tool                    | Full | in-progress | P1 | Full | [需求包](requirements/active/SKILL-LOAD-skill-loader-tool/index.md) | 隔离 worktree 中实现并验证 |
 | 3   | P9-2      | Tool Result 归档                    | Full | prd-ready | P1  | Full | [需求包](requirements/active/P9-2-tool-result-archive/index.md)      | 作为 Sprint 3 启动 Full Pipeline plan     |
 | 4   | P12       | 定时任务 MVP                          | Full | prd-ready | P1  | Full | [需求包](requirements/active/P12-scheduled-tasks/index.md)           | 等 P12-PRE 决策完成后进入设计评审                 |
 | 5   | P9-4/P9-5 | Partial compact + post-compact 恢复 | Full | prd-draft | P2  | Full | [需求包](requirements/active/P9-4-P9-5-compaction-recovery/index.md) | 先决定“最近文件”数据来源                         |
