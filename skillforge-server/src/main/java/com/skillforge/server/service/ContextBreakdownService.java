@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillforge.core.compact.RequestTokenEstimator;
 import com.skillforge.core.compact.TokenEstimator;
 import com.skillforge.core.context.ContextProvider;
+import com.skillforge.core.engine.AgentLoopEngine;
 import com.skillforge.core.llm.ModelConfig;
 import com.skillforge.core.model.AgentDefinition;
 import com.skillforge.core.model.ContentBlock;
@@ -96,7 +97,7 @@ public class ContextBreakdownService {
         List<Segment> systemPromptChildren = buildSystemPromptSegments(agentDef, userId, session);
         long systemPromptTotal = sumTokens(systemPromptChildren);
 
-        long toolSchemasTokens = estimateToolSchemasTokens();
+        long toolSchemasTokens = estimateToolSchemasTokens(agentDef);
         Segment toolSchemas = Segment.leaf(
                 "tool_schemas", "Tool schemas (JSON)", toolSchemasTokens);
 
@@ -157,12 +158,6 @@ public class ContextBreakdownService {
         out.add(Segment.leaf("tools_md", "TOOLS.md / Guidelines",
                 TokenEstimator.estimateString(toolsText)));
 
-        String skillsBlock = renderSkillsListBlock(agentDef);
-        if (!skillsBlock.isEmpty()) {
-            out.add(Segment.leaf("skills_list", "Skills list",
-                    TokenEstimator.estimateString(skillsBlock)));
-        }
-
         String behaviorBlock = renderBehaviorRulesBlock(agentDef);
         if (!behaviorBlock.isEmpty()) {
             out.add(Segment.leaf("behavior_rules", "Behavior rules",
@@ -200,30 +195,12 @@ public class ContextBreakdownService {
     }
 
     /**
-     * Plan r2 §5 — list only the skills authorised for this session (matches what
-     * AgentLoopEngine actually injects into the system prompt). Resolver failure /
-     * absent agent → fall back to {@link SessionSkillView#EMPTY} (fail-secure).
+     * Skills are no longer rendered in the system prompt; they are exposed through
+     * the single Skill loader tool schema.
      * <p>Package-private for {@code ContextBreakdownServiceTest}.
      */
     String renderSkillsListBlock(AgentDefinition agentDef) {
-        Collection<SkillDefinition> defs;
-        try {
-            SessionSkillView view = sessionSkillResolver != null
-                    ? sessionSkillResolver.resolveFor(agentDef)
-                    : SessionSkillView.EMPTY;
-            defs = view != null ? view.all() : List.of();
-        } catch (Exception e) {
-            log.warn("renderSkillsListBlock: resolver failed, treating as empty: {}", e.getMessage());
-            defs = List.of();
-        }
-        if (defs == null || defs.isEmpty()) return "";
-        StringBuilder sb = new StringBuilder();
-        sb.append("## Available Skills\n\n");
-        for (SkillDefinition d : defs) {
-            sb.append("- **").append(nullSafe(d.getName())).append("**: ")
-                    .append(nullSafe(d.getDescription())).append("\n");
-        }
-        return sb.toString();
+        return "";
     }
 
     private String renderBehaviorRulesBlock(AgentDefinition agentDef) {
@@ -310,25 +287,44 @@ public class ContextBreakdownService {
 
     // ───────────────────────────── tool schemas ─────────────────────────────
 
-    private long estimateToolSchemasTokens() {
+    private long estimateToolSchemasTokens(AgentDefinition agentDef) {
         Collection<Tool> skills = skillRegistry.getAllTools();
-        if (skills == null || skills.isEmpty()) return 0L;
         // CTX-1 — collect ToolSchemas first then delegate to RequestTokenEstimator so
         // the dashboard count and the engine's compact-trigger ratio share one
         // algorithm (FR-1.1 / AC-1). Schema fetch errors continue to be skipped silently
         // (preserve historical behaviour).
-        List<ToolSchema> schemas = new ArrayList<>(skills.size());
-        for (Tool s : skills) {
-            ToolSchema schema;
-            try {
-                schema = s.getToolSchema();
-            } catch (RuntimeException ex) {
-                log.debug("getToolSchema failed for {}; skipping", s.getName(), ex);
-                continue;
+        List<ToolSchema> schemas = new ArrayList<>(skills != null ? skills.size() + 1 : 1);
+        if (skills != null) {
+            for (Tool s : skills) {
+                ToolSchema schema;
+                try {
+                    schema = s.getToolSchema();
+                } catch (RuntimeException ex) {
+                    log.debug("getToolSchema failed for {}; skipping", s.getName(), ex);
+                    continue;
+                }
+                if (schema != null) schemas.add(schema);
             }
-            if (schema != null) schemas.add(schema);
+        }
+
+        List<SkillDefinition> visibleSkills = resolveVisibleSkillDefs(agentDef);
+        if (!visibleSkills.isEmpty()) {
+            schemas.add(AgentLoopEngine.skillLoaderToolSchema(visibleSkills));
         }
         return RequestTokenEstimator.estimateToolSchemas(schemas, objectMapper);
+    }
+
+    private List<SkillDefinition> resolveVisibleSkillDefs(AgentDefinition agentDef) {
+        try {
+            SessionSkillView view = sessionSkillResolver != null
+                    ? sessionSkillResolver.resolveFor(agentDef)
+                    : SessionSkillView.EMPTY;
+            Collection<SkillDefinition> defs = view != null ? view.all() : List.of();
+            return defs != null ? new ArrayList<>(defs) : List.of();
+        } catch (Exception e) {
+            log.warn("resolveVisibleSkillDefs: resolver failed, treating as empty: {}", e.getMessage());
+            return List.of();
+        }
     }
 
     // ───────────────────────────── messages ─────────────────────────────

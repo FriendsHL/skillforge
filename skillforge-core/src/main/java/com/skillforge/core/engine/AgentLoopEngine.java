@@ -64,6 +64,7 @@ public class AgentLoopEngine {
     static final int BREAKER_TRIP_THRESHOLD = 3;
     /** After breaker trips, allow one half-open retry once this window has elapsed. */
     static final long BREAKER_HALF_OPEN_WINDOW_MS = 60_000L;
+    static final String SKILL_LOADER_TOOL_NAME = "Skill";
 
     private final LlmProviderFactory llmProviderFactory;
     private final String defaultProviderName;
@@ -1293,12 +1294,12 @@ public class AgentLoopEngine {
     }
 
     /**
-     * 收集所有可用的工具 schema：内置 Tool + SkillDefinition + (可选) ask_user。
+     * 收集所有可用的工具 schema：内置 Tool + Skill loader + (可选) ask_user。
      * <p>Plan r2 §5 (B-3) 边界：
      * <ul>
      *   <li>L1092 内置 Tool 段保持原状 — 只受 excludedSkillNames / allowedToolNames 过滤；
      *       view 不管内置 Tool。</li>
-     *   <li>SkillDefinition 段改读 LoopContext.skillView.all() —
+     *   <li>Skill loader 段改读 LoopContext.skillView.all() —
      *       view 已经在解析时排除 disabled_system_skills，调用方不再叠加 excludedSkillNames。</li>
      * </ul>
      */
@@ -1310,6 +1311,9 @@ public class AgentLoopEngine {
         // 内置 Tool (filter out excluded skills for depth-aware multi-agent collab,
         // and apply allowedToolNames whitelist if configured) — view 不影响这一段。
         for (Tool tool : skillRegistry.getAllTools()) {
+            if (SKILL_LOADER_TOOL_NAME.equals(tool.getName())) {
+                continue;
+            }
             if (excludedSkillNames != null && excludedSkillNames.contains(tool.getName())) {
                 continue;
             }
@@ -1323,13 +1327,11 @@ public class AgentLoopEngine {
             }
         }
 
-        // SkillDefinition (zip 包 Skill) — 来自 SessionSkillView（plan r2 §5）。
+        // Skill loader — one schema lists the package skills visible to this session.
         // view 在解析阶段已应用 disabled_system_skills；这里不再叠加 excludedSkillNames。
-        for (SkillDefinition def : resolveVisibleSkillDefs(loopCtx)) {
-            Map<String, Object> inputSchema = new HashMap<>();
-            inputSchema.put("type", "object");
-            inputSchema.put("properties", Collections.emptyMap());
-            tools.add(new ToolSchema(def.getName(), def.getDescription(), inputSchema));
+        List<SkillDefinition> visibleSkillDefs = resolveVisibleSkillDefs(loopCtx);
+        if (!visibleSkillDefs.isEmpty()) {
+            tools.add(skillLoaderToolSchema(visibleSkillDefs));
         }
 
         // ask_user:仅在 ask 模式下注入,auto 模式下 LLM 看不到这个 tool
@@ -1343,6 +1345,40 @@ public class AgentLoopEngine {
         }
 
         return tools;
+    }
+
+    public static ToolSchema skillLoaderToolSchema(List<SkillDefinition> visibleSkillDefs) {
+        Map<String, Object> nameProperty = new HashMap<>();
+        nameProperty.put("type", "string");
+        nameProperty.put("description", "Exact name of the skill to load.");
+
+        Map<String, Object> properties = new HashMap<>();
+        properties.put("name", nameProperty);
+
+        Map<String, Object> inputSchema = new HashMap<>();
+        inputSchema.put("type", "object");
+        inputSchema.put("properties", properties);
+        inputSchema.put("required", List.of("name"));
+
+        return new ToolSchema(SKILL_LOADER_TOOL_NAME, skillLoaderDescription(visibleSkillDefs), inputSchema);
+    }
+
+    private static String skillLoaderDescription(List<SkillDefinition> visibleSkillDefs) {
+        StringBuilder sb = new StringBuilder();
+        int count = visibleSkillDefs != null ? visibleSkillDefs.size() : 0;
+        sb.append("Load instructions for one of the ")
+                .append(count)
+                .append(count == 1 ? " skill" : " skills")
+                .append(" available to this session. Pass the exact skill name. Available skills:");
+        if (visibleSkillDefs != null) {
+            for (SkillDefinition def : visibleSkillDefs) {
+                sb.append("\n- ").append(def.getName());
+                if (def.getDescription() != null && !def.getDescription().isBlank()) {
+                    sb.append(": ").append(def.getDescription());
+                }
+            }
+        }
+        return sb.toString();
     }
 
     /**
@@ -1930,6 +1966,55 @@ public class AgentLoopEngine {
         return executeToolCall(block, loopContext, toolCallRecords, null);
     }
 
+    private Message executeSkillLoaderTool(String toolUseId,
+                                           Map<String, Object> input,
+                                           LoopContext loopContext,
+                                           List<ToolCallRecord> toolCallRecords,
+                                           long startTime) {
+        Object rawName = input != null ? input.get("name") : null;
+        if (!(rawName instanceof String requestedName) || requestedName.isBlank()) {
+            String error = "Skill loader requires a non-empty 'name' string.";
+            long duration = System.currentTimeMillis() - startTime;
+            toolCallRecords.add(new ToolCallRecord(SKILL_LOADER_TOOL_NAME, input, error, false, duration, startTime));
+            recordTelemetry(SKILL_LOADER_TOOL_NAME, false, SkillResult.ErrorType.VALIDATION.name());
+            return Message.toolResult(toolUseId, error, true, SkillResult.ErrorType.VALIDATION.name());
+        }
+
+        String skillToLoad = requestedName.trim();
+        com.skillforge.core.skill.view.SessionSkillView view = loopContext != null
+                ? loopContext.getSkillView() : null;
+        Optional<SkillDefinition> skillDefOpt = view != null
+                ? view.resolve(skillToLoad)
+                : skillRegistry.getSkillDefinition(skillToLoad);
+
+        if (skillDefOpt.isEmpty()) {
+            int notAllowedCount = loopContext != null
+                    ? loopContext.incrementNotAllowedCount(skillToLoad)
+                    : 1;
+            String error;
+            if (loopContext != null && notAllowedCount >= 2) {
+                loopContext.setAbortToolUse(true);
+                error = "[ABORTED] skill '" + skillToLoad + "' is not available for this agent. "
+                        + "Repeated calls (n=" + notAllowedCount + ") detected — aborting tool_use loop.";
+            } else {
+                error = "[NOT ALLOWED] skill '" + skillToLoad + "' is not available for this agent. "
+                        + "Call Skill with one of the names listed in the Skill tool description.";
+            }
+            long duration = System.currentTimeMillis() - startTime;
+            toolCallRecords.add(new ToolCallRecord(skillToLoad, input, error, false, duration, startTime));
+            recordTelemetry(skillToLoad, false, SkillResult.ErrorType.NOT_ALLOWED.name());
+            return Message.toolResult(toolUseId, error, true, SkillResult.ErrorType.NOT_ALLOWED.name());
+        }
+
+        SkillDefinition skillDef = skillDefOpt.get();
+        String content = skillDef.getPromptContent() != null ? skillDef.getPromptContent() : "";
+        long duration = System.currentTimeMillis() - startTime;
+        toolCallRecords.add(new ToolCallRecord(skillToLoad, input, content, true, duration, startTime));
+        log.debug("Skill loader returned promptContent for '{}', duration={}ms", skillToLoad, duration);
+        recordTelemetry(skillToLoad, true, null);
+        return Message.toolResult(toolUseId, content, false);
+    }
+
     // Package-private for AgentLoopEngineTelemetryTest / NotAllowedHijackShortCircuitTest
     // (Plan r2 W-BE-1: cover all 7 telemetry return paths + B-4 hijack short-circuit).
     Message executeToolCall(ToolUseBlock block, LoopContext loopContext,
@@ -1947,7 +2032,8 @@ public class AgentLoopEngine {
             // 仅对 NON-built-in name 生效；built-in Tool / 引擎特殊 tool（ask_user / compact_context）
             // 不进 view，直接走原路径。
             boolean isBuiltinTool = skillRegistry.getTool(skillName).isPresent();
-            boolean isEngineSpecial = AskUserTool.NAME.equals(skillName)
+            boolean isEngineSpecial = SKILL_LOADER_TOOL_NAME.equals(skillName)
+                    || AskUserTool.NAME.equals(skillName)
                     || ContextCompactTool.NAME.equals(skillName);
             com.skillforge.core.skill.view.SessionSkillView view = loopContext != null
                     ? loopContext.getSkillView() : null;
@@ -1971,7 +2057,12 @@ public class AgentLoopEngine {
                         SkillResult.ErrorType.NOT_ALLOWED.name());
             }
 
-            // 检查是否为 SkillDefinition (zip 包 Tool)
+            if (SKILL_LOADER_TOOL_NAME.equals(skillName)) {
+                return executeSkillLoaderTool(toolUseId, input, loopContext, toolCallRecords, startTime);
+            }
+
+            // Legacy direct SkillDefinition calls are still accepted for compatibility, but
+            // SkillDefinition schemas are no longer exposed to the model.
             // Plan r2 §5: 优先从 view 取（含授权解析），fallback 到 registry 仅在 view 未注入时。
             Optional<SkillDefinition> skillDefOpt = (view != null)
                     ? view.resolve(skillName)

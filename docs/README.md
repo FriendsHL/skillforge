@@ -20,6 +20,7 @@
 | ID | 标题 | 状态 | 需求包 | MRD | PRD | 技术方案 | 交付 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | P12-PRE | Sprint 4 前置决策 | ready | [需求包](requirements/active/P12-preflight-decisions/index.md) | - | - | - | - |
+| SKILL-LOAD | Skill Loader Tool | in-progress | [需求包](requirements/active/SKILL-LOAD-skill-loader-tool/index.md) | [MRD](requirements/active/SKILL-LOAD-skill-loader-tool/mrd.md) | [PRD](requirements/active/SKILL-LOAD-skill-loader-tool/prd.md) | [方案](requirements/active/SKILL-LOAD-skill-loader-tool/tech-design.md) | - |
 | P1-D | Skill Root 与 Catalog 收口 | design-draft | [需求包](requirements/active/P1-D-skill-root-catalog-convergence/index.md) | [MRD](requirements/active/P1-D-skill-root-catalog-convergence/mrd.md) | [PRD](requirements/active/P1-D-skill-root-catalog-convergence/prd.md) | [方案](requirements/active/P1-D-skill-root-catalog-convergence/tech-design.md) | - |
 | P9-2 | Tool Result 归档 | prd-ready | [需求包](requirements/active/P9-2-tool-result-archive/index.md) | [MRD](requirements/active/P9-2-tool-result-archive/mrd.md) | [PRD](requirements/active/P9-2-tool-result-archive/prd.md) | [方案](requirements/active/P9-2-tool-result-archive/tech-design.md) | - |
 | P12 | 定时任务 MVP | prd-ready | [需求包](requirements/active/P12-scheduled-tasks/index.md) | [MRD](requirements/active/P12-scheduled-tasks/mrd.md) | [PRD](requirements/active/P12-scheduled-tasks/prd.md) | [方案](requirements/active/P12-scheduled-tasks/tech-design.md) | - |

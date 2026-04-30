@@ -7,6 +7,9 @@ import com.skillforge.core.model.SkillDefinition;
 import com.skillforge.core.skill.SkillRegistry;
 import com.skillforge.core.skill.view.SessionSkillResolver;
 import com.skillforge.core.skill.view.SessionSkillView;
+import com.skillforge.server.dto.ContextBreakdownDto;
+import com.skillforge.server.entity.AgentEntity;
+import com.skillforge.server.entity.SessionEntity;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -24,11 +27,8 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 
 /**
- * Plan r2 §5 + Code Judge r1 B-BE-3 — verify ContextBreakdownService renders the
- * skill list using {@link SessionSkillView#all()} (the agent-authorised subset),
- * not {@code skillRegistry.getAllSkillDefinitions()} (the registry-wide set).
- * <p>The original B-BE-3 bug listed disabled / unauthorised skills in the breakdown
- * panel — token estimate too high, and in multi-user scenarios leaks names.
+ * Verifies the context breakdown follows the same skill exposure model as the
+ * runtime request: no prompt-side skill list, one view-filtered Skill loader schema.
  */
 @ExtendWith(MockitoExtension.class)
 class ContextBreakdownServiceTest {
@@ -59,40 +59,55 @@ class ContextBreakdownServiceTest {
     }
 
     @Test
-    @DisplayName("renderSkillsList only lists view.all() — disabled system skills are excluded")
-    void renderSkillsList_filtersByView() {
-        // Registry-wide: 3 skills exist (skillhub, github, my-private)
-        // View: agent has disabled "github" → only skillhub + my-private are authorised.
-        SkillDefinition skillhub = def("skillhub", true);
-        SkillDefinition github = def("github", true);
-        SkillDefinition mySkill = def("my-private", false);
+    @DisplayName("renderSkillsList is empty because skills are exposed by the Skill loader tool")
+    void renderSkillsList_returnsEmptyWhenSkillsMoveToLoaderTool() {
+        AgentDefinition agentDef = new AgentDefinition();
+        agentDef.setId("42");
 
+        String block = service.renderSkillsListBlock(agentDef);
+
+        assertThat(block).isEmpty();
+    }
+
+    @Test
+    @DisplayName("breakdown counts visible skills as one Skill loader tool schema")
+    void breakdown_countsSkillLoaderSchema() {
+        SkillDefinition skillhub = def("skillhub", true);
+        SkillDefinition mySkill = def("my-private", false);
         Map<String, SkillDefinition> allowed = new LinkedHashMap<>();
         allowed.put("skillhub", skillhub);
         allowed.put("my-private", mySkill);
         SessionSkillView view = new SessionSkillView(allowed,
                 Set.of("skillhub"), Set.of("my-private"));
 
-        when(sessionSkillResolver.resolveFor(any(AgentDefinition.class))).thenReturn(view);
-
         AgentDefinition agentDef = new AgentDefinition();
         agentDef.setId("42");
+        AgentEntity agentEntity = new AgentEntity();
+        agentEntity.setId(42L);
+        agentEntity.setModelId("gpt-4o");
+        SessionEntity session = new SessionEntity();
+        session.setId("s1");
+        session.setAgentId(42L);
 
-        String block = service.renderSkillsListBlock(agentDef);
+        when(agentService.getAgent(42L)).thenReturn(agentEntity);
+        when(agentService.toAgentDefinition(agentEntity)).thenReturn(agentDef);
+        when(sessionService.getContextMessages("s1")).thenReturn(List.of());
+        when(sessionSkillResolver.resolveFor(agentDef)).thenReturn(view);
 
-        assertThat(block).contains("skillhub");
-        assertThat(block).contains("my-private");
-        assertThat(block)
-                .as("disabled system skill 'github' must NOT appear in breakdown — view-filtered")
-                .doesNotContain("github");
+        ContextBreakdownDto breakdown = service.breakdown(session, 7L);
+
+        ContextBreakdownDto.Segment tools = breakdown.segments().stream()
+                .filter(s -> "tool_schemas".equals(s.key()))
+                .findFirst()
+                .orElseThrow();
+        assertThat(tools.tokens())
+                .as("one Skill loader schema should be counted even when no Java tools are registered")
+                .isGreaterThan(0);
     }
 
     @Test
     @DisplayName("renderSkillsList: empty view → empty block (does not fall back to registry)")
     void renderSkillsList_emptyView_returnsEmpty() {
-        when(sessionSkillResolver.resolveFor(any(AgentDefinition.class)))
-                .thenReturn(SessionSkillView.EMPTY);
-
         AgentDefinition agentDef = new AgentDefinition();
         String block = service.renderSkillsListBlock(agentDef);
 
@@ -100,11 +115,8 @@ class ContextBreakdownServiceTest {
     }
 
     @Test
-    @DisplayName("renderSkillsList: resolver throws → fail-secure to empty (does NOT leak registry)")
-    void renderSkillsList_resolverFailure_failSecure() {
-        when(sessionSkillResolver.resolveFor(any(AgentDefinition.class)))
-                .thenThrow(new RuntimeException("resolver boom"));
-
+    @DisplayName("renderSkillsList: no resolver access needed because prompt-side skill list is gone")
+    void renderSkillsList_doesNotResolveSkills() {
         AgentDefinition agentDef = new AgentDefinition();
         String block = service.renderSkillsListBlock(agentDef);
 

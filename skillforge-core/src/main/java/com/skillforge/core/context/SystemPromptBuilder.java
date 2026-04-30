@@ -19,20 +19,18 @@ public class SystemPromptBuilder {
             Pattern.CASE_INSENSITIVE);
 
     private final AgentDefinition agentDefinition;
-    private final List<SkillDefinition> skillDefinitions;
     private final List<ContextProvider> contextProviders;
 
     public SystemPromptBuilder(AgentDefinition agentDefinition,
                                List<SkillDefinition> skillDefinitions,
                                List<ContextProvider> contextProviders) {
         this.agentDefinition = agentDefinition;
-        this.skillDefinitions = skillDefinitions;
         this.contextProviders = contextProviders;
     }
 
     /**
      * 构建完整的系统提示词。
-     * 拼接顺序：CLAUDE.md → AGENT.md → SOUL.md → TOOLS.md/默认Guidelines → Skills → Context
+     * 拼接顺序：CLAUDE.md → AGENT.md → SOUL.md → TOOLS.md/默认Guidelines → Context
      */
     public String build() {
         return build(null);
@@ -78,19 +76,10 @@ public class SystemPromptBuilder {
             sb.append("\n");
         }
 
-        // 5. Available skills
-        if (skillDefinitions != null && !skillDefinitions.isEmpty()) {
-            sb.append("## Available Skills\n\n");
-            for (SkillDefinition skill : skillDefinitions) {
-                sb.append("- **").append(skill.getName()).append("**: ").append(skill.getDescription()).append("\n");
-            }
-            sb.append("\n");
-        }
-
-        // 6. Behavior Rules — after Available Skills, before Context (recency bias)
+        // 5. Behavior Rules — before Context (recency bias)
         appendBehaviorRules(sb);
 
-        // 7. Context from providers
+        // 6. Context from providers
         if (contextProviders != null && !contextProviders.isEmpty()) {
             sb.append("## Context\n\n");
             for (ContextProvider provider : contextProviders) {
