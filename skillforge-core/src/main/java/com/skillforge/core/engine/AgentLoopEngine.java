@@ -1749,10 +1749,65 @@ public class AgentLoopEngine {
      */
     Message handleInstallConfirmation(ToolUseBlock block, LoopContext loopCtx,
                                       List<ToolCallRecord> toolCallRecords) {
-        ConfirmationGate gate = handleInstallConfirmationGate(block, loopCtx, toolCallRecords);
-        return gate.immediateResult != null
-                ? gate.immediateResult
-                : Message.toolResult(block.getId(), "Install confirmation is waiting for user approval.", true);
+        String sid = loopCtx.getSessionId();
+        String toolUseId = block.getId();
+        Map<String, Object> input = block.getInput() != null ? block.getInput() : Collections.emptyMap();
+        String command = String.valueOf(input.getOrDefault("command", ""));
+
+        if (pendingAskRegistry != null && pendingAskRegistry.hasPendingForSession(sid)) {
+            return Message.toolResult(toolUseId,
+                    "Install confirmation cannot start while ask_user is pending; "
+                            + "LLM should re-emit after the ask is answered.", true);
+        }
+
+        InstallTargetParser.Parsed parsed = InstallTargetParser.parse(command);
+        String installTool = parsed.toolName();
+        String installTarget = parsed.installTarget();
+        String rootSid = resolveRootSessionIdCached(sid, loopCtx);
+
+        if (sessionConfirmCache != null
+                && sessionConfirmCache.isApproved(rootSid, installTool, installTarget)) {
+            log.info("Install cache hit: rootSid={} tool={} target={}", rootSid, installTool, installTarget);
+            return runInstallSyncWithBroadcast(block, loopCtx, toolCallRecords);
+        }
+
+        if (confirmationPrompter == null) {
+            log.warn("Install confirmation prompter not configured; rejecting fail-closed sid={}", sid);
+            return Message.toolResult(toolUseId,
+                    "Install confirmation is not available in this runtime; please re-run after enabling it.", true);
+        }
+
+        try {
+            Decision d = confirmationPrompter.prompt(new ConfirmationPrompter.ConfirmationRequest(
+                    sid, loopCtx.getUserId(), toolUseId, installTool, installTarget, command,
+                    null, installConfirmTimeoutSeconds));
+            if (d == Decision.APPROVED) {
+                if (sessionConfirmCache != null) {
+                    sessionConfirmCache.approve(rootSid, installTool, installTarget);
+                }
+                return runInstallSyncWithBroadcast(block, loopCtx, toolCallRecords);
+            }
+            String previewCmd = truncateForResult(command);
+            return Message.toolResult(toolUseId,
+                    d == Decision.DENIED
+                            ? "User denied install of " + installTool + " target=" + installTarget
+                                    + ": " + previewCmd
+                            : "Install confirmation timed out for " + installTool
+                                    + " target=" + installTarget,
+                    true);
+        } catch (ChannelUnavailableException ce) {
+            log.warn("Install confirmation channel unavailable sid={}: {}", sid, ce.getMessage());
+            return Message.toolResult(toolUseId, ce.getMessage(), true);
+        } catch (Exception ex) {
+            log.error("Install confirmation flow error sid={}", sid, ex);
+            return Message.toolResult(toolUseId,
+                    "Install confirmation failed: " + ex.getMessage(), true);
+        } finally {
+            if (broadcaster != null && sid != null
+                    && (pendingAskRegistry == null || !pendingAskRegistry.hasPendingForSession(sid))) {
+                broadcaster.sessionStatus(sid, "running", null, null);
+            }
+        }
     }
 
     private ConfirmationGate handleInstallConfirmationGate(ToolUseBlock block, LoopContext loopCtx,
@@ -1808,10 +1863,71 @@ public class AgentLoopEngine {
 
     Message handleCreateAgentConfirmation(ToolUseBlock block, LoopContext loopCtx,
                                           List<ToolCallRecord> toolCallRecords) {
-        ConfirmationGate gate = handleCreateAgentConfirmationGate(block, loopCtx, toolCallRecords);
-        return gate.immediateResult != null
-                ? gate.immediateResult
-                : Message.toolResult(block.getId(), block.getName() + " confirmation is waiting for user approval.", true);
+        String sid = loopCtx.getSessionId();
+        String toolUseId = block.getId();
+        String toolName = block.getName();
+        Map<String, Object> input = block.getInput() != null ? block.getInput() : Collections.emptyMap();
+
+        if (pendingAskRegistry != null && pendingAskRegistry.hasPendingForSession(sid)) {
+            return Message.toolResult(toolUseId,
+                    toolName + " confirmation cannot start while ask_user is pending; "
+                            + "LLM should re-emit after the ask is answered.", true);
+        }
+
+        Optional<Tool> toolOpt = skillRegistry.getTool(block.getName());
+        if (toolOpt.isEmpty()) {
+            return Message.toolResult(toolUseId, toolName + " tool is not registered", true);
+        }
+        List<String> missingRequired = findMissingRequiredFields(toolOpt.get(), input);
+        if (!missingRequired.isEmpty()) {
+            String hint = "[RETRY NEEDED] " + toolName + " missing required argument(s): "
+                    + String.join(", ", missingRequired)
+                    + ". Re-emit the tool call with all required fields populated.";
+            return Message.toolResult(toolUseId, hint, true, SkillResult.ErrorType.VALIDATION.name());
+        }
+
+        if (confirmationPrompter == null) {
+            log.warn("{} confirmation prompter not configured; rejecting fail-closed sid={}", toolName, sid);
+            return Message.toolResult(toolUseId,
+                    toolName + " requires user approval, but confirmation is not available in this runtime.",
+                    true);
+        }
+        if (toolApprovalRegistry == null) {
+            log.warn("{} approval registry not configured; rejecting fail-closed sid={}", toolName, sid);
+            return Message.toolResult(toolUseId,
+                    toolName + " approval registry is not configured; cannot mutate agent safely.",
+                    true);
+        }
+
+        String targetLabel = agentMutationTargetLabel(toolName, input);
+        String preview = mapToJson(input);
+        try {
+            Decision d = confirmationPrompter.prompt(new ConfirmationPrompter.ConfirmationRequest(
+                    sid, loopCtx.getUserId(), toolUseId, toolName, targetLabel, preview,
+                    null, installConfirmTimeoutSeconds));
+            if (d == Decision.APPROVED) {
+                String token = toolApprovalRegistry.issue(
+                        sid, block.getName(), toolUseId, java.time.Duration.ofMinutes(5));
+                return runToolSyncWithBroadcast(block, loopCtx, toolCallRecords, token);
+            }
+            return Message.toolResult(toolUseId,
+                    d == Decision.DENIED
+                            ? "User denied " + toolName + " for target=" + targetLabel
+                            : toolName + " confirmation timed out for target=" + targetLabel,
+                    true);
+        } catch (ChannelUnavailableException ce) {
+            log.warn("{} confirmation channel unavailable sid={}: {}", toolName, sid, ce.getMessage());
+            return Message.toolResult(toolUseId, ce.getMessage(), true);
+        } catch (Exception ex) {
+            log.error("{} confirmation flow error sid={}", sid, ex);
+            return Message.toolResult(toolUseId,
+                    toolName + " confirmation failed: " + ex.getMessage(), true);
+        } finally {
+            if (broadcaster != null && sid != null
+                    && (pendingAskRegistry == null || !pendingAskRegistry.hasPendingForSession(sid))) {
+                broadcaster.sessionStatus(sid, "running", null, null);
+            }
+        }
     }
 
     private ConfirmationGate handleCreateAgentConfirmationGate(ToolUseBlock block, LoopContext loopCtx,

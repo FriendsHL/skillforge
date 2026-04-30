@@ -59,6 +59,13 @@ public class ChannelCardActionController {
         this.chatService = chatService;
     }
 
+    ChannelCardActionController(FeishuCardActionVerifier verifier,
+                                ChannelConfigService channelConfigService,
+                                PendingConfirmationRegistry pendingConfirmationRegistry,
+                                ObjectMapper objectMapper) {
+        this(verifier, channelConfigService, pendingConfirmationRegistry, objectMapper, null);
+    }
+
     @PostMapping("/feishu/card-action")
     public ResponseEntity<?> feishuCardAction(@RequestBody(required = false) byte[] rawBody,
                                               HttpServletRequest req) {
@@ -118,10 +125,17 @@ public class ChannelCardActionController {
             return ResponseEntity.ok(toast("Invalid decision"));
         }
 
-        try {
-            chatService.answerConfirmation(pc.sessionId(), confirmationId, decision, null);
-        } catch (IllegalArgumentException | IllegalStateException e) {
-            return ResponseEntity.ok(toast("授权请求已失效或已被处理"));
+        if (chatService != null) {
+            try {
+                chatService.answerConfirmation(pc.sessionId(), confirmationId, decision, null);
+            } catch (IllegalArgumentException | IllegalStateException e) {
+                return ResponseEntity.ok(toast("授权请求已失效或已被处理"));
+            }
+        } else {
+            boolean ok = pendingConfirmationRegistry.complete(confirmationId, decision, openId);
+            if (!ok) {
+                return ResponseEntity.ok(toast("授权请求已失效或已被处理"));
+            }
         }
         return ResponseEntity.ok(toast(decision == Decision.APPROVED ? "✅ 已批准" : "❌ 已拒绝"));
     }
