@@ -109,7 +109,8 @@
 - `skillforge-core/src/main/java/com/skillforge/core/engine/AgentLoopEngine.java` — Agent Loop 核心
 - `skillforge-core/src/main/java/com/skillforge/core/engine/hook/*` — Hook dispatcher / HookHandler / LifecycleHooksConfig
 - `skillforge-core/src/main/java/com/skillforge/core/llm/**` — LlmProvider 抽象和各 provider 实现（ClaudeProvider / OpenAi-compatible，SSE streaming）
-- `skillforge-core/src/main/java/com/skillforge/core/context/CompactionService.java` — 上下文压缩（3-phase split + stripe lock）
+- `skillforge-core/src/main/java/com/skillforge/core/compact/*` — 上下文压缩算法层（`ContextCompactorCallback` 接口、Light/Full/SessionMemory 三种策略、`TokenEstimator`、`CompactableToolRegistry`、boundary 检测；触碰必小心 tool_use↔tool_result 配对）
+- `skillforge-server/src/main/java/com/skillforge/server/service/CompactionService.java` — 上下文压缩编排层（实现 `ContextCompactorCallback`，stripe lock 64 槽、3-phase split 持锁/不持锁交替、`fullCompactInFlight` 去重、idempotency guard、DB 持久化、`session_updated` 广播）
 - `skillforge-server/src/main/java/com/skillforge/server/service/ChatService.java` — session 状态机 + tool_use/tool_result 不变量
 - `skillforge-server/src/main/java/com/skillforge/server/service/SessionService.java` + `SessionMessageRepository` — 消息行存储
 - `skillforge-server/src/main/resources/db/migration/V*.sql` — Flyway migration（schema 边界）

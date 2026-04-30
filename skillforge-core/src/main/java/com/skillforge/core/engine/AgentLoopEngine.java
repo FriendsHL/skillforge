@@ -1,9 +1,12 @@
 package com.skillforge.core.engine;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
 import com.skillforge.core.compact.CompactableToolRegistry;
 import com.skillforge.core.compact.ContextCompactTool;
 import com.skillforge.core.compact.ContextCompactorCallback;
 import com.skillforge.core.compact.ContextCompactorCallback.CompactCallbackResult;
+import com.skillforge.core.compact.RequestTokenEstimator;
 import com.skillforge.core.compact.TimeBasedColdCleanup;
 import com.skillforge.core.compact.TokenEstimator;
 import com.skillforge.core.context.ContextProvider;
@@ -15,6 +18,8 @@ import com.skillforge.core.engine.confirm.InstallTargetParser;
 import com.skillforge.core.engine.confirm.RootSessionLookup;
 import com.skillforge.core.engine.confirm.SessionConfirmCache;
 import com.skillforge.core.engine.confirm.ToolApprovalRegistry;
+import com.skillforge.core.llm.CompactThresholds;
+import com.skillforge.core.llm.LlmContextLengthExceededException;
 import com.skillforge.core.llm.LlmProvider;
 import com.skillforge.core.llm.LlmProviderFactory;
 import com.skillforge.core.llm.LlmRequest;
@@ -100,6 +105,15 @@ public class AgentLoopEngine {
     private java.util.function.Function<Long, String> claudeMdProvider;
     /** 默认 context window, 单位 token。从 AgentDefinition config 覆盖。 */
     private int defaultContextWindowTokens = 32000;
+    /**
+     * CTX-1: ObjectMapper for tool-schema serialisation in {@link RequestTokenEstimator}.
+     * Pre-initialised to a JavaTimeModule-registered instance so test paths that don't
+     * inject the Spring Bean don't trip footgun #1 (silent wrong timestamps). Server wires
+     * the project-wide Spring Bean via {@link #setJsonMapper(ObjectMapper)}.
+     */
+    private ObjectMapper jsonMapper = new ObjectMapper()
+            .findAndRegisterModules()
+            .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
     /**
      * Plan r2 §7 — telemetry recorder. Server 注入 SkillService::recordUsage 的引用。
      * Engine 在 executeToolCall 的所有 return 路径之前调用，覆盖 7 个注入点：
@@ -196,6 +210,17 @@ public class AgentLoopEngine {
     public void setDefaultContextWindowTokens(int defaultContextWindowTokens) {
         if (defaultContextWindowTokens > 0) {
             this.defaultContextWindowTokens = defaultContextWindowTokens;
+        }
+    }
+
+    /**
+     * CTX-1 — inject the Spring-managed ObjectMapper used for tool-schema serialisation
+     * inside {@link RequestTokenEstimator}. Null falls back to the pre-initialised
+     * default (still has JavaTimeModule registered). Idempotent.
+     */
+    public void setJsonMapper(ObjectMapper jsonMapper) {
+        if (jsonMapper != null) {
+            this.jsonMapper = jsonMapper;
         }
     }
 
@@ -444,16 +469,23 @@ public class AgentLoopEngine {
             // b1RanInThisIteration, 而 B1 分支的执行条件是 ratio/waste, 改过后 ratio
             // 通常下降不再满足触发. 这保证了 "B2 只在 B1 执行后触发"
             // 且"每个 iteration 至多一次完整 B1→B2 序列".
+            // CTX-1 — three-tier triggers now use RequestTokenEstimator (system + messages
+            // + tools + maxTokens) so the ratio matches what ContextBreakdownService shows
+            // in the dashboard; thresholds resolved per-provider (default 0.60/0.80/0.85).
+            CompactThresholds thresholds = llmProvider.getCompactThresholds();
+            if (thresholds == null) thresholds = CompactThresholds.DEFAULTS;
+            int agentMaxTokens = agentDef.getMaxTokens();
             boolean b1RanInThisIteration = false;
             if (compactorCallback != null && isCompactBreakerAllowing(loopCtx)) {
-                int estTokens = TokenEstimator.estimate(messages);
+                int estTokens = RequestTokenEstimator.estimate(
+                        systemPrompt, messages, tools, agentMaxTokens, jsonMapper);
                 double ratio = contextWindowTokens > 0 ? (double) estTokens / contextWindowTokens : 0;
                 boolean waste = detectWaste(messages);
-                if (ratio > 0.60 || waste) {
+                if (ratio > thresholds.getSoftRatio() || waste) {
                     String reason = waste
                             ? "engine-soft: waste detected (large tool_result / dedup / retry loop)"
-                            : String.format("engine-soft: estTokens=%d / window=%d (ratio=%.2f)",
-                                    estTokens, contextWindowTokens, ratio);
+                            : String.format("engine-soft: estTokens=%d / window=%d (ratio=%.2f, threshold=%.2f)",
+                                    estTokens, contextWindowTokens, ratio, thresholds.getSoftRatio());
                     try {
                         CompactCallbackResult cr = compactorCallback.compactLight(
                                 loopCtx.getSessionId(), messages, "engine-soft", reason);
@@ -463,7 +495,8 @@ public class AgentLoopEngine {
                             messages = cr.messages;
                             loopCtx.setMessages(messages);
                             loopCtx.markCompactedThisIteration();
-                            estTokens = TokenEstimator.estimate(messages);
+                            estTokens = RequestTokenEstimator.estimate(
+                                    systemPrompt, messages, tools, agentMaxTokens, jsonMapper);
                             ratio = contextWindowTokens > 0 ? (double) estTokens / contextWindowTokens : 0;
                             log.info("engine-soft light compact done: sessionId={}, reclaimed={} tokens, new ratio={}",
                                     loopCtx.getSessionId(), cr.tokensReclaimed, String.format("%.2f", ratio));
@@ -477,10 +510,10 @@ public class AgentLoopEngine {
                                 loopCtx.getConsecutiveCompactFailures(), e);
                     }
                 }
-                // B2: B1 刚跑过 (无论实际 performed 还是 no-op) 且 ratio 仍 > 0.80 → 升级到 full
-                if (b1RanInThisIteration && ratio > 0.80) {
-                    String reason = String.format("engine-hard: B1 ran but ratio still %.2f (estTokens=%d / window=%d)",
-                            ratio, estTokens, contextWindowTokens);
+                // B2: B1 刚跑过 (无论实际 performed 还是 no-op) 且 ratio 仍 > hardRatio → 升级到 full
+                if (b1RanInThisIteration && ratio > thresholds.getHardRatio()) {
+                    String reason = String.format("engine-hard: B1 ran but ratio still %.2f (estTokens=%d / window=%d, threshold=%.2f)",
+                            ratio, estTokens, contextWindowTokens, thresholds.getHardRatio());
                     try {
                         CompactCallbackResult cr = compactorCallback.compactFull(
                                 loopCtx.getSessionId(), messages, "engine-hard", reason);
@@ -565,17 +598,23 @@ public class AgentLoopEngine {
             request.setThinkingMode(agentDef.getThinkingMode());
             request.setReasoningEffort(agentDef.getReasoningEffort());
 
-            // Preemptive compaction: last-resort check before LLM call
+            // Preemptive compaction: last-resort check before LLM call.
+            // CTX-1 — uses the same RequestTokenEstimator envelope (incl. promptSuffix that
+            // was just appended in `request.setSystemPrompt`) and the per-provider preemptive
+            // ratio. Reading from the just-built request keeps a single source of truth.
             if (compactorCallback != null && isCompactBreakerAllowing(loopCtx)) {
-                int estTokens = TokenEstimator.estimate(messages);
+                int estTokens = RequestTokenEstimator.estimate(
+                        request.getSystemPrompt(), messages, tools, request.getMaxTokens(), jsonMapper);
                 double ratio = contextWindowTokens > 0 ? (double) estTokens / contextWindowTokens : 0;
-                if (ratio > 0.85) {
-                    log.info("Preemptive compaction triggered: ratio={}, estTokens={}, window={}",
-                            String.format("%.2f", ratio), estTokens, contextWindowTokens);
+                if (ratio > thresholds.getPreemptiveRatio()) {
+                    log.info("Preemptive compaction triggered: ratio={}, estTokens={}, window={}, threshold={}",
+                            String.format("%.2f", ratio), estTokens, contextWindowTokens,
+                            String.format("%.2f", thresholds.getPreemptiveRatio()));
                     try {
                         CompactCallbackResult cr = compactorCallback.compactFull(
                                 loopCtx.getSessionId(), messages, "engine-preemptive",
-                                String.format("ratio %.2f > 0.85 before LLM call", ratio));
+                                String.format("ratio %.2f > %.2f before LLM call",
+                                        ratio, thresholds.getPreemptiveRatio()));
                         if (cr != null && cr.performed) {
                             messages = cr.messages;
                             loopCtx.setMessages(messages);
@@ -593,13 +632,25 @@ public class AgentLoopEngine {
             }
 
             // b. 流式调用 LLM,文本增量通过 broadcaster.assistantDelta 推到前端
-            final long llmCallStart = System.currentTimeMillis();
+            // CTX-1 — wrapped in a retry loop bounded to a single retry on
+            // {@link LlmContextLengthExceededException}: provider rejects with
+            // context_length_exceeded → engine runs a one-shot compactFull and re-issues
+            // the (now smaller) request once. This is a fresh chatStream call (delta
+            // counters reset), so it does not violate the "chatStream not retried"
+            // footgun #3 (which was about resuming an already-emitting stream).
+            boolean retriedOverflow = false;
+            LlmResponse response = null;
+            // llmCallStart and streamWarnings need to span retries for the LLM_CALL span; reset per attempt.
+            long llmCallStart = System.currentTimeMillis();
+            java.util.Map<String, Object> streamWarnings = new java.util.concurrent.ConcurrentHashMap<>();
+            while (true) {
+            llmCallStart = System.currentTimeMillis();
             final java.util.concurrent.atomic.AtomicReference<LlmResponse> respHolder = new java.util.concurrent.atomic.AtomicReference<>();
             final java.util.concurrent.atomic.AtomicReference<Throwable> errHolder = new java.util.concurrent.atomic.AtomicReference<>();
             final java.util.concurrent.CountDownLatch streamDone = new java.util.concurrent.CountDownLatch(1);
             final String broadcastSid = loopCtx.getSessionId();
             // BUG-D: collect provider-emitted warnings and attach them to the LLM_CALL span.
-            final java.util.Map<String, Object> streamWarnings = new java.util.concurrent.ConcurrentHashMap<>();
+            final java.util.Map<String, Object> streamWarningsLocal = new java.util.concurrent.ConcurrentHashMap<>();
             try {
                 // 流式 tool_use 分片需要记住 name(按 toolUseId 维度)才能广播 toolUseDelta
                 final java.util.Map<String, String> streamToolNames = new java.util.concurrent.ConcurrentHashMap<>();
@@ -670,7 +721,7 @@ public class AgentLoopEngine {
                     @Override public void onWarning(String key, Object value) {
                         // BUG-D: accumulate provider warnings; written to LLM_CALL span attributes below.
                         if (key != null && value != null) {
-                            streamWarnings.put(key, value);
+                            streamWarningsLocal.put(key, value);
                             // W2 fix: include sessionId for log correlation in multi-session deployments.
                             log.warn("LLM stream warning: sessionId={}, iteration={}, {}={}",
                                     broadcastSid, loopCtx.getLoopCount(), key, value);
@@ -695,17 +746,57 @@ public class AgentLoopEngine {
             if (loopCtx.isCancelled()) {
                 log.info("AgentLoop cancelled during LLM call at loop {}", loopCtx.getLoopCount() + 1);
                 cancelled = true;
-                break;
+                break; // exit inner retry loop; outer cancellation guard below.
             }
             if (errHolder.get() != null) {
                 Throwable e = errHolder.get();
+                LlmContextLengthExceededException overflow = unwrapContextOverflow(e);
+                if (overflow != null) {
+                    if (retriedOverflow || compactorCallback == null) {
+                        log.error("Context overflow surfaced at loop {} (retried={}, compactor={}): sessionId={}",
+                                loopCtx.getLoopCount(), retriedOverflow,
+                                compactorCallback != null, sessionId, overflow);
+                        throw overflow;
+                    }
+                    log.warn("Context overflow caught at loop {}, attempting one-shot compactFull + retry: sessionId={}",
+                            loopCtx.getLoopCount(), sessionId, overflow);
+                    CompactCallbackResult cr;
+                    try {
+                        cr = compactorCallback.compactFull(
+                                loopCtx.getSessionId(), messages, "post-overflow",
+                                "context_length_exceeded:" + overflow.getMessage());
+                    } catch (Exception compactEx) {
+                        recordCompactFailure(loopCtx);
+                        log.error("Post-overflow compactFull failed (consecutive failures: {})",
+                                loopCtx.getConsecutiveCompactFailures(), compactEx);
+                        throw overflow; // surface original overflow; compact failure is secondary.
+                    }
+                    if (cr == null || !cr.performed) {
+                        log.warn("Post-overflow compactFull returned no-op (in-flight / idempotent), surfacing overflow");
+                        throw overflow;
+                    }
+                    loopCtx.resetCompactFailures();
+                    messages = cr.messages;
+                    loopCtx.setMessages(messages);
+                    request.setMessages(messages);
+                    retriedOverflow = true;
+                    log.info("Post-overflow compactFull done: reclaimed {} tokens, retrying chatStream",
+                            cr.tokensReclaimed);
+                    continue; // retry inner loop with compacted messages.
+                }
                 log.error("LLM stream returned error at loop {}", loopCtx.getLoopCount(), e);
                 throw new RuntimeException("LLM call failed: " + e.getMessage(), e);
             }
-            LlmResponse response = respHolder.get();
+            response = respHolder.get();
             if (response == null) {
                 throw new RuntimeException("LLM stream completed without response");
             }
+            // Copy local warnings into the outer-scope map only on the successful attempt
+            // — earlier overflow attempts are discarded; their LLM_CALL span doesn't fire.
+            streamWarnings.putAll(streamWarningsLocal);
+            break; // success — exit inner retry loop.
+            } // end inner retry while
+            if (cancelled) break; // exit outer iteration loop on cancellation.
             lastResponse = response;
 
             // c. 累加 token 用量
@@ -1662,6 +1753,26 @@ public class AgentLoopEngine {
         if (ctx.getConsecutiveCompactFailures() >= BREAKER_TRIP_THRESHOLD) {
             ctx.refreshCompactBreakerOpenedAt();
         }
+    }
+
+    /**
+     * CTX-1 — walk a Throwable's cause chain looking for an
+     * {@link LlmContextLengthExceededException}. Some providers wrap it (e.g. observer
+     * registry might re-throw); unwrapping defensively means engine retry logic
+     * doesn't depend on the exact place the exception was raised.
+     *
+     * <p>Bounded to 8 hops to avoid pathological cause chains. Returns null when no
+     * overflow exception is found.
+     */
+    static LlmContextLengthExceededException unwrapContextOverflow(Throwable t) {
+        Throwable cur = t;
+        for (int i = 0; cur != null && i < 8; i++) {
+            if (cur instanceof LlmContextLengthExceededException overflow) {
+                return overflow;
+            }
+            cur = cur.getCause();
+        }
+        return null;
     }
 
     /**

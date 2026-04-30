@@ -1,6 +1,6 @@
 # SkillForge 文档
 
-> 更新于：2026-04-28
+> 更新于：2026-04-30
 > Agent 规则：先读这里，再只打开当前任务链接到的文档。
 
 编辑 docs 前，先读 [DOCS-GOVERNANCE.md](DOCS-GOVERNANCE.md)。
@@ -43,6 +43,7 @@
 | SEC-2 | Hook Source Protection | [需求包](requirements/archive/2026-04-25-SEC-2-hook-source-protection/index.md) | [方案](requirements/archive/2026-04-25-SEC-2-hook-source-protection/tech-design.md) |
 | Memory v2 | 写入 / 召回 / 淘汰 | [需求包](requirements/archive/2026-04-27-MEMORY-v2/index.md) | [方案](requirements/archive/2026-04-27-MEMORY-v2/tech-design.md) |
 | OBS-1 | Session x Trace 合并详情视图 | [需求包](requirements/archive/2026-04-29-OBS-1-session-trace/index.md) | [方案](requirements/archive/2026-04-29-OBS-1-session-trace/tech-design.md) |
+| CTX-1 | 三档触发接全量估算 + 阈值配置化 + 撞窗 retry | [需求包](requirements/archive/2026-04-30-CTX-1-context-token-accounting/index.md) | [方案](requirements/archive/2026-04-30-CTX-1-context-token-accounting/tech-design.md) |
 | P5 | 前端体验优化 | [需求包](requirements/archive/2026-04-19-P5-frontend-optimization/index.md) | [方案](requirements/archive/2026-04-19-P5-frontend-optimization/tech-design.md) |
 | P2 | Channel Gateway | [需求包](requirements/archive/2026-04-20-P2-channel-gateway/index.md) | [方案](requirements/archive/2026-04-20-P2-channel-gateway/tech-design.md) |
 | P4 | Code Agent | [需求包](requirements/archive/2026-04-19-P4-code-agent/index.md) | [方案](requirements/archive/2026-04-19-P4-code-agent/tech-design.md) |

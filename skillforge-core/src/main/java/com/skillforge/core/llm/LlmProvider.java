@@ -45,4 +45,19 @@ public interface LlmProvider {
     default void chatStream(LlmRequest request, LlmCallContext ctx, LlmStreamHandler handler) {
         chatStream(request, handler);
     }
+
+    /**
+     * Compact thresholds for this provider (B1 light / B2 full / preemptive ratios).
+     * Default returns {@link CompactThresholds#DEFAULTS} so providers without explicit
+     * configuration keep the historical 0.60 / 0.80 / 0.85 behaviour.
+     *
+     * <p>Implementations that support per-provider overrides (e.g. {@code ClaudeProvider},
+     * {@code OpenAiProvider}) hold a mutable thresholds field and override this to return
+     * it.
+     *
+     * @since CTX-1
+     */
+    default CompactThresholds getCompactThresholds() {
+        return CompactThresholds.DEFAULTS;
+    }
 }

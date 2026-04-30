@@ -67,6 +67,16 @@ public class LlmProperties {
         private Integer maxRetries;
         /** Optional context window (tokens) override. Null = use ModelConfig default (32000). */
         private Integer contextWindowTokens;
+        /** CTX-1: Optional per-provider compact thresholds. Null → defaults (0.60/0.80/0.85). */
+        private CompactThresholds compactThresholds;
+
+        public CompactThresholds getCompactThresholds() {
+            return compactThresholds;
+        }
+
+        public void setCompactThresholds(CompactThresholds compactThresholds) {
+            this.compactThresholds = compactThresholds;
+        }
 
         public Integer getReadTimeoutSeconds() {
             return readTimeoutSeconds;
@@ -130,6 +140,66 @@ public class LlmProperties {
 
         public void setModels(List<String> models) {
             this.models = models != null ? models : new ArrayList<>();
+        }
+    }
+
+    /**
+     * CTX-1 — per-provider compact threshold ratios. Mapped to
+     * {@link com.skillforge.core.llm.CompactThresholds} when wiring providers.
+     *
+     * <pre>
+     * skillforge:
+     *   llm:
+     *     providers:
+     *       claude:
+     *         compactThresholds:
+     *           softRatio: 0.60       # B1 light trigger
+     *           hardRatio: 0.80       # B2 full trigger (B1-gated)
+     *           preemptiveRatio: 0.85 # preemptive full trigger
+     * </pre>
+     *
+     * Each ratio is optional; null falls back to the default in
+     * {@link com.skillforge.core.llm.CompactThresholds#DEFAULTS}.
+     */
+    public static class CompactThresholds {
+        private Double softRatio;
+        private Double hardRatio;
+        private Double preemptiveRatio;
+
+        public Double getSoftRatio() {
+            return softRatio;
+        }
+
+        public void setSoftRatio(Double softRatio) {
+            this.softRatio = softRatio;
+        }
+
+        public Double getHardRatio() {
+            return hardRatio;
+        }
+
+        public void setHardRatio(Double hardRatio) {
+            this.hardRatio = hardRatio;
+        }
+
+        public Double getPreemptiveRatio() {
+            return preemptiveRatio;
+        }
+
+        public void setPreemptiveRatio(Double preemptiveRatio) {
+            this.preemptiveRatio = preemptiveRatio;
+        }
+
+        /**
+         * Materialise into the core value object, filling in defaults for any null field.
+         */
+        public com.skillforge.core.llm.CompactThresholds toCore() {
+            com.skillforge.core.llm.CompactThresholds defaults =
+                    com.skillforge.core.llm.CompactThresholds.DEFAULTS;
+            return new com.skillforge.core.llm.CompactThresholds(
+                    softRatio != null ? softRatio : defaults.getSoftRatio(),
+                    hardRatio != null ? hardRatio : defaults.getHardRatio(),
+                    preemptiveRatio != null ? preemptiveRatio : defaults.getPreemptiveRatio());
         }
     }
 }

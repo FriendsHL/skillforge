@@ -397,7 +397,19 @@ public class SkillForgeConfig {
                 modelConfig.setContextWindowTokens(providerConfig.getContextWindowTokens());
             }
             try {
-                factory.getProvider(modelConfig);
+                com.skillforge.core.llm.LlmProvider provider = factory.getProvider(modelConfig);
+                // CTX-1 — apply per-provider compact thresholds if configured;
+                // otherwise the provider keeps its default 0.60/0.80/0.85.
+                if (providerConfig.getCompactThresholds() != null) {
+                    com.skillforge.core.llm.CompactThresholds thresholds =
+                            providerConfig.getCompactThresholds().toCore();
+                    if (provider instanceof com.skillforge.core.llm.ClaudeProvider claude) {
+                        claude.setCompactThresholds(thresholds);
+                    } else if (provider instanceof com.skillforge.core.llm.OpenAiProvider openai) {
+                        openai.setCompactThresholds(thresholds);
+                    }
+                    log.info("Applied compact thresholds to provider {}: {}", name, thresholds);
+                }
                 log.info("Registered LLM provider: name={}, type={}, baseUrl={}, readTimeoutSec={}, maxRetries={}, contextWindowTokens={}",
                         name, providerConfig.getType(), providerConfig.getBaseUrl(),
                         modelConfig.getReadTimeoutSeconds(), modelConfig.getMaxRetries(),
@@ -499,7 +511,8 @@ public class SkillForgeConfig {
                                            com.skillforge.core.engine.confirm.RootSessionLookup rootSessionLookup,
                                            com.skillforge.core.engine.confirm.ConfirmationPrompter confirmationPrompter,
                                            com.skillforge.core.skill.view.SessionSkillResolver sessionSkillResolver,
-                                           com.skillforge.server.service.SkillService skillService) {
+                                           com.skillforge.server.service.SkillService skillService,
+                                           com.fasterxml.jackson.databind.ObjectMapper objectMapper) {
         String defaultProvider = llmProperties.getDefaultProvider() != null
                 ? llmProperties.getDefaultProvider() : "claude";
         AgentLoopEngine engine = new AgentLoopEngine(llmProviderFactory, defaultProvider, skillRegistry,
@@ -511,6 +524,9 @@ public class SkillForgeConfig {
         engine.setPendingAskRegistry(pendingAskRegistry);
         engine.setCompactorCallback(compactorCallback);
         engine.setTraceCollector(traceCollector);
+        // CTX-1 — wire the project-wide Spring ObjectMapper (JavaTimeModule registered)
+        // into RequestTokenEstimator path. Avoids footgun #1 (silent wrong serialisation).
+        engine.setJsonMapper(objectMapper);
         // Memory v2 (PR-2): BiFunction provider — taskContext = current user message lets
         // L1 hybrid recall pick semantically relevant knowledge/project/reference memories.
         engine.setMemoryProvider((userId, taskContext) ->

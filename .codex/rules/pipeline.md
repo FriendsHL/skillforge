@@ -32,7 +32,8 @@ Use Full when any red light is present:
   - `skillforge-core/src/main/java/com/skillforge/core/engine/AgentLoopEngine.java`
   - `skillforge-core/src/main/java/com/skillforge/core/engine/hook/*`
   - `skillforge-core/src/main/java/com/skillforge/core/llm/**`
-  - `skillforge-core/src/main/java/com/skillforge/core/context/CompactionService.java`
+  - `skillforge-core/src/main/java/com/skillforge/core/compact/*` (compaction algorithm layer: `ContextCompactorCallback`, Light/Full/SessionMemory strategies, `TokenEstimator`, `CompactableToolRegistry`, boundary detection)
+  - `skillforge-server/src/main/java/com/skillforge/server/service/CompactionService.java` (orchestration layer: stripe lock, 3-phase split, in-flight dedup, persistence, broadcast)
   - `skillforge-server/src/main/java/com/skillforge/server/service/ChatService.java`
   - `skillforge-server/src/main/java/com/skillforge/server/service/SessionService.java`
   - `SessionMessageRepository`

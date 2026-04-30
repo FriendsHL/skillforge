@@ -64,6 +64,8 @@ public class OpenAiProvider implements LlmProvider {
     private final ObjectMapper objectMapper;
     /** OBS-1: optional observer registry (defaults to NO_OP). */
     private LlmCallObserverRegistry observerRegistry = LlmCallObserverRegistry.NO_OP;
+    /** CTX-1: per-provider compact thresholds; defaults to historical 0.60/0.80/0.85. */
+    private CompactThresholds compactThresholds = CompactThresholds.DEFAULTS;
 
     /** Legacy 3-arg ctor — kept as a deprecated shim; prefer the 7-arg ctor below. */
     @Deprecated
@@ -135,6 +137,55 @@ public class OpenAiProvider implements LlmProvider {
         this.observerRegistry = registry == null ? LlmCallObserverRegistry.NO_OP : registry;
     }
 
+    /** CTX-1: setter for compact thresholds; null → fall back to {@link CompactThresholds#DEFAULTS}. */
+    public void setCompactThresholds(CompactThresholds thresholds) {
+        this.compactThresholds = thresholds == null ? CompactThresholds.DEFAULTS : thresholds;
+    }
+
+    @Override
+    public CompactThresholds getCompactThresholds() {
+        return compactThresholds;
+    }
+
+    /**
+     * Detect OpenAI-compatible context-overflow errors.
+     * Recognises {@code error.code == "context_length_exceeded"} (OpenAI canonical) and
+     * messages containing "context length" / "maximum context length" (DeepSeek / vLLM /
+     * other compat layers commonly do this).
+     *
+     * <p>Package-private for unit-test access.
+     */
+    static LlmContextLengthExceededException detectContextOverflow(ObjectMapper mapper,
+                                                                     String providerName,
+                                                                     int httpStatus,
+                                                                     String errorBody) {
+        if (errorBody == null || errorBody.isEmpty()) return null;
+        try {
+            JsonNode root = mapper.readTree(errorBody);
+            JsonNode err = root.path("error");
+            if (err.isMissingNode() || err.isNull()) {
+                err = root;
+            }
+            String code = err.path("code").asText("");
+            String type = err.path("type").asText("");
+            String message = err.path("message").asText("");
+            String lowerMsg = message == null ? "" : message.toLowerCase(java.util.Locale.ROOT);
+            boolean codeMatch = "context_length_exceeded".equals(code)
+                    || "context_length_exceeded".equals(type);
+            boolean msgMatch = lowerMsg.contains("context length")
+                    || lowerMsg.contains("maximum context length")
+                    || lowerMsg.contains("context window");
+            if (codeMatch || msgMatch) {
+                return new LlmContextLengthExceededException(
+                        providerName + " context overflow: HTTP " + httpStatus + " - " + message);
+            }
+        } catch (Exception parseFail) {
+            log.debug("{} error body not parseable as JSON, skip overflow detection: {}",
+                    providerName, parseFail.getMessage());
+        }
+        return null;
+    }
+
     @Override
     public LlmResponse chat(LlmRequest request, LlmCallContext ctx) {
         // OBS-1 §4.3 non-stream lifecycle: beforeCall once OUTSIDE retry loop.
@@ -190,6 +241,11 @@ public class OpenAiProvider implements LlmProvider {
         try (Response response = httpClient.newCall(httpRequest).execute()) {
             if (!response.isSuccessful()) {
                 String errorBody = response.body() != null ? response.body().string() : "no body";
+                LlmContextLengthExceededException overflow =
+                        detectContextOverflow(objectMapper, providerDisplayName, response.code(), errorBody);
+                if (overflow != null) {
+                    throw overflow;
+                }
                 throw new RuntimeException(providerDisplayName + " API error: HTTP "
                         + response.code() + " - " + errorBody);
             }
@@ -235,6 +291,11 @@ public class OpenAiProvider implements LlmProvider {
         try (Response response = httpClient.newCall(httpRequest).execute()) {
             if (!response.isSuccessful()) {
                 String errorBody = response.body() != null ? response.body().string() : "no body";
+                LlmContextLengthExceededException overflow =
+                        detectContextOverflow(objectMapper, providerDisplayName, response.code(), errorBody);
+                if (overflow != null) {
+                    throw overflow;
+                }
                 throw new RuntimeException(providerDisplayName + " API error: HTTP " + response.code() + " - " + errorBody);
             }
             String responseBody = response.body().string();
@@ -336,8 +397,12 @@ public class OpenAiProvider implements LlmProvider {
             try (Response r = response) {
                 if (!r.isSuccessful()) {
                     String errorBody = r.body() != null ? r.body().string() : "no body";
-                    RuntimeException ex = new RuntimeException(
-                            providerDisplayName + " API error: HTTP " + r.code() + " - " + errorBody);
+                    LlmContextLengthExceededException overflow =
+                            detectContextOverflow(objectMapper, providerDisplayName, r.code(), errorBody);
+                    RuntimeException ex = overflow != null
+                            ? overflow
+                            : new RuntimeException(
+                                    providerDisplayName + " API error: HTTP " + r.code() + " - " + errorBody);
                     SafeObservers.notifyError(observerRegistry, ctx, ex, null);
                     handler.onError(ex);
                     return;

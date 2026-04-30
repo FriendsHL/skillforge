@@ -57,6 +57,8 @@ public class ClaudeProvider implements LlmProvider {
     /** OBS-1: optional observer registry; defaults to NO_OP — providers can be created
      *  without server-side wiring (e.g. tests) with zero overhead. */
     private LlmCallObserverRegistry observerRegistry = LlmCallObserverRegistry.NO_OP;
+    /** CTX-1: per-provider compact thresholds; defaults to historical 0.60/0.80/0.85. */
+    private CompactThresholds compactThresholds = CompactThresholds.DEFAULTS;
 
     public ClaudeProvider(String apiKey, String baseUrl, String defaultModel) {
         this(apiKey, baseUrl, defaultModel,
@@ -96,6 +98,53 @@ public class ClaudeProvider implements LlmProvider {
     /** OBS-1: setter injection for observer registry; null → NO_OP. */
     public void setObserverRegistry(LlmCallObserverRegistry registry) {
         this.observerRegistry = registry == null ? LlmCallObserverRegistry.NO_OP : registry;
+    }
+
+    /** CTX-1: setter for compact thresholds; null → fall back to {@link CompactThresholds#DEFAULTS}. */
+    public void setCompactThresholds(CompactThresholds thresholds) {
+        this.compactThresholds = thresholds == null ? CompactThresholds.DEFAULTS : thresholds;
+    }
+
+    @Override
+    public CompactThresholds getCompactThresholds() {
+        return compactThresholds;
+    }
+
+    /**
+     * Detect Anthropic's "prompt is too long" error inside an HTTP error body.
+     * Claude flags it as {@code error.type == "invalid_request_error"} with the
+     * message containing "prompt is too long" (or, occasionally,
+     * "input is too long" on some compatibility wrappers).
+     *
+     * <p>Package-private for unit-test access.
+     *
+     * @return parsed {@link LlmContextLengthExceededException} if recognised; {@code null} otherwise
+     */
+    static LlmContextLengthExceededException detectContextOverflow(ObjectMapper mapper,
+                                                                     int httpStatus,
+                                                                     String errorBody) {
+        if (errorBody == null || errorBody.isEmpty()) return null;
+        // 400 invalid_request_error is the documented status; some proxies use 413 — accept both.
+        try {
+            JsonNode root = mapper.readTree(errorBody);
+            JsonNode err = root.path("error");
+            if (err.isMissingNode() || err.isNull()) {
+                err = root; // some proxies return the error object at top level
+            }
+            String type = err.path("type").asText("");
+            String message = err.path("message").asText("");
+            String lowerMsg = message == null ? "" : message.toLowerCase(java.util.Locale.ROOT);
+            if ("invalid_request_error".equals(type)
+                    && (lowerMsg.contains("prompt is too long") || lowerMsg.contains("input is too long"))) {
+                return new LlmContextLengthExceededException(
+                        "Claude context overflow: HTTP " + httpStatus + " - " + message);
+            }
+        } catch (Exception parseFail) {
+            // Body wasn't JSON — fall through; will not auto-retry.
+            log.debug("Claude error body not parseable as JSON, skip overflow detection: {}",
+                    parseFail.getMessage());
+        }
+        return null;
     }
 
     @Override
@@ -155,6 +204,11 @@ public class ClaudeProvider implements LlmProvider {
         try (Response response = httpClient.newCall(httpRequest).execute()) {
             if (!response.isSuccessful()) {
                 String errorBody = response.body() != null ? response.body().string() : "no body";
+                LlmContextLengthExceededException overflow =
+                        detectContextOverflow(objectMapper, response.code(), errorBody);
+                if (overflow != null) {
+                    throw overflow;
+                }
                 throw new RuntimeException("Claude API error: HTTP " + response.code() + " - " + errorBody);
             }
             String responseBody = response.body().string();
@@ -200,6 +254,11 @@ public class ClaudeProvider implements LlmProvider {
         try (Response response = httpClient.newCall(httpRequest).execute()) {
             if (!response.isSuccessful()) {
                 String errorBody = response.body() != null ? response.body().string() : "no body";
+                LlmContextLengthExceededException overflow =
+                        detectContextOverflow(objectMapper, response.code(), errorBody);
+                if (overflow != null) {
+                    throw overflow;
+                }
                 throw new RuntimeException("Claude API error: HTTP " + response.code() + " - " + errorBody);
             }
             String responseBody = response.body().string();
@@ -295,8 +354,12 @@ public class ClaudeProvider implements LlmProvider {
             try (Response r = response) {
                 if (!r.isSuccessful()) {
                     String errorBody = r.body() != null ? r.body().string() : "no body";
-                    RuntimeException ex = new RuntimeException(
-                            "Claude API error: HTTP " + r.code() + " - " + errorBody);
+                    LlmContextLengthExceededException overflow =
+                            detectContextOverflow(objectMapper, r.code(), errorBody);
+                    RuntimeException ex = overflow != null
+                            ? overflow
+                            : new RuntimeException(
+                                    "Claude API error: HTTP " + r.code() + " - " + errorBody);
                     SafeObservers.notifyError(observerRegistry, ctx, ex, null);
                     handler.onError(ex);
                     return;

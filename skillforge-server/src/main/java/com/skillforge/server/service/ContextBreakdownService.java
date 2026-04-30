@@ -2,6 +2,7 @@ package com.skillforge.server.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.skillforge.core.compact.RequestTokenEstimator;
 import com.skillforge.core.compact.TokenEstimator;
 import com.skillforge.core.context.ContextProvider;
 import com.skillforge.core.llm.ModelConfig;
@@ -103,11 +104,21 @@ public class ContextBreakdownService {
         List<Segment> messageChildren = bucketMessages(context);
         long messagesTotal = sumTokens(messageChildren);
 
+        // CTX-1 — include max_tokens output reservation as its own segment so the
+        // dashboard total matches AgentLoopEngine's RequestTokenEstimator.estimate()
+        // exactly (PRD AC-1 / tech-design D2). Otherwise the engine's compact-trigger
+        // ratio would always be larger than the right-rail "context window pct" by
+        // exactly maxTokens — confusing for users debugging "why did it compact early?".
+        long outputReserved = Math.max(0, agentDef.getMaxTokens());
+        Segment outputReservedSeg = Segment.leaf(
+                "output_reserved", "Output reservation (max_tokens)", outputReserved);
+
         List<Segment> segments = new ArrayList<>();
         segments.add(new Segment(
                 "system_prompt", "System prompt", systemPromptTotal, systemPromptChildren));
         segments.add(toolSchemas);
         segments.add(new Segment("messages", "Messages", messagesTotal, messageChildren));
+        segments.add(outputReservedSeg);
 
         long total = sumTokens(segments);
         long windowLimit = resolveWindowLimit(agentDef, agentEntity.getModelId());
@@ -302,7 +313,11 @@ public class ContextBreakdownService {
     private long estimateToolSchemasTokens() {
         Collection<Tool> skills = skillRegistry.getAllTools();
         if (skills == null || skills.isEmpty()) return 0L;
-        long total = 0L;
+        // CTX-1 — collect ToolSchemas first then delegate to RequestTokenEstimator so
+        // the dashboard count and the engine's compact-trigger ratio share one
+        // algorithm (FR-1.1 / AC-1). Schema fetch errors continue to be skipped silently
+        // (preserve historical behaviour).
+        List<ToolSchema> schemas = new ArrayList<>(skills.size());
         for (Tool s : skills) {
             ToolSchema schema;
             try {
@@ -311,16 +326,9 @@ public class ContextBreakdownService {
                 log.debug("getToolSchema failed for {}; skipping", s.getName(), ex);
                 continue;
             }
-            if (schema == null) continue;
-            try {
-                total += TokenEstimator.estimateString(objectMapper.writeValueAsString(schema));
-            } catch (JsonProcessingException ex) {
-                // Fall back to best-effort estimate on the name+description pair.
-                total += TokenEstimator.estimateString(nullSafe(schema.getName()))
-                        + TokenEstimator.estimateString(nullSafe(schema.getDescription()));
-            }
+            if (schema != null) schemas.add(schema);
         }
-        return total;
+        return RequestTokenEstimator.estimateToolSchemas(schemas, objectMapper);
     }
 
     // ───────────────────────────── messages ─────────────────────────────
