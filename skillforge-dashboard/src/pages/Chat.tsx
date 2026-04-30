@@ -370,6 +370,15 @@ const Chat: React.FC = () => {
     }
   };
 
+  const handleAnswerAskMessage = async (askId: string, answer: string) => {
+    if (!activeSessionId) return;
+    try {
+      await answerAsk(activeSessionId, askId, answer, userId);
+    } catch {
+      message.error('Failed to submit answer');
+    }
+  };
+
   const handleConfirmDecision = async (decision: ConfirmationDecision) => {
     if (!pendingConfirm || !activeSessionId || confirmSubmitting) return;
     setConfirmSubmitting(decision);
@@ -395,6 +404,23 @@ const Chat: React.FC = () => {
       }
     } finally {
       setConfirmSubmitting(null);
+    }
+  };
+
+  const handleConfirmDecisionMessage = async (
+    confirmationId: string,
+    decision: ConfirmationDecision,
+  ) => {
+    if (!activeSessionId) return;
+    try {
+      await submitConfirmation(activeSessionId, confirmationId, decision, userId);
+    } catch (e: unknown) {
+      const status = (e as { response?: { status?: number } })?.response?.status;
+      if (status === 409 || status === 404 || status === 410) {
+        message.info('Confirmation already handled');
+      } else {
+        message.error('Failed to submit decision');
+      }
     }
   };
 
@@ -807,6 +833,8 @@ const Chat: React.FC = () => {
                   onCompactionDismiss={() => setCompactionNotice(false)}
                   runtimeStatus={runtimeStatus}
                   agentName={agentName}
+                  onAnswerAsk={handleAnswerAskMessage}
+                  onConfirmDecision={handleConfirmDecisionMessage}
                 />
               </>
             ) : (

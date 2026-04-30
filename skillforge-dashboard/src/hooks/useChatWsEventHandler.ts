@@ -129,12 +129,37 @@ export function useChatWsEventHandler(deps: WsEventHandlerDeps) {
           }
         }
       } else if (evt.type === 'ask_user') {
-        setPendingAsk({
-          askId: evt.askId as string,
-          question: evt.question as string,
-          context: evt.context as string | undefined,
-          options: (evt.options as PendingAskOption[]) ?? [],
-          allowOther: evt.allowOther !== false,
+        const askId = evt.askId as string;
+        const question = (evt.question as string) ?? '';
+        const context = evt.context as string | undefined;
+        const options = Array.isArray(evt.options) ? (evt.options as PendingAskOption[]) : [];
+        const allowOther = evt.allowOther !== false;
+        setPendingAsk(null);
+        setRawMessages((prev) => {
+          if (prev.some((m) => {
+            const msg = m as { messageType?: string; controlId?: string } | null;
+            return msg?.messageType === 'ask_user' && msg.controlId === askId;
+          })) {
+            return prev;
+          }
+          return [
+            ...prev,
+            {
+              role: 'assistant',
+              content: question,
+              msgType: 'SYSTEM_EVENT',
+              messageType: 'ask_user',
+              controlId: askId,
+              metadata: {
+                controlId: askId,
+                question,
+                context,
+                options,
+                allowOther,
+                state: 'pending',
+              },
+            },
+          ];
         });
         setOtherInput('');
       } else if (evt.type === 'confirmation_required') {
@@ -157,7 +182,7 @@ export function useChatWsEventHandler(deps: WsEventHandlerDeps) {
               { id: 'approve', label: 'Approve', variant: 'approve' },
             ];
         const expiresAt = (evt.expiresAt as string | undefined) ?? payload.expiresAt ?? '';
-        setPendingConfirm({
+        const cardPayload = {
           confirmationId,
           sessionId,
           installTool,
@@ -167,6 +192,31 @@ export function useChatWsEventHandler(deps: WsEventHandlerDeps) {
           description,
           choices,
           expiresAt,
+        };
+        setPendingConfirm(null);
+        setRawMessages((prev) => {
+          if (prev.some((m) => {
+            const msg = m as { messageType?: string; controlId?: string } | null;
+            return msg?.messageType === 'confirmation' && msg.controlId === confirmationId;
+          })) {
+            return prev;
+          }
+          return [
+            ...prev,
+            {
+              role: 'assistant',
+              content: title,
+              msgType: 'SYSTEM_EVENT',
+              messageType: 'confirmation',
+              controlId: confirmationId,
+              metadata: {
+                ...cardPayload,
+                controlId: confirmationId,
+                question: title,
+                state: 'pending',
+              },
+            },
+          ];
         });
       } else if (evt.type === 'tool_started') {
         const toolUseId = evt.toolUseId as string;

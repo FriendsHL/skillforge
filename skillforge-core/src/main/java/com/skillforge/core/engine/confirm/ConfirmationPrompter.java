@@ -1,7 +1,7 @@
 package com.skillforge.core.engine.confirm;
 
 /**
- * SPI:推送 human-confirmation prompt 给用户, 阻塞等待 Decision.
+ * SPI:推送 human-confirmation prompt 给用户。
  *
  * <p>严禁在 {@code SkillHook} 内调用 —— 仅
  * {@link com.skillforge.core.engine.AgentLoopEngine#handleInstallConfirmation
@@ -21,6 +21,15 @@ public interface ConfirmationPrompter {
      *         (caller converts to error tool_result)
      */
     Decision prompt(ConfirmationRequest request);
+
+    /**
+     * Non-blocking prompt creation used by chat-inline controls. Implementations should
+     * register/deliver the prompt and return the payload, but must not wait for a user
+     * decision.
+     */
+    default ConfirmationPromptPayload promptNonBlocking(ConfirmationRequest request) {
+        throw new UnsupportedOperationException("non-blocking confirmation is not supported");
+    }
 
     /**
      * Input to {@link #prompt}. Field names retain the original install-confirmation naming

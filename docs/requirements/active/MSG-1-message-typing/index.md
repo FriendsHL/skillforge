@@ -3,24 +3,22 @@
 ---
 id: MSG-1
 mode: full
-status: draft
+status: design-draft
 priority: P1
 risk: Full
 created: 2026-04-29
-updated: 2026-04-29
+updated: 2026-04-30
 ---
 
 ## 摘要
 
-把目前散落在"字符串 marker + 内存 latch"上的两类非常规消息（subagent 返回、ask_user 请求）正规化进消息流：在 `t_session_messages` 增加 `message_type` 字段，前端按 type 分发渲染；同时把 ask_user 卡片从瞬态 React state + 阻塞线程等待，转成可持久化、可重连恢复、可标记 answered、等待期间不占用 chatLoop worker 的挂起 / 恢复流程。
+把目前散落在"字符串 marker + 内存 latch"上的非常规消息正规化进消息流：在 `t_session_message` 增加 UI 语义型 `message_type` 字段，前端按 type 分发渲染；同时把 `ask_user` 和审批类阻断卡片从弹框 / 临时 React state / 阻塞线程等待，改成消息流内联卡片 + 非阻塞 `waiting_user` + continuation 恢复。
 
 合并解决 [BUG-30](../../../bugs.md)（subagent 返回被渲染成用户消息）和 [BUG-31](../../../bugs.md)（ask_user 卡片在 WS 重连后丢失）。
 
 ## 当前状态
 
-**草稿，待 2026-04-30 讨论。** 改动横跨 core 引擎、server 持久化、Flyway migration、WS 协议、dashboard 渲染，触碰核心文件清单（`ChatService` / `SessionMessageRepository` / `PendingAskRegistry` / `ChatWebSocketHandler` / `Chat.tsx` / `useChatWsEventHandler.ts`），按 SkillForge 强制规则走 Full Pipeline。
-
-讨论时需要先收敛下面"待决策点"，再决定要不要进入 mrd / prd / tech-design。
+**Full 技术方案草案已建立。** 已确认产品方向：阻断式交互卡片统一处理。`ask_user` 是模型决策触发的内联消息卡片；install / mutation approval 是框架拦截工具后触发的审批卡片。触发后当前 loop 结束并释放 worker；用户显式点击卡片后补齐对应 `tool_result` 或工具结果，并开启新的 trace loop；主输入框自然语言不会隐式 approve 审批卡片。改动横跨 core 引擎、server 持久化、Flyway migration、WS 协议、dashboard 渲染，触碰核心文件清单（`ChatService` / `SessionMessageRepository` / `PendingAskRegistry` / `ChatWebSocketHandler` / `Chat.tsx` / `useChatWsEventHandler.ts`），按 SkillForge 强制规则走 Full Pipeline。
 
 ## 关联 Bug
 
@@ -30,9 +28,9 @@ updated: 2026-04-29
   - 根因 1：ask 卡片状态只在 Chat.tsx React `useState`；后端 `PendingAskRegistry` 只存 `sessionId + latch + answer`，**不存 question/options/allowOther**。前端没有任何数据源能恢复出卡片。
   - 根因 2：`AgentLoopEngine.handleAskUser()` 在 `chatLoopExecutor` worker 内调用 `CountDownLatch.await()`，默认最长 30 分钟；等待期间 worker 被占用，`cancelRequested` 也不会主动释放该 latch。
 
-## 关键改动方向（候选，待讨论）
+## 已定产品方向
 
-### 1. `t_session_messages` 增加 `message_type`
+### 1. `t_session_message` 增加 UI 语义型 `message_type`
 
 新增字段 `message_type VARCHAR(32) DEFAULT 'normal'`，初始值域：
 
@@ -42,37 +40,37 @@ updated: 2026-04-29
 | `team_result` | TeamCreate 子 agent 返回 | user | `SubAgentRegistry.enqueueForParent` |
 | `subagent_result` | 非 collab 的 subagent 返回 | user | 同上 |
 | `ask_user` | Agent 发起的 ask_user 卡片 | assistant（或 system） | `AgentLoopEngine` ask_user 路径 |
+| `confirmation` | 框架发起的审批卡片 | assistant（或 system） | install / CreateAgent / UpdateAgent 拦截路径 |
 
-新增 Flyway `V38__add_message_type.sql`。
+新增 Flyway migration 使用当前下一个版本号（P9-2 已占用 V39，预计为 V40）。
 
-### 2. ask_user 持久化 + answered 标记 + 挂起 / 恢复
+### 2. ask_user 持久化为消息流内联卡片
 
-- `t_session_messages` 增加 `answered_at TIMESTAMPTZ NULL`（仅对 `message_type='ask_user'` 行有意义）
-- `ChatController.answer` 在 `pendingAskRegistry.complete()` 之外，再 update 对应消息行的 `answered_at`
-- 前端渲染 ask_user 消息行时：`answered_at != null` → disabled 灰显；`answered_at == null` → 可交互
-- 长期目标：`ask_user` 不再在 engine 主 loop 内阻塞等待。LLM 发起 ask 时持久化 pending ask + 退出当前 loop 释放 `chatLoopExecutor` 线程；用户回答后写入对应 tool_result / answer 事件，再重新提交 loop 继续执行。
+- `ask_user` 不是弹框，而是一条 assistant 侧特殊消息，直接出现在 Chat 消息流。
+- `t_session_message` 增加 `answered_at TIMESTAMPTZ NULL`（仅对 `message_type='ask_user'` 行有意义）。
+- 前端渲染 ask_user 消息行时：`answered_at == null` 可交互；`answered_at != null` 折叠为“已回答 / 已替代 / 已过期”历史摘要，不可再次点击。
 
-### 3. PendingAskRegistry 双写 / 同步（过渡方案）
+### 3. loop 非阻塞停止与恢复
 
-- 内存 latch 可作为第一阶段兼容路径保留，但最终实现应去掉长时间阻塞等待
-- 进 ask_user 时同时写一行 `message_type='ask_user'` 的消息（content 存 question/options/allowOther/askId 的 JSON）
-- 服务重启 → latch 没了 + DB 行还在 → 用户点 answer endpoint 找不到 askId → 返回 `410 GONE` → 前端把卡片置 `expired` 状态
+- 模型调用 `ask_user` 或框架触发审批后，后端持久化卡片、广播消息快照 / 状态，当前 loop 结束，session 进入 `waiting_user`。
+- 不再在 `chatLoopExecutor` worker 内 `CountDownLatch.await()` 等待用户。
+- 用户点击 ask 卡片提交答案时，补齐原 ask_user 的 `tool_result` 并开启新的 trace loop。
+- 用户直接输入新消息时，当前未回答 ask 卡片标记为 `superseded`，新消息按普通 user turn 继续。
+- 审批卡片必须显式点击 approve / deny，自然语言不能隐式 approve。
 
 ### 4. 前端 normalizeMessages + 渲染分发
 
 - 按 `messageType` 分发到不同组件：`<MessageBubble>` / `<TeamResultBubble>` / `<PendingAskCard>`（消息流内嵌版）
 - ask_user 卡片不再依赖 React `useState`，由 messages_snapshot 驱动
 
-## 待决策点（明天讨论）
+## 技术方案核心决策
 
-1. **持久化粒度**：ask_user content 用 JSON 存进 `t_session_messages.content`，还是单开 `t_pending_asks` 关联表？前者简单但 schema 复杂；后者干净但消息流渲染要做 join 或两次查询。
-2. **role 怎么定**：ask_user 消息的 role 是 `assistant`（agent 发的）、`system`（控制流）、还是新增 `tool`？影响 LLM 重发时 conversation history 长什么样。
-3. **answered 后保留不保留卡片**：disabled 灰显 vs. 折叠成一行简短摘要 vs. 答复后整行替换为普通 user message。三种选项各有 UX 权衡。
-4. **挂起 / 恢复边界**：ask_user 发起后 loop 是直接返回 `waiting_user` 状态并释放线程，还是先保留 latch 作为一期兼容、再二期改成完全非阻塞？完全非阻塞需要明确 tool_use/tool_result 如何跨请求持久化并恢复。
-5. **cancel 语义**：用户在 waiting_user 时点击 cancel，是把 pending ask 标成 cancelled/expired，还是写入一个 synthetic tool_result 让 LLM 得知用户取消？
-6. **`team_result` 是否值得单独类型**：现在前端能识别 `[TeamResult ...]` marker；如果 BUG-31 走持久化方案，`message_type` 字段无论如何都要加，那 `team_result` 顺手归一是接近零成本；但要不要在这一波也修 BUG-30，还是只解决 ask_user，BUG-30 留给后面（避免范围爆炸）。
-7. **历史消息回填**：现有 `t_session_messages` 全部默认 `'normal'`，对历史 TeamResult 行就识别不出来。要不要写个一次性 ETL 把 `[TeamResult` 开头的内容回标？
-8. **migration 顺序**：跟 P1-D / P9-2 的 schema 改动怎么排队？OBS-1 已经吃掉 V33-V37，下一个空位是 V38。
+1. 阻断式交互卡片统一为“持久化 continuation + 释放 worker + 用户显式卡片动作开启新 trace loop 恢复”。
+2. `ask_user` 点击卡片时补齐原 `toolUseId` 的 `tool_result`；直接主输入框发消息时标记 `superseded`，按普通 user turn 继续。
+3. install / mutation approval 是框架拦截工具后触发，点击 approve / deny 后补齐工具结果；自然语言不能隐式 approve。
+4. 阻断式卡片行使用 `msg_type='SYSTEM_EVENT'`，`message_type='ask_user'` 或 `confirmation`，pending 时从 LLM conversation 重建中排除，由 continuation 恢复时生成 provider 消息。
+5. 历史 `[TeamResult ...]` 不做全量回写；新消息写 `message_type`，前端对老 marker 做兼容识别。
+6. migration 版本号以当前主干最高 Flyway 版本为准；当前设计预期为 V40。
 
 ## 风险点
 
@@ -86,8 +84,8 @@ updated: 2026-04-29
 
 | 文档 | 链接 |
 | --- | --- |
-| MRD | 待建（明天讨论后） |
-| PRD | 待建 |
-| 技术方案 | 待建 |
+| MRD | [mrd.md](mrd.md) |
+| PRD | [prd.md](prd.md) |
+| 技术方案 | [tech-design.md](tech-design.md) |
 | 交付 | - |
 | 关联 bug | [BUG-30 / BUG-31](../../../bugs.md) |

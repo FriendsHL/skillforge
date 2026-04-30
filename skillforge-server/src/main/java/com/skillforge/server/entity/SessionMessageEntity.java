@@ -54,6 +54,14 @@ public class SessionMessageEntity {
     @Column(name = "metadata_json", columnDefinition = "TEXT")
     private String metadataJson;
 
+    /** UI / 控制流语义：normal / team_result / subagent_result / ask_user / confirmation。 */
+    @Column(name = "message_type", length = 32, nullable = false)
+    private String messageType = "normal";
+
+    /** 控制消息稳定 ID，例如 askId / confirmationId。 */
+    @Column(name = "control_id", length = 64)
+    private String controlId;
+
     /** OpenAI 兼容 provider thinking 模式下的推理内容；带 tool_use 的下一轮必须原样回传，否则 API 400。 */
     @Column(name = "reasoning_content", columnDefinition = "TEXT")
     private String reasoningContent;
@@ -61,6 +69,10 @@ public class SessionMessageEntity {
     /** 预留给后续工具输出裁剪：非空表示该消息已被裁剪。 */
     @Column(name = "pruned_at")
     private Instant prunedAt;
+
+    /** 一次性控制卡片完成时间；非空表示前端折叠为历史摘要。 */
+    @Column(name = "answered_at")
+    private Instant answeredAt;
 
     @CreatedDate
     @Column(name = "created_at", nullable = false, updatable = false)
@@ -125,6 +137,22 @@ public class SessionMessageEntity {
         this.metadataJson = metadataJson;
     }
 
+    public String getMessageType() {
+        return messageType;
+    }
+
+    public void setMessageType(String messageType) {
+        this.messageType = messageType;
+    }
+
+    public String getControlId() {
+        return controlId;
+    }
+
+    public void setControlId(String controlId) {
+        this.controlId = controlId;
+    }
+
     public String getReasoningContent() {
         return reasoningContent;
     }
@@ -139,6 +167,14 @@ public class SessionMessageEntity {
 
     public void setPrunedAt(Instant prunedAt) {
         this.prunedAt = prunedAt;
+    }
+
+    public Instant getAnsweredAt() {
+        return answeredAt;
+    }
+
+    public void setAnsweredAt(Instant answeredAt) {
+        this.answeredAt = answeredAt;
     }
 
     public Instant getCreatedAt() {

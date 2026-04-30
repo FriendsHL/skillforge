@@ -5,6 +5,9 @@ import com.skillforge.core.llm.LlmProviderFactory;
 import com.skillforge.core.llm.LlmRequest;
 import com.skillforge.core.llm.LlmResponse;
 import com.skillforge.core.llm.LlmStreamHandler;
+import com.skillforge.core.engine.confirm.ConfirmationPrompter;
+import com.skillforge.core.engine.confirm.ConfirmationPromptPayload;
+import com.skillforge.core.engine.confirm.Decision;
 import com.skillforge.core.model.AgentDefinition;
 import com.skillforge.core.model.ContentBlock;
 import com.skillforge.core.model.Message;
@@ -23,6 +26,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Queue;
+import java.time.Instant;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -68,6 +72,67 @@ class AgentLoopEngineToolUseInvariantTest {
         assertThat(toolResult.getType()).isEqualTo("tool_result");
         assertThat(toolResult.getToolUseId()).isEqualTo("call-1");
         assertThat(toolResult.getContent()).isEqualTo("echo hello");
+    }
+
+    @Test
+    @DisplayName("ask_user returns waiting_user pending control without appending tool_result")
+    void askUserToolUse_returnsWaitingUserPendingControlWithoutToolResult() {
+        SkillRegistry registry = new SkillRegistry();
+        LlmProviderFactory factory = new LlmProviderFactory();
+        factory.registerProvider("fake", new QueueProvider(List.of(
+                toolResponse("ask-1", "ask_user", Map.of(
+                        "question", "Pick an environment",
+                        "context", "Deployment target",
+                        "options", List.of("staging", "production")), "tool_use"))));
+
+        AgentLoopEngine engine = new AgentLoopEngine(factory, "fake", registry,
+                Collections.emptyList(), Collections.emptyList(), Collections.emptyList());
+        engine.setPendingAskRegistry(new PendingAskRegistry());
+        AgentDefinition agent = new AgentDefinition();
+        agent.setName("test-agent");
+        agent.setModelId("fake:model");
+        agent.setSystemPrompt("You are a test agent.");
+        agent.setConfig(Map.of("max_loops", 3, "execution_mode", "ask"));
+
+        LoopResult result = engine.run(agent, "start", new ArrayList<>(), "sid", 1L);
+
+        assertThat(result.getStatus()).isEqualTo("waiting_user");
+        assertThat(result.getPendingControl()).isNotNull();
+        assertThat(result.getPendingControl().getControlId()).isNotBlank();
+        assertThat(result.getPendingControl().getToolUseId()).isEqualTo("ask-1");
+        assertThat(result.getPendingControl().getQuestion()).isEqualTo("Pick an environment");
+        assertThat(result.getMessages()).hasSize(2);
+        assertThat(result.getMessages().get(1).getToolUseBlocks()).extracting(ToolUseBlock::getId)
+                .containsExactly("ask-1");
+    }
+
+    @Test
+    @DisplayName("confirmation tool_use returns waiting_user pending confirmation without appending tool_result")
+    void confirmationToolUse_returnsWaitingUserPendingControlWithoutToolResult() {
+        SkillRegistry registry = new SkillRegistry();
+        LlmProviderFactory factory = new LlmProviderFactory();
+        factory.registerProvider("fake", new QueueProvider(List.of(
+                toolResponse("bash-1", "Bash", Map.of("command", "clawhub install left-pad"), "tool_use"))));
+
+        AgentLoopEngine engine = new AgentLoopEngine(factory, "fake", registry,
+                Collections.emptyList(), Collections.emptyList(), Collections.emptyList());
+        engine.setConfirmationPrompter(new NonBlockingPrompter());
+        AgentDefinition agent = new AgentDefinition();
+        agent.setName("test-agent");
+        agent.setModelId("fake:model");
+        agent.setSystemPrompt("You are a test agent.");
+        agent.setConfig(Map.of("max_loops", 3, "execution_mode", "ask"));
+
+        LoopResult result = engine.run(agent, "start", new ArrayList<>(), "sid", 1L);
+
+        assertThat(result.getStatus()).isEqualTo("waiting_user");
+        assertThat(result.getPendingControl()).isNotNull();
+        assertThat(result.getPendingControl().getInteractionKind()).isEqualTo("confirmation");
+        assertThat(result.getPendingControl().getControlId()).isEqualTo("confirm-1");
+        assertThat(result.getPendingControl().getToolUseId()).isEqualTo("bash-1");
+        assertThat(result.getMessages()).hasSize(2);
+        assertThat(result.getMessages().get(1).getToolUseBlocks()).extracting(ToolUseBlock::getId)
+                .containsExactly("bash-1");
     }
 
     private static LlmResponse toolResponse(String id, String name, Map<String, Object> input, String stopReason) {
@@ -129,6 +194,27 @@ class AgentLoopEngineToolUseInvariantTest {
         @Override public SkillResult execute(Map<String, Object> input, SkillContext context) {
             calls.incrementAndGet();
             return SkillResult.success("echo " + input.get("value"));
+        }
+    }
+
+    private static class NonBlockingPrompter implements ConfirmationPrompter {
+        @Override public Decision prompt(ConfirmationRequest request) {
+            return Decision.DENIED;
+        }
+
+        @Override public ConfirmationPromptPayload promptNonBlocking(ConfirmationRequest request) {
+            return new ConfirmationPromptPayload(
+                    "confirm-1",
+                    request.sessionId(),
+                    request.installTool(),
+                    request.installTarget(),
+                    request.command(),
+                    "Install confirmation",
+                    "Approve install",
+                    List.of(
+                            new ConfirmationPromptPayload.ConfirmationChoice("approved", "Approve", "primary"),
+                            new ConfirmationPromptPayload.ConfirmationChoice("denied", "Deny", "danger")),
+                    Instant.now().plusSeconds(60));
         }
     }
 }

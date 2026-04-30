@@ -1,6 +1,9 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { type ToolCall } from './ToolCallTimeline';
 import MarkdownRenderer from './MarkdownRenderer';
+import PendingAskCard from './PendingAskCard';
+import InstallConfirmationCard from './InstallConfirmationCard';
+import type { ConfirmationDecision, ConfirmationPromptPayload } from '../api';
 import { RoleAvatar } from './chat/primitives';
 import {
   IconAttach,
@@ -111,6 +114,10 @@ ChatInput.displayName = 'ChatInput';
 export interface ChatMessage {
   role: 'user' | 'assistant' | 'summary';
   content: string;
+  messageType?: 'normal' | 'team_result' | 'subagent_result' | 'ask_user' | 'confirmation';
+  controlId?: string;
+  answeredAt?: string;
+  metadata?: Record<string, unknown>;
   toolCalls?: ToolCall[];
   timestamp?: string;
   id?: string;
@@ -133,6 +140,8 @@ interface ChatWindowProps {
   onCompactionDismiss?: () => void;
   runtimeStatus?: string;
   agentName?: string;
+  onAnswerAsk?: (askId: string, answer: string) => void;
+  onConfirmDecision?: (confirmationId: string, decision: ConfirmationDecision) => void;
 }
 
 interface ToolCallRowProps {
@@ -192,6 +201,45 @@ const ToolCallRow: React.FC<ToolCallRowProps> = ({ tc }) => {
   );
 };
 
+const InlineConfirmationCard: React.FC<{
+  payload: ConfirmationPromptPayload;
+  answeredAt?: string;
+  state?: string;
+  onDecision?: (decision: ConfirmationDecision) => void;
+}> = ({ payload, answeredAt, state, onDecision }) => {
+  const [submitted, setSubmitted] = useState<ConfirmationDecision | null>(null);
+  const done = !!answeredAt || submitted != null;
+  if (done) {
+    const label = state === 'denied' || submitted === 'DENIED' ? 'Denied' : 'Approved';
+    return (
+      <div className="confirm-card confirm-card-summary" aria-label="Approval summary">
+        <div className="confirm-header">
+          <span className="confirm-header-dot" aria-hidden="true" />
+          {label}
+        </div>
+        <div className="confirm-title">{payload.title}</div>
+        <div className="confirm-meta">
+          tool: <strong>{payload.installTool}</strong>
+          <span className="confirm-meta-sep">·</span>
+          target: <code className="confirm-target">{payload.installTarget}</code>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <InstallConfirmationCard
+      payload={payload}
+      submitting={submitted != null}
+      submittingDecision={submitted}
+      onDecision={(decision) => {
+        if (submitted != null) return;
+        setSubmitted(decision);
+        onDecision?.(decision);
+      }}
+    />
+  );
+};
+
 const ChatWindow: React.FC<ChatWindowProps> = ({
   messages,
   loading,
@@ -202,6 +250,8 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
   compactionNotice,
   onCompactionDismiss,
   agentName,
+  onAnswerAsk,
+  onConfirmDecision,
 }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -264,6 +314,79 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
                   <div className="mcs-body">
                     <MarkdownRenderer content={msg.content} />
                   </div>
+                </div>
+              );
+            }
+            if (msg.messageType === 'ask_user') {
+              const metadata = msg.metadata ?? {};
+              const askId = msg.controlId ?? String(metadata.controlId ?? '');
+              const options = Array.isArray(metadata.options)
+                ? metadata.options
+                    .filter((opt): opt is Record<string, unknown> => !!opt && typeof opt === 'object')
+                    .map((opt) => ({
+                      label: String(opt.label ?? ''),
+                      description: opt.description != null ? String(opt.description) : undefined,
+                    }))
+                : [];
+              return (
+                <div key={msg.id ?? `ask-${askId || idx}`} className="msg assistant">
+                  <PendingAskCard
+                    pendingAsk={{
+                      askId,
+                      question: String(metadata.question ?? msg.content ?? ''),
+                      context: metadata.context != null ? String(metadata.context) : undefined,
+                      options,
+                      allowOther: metadata.allowOther !== false,
+                    }}
+                    answeredAt={msg.answeredAt}
+                    state={typeof metadata.state === 'string' ? metadata.state : undefined}
+                    answer={typeof metadata.answer === 'string' ? metadata.answer : undefined}
+                    onAnswer={(answer) => {
+                      if (askId && onAnswerAsk) onAnswerAsk(askId, answer);
+                    }}
+                  />
+                </div>
+              );
+            }
+            if (msg.messageType === 'confirmation') {
+              const metadata = msg.metadata ?? {};
+              const choicesRaw = Array.isArray(metadata.choices)
+                ? metadata.choices
+                : Array.isArray(metadata.options)
+                  ? metadata.options
+                  : [];
+              const choices = choicesRaw
+                .filter((choice): choice is Record<string, unknown> => !!choice && typeof choice === 'object')
+                .map((choice) => ({
+                  id: choice.id != null ? String(choice.id) : undefined,
+                  value: choice.value != null ? String(choice.value) : undefined,
+                  label: String(choice.label ?? choice.value ?? ''),
+                  style: choice.style != null ? String(choice.style) : undefined,
+                  description: choice.description != null ? String(choice.description) : undefined,
+                }));
+              const payload: ConfirmationPromptPayload = {
+                confirmationId: msg.controlId ?? String(metadata.confirmationId ?? metadata.controlId ?? ''),
+                sessionId: String(metadata.sessionId ?? ''),
+                installTool: String(metadata.installTool ?? metadata.toolName ?? 'unknown'),
+                installTarget: String(metadata.installTarget ?? '*'),
+                commandPreview: String(metadata.commandPreview ?? ''),
+                title: String(metadata.title ?? metadata.question ?? msg.content ?? 'Approval required'),
+                description: String(metadata.description ?? ''),
+                choices,
+                expiresAt: String(metadata.expiresAt ?? ''),
+              };
+              return (
+                <div key={msg.id ?? `confirmation-${msg.controlId ?? idx}`} className="msg assistant">
+                  <InlineConfirmationCard
+                    payload={payload}
+                    answeredAt={msg.answeredAt}
+                    state={typeof metadata.state === 'string' ? metadata.state : undefined}
+                    onDecision={(decision) => {
+                      if (payload.confirmationId && onConfirmDecision) {
+                        onConfirmDecision(payload.confirmationId, decision);
+                      }
+                    }}
+                  />
                 </div>
               );
             }

@@ -16,6 +16,7 @@ public class LoopResult {
     private long totalOutputTokens;
     private int loopCount;
     private List<ToolCallRecord> toolCalls;
+    private InteractiveControlRequest pendingControl;
     /** completed / cancelled / max_loops / interrupted. 默认 completed 保持对旧调用者的兼容。 */
     private String status = "completed";
 
@@ -89,5 +90,13 @@ public class LoopResult {
 
     public void setToolCalls(List<ToolCallRecord> toolCalls) {
         this.toolCalls = toolCalls;
+    }
+
+    public InteractiveControlRequest getPendingControl() {
+        return pendingControl;
+    }
+
+    public void setPendingControl(InteractiveControlRequest pendingControl) {
+        this.pendingControl = pendingControl;
     }
 }

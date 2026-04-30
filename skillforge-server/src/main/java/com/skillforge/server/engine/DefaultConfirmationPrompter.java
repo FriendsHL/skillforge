@@ -61,6 +61,28 @@ public class DefaultConfirmationPrompter implements ConfirmationPrompter {
 
     @Override
     public Decision prompt(ConfirmationRequest request) {
+        ConfirmationPromptPayload payload = promptNonBlocking(request);
+        String sid = request.sessionId();
+        String confirmationId = payload.confirmationId();
+        try {
+            Decision d;
+            try {
+                d = pendingConfirmationRegistry.await(confirmationId, request.timeoutSeconds());
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                return Decision.DENIED;
+            }
+            if (d == null) d = Decision.TIMEOUT;
+            log.info("Install confirmation decided sid={} tool={} target={} decision={}",
+                    sid, request.installTool(), request.installTarget(), d);
+            return d;
+        } finally {
+            pendingConfirmationRegistry.removeIfPresent(confirmationId);
+        }
+    }
+
+    @Override
+    public ConfirmationPromptPayload promptNonBlocking(ConfirmationRequest request) {
         String sid = request.sessionId();
         String toolUseId = request.toolUseId();
 
@@ -121,27 +143,16 @@ public class DefaultConfirmationPrompter implements ConfirmationPrompter {
                 }
                 broadcaster.confirmationRequired(sid, payload);
             }
-
-            // 5. Broadcast session status → waiting_user (regardless of channel; dashboard listens)
-            if (broadcaster != null) {
-                broadcaster.sessionStatus(sid, "waiting_user", "waiting_confirmation", null);
-            }
-
-            // 6. Block waiting for decision
-            Decision d;
-            try {
-                d = pendingConfirmationRegistry.await(confirmationId, request.timeoutSeconds());
-            } catch (InterruptedException ie) {
-                Thread.currentThread().interrupt();
-                return Decision.DENIED;
-            }
-            if (d == null) d = Decision.TIMEOUT;
-            log.info("Install confirmation decided sid={} tool={} target={} decision={}",
-                    sid, request.installTool(), request.installTarget(), d);
-            return d;
-        } finally {
+        } catch (RuntimeException e) {
             pendingConfirmationRegistry.removeIfPresent(confirmationId);
+            throw e;
         }
+
+        // 5. Broadcast session status → waiting_user (regardless of channel; dashboard listens)
+        if (broadcaster != null) {
+            broadcaster.sessionStatus(sid, "waiting_user", "waiting_confirmation", null);
+        }
+        return payload;
     }
 
     private ConfirmationPromptPayload buildPayload(PendingConfirmation pc) {

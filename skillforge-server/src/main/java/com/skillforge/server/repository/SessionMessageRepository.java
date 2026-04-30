@@ -44,4 +44,10 @@ public interface SessionMessageRepository extends JpaRepository<SessionMessageEn
 
     long countBySessionIdAndRoleAndMsgTypeAndPrunedAtIsNullAndSeqNoGreaterThan(
             String sessionId, String role, String msgType, long seqNo);
+
+    Optional<SessionMessageEntity> findBySessionIdAndMessageTypeAndControlId(
+            String sessionId, String messageType, String controlId);
+
+    Optional<SessionMessageEntity> findTopBySessionIdAndMessageTypeAndAnsweredAtIsNullOrderBySeqNoDesc(
+            String sessionId, String messageType);
 }

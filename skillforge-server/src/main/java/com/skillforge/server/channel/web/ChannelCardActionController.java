@@ -10,6 +10,7 @@ import com.skillforge.server.channel.platform.feishu.FeishuCardActionVerifier;
 import com.skillforge.server.channel.spi.ChannelConfigDecrypted;
 import com.skillforge.server.channel.spi.WebhookContext;
 import com.skillforge.server.channel.spi.WebhookVerificationException;
+import com.skillforge.server.service.ChatService;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -44,15 +45,18 @@ public class ChannelCardActionController {
     private final ChannelConfigService channelConfigService;
     private final PendingConfirmationRegistry pendingConfirmationRegistry;
     private final ObjectMapper objectMapper;
+    private final ChatService chatService;
 
     public ChannelCardActionController(FeishuCardActionVerifier verifier,
                                        ChannelConfigService channelConfigService,
                                        PendingConfirmationRegistry pendingConfirmationRegistry,
-                                       ObjectMapper objectMapper) {
+                                       ObjectMapper objectMapper,
+                                       ChatService chatService) {
         this.verifier = verifier;
         this.channelConfigService = channelConfigService;
         this.pendingConfirmationRegistry = pendingConfirmationRegistry;
         this.objectMapper = objectMapper;
+        this.chatService = chatService;
     }
 
     @PostMapping("/feishu/card-action")
@@ -114,8 +118,9 @@ public class ChannelCardActionController {
             return ResponseEntity.ok(toast("Invalid decision"));
         }
 
-        boolean ok = pendingConfirmationRegistry.complete(confirmationId, decision, openId);
-        if (!ok) {
+        try {
+            chatService.answerConfirmation(pc.sessionId(), confirmationId, decision, null);
+        } catch (IllegalArgumentException | IllegalStateException e) {
             return ResponseEntity.ok(toast("授权请求已失效或已被处理"));
         }
         return ResponseEntity.ok(toast(decision == Decision.APPROVED ? "✅ 已批准" : "❌ 已拒绝"));

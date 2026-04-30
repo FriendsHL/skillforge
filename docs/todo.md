@@ -19,7 +19,7 @@
 | --- | --- | --- | --- |
 | P12-PRE | Cost 可见性、embedded PG 备份、多用户 / 权限边界 | youren | P12 |
 | P9-4/P9-5 | compact 后“最近文件”的数据来源 | youren + agent | P9-5 设计 |
-| MSG-1 | message_type 持久化 vs 单表、ask_user role 选型、answered UX、是否同 wave 解 BUG-30 | youren | 进入 mrd / prd 编写（[草稿](requirements/active/MSG-1-message-typing/index.md)，2026-04-30 讨论） |
+| MSG-1 | Full 技术方案：inline ask card、非阻塞 waiting_user 恢复、BUG-30 TeamResult 类型化 | youren + agent | design draft，待评审（[需求包](requirements/active/MSG-1-message-typing/index.md)） |
 
 ## 最近完成
 

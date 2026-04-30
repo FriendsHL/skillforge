@@ -173,6 +173,10 @@ public class ChatController {
             Map<String, Object> body = new LinkedHashMap<>();
             body.put("error", "Server is busy, please try again later");
             return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(body);
+        } catch (IllegalStateException e) {
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("error", e.getMessage());
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(body);
         }
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("sessionId", sessionId);
@@ -237,12 +241,16 @@ public class ChatController {
         if (decision == Decision.TIMEOUT) {
             return ResponseEntity.badRequest().body(Map.of("error", "TIMEOUT is reserved for server"));
         }
-        boolean ok = pendingConfirmationRegistry.complete(cid.toString(), decision, null);
-        if (!ok) {
+        try {
+            chatService.answerConfirmation(sessionId, cid.toString(), decision, userId);
+            return ResponseEntity.ok(Map.of("status", "ok"));
+        } catch (IllegalArgumentException e) {
             return ResponseEntity.status(HttpStatus.GONE)
                     .body(Map.of("error", "confirmation has expired or does not exist"));
+        } catch (IllegalStateException e) {
+            return ResponseEntity.status(HttpStatus.CONFLICT)
+                    .body(Map.of("error", e.getMessage()));
         }
-        return ResponseEntity.ok(Map.of("status", "ok"));
     }
 
     /**
@@ -269,10 +277,14 @@ public class ChatController {
         if (askId == null || answer == null) {
             return ResponseEntity.badRequest().body(Map.of("error", "askId and answer required"));
         }
-        boolean ok = pendingAskRegistry.complete(askId, answer);
-        if (!ok) {
+        try {
+            chatService.answerAsk(sessionId, askId, answer, userId);
+        } catch (IllegalArgumentException e) {
             return ResponseEntity.status(HttpStatus.GONE)
                     .body(Map.of("error", "ask has expired or does not exist"));
+        } catch (IllegalStateException e) {
+            return ResponseEntity.status(HttpStatus.CONFLICT)
+                    .body(Map.of("error", e.getMessage()));
         }
         return ResponseEntity.ok(Map.of("status", "ok"));
     }

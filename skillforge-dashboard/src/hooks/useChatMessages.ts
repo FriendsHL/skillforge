@@ -43,10 +43,26 @@ export function normalizeMessages(list: any[]): ChatMessage[] {
 
   for (const m of list) {
     const msgType = typeof m.msgType === 'string' ? m.msgType.toUpperCase() : '';
+    const messageType = typeof m.messageType === 'string' ? m.messageType : 'normal';
     const { text, toolUseBlocks, toolResultBlocks } = extractBlocks(m.content);
 
     if (msgType === 'COMPACT_BOUNDARY') {
       // Boundary is a structural marker for context slicing, not a user-visible card.
+      continue;
+    }
+
+    if (messageType === 'ask_user' || messageType === 'confirmation') {
+      const metadata = m.metadata && typeof m.metadata === 'object'
+        ? (m.metadata as Record<string, unknown>)
+        : {};
+      result.push({
+        role: 'assistant',
+        content: text,
+        messageType,
+        controlId: typeof m.controlId === 'string' ? m.controlId : undefined,
+        answeredAt: typeof m.answeredAt === 'string' ? m.answeredAt : undefined,
+        metadata,
+      });
       continue;
     }
 

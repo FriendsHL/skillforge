@@ -48,6 +48,10 @@ public class SessionService {
     public static final String MSG_TYPE_NORMAL = "NORMAL";
     public static final String MSG_TYPE_COMPACT_BOUNDARY = "COMPACT_BOUNDARY";
     public static final String MSG_TYPE_SUMMARY = "SUMMARY";
+    public static final String MSG_TYPE_SYSTEM_EVENT = "SYSTEM_EVENT";
+    public static final String MESSAGE_TYPE_NORMAL = "normal";
+    public static final String MESSAGE_TYPE_ASK_USER = "ask_user";
+    public static final String MESSAGE_TYPE_CONFIRMATION = "confirmation";
 
     private final SessionRepository sessionRepository;
     private final SessionMessageRepository sessionMessageRepository;
@@ -193,15 +197,25 @@ public class SessionService {
         return sessionRepository.findByParentSessionId(parentSessionId);
     }
 
-    public record AppendMessage(Message message, String msgType, Map<String, Object> metadata) {
+    public record AppendMessage(Message message, String msgType, String messageType, String controlId,
+                                Instant answeredAt, Map<String, Object> metadata) {
         public AppendMessage {
             Objects.requireNonNull(message, "message");
             msgType = (msgType == null || msgType.isBlank()) ? MSG_TYPE_NORMAL : msgType;
+            messageType = (messageType == null || messageType.isBlank()) ? MESSAGE_TYPE_NORMAL : messageType;
             metadata = (metadata == null) ? Collections.emptyMap() : metadata;
+        }
+
+        public AppendMessage(Message message, String msgType, Map<String, Object> metadata) {
+            this(message, msgType, MESSAGE_TYPE_NORMAL, null, null, metadata);
         }
     }
 
-    public record StoredMessage(long seqNo, String msgType, Map<String, Object> metadata, Message message) {
+    public record StoredMessage(long seqNo, String msgType, String messageType, String controlId,
+                                Instant answeredAt, Map<String, Object> metadata, Message message) {
+        public StoredMessage(long seqNo, String msgType, Map<String, Object> metadata, Message message) {
+            this(seqNo, msgType, MESSAGE_TYPE_NORMAL, null, null, metadata, message);
+        }
     }
 
     @Transactional(readOnly = true)
@@ -225,6 +239,9 @@ public class SessionService {
                     toRoleString(m),
                     m.getContent(),
                     stored.msgType(),
+                    stored.messageType(),
+                    stored.controlId(),
+                    stored.answeredAt(),
                     stored.metadata()
             ));
         }
@@ -351,9 +368,67 @@ public class SessionService {
         List<Message> out = new ArrayList<>();
         int start = (lastBoundary >= 0) ? lastBoundary + 1 : 0;
         for (int i = start; i < records.size(); i++) {
-            out.add(records.get(i).message());
+            StoredMessage record = records.get(i);
+            if (MSG_TYPE_SYSTEM_EVENT.equals(record.msgType())) {
+                continue;
+            }
+            out.add(record.message());
         }
         return applyArchiveSafely(id, out);
+    }
+
+    public long appendInteractiveControlMessage(String id, String messageType, String controlId,
+                                                Message message, Map<String, Object> metadata) {
+        return appendMessages(id, List.of(new AppendMessage(
+                message,
+                MSG_TYPE_SYSTEM_EVENT,
+                messageType,
+                controlId,
+                null,
+                metadata)));
+    }
+
+    @Transactional
+    public SessionMessageEntity markControlAnswered(String sessionId, String messageType, String controlId,
+                                                    String state, String answer, String answerMode) {
+        SessionMessageEntity entity = sessionMessageRepository
+                .findBySessionIdAndMessageTypeAndControlId(sessionId, messageType, controlId)
+                .orElseThrow(() -> new IllegalArgumentException("control not found"));
+        if (entity.getAnsweredAt() != null) {
+            throw new IllegalStateException("control already answered");
+        }
+        Map<String, Object> metadata = new LinkedHashMap<>(readMapJsonSafely(entity.getMetadataJson()));
+        metadata.put("state", state);
+        if (answer != null) {
+            metadata.put("answer", answer);
+        }
+        metadata.put("answerMode", answerMode);
+        Instant now = Instant.now();
+        entity.setAnsweredAt(now);
+        metadata.put("answeredAt", now.toString());
+        entity.setMetadataJson(writeJsonSafely(metadata));
+        return sessionMessageRepository.save(entity);
+    }
+
+    @Transactional(readOnly = true)
+    public SessionMessageEntity getControlMessage(String sessionId, String messageType, String controlId) {
+        return sessionMessageRepository
+                .findBySessionIdAndMessageTypeAndControlId(sessionId, messageType, controlId)
+                .orElseThrow(() -> new IllegalArgumentException("control not found"));
+    }
+
+    @Transactional(readOnly = true)
+    public java.util.Optional<SessionMessageEntity> findPendingAsk(String sessionId) {
+        return sessionMessageRepository
+                .findTopBySessionIdAndMessageTypeAndAnsweredAtIsNullOrderBySeqNoDesc(
+                        sessionId, MESSAGE_TYPE_ASK_USER);
+    }
+
+    @Transactional(readOnly = true)
+    public java.util.Optional<SessionMessageEntity> findPendingConfirmation(String sessionId) {
+        return sessionMessageRepository
+                .findTopBySessionIdAndMessageTypeAndAnsweredAtIsNullOrderBySeqNoDesc(
+                        sessionId, MESSAGE_TYPE_CONFIRMATION);
     }
 
     /**
@@ -810,7 +885,16 @@ public class SessionService {
                 metadata.put("pruned", true);
                 metadata.put("pruned_at", e.getPrunedAt().toString());
             }
-            out.add(new StoredMessage(e.getSeqNo(), e.getMsgType(), metadata, message));
+            String messageType = e.getMessageType() == null || e.getMessageType().isBlank()
+                    ? MESSAGE_TYPE_NORMAL : e.getMessageType();
+            out.add(new StoredMessage(
+                    e.getSeqNo(),
+                    e.getMsgType(),
+                    messageType,
+                    e.getControlId(),
+                    e.getAnsweredAt(),
+                    metadata,
+                    message));
         }
         return out;
     }
@@ -1004,6 +1088,9 @@ public class SessionService {
             e.setSeqNo(base + i + 1);
             e.setRole(toRoleString(append.message()));
             e.setMsgType(append.msgType());
+            e.setMessageType(append.messageType());
+            e.setControlId(append.controlId());
+            e.setAnsweredAt(append.answeredAt());
             e.setContentJson(writeJsonSafely(append.message().getContent()));
             e.setReasoningContent(append.message().getReasoningContent());
             e.setMetadataJson(writeJsonSafely(append.metadata()));

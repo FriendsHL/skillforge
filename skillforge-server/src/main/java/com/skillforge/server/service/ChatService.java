@@ -1,10 +1,12 @@
 package com.skillforge.server.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillforge.core.engine.AgentLoopEngine;
 import com.skillforge.core.engine.CancellationRegistry;
 import com.skillforge.core.engine.ChatEventBroadcaster;
+import com.skillforge.core.engine.InteractiveControlRequest;
 import com.skillforge.core.engine.LoopContext;
 import com.skillforge.core.engine.LoopResult;
 import com.skillforge.core.engine.confirm.Decision;
@@ -20,6 +22,7 @@ import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.CollabRunEntity;
 import com.skillforge.server.entity.ModelUsageEntity;
 import com.skillforge.server.entity.SessionEntity;
+import com.skillforge.server.entity.SessionMessageEntity;
 import com.skillforge.server.repository.CollabRunRepository;
 import com.skillforge.server.repository.ModelUsageRepository;
 import com.skillforge.server.memory.SessionDigestExtractor;
@@ -125,6 +128,20 @@ public class ChatService {
         synchronized (compactionService.lockFor(sessionId)) {
             // Re-read session inside lock to avoid TOCTOU on runtimeStatus
             session = sessionService.getSession(sessionId);
+
+            if ("waiting_user".equals(session.getRuntimeStatus())) {
+                if (sessionService.findPendingConfirmation(sessionId).isPresent()) {
+                    throw new IllegalStateException("pending confirmation must be resolved first");
+                }
+                sessionService.findPendingAsk(sessionId).ifPresent(ask ->
+                        sessionService.markControlAnswered(
+                                sessionId,
+                                SessionService.MESSAGE_TYPE_ASK_USER,
+                                ask.getControlId(),
+                                "superseded",
+                                userMessage,
+                                "direct_input"));
+            }
 
             // If session is already running, enqueue the message instead of starting a new loop
             if ("running".equals(session.getRuntimeStatus())) {
@@ -368,6 +385,7 @@ public class ChatService {
             LoopResult result = agentLoopEngine.run(agentDef, userMessage, history, sessionId, userId, preCtx);
             finalMessage = result.getFinalResponse();
             toolCallCount = result.getToolCalls() != null ? result.getToolCalls().size() : 0;
+            boolean waitingUser = "waiting_user".equals(result.getStatus());
 
             boolean wasCancelled = "cancelled".equals(result.getStatus());
             if (wasCancelled) {
@@ -412,6 +430,36 @@ public class ChatService {
             // 保存最终 messages(engine 已经把 user msg + 之后所有消息组装好了)
             sessionService.updateSessionMessages(sessionId, finalMessages,
                     result.getTotalInputTokens(), result.getTotalOutputTokens());
+
+            if (waitingUser) {
+                persistPendingControl(sessionId, result.getPendingControl());
+                ModelUsageEntity usage = new ModelUsageEntity();
+                usage.setUserId(userId);
+                usage.setAgentId(agentEntity.getId());
+                usage.setSessionId(sessionId);
+                usage.setModelId(agentDef.getModelId());
+                usage.setInputTokens((int) result.getTotalInputTokens());
+                usage.setOutputTokens((int) result.getTotalOutputTokens());
+                try {
+                    usage.setToolCalls(objectMapper.writeValueAsString(result.getToolCalls()));
+                } catch (JsonProcessingException e) {
+                    usage.setToolCalls("[]");
+                }
+                modelUsageRepository.save(usage);
+
+                SessionEntity s = sessionService.getSession(sessionId);
+                s.setCompletedAt(java.time.Instant.now());
+                s.setRuntimeStatus("waiting_user");
+                s.setRuntimeStep("waiting_control");
+                s.setRuntimeError(null);
+                sessionService.saveSession(s);
+                if (broadcaster != null) {
+                    broadcaster.sessionStatus(sessionId, "waiting_user", "waiting_control", null);
+                    broadcaster.userEvent(s.getUserId(), sessionUpdatedPayload(s, s.getMessageCount()));
+                }
+                finalStatus = "waiting_user";
+                return;
+            }
 
             // 记录 ModelUsage
             ModelUsageEntity usage = new ModelUsageEntity();
@@ -516,7 +564,7 @@ public class ChatService {
             // Wake any pending install confirmation for this session (cancel cascade).
             // Safe to always invoke — no-op when no pending confirmation exists.
             try {
-                if (pendingConfirmationRegistry != null) {
+                if (!"waiting_user".equals(finalStatus) && pendingConfirmationRegistry != null) {
                     pendingConfirmationRegistry.completeAllForSession(sessionId, Decision.DENIED);
                 }
             } catch (Exception ignored) {
@@ -524,7 +572,7 @@ public class ChatService {
             // r3: only a true root session clears its install-confirm cache. Child sessions
             // inherit the root's approvals and must not wipe them on their own loop end.
             try {
-                if (sessionConfirmCache != null) {
+                if (!"waiting_user".equals(finalStatus) && sessionConfirmCache != null) {
                     String rootSid = rootSessionLookup != null
                             ? rootSessionLookup.resolveRoot(sessionId)
                             : sessionId;
@@ -536,15 +584,18 @@ public class ChatService {
             }
             // SubAgent 回调钩子:如果这是子 session,把结果 push 到父;如果这是父,drain 等待中的子结果
             try {
-                subAgentRegistry.onSessionLoopFinished(sessionId, finalMessage, finalStatus,
-                        toolCallCount, System.currentTimeMillis() - startedAt);
+                if (!"waiting_user".equals(finalStatus)) {
+                    subAgentRegistry.onSessionLoopFinished(sessionId, finalMessage, finalStatus,
+                            toolCallCount, System.currentTimeMillis() - startedAt);
+                }
             } catch (Exception hookErr) {
                 log.error("SubAgentRegistry hook failed: sessionId={}", sessionId, hookErr);
             }
 
             // CollabRun hooks: cancel cascade FIRST, then notify completion (null-safe for tests)
             try {
-                if (collabRunService != null && collabRunRepository != null) {
+                if (!"waiting_user".equals(finalStatus)
+                        && collabRunService != null && collabRunRepository != null) {
                     SessionEntity finishedSession = sessionService.getSession(sessionId);
                     String finishedCollabRunId = finishedSession.getCollabRunId();
                     if (finishedCollabRunId != null) {
@@ -564,6 +615,166 @@ public class ChatService {
             } catch (Exception collabErr) {
                 log.error("CollabRun hook failed: sessionId={}", sessionId, collabErr);
             }
+        }
+    }
+
+    public void answerAsk(String sessionId, String askId, String answer, Long userId) {
+        SessionMessageEntity control = sessionService.getControlMessage(
+                sessionId, SessionService.MESSAGE_TYPE_ASK_USER, askId);
+        Map<String, Object> metadata = readMetadata(control);
+        Object toolUseIdObj = metadata.get("toolUseId");
+        String toolUseId = toolUseIdObj != null ? toolUseIdObj.toString() : null;
+        if (toolUseId == null || toolUseId.isBlank()) {
+            throw new IllegalStateException("ask continuation missing toolUseId");
+        }
+        synchronized (compactionService.lockFor(sessionId)) {
+            sessionService.markControlAnswered(
+                    sessionId,
+                    SessionService.MESSAGE_TYPE_ASK_USER,
+                    askId,
+                    "answered",
+                    answer,
+                    "card");
+            Message toolResult = Message.toolResult(toolUseId, "User answered: " + answer, false);
+            sessionService.appendNormalMessages(sessionId, List.of(toolResult));
+            SessionEntity session = sessionService.getSession(sessionId);
+            AgentEntity agentEntity = agentService.getAgent(session.getAgentId());
+            session.setRuntimeStatus("running");
+            session.setRuntimeStep("Resuming");
+            session.setRuntimeError(null);
+            sessionService.saveSession(session);
+            List<Message> history = sessionService.getContextMessages(sessionId);
+            if (broadcaster != null) {
+                broadcaster.messageAppended(sessionId, toolResult);
+                broadcaster.sessionStatus(sessionId, "running", "Resuming", null);
+            }
+            chatLoopExecutor.execute(() -> runLoop(sessionId, null, userId, agentEntity, history));
+        }
+    }
+
+    public void answerConfirmation(String sessionId, String confirmationId, Decision decision, Long userId) {
+        SessionMessageEntity control = sessionService.getControlMessage(
+                sessionId, SessionService.MESSAGE_TYPE_CONFIRMATION, confirmationId);
+        Map<String, Object> metadata = readMetadata(control);
+        String toolUseId = stringValue(metadata.get("toolUseId"));
+        String toolName = stringValue(metadata.get("toolName"));
+        String confirmationKind = stringValue(metadata.get("confirmationKind"));
+        String installTool = stringValue(metadata.get("installTool"));
+        String installTarget = stringValue(metadata.get("installTarget"));
+        Map<String, Object> toolInput = mapValue(metadata.get("toolInput"));
+        if (toolUseId == null || toolUseId.isBlank() || toolName == null || toolName.isBlank()) {
+            throw new IllegalStateException("confirmation continuation missing tool identity");
+        }
+        synchronized (compactionService.lockFor(sessionId)) {
+            sessionService.markControlAnswered(
+                    sessionId,
+                    SessionService.MESSAGE_TYPE_CONFIRMATION,
+                    confirmationId,
+                    decision == Decision.APPROVED ? "approved" : "denied",
+                    decision.name().toLowerCase(),
+                    "card");
+            if (pendingConfirmationRegistry != null) {
+                pendingConfirmationRegistry.complete(confirmationId, decision, null);
+                pendingConfirmationRegistry.removeIfPresent(confirmationId);
+            }
+            SessionEntity session = sessionService.getSession(sessionId);
+            AgentEntity agentEntity = agentService.getAgent(session.getAgentId());
+            AgentDefinition agentDef = agentService.toAgentDefinition(agentEntity);
+            Message toolResult = agentLoopEngine.completeConfirmedTool(
+                    agentDef,
+                    sessionId,
+                    userId,
+                    toolUseId,
+                    toolName,
+                    toolInput,
+                    confirmationKind,
+                    installTool,
+                    installTarget,
+                    decision);
+            sessionService.appendNormalMessages(sessionId, List.of(toolResult));
+            session.setRuntimeStatus("running");
+            session.setRuntimeStep("Resuming");
+            session.setRuntimeError(null);
+            sessionService.saveSession(session);
+            List<Message> history = sessionService.getContextMessages(sessionId);
+            if (broadcaster != null) {
+                broadcaster.messageAppended(sessionId, toolResult);
+                broadcaster.sessionStatus(sessionId, "running", "Resuming", null);
+            }
+            chatLoopExecutor.execute(() -> runLoop(sessionId, null, userId, agentEntity, history));
+        }
+    }
+
+    private void persistPendingControl(String sessionId, InteractiveControlRequest control) {
+        if (control == null) {
+            return;
+        }
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("controlId", control.getControlId());
+        metadata.put("interactionKind", control.getInteractionKind());
+        metadata.put("toolUseId", control.getToolUseId());
+        metadata.put("toolName", control.getToolName());
+        metadata.put("question", control.getQuestion());
+        metadata.put("context", control.getContext());
+        metadata.put("options", control.getOptions());
+        metadata.put("allowOther", control.isAllowOther());
+        metadata.put("state", "pending");
+        metadata.put("answer", null);
+        metadata.put("answerMode", null);
+        metadata.put("assistantToolUseMessage", control.getAssistantToolUseMessage());
+        metadata.putAll(control.getExtra());
+
+        Message card = Message.assistant(control.getQuestion() != null ? control.getQuestion() : "");
+        String messageType = "confirmation".equals(control.getInteractionKind())
+                ? SessionService.MESSAGE_TYPE_CONFIRMATION
+                : SessionService.MESSAGE_TYPE_ASK_USER;
+        sessionService.appendInteractiveControlMessage(
+                sessionId,
+                messageType,
+                control.getControlId(),
+                card,
+                metadata);
+        if (broadcaster != null && SessionService.MESSAGE_TYPE_ASK_USER.equals(messageType)) {
+            ChatEventBroadcaster.AskUserEvent event = new ChatEventBroadcaster.AskUserEvent();
+            event.askId = control.getControlId();
+            event.question = control.getQuestion();
+            event.context = control.getContext();
+            event.allowOther = control.isAllowOther();
+            event.options = control.getOptions().stream()
+                    .map(opt -> new ChatEventBroadcaster.AskUserEvent.Option(
+                            opt.get("label") != null ? opt.get("label").toString() : "",
+                            opt.get("description") != null ? opt.get("description").toString() : null))
+                    .toList();
+            broadcaster.askUser(sessionId, event);
+        }
+    }
+
+    private static String stringValue(Object value) {
+        return value != null ? value.toString() : null;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> mapValue(Object value) {
+        if (value instanceof Map<?, ?> raw) {
+            Map<String, Object> out = new LinkedHashMap<>();
+            raw.forEach((k, v) -> {
+                if (k != null) {
+                    out.put(k.toString(), v);
+                }
+            });
+            return out;
+        }
+        return Map.of();
+    }
+
+    private Map<String, Object> readMetadata(SessionMessageEntity entity) {
+        if (entity.getMetadataJson() == null || entity.getMetadataJson().isBlank()) {
+            return Map.of();
+        }
+        try {
+            return objectMapper.readValue(entity.getMetadataJson(), new TypeReference<Map<String, Object>>() {});
+        } catch (Exception e) {
+            throw new IllegalStateException("invalid control metadata", e);
         }
     }
 }
