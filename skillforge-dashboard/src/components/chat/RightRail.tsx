@@ -139,7 +139,7 @@ function ActivityTab({
     : now;
   const loopEnd = runtimeStatus === 'running' ? Math.max(now, lastSpanEnd) : lastSpanEnd;
   const totalMs = Math.max(loopEnd - loopStart, 1);
-  const spanSumMs = spans.reduce((sum, s) => sum + (s.durationMs ?? (s.endTs ? s.endTs - s.startTs : now - s.startTs)), 0);
+  const spanSumMs = spans.reduce((sum, s) => sum + (s.endTs ? s.endTs - s.startTs : now - s.startTs), 0);
   const isRunning = runtimeStatus === 'running';
   const doneCount = spans.filter((s) => !!s.endTs).length;
   const errCount = spans.filter((s) => s.status === 'error').length;
@@ -208,11 +208,11 @@ function ActivityTab({
             const isError = span.status === 'error';
             const color = SPAN_COLORS[span.type] ?? 'var(--fg-4)';
             const spanStart = span.startTs - loopStart;
-            const spanDur = done && span.durationMs != null
-              ? span.durationMs
+            const spanDur = done
+              ? (span.endTs! - span.startTs)
               : now - span.startTs;
             const barLeft = (spanStart / totalMs) * 100;
-            const barWidth = Math.max((spanDur / totalMs) * 100, 2);
+            const barWidth = Math.min(Math.max((spanDur / totalMs) * 100, 2), 100 - barLeft);
             const elapsed = done ? formatDuration(spanDur) : formatElapsed(spanDur);
 
             return (
