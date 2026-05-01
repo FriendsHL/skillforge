@@ -192,7 +192,7 @@ function ActivityTab({
                   left: '0%',
                   width: '100%',
                   background: isRunning
-                    ? 'var(--fg-2)'
+                    ? '#ca8a04'
                     : errCount > 0
                       ? '#ef4444'
                       : '#16a34a',
