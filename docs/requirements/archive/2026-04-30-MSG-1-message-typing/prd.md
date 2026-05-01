@@ -2,7 +2,8 @@
 
 ---
 id: MSG-1
-status: prd-ready
+status: delivered
+delivered: 2026-04-30
 owner: youren
 priority: P1
 risk: Full

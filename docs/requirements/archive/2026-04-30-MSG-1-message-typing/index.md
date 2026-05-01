@@ -3,11 +3,12 @@
 ---
 id: MSG-1
 mode: full
-status: design-draft
+status: done
 priority: P1
 risk: Full
 created: 2026-04-29
 updated: 2026-04-30
+delivered: 2026-04-30
 ---
 
 ## 摘要
@@ -18,7 +19,18 @@ updated: 2026-04-30
 
 ## 当前状态
 
-**Full 技术方案草案已建立。** 已确认产品方向：阻断式交互卡片统一处理。`ask_user` 是模型决策触发的内联消息卡片；install / mutation approval 是框架拦截工具后触发的审批卡片。触发后当前 loop 结束并释放 worker；用户显式点击卡片后补齐对应 `tool_result` 或工具结果，并开启新的 trace loop；主输入框自然语言不会隐式 approve 审批卡片。改动横跨 core 引擎、server 持久化、Flyway migration、WS 协议、dashboard 渲染，触碰核心文件清单（`ChatService` / `SessionMessageRepository` / `PendingAskRegistry` / `ChatWebSocketHandler` / `Chat.tsx` / `useChatWsEventHandler.ts`），按 SkillForge 强制规则走 Full Pipeline。
+**done，2026-04-30 交付**（commit `543a60e` `feat(chat): inline human interaction cards`，V40 migration `session_message_ui_types`）。
+
+实际落地：
+- `t_session_message` 加 `message_type` (32) + `answered_at` (TIMESTAMPTZ) + `control_id` 列 + `idx_session_message_control` 索引（V40 migration）
+- core 引擎 `AgentLoopEngine` (+361 行) + 新建 `InteractiveControlRequest.java`（104 行 control request 抽象）+ `LoopResult` 加 control 字段
+- server `ChatService` (+221 行) 实现非阻塞 waiting_user + continuation 恢复 + 释放 worker；`ChatController` / `ChannelCardActionController` / `DefaultConfirmationPrompter` 配套
+- 前端 `ChatWindow` (+123 行) + `Chat.tsx` 加 inline 卡片渲染分发；`PendingAskCard` 改造；`useChatWsEventHandler` 加 control message 重建（rawMessages 写路径，非阻塞 ask_user / confirmation 复活）
+- 测试 `AgentLoopEngineToolUseInvariantTest`
+
+解决 BUG-30 / BUG-31（详见下"关联 Bug"）—— 已 closed。
+
+文档 governance 修订（2026-05-02 补回写）：本期实现完成时未及时更新 status 字段，今天 cleanup 一并修订。
 
 ## 关联 Bug
 
