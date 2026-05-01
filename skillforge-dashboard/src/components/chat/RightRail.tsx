@@ -169,7 +169,7 @@ function ActivityTab({
             <div className="mw-span-head">
               <span className="mw-dot" style={{
                 background: isRunning
-                  ? undefined
+                  ? undefined  /* CSS handles running pulse with --fg-2 */
                   : errCount > 0
                     ? '#ef4444'
                     : '#16a34a',
@@ -192,7 +192,7 @@ function ActivityTab({
                   left: '0%',
                   width: '100%',
                   background: isRunning
-                    ? 'var(--accent)'
+                    ? 'var(--fg-2)'
                     : errCount > 0
                       ? '#ef4444'
                       : '#16a34a',
