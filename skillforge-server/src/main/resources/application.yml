@@ -126,8 +126,12 @@ skillforge:
         #                             # (2 attempts with 2-5s exponential backoff + jitter).
       xiaomi-mimo:
         type: openai
+        # IMPORTANT: do NOT include the `/v1` suffix here — OpenAiProvider hard-codes
+        # `baseUrl + "/v1/chat/completions"`. Other openai-compatible providers
+        # (deepseek / dashscope / claude) all configure root host only. Doubling
+        # `/v1` results in HTTP 404 from upstream openresty.
         api-key: ${XIAOMI_MIMO_API_KEY:}
-        base-url: https://token-plan-cn.xiaomimimo.com/v1
+        base-url: https://token-plan-cn.xiaomimimo.com
         # IMPORTANT: model names MUST be lowercase to match Xiaomi's /v1/models
         # registry. Mixed-case (e.g. "MiMo-V2.5-Pro") is rejected with HTTP 400
         # "Not supported model" by the upstream — confirmed via GET /v1/models.
