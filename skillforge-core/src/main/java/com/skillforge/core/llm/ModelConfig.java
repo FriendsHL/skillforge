@@ -51,6 +51,13 @@ public class ModelConfig {
         m.put("kimi-k2.5",            262_144);
         m.put("glm-5",                202_752);
         m.put("minimax-m2.5",         204_800);
+        // Xiaomi MiMo — more-specific prefixes MUST appear before less-specific ones.
+        m.put("mimo-v2.5-pro",      1_048_576);
+        m.put("mimo-v2.5-tts",      1_048_576);  // TTS variants share V2.5 tokenizer (1M)
+        m.put("mimo-v2.5",          1_048_576);
+        m.put("mimo-v2-pro",        1_048_576);
+        m.put("mimo-v2-omni",         262_144);  // 256K omni-modal
+        m.put("mimo-v2-tts",        1_048_576);
         // Alibaba Qwen (conservative; override via YAML for exact values)
         m.put("qwen",                  32_000);
         // Gemini

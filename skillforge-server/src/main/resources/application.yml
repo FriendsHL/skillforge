@@ -124,6 +124,26 @@ skillforge:
         #                             # Stream chatStream() does NOT use this; it has a dedicated
         #                             # handshake-phase retry on ConnectException / SSLHandshakeException
         #                             # (2 attempts with 2-5s exponential backoff + jitter).
+      xiaomi-mimo:
+        type: openai
+        api-key: ${XIAOMI_MIMO_API_KEY:}
+        base-url: https://token-plan-cn.xiaomimimo.com/v1
+        model: MiMo-V2.5-Pro
+        models:
+          - MiMo-V2.5-Pro
+          - MiMo-V2.5
+          - MiMo-V2.5-TTS-VoiceClone
+          - MiMo-V2.5-TTS-VoiceDesign
+          - MiMo-V2.5-TTS
+          - MiMo-V2-Pro
+          - MiMo-V2-Omni
+          - MiMo-V2-TTS
+        # Context windows resolved per-model via ModelConfig.KNOWN_MODEL_WINDOWS
+        # (V2.5 / V2-Pro = 1M tokens, V2-Omni = 256K, TTS variants = 1M tokenizer-aligned).
+        # Note: TTS models (-TTS / -TTS-VoiceClone / -TTS-VoiceDesign) are listed for
+        # catalog visibility — chat-completion code path is not the right invocation
+        # surface for them; keep them out of agent.modelId until a TTS-aware path exists.
+        read-timeout-seconds: 240
 
   # Memory extraction configuration
   memory:
