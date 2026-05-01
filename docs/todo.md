@@ -25,7 +25,7 @@
 
 | ID | 完成日期 | Commit | 交付 |
 | --- | --- | --- | --- |
-| **SKILL-IMPORT-BATCH** | 2026-05-01 | 待 commit | [交付索引](delivery-index.md) |
+| **SKILL-IMPORT-BATCH** | 2026-05-01 | `478e135` | [交付索引](delivery-index.md) |
 | SKILL-IMPORT | 2026-05-01 | `a09a17a` + `4490e14` | [交付索引](delivery-index.md) |
 | P9-2 + BUG-32 | 2026-04-30 | 待 commit | [交付索引](delivery-index.md) |
 | SKILL-LOAD | 2026-04-30 | `8d1fb45`(merged via `d74e01c`) | [交付索引](delivery-index.md) |
