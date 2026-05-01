@@ -77,6 +77,23 @@ npx clawhub uninstall <slug>
 npx clawhub list
 ```
 
+## After Install: Register to SkillForge
+
+`npx clawhub install` only puts the skill into ClawHub's own workspace
+(`~/.openclaw/workspace/skills/<slug>`). To make it visible to SkillForge
+(dashboard, t_skill catalog, future agent turns), you MUST call:
+
+```
+ImportSkill({
+  sourcePath: "~/.openclaw/workspace/skills/<slug>",
+  source: "clawhub"
+})
+```
+
+Without this step, the skill stays in ClawHub's workspace only and SkillForge
+cannot dispatch it on subsequent turns. Run `ImportSkill` immediately after a
+successful `npx clawhub install`.
+
 ## Important Notes
 
 - Search ONCE with a broad keyword, then inspect selectively — do NOT repeatedly search with different keywords

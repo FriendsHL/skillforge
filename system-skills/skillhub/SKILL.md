@@ -45,6 +45,23 @@ npx @skill-hub/cli install SKILL_NAME --agent claude --yes
 
 Supported agents: claude, cursor, codex, gemini, copilot, windsurf, cline, roo, opencode
 
+## After Install: Register to SkillForge
+
+`npx @skill-hub/cli install ... --agent claude` only puts the skill into
+SkillHub's local workspace. To make it visible to SkillForge (dashboard,
+t_skill catalog, future agent turns), you MUST call:
+
+```
+ImportSkill({
+  sourcePath: "<absolute path to the SkillHub workspace dir containing SKILL.md>",
+  source: "skillhub"
+})
+```
+
+Without this step, the skill stays in SkillHub's workspace only and SkillForge
+cannot dispatch it on subsequent turns. Run `ImportSkill` immediately after a
+successful install.
+
 ## Important Notes
 
 - Always use `--json` flag for structured output

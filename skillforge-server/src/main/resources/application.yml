@@ -60,6 +60,13 @@ skillforge:
     dual-read-verify-enabled: false
     backfill-enabled: true
     max-backfill-sessions-per-startup: 300
+  # SKILL-IMPORT — whitelist for the ImportSkill agent tool. Each entry is a
+  # filesystem prefix that sourcePath must start with (after symlink resolution).
+  # Leading "~" expands to the JVM user.home. Add new roots + restart to enable
+  # additional marketplace CLIs (no code change required).
+  skill-import:
+    allowed-source-roots:
+      - "~/.openclaw/workspace/skills"
   # Skill packages storage path.
   # P1-D (2026-04-30): runtime path is now resolved by SkillForgeHomeResolver
   # (env var SKILLFORGE_HOME or auto-detect project root → <projectRoot>/skillforge-server).

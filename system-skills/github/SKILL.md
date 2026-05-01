@@ -67,6 +67,24 @@ JSON output with jq filtering:
 gh issue list --repo OWNER/REPO --json number,title --jq '.[] | "\(.number): \(.title)"'
 ```
 
+## After Install: Register to SkillForge
+
+If you cloned a GitHub repository whose contents are a Claude skill (i.e. the
+clone directory contains a `SKILL.md`), the local clone is invisible to
+SkillForge until you register it. After `gh repo clone <owner>/<repo>` (or any
+equivalent `git clone` into a whitelisted directory), you MUST call:
+
+```
+ImportSkill({
+  sourcePath: "<absolute path to the cloned repo containing SKILL.md>",
+  source: "github"
+})
+```
+
+Without this step, the cloned skill is not visible to SkillForge (dashboard
+catalog, t_skill table, subsequent agent turns). The `sourcePath` must be
+inside one of the configured `skillforge.skill-import.allowed-source-roots`.
+
 ## Important Notes
 
 - Use `curl` + GitHub REST API when `gh` CLI is not installed

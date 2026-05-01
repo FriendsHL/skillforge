@@ -1,6 +1,6 @@
 # SkillForge ToDo
 
-> 更新于：2026-04-30(P9-2 + BUG-32 交付)
+> 更新于：2026-05-01(SKILL-IMPORT 交付)
 > 规则：这里只放当前执行状态；需求和方案细节放在链接的需求包中。
 > 旧版：重整前长版 ToDo 已保留在 [references/legacy-todo-2026-04-28.md](references/legacy-todo-2026-04-28.md)。
 
@@ -25,7 +25,8 @@
 
 | ID | 完成日期 | Commit | 交付 |
 | --- | --- | --- | --- |
-| **P9-2 + BUG-32** | 2026-04-30 | 待 commit | [交付索引](delivery-index.md) |
+| **SKILL-IMPORT** | 2026-05-01 | 待 commit | [交付索引](delivery-index.md) |
+| P9-2 + BUG-32 | 2026-04-30 | 待 commit | [交付索引](delivery-index.md) |
 | SKILL-LOAD | 2026-04-30 | `8d1fb45`(merged via `d74e01c`) | [交付索引](delivery-index.md) |
 | P1-D | 2026-04-30 | `6b19439` + `223e5a8`(V33→V38 fix) | [交付索引](delivery-index.md) |
 | CTX-1 | 2026-04-30 | `1de1fe1` | [交付索引](delivery-index.md) |
@@ -38,16 +39,16 @@
 
 ## 暂缓
 
-| ID | 原因 | 重评触发条件 | 文档 |
-| --- | --- | --- | --- |
-| BUG-G | 根因已修，剩余 sanitizer / 尾部不变量属于防御性补强 | 再次出现 dangling assistant `tool_use` / 缺失 `tool_result` | [需求包](requirements/deferred/BUG-G-defensive-hardening/index.md) |
-| SEC-1 | 当前本地 / 单用户使用下重要但不紧急 | 多端部署、共享环境或 P12 正式上线 | [需求包](requirements/backlog/SEC-1-channel-config-encryption/index.md) |
-| P14 | 暂无真实多轮 benchmark 需求 | 出现 tau-bench 类真实业务评测需求 | deferred package TBD |
-| P3-2/P3-4 | 依赖 P14 eval 基础设施 | P14 基础设施就绪 | deferred package TBD |
-| P15-3/P15-6 | Analyzer MVP 暂不需要 eval run 读取或分析 tab 落库 | Analyzer MVP 证明有持续价值 | deferred package TBD |
-| P12-3/P12-6 | 超出 P12 MVP 范围 | 需要 system job UI 或高级可靠性 | [P12](requirements/active/P12-scheduled-tasks/index.md) |
-| P10-4/P10-5 | 四条命令 MVP 已覆盖主要场景 | 出现明确自定义命令或 help menu 需求 | [P10](requirements/active/P10-slash-commands/index.md) |
-| OBS-1-4/OBS-1-5 | OBS-1 MVP 上线后再看 compact 验证视角 + provider quirk 自动诊断的真实使用 | 看到真实 raw payload 后用户提出明确需求 | [OBS-1 PRD](requirements/archive/2026-04-29-OBS-1-session-trace/prd.md) |
+| ID              | 原因                                                      | 重评触发条件                                                | 文档                                                                      |
+| --------------- | ------------------------------------------------------- | ----------------------------------------------------- | ----------------------------------------------------------------------- |
+| BUG-G           | 根因已修，剩余 sanitizer / 尾部不变量属于防御性补强                        | 再次出现 dangling assistant `tool_use` / 缺失 `tool_result` | [需求包](requirements/deferred/BUG-G-defensive-hardening/index.md)         |
+| SEC-1           | 当前本地 / 单用户使用下重要但不紧急                                     | 多端部署、共享环境或 P12 正式上线                                   | [需求包](requirements/backlog/SEC-1-channel-config-encryption/index.md)    |
+| P14             | 暂无真实多轮 benchmark 需求                                     | 出现 tau-bench 类真实业务评测需求                                | deferred package TBD                                                    |
+| P3-2/P3-4       | 依赖 P14 eval 基础设施                                        | P14 基础设施就绪                                            | deferred package TBD                                                    |
+| P15-3/P15-6     | Analyzer MVP 暂不需要 eval run 读取或分析 tab 落库                 | Analyzer MVP 证明有持续价值                                  | deferred package TBD                                                    |
+| P12-3/P12-6     | 超出 P12 MVP 范围                                           | 需要 system job UI 或高级可靠性                               | [P12](requirements/active/P12-scheduled-tasks/index.md)                 |
+| P10-4/P10-5     | 四条命令 MVP 已覆盖主要场景                                        | 出现明确自定义命令或 help menu 需求                               | [P10](requirements/active/P10-slash-commands/index.md)                  |
+| OBS-1-4/OBS-1-5 | OBS-1 MVP 上线后再看 compact 验证视角 + provider quirk 自动诊断的真实使用 | 看到真实 raw payload 后用户提出明确需求                            | [OBS-1 PRD](requirements/archive/2026-04-29-OBS-1-session-trace/prd.md) |
 
 ## 阅读规则
 

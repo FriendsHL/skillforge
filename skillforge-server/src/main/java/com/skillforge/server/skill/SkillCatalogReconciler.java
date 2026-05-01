@@ -425,6 +425,28 @@ public class SkillCatalogReconciler {
     }
 
     /**
+     * SKILL-IMPORT — sha256 hash of {@code SKILL.md} bytes for the given skill
+     * directory. Public surface so {@code SkillImportService} can compute the
+     * exact same hash that {@link #reconcileRuntime()} writes; without sharing
+     * the algorithm the next reconciler pass would treat the row as
+     * content-changed and rewrite it.
+     *
+     * <p>Hash scope is the single {@code SKILL.md} file (matches the existing
+     * reconciler behaviour); other files in the directory are not part of the
+     * fingerprint.
+     *
+     * @throws IllegalArgumentException if neither {@code SKILL.md} nor
+     *     {@code skill.md} is present in the directory.
+     */
+    public String hashSkillMd(Path skillDir) {
+        Path skillMd = findSkillMd(skillDir);
+        if (skillMd == null) {
+            throw new IllegalArgumentException("SKILL.md not found in " + skillDir);
+        }
+        return sha256(readBytes(skillMd));
+    }
+
+    /**
      * Resolve a row's stored {@code skill_path} to an absolute string suitable
      * for path-equality lookup. Handles legacy relative paths (e.g.
      * {@code ./data/skills/<ownerId>/<uuid>}) — the legacy cwd was

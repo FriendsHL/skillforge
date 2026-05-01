@@ -37,6 +37,9 @@ import com.skillforge.server.code.CompiledMethodService;
 import com.skillforge.server.code.RegisterCompiledMethodTool;
 import com.skillforge.server.code.RegisterScriptMethodTool;
 import com.skillforge.server.code.ScriptMethodService;
+import com.skillforge.server.skill.ImportSkillTool;
+import com.skillforge.server.skill.SkillImportProperties;
+import com.skillforge.server.skill.SkillImportService;
 import com.skillforge.server.skill.TodoStore;
 import com.skillforge.server.tool.TodoWriteTool;
 import com.skillforge.server.tool.MemoryDetailTool;
@@ -89,7 +92,8 @@ import java.util.concurrent.TimeUnit;
         LlmProperties.class,
         LifecycleHooksScriptProperties.class,
         SessionMessageStoreProperties.class,
-        MemoryProperties.class
+        MemoryProperties.class,
+        SkillImportProperties.class
 })
 public class SkillForgeConfig {
 
@@ -222,6 +226,21 @@ public class SkillForgeConfig {
         TodoWriteTool tool = new TodoWriteTool(todoStore);
         skillRegistry.registerTool(tool);
         log.info("Registered TodoWriteTool into SkillRegistry");
+        return tool;
+    }
+
+    /**
+     * SKILL-IMPORT — registers the {@code ImportSkill} agent tool. Lets the
+     * agent register a skill it has installed externally (ClawHub / GitHub /
+     * SkillHub) into SkillForge. See {@link SkillImportService}.
+     */
+    @Bean
+    public ImportSkillTool importSkillTool(SkillImportService skillImportService,
+                                           ObjectMapper objectMapper,
+                                           SkillRegistry skillRegistry) {
+        ImportSkillTool tool = new ImportSkillTool(skillImportService, objectMapper);
+        skillRegistry.registerTool(tool);
+        log.info("Registered ImportSkillTool into SkillRegistry");
         return tool;
     }
 
