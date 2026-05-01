@@ -51,6 +51,7 @@
 | P10-4/P10-5     | 四条命令 MVP 已覆盖主要场景                                        | 出现明确自定义命令或 help menu 需求                               | [P10](requirements/active/P10-slash-commands/index.md)                  |
 | OBS-1-4/OBS-1-5 | OBS-1 MVP 上线后再看 compact 验证视角 + provider quirk 自动诊断的真实使用 | 看到真实 raw payload 后用户提出明确需求                            | [OBS-1 PRD](requirements/archive/2026-04-29-OBS-1-session-trace/prd.md) |
 | SKILL-UNINSTALL | dashboard delete 按钮已能用但不清 `t_agent.skill_ids`（silent dangling）；agent 没对应卸载 Tool；本期 SKILL-IMPORT 后浮现的对称缺口 | agent 主动需要卸载 skill / 用户报告删 skill 后 skill_ids 残留 stale 名字 | 主旨：UninstallSkill Tool（dry-run + confirm 双调用）+ SkillService.deleteSkill 内部加 unbind 修复（dashboard 同步受益）+ 全局扫所有 t_agent 解绑 + system 禁卸 + 不调 `npx clawhub uninstall`。Mid 档，需求包待真做时建 |
+| WAITING-SUBAGENT-UX | SubAgent / TeamCreate 异步派发后，主 agent loop 结束 → `runtime_status=idle`，但 sub-agent 还在 running。UI 没有"等待 N 个 sub-agent"指示，用户误以为卡住会重发消息（session `2ad5da4d` 现场） | 多次用户反馈"主 agent 不动了"补消息后才发现 sub-agent 还在跑 / collab 页面信息不够 | 主旨：session 级 `pending_subagent_count` 字段（从活跃 collab_run 计算，per-turn refresh）+ chat header 显示"等待 N 个 sub-agent" badge + hover 展开看 handle / status / duration。语义类似 MSG-1 waiting_user 但对应 waiting_subagent。Mid 档，需求包待真做时建 |
 
 ## 阅读规则
 
