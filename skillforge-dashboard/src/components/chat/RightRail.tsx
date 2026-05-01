@@ -138,7 +138,13 @@ function ActivityTab({
     ? Math.max(...spans.map((s) => s.endTs ?? s.startTs))
     : now;
   const loopEnd = runtimeStatus === 'running' ? Math.max(now, lastSpanEnd) : lastSpanEnd;
-  const totalMs = Math.max(loopEnd - loopStart, 1);
+  // Effective total: max of loopEnd and all individual span ends (handles edge cases
+  // where a span's endTs exceeds loopEnd due to timing)
+  const effectiveEnd = spans.reduce(
+    (max, s) => Math.max(max, s.endTs ?? now),
+    loopEnd,
+  );
+  const totalMs = Math.max(effectiveEnd - loopStart, 1);
   const spanSumMs = spans.reduce((sum, s) => sum + (s.endTs ? s.endTs - s.startTs : now - s.startTs), 0);
   const isRunning = runtimeStatus === 'running';
   const doneCount = spans.filter((s) => !!s.endTs).length;
