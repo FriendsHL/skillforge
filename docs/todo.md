@@ -1,6 +1,6 @@
 # SkillForge ToDo
 
-> 更新于：2026-05-01(SKILL-IMPORT 交付)
+> 更新于：2026-05-01(SKILL-IMPORT-BATCH 交付)
 > 规则：这里只放当前执行状态；需求和方案细节放在链接的需求包中。
 > 旧版：重整前长版 ToDo 已保留在 [references/legacy-todo-2026-04-28.md](references/legacy-todo-2026-04-28.md)。
 
@@ -25,7 +25,8 @@
 
 | ID | 完成日期 | Commit | 交付 |
 | --- | --- | --- | --- |
-| **SKILL-IMPORT** | 2026-05-01 | 待 commit | [交付索引](delivery-index.md) |
+| **SKILL-IMPORT-BATCH** | 2026-05-01 | 待 commit | [交付索引](delivery-index.md) |
+| SKILL-IMPORT | 2026-05-01 | `a09a17a` + `4490e14` | [交付索引](delivery-index.md) |
 | P9-2 + BUG-32 | 2026-04-30 | 待 commit | [交付索引](delivery-index.md) |
 | SKILL-LOAD | 2026-04-30 | `8d1fb45`(merged via `d74e01c`) | [交付索引](delivery-index.md) |
 | P1-D | 2026-04-30 | `6b19439` + `223e5a8`(V33→V38 fix) | [交付索引](delivery-index.md) |
@@ -49,6 +50,7 @@
 | P12-3/P12-6     | 超出 P12 MVP 范围                                           | 需要 system job UI 或高级可靠性                               | [P12](requirements/active/P12-scheduled-tasks/index.md)                 |
 | P10-4/P10-5     | 四条命令 MVP 已覆盖主要场景                                        | 出现明确自定义命令或 help menu 需求                               | [P10](requirements/active/P10-slash-commands/index.md)                  |
 | OBS-1-4/OBS-1-5 | OBS-1 MVP 上线后再看 compact 验证视角 + provider quirk 自动诊断的真实使用 | 看到真实 raw payload 后用户提出明确需求                            | [OBS-1 PRD](requirements/archive/2026-04-29-OBS-1-session-trace/prd.md) |
+| SKILL-UNINSTALL | dashboard delete 按钮已能用但不清 `t_agent.skill_ids`（silent dangling）；agent 没对应卸载 Tool；本期 SKILL-IMPORT 后浮现的对称缺口 | agent 主动需要卸载 skill / 用户报告删 skill 后 skill_ids 残留 stale 名字 | 主旨：UninstallSkill Tool（dry-run + confirm 双调用）+ SkillService.deleteSkill 内部加 unbind 修复（dashboard 同步受益）+ 全局扫所有 t_agent 解绑 + system 禁卸 + 不调 `npx clawhub uninstall`。Mid 档，需求包待真做时建 |
 
 ## 阅读规则
 

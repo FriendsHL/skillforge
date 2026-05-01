@@ -47,6 +47,7 @@
 | SKILL-LOAD | Skill Loader Tool | [需求包](requirements/archive/2026-04-30-SKILL-LOAD-skill-loader-tool/index.md) | [方案](requirements/archive/2026-04-30-SKILL-LOAD-skill-loader-tool/tech-design.md) |
 | P9-2 | Tool Result 归档 + BUG-32 长任务修复 | [需求包](requirements/archive/2026-04-30-P9-2-tool-result-archive/index.md) | [方案](requirements/archive/2026-04-30-P9-2-tool-result-archive/tech-design.md) |
 | SKILL-IMPORT | 第三方 marketplace 装包导入 SkillForge | [需求包](requirements/archive/2026-05-01-SKILL-IMPORT-third-party-marketplace/index.md) | [方案](requirements/archive/2026-05-01-SKILL-IMPORT-third-party-marketplace/tech-design.md) |
+| SKILL-IMPORT-BATCH | 扫描 marketplace whitelist batch import | [需求包](requirements/archive/2026-05-01-SKILL-IMPORT-BATCH-rescan-marketplace/index.md) | [方案](requirements/archive/2026-05-01-SKILL-IMPORT-BATCH-rescan-marketplace/tech-design.md) |
 | P5 | 前端体验优化 | [需求包](requirements/archive/2026-04-19-P5-frontend-optimization/index.md) | [方案](requirements/archive/2026-04-19-P5-frontend-optimization/tech-design.md) |
 | P2 | Channel Gateway | [需求包](requirements/archive/2026-04-20-P2-channel-gateway/index.md) | [方案](requirements/archive/2026-04-20-P2-channel-gateway/tech-design.md) |
 | P4 | Code Agent | [需求包](requirements/archive/2026-04-19-P4-code-agent/index.md) | [方案](requirements/archive/2026-04-19-P4-code-agent/tech-design.md) |

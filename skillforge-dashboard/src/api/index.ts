@@ -360,6 +360,45 @@ export interface RescanReport {
 
 /** P1-D: trigger a synchronous filesystem rescan and return the reconciliation report. */
 export const rescanSkills = () => api.post<RescanReport>('/skills/rescan');
+
+/**
+ * SKILL-IMPORT-BATCH — single item in any of the four
+ * {@link BatchImportResult} buckets. Field optionality reflects which bucket
+ * the item belongs to:
+ *  - imported / updated → name + skillPath set
+ *  - skipped → name + reason set
+ *  - failed → name + error set
+ */
+export interface BatchImportResultItem {
+  name: string;
+  skillPath?: string;
+  reason?: string;
+  error?: string;
+}
+
+/**
+ * SKILL-IMPORT-BATCH — response of {@code POST /api/skills/rescan-marketplace}.
+ * One subdir failure does not abort the whole batch, so callers should render
+ * partial-success state across all four buckets.
+ */
+export interface BatchImportResult {
+  imported: BatchImportResultItem[];
+  updated: BatchImportResultItem[];
+  skipped: BatchImportResultItem[];
+  failed: BatchImportResultItem[];
+}
+
+/**
+ * SKILL-IMPORT-BATCH — trigger a marketplace rescan + batch register.
+ * `userId` mirrors uploadSkill / forkSkill etc. — BE writes ownerId from the
+ * validated userId and never accepts ownerId from FE.
+ */
+export const rescanMarketplace = (source: string, userId: number) =>
+  api.post<BatchImportResult>(
+    `/skills/rescan-marketplace?source=${encodeURIComponent(source)}`,
+    null,
+    { params: { userId } },
+  );
 export const getBuiltinSkills = () => api.get('/skills/builtin');
 export const uploadSkill = (file: File, userId: number) => {
   const form = new FormData();

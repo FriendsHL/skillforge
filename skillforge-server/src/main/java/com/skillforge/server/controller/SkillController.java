@@ -8,8 +8,11 @@ import com.skillforge.server.entity.SkillEvolutionRunEntity;
 import com.skillforge.server.improve.SkillAbEvalService;
 import com.skillforge.server.improve.SkillEvolutionService;
 import com.skillforge.server.service.SkillService;
+import com.skillforge.server.skill.BatchImportResult;
 import com.skillforge.server.skill.RescanReport;
 import com.skillforge.server.skill.SkillCatalogReconciler;
+import com.skillforge.server.skill.SkillBatchImporter;
+import com.skillforge.server.skill.SkillSource;
 import com.skillforge.server.skill.UserSkillLoader;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.http.HttpStatus;
@@ -25,6 +28,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -35,24 +39,41 @@ import java.util.stream.Collectors;
 @RequestMapping("/api/skills")
 public class SkillController {
 
+    /**
+     * SKILL-IMPORT-BATCH — only marketplace-style sources are accepted by
+     * {@link #rescanMarketplace}. Internal sources (UPLOAD / SKILL_CREATOR /
+     * DRAFT_APPROVE / EVOLUTION_FORK) reach the catalog through other paths
+     * and must not be addressable via this endpoint or they would corrupt the
+     * {@code t_skill.source} column with a wire form that does not correspond
+     * to a marketplace install.
+     */
+    private static final Set<SkillSource> MARKETPLACE_SOURCES = EnumSet.of(
+            SkillSource.CLAWHUB,
+            SkillSource.GITHUB,
+            SkillSource.SKILLHUB,
+            SkillSource.FILESYSTEM);
+
     private final SkillService skillService;
     private final SkillRegistry skillRegistry;
     private final SkillAbEvalService skillAbEvalService;
     private final SkillEvolutionService skillEvolutionService;
     private final SkillCatalogReconciler reconciler;
     private final UserSkillLoader userSkillLoader;
+    private final SkillBatchImporter skillBatchImporter;
 
     public SkillController(SkillService skillService, SkillRegistry skillRegistry,
                            SkillAbEvalService skillAbEvalService,
                            SkillEvolutionService skillEvolutionService,
                            SkillCatalogReconciler reconciler,
-                           UserSkillLoader userSkillLoader) {
+                           UserSkillLoader userSkillLoader,
+                           SkillBatchImporter skillBatchImporter) {
         this.skillService = skillService;
         this.skillRegistry = skillRegistry;
         this.skillAbEvalService = skillAbEvalService;
         this.skillEvolutionService = skillEvolutionService;
         this.reconciler = reconciler;
         this.userSkillLoader = userSkillLoader;
+        this.skillBatchImporter = skillBatchImporter;
     }
 
     /**
@@ -475,5 +496,51 @@ public class SkillController {
         body.put("shadowed", report.shadowed());
         body.put("disabledDuplicates", report.disabledDuplicates());
         return ResponseEntity.ok(body);
+    }
+
+    /**
+     * SKILL-IMPORT-BATCH — scan every {@code allowed-source-roots} root for
+     * first-level subdirs and call {@code SkillBatchImporter.batchImportFromMarketplace}
+     * to register each into the catalog. The same {@link SkillSource} is
+     * applied to every subdir; the wire form (e.g. {@code clawhub} /
+     * {@code github} / {@code skillhub} / {@code filesystem}) maps to
+     * {@link SkillSource} via uppercase + dash→underscore.
+     *
+     * <p>Auth: mirrors {@code /upload}, {@code /fork}, etc. — the BE writes
+     * {@code ownerId} from the validated {@code userId} query param and never
+     * accepts an {@code ownerId} parameter from the FE.
+     *
+     * @param sourceWire wire-format source name; one of {@code clawhub} /
+     *                   {@code github} / {@code skillhub} / {@code filesystem}
+     * @param userId     calling user id; used as {@code ownerId} for every
+     *                   imported row (P1 §B-1, "BE writes ownerId from the
+     *                   validated userId — never accepts ownerId from FE")
+     * @return 200 with {@link BatchImportResult} JSON; 400 if {@code source}
+     *         is not a recognised {@link SkillSource} wire name
+     */
+    @PostMapping("/rescan-marketplace")
+    public ResponseEntity<?> rescanMarketplace(
+            @RequestParam("source") String sourceWire,
+            @RequestParam(value = "userId", required = true) Long userId) {
+        SkillSource source;
+        try {
+            source = SkillSource.valueOf(sourceWire.toUpperCase().replace('-', '_'));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest()
+                    .body(Map.of("error", "invalid source: " + sourceWire));
+        }
+        // Defence in depth: SkillSource.valueOf would otherwise accept
+        // server-internal allocation sources (upload / skill_creator /
+        // draft_approve / evolution_fork) which must NOT route through the
+        // marketplace rescan endpoint. PRD F1 limits this endpoint to
+        // {clawhub, github, skillhub, filesystem}.
+        if (!MARKETPLACE_SOURCES.contains(source)) {
+            return ResponseEntity.badRequest()
+                    .body(Map.of("error",
+                            "source must be one of: clawhub, github, skillhub, filesystem (got: "
+                                    + sourceWire + ")"));
+        }
+        BatchImportResult result = skillBatchImporter.batchImportFromMarketplace(source, userId);
+        return ResponseEntity.ok(result);
     }
 }

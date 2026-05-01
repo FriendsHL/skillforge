@@ -7,6 +7,7 @@ import com.skillforge.server.improve.SkillEvolutionService;
 import com.skillforge.server.service.SkillService;
 import com.skillforge.server.skill.RescanReport;
 import com.skillforge.server.skill.SkillCatalogReconciler;
+import com.skillforge.server.skill.SkillBatchImporter;
 import com.skillforge.server.skill.UserSkillLoader;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -47,13 +48,15 @@ class SkillControllerTest {
     @Mock private SkillEvolutionService skillEvolutionService;
     @Mock private SkillCatalogReconciler reconciler;
     @Mock private UserSkillLoader userSkillLoader;
+    @Mock private SkillBatchImporter skillBatchImporter;
 
     private SkillController controller;
 
     @BeforeEach
     void setUp() {
         controller = new SkillController(skillService, skillRegistry,
-                skillAbEvalService, skillEvolutionService, reconciler, userSkillLoader);
+                skillAbEvalService, skillEvolutionService, reconciler, userSkillLoader,
+                skillBatchImporter);
     }
 
     @Test
