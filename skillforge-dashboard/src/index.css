@@ -2627,10 +2627,10 @@ html[data-density="spacious"] { --density: 1; }
   opacity: 1;
 }
 .mw-agent-root--running .mw-bar-track {
-  box-shadow: 0 0 6px rgba(202, 138, 4, 0.25);
+  box-shadow: 0 0 6px rgba(6, 182, 212, 0.25);
 }
 .mw-agent-root--running .mw-span-head .mw-dot {
-  background: #ca8a04;
+  background: #06b6d4;
   opacity: 1;
   animation: mw-pulse 1.4s ease-in-out infinite;
 }
