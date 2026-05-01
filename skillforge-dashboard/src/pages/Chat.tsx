@@ -42,7 +42,7 @@ import {
 import { z } from 'zod';
 import { AgentSchema, SessionSchema, safeParseList } from '../api/schemas';
 import { useChatWebSocket } from '../hooks/useChatWebSocket';
-import { useChatMessages, type InflightTool } from '../hooks/useChatMessages';
+import { useChatMessages, type InflightTool, type LoopSpan } from '../hooks/useChatMessages';
 import { useCollabState } from '../hooks/useCollabState';
 import {
   useChatSession,
@@ -90,6 +90,8 @@ const Chat: React.FC = () => {
     setStreamingToolInputs,
     inflightTools,
     setInflightTools,
+    loopSpans,
+    setLoopSpans,
   } = useChatMessages(activeSessionId);
 
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus>('idle');
@@ -244,6 +246,7 @@ const Chat: React.FC = () => {
     setCollabRunStatus,
     setSessions,
     setCompactionNotice,
+    setLoopSpans,
   });
 
   useChatWebSocket(activeSessionId, handleWsEvent);
@@ -343,6 +346,7 @@ const Chat: React.FC = () => {
   };
 
   const doSend = async (sid: string, text: string) => {
+    setLoopSpans([]);
     setRawMessages((prev) => [...prev, { role: 'user', content: text }]);
     setRuntimeStatus('running');
     setRuntimeStep('Starting');
@@ -873,6 +877,7 @@ const Chat: React.FC = () => {
         userId={userId}
         onCompactClick={handleCompactClick}
         compacting={compacting}
+        loopSpans={loopSpans}
       />
 
       <CompactionHistoryModal

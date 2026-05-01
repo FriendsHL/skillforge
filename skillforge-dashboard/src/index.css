@@ -2570,6 +2570,222 @@ html[data-density="spacious"] { --density: 1; }
   color: var(--fg-4);
 }
 
+/* Mini waterfall (ActivityTab) */
+.mw-container {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.mini-waterfall-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.mini-waterfall {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.mw-header-meta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-4);
+}
+.mw-timescale {
+  position: relative;
+  height: 16px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--border-1);
+}
+.mw-tick {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--fg-4);
+}
+.mw-span {
+  border-radius: 4px;
+  transition: opacity 0.2s;
+}
+.mw-span--done {
+  opacity: 1;
+}
+.mw-span--done:hover {
+  opacity: 1;
+}
+.mw-span--active {
+  opacity: 1;
+}
+.mw-span--err {
+  opacity: 1;
+}
+.mw-agent-root {
+  opacity: 1;
+}
+.mw-agent-root--running .mw-bar-track {
+  box-shadow: 0 0 6px rgba(var(--accent-rgb, 99, 102, 241), 0.3);
+}
+.mw-agent-root--running .mw-dot--agent {
+  background: var(--accent);
+  opacity: 1;
+  animation: mw-pulse 1.4s ease-in-out infinite;
+}
+.mw-end-badge {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+.mw-end-badge--ok {
+  color: #16a34a;
+  background: rgba(22, 163, 74, 0.12);
+}
+.mw-end-badge--err {
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.12);
+}
+.mw-span-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px 2px;
+}
+.mw-dot {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--fg-4);
+  transition: background 0.3s;
+}
+.mw-dot--agent {
+  width: 8px;
+  height: 8px;
+  background: var(--accent);
+  opacity: 0.5;
+}
+.mw-dot--pulse {
+  background: var(--accent);
+  animation: mw-pulse 1.4s ease-in-out infinite;
+}
+.mw-span--active .mw-dot {
+  background: var(--accent);
+  animation: mw-pulse 1.4s ease-in-out infinite;
+}
+.mw-span--err .mw-dot {
+  background: var(--err, #ef4444);
+}
+@keyframes mw-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+.mw-type {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-radius: 3px;
+  padding: 1px 4px;
+}
+.mw-type--llm {
+  color: #818cf8;
+  background: rgba(129, 140, 248, 0.12);
+}
+.mw-type--tool {
+  color: #f59e0b;
+  background: rgba(245, 158, 11, 0.12);
+}
+.mw-type--agent {
+  color: var(--fg-3);
+  background: var(--bg-surface);
+}
+.mw-name {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mw-dur {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--fg-4);
+}
+.mw-spinner {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1.5px solid var(--border-2);
+  border-top-color: var(--accent);
+  animation: sf-spin 0.8s linear infinite;
+}
+.mw-bar-track {
+  position: relative;
+  height: 4px;
+  margin: 0 6px 4px;
+  background: var(--bg-surface);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.mw-bar {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  border-radius: 2px;
+  min-width: 2px;
+  transition: width 0.4s ease;
+}
+.mw-bar--live {
+  animation: mw-bar-glow 1.6s ease-in-out infinite;
+}
+@keyframes mw-bar-glow {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+.mw-bar--err {
+  opacity: 0.8;
+}
+
+/* Running indicator — lightweight, distinct from span rows */
+.mw-running-indicator {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 6px 4px;
+  margin-top: 4px;
+  border-top: 1px dashed var(--border-1);
+}
+.mw-running-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: mw-pulse 1.4s ease-in-out infinite;
+}
+.mw-running-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--fg-4);
+  font-style: italic;
+  animation: mw-pulse 1.4s ease-in-out infinite;
+}
+
 /* Pending ask */
 .ask-card {
   margin: 14px auto;

@@ -13,6 +13,16 @@ export interface StreamingToolInput {
   startTs: number;
 }
 
+export interface LoopSpan {
+  id: string;
+  type: 'LLM_CALL' | 'TOOL_CALL';
+  name: string;
+  startTs: number;
+  endTs?: number;
+  status?: 'success' | 'error';
+  durationMs?: number;
+}
+
 /**
  * 归一化后端返回的消息列表:
  * Agent Loop 产生的历史消息里 tool_result 以 role=user 发回,会变成空文本的用户气泡。
@@ -165,6 +175,7 @@ export function useChatMessages(activeSessionId: string | undefined) {
   const [streamingText, setStreamingText] = useState<string>('');
   const [streamingToolInputs, setStreamingToolInputs] = useState<Record<string, StreamingToolInput>>({});
   const [inflightTools, setInflightTools] = useState<Record<string, InflightTool>>({});
+  const [loopSpans, setLoopSpans] = useState<LoopSpan[]>([]);
 
   const messages = useMemo(() => normalizeMessages(rawMessages as any[]), [rawMessages]);
 
@@ -173,6 +184,7 @@ export function useChatMessages(activeSessionId: string | undefined) {
     setStreamingText('');
     setStreamingToolInputs({});
     setInflightTools({});
+    setLoopSpans([]);
   }, [activeSessionId]);
 
   return {
@@ -185,5 +197,7 @@ export function useChatMessages(activeSessionId: string | undefined) {
     setStreamingToolInputs,
     inflightTools,
     setInflightTools,
+    loopSpans,
+    setLoopSpans,
   };
 }

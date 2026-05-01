@@ -4,7 +4,7 @@ import type {
   ConfirmationChoice,
   ConfirmationPromptPayload,
 } from '../api';
-import type { InflightTool, StreamingToolInput } from './useChatMessages';
+import type { InflightTool, StreamingToolInput, LoopSpan } from './useChatMessages';
 import type { RuntimeStatus } from './useChatSession';
 
 interface PendingAskOption {
@@ -40,6 +40,7 @@ export interface WsEventHandlerDeps {
   setCollabRunStatus: Dispatch<SetStateAction<string | null>>;
   setSessions: Dispatch<SetStateAction<any[]>>;
   setCompactionNotice: Dispatch<SetStateAction<boolean>>;
+  setLoopSpans: Dispatch<SetStateAction<LoopSpan[]>>;
 }
 
 export function useChatWsEventHandler(deps: WsEventHandlerDeps) {
@@ -58,9 +59,11 @@ export function useChatWsEventHandler(deps: WsEventHandlerDeps) {
     setCollabRunStatus,
     setSessions,
     setCompactionNotice,
+    setLoopSpans,
   } = deps;
 
   const lastSnapshotVersionRef = useRef<number>(-1);
+  const activeLlmSpanIdRef = useRef<string | null>(null);
 
   return useCallback(
     (evtRaw: unknown) => {
@@ -88,6 +91,7 @@ export function useChatWsEventHandler(deps: WsEventHandlerDeps) {
           setStreamingText('');
           setStreamingToolInputs({});
           setCancelling(false);
+          activeLlmSpanIdRef.current = null;
         }
       } else if (evt.type === 'message_appended') {
         if (
@@ -99,6 +103,17 @@ export function useChatWsEventHandler(deps: WsEventHandlerDeps) {
         const msg = evt.message as { role?: string; content?: unknown } | undefined;
         if (msg?.role === 'assistant') {
           setStreamingText('');
+          // Close active LLM_CALL span
+          if (activeLlmSpanIdRef.current) {
+            const llmId = activeLlmSpanIdRef.current;
+            activeLlmSpanIdRef.current = null;
+            const endTs = Date.now();
+            setLoopSpans((prev) =>
+              prev.map((e) =>
+                e.id === llmId ? { ...e, endTs, status: 'success', durationMs: endTs - e.startTs } : e,
+              ),
+            );
+          }
         }
         if (msg) {
           setRawMessages((prev) => {
@@ -221,21 +236,44 @@ export function useChatWsEventHandler(deps: WsEventHandlerDeps) {
       } else if (evt.type === 'tool_started') {
         const toolUseId = evt.toolUseId as string;
         const name = evt.name as string;
+        const startTs = Date.now();
         setInflightTools((prev) => ({
           ...prev,
-          [toolUseId]: { name, input: evt.input, startTs: Date.now() },
+          [toolUseId]: { name, input: evt.input, startTs },
         }));
+        setLoopSpans((prev) => {
+          if (prev.some((e) => e.id === toolUseId)) return prev;
+          return [...prev, { id: toolUseId, type: 'TOOL_CALL', name, startTs }];
+        });
       } else if (evt.type === 'tool_finished') {
         const toolUseId = evt.toolUseId as string;
+        const endTs = Date.now();
+        const status = (evt.status as 'success' | 'error') ?? 'success';
         setInflightTools((prev) => {
           const next = { ...prev };
           delete next[toolUseId];
           return next;
         });
+        setLoopSpans((prev) =>
+          prev.map((e) =>
+            e.id === toolUseId
+              ? { ...e, endTs, status, durationMs: endTs - e.startTs }
+              : e,
+          ),
+        );
       } else if (evt.type === 'text_delta') {
         const chunk = (evt.delta as string) ?? '';
         if (chunk) {
           setStreamingText((prev) => prev + chunk);
+          // Start LLM_CALL span on first text delta of this turn
+          if (!activeLlmSpanIdRef.current) {
+            const llmId = `llm_${Date.now()}`;
+            activeLlmSpanIdRef.current = llmId;
+            setLoopSpans((prev) => [
+              ...prev,
+              { id: llmId, type: 'LLM_CALL', name: 'Generating', startTs: Date.now() },
+            ]);
+          }
         }
       } else if (evt.type === 'tool_use_delta') {
         const toolUseId = evt.toolUseId as string;
@@ -296,6 +334,7 @@ export function useChatWsEventHandler(deps: WsEventHandlerDeps) {
       setCollabRunStatus,
       setSessions,
       setCompactionNotice,
+      setLoopSpans,
     ],
   );
 }

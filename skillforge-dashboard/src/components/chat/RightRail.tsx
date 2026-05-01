@@ -15,6 +15,16 @@ interface InflightTool {
   startTs: number;
 }
 
+interface LoopSpan {
+  id: string;
+  type: 'LLM_CALL' | 'TOOL_CALL';
+  name: string;
+  startTs: number;
+  endTs?: number;
+  status?: 'success' | 'error';
+  durationMs?: number;
+}
+
 export interface CollabMember {
   handle: string;
   sessionId: string;
@@ -67,6 +77,7 @@ interface RightRailProps {
   userId?: number;
   onCompactClick?: () => void;
   compacting?: boolean;
+  loopSpans?: LoopSpan[];
 }
 
 type Tab = 'context' | 'activity' | 'subagent' | 'team';
@@ -77,72 +88,176 @@ const formatElapsed = (ms: number): string => {
   return `${Math.floor(s / 60)}m ${(s % 60).toString().padStart(2, '0')}s`;
 };
 
+function formatDuration(ms: number): string {
+  if (ms >= 1000) return `${(ms / 1000).toFixed(1)}s`;
+  return `${ms}ms`;
+}
+
+const SPAN_COLORS: Record<string, string> = {
+  LLM_CALL: '#818cf8',
+  TOOL_CALL: '#f59e0b',
+};
+
 function ActivityTab({
   inflightTools,
   runtimeStatus,
+  loopSpans,
 }: {
   inflightTools: Record<string, InflightTool>;
   runtimeStatus: string;
+  loopSpans?: LoopSpan[];
 }) {
   const [now, setNow] = useState(Date.now());
-  const entries = Object.entries(inflightTools);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const hasSpans = loopSpans && loopSpans.length > 0;
+  const hasInflight = Object.keys(inflightTools).length > 0;
 
   useEffect(() => {
-    if (entries.length === 0) return;
+    if (!hasInflight && runtimeStatus !== 'running') return;
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
-  }, [entries.length]);
+  }, [hasInflight, runtimeStatus]);
 
-  if (entries.length === 0) {
+  // Auto-scroll to bottom when new spans appear
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [loopSpans?.length]);
+
+  if (!hasSpans && !hasInflight) {
     return (
       <div className="rail-empty-rd">
-        {runtimeStatus === 'running' ? 'Agent is thinking…' : 'No active tools.'}
+        {runtimeStatus === 'running' ? 'Agent is thinking…' : 'No activity.'}
       </div>
     );
   }
 
+  const spans = loopSpans ?? [];
+  const loopStart = spans.length > 0 ? spans[0].startTs : now;
+  const lastSpanEnd = spans.length > 0
+    ? Math.max(...spans.map((s) => s.endTs ?? s.startTs))
+    : now;
+  const loopEnd = runtimeStatus === 'running' ? Math.max(now, lastSpanEnd) : lastSpanEnd;
+  const totalMs = Math.max(loopEnd - loopStart, 1);
+  const spanSumMs = spans.reduce((sum, s) => sum + (s.durationMs ?? (s.endTs ? s.endTs - s.startTs : now - s.startTs)), 0);
+  const isRunning = runtimeStatus === 'running';
+  const doneCount = spans.filter((s) => !!s.endTs).length;
+  const errCount = spans.filter((s) => s.status === 'error').length;
+
   return (
-    <>
+    <div className="mw-container">
       <div className="rail-section-title">
-        <span>Live tools</span>
-        <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--fg-4)' }}>
-          {entries.length} active
+        <span>Loop</span>
+        <span className="mw-header-meta">
+          {doneCount}/{spans.length} done · {formatElapsed(spanSumMs)}{errCount > 0 && <>{' '}· <span style={{ color: 'var(--err, #ef4444)' }}>{errCount} err</span></>}
         </span>
       </div>
-      {entries.map(([id, t]) => {
-        let inputPreview = '';
-        try {
-          inputPreview = typeof t.input === 'string' ? t.input : JSON.stringify(t.input);
-        } catch {
-          inputPreview = '';
-        }
-        return (
-          <div key={id} className="lane-item-rd">
-            <div className="lane-head">
-              <span className="lane-name">{t.name}</span>
-              <span className="lane-status-rd">running</span>
-              <span className="lane-elapsed">{formatElapsed(now - t.startTs)}</span>
+
+      {/* Time scale */}
+      <div className="mw-timescale">
+        {[0, 0.5, 1].map((t) => (
+          <span key={t} className="mw-tick" style={{ left: `${t * 100}%` }}>
+            {formatElapsed(totalMs * t)}
+          </span>
+        ))}
+      </div>
+
+      <div className="mini-waterfall-scroll" ref={scrollRef}>
+        <div className="mini-waterfall">
+          {/* Agent root bar */}
+          <div className={`mw-span mw-agent-root ${isRunning ? 'mw-agent-root--running' : ''}`}>
+            <div className="mw-span-head">
+              <span className="mw-dot" style={{
+                background: isRunning
+                  ? undefined
+                  : errCount > 0
+                    ? '#ef4444'
+                    : '#16a34a',
+                opacity: isRunning ? undefined : 0.8,
+              }} />
+              <span className="mw-type mw-type--agent">Agent</span>
+              <span className="mw-name">Total</span>
+              {!isRunning && errCount > 0 && (
+                <span className="mw-end-badge mw-end-badge--err">✗ error</span>
+              )}
+              {!isRunning && errCount === 0 && doneCount === spans.length && spans.length > 0 && (
+                <span className="mw-end-badge mw-end-badge--ok">✓ done</span>
+              )}
+              <span className="mw-dur">{formatElapsed(totalMs)}</span>
             </div>
-            <div className="lane-progress">
-              <div className="lane-progress-bar" />
-            </div>
-            <div
-              style={{
-                marginTop: 6,
-                fontFamily: 'var(--font-mono)',
-                fontSize: 11,
-                color: 'var(--fg-3)',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {inputPreview}
+            <div className="mw-bar-track">
+              <div
+                className={`mw-bar ${isRunning ? 'mw-bar--live' : ''}`}
+                style={{
+                  left: '0%',
+                  width: '100%',
+                  background: isRunning
+                    ? 'var(--accent)'
+                    : errCount > 0
+                      ? '#ef4444'
+                      : '#16a34a',
+                  opacity: isRunning ? 0.35 : 0.5,
+                }}
+              />
             </div>
           </div>
-        );
-      })}
-    </>
+
+          {/* Span rows */}
+          {spans.map((span) => {
+            const done = !!span.endTs;
+            const isError = span.status === 'error';
+            const color = SPAN_COLORS[span.type] ?? 'var(--fg-4)';
+            const spanStart = span.startTs - loopStart;
+            const spanDur = done && span.durationMs != null
+              ? span.durationMs
+              : now - span.startTs;
+            const barLeft = (spanStart / totalMs) * 100;
+            const barWidth = Math.max((spanDur / totalMs) * 100, 2);
+            const elapsed = done ? formatDuration(spanDur) : formatElapsed(spanDur);
+
+            return (
+              <div
+                key={span.id}
+                className={`mw-span ${done ? 'mw-span--done' : 'mw-span--active'} ${isError ? 'mw-span--err' : ''}`}
+              >
+                <div className="mw-span-head">
+                  <span className="mw-dot" style={{ background: done && !isError ? color : undefined }} />
+                  <span className={`mw-type mw-type--${span.type === 'LLM_CALL' ? 'llm' : 'tool'}`}>
+                    {span.type === 'LLM_CALL' ? 'LLM' : 'Tool'}
+                  </span>
+                  <span className="mw-name">{span.name}</span>
+                  {done && isError && (
+                    <span className="mw-end-badge mw-end-badge--err">✗</span>
+                  )}
+                  <span className="mw-dur">
+                    {!done && <span className="mw-spinner" />}
+                    {elapsed}
+                  </span>
+                </div>
+                <div className="mw-bar-track">
+                  <div
+                    className={`mw-bar ${done ? '' : 'mw-bar--live'} ${isError ? 'mw-bar--err' : ''}`}
+                    style={{
+                      left: `${barLeft}%`,
+                      width: `${barWidth}%`,
+                      background: isError ? 'var(--err, #ef4444)' : color,
+                    }}
+                  />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Running indicator — thin pulsing line, not a span row */}
+        {isRunning && (
+          <div className="mw-running-indicator">
+            <span className="mw-running-dot" />
+            <span className="mw-running-label">thinking…</span>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -989,9 +1104,12 @@ function RightRail({
   userId,
   onCompactClick,
   compacting,
+  loopSpans,
 }: RightRailProps) {
   const [tab, setTab] = useState<Tab>(collabRunId ? 'team' : 'activity');
+  const loopSpanCount = loopSpans?.length ?? 0;
   const activeToolCount = Object.keys(inflightTools).length;
+  const badgeCount = loopSpanCount > 0 ? loopSpanCount : activeToolCount;
 
   return (
     <aside className="rail">
@@ -1008,7 +1126,7 @@ function RightRail({
           className={`rail-tab ${tab === 'activity' ? 'on' : ''}`}
           onClick={() => setTab('activity')}
         >
-          Activity <span className="count">{activeToolCount}</span>
+          Activity <span className="count">{badgeCount}</span>
         </button>
         <button
           type="button"
@@ -1046,7 +1164,7 @@ function RightRail({
           />
         )}
         {tab === 'activity' && (
-          <ActivityTab inflightTools={inflightTools} runtimeStatus={runtimeStatus} />
+          <ActivityTab inflightTools={inflightTools} runtimeStatus={runtimeStatus} loopSpans={loopSpans} />
         )}
         {tab === 'subagent' && (
           <SubAgentTab sessionId={sessionId} userId={userId} />
