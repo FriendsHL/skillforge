@@ -53,6 +53,16 @@ skillforge:
                                         # guard). Switched back to off so subsequent
                                         # restarts don't re-run the migration.
         qwen-displayname: bailian      # bailian | dashscope (R2-B4 §3.3)
+      trace_span:
+        mode: off                       # off | flyway (OBS-2 §M2)
+                                        # Switching to 'flyway' triggers Flyway re-run of
+                                        # R__migrate_legacy_trace_span (placeholder hash
+                                        # changes), which migrates t_trace_span TOOL_CALL +
+                                        # 4 event types into t_llm_span (kind=tool/event,
+                                        # source='legacy') and backfills lifecycle/aggregate
+                                        # fields on existing legacy t_llm_trace rows.
+                                        # After verifying counts in dev DB, revert to 'off'
+                                        # so subsequent restarts don't re-run.
 
   session-message-store:
     row-read-enabled: true

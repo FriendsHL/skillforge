@@ -52,7 +52,9 @@ class PgLlmSpanEntityIT {
         Flyway.configure()
                 .dataSource(ds)
                 .locations("classpath:db/migration")
-                .placeholders(java.util.Map.of("etl_mode", "off"))
+                .placeholders(java.util.Map.of(
+                        "etl_mode", "off",
+                        "etl_trace_span_mode", "off"))
                 .load()
                 .migrate();
     }

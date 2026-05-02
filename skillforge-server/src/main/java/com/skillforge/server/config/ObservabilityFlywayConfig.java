@@ -26,11 +26,16 @@ public class ObservabilityFlywayConfig {
 
     @Bean
     public FlywayConfigurationCustomizer obsFlywayCustomizer(
-            @Value("${skillforge.observability.etl.legacy.mode:off}") String etlMode) {
+            @Value("${skillforge.observability.etl.legacy.mode:off}") String etlMode,
+            @Value("${skillforge.observability.etl.trace_span.mode:off}") String etlTraceSpanMode) {
         return (FluentConfiguration config) -> {
-            // Plan §3.4 R3-WN1: placeholder controls hash diff so mode flip → R__ rerun.
+            // Plan §3.4 R3-WN1 / OBS-2 §M2: placeholders control hash diff so mode flips
+            // re-run the corresponding R__ migration.
+            //   * etl_mode            → R__migrate_legacy_llm_call  (OBS-1)
+            //   * etl_trace_span_mode → R__migrate_legacy_trace_span (OBS-2 §M2)
             Map<String, String> placeholders = new HashMap<>(config.getPlaceholders());
             placeholders.put("etl_mode", etlMode);
+            placeholders.put("etl_trace_span_mode", etlTraceSpanMode);
             config.placeholders(placeholders);
         };
     }

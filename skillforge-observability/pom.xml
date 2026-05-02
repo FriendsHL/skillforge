@@ -57,4 +57,27 @@
             <scope>test</scope>
         </dependency>
     </dependencies>
+
+    <build>
+        <plugins>
+            <!--
+                OBS-2 §M2 build hygiene: align with skillforge-server's surefire config so
+                **/*IT.java embedded-postgres tests (PgLlmSpanEntityIT, PgLlmTraceLifecycleIT,
+                PgLlmTraceSpanMigrationIT) are picked up by `mvn test`. Without this include,
+                Spring Boot's inherited surefire defaults only match *Test.java / *Tests.java,
+                silently skipping the existing M1 IT files added in commit 4412729.
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <includes>
+                        <include>**/*Test.java</include>
+                        <include>**/*Tests.java</include>
+                        <include>**/*IT.java</include>
+                    </includes>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
 </project>
