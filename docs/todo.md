@@ -24,7 +24,7 @@
 
 | ID | 完成日期 | Commit | 交付 |
 | --- | --- | --- | --- |
-| **OBS-2 M4** | 2026-05-03 | M2 ETL 实跑（33 trace + 920 tool + 4 event 回填）+ M4 关旧轨写入 commit (hash 待补) | [交付索引](delivery-index.md)；M5/M6 待跟进 |
+| **OBS-2 M4** | 2026-05-03 | M2 ETL 实跑（33 trace + 920 tool + 4 event 回填）+ M4 关旧轨写入 `b31cfaf` | [交付索引](delivery-index.md)；M5/M6 待跟进 |
 | **OBS-2 Trace 数据模型统一（M0-M3）** | 2026-05-02 | `cf9123c` + `06b2372` + `edd5a21`(M0) + `4412729`(M1) + `26023c5`(M2) + `69ee35b`(M3) | [交付索引](delivery-index.md)；M3.5/M4/M5/M6 待跟进，PRD 留 active |
 | **xiaomi-mimo provider** | 2026-05-02 | `08a6d4d` + `afa8cf4` + `f6be1ab` | [交付索引](delivery-index.md) |
 | SKILL-IMPORT-BATCH | 2026-05-01 | `478e135` | [交付索引](delivery-index.md) |

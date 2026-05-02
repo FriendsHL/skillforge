@@ -42,7 +42,7 @@ OBS-2 把 `t_llm_trace` / `t_llm_span` 扩展为统一 trace + span 表（加 `k
 | M3（API + 前端切读）| ✅ | `69ee35b` |
 | M3.5（观察期）| ✅ | dev DB 双轨一致已确认 |
 | M2 ETL 真触发（前置 M4）| ✅ | 直接 SQL 等价跑：33 legacy trace 转 ok/error + 920 tool + 4 event 回填 |
-| M4（关闭 t_trace_span 写入）| ✅ | (commit hash 待补) |
+| M4（关闭 t_trace_span 写入）| ✅ | `b31cfaf` |
 | M5（观察期 ~2 天，单轨）| ⏳ | — |
 | M6（drop t_trace_span）| ⏳ | — |
 
