@@ -175,7 +175,9 @@ const SessionDetail: React.FC = () => {
     queryKey: ['session-spans', sessionId, userId],
     queryFn: async () => {
       if (!sessionId || !userId) throw new Error('missing sessionId or userId');
-      const res = await getSessionSpans(sessionId, userId);
+      // limit=1000 is the backend max; default 200 truncated long sessions and
+      // dropped the latest traces' children. (3) will switch to per-trace fetch.
+      const res = await getSessionSpans(sessionId, userId, { limit: 1000 });
       const data = res.data;
       return Array.isArray(data.spans) ? data.spans : [];
     },
