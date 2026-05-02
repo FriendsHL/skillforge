@@ -47,9 +47,11 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.time.Instant;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 /**
@@ -87,6 +89,13 @@ public class AgentLoopEngine {
     private ContextCompactorCallback compactorCallback;
     /** 可选:链路追踪收集器。null 时不记录 span。 */
     private TraceCollector traceCollector;
+    /**
+     * OBS-2 M1: 可选 trace lifecycle sink — 同步 upsertTraceStub + 异步 writeToolSpan /
+     * writeEventSpan / finalizeTrace。null 时不写 t_llm_trace lifecycle / t_llm_span
+     * (kind=tool|event)（双写降级），不影响主路径。Engine 调用处必须包 try-catch 隔离
+     * DB 故障（§C.2 R2-B1）。
+     */
+    private TraceLifecycleSink traceLifecycleSink;
     /** 可选:install confirmation prompter。null 时 install 命令走 SafetyHook fail-closed。 */
     private ConfirmationPrompter confirmationPrompter;
     /** 可选:会话级 install 授权缓存(per root session)。 */
@@ -184,6 +193,11 @@ public class AgentLoopEngine {
 
     public void setTraceCollector(TraceCollector traceCollector) {
         this.traceCollector = traceCollector;
+    }
+
+    /** OBS-2 M1: wire optional trace lifecycle sink (PgLlmTraceStore in production). */
+    public void setTraceLifecycleSink(TraceLifecycleSink traceLifecycleSink) {
+        this.traceLifecycleSink = traceLifecycleSink;
     }
 
     public void setConfirmationPrompter(ConfirmationPrompter confirmationPrompter) {
@@ -407,6 +421,14 @@ public class AgentLoopEngine {
         LlmProvider llmProvider = resolveProvider(agentDef, resolvedModel);
         String actualModelId = resolvedModel[0];
 
+        // OBS-2 M1: capture loop start time for finalize totalDurationMs.
+        final long obsLoopStartMs = System.currentTimeMillis();
+        // OBS-2 M1 §C.7 R2-B2: use AtomicInteger so lambda-internal increments compile and
+        // are safe across the multi-threaded supplyAsync path. obsEventCount also AtomicInteger
+        // for consistency / future-safety even though it's currently incremented from main loop only.
+        final AtomicInteger obsToolCallCount = new AtomicInteger(0);
+        final AtomicInteger obsEventCount = new AtomicInteger(0);
+
         // Trace: AGENT_LOOP root span
         final TraceSpan rootSpan;
         if (traceCollector != null) {
@@ -414,8 +436,29 @@ public class AgentLoopEngine {
             rootSpan.setSessionId(sessionId);
             rootSpan.setModelId(actualModelId);
             rootSpan.setInput(userMessage);
+            // OBS-2 M1 §C.2: align rootSpan id with caller-provided traceId so
+            // t_llm_trace.trace_id == AGENT_LOOP span id (single trace anchor).
+            if (loopCtx.getTraceId() != null) {
+                rootSpan.setId(loopCtx.getTraceId());
+            }
         } else {
             rootSpan = null;
+        }
+
+        // OBS-2 M1 §C.2 R2-B1: synchronously upsert trace stub so reads after user-message
+        // broadcast can find the trace row. Wrapped in try-catch — DB failure must NOT
+        // propagate to the agent main loop (drop = degraded observability, not bug).
+        if (traceLifecycleSink != null && loopCtx.getTraceId() != null) {
+            try {
+                traceLifecycleSink.upsertTraceStub(
+                        loopCtx.getTraceId(), sessionId,
+                        agentDef.getId() != null ? parseAgentIdSafe(agentDef.getId()) : null,
+                        userId, agentDef.getName(),
+                        Instant.ofEpochMilli(obsLoopStartMs));
+            } catch (Exception e) {
+                log.warn("upsertTraceStub failed (dropped): traceId={} sessionId={}",
+                        loopCtx.getTraceId(), sessionId, e);
+            }
         }
 
         // 6. 进入循环
@@ -708,11 +751,15 @@ public class AgentLoopEngine {
             try {
                 // 流式 tool_use 分片需要记住 name(按 toolUseId 维度)才能广播 toolUseDelta
                 final java.util.Map<String, String> streamToolNames = new java.util.concurrent.ConcurrentHashMap<>();
-                // OBS-1 §4.2: build LlmCallContext per LLM call (new spanId each iteration);
-                // traceId = AGENT_LOOP root span id so all LLM calls within one run share trace.
+                // OBS-1 §4.2 + OBS-2 M1 §C.3: build LlmCallContext per LLM call. traceId =
+                // loopCtx.getTraceId() (preferred — set by ChatService) falling back to
+                // rootSpan.getId() for legacy callers without externalContext.
+                String obsTraceId = loopCtx.getTraceId() != null
+                        ? loopCtx.getTraceId()
+                        : (rootSpan != null ? rootSpan.getId() : null);
                 LlmCallContext llmCtx = LlmCallContext.builder()
-                        .traceId(rootSpan != null ? rootSpan.getId() : null)
-                        .parentSpanId(rootSpan != null ? rootSpan.getId() : null)
+                        .traceId(obsTraceId)
+                        .parentSpanId(obsTraceId)
                         .sessionId(sessionId)
                         .agentId(agentDef.getId() != null ? parseAgentIdSafe(agentDef.getId()) : null)
                         .userId(userId)
@@ -997,7 +1044,7 @@ public class AgentLoopEngine {
             Message assistantMsg = buildAssistantMessage(response);
             messages.add(assistantMsg);
             if (broadcaster != null && loopCtx.getSessionId() != null) {
-                broadcaster.messageAppended(loopCtx.getSessionId(), assistantMsg);
+                broadcaster.messageAppended(loopCtx.getSessionId(), loopCtx.getTraceId(), assistantMsg);
             }
 
             // e. 判断是否 tool_use
@@ -1027,35 +1074,50 @@ public class AgentLoopEngine {
                 if (AskUserTool.NAME.equals(block.getName())) {
                     long askStart = System.currentTimeMillis();
                     InteractiveControlRequest control = buildAskUserControl(block, assistantMsg);
-                    // Trace: ASK_USER span
+                    String askInput = block.getInput() != null ? block.getInput().toString() : "";
+                    String askOutput = "waiting_user:" + control.getControlId();
+                    String askSpanId = UUID.randomUUID().toString();
+                    long askEnd = System.currentTimeMillis();
+                    // Trace: ASK_USER span (legacy t_trace_span)
                     if (traceCollector != null && rootSpan != null) {
                         TraceSpan askSpan = new TraceSpan("ASK_USER", "ask_user");
+                        askSpan.setId(askSpanId);
                         askSpan.setSessionId(sessionId);
                         askSpan.setParentSpanId(rootSpan.getId());
                         askSpan.setIterationIndex(loopCtx.getLoopCount());
                         askSpan.setStartTimeMs(askStart);
-                        askSpan.setInput(block.getInput() != null ? block.getInput().toString() : "");
-                        askSpan.setOutput("waiting_user:" + control.getControlId());
+                        askSpan.setInput(askInput);
+                        askSpan.setOutput(askOutput);
                         askSpan.end();
                         traceCollector.record(askSpan);
                     }
+                    // OBS-2 M1 §C.4: dual-write to t_llm_span (kind='event', eventType='ask_user').
+                    writeEventSpanSafe(askSpanId, "ask_user", "ask_user",
+                            sessionId, loopCtx, agentDef, askInput, askOutput,
+                            askStart, askEnd, loopCtx.getLoopCount(), true, null,
+                            obsEventCount);
                     LoopResult waiting = buildResult(loopCtx, messages, "", toolCallRecords);
                     waiting.setStatus("waiting_user");
                     waiting.setPendingControl(control);
                     if (traceCollector != null && rootSpan != null) {
-                        rootSpan.setOutput("waiting_user:" + control.getControlId());
+                        rootSpan.setOutput(askOutput);
                         rootSpan.setInputTokens((int) loopCtx.getTotalInputTokens());
                         rootSpan.setOutputTokens((int) loopCtx.getTotalOutputTokens());
                         rootSpan.end();
                         traceCollector.record(rootSpan);
                     }
+                    // OBS-2 M1 §C.8 path #7: ASK_USER waiting_user → finalize trace status='ok'.
+                    finalizeTraceSafe(loopCtx, "ok", null, obsLoopStartMs,
+                            obsToolCallCount, obsEventCount);
                     return waiting;
                 } else if (isInstallRequiringConfirmation(block)) {
                     long icStart = System.currentTimeMillis();
                     ConfirmationGate gate = handleInstallConfirmationGate(block, loopCtx, toolCallRecords);
                     if (gate.pendingControl != null) {
+                        // OBS-2 M1 §C.5: pending path — recordConfirmationTrace also dual-writes event span.
                         recordConfirmationTrace("INSTALL_CONFIRM", "install_confirmation", block, loopCtx,
-                                rootSpan, icStart, "waiting_user:" + gate.pendingControl.getControlId());
+                                rootSpan, icStart, "waiting_user:" + gate.pendingControl.getControlId(),
+                                agentDef, "install_confirm", obsEventCount);
                         LoopResult waiting = buildResult(loopCtx, messages, "", toolCallRecords);
                         waiting.setStatus("waiting_user");
                         waiting.setPendingControl(gate.pendingControl);
@@ -1066,21 +1128,34 @@ public class AgentLoopEngine {
                             rootSpan.end();
                             traceCollector.record(rootSpan);
                         }
+                        // OBS-2 M1 §C.8 path #8: INSTALL_CONFIRM waiting_user → finalize ok.
+                        finalizeTraceSafe(loopCtx, "ok", null, obsLoopStartMs,
+                                obsToolCallCount, obsEventCount);
                         return waiting;
                     }
                     Message result = gate.immediateResult;
                     askResults.put(i, result);
+                    String icInput = block.getInput() != null ? block.getInput().toString() : "";
+                    String icOutput = result != null ? result.getTextContent() : "";
+                    String icSpanId = UUID.randomUUID().toString();
+                    long icEnd = System.currentTimeMillis();
                     if (traceCollector != null && rootSpan != null) {
                         TraceSpan icSpan = new TraceSpan("INSTALL_CONFIRM", "install_confirmation");
+                        icSpan.setId(icSpanId);
                         icSpan.setSessionId(sessionId);
                         icSpan.setParentSpanId(rootSpan.getId());
                         icSpan.setIterationIndex(loopCtx.getLoopCount());
                         icSpan.setStartTimeMs(icStart);
-                        icSpan.setInput(block.getInput() != null ? block.getInput().toString() : "");
-                        icSpan.setOutput(result.getTextContent());
+                        icSpan.setInput(icInput);
+                        icSpan.setOutput(icOutput);
                         icSpan.end();
                         traceCollector.record(icSpan);
                     }
+                    // OBS-2 M1 §C.5 (immediate path): dual-write event span (kind='event', eventType='install_confirm').
+                    writeEventSpanSafe(icSpanId, "install_confirm", "install_confirmation",
+                            sessionId, loopCtx, agentDef, icInput, icOutput,
+                            icStart, icEnd, loopCtx.getLoopCount(), true, null,
+                            obsEventCount);
                 } else if (isAgentMutationRequiringConfirmation(block)) {
                     long confirmStart = System.currentTimeMillis();
                     ConfirmationGate gate = handleCreateAgentConfirmationGate(block, loopCtx, toolCallRecords);
@@ -1088,8 +1163,11 @@ public class AgentLoopEngine {
                         String confirmName = "UpdateAgent".equals(block.getName())
                                 ? "update_agent_confirmation"
                                 : "create_agent_confirmation";
+                        // OBS-2 M1 §C.5: pending path — recordConfirmationTrace dual-writes event span.
                         recordConfirmationTrace("AGENT_CONFIRM", confirmName, block, loopCtx,
-                                rootSpan, confirmStart, "waiting_user:" + gate.pendingControl.getControlId());
+                                rootSpan, confirmStart,
+                                "waiting_user:" + gate.pendingControl.getControlId(),
+                                agentDef, "agent_confirm", obsEventCount);
                         LoopResult waiting = buildResult(loopCtx, messages, "", toolCallRecords);
                         waiting.setStatus("waiting_user");
                         waiting.setPendingControl(gate.pendingControl);
@@ -1100,40 +1178,63 @@ public class AgentLoopEngine {
                             rootSpan.end();
                             traceCollector.record(rootSpan);
                         }
+                        // OBS-2 M1 §C.8 path #9: AGENT_CONFIRM waiting_user → finalize ok.
+                        finalizeTraceSafe(loopCtx, "ok", null, obsLoopStartMs,
+                                obsToolCallCount, obsEventCount);
                         return waiting;
                     }
                     Message result = gate.immediateResult;
                     askResults.put(i, result);
+                    String confirmName = "UpdateAgent".equals(block.getName())
+                            ? "update_agent_confirmation"
+                            : "create_agent_confirmation";
+                    String confirmInput = block.getInput() != null ? block.getInput().toString() : "";
+                    String confirmOutput = result != null ? result.getTextContent() : "";
+                    String confirmSpanId = UUID.randomUUID().toString();
+                    long confirmEnd = System.currentTimeMillis();
                     if (traceCollector != null && rootSpan != null) {
-                        String confirmName = "UpdateAgent".equals(block.getName())
-                                ? "update_agent_confirmation"
-                                : "create_agent_confirmation";
                         TraceSpan confirmSpan = new TraceSpan("AGENT_CONFIRM", confirmName);
+                        confirmSpan.setId(confirmSpanId);
                         confirmSpan.setSessionId(sessionId);
                         confirmSpan.setParentSpanId(rootSpan.getId());
                         confirmSpan.setIterationIndex(loopCtx.getLoopCount());
                         confirmSpan.setStartTimeMs(confirmStart);
-                        confirmSpan.setInput(block.getInput() != null ? block.getInput().toString() : "");
-                        confirmSpan.setOutput(result.getTextContent());
+                        confirmSpan.setInput(confirmInput);
+                        confirmSpan.setOutput(confirmOutput);
                         confirmSpan.end();
                         traceCollector.record(confirmSpan);
                     }
+                    // OBS-2 M1 §C.5 (immediate path): dual-write event span (kind='event', eventType='agent_confirm').
+                    writeEventSpanSafe(confirmSpanId, "agent_confirm", confirmName,
+                            sessionId, loopCtx, agentDef, confirmInput, confirmOutput,
+                            confirmStart, confirmEnd, loopCtx.getLoopCount(), true, null,
+                            obsEventCount);
                 } else if (ContextCompactTool.NAME.equals(block.getName())) {
                     long compactStart = System.currentTimeMillis();
                     Message result = handleCompactContext(block, loopCtx);
                     askResults.put(i, result);
-                    // Trace: COMPACT span
+                    String compactInput = block.getInput() != null ? block.getInput().toString() : "";
+                    String compactOutput = result != null ? result.getTextContent() : "";
+                    String compactSpanId = UUID.randomUUID().toString();
+                    long compactEnd = System.currentTimeMillis();
+                    // Trace: COMPACT span (legacy t_trace_span)
                     if (traceCollector != null && rootSpan != null) {
                         TraceSpan compactSpan = new TraceSpan("COMPACT", "compact_context");
+                        compactSpan.setId(compactSpanId);
                         compactSpan.setSessionId(sessionId);
                         compactSpan.setParentSpanId(rootSpan.getId());
                         compactSpan.setIterationIndex(loopCtx.getLoopCount());
                         compactSpan.setStartTimeMs(compactStart);
-                        compactSpan.setInput(block.getInput() != null ? block.getInput().toString() : "");
-                        compactSpan.setOutput(result.getTextContent());
+                        compactSpan.setInput(compactInput);
+                        compactSpan.setOutput(compactOutput);
                         compactSpan.end();
                         traceCollector.record(compactSpan);
                     }
+                    // OBS-2 M1 §C.5: dual-write event span (kind='event', eventType='compact').
+                    writeEventSpanSafe(compactSpanId, "compact", "compact_context",
+                            sessionId, loopCtx, agentDef, compactInput, compactOutput,
+                            compactStart, compactEnd, loopCtx.getLoopCount(), true, null,
+                            obsEventCount);
                     // compact 可能替换了 messages, 同步回本地 messages 引用
                     messages = loopCtx.getMessages();
                 } else {
@@ -1182,9 +1283,13 @@ public class AgentLoopEngine {
                             if (broadcaster != null && loopCtx.getSessionId() != null) {
                                 broadcaster.toolFinished(loopCtx.getSessionId(), fblock.getId(), status, dur, errorMsg);
                             }
-                            // Trace: TOOL_CALL span
+                            // Trace: TOOL_CALL span (legacy t_trace_span)
+                            String toolSpanId = UUID.randomUUID().toString();
+                            String toolInputStrFinal = fblock.getInput() != null ? mapToJson(fblock.getInput()) : "";
+                            String toolOutputTextFinal = toolOutputText != null ? toolOutputText : "";
                             if (traceCollector != null && rootSpan != null) {
                                 TraceSpan toolSpan = new TraceSpan("TOOL_CALL", fblock.getName());
+                                toolSpan.setId(toolSpanId);
                                 toolSpan.setSessionId(loopCtx.getSessionId());
                                 toolSpan.setParentSpanId(rootSpan.getId());
                                 toolSpan.setToolUseId(fblock.getId());
@@ -1192,12 +1297,21 @@ public class AgentLoopEngine {
                                 toolSpan.setStartTimeMs(toolStart);
                                 toolSpan.setEndTimeMs(toolStart + dur);
                                 toolSpan.setDurationMs(dur);
-                                toolSpan.setInput(fblock.getInput() != null ? mapToJson(fblock.getInput()) : "");
-                                toolSpan.setOutput(toolOutputText != null ? toolOutputText : "");
+                                toolSpan.setInput(toolInputStrFinal);
+                                toolSpan.setOutput(toolOutputTextFinal);
                                 toolSpan.setSuccess("success".equals(status));
                                 toolSpan.setError(errorMsg);
                                 traceCollector.record(toolSpan);
                             }
+                            // OBS-2 M1 §C.6 R2-B2: dual-write to t_llm_span (kind='tool').
+                            // obsToolCallCount is AtomicInteger so increment here is safe inside
+                            // CompletableFuture.supplyAsync's lambda finally block.
+                            obsToolCallCount.incrementAndGet();
+                            writeToolSpanSafe(toolSpanId, fblock.getName(), fblock.getId(),
+                                    loopCtx.getSessionId(), loopCtx, agentDef,
+                                    toolInputStrFinal, toolOutputTextFinal,
+                                    toolStart, toolStart + dur, dur, currentIteration,
+                                    "success".equals(status), errorMsg);
                         }
                         synchronized (askResults) {
                             askResults.put(idx, r);
@@ -1232,7 +1346,7 @@ public class AgentLoopEngine {
                 }
                 messages.add(toolResult);
                 if (broadcaster != null && loopCtx.getSessionId() != null) {
-                    broadcaster.messageAppended(loopCtx.getSessionId(), toolResult);
+                    broadcaster.messageAppended(loopCtx.getSessionId(), loopCtx.getTraceId(), toolResult);
                 }
             }
 
@@ -1262,6 +1376,9 @@ public class AgentLoopEngine {
                 rootSpan.end();
                 traceCollector.record(rootSpan);
             }
+            // OBS-2 M1 §C.8 path #1: cancelled.
+            finalizeTraceSafe(loopCtx, "cancelled", "cancelled", obsLoopStartMs,
+                    obsToolCallCount, obsEventCount);
             return result;
         }
 
@@ -1291,6 +1408,9 @@ public class AgentLoopEngine {
                 rootSpan.end();
                 traceCollector.record(rootSpan);
             }
+            // OBS-2 M1 §C.8 path #2/#3/#4: budget / duration / max_tokens exhausted.
+            finalizeTraceSafe(loopCtx, "error", reason, obsLoopStartMs,
+                    obsToolCallCount, obsEventCount);
             return result;
         }
 
@@ -1310,6 +1430,9 @@ public class AgentLoopEngine {
             }
             LoopResult maxLoopsResult = buildResult(loopCtx, messages, limitMsg, toolCallRecords);
             maxLoopsResult.setStatus("max_loops_reached");
+            // OBS-2 M1 §C.8 path #5: max_loops reached.
+            finalizeTraceSafe(loopCtx, "error", "max_loops", obsLoopStartMs,
+                    obsToolCallCount, obsEventCount);
             return maxLoopsResult;
         }
 
@@ -1332,6 +1455,9 @@ public class AgentLoopEngine {
             rootSpan.end();
             traceCollector.record(rootSpan);
         }
+        // OBS-2 M1 §C.8 path #6 / #10 (normal abortToolUse): normal exit → status='ok'.
+        finalizeTraceSafe(loopCtx, "ok", null, obsLoopStartMs,
+                obsToolCallCount, obsEventCount);
         return buildResult(loopCtx, messages, finalText, toolCallRecords);
     }
 
@@ -1431,9 +1557,13 @@ public class AgentLoopEngine {
         final java.util.concurrent.CountDownLatch streamDone = new java.util.concurrent.CountDownLatch(1);
         final String broadcastSid = loopCtx.getSessionId();
         try {
+            // OBS-2 M1 §C.3: continuation uses same traceId as the original LLM call.
+            String obsContTraceId = loopCtx.getTraceId() != null
+                    ? loopCtx.getTraceId()
+                    : (rootSpan != null ? rootSpan.getId() : null);
             LlmCallContext llmCtx = LlmCallContext.builder()
-                    .traceId(rootSpan != null ? rootSpan.getId() : null)
-                    .parentSpanId(rootSpan != null ? rootSpan.getId() : null)
+                    .traceId(obsContTraceId)
+                    .parentSpanId(obsContTraceId)
                     .sessionId(sessionId)
                     .agentId(agentDef.getId() != null ? parseAgentIdSafe(agentDef.getId()) : null)
                     .userId(userId)
@@ -2027,6 +2157,10 @@ public class AgentLoopEngine {
         return control;
     }
 
+    /**
+     * Legacy helper retained for backward compat (TraceSpan-only). Prefer the OBS-2 overload
+     * below which also writes the t_llm_span (kind='event') row.
+     */
     private void recordConfirmationTrace(String type, String name, ToolUseBlock block, LoopContext loopCtx,
                                          TraceSpan rootSpan, long start, String output) {
         if (traceCollector == null || rootSpan == null) {
@@ -2041,6 +2175,121 @@ public class AgentLoopEngine {
         span.setOutput(output);
         span.end();
         traceCollector.record(span);
+    }
+
+    /**
+     * OBS-2 M1 §C.5: record TraceSpan + dual-write t_llm_span (kind='event').
+     * Used by INSTALL_CONFIRM / AGENT_CONFIRM pending paths.
+     */
+    private void recordConfirmationTrace(String type, String name, ToolUseBlock block, LoopContext loopCtx,
+                                         TraceSpan rootSpan, long start, String output,
+                                         AgentDefinition agentDef, String eventType,
+                                         AtomicInteger obsEventCount) {
+        String input = block.getInput() != null ? block.getInput().toString() : "";
+        String spanId = UUID.randomUUID().toString();
+        long end = System.currentTimeMillis();
+        if (traceCollector != null && rootSpan != null) {
+            TraceSpan span = new TraceSpan(type, name);
+            span.setId(spanId);
+            span.setSessionId(loopCtx.getSessionId());
+            span.setParentSpanId(rootSpan.getId());
+            span.setIterationIndex(loopCtx.getLoopCount());
+            span.setStartTimeMs(start);
+            span.setInput(input);
+            span.setOutput(output);
+            span.end();
+            traceCollector.record(span);
+        }
+        writeEventSpanSafe(spanId, eventType, name, loopCtx.getSessionId(), loopCtx, agentDef,
+                input, output, start, end, loopCtx.getLoopCount(), true, null, obsEventCount);
+    }
+
+    // ===== OBS-2 M1 helper methods (write t_llm_span / finalize t_llm_trace) =====
+
+    /**
+     * OBS-2 M1 §C.5: dual-write event span to t_llm_span (kind='event').
+     * Increments {@code obsEventCount}. Wrapped in try-catch — failure log+drop, never propagates.
+     * No-op when {@code traceLifecycleSink} is unwired or {@code loopCtx.traceId} is null.
+     */
+    private void writeEventSpanSafe(String spanId, String eventType, String name,
+                                    String sessionIdParam, LoopContext loopCtx, AgentDefinition agentDef,
+                                    String inputSummary, String outputSummary,
+                                    long startedAtMs, long endedAtMs,
+                                    int iterationIndex, boolean success, String error,
+                                    AtomicInteger obsEventCount) {
+        if (obsEventCount != null) {
+            obsEventCount.incrementAndGet();
+        }
+        if (traceLifecycleSink == null || loopCtx == null || loopCtx.getTraceId() == null) {
+            return;
+        }
+        try {
+            traceLifecycleSink.writeEventSpan(
+                    spanId, loopCtx.getTraceId(), loopCtx.getTraceId(),
+                    sessionIdParam,
+                    agentDef != null && agentDef.getId() != null ? parseAgentIdSafe(agentDef.getId()) : null,
+                    eventType, name, inputSummary, outputSummary,
+                    Instant.ofEpochMilli(startedAtMs), Instant.ofEpochMilli(endedAtMs),
+                    Math.max(0, endedAtMs - startedAtMs),
+                    iterationIndex, success, error);
+        } catch (Exception e) {
+            log.warn("writeEventSpan submit failed (dropped): traceId={} eventType={}",
+                    loopCtx.getTraceId(), eventType, e);
+        }
+    }
+
+    /**
+     * OBS-2 M1 §C.6: dual-write tool span to t_llm_span (kind='tool'). Caller (the
+     * supplyAsync lambda's finally block) increments {@code obsToolCallCount} (AtomicInteger
+     * for thread-safety) before calling this helper. Wrapped in try-catch.
+     */
+    private void writeToolSpanSafe(String spanId, String name, String toolUseId,
+                                   String sessionIdParam, LoopContext loopCtx, AgentDefinition agentDef,
+                                   String inputSummary, String outputSummary,
+                                   long startedAtMs, long endedAtMs, long latencyMs,
+                                   int iterationIndex, boolean success, String error) {
+        if (traceLifecycleSink == null || loopCtx == null || loopCtx.getTraceId() == null) {
+            return;
+        }
+        try {
+            traceLifecycleSink.writeToolSpan(
+                    spanId, loopCtx.getTraceId(), loopCtx.getTraceId(),
+                    sessionIdParam,
+                    agentDef != null && agentDef.getId() != null ? parseAgentIdSafe(agentDef.getId()) : null,
+                    name, toolUseId, inputSummary, outputSummary,
+                    Instant.ofEpochMilli(startedAtMs), Instant.ofEpochMilli(endedAtMs),
+                    latencyMs, iterationIndex, success, error);
+        } catch (Exception e) {
+            log.warn("writeToolSpan submit failed (dropped): traceId={} name={}",
+                    loopCtx.getTraceId(), name, e);
+        }
+    }
+
+    /**
+     * OBS-2 M1 §C.8 R2-B3: finalize trace with idempotent UPDATE. Wrapped in try-catch —
+     * failure log+drop, never propagates. SQL has {@code WHERE status='running'} so multiple
+     * calls are safe (terminal status not overwritten).
+     */
+    private void finalizeTraceSafe(LoopContext loopCtx, String status, String error,
+                                   long startedAtMs,
+                                   AtomicInteger obsToolCallCount,
+                                   AtomicInteger obsEventCount) {
+        if (traceLifecycleSink == null || loopCtx == null || loopCtx.getTraceId() == null) {
+            return;
+        }
+        try {
+            long now = System.currentTimeMillis();
+            traceLifecycleSink.finalizeTrace(
+                    loopCtx.getTraceId(),
+                    status, error,
+                    Math.max(0, now - startedAtMs),
+                    obsToolCallCount != null ? obsToolCallCount.get() : 0,
+                    obsEventCount != null ? obsEventCount.get() : 0,
+                    Instant.ofEpochMilli(now));
+        } catch (Exception e) {
+            log.warn("finalizeTrace submit failed (dropped): traceId={} status={}",
+                    loopCtx.getTraceId(), status, e);
+        }
     }
 
     private static final class ConfirmationGate {

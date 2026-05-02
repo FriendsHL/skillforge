@@ -114,6 +114,18 @@ public class LlmSpanEntity {
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
+    /** OBS-2 M0: kind enum (应用层校验) — llm | tool | event。 */
+    @Column(name = "kind", length = 16, nullable = false)
+    private String kind = "llm";
+
+    /** OBS-2 M0: 仅 kind=event 时填; ask_user | install_confirm | compact | agent_confirm。 */
+    @Column(name = "event_type", length = 32)
+    private String eventType;
+
+    /** OBS-2 M0: tool name (kind=tool) / event name (kind=event) / NULL for kind=llm。 */
+    @Column(name = "name", length = 256)
+    private String name;
+
     public LlmSpanEntity() {}
 
     public String getSpanId() { return spanId; }
@@ -180,4 +192,10 @@ public class LlmSpanEntity {
     public void setSource(String v) { this.source = v; }
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant v) { this.createdAt = v; }
+    public String getKind() { return kind; }
+    public void setKind(String v) { this.kind = v; }
+    public String getEventType() { return eventType; }
+    public void setEventType(String v) { this.eventType = v; }
+    public String getName() { return name; }
+    public void setName(String v) { this.name = v; }
 }

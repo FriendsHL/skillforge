@@ -198,10 +198,13 @@ public class ChatWebSocketHandler extends TextWebSocketHandler implements ChatEv
     }
 
     @Override
-    public void messageAppended(String sessionId, Message message) {
+    public void messageAppended(String sessionId, String traceId, Message message) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("type", "message_appended");
         payload.put("sessionId", sessionId);
+        if (traceId != null) {
+            payload.put("traceId", traceId);
+        }
         payload.put("message", message);
         broadcast(sessionId, payload);
     }

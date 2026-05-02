@@ -15,8 +15,14 @@ public interface ChatEventBroadcaster {
     /** 广播 session 状态变更。status: idle / running / waiting_user / error */
     void sessionStatus(String sessionId, String status, String step, String error);
 
-    /** 广播一条新消息追加事件(engine 执行过程中每当有新消息落入 messages 列表时调用)。 */
-    void messageAppended(String sessionId, Message message);
+    /**
+     * 广播一条新消息追加事件(engine 执行过程中每当有新消息落入 messages 列表时调用)。
+     *
+     * <p>OBS-2 M1: 加 {@code traceId} 参数，让 implementation（{@code ChatWebSocketHandler}）
+     * 在广播 WS 事件 + 持久化 {@code t_session_message.trace_id} 时拿到 trace 关联。
+     * 调用方在 trace 不可用时（如 enqueue 路径）传 {@code null}。
+     */
+    void messageAppended(String sessionId, String traceId, Message message);
 
     /** 广播一次全量 messages 同步(可选,主要用于 loop 结束前对齐)。 */
     default void messagesSnapshot(String sessionId, List<Message> messages) {

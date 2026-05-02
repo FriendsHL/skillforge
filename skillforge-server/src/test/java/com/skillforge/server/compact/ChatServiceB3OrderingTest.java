@@ -90,7 +90,8 @@ class ChatServiceB3OrderingTest {
                 new com.skillforge.server.hook.NoopLifecycleHookDispatcher(),
                 new com.skillforge.core.engine.confirm.SessionConfirmCache(),
                 new com.skillforge.core.engine.confirm.PendingConfirmationRegistry(),
-                sid -> sid);
+                sid -> sid,
+                org.mockito.Mockito.mock(com.skillforge.observability.api.LlmTraceStore.class));
     }
 
     private SessionEntity sessionWithGap(String id, long gapHours, int msgCount) {
@@ -123,7 +124,8 @@ class ChatServiceB3OrderingTest {
         // sessionService.appendNormalMessages(...)
         InOrder io = inOrder(compactionService, sessionService);
         io.verify(compactionService).compact(eq("sid"), eq("light"), eq("engine-gap"), anyString());
-        io.verify(sessionService).appendNormalMessages(eq("sid"), any());
+        // OBS-2 M1: chatAsync now calls the 3-arg overload that carries traceId.
+        io.verify(sessionService).appendNormalMessages(eq("sid"), any(), any());
     }
 
     @Test

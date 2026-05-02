@@ -66,6 +66,13 @@ public class SessionMessageEntity {
     @Column(name = "reasoning_content", columnDefinition = "TEXT")
     private String reasoningContent;
 
+    /**
+     * OBS-2 M1: 关联的 trace id（{@code t_llm_trace.trace_id} 外键语义，未加 FK 约束以容忍孤儿）。
+     * 历史行 = NULL（不 backfill）；M1 后由 ChatService / AgentLoopEngine 透传。
+     */
+    @Column(name = "trace_id", length = 36)
+    private String traceId;
+
     /** 预留给后续工具输出裁剪：非空表示该消息已被裁剪。 */
     @Column(name = "pruned_at")
     private Instant prunedAt;
@@ -183,5 +190,13 @@ public class SessionMessageEntity {
 
     public void setCreatedAt(Instant createdAt) {
         this.createdAt = createdAt;
+    }
+
+    public String getTraceId() {
+        return traceId;
+    }
+
+    public void setTraceId(String traceId) {
+        this.traceId = traceId;
     }
 }

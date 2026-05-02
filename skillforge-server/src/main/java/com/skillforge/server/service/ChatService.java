@@ -18,6 +18,8 @@ import com.skillforge.core.model.AgentDefinition;
 import com.skillforge.core.model.Message;
 import com.skillforge.core.model.SkillDefinition;
 import com.skillforge.core.skill.SkillRegistry;
+import com.skillforge.observability.api.LlmTraceStore;
+import com.skillforge.observability.api.LlmTraceStore.TraceFinalizeRequest;
 import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.CollabRunEntity;
 import com.skillforge.server.entity.ModelUsageEntity;
@@ -37,6 +39,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.UUID;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -69,6 +72,11 @@ public class ChatService {
     private final SessionConfirmCache sessionConfirmCache;
     private final PendingConfirmationRegistry pendingConfirmationRegistry;
     private final RootSessionLookup rootSessionLookup;
+    /**
+     * OBS-2 M1 §D.8.1 (r2 review r2): exception path 保底 finalize 需要直接访问 traceStore。
+     * 注入后 Spring 启动失败会先报错（traceStore 是 OBS-1 既有 @Service Bean），不再用 null guard。
+     */
+    private final LlmTraceStore traceStore;
 
     public ChatService(AgentService agentService,
                        SessionService sessionService,
@@ -88,7 +96,8 @@ public class ChatService {
                        LifecycleHookDispatcher lifecycleHookDispatcher,
                        SessionConfirmCache sessionConfirmCache,
                        PendingConfirmationRegistry pendingConfirmationRegistry,
-                       RootSessionLookup rootSessionLookup) {
+                       RootSessionLookup rootSessionLookup,
+                       LlmTraceStore traceStore) {
         this.agentService = agentService;
         this.sessionService = sessionService;
         this.skillRegistry = skillRegistry;
@@ -108,6 +117,7 @@ public class ChatService {
         this.sessionConfirmCache = sessionConfirmCache;
         this.pendingConfirmationRegistry = pendingConfirmationRegistry;
         this.rootSessionLookup = rootSessionLookup;
+        this.traceStore = traceStore;
     }
 
     /**
@@ -158,9 +168,11 @@ public class ChatService {
                         // and will be persisted when the engine drains it
                         return;
                     }
-                    // Broadcast so frontend shows the message immediately
+                    // Broadcast so frontend shows the message immediately.
+                    // OBS-2 M1 §A.1 row 3: enqueue path → traceId=null (corresponding trace not yet created;
+                    // 队列消息归并到当前 running loop 的下一轮 LLM call，本身不开新 trace)。
                     if (broadcaster != null) {
-                        broadcaster.messageAppended(sessionId, Message.user(userMessage));
+                        broadcaster.messageAppended(sessionId, null, Message.user(userMessage));
                     }
                     log.info("Enqueued user message for running session {}", sessionId);
                     return;
@@ -192,10 +204,12 @@ public class ChatService {
 
             // 2. 把 user message 立即持久化到行存储，这样前端刷新也能看到。
             //    B3 必须在这一步之前完成, 否则旧 gap 会被新 user message 打掉。
+            // OBS-2 M1 §D.1 §D.5: 在持久化前生成 traceId，让 user message + 后续 engine output 共享同一 trace。
+            String traceId = UUID.randomUUID().toString();
             List<Message> fullHistory = sessionService.getFullHistory(sessionId);
             List<Message> history = sessionService.getContextMessages(sessionId);
             Message userMsg = Message.user(userMessage);
-            sessionService.appendNormalMessages(sessionId, List.of(userMsg));
+            sessionService.appendNormalMessages(sessionId, List.of(userMsg), traceId);
 
             // 2.1 第一条 user message 时立即生成截断标题(同步,极快)
             // 同时触发 SessionStart lifecycle hook（仅在首条消息时，非每轮）
@@ -236,15 +250,17 @@ public class ChatService {
             sessionService.saveSession(session);
 
             // 4. 广播 user message + running 状态
+            // OBS-2 M1 §A.1 row 4 / §D.5: 广播 traceId，供前端 trace 关联。
             if (broadcaster != null) {
-                broadcaster.messageAppended(sessionId, userMsg);
+                broadcaster.messageAppended(sessionId, traceId, userMsg);
                 broadcaster.sessionStatus(sessionId, "running", "Starting", null);
                 broadcaster.userEvent(session.getUserId(), sessionUpdatedPayload(session, fullHistory.size() + 1));
             }
 
             // 5. 提交到线程池异步跑 loop
             final List<Message> historyForLoop = history;
-            chatLoopExecutor.execute(() -> runLoop(sessionId, userMessage, userId, agentEntity, historyForLoop));
+            final String capturedTraceId = traceId;
+            chatLoopExecutor.execute(() -> runLoop(sessionId, userMessage, userId, agentEntity, historyForLoop, capturedTraceId));
         }
     }
 
@@ -266,13 +282,31 @@ public class ChatService {
 
     /**
      * 实际的 loop 执行(在 chatLoopExecutor 线程里跑)。
+     * <p>OBS-2 M1: 5-arg overload 委托给 6-arg 版本（externalTraceId=null → 委托内部生成）。
+     * 保留以兼容尚未传 traceId 的调用方（生产路径全部已更新为 6-arg）。
      */
     private void runLoop(String sessionId, String userMessage, Long userId,
                          AgentEntity agentEntity, List<Message> history) {
-        long startedAt = System.currentTimeMillis();
+        runLoop(sessionId, userMessage, userId, agentEntity, history, null);
+    }
+
+    /**
+     * 实际的 loop 执行(在 chatLoopExecutor 线程里跑)。
+     * <p>OBS-2 M1 §D.2: 加 externalTraceId 参数 — 由 chatAsync / answerAsk / answerConfirmation
+     * 在 submit 前生成 UUID 并透传，让 user message 广播 + engine 内部 trace 共享同一 traceId。
+     * null 时内部生成 fallback（兜底，正常路径不应触发）。
+     */
+    private void runLoop(String sessionId, String userMessage, Long userId,
+                         AgentEntity agentEntity, List<Message> history,
+                         String externalTraceId) {
+        // OBS-2 M1 §D.8.2: 显式 startedAt 给 §D.8.3 catch 块 finalize 使用。
+        final long startedAt = System.currentTimeMillis();
         String finalMessage = null;
         int toolCallCount = 0;
         String finalStatus = "completed";
+        // OBS-2 M1 §D.1: traceId 在 runLoop 入口必须存在 — 优先使用调用方传入的，否则 fallback 生成。
+        final String traceId = externalTraceId != null ? externalTraceId : UUID.randomUUID().toString();
+        LoopContext preCtx = null;
         try {
             // 解析 agent definition,并把 session 的 executionMode 注入 config
             AgentDefinition agentDef = agentService.toAgentDefinition(agentEntity);
@@ -329,7 +363,9 @@ public class ChatService {
 
             log.info("Running agent loop (async): sessionId={}, agentId={}, mode={}", sessionId, agentEntity.getId(), mode);
             // 预建 LoopContext 并注册到 CancellationRegistry, 让 /cancel 端点可以找到它
-            LoopContext preCtx = new LoopContext();
+            preCtx = new LoopContext();
+            // OBS-2 M1 §D.1: 透传 traceId 到 engine，让 rootSpan id == traceId 形成单一锚点。
+            preCtx.setTraceId(traceId);
 
             // Depth-aware tool filtering: if session is in a collab run and at max depth,
             // exclude TeamCreate and SubAgent skills to prevent leaf agents from spawning further agents
@@ -419,8 +455,9 @@ public class ChatService {
                 finalStatus = resultStatus;   // ← 同步 finalStatus，确保 subAgentRegistry 和 SessionEnd hook 收到正确 reason
                 Message notifyMsg = Message.assistant(finalMessage);
                 finalMessages.add(notifyMsg);
+                // OBS-2 M1 §A.1 row 5 / §D.3: 静默退出 notify 也归当前 trace。
                 if (broadcaster != null) {
-                    broadcaster.messageAppended(sessionId, notifyMsg);
+                    broadcaster.messageAppended(sessionId, preCtx.getTraceId(), notifyMsg);
                 }
                 log.info("Silent exit notified to user: status={}, sessionId={}", resultStatus, sessionId);
             }
@@ -428,8 +465,9 @@ public class ChatService {
             cancellationRegistry.unregister(sessionId);
 
             // 保存最终 messages(engine 已经把 user msg + 之后所有消息组装好了)
+            // OBS-2 M1 §D.5: 透传 traceId 让 engine 输出（assistant / tool_result）行 trace_id 不为 null。
             sessionService.updateSessionMessages(sessionId, finalMessages,
-                    result.getTotalInputTokens(), result.getTotalOutputTokens());
+                    result.getTotalInputTokens(), result.getTotalOutputTokens(), traceId);
 
             if (waitingUser) {
                 persistPendingControl(sessionId, result.getPendingControl());
@@ -533,6 +571,23 @@ public class ChatService {
             // errorDetail 仅包含原始异常栈文本，前缀由前端/消费方自行组装（避免双层前缀）。
             String errorDetail = StackTraceFormatter.format(e, 10);
             finalMessage = safeError;
+            // OBS-2 M1 §D.8.3 (r2 review r2): exception path 保底 finalize trace。
+            // engine 抛 unhandled exception 时确保 t_llm_trace.status 不留 'running'。
+            // toolCallCount/eventCount 用 0/0 fallback（exception 路径下 engine 局部计数器
+            // 不可达，0 是合理 fallback：前端按 trace 拉 spans 实际算计数）。
+            // 与 engine 正常 finalize 互斥：engine 已 finalize → status terminal → §B.3
+            // `WHERE status='running'` 守卫让本次 UPDATE 0 rows（幂等）。
+            try {
+                traceStore.finalizeTrace(new TraceFinalizeRequest(
+                        traceId,
+                        "error",
+                        "agent_loop_exception",
+                        System.currentTimeMillis() - startedAt,
+                        0, 0,
+                        Instant.now()));
+            } catch (Exception ignored) {
+                /* observability 失败不影响主路径 */
+            }
             try {
                 SessionEntity s = sessionService.getSession(sessionId);
                 s.setCompletedAt(java.time.Instant.now());
@@ -636,7 +691,9 @@ public class ChatService {
                     answer,
                     "card");
             Message toolResult = Message.toolResult(toolUseId, "User answered: " + answer, false);
-            sessionService.appendNormalMessages(sessionId, List.of(toolResult));
+            // OBS-2 M1 §D.4: resumeTraceId 在持久化前生成 — 让 toolResult + 后续 engine 共享同一 trace。
+            String resumeTraceId = UUID.randomUUID().toString();
+            sessionService.appendNormalMessages(sessionId, List.of(toolResult), resumeTraceId);
             SessionEntity session = sessionService.getSession(sessionId);
             AgentEntity agentEntity = agentService.getAgent(session.getAgentId());
             session.setRuntimeStatus("running");
@@ -645,10 +702,10 @@ public class ChatService {
             sessionService.saveSession(session);
             List<Message> history = sessionService.getContextMessages(sessionId);
             if (broadcaster != null) {
-                broadcaster.messageAppended(sessionId, toolResult);
+                broadcaster.messageAppended(sessionId, resumeTraceId, toolResult);
                 broadcaster.sessionStatus(sessionId, "running", "Resuming", null);
             }
-            chatLoopExecutor.execute(() -> runLoop(sessionId, null, userId, agentEntity, history));
+            chatLoopExecutor.execute(() -> runLoop(sessionId, null, userId, agentEntity, history, resumeTraceId));
         }
     }
 
@@ -691,17 +748,19 @@ public class ChatService {
                     installTool,
                     installTarget,
                     decision);
-            sessionService.appendNormalMessages(sessionId, List.of(toolResult));
+            // OBS-2 M1 §D.4: resumeTraceId 在持久化前生成。
+            String resumeTraceId = UUID.randomUUID().toString();
+            sessionService.appendNormalMessages(sessionId, List.of(toolResult), resumeTraceId);
             session.setRuntimeStatus("running");
             session.setRuntimeStep("Resuming");
             session.setRuntimeError(null);
             sessionService.saveSession(session);
             List<Message> history = sessionService.getContextMessages(sessionId);
             if (broadcaster != null) {
-                broadcaster.messageAppended(sessionId, toolResult);
+                broadcaster.messageAppended(sessionId, resumeTraceId, toolResult);
                 broadcaster.sessionStatus(sessionId, "running", "Resuming", null);
             }
-            chatLoopExecutor.execute(() -> runLoop(sessionId, null, userId, agentEntity, history));
+            chatLoopExecutor.execute(() -> runLoop(sessionId, null, userId, agentEntity, history, resumeTraceId));
         }
     }
 

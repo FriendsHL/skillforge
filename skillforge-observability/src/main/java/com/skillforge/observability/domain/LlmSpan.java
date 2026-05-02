@@ -15,6 +15,13 @@ import java.util.Map;
  *   <li>{@code "write_failed"} — live 但 blob 写盘失败</li>
  *   <li>{@code "truncated"} — payload 超过 50 MB hard cap，被截断</li>
  * </ul>
+ *
+ * <p>OBS-2 M0 新增字段：
+ * <ul>
+ *   <li>{@code kind} — {@code "llm"} | {@code "tool"} | {@code "event"}（应用层枚举校验）</li>
+ *   <li>{@code eventType} — 仅 {@code kind="event"} 时填；{@code "ask_user"} | {@code "install_confirm"} | {@code "compact"} | {@code "agent_confirm"}</li>
+ *   <li>{@code name} — tool name (kind=tool) / event name (kind=event) / null for kind=llm（走 model）</li>
+ * </ul>
  */
 public record LlmSpan(
         String spanId,
@@ -47,7 +54,11 @@ public record LlmSpan(
         String errorType,
         String toolUseId,
         Map<String, Object> attributes,
-        LlmSpanSource source
+        LlmSpanSource source,
+        // OBS-2 M0 新增 — kind / eventType / name
+        String kind,
+        String eventType,
+        String name
 ) {
     public LlmSpan {
         if (spanId == null || spanId.isBlank()) {
@@ -65,5 +76,53 @@ public record LlmSpan(
         attributes = attributes == null ? Collections.emptyMap() : Map.copyOf(attributes);
         if (source == null) source = LlmSpanSource.LIVE;
         if (blobStatus == null) blobStatus = "ok";
+        if (kind == null || kind.isBlank()) kind = "llm";
+    }
+
+    /**
+     * Backward-compatible constructor for OBS-1 callers — defaults
+     * {@code kind="llm"}, {@code eventType=null}, {@code name=null}.
+     * OBS-2 callers (tool / event spans) should use the full canonical constructor.
+     */
+    public LlmSpan(
+            String spanId,
+            String traceId,
+            String parentSpanId,
+            String sessionId,
+            Long agentId,
+            String provider,
+            String model,
+            int iterationIndex,
+            boolean stream,
+            String inputSummary,
+            String outputSummary,
+            String inputBlobRef,
+            String outputBlobRef,
+            String rawSseBlobRef,
+            String blobStatus,
+            int inputTokens,
+            int outputTokens,
+            Integer cacheReadTokens,
+            String usageJson,
+            BigDecimal costUsd,
+            long latencyMs,
+            Instant startedAt,
+            Instant endedAt,
+            String finishReason,
+            String requestId,
+            String reasoningContent,
+            String error,
+            String errorType,
+            String toolUseId,
+            Map<String, Object> attributes,
+            LlmSpanSource source) {
+        this(spanId, traceId, parentSpanId, sessionId, agentId, provider, model,
+                iterationIndex, stream, inputSummary, outputSummary,
+                inputBlobRef, outputBlobRef, rawSseBlobRef, blobStatus,
+                inputTokens, outputTokens, cacheReadTokens, usageJson,
+                costUsd, latencyMs, startedAt, endedAt,
+                finishReason, requestId, reasoningContent,
+                error, errorType, toolUseId, attributes, source,
+                "llm", null, null);
     }
 }

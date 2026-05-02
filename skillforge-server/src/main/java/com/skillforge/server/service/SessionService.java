@@ -198,7 +198,7 @@ public class SessionService {
     }
 
     public record AppendMessage(Message message, String msgType, String messageType, String controlId,
-                                Instant answeredAt, Map<String, Object> metadata) {
+                                Instant answeredAt, Map<String, Object> metadata, String traceId) {
         public AppendMessage {
             Objects.requireNonNull(message, "message");
             msgType = (msgType == null || msgType.isBlank()) ? MSG_TYPE_NORMAL : msgType;
@@ -206,8 +206,14 @@ public class SessionService {
             metadata = (metadata == null) ? Collections.emptyMap() : metadata;
         }
 
+        /** Backward-compat — defaults traceId to null. */
+        public AppendMessage(Message message, String msgType, String messageType, String controlId,
+                             Instant answeredAt, Map<String, Object> metadata) {
+            this(message, msgType, messageType, controlId, answeredAt, metadata, null);
+        }
+
         public AppendMessage(Message message, String msgType, Map<String, Object> metadata) {
-            this(message, msgType, MESSAGE_TYPE_NORMAL, null, null, metadata);
+            this(message, msgType, MESSAGE_TYPE_NORMAL, null, null, metadata, null);
         }
     }
 
@@ -489,18 +495,29 @@ public class SessionService {
     }
 
     public long appendMessages(String id, List<Message> messages, String msgType) {
+        return appendMessages(id, messages, msgType, null);
+    }
+
+    /** OBS-2 M1: overload that persists {@code traceId} on every appended row. */
+    public long appendMessages(String id, List<Message> messages, String msgType, String traceId) {
         if (messages == null || messages.isEmpty()) {
             return getLastSeqNo(id);
         }
         List<AppendMessage> wraps = new ArrayList<>(messages.size());
         for (Message message : messages) {
-            wraps.add(new AppendMessage(message, msgType, Collections.emptyMap()));
+            wraps.add(new AppendMessage(message, msgType, MESSAGE_TYPE_NORMAL, null, null,
+                    Collections.emptyMap(), traceId));
         }
         return appendMessages(id, wraps);
     }
 
     public long appendNormalMessages(String id, List<Message> messages) {
-        return appendMessages(id, messages, MSG_TYPE_NORMAL);
+        return appendMessages(id, messages, MSG_TYPE_NORMAL, null);
+    }
+
+    /** OBS-2 M1: overload that persists {@code traceId} on every appended row. */
+    public long appendNormalMessages(String id, List<Message> messages, String traceId) {
+        return appendMessages(id, messages, MSG_TYPE_NORMAL, traceId);
     }
 
     public long countMessageRows(String sessionId) {
@@ -563,6 +580,17 @@ public class SessionService {
 
     public void updateSessionMessages(String id, List<Message> messages,
                                        long inputTokens, long outputTokens) {
+        updateSessionMessages(id, messages, inputTokens, outputTokens, null);
+    }
+
+    /**
+     * OBS-2 M1: overload that stamps {@code traceId} on every newly appended row from the engine.
+     * Existing rows (re-written via boundary preservation / full rewrite) keep their original
+     * trace_id (they are restored from {@link StoredMessage}) — the new traceId only applies to
+     * delta messages produced by the current loop.
+     */
+    public void updateSessionMessages(String id, List<Message> messages,
+                                       long inputTokens, long outputTokens, String traceId) {
         synchronized (lockForAppend(id)) {
             requiredTxTemplate.execute(status -> {
                 List<Message> persistedContext = getContextMessages(id);
@@ -585,14 +613,16 @@ public class SessionService {
                             wraps.add(new AppendMessage(stored.message(), stored.msgType(), stored.metadata()));
                         }
                         for (Message message : messages) {
-                            wraps.add(new AppendMessage(message, MSG_TYPE_NORMAL, Collections.emptyMap()));
+                            wraps.add(new AppendMessage(message, MSG_TYPE_NORMAL, MESSAGE_TYPE_NORMAL,
+                                    null, null, Collections.emptyMap(), traceId));
                         }
                         rewriteRowsInNewTransaction(id, wraps);
                     } else {
                         log.warn("updateSessionMessages prefix mismatch, fallback to full rewrite: sessionId={}", id);
                         List<AppendMessage> wraps = new ArrayList<>(messages.size());
                         for (Message message : messages) {
-                            wraps.add(new AppendMessage(message, MSG_TYPE_NORMAL, Collections.emptyMap()));
+                            wraps.add(new AppendMessage(message, MSG_TYPE_NORMAL, MESSAGE_TYPE_NORMAL,
+                                    null, null, Collections.emptyMap(), traceId));
                         }
                         rewriteRowsInNewTransaction(id, wraps);
                     }
@@ -603,7 +633,8 @@ public class SessionService {
                     if (!delta.isEmpty()) {
                         List<AppendMessage> wraps = new ArrayList<>(delta.size());
                         for (Message message : delta) {
-                            wraps.add(new AppendMessage(message, MSG_TYPE_NORMAL, Collections.emptyMap()));
+                            wraps.add(new AppendMessage(message, MSG_TYPE_NORMAL, MESSAGE_TYPE_NORMAL,
+                                    null, null, Collections.emptyMap(), traceId));
                         }
                         appendRowsOnce(id, wraps);
                     }
@@ -1095,6 +1126,8 @@ public class SessionService {
             e.setReasoningContent(append.message().getReasoningContent());
             e.setMetadataJson(writeJsonSafely(append.metadata()));
             e.setCreatedAt(now);
+            // OBS-2 M1: persist trace_id (may be null for legacy / pre-trace paths)
+            e.setTraceId(append.traceId());
             entities.add(e);
         }
         sessionMessageRepository.saveAll(entities);

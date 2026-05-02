@@ -53,6 +53,30 @@ public class LlmTraceEntity {
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
+    /** OBS-2 M0: trace 结束时 finalize 写回 (ended_at - started_at) ms。 */
+    @Column(name = "total_duration_ms", nullable = false)
+    private long totalDurationMs;
+
+    /** OBS-2 M0: 该 trace 内 t_llm_span where kind=tool 计数。 */
+    @Column(name = "tool_call_count", nullable = false)
+    private int toolCallCount;
+
+    /** OBS-2 M0: 该 trace 内 t_llm_span where kind=event 计数。 */
+    @Column(name = "event_count", nullable = false)
+    private int eventCount;
+
+    /** OBS-2 M0: running | ok | error | cancelled (应用层枚举校验)。 */
+    @Column(name = "status", length = 16, nullable = false)
+    private String status = "running";
+
+    /** OBS-2 M0: 失败时摘要错误信息 (TEXT, 不限长)。 */
+    @Column(name = "error", columnDefinition = "TEXT")
+    private String error;
+
+    /** OBS-2 M0: trace 主 agent 名 (与 root_name 同语义；新加为字段自描述)。 */
+    @Column(name = "agent_name", length = 256)
+    private String agentName;
+
     public LlmTraceEntity() {}
 
     public String getTraceId() { return traceId; }
@@ -79,4 +103,16 @@ public class LlmTraceEntity {
     public void setSource(String v) { this.source = v; }
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant v) { this.createdAt = v; }
+    public long getTotalDurationMs() { return totalDurationMs; }
+    public void setTotalDurationMs(long v) { this.totalDurationMs = v; }
+    public int getToolCallCount() { return toolCallCount; }
+    public void setToolCallCount(int v) { this.toolCallCount = v; }
+    public int getEventCount() { return eventCount; }
+    public void setEventCount(int v) { this.eventCount = v; }
+    public String getStatus() { return status; }
+    public void setStatus(String v) { this.status = v; }
+    public String getError() { return error; }
+    public void setError(String v) { this.error = v; }
+    public String getAgentName() { return agentName; }
+    public void setAgentName(String v) { this.agentName = v; }
 }

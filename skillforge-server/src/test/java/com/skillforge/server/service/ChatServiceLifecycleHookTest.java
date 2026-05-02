@@ -126,7 +126,8 @@ class ChatServiceLifecycleHookTest {
                 null, null, new ObjectMapper(), null, dispatcher,
                 new com.skillforge.core.engine.confirm.SessionConfirmCache(),
                 new com.skillforge.core.engine.confirm.PendingConfirmationRegistry(),
-                sid -> sid);
+                sid -> sid,
+                org.mockito.Mockito.mock(com.skillforge.observability.api.LlmTraceStore.class));
     }
 
     private SessionEntity freshSession(String id) {

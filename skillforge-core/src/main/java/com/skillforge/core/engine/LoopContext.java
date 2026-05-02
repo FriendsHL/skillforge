@@ -24,6 +24,12 @@ public class LoopContext {
     private List<Message> messages;
     private String sessionId;
     private Long userId;
+    /**
+     * OBS-2 M1: trace id (UUID) 由 ChatService 在 chatStream / answerAsk / answerConfirmation
+     * 入口生成，透传到 engine。AgentLoopEngine 使用此值作为 rootSpan id（AGENT_LOOP），
+     * 让 t_llm_trace.trace_id == AGENT_LOOP span id 形成 trace lifecycle 锚点。
+     */
+    private String traceId;
     private String workingDirectory;
     private long totalInputTokens;
     private long totalOutputTokens;
@@ -187,6 +193,15 @@ public class LoopContext {
 
     public void setUserId(Long userId) {
         this.userId = userId;
+    }
+
+    /** OBS-2 M1: trace id (UUID) — see field doc. */
+    public String getTraceId() {
+        return traceId;
+    }
+
+    public void setTraceId(String traceId) {
+        this.traceId = traceId;
     }
 
     public String getWorkingDirectory() {

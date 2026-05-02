@@ -517,6 +517,7 @@ public class SkillForgeConfig {
                                            PendingAskRegistry pendingAskRegistry,
                                            @Lazy ContextCompactorCallback compactorCallback,
                                            com.skillforge.core.engine.TraceCollector traceCollector,
+                                           com.skillforge.core.engine.TraceLifecycleSink traceLifecycleSink,
                                            com.skillforge.server.context.EnvironmentContextProvider environmentContextProvider,
                                            com.skillforge.server.hook.ActivityLogHook activityLogHook,
                                            LifecycleHookLoopAdapter lifecycleHookLoopAdapter,
@@ -541,6 +542,8 @@ public class SkillForgeConfig {
         engine.setPendingAskRegistry(pendingAskRegistry);
         engine.setCompactorCallback(compactorCallback);
         engine.setTraceCollector(traceCollector);
+        // OBS-2 M1: wire trace lifecycle sink (PgLlmTraceStore via adapter).
+        engine.setTraceLifecycleSink(traceLifecycleSink);
         // CTX-1 — wire the project-wide Spring ObjectMapper (JavaTimeModule registered)
         // into RequestTokenEstimator path. Avoids footgun #1 (silent wrong serialisation).
         engine.setJsonMapper(objectMapper);
