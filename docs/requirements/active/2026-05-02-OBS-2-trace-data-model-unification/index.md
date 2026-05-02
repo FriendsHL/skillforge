@@ -3,11 +3,13 @@
 ---
 id: OBS-2
 mode: full
-status: draft
+status: in-progress
 priority: P1
 risk: Full
 created: 2026-05-02
 updated: 2026-05-02
+milestones_done: M0, M1, M2, M3
+milestones_pending: M3.5 (1-2 周观察), M4 (关旧写), M5 (4 周观察), M6 (drop t_trace_span)
 ---
 
 ## 摘要
@@ -29,7 +31,19 @@ OBS-2 把 `t_llm_trace` / `t_llm_span` 扩展为统一 trace + span 表（加 `k
 
 ## 当前状态
 
-**草稿（2026-05-02）**。前置 Phase A（双轨数据回填到 `t_llm_trace` / `t_llm_span` 共 33 trace + 176 span）已完成，未提交（纯数据层动作）。OBS-2 主体待 PRD 用户批准 → Full 档 Plan 阶段 → Dev → Review 对抗 2 轮。
+**进行中（2026-05-02）**。M0 / M1 / M2 / M3 已交付（双写期已开始 + API/前端切读完成）；M3.5 / M4 / M5 / M6 待跟进。
+
+| 里程碑 | 状态 | commit |
+|---|---|---|
+| Phase A（数据修复，前置）| ✅ | 直接 SQL（无 commit） |
+| M0（schema migration）| ✅ | `edd5a21` |
+| M1（写入路径双写）| ✅ | `4412729` |
+| M2（历史数据迁移 ETL）| ✅ | `26023c5` |
+| M3（API + 前端切读）| ✅ | `69ee35b` |
+| M3.5（观察期 1-2 周）| ⏳ | — |
+| M4（关闭 t_trace_span 写入）| ⏳ | — |
+| M5（观察期 4 周）| ⏳ | — |
+| M6（drop t_trace_span）| ⏳ | — |
 
 ## 链接
 
