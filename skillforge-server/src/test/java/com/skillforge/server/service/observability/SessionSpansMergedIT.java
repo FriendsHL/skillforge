@@ -3,13 +3,12 @@ package com.skillforge.server.service.observability;
 import com.skillforge.observability.api.LlmTraceStore;
 import com.skillforge.observability.domain.LlmSpan;
 import com.skillforge.observability.domain.LlmSpanSource;
+import com.skillforge.server.controller.observability.dto.EventSpanSummaryDto;
 import com.skillforge.server.controller.observability.dto.LlmSpanSummaryDto;
 import com.skillforge.server.controller.observability.dto.SpanSummaryDto;
 import com.skillforge.server.controller.observability.dto.ToolSpanSummaryDto;
 import com.skillforge.server.entity.SessionEntity;
-import com.skillforge.server.entity.TraceSpanEntity;
 import com.skillforge.server.repository.SessionRepository;
-import com.skillforge.server.repository.TraceSpanRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -17,8 +16,8 @@ import org.junit.jupiter.api.Test;
 import java.time.Instant;
 import java.util.Collections;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -26,33 +25,37 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * Plan §7.2 / Judge R3 — merged session spans must surface both LLM and TOOL_CALL rows
- * with correct {@code kind} discriminator and {@code startedAt} ordering.
+ * OBS-2 M3 — single-table session spans output (kind={llm,tool,event}).
  *
- * <p>Approach: unit-test the {@link SessionSpansService} directly with mocked stores —
- * captures the merge contract without spinning up a full Spring + PG context. The DB
- * round-trip is already covered by {@link com.skillforge.observability.store.PgLlmTraceUpsertTest}
- * and {@code TraceSpanRepository}'s implicit JPA wiring.
+ * <p>The pre-M3 merged-table implementation is gone — listMergedSpans now reads
+ * {@code t_llm_span} via {@link LlmTraceStore#listSpansBySession(String, Set, Instant, int)}
+ * (with kind filtering pushed into the SQL layer). The traceId branch routes through
+ * {@link LlmTraceStore#listSpansByTrace}.
+ *
+ * <p>r2 W-1: SessionSpansService depends on the {@link LlmTraceStore} interface, not the
+ * concrete {@code PgLlmTraceStore} class — this test mocks the interface accordingly.
  */
-@DisplayName("SessionSpansService — merged LLM + TOOL_CALL output")
+@DisplayName("SessionSpansService — single-table output (M3)")
 class SessionSpansMergedIT {
 
     private static final Long USER_ID = 1L;
 
     private LlmTraceStore traceStore;
-    private TraceSpanRepository traceSpanRepository;
     private SessionRepository sessionRepository;
+    private SubagentSessionResolver subagentResolver;
     private SessionSpansService service;
 
     @BeforeEach
     void setUp() {
         traceStore = mock(LlmTraceStore.class);
-        traceSpanRepository = mock(TraceSpanRepository.class);
         sessionRepository = mock(SessionRepository.class);
-        service = new SessionSpansService(traceStore, traceSpanRepository, sessionRepository);
+        subagentResolver = mock(SubagentSessionResolver.class);
+        service = new SessionSpansService(traceStore, sessionRepository, subagentResolver);
     }
 
     /** Stub the session ownership lookup that lives at the top of {@code listMergedSpans}. */
@@ -63,128 +66,179 @@ class SessionSpansMergedIT {
         when(sessionRepository.findById(eq(sessionId))).thenReturn(Optional.of(session));
     }
 
-    @Test
-    @DisplayName("seed 1 LLM span + 1 TOOL_CALL span → returns 2 spans ordered by startedAt with kind set")
-    void mergesLlmAndToolByStartedAt() {
-        String sessionId = "session-merged-1";
-        Instant t0 = Instant.parse("2026-04-29T10:00:00Z");
-        Instant t1 = Instant.parse("2026-04-29T10:00:05Z");
-
-        // LLM span starts FIRST.
-        LlmSpan llm = new LlmSpan(
-                "llm-span-1", "trace-1", null, sessionId,
+    private LlmSpan llmSpan(String spanId, String sessionId, Instant t) {
+        return new LlmSpan(
+                spanId, "trace-1", null, sessionId,
                 1L, "claude", "claude-sonnet-4-20250514",
                 0, true,
                 null, null, null, null, null,
                 "ok",
                 100, 50, null, null,
-                null, 5_000L,
-                t0, t1,
+                null, 5_000L, t, t,
                 "stop", null, null,
                 null, null, null,
                 Collections.emptyMap(),
-                LlmSpanSource.LIVE);
+                LlmSpanSource.LIVE,
+                "llm", null, null);
+    }
 
-        // TOOL_CALL span starts AFTER (t1).
-        TraceSpanEntity tool = new TraceSpanEntity();
-        tool.setId("tool-span-1");
-        tool.setSessionId(sessionId);
-        tool.setParentSpanId("agent-loop-root-1");
-        tool.setSpanType("TOOL_CALL");
-        tool.setName("FileRead");
-        tool.setToolUseId("tool_use_abc");
-        tool.setSuccess(true);
-        tool.setInput("{\"path\":\"/tmp/foo\"}");
-        tool.setOutput("read 100 bytes");
-        tool.setStartTime(t1);
-        tool.setEndTime(Instant.parse("2026-04-29T10:00:06Z"));
-        tool.setDurationMs(1_000L);
-        tool.setIterationIndex(0);
+    private LlmSpan toolSpan(String spanId, String sessionId, Instant t, String name) {
+        return new LlmSpan(
+                spanId, "trace-1", "trace-1", sessionId,
+                1L, null, null,
+                0, false,
+                "{\"path\":\"/tmp\"}", "read", null, null, null,
+                "ok",
+                0, 0, null, null,
+                null, 1_000L, t, t,
+                null, null, null,
+                null, null, "tu_x",
+                Collections.emptyMap(),
+                LlmSpanSource.LIVE,
+                "tool", null, name);
+    }
 
-        stubOwnedSession(sessionId);
-        when(traceStore.listSpansBySession(eq(sessionId), any(), anyInt()))
-                .thenReturn(List.of(llm));
-        when(traceSpanRepository.findBySessionIdAndSpanTypeOrderByStartTimeAsc(
-                eq(sessionId), eq("TOOL_CALL"))).thenReturn(List.of(tool));
-
-        // Act
-        List<SpanSummaryDto> merged = service.listMergedSpans(sessionId, USER_ID, null, 200, null);
-
-        // Assert
-        assertThat(merged).hasSize(2);
-        assertThat(merged.get(0).kind()).isEqualTo("llm");
-        assertThat(merged.get(0).spanId()).isEqualTo("llm-span-1");
-        assertThat(merged.get(1).kind()).isEqualTo("tool");
-        assertThat(merged.get(1).spanId()).isEqualTo("tool-span-1");
-        // Strictly ordered by startedAt
-        assertThat(merged.get(0).startedAt()).isBefore(merged.get(1).startedAt());
-
-        assertThat(merged.get(0)).isInstanceOf(LlmSpanSummaryDto.class);
-        assertThat(merged.get(1)).isInstanceOf(ToolSpanSummaryDto.class);
+    private LlmSpan eventSpan(String spanId, String sessionId, Instant t, String eventType) {
+        return new LlmSpan(
+                spanId, "trace-1", "trace-1", sessionId,
+                1L, null, null,
+                0, false,
+                "in", "out", null, null, null,
+                "ok",
+                0, 0, null, null,
+                null, 250L, t, t,
+                null, null, null,
+                null, null, null,
+                Collections.emptyMap(),
+                LlmSpanSource.LIVE,
+                "event", eventType, eventType);
     }
 
     @Test
-    @DisplayName("kinds=[llm] filters out tool spans (and never queries TraceSpanRepository)")
-    void kindsFilterOnlyLlm() {
+    @DisplayName("returns all 3 kinds via single-table query, ordered by startedAt")
+    void returnsAllKinds() {
+        String sessionId = "session-merged-1";
+        Instant t0 = Instant.parse("2026-04-29T10:00:00Z");
+        Instant t1 = Instant.parse("2026-04-29T10:00:05Z");
+        Instant t2 = Instant.parse("2026-04-29T10:00:10Z");
+
+        stubOwnedSession(sessionId);
+        when(traceStore.listSpansBySession(eq(sessionId), any(), any(), anyInt()))
+                .thenReturn(List.of(
+                        llmSpan("llm-1", sessionId, t0),
+                        toolSpan("tool-1", sessionId, t1, "FileRead"),
+                        eventSpan("event-1", sessionId, t2, "ask_user")));
+
+        List<SpanSummaryDto> merged = service.listMergedSpans(
+                sessionId, USER_ID, null, null, 200, null);
+
+        assertThat(merged).hasSize(3);
+        assertThat(merged.get(0)).isInstanceOf(LlmSpanSummaryDto.class);
+        assertThat(merged.get(1)).isInstanceOf(ToolSpanSummaryDto.class);
+        assertThat(merged.get(2)).isInstanceOf(EventSpanSummaryDto.class);
+        assertThat(merged.get(2).kind()).isEqualTo("event");
+    }
+
+    @Test
+    @DisplayName("kinds=[llm] forwards filter to LlmTraceStore.listSpansBySession")
+    void kindsFilterPushedDown() {
         String sessionId = "session-llm-only";
         Instant t0 = Instant.parse("2026-04-29T10:00:00Z");
 
-        LlmSpan llm = new LlmSpan(
-                "llm-only", "trace-only", null, sessionId,
-                1L, "openai", "gpt-4o",
-                0, false,
-                null, null, null, null, null,
-                "ok",
-                10, 5, null, null,
-                null, 100L, t0, t0,
-                "stop", null, null, null, null, null,
-                Collections.emptyMap(),
-                LlmSpanSource.LIVE);
         stubOwnedSession(sessionId);
-        when(traceStore.listSpansBySession(eq(sessionId), any(), anyInt()))
-                .thenReturn(List.of(llm));
+        when(traceStore.listSpansBySession(eq(sessionId), eq(Set.of("llm")), any(), anyInt()))
+                .thenReturn(List.of(llmSpan("llm-only", sessionId, t0)));
 
         List<SpanSummaryDto> merged = service.listMergedSpans(
-                sessionId, USER_ID, null, 200, java.util.Set.of("llm"));
+                sessionId, USER_ID, null, null, 200, Set.of("llm"));
 
         assertThat(merged).hasSize(1);
         assertThat(merged.get(0).kind()).isEqualTo("llm");
-        org.mockito.Mockito.verify(traceSpanRepository, org.mockito.Mockito.never())
-                .findBySessionIdAndSpanTypeOrderByStartTimeAsc(anyString(), anyString());
     }
 
     @Test
-    @DisplayName("kinds=[tool] filters out llm spans (and never queries LlmTraceStore)")
-    void kindsFilterOnlyTool() {
-        String sessionId = "session-tool-only";
+    @DisplayName("traceId param routes through traceStore.listSpansByTrace and bypasses session query")
+    void traceIdRoutesThroughTraceStore() {
+        String sessionId = "session-trace-route";
         Instant t0 = Instant.parse("2026-04-29T10:00:00Z");
 
-        TraceSpanEntity tool = new TraceSpanEntity();
-        tool.setId("tool-only");
-        tool.setSessionId(sessionId);
-        tool.setParentSpanId("root");
-        tool.setSpanType("TOOL_CALL");
-        tool.setName("Bash");
-        tool.setStartTime(t0);
-        tool.setEndTime(t0);
-        tool.setSuccess(true);
-        tool.setDurationMs(0L);
-
         stubOwnedSession(sessionId);
-        when(traceSpanRepository.findBySessionIdAndSpanTypeOrderByStartTimeAsc(
-                eq(sessionId), eq("TOOL_CALL"))).thenReturn(List.of(tool));
+        when(traceStore.listSpansByTrace(eq("trace-1"), any(), anyInt()))
+                .thenReturn(List.of(llmSpan("llm-1", sessionId, t0)));
 
         List<SpanSummaryDto> merged = service.listMergedSpans(
-                sessionId, USER_ID, null, 200, java.util.Set.of("tool"));
+                sessionId, USER_ID, "trace-1", null, 200, null);
 
         assertThat(merged).hasSize(1);
-        assertThat(merged.get(0).kind()).isEqualTo("tool");
-        org.mockito.Mockito.verify(traceStore, org.mockito.Mockito.never())
-                .listSpansBySession(anyString(), any(), anyInt());
+        verify(traceStore, never()).listSpansBySession(anyString(), any(), any(), anyInt());
+        verify(traceStore).listSpansByTrace(eq("trace-1"), any(), anyInt());
     }
 
-    @SuppressWarnings("unused")
-    private static Map<String, Object> emptyMap() {
-        return Map.of();
+    @Test
+    @DisplayName("traceId branch drops cross-session spans (defensive)")
+    void traceIdDropsCrossSession() {
+        String sessionId = "session-A";
+        Instant t0 = Instant.parse("2026-04-29T10:00:00Z");
+
+        stubOwnedSession(sessionId);
+        // Trace returns a span whose sessionId belongs to a different session — should be dropped.
+        when(traceStore.listSpansByTrace(eq("trace-1"), any(), anyInt()))
+                .thenReturn(List.of(llmSpan("llm-1", "session-B", t0)));
+
+        List<SpanSummaryDto> merged = service.listMergedSpans(
+                sessionId, USER_ID, "trace-1", null, 200, null);
+
+        assertThat(merged).isEmpty();
+    }
+
+    @Test
+    @DisplayName("null kinds defaults to [llm,tool,event] passed down to LlmTraceStore (W-4)")
+    void nullKindsDefaultsToAllThree() {
+        String sessionId = "session-default-kinds";
+        stubOwnedSession(sessionId);
+        when(traceStore.listSpansBySession(eq(sessionId), any(), any(), anyInt()))
+                .thenReturn(List.of());
+
+        service.listMergedSpans(sessionId, USER_ID, null, null, 200, null);
+
+        org.mockito.ArgumentCaptor<Set<String>> kindsCaptor =
+                org.mockito.ArgumentCaptor.forClass(Set.class);
+        verify(traceStore).listSpansBySession(eq(sessionId), kindsCaptor.capture(), any(), anyInt());
+        assertThat(kindsCaptor.getValue())
+                .as("null kinds expanded to all three at the service layer")
+                .containsExactlyInAnyOrder("llm", "tool", "event");
+    }
+
+    @Test
+    @DisplayName("empty kinds defaults to [llm,tool,event] passed down to LlmTraceStore (W-4)")
+    void emptyKindsDefaultsToAllThree() {
+        String sessionId = "session-empty-kinds";
+        stubOwnedSession(sessionId);
+        when(traceStore.listSpansBySession(eq(sessionId), any(), any(), anyInt()))
+                .thenReturn(List.of());
+
+        service.listMergedSpans(sessionId, USER_ID, null, null, 200, Set.of());
+
+        org.mockito.ArgumentCaptor<Set<String>> kindsCaptor =
+                org.mockito.ArgumentCaptor.forClass(Set.class);
+        verify(traceStore).listSpansBySession(eq(sessionId), kindsCaptor.capture(), any(), anyInt());
+        assertThat(kindsCaptor.getValue())
+                .containsExactlyInAnyOrder("llm", "tool", "event");
+    }
+
+    @Test
+    @DisplayName("ownership mismatch returns empty (defense in depth)")
+    void ownershipMismatchEmpty() {
+        String sessionId = "session-other";
+        SessionEntity session = new SessionEntity();
+        session.setId(sessionId);
+        session.setUserId(99L);  // different from USER_ID
+        when(sessionRepository.findById(eq(sessionId))).thenReturn(Optional.of(session));
+
+        List<SpanSummaryDto> merged = service.listMergedSpans(
+                sessionId, USER_ID, null, null, 200, null);
+
+        assertThat(merged).isEmpty();
+        verify(traceStore, never()).listSpansBySession(anyString(), any(), any(), anyInt());
     }
 }

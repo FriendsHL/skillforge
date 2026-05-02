@@ -24,7 +24,44 @@ export type LlmSpanSource = 'live' | 'legacy';
 export type BlobPart = 'request' | 'response' | 'sse';
 
 /** Discriminator value for {@link SpanSummary}. */
-export type SpanKind = 'llm' | 'tool';
+export type SpanKind = 'llm' | 'tool' | 'event';
+
+/**
+ * OBS-2 M3 — discriminator value for event spans (`kind='event'`). Mirrors the
+ * 4 lifecycle event types the engine emits via `t_trace_span` today
+ * (ASK_USER / INSTALL_CONFIRM / COMPACT / AGENT_CONFIRM); on the new path each
+ * row is a `t_llm_span where kind='event'` carrying `event_type` lowercase.
+ *
+ * The `EventSpanType` literal union is derived from {@link VALID_EVENT_TYPES}
+ * so adding a new type touches a single source of truth + the runtime guard
+ * {@link normalizeEventType} catches BE drift at parse time.
+ */
+export const VALID_EVENT_TYPES = [
+  'ask_user',
+  'install_confirm',
+  'compact',
+  'agent_confirm',
+] as const;
+
+export type EventSpanType = typeof VALID_EVENT_TYPES[number];
+
+/**
+ * Runtime guard for `EventSpanSummaryDto.eventType` / `EventSpanDetailDto.eventType`.
+ *
+ * Catches BE drift: a future backend that ships a 5th event type (e.g.
+ * `tool_confirm`) without a coordinated FE update would otherwise be silently
+ * cast through. Logs once via `console.warn` and falls back to `'ask_user'`
+ * so the UI keeps rendering instead of throwing.
+ */
+export function normalizeEventType(raw: unknown): EventSpanType {
+  if (typeof raw === 'string'
+      && (VALID_EVENT_TYPES as readonly string[]).includes(raw)) {
+    return raw as EventSpanType;
+  }
+  // eslint-disable-next-line no-console
+  console.warn('[obs-2] Unknown eventType from backend; falling back to ask_user:', raw);
+  return 'ask_user';
+}
 
 export interface LlmSpanSummary {
   kind: 'llm';
@@ -68,7 +105,34 @@ export interface ToolSpanSummary {
   subagentSessionId?: string | null;
 }
 
-export type SpanSummary = LlmSpanSummary | ToolSpanSummary;
+/**
+ * OBS-2 M3 — event span summary. Mirrors backend `EventSpanSummaryDto`
+ * (`kind='event'`). 4 event types emitted by AgentLoopEngine:
+ *  - ask_user (interactive prompt)
+ *  - install_confirm (skill install confirmation)
+ *  - compact (context compaction trigger)
+ *  - agent_confirm (CreateAgent confirmation)
+ *
+ * Field layout intentionally mirrors {@link ToolSpanSummary} (preview-only) —
+ * full input/output is fetched on demand via `getEventSpanDetail`.
+ */
+export interface EventSpanSummary {
+  kind: 'event';
+  spanId: string;
+  traceId: string;
+  parentSpanId: string | null;
+  startedAt: string;
+  endedAt: string | null;
+  latencyMs: number;
+  eventType: EventSpanType;
+  name: string;
+  success: boolean;
+  error: string | null;
+  inputPreview: string | null;
+  outputPreview: string | null;
+}
+
+export type SpanSummary = LlmSpanSummary | ToolSpanSummary | EventSpanSummary;
 
 export function isLlmSpanSummary(s: SpanSummary): s is LlmSpanSummary {
   return s.kind === 'llm';
@@ -76,6 +140,10 @@ export function isLlmSpanSummary(s: SpanSummary): s is LlmSpanSummary {
 
 export function isToolSpanSummary(s: SpanSummary): s is ToolSpanSummary {
   return s.kind === 'tool';
+}
+
+export function isEventSpanSummary(s: SpanSummary): s is EventSpanSummary {
+  return s.kind === 'event';
 }
 
 export interface SessionSpansResponse {
@@ -155,6 +223,32 @@ export interface ToolSpanDetail {
   iterationIndex: number;
   /** R3-WN2: present iff toolName='SubAgent' AND resolver located child. */
   subagentSessionId?: string | null;
+}
+
+/**
+ * OBS-2 M3 — mirror of backend `EventSpanDetailDto`.
+ *
+ * Simpler than {@link ToolSpanDetail} because event spans don't have
+ * tool_use_id pairing or subagent linkage. Full input/output preserved up to
+ * backend truncation (≈ 65k).
+ */
+export interface EventSpanDetail {
+  spanId: string;
+  traceId: string;
+  parentSpanId: string | null;
+  sessionId: string;
+  eventType: EventSpanType;
+  name: string;
+  success: boolean;
+  error?: string | null;
+  /** Full text up to backend truncation (~65k). */
+  input?: string | null;
+  /** Full text up to backend truncation (~65k). */
+  output?: string | null;
+  startedAt: string;
+  endedAt: string | null;
+  latencyMs: number;
+  iterationIndex: number;
 }
 
 /** Mirror of backend `LlmTraceDto`. */

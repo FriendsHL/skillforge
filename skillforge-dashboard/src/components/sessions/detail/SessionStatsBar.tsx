@@ -1,9 +1,11 @@
 import React from 'react';
 import type { SpanSummary } from '../../../types/observability';
-import type { TimelineMessage } from './SessionTimelinePanel';
 
 interface SessionStatsBarProps {
-  messages: TimelineMessage[];
+  /**
+   * OBS-2 M3 — spans for the currently selected trace (per-trace fetch).
+   * Stats reflect the selected trace, not the whole session.
+   */
   spans: SpanSummary[];
 }
 
@@ -19,13 +21,18 @@ function formatTokens(n: number): string {
   return `${(n / 1000).toFixed(0)}k`;
 }
 
-const SessionStatsBar: React.FC<SessionStatsBarProps> = ({ messages, spans }) => {
-  // Calculate stats
-  const userMessages = messages.filter((m) => m.role === 'user').length;
-  const assistantMessages = messages.filter((m) => m.role === 'assistant').length;
-
+/**
+ * Per-trace stats summary shown in the SessionDetail header.
+ *
+ * OBS-2 M3 (PRD §4 Q7 decision C1): the legacy "Messages" field was removed
+ * because per-trace mode makes it semantically ambiguous (which messages
+ * "belong" to a trace?) and the remaining 4 columns already characterize the
+ * trace. Re-introduce only with a clear semantic story.
+ */
+const SessionStatsBar: React.FC<SessionStatsBarProps> = ({ spans }) => {
   const llmSpans = spans.filter((s) => s.kind === 'llm');
   const toolSpans = spans.filter((s) => s.kind === 'tool');
+  const eventSpans = spans.filter((s) => s.kind === 'event');
 
   const totalInputTokens = llmSpans.reduce((sum, s) => sum + s.inputTokens, 0);
   const totalOutputTokens = llmSpans.reduce((sum, s) => sum + s.outputTokens, 0);
@@ -33,28 +40,29 @@ const SessionStatsBar: React.FC<SessionStatsBarProps> = ({ messages, spans }) =>
 
   const totalLatencyMs = spans.reduce((sum, s) => sum + s.latencyMs, 0);
 
-  const errorCount = spans.filter((s) => s.kind === 'llm' ? s.error : !s.success).length;
+  const errorCount = spans.filter((s) => {
+    if (s.kind === 'llm') return Boolean(s.error || s.errorType);
+    return !s.success;
+  }).length;
 
   return (
     <div className="obs-stats-bar">
-      <div className="obs-stats-item">
-        <span className="obs-stats-label">Messages</span>
-        <span className="obs-stats-value">
-          <span className="obs-stats-role user">{userMessages}</span>
-          <span className="obs-stats-sep">/</span>
-          <span className="obs-stats-role assistant">{assistantMessages}</span>
-        </span>
-        <span className="obs-stats-hint">user / assistant</span>
-      </div>
-
       <div className="obs-stats-item">
         <span className="obs-stats-label">Spans</span>
         <span className="obs-stats-value">
           <span className="obs-stats-kind llm">{llmSpans.length}</span>
           <span className="obs-stats-sep">/</span>
           <span className="obs-stats-kind tool">{toolSpans.length}</span>
+          {eventSpans.length > 0 && (
+            <>
+              <span className="obs-stats-sep">/</span>
+              <span className="obs-stats-kind event">{eventSpans.length}</span>
+            </>
+          )}
         </span>
-        <span className="obs-stats-hint">LLM / Tool</span>
+        <span className="obs-stats-hint">
+          {eventSpans.length > 0 ? 'LLM / Tool / Event' : 'LLM / Tool'}
+        </span>
       </div>
 
       <div className="obs-stats-item">

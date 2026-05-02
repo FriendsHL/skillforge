@@ -217,10 +217,26 @@ public class SessionService {
         }
     }
 
+    /**
+     * StoredMessage carries the row-store representation back into the service layer.
+     *
+     * <p>OBS-2 M3 W1: {@code traceId} now travels with the row so boundary preservation /
+     * full rewrite paths in {@link #updateSessionMessages(String, List, long, long, String)}
+     * can restore the original {@code trace_id} on each historical row instead of clearing
+     * it to NULL. Only delta rows (newly written by the current loop) get stamped with the
+     * {@code traceId} parameter passed to {@code updateSessionMessages}.
+     */
     public record StoredMessage(long seqNo, String msgType, String messageType, String controlId,
-                                Instant answeredAt, Map<String, Object> metadata, Message message) {
+                                Instant answeredAt, Map<String, Object> metadata, Message message,
+                                String traceId) {
+        /** Backward-compat — defaults traceId to null. */
+        public StoredMessage(long seqNo, String msgType, String messageType, String controlId,
+                             Instant answeredAt, Map<String, Object> metadata, Message message) {
+            this(seqNo, msgType, messageType, controlId, answeredAt, metadata, message, null);
+        }
+
         public StoredMessage(long seqNo, String msgType, Map<String, Object> metadata, Message message) {
-            this(seqNo, msgType, MESSAGE_TYPE_NORMAL, null, null, metadata, message);
+            this(seqNo, msgType, MESSAGE_TYPE_NORMAL, null, null, metadata, message, null);
         }
     }
 
@@ -248,7 +264,8 @@ public class SessionService {
                     stored.messageType(),
                     stored.controlId(),
                     stored.answeredAt(),
-                    stored.metadata()
+                    stored.metadata(),
+                    stored.traceId()
             ));
         }
         return out;
@@ -608,9 +625,15 @@ public class SessionService {
                     if (lastBoundary >= 0) {
                         log.warn("updateSessionMessages prefix mismatch, preserve boundary rewrite: sessionId={}", id);
                         List<AppendMessage> wraps = new ArrayList<>(lastBoundary + 1 + messages.size());
+                        // OBS-2 M3 W1: preserve each historical row's original trace_id (read back
+                        // via StoredMessage.traceId, populated by toStoredMessages from
+                        // SessionMessageEntity.traceId). Without this, boundary preservation
+                        // would clear trace_id on every kept row.
                         for (int i = 0; i <= lastBoundary; i++) {
                             StoredMessage stored = fullRecords.get(i);
-                            wraps.add(new AppendMessage(stored.message(), stored.msgType(), stored.metadata()));
+                            wraps.add(new AppendMessage(stored.message(), stored.msgType(),
+                                    stored.messageType(), stored.controlId(), stored.answeredAt(),
+                                    stored.metadata(), stored.traceId()));
                         }
                         for (Message message : messages) {
                             wraps.add(new AppendMessage(message, MSG_TYPE_NORMAL, MESSAGE_TYPE_NORMAL,
@@ -619,6 +642,8 @@ public class SessionService {
                         rewriteRowsInNewTransaction(id, wraps);
                     } else {
                         log.warn("updateSessionMessages prefix mismatch, fallback to full rewrite: sessionId={}", id);
+                        // OBS-2 M3 W1: full-rewrite path — no historical rows kept since lastBoundary<0,
+                        // so the new traceId on delta is the only stamp; no historical row to preserve.
                         List<AppendMessage> wraps = new ArrayList<>(messages.size());
                         for (Message message : messages) {
                             wraps.add(new AppendMessage(message, MSG_TYPE_NORMAL, MESSAGE_TYPE_NORMAL,
@@ -925,7 +950,8 @@ public class SessionService {
                     e.getControlId(),
                     e.getAnsweredAt(),
                     metadata,
-                    message));
+                    message,
+                    e.getTraceId()));
         }
         return out;
     }

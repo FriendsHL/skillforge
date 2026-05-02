@@ -123,10 +123,15 @@
   color: #5c8a4a;
 }
 
+.obs-stats-kind.event {
+  color: #b87316;
+}
+
 [data-theme="dark"] .obs-stats-role.user { color: #90b8d8; }
 [data-theme="dark"] .obs-stats-role.assistant { color: #b89ad8; }
 [data-theme="dark"] .obs-stats-kind.llm { color: #b89ad8; }
 [data-theme="dark"] .obs-stats-kind.tool { color: #8fca8f; }
+[data-theme="dark"] .obs-stats-kind.event { color: #e0a050; }
 
 .obs-stats-item--error {
   background: rgba(184, 65, 47, 0.08);

@@ -38,6 +38,7 @@ public class SessionSpansController {
     public Map<String, Object> listSpans(
             @PathVariable String sessionId,
             @RequestParam Long userId,
+            @RequestParam(required = false) String traceId,
             @RequestParam(required = false) Instant since,
             @RequestParam(required = false, defaultValue = "200") int limit,
             @RequestParam(required = false) Set<String> kinds) {
@@ -48,7 +49,8 @@ public class SessionSpansController {
         if (limit < 1) limit = 1;
         if (limit > 1000) limit = 1000;
 
-        List<SpanSummaryDto> spans = service.listMergedSpans(sessionId, userId, since, limit, kinds);
+        List<SpanSummaryDto> spans = service.listMergedSpans(
+                sessionId, userId, traceId, since, limit, kinds);
         boolean hasMore = spans.size() >= limit;
         return Map.of("spans", spans, "hasMore", hasMore);
     }

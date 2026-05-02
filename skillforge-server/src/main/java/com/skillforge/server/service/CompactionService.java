@@ -560,10 +560,15 @@ public class CompactionService implements ContextCompactorCallback {
             }
             if (lastBoundary >= 0) {
                 List<SessionService.AppendMessage> rewritten = new ArrayList<>();
+                // OBS-2 M3 W1: preserve historical trace_id when rewriting rows during a
+                // full-compact boundary preservation pass. Compaction has no traceId of its
+                // own (background orchestration), so post-boundary new messages keep null.
                 for (int i = 0; i <= lastBoundary; i++) {
                     SessionService.StoredMessage item = all.get(i);
                     rewritten.add(new SessionService.AppendMessage(
-                            item.message(), item.msgType(), item.metadata()));
+                            item.message(), item.msgType(), item.messageType(),
+                            item.controlId(), item.answeredAt(),
+                            item.metadata(), item.traceId()));
                 }
                 for (Message msg : result.getMessages()) {
                     rewritten.add(new SessionService.AppendMessage(
@@ -674,12 +679,16 @@ public class CompactionService implements ContextCompactorCallback {
         long endSeq = resolveCheckpointEndSeq(checkpoint);
         List<SessionService.StoredMessage> records = sessionService.getFullHistoryRecords(sessionId);
         List<SessionService.AppendMessage> out = new ArrayList<>();
+        // OBS-2 M3 W1: checkpoint restore replays historical rows; preserve original trace_id
+        // so per-trace queries remain consistent after a restore.
         for (SessionService.StoredMessage record : records) {
             if (record.seqNo() > endSeq) {
                 break;
             }
             out.add(new SessionService.AppendMessage(
-                    record.message(), record.msgType(), record.metadata()));
+                    record.message(), record.msgType(), record.messageType(),
+                    record.controlId(), record.answeredAt(),
+                    record.metadata(), record.traceId()));
         }
         return out;
     }

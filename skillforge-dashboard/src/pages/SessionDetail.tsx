@@ -1,13 +1,14 @@
 import React, { useMemo, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { getSession, getSessionMessages, getTraces, getTraceSpans, getSessionSpans } from '../api';
+import { getSession, getSessionMessages, getTraces, getSessionSpans } from '../api';
 import { useAuth } from '../contexts/AuthContext';
 import TraceSidebar, { type TraceInfo } from '../components/sessions/detail/TraceSidebar';
 import SessionWaterfallPanel from '../components/sessions/detail/SessionWaterfallPanel';
 import TraceDetailPanel, { type TraceOverview } from '../components/sessions/detail/TraceDetailPanel';
 import SessionStatsBar from '../components/sessions/detail/SessionStatsBar';
 import type { SpanSummary } from '../types/observability';
+import { normalizeEventType } from '../types/observability';
 import '../components/sessions/sessions.css';
 import '../components/skills/skills.css';
 import '../components/traces/traces.css';
@@ -15,9 +16,17 @@ import '../components/sessions/detail/session-detail.css';
 
 interface RawMessage {
   id?: string | number;
+  /** Sequence number within the session — primary sort key (BE writes monotonically). */
+  seqNo?: number;
   role?: string;
   content?: unknown;
   createdAt?: string;
+  /**
+   * OBS-2 M3 — `t_session_message.trace_id` exposed via SessionMessageDto.
+   * NULL for historical messages (pre-M1 cut-over) and for messages outside
+   * an active trace (system / pre-loop). Newly written messages carry it.
+   */
+  traceId?: string | null;
 }
 
 interface TimelineMessage {
@@ -114,7 +123,8 @@ const SessionDetail: React.FC = () => {
     staleTime: 30_000,
   });
 
-  // Messages for stats bar
+  // Messages — used by SessionWaterfallPanel (turn-index calculation) and by
+  // selectedTraceOverview (derive User query / Assistant result per trace_id).
   const messagesQuery = useQuery({
     queryKey: ['session', sessionId, 'messages', userId],
     queryFn: async () => {
@@ -155,81 +165,87 @@ const SessionDetail: React.FC = () => {
     }
   }, [traces, selectedTraceId]);
 
-  // Full input/output for the selected trace. The /api/traces list endpoint
-  // truncates input/output to 200 chars; /api/traces/{id}/spans returns the
-  // root span with full text. We only fetch when a trace is selected.
-  const selectedTraceFullQuery = useQuery({
-    queryKey: ['trace-spans', selectedTraceId],
-    queryFn: async () => {
-      if (!selectedTraceId) throw new Error('missing traceId');
-      const res = await getTraceSpans(selectedTraceId);
-      const data = res.data as { root?: Record<string, unknown> } | null;
-      return data?.root ?? null;
-    },
-    enabled: Boolean(selectedTraceId),
-    staleTime: 30_000,
-  });
-
-  // Spans for this session (using observability API for correct span IDs)
+  // OBS-2 M3 — Spans for the *currently selected* trace. Backend filters by
+  // trace_id directly; we no longer fetch "all session spans + client-side
+  // filter" (that path needed limit=1000 to avoid truncating long sessions).
   const sessionSpansQuery = useQuery({
-    queryKey: ['session-spans', sessionId, userId],
+    queryKey: ['session-spans', sessionId, userId, selectedTraceId],
     queryFn: async () => {
-      if (!sessionId || !userId) throw new Error('missing sessionId or userId');
-      // limit=1000 is the backend max; default 200 truncated long sessions and
-      // dropped the latest traces' children. (3) will switch to per-trace fetch.
-      const res = await getSessionSpans(sessionId, userId, { limit: 1000 });
+      if (!sessionId || !userId || !selectedTraceId) {
+        throw new Error('missing sessionId / userId / selectedTraceId');
+      }
+      const res = await getSessionSpans(sessionId, userId, {
+        traceId: selectedTraceId,
+      });
       const data = res.data;
       return Array.isArray(data.spans) ? data.spans : [];
     },
-    enabled: Boolean(sessionId && userId),
+    enabled: Boolean(sessionId && userId && selectedTraceId),
     staleTime: 30_000,
   });
 
   // Convert observability spans to SpanSummary format
   const spans = useMemo<SpanSummary[]>(() => {
     const rawSpans = sessionSpansQuery.data ?? [];
-    return rawSpans.map((raw) => {
+    return rawSpans.map((raw): SpanSummary => {
       if (raw.kind === 'llm') {
         return {
           kind: 'llm',
           spanId: String(raw.spanId || ''),
           traceId: String(raw.traceId || ''),
-          parentSpanId: raw.parentSpanId as string | null,
+          parentSpanId: (raw.parentSpanId as string | null) ?? null,
           startedAt: String(raw.startedAt || ''),
-          endedAt: raw.endedAt as string | null,
+          endedAt: (raw.endedAt as string | null) ?? null,
           latencyMs: Number(raw.latencyMs || 0),
-          provider: raw.provider as string | null,
-          model: raw.model as string | null,
+          provider: (raw.provider as string | null) ?? null,
+          model: (raw.model as string | null) ?? null,
           inputTokens: Number(raw.inputTokens || 0),
           outputTokens: Number(raw.outputTokens || 0),
-          source: (raw.source as string) || 'live',
+          source: ((raw.source as 'live' | 'legacy') || 'live'),
           stream: Boolean(raw.stream),
           hasRawRequest: Boolean(raw.hasRawRequest),
           hasRawResponse: Boolean(raw.hasRawResponse),
           hasRawSse: Boolean(raw.hasRawSse),
-          blobStatus: raw.blobStatus as string | null,
-          finishReason: raw.finishReason as string | null,
-          error: raw.error as string | null,
-          errorType: raw.errorType as string | null,
-        } as SpanSummary;
-      } else {
+          blobStatus: (raw.blobStatus as 'ok' | 'legacy' | 'write_failed' | 'truncated' | null) ?? null,
+          finishReason: (raw.finishReason as string | null) ?? null,
+          error: (raw.error as string | null) ?? null,
+          errorType: (raw.errorType as string | null) ?? null,
+        };
+      }
+      if (raw.kind === 'event') {
         return {
-          kind: 'tool',
+          kind: 'event',
           spanId: String(raw.spanId || ''),
           traceId: String(raw.traceId || ''),
-          parentSpanId: raw.parentSpanId as string | null,
+          parentSpanId: (raw.parentSpanId as string | null) ?? null,
           startedAt: String(raw.startedAt || ''),
-          endedAt: raw.endedAt as string | null,
+          endedAt: (raw.endedAt as string | null) ?? null,
           latencyMs: Number(raw.latencyMs || 0),
-          toolName: raw.toolName as string | null,
-          toolUseId: raw.toolUseId as string | null,
-          success: Boolean(raw.success),
-          error: raw.error as string | null,
-          inputPreview: raw.inputPreview as string | null,
-          outputPreview: raw.outputPreview as string | null,
-          subagentSessionId: raw.subagentSessionId as string | null,
-        } as SpanSummary;
+          eventType: normalizeEventType(raw.eventType),
+          name: String(raw.name || ''),
+          success: raw.success !== false,
+          error: (raw.error as string | null) ?? null,
+          inputPreview: (raw.inputPreview as string | null) ?? null,
+          outputPreview: (raw.outputPreview as string | null) ?? null,
+        };
       }
+      // Default: tool kind
+      return {
+        kind: 'tool',
+        spanId: String(raw.spanId || ''),
+        traceId: String(raw.traceId || ''),
+        parentSpanId: (raw.parentSpanId as string | null) ?? null,
+        startedAt: String(raw.startedAt || ''),
+        endedAt: (raw.endedAt as string | null) ?? null,
+        latencyMs: Number(raw.latencyMs || 0),
+        toolName: String((raw.toolName as string) || ''),
+        toolUseId: (raw.toolUseId as string | null) ?? null,
+        success: Boolean(raw.success),
+        error: (raw.error as string | null) ?? null,
+        inputPreview: (raw.inputPreview as string | null) ?? null,
+        outputPreview: (raw.outputPreview as string | null) ?? null,
+        subagentSessionId: (raw.subagentSessionId as string | null) ?? null,
+      };
     });
   }, [sessionSpansQuery.data]);
 
@@ -243,32 +259,55 @@ const SessionDetail: React.FC = () => {
     return spans.find((s) => s.spanId === selectedSpanId) ?? null;
   }, [spans, selectedSpanId]);
 
-  // Spans belonging to the selected trace. Both /api/traces.traceId and the
-  // observability span feed share the AGENT_LOOP root span id (see
-  // AgentLoopEngine line 608-610 and SessionSpansService.toToolSummary), so
-  // filtering by traceId is safe.
-  const traceSpans = useMemo<SpanSummary[]>(() => {
-    if (!selectedTraceId) return [];
-    return spans.filter((s) => s.traceId === selectedTraceId);
-  }, [spans, selectedTraceId]);
+  // OBS-2 M3 — `spans` is already filtered to the selected trace by the
+  // backend (per-trace fetch), no client-side filtering needed.
 
-  // Get selected trace overview for right panel. Prefer the un-truncated
-  // input/output from /api/traces/{id}/spans (root span); fall back to the
-  // 200-char preview from the trace list while the full payload is loading.
+  /**
+   * Selected trace overview for the right panel.
+   *
+   * OBS-2 M3 cut-over: `t_llm_trace` doesn't carry input/output text columns
+   * any more (those used to live on `t_trace_span.AGENT_LOOP`). We derive
+   * "User query" + "Assistant result" from the per-trace messages slice
+   * instead — `t_session_message.trace_id` is populated for new traces post-M1.
+   *
+   * Fallback chain when messages don't carry trace_id (historical pre-M1
+   * traces): trace.input / trace.output from the list endpoint (also null
+   * post-M3), ultimately rendered as "—" by TraceDetailPanel.
+   */
   const selectedTraceOverview = useMemo<TraceOverview | null>(() => {
     if (!selectedTraceId) return null;
     const trace = traces.find((t) => t.id === selectedTraceId);
     if (!trace) return null;
-    const fullRoot = selectedTraceFullQuery.data;
-    const fullInput =
-      fullRoot && typeof fullRoot.input === 'string' ? (fullRoot.input as string) : null;
-    const fullOutput =
-      fullRoot && typeof fullRoot.output === 'string' ? (fullRoot.output as string) : null;
+
+    const traceMessages = (messagesQuery.data ?? [])
+      .filter((m) => m.traceId === selectedTraceId)
+      .slice()
+      .sort((a, b) => {
+        // Prefer seqNo (monotonic per session); fall back to createdAt parse.
+        const aSeq = typeof a.seqNo === 'number' ? a.seqNo : null;
+        const bSeq = typeof b.seqNo === 'number' ? b.seqNo : null;
+        if (aSeq != null && bSeq != null) return aSeq - bSeq;
+        return tsOf(a.createdAt) - tsOf(b.createdAt);
+      });
+
+    const firstUser = traceMessages.find((m) => m.role === 'user');
+    // Walk from the end without mutating the sorted copy.
+    let lastAssistant: RawMessage | undefined;
+    for (let i = traceMessages.length - 1; i >= 0; i--) {
+      if (traceMessages[i].role === 'assistant') {
+        lastAssistant = traceMessages[i];
+        break;
+      }
+    }
+
+    const derivedInput = firstUser ? flattenContentText(firstUser.content) : '';
+    const derivedOutput = lastAssistant ? flattenContentText(lastAssistant.content) : '';
+
     return {
       id: trace.id,
       name: trace.name,
-      input: fullInput ?? trace.input,
-      output: fullOutput ?? trace.output,
+      input: derivedInput || trace.input,
+      output: derivedOutput || trace.output,
       status: trace.status,
       totalMs: trace.totalMs,
       tokensIn: trace.tokensIn,
@@ -276,7 +315,7 @@ const SessionDetail: React.FC = () => {
       model: trace.model,
       startTime: trace.startTime,
     };
-  }, [traces, selectedTraceId, selectedTraceFullQuery.data]);
+  }, [traces, selectedTraceId, messagesQuery.data]);
 
   const sessionTitle =
     (sessionQuery.data?.title as string | undefined) ??
@@ -306,10 +345,7 @@ const SessionDetail: React.FC = () => {
           )}
         </div>
         {sessionId && (
-          <SessionStatsBar
-            messages={messages}
-            spans={spans}
-          />
+          <SessionStatsBar spans={spans} />
         )}
       </header>
 
@@ -331,7 +367,7 @@ const SessionDetail: React.FC = () => {
 
         {/* Middle: Waterfall for selected trace */}
         <SessionWaterfallPanel
-          spans={traceSpans}
+          spans={spans}
           messages={messages}
           selectedSpanId={selectedSpan?.spanId ?? null}
           onSelectSpan={(s) => setSelectedSpanId(s.spanId)}

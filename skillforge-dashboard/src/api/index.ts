@@ -286,10 +286,17 @@ import type {
   SessionSpansResponse,
   LlmSpanDetail,
   ToolSpanDetail,
+  EventSpanDetail,
   BlobPart,
 } from '../types/observability';
 
 export interface GetSessionSpansParams {
+  /**
+   * OBS-2 M3: when set, backend filters `t_llm_span` to only this trace_id.
+   * Used by SessionDetail to fetch spans of the currently selected trace
+   * (replaces the legacy "fetch all session spans + client-side filter" path).
+   */
+  traceId?: string;
   since?: string;
   limit?: number;
   /**
@@ -297,8 +304,10 @@ export interface GetSessionSpansParams {
    * param as repeated `?kinds=llm&kinds=tool`, which the Spring controller
    * deserialises into `Set<String>`. Comma-form (e.g. `kinds=llm,tool`) is
    * also accepted on the wire. Omit / empty array → backend defaults to all.
+   *
+   * OBS-2 M3 adds `'event'` for the 4 lifecycle event spans.
    */
-  kinds?: Array<'llm' | 'tool'>;
+  kinds?: Array<'llm' | 'tool' | 'event'>;
 }
 
 // W6 fix: OBS-1 controllers now require `userId` to enforce session ownership;
@@ -317,6 +326,14 @@ export const getLlmSpanDetail = (spanId: string, userId: number) =>
 
 export const getToolSpanDetail = (spanId: string, userId: number) =>
   api.get<ToolSpanDetail>(`/observability/tool-spans/${spanId}`, { params: { userId } });
+
+/**
+ * OBS-2 M3 — fetch a single event span's detail (full input / output / error).
+ * Backend reads from `t_llm_span` where `kind='event'`; 404 when the span
+ * exists but is a different kind.
+ */
+export const getEventSpanDetail = (spanId: string, userId: number) =>
+  api.get<EventSpanDetail>(`/observability/event-spans/${spanId}`, { params: { userId } });
 
 /**
  * Fetch the controlled blob payload (request / response / sse). Backend streams

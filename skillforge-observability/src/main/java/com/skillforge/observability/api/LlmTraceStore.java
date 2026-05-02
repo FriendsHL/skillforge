@@ -38,6 +38,15 @@ public interface LlmTraceStore {
     /** 列出某 session 的 LLM spans（按 startedAt ASC）。 */
     List<LlmSpan> listSpansBySession(String sessionId, Instant since, int limit);
 
+    /**
+     * OBS-2 M3 — list spans for a session, narrowed to {@code kinds} when provided, paginated.
+     *
+     * <p>Used by {@code GET /api/observability/sessions/{id}/spans} after the M3 cut-over.
+     * {@code kinds=null} or empty means all kinds (llm + tool + event); the implementation
+     * MUST push the limit down to SQL via Pageable, not slice in Java.
+     */
+    List<LlmSpan> listSpansBySession(String sessionId, Set<String> kinds, Instant since, int limit);
+
     /** 单 span 详情。 */
     Optional<LlmSpan> readSpan(String spanId);
 

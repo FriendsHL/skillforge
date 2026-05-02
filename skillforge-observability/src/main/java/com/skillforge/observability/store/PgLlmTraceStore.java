@@ -209,6 +209,34 @@ public class PgLlmTraceStore implements LlmTraceStore {
         return out;
     }
 
+    /**
+     * OBS-2 M3: list spans for a session, narrowed to {@code kinds} when provided, paginated.
+     *
+     * <p>Used by {@code GET /api/observability/sessions/{id}/spans} after M3 cut-over.
+     *
+     * <p>r2 W-4 fix: null/empty {@code kinds} now defaults to all three kinds and routes
+     * through the Pageable-aware repository method, so the SQL LIMIT always applies.
+     */
+    @Override
+    @Transactional(readOnly = true)
+    public List<LlmSpan> listSpansBySession(String sessionId, Set<String> kinds, Instant since, int limit) {
+        int effectiveLimit = Math.max(1, limit);
+        org.springframework.data.domain.Pageable page =
+                org.springframework.data.domain.PageRequest.of(0, effectiveLimit);
+        Set<String> effectiveKinds = (kinds == null || kinds.isEmpty())
+                ? Set.of("llm", "tool", "event")
+                : kinds;
+        List<LlmSpanEntity> raw = since != null
+                ? spanRepository.findBySessionIdAndKindInAndStartedAtGreaterThanEqualOrderByStartedAtAsc(
+                        sessionId, effectiveKinds, since, page)
+                : spanRepository.findBySessionIdAndKindInOrderByStartedAtAsc(sessionId, effectiveKinds, page);
+        List<LlmSpan> out = new ArrayList<>(raw.size());
+        for (LlmSpanEntity e : raw) {
+            out.add(toDomain(e));
+        }
+        return out;
+    }
+
     @Override
     @Transactional(readOnly = true)
     public Optional<LlmSpan> readSpan(String spanId) {
@@ -368,17 +396,23 @@ public class PgLlmTraceStore implements LlmTraceStore {
         }
     }
 
+    /**
+     * OBS-2 M3 W2: push limit + kind filter down to SQL/pagination instead of loading every
+     * span row for the trace into memory and slicing in Java. For long sessions (thousands
+     * of tool calls) the previous loop materialised the entire trace's spans before
+     * truncating; with this fix the DB returns at most {@code limit} rows.
+     */
     @Override
     @Transactional(readOnly = true)
     public List<LlmSpan> listSpansByTrace(String traceId, Set<String> kinds, int limit) {
-        List<LlmSpanEntity> raw = spanRepository.findByTraceIdOrderByStartedAtAsc(traceId);
-        List<LlmSpan> out = new ArrayList<>();
-        int n = 0;
+        int effectiveLimit = Math.max(1, limit);
+        org.springframework.data.domain.Pageable page =
+                org.springframework.data.domain.PageRequest.of(0, effectiveLimit);
+        List<LlmSpanEntity> raw = (kinds == null || kinds.isEmpty())
+                ? spanRepository.findByTraceIdOrderByStartedAtAsc(traceId, page)
+                : spanRepository.findByTraceIdAndKindInOrderByStartedAtAsc(traceId, kinds, page);
+        List<LlmSpan> out = new ArrayList<>(raw.size());
         for (LlmSpanEntity e : raw) {
-            if (kinds != null && !kinds.isEmpty() && !kinds.contains(e.getKind())) {
-                continue;
-            }
-            if (n++ >= limit) break;
             out.add(toDomain(e));
         }
         return out;

@@ -2,6 +2,7 @@ import React from 'react';
 import type { SpanSummary } from '../../../types/observability';
 import LlmSpanDetailView from './LlmSpanDetailView';
 import ToolSpanDetailView from './ToolSpanDetailView';
+import EventSpanDetailView from './EventSpanDetailView';
 
 interface SpanDetailPanelProps {
   span: SpanSummary | null;
@@ -30,10 +31,14 @@ const SpanDetailPanel: React.FC<SpanDetailPanelProps> = ({ span }) => {
       <div className="obs-span-detail-body">
         {/* FE-B1 fix: key={span.spanId} forces remount on span switch, resetting
             PayloadViewer's internal blob state so spanA blob text never bleeds into spanB. */}
-        {span.kind === 'llm' ? (
+        {span.kind === 'llm' && (
           <LlmSpanDetailView key={span.spanId} span={span} />
-        ) : (
+        )}
+        {span.kind === 'tool' && (
           <ToolSpanDetailView key={span.spanId} span={span} />
+        )}
+        {span.kind === 'event' && (
+          <EventSpanDetailView key={span.spanId} span={span} />
         )}
       </div>
     </aside>

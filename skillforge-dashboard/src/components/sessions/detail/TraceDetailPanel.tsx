@@ -2,6 +2,7 @@ import React from 'react';
 import type { SpanSummary } from '../../../types/observability';
 import LlmSpanDetailView from './LlmSpanDetailView';
 import ToolSpanDetailView from './ToolSpanDetailView';
+import EventSpanDetailView from './EventSpanDetailView';
 
 interface TraceOverview {
   id: string;
@@ -73,10 +74,13 @@ const TraceDetailPanel: React.FC<TraceDetailPanelProps> = ({ trace, span }) => {
         </div>
         <div className="tr-span-detail-body">
           {span.kind === 'llm' && (
-            <LlmSpanDetailView key={span.spanId} span={span as any} />
+            <LlmSpanDetailView key={span.spanId} span={span} />
           )}
           {span.kind === 'tool' && (
-            <ToolSpanDetailView key={span.spanId} span={span as any} />
+            <ToolSpanDetailView key={span.spanId} span={span} />
+          )}
+          {span.kind === 'event' && (
+            <EventSpanDetailView key={span.spanId} span={span} />
           )}
         </div>
       </aside>

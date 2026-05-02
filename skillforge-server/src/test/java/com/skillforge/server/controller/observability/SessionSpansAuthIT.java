@@ -7,8 +7,6 @@ import com.skillforge.observability.domain.LlmSpan;
 import com.skillforge.observability.domain.LlmSpanSource;
 import com.skillforge.observability.domain.LlmTrace;
 import com.skillforge.server.entity.SessionEntity;
-import com.skillforge.server.entity.TraceSpanEntity;
-import com.skillforge.server.repository.TraceSpanRepository;
 import com.skillforge.server.service.SessionService;
 import com.skillforge.server.service.observability.SessionSpansService;
 import com.skillforge.server.service.observability.SubagentSessionResolver;
@@ -62,7 +60,6 @@ class SessionSpansAuthIT {
     private SessionService sessionService;
     private SessionSpansService spansService;
     private LlmTraceStore traceStore;
-    private TraceSpanRepository traceSpanRepository;
     private BlobStore blobStore;
     private SubagentSessionResolver subagentResolver;
 
@@ -73,7 +70,6 @@ class SessionSpansAuthIT {
         sessionService = mock(SessionService.class);
         spansService = mock(SessionSpansService.class);
         traceStore = mock(LlmTraceStore.class);
-        traceSpanRepository = mock(TraceSpanRepository.class);
         blobStore = mock(BlobStore.class);
         subagentResolver = mock(SubagentSessionResolver.class);
 
@@ -95,8 +91,9 @@ class SessionSpansAuthIT {
         LlmSpanController llmSpanCtrl = new LlmSpanController(
                 traceStore, blobStore, new Semaphore(20), guard);
         LlmTraceController traceCtrl = new LlmTraceController(traceStore, guard);
+        // OBS-2 M3 — ToolSpanController now reads from t_llm_span via LlmTraceStore.
         ToolSpanController toolCtrl = new ToolSpanController(
-                traceSpanRepository, subagentResolver, guard);
+                traceStore, subagentResolver, guard);
 
         mvc = MockMvcBuilders.standaloneSetup(spansCtrl, llmSpanCtrl, traceCtrl, toolCtrl)
                 .setMessageConverters(
@@ -113,7 +110,8 @@ class SessionSpansAuthIT {
     @Test
     @DisplayName("session spans: owner → 200")
     void sessionSpans_owner_200() throws Exception {
-        when(spansService.listMergedSpans(eq(SESSION_USER_1), eq(USER_1), any(), anyInt(), any()))
+        when(spansService.listMergedSpans(
+                eq(SESSION_USER_1), eq(USER_1), any(), any(), anyInt(), any()))
                 .thenReturn(List.of());
         mvc.perform(get("/api/observability/sessions/{id}/spans", SESSION_USER_1)
                         .param("userId", String.valueOf(USER_1)))
@@ -251,16 +249,9 @@ class SessionSpansAuthIT {
     @Test
     @DisplayName("tool span: owner → 200")
     void toolSpan_owner_200() throws Exception {
-        TraceSpanEntity tool = new TraceSpanEntity();
-        tool.setId("tool-span-1");
-        tool.setSessionId(SESSION_USER_1);
-        tool.setSpanType("TOOL_CALL");
-        tool.setName("Bash");
-        tool.setStartTime(Instant.now());
-        tool.setEndTime(Instant.now());
-        tool.setSuccess(true);
-        when(traceSpanRepository.findById(eq("tool-span-1"))).thenReturn(Optional.of(tool));
-        when(subagentResolver.resolve(any())).thenReturn(null);
+        LlmSpan tool = makeToolSpan("tool-span-1", SESSION_USER_1);
+        when(traceStore.readSpan(eq("tool-span-1"))).thenReturn(Optional.of(tool));
+        when(subagentResolver.resolve(any(LlmSpan.class))).thenReturn(null);
         mvc.perform(get("/api/observability/tool-spans/{id}", "tool-span-1")
                         .param("userId", String.valueOf(USER_1)))
                 .andExpect(status().isOk());
@@ -269,15 +260,8 @@ class SessionSpansAuthIT {
     @Test
     @DisplayName("tool span: non-owner → 403")
     void toolSpan_nonOwner_403() throws Exception {
-        TraceSpanEntity tool = new TraceSpanEntity();
-        tool.setId("tool-span-2");
-        tool.setSessionId(SESSION_USER_2);
-        tool.setSpanType("TOOL_CALL");
-        tool.setName("Bash");
-        tool.setStartTime(Instant.now());
-        tool.setEndTime(Instant.now());
-        tool.setSuccess(true);
-        when(traceSpanRepository.findById(eq("tool-span-2"))).thenReturn(Optional.of(tool));
+        LlmSpan tool = makeToolSpan("tool-span-2", SESSION_USER_2);
+        when(traceStore.readSpan(eq("tool-span-2"))).thenReturn(Optional.of(tool));
         mvc.perform(get("/api/observability/tool-spans/{id}", "tool-span-2")
                         .param("userId", String.valueOf(USER_1)))
                 .andExpect(status().isForbidden());
@@ -293,8 +277,52 @@ class SessionSpansAuthIT {
     @Test
     @DisplayName("tool span: not found → 404")
     void toolSpan_notFound_404() throws Exception {
-        when(traceSpanRepository.findById(eq("missing-tool"))).thenReturn(Optional.empty());
+        when(traceStore.readSpan(eq("missing-tool"))).thenReturn(Optional.empty());
         mvc.perform(get("/api/observability/tool-spans/{id}", "missing-tool")
+                        .param("userId", String.valueOf(USER_1)))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    @DisplayName("tool span: returns 404 for kind=event row (kind mismatch)")
+    void toolSpan_kindMismatch_404() throws Exception {
+        LlmSpan event = makeEventSpan("evt-span-x", SESSION_USER_1);
+        when(traceStore.readSpan(eq("evt-span-x"))).thenReturn(Optional.of(event));
+        mvc.perform(get("/api/observability/tool-spans/{id}", "evt-span-x")
+                        .param("userId", String.valueOf(USER_1)))
+                .andExpect(status().isNotFound());
+    }
+
+    // -----------------------------------------------------------------------
+    // ToolSpanController — GET /api/observability/event-spans/{spanId}
+    // -----------------------------------------------------------------------
+
+    @Test
+    @DisplayName("event span: owner → 200")
+    void eventSpan_owner_200() throws Exception {
+        LlmSpan event = makeEventSpan("evt-span-1", SESSION_USER_1);
+        when(traceStore.readSpan(eq("evt-span-1"))).thenReturn(Optional.of(event));
+        mvc.perform(get("/api/observability/event-spans/{id}", "evt-span-1")
+                        .param("userId", String.valueOf(USER_1)))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("event span: non-owner → 403")
+    void eventSpan_nonOwner_403() throws Exception {
+        LlmSpan event = makeEventSpan("evt-span-2", SESSION_USER_2);
+        when(traceStore.readSpan(eq("evt-span-2"))).thenReturn(Optional.of(event));
+        mvc.perform(get("/api/observability/event-spans/{id}", "evt-span-2")
+                        .param("userId", String.valueOf(USER_1)))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("event span: returns 404 for kind=tool row (kind mismatch)")
+    void eventSpan_kindMismatch_404() throws Exception {
+        LlmSpan tool = makeToolSpan("tool-span-yes", SESSION_USER_1);
+        when(traceStore.readSpan(eq("tool-span-yes"))).thenReturn(Optional.of(tool));
+        mvc.perform(get("/api/observability/event-spans/{id}", "tool-span-yes")
                         .param("userId", String.valueOf(USER_1)))
                 .andExpect(status().isNotFound());
     }
@@ -317,5 +345,39 @@ class SessionSpansAuthIT {
                 "stop", null, null, null, null, null,
                 Collections.emptyMap(),
                 LlmSpanSource.LIVE);
+    }
+
+    private static LlmSpan makeToolSpan(String spanId, String sessionId) {
+        return new LlmSpan(
+                spanId, "trace-x", "trace-x", sessionId,
+                1L, null, null,
+                0, false,
+                "in", "out", null, null, null,
+                "ok",
+                0, 0, null, null,
+                null, 100L,
+                Instant.parse("2026-04-29T10:00:00Z"),
+                Instant.parse("2026-04-29T10:00:01Z"),
+                null, null, null, null, null, "tu_x",
+                Collections.emptyMap(),
+                LlmSpanSource.LIVE,
+                "tool", null, "Bash");
+    }
+
+    private static LlmSpan makeEventSpan(String spanId, String sessionId) {
+        return new LlmSpan(
+                spanId, "trace-x", "trace-x", sessionId,
+                1L, null, null,
+                0, false,
+                "in", "out", null, null, null,
+                "ok",
+                0, 0, null, null,
+                null, 100L,
+                Instant.parse("2026-04-29T10:00:00Z"),
+                Instant.parse("2026-04-29T10:00:01Z"),
+                null, null, null, null, null, null,
+                Collections.emptyMap(),
+                LlmSpanSource.LIVE,
+                "event", "ask_user", "ask_user");
     }
 }

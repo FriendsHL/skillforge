@@ -1,7 +1,9 @@
 package com.skillforge.server.controller;
 
-import com.skillforge.server.entity.TraceSpanEntity;
-import com.skillforge.server.repository.TraceSpanRepository;
+import com.skillforge.observability.entity.LlmSpanEntity;
+import com.skillforge.observability.entity.LlmTraceEntity;
+import com.skillforge.observability.repository.LlmSpanRepository;
+import com.skillforge.observability.repository.LlmTraceRepository;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -10,145 +12,210 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 /**
  * Traces API：提供 Langfuse 风格的链路追踪查询。
- * <p>
- * 一个 "trace" = 一个 AGENT_LOOP root span（一次用户请求的完整执行）。
+ *
+ * <p>OBS-2 M3 — read path cut-over from {@code t_trace_span} to the unified
+ * {@code t_llm_trace} + {@code t_llm_span} tables:
+ * <ul>
+ *   <li>{@code GET /api/traces?sessionId=X} — driven by {@code t_llm_trace} aggregates
+ *   ({@code total_duration_ms} / {@code tool_call_count} / {@code event_count} / {@code status}),
+ *   eliminating the previous N+1 child-span scan</li>
+ *   <li>{@code GET /api/traces/{traceId}/spans} — flat list from {@code t_llm_span where trace_id=?}
+ *   (kind column distinguishes llm/tool/event; the legacy BFS over parent_span_id is gone)</li>
+ *   <li>{@code GET /api/traces/session/{sessionId}} — kept for backward-compat (returns flat list
+ *   from {@code t_llm_span}, all kinds)</li>
+ * </ul>
+ *
+ * <p>Response shape is intentionally close to the pre-M3 form so existing UI clients keep
+ * rendering; the {@code llmCallCount} field counts spans of {@code kind='llm'} on the trace.
  */
 @RestController
 @RequestMapping("/api/traces")
 public class TracesController {
 
-    private final TraceSpanRepository spanRepository;
+    private final LlmTraceRepository traceRepository;
+    private final LlmSpanRepository spanRepository;
 
-    public TracesController(TraceSpanRepository spanRepository) {
+    public TracesController(LlmTraceRepository traceRepository,
+                            LlmSpanRepository spanRepository) {
+        this.traceRepository = traceRepository;
         this.spanRepository = spanRepository;
     }
 
     /**
-     * 列出 traces（AGENT_LOOP root span），支持按 sessionId 过滤。
+     * 列出 traces，支持按 sessionId 过滤。
      * 返回每个 trace 的摘要信息（不含 input/output 全文）。
+     *
+     * <p>Pre-M3 implementation read {@code t_trace_span where span_type='AGENT_LOOP'} and
+     * fanned out one query per trace to count children — N+1 on long sessions. M3 reads
+     * the aggregate columns ({@code tool_call_count} / {@code event_count} / {@code total_duration_ms})
+     * directly from {@code t_llm_trace}, written by {@code AgentLoopEngine.finalizeTrace}.
      */
     @GetMapping
     public ResponseEntity<List<Map<String, Object>>> listTraces(
             @RequestParam(required = false) String sessionId) {
-        List<TraceSpanEntity> roots;
+        List<LlmTraceEntity> traces;
         if (sessionId != null && !sessionId.isBlank()) {
-            roots = spanRepository.findBySessionIdAndSpanTypeOrderByStartTimeDesc(sessionId, "AGENT_LOOP");
+            traces = traceRepository.findBySessionIdOrderByStartedAtDesc(sessionId);
         } else {
-            roots = spanRepository.findBySpanTypeOrderByStartTimeDesc("AGENT_LOOP");
+            // Pre-M3 behaviour returned all traces ordered by recency. We don't expose a
+            // global findAllOrderByStartedAtDesc — admins / cron tools call the per-session form.
+            traces = new ArrayList<>(traceRepository.findAll());
+            traces.sort((a, b) -> {
+                if (a.getStartedAt() == null && b.getStartedAt() == null) return 0;
+                if (a.getStartedAt() == null) return 1;
+                if (b.getStartedAt() == null) return -1;
+                return b.getStartedAt().compareTo(a.getStartedAt());
+            });
         }
 
-        List<Map<String, Object>> result = new ArrayList<>();
-        for (TraceSpanEntity root : roots) {
-            // 查询子 span 统计
-            List<TraceSpanEntity> children = spanRepository.findByParentSpanIdOrderByStartTimeAsc(root.getId());
-            int llmCallCount = 0;
-            int toolCallCount = 0;
-            int totalChildDuration = 0;
-            for (TraceSpanEntity child : children) {
-                if ("LLM_CALL".equals(child.getSpanType())) llmCallCount++;
-                else if ("TOOL_CALL".equals(child.getSpanType())) toolCallCount++;
-                totalChildDuration += child.getDurationMs();
+        // r2 B-1 fix: batch-count llm spans across all traces in a single GROUP BY query
+        // instead of per-trace findByTraceIdOrderByStartedAtAsc. Tool / event counts are
+        // already stamped on t_llm_trace by AgentLoopEngine.finalizeTrace; only LLM count
+        // needs an aggregate from t_llm_span (no llm_call_count column on t_llm_trace today).
+        List<String> traceIds = new ArrayList<>(traces.size());
+        for (LlmTraceEntity t : traces) traceIds.add(t.getTraceId());
+        Map<String, Long> llmCountByTrace = traceIds.isEmpty()
+                ? Collections.emptyMap()
+                : new HashMap<>();
+        if (!traceIds.isEmpty()) {
+            for (Object[] row : spanRepository.countByTraceIdsAndKind(traceIds, "llm")) {
+                llmCountByTrace.put((String) row[0], (Long) row[1]);
             }
+        }
 
-            Map<String, Object> trace = new LinkedHashMap<>();
-            trace.put("traceId", root.getId());
-            trace.put("sessionId", root.getSessionId());
-            trace.put("name", root.getName());
-            trace.put("input", truncate(root.getInput(), 200));
-            trace.put("output", truncate(root.getOutput(), 200));
-            trace.put("startTime", root.getStartTime());
-            trace.put("endTime", root.getEndTime());
-            trace.put("durationMs", root.getDurationMs());
-            trace.put("inputTokens", root.getInputTokens());
-            trace.put("outputTokens", root.getOutputTokens());
-            trace.put("modelId", root.getModelId());
-            trace.put("success", root.isSuccess());
-            trace.put("error", root.getError());
-            trace.put("llmCallCount", llmCallCount);
-            trace.put("toolCallCount", toolCallCount);
-            result.add(trace);
+        List<Map<String, Object>> result = new ArrayList<>(traces.size());
+        for (LlmTraceEntity t : traces) {
+            int llmCallCount = llmCountByTrace.getOrDefault(t.getTraceId(), 0L).intValue();
+
+            Map<String, Object> dto = new LinkedHashMap<>();
+            dto.put("traceId", t.getTraceId());
+            dto.put("sessionId", t.getSessionId());
+            dto.put("name", t.getAgentName() != null ? t.getAgentName() : t.getRootName());
+            dto.put("input", null);   // input/output blobs live on individual spans now
+            dto.put("output", null);
+            dto.put("startTime", t.getStartedAt());
+            dto.put("endTime", t.getEndedAt());
+            dto.put("durationMs", t.getTotalDurationMs());
+            dto.put("inputTokens", t.getTotalInputTokens());
+            dto.put("outputTokens", t.getTotalOutputTokens());
+            dto.put("modelId", null);  // model lives on individual LLM spans
+            // status enum: running | ok | error | cancelled. Map to legacy boolean for
+            // backward compat with existing dashboard.
+            String status = t.getStatus();
+            dto.put("status", status);
+            dto.put("success", "ok".equals(status));
+            dto.put("error", t.getError());
+            dto.put("llmCallCount", llmCallCount);
+            dto.put("toolCallCount", t.getToolCallCount());
+            dto.put("eventCount", t.getEventCount());
+            dto.put("agentName", t.getAgentName());
+            result.add(dto);
         }
         return ResponseEntity.ok(result);
     }
 
     /**
-     * 获取某个 trace 的完整 span 树（root + 所有子 span）。
+     * 获取某个 trace 的完整 span 列表（按 startedAt ASC）。
+     *
+     * <p>OBS-2 M3 — flat list from {@code t_llm_span where trace_id=?}. The pre-M3 BFS over
+     * {@code parent_span_id} is unnecessary because {@code kind} now distinguishes llm/tool/event,
+     * and {@code t_llm_trace} carries the root metadata directly.
      */
     @GetMapping("/{traceId}/spans")
     public ResponseEntity<Map<String, Object>> getTraceSpans(@PathVariable String traceId) {
-        TraceSpanEntity root = spanRepository.findById(traceId).orElse(null);
-        if (root == null) {
+        LlmTraceEntity trace = traceRepository.findById(traceId).orElse(null);
+        if (trace == null) {
             return ResponseEntity.notFound().build();
         }
 
-        // BFS to collect all descendants, not just direct children
-        List<TraceSpanEntity> allDescendants = new ArrayList<>();
-        List<String> frontier = new ArrayList<>();
-        frontier.add(traceId);
-        while (!frontier.isEmpty()) {
-            List<String> nextFrontier = new ArrayList<>();
-            for (String parentId : frontier) {
-                List<TraceSpanEntity> children = spanRepository.findByParentSpanIdOrderByStartTimeAsc(parentId);
-                allDescendants.addAll(children);
-                for (TraceSpanEntity child : children) {
-                    nextFrontier.add(child.getId());
-                }
-            }
-            frontier = nextFrontier;
+        List<LlmSpanEntity> spans = spanRepository.findByTraceIdOrderByStartedAtAsc(traceId);
+
+        Map<String, Object> root = new LinkedHashMap<>();
+        root.put("id", trace.getTraceId());
+        root.put("sessionId", trace.getSessionId());
+        root.put("parentSpanId", null);
+        root.put("spanType", "AGENT_LOOP");
+        root.put("name", trace.getAgentName() != null ? trace.getAgentName() : trace.getRootName());
+        root.put("input", null);
+        root.put("output", null);
+        root.put("startTime", trace.getStartedAt());
+        root.put("endTime", trace.getEndedAt());
+        root.put("durationMs", trace.getTotalDurationMs());
+        root.put("iterationIndex", 0);
+        root.put("inputTokens", trace.getTotalInputTokens());
+        root.put("outputTokens", trace.getTotalOutputTokens());
+        root.put("modelId", null);
+        root.put("status", trace.getStatus());
+        root.put("success", "ok".equals(trace.getStatus()));
+        root.put("error", trace.getError());
+
+        List<Map<String, Object>> spanDtos = new ArrayList<>(spans.size());
+        for (LlmSpanEntity s : spans) {
+            spanDtos.add(toMap(s));
         }
 
         Map<String, Object> result = new LinkedHashMap<>();
-        result.put("root", toMap(root));
-        List<Map<String, Object>> spans = new ArrayList<>();
-        for (TraceSpanEntity child : allDescendants) {
-            spans.add(toMap(child));
-        }
-        result.put("spans", spans);
+        result.put("root", root);
+        result.put("spans", spanDtos);
         return ResponseEntity.ok(result);
     }
 
     /**
      * 获取某个 session 的所有 span（扁平列表，按 startTime 正序）。
+     *
+     * <p>Backward-compat endpoint kept for any existing client that built links to
+     * {@code /api/traces/session/{id}}; the cut-over reads {@code t_llm_span} directly.
      */
     @GetMapping("/session/{sessionId}")
     public ResponseEntity<List<Map<String, Object>>> getSessionSpans(@PathVariable String sessionId) {
-        List<TraceSpanEntity> spans = spanRepository.findBySessionIdOrderByStartTimeAsc(sessionId);
-        List<Map<String, Object>> result = new ArrayList<>();
-        for (TraceSpanEntity span : spans) {
-            result.add(toMap(span));
+        List<LlmSpanEntity> spans = spanRepository.findBySessionIdOrderByStartedAtAsc(sessionId);
+        List<Map<String, Object>> result = new ArrayList<>(spans.size());
+        for (LlmSpanEntity s : spans) {
+            result.add(toMap(s));
         }
         return ResponseEntity.ok(result);
     }
 
-    private Map<String, Object> toMap(TraceSpanEntity e) {
+    private Map<String, Object> toMap(LlmSpanEntity e) {
         Map<String, Object> m = new LinkedHashMap<>();
-        m.put("id", e.getId());
+        m.put("id", e.getSpanId());
         m.put("sessionId", e.getSessionId());
         m.put("parentSpanId", e.getParentSpanId());
-        m.put("spanType", e.getSpanType());
-        m.put("name", e.getName());
-        m.put("input", e.getInput());
-        m.put("output", e.getOutput());
-        m.put("startTime", e.getStartTime());
-        m.put("endTime", e.getEndTime());
-        m.put("durationMs", e.getDurationMs());
+        // Map back to legacy spanType strings for any client still keying off it.
+        m.put("spanType", legacySpanType(e));
+        m.put("kind", e.getKind());
+        m.put("eventType", e.getEventType());
+        m.put("name", e.getName() != null ? e.getName() : e.getModel());
+        m.put("input", e.getInputSummary());
+        m.put("output", e.getOutputSummary());
+        m.put("startTime", e.getStartedAt());
+        m.put("endTime", e.getEndedAt());
+        m.put("durationMs", e.getLatencyMs());
         m.put("iterationIndex", e.getIterationIndex());
         m.put("inputTokens", e.getInputTokens());
         m.put("outputTokens", e.getOutputTokens());
-        m.put("modelId", e.getModelId());
-        m.put("success", e.isSuccess());
+        m.put("modelId", e.getModel());
+        m.put("success", e.getError() == null);
         m.put("error", e.getError());
         return m;
     }
 
-    private String truncate(String s, int maxLen) {
-        if (s == null || s.length() <= maxLen) return s;
-        return s.substring(0, maxLen) + "...";
+    private static String legacySpanType(LlmSpanEntity e) {
+        String kind = e.getKind();
+        if ("llm".equals(kind)) return "LLM_CALL";
+        if ("tool".equals(kind)) return "TOOL_CALL";
+        if ("event".equals(kind)) {
+            String et = e.getEventType();
+            return et == null ? "EVENT" : et.toUpperCase(java.util.Locale.ROOT);
+        }
+        return kind == null ? "UNKNOWN" : kind.toUpperCase(java.util.Locale.ROOT);
     }
 }

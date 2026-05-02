@@ -314,9 +314,11 @@
 }
 .tr-kind-tag.k-llm   { background: rgba(138, 111, 179, 0.15); color: #8a6fb3; }
 .tr-kind-tag.k-tool   { background: rgba(92, 138, 74, 0.15);  color: #5c8a4a; }
+.tr-kind-tag.k-event  { background: rgba(196, 132, 39, 0.15); color: #b87316; }
 .tr-kind-tag.k-agent  { background: rgba(74, 122, 168, 0.15); color: #4a7aa8; }
 [data-theme="dark"] .tr-kind-tag.k-llm   { background: rgba(138, 111, 179, 0.2); color: #b89ad8; }
 [data-theme="dark"] .tr-kind-tag.k-tool   { background: rgba(92, 138, 74, 0.2);  color: #8fca8f; }
+[data-theme="dark"] .tr-kind-tag.k-event  { background: rgba(196, 132, 39, 0.22); color: #e0a050; }
 [data-theme="dark"] .tr-kind-tag.k-agent  { background: rgba(74, 122, 168, 0.2); color: #90b8d8; }
 
 .tr-span-label {
@@ -344,10 +346,12 @@
 .tr-span-row:hover .tr-span-bar { opacity: 1; }
 .tr-span-bar.k-llm   { background: #8a6fb3; }
 .tr-span-bar.k-tool   { background: #5c8a4a; }
+.tr-span-bar.k-event  { background: #b87316; }
 .tr-span-bar.k-agent  { background: #4a7aa8; }
 .tr-span-bar.err      { background: var(--color-err) !important; }
 [data-theme="dark"] .tr-span-bar.k-llm   { background: #b89ad8; }
 [data-theme="dark"] .tr-span-bar.k-tool   { background: #8fca8f; }
+[data-theme="dark"] .tr-span-bar.k-event  { background: #e0a050; }
 [data-theme="dark"] .tr-span-bar.k-agent  { background: #90b8d8; }
 
 .tr-span-dur {

@@ -17,11 +17,15 @@ function shortenLabel(span: SpanSummary): string {
     if (parts.length === 0) parts.push('llm');
     return parts.join(' · ');
   }
+  if (span.kind === 'event') {
+    return span.name || span.eventType || 'event';
+  }
   return span.toolName || 'tool';
 }
 
 function statusTone(span: SpanSummary): 'ok' | 'err' | 'warn' {
   if (span.kind === 'llm') return span.error ? 'err' : 'ok';
+  // tool & event both expose `success`
   return span.success ? 'ok' : 'err';
 }
 

@@ -1,5 +1,10 @@
 import React, { useMemo, useState } from 'react';
-import type { SpanSummary, LlmSpanSummary, ToolSpanSummary } from '../../../types/observability';
+import type {
+  SpanSummary,
+  LlmSpanSummary,
+  ToolSpanSummary,
+  EventSpanSummary,
+} from '../../../types/observability';
 
 interface TimelineMessage {
   id: string;
@@ -37,7 +42,7 @@ interface WaterfallRow {
   span: SpanSummary;
   startOffsetMs: number;
   durationMs: number;
-  kind: 'llm' | 'tool';
+  kind: 'llm' | 'tool' | 'event';
   label: string;
   hasError: boolean;
 }
@@ -45,6 +50,7 @@ interface WaterfallRow {
 interface FilterState {
   llm: boolean;
   tool: boolean;
+  event: boolean;
   error: boolean;
 }
 
@@ -68,12 +74,19 @@ function isToolSpan(s: SpanSummary): s is ToolSpanSummary {
   return s.kind === 'tool';
 }
 
+function isEventSpan(s: SpanSummary): s is EventSpanSummary {
+  return s.kind === 'event';
+}
+
 function getSpanLabel(span: SpanSummary): string {
   if (isLlmSpan(span)) {
     return span.model || 'LLM';
   }
   if (isToolSpan(span)) {
     return span.toolName || 'Tool';
+  }
+  if (isEventSpan(span)) {
+    return span.name || span.eventType || 'Event';
   }
   return 'Span';
 }
@@ -83,6 +96,9 @@ function getSpanError(span: SpanSummary): boolean {
     return span.errorType != null || span.error != null;
   }
   if (isToolSpan(span)) {
+    return !span.success;
+  }
+  if (isEventSpan(span)) {
     return !span.success;
   }
   return false;
@@ -97,12 +113,13 @@ function calculateRows(
 ): {
   rows: WaterfallRow[];
   totalMs: number;
-  stats: { llm: number; tool: number; error: number; total: number };
+  stats: { llm: number; tool: number; event: number; error: number; total: number };
   baseStartMs: number;
 } {
   const allStats = {
     llm: spans.filter((s) => s.kind === 'llm').length,
     tool: spans.filter((s) => s.kind === 'tool').length,
+    event: spans.filter((s) => s.kind === 'event').length,
     error: spans.filter((s) => getSpanError(s)).length,
     total: spans.length,
   };
@@ -155,14 +172,18 @@ function calculateRows(
     span,
     startOffsetMs: Math.max(0, tsOf(span.startedAt) - baseStartMs),
     durationMs: span.latencyMs,
-    kind: span.kind as 'llm' | 'tool',
+    kind: span.kind,
     label: getSpanLabel(span),
     hasError: getSpanError(span),
   }));
 
   const filteredRows = allRows.filter((row) => {
     if (filter.error) return row.hasError;
-    return (filter.llm && row.kind === 'llm') || (filter.tool && row.kind === 'tool');
+    return (
+      (filter.llm && row.kind === 'llm') ||
+      (filter.tool && row.kind === 'tool') ||
+      (filter.event && row.kind === 'event')
+    );
   });
 
   return { rows: filteredRows, totalMs: totalTime, stats: allStats, baseStartMs };
@@ -177,7 +198,7 @@ const SessionWaterfallPanel: React.FC<SessionWaterfallPanelProps> = ({
   traceRoot,
   onSelectRoot,
 }) => {
-  const [filter, setFilter] = useState<FilterState>({ llm: true, tool: true, error: false });
+  const [filter, setFilter] = useState<FilterState>({ llm: true, tool: true, event: true, error: false });
 
   const { rows, totalMs, stats } = useMemo(
     () => calculateRows(spans, messages, filter, turnIndex, traceRoot),
@@ -188,9 +209,12 @@ const SessionWaterfallPanel: React.FC<SessionWaterfallPanelProps> = ({
 
   const toggleFilter = (key: keyof FilterState) => {
     if (key === 'error') {
+      // Toggling error mode collapses kind filters: when entering error mode
+      // hide kind chips; when leaving, restore "all kinds on".
       setFilter((prev) => ({
         llm: prev.error ? true : false,
         tool: prev.error ? true : false,
+        event: prev.error ? true : false,
         error: !prev.error,
       }));
     } else {
@@ -243,6 +267,13 @@ const SessionWaterfallPanel: React.FC<SessionWaterfallPanelProps> = ({
           onClick={() => toggleFilter('tool')}
         >
           tool · {stats.tool}
+        </button>
+        <button
+          type="button"
+          className={`tr-chip sm ${filter.event && !filter.error ? 'on' : ''}`}
+          onClick={() => toggleFilter('event')}
+        >
+          event · {stats.event}
         </button>
         <button
           type="button"
