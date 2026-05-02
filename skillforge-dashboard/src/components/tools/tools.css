@@ -10,7 +10,7 @@
 
 .tools-table-h-sf {
   display: grid;
-  grid-template-columns: 2.4fr 0.8fr 0.8fr 0.8fr 0.8fr 0.6fr;
+  grid-template-columns: 3fr 0.9fr 0.8fr 0.8fr 0.6fr;
   gap: 12px;
   padding: 10px 16px;
   background: var(--bg-hover);
@@ -24,7 +24,7 @@
 
 .tools-row-sf {
   display: grid;
-  grid-template-columns: 2.4fr 0.8fr 0.8fr 0.8fr 0.8fr 0.6fr;
+  grid-template-columns: 3fr 0.9fr 0.8fr 0.8fr 0.6fr;
   gap: 12px;
   padding: 12px 16px;
   align-items: center;
@@ -63,18 +63,24 @@
   overflow: hidden;
 }
 
-.tools-num-sf {
+/* Flags column */
+.tools-flags-sf {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.tool-flag-sf {
   font-family: var(--font-mono);
-  font-size: 12.5px;
-  color: var(--fg-2);
-  text-align: right;
-}
-.tools-num-sf .unit {
   font-size: 10px;
-  color: var(--fg-4);
-  margin-left: 1px;
+  font-weight: 500;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: var(--bg-hover);
+  color: var(--fg-3);
+  letter-spacing: 0.04em;
 }
-.tools-num-sf.err-high { color: var(--color-err); }
 
 /* Category chip */
 .tool-cat-sf {

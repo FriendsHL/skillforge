@@ -139,10 +139,9 @@ const ToolList: React.FC = () => {
             <div className="tools-table-sf">
               <div className="tools-table-h-sf">
                 <div>Tool</div>
+                <div>Category</div>
                 <div>Trust</div>
-                <div style={{ textAlign: 'right' }}>Read-only</div>
-                <div style={{ textAlign: 'right' }}>Category</div>
-                <div style={{ textAlign: 'right' }}>Schema</div>
+                <div style={{ textAlign: 'right' }}>Flags</div>
                 <div />
               </div>
               {rows.map(t => {
@@ -150,16 +149,17 @@ const ToolList: React.FC = () => {
                 return (
                   <button key={t.id} className="tools-row-sf" onClick={() => openDetail(t)}>
                     <div className="tools-row-name-col-sf">
-                      <span className={`tool-cat-sf cat-${t.category}`}>{t.category}</span>
                       <div>
                         <div className="tools-row-name-sf">{t.name}</div>
                         {t.description && <div className="tools-row-desc-sf">{t.description}</div>}
                       </div>
                     </div>
+                    <div><span className={`tool-cat-sf cat-${t.category}`}>{t.category}</span></div>
                     <div><span className={`tool-danger-sf ${d.cls}`}>{d.text}</span></div>
-                    <div className="tools-num-sf">{t.readOnly ? 'yes' : 'no'}</div>
-                    <div className="tools-num-sf">{t.category}</div>
-                    <div className="tools-num-sf">{t.toolSchema ? 'yes' : '—'}</div>
+                    <div className="tools-flags-sf">
+                      {t.readOnly && <span className="tool-flag-sf">RO</span>}
+                      {t.toolSchema && <span className="tool-flag-sf">Schema</span>}
+                    </div>
                     <div />
                   </button>
                 );
