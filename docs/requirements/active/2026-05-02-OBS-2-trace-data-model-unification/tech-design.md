@@ -49,16 +49,16 @@ CREATE INDEX idx_session_message_trace ON t_session_message (session_id, trace_i
 
 历史数据 trace_id = NULL；新写入由 `ChatEventBroadcaster` 接口扩展后传入。
 
-### 1.4 Migration 编号
+### 1.4 Migration 编号（已落地）
 
 | 编号 | 模块 | 内容 |
 |---|---|---|
 | V41 | server | `t_session_message.trace_id` |
-| V41 | observability | `t_llm_trace` 聚合字段 |
-| V42 | observability | `t_llm_span` kind / event_type / name + 索引 |
+| V42 | observability | `t_llm_trace` 聚合字段 |
+| V43 | observability | `t_llm_span` kind / event_type / name + 索引 |
 | R__migrate_legacy_trace_span | observability | M2 历史数据迁移（repeatable，placeholder 控制） |
 
-> 注意 server 和 observability 共享全局编号空间（参见 commit 223e5a8）；server V41 与 observability V41 不冲突因为它们改不同表。但建议 observability 用 V42 / V43 避免歧义；以最终 build 为准。
+> server 和 observability 共享全局编号空间（参见 commit 223e5a8）。observability 从 V37 跳到 V42，跳过 server 已占用的 V38–V41，避免 hash 冲突。
 
 ## 2. 写入路径改造
 
