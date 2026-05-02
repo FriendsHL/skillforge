@@ -6,20 +6,43 @@ import com.skillforge.core.model.ToolSchema;
 import com.skillforge.core.skill.SkillContext;
 import com.skillforge.core.skill.SkillResult;
 import com.skillforge.core.skill.Tool;
+import com.skillforge.observability.api.LlmTraceStore;
+import com.skillforge.observability.api.LlmTraceStore.TraceWithSpans;
+import com.skillforge.observability.domain.LlmSpan;
+import com.skillforge.observability.domain.LlmTrace;
+import com.skillforge.observability.entity.LlmTraceEntity;
+import com.skillforge.observability.repository.LlmTraceRepository;
 import com.skillforge.server.entity.SessionEntity;
-import com.skillforge.server.entity.TraceSpanEntity;
-import com.skillforge.server.repository.TraceSpanRepository;
 import com.skillforge.server.service.SessionService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.ArrayList;
+import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 /**
  * Read-only self-inspection tool for trace summaries and span trees.
+ *
+ * <p>OBS-2 M4 — read path migrated from {@code t_trace_span} (legacy
+ * {@code TraceSpanRepository}) to the unified {@code t_llm_trace} +
+ * {@code t_llm_span} tables via {@link LlmTraceStore}.
+ *
+ * <p>Output shape stays close to the pre-M4 form so existing LLM prompt
+ * habits keep working:
+ * <ul>
+ *   <li>{@code list_traces} returns {@code traceId}, {@code sessionId},
+ *       {@code name}, {@code startTime}, {@code endTime}, {@code durationMs},
+ *       {@code inputTokens}, {@code outputTokens}, {@code success},
+ *       {@code error}, {@code input}, {@code output} (now nulled per M3 —
+ *       lives on individual spans), and the count fields
+ *       {@code llmCallCount} / {@code toolCallCount} / {@code eventCount}.</li>
+ *   <li>{@code get_trace} returns {@code root} (synthesised from
+ *       {@code t_llm_trace}, {@code spanType="AGENT_LOOP"} for compat) plus
+ *       a flat {@code spans} list (kind=llm/tool/event) ordered by
+ *       {@code startedAt ASC}, capped at {@code maxSpans}.</li>
+ * </ul>
  */
 public class GetTraceTool implements Tool {
 
@@ -28,14 +51,17 @@ public class GetTraceTool implements Tool {
     private static final int HARD_MAX_SPANS = 100;
     private static final int IO_PREVIEW_CHARS = 500;
 
-    private final TraceSpanRepository spanRepository;
+    private final LlmTraceStore traceStore;
+    private final LlmTraceRepository traceRepository;
     private final SessionService sessionService;
     private final ObjectMapper objectMapper;
 
-    public GetTraceTool(TraceSpanRepository spanRepository,
+    public GetTraceTool(LlmTraceStore traceStore,
+                        LlmTraceRepository traceRepository,
                         SessionService sessionService,
                         ObjectMapper objectMapper) {
-        this.spanRepository = spanRepository;
+        this.traceStore = traceStore;
+        this.traceRepository = traceRepository;
         this.sessionService = sessionService;
         this.objectMapper = objectMapper;
     }
@@ -111,16 +137,22 @@ public class GetTraceTool implements Tool {
     private SkillResult listTraces(Map<String, Object> input, SkillContext context) throws JsonProcessingException {
         String sessionId = resolveSessionId(input, context);
         assertSessionAccessible(sessionId, context);
-        List<Map<String, Object>> traces = spanRepository
-                .findBySessionIdAndSpanTypeOrderByStartTimeDesc(sessionId, "AGENT_LOOP")
-                .stream()
-                .map(this::toTraceSummary)
-                .toList();
+
+        // OBS-2 M4: trace list comes from t_llm_trace (aggregate columns), no longer
+        // from t_trace_span where span_type='AGENT_LOOP'. Per-trace LLM-call count is
+        // computed via listSpansByTrace(kind={llm}, limit=HARD_MAX_SPANS) — bounded by
+        // HARD_MAX_SPANS so no unbounded scan even on long sessions; trace's own
+        // toolCallCount / eventCount are reused from the aggregate.
+        List<LlmTraceEntity> traces = traceRepository.findBySessionIdOrderByStartedAtDesc(sessionId);
+        List<Map<String, Object>> summaries = new java.util.ArrayList<>(traces.size());
+        for (LlmTraceEntity te : traces) {
+            summaries.add(toTraceSummary(te));
+        }
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("action", "list_traces");
         out.put("sessionId", sessionId);
-        out.put("count", traces.size());
-        out.put("traces", traces);
+        out.put("count", summaries.size());
+        out.put("traces", summaries);
         return SkillResult.success(objectMapper.writeValueAsString(out));
     }
 
@@ -129,107 +161,133 @@ public class GetTraceTool implements Tool {
         if (traceId == null || traceId.isBlank()) {
             return SkillResult.error("traceId is required for get_trace");
         }
-        TraceSpanEntity root = spanRepository.findById(traceId)
+        TraceWithSpans tws = traceStore.readByTraceId(traceId)
                 .orElseThrow(() -> new IllegalArgumentException("trace not found: " + traceId));
+        LlmTrace trace = tws.trace();
         String requestedSessionId = stringValue(input.get("sessionId"));
         if (requestedSessionId != null && !requestedSessionId.isBlank()
-                && !requestedSessionId.equals(root.getSessionId())) {
+                && !requestedSessionId.equals(trace.sessionId())) {
             return SkillResult.error("traceId does not belong to sessionId=" + requestedSessionId);
         }
-        assertSessionAccessible(root.getSessionId(), context);
+        assertSessionAccessible(trace.sessionId(), context);
 
         int maxSpans = intValue(input.get("maxSpans"), DEFAULT_MAX_SPANS, 1, HARD_MAX_SPANS);
-        List<TraceSpanEntity> collected = collectDescendants(root.getId(), maxSpans + 1);
-        boolean truncated = collected.size() > maxSpans;
-        List<TraceSpanEntity> descendants = truncated ? collected.subList(0, maxSpans) : collected;
+        // OBS-2 M4: span tree via flat t_llm_span trace_id fetch (kind discriminates).
+        // limit pushed to SQL via listSpansByTrace's Pageable to avoid loading all spans
+        // for long traces. Fetch maxSpans+1 to detect truncation.
+        List<LlmSpan> all = traceStore.listSpansByTrace(traceId, null, maxSpans + 1);
+        boolean truncated = all.size() > maxSpans;
+        List<LlmSpan> spans = truncated ? all.subList(0, maxSpans) : all;
 
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("action", "get_trace");
-        out.put("traceId", root.getId());
-        out.put("sessionId", root.getSessionId());
-        out.put("root", toSpanMap(root));
+        out.put("traceId", trace.traceId());
+        out.put("sessionId", trace.sessionId());
+        out.put("root", toRootMap(trace));
         out.put("maxSpans", maxSpans);
-        out.put("returnedSpans", descendants.size());
+        out.put("returnedSpans", spans.size());
         out.put("truncated", truncated);
-        out.put("spans", descendants.stream().map(this::toSpanMap).toList());
+        out.put("spans", spans.stream().map(GetTraceTool::toSpanMap).toList());
         return SkillResult.success(objectMapper.writeValueAsString(out));
     }
 
-    private List<TraceSpanEntity> collectDescendants(String rootId, int maxSpans) {
-        List<TraceSpanEntity> out = new ArrayList<>();
-        List<String> frontier = new ArrayList<>();
-        frontier.add(rootId);
-        while (!frontier.isEmpty() && out.size() < maxSpans) {
-            List<String> next = new ArrayList<>();
-            for (String parentId : frontier) {
-                if (out.size() >= maxSpans) {
-                    break;
-                }
-                List<TraceSpanEntity> children = spanRepository.findByParentSpanIdOrderByStartTimeAsc(parentId);
-                for (TraceSpanEntity child : children) {
-                    if (out.size() >= maxSpans) {
-                        break;
-                    }
-                    out.add(child);
-                    next.add(child.getId());
-                }
-            }
-            frontier = next;
-        }
-        return out;
-    }
+    private Map<String, Object> toTraceSummary(LlmTraceEntity te) {
+        // Per-trace LLM call count — single bounded query against t_llm_span where
+        // trace_id=? AND kind='llm'. Bounded by HARD_MAX_SPANS so very long traces
+        // report at most 100 (matches the existing get_trace cap).
+        int llmCallCount = traceStore
+                .listSpansByTrace(te.getTraceId(), java.util.Set.of("llm"), HARD_MAX_SPANS)
+                .size();
 
-    private Map<String, Object> toTraceSummary(TraceSpanEntity root) {
-        List<TraceSpanEntity> children = spanRepository.findByParentSpanIdOrderByStartTimeAsc(root.getId());
-        int llmCallCount = 0;
-        int toolCallCount = 0;
-        for (TraceSpanEntity child : children) {
-            if ("LLM_CALL".equals(child.getSpanType())) {
-                llmCallCount++;
-            } else if ("TOOL_CALL".equals(child.getSpanType())) {
-                toolCallCount++;
-            }
-        }
-
+        String status = te.getStatus();
         Map<String, Object> m = new LinkedHashMap<>();
-        m.put("traceId", root.getId());
-        m.put("sessionId", root.getSessionId());
-        m.put("name", root.getName());
-        m.put("startTime", instantValue(root.getStartTime()));
-        m.put("endTime", instantValue(root.getEndTime()));
-        m.put("durationMs", root.getDurationMs());
-        m.put("inputTokens", root.getInputTokens());
-        m.put("outputTokens", root.getOutputTokens());
-        m.put("modelId", root.getModelId());
-        m.put("success", root.isSuccess());
-        m.put("error", truncate(root.getError(), IO_PREVIEW_CHARS));
-        m.put("input", truncate(root.getInput(), 200));
-        m.put("output", truncate(root.getOutput(), 200));
+        m.put("traceId", te.getTraceId());
+        m.put("sessionId", te.getSessionId());
+        m.put("name", te.getAgentName() != null ? te.getAgentName() : te.getRootName());
+        m.put("startTime", instantValue(te.getStartedAt()));
+        m.put("endTime", instantValue(te.getEndedAt()));
+        m.put("durationMs", te.getTotalDurationMs());
+        m.put("inputTokens", te.getTotalInputTokens());
+        m.put("outputTokens", te.getTotalOutputTokens());
+        // OBS-2 M4: trace-level model id no longer exists on t_llm_trace (lives on
+        // individual LLM spans). Kept null for shape compat with pre-M4 output.
+        m.put("modelId", null);
+        m.put("status", status);
+        m.put("success", "ok".equals(status));
+        m.put("error", truncate(te.getError(), IO_PREVIEW_CHARS));
+        // Pre-M4 surfaced root TraceSpan input/output here. With t_llm_trace those
+        // payloads live on individual spans; null preserves the field for
+        // backward-compat consumers.
+        m.put("input", null);
+        m.put("output", null);
         m.put("llmCallCount", llmCallCount);
-        m.put("toolCallCount", toolCallCount);
+        m.put("toolCallCount", te.getToolCallCount());
+        m.put("eventCount", te.getEventCount());
         return m;
     }
 
-    private Map<String, Object> toSpanMap(TraceSpanEntity span) {
+    private Map<String, Object> toRootMap(LlmTrace trace) {
+        String status = trace.status();
         Map<String, Object> m = new LinkedHashMap<>();
-        m.put("id", span.getId());
-        m.put("sessionId", span.getSessionId());
-        m.put("parentSpanId", span.getParentSpanId());
-        m.put("spanType", span.getSpanType());
-        m.put("name", span.getName());
-        m.put("input", truncate(span.getInput(), IO_PREVIEW_CHARS));
-        m.put("output", truncate(span.getOutput(), IO_PREVIEW_CHARS));
-        m.put("startTime", instantValue(span.getStartTime()));
-        m.put("endTime", instantValue(span.getEndTime()));
-        m.put("durationMs", span.getDurationMs());
-        m.put("iterationIndex", span.getIterationIndex());
-        m.put("inputTokens", span.getInputTokens());
-        m.put("outputTokens", span.getOutputTokens());
-        m.put("modelId", span.getModelId());
-        m.put("success", span.isSuccess());
-        m.put("error", truncate(span.getError(), IO_PREVIEW_CHARS));
-        m.put("toolUseId", span.getToolUseId());
+        m.put("id", trace.traceId());
+        m.put("sessionId", trace.sessionId());
+        m.put("parentSpanId", null);
+        // Synthetic span_type for backward compat with the pre-M4 output shape.
+        m.put("spanType", "AGENT_LOOP");
+        m.put("name", trace.agentName() != null ? trace.agentName() : trace.rootName());
+        m.put("input", null);
+        m.put("output", null);
+        m.put("startTime", instantValue(trace.startedAt()));
+        m.put("endTime", instantValue(trace.endedAt()));
+        m.put("durationMs", trace.totalDurationMs());
+        m.put("iterationIndex", 0);
+        m.put("inputTokens", trace.totalInputTokens());
+        m.put("outputTokens", trace.totalOutputTokens());
+        m.put("modelId", null);
+        m.put("status", status);
+        m.put("success", "ok".equals(status));
+        m.put("error", truncate(trace.error(), IO_PREVIEW_CHARS));
+        m.put("toolUseId", null);
         return m;
+    }
+
+    private static Map<String, Object> toSpanMap(LlmSpan s) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("id", s.spanId());
+        m.put("sessionId", s.sessionId());
+        m.put("parentSpanId", s.parentSpanId());
+        m.put("spanType", legacySpanType(s));
+        m.put("kind", s.kind());
+        m.put("eventType", s.eventType());
+        m.put("name", s.name() != null ? s.name() : s.model());
+        m.put("input", truncate(s.inputSummary(), IO_PREVIEW_CHARS));
+        m.put("output", truncate(s.outputSummary(), IO_PREVIEW_CHARS));
+        m.put("startTime", instantValue(s.startedAt()));
+        m.put("endTime", instantValue(s.endedAt()));
+        m.put("durationMs", s.latencyMs());
+        m.put("iterationIndex", s.iterationIndex());
+        m.put("inputTokens", s.inputTokens());
+        m.put("outputTokens", s.outputTokens());
+        m.put("modelId", s.model());
+        m.put("success", s.error() == null);
+        m.put("error", truncate(s.error(), IO_PREVIEW_CHARS));
+        m.put("toolUseId", s.toolUseId());
+        return m;
+    }
+
+    /**
+     * Map OBS-2 M4 {@code kind} (+{@code eventType}) back to the legacy
+     * {@code span_type} string so LLM prompt habits keep working.
+     */
+    private static String legacySpanType(LlmSpan s) {
+        String kind = s.kind();
+        if ("llm".equals(kind)) return "LLM_CALL";
+        if ("tool".equals(kind)) return "TOOL_CALL";
+        if ("event".equals(kind)) {
+            String et = s.eventType();
+            return et == null ? "EVENT" : et.toUpperCase(java.util.Locale.ROOT);
+        }
+        return kind == null ? "UNKNOWN" : kind.toUpperCase(java.util.Locale.ROOT);
     }
 
     private String resolveSessionId(Map<String, Object> input, SkillContext context) {
@@ -256,7 +314,7 @@ public class GetTraceTool implements Tool {
         return value != null ? value.toString() : null;
     }
 
-    private static String instantValue(java.time.Instant value) {
+    private static String instantValue(Instant value) {
         return value != null ? value.toString() : null;
     }
 

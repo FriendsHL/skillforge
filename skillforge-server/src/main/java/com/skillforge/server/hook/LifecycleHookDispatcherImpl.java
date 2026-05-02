@@ -448,7 +448,12 @@ public class LifecycleHookDispatcherImpl implements LifecycleHookDispatcher {
             } else if (reason != null) {
                 span.setOutput(reason);
             }
-            traceCollector.record(span);
+            // OBS-2 M4: legacy LIFECYCLE_HOOK trace_span write path closed.
+            // Span object construction kept for now; M5/M6 cleanup will drop the
+            // whole traceHook(...) helper. No replacement on the new t_llm_span
+            // path yet — lifecycle hooks are not modeled as trace spans in OBS-2
+            // (OBS-3 may revisit if hook execution observability is needed).
+            // traceCollector.record(span);
         } catch (Exception e) {
             log.debug("Failed to record LIFECYCLE_HOOK trace span (non-fatal): {}", e.toString());
         }

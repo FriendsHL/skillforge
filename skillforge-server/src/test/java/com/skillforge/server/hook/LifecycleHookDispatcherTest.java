@@ -160,12 +160,12 @@ class LifecycleHookDispatcherTest {
 
         assertThat(result).isTrue();
         assertThat(runner.calls).hasValue(1);
-        assertThat(collected).hasSize(1);
-        assertThat(collected.get(0).getInput()).contains("source=AGENT", "sourceId=agent:7");
-        assertThat(collected.get(0).getAttributes())
-                .containsEntry("hook.source", "agent")
-                .containsEntry("hook.source_id", "agent:7")
-                .containsEntry("hook.author_agent_id", 99L);
+        assertThat(collected).as("OBS-2 M4: LIFECYCLE_HOOK trace_span write path closed; collected stays empty").isEmpty();
+        // OBS-2 M4: assertThat(collected.get(0).getInput()).contains("source=AGENT", "sourceId=agent:7");
+        // OBS-2 M4: assertThat(collected.get(0).getAttributes())
+        // OBS-2 M4: .containsEntry("hook.source", "agent")
+        // OBS-2 M4: .containsEntry("hook.source_id", "agent:7")
+        // OBS-2 M4: .containsEntry("hook.author_agent_id", 99L);
     }
 
     @Test
@@ -186,8 +186,8 @@ class LifecycleHookDispatcherTest {
                 entry(new HookHandler.SkillHandler("X"), 5, FailurePolicy.ABORT, false));
         boolean keepGoing = dispatcher.dispatch(HookEvent.USER_PROMPT_SUBMIT, Map.of(), def, "s1", 99L);
         assertThat(keepGoing).isFalse();
-        assertThat(collected).hasSize(1);
-        assertThat(collected.get(0).getError()).isEqualTo("runner_not_implemented");
+        assertThat(collected).as("OBS-2 M4: LIFECYCLE_HOOK trace_span write path closed; collected stays empty").isEmpty();
+        // OBS-2 M4: assertThat(collected.get(0).getError()).isEqualTo("runner_not_implemented");
     }
 
     @Test
@@ -210,9 +210,9 @@ class LifecycleHookDispatcherTest {
         boolean keepGoing = dispatcher.dispatch(HookEvent.USER_PROMPT_SUBMIT, Map.of(), def, "s1", 99L);
         assertThat(keepGoing).isTrue();
         assertThat(runner.calls.get()).isEqualTo(1);
-        assertThat(collected).hasSize(1);
-        assertThat(collected.get(0).isSuccess()).isTrue();
-        assertThat(collected.get(0).getSpanType()).isEqualTo("LIFECYCLE_HOOK");
+        assertThat(collected).as("OBS-2 M4: LIFECYCLE_HOOK trace_span write path closed; collected stays empty").isEmpty();
+        // OBS-2 M4: assertThat(collected.get(0).isSuccess()).isTrue();
+        // OBS-2 M4: assertThat(collected.get(0).getSpanType()).isEqualTo("LIFECYCLE_HOOK");
     }
 
     @Test
@@ -246,8 +246,8 @@ class LifecycleHookDispatcherTest {
                 entry(new HookHandler.SkillHandler("X"), 5, FailurePolicy.CONTINUE, false));
         boolean keepGoing = dispatcher.dispatch(HookEvent.POST_TOOL_USE, Map.of(), def, "s1", 99L);
         assertThat(keepGoing).isTrue();
-        assertThat(collected).hasSize(1);
-        assertThat(collected.get(0).getError()).startsWith("exception:");
+        assertThat(collected).as("OBS-2 M4: LIFECYCLE_HOOK trace_span write path closed; collected stays empty").isEmpty();
+        // OBS-2 M4: assertThat(collected.get(0).getError()).startsWith("exception:");
     }
 
     @Test
@@ -263,8 +263,8 @@ class LifecycleHookDispatcherTest {
         assertThat(keepGoing).isFalse();
         // Timed out around ~1s, not ~5s.
         assertThat(elapsed).isLessThan(3000L);
-        assertThat(collected).hasSize(1);
-        assertThat(collected.get(0).getError()).isEqualTo("timeout");
+        assertThat(collected).as("OBS-2 M4: LIFECYCLE_HOOK trace_span write path closed; collected stays empty").isEmpty();
+        // OBS-2 M4: assertThat(collected.get(0).getError()).isEqualTo("timeout");
     }
 
     @Test
@@ -386,7 +386,7 @@ class LifecycleHookDispatcherTest {
         boolean keepGoing = dispatcher.dispatch(HookEvent.POST_TOOL_USE, Map.of(), def, "s1", 99L);
         assertThat(keepGoing).isTrue();
         assertThat(counter.get()).isEqualTo(2);
-        assertThat(collected).hasSize(2);
+        assertThat(collected).as("OBS-2 M4: LIFECYCLE_HOOK trace_span write path closed; collected stays empty").isEmpty();
     }
 
     @Test
@@ -453,8 +453,8 @@ class LifecycleHookDispatcherTest {
         boolean keepGoing = dispatcher.dispatch(HookEvent.USER_PROMPT_SUBMIT, Map.of(), def, "s1", 99L);
         assertThat(keepGoing).isFalse(); // ABORT policy → false
         assertThat(calls.get()).isEqualTo(0);
-        assertThat(collected).hasSize(1);
-        assertThat(collected.get(0).getError()).startsWith("forbidden_skill");
+        assertThat(collected).as("OBS-2 M4: LIFECYCLE_HOOK trace_span write path closed; collected stays empty").isEmpty();
+        // OBS-2 M4: assertThat(collected.get(0).getError()).startsWith("forbidden_skill");
     }
 
     @Test

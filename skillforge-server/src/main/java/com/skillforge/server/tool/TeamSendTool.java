@@ -169,7 +169,13 @@ public class TeamSendTool implements Tool {
             span.setEndTimeMs(System.currentTimeMillis());
             span.setDurationMs(span.getEndTimeMs() - span.getStartTimeMs());
             span.setSuccess(true);
-            traceCollector.record(span);
+            // OBS-2 M4: legacy PEER_MESSAGE trace_span write path closed.
+            // Span object construction kept for now; M5/M6 cleanup will drop the
+            // whole recordPeerMessageSpan(...) helper. No replacement on the new
+            // t_llm_span path yet — peer messages are not modeled as trace spans
+            // in OBS-2 (OBS-3 unified-trace-tree may revisit cross-agent peer
+            // observability when sub-agent timeline rendering is built).
+            // traceCollector.record(span);
         } catch (Exception e) {
             log.warn("Failed to record PEER_MESSAGE trace span: {}", e.getMessage());
         }
