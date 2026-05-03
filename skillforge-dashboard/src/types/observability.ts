@@ -266,3 +266,99 @@ export interface LlmTrace {
   source: LlmSpanSource;
   spans: LlmSpanSummary[];
 }
+
+/* ─── OBS-3 Unified Trace Tree ───────────────────────────────────────────────
+ * Mirror of backend OBS-3 DTOs (TraceWithDescendantsDto, DescendantTraceDto,
+ * UnifiedSpanDto). See docs/requirements/active/2026-05-03-OBS-3-unified-trace-tree
+ * tech-design §1.2 for the canonical Java records.
+ *
+ * Contract: any backend DTO change must SendMessage Frontend Dev (mirrors the
+ * obs-1-dto-freeze pattern at the top of this file).
+ */
+
+/** OBS-3 — descendant trace lifecycle status. Mirrors `t_llm_trace.status`. */
+export type DescendantTraceStatus = 'running' | 'ok' | 'error' | 'cancelled';
+
+/**
+ * OBS-3 — slim trace summary (no spans). Mirrors BE `LlmTraceSummaryDto`.
+ * Distinct from {@link LlmTrace} above (which carries inline spans) — the
+ * unified-tree response splits trace metadata from spans because spans are
+ * returned as a single cross-trace timeline (`UnifiedSpan[]`).
+ */
+export interface LlmTraceSummary {
+  traceId: string;
+  sessionId: string;
+  agentId: number | null;
+  userId: number | null;
+  rootName: string | null;
+  agentName: string | null;
+  status: DescendantTraceStatus;
+  error: string | null;
+  startedAt: string;
+  endedAt: string | null;
+  totalDurationMs: number;
+  toolCallCount: number;
+  eventCount: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalCostUsd: number | null;
+  source: LlmSpanSource;
+}
+
+/**
+ * OBS-3 — descendant trace metadata used to render nested sub-tree headers
+ * (TeamCreate / SubAgent rows) and child status badges. One entry per
+ * descendant trace in DFS order.
+ */
+export interface DescendantTraceMeta {
+  traceId: string;
+  sessionId: string;
+  /** 1 = direct child, 2 = grandchild, 3 = great-grandchild (BE caps at 3). */
+  depth: number;
+  /** trace_id of the parent in the tree (depth-1 layer). */
+  parentTraceId: string;
+  /**
+   * span_id of the dispatch span (TeamCreate / SubAgent tool span) that
+   * triggered this descendant. May be null when the resolver fails to
+   * associate (`tech-design §1.4 #5`); UI then renders the sub-tree at the
+   * end of the parent.
+   */
+  parentSpanId: string | null;
+  /**
+   * Agent name. BE may return null when the child session lacks an agent
+   * binding (rare but possible per BE contract 2026-05-03). UI falls back
+   * to a short trace_id display.
+   */
+  agentName: string | null;
+  status: DescendantTraceStatus;
+  totalDurationMs: number;
+  toolCallCount: number;
+  eventCount: number;
+}
+
+/**
+ * OBS-3 — span row tagged with depth + parent trace, for unified rendering.
+ * `depth=0` means the span belongs to the root trace; `depth>0` means it
+ * belongs to a descendant trace (use `parentTraceId` to look up the
+ * `DescendantTraceMeta`).
+ */
+export interface UnifiedSpan {
+  span: SpanSummary;
+  depth: number;
+  /** null for root-trace spans, non-null for descendant spans. */
+  parentTraceId: string | null;
+}
+
+/**
+ * OBS-3 — response of `GET /api/traces/{traceId}/with_descendants`. Mirrors
+ * backend `TraceWithDescendantsDto`. `rootTrace` is the LlmTrace summary;
+ * descendants/spans are pre-sorted by the BE (DFS for descendants, started_at
+ * ASC for spans across all traces).
+ */
+export interface TraceWithDescendants {
+  rootTrace: LlmTraceSummary;
+  descendants: DescendantTraceMeta[];
+  spans: UnifiedSpan[];
+  /** True when descendants were truncated to `max_descendants`. */
+  truncated: boolean;
+}

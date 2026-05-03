@@ -110,6 +110,20 @@ public interface ChatEventBroadcaster {
         // no-op default
     }
 
+    /**
+     * OBS-3 — broadcast a {@code trace_finalized} event after {@link AgentLoopEngine}
+     * finishes a trace (status transitions {@code running} → {@code ok} / {@code error} /
+     * {@code cancelled}). The dashboard's unified-trace view subscribes to this so child
+     * trace status badges flip without a full refetch.
+     *
+     * <p>Default no-op so non-WS implementations (tests, headless harnesses) need not opt
+     * in. {@code error} may be null for {@code ok} status.
+     */
+    default void traceFinalized(String sessionId, String traceId, String status, String error,
+                                long totalDurationMs, int toolCallCount, int eventCount) {
+        // no-op default
+    }
+
     class AskUserEvent {
         public String askId;
         public String question;

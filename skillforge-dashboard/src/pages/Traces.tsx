@@ -1,9 +1,36 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
-import { getTraces, getTraceSpans, extractList } from '../api';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { getTraces, getTraceWithDescendants, extractList } from '../api';
+import { useAuth } from '../contexts/AuthContext';
+import NestedWaterfallRenderer from '../components/observability/NestedWaterfallRenderer';
+import type {
+  SpanSummary,
+  UnifiedSpan,
+  DescendantTraceMeta,
+  TraceWithDescendants,
+} from '../types/observability';
 import '../components/traces/traces.css';
 import '../components/skills/skills.css';
+
+const OBS3_MAX_DEPTH = 3;
+const OBS3_MAX_DESCENDANTS = 20;
+
+interface TraceFinalizedPayload {
+  type: 'trace_finalized';
+  sessionId?: string;
+  traceId: string;
+  status: 'ok' | 'error' | 'cancelled' | 'running';
+  totalDurationMs?: number;
+  toolCallCount?: number;
+  eventCount?: number;
+}
+
+function isTraceFinalizedEvent(value: unknown): value is TraceFinalizedPayload {
+  if (!value || typeof value !== 'object') return false;
+  const v = value as Record<string, unknown>;
+  return v.type === 'trace_finalized' && typeof v.traceId === 'string' && typeof v.status === 'string';
+}
 
 interface TraceRun {
   id: string;
@@ -24,6 +51,11 @@ interface TraceRun {
   at: string;
 }
 
+/**
+ * Legacy local Span shape, retained for the right-pane SpanDetail (it pulls
+ * fields from the legacy `getTraceSpans` response). The waterfall now uses
+ * OBS-3 UnifiedSpan; we map UnifiedSpan → Span for the detail panel only.
+ */
 interface Span {
   id: string;
   kind: string;
@@ -65,28 +97,59 @@ function normalizeRun(raw: Record<string, unknown>): TraceRun {
   };
 }
 
-function spanKind(spanType: string): string {
-  if (spanType === 'LLM_CALL') return 'llm';
-  if (spanType === 'TOOL_CALL') return 'tool';
-  return 'agent';
-}
-
-function normalizeSpan(raw: Record<string, unknown>, rootStartMs: number): Span {
-  const startMs = raw.startTime ? new Date(String(raw.startTime)).getTime() : 0;
+/** Convert OBS-3 UnifiedSpan → legacy Span shape used by SpanDetail. */
+function unifiedToLegacySpan(unified: UnifiedSpan, rootStartMs: number): Span {
+  const span = unified.span;
+  const startMs = Date.parse(span.startedAt);
+  const startOffset = Math.max(0, (Number.isFinite(startMs) ? startMs : 0) - rootStartMs);
+  if (span.kind === 'llm') {
+    return {
+      id: span.spanId,
+      kind: 'llm',
+      name: span.model || 'LLM',
+      parent: span.parentSpanId,
+      start: startOffset,
+      dur: span.latencyMs || 0,
+      ok: span.error == null && span.errorType == null,
+      input: '',
+      output: '',
+      error: span.error ?? null,
+      tokensIn: span.inputTokens,
+      tokensOut: span.outputTokens,
+      model: span.model || '',
+    };
+  }
+  if (span.kind === 'tool') {
+    return {
+      id: span.spanId,
+      kind: 'tool',
+      name: span.toolName || 'Tool',
+      parent: span.parentSpanId,
+      start: startOffset,
+      dur: span.latencyMs || 0,
+      ok: span.success,
+      input: span.inputPreview ?? '',
+      output: span.outputPreview ?? '',
+      error: span.error ?? null,
+      tokensIn: 0,
+      tokensOut: 0,
+      model: '',
+    };
+  }
   return {
-    id: String(raw.id || ''),
-    kind: spanKind(String(raw.spanType || '')),
-    name: String(raw.name || ''),
-    parent: (raw.parentSpanId as string) || null,
-    start: Math.max(0, startMs - rootStartMs),
-    dur: Number(raw.durationMs || 0),
-    ok: raw.success !== false,
-    input: String(raw.input || ''),
-    output: String(raw.output || ''),
-    error: (raw.error as string) || null,
-    tokensIn: Number(raw.inputTokens || 0),
-    tokensOut: Number(raw.outputTokens || 0),
-    model: String(raw.modelId || ''),
+    id: span.spanId,
+    kind: 'event',
+    name: span.name || span.eventType || 'Event',
+    parent: span.parentSpanId,
+    start: startOffset,
+    dur: span.latencyMs || 0,
+    ok: span.success,
+    input: span.inputPreview ?? '',
+    output: span.outputPreview ?? '',
+    error: span.error ?? null,
+    tokensIn: 0,
+    tokensOut: 0,
+    model: '',
   };
 }
 
@@ -108,10 +171,14 @@ function fmtTime(iso: string): string {
 }
 
 const Traces: React.FC = () => {
+  const { userId } = useAuth();
+  const queryClient = useQueryClient();
   const [q, setQ] = useState('');
   const [statusFilter, setStatusFilter] = useState<string | null>(null);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [selectedSpanId, setSelectedSpanId] = useState<string | null>(null);
+  /** OBS-3 — page-owned expansion state for nested descendant sub-trees. */
+  const [expandedSubtrees, setExpandedSubtrees] = useState<Set<string>>(new Set());
 
   const { data: rawTraces = [] } = useQuery({
     queryKey: ['traces'],
@@ -132,27 +199,183 @@ const Traces: React.FC = () => {
   const selectedRun = filteredRuns.find(r => r.id === selectedRunId) || filteredRuns[0] || null;
   const activeRunId = selectedRun?.id || null;
 
-  // Fetch spans for selected run
-  const { data: spansData } = useQuery({
-    queryKey: ['trace-spans', activeRunId],
-    queryFn: () => getTraceSpans(activeRunId!).then(res => res.data),
-    enabled: !!activeRunId,
+  // OBS-3 — unified trace + descendants for selected run.
+  const { data: unifiedData } = useQuery({
+    queryKey: ['unified-trace', activeRunId, userId, OBS3_MAX_DEPTH, OBS3_MAX_DESCENDANTS],
+    queryFn: async () => {
+      if (!activeRunId || !userId) throw new Error('missing activeRunId / userId');
+      const res = await getTraceWithDescendants(activeRunId, userId, {
+        maxDepth: OBS3_MAX_DEPTH,
+        maxDescendants: OBS3_MAX_DESCENDANTS,
+      });
+      return res.data;
+    },
+    enabled: Boolean(activeRunId && userId),
+    staleTime: 30_000,
   });
 
+  const unifiedSpans = useMemo<UnifiedSpan[]>(() => unifiedData?.spans ?? [], [unifiedData]);
+  const descendants = useMemo<DescendantTraceMeta[]>(() => unifiedData?.descendants ?? [], [unifiedData]);
+
+  // Legacy Span list — derived from UnifiedSpan, used by the right SpanDetail panel.
   const spans = useMemo<Span[]>(() => {
-    if (!spansData) return [];
-    const root = spansData.root as Record<string, unknown> | null;
-    const rootStart = root?.startTime ? new Date(String(root.startTime)).getTime() : 0;
-    const rawSpans = Array.isArray(spansData.spans) ? spansData.spans : [];
-    const all: Span[] = [];
-    if (root) all.push(normalizeSpan(root, rootStart));
-    rawSpans.forEach((s: Record<string, unknown>) => all.push(normalizeSpan(s, rootStart)));
-    return all;
-  }, [spansData]);
+    if (unifiedSpans.length === 0) return [];
+    const starts = unifiedSpans
+      .map((u) => Date.parse(u.span.startedAt))
+      .filter((t) => Number.isFinite(t));
+    const rootStart = starts.length > 0 ? Math.min(...starts) : 0;
+    return unifiedSpans.map((u) => unifiedToLegacySpan(u, rootStart));
+  }, [unifiedSpans]);
 
   const selectedSpan = spans.find(s => s.id === selectedSpanId) || spans[0] || null;
 
   const toggleStatus = (v: string) => setStatusFilter(s => s === v ? null : v);
+
+  // Clear expanded sub-trees when switching runs (visual contract).
+  useEffect(() => {
+    setExpandedSubtrees(new Set());
+  }, [activeRunId]);
+
+  const handleToggleSubtree = useCallback((childTraceId: string) => {
+    setExpandedSubtrees((prev) => {
+      const next = new Set(prev);
+      if (next.has(childTraceId)) next.delete(childTraceId);
+      else next.add(childTraceId);
+      return next;
+    });
+  }, []);
+
+  const handleLoadMore = useCallback(
+    async (childTraceId: string) => {
+      if (!userId) return;
+      try {
+        const res = await getTraceWithDescendants(childTraceId, userId, {
+          maxDepth: 2,
+          maxDescendants: OBS3_MAX_DESCENDANTS,
+        });
+        const extra = res.data;
+        queryClient.setQueryData<TraceWithDescendants>(
+          ['unified-trace', activeRunId, userId, OBS3_MAX_DEPTH, OBS3_MAX_DESCENDANTS],
+          (prev) => {
+            if (!prev) return prev;
+            const seenDescendants = new Set(prev.descendants.map((d) => d.traceId));
+            const newDescendants = extra.descendants.filter((d) => !seenDescendants.has(d.traceId));
+            const seenSpans = new Set(prev.spans.map((u) => u.span.spanId));
+            const newSpans = extra.spans.filter((u) => !seenSpans.has(u.span.spanId));
+            const mergedSpans = [...prev.spans, ...newSpans].sort((a, b) => {
+              const ta = Date.parse(a.span.startedAt);
+              const tb = Date.parse(b.span.startedAt);
+              return (Number.isFinite(ta) ? ta : 0) - (Number.isFinite(tb) ? tb : 0);
+            });
+            return {
+              ...prev,
+              descendants: [...prev.descendants, ...newDescendants],
+              spans: mergedSpans,
+              truncated: false,
+            };
+          },
+        );
+      } catch {
+        // Best-effort lazy load; ignore network failures.
+      }
+    },
+    [queryClient, activeRunId, userId],
+  );
+
+  /**
+   * OBS-3 §2.3 — WS subscribers for `trace_finalized` (BE Dev confirmed 2026-05-03):
+   * each trace's `trace_finalized` arrives on its **own** session's WS channel.
+   * We open the parent session sub PLUS one per descendant.sessionId so child
+   * status flips propagate immediately into the cached unified trace.
+   */
+  const handleTraceFinalized = useCallback(
+    (evt: TraceFinalizedPayload) => {
+      queryClient.setQueryData<TraceWithDescendants>(
+        ['unified-trace', activeRunId, userId, OBS3_MAX_DEPTH, OBS3_MAX_DESCENDANTS],
+        (prev) => {
+          if (!prev) return prev;
+          if (evt.traceId === prev.rootTrace.traceId) {
+            return {
+              ...prev,
+              rootTrace: {
+                ...prev.rootTrace,
+                status: evt.status as DescendantTraceMeta['status'],
+                totalDurationMs:
+                  typeof evt.totalDurationMs === 'number'
+                    ? evt.totalDurationMs
+                    : prev.rootTrace.totalDurationMs,
+                toolCallCount:
+                  typeof evt.toolCallCount === 'number'
+                    ? evt.toolCallCount
+                    : prev.rootTrace.toolCallCount,
+                eventCount:
+                  typeof evt.eventCount === 'number'
+                    ? evt.eventCount
+                    : prev.rootTrace.eventCount,
+              },
+            };
+          }
+          const nextDescendants = prev.descendants.map((d) =>
+            d.traceId === evt.traceId
+              ? {
+                  ...d,
+                  status: evt.status as DescendantTraceMeta['status'],
+                  totalDurationMs:
+                    typeof evt.totalDurationMs === 'number' ? evt.totalDurationMs : d.totalDurationMs,
+                  toolCallCount:
+                    typeof evt.toolCallCount === 'number' ? evt.toolCallCount : d.toolCallCount,
+                  eventCount:
+                    typeof evt.eventCount === 'number' ? evt.eventCount : d.eventCount,
+                }
+              : d,
+          );
+          return { ...prev, descendants: nextDescendants };
+        },
+      );
+    },
+    [queryClient, activeRunId, userId],
+  );
+
+  // Content-stable session-id key (sorted '|'-joined) — see SessionDetail.tsx
+  // for rationale (prevents WS churn on setQueryData mutations).
+  const wsSessionIdsKey = useMemo<string>(() => {
+    const ids = new Set<string>();
+    if (selectedRun?.sessionFullId) ids.add(selectedRun.sessionFullId);
+    for (const d of descendants) {
+      if (d.sessionId) ids.add(d.sessionId);
+    }
+    return Array.from(ids).sort().join('|');
+  }, [selectedRun?.sessionFullId, descendants]);
+
+  const wsListRef = useRef<WebSocket[]>([]);
+  useEffect(() => {
+    const sessionIds = wsSessionIdsKey ? wsSessionIdsKey.split('|').filter(Boolean) : [];
+    if (sessionIds.length === 0) return;
+    const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
+    const token = localStorage.getItem('sf_token') ?? '';
+    const sockets: WebSocket[] = [];
+    for (const sid of sessionIds) {
+      const ws = new WebSocket(
+        `${proto}://${window.location.host}/ws/chat/${sid}?token=${encodeURIComponent(token)}`,
+      );
+      ws.onmessage = (ev) => {
+        try {
+          const evt: unknown = JSON.parse(ev.data);
+          if (isTraceFinalizedEvent(evt)) handleTraceFinalized(evt);
+        } catch {
+          // ignore malformed
+        }
+      };
+      sockets.push(ws);
+    }
+    wsListRef.current = sockets;
+    return () => {
+      for (const ws of sockets) {
+        try { ws.close(); } catch { /* ignore */ }
+      }
+      if (wsListRef.current === sockets) wsListRef.current = [];
+    };
+  }, [wsSessionIdsKey, handleTraceFinalized]);
 
   return (
     <div className="tr-surface">
@@ -203,11 +426,17 @@ const Traces: React.FC = () => {
         <section className="tr-detail">
           <RunHeader run={selectedRun} />
           <div className="tr-detail-split">
-            <Waterfall
-              spans={spans}
+            <NestedWaterfallRenderer
+              spans={unifiedSpans}
+              descendants={descendants}
               totalMs={selectedRun.totalMs || 1}
-              selectedSpanId={selectedSpan?.id || null}
-              onSelect={id => setSelectedSpanId(id)}
+              selectedSpanId={selectedSpan?.id ?? null}
+              onSelectSpan={(s) => setSelectedSpanId(s.spanId)}
+              mode="full"
+              expandedSubtrees={expandedSubtrees}
+              onToggleSubtree={handleToggleSubtree}
+              truncated={unifiedData?.truncated ?? false}
+              onLoadMore={handleLoadMore}
             />
             <SpanDetail span={selectedSpan} runId={selectedRun.id} session={selectedRun.session} />
           </div>
@@ -267,91 +496,6 @@ function StatItem({ label, value, mono }: { label: string; value: string; mono?:
     <div className="tr-stat">
       <span className="tr-stat-lbl">{label}</span>
       <span className={`tr-stat-v ${mono ? 'mono' : ''}`}>{value}</span>
-    </div>
-  );
-}
-
-function Waterfall({ spans, totalMs, selectedSpanId, onSelect }: {
-  spans: Span[];
-  totalMs: number;
-  selectedSpanId: string | null;
-  onSelect: (id: string) => void;
-}) {
-  const rows = useMemo(() => {
-    const byParent: Record<string, Span[]> = {};
-    spans.forEach(s => {
-      const p = s.parent || '__root';
-      (byParent[p] = byParent[p] || []).push(s);
-    });
-    const out: { span: Span; depth: number }[] = [];
-    const flatten = (parent = '__root', depth = 0) => {
-      (byParent[parent] || []).forEach(span => {
-        out.push({ span, depth });
-        flatten(span.id, depth + 1);
-      });
-    };
-    flatten();
-    return out;
-  }, [spans]);
-
-  return (
-    <div className="tr-waterfall">
-      <div className="tr-waterfall-h">
-        <div className="tr-waterfall-h-name">Spans</div>
-        <div className="tr-waterfall-h-bar">
-          <div className="tr-timescale">
-            {[0, 0.25, 0.5, 0.75, 1].map(t => (
-              <div key={t} className="tr-timescale-tick" style={{ left: `${t * 100}%` }}>
-                <span>{fmtMs(totalMs * t)}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-      <div className="tr-waterfall-body">
-        {rows.map(({ span, depth }) => {
-          const pct = Math.max(0.5, (span.dur / totalMs) * 100);
-          const left = (span.start / totalMs) * 100;
-          return (
-            <button
-              key={span.id}
-              className={`tr-span-row ${span.id === selectedSpanId ? 'sel' : ''} ${span.ok ? '' : 'err'}`}
-              onClick={() => onSelect(span.id)}
-            >
-              <div className="tr-span-name" style={{ paddingLeft: 4 + depth * 18 }}>
-                {depth > 0 && <span className="tr-tree-line" aria-hidden="true">└─</span>}
-                <span className={`tr-kind-tag k-${span.kind}`}>{span.kind}</span>
-                <span className="tr-span-label mono-sm">{span.name}</span>
-              </div>
-              <div className="tr-span-bar-track">
-                <div
-                  className={`tr-span-bar k-${span.kind} ${span.ok ? '' : 'err'}`}
-                  style={{ left: `${left}%`, width: `${pct}%` }}
-                  title={`${span.name} · ${fmtMs(span.dur)}`}
-                />
-                {(() => {
-                  const endPct = left + pct;
-                  const isNearEdge = endPct > 75;
-                  return (
-                    <span
-                      className="tr-span-dur mono-sm"
-                      style={isNearEdge
-                        ? { left: `calc(${endPct}% - 4px)`, transform: 'translateY(-50%) translateX(-100%)', color: 'rgba(255,255,255,0.88)' }
-                        : { left: `calc(${endPct}% + 4px)` }
-                      }
-                    >
-                      {fmtMs(span.dur)}
-                    </span>
-                  );
-                })()}
-              </div>
-            </button>
-          );
-        })}
-        {rows.length === 0 && (
-          <div className="tr-empty">No spans for this run.</div>
-        )}
-      </div>
     </div>
   );
 }

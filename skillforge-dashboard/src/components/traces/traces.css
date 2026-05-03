@@ -364,6 +364,163 @@
   white-space: nowrap;
 }
 
+/* ─── OBS-3 Nested Waterfall ──────────────────────────────────────────────
+ * Shared styling for NestedWaterfallRenderer (full + mini modes). Mini mode
+ * is constrained to the chat right-rail width — keep all rules max-width
+ * safe and avoid horizontal overflow.
+ */
+.nested-wf--mini {
+  /* Mini lives inside the right rail's `mini-waterfall-scroll` container.
+   * Inherit width from the parent and never overflow horizontally. */
+  width: 100%;
+  max-width: 100%;
+  border-right: 0;
+  font-size: 11px;
+}
+.nested-wf--mini .tr-span-row {
+  grid-template-columns: minmax(0, 1.2fr) minmax(60px, 1fr);
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border-1, rgba(255, 255, 255, 0.04));
+  /* Let the name column shrink; track column has a hard min so the bar stays visible. */
+  min-width: 0;
+}
+.nested-wf--mini .tr-span-name {
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+.nested-wf--mini .tr-span-label {
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nested-wf--mini .tr-kind-tag {
+  font-size: 8px;
+  padding: 1px 3px;
+}
+.nested-wf--mini .tr-span-bar-track {
+  height: 6px;
+}
+.nested-wf--mini .tr-span-dur {
+  font-size: 8px;
+}
+
+/* Vertical guide line for depth>0 rows in full mode. */
+.nested-wf-guide {
+  display: inline-block;
+  width: 1px;
+  height: 16px;
+  margin-right: 6px;
+  background: var(--border-2, rgba(255, 255, 255, 0.16));
+  flex-shrink: 0;
+}
+
+/* Toggle button (▶/▼ in full, ▸/▾ in mini). */
+.nested-wf-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  font-size: 10px;
+  color: var(--fg-4);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  flex-shrink: 0;
+  user-select: none;
+  border-radius: 3px;
+}
+.nested-wf-toggle:hover {
+  color: var(--fg-1);
+  background: var(--bg-hover);
+}
+.nested-wf-toggle--mini {
+  width: 12px;
+  height: 12px;
+  font-size: 9px;
+}
+
+/* Child status badge (full mode = pill text, mini mode = colored dot). */
+.nested-wf-child-status {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 99px;
+  letter-spacing: 0.04em;
+  margin-left: 2px;
+  text-transform: lowercase;
+  flex-shrink: 0;
+}
+.nested-wf-child-status--running {
+  background: rgba(74, 122, 168, 0.15);
+  color: #4a7aa8;
+}
+.nested-wf-child-status--ok {
+  background: rgba(92, 138, 74, 0.15);
+  color: #5c8a4a;
+}
+.nested-wf-child-status--error {
+  background: rgba(184, 65, 47, 0.15);
+  color: #b84130;
+}
+.nested-wf-child-status--cancelled {
+  background: var(--bg-hover);
+  color: var(--fg-4);
+}
+[data-theme="dark"] .nested-wf-child-status--running {
+  background: rgba(74, 122, 168, 0.22);
+  color: #90b8d8;
+}
+[data-theme="dark"] .nested-wf-child-status--ok {
+  background: rgba(92, 138, 74, 0.22);
+  color: #8fca8f;
+}
+[data-theme="dark"] .nested-wf-child-status--error {
+  background: rgba(184, 65, 47, 0.22);
+  color: #e08070;
+}
+.nested-wf-child-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  display: inline-block;
+  margin-left: 2px;
+  flex-shrink: 0;
+}
+
+/* Standalone child header row (used when BE can't resolve dispatch span). */
+.nested-wf-child-header {
+  background: var(--bg-elev, rgba(255, 255, 255, 0.02));
+  font-style: italic;
+}
+.nested-wf-child-header:hover {
+  background: var(--bg-hover);
+}
+
+/* "Show more" lazy-load anchor. */
+.nested-wf-load-more {
+  width: 100%;
+  padding: 6px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--fg-4);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+  text-align: left;
+  border-top: 1px dashed var(--border-1);
+}
+.nested-wf-load-more:hover {
+  color: var(--accent);
+  background: var(--bg-hover);
+}
+
 /* Span detail panel */
 .tr-span-detail {
   display: flex;

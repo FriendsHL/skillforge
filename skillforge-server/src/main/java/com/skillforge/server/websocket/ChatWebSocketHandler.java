@@ -421,4 +421,31 @@ public class ChatWebSocketHandler extends TextWebSocketHandler implements ChatEv
             log.debug("collabMessageRouted: userId not found for collabRunId={}", collabRunId);
         }
     }
+
+    /**
+     * OBS-3 — broadcast {@code trace_finalized} on the trace's own session channel. The
+     * unified-trace UI subscribes to descendant child sessions when it loads the
+     * {@code with_descendants} response and uses these events to flip child status
+     * badges (running → ok / error / cancelled) without a full refetch.
+     *
+     * <p>Backward compatible: clients not handling {@code type=trace_finalized} silently
+     * ignore the message.
+     */
+    @Override
+    public void traceFinalized(String sessionId, String traceId, String status, String error,
+                               long totalDurationMs, int toolCallCount, int eventCount) {
+        if (sessionId == null || traceId == null) {
+            return;
+        }
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("type", "trace_finalized");
+        payload.put("sessionId", sessionId);
+        payload.put("traceId", traceId);
+        payload.put("status", status);
+        payload.put("error", error);
+        payload.put("totalDurationMs", totalDurationMs);
+        payload.put("toolCallCount", toolCallCount);
+        payload.put("eventCount", eventCount);
+        broadcast(sessionId, payload);
+    }
 }

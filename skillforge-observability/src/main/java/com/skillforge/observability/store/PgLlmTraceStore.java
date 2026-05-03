@@ -404,6 +404,22 @@ public class PgLlmTraceStore implements LlmTraceStore {
      */
     @Override
     @Transactional(readOnly = true)
+    public List<LlmTrace> listTracesBySessionAsc(String sessionId, int limit) {
+        if (sessionId == null || sessionId.isBlank()) return List.of();
+        int effectiveLimit = Math.max(1, limit);
+        org.springframework.data.domain.Pageable page =
+                org.springframework.data.domain.PageRequest.of(0, effectiveLimit);
+        List<LlmTraceEntity> raw = traceRepository
+                .findBySessionIdOrderByStartedAtAsc(sessionId, page);
+        List<LlmTrace> out = new ArrayList<>(raw.size());
+        for (LlmTraceEntity te : raw) {
+            out.add(toDomain(te));
+        }
+        return out;
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public List<LlmSpan> listSpansByTrace(String traceId, Set<String> kinds, int limit) {
         int effectiveLimit = Math.max(1, limit);
         org.springframework.data.domain.Pageable page =
