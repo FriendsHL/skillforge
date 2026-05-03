@@ -2058,49 +2058,26 @@ public class AgentLoopEngine {
      * OBS-2 M1 §C.8 R2-B3: finalize trace with idempotent UPDATE. Wrapped in try-catch —
      * failure log+drop, never propagates. SQL has {@code WHERE status='running'} so multiple
      * calls are safe (terminal status not overwritten).
-     *
-     * <p>OBS-3: after persisting the finalize, broadcast a {@code trace_finalized} event on
-     * the trace's session WebSocket channel so the dashboard's unified-trace view can flip
-     * child trace badges without a full refetch. Centralizing the broadcast here covers all
-     * finalize entry points (cancelled / budget / duration / max_tokens / max_loops / normal /
-     * abortToolUse / ASK_USER waiting / INSTALL_CONFIRM waiting / AGENT_CONFIRM waiting)
-     * without touching each call site. Broadcast failure never propagates.
      */
     private void finalizeTraceSafe(LoopContext loopCtx, String status, String error,
                                    long startedAtMs,
                                    AtomicInteger obsToolCallCount,
                                    AtomicInteger obsEventCount) {
-        if (loopCtx == null || loopCtx.getTraceId() == null) {
+        if (traceLifecycleSink == null || loopCtx == null || loopCtx.getTraceId() == null) {
             return;
         }
-        long now = System.currentTimeMillis();
-        long durationMs = Math.max(0, now - startedAtMs);
-        int toolCalls = obsToolCallCount != null ? obsToolCallCount.get() : 0;
-        int events = obsEventCount != null ? obsEventCount.get() : 0;
-        if (traceLifecycleSink != null) {
-            try {
-                traceLifecycleSink.finalizeTrace(
-                        loopCtx.getTraceId(),
-                        status, error,
-                        durationMs, toolCalls, events,
-                        Instant.ofEpochMilli(now));
-            } catch (Exception e) {
-                log.warn("finalizeTrace submit failed (dropped): traceId={} status={}",
-                        loopCtx.getTraceId(), status, e);
-            }
-        }
-        // OBS-3 — best-effort WS broadcast; does not propagate.
-        if (broadcaster != null && loopCtx.getSessionId() != null) {
-            try {
-                broadcaster.traceFinalized(
-                        loopCtx.getSessionId(),
-                        loopCtx.getTraceId(),
-                        status, error,
-                        durationMs, toolCalls, events);
-            } catch (Exception e) {
-                log.warn("traceFinalized broadcast failed (dropped): traceId={} status={}",
-                        loopCtx.getTraceId(), status, e);
-            }
+        try {
+            long now = System.currentTimeMillis();
+            traceLifecycleSink.finalizeTrace(
+                    loopCtx.getTraceId(),
+                    status, error,
+                    Math.max(0, now - startedAtMs),
+                    obsToolCallCount != null ? obsToolCallCount.get() : 0,
+                    obsEventCount != null ? obsEventCount.get() : 0,
+                    Instant.ofEpochMilli(now));
+        } catch (Exception e) {
+            log.warn("finalizeTrace submit failed (dropped): traceId={} status={}",
+                    loopCtx.getTraceId(), status, e);
         }
     }
 

@@ -95,14 +95,6 @@ public interface LlmTraceStore {
      */
     List<LlmSpan> listSpansByTrace(String traceId, Set<String> kinds, int limit);
 
-    /**
-     * OBS-3: list traces for a session, ordered by {@code startedAt} ascending, capped at
-     * {@code limit}. Used by {@code TraceDescendantsService} to pick the first trace of a
-     * descendant child session (child sessions can carry multiple traces if multi-turn;
-     * OBS-3 simplification: take the earliest one for the unified tree).
-     */
-    List<LlmTrace> listTracesBySessionAsc(String sessionId, int limit);
-
     // ===== request records =====
 
     /** OBS-2 M1 §B.1.1: trace stub 创建请求。 */

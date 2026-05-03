@@ -30,13 +30,6 @@ public interface SessionRepository extends JpaRepository<SessionEntity, String> 
     List<SessionEntity> findByParentSessionId(String parentSessionId);
 
     /**
-     * OBS-3 — child sessions of a given parent, ordered by createdAt ASC. Used by
-     * {@code TraceDescendantsService} DFS to walk descendant child sessions in
-     * deterministic chronological order so the unified-trace render is stable.
-     */
-    List<SessionEntity> findByParentSessionIdOrderByCreatedAtAsc(String parentSessionId);
-
-    /**
      * OBS-1 §7.4 R3-WN2 — fallback resolver path for SubAgent TOOL_CALL spans whose
      * output text didn't carry the expected "  childSessionId: <uuid>\n" line.
      *
