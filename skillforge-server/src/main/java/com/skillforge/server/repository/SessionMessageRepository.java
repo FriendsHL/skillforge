@@ -9,6 +9,8 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 
 public interface SessionMessageRepository extends JpaRepository<SessionMessageEntity, Long> {
@@ -50,4 +52,20 @@ public interface SessionMessageRepository extends JpaRepository<SessionMessageEn
 
     Optional<SessionMessageEntity> findTopBySessionIdAndMessageTypeAndAnsweredAtIsNullOrderBySeqNoDesc(
             String sessionId, String messageType);
+
+    /**
+     * OBS-2 M3 follow-up — restore "trace title = first user message" semantics
+     * after /api/traces switched to t_llm_trace (which has no input column).
+     * <p>
+     * Returns one row per traceId: (traceId, contentJson) of the earliest user
+     * message belonging to that trace. PostgreSQL DISTINCT ON guarantees the
+     * first row per trace_id given the ORDER BY (trace_id, seq_no ASC).
+     */
+    @Query(value = "SELECT DISTINCT ON (trace_id) trace_id, content_json " +
+                   "FROM t_session_message " +
+                   "WHERE trace_id IN (:traceIds) AND role = 'user' " +
+                   "ORDER BY trace_id, seq_no ASC",
+           nativeQuery = true)
+    List<Object[]> findFirstUserMessageContentByTraceIds(
+            @Param("traceIds") Collection<String> traceIds);
 }

@@ -1,9 +1,14 @@
 package com.skillforge.server.controller;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillforge.observability.entity.LlmSpanEntity;
 import com.skillforge.observability.entity.LlmTraceEntity;
 import com.skillforge.observability.repository.LlmSpanRepository;
 import com.skillforge.observability.repository.LlmTraceRepository;
+import com.skillforge.server.repository.SessionMessageRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -40,13 +45,22 @@ import java.util.Map;
 @RequestMapping("/api/traces")
 public class TracesController {
 
+    private static final Logger log = LoggerFactory.getLogger(TracesController.class);
+    private static final int INPUT_PREVIEW_MAX = 200;
+
     private final LlmTraceRepository traceRepository;
     private final LlmSpanRepository spanRepository;
+    private final SessionMessageRepository sessionMessageRepository;
+    private final ObjectMapper objectMapper;
 
     public TracesController(LlmTraceRepository traceRepository,
-                            LlmSpanRepository spanRepository) {
+                            LlmSpanRepository spanRepository,
+                            SessionMessageRepository sessionMessageRepository,
+                            ObjectMapper objectMapper) {
         this.traceRepository = traceRepository;
         this.spanRepository = spanRepository;
+        this.sessionMessageRepository = sessionMessageRepository;
+        this.objectMapper = objectMapper;
     }
 
     /**
@@ -91,6 +105,24 @@ public class TracesController {
             }
         }
 
+        // OBS-2 M3 follow-up: derive trace.input from first user message of each trace.
+        // M3 cut /api/traces over to t_llm_trace, which has no input column. Pre-M3 callers
+        // (TraceSidebar, Traces.tsx) used trace.input as the list-item title; we rebuild it
+        // here so the dashboard title fallback no longer collapses to agent_name.
+        Map<String, String> firstUserInputByTrace = traceIds.isEmpty()
+                ? Collections.emptyMap()
+                : new HashMap<>();
+        if (!traceIds.isEmpty()) {
+            for (Object[] row : sessionMessageRepository.findFirstUserMessageContentByTraceIds(traceIds)) {
+                String tid = (String) row[0];
+                String contentJson = (String) row[1];
+                String text = flattenUserContent(contentJson);
+                if (text != null && !text.isEmpty()) {
+                    firstUserInputByTrace.put(tid, truncate(text, INPUT_PREVIEW_MAX));
+                }
+            }
+        }
+
         List<Map<String, Object>> result = new ArrayList<>(traces.size());
         for (LlmTraceEntity t : traces) {
             int llmCallCount = llmCountByTrace.getOrDefault(t.getTraceId(), 0L).intValue();
@@ -99,8 +131,8 @@ public class TracesController {
             dto.put("traceId", t.getTraceId());
             dto.put("sessionId", t.getSessionId());
             dto.put("name", t.getAgentName() != null ? t.getAgentName() : t.getRootName());
-            dto.put("input", null);   // input/output blobs live on individual spans now
-            dto.put("output", null);
+            dto.put("input", firstUserInputByTrace.get(t.getTraceId()));   // OBS-2 M3 follow-up: derived from first user message
+            dto.put("output", null);   // output blobs live on individual spans
             dto.put("startTime", t.getStartedAt());
             dto.put("endTime", t.getEndedAt());
             dto.put("durationMs", t.getTotalDurationMs());
@@ -217,5 +249,44 @@ public class TracesController {
             return et == null ? "EVENT" : et.toUpperCase(java.util.Locale.ROOT);
         }
         return kind == null ? "UNKNOWN" : kind.toUpperCase(java.util.Locale.ROOT);
+    }
+
+    /**
+     * Extract user-visible text from a t_session_message.content_json payload.
+     * Content can be:
+     * <ul>
+     *   <li>JSON-encoded string ({@code "looking for skills"}) — common for plain user messages</li>
+     *   <li>JSON array of content blocks ({@code [{type:"text",text:"..."},{type:"tool_use",...}]}) —
+     *       Claude/OpenAi assistant + tool messages</li>
+     *   <li>Plain string fallback when not valid JSON</li>
+     * </ul>
+     * Returns the first text block's text (or the whole string for plain string).
+     * Returns null on any parse error so the caller falls back gracefully.
+     */
+    private String flattenUserContent(String contentJson) {
+        if (contentJson == null || contentJson.isEmpty()) return null;
+        try {
+            JsonNode node = objectMapper.readTree(contentJson);
+            if (node.isTextual()) {
+                return node.asText();
+            }
+            if (node.isArray()) {
+                for (JsonNode block : node) {
+                    if (block.has("type") && "text".equals(block.path("type").asText())
+                            && block.has("text")) {
+                        return block.path("text").asText();
+                    }
+                }
+            }
+            return null;
+        } catch (Exception e) {
+            log.debug("flattenUserContent failed for trace input derivation: {}", e.toString());
+            return null;
+        }
+    }
+
+    private static String truncate(String s, int max) {
+        if (s == null) return null;
+        return s.length() <= max ? s : s.substring(0, max) + "…";
     }
 }
