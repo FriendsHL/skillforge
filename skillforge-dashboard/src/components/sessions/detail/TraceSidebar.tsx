@@ -1,4 +1,5 @@
 import React from 'react';
+import { fmtMs } from './session-detail-utils';
 
 interface TraceInfo {
   id: string;
@@ -15,18 +16,19 @@ interface TraceInfo {
   toolCalls: number;
   model: string;
   startTime: string;
+  /**
+   * OBS-4 M2 — root_trace_id for the investigation this trace belongs to.
+   * For pre-OBS-4 traces (V45 backfill set root_trace_id = trace_id) and
+   * for the first trace of a fresh user message, this equals `id`. Used by
+   * SessionDetail to fetch the full tree via GET /api/traces/{rootId}/tree.
+   */
+  rootTraceId: string;
 }
 
 interface TraceSidebarProps {
   traces: TraceInfo[];
   selectedTraceId: string | null;
   onSelectTrace: (id: string) => void;
-}
-
-function fmtMs(ms: number): string {
-  if (ms < 1000) return ms + 'ms';
-  if (ms < 60000) return (ms / 1000).toFixed(2) + 's';
-  return (ms / 60000).toFixed(1) + 'm';
 }
 
 function fmtTime(iso: string): string {

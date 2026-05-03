@@ -3,6 +3,7 @@ import type { SpanSummary } from '../../../types/observability';
 import LlmSpanDetailView from './LlmSpanDetailView';
 import ToolSpanDetailView from './ToolSpanDetailView';
 import EventSpanDetailView from './EventSpanDetailView';
+import { fmtMs } from './session-detail-utils';
 
 interface TraceOverview {
   id: string;
@@ -22,12 +23,6 @@ interface TraceDetailPanelProps {
   trace: TraceOverview | null;
   /** Selected span - if set, show span detail instead of trace overview */
   span: SpanSummary | null;
-}
-
-function fmtMs(ms: number): string {
-  if (ms < 1000) return ms + 'ms';
-  if (ms < 60000) return (ms / 1000).toFixed(2) + 's';
-  return (ms / 60000).toFixed(1) + 'm';
 }
 
 function fmtTime(iso: string): string {

@@ -288,7 +288,17 @@ import type {
   ToolSpanDetail,
   EventSpanDetail,
   BlobPart,
+  TraceTreeDto,
 } from '../types/observability';
+
+/**
+ * OBS-4 M3 — fetch the full unified trace tree for a `root_trace_id`.
+ * Backend returns every trace (and its spans) sharing the same
+ * `root_trace_id` across sessions, depth-annotated for nested rendering.
+ * 404 when no trace exists with this rootTraceId.
+ */
+export const getTraceTree = (rootTraceId: string) =>
+  api.get<TraceTreeDto>(`/traces/${rootTraceId}/tree`);
 
 export interface GetSessionSpansParams {
   /**

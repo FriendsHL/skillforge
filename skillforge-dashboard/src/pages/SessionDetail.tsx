@@ -1,14 +1,14 @@
 import React, { useMemo, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { getSession, getSessionMessages, getTraces, getSessionSpans } from '../api';
+import { getSession, getSessionMessages, getTraces, getTraceTree } from '../api';
 import { useAuth } from '../contexts/AuthContext';
 import TraceSidebar, { type TraceInfo } from '../components/sessions/detail/TraceSidebar';
 import SessionWaterfallPanel from '../components/sessions/detail/SessionWaterfallPanel';
+import { traceSpanToSummary } from '../components/sessions/detail/session-detail-utils';
 import TraceDetailPanel, { type TraceOverview } from '../components/sessions/detail/TraceDetailPanel';
 import SessionStatsBar from '../components/sessions/detail/SessionStatsBar';
-import type { SpanSummary } from '../types/observability';
-import { normalizeEventType } from '../types/observability';
+import type { SpanSummary, TraceTreeDto, TraceNodeDto } from '../types/observability';
 import '../components/sessions/sessions.css';
 import '../components/skills/skills.css';
 import '../components/traces/traces.css';
@@ -28,15 +28,6 @@ interface RawMessage {
    */
   traceId?: string | null;
 }
-
-interface TimelineMessage {
-  id: string;
-  role: 'user' | 'assistant' | 'system' | 'tool';
-  createdAt: string;
-  text: string;
-}
-
-
 
 function flattenContentText(content: unknown): string {
   if (typeof content === 'string') return content;
@@ -60,18 +51,6 @@ function flattenContentText(content: unknown): string {
     .join('\n');
 }
 
-function normalizeMessage(raw: RawMessage, idx: number): TimelineMessage {
-  const role = (raw.role === 'assistant' || raw.role === 'user' || raw.role === 'system' || raw.role === 'tool')
-    ? raw.role
-    : 'assistant';
-  return {
-    id: raw.id != null ? String(raw.id) : `idx-${idx}`,
-    role,
-    createdAt: raw.createdAt ?? '',
-    text: flattenContentText(raw.content),
-  };
-}
-
 function tsOf(iso: string | null | undefined): number {
   if (!iso) return 0;
   const t = Date.parse(iso);
@@ -83,9 +62,16 @@ function normalizeTrace(raw: Record<string, unknown>, index: number): TraceInfo 
   const tokensOut = Number(raw.outputTokens || 0);
   const inputStr = String(raw.input || '');
   const title = inputStr.length > 50 ? inputStr.slice(0, 50) + '…' : inputStr;
-  
+  const traceId = String(raw.traceId || '');
+  // OBS-4 M2 — fall back to traceId if BE didn't ship rootTraceId. V45
+  // backfill set root_trace_id = trace_id for all pre-M0 rows, so this
+  // fallback only runs for legacy frontend cache hits or BE rollback.
+  const rootTraceId = typeof raw.rootTraceId === 'string' && raw.rootTraceId.length > 0
+    ? raw.rootTraceId
+    : traceId;
+
   return {
-    id: String(raw.traceId || ''),
+    id: traceId,
     index,
     name: String(raw.name || 'Agent loop'),
     title: title || String(raw.name || 'Agent loop'),
@@ -99,6 +85,7 @@ function normalizeTrace(raw: Record<string, unknown>, index: number): TraceInfo 
     toolCalls: Number(raw.toolCallCount || 0),
     model: String(raw.modelId || '—'),
     startTime: String(raw.startTime || ''),
+    rootTraceId,
   };
 }
 
@@ -165,102 +152,65 @@ const SessionDetail: React.FC = () => {
     }
   }, [traces, selectedTraceId]);
 
-  // OBS-2 M3 — Spans for the *currently selected* trace. Backend filters by
-  // trace_id directly; we no longer fetch "all session spans + client-side
-  // filter" (that path needed limit=1000 to avoid truncating long sessions).
-  const sessionSpansQuery = useQuery({
-    queryKey: ['session-spans', sessionId, userId, selectedTraceId],
+  // OBS-4 M3 — derive rootTraceId from the selected trace and fetch the
+  // unified tree (replaces OBS-2's per-trace `getSessionSpans` call). For
+  // pre-OBS-4 traces the V45 backfill set rootTraceId = traceId, so the
+  // tree returns a single trace and the panel renders identically to OBS-2.
+  const selectedTrace = useMemo<TraceInfo | null>(() => {
+    if (!selectedTraceId) return null;
+    return traces.find((t) => t.id === selectedTraceId) ?? null;
+  }, [traces, selectedTraceId]);
+
+  const rootTraceId = selectedTrace?.rootTraceId ?? null;
+
+  const traceTreeQuery = useQuery({
+    queryKey: ['trace-tree', rootTraceId],
     queryFn: async () => {
-      if (!sessionId || !userId || !selectedTraceId) {
-        throw new Error('missing sessionId / userId / selectedTraceId');
-      }
-      const res = await getSessionSpans(sessionId, userId, {
-        traceId: selectedTraceId,
-      });
-      const data = res.data;
-      return Array.isArray(data.spans) ? data.spans : [];
+      if (!rootTraceId) throw new Error('missing rootTraceId');
+      const res = await getTraceTree(rootTraceId);
+      return res.data as TraceTreeDto;
     },
-    enabled: Boolean(sessionId && userId && selectedTraceId),
+    enabled: Boolean(rootTraceId),
     staleTime: 30_000,
   });
 
-  // Convert observability spans to SpanSummary format
-  const spans = useMemo<SpanSummary[]>(() => {
-    const rawSpans = sessionSpansQuery.data ?? [];
-    return rawSpans.map((raw): SpanSummary => {
-      if (raw.kind === 'llm') {
-        return {
-          kind: 'llm',
-          spanId: String(raw.spanId || ''),
-          traceId: String(raw.traceId || ''),
-          parentSpanId: (raw.parentSpanId as string | null) ?? null,
-          startedAt: String(raw.startedAt || ''),
-          endedAt: (raw.endedAt as string | null) ?? null,
-          latencyMs: Number(raw.latencyMs || 0),
-          provider: (raw.provider as string | null) ?? null,
-          model: (raw.model as string | null) ?? null,
-          inputTokens: Number(raw.inputTokens || 0),
-          outputTokens: Number(raw.outputTokens || 0),
-          source: ((raw.source as 'live' | 'legacy') || 'live'),
-          stream: Boolean(raw.stream),
-          hasRawRequest: Boolean(raw.hasRawRequest),
-          hasRawResponse: Boolean(raw.hasRawResponse),
-          hasRawSse: Boolean(raw.hasRawSse),
-          blobStatus: (raw.blobStatus as 'ok' | 'legacy' | 'write_failed' | 'truncated' | null) ?? null,
-          finishReason: (raw.finishReason as string | null) ?? null,
-          error: (raw.error as string | null) ?? null,
-          errorType: (raw.errorType as string | null) ?? null,
-        };
-      }
-      if (raw.kind === 'event') {
-        return {
-          kind: 'event',
-          spanId: String(raw.spanId || ''),
-          traceId: String(raw.traceId || ''),
-          parentSpanId: (raw.parentSpanId as string | null) ?? null,
-          startedAt: String(raw.startedAt || ''),
-          endedAt: (raw.endedAt as string | null) ?? null,
-          latencyMs: Number(raw.latencyMs || 0),
-          eventType: normalizeEventType(raw.eventType),
-          name: String(raw.name || ''),
-          success: raw.success !== false,
-          error: (raw.error as string | null) ?? null,
-          inputPreview: (raw.inputPreview as string | null) ?? null,
-          outputPreview: (raw.outputPreview as string | null) ?? null,
-        };
-      }
-      // Default: tool kind
-      return {
-        kind: 'tool',
-        spanId: String(raw.spanId || ''),
-        traceId: String(raw.traceId || ''),
-        parentSpanId: (raw.parentSpanId as string | null) ?? null,
-        startedAt: String(raw.startedAt || ''),
-        endedAt: (raw.endedAt as string | null) ?? null,
-        latencyMs: Number(raw.latencyMs || 0),
-        toolName: String((raw.toolName as string) || ''),
-        toolUseId: (raw.toolUseId as string | null) ?? null,
-        success: Boolean(raw.success),
-        error: (raw.error as string | null) ?? null,
-        inputPreview: (raw.inputPreview as string | null) ?? null,
-        outputPreview: (raw.outputPreview as string | null) ?? null,
-        subagentSessionId: (raw.subagentSessionId as string | null) ?? null,
-      };
-    });
-  }, [sessionSpansQuery.data]);
+  const traceTree: TraceTreeDto | null = traceTreeQuery.data ?? null;
 
-  const messages = useMemo<TimelineMessage[]>(() => {
-    const raw = messagesQuery.data ?? [];
-    return raw.map((m, i) => normalizeMessage(m, i));
-  }, [messagesQuery.data]);
+  // Parent-session traces (depth=0) → their concatenated spans form the
+  // "parent main timeline" passed into SessionWaterfallPanel. Stats bar
+  // also uses this list (matches OBS-2 "stats reflect this session" feel).
+  const parentTraces = useMemo<TraceNodeDto[]>(() => {
+    if (!traceTree) return [];
+    return traceTree.traces
+      .filter((t) => t.depth === 0)
+      .slice()
+      .sort((a, b) => tsOf(a.startedAt) - tsOf(b.startedAt));
+  }, [traceTree]);
+
+  // SpanSummary list for the parent main timeline (depth=0 traces only).
+  // Concat across multiple depth=0 traces in chronological order — when a
+  // user message triggers multiple agent loops in the parent session they
+  // all share the same root_trace_id and we want them on one timeline.
+  const parentSpans = useMemo<SpanSummary[]>(() => {
+    return parentTraces.flatMap((t) =>
+      t.spans.map((s) => traceSpanToSummary(s, t.traceId)),
+    );
+  }, [parentTraces]);
+
+  // Span lookup pool covers ALL traces in the tree so clicking a child
+  // internal span (depth=2 in the waterfall) resolves to a SpanSummary the
+  // right detail panel can consume.
+  const allSpansInTree = useMemo<SpanSummary[]>(() => {
+    if (!traceTree) return [];
+    return traceTree.traces.flatMap((t) =>
+      t.spans.map((s) => traceSpanToSummary(s, t.traceId)),
+    );
+  }, [traceTree]);
 
   const selectedSpan = useMemo<SpanSummary | null>(() => {
     if (!selectedSpanId) return null;
-    return spans.find((s) => s.spanId === selectedSpanId) ?? null;
-  }, [spans, selectedSpanId]);
-
-  // OBS-2 M3 — `spans` is already filtered to the selected trace by the
-  // backend (per-trace fetch), no client-side filtering needed.
+    return allSpansInTree.find((s) => s.spanId === selectedSpanId) ?? null;
+  }, [allSpansInTree, selectedSpanId]);
 
   /**
    * Selected trace overview for the right panel.
@@ -270,9 +220,9 @@ const SessionDetail: React.FC = () => {
    * "User query" + "Assistant result" from the per-trace messages slice
    * instead — `t_session_message.trace_id` is populated for new traces post-M1.
    *
-   * Fallback chain when messages don't carry trace_id (historical pre-M1
-   * traces): trace.input / trace.output from the list endpoint (also null
-   * post-M3), ultimately rendered as "—" by TraceDetailPanel.
+   * OBS-4 M3 keeps this behaviour unchanged: the right panel still describes
+   * the user-selected trace (single trace), not the whole tree. The waterfall
+   * is the only surface that pivots to "tree-wide".
    */
   const selectedTraceOverview = useMemo<TraceOverview | null>(() => {
     if (!selectedTraceId) return null;
@@ -321,8 +271,8 @@ const SessionDetail: React.FC = () => {
     (sessionQuery.data?.title as string | undefined) ??
     (sessionId ? `Session ${sessionId.slice(0, 12)}` : 'Session');
 
-  const isLoading = sessionQuery.isLoading || tracesQuery.isLoading || sessionSpansQuery.isLoading;
-  const isError = sessionQuery.isError || tracesQuery.isError || sessionSpansQuery.isError;
+  const isLoading = sessionQuery.isLoading || tracesQuery.isLoading || traceTreeQuery.isLoading;
+  const isError = sessionQuery.isError || tracesQuery.isError || traceTreeQuery.isError;
 
   return (
     <div className="obs-session-detail">
@@ -345,7 +295,7 @@ const SessionDetail: React.FC = () => {
           )}
         </div>
         {sessionId && (
-          <SessionStatsBar spans={spans} />
+          <SessionStatsBar spans={parentSpans} />
         )}
       </header>
 
@@ -367,8 +317,8 @@ const SessionDetail: React.FC = () => {
 
         {/* Middle: Waterfall for selected trace */}
         <SessionWaterfallPanel
-          spans={spans}
-          messages={messages}
+          spans={parentSpans}
+          traceTree={traceTree}
           selectedSpanId={selectedSpan?.spanId ?? null}
           onSelectSpan={(s) => setSelectedSpanId(s.spanId)}
           traceRoot={selectedTraceOverview ? {

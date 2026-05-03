@@ -9,7 +9,7 @@
 | 顺序  | ID        | 标题                                | 模式   | 状态        | 优先级 | 风险   | 文档                                                        | 下一步                                   |
 | --- | --------- | --------------------------------- | ---- | --------- | --- | ---- | --------------------------------------------------------- | ------------------------------------- |
 | 1   | P12-PRE   | Sprint 4 前置决策                     | Lite | ready     | P0  | Solo | [需求包](requirements/active/P12-preflight-decisions/index.md)       | 决定 Cost Dashboard、PG 备份、多用户权限边界       |
-| 2   | OBS-4     | 跨 agent / 跨 session trace 串联（root_trace_id） | Full | M0/M1/M2 done | P1 | Full | [需求包](requirements/active/2026-05-03-OBS-4-root-trace-id/index.md) | M3 FE 二级折叠瀑布流（3-5 天）→ M4 观察 |
+| 2   | OBS-4     | 跨 agent / 跨 session trace 串联（root_trace_id） | Full | M0/M1/M2/M3 done | P1 | Full | [需求包](requirements/active/2026-05-03-OBS-4-root-trace-id/index.md) | M4 观察期 1 周 + delivery-index 收尾 |
 | 4   | P12       | 定时任务 MVP                          | Full | prd-ready | P1  | Full | [需求包](requirements/active/P12-scheduled-tasks/index.md)           | 等 P12-PRE 决策完成后进入设计评审                 |
 | 5   | P9-4/P9-5 | Partial compact + post-compact 恢复 | Full | prd-draft | P2  | Full | [需求包](requirements/active/P9-4-P9-5-compaction-recovery/index.md) | 先决定“最近文件”数据来源                         |
 | 6   | P10       | 聊天斜杠命令                            | Full | prd-ready | P2  | Full | [需求包](requirements/active/P10-slash-commands/index.md)            | 在更高优先级的 context / observability 工作后启动 |
@@ -25,7 +25,8 @@
 
 | ID | 完成日期 | Commit | 交付 |
 | --- | --- | --- | --- |
-| **OBS-4 M2** | 2026-05-03 | 待 commit；GET /api/traces/{rootId}/tree + listTraces 加 rootTraceId 字段 + TraceTreeService（3 SQL + DFS depth + cycle defence）+ 12 unit test | [交付索引](delivery-index.md)；M3 FE 二级折叠瀑布流下一步 |
+| **OBS-4 M3** | 2026-05-03 | 待 commit；FE 二级折叠瀑布流（WaterfallFoldTeamRow + WaterfallChildSummaryRow + SessionWaterfallPanel 重写支持 4-种 WaterfallRow union + 默认全收起避开 OBS-3 v1 fail 教训 + 老 session 视觉零变化） | [交付索引](delivery-index.md)；M4 观察期下一步 |
+| **OBS-4 M2** | 2026-05-03 | `877495b`；GET /api/traces/{rootId}/tree + listTraces 加 rootTraceId 字段 + TraceTreeService（3 SQL + DFS depth + cycle defence）+ 12 unit test | [交付索引](delivery-index.md)；M3 已交付 |
 | **OBS-4 M1** | 2026-05-03 | `e89c593`；V46 SET NOT NULL + 写入路径全链路（ChatService 4-arg overload / AgentLoopEngine + LoopContext 透传 / PgLlmTraceStore SQL 加列 + INV-2 immutable / SessionService 4 方法 / spawn 复制 active_root / 4 新 IT 锁 INV-1~6） | [交付索引](delivery-index.md)；M2 已交付 |
 | **OBS-4 M0** | 2026-05-03 | `eda937d`；V44 `t_session.active_root_trace_id` + V45 `t_llm_trace.root_trace_id` (nullable + 回填 + 索引) | [交付索引](delivery-index.md)；M1 已交付 |
 | **OBS-2 M4** | 2026-05-03 | M2 ETL 实跑（33 trace + 920 tool + 4 event 回填）+ M4 关旧轨写入 `b31cfaf` | [交付索引](delivery-index.md)；M5/M6 待跟进 |

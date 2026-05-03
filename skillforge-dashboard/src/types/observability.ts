@@ -266,3 +266,76 @@ export interface LlmTrace {
   source: LlmSpanSource;
   spans: LlmSpanSummary[];
 }
+
+// ─── OBS-4 M3 — root_trace_id unified tree DTOs ─────────────────────────────
+// Mirrors backend records under
+//   skillforge-server/.../observability/dto/{TraceTreeDto,TraceNodeDto,TraceSpanDto}.java
+// FE consumes via GET /api/traces/{rootTraceId}/tree (M2 endpoint).
+//
+// Field shape kept verbatim from backend records — `kind` / `eventType` /
+// `status` are stringly-typed on the wire (Java records don't carry the FE
+// discriminator literals), so consumers narrow before use.
+
+/** Trace status persisted on `t_llm_trace.status`. */
+export type TraceStatus = 'running' | 'ok' | 'error' | 'cancelled';
+
+/**
+ * One span inside a {@link TraceNodeDto}. Shape mirrors the existing
+ * `GET /api/traces/{traceId}/spans` payload: kind-specific fields are
+ * nullable when not applicable (`model` is null for tool/event etc.).
+ *
+ * `status` is derived BE-side from `error` ("ok" if error null, else "error").
+ */
+export interface TraceSpanDto {
+  spanId: string;
+  parentSpanId: string | null;
+  kind: 'llm' | 'tool' | 'event';
+  eventType: string | null; // event spans only
+  name: string | null;      // tool name / event name / null for llm
+  model: string | null;     // llm spans only
+  inputSummary: string | null;
+  outputSummary: string | null;
+  startedAt: string;        // ISO-8601
+  endedAt: string | null;
+  latencyMs: number;
+  iterationIndex: number;
+  inputTokens: number;
+  outputTokens: number;
+  status: 'ok' | 'error';
+  error: string | null;
+}
+
+/**
+ * One trace node inside a {@link TraceTreeDto}. `depth` is computed BE-side
+ * from `t_session.parent_session_id` chain (root session = 0; spawned child
+ * = 1; grandchild = 2; …). `spans` ordered by startedAt asc.
+ */
+export interface TraceNodeDto {
+  traceId: string;
+  sessionId: string;
+  agentId: number | null;
+  agentName: string | null;
+  depth: number;
+  parentSessionId: string | null;
+  status: TraceStatus;
+  startedAt: string;
+  endedAt: string | null;
+  totalDurationMs: number;
+  llmCallCount: number;
+  toolCallCount: number;
+  eventCount: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  error: string | null;
+  spans: TraceSpanDto[];
+}
+
+/**
+ * Response shape for `GET /api/traces/{rootTraceId}/tree`. One TraceTreeDto
+ * = one investigation = all traces sharing the same `root_trace_id` across
+ * sessions. M3 FE renders this as a unified two-level-collapsible waterfall.
+ */
+export interface TraceTreeDto {
+  rootTraceId: string;
+  traces: TraceNodeDto[];
+}
