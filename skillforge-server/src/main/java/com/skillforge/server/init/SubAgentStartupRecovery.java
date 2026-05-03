@@ -103,9 +103,11 @@ public class SubAgentStartupRecovery implements ApplicationRunner {
             log.info("Startup recovery: resubmitting child session {} (run {}) via chatAsync [restart resume]",
                     childId, run.getRunId());
             try {
+                // OBS-4 §2.1: preserveActiveRoot=true — restart resume 是合成续接，child session
+                // 的 active_root（如有）从 DB 持久化中保留下来；不要清空（决策 Q5：active_root 持久化）。
                 chatService.chatAsync(childId,
                         "[Resume from restart] Continue your previous work.",
-                        child.getUserId());
+                        child.getUserId(), true);
             } catch (Exception e) {
                 log.error("Startup recovery: chatAsync failed for child session {}, marking run CANCELLED",
                         childId, e);

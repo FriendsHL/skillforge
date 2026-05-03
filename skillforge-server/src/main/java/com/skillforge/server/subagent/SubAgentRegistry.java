@@ -247,7 +247,10 @@ public class SubAgentRegistry {
 
             log.info("Resuming parent session {} with {} pending subagent result(s)", parentSessionId, n);
             try {
-                chatServiceProvider.getObject().chatAsync(parentSessionId, payload, parent.getUserId());
+                // OBS-4 §2.1: preserveActiveRoot=true — subagent 结果回投是合成续接，不是新 user message
+                // 边界，要让 parent 的下一个 trace 继承父 active_root（INV-3 同 user message 内主 agent
+                // 所有 trace 共享同一 root_trace_id）。决策 Q7：父 session 的 active_root 不在此清空。
+                chatServiceProvider.getObject().chatAsync(parentSessionId, payload, parent.getUserId(), true);
             } catch (Exception e) {
                 int nextRetry = maxRetry + 1;
                 if (nextRetry >= MAX_DELIVERY_RETRIES) {
@@ -366,7 +369,10 @@ public class SubAgentRegistry {
 
             log.info("Resuming session {} with {} pending message(s)", targetSessionId, n);
             try {
-                chatServiceProvider.getObject().chatAsync(targetSessionId, payload, target.getUserId());
+                // OBS-4 §2.1: preserveActiveRoot=true — peer message / subagent result 是合成续接，
+                // 不是新 user message 边界。target 的 active_root 由前一个 trace（同 user message 内）
+                // 已设；新 trace 应继承同一 root（INV-3）。
+                chatServiceProvider.getObject().chatAsync(targetSessionId, payload, target.getUserId(), true);
             } catch (Exception e) {
                 int nextRetry = maxRetry + 1;
                 if (nextRetry >= MAX_DELIVERY_RETRIES) {

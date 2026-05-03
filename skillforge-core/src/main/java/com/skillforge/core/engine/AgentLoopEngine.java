@@ -457,10 +457,12 @@ public class AgentLoopEngine {
         // OBS-2 M1 §C.2 R2-B1: synchronously upsert trace stub so reads after user-message
         // broadcast can find the trace row. Wrapped in try-catch — DB failure must NOT
         // propagate to the agent main loop (drop = degraded observability, not bug).
+        // OBS-4 §2.2: pass loopCtx.getRootTraceId() — null → store layer COALESCEs to traceId
+        // (self as root, matches historical backfill behavior).
         if (traceLifecycleSink != null && loopCtx.getTraceId() != null) {
             try {
                 traceLifecycleSink.upsertTraceStub(
-                        loopCtx.getTraceId(), sessionId,
+                        loopCtx.getTraceId(), loopCtx.getRootTraceId(), sessionId,
                         agentDef.getId() != null ? parseAgentIdSafe(agentDef.getId()) : null,
                         userId, agentDef.getName(),
                         Instant.ofEpochMilli(obsLoopStartMs));

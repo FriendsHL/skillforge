@@ -11,6 +11,7 @@ import com.skillforge.server.dto.SessionMessageDto;
 import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.SessionMessageEntity;
 import com.skillforge.server.entity.SessionEntity;
+import com.skillforge.server.exception.SessionNotFoundException;
 import com.skillforge.server.repository.AgentRepository;
 import com.skillforge.server.repository.SessionMessageRepository;
 import com.skillforge.server.repository.SessionRepository;
@@ -679,6 +680,77 @@ public class SessionService {
 
     public SessionEntity saveSession(SessionEntity session) {
         return sessionRepository.save(session);
+    }
+
+    // ============ OBS-4: active_root_trace_id 读写接口 ============
+
+    /**
+     * OBS-4 §2.5: 读 session.active_root_trace_id (跨 agent / 跨 session trace 串联根)。
+     * <p>NULL = 老 session 或当前无 active 处理流程。ChatService 在每次 user message 边界
+     * 处由 chatAsync 清空，主 agent 首个 trace 创建时回填为自身 trace_id；spawn child
+     * 时由 spawnMember 复制父 session 的当前值给 child。
+     */
+    @Transactional(readOnly = true)
+    public String getActiveRootTraceId(String sessionId) {
+        return sessionRepository.findById(sessionId)
+                .map(SessionEntity::getActiveRootTraceId)
+                .orElseThrow(() -> new SessionNotFoundException(sessionId));
+    }
+
+    /**
+     * OBS-4 §2.5: 写 session.active_root_trace_id。
+     * <p>由 ChatService 4-arg preserveActiveRoot=true 路径在 active_root 缺失时 defensive
+     * 回填使用（正常路径已通过 spawnMember 或 allocateNewRootTraceId 设好）。
+     * 失败抛 {@link SessionNotFoundException}，调用方负责回滚整个 user message 处理。
+     */
+    @Transactional
+    public void setActiveRootTraceId(String sessionId, String rootTraceId) {
+        SessionEntity session = sessionRepository.findById(sessionId)
+                .orElseThrow(() -> new SessionNotFoundException(sessionId));
+        session.setActiveRootTraceId(rootTraceId);
+        sessionRepository.save(session);
+    }
+
+    /**
+     * OBS-4 §2.5: 清空 session.active_root_trace_id。
+     * <p>常规 user message 边界**不**调本方法 — 走 {@link #allocateNewRootTraceId(String, String)}
+     * 单事务原子重置 (W2/W3)。本方法保留供未来 admin / cleanup / test 场景调用。
+     */
+    @Transactional
+    public void clearActiveRootTraceId(String sessionId) {
+        SessionEntity session = sessionRepository.findById(sessionId)
+                .orElseThrow(() -> new SessionNotFoundException(sessionId));
+        session.setActiveRootTraceId(null);
+        sessionRepository.save(session);
+    }
+
+    /**
+     * OBS-4 §2.5 (W2/W3 r1 fix): user-message-boundary 原子重置 + 设新 root。
+     *
+     * <p>单 {@code @Transactional} 内 load → set activeRootTraceId = newRootTraceId → save，
+     * 消除原 clear-then-set 三事务模式（reviewer r1 W2/W3）：
+     * <ul>
+     *   <li>原子性：tech-design §2.1 的"清空 + 设新值放在同一事务内"声明现在与实现一致</li>
+     *   <li>消除冗余 DB read：clear 后立即 get 必然 null 的多余查询不再发生</li>
+     *   <li>窗口期消除：clear 与 set 之间的 active_root=NULL 可见窗口不再存在</li>
+     * </ul>
+     *
+     * <p>由 {@link com.skillforge.server.service.ChatService#chatAsync(String, String, Long)}
+     * 3-arg 入口（真实 user message 边界，{@code preserveActiveRoot=false}）调用。
+     * 4-arg {@code preserveActiveRoot=true} 路径不调本方法（直接 read 已有 active_root 继承）。
+     *
+     * <p>幂等性：重复用同一 newRootTraceId 调用是 effective no-op（最终值相同）。
+     *
+     * @param sessionId        session id
+     * @param newRootTraceId   即将作为本 user message 主 agent 第一个 trace 的 root_trace_id
+     *                         （= 该 trace 自身的 trace_id）
+     */
+    @Transactional
+    public void allocateNewRootTraceId(String sessionId, String newRootTraceId) {
+        SessionEntity session = sessionRepository.findById(sessionId)
+                .orElseThrow(() -> new SessionNotFoundException(sessionId));
+        session.setActiveRootTraceId(newRootTraceId);
+        sessionRepository.save(session);
     }
 
     public record DeleteSkipped(String id, String reason) {}

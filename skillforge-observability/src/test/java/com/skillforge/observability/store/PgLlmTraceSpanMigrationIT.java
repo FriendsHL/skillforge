@@ -560,14 +560,16 @@ class PgLlmTraceSpanMigrationIT {
     /** Pre-existing legacy t_llm_trace row (status defaults to 'running' via V42). */
     private void insertLegacyTraceStub(String traceId, String sessionId, Long agentId, Instant startedAt)
             throws Exception {
+        // OBS-4: root_trace_id NOT NULL after V46 — set self-as-root (matches V45 backfill).
         try (Connection c = ds.getConnection();
              PreparedStatement ps = c.prepareStatement(
-                     "INSERT INTO t_llm_trace (trace_id, session_id, agent_id, started_at, source) "
-                             + "VALUES (?, ?, ?, ?, 'legacy')")) {
+                     "INSERT INTO t_llm_trace (trace_id, root_trace_id, session_id, agent_id, started_at, source) "
+                             + "VALUES (?, ?, ?, ?, ?, 'legacy')")) {
             ps.setString(1, traceId);
-            ps.setString(2, sessionId);
-            if (agentId == null) ps.setNull(3, Types.BIGINT); else ps.setLong(3, agentId);
-            ps.setTimestamp(4, Timestamp.from(startedAt));
+            ps.setString(2, traceId); // root_trace_id = self
+            ps.setString(3, sessionId);
+            if (agentId == null) ps.setNull(4, Types.BIGINT); else ps.setLong(4, agentId);
+            ps.setTimestamp(5, Timestamp.from(startedAt));
             ps.executeUpdate();
         }
     }
@@ -575,16 +577,18 @@ class PgLlmTraceSpanMigrationIT {
     /** Pre-existing live t_llm_trace row at status='running' with custom agent_name (Section 1 source-filter test). */
     private void insertLiveTraceStubRunning(String traceId, String sessionId, Long agentId,
                                             String agentName, Instant startedAt) throws Exception {
+        // OBS-4: root_trace_id NOT NULL after V46 — set self-as-root.
         try (Connection c = ds.getConnection();
              PreparedStatement ps = c.prepareStatement(
-                     "INSERT INTO t_llm_trace (trace_id, session_id, agent_id, agent_name, "
+                     "INSERT INTO t_llm_trace (trace_id, root_trace_id, session_id, agent_id, agent_name, "
                              + "started_at, source, status) "
-                             + "VALUES (?, ?, ?, ?, ?, 'live', 'running')")) {
+                             + "VALUES (?, ?, ?, ?, ?, ?, 'live', 'running')")) {
             ps.setString(1, traceId);
-            ps.setString(2, sessionId);
-            if (agentId == null) ps.setNull(3, Types.BIGINT); else ps.setLong(3, agentId);
-            ps.setString(4, agentName);
-            ps.setTimestamp(5, Timestamp.from(startedAt));
+            ps.setString(2, traceId); // root_trace_id = self
+            ps.setString(3, sessionId);
+            if (agentId == null) ps.setNull(4, Types.BIGINT); else ps.setLong(4, agentId);
+            ps.setString(5, agentName);
+            ps.setTimestamp(6, Timestamp.from(startedAt));
             ps.executeUpdate();
         }
     }

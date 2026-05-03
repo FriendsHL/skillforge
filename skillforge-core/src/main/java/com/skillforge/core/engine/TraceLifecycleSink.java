@@ -21,8 +21,14 @@ import java.time.Instant;
  */
 public interface TraceLifecycleSink {
 
-    /** rootSpan 创建时同步调用 — INSERT ON CONFLICT (trace_id) DO NOTHING。 */
+    /**
+     * rootSpan 创建时同步调用 — INSERT ON CONFLICT (trace_id) DO NOTHING。
+     *
+     * <p>OBS-4 §2.3: 加 {@code rootTraceId} 参数 — 首次 INSERT 时写入 t_llm_trace.root_trace_id；
+     * ON CONFLICT 时不更新 root_trace_id（INV-2: immutable, 一次写定终身不变）。
+     */
     void upsertTraceStub(String traceId,
+                         String rootTraceId,
                          String sessionId,
                          Long agentId,
                          Long userId,

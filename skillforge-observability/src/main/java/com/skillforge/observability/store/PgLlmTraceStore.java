@@ -40,13 +40,23 @@ public class PgLlmTraceStore implements LlmTraceStore {
 
     private static final Logger log = LoggerFactory.getLogger(PgLlmTraceStore.class);
 
+    /**
+     * OBS-1 main write path UPSERT.
+     *
+     * <p>OBS-4 §2.3: include {@code root_trace_id} with self-fallback. After V46 the column is
+     * NOT NULL; in production this SQL almost always hits ON CONFLICT (upsertTraceStub already
+     * created the row), but the rare INSERT branch (e.g. test paths or any caller that didn't
+     * call upsertTraceStub first) must still satisfy NOT NULL — fallback to {@code trace_id}
+     * (self as root) preserves historical backfill semantics. ON CONFLICT does NOT update
+     * {@code root_trace_id} (INV-2 immutable), so existing rows' root is preserved.
+     */
     private static final String UPSERT_TRACE_SQL = """
             INSERT INTO t_llm_trace (
-              trace_id, session_id, agent_id, user_id, root_name,
+              trace_id, root_trace_id, session_id, agent_id, user_id, root_name,
               started_at, ended_at, total_input_tokens, total_output_tokens, total_cost_usd,
               source, created_at
             ) VALUES (
-              :traceId, :sessionId, :agentId, :userId, :rootName,
+              :traceId, :traceId, :sessionId, :agentId, :userId, :rootName,
               :startedAt, :endedAt, :inDelta, :outDelta, :costDelta,
               :source, now()
             )
@@ -57,15 +67,21 @@ public class PgLlmTraceStore implements LlmTraceStore {
               total_cost_usd      = COALESCE(t_llm_trace.total_cost_usd, 0) + COALESCE(EXCLUDED.total_cost_usd, 0)
             """;
 
-    /** OBS-2 M1 §B.3 — trace stub 同步 INSERT；DO NOTHING 让二次调用幂等。 */
+    /**
+     * OBS-2 M1 §B.3 — trace stub 同步 INSERT；DO NOTHING 让二次调用幂等。
+     *
+     * <p>OBS-4 §2.3 INV-2: root_trace_id 首次 INSERT 时定型，ON CONFLICT 不更新（immutable）。
+     * 调用方 {@code rootTraceId} 为 null 时通过 {@code COALESCE(:rootTraceId, :traceId)}
+     * fallback 为自身 trace_id（自己当 root，跟历史 backfill 行为一致）。
+     */
     private static final String INSERT_TRACE_STUB_SQL = """
             INSERT INTO t_llm_trace (
-              trace_id, session_id, agent_id, user_id, agent_name, root_name,
+              trace_id, root_trace_id, session_id, agent_id, user_id, agent_name, root_name,
               status, started_at, total_input_tokens, total_output_tokens,
               total_duration_ms, tool_call_count, event_count,
               source, created_at
             ) VALUES (
-              :traceId, :sessionId, :agentId, :userId, :agentName, :agentName,
+              :traceId, COALESCE(:rootTraceId, :traceId), :sessionId, :agentId, :userId, :agentName, :agentName,
               'running', :startedAt, 0, 0,
               0, 0, 0,
               'live', now()
@@ -253,6 +269,7 @@ public class PgLlmTraceStore implements LlmTraceStore {
     public void upsertTraceStub(TraceStubRequest request) {
         em.createNativeQuery(INSERT_TRACE_STUB_SQL)
                 .setParameter("traceId", request.traceId())
+                .setParameter("rootTraceId", request.rootTraceId())
                 .setParameter("sessionId", request.sessionId())
                 .setParameter("agentId", request.agentId())
                 .setParameter("userId", request.userId())

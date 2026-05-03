@@ -28,10 +28,10 @@ public class LlmTraceLifecycleSinkAdapter implements TraceLifecycleSink {
     }
 
     @Override
-    public void upsertTraceStub(String traceId, String sessionId, Long agentId, Long userId,
-                                String agentName, Instant startedAt) {
+    public void upsertTraceStub(String traceId, String rootTraceId, String sessionId, Long agentId,
+                                Long userId, String agentName, Instant startedAt) {
         traceStore.upsertTraceStub(new TraceStubRequest(
-                traceId, sessionId, agentId, userId, agentName, startedAt));
+                traceId, rootTraceId, sessionId, agentId, userId, agentName, startedAt));
     }
 
     @Override

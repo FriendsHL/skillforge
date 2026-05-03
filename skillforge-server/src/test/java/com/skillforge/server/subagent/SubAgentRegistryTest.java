@@ -22,6 +22,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -178,7 +179,8 @@ class SubAgentRegistryTest {
         registry.onSessionLoopFinished("ca", "the answer is 42", "completed", 3, 1234L);
 
         // 父被唤醒一次,消息体包含子 final message
-        verify(chatService, times(1)).chatAsync(eq("pa"), anyString(), eq(7L));
+        // OBS-4 §2.1: subagent result delivery uses 4-arg chatAsync(preserveActiveRoot=true)
+        verify(chatService, times(1)).chatAsync(eq("pa"), anyString(), eq(7L), eq(true));
         // 从持久层重新读出 run 做断言(DTO 本身不随持久化更新)
         SubAgentRegistry.SubAgentRun refreshed = registry.getRun(run.runId);
         assertThat(refreshed.status).isEqualTo("COMPLETED");
@@ -200,7 +202,9 @@ class SubAgentRegistryTest {
         registry.onSessionLoopFinished("cb", "partial done", "completed", 1, 100L);
 
         // 父在跑,不能抢跑
+        // OBS-4 §2.1: subagent result delivery now uses 4-arg chatAsync — neither overload should fire.
         verify(chatService, never()).chatAsync(anyString(), anyString(), any());
+        verify(chatService, never()).chatAsync(anyString(), anyString(), any(), anyBoolean());
         SubAgentRegistry.SubAgentRun refreshed = registry.getRun(run.runId);
         assertThat(refreshed.status).isEqualTo("COMPLETED");
     }
@@ -219,7 +223,9 @@ class SubAgentRegistryTest {
         when(sessionRepository.findById("pc")).thenReturn(Optional.of(parentRunning));
 
         registry.onSessionLoopFinished("cc", "child done", "completed", 1, 50L);
+        // OBS-4 §2.1: subagent result delivery now uses 4-arg chatAsync — neither overload should fire.
         verify(chatService, never()).chatAsync(anyString(), anyString(), any());
+        verify(chatService, never()).chatAsync(anyString(), anyString(), any(), anyBoolean());
 
         // 之后父自己 loop 跑完进入 idle,在 finally 里再次回调 onSessionLoopFinished("pc",...)
         SessionEntity parentIdleNow = session("pc", 0, "idle", null);
@@ -228,7 +234,8 @@ class SubAgentRegistryTest {
         registry.onSessionLoopFinished("pc", "parent turn done", "completed", 0, 10L);
 
         // 这次应该 drain 队列并唤醒父
-        verify(chatService, times(1)).chatAsync(eq("pc"), anyString(), eq(7L));
+        // OBS-4 §2.1: subagent result delivery uses 4-arg chatAsync(preserveActiveRoot=true)
+        verify(chatService, times(1)).chatAsync(eq("pc"), anyString(), eq(7L), eq(true));
     }
 
     @Test
@@ -250,7 +257,9 @@ class SubAgentRegistryTest {
 
         registry.onSessionLoopFinished("cd1", "alpha result", "completed", 1, 10L);
         registry.onSessionLoopFinished("cd2", "beta result", "completed", 1, 10L);
+        // OBS-4 §2.1: subagent result delivery now uses 4-arg chatAsync — neither overload should fire.
         verify(chatService, never()).chatAsync(anyString(), anyString(), any());
+        verify(chatService, never()).chatAsync(anyString(), anyString(), any(), anyBoolean());
 
         // 父 loop 跑完
         SessionEntity parentIdleNow = session("pd", 0, "idle", null);
@@ -258,7 +267,8 @@ class SubAgentRegistryTest {
         registry.onSessionLoopFinished("pd", "parent done", "completed", 0, 5L);
 
         // 一次性合并 drain
-        verify(chatService, times(1)).chatAsync(eq("pd"), anyString(), eq(7L));
+        // OBS-4 §2.1: subagent result delivery uses 4-arg chatAsync(preserveActiveRoot=true)
+        verify(chatService, times(1)).chatAsync(eq("pd"), anyString(), eq(7L), eq(true));
         assertThat(registry.listRunsForParent("pd"))
                 .extracting(r -> r.status)
                 .containsExactlyInAnyOrder("COMPLETED", "COMPLETED");

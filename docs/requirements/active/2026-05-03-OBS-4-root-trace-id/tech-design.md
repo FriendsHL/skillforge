@@ -64,45 +64,71 @@ OBS-4 用：
 
 **改动**：
 
+ChatService 改为 **3-arg / 4-arg overload**，用 `boolean preserveActiveRoot` 显式区分调用语义：
+
 ```java
-// 现状（OBS-2）
-String traceId = UUID.randomUUID().toString();
-sessionService.appendNormalMessages(sessionId, List.of(userMsg), traceId);
-// ...
-preCtx.setTraceId(traceId);
-
-// OBS-4 改造
-String traceId = UUID.randomUUID().toString();
-
-// §C.1 root_trace_id 决策：检查 session 的 active_root_trace_id
-String existingActiveRoot = sessionService.getActiveRootTraceId(sessionId);
-String rootTraceId;
-if (existingActiveRoot == null) {
-    // 新 root：每次 user message 都重置 active_root（边界规则 a），
-    // 这里 existingActiveRoot 必为 null（user message 处理前已清空，见 §C.2）
-    rootTraceId = traceId;
-    sessionService.setActiveRootTraceId(sessionId, rootTraceId);
-} else {
-    // 继承（理论上 user message 边界不该走到这；保留作为 defensive：
-    // 如果上次 user message 处理异常没清 active_root，下次 user message
-    // 进来仍按"新 root"走，覆盖式 set；不依赖此分支）
-    rootTraceId = existingActiveRoot;
+// 3-arg overload — 默认 preserveActiveRoot=false（真实 user message 边界）
+public void chatAsync(String sessionId, String userMessage, Long userId) {
+    chatAsync(sessionId, userMessage, userId, false);
 }
 
-sessionService.appendNormalMessages(sessionId, List.of(userMsg), traceId);
-// ...
-preCtx.setTraceId(traceId);
-preCtx.setRootTraceId(rootTraceId);   // §A.1 透传
+// 4-arg overload — 内部合成续接路径（spawn child / subagent 结果回投 / peer 消息 /
+// startup recovery）传 preserveActiveRoot=true
+public void chatAsync(String sessionId, String userMessage, Long userId,
+                      boolean preserveActiveRoot) {
+    // ...（前略：状态机检查 / B3 compact / traceId 生成）
+    String traceId = UUID.randomUUID().toString();
+
+    // OBS-4 §C: active_root_trace_id 决策
+    String rootTraceId;
+    if (!preserveActiveRoot) {
+        // 真实 user message 边界（INV-5）：单事务原子重置 active_root = traceId
+        // 自己当 root。W2/W3 r1 fix：原 clear+get+set 三独立事务合并为单
+        // allocateNewRootTraceId @Transactional 调用，消除窗口期 + 冗余 DB read。
+        rootTraceId = traceId;
+        sessionService.allocateNewRootTraceId(sessionId, rootTraceId);
+    } else {
+        // 合成续接：read 已有 active_root 继承（INV-3/INV-4/INV-6）
+        String existingActiveRoot = sessionService.getActiveRootTraceId(sessionId);
+        if (existingActiveRoot == null) {
+            // Defensive 兜底：spawn 链异常导致 active_root 缺失，自己当 root + 回填
+            rootTraceId = traceId;
+            sessionService.setActiveRootTraceId(sessionId, rootTraceId);
+        } else {
+            rootTraceId = existingActiveRoot;
+        }
+    }
+
+    sessionService.appendNormalMessages(sessionId, List.of(userMsg), traceId);
+    // ...
+    preCtx.setTraceId(traceId);
+    preCtx.setRootTraceId(rootTraceId);   // §A.1 透传
+}
 ```
 
-**user message 边界处理**：在 `chatAsync` 入口（line 130 附近，user message 入队前）：
+**调用方分类**（review r1 全覆盖核对）：
+
+| 调用方 | 参数 | 语义 |
+|---|---|---|
+| ChatController / ChannelSessionRouter | 3-arg (= false) | 真实用户输入，INV-5 新 root |
+| CollabRunService.spawnMember | 4-arg true | spawn child；child.active_root 已被复制为 parent.active_root |
+| SubAgentTool.handleDispatch | 4-arg true | 同上 |
+| SubAgentRegistry.maybeResumeParent | 4-arg true | subagent 结果回投，继承父 active_root |
+| SubAgentRegistry.maybeResumeSession | 4-arg true | peer 消息合成续接 |
+| SubAgentStartupRecovery | 4-arg true | JVM 重启续接，复用持久化 active_root（决策 Q5） |
+
+**SessionService API**：
 
 ```java
-// §C.2 OBS-4 边界规则 a：每个 user message 一个新 root
-sessionService.clearActiveRootTraceId(sessionId);   // 清空，等下面新 trace 创建时重新填
+public class SessionService {
+    @Transactional(readOnly = true) public String getActiveRootTraceId(String sessionId);
+    @Transactional public void setActiveRootTraceId(String sessionId, String rootTraceId);
+    @Transactional public void clearActiveRootTraceId(String sessionId);  // admin/test 用
+    @Transactional public void allocateNewRootTraceId(String sessionId, String newRootTraceId);  // user message 边界原子调用
+}
 ```
 
-**注**：清空 + 设新值是两个独立 writes；放在同一事务内保证原子性。
+**原子性**：`allocateNewRootTraceId` 单 `@Transactional` 内 `findById → set → save`，保证 user message 边界的 active_root 重置和读出对外原子可见。
 
 ### 2.2 AgentLoopEngine（trace 创建时写 root_trace_id）
 

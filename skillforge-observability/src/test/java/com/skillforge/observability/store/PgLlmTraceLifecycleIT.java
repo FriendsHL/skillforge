@@ -35,15 +35,20 @@ import static org.assertj.core.api.Assertions.assertThat;
 @DisplayName("PgLlmTraceStore — OBS-2 M1 lifecycle SQL semantics")
 class PgLlmTraceLifecycleIT {
 
-    /** Mirrors {@code PgLlmTraceStore.INSERT_TRACE_STUB_SQL}. */
+    /**
+     * Mirrors {@code PgLlmTraceStore.INSERT_TRACE_STUB_SQL}.
+     * <p>OBS-4 §2.3: includes {@code root_trace_id} column with {@code COALESCE} fallback to
+     * trace_id (self as root, matches V45 backfill semantics). After V46 sets NOT NULL the
+     * column must always be populated.
+     */
     private static final String INSERT_TRACE_STUB_SQL =
             "INSERT INTO t_llm_trace ("
-                    + "  trace_id, session_id, agent_id, user_id, agent_name, root_name,"
+                    + "  trace_id, root_trace_id, session_id, agent_id, user_id, agent_name, root_name,"
                     + "  status, started_at, total_input_tokens, total_output_tokens,"
                     + "  total_duration_ms, tool_call_count, event_count,"
                     + "  source, created_at"
                     + ") VALUES ("
-                    + "  ?, ?, ?, ?, ?, ?,"
+                    + "  ?, COALESCE(?, ?), ?, ?, ?, ?, ?,"
                     + "  'running', ?, 0, 0,"
                     + "  0, 0, 0,"
                     + "  'live', now()"
@@ -169,12 +174,15 @@ class PgLlmTraceLifecycleIT {
         try (Connection c = ds.getConnection();
              PreparedStatement ps = c.prepareStatement(INSERT_TRACE_STUB_SQL)) {
             ps.setString(1, traceId);
-            ps.setString(2, sessionId);
-            ps.setNull(3, Types.BIGINT);
-            ps.setNull(4, Types.BIGINT);
-            ps.setString(5, agentName);
-            ps.setString(6, agentName);
-            ps.setTimestamp(7, Timestamp.from(startedAt));
+            // OBS-4: root_trace_id parameter — null lets COALESCE fallback to trace_id (self as root)
+            ps.setNull(2, Types.VARCHAR);
+            ps.setString(3, traceId); // COALESCE fallback
+            ps.setString(4, sessionId);
+            ps.setNull(5, Types.BIGINT);
+            ps.setNull(6, Types.BIGINT);
+            ps.setString(7, agentName);
+            ps.setString(8, agentName);
+            ps.setTimestamp(9, Timestamp.from(startedAt));
             ps.executeUpdate();
         }
     }

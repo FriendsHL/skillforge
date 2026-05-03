@@ -115,6 +115,42 @@ class TraceIdPropagationIT {
     }
 
     @Test
+    @DisplayName("OBS-4 INV-3 — multiple traces in same user message share one root_trace_id")
+    void sameUserMessageMultipleTracesShareRoot() throws Exception {
+        // Simulates: user → main agent → spawns child → main agent later resumes for summary.
+        // Both main-agent traces (and the child trace) share the same root_trace_id.
+        String sessionId = UUID.randomUUID().toString();
+        String mainTrace1 = UUID.randomUUID().toString(); // first main-agent trace
+        String mainTrace2 = UUID.randomUUID().toString(); // resume after children done
+        Instant t0 = Instant.parse("2026-05-03T10:00:00Z");
+
+        seedSession(sessionId);
+        // First main-agent trace: self as root → root_trace_id = mainTrace1
+        insertTraceStubWithRoot(mainTrace1, mainTrace1, sessionId, t0);
+        // Second main-agent trace within same user message: inherits root = mainTrace1
+        insertTraceStubWithRoot(mainTrace2, mainTrace1, sessionId, t0.plusSeconds(30));
+
+        // Both traces returned by the "tree by root" query
+        try (Connection c = ds.getConnection();
+             PreparedStatement ps = c.prepareStatement(
+                     "SELECT trace_id, root_trace_id FROM t_llm_trace "
+                             + "WHERE root_trace_id = ? ORDER BY started_at")) {
+            ps.setString(1, mainTrace1);
+            try (ResultSet rs = ps.executeQuery()) {
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getString("trace_id")).isEqualTo(mainTrace1);
+                assertThat(rs.getString("root_trace_id")).isEqualTo(mainTrace1);
+                assertThat(rs.next()).isTrue();
+                assertThat(rs.getString("trace_id")).isEqualTo(mainTrace2);
+                assertThat(rs.getString("root_trace_id"))
+                        .as("2nd main-agent trace inherits 1st trace's root (INV-3)")
+                        .isEqualTo(mainTrace1);
+                assertThat(rs.next()).as("exactly 2 traces under this root").isFalse();
+            }
+        }
+    }
+
+    @Test
     @DisplayName("session_message rows with NULL trace_id (legacy) coexist with new rows that have trace_id")
     void backwardCompatNullAndPopulatedRowsCoexist() throws Exception {
         String sessionId = UUID.randomUUID().toString();
@@ -184,21 +220,29 @@ class TraceIdPropagationIT {
     }
 
     private void insertTraceStub(String traceId, String sessionId, Instant startedAt) throws Exception {
+        // OBS-4: root_trace_id is NOT NULL (V46) — set to trace_id (self as root, matches V45 backfill).
+        insertTraceStubWithRoot(traceId, traceId, sessionId, startedAt);
+    }
+
+    /** OBS-4: variant that sets explicit root_trace_id (for INV-3 scenarios). */
+    private void insertTraceStubWithRoot(String traceId, String rootTraceId, String sessionId,
+                                          Instant startedAt) throws Exception {
         try (Connection c = ds.getConnection();
              PreparedStatement ps = c.prepareStatement(
                      "INSERT INTO t_llm_trace ("
-                             + " trace_id, session_id, agent_id, user_id, agent_name, root_name,"
+                             + " trace_id, root_trace_id, session_id, agent_id, user_id, agent_name, root_name,"
                              + " status, started_at, total_input_tokens, total_output_tokens,"
                              + " total_duration_ms, tool_call_count, event_count,"
                              + " source, created_at"
                              + ") VALUES ("
-                             + " ?, ?, NULL, NULL, 'agent', 'agent',"
+                             + " ?, ?, ?, NULL, NULL, 'agent', 'agent',"
                              + " 'running', ?, 0, 0,"
                              + " 0, 0, 0,"
                              + " 'live', now())")) {
             ps.setString(1, traceId);
-            ps.setString(2, sessionId);
-            ps.setTimestamp(3, Timestamp.from(startedAt));
+            ps.setString(2, rootTraceId);
+            ps.setString(3, sessionId);
+            ps.setTimestamp(4, Timestamp.from(startedAt));
             ps.executeUpdate();
         }
     }

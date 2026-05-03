@@ -170,21 +170,23 @@ class DualWriteToolSpanIT {
     }
 
     private void seedTrace(String traceId, String sessionId, Instant startedAt) throws Exception {
+        // OBS-4: root_trace_id NOT NULL after V46 — set self-as-root (matches V45 backfill).
         try (Connection c = ds.getConnection();
              PreparedStatement ps = c.prepareStatement(
                      "INSERT INTO t_llm_trace ("
-                             + " trace_id, session_id, agent_id, user_id, agent_name, root_name,"
+                             + " trace_id, root_trace_id, session_id, agent_id, user_id, agent_name, root_name,"
                              + " status, started_at, total_input_tokens, total_output_tokens,"
                              + " total_duration_ms, tool_call_count, event_count,"
                              + " source, created_at"
                              + ") VALUES ("
-                             + " ?, ?, NULL, NULL, 'agent', 'agent',"
+                             + " ?, ?, ?, NULL, NULL, 'agent', 'agent',"
                              + " 'running', ?, 0, 0,"
                              + " 0, 0, 0,"
                              + " 'live', now())")) {
             ps.setString(1, traceId);
-            ps.setString(2, sessionId);
-            ps.setTimestamp(3, Timestamp.from(startedAt));
+            ps.setString(2, traceId); // root_trace_id = self
+            ps.setString(3, sessionId);
+            ps.setTimestamp(4, Timestamp.from(startedAt));
             ps.executeUpdate();
         }
     }

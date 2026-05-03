@@ -30,6 +30,13 @@ public class LoopContext {
      * 让 t_llm_trace.trace_id == AGENT_LOOP span id 形成 trace lifecycle 锚点。
      */
     private String traceId;
+    /**
+     * OBS-4 §2.2: root trace id (UUID) — 跨 agent / 跨 session trace 串联根。
+     * 由 ChatService 在 user message 边界处决策（自己当 root 或继承 session.active_root_trace_id），
+     * 透传到 engine。AgentLoopEngine 在 upsertTraceStub 时把它写入 t_llm_trace.root_trace_id
+     * （首次 INSERT 时定型，ON CONFLICT 不更新 → INV-2 immutable）。
+     */
+    private String rootTraceId;
     private String workingDirectory;
     private long totalInputTokens;
     private long totalOutputTokens;
@@ -202,6 +209,15 @@ public class LoopContext {
 
     public void setTraceId(String traceId) {
         this.traceId = traceId;
+    }
+
+    /** OBS-4 §2.2: root trace id (UUID) — see field doc. */
+    public String getRootTraceId() {
+        return rootTraceId;
+    }
+
+    public void setRootTraceId(String rootTraceId) {
+        this.rootTraceId = rootTraceId;
     }
 
     public String getWorkingDirectory() {

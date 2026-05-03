@@ -125,9 +125,29 @@ public class ChatService {
      * 同步完成:持久化 user message、广播 running、提交线程池。
      * 异步执行:engine.run() + 持久化结果 + 广播 idle/error。
      *
+     * <p>3-arg overload — 默认 {@code preserveActiveRoot=false}：当作真正的 user message
+     * 边界处理（清空 active_root_trace_id 后开新 root）。控制器入口 / 用户输入路径用此版本。
+     *
      * @throws RejectedExecutionException 线程池满(controller 层捕获返 429)
      */
     public void chatAsync(String sessionId, String userMessage, Long userId) {
+        chatAsync(sessionId, userMessage, userId, false);
+    }
+
+    /**
+     * 异步启动 chat loop（OBS-4 4-arg overload）。
+     *
+     * <p>{@code preserveActiveRoot=true}：合成续接路径（subagent 结果回投、peer 消息、
+     * spawn child 后投递任务 brief、startup recovery 续跑），不要清空 session.active_root_trace_id，
+     * 让本次 trace 继承同一 root（OBS-4 INV-3/INV-4/INV-6）。
+     *
+     * <p>{@code preserveActiveRoot=false}：真正的 user message 边界（控制器入口），
+     * 清空 active_root → 开新 root（OBS-4 INV-5）。
+     *
+     * @throws RejectedExecutionException 线程池满(controller 层捕获返 429)
+     */
+    public void chatAsync(String sessionId, String userMessage, Long userId,
+                          boolean preserveActiveRoot) {
         // 1. 读当前 session 和 agent
         SessionEntity session = sessionService.getSession(sessionId);
         AgentEntity agentEntity = agentService.getAgent(session.getAgentId());
@@ -206,6 +226,36 @@ public class ChatService {
             //    B3 必须在这一步之前完成, 否则旧 gap 会被新 user message 打掉。
             // OBS-2 M1 §D.1 §D.5: 在持久化前生成 traceId，让 user message + 后续 engine output 共享同一 trace。
             String traceId = UUID.randomUUID().toString();
+
+            // OBS-4 §2.1 §C.2: user message 边界处理 + active_root_trace_id 决策。
+            // 两条路径分支：
+            //   - preserveActiveRoot=false (真实用户输入)：单事务原子重置 active_root = traceId
+            //     (INV-5: 新 user message 必开新 root)。W2/W3 r1 fix：合并 clear+get+set 三事务为
+            //     单 allocateNewRootTraceId，消除窗口期 + 冗余 DB read。
+            //   - preserveActiveRoot=true (合成续接：subagent 结果回投 / peer 消息 / spawn child 投递
+            //     task brief / startup recovery)：直接 read 已有 active_root 继承 (INV-3/INV-4/INV-6)；
+            //     spawn 路径在 spawnMember 时已设好 child.active_root，正常情况 read 必非 null；
+            //     null 时 defensive 自己当 root 并回填（兜底，不应在正常流程触发）。
+            // 失败抛 → outer try-catch 不存在，但 chatLoopExecutor 还没提交，所以 user message 行也没落
+            // → session 保持 idle 状态，下次重试时按"新 root"语义走。
+            String rootTraceId;
+            if (!preserveActiveRoot) {
+                // 真实 user message 边界：单事务 set active_root = traceId
+                rootTraceId = traceId;
+                sessionService.allocateNewRootTraceId(sessionId, rootTraceId);
+            } else {
+                // 合成续接：read 已有 active_root 继承
+                String existingActiveRoot = sessionService.getActiveRootTraceId(sessionId);
+                if (existingActiveRoot == null) {
+                    // Defensive 兜底：spawn 链 / restart resume 异常导致 active_root 缺失时
+                    // fallback 自己当 root（不破坏 trace 完整性，仅退化为单 trace 视图）。
+                    rootTraceId = traceId;
+                    sessionService.setActiveRootTraceId(sessionId, rootTraceId);
+                } else {
+                    rootTraceId = existingActiveRoot;
+                }
+            }
+
             List<Message> fullHistory = sessionService.getFullHistory(sessionId);
             List<Message> history = sessionService.getContextMessages(sessionId);
             Message userMsg = Message.user(userMessage);
@@ -260,7 +310,8 @@ public class ChatService {
             // 5. 提交到线程池异步跑 loop
             final List<Message> historyForLoop = history;
             final String capturedTraceId = traceId;
-            chatLoopExecutor.execute(() -> runLoop(sessionId, userMessage, userId, agentEntity, historyForLoop, capturedTraceId));
+            final String capturedRootTraceId = rootTraceId;
+            chatLoopExecutor.execute(() -> runLoop(sessionId, userMessage, userId, agentEntity, historyForLoop, capturedTraceId, capturedRootTraceId));
         }
     }
 
@@ -282,12 +333,22 @@ public class ChatService {
 
     /**
      * 实际的 loop 执行(在 chatLoopExecutor 线程里跑)。
-     * <p>OBS-2 M1: 5-arg overload 委托给 6-arg 版本（externalTraceId=null → 委托内部生成）。
-     * 保留以兼容尚未传 traceId 的调用方（生产路径全部已更新为 6-arg）。
+     * <p>OBS-2 M1: 5-arg overload 委托给 7-arg 版本（externalTraceId=null → 委托内部生成）。
+     * 保留以兼容尚未传 traceId 的调用方（生产路径全部已更新）。
      */
     private void runLoop(String sessionId, String userMessage, Long userId,
                          AgentEntity agentEntity, List<Message> history) {
-        runLoop(sessionId, userMessage, userId, agentEntity, history, null);
+        runLoop(sessionId, userMessage, userId, agentEntity, history, null, null);
+    }
+
+    /**
+     * 6-arg overload 委托给 7-arg 版本（externalRootTraceId=null → engine 调用 store 时
+     * 由 SQL COALESCE 兜底为 traceId 自身，自己当 root，跟历史 backfill 行为一致）。
+     */
+    private void runLoop(String sessionId, String userMessage, Long userId,
+                         AgentEntity agentEntity, List<Message> history,
+                         String externalTraceId) {
+        runLoop(sessionId, userMessage, userId, agentEntity, history, externalTraceId, null);
     }
 
     /**
@@ -295,10 +356,13 @@ public class ChatService {
      * <p>OBS-2 M1 §D.2: 加 externalTraceId 参数 — 由 chatAsync / answerAsk / answerConfirmation
      * 在 submit 前生成 UUID 并透传，让 user message 广播 + engine 内部 trace 共享同一 traceId。
      * null 时内部生成 fallback（兜底，正常路径不应触发）。
+     * <p>OBS-4 §2.2: 加 externalRootTraceId 参数 — 由 chatAsync / answerAsk / answerConfirmation
+     * 决策后透传到 engine（engine 写入 t_llm_trace.root_trace_id）。null 时存储层 SQL
+     * COALESCE 兜底为 traceId 自身（自己当 root）。
      */
     private void runLoop(String sessionId, String userMessage, Long userId,
                          AgentEntity agentEntity, List<Message> history,
-                         String externalTraceId) {
+                         String externalTraceId, String externalRootTraceId) {
         // OBS-2 M1 §D.8.2: 显式 startedAt 给 §D.8.3 catch 块 finalize 使用。
         final long startedAt = System.currentTimeMillis();
         String finalMessage = null;
@@ -366,6 +430,9 @@ public class ChatService {
             preCtx = new LoopContext();
             // OBS-2 M1 §D.1: 透传 traceId 到 engine，让 rootSpan id == traceId 形成单一锚点。
             preCtx.setTraceId(traceId);
+            // OBS-4 §2.2: 透传 rootTraceId 到 engine，让 t_llm_trace.root_trace_id 写入对应 root。
+            // null 时存储层 SQL 用 COALESCE 兜底为 trace_id 自身（自己当 root）。
+            preCtx.setRootTraceId(externalRootTraceId);
 
             // Depth-aware tool filtering: if session is in a collab run and at max depth,
             // exclude TeamCreate and SubAgent skills to prevent leaf agents from spawning further agents
@@ -693,6 +760,19 @@ public class ChatService {
             Message toolResult = Message.toolResult(toolUseId, "User answered: " + answer, false);
             // OBS-2 M1 §D.4: resumeTraceId 在持久化前生成 — 让 toolResult + 后续 engine 共享同一 trace。
             String resumeTraceId = UUID.randomUUID().toString();
+
+            // OBS-4 §2.1 §6.2: ask answer 是 user message 内的续接（原任务还没完），不是新的
+            // user message 边界。读 active_root：非 null 继承（INV-3）；null 则 defensive 自己当 root
+            // 并回填（兜底，正常流程上一个 trace 创建时已经回填过）。
+            String existingActiveRoot = sessionService.getActiveRootTraceId(sessionId);
+            String resumeRootTraceId;
+            if (existingActiveRoot == null) {
+                resumeRootTraceId = resumeTraceId;
+                sessionService.setActiveRootTraceId(sessionId, resumeRootTraceId);
+            } else {
+                resumeRootTraceId = existingActiveRoot;
+            }
+
             sessionService.appendNormalMessages(sessionId, List.of(toolResult), resumeTraceId);
             SessionEntity session = sessionService.getSession(sessionId);
             AgentEntity agentEntity = agentService.getAgent(session.getAgentId());
@@ -705,7 +785,8 @@ public class ChatService {
                 broadcaster.messageAppended(sessionId, resumeTraceId, toolResult);
                 broadcaster.sessionStatus(sessionId, "running", "Resuming", null);
             }
-            chatLoopExecutor.execute(() -> runLoop(sessionId, null, userId, agentEntity, history, resumeTraceId));
+            final String capturedRootTraceId = resumeRootTraceId;
+            chatLoopExecutor.execute(() -> runLoop(sessionId, null, userId, agentEntity, history, resumeTraceId, capturedRootTraceId));
         }
     }
 
@@ -750,6 +831,18 @@ public class ChatService {
                     decision);
             // OBS-2 M1 §D.4: resumeTraceId 在持久化前生成。
             String resumeTraceId = UUID.randomUUID().toString();
+
+            // OBS-4 §2.1 §6.2: confirmation 答复是 user message 内的续接，不是新边界。
+            // 同 answerAsk：非 null 继承；null 则 defensive 自己当 root 并回填。
+            String existingActiveRoot = sessionService.getActiveRootTraceId(sessionId);
+            String resumeRootTraceId;
+            if (existingActiveRoot == null) {
+                resumeRootTraceId = resumeTraceId;
+                sessionService.setActiveRootTraceId(sessionId, resumeRootTraceId);
+            } else {
+                resumeRootTraceId = existingActiveRoot;
+            }
+
             sessionService.appendNormalMessages(sessionId, List.of(toolResult), resumeTraceId);
             session.setRuntimeStatus("running");
             session.setRuntimeStep("Resuming");
@@ -760,7 +853,8 @@ public class ChatService {
                 broadcaster.messageAppended(sessionId, resumeTraceId, toolResult);
                 broadcaster.sessionStatus(sessionId, "running", "Resuming", null);
             }
-            chatLoopExecutor.execute(() -> runLoop(sessionId, null, userId, agentEntity, history, resumeTraceId));
+            final String capturedRootTraceId = resumeRootTraceId;
+            chatLoopExecutor.execute(() -> runLoop(sessionId, null, userId, agentEntity, history, resumeTraceId, capturedRootTraceId));
         }
     }
 

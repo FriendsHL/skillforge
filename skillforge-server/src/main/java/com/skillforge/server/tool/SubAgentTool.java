@@ -158,13 +158,17 @@ public class SubAgentTool implements Tool {
             int maxLoops = ((Number) maxLoopsObj).intValue();
             if (maxLoops > 0) {
                 child.setMaxLoops(maxLoops);
-                sessionService.saveSession(child);
             }
         }
+        // OBS-4 §2.5 INV-4: 复制父 session 当前 active_root 给 child，让 child 内部 trace 继承同一 root
+        // （递归 child of child 同样路径，决策 Q6）。必须在 chatAsync 之前 set 让 chatAsync 能读到。
+        child.setActiveRootTraceId(parent.getActiveRootTraceId());
+        sessionService.saveSession(child);
         registry.attachChildSession(run.runId, child.getId());
 
         // 3. 异步启动子 agent loop
-        chatService.chatAsync(child.getId(), task, parent.getUserId());
+        // OBS-4 §2.1: preserveActiveRoot=true — child 已被设好 active_root，不要清空（INV-4）。
+        chatService.chatAsync(child.getId(), task, parent.getUserId(), true);
 
         log.info("SubAgent dispatched: runId={}, parent={}, child={}, agent={}",
                 run.runId, parentSessionId, child.getId(), targetAgent.getName());

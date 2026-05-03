@@ -62,7 +62,9 @@ class SubAgentToolTest {
 
         assertThat(result.isSuccess()).isTrue();
         assertThat(result.getOutput()).contains("Reviewer").contains("childSessionId: child");
-        verify(chatService).chatAsync("child", "review this", 10L);
+        // OBS-4 §2.1: SubAgentTool now uses 4-arg chatAsync(preserveActiveRoot=true) so
+        // child inherits parent's active_root_trace_id (INV-4).
+        verify(chatService).chatAsync("child", "review this", 10L, true);
     }
 
     @Test

@@ -97,9 +97,17 @@ public interface LlmTraceStore {
 
     // ===== request records =====
 
-    /** OBS-2 M1 §B.1.1: trace stub 创建请求。 */
+    /**
+     * OBS-2 M1 §B.1.1: trace stub 创建请求。
+     *
+     * <p>OBS-4 §2.3: 加 {@code rootTraceId} 字段 — 跨 agent / 跨 session trace 串联根 ID。
+     * 首次 INSERT 时写入；ON CONFLICT 时不更新（INV-2 immutable）。可空：老路径 / 旧调用方
+     * 传 null 时 {@link com.skillforge.observability.store.PgLlmTraceStore} 端会 fallback
+     * 为 trace_id 自身（自己当 root，跟历史 backfill 行为一致）。
+     */
     record TraceStubRequest(
             String traceId,
+            String rootTraceId,
             String sessionId,
             Long agentId,
             Long userId,

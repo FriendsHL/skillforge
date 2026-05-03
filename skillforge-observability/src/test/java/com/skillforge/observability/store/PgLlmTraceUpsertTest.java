@@ -35,14 +35,18 @@ import static org.assertj.core.api.Assertions.assertThat;
 @DisplayName("PgLlmTraceStore — upsert trace SQL semantics")
 class PgLlmTraceUpsertTest {
 
-    /** Mirrors {@code PgLlmTraceStore.UPSERT_TRACE_SQL} verbatim. */
+    /**
+     * Mirrors {@code PgLlmTraceStore.UPSERT_TRACE_SQL} verbatim.
+     * <p>OBS-4 §2.3: includes {@code root_trace_id = trace_id} (self-as-root fallback).
+     * After V46 sets root_trace_id NOT NULL the INSERT path must populate it.
+     */
     private static final String UPSERT_TRACE_SQL =
             "INSERT INTO t_llm_trace (\n"
-                    + "  trace_id, session_id, agent_id, user_id, root_name,\n"
+                    + "  trace_id, root_trace_id, session_id, agent_id, user_id, root_name,\n"
                     + "  started_at, ended_at, total_input_tokens, total_output_tokens, total_cost_usd,\n"
                     + "  source, created_at\n"
                     + ") VALUES (\n"
-                    + "  ?, ?, ?, ?, ?,\n"
+                    + "  ?, ?, ?, ?, ?, ?,\n"
                     + "  ?, ?, ?, ?, ?,\n"
                     + "  ?, now()\n"
                     + ")\n"
@@ -142,16 +146,18 @@ class PgLlmTraceUpsertTest {
         try (Connection c = ds.getConnection();
              PreparedStatement ps = c.prepareStatement(UPSERT_TRACE_SQL)) {
             ps.setString(1, traceId);
-            ps.setString(2, sessionId);
-            ps.setNull(3, Types.BIGINT);
+            // OBS-4: root_trace_id parameter — production SQL passes traceId as self-root fallback.
+            ps.setString(2, traceId);
+            ps.setString(3, sessionId);
             ps.setNull(4, Types.BIGINT);
-            ps.setString(5, rootName);
-            ps.setTimestamp(6, Timestamp.from(startedAt));
-            ps.setTimestamp(7, Timestamp.from(endedAt));
-            ps.setInt(8, inDelta);
-            ps.setInt(9, outDelta);
-            ps.setBigDecimal(10, costDelta);
-            ps.setString(11, "live");
+            ps.setNull(5, Types.BIGINT);
+            ps.setString(6, rootName);
+            ps.setTimestamp(7, Timestamp.from(startedAt));
+            ps.setTimestamp(8, Timestamp.from(endedAt));
+            ps.setInt(9, inDelta);
+            ps.setInt(10, outDelta);
+            ps.setBigDecimal(11, costDelta);
+            ps.setString(12, "live");
             ps.executeUpdate();
         }
     }

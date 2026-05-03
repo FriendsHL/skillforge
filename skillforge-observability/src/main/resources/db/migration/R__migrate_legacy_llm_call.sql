@@ -10,13 +10,16 @@ BEGIN
     -- set that GUC, so the SQL always took the skip branch. Placeholder is sufficient
     -- because Flyway's hash already follows it (forces re-run on mode flip).
     IF '${etl_mode}' = 'flyway' THEN
+        -- OBS-4: include root_trace_id (self-as-root, matches V45 backfill semantics).
+        -- Required after V46 SET NOT NULL — legacy ETL never had cross-agent semantics, so
+        -- each legacy AGENT_LOOP trace acts as its own root (degenerate single-trace tree).
         INSERT INTO t_llm_trace (
-            trace_id, session_id, agent_id, user_id, root_name,
+            trace_id, root_trace_id, session_id, agent_id, user_id, root_name,
             started_at, ended_at, total_input_tokens, total_output_tokens,
             total_cost_usd, source, created_at
         )
         SELECT DISTINCT ON (ts.id)
-            ts.id, ts.session_id, s.agent_id, s.user_id, ts.name,
+            ts.id, ts.id, ts.session_id, s.agent_id, s.user_id, ts.name,
             ts.start_time, ts.end_time, ts.input_tokens, ts.output_tokens,
             NULL, 'legacy', ts.start_time
         FROM t_trace_span ts

@@ -106,8 +106,9 @@ class AgentLoopEngineNoTraceCollectorRecordIT {
         verify(traceCollector, never()).record(any(TraceSpan.class));
 
         // ── OBS-2 lifecycle sink (t_llm_trace + t_llm_span) still wired.
+        // OBS-4 §2.3: upsertTraceStub now takes rootTraceId as 2nd arg.
         verify(traceLifecycleSink, times(1))
-                .upsertTraceStub(eq(ctx.getTraceId()), eq("sid-1"), any(), any(), anyString(), any(Instant.class));
+                .upsertTraceStub(eq(ctx.getTraceId()), any(), eq("sid-1"), any(), any(), anyString(), any(Instant.class));
         verify(traceLifecycleSink, atLeastOnce())
                 .writeToolSpan(anyString(), eq(ctx.getTraceId()), anyString(), eq("sid-1"),
                         any(), eq("Echo"), anyString(), anyString(), anyString(),
@@ -138,8 +139,9 @@ class AgentLoopEngineNoTraceCollectorRecordIT {
         assertThat(result.getFinalResponse()).isEqualTo("just text");
         verify(traceCollector, never()).record(any(TraceSpan.class));
         // upsertTraceStub + finalizeTrace still happen on the new path.
+        // OBS-4 §2.3: upsertTraceStub now takes rootTraceId as 2nd arg.
         verify(traceLifecycleSink, times(1))
-                .upsertTraceStub(eq(ctx.getTraceId()), eq("sid-2"), any(), any(), anyString(), any(Instant.class));
+                .upsertTraceStub(eq(ctx.getTraceId()), any(), eq("sid-2"), any(), any(), anyString(), any(Instant.class));
         verify(traceLifecycleSink, atLeast(1))
                 .finalizeTrace(eq(ctx.getTraceId()), anyString(), any(),
                         anyLong(), anyInt(), anyInt(), any(Instant.class));

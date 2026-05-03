@@ -167,6 +167,10 @@ public class CollabRunService {
         if (maxLoops != null && maxLoops > 0) {
             child.setMaxLoops(maxLoops);
         }
+        // OBS-4 §2.5 INV-4: 复制父 session 当前 active_root 给 child，让 child 内部 trace
+        // 继承同一 root（递归 child of child 也走此路径，决策 Q6 无深度限制）。
+        // 注意：必须在 chatAsync 之前 setActiveRootTraceId，让 child 的 chatAsync 能读到。
+        child.setActiveRootTraceId(spawningSession.getActiveRootTraceId());
         sessionService.saveSession(child);
 
         subAgentRegistry.attachChildSession(run.runId, child.getId());
@@ -181,7 +185,10 @@ public class CollabRunService {
         }
 
         // Fire chatAsync asynchronously
-        chatServiceProvider.getObject().chatAsync(child.getId(), fullTask, spawningSession.getUserId());
+        // OBS-4 §2.1: preserveActiveRoot=true — child 已被设好 active_root（= 父 active_root），
+        // 不要在 chatAsync 入口清空，让 child 内部第一个 trace 也继承同一 root（INV-4）。
+        chatServiceProvider.getObject().chatAsync(child.getId(), fullTask,
+                spawningSession.getUserId(), true);
 
         log.info("CollabRun member spawned: collabRunId={}, handle={}, childSession={}, agent={}",
                 collabRunId, handle, child.getId(), targetAgent.getName());
