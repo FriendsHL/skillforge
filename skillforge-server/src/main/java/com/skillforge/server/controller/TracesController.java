@@ -6,7 +6,9 @@ import com.skillforge.observability.entity.LlmSpanEntity;
 import com.skillforge.observability.entity.LlmTraceEntity;
 import com.skillforge.observability.repository.LlmSpanRepository;
 import com.skillforge.observability.repository.LlmTraceRepository;
+import com.skillforge.server.controller.observability.dto.TraceTreeDto;
 import com.skillforge.server.repository.SessionMessageRepository;
+import com.skillforge.server.service.TraceTreeService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
@@ -51,15 +53,18 @@ public class TracesController {
     private final LlmTraceRepository traceRepository;
     private final LlmSpanRepository spanRepository;
     private final SessionMessageRepository sessionMessageRepository;
+    private final TraceTreeService traceTreeService;
     private final ObjectMapper objectMapper;
 
     public TracesController(LlmTraceRepository traceRepository,
                             LlmSpanRepository spanRepository,
                             SessionMessageRepository sessionMessageRepository,
+                            TraceTreeService traceTreeService,
                             ObjectMapper objectMapper) {
         this.traceRepository = traceRepository;
         this.spanRepository = spanRepository;
         this.sessionMessageRepository = sessionMessageRepository;
+        this.traceTreeService = traceTreeService;
         this.objectMapper = objectMapper;
     }
 
@@ -129,6 +134,7 @@ public class TracesController {
 
             Map<String, Object> dto = new LinkedHashMap<>();
             dto.put("traceId", t.getTraceId());
+            dto.put("rootTraceId", t.getRootTraceId());   // OBS-4 M2: FE 用它识别整树入口
             dto.put("sessionId", t.getSessionId());
             dto.put("name", t.getAgentName() != null ? t.getAgentName() : t.getRootName());
             dto.put("input", firstUserInputByTrace.get(t.getTraceId()));   // OBS-2 M3 follow-up: derived from first user message
@@ -198,6 +204,28 @@ public class TracesController {
         result.put("root", root);
         result.put("spans", spanDtos);
         return ResponseEntity.ok(result);
+    }
+
+    /**
+     * OBS-4 M2: 按 root_trace_id 拿一次完整调研的所有 traces + spans（跨 session）。
+     *
+     * <p>同一 user message 内主 agent 多 trace + 派出去的 subagent 内部所有 trace 共享同一
+     * {@code root_trace_id}（由 M1 写入路径透传 + 持久化的 active_root_trace_id 串联）。
+     * 本端点一次返回整树，FE 用于二级折叠 inline group 渲染。
+     *
+     * <p>Performance：6f18ecca 实测规模（6 sessions / 138 spans）&lt; 200ms（PRD §3 验收 #6）。
+     * 核心是 3 条 SQL（按 root_trace_id 拿 traces + 按 traceId IN 拿 spans + 按 sessionId IN
+     * 批量 PK 加载 sessions 算 depth），剩下是内存 DFS 算 depth 和 grouping。
+     *
+     * <p>404 当 rootTraceId 没有任何 trace 时（包括非法/空字符串）；调用方为 SessionDetail
+     * 进入页面时拿 selectedTrace.rootTraceId（{@code GET /api/traces?sessionId=X} 响应已带上
+     * 该字段）。
+     */
+    @GetMapping("/{rootTraceId}/tree")
+    public ResponseEntity<TraceTreeDto> getTraceTree(@PathVariable String rootTraceId) {
+        return traceTreeService.getTree(rootTraceId)
+                .map(ResponseEntity::ok)
+                .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
     /**

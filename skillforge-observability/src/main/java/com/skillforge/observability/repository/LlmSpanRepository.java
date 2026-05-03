@@ -27,6 +27,13 @@ public interface LlmSpanRepository extends JpaRepository<LlmSpanEntity, String> 
     List<LlmSpanEntity> findByTraceIdOrderByStartedAtAsc(String traceId);
 
     /**
+     * OBS-4 M2: batch lookup spans across multiple traces — used by
+     * {@code GET /api/traces/{rootTraceId}/tree} to fetch every span belonging to any
+     * trace in the investigation in one query, then group by traceId in memory.
+     */
+    List<LlmSpanEntity> findByTraceIdInOrderByStartedAtAsc(Collection<String> traceIds);
+
+    /**
      * OBS-2 M3 W2: paginated lookup with kind filter so {@link
      * com.skillforge.observability.api.LlmTraceStore#listSpansByTrace} pushes the
      * limit down to SQL instead of loading every span for the trace into memory.
