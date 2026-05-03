@@ -1,46 +1,18 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { getSession, getSessionMessages, getTraces, getTraceWithDescendants } from '../api';
+import { useQuery } from '@tanstack/react-query';
+import { getSession, getSessionMessages, getTraces, getSessionSpans } from '../api';
 import { useAuth } from '../contexts/AuthContext';
 import TraceSidebar, { type TraceInfo } from '../components/sessions/detail/TraceSidebar';
 import SessionWaterfallPanel from '../components/sessions/detail/SessionWaterfallPanel';
 import TraceDetailPanel, { type TraceOverview } from '../components/sessions/detail/TraceDetailPanel';
 import SessionStatsBar from '../components/sessions/detail/SessionStatsBar';
-import type {
-  SpanSummary,
-  UnifiedSpan,
-  DescendantTraceMeta,
-  TraceWithDescendants,
-} from '../types/observability';
+import type { SpanSummary } from '../types/observability';
+import { normalizeEventType } from '../types/observability';
 import '../components/sessions/sessions.css';
 import '../components/skills/skills.css';
 import '../components/traces/traces.css';
 import '../components/sessions/detail/session-detail.css';
-
-/**
- * OBS-3 — DFS depth + descendant cap. Mirrors backend defaults; passed in
- * the React Query key so a (rare) future tweak to caps invalidates cleanly.
- */
-const OBS3_MAX_DEPTH = 3;
-const OBS3_MAX_DESCENDANTS = 20;
-
-interface TraceFinalizedPayload {
-  type: 'trace_finalized';
-  sessionId?: string;
-  traceId: string;
-  status: 'ok' | 'error' | 'cancelled' | 'running';
-  error?: string | null;
-  totalDurationMs?: number;
-  toolCallCount?: number;
-  eventCount?: number;
-}
-
-function isTraceFinalizedEvent(value: unknown): value is TraceFinalizedPayload {
-  if (!value || typeof value !== 'object') return false;
-  const v = value as Record<string, unknown>;
-  return v.type === 'trace_finalized' && typeof v.traceId === 'string' && typeof v.status === 'string';
-}
 
 interface RawMessage {
   id?: string | number;
@@ -136,11 +108,8 @@ const SessionDetail: React.FC = () => {
   const { id: sessionId } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { userId } = useAuth();
-  const queryClient = useQueryClient();
   const [selectedSpanId, setSelectedSpanId] = useState<string | null>(null);
   const [selectedTraceId, setSelectedTraceId] = useState<string | null>(null);
-  /** OBS-3 — page-owned expansion state for nested descendant sub-trees. */
-  const [expandedSubtrees, setExpandedSubtrees] = useState<Set<string>>(new Set());
 
   // Session info
   const sessionQuery = useQuery({
@@ -196,88 +165,89 @@ const SessionDetail: React.FC = () => {
     }
   }, [traces, selectedTraceId]);
 
-  // OBS-3 — Unified trace + descendants for the selected trace. One fetch
-  // returns parent spans (depth=0) + descendant trace spans (depth>0) +
-  // descendant trace metadata (status, durations). React Query key includes
-  // depth/descendant caps so future tweaks invalidate cleanly.
-  const unifiedTraceQuery = useQuery({
-    queryKey: [
-      'unified-trace',
-      selectedTraceId,
-      userId,
-      OBS3_MAX_DEPTH,
-      OBS3_MAX_DESCENDANTS,
-    ],
+  // OBS-2 M3 — Spans for the *currently selected* trace. Backend filters by
+  // trace_id directly; we no longer fetch "all session spans + client-side
+  // filter" (that path needed limit=1000 to avoid truncating long sessions).
+  const sessionSpansQuery = useQuery({
+    queryKey: ['session-spans', sessionId, userId, selectedTraceId],
     queryFn: async () => {
-      if (!userId || !selectedTraceId) {
-        throw new Error('missing userId / selectedTraceId');
+      if (!sessionId || !userId || !selectedTraceId) {
+        throw new Error('missing sessionId / userId / selectedTraceId');
       }
-      const res = await getTraceWithDescendants(selectedTraceId, userId, {
-        maxDepth: OBS3_MAX_DEPTH,
-        maxDescendants: OBS3_MAX_DESCENDANTS,
+      const res = await getSessionSpans(sessionId, userId, {
+        traceId: selectedTraceId,
       });
-      return res.data;
+      const data = res.data;
+      return Array.isArray(data.spans) ? data.spans : [];
     },
-    enabled: Boolean(userId && selectedTraceId),
+    enabled: Boolean(sessionId && userId && selectedTraceId),
     staleTime: 30_000,
   });
 
-  // OBS-3 — unified spans (parent + descendants), pre-sorted by BE.
-  const unifiedSpans = useMemo<UnifiedSpan[]>(() => {
-    return unifiedTraceQuery.data?.spans ?? [];
-  }, [unifiedTraceQuery.data]);
-
-  const descendants = useMemo<DescendantTraceMeta[]>(() => {
-    return unifiedTraceQuery.data?.descendants ?? [];
-  }, [unifiedTraceQuery.data]);
-
-  // Flat SpanSummary view (used by SessionStatsBar + selected-span lookup).
+  // Convert observability spans to SpanSummary format
   const spans = useMemo<SpanSummary[]>(() => {
-    return unifiedSpans.map((u) => u.span);
-  }, [unifiedSpans]);
-
-  // Lazy-load handler for "Show more" button under truncated descendants.
-  // Fetches the child sub-tree (max_depth=2) and merges its spans + descendants
-  // back into the cached unified trace via setQueryData.
-  const handleLoadMore = useCallback(
-    async (childTraceId: string) => {
-      if (!userId) return;
-      try {
-        const res = await getTraceWithDescendants(childTraceId, userId, {
-          maxDepth: 2,
-          maxDescendants: OBS3_MAX_DESCENDANTS,
-        });
-        const extra = res.data;
-        queryClient.setQueryData<TraceWithDescendants>(
-          ['unified-trace', selectedTraceId, userId, OBS3_MAX_DEPTH, OBS3_MAX_DESCENDANTS],
-          (prev) => {
-            if (!prev) return prev;
-            // Merge — de-dup descendants and spans by traceId / spanId.
-            const seenDescendants = new Set(prev.descendants.map((d) => d.traceId));
-            const newDescendants = extra.descendants.filter((d) => !seenDescendants.has(d.traceId));
-            const seenSpans = new Set(prev.spans.map((u) => u.span.spanId));
-            const newSpans = extra.spans.filter((u) => !seenSpans.has(u.span.spanId));
-            const mergedSpans = [...prev.spans, ...newSpans].sort((a, b) => {
-              const ta = Date.parse(a.span.startedAt);
-              const tb = Date.parse(b.span.startedAt);
-              return (Number.isFinite(ta) ? ta : 0) - (Number.isFinite(tb) ? tb : 0);
-            });
-            return {
-              ...prev,
-              descendants: [...prev.descendants, ...newDescendants],
-              spans: mergedSpans,
-              truncated: false,
-            };
-          },
-        );
-      } catch (err) {
-        // Swallow — UI just won't get the extra rows. Real surfaces should
-        // log via a proper logger; per `frontend.md` no console.log in prod.
-        void err;
+    const rawSpans = sessionSpansQuery.data ?? [];
+    return rawSpans.map((raw): SpanSummary => {
+      if (raw.kind === 'llm') {
+        return {
+          kind: 'llm',
+          spanId: String(raw.spanId || ''),
+          traceId: String(raw.traceId || ''),
+          parentSpanId: (raw.parentSpanId as string | null) ?? null,
+          startedAt: String(raw.startedAt || ''),
+          endedAt: (raw.endedAt as string | null) ?? null,
+          latencyMs: Number(raw.latencyMs || 0),
+          provider: (raw.provider as string | null) ?? null,
+          model: (raw.model as string | null) ?? null,
+          inputTokens: Number(raw.inputTokens || 0),
+          outputTokens: Number(raw.outputTokens || 0),
+          source: ((raw.source as 'live' | 'legacy') || 'live'),
+          stream: Boolean(raw.stream),
+          hasRawRequest: Boolean(raw.hasRawRequest),
+          hasRawResponse: Boolean(raw.hasRawResponse),
+          hasRawSse: Boolean(raw.hasRawSse),
+          blobStatus: (raw.blobStatus as 'ok' | 'legacy' | 'write_failed' | 'truncated' | null) ?? null,
+          finishReason: (raw.finishReason as string | null) ?? null,
+          error: (raw.error as string | null) ?? null,
+          errorType: (raw.errorType as string | null) ?? null,
+        };
       }
-    },
-    [queryClient, selectedTraceId, userId],
-  );
+      if (raw.kind === 'event') {
+        return {
+          kind: 'event',
+          spanId: String(raw.spanId || ''),
+          traceId: String(raw.traceId || ''),
+          parentSpanId: (raw.parentSpanId as string | null) ?? null,
+          startedAt: String(raw.startedAt || ''),
+          endedAt: (raw.endedAt as string | null) ?? null,
+          latencyMs: Number(raw.latencyMs || 0),
+          eventType: normalizeEventType(raw.eventType),
+          name: String(raw.name || ''),
+          success: raw.success !== false,
+          error: (raw.error as string | null) ?? null,
+          inputPreview: (raw.inputPreview as string | null) ?? null,
+          outputPreview: (raw.outputPreview as string | null) ?? null,
+        };
+      }
+      // Default: tool kind
+      return {
+        kind: 'tool',
+        spanId: String(raw.spanId || ''),
+        traceId: String(raw.traceId || ''),
+        parentSpanId: (raw.parentSpanId as string | null) ?? null,
+        startedAt: String(raw.startedAt || ''),
+        endedAt: (raw.endedAt as string | null) ?? null,
+        latencyMs: Number(raw.latencyMs || 0),
+        toolName: String((raw.toolName as string) || ''),
+        toolUseId: (raw.toolUseId as string | null) ?? null,
+        success: Boolean(raw.success),
+        error: (raw.error as string | null) ?? null,
+        inputPreview: (raw.inputPreview as string | null) ?? null,
+        outputPreview: (raw.outputPreview as string | null) ?? null,
+        subagentSessionId: (raw.subagentSessionId as string | null) ?? null,
+      };
+    });
+  }, [sessionSpansQuery.data]);
 
   const messages = useMemo<TimelineMessage[]>(() => {
     const raw = messagesQuery.data ?? [];
@@ -351,139 +321,8 @@ const SessionDetail: React.FC = () => {
     (sessionQuery.data?.title as string | undefined) ??
     (sessionId ? `Session ${sessionId.slice(0, 12)}` : 'Session');
 
-  const isLoading = sessionQuery.isLoading || tracesQuery.isLoading || unifiedTraceQuery.isLoading;
-  const isError = sessionQuery.isError || tracesQuery.isError || unifiedTraceQuery.isError;
-
-  // OBS-3 — clear expansion state when the user picks a different trace.
-  // Visual contract: each new trace starts collapsed.
-  useEffect(() => {
-    setExpandedSubtrees(new Set());
-  }, [selectedTraceId]);
-
-  const handleToggleSubtree = useCallback((childTraceId: string) => {
-    setExpandedSubtrees((prev) => {
-      const next = new Set(prev);
-      if (next.has(childTraceId)) next.delete(childTraceId);
-      else next.add(childTraceId);
-      return next;
-    });
-  }, []);
-
-  /**
-   * OBS-3 §2.3 — WebSocket subscribers for `trace_finalized`.
-   *
-   * BE contract (2026-05-03 BE Dev confirmed): each trace's `trace_finalized`
-   * event broadcasts on its **own** session's WS channel. So for a trace tree
-   * with N descendant child sessions, we open the parent session sub PLUS one
-   * sub per descendant.sessionId. The parent's own trace_finalized arrives on
-   * the parent channel; each child's arrives on the child's channel.
-   *
-   * Why per-session sockets (not a single multiplexed channel): the existing
-   * `/ws/chat/{sessionId}` endpoint is session-scoped (matches OBS-1 infra);
-   * BE didn't add cross-session routing.
-   *
-   * Cleanup contract (frontend.md footgun #2): we close every socket and
-   * null the ref array on unmount / dep change.
-   */
-  const handleTraceFinalized = useCallback(
-    (evt: TraceFinalizedPayload) => {
-      queryClient.setQueryData<TraceWithDescendants>(
-        ['unified-trace', selectedTraceId, userId, OBS3_MAX_DEPTH, OBS3_MAX_DESCENDANTS],
-        (prev) => {
-          if (!prev) return prev;
-          // Update root trace status if this is the root, else update the
-          // matching descendant entry. Both update paths preserve referential
-          // identity for unaffected entries so React Query bails out cheaply.
-          if (evt.traceId === prev.rootTrace.traceId) {
-            return {
-              ...prev,
-              rootTrace: {
-                ...prev.rootTrace,
-                status: evt.status as DescendantTraceMeta['status'],
-                error: evt.error ?? prev.rootTrace.error,
-                totalDurationMs:
-                  typeof evt.totalDurationMs === 'number'
-                    ? evt.totalDurationMs
-                    : prev.rootTrace.totalDurationMs,
-                toolCallCount:
-                  typeof evt.toolCallCount === 'number'
-                    ? evt.toolCallCount
-                    : prev.rootTrace.toolCallCount,
-                eventCount:
-                  typeof evt.eventCount === 'number'
-                    ? evt.eventCount
-                    : prev.rootTrace.eventCount,
-              },
-            };
-          }
-          const nextDescendants = prev.descendants.map((d) =>
-            d.traceId === evt.traceId
-              ? {
-                  ...d,
-                  status: evt.status as DescendantTraceMeta['status'],
-                  totalDurationMs:
-                    typeof evt.totalDurationMs === 'number'
-                      ? evt.totalDurationMs
-                      : d.totalDurationMs,
-                  toolCallCount:
-                    typeof evt.toolCallCount === 'number'
-                      ? evt.toolCallCount
-                      : d.toolCallCount,
-                  eventCount:
-                    typeof evt.eventCount === 'number' ? evt.eventCount : d.eventCount,
-                }
-              : d,
-          );
-          return { ...prev, descendants: nextDescendants };
-        },
-      );
-    },
-    [queryClient, selectedTraceId, userId],
-  );
-
-  // Content-stable union of session ids needing WS subs. We use a sorted
-  // string key as the useEffect dep so a `setQueryData` mutation that
-  // produces a new descendants array but identical session ids does NOT
-  // churn the open sockets (would otherwise close+reopen on every
-  // trace_finalized event).
-  const wsSessionIdsKey = useMemo<string>(() => {
-    const ids = new Set<string>();
-    if (sessionId) ids.add(sessionId);
-    for (const d of descendants) {
-      if (d.sessionId) ids.add(d.sessionId);
-    }
-    return Array.from(ids).sort().join('|');
-  }, [sessionId, descendants]);
-
-  const wsListRef = useRef<WebSocket[]>([]);
-  useEffect(() => {
-    const sessionIds = wsSessionIdsKey ? wsSessionIdsKey.split('|').filter(Boolean) : [];
-    if (sessionIds.length === 0) return;
-    const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
-    const token = localStorage.getItem('sf_token') ?? '';
-    const sockets: WebSocket[] = [];
-    for (const sid of sessionIds) {
-      const ws = new WebSocket(
-        `${proto}://${window.location.host}/ws/chat/${sid}?token=${encodeURIComponent(token)}`,
-      );
-      ws.onmessage = (ev) => {
-        try {
-          const evt: unknown = JSON.parse(ev.data);
-          if (isTraceFinalizedEvent(evt)) handleTraceFinalized(evt);
-        } catch {
-          // ignore malformed
-        }
-      };
-      sockets.push(ws);
-    }
-    wsListRef.current = sockets;
-    return () => {
-      for (const ws of sockets) {
-        try { ws.close(); } catch { /* ignore */ }
-      }
-      if (wsListRef.current === sockets) wsListRef.current = [];
-    };
-  }, [wsSessionIdsKey, handleTraceFinalized]);
+  const isLoading = sessionQuery.isLoading || tracesQuery.isLoading || sessionSpansQuery.isLoading;
+  const isError = sessionQuery.isError || tracesQuery.isError || sessionSpansQuery.isError;
 
   return (
     <div className="obs-session-detail">
@@ -526,10 +365,9 @@ const SessionDetail: React.FC = () => {
           }}
         />
 
-        {/* Middle: Waterfall for selected trace (OBS-3 unified). */}
+        {/* Middle: Waterfall for selected trace */}
         <SessionWaterfallPanel
-          spans={unifiedSpans}
-          descendants={descendants}
+          spans={spans}
           messages={messages}
           selectedSpanId={selectedSpan?.spanId ?? null}
           onSelectSpan={(s) => setSelectedSpanId(s.spanId)}
@@ -541,10 +379,6 @@ const SessionDetail: React.FC = () => {
             status: selectedTraceOverview.status,
           } : null}
           onSelectRoot={() => setSelectedSpanId(null)}
-          expandedSubtrees={expandedSubtrees}
-          onToggleSubtree={handleToggleSubtree}
-          truncated={unifiedTraceQuery.data?.truncated ?? false}
-          onLoadMore={handleLoadMore}
         />
 
         {/* Right: Trace/Span detail */}

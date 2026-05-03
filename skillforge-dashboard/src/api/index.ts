@@ -288,44 +288,7 @@ import type {
   ToolSpanDetail,
   EventSpanDetail,
   BlobPart,
-  TraceWithDescendants,
 } from '../types/observability';
-
-// ─── Observability (OBS-3 Unified Trace Tree) ─────────────────────────────
-/**
- * OBS-3 — fetch a trace plus the full descendant tree (child / grandchild
- * sessions reached via `t_session.parent_session_id`). Backend DFS bounded
- * by `max_depth` (default 3) and `max_descendants` (default 20). When the
- * descendant count exceeds `max_descendants`, the response carries
- * `truncated=true` and the UI should expose a "Show more" affordance that
- * re-calls this endpoint per descendant subtree.
- *
- * `userId` is required for ownership enforcement (mirrors OBS-1 W6 fix).
- */
-export interface GetTraceWithDescendantsParams {
-  /** DFS depth cap. Backend default = 3, hard ceiling = 3. */
-  maxDepth?: number;
-  /** Truncation cap for total descendants. Backend default = 20. */
-  maxDescendants?: number;
-}
-
-export const getTraceWithDescendants = (
-  traceId: string,
-  userId: number,
-  params?: GetTraceWithDescendantsParams,
-) =>
-  api.get<TraceWithDescendants>(`/traces/${traceId}/with_descendants`, {
-    // OBS-3 backend uses snake_case query params (see TraceWithDescendantsController);
-    // sending camelCase `userId` would 400 because the BE annotation is
-    // `@RequestParam(name="user_id") Long userId`.
-    params: {
-      user_id: userId,
-      ...(params?.maxDepth !== undefined ? { max_depth: params.maxDepth } : {}),
-      ...(params?.maxDescendants !== undefined
-        ? { max_descendants: params.maxDescendants }
-        : {}),
-    },
-  });
 
 export interface GetSessionSpansParams {
   /**

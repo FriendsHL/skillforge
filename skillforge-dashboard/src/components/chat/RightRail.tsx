@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -7,8 +7,6 @@ import {
   type ContextBreakdown,
   type ContextBreakdownSegment,
 } from '../../api';
-import NestedWaterfallRenderer from '../observability/NestedWaterfallRenderer';
-import type { UnifiedSpan } from '../../types/observability';
 import { IconCompact } from './ChatIcons';
 
 interface InflightTool {
@@ -90,73 +88,15 @@ const formatElapsed = (ms: number): string => {
   return `${Math.floor(s / 60)}m ${(s % 60).toString().padStart(2, '0')}s`;
 };
 
-/* OBS-3 (2026-05-03): formatDuration / SPAN_COLORS removed — the mini
- * waterfall now delegates to NestedWaterfallRenderer which owns its own
- * formatting (`fmtMs`) and color palette via .tr-kind-tag / .tr-span-bar
- * CSS classes. */
-
-/**
- * OBS-3 — convert live loopSpans (numeric timestamps) into UnifiedSpan
- * shape so NestedWaterfallRenderer can render them in mini mode. Live spans
- * are always depth=0 (we don't have descendant trace data live; nested
- * sub-trees would need a separate fetch).
- *
- * The renderer expects ISO startedAt strings; we synthesise them from
- * numeric `startTs` ms so the existing `tsOf()` parser works uniformly.
- */
-function loopSpansToUnified(loopSpans: LoopSpan[], now: number): UnifiedSpan[] {
-  return loopSpans.map((s): UnifiedSpan => {
-    const startedAt = new Date(s.startTs).toISOString();
-    const endedAtMs = s.endTs ?? now;
-    const endedAt = new Date(endedAtMs).toISOString();
-    const latencyMs = Math.max(0, endedAtMs - s.startTs);
-    const isError = s.status === 'error';
-    if (s.type === 'LLM_CALL') {
-      return {
-        depth: 0,
-        parentTraceId: null,
-        span: {
-          kind: 'llm',
-          spanId: s.id,
-          traceId: '',
-          parentSpanId: null,
-          startedAt,
-          endedAt,
-          latencyMs,
-          provider: null,
-          model: s.name || null,
-          inputTokens: 0,
-          outputTokens: 0,
-          source: 'live',
-          stream: true,
-          hasRawRequest: false,
-          hasRawResponse: false,
-          hasRawSse: false,
-          blobStatus: null,
-          error: isError ? 'error' : null,
-          errorType: isError ? 'error' : null,
-        },
-      };
-    }
-    return {
-      depth: 0,
-      parentTraceId: null,
-      span: {
-        kind: 'tool',
-        spanId: s.id,
-        traceId: '',
-        parentSpanId: null,
-        startedAt,
-        endedAt,
-        latencyMs,
-        toolName: s.name,
-        toolUseId: null,
-        success: !isError,
-        error: isError ? 'error' : null,
-      },
-    };
-  });
+function formatDuration(ms: number): string {
+  if (ms >= 1000) return `${(ms / 1000).toFixed(1)}s`;
+  return `${ms}ms`;
 }
+
+const SPAN_COLORS: Record<string, string> = {
+  LLM_CALL: '#818cf8',
+  TOOL_CALL: '#f59e0b',
+};
 
 function ActivityTab({
   inflightTools,
@@ -171,10 +111,6 @@ function ActivityTab({
   const scrollRef = useRef<HTMLDivElement>(null);
   const hasSpans = loopSpans && loopSpans.length > 0;
   const hasInflight = Object.keys(inflightTools).length > 0;
-  // OBS-3 mini waterfall folding state (kept here even though live loopSpans
-  // don't carry descendants — preserves the renderer contract and lets us
-  // wire historical traces in later without refactor).
-  const [expandedSubtrees, setExpandedSubtrees] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     if (!hasInflight && runtimeStatus !== 'running') return;
@@ -188,12 +124,22 @@ function ActivityTab({
     if (el) el.scrollTop = el.scrollHeight;
   }, [loopSpans?.length]);
 
+  if (!hasSpans && !hasInflight) {
+    return (
+      <div className="rail-empty-rd">
+        {runtimeStatus === 'running' ? 'Agent is thinking…' : 'No activity.'}
+      </div>
+    );
+  }
+
   const spans = loopSpans ?? [];
   const loopStart = spans.length > 0 ? spans[0].startTs : now;
   const lastSpanEnd = spans.length > 0
     ? Math.max(...spans.map((s) => s.endTs ?? s.startTs))
     : now;
   const loopEnd = runtimeStatus === 'running' ? Math.max(now, lastSpanEnd) : lastSpanEnd;
+  // Effective total: max of loopEnd and all individual span ends (handles edge cases
+  // where a span's endTs exceeds loopEnd due to timing)
   const effectiveEnd = spans.reduce(
     (max, s) => Math.max(max, s.endTs ?? now),
     loopEnd,
@@ -203,30 +149,6 @@ function ActivityTab({
   const isRunning = runtimeStatus === 'running';
   const doneCount = spans.filter((s) => !!s.endTs).length;
   const errCount = spans.filter((s) => s.status === 'error').length;
-
-  // Build the unified-span view feeding the shared mini renderer. We re-derive
-  // each tick because `now` advances during running state.
-  const unifiedSpans = useMemo(
-    () => loopSpansToUnified(spans, now),
-    [spans, now],
-  );
-
-  if (!hasSpans && !hasInflight) {
-    return (
-      <div className="rail-empty-rd">
-        {runtimeStatus === 'running' ? 'Agent is thinking…' : 'No activity.'}
-      </div>
-    );
-  }
-
-  const handleToggleSubtree = (childTraceId: string) => {
-    setExpandedSubtrees((prev) => {
-      const next = new Set(prev);
-      if (next.has(childTraceId)) next.delete(childTraceId);
-      else next.add(childTraceId);
-      return next;
-    });
-  };
 
   return (
     <div className="mw-container">
@@ -246,20 +168,92 @@ function ActivityTab({
         ))}
       </div>
 
-      {/* OBS-3 — shared mini waterfall renderer. Live loopSpans render as
-          depth=0; descendants stay empty until a future enhancement wires
-          getTraceWithDescendants into the chat session. */}
       <div className="mini-waterfall-scroll" ref={scrollRef}>
-        <NestedWaterfallRenderer
-          spans={unifiedSpans}
-          descendants={[]}
-          totalMs={totalMs}
-          selectedSpanId={null}
-          onSelectSpan={() => { /* mini view is read-only */ }}
-          mode="mini"
-          expandedSubtrees={expandedSubtrees}
-          onToggleSubtree={handleToggleSubtree}
-        />
+        <div className="mini-waterfall">
+          {/* Agent root bar */}
+          <div className={`mw-span mw-agent-root ${isRunning ? 'mw-agent-root--running' : ''}`}>
+            <div className="mw-span-head">
+              <span className="mw-dot" style={{
+                background: isRunning
+                  ? undefined  /* CSS handles running pulse with --fg-2 */
+                  : errCount > 0
+                    ? '#ef4444'
+                    : '#16a34a',
+                opacity: isRunning ? undefined : 0.8,
+              }} />
+              <span className="mw-type mw-type--agent">Agent</span>
+              <span className="mw-name">Total</span>
+              {!isRunning && errCount > 0 && (
+                <span className="mw-end-badge mw-end-badge--err">✗ error</span>
+              )}
+              {!isRunning && errCount === 0 && doneCount === spans.length && spans.length > 0 && (
+                <span className="mw-end-badge mw-end-badge--ok">✓ done</span>
+              )}
+              <span className="mw-dur">{formatElapsed(totalMs)}</span>
+            </div>
+            <div className="mw-bar-track">
+              <div
+                className={`mw-bar ${isRunning ? 'mw-bar--live' : ''}`}
+                style={{
+                  left: '0%',
+                  width: '100%',
+                  background: isRunning
+                    ? '#06b6d4'
+                    : errCount > 0
+                      ? '#ef4444'
+                      : '#16a34a',
+                  opacity: isRunning ? 0.35 : 0.5,
+                }}
+              />
+            </div>
+          </div>
+
+          {/* Span rows */}
+          {spans.map((span) => {
+            const done = !!span.endTs;
+            const isError = span.status === 'error';
+            const color = SPAN_COLORS[span.type] ?? 'var(--fg-4)';
+            const spanStart = span.startTs - loopStart;
+            const spanDur = done
+              ? (span.endTs! - span.startTs)
+              : now - span.startTs;
+            const barLeft = (spanStart / totalMs) * 100;
+            const barWidth = Math.min(Math.max((spanDur / totalMs) * 100, 2), 100 - barLeft);
+            const elapsed = done ? formatDuration(spanDur) : formatElapsed(spanDur);
+
+            return (
+              <div
+                key={span.id}
+                className={`mw-span ${done ? 'mw-span--done' : 'mw-span--active'} ${isError ? 'mw-span--err' : ''}`}
+              >
+                <div className="mw-span-head">
+                  <span className="mw-dot" style={{ background: done && !isError ? color : undefined }} />
+                  <span className={`mw-type mw-type--${span.type === 'LLM_CALL' ? 'llm' : 'tool'}`}>
+                    {span.type === 'LLM_CALL' ? 'LLM' : 'Tool'}
+                  </span>
+                  <span className="mw-name">{span.name}</span>
+                  {done && isError && (
+                    <span className="mw-end-badge mw-end-badge--err">✗</span>
+                  )}
+                  <span className="mw-dur">
+                    {!done && <span className="mw-spinner" />}
+                    {elapsed}
+                  </span>
+                </div>
+                <div className="mw-bar-track">
+                  <div
+                    className={`mw-bar ${done ? '' : 'mw-bar--live'} ${isError ? 'mw-bar--err' : ''}`}
+                    style={{
+                      left: `${barLeft}%`,
+                      width: `${barWidth}%`,
+                      background: isError ? 'var(--err, #ef4444)' : color,
+                    }}
+                  />
+                </div>
+              </div>
+            );
+          })}
+        </div>
 
         {/* Running indicator — thin pulsing line, not a span row */}
         {isRunning && (
