@@ -1,12 +1,17 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import {
   getSubAgentRuns,
   getContextBreakdown,
+  getTraces,
+  getTraceTree,
   type ContextBreakdown,
   type ContextBreakdownSegment,
 } from '../../api';
+import type { TraceTreeDto, TraceNodeDto } from '../../types/observability';
+import { fmtMs } from '../sessions/detail/session-detail-utils';
+import '../sessions/detail/session-detail.css';
 import { IconCompact } from './ChatIcons';
 
 interface InflightTool {
@@ -23,6 +28,8 @@ interface LoopSpan {
   endTs?: number;
   status?: 'success' | 'error';
   durationMs?: number;
+  /** Present when this TOOL_CALL span is a SubAgent/TeamCreate invocation */
+  subagentSessionId?: string | null;
 }
 
 export interface CollabMember {
@@ -98,19 +105,97 @@ const SPAN_COLORS: Record<string, string> = {
   TOOL_CALL: '#f59e0b',
 };
 
+/** Tool names that spawn child agent sessions */
+const SUBAGENT_TOOL_NAMES = new Set(['SubAgent', 'TeamCreate', 'TeamSend', 'TeamKill']);
+
 function ActivityTab({
   inflightTools,
   runtimeStatus,
   loopSpans,
+  sessionId,
+  userId,
 }: {
   inflightTools: Record<string, InflightTool>;
   runtimeStatus: string;
   loopSpans?: LoopSpan[];
+  sessionId?: string | null;
+  userId?: number;
 }) {
   const [now, setNow] = useState(Date.now());
   const scrollRef = useRef<HTMLDivElement>(null);
   const hasSpans = loopSpans && loopSpans.length > 0;
   const hasInflight = Object.keys(inflightTools).length > 0;
+  const [foldState, setFoldState] = useState<Record<string, boolean>>({});
+  const toggleFold = (key: string) =>
+    setFoldState((prev) => ({ ...prev, [key]: !prev[key] }));
+
+  // Always fetch traces to get rootTraceId (no dependency on subagentSessionId)
+  const tracesQuery = useQuery({
+    queryKey: ['activity-traces', sessionId],
+    queryFn: async () => {
+      if (!sessionId) throw new Error('missing sessionId');
+      const res = await getTraces(sessionId);
+      return Array.isArray(res.data) ? res.data : [];
+    },
+    enabled: Boolean(sessionId),
+    staleTime: 30_000,
+  });
+
+  // Extract rootTraceId from the first trace
+  const rootTraceId = useMemo(() => {
+    const traces = tracesQuery.data as Record<string, unknown>[] | undefined;
+    if (!traces || traces.length === 0) return null;
+    const first = traces[0];
+    return (first.rootTraceId as string) || (first.traceId as string) || null;
+  }, [tracesQuery.data]);
+
+  // Fetch the full trace tree
+  const traceTreeQuery = useQuery({
+    queryKey: ['activity-trace-tree', rootTraceId],
+    queryFn: async () => {
+      if (!rootTraceId) throw new Error('missing rootTraceId');
+      const res = await getTraceTree(rootTraceId);
+      return res.data as TraceTreeDto;
+    },
+    enabled: Boolean(rootTraceId),
+    staleTime: 30_000,
+  });
+
+  const traceTree: TraceTreeDto | null = traceTreeQuery.data ?? null;
+
+  // Match loopSpans with child traces by time window
+  const spanChildMap = useMemo(() => {
+    if (!traceTree || !loopSpans || loopSpans.length === 0) return new Map<string, TraceNodeDto[]>();
+    const map = new Map<string, TraceNodeDto[]>();
+    const parentSessionId =
+      traceTree.traces.find((t) => t.depth === 0)?.sessionId ?? null;
+    if (!parentSessionId) return map;
+    const childTraces = traceTree.traces.filter(
+      (t) => t.depth === 1 && t.parentSessionId === parentSessionId,
+    );
+    if (childTraces.length === 0) return map;
+
+    // Find tool spans that are TeamCreate/SubAgent
+    const teamSpans = loopSpans.filter(
+      (s) => s.type === 'TOOL_CALL' && (s.name === 'TeamCreate' || s.name === 'SubAgent' || s.name === 'SubAgentDispatch'),
+    );
+    if (teamSpans.length === 0) return map;
+
+    // Assign child traces to team spans by start time
+    const sortedSpans = [...teamSpans].sort((a, b) => a.startTs - b.startTs);
+    for (const child of childTraces) {
+      const childStart = child.startedAt ? new Date(child.startedAt).getTime() : 0;
+      let owner = sortedSpans[0];
+      for (const s of sortedSpans) {
+        if (s.startTs <= childStart) owner = s;
+        else break;
+      }
+      const existing = map.get(owner.id) ?? [];
+      existing.push(child);
+      map.set(owner.id, existing);
+    }
+    return map;
+  }, [traceTree, loopSpans]);
 
   useEffect(() => {
     if (!hasInflight && runtimeStatus !== 'running') return;
@@ -221,6 +306,179 @@ function ActivityTab({
             const barWidth = Math.min(Math.max((spanDur / totalMs) * 100, 2), 100 - barLeft);
             const elapsed = done ? formatDuration(spanDur) : formatElapsed(spanDur);
 
+            // Check if this span has child traces from the trace tree
+            const childTraces = spanChildMap.get(span.id) ?? [];
+            const hasChildren = childTraces.length > 0;
+            const isFolded = hasChildren && !foldState[span.id];
+
+            if (hasChildren) {
+              // Render as fold-team row
+              const totalChildSpans = childTraces.reduce(
+                (acc, c) => acc + c.llmCallCount + c.toolCallCount + c.eventCount,
+                0,
+              );
+              const totalChildDur = childTraces.reduce(
+                (acc, c) => acc + Math.max(0, c.totalDurationMs ?? 0),
+                0,
+              );
+
+              return (
+                <div key={span.id}>
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    className={`mw-span ${done ? 'mw-span--done' : 'mw-span--active'} ${isError ? 'mw-span--err' : ''} tr-fold-team-row ${!isFolded ? 'is-expanded' : ''}`}
+                    onClick={() => toggleFold(span.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        toggleFold(span.id);
+                      }
+                    }}
+                  >
+                    <div className="mw-span-head">
+                      <button
+                        type="button"
+                        className={`tr-fold-caret ${!isFolded ? 'is-expanded' : ''}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleFold(span.id);
+                        }}
+                        aria-label={isFolded ? 'Expand subagent group' : 'Collapse subagent group'}
+                        aria-expanded={!isFolded}
+                      >
+                        ▶
+                      </button>
+                      <span className="mw-dot" style={{ background: done && !isError ? color : undefined }} />
+                      <span className="mw-type mw-type--tool">Tool</span>
+                      <span className="mw-name">{span.name}</span>
+                      <span className="tr-fold-team-meta">
+                        ({childTraces.length} child · {totalChildSpans} spans · {fmtMs(totalChildDur)})
+                      </span>
+                      {done && isError && (
+                        <span className="mw-end-badge mw-end-badge--err">✗</span>
+                      )}
+                      <span className="mw-dur">
+                        {!done && <span className="mw-spinner" />}
+                        {elapsed}
+                      </span>
+                    </div>
+                    <div className="mw-bar-track">
+                      <div
+                        className={`mw-bar ${done ? '' : 'mw-bar--live'} ${isError ? 'mw-bar--err' : ''}`}
+                        style={{
+                          left: `${barLeft}%`,
+                          width: `${barWidth}%`,
+                          background: isError ? 'var(--err, #ef4444)' : color,
+                        }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Child trace summaries (when expanded) */}
+                  {!isFolded && childTraces.map((child) => {
+                    const childFoldKey = `${span.id}-${child.traceId}`;
+                    const isChildFolded = !foldState[childFoldKey];
+                    const childTotalSpans = child.llmCallCount + child.toolCallCount + child.eventCount;
+                    const childHasError = child.status === 'error';
+                    const agentLabel = child.agentName ?? `agent#${child.agentId ?? '?'}`;
+                    // Calculate child bar position relative to the parent span
+                    const childStartMs = child.startedAt ? new Date(child.startedAt).getTime() : 0;
+                    const childDurMs = Math.max(0, child.totalDurationMs ?? 0);
+                    const childBarLeft = totalMs > 0 ? Math.max(0, ((childStartMs - loopStart) / totalMs) * 100) : 0;
+                    const childBarWidth = totalMs > 0 ? Math.min(Math.max((childDurMs / totalMs) * 100, 0.5), 100 - childBarLeft) : 0;
+
+                    return (
+                      <div key={childFoldKey}>
+                        <div
+                          role="button"
+                          tabIndex={0}
+                          className={`mw-span tr-child-summary-row ${childHasError ? 'err' : ''} ${!isChildFolded ? 'is-expanded' : ''}`}
+                          style={{ paddingLeft: 24 }}
+                          onClick={() => toggleFold(childFoldKey)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              toggleFold(childFoldKey);
+                            }
+                          }}
+                        >
+                          <div className="mw-span-head">
+                            <span
+                              className={`tr-fold-caret ${!isChildFolded ? 'is-expanded' : ''}`}
+                              aria-hidden="true"
+                            >
+                              ▶
+                            </span>
+                            <span className="mw-dot" style={{ background: childHasError ? undefined : '#4a7aa8' }} />
+                            <span className="mw-type mw-type--agent" style={{ background: 'rgba(74, 122, 168, 0.15)', color: '#4a7aa8' }}>
+                              child
+                            </span>
+                            <span className="mw-name">{agentLabel}</span>
+                            <span className={`tr-status-badge ${child.status === 'ok' ? 'ok' : child.status === 'error' ? 'err' : ''}`}>
+                              {child.status}
+                            </span>
+                            <span className="tr-child-summary-meta">{childTotalSpans} spans</span>
+                            <span className="mw-dur">{fmtMs(Math.max(0, child.totalDurationMs ?? 0))}</span>
+                          </div>
+                          {/* Child time bar */}
+                          <div className="mw-bar-track">
+                            <div
+                              className={`mw-bar ${childHasError ? 'mw-bar--err' : ''}`}
+                              style={{
+                                left: `${childBarLeft}%`,
+                                width: `${childBarWidth}%`,
+                                background: childHasError ? 'var(--err, #ef4444)' : '#4a7aa8',
+                                opacity: 0.7,
+                              }}
+                            />
+                          </div>
+                        </div>
+
+                        {/* Child internal spans (when expanded) */}
+                        {!isChildFolded && (
+                          <div style={{ paddingLeft: 48 }}>
+                            {child.spans
+                              .slice()
+                              .sort((a, b) => {
+                                const aT = a.startedAt ? new Date(a.startedAt).getTime() : 0;
+                                const bT = b.startedAt ? new Date(b.startedAt).getTime() : 0;
+                                return aT - bT;
+                              })
+                              .map((cs) => {
+                                const csStart = cs.startedAt ? new Date(cs.startedAt).getTime() : 0;
+                                const csDur = cs.latencyMs ?? 0;
+                                const csKind = cs.kind === 'llm' ? 'llm' : cs.kind === 'event' ? 'event' : 'tool';
+                                const csLabel = cs.name ?? cs.model ?? csKind;
+                                const csHasError = cs.status === 'error';
+
+                                return (
+                                  <div
+                                    key={cs.spanId}
+                                    className={`mw-span mw-span--done ${csHasError ? 'mw-span--err' : ''}`}
+                                  >
+                                    <div className="mw-span-head">
+                                      <span className="mw-dot" style={{ background: csHasError ? undefined : SPAN_COLORS[csKind === 'llm' ? 'LLM_CALL' : 'TOOL_CALL'] }} />
+                                      <span className={`mw-type mw-type--${csKind}`}>{csKind.toUpperCase()}</span>
+                                      <span className="mw-name">{csLabel}</span>
+                                      {csHasError && (
+                                        <span className="mw-end-badge mw-end-badge--err">✗</span>
+                                      )}
+                                      <span className="mw-dur">{fmtMs(csDur)}</span>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            }
+
+            // Regular span row (no children)
             return (
               <div
                 key={span.id}
@@ -1170,7 +1428,7 @@ function RightRail({
           />
         )}
         {tab === 'activity' && (
-          <ActivityTab inflightTools={inflightTools} runtimeStatus={runtimeStatus} loopSpans={loopSpans} />
+          <ActivityTab inflightTools={inflightTools} runtimeStatus={runtimeStatus} loopSpans={loopSpans} sessionId={sessionId} userId={userId} />
         )}
         {tab === 'subagent' && (
           <SubAgentTab sessionId={sessionId} userId={userId} />
