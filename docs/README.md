@@ -23,6 +23,7 @@
 | P12 | 定时任务 MVP | prd-ready | [需求包](requirements/active/P12-scheduled-tasks/index.md) | [MRD](requirements/active/P12-scheduled-tasks/mrd.md) | [PRD](requirements/active/P12-scheduled-tasks/prd.md) | [方案](requirements/active/P12-scheduled-tasks/tech-design.md) | - |
 | P9-4/P9-5 | Partial compact + post-compact 恢复 | prd-draft | [需求包](requirements/active/P9-4-P9-5-compaction-recovery/index.md) | [MRD](requirements/active/P9-4-P9-5-compaction-recovery/mrd.md) | [PRD](requirements/active/P9-4-P9-5-compaction-recovery/prd.md) | [方案](requirements/active/P9-4-P9-5-compaction-recovery/tech-design.md) | - |
 | P10 | 聊天斜杠命令 | prd-ready | [需求包](requirements/active/P10-slash-commands/index.md) | [MRD](requirements/active/P10-slash-commands/mrd.md) | [PRD](requirements/active/P10-slash-commands/prd.md) | [方案](requirements/active/P10-slash-commands/tech-design.md) | - |
+| OBS-4 | 跨 agent / 跨 session trace 串联（root_trace_id） | planning | [需求包](requirements/active/2026-05-03-OBS-4-root-trace-id/index.md) | [MRD](requirements/active/2026-05-03-OBS-4-root-trace-id/mrd.md) | [PRD](requirements/active/2026-05-03-OBS-4-root-trace-id/prd.md) | [方案](requirements/active/2026-05-03-OBS-4-root-trace-id/tech-design.md) | - |
 
 ## Backlog 和暂缓
 

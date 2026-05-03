@@ -20,6 +20,16 @@ public class LlmTraceEntity {
     @Column(name = "trace_id", length = 36, nullable = false)
     private String traceId;
 
+    /**
+     * OBS-4 M0: 跨 agent / 跨 session trace 串联根。
+     * 同一 user message 内主 agent 所有 trace + 派出的所有 subagent (含递归 child of child)
+     * 全部共享同一 root_trace_id。Immutable: 一旦写入不再改。
+     * <p>M0 schema 是 nullable（迁移 V45 仅加列 + 回填，不 SET NOT NULL）；
+     * M1 写入路径改完后由后续 V46 SET NOT NULL。读路径从 M2 起按它聚合整树。
+     */
+    @Column(name = "root_trace_id", length = 36)
+    private String rootTraceId;
+
     @Column(name = "session_id", length = 36, nullable = false)
     private String sessionId;
 
@@ -81,6 +91,8 @@ public class LlmTraceEntity {
 
     public String getTraceId() { return traceId; }
     public void setTraceId(String v) { this.traceId = v; }
+    public String getRootTraceId() { return rootTraceId; }
+    public void setRootTraceId(String v) { this.rootTraceId = v; }
     public String getSessionId() { return sessionId; }
     public void setSessionId(String v) { this.sessionId = v; }
     public Long getAgentId() { return agentId; }

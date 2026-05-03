@@ -113,6 +113,16 @@ public class SessionEntity {
     private Instant completedAt;
 
     /**
+     * OBS-4: 当前 user message 处理期间的 active root trace id —— 跨 agent / 跨 session
+     * trace 串联根。每次收到新 user message 由 ChatService 清空（边界重置）；主 agent 第一个
+     * trace 创建时由 ChatService 回填为 trace_id（自己当 root）；后续主 agent trace 创建时
+     * 读这一字段继承同一 root；spawn child session 时复制父 session 的当前值给 child。
+     * 默认 NULL：老 session 不参与 root_trace_id 链路。
+     */
+    @Column(name = "active_root_trace_id", length = 36)
+    private String activeRootTraceId;
+
+    /**
      * 最后一次抽取时间（成功或空结果都更新），可重复刷新。
      *
      * <p>历史语义是"终身锁"（非空即跳过后续抽取）。Memory v2 PR-3 起将以
@@ -322,6 +332,14 @@ public class SessionEntity {
 
     public void setLastUserMessageAt(Instant lastUserMessageAt) {
         this.lastUserMessageAt = lastUserMessageAt;
+    }
+
+    public String getActiveRootTraceId() {
+        return activeRootTraceId;
+    }
+
+    public void setActiveRootTraceId(String activeRootTraceId) {
+        this.activeRootTraceId = activeRootTraceId;
     }
 
     public int getFullCompactCount() {
