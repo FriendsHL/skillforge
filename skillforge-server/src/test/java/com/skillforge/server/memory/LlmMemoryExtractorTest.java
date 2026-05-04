@@ -59,7 +59,7 @@ class LlmMemoryExtractorTest {
 
     private List<ActivityLogEntity> makeActivities() {
         ActivityLogEntity a = new ActivityLogEntity();
-        a.setToolName("FileRead");
+        a.setToolName("Read");
         a.setInputSummary("read config.yml");
         a.setSuccess(true);
         return List.of(a);

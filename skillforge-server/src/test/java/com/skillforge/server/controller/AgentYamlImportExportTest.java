@@ -31,7 +31,7 @@ class AgentYamlImportExportTest {
             "  You are a helpful bot.\n" +
             "skills:\n" +
             "  - Bash\n" +
-            "  - FileRead\n";
+            "  - Read\n";
 
     @Test
     void importParsesYamlAndDelegatesToService() {
@@ -53,7 +53,7 @@ class AgentYamlImportExportTest {
         assertThat(saved.getModelId()).isEqualTo("deepseek-chat");
         assertThat(saved.getExecutionMode()).isEqualTo("auto");
         assertThat(saved.isPublic()).isFalse();
-        assertThat(saved.getSkillIds()).contains("Bash").contains("FileRead");
+        assertThat(saved.getSkillIds()).contains("Bash").contains("Read");
         assertThat(saved.getSystemPrompt()).contains("helpful bot");
     }
 
@@ -83,7 +83,7 @@ class AgentYamlImportExportTest {
         stored.setExecutionMode("auto");
         stored.setPublic(false);
         stored.setSystemPrompt("You are a helpful bot.\n");
-        stored.setSkillIds("[\"Bash\",\"FileRead\"]");
+        stored.setSkillIds("[\"Bash\",\"Read\"]");
 
         AgentService svc = mock(AgentService.class);
         when(svc.getAgent(5L)).thenReturn(stored);
@@ -95,7 +95,7 @@ class AgentYamlImportExportTest {
         assertThat(yaml).contains("name: Round Trip");
         assertThat(yaml).contains("modelId: deepseek-chat");
         assertThat(yaml).contains("- Bash");
-        assertThat(yaml).contains("- FileRead");
+        assertThat(yaml).contains("- Read");
         // must not expose the raw json-string skillIds field
         assertThat(yaml).doesNotContain("skillIds");
     }
@@ -173,7 +173,7 @@ class AgentYamlImportExportTest {
         assertThat(roundTripYaml).isNotNull();
         // Sanity: exported yaml uses the friendly skills: list, never the raw json string
         assertThat(roundTripYaml).contains("- Bash");
-        assertThat(roundTripYaml).contains("- FileRead");
+        assertThat(roundTripYaml).contains("- Read");
 
         // 3. Re-import the exported YAML
         ResponseEntity<?> secondResp = controller.importAgent(roundTripYaml);

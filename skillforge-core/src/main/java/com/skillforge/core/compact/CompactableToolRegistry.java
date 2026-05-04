@@ -25,7 +25,7 @@ public final class CompactableToolRegistry {
      * is typically large and expendable after initial processing.
      */
     public static final Set<String> DEFAULT_COMPACTABLE_TOOLS = Set.of(
-            "Bash", "FileRead", "FileWrite", "FileEdit",
+            "Bash", "Read", "Write", "Edit",
             "Grep", "Glob", "WebFetch", "WebSearch",
             "Browser", "CodeSandbox", "CodeReview"
     );
@@ -59,7 +59,7 @@ public final class CompactableToolRegistry {
      * <p>Reads the {@code "compactable_tools"} key. If present and non-empty,
      * uses that list as the whitelist; otherwise falls back to defaults.
      *
-     * <p>Example agent config: {@code {"compactable_tools": ["Bash","FileRead","Grep"]}}
+     * <p>Example agent config: {@code {"compactable_tools": ["Bash","Read","Grep"]}}
      */
     public static CompactableToolRegistry fromAgentConfig(Map<String, Object> agentConfig) {
         if (agentConfig == null) {

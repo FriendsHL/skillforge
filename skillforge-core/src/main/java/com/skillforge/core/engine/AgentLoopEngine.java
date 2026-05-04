@@ -2301,7 +2301,7 @@ public class AgentLoopEngine {
     /**
      * 提取 Tool 的 required 字段, 检查 input 中是否齐备。
      * 仅检查 key 存在 + 值非 null; 空字符串/blank 检查留给 skill 自身（语义因 skill 而异,
-     * 例如 FileWrite 接受 "" 作为合法 content, 但 file_path 不允许 blank）。
+     * 例如 Write 接受 "" 作为合法 content, 但 file_path 不允许 blank）。
      * <p>Package-private for unit testing.
      */
     static List<String> findMissingRequiredFields(Tool tool, Map<String, Object> input) {

@@ -23,7 +23,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * <p>Regression cover for SkillForge session 9347f84c, where 3 consecutive
  * "file_path is required" tool_results triggered an unnecessary compaction that
- * collapsed the LLM's pending FileWrite content.
+ * collapsed the LLM's pending Write content.
  */
 class AgentLoopEngineWasteDetectTest {
 
@@ -76,7 +76,7 @@ class AgentLoopEngineWasteDetectTest {
     }
 
     @Test
-    @DisplayName("9347f84c regression: 3 identical empty-input FileWrite returning VALIDATION must NOT trigger waste")
+    @DisplayName("9347f84c regression: 3 identical empty-input Write returning VALIDATION must NOT trigger waste")
     void threeConsecutiveValidationErrors_doesNotTriggerWaste() {
         AgentLoopEngine engine = newEngine();
         List<Message> messages = new ArrayList<>();
@@ -85,7 +85,7 @@ class AgentLoopEngineWasteDetectTest {
         // — must skip both rule 2 (consecutive errors) AND rule 3 (consecutive identical
         // tool_use) since both would otherwise fire.
         for (int i = 0; i < 3; i++) {
-            messages.add(toolUse("t" + i, "FileWrite", Collections.emptyMap()));
+            messages.add(toolUse("t" + i, "Write", Collections.emptyMap()));
             messages.add(toolResult("t" + i, "file_path is required", true,
                     SkillResult.ErrorType.VALIDATION.name()));
         }
@@ -128,7 +128,7 @@ class AgentLoopEngineWasteDetectTest {
 
         // validation × 1 (must not increment, but also must not reset since
         // it's not a successful tool_result either)
-        messages.add(toolUse("t3", "FileWrite"));
+        messages.add(toolUse("t3", "Write"));
         messages.add(toolResult("t3", "file_path is required", true,
                 SkillResult.ErrorType.VALIDATION.name()));
 

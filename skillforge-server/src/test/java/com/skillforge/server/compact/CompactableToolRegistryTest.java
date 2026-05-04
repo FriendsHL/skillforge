@@ -15,7 +15,7 @@ class CompactableToolRegistryTest {
     @Test
     void defaults_include_expected_tools() {
         var registry = new CompactableToolRegistry();
-        for (String name : List.of("Bash", "FileRead", "FileWrite", "FileEdit",
+        for (String name : List.of("Bash", "Read", "Write", "Edit",
                 "Grep", "Glob", "WebFetch", "WebSearch",
                 "Browser", "CodeSandbox", "CodeReview")) {
             assertThat(registry.isCompactable(name))
@@ -91,10 +91,10 @@ class CompactableToolRegistryTest {
 
     @Test
     void fromAgentConfig_with_override_uses_custom_list() {
-        Map<String, Object> config = Map.of("compactable_tools", List.of("Bash", "FileRead"));
+        Map<String, Object> config = Map.of("compactable_tools", List.of("Bash", "Read"));
         var registry = CompactableToolRegistry.fromAgentConfig(config);
         assertThat(registry.isCompactable("Bash")).isTrue();
-        assertThat(registry.isCompactable("FileRead")).isTrue();
+        assertThat(registry.isCompactable("Read")).isTrue();
         assertThat(registry.isCompactable("Grep")).isFalse();
     }
 

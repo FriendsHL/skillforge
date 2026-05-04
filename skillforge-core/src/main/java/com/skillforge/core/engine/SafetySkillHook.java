@@ -82,10 +82,10 @@ public class SafetySkillHook implements SkillHook {
         switch (skillName) {
             case "Bash":
                 return checkBashSafety(input, context);
-            case "FileWrite":
-            case "FileEdit":
+            case "Write":
+            case "Edit":
                 return checkWritePathSafety(skillName, input);
-            case "FileRead":
+            case "Read":
                 return checkReadPathSafety(input);
             default:
                 return input;

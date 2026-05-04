@@ -17,7 +17,7 @@
     "expectedList": ["3", "doc1", "doc2", "doc3"]
   },
   "performanceThresholdMs": 30000,
-  "toolsHint": ["Glob", "FileRead"],
+  "toolsHint": ["Glob", "Read"],
   "maxLoops": 15,
   "tags": ["compaction", "multi-file"]
 }

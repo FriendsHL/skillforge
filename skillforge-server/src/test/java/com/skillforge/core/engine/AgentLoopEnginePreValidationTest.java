@@ -59,7 +59,7 @@ class AgentLoopEnginePreValidationTest {
     @Test
     @DisplayName("input contains all required fields → no missing")
     void allRequiredPresent_returnsEmpty() {
-        Tool tool = new StubTool("FileWrite", schemaWithRequired(List.of("file_path", "content")));
+        Tool tool = new StubTool("Write", schemaWithRequired(List.of("file_path", "content")));
         Map<String, Object> input = new HashMap<>();
         input.put("file_path", "/tmp/x");
         input.put("content", "hi");
@@ -70,7 +70,7 @@ class AgentLoopEnginePreValidationTest {
     @Test
     @DisplayName("9347f84c shape: empty input on schema with required fields → all listed missing")
     void emptyInputOnRequiredSchema_listsAllMissing() {
-        Tool tool = new StubTool("FileWrite",
+        Tool tool = new StubTool("Write",
                 schemaWithRequired(List.of("file_path", "content")));
 
         List<String> missing = AgentLoopEngine.findMissingRequiredFields(tool, Map.of());
@@ -83,7 +83,7 @@ class AgentLoopEnginePreValidationTest {
     @Test
     @DisplayName("required key present but value is null → counted as missing")
     void requiredKeyWithNullValue_countsAsMissing() {
-        Tool tool = new StubTool("FileEdit",
+        Tool tool = new StubTool("Edit",
                 schemaWithRequired(List.of("file_path", "old_string", "new_string")));
         Map<String, Object> input = new HashMap<>();
         input.put("file_path", "/tmp/x");
@@ -97,11 +97,11 @@ class AgentLoopEnginePreValidationTest {
     @Test
     @DisplayName("required field with empty string value is NOT pre-rejected (skill decides)")
     void emptyStringValue_passesPreValidation() {
-        Tool tool = new StubTool("FileWrite",
+        Tool tool = new StubTool("Write",
                 schemaWithRequired(List.of("file_path", "content")));
         Map<String, Object> input = new HashMap<>();
         input.put("file_path", "/tmp/x");
-        input.put("content", "");   // legitimate for FileWrite (write empty file)
+        input.put("content", "");   // legitimate for Write (write empty file)
 
         assertThat(AgentLoopEngine.findMissingRequiredFields(tool, input))
                 .as("Engine pre-validation only checks key presence + non-null;"
@@ -128,7 +128,7 @@ class AgentLoopEnginePreValidationTest {
         Tool noSchema = new StubTool("X", null);
         assertThat(AgentLoopEngine.findMissingRequiredFields(noSchema, Map.of())).isEmpty();
 
-        Tool tool = new StubTool("FileWrite",
+        Tool tool = new StubTool("Write",
                 schemaWithRequired(List.of("file_path", "content")));
         assertThat(AgentLoopEngine.findMissingRequiredFields(tool, null))
                 .containsExactly("file_path", "content");

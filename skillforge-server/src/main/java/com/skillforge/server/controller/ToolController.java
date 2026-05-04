@@ -13,7 +13,7 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
- * Canonical endpoint for listing Java Tool definitions (Bash, FileRead, etc.).
+ * Canonical endpoint for listing Java Tool definitions (Bash, Read, etc.).
  * Separate from SkillController which handles SKILL.md-based skills.
  */
 @RestController

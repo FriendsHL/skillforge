@@ -419,7 +419,7 @@ class AgentLoopEngineInstallConfirmationTest {
         assertThat(engine.isInstallRequiringConfirmation(
                 new ToolUseBlock("id2", "Bash", Map.of("command", "echo hi")))).isFalse();
         assertThat(engine.isInstallRequiringConfirmation(
-                new ToolUseBlock("id3", "FileRead", Map.of("command", "clawhub install x")))).isFalse();
+                new ToolUseBlock("id3", "Read", Map.of("command", "clawhub install x")))).isFalse();
     }
 
     // ---- helpers ----

@@ -28,7 +28,7 @@ class ScenarioRunResultTest {
     void applyToolCallSignals_failedTool_setsSkillExecutionFailed() {
         ScenarioRunResult result = new ScenarioRunResult();
 
-        result.applyToolCallSignals(List.of(toolCall("FileRead", false, "file not found")));
+        result.applyToolCallSignals(List.of(toolCall("Read", false, "file not found")));
 
         assertThat(result.isSkillExecutionFailed()).isTrue();
         assertThat(result.isMemorySkillCalled()).isFalse();

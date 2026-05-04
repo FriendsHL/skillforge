@@ -67,10 +67,10 @@ public class SystemPromptBuilder {
             sb.append(toolsPrompt.strip()).append("\n\n");
         } else {
             sb.append("## Tool Usage Guidelines\n\n");
-            sb.append("- Use FileRead instead of running `cat` or `head` via Bash\n");
+            sb.append("- Use Read instead of running `cat` or `head` via Bash\n");
             sb.append("- Use Glob instead of running `find` or `ls` via Bash\n");
             sb.append("- Use Grep instead of running `grep` or `rg` via Bash\n");
-            sb.append("- Use FileEdit for modifying existing files instead of FileWrite\n");
+            sb.append("- Use Edit for modifying existing files instead of Write\n");
             sb.append("- Always read a file before editing or overwriting it\n");
             sb.append("- Use absolute file paths whenever possible\n");
             sb.append("\n");

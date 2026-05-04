@@ -120,7 +120,7 @@ class EngineEstimateMatchesBreakdownIT {
 
         // Tools: two stub tools with deterministic schemas.
         List<Tool> tools = List.of(
-                new StubTool("FileRead", "Read a file from disk",
+                new StubTool("Read", "Read a file from disk",
                         Map.of("type", "object",
                                "properties", Map.of("path", Map.of("type", "string")))),
                 new StubTool("Glob", "Find files matching a pattern",
@@ -251,10 +251,10 @@ class EngineEstimateMatchesBreakdownIT {
      */
     private static String defaultToolsGuidelines() {
         return "## Tool Usage Guidelines\n\n"
-                + "- Use FileRead instead of running `cat` or `head` via Bash\n"
+                + "- Use Read instead of running `cat` or `head` via Bash\n"
                 + "- Use Glob instead of running `find` or `ls` via Bash\n"
                 + "- Use Grep instead of running `grep` or `rg` via Bash\n"
-                + "- Use FileEdit for modifying existing files instead of FileWrite\n"
+                + "- Use Edit for modifying existing files instead of Write\n"
                 + "- Always read a file before editing or overwriting it\n"
                 + "- Use absolute file paths whenever possible\n";
     }

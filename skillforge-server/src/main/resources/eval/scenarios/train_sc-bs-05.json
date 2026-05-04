@@ -15,7 +15,7 @@
     "expectedList": ["Name: Alice", "Age: 30"]
   },
   "performanceThresholdMs": 15000,
-  "toolsHint": ["FileRead"],
+  "toolsHint": ["Read"],
   "maxLoops": 8,
   "tags": ["basic", "format"]
 }

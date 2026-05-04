@@ -20,14 +20,14 @@ public class FileWriteTool implements Tool {
 
     @Override
     public String getName() {
-        return "FileWrite";
+        return "Write";
     }
 
     @Override
     public String getDescription() {
         return "Writes content to a file, creating it if it doesn't exist.\n\n"
-                + "- If the file already exists, you MUST use FileRead first to read its contents\n"
-                + "- Prefer FileEdit for modifying existing files — it only sends the diff\n"
+                + "- If the file already exists, you MUST use Read first to read its contents\n"
+                + "- Prefer Edit for modifying existing files — it only sends the diff\n"
                 + "- Only use this tool to create new files or for complete rewrites";
     }
 

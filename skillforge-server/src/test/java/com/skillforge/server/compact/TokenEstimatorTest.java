@@ -109,12 +109,12 @@ class TokenEstimatorTest {
     void estimate_contentBlockToolUse_countsNameAndInput() {
         Map<String, Object> input = new LinkedHashMap<>();
         input.put("path", "README.md");
-        ContentBlock toolUse = ContentBlock.toolUse("call_1", "FileRead", input);
+        ContentBlock toolUse = ContentBlock.toolUse("call_1", "Read", input);
         Message m = new Message();
         m.setRole(Message.Role.ASSISTANT);
         m.setContent(List.of(toolUse));
 
-        int expected = TokenEstimator.estimateString("FileRead")
+        int expected = TokenEstimator.estimateString("Read")
                 + TokenEstimator.estimateString(input.toString());
         assertThat(TokenEstimator.estimate(List.of(m)))
                 .isEqualTo(expected + PER_MESSAGE_OVERHEAD);

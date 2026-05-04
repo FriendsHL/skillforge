@@ -28,7 +28,7 @@ class SkillCreatorServiceTest {
         draft.setId("draft-1");
         draft.setName("ExtractKpiPattern");
         draft.setDescription("Locate KPI definitions in a repo and summarise them.");
-        draft.setRequiredTools("Grep, FileRead");
+        draft.setRequiredTools("Grep, Read");
         draft.setTriggers("find KPIs, kpi extraction");
         draft.setPromptHint("1. Use Grep to find KPI mentions. 2. Read each match. 3. Summarize.");
         draft.setOwnerId(42L);
@@ -41,7 +41,7 @@ class SkillCreatorServiceTest {
         assertThat(body).startsWith("---\n");
         assertThat(body).contains("name: ExtractKpiPattern");
         assertThat(body).contains("description:");
-        assertThat(body).contains("allowed-tools: [Grep, FileRead]");
+        assertThat(body).contains("allowed-tools: [Grep, Read]");
 
         SkillPackageLoader loader = new SkillPackageLoader();
         SkillDefinition def = loader.loadFromDirectory(tmp);

@@ -25,7 +25,7 @@ public class FileReadTool implements Tool {
 
     @Override
     public String getName() {
-        return "FileRead";
+        return "Read";
     }
 
     @Override
@@ -95,7 +95,7 @@ public class FileReadTool implements Tool {
                     .mapToObj(i -> String.format("%3d\t%s", start + i + 1, lines.get(i)))
                     .collect(Collectors.joining("\n"));
 
-            // FileRead dedup removed — cross-session cache + compaction conflict issues
+            // Read dedup removed — cross-session cache + compaction conflict issues
 
             return SkillResult.success(result);
         } catch (IOException e) {

@@ -56,10 +56,10 @@ class AgentYamlMapperMalformedTest {
 
     @Test
     void toYaml_validJsonArray_extractsList() {
-        String yaml = AgentYamlMapper.toYaml(newAgent("[\"Bash\",\"FileRead\"]"));
+        String yaml = AgentYamlMapper.toYaml(newAgent("[\"Bash\",\"Read\"]"));
         assertThat(yaml).contains("skills:");
         assertThat(yaml).contains("- Bash");
-        assertThat(yaml).contains("- FileRead");
+        assertThat(yaml).contains("- Read");
         assertThat(yaml).doesNotContain("skillIdsRaw");
     }
 

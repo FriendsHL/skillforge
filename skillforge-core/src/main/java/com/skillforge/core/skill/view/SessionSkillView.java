@@ -14,7 +14,7 @@ import java.util.Set;
  * Per-session skill 授权视图。Plan r2 §5。
  * <p>
  * <b>边界（B-3）</b>：view 只管 skill 包（system skill + user skill = SkillDefinition 实例），
- * 不管内置 Java Tool（Bash / FileRead / Memory / SubAgent 等）。内置 Tool 永远全部可用，受
+ * 不管内置 Java Tool（Bash / Read / Memory / SubAgent 等）。内置 Tool 永远全部可用，受
  * {@code LoopContext.excludedSkillNames} / {@code allowedToolNames} 的 depth-aware 限制，
  * 与 view 正交。
  * <p>

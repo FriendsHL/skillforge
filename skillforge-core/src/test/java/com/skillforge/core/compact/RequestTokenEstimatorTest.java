@@ -149,7 +149,7 @@ class RequestTokenEstimatorTest {
         Map<String, Object> schema2 = new HashMap<>();
         schema2.put("type", "object");
         return List.of(
-                new ToolSchema("FileRead", "Read a file from disk", schema1),
+                new ToolSchema("Read", "Read a file from disk", schema1),
                 new ToolSchema("Glob", "Find files matching a pattern", schema2)
         );
     }

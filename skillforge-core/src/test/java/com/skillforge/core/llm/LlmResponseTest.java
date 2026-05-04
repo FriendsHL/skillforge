@@ -17,7 +17,7 @@ class LlmResponseTest {
     void isToolUse_toolBlocksPresentDespiteEndTurn_true() {
         LlmResponse response = new LlmResponse();
         response.setStopReason("end_turn");
-        response.setToolUseBlocks(List.of(new ToolUseBlock("call-1", "FileEdit", Map.of("file_path", "x"))));
+        response.setToolUseBlocks(List.of(new ToolUseBlock("call-1", "Edit", Map.of("file_path", "x"))));
 
         assertThat(response.isToolUse()).isTrue();
     }
@@ -28,7 +28,7 @@ class LlmResponseTest {
         LlmResponse response = new LlmResponse();
         response.setStopReason("end_turn");
         response.setToolUseBlocks(List.of(
-                new ToolUseBlock("", "FileEdit", Map.of()),
+                new ToolUseBlock("", "Edit", Map.of()),
                 new ToolUseBlock("call-2", " ", Map.of())));
 
         assertThat(response.isToolUse()).isFalse();

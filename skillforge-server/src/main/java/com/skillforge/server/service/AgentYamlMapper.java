@@ -29,7 +29,7 @@ import java.util.Map;
  *   ...
  * skills:
  *   - Bash
- *   - FileRead
+ *   - Read
  * config:
  *   key: value
  * </pre>

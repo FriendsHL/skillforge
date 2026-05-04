@@ -411,7 +411,7 @@ public class ChatService {
                             + "4. Wait for [TeamResult] messages to arrive automatically — do NOT poll or call TeamList\n"
                             + "5. Once all results arrive, synthesize them into a final response for the user\n\n"
                             + "**Rules:**\n"
-                            + "- Do NOT use Bash, FileRead, Grep, or other tools yourself — delegate to team members\n"
+                            + "- Do NOT use Bash, Read, Grep, or other tools yourself — delegate to team members\n"
                             + "- Do NOT do research or investigation yourself — that's what team members are for\n"
                             + "- You MAY use TeamSend to send additional context to a running member\n"
                             + "- You MAY use TeamKill to cancel a member that is no longer needed\n"

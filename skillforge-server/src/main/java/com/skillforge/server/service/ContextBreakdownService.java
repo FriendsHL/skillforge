@@ -53,10 +53,10 @@ public class ContextBreakdownService {
 
     private static final String DEFAULT_TOOLS_GUIDELINES =
             "## Tool Usage Guidelines\n\n"
-                    + "- Use FileRead instead of running `cat` or `head` via Bash\n"
+                    + "- Use Read instead of running `cat` or `head` via Bash\n"
                     + "- Use Glob instead of running `find` or `ls` via Bash\n"
                     + "- Use Grep instead of running `grep` or `rg` via Bash\n"
-                    + "- Use FileEdit for modifying existing files instead of FileWrite\n"
+                    + "- Use Edit for modifying existing files instead of Write\n"
                     + "- Always read a file before editing or overwriting it\n"
                     + "- Use absolute file paths whenever possible\n";
 

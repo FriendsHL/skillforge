@@ -90,9 +90,9 @@ class DualWriteToolSpanIT {
         seedSession(sessionId);
         seedTrace(traceId, sessionId, t);
         // 1) Old table — t_trace_span row written by traceCollector.record(...)
-        insertTraceSpan(sharedSpanId, traceId, sessionId, "TOOL_CALL", "FileRead", t);
+        insertTraceSpan(sharedSpanId, traceId, sessionId, "TOOL_CALL", "Read", t);
         // 2) New table — t_llm_span row written by PgLlmTraceStore.writeToolSpan
-        insertLlmToolSpan(sharedSpanId, traceId, sessionId, "FileRead", t);
+        insertLlmToolSpan(sharedSpanId, traceId, sessionId, "Read", t);
 
         // Cross-table consistency check (mirrors scripts/observability/check_dual_write.sql).
         try (Connection c = ds.getConnection();
@@ -124,8 +124,8 @@ class DualWriteToolSpanIT {
 
         seedSession(sessionId);
         seedTrace(traceId, sessionId, t);
-        insertTraceSpan(oldId, traceId, sessionId, "TOOL_CALL", "FileRead", t);
-        insertLlmToolSpan(newId, traceId, sessionId, "FileRead", t);
+        insertTraceSpan(oldId, traceId, sessionId, "TOOL_CALL", "Read", t);
+        insertLlmToolSpan(newId, traceId, sessionId, "Read", t);
 
         try (Connection c = ds.getConnection();
              PreparedStatement ps = c.prepareStatement(

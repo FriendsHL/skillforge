@@ -21,7 +21,7 @@ class SessionSkillViewTest {
     void isAllowed_builtinTool_returnsFalse() {
         SessionSkillView view = new SessionSkillView(Map.of(), Set.of(), Set.of());
         assertThat(view.isAllowed("Bash")).isFalse();
-        assertThat(view.isAllowed("FileRead")).isFalse();
+        assertThat(view.isAllowed("Read")).isFalse();
     }
 
     @Test

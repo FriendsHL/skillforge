@@ -149,7 +149,7 @@ public class SkillDraftService {
                     - name: short PascalCase identifier (2-4 words, no spaces)
                     - description: what this skill does (1-2 sentences)
                     - triggers: comma-separated phrases that indicate when to use this skill
-                    - requiredTools: comma-separated tool names needed (Bash, FileRead, Grep, etc.) or empty string
+                    - requiredTools: comma-separated tool names needed (Bash, Read, Grep, etc.) or empty string
                     - promptHint: instructions for how the agent should execute this skill (3-5 sentences). This becomes the SKILL.md body when approved.
                     - extractionRationale: why this session demonstrates a reusable skill""";
 

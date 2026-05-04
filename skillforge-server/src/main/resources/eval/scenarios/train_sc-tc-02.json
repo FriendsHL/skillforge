@@ -16,7 +16,7 @@
     "expectedList": ["HELLO WORLD"]
   },
   "performanceThresholdMs": 20000,
-  "toolsHint": ["FileRead"],
+  "toolsHint": ["Read"],
   "maxLoops": 10,
   "tags": ["tool-chain", "conditional"]
 }

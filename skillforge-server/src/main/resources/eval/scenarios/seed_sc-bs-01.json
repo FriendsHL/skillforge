@@ -15,7 +15,7 @@
     "expected": "hello world"
   },
   "performanceThresholdMs": 15000,
-  "toolsHint": ["FileRead"],
+  "toolsHint": ["Read"],
   "maxLoops": 8,
   "tags": ["file-io", "basic"]
 }

@@ -14,7 +14,7 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 /**
- * Sandboxed FileRead that restricts reads to within the sandbox root directory.
+ * Sandboxed Read that restricts reads to within the sandbox root directory.
  */
 class SandboxedFileReadTool implements Tool {
 
@@ -25,7 +25,7 @@ class SandboxedFileReadTool implements Tool {
     }
 
     @Override
-    public String getName() { return "FileRead"; }
+    public String getName() { return "Read"; }
 
     @Override
     public String getDescription() {

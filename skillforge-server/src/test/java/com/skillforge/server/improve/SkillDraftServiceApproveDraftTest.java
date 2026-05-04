@@ -84,7 +84,7 @@ class SkillDraftServiceApproveDraftTest {
         d.setOwnerId(7L);
         d.setName("MySkill");
         d.setDescription("Does a thing.");
-        d.setRequiredTools("FileRead");
+        d.setRequiredTools("Read");
         d.setPromptHint("Do this then that.");
         d.setStatus(status);
         return d;

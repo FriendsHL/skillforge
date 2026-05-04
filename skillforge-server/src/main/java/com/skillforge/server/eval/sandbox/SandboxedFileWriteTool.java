@@ -13,7 +13,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Sandboxed FileWrite that restricts writes to within the sandbox root directory.
+ * Sandboxed Write that restricts writes to within the sandbox root directory.
  */
 class SandboxedFileWriteTool implements Tool {
 
@@ -24,7 +24,7 @@ class SandboxedFileWriteTool implements Tool {
     }
 
     @Override
-    public String getName() { return "FileWrite"; }
+    public String getName() { return "Write"; }
 
     @Override
     public String getDescription() {

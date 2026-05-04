@@ -15,7 +15,7 @@
     "expected": "The agent should output only the number 60, with no additional text, explanation or formatting."
   },
   "performanceThresholdMs": 15000,
-  "toolsHint": ["FileRead"],
+  "toolsHint": ["Read"],
   "maxLoops": 8,
   "tags": ["basic", "output-format"]
 }

@@ -126,7 +126,7 @@ class SessionSpansMergedIT {
         when(traceStore.listSpansBySession(eq(sessionId), any(), any(), anyInt()))
                 .thenReturn(List.of(
                         llmSpan("llm-1", sessionId, t0),
-                        toolSpan("tool-1", sessionId, t1, "FileRead"),
+                        toolSpan("tool-1", sessionId, t1, "Read"),
                         eventSpan("event-1", sessionId, t2, "ask_user")));
 
         List<SpanSummaryDto> merged = service.listMergedSpans(

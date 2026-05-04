@@ -15,7 +15,7 @@
     "expected": "(?i)HELLO WORLD|wrote|written|output\\.txt"
   },
   "performanceThresholdMs": 20000,
-  "toolsHint": ["FileRead", "FileWrite"],
+  "toolsHint": ["Read", "Write"],
   "maxLoops": 10,
   "tags": ["file-io", "tool-chain"]
 }

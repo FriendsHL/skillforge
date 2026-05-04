@@ -176,7 +176,7 @@ public class SkillController {
     }
 
     /**
-     * 返回所有工具（Bash, FileRead 等 Java Skill），不包含 ClawHub 等已迁移为文件 Skill 的。
+     * 返回所有工具（Bash, Read 等 Java Skill），不包含 ClawHub 等已迁移为文件 Skill 的。
      */
     @GetMapping("/builtin")
     public ResponseEntity<List<Map<String, Object>>> listBuiltinSkills() {

@@ -357,7 +357,7 @@ export const getLlmSpanBlob = (spanId: string, part: BlobPart, userId: number) =
     transformResponse: [(d: unknown) => (typeof d === 'string' ? d : String(d ?? ''))],
   });
 
-// Tool API (Java function-calling tools: Bash, FileRead, etc.)
+// Tool API (Java function-calling tools: Bash, Read, etc.)
 export const getTools = () => api.get('/tools');
 
 // Skill API

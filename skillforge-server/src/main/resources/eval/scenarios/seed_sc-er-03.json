@@ -15,7 +15,7 @@
     "expectedList": ["missing_dep.txt"]
   },
   "performanceThresholdMs": 20000,
-  "toolsHint": ["FileRead"],
+  "toolsHint": ["Read"],
   "maxLoops": 10,
   "tags": ["error-recovery", "dependency"]
 }
