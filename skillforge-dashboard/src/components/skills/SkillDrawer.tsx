@@ -41,7 +41,7 @@ export const SkillDrawer: React.FC<SkillDrawerProps> = ({
   }, [onClose]);
 
   const tabs = [
-    { id: 'readme', label: 'README' },
+    { id: 'readme', label: 'SKILL.md' },
     { id: 'files', label: 'Files', count: detail?.references ? Object.keys(detail.references).length : 0 },
     { id: 'source', label: 'Source' },
     ...(skill.toolSchema ? [{ id: 'schema', label: 'Schema' }] : []),
@@ -242,7 +242,7 @@ export const SkillDrawer: React.FC<SkillDrawerProps> = ({
 
           {tab === 'readme' && (
             <div className="sf-code-block" style={{ whiteSpace: 'pre-wrap' }}>
-              {detail?.skillMd || detail?.promptContent || skill.description || 'No README content.'}
+              {detail?.skillMd || detail?.promptContent || skill.description || 'No SKILL.md content.'}
             </div>
           )}
 
