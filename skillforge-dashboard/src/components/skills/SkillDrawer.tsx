@@ -29,7 +29,7 @@ export const SkillDrawer: React.FC<SkillDrawerProps> = ({
   const { data: detail, isLoading } = useQuery<SkillDetailData>({
     queryKey: ['skill-detail', skill.id],
     queryFn: () => getSkillDetail(skill.id).then(r => r.data),
-    enabled: typeof skill.id === 'number',
+    enabled: skill.id != null,
   });
 
   const showAbPanel = !skill.system && typeof skill.id === 'number';
@@ -236,7 +236,7 @@ export const SkillDrawer: React.FC<SkillDrawerProps> = ({
         </nav>
 
         <div className="sf-drawer-body">
-          {isLoading && typeof skill.id === 'number' && (
+          {isLoading && (
             <div className="sf-empty-state">Loading…</div>
           )}
 
