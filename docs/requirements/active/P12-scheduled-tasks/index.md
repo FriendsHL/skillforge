@@ -22,7 +22,7 @@ updated: 2026-04-28
 
 ## 当前状态
 
-等待 Sprint 4 前置决策完成。首版范围已收窄为 user tasks；system jobs 和高级可靠性进入 V2。
+[Sprint 4 前置决策（P12-PRE）](../../archive/2026-05-04-P12-PRE-preflight-decisions/index.md) 2026-05-04 已闭环：Cost Dashboard = 复用 `pages/ModelUsage`；PG 备份和多用户/权限模型均"暂不实现，accept current risk"。可进入设计评审。首版范围已收窄为 user tasks；system jobs 和高级可靠性进入 V2。
 
 ## 链接
 

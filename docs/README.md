@@ -19,7 +19,6 @@
 
 | ID | 标题 | 状态 | 需求包 | MRD | PRD | 技术方案 | 交付 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| P12-PRE | Sprint 4 前置决策 | ready | [需求包](requirements/active/P12-preflight-decisions/index.md) | - | - | - | - |
 | P12 | 定时任务 MVP | prd-ready | [需求包](requirements/active/P12-scheduled-tasks/index.md) | [MRD](requirements/active/P12-scheduled-tasks/mrd.md) | [PRD](requirements/active/P12-scheduled-tasks/prd.md) | [方案](requirements/active/P12-scheduled-tasks/tech-design.md) | - |
 | P9-4/P9-5 | Partial compact + post-compact 恢复 | prd-draft | [需求包](requirements/active/P9-4-P9-5-compaction-recovery/index.md) | [MRD](requirements/active/P9-4-P9-5-compaction-recovery/mrd.md) | [PRD](requirements/active/P9-4-P9-5-compaction-recovery/prd.md) | [方案](requirements/active/P9-4-P9-5-compaction-recovery/tech-design.md) | - |
 | P10 | 聊天斜杠命令 | prd-ready | [需求包](requirements/active/P10-slash-commands/index.md) | [MRD](requirements/active/P10-slash-commands/mrd.md) | [PRD](requirements/active/P10-slash-commands/prd.md) | [方案](requirements/active/P10-slash-commands/tech-design.md) | - |
@@ -37,6 +36,7 @@
 
 | ID | 标题 | 需求包 | 技术方案 |
 | --- | --- | --- | --- |
+| P12-PRE | Sprint 4 前置决策（Cost Dashboard / PG 备份 / 多用户权限） | [需求包](requirements/archive/2026-05-04-P12-PRE-preflight-decisions/index.md) | — (Lite, decisions in index.md) |
 | P6 | 消息行存储 | [需求包](requirements/archive/2026-04-21-P6-session-message-storage/index.md) | [方案](requirements/archive/2026-04-21-P6-session-message-storage/tech-design.md) |
 | SEC-2 | Hook Source Protection | [需求包](requirements/archive/2026-04-25-SEC-2-hook-source-protection/index.md) | [方案](requirements/archive/2026-04-25-SEC-2-hook-source-protection/tech-design.md) |
 | Memory v2 | 写入 / 召回 / 淘汰 | [需求包](requirements/archive/2026-04-27-MEMORY-v2/index.md) | [方案](requirements/archive/2026-04-27-MEMORY-v2/tech-design.md) |

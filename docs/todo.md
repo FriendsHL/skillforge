@@ -8,8 +8,7 @@
 
 | 顺序  | ID        | 标题                                | 模式   | 状态        | 优先级 | 风险   | 文档                                                        | 下一步                                   |
 | --- | --------- | --------------------------------- | ---- | --------- | --- | ---- | --------------------------------------------------------- | ------------------------------------- |
-| 1   | P12-PRE   | Sprint 4 前置决策                     | Lite | ready     | P0  | Solo | [需求包](requirements/active/P12-preflight-decisions/index.md)       | 决定 Cost Dashboard、PG 备份、多用户权限边界       |
-| 4   | P12       | 定时任务 MVP                          | Full | prd-ready | P1  | Full | [需求包](requirements/active/P12-scheduled-tasks/index.md)           | 等 P12-PRE 决策完成后进入设计评审                 |
+| 4   | P12       | 定时任务 MVP                          | Full | prd-ready | P1  | Full | [需求包](requirements/active/P12-scheduled-tasks/index.md)           | 进入设计评审（P12-PRE 已闭环）                  |
 | 5   | P9-4/P9-5 | Partial compact + post-compact 恢复 | Full | prd-draft | P2  | Full | [需求包](requirements/active/P9-4-P9-5-compaction-recovery/index.md) | 先决定“最近文件”数据来源                         |
 | 6   | P10       | 聊天斜杠命令                            | Full | prd-ready | P2  | Full | [需求包](requirements/active/P10-slash-commands/index.md)            | 在更高优先级的 context / observability 工作后启动 |
 
@@ -17,13 +16,13 @@
 
 | ID | 待决策 | 负责人 | 阻塞项 |
 | --- | --- | --- | --- |
-| P12-PRE | Cost 可见性、embedded PG 备份、多用户 / 权限边界 | youren | P12 |
 | P9-4/P9-5 | compact 后“最近文件”的数据来源 | youren + agent | P9-5 设计 |
 
 ## 最近完成
 
 | ID | 完成日期 | Commit | 交付 |
 | --- | --- | --- | --- |
+| **P12-PRE** | 2026-05-04 | 本 commit | Sprint 4 前置决策闭环：Cost Dashboard 复用现有 `pages/ModelUsage`；PG 备份 + 多用户/权限模型均"暂不实现，accept current risk"。需求包归档；P12 解除 blocker |
 | **TOOL-CC-NAME-ALIAS** | 2026-05-04 | 本 commit | 内置 file 工具 LLM-facing 名 `FileRead/FileWrite/FileEdit` → `Read/Write/Edit`（3 Tool + 2 Sandboxed* 改 `getName()`；46 文件 string literals + V47 migration backfill `t_agent.skill_ids/tool_ids`）。**实施时改方案**：原 todo 写"加别名重定向"，实测后用户决定走"直接改名"（避免长期维护双名歧义）。Reviewer PASS，`mvn test` 695 pass / 0 fail |
 | **OBS-4 全交付（M0-M4）** | 2026-05-03 | `eda937d`(M0) + `e89c593`(M1) + `877495b`(M2) + `a496a7e`(M3) + 本 commit (M4 收尾归档)；root_trace_id 一等公民字段 + 跨 agent / 跨 session trace 串联 + FE 二级折叠瀑布流；session `cf4202a6` 7 traces / 5 sessions / 60 spans 真实场景 INV-1/3/4/5/6 全验证 | [交付索引](delivery-index.md)；需求包归档到 archive |
 | **OBS-2 M4** | 2026-05-03 | M2 ETL 实跑（33 trace + 920 tool + 4 event 回填）+ M4 关旧轨写入 `b31cfaf` | [交付索引](delivery-index.md)；M5/M6 待跟进 |
