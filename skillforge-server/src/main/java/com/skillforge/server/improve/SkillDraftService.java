@@ -24,6 +24,7 @@ import com.skillforge.server.skill.SkillStorageService;
 import com.skillforge.server.websocket.UserWebSocketHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -333,8 +334,24 @@ public class SkillDraftService {
         entity.setRiskLevel("low");
         entity.setSystem(false);
         entity.setSkillPath(targetDir.toString());
-        SkillEntity savedSkill = skillRepository.save(entity);
-        // If this throws (UNIQUE conflict / DB failure) → tx rollback, afterCommit not invoked,
+        SkillEntity savedSkill;
+        try {
+            savedSkill = skillRepository.save(entity);
+        } catch (DataIntegrityViolationException dive) {
+            // uq_t_skill_owner_name violation — exact-name collision that similarity-based
+            // dedupe (≥ DEDUP_HIGH) didn't catch. Clean up the on-disk artifact dir before
+            // tx rollback so we don't leak an orphan (UserSkillLoader scan would still
+            // recover it, but proactive cleanup is cheaper). Then map to a structured 409.
+            // Note: we don't look up the existing skill's id — PostgreSQL aborts the
+            // transaction on a unique violation (see SkillRepository#insertImportedSkillIgnoreConflict
+            // javadoc), so any subsequent SELECT in this tx would itself fail. The FE
+            // surfaces the conflict by name, which is sufficient.
+            cleanupDirSafely(targetDir);
+            throw new SkillNameConflictException(
+                    "Skill named '" + draft.getName() + "' already exists for this owner.",
+                    draft.getName());
+        }
+        // If save throws other DB failures → tx rollback, afterCommit not invoked,
         // registry stays clean; orphan dir on disk is detected by UserSkillLoader scan (case A).
 
         // STEP 6: update draft status (in-tx, after save, before afterCommit registration)

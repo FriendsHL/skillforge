@@ -3,6 +3,7 @@ package com.skillforge.server.controller;
 import com.skillforge.server.entity.SkillDraftEntity;
 import com.skillforge.server.improve.HighSimilarityRejectedException;
 import com.skillforge.server.improve.SkillDraftService;
+import com.skillforge.server.improve.SkillNameConflictException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -116,6 +117,13 @@ public class SkillDraftController {
             errBody.put("similarity", e.getSimilarity());
             errBody.put("mergeCandidateId", e.getCandidateId());
             errBody.put("mergeCandidateName", e.getCandidateName());
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(errBody);
+        } catch (SkillNameConflictException e) {
+            // 409 Conflict — exact-name collision that similarity-based dedupe missed.
+            Map<String, Object> errBody = new LinkedHashMap<>();
+            errBody.put("error", e.getMessage());
+            errBody.put("code", "NAME_CONFLICT");
+            errBody.put("existingSkillName", e.getExistingSkillName());
             return ResponseEntity.status(HttpStatus.CONFLICT).body(errBody);
         } catch (RuntimeException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));

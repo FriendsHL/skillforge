@@ -20,6 +20,7 @@ import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataIntegrityViolationException;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -60,6 +61,7 @@ class SkillDraftServiceApproveDraftTest {
     @Mock private SkillStorageService skillStorageService;
 
     private SkillDraftService service;
+    private Path skillsRoot;
 
     @BeforeEach
     void setUp(@TempDir Path tmp) {
@@ -75,6 +77,7 @@ class SkillDraftServiceApproveDraftTest {
                 skillStorageService);
         // Tests use the legacy 2-layer skillsDir override; SkillStorageService is unused
         // when skillsDir is set, so the @Mock above stays at no-op default.
+        this.skillsRoot = tmp;
         service.setSkillsDir(tmp.toString());
     }
 
@@ -197,6 +200,42 @@ class SkillDraftServiceApproveDraftTest {
         SkillDraftEntity result = service.approveDraft(draft.getId(), 11L, false);
 
         assertThat(result.getStatus()).isEqualTo("approved");
+    }
+
+    @Test
+    @DisplayName("STEP 5 unique violation → SkillNameConflictException + dir cleaned + draft not flipped")
+    void approveDraft_uniqueViolation_throwsNameConflict() {
+        SkillDraftEntity draft = newDraft("draft");
+        when(skillDraftRepository.findByIdForUpdate(draft.getId())).thenReturn(Optional.of(draft));
+        // Simulate unique-constraint violation on save.
+        when(skillRepository.save(any(SkillEntity.class)))
+                .thenThrow(new DataIntegrityViolationException("dup"));
+
+        assertThatThrownBy(() -> service.approveDraft(draft.getId(), 11L))
+                .isInstanceOf(SkillNameConflictException.class)
+                .satisfies(e -> {
+                    SkillNameConflictException nce = (SkillNameConflictException) e;
+                    assertThat(nce.getExistingSkillName()).isEqualTo(draft.getName());
+                    assertThat(nce.getMessage()).contains("already exists");
+                });
+
+        // Draft must NOT be flipped to "approved" — STEP 6 was never reached.
+        assertThat(draft.getStatus()).isEqualTo("draft");
+        verify(skillDraftRepository, never()).save(any(SkillDraftEntity.class));
+        verify(skillRegistry, never()).registerSkillDefinition(any());
+        // Artifact dir was cleaned up: cleanupDirSafely walks + deletes the rendered
+        // skillId subdir before the throw. Owner subdir (if it was created) should now
+        // be empty of any skill subdirectories.
+        Path ownerDir = skillsRoot.resolve(String.valueOf(draft.getOwnerId()));
+        if (Files.isDirectory(ownerDir)) {
+            try (var entries = Files.list(ownerDir)) {
+                assertThat(entries.count())
+                        .as("owner dir should be empty after cleanupDirSafely")
+                        .isEqualTo(0);
+            } catch (IOException e) {
+                throw new AssertionError(e);
+            }
+        }
     }
 
     @Test

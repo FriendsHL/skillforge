@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillforge.server.entity.SkillDraftEntity;
 import com.skillforge.server.improve.HighSimilarityRejectedException;
 import com.skillforge.server.improve.SkillDraftService;
+import com.skillforge.server.improve.SkillNameConflictException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -159,6 +160,26 @@ class SkillDraftControllerTest {
         assertThat(resp.getBody().get("similarity")).isEqualTo(0.92);
         assertThat(resp.getBody().get("mergeCandidateId")).isEqualTo(7L);
         assertThat(resp.getBody().get("mergeCandidateName")).isEqualTo("ExistingSkill");
+    }
+
+    @Test
+    @DisplayName("SkillNameConflictException → 409 + NAME_CONFLICT structured body")
+    void reviewDraft_nameConflict_returns409() {
+        when(skillDraftService.approveDraft(eq("d1"), eq(11L), eq(false)))
+                .thenThrow(new SkillNameConflictException(
+                        "Skill named 'MyName' already exists for this owner.",
+                        "MyName"));
+
+        Map<String, Object> body = new HashMap<>();
+        body.put("action", "approve");
+        body.put("reviewedBy", 11);
+
+        ResponseEntity<Map<String, Object>> resp = controller.reviewDraft("d1", body);
+
+        assertThat(resp.getStatusCode().value()).isEqualTo(409);
+        assertThat(resp.getBody().get("code")).isEqualTo("NAME_CONFLICT");
+        assertThat(resp.getBody().get("existingSkillName")).isEqualTo("MyName");
+        assertThat(resp.getBody().get("error")).asString().contains("already exists");
     }
 
     @Test
