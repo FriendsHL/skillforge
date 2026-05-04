@@ -273,4 +273,97 @@ class SubAgentRegistryTest {
                 .extracting(r -> r.status)
                 .containsExactlyInAnyOrder("COMPLETED", "COMPLETED");
     }
+
+    // ============ continue / terminate helpers ============
+
+    @Test
+    void markRunResumed_flips_completed_back_to_running_and_clears_finalMessage() {
+        // Pre-populate a COMPLETED run.
+        SubAgentRunEntity entity = new SubAgentRunEntity();
+        entity.setRunId("rx-1");
+        entity.setParentSessionId("p-x");
+        entity.setStatus("COMPLETED");
+        entity.setFinalMessage("done before");
+        entity.setCompletedAt(java.time.Instant.now());
+        runStore.put("rx-1", entity);
+
+        registry.markRunResumed("rx-1");
+
+        SubAgentRunEntity after = runStore.get("rx-1");
+        assertThat(after.getStatus()).isEqualTo("RUNNING");
+        assertThat(after.getFinalMessage()).isNull();
+        assertThat(after.getCompletedAt()).isNull();
+    }
+
+    @Test
+    void markRunResumed_unknownRunId_isNoOp() {
+        // No entity in store — call must not throw and store stays empty.
+        registry.markRunResumed("nope");
+        assertThat(runStore).doesNotContainKey("nope");
+    }
+
+    @Test
+    void markRunResumed_terminatedRun_keepsTerminated() {
+        // Defensive guard: even if a caller tries to resume a TERMINATED run (e.g. bug or race),
+        // markRunResumed must NOT downgrade the sticky terminal state.
+        java.time.Instant terminatedAt = java.time.Instant.parse("2026-05-01T00:00:00Z");
+        SubAgentRunEntity entity = new SubAgentRunEntity();
+        entity.setRunId("rx-3");
+        entity.setParentSessionId("p-x");
+        entity.setStatus("TERMINATED");
+        entity.setFinalMessage("killed by parent");
+        entity.setCompletedAt(terminatedAt);
+        runStore.put("rx-3", entity);
+
+        registry.markRunResumed("rx-3");
+
+        SubAgentRunEntity after = runStore.get("rx-3");
+        assertThat(after.getStatus()).isEqualTo("TERMINATED");
+        assertThat(after.getFinalMessage()).isEqualTo("killed by parent");
+        assertThat(after.getCompletedAt()).isEqualTo(terminatedAt);
+    }
+
+    @Test
+    void markRunTerminated_sets_terminal_state_and_completedAt() {
+        SubAgentRunEntity entity = new SubAgentRunEntity();
+        entity.setRunId("rx-2");
+        entity.setParentSessionId("p-x");
+        entity.setStatus("RUNNING");
+        runStore.put("rx-2", entity);
+
+        registry.markRunTerminated("rx-2");
+
+        SubAgentRunEntity after = runStore.get("rx-2");
+        assertThat(after.getStatus()).isEqualTo("TERMINATED");
+        assertThat(after.getCompletedAt()).isNotNull();
+    }
+
+    @Test
+    void onSessionLoopFinished_terminatedRun_keepsTerminated() {
+        // Locks in the guard added in onSessionLoopFinished: a run already marked TERMINATED
+        // by parent's terminate action must NOT be downgraded back to COMPLETED when the
+        // cancelled child loop eventually unwinds and triggers onSessionLoopFinished.
+        SessionEntity parent = session("p-term", 0, "idle", null);
+        when(sessionRepository.countByParentSessionIdAndRuntimeStatus("p-term", "running")).thenReturn(0L);
+        SubAgentRegistry.SubAgentRun run = registry.registerRun(parent, 9L, "alpha", "task body");
+        registry.attachChildSession(run.runId, "c-term");
+
+        // Parent terminates → markRunTerminated bumps status to TERMINATED
+        registry.markRunTerminated(run.runId);
+        assertThat(runStore.get(run.runId).getStatus()).isEqualTo("TERMINATED");
+
+        // Now the cancelled child loop unwinds and triggers onSessionLoopFinished.
+        SessionEntity child = session("c-term", 1, "idle", "p-term");
+        child.setSubAgentRunId(run.runId);
+        when(sessionRepository.findById("c-term")).thenReturn(Optional.of(child));
+        when(sessionRepository.findById("p-term")).thenReturn(Optional.of(parent));
+
+        registry.onSessionLoopFinished("c-term", "partial output", "completed", 1, 100L);
+
+        // Status must still be TERMINATED — guard prevents the downgrade.
+        assertThat(runStore.get(run.runId).getStatus()).isEqualTo("TERMINATED");
+        // finalMessage / completedAt are still updated (per guard's intent: only the
+        // status field is sticky, the informational fields reflect the actual loop teardown).
+        assertThat(runStore.get(run.runId).getFinalMessage()).isEqualTo("partial output");
+    }
 }

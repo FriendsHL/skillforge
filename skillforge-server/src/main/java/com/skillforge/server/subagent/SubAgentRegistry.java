@@ -120,6 +120,42 @@ public class SubAgentRegistry {
         });
     }
 
+    /**
+     * 父 Agent 用 'continue' action 复用既有子 session 时调用：把 run 状态从 COMPLETED/FAILED
+     * 翻回 RUNNING，清掉前一轮的 finalMessage / completedAt，避免列表里看上去是“老结果”。
+     *
+     * <p>不取 stripe lock：JPA 单行 save 已是原子操作；并发 continue + onSessionLoopFinished 的极端
+     * 竞态由数据库 last-write-wins 兜住（功能上等价于哪个最后跑就是哪个）。
+     */
+    public void markRunResumed(String runId) {
+        runRepository.findById(runId).ifPresent(entity -> {
+            if ("TERMINATED".equals(entity.getStatus())) {
+                // Defensive: caller (handleContinue run-level guard) should already prevent this,
+                // but double-guard the sticky terminal state so it can't be re-opened by mistake.
+                return;
+            }
+            entity.setStatus("RUNNING");
+            entity.setFinalMessage(null);
+            entity.setCompletedAt(null);
+            runRepository.save(entity);
+        });
+    }
+
+    /**
+     * 'terminate' action 时调用：把 run 标记为 TERMINATED + completedAt=now()。
+     *
+     * <p>TERMINATED 是 sticky 终态：{@link #onSessionLoopFinished} 的 status 改写有显式 guard
+     * 跳过 TERMINATED 的 run，因此即使被 cancel 的 loop 之后再触发 finally，也不会把状态
+     * downgrade 回 COMPLETED。
+     */
+    public void markRunTerminated(String runId) {
+        runRepository.findById(runId).ifPresent(entity -> {
+            entity.setStatus("TERMINATED");
+            entity.setCompletedAt(Instant.now());
+            runRepository.save(entity);
+        });
+    }
+
     public SubAgentRun getRun(String runId) {
         return runRepository.findById(runId).map(this::toRun).orElse(null);
     }
@@ -152,7 +188,12 @@ public class SubAgentRegistry {
             String runId = session.getSubAgentRunId();
             SubAgentRunEntity runEntity = runId != null ? runRepository.findById(runId).orElse(null) : null;
             if (runEntity != null) {
-                runEntity.setStatus("error".equals(status) ? "FAILED" : "COMPLETED");
+                // TERMINATED 是父显式 'terminate' 设置的终态，loop teardown 不能 downgrade 它。
+                // 仅当当前 status 不是 TERMINATED 时才按 loop 结果改写。finalMessage / completedAt
+                // 继续记录，方便用户看到子终止瞬间的最后输出和实际收尾时间。
+                if (!"TERMINATED".equals(runEntity.getStatus())) {
+                    runEntity.setStatus("error".equals(status) ? "FAILED" : "COMPLETED");
+                }
                 runEntity.setFinalMessage(finalMessage);
                 runEntity.setCompletedAt(Instant.now());
                 runRepository.save(runEntity);

@@ -592,7 +592,15 @@ public class ChatService {
                 s.setRuntimeStep(null);
                 s.setRuntimeError(finalMessage != null ? finalMessage : "Aborted by lifecycle hook");
             } else {
-                s.setRuntimeStatus("idle");
+                // SubAgent terminate guard: 父显式 'terminate' 子 session 时 handleTerminate
+                // 把 child.runtime_status 设为 "terminated"。loop teardown 不能 downgrade 它
+                // 回 "idle"。与 SubAgentRegistry.onSessionLoopFinished 里 TERMINATED 的
+                // status guard 对称。仅守 idle 路径；"error"（hook abort / exception）仍按
+                // 真实失败反映。Broadcast 仍发 "idle"（前端不引入 "terminated" 枚举），DB 持
+                // 久态保留 "terminated" 供 'list' / panel 读取。
+                if (!"terminated".equals(s.getRuntimeStatus())) {
+                    s.setRuntimeStatus("idle");
+                }
                 s.setRuntimeStep(wasCancelled ? "cancelled" : null);
                 s.setRuntimeError(null);
             }

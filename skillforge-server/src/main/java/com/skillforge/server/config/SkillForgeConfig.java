@@ -325,8 +325,10 @@ public class SkillForgeConfig {
                                        SessionService sessionService,
                                        @Lazy ChatService chatService,
                                        SubAgentRegistry subAgentRegistry,
+                                       CancellationRegistry cancellationRegistry,
                                        SkillRegistry skillRegistry) {
-        SubAgentTool tool = new SubAgentTool(targetResolver, sessionService, chatService, subAgentRegistry);
+        SubAgentTool tool = new SubAgentTool(targetResolver, sessionService, chatService,
+                subAgentRegistry, cancellationRegistry);
         skillRegistry.registerTool(tool);
         log.info("Registered SubAgentTool into SkillRegistry");
         return tool;
