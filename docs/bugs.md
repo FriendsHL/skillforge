@@ -25,7 +25,6 @@
 | --- | --- | --- | --- | --- | --- | --- |
 | BUG-27 | P2 | Agent 配置 / 确认流 | open | 同一 session 内连续更新 agent prompt 时需要重复用户确认 | 用户已在当前 session 确认过一次 agent prompt 更新，再次调整仍会触发确认，影响迭代效率 | 将确认授权按 session + agent + update 类型设置短期有效期，或支持一次确认覆盖同一轮 prompt-only 后续修改 |
 | BUG-28 | P2 | 审核卡片 / UX | open | 审核卡片需要优化 | 当前审核卡片难以快速判断来源、变更内容、风险点和影响范围；确认 / 拒绝动作不够突出 | 增加来源信息、变更摘要 / diff、风险提示和更清晰的 Approve / Edit / Discard 操作；长内容默认折叠并支持展开 |
-| BUG-29 | P2 | Chat / Team | open | Chat 页面 Team 运行时右侧 Agent 列表不可点击 | Team 运行过程中，右侧 Team 面板能展示当前有几个 agent，但具体 agent 项不能点击 | 2026-04-29 评估：Chat 主流里 subagent 卡片已有跳子 session 入口，右侧 Team 面板加点击是冗余入口；降 P2 暂不修，等出现明确差异化诉求再重评 |
 ## 待分流
 
 当前无。新记录如果缺少复现、影响范围或修复方向，先放这里；补齐后再移入“开放中”。
@@ -35,6 +34,7 @@
 | ID | 原因 | 重评触发条件 | 文档 |
 | --- | --- | --- | --- |
 | BUG-G | 根因已修，剩余 sanitizer / 尾部不变量属于防御性补强 | 再次出现 dangling assistant `tool_use` / 缺失 `tool_result` | [需求包](requirements/deferred/BUG-G-defensive-hardening/index.md) |
+| BUG-29 | Chat 主流 subagent 卡片已有跳子 session 入口；右侧 Team 面板 `RightRail.tsx:872-873` 在 child 已生成时也可点击（`sa-item--clickable` + onClick navigate）；child 未生成时不可点击是合理设计。冗余入口诉求未明确 | 用户报"右侧 Team 面板"差异化诉求 / 多次反馈想从 Team 面板直接跳子 session 而非走 subagent 卡片 | 2026-05-04 audit 确认现状：`RightRail.tsx:870-876` sa-item 已支持点击（仅 hasChild=true 时）|
 
 ## 最近修复
 
