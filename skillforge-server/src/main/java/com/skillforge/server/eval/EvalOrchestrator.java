@@ -107,8 +107,32 @@ public class EvalOrchestrator {
             double totalOracleScore = 0;
             Map<FailureAttribution, Integer> attrHistogram = new HashMap<>();
 
-            for (EvalScenario scenario : scenarios) {
+            // EVAL-V2 M1: progress streaming throttle. When totalCount > 50, push
+            // events on roughly every 5% boundary instead of per-case to avoid WS
+            // spam at scale. The final case always pushes (i == totalCount-1).
+            int totalCount = scenarios.size();
+            int progressStride = computeProgressStride(totalCount);
+
+            for (int i = 0; i < totalCount; i++) {
+                EvalScenario scenario = scenarios.get(i);
                 log.info("Running scenario: {} ({})", scenario.getId(), scenario.getName());
+
+                boolean shouldPushProgress = shouldPushProgressEvent(i, totalCount, progressStride);
+
+                // EVAL-V2 M1: push case_running BEFORE we run the scenario so the UI
+                // can show "current case" while the scenario executes.
+                if (shouldPushProgress && broadcaster != null && userId != null) {
+                    Map<String, Object> evt = new LinkedHashMap<>();
+                    evt.put("type", "eval_progress");
+                    evt.put("event", "case_running");
+                    evt.put("evalRunId", evalRunId);
+                    evt.put("scenarioId", scenario.getId());
+                    evt.put("scenarioName", scenario.getName());
+                    evt.put("passedCount", passed);
+                    evt.put("totalCount", totalCount);
+                    evt.put("currentIndex", i);
+                    broadcaster.userEvent(userId, evt);
+                }
 
                 ScenarioRunResult runResult = scenarioRunner.runScenario(
                         evalRunId, scenario, agentDef, userId);
@@ -161,7 +185,8 @@ public class EvalOrchestrator {
 
                 attrHistogram.merge(judgeOutput.getAttribution(), 1, Integer::sum);
 
-                // Broadcast eval_scenario_finished
+                // Broadcast eval_scenario_finished (legacy, retained for callers
+                // that already subscribe to per-case finishes).
                 if (broadcaster != null && userId != null) {
                     Map<String, Object> event = new LinkedHashMap<>();
                     event.put("type", "eval_scenario_finished");
@@ -172,6 +197,23 @@ public class EvalOrchestrator {
                     event.put("executionTimeMs", runResult.getExecutionTimeMs());
                     event.put("loopCount", runResult.getLoopCount());
                     broadcaster.userEvent(userId, event);
+                }
+
+                // EVAL-V2 M1: push case_passed / case_failed for progress UI
+                // (separate type=eval_progress channel from legacy event above).
+                if (shouldPushProgress && broadcaster != null && userId != null) {
+                    Map<String, Object> evt = new LinkedHashMap<>();
+                    evt.put("type", "eval_progress");
+                    evt.put("event", judgeOutput.isPass() ? "case_passed" : "case_failed");
+                    evt.put("evalRunId", evalRunId);
+                    evt.put("scenarioId", scenario.getId());
+                    evt.put("scenarioName", scenario.getName());
+                    evt.put("score", judgeOutput.getCompositeScore());
+                    evt.put("attribution", judgeOutput.getAttribution().name());
+                    evt.put("passedCount", passed);
+                    evt.put("totalCount", totalCount);
+                    evt.put("currentIndex", i);
+                    broadcaster.userEvent(userId, evt);
                 }
             }
 
@@ -223,7 +265,7 @@ public class EvalOrchestrator {
             collabRun.setCompletedAt(Instant.now());
             collabRunRepository.save(collabRun);
 
-            // 11. Broadcast eval_run_completed
+            // 11. Broadcast eval_run_completed (legacy event)
             if (broadcaster != null && userId != null) {
                 Map<String, Object> event = new LinkedHashMap<>();
                 event.put("type", "eval_run_completed");
@@ -235,6 +277,20 @@ public class EvalOrchestrator {
                 event.put("passed", passed);
                 event.put("failed", failed);
                 broadcaster.userEvent(userId, event);
+            }
+
+            // EVAL-V2 M1: progress channel completion event (mirrors legacy event
+            // but with type=eval_progress, so the FE progress handler doesn't
+            // have to subscribe to two payload shapes).
+            if (broadcaster != null && userId != null) {
+                Map<String, Object> evt = new LinkedHashMap<>();
+                evt.put("type", "eval_progress");
+                evt.put("event", "eval_run_completed");
+                evt.put("evalRunId", evalRunId);
+                evt.put("passedCount", passed);
+                evt.put("failedCount", failed);
+                evt.put("totalCount", scenarios.size());
+                broadcaster.userEvent(userId, evt);
             }
 
             log.info("Eval run completed: evalRunId={}, passRate={}%, avgScore={}", evalRunId,
@@ -288,6 +344,32 @@ public class EvalOrchestrator {
                 });
 
         return suggestions;
+    }
+
+    /**
+     * EVAL-V2 M1: progress event stride. Up to 50 cases pushes per case
+     * (stride=1); above that, pushes on every {@code totalCount/20} cases
+     * (~5% increments) so the WS channel doesn't get hammered on big eval
+     * runs. {@code Math.max(1, …)} guards against div-rounding to 0 (only
+     * possible if {@code totalCount < 20}, which the >50 gate rules out,
+     * but the guard is cheap insurance).
+     *
+     * <p>Package-private + static so {@code EvalOrchestratorThrottleTest}
+     * can lock the math without spinning up Spring.
+     */
+    static int computeProgressStride(int totalCount) {
+        return totalCount > 50 ? Math.max(1, totalCount / 20) : 1;
+    }
+
+    /**
+     * EVAL-V2 M1: returns whether index {@code i} (0-based) of an eval batch
+     * should emit a progress WS event. Always emits on the last case so the
+     * "100% complete" frame doesn't get swallowed by the stride.
+     */
+    static boolean shouldPushProgressEvent(int i, int totalCount, int stride) {
+        if (totalCount <= 0) return false;
+        if (stride <= 0) return false;
+        return (i % stride == 0) || (i == totalCount - 1);
     }
 
     private int computeConsecutiveDeclineCount(String agentDefinitionId, double currentPassRate) {

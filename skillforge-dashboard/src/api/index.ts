@@ -852,6 +852,38 @@ export const triggerEvalRun = (agentId: string, userId = 1) =>
   api.post('/eval/runs', { agentId, userId });
 export const getEvalScenarios = () => api.get('/eval/scenarios');
 
+// EVAL-V2 M0: per-agent dataset = EvalScenarioEntity rows for that agent.
+export interface EvalDatasetScenario {
+  id: string;
+  agentId: string;
+  name: string;
+  description?: string;
+  category: string;
+  split: string;
+  task: string;
+  oracleType: string;
+  oracleExpected?: string;
+  status: 'draft' | 'active' | 'discarded';
+  sourceSessionId?: string;
+  extractionRationale?: string;
+  createdAt: string;
+  reviewedAt?: string;
+}
+export const getEvalDatasetScenarios = (agentId: string | number) =>
+  api.get<EvalDatasetScenario[]>('/eval/scenarios', { params: { agentId } });
+
+// EVAL-V2 M0: recent eval runs in which a given scenario participated.
+export interface ScenarioRecentRun {
+  evalRunId: string;
+  completedAt: string | null;
+  startedAt: string | null;
+  compositeScore: number | null;
+  status: string;
+  attribution?: string;
+}
+export const getScenarioRecentRuns = (scenarioId: string, limit = 10) =>
+  api.get<ScenarioRecentRun[]>(`/eval/scenarios/${scenarioId}/recent-runs`, { params: { limit } });
+
 // ─── Self-Improve Pipeline ───────────────────────────────────────────────────
 
 export interface ImprovementStartResult {

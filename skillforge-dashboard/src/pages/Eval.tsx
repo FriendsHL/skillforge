@@ -1,9 +1,14 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Select } from 'antd';
-import { getEvalRuns, getEvalRun, triggerEvalRun, getAgents, extractList } from '../api';
+import {
+  getEvalRuns, getEvalRun, triggerEvalRun, getAgents, extractList,
+  type EvalDatasetScenario,
+} from '../api';
 import { useAuth } from '../contexts/AuthContext';
 import ScenarioDraftPanel from '../components/ScenarioDraftPanel';
+import DatasetBrowser from '../components/evals/DatasetBrowser';
+import AnalyzeCaseModal from '../components/evals/AnalyzeCaseModal';
 import '../components/agents/agents.css';
 import '../components/evals/evals.css';
 import '../components/skills/skills.css';
@@ -37,12 +42,28 @@ interface EvalRow {
 interface ScenarioResult {
   scenarioId: string;
   name?: string;
+  category?: string;
+  split?: string;
   status: string;
   compositeScore?: number;
   errorMessage?: string;
   attribution?: string;
   judgeRationale?: string;
   agentFinalOutput?: string;
+  task?: string;
+  oracleType?: string;
+  oracleExpected?: string;
+  traceId?: string;
+}
+
+// Per-row live progress state populated from `eval_progress` WS events.
+// Stored separately from the run row so we don't have to refetch the whole
+// run detail just to update a progress bar.
+interface ProgressState {
+  passedCount: number;
+  totalCount: number;
+  currentScenarioName?: string;
+  completed?: boolean;
 }
 
 function normalizeEval(raw: Record<string, unknown>, agents: Record<string, unknown>[]): EvalRow {
@@ -97,6 +118,7 @@ function scoreColor(s: number): string {
 function fmtTime(iso: string): string {
   if (!iso) return '—';
   const d = new Date(iso);
+  if (isNaN(d.getTime())) return '—';
   const now = Date.now();
   const diff = now - d.getTime();
   if (diff < 60000) return 'just now';
@@ -132,14 +154,19 @@ function FilterItem({ label, count, active, onClick }: { label: string; count: n
   );
 }
 
+type TopTab = 'runs' | 'datasets';
+
 const Eval: React.FC = () => {
   const queryClient = useQueryClient();
   const { userId } = useAuth();
+  const [topTab, setTopTab] = useState<TopTab>('runs');
   const [q, setQ] = useState('');
   const [filterStatus, setFilterStatus] = useState<string | null>(null);
   const [open, setOpen] = useState<EvalRow | null>(null);
   const [drawerTab, setDrawerTab] = useState('cases');
   const [runDialog, setRunDialog] = useState(false);
+  // EVAL-V2 M1: per-evalRunId live progress state, fed by `eval_progress` WS events.
+  const [progressByRun, setProgressByRun] = useState<Record<string, ProgressState>>({});
 
   const { data: rawRuns = [] } = useQuery({
     queryKey: ['eval-runs'],
@@ -156,6 +183,86 @@ const Eval: React.FC = () => {
   });
 
   const all = useMemo<EvalRow[]>(() => rawRuns.map(r => normalizeEval(r, rawAgents)), [rawRuns, rawAgents]);
+
+  // EVAL-V2 M1: WS subscription for live progress events. We attach to the
+  // user-level WS channel (same channel used by SessionList for runtimeStatus
+  // updates). Reconnect-after-disconnect intentionally has no replay logic;
+  // when WS reconnects we just invalidate the runs list so any in-flight
+  // RUNNING row gets a fresh GET /eval/runs/{id} via the existing 3s poll.
+  const wsRef = useRef<WebSocket | null>(null);
+  const unmountedRef = useRef(false);
+  useEffect(() => {
+    unmountedRef.current = false;
+    const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
+    const token = localStorage.getItem('sf_token') ?? '';
+    const url = `${proto}://${window.location.host}/ws/users/${userId}?token=${encodeURIComponent(token)}`;
+    let ws: WebSocket | null = null;
+    try {
+      ws = new WebSocket(url);
+      wsRef.current = ws;
+      ws.onmessage = (e) => {
+        if (unmountedRef.current) return;
+        try {
+          const msg = JSON.parse(e.data) as Record<string, unknown>;
+          if (msg.type !== 'eval_progress') return;
+          const evt = String(msg.event || '');
+          const evalRunId = String(msg.evalRunId || '');
+          if (!evalRunId) return;
+          if (evt === 'eval_run_completed') {
+            setProgressByRun(prev => ({
+              ...prev,
+              [evalRunId]: {
+                passedCount: Number(msg.passedCount || 0),
+                totalCount: Number(msg.totalCount || 0),
+                completed: true,
+              },
+            }));
+            // Trigger a refetch so the row's terminal score/attribution is
+            // pulled from the freshly persisted EvalRunEntity.
+            queryClient.invalidateQueries({ queryKey: ['eval-runs'] });
+            queryClient.invalidateQueries({ queryKey: ['eval-run', evalRunId] });
+            return;
+          }
+          // case_running / case_passed / case_failed
+          //
+          // Note: the backend sends `passedCount` post-increment for
+          // case_passed (and unchanged for case_running / case_failed). So we
+          // trust the backend value as-is — do NOT add 1 again on the FE,
+          // which would double-count.
+          setProgressByRun(prev => {
+            const prior = prev[evalRunId];
+            const passedCount = Number(msg.passedCount ?? prior?.passedCount ?? 0);
+            const totalCount = Number(msg.totalCount ?? prior?.totalCount ?? 0);
+            const next: ProgressState = {
+              ...prior,
+              passedCount,
+              totalCount,
+              currentScenarioName: typeof msg.scenarioName === 'string' ? msg.scenarioName : prior?.currentScenarioName,
+            };
+            return { ...prev, [evalRunId]: next };
+          });
+        } catch {
+          // swallow malformed messages — avoids cascading state updates
+        }
+      };
+      ws.onerror = () => { /* noop */ };
+      ws.onclose = () => {
+        // On disconnect we don't try to replay; refetching the runs list on
+        // next mount or poll tick will reconcile. (D2(a) reconnect strategy.)
+        if (wsRef.current === ws) wsRef.current = null;
+      };
+    } catch {
+      // ignore — WS unavailable, table polling still keeps rows current
+    }
+    return () => {
+      unmountedRef.current = true;
+      const cur = wsRef.current;
+      wsRef.current = null;
+      if (cur) {
+        try { cur.close(); } catch { /* noop */ }
+      }
+    };
+  }, [userId, queryClient]);
 
   const rows = useMemo(() => {
     return all.filter(e => {
@@ -191,47 +298,84 @@ const Eval: React.FC = () => {
           </div>
         </header>
 
+        <div className="eval-toptab-row" role="tablist">
+          {(['runs', 'datasets'] as TopTab[]).map(t => (
+            <button
+              key={t}
+              role="tab"
+              aria-selected={topTab === t}
+              className={`eval-toptab ${topTab === t ? 'on' : ''}`}
+              onClick={() => setTopTab(t)}
+            >
+              {t === 'runs' ? 'Runs' : 'Datasets'}
+              {t === 'runs' && <span className="eval-toptab-count">{all.length}</span>}
+            </button>
+          ))}
+        </div>
+
         <div className="agents-body">
-          {rows.length === 0 ? (
+          {topTab === 'datasets' ? (
+            <DatasetBrowser agents={rawAgents} userId={userId} />
+          ) : rows.length === 0 ? (
             <div className="sf-empty-state">No eval runs yet. Select an agent and run an eval.</div>
           ) : (
             <div className="eval-grid">
-              {rows.map(e => (
-                <div key={e.id} className={`eval-card s-${e.status}`}>
-                  <button className="eval-card-body" onClick={() => openDetail(e)}>
-                    <div className="eval-card-h">
-                      <h3>{e.name}</h3>
-                      <span className={`sess-status s-${e.status === 'pass' ? 'idle' : e.status === 'warn' ? 'waiting' : 'error'}`}>
-                        {e.status}
-                      </span>
-                    </div>
-                    <div className="eval-card-meta">
-                      <span className="kv-chip-sf">suite · {e.suite}</span>
-                      <span className="kv-chip-sf">target · {e.target}</span>
-                    </div>
-                    <div className="eval-big">
-                      <div className="eval-score" style={{ color: scoreColor(e.score) }}>
-                        {(e.score * 100).toFixed(1)}<em>%</em>
+              {rows.map(e => {
+                const live = progressByRun[e.id];
+                const isRunning = String(e.raw.status) === 'RUNNING';
+                const liveTotal = live?.totalCount || e.cases;
+                const livePassed = live?.passedCount ?? e.pass;
+                const pct = liveTotal > 0 ? Math.min(100, Math.round((livePassed / liveTotal) * 100)) : 0;
+                return (
+                  <div key={e.id} className={`eval-card s-${e.status}`}>
+                    <button className="eval-card-body" onClick={() => openDetail(e)}>
+                      <div className="eval-card-h">
+                        <h3>{e.name}</h3>
+                        <span className={`sess-status s-${e.status === 'pass' ? 'idle' : e.status === 'warn' ? 'waiting' : 'error'}`}>
+                          {e.status}
+                        </span>
                       </div>
-                      <div className="eval-trend">
-                        <MiniSpark data={e.trend} color={scoreColor(e.score)} />
-                        <span className="mono-sm">{e.runs} runs</span>
+                      <div className="eval-card-meta">
+                        <span className="kv-chip-sf">suite · {e.suite}</span>
+                        <span className="kv-chip-sf">target · {e.target}</span>
                       </div>
-                    </div>
-                    <div className="eval-stats">
-                      <div><span className="n ok">{e.pass}</span><span className="lbl">pass</span></div>
-                      <div><span className="n err">{e.fail}</span><span className="lbl">fail</span></div>
-                      <div><span className="n">{e.cases}</span><span className="lbl">total</span></div>
-                      <div><span className="n">{e.lastRun}</span><span className="lbl">last run</span></div>
-                    </div>
-                  </button>
-                  <div className="eval-card-actions">
-                    <button className="sf-mini-btn" onClick={(ev) => { ev.stopPropagation(); setRunDialog(true); }}>
-                      {PLAY_ICON} Run
+                      <div className="eval-big">
+                        <div className="eval-score" style={{ color: scoreColor(e.score) }}>
+                          {(e.score * 100).toFixed(1)}<em>%</em>
+                        </div>
+                        <div className="eval-trend">
+                          <MiniSpark data={e.trend} color={scoreColor(e.score)} />
+                          <span className="mono-sm">{e.runs} runs</span>
+                        </div>
+                      </div>
+                      {isRunning && liveTotal > 0 && (
+                        <div className="eval-progress" aria-label="eval progress">
+                          <div className="eval-progress-bar">
+                            <div className="eval-progress-bar-fill" style={{ width: `${pct}%` }} />
+                          </div>
+                          <div className="eval-progress-meta">
+                            <span className="cur" title={live?.currentScenarioName ?? ''}>
+                              {live?.currentScenarioName ? `▶ ${live.currentScenarioName}` : 'running…'}
+                            </span>
+                            <span>{livePassed}/{liveTotal} ({pct}%)</span>
+                          </div>
+                        </div>
+                      )}
+                      <div className="eval-stats">
+                        <div><span className="n ok">{e.pass}</span><span className="lbl">pass</span></div>
+                        <div><span className="n err">{e.fail}</span><span className="lbl">fail</span></div>
+                        <div><span className="n">{e.cases}</span><span className="lbl">total</span></div>
+                        <div><span className="n">{e.lastRun}</span><span className="lbl">last run</span></div>
+                      </div>
                     </button>
+                    <div className="eval-card-actions">
+                      <button className="sf-mini-btn" onClick={(ev) => { ev.stopPropagation(); setRunDialog(true); }}>
+                        {PLAY_ICON} Run
+                      </button>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
@@ -244,6 +388,8 @@ const Eval: React.FC = () => {
           setTab={setDrawerTab}
           onClose={() => setOpen(null)}
           onRun={() => setRunDialog(true)}
+          agents={rawAgents}
+          userId={userId}
         />
       )}
 
@@ -262,13 +408,17 @@ const Eval: React.FC = () => {
   );
 };
 
-function EvalDrawer({ evalRow, tab, setTab, onClose, onRun }: {
+interface EvalDrawerProps {
   evalRow: EvalRow;
   tab: string;
   setTab: (t: string) => void;
   onClose: () => void;
   onRun: () => void;
-}) {
+  agents: Record<string, unknown>[];
+  userId: number;
+}
+
+function EvalDrawer({ evalRow, tab, setTab, onClose, onRun, agents, userId }: EvalDrawerProps) {
   useEffect(() => {
     const h = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', h);
@@ -282,6 +432,7 @@ function EvalDrawer({ evalRow, tab, setTab, onClose, onRun }: {
   });
 
   const scenarios: ScenarioResult[] = (runDetail as Record<string, unknown>)?.scenarioResults as ScenarioResult[] ?? [];
+  const [analyzing, setAnalyzing] = useState<{ scenario: ScenarioResult; ctx: { evalRunId: string; compositeScore?: number; attribution?: string } } | null>(null);
 
   const tabs = [
     { id: 'cases', label: 'Cases' },
@@ -339,41 +490,21 @@ function EvalDrawer({ evalRow, tab, setTab, onClose, onRun }: {
               {scenarios.length === 0 ? (
                 <div className="sf-empty-state">No scenario results available.</div>
               ) : (
-                <div className="sf-table">
-                  <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                    <thead>
-                      <tr>
-                        <th style={{ textAlign: 'left', padding: '8px 12px', fontFamily: 'var(--font-mono)', fontSize: 10, fontWeight: 600, color: 'var(--fg-4)', letterSpacing: '0.08em', textTransform: 'uppercase', borderBottom: '1px solid var(--border-1)' }}>Scenario</th>
-                        <th style={{ textAlign: 'left', padding: '8px 12px', fontFamily: 'var(--font-mono)', fontSize: 10, fontWeight: 600, color: 'var(--fg-4)', letterSpacing: '0.08em', textTransform: 'uppercase', borderBottom: '1px solid var(--border-1)' }}>Status</th>
-                        <th style={{ textAlign: 'right', padding: '8px 12px', fontFamily: 'var(--font-mono)', fontSize: 10, fontWeight: 600, color: 'var(--fg-4)', letterSpacing: '0.08em', textTransform: 'uppercase', borderBottom: '1px solid var(--border-1)' }}>Score</th>
-                        <th style={{ textAlign: 'left', padding: '8px 12px', fontFamily: 'var(--font-mono)', fontSize: 10, fontWeight: 600, color: 'var(--fg-4)', letterSpacing: '0.08em', textTransform: 'uppercase', borderBottom: '1px solid var(--border-1)' }}>Details</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {scenarios.map(s => (
-                        <tr key={s.scenarioId} style={{ borderBottom: '1px solid var(--border-1)' }}>
-                          <td style={{ padding: '10px 12px', fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--fg-2)' }}>
-                            {s.name || s.scenarioId}
-                          </td>
-                          <td style={{ padding: '10px 12px' }}>
-                            <span className={`sess-status s-${s.status === 'PASS' ? 'idle' : s.status === 'TIMEOUT' ? 'waiting' : 'error'}`}>
-                              {s.status}
-                            </span>
-                          </td>
-                          <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 500, color: scoreColor((s.compositeScore ?? 0) / 100) }}>
-                            {s.compositeScore != null ? `${Math.round(s.compositeScore)}%` : '—'}
-                          </td>
-                          <td style={{ padding: '10px 12px', fontSize: 11, color: 'var(--fg-4)', fontFamily: 'var(--font-mono)', maxWidth: 240 }}>
-                            {s.errorMessage ? (
-                              <span style={{ color: 'var(--error-fg, #d97b5c)' }}>{s.errorMessage}</span>
-                            ) : s.attribution && s.attribution !== 'NONE' ? (
-                              <span style={{ opacity: 0.7 }}>{s.attribution.toLowerCase().replace(/_/g, ' ')}</span>
-                            ) : null}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                <div className="scn-result-list">
+                  {scenarios.map(s => (
+                    <ScenarioResultCard
+                      key={s.scenarioId}
+                      scenario={s}
+                      onAnalyze={() => setAnalyzing({
+                        scenario: s,
+                        ctx: {
+                          evalRunId: evalRow.id,
+                          compositeScore: s.compositeScore,
+                          attribution: s.attribution,
+                        },
+                      })}
+                    />
+                  ))}
                 </div>
               )}
               {Array.isArray((runDetail as Record<string, unknown>)?.improvementSuggestions) &&
@@ -405,7 +536,126 @@ function EvalDrawer({ evalRow, tab, setTab, onClose, onRun }: {
           )}
         </div>
       </aside>
+
+      {analyzing && (
+        <AnalyzeCaseModal
+          // The Cases tab works against scenarios from the run's
+          // scenarioResults json, which carry id+name+task; reuse the same
+          // dataset shape so the Analyze modal's prompt builder can read
+          // sourceSessionId etc. from the EvalDatasetScenario contract.
+          scenario={scenarioResultToDataset(analyzing.scenario, evalRow.agentId)}
+          agents={agents}
+          userId={userId}
+          context={analyzing.ctx}
+          onClose={() => setAnalyzing(null)}
+        />
+      )}
     </>
+  );
+}
+
+// Adapt a per-run ScenarioResult (lives in scenarioResults jsonb) to the
+// EvalDatasetScenario shape that AnalyzeCaseModal expects. The two share
+// most fields but ScenarioResult lacks `agentId`/`createdAt`/`status`
+// (case status ≠ scenario status), so we synthesize sensible defaults.
+function scenarioResultToDataset(s: ScenarioResult, agentId: string): EvalDatasetScenario {
+  return {
+    id: s.scenarioId,
+    agentId,
+    name: s.name ?? s.scenarioId,
+    category: s.category ?? 'session_derived',
+    split: s.split ?? 'held_out',
+    task: s.task ?? '',
+    oracleType: s.oracleType ?? 'llm_judge',
+    oracleExpected: s.oracleExpected,
+    status: 'active',
+    createdAt: '',
+  };
+}
+
+interface ScenarioResultCardProps {
+  scenario: ScenarioResult;
+  onAnalyze: () => void;
+}
+
+function ScenarioResultCard({ scenario, onAnalyze }: ScenarioResultCardProps) {
+  const [showRationale, setShowRationale] = useState(false);
+  const [showOutput, setShowOutput] = useState(false);
+  const [showTask, setShowTask] = useState(false);
+
+  const score = scenario.compositeScore ?? 0;
+  const score01 = score / 100;
+  const tier = score >= 80 ? 'pass' : score >= 60 ? 'warn' : 'fail';
+
+  const attribution = scenario.attribution ?? 'NONE';
+  const isFailedAttr = attribution !== 'NONE';
+
+  return (
+    <div className={`scn-result-card s-${tier}`}>
+      <div className="scn-result-h">
+        <div className="scn-result-h-l">
+          <span className="scn-result-name">{scenario.name || scenario.scenarioId}</span>
+          <span className={`sess-status s-${scenario.status === 'PASS' ? 'idle' : scenario.status === 'TIMEOUT' ? 'waiting' : 'error'}`}>
+            {scenario.status}
+          </span>
+        </div>
+        <div className="scn-result-score" style={{ color: scoreColor(score01) }}>
+          {scenario.compositeScore != null ? Math.round(score) : '—'}<em>%</em>
+        </div>
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+        {scenario.category && <span className="kv-chip-sf">{scenario.category}</span>}
+        {scenario.split && <span className="kv-chip-sf">{scenario.split}</span>}
+        {/* PRD §2: attribution badge only when meaningful (non-NONE). For
+            passing scenarios attribution is always NONE — rendering an empty
+            "none" pill there is visually noisy and was r3-FE-2 review feedback. */}
+        {isFailedAttr && (
+          <span className="scn-result-attr attr-fail">
+            {attribution.toLowerCase().replace(/_/g, ' ')}
+          </span>
+        )}
+        {scenario.traceId && (
+          <span className="kv-chip-sf" title={scenario.traceId}>
+            trace · {scenario.traceId.slice(0, 8)}
+          </span>
+        )}
+      </div>
+
+      {scenario.errorMessage && (
+        <div className="scn-result-section" style={{ color: 'var(--error-fg, #d97b5c)' }}>
+          {scenario.errorMessage}
+        </div>
+      )}
+
+      {scenario.task && (
+        <>
+          <button className="scn-result-disclosure" onClick={() => setShowTask(v => !v)}>
+            {showTask ? '▾' : '▸'} task
+          </button>
+          {showTask && <div className="scn-result-section">{scenario.task}</div>}
+        </>
+      )}
+      {scenario.judgeRationale && (
+        <>
+          <button className="scn-result-disclosure" onClick={() => setShowRationale(v => !v)}>
+            {showRationale ? '▾' : '▸'} judge rationale
+          </button>
+          {showRationale && <div className="scn-result-section">{scenario.judgeRationale}</div>}
+        </>
+      )}
+      {scenario.agentFinalOutput && (
+        <>
+          <button className="scn-result-disclosure" onClick={() => setShowOutput(v => !v)}>
+            {showOutput ? '▾' : '▸'} agent final output
+          </button>
+          {showOutput && <div className="scn-result-section mono">{scenario.agentFinalOutput}</div>}
+        </>
+      )}
+
+      <div className="scn-result-actions">
+        <button className="sf-mini-btn" onClick={onAnalyze}>Analyze</button>
+      </div>
+    </div>
   );
 }
 

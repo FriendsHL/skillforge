@@ -194,3 +194,284 @@
 .mini-spark svg {
   display: block;
 }
+
+/* ============== EVAL TOP-LEVEL TABS ============== */
+
+.eval-toptab-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 0 12px;
+  border-bottom: 1px solid var(--border-1);
+  margin-bottom: 16px;
+}
+.eval-toptab {
+  background: transparent;
+  border: 0;
+  padding: 8px 14px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  color: var(--fg-3);
+  border-bottom: 2px solid transparent;
+  margin-bottom: -13px;
+  transition: color var(--transition-base), border-color var(--transition-base);
+}
+.eval-toptab:hover { color: var(--fg-1); }
+.eval-toptab.on {
+  color: var(--fg-1);
+  border-bottom-color: var(--accent, #6366f1);
+}
+.eval-toptab-count {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--fg-4);
+  margin-left: 6px;
+  letter-spacing: 0.04em;
+}
+
+/* ============== DATASET BROWSER ============== */
+
+.dataset-browser {
+  padding: 4px 4px 24px;
+}
+.dataset-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 16px;
+}
+.dataset-toolbar .ant-select,
+.dataset-toolbar .agents-search {
+  min-width: 200px;
+}
+.dataset-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 14px;
+}
+.dataset-card {
+  position: relative;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-md);
+  padding: 14px 16px 12px;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  transition: border-color var(--transition-base), box-shadow var(--transition-base);
+}
+.dataset-card:hover {
+  border-color: var(--border-2);
+  box-shadow: var(--shadow-card-hover);
+}
+.dataset-card.s-active { border-left: 3px solid var(--color-ok); }
+.dataset-card.s-draft { border-left: 3px solid var(--color-warn); }
+.dataset-card.s-discarded { border-left: 3px solid var(--border-2); opacity: 0.55; }
+.dataset-card-h {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.dataset-card-h h4 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--fg-1);
+  letter-spacing: -0.005em;
+  word-break: break-word;
+}
+.dataset-card-meta {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.dataset-card-task {
+  font-size: 12px;
+  color: var(--fg-3);
+  line-height: 1.55;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+
+/* ============== SCENARIO RESULT CARD (cases tab) ============== */
+
+.scn-result-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.scn-result-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-md);
+  padding: 14px 16px;
+}
+.scn-result-card.s-pass { border-left: 3px solid var(--color-ok); }
+.scn-result-card.s-warn { border-left: 3px solid var(--color-warn); }
+.scn-result-card.s-fail { border-left: 3px solid var(--color-err); }
+.scn-result-h {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.scn-result-h-l {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  min-width: 0;
+}
+.scn-result-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--fg-1);
+  word-break: break-word;
+}
+.scn-result-score {
+  font-family: var(--font-serif);
+  font-size: 28px;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  line-height: 1;
+}
+.scn-result-score em {
+  font-size: 12px;
+  font-style: normal;
+  opacity: 0.6;
+  margin-left: 2px;
+}
+.scn-result-attr {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--bg-base);
+  border: 1px solid var(--border-1);
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--fg-3);
+}
+.scn-result-attr.attr-fail { color: var(--color-err); border-color: var(--color-err); }
+.scn-result-disclosure {
+  background: transparent;
+  border: 0;
+  padding: 4px 0;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  color: var(--fg-3);
+  font-family: var(--font-mono);
+  letter-spacing: 0.04em;
+}
+.scn-result-disclosure:hover { color: var(--fg-1); }
+.scn-result-section {
+  margin-top: 8px;
+  padding: 10px 12px;
+  background: var(--bg-base);
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  color: var(--fg-2);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.scn-result-section.mono {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+.scn-result-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+/* ============== PROGRESS BAR ============== */
+
+.eval-progress {
+  margin-top: 8px;
+}
+.eval-progress-bar {
+  height: 4px;
+  background: var(--bg-base);
+  border-radius: 999px;
+  overflow: hidden;
+  border: 1px solid var(--border-1);
+}
+.eval-progress-bar-fill {
+  height: 100%;
+  background: var(--accent, #6366f1);
+  transition: width 320ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.eval-progress-meta {
+  margin-top: 4px;
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--fg-4);
+  letter-spacing: 0.04em;
+}
+.eval-progress-meta .cur {
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ============== SCENARIO DRAWER (DETAIL) ============== */
+
+.scn-detail-section {
+  margin-bottom: 18px;
+}
+.scn-detail-section h4 {
+  margin: 0 0 6px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-4);
+}
+.scn-detail-section pre {
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--bg-base);
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  color: var(--fg-2);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-mono);
+}
+.scn-recent-run {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  margin-bottom: 6px;
+  font-size: 12px;
+}
+.scn-recent-run .rid {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-3);
+}
