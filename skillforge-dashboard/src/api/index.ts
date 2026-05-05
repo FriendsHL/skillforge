@@ -896,6 +896,20 @@ export interface EvalDatasetScenario {
    * for FE consumption (the BE may add this field as it surfaces it).
    */
   conversationTurns?: ConversationTurn[];
+  /**
+   * EVAL-V2 M3b: optional rich-detail fields. Populated for "Base" scenarios
+   * (classpath / home dir JSON via {@link BaseScenario}) where the on-disk
+   * spec carries this metadata. Per-agent EvalScenarioEntity rows currently
+   * don't persist these (M3b doesn't touch the entity schema), so they
+   * remain undefined on the Agent tab — the drawer renders sections only
+   * when the field is non-empty.
+   */
+  toolsHint?: string[];
+  tags?: string[];
+  /** File names only (no content). Surfaces what the scenario sets up. */
+  setupFiles?: string[];
+  maxLoops?: number;
+  performanceThresholdMs?: number;
 }
 export const getEvalDatasetScenarios = (agentId: string | number) =>
   api.get<EvalDatasetScenario[]>('/eval/scenarios', { params: { agentId } });
@@ -982,6 +996,17 @@ export interface BaseScenario {
   source?: 'classpath' | 'home';
   /** EVAL-V2 M2: multi-turn turns when the on-disk JSON has them; NULL/undef = single-turn. */
   conversationTurns?: ConversationTurn[];
+  /**
+   * EVAL-V2 M3b: rich-detail fields surfaced by the BE for the drawer.
+   * Lists are only emitted when non-empty (BE-side guard); maxLoops /
+   * performanceThresholdMs always present (primitive defaults 10 / 30000).
+   */
+  toolsHint?: string[];
+  tags?: string[];
+  /** File names only (no content). Setup file content stays server-side. */
+  setupFiles?: string[];
+  maxLoops?: number;
+  performanceThresholdMs?: number;
 }
 export const getBaseScenarios = () => api.get<BaseScenario[]>('/eval/scenarios/base');
 

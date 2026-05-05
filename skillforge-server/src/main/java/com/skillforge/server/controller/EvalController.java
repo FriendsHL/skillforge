@@ -369,6 +369,28 @@ public class EvalController {
             map.put("oracleType", s.getOracle().getType());
             map.put("oracleExpected", s.getOracle().getExpected());
         }
+        // EVAL-V2 M3b: surface remaining EvalScenario fields so the drawer can
+        // show full case context (toolsHint / tags / setup files / loop & perf
+        // budgets). Setup files surface only file *names* (keys) — content stays
+        // server-side because seeds embed entire test fixtures (potentially MBs)
+        // that the drawer doesn't render anyway. Each list/map is only emitted
+        // when non-empty so single-turn / minimal scenarios keep a compact
+        // response shape (no empty `[]` shells).
+        if (s.getToolsHint() != null && !s.getToolsHint().isEmpty()) {
+            map.put("toolsHint", s.getToolsHint());
+        }
+        if (s.getTags() != null && !s.getTags().isEmpty()) {
+            map.put("tags", s.getTags());
+        }
+        if (s.getSetup() != null && s.getSetup().getFiles() != null
+                && !s.getSetup().getFiles().isEmpty()) {
+            map.put("setupFiles", new ArrayList<>(s.getSetup().getFiles().keySet()));
+        }
+        // maxLoops / performanceThresholdMs are primitive long/int with sensible
+        // defaults (10 / 30000) so we always emit them — the FE shows them as
+        // "max loops: X · perf: Yms" technical metadata.
+        map.put("maxLoops", s.getMaxLoops());
+        map.put("performanceThresholdMs", s.getPerformanceThresholdMs());
         // EVAL-V2 M2: surface multi-turn spec to FE so ScenarioDetailDrawer can
         // render the conversation view. Only emit the key when present so single-turn
         // cases keep their compact response shape.

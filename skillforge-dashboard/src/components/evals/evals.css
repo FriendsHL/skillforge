@@ -301,6 +301,26 @@
   overflow: hidden;
   word-break: break-word;
 }
+/* EVAL-V2 M3b: description preview on the dataset card — slightly muted
+   versus task, line-clamped to 2 to leave room for task underneath.
+   line-clamp is webkit-prefixed (works in Chrome/Edge/Safari/Firefox 68+);
+   on the off chance line-clamp is unsupported, max-height + overflow:hidden
+   fallback keeps the card from blowing up vertically. */
+.dataset-card-desc {
+  font-size: 11.5px;
+  color: var(--fg-4);
+  line-height: 1.5;
+  margin-bottom: 6px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  /* 2 lines × 1.5 line-height fallback for browsers without
+     -webkit-line-clamp (some older Firefox); 3em matches exactly the
+     two-line height so we don't crop the bottom of the second line. */
+  max-height: 3em;
+  word-break: break-word;
+}
 
 /* ============== SCENARIO RESULT CARD (cases tab) ============== */
 

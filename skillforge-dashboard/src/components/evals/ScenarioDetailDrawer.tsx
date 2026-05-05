@@ -224,6 +224,94 @@ function ScenarioDetailDrawer({ scenario, userId, onClose, onAnalyze }: Scenario
             </div>
           )}
 
+          {/* EVAL-V2 M3b: description is prose, not code — render in a regular
+              text block (not <pre>, which forces mono + preformatting). The
+              wrapping div mimics the .scn-detail-section pre frame for visual
+              consistency but uses sans body font and natural whitespace. */}
+          {scenario.description && scenario.description.trim().length > 0 && (
+            <div className="scn-detail-section">
+              <h4>Description</h4>
+              <div
+                style={{
+                  padding: '10px 12px',
+                  background: 'var(--bg-base)',
+                  border: '1px solid var(--border-1)',
+                  borderRadius: 4,
+                  fontSize: 13,
+                  color: 'var(--fg-2)',
+                  lineHeight: 1.55,
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word',
+                }}
+              >
+                {scenario.description}
+              </div>
+            </div>
+          )}
+
+          {scenario.toolsHint && scenario.toolsHint.length > 0 && (
+            <div className="scn-detail-section">
+              <h4>Tools</h4>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {scenario.toolsHint.map(t => (
+                  <span key={`tool-${t}`} className="kv-chip-sf" title={t}>{t}</span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {scenario.tags && scenario.tags.length > 0 && (
+            <div className="scn-detail-section">
+              <h4>Tags</h4>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {scenario.tags.map(t => (
+                  <span key={`tag-${t}`} className="kv-chip-sf" title={t}>#{t}</span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {scenario.setupFiles && scenario.setupFiles.length > 0 && (
+            <div className="scn-detail-section">
+              <h4>Setup files</h4>
+              <ul
+                style={{
+                  margin: 0,
+                  padding: '8px 12px 8px 26px',
+                  background: 'var(--bg-base)',
+                  border: '1px solid var(--border-1)',
+                  borderRadius: 4,
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: 11.5,
+                  color: 'var(--fg-2)',
+                  lineHeight: 1.6,
+                }}
+              >
+                {scenario.setupFiles.map(f => (
+                  <li key={`file-${f}`} style={{ wordBreak: 'break-all' }}>{f}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* EVAL-V2 M3b: technical knobs (loop / perf budget). BE always
+              emits both for base scenarios with primitive defaults (10 / 30000),
+              but on the agent path these are undefined — guard each so we
+              don't render "max loops: undefined". */}
+          {(scenario.maxLoops != null || scenario.performanceThresholdMs != null) && (
+            <div className="scn-detail-section">
+              <h4>Technical</h4>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {scenario.maxLoops != null && (
+                  <span className="kv-chip-sf">max loops · {scenario.maxLoops}</span>
+                )}
+                {scenario.performanceThresholdMs != null && (
+                  <span className="kv-chip-sf">perf budget · {scenario.performanceThresholdMs}ms</span>
+                )}
+              </div>
+            </div>
+          )}
+
           {scenario.extractionRationale && (
             <div className="scn-detail-section">
               <h4>Extraction rationale</h4>

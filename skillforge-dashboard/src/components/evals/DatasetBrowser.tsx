@@ -50,6 +50,15 @@ function baseToDataset(s: BaseScenario): EvalDatasetScenario {
     // Surface source on the projection so filter/render don't need to
     // cross-index back into baseRaw (which breaks once the array is filtered).
     source: s.source,
+    // EVAL-V2 M3b: pass through rich detail fields so the drawer can render
+    // toolsHint / tags / setup files / loop & perf metadata, and the card
+    // can show a description preview + a few tag chips.
+    conversationTurns: s.conversationTurns,
+    toolsHint: s.toolsHint,
+    tags: s.tags,
+    setupFiles: s.setupFiles,
+    maxLoops: s.maxLoops,
+    performanceThresholdMs: s.performanceThresholdMs,
   };
 }
 
@@ -222,32 +231,74 @@ function DatasetBrowser({ agents, userId }: DatasetBrowserProps) {
         <div className="sf-empty-state">No scenarios match the current filters.</div>
       ) : (
         <div className="dataset-grid">
-          {filtered.map(s => (
-            <button
-              key={s.id}
-              className={`dataset-card s-${s.status}`}
-              onClick={() => setOpened(s)}
-            >
-              <div className="dataset-card-h">
-                <h4>{s.name}</h4>
-                {tab === 'agent' ? (
-                  <span className={`sess-status s-${s.status === 'active' ? 'idle' : s.status === 'draft' ? 'waiting' : 'error'}`}>
-                    {s.status}
-                  </span>
-                ) : s.source ? (
-                  <span className="kv-chip-sf" title={s.source}>
-                    {s.source === 'classpath' ? '系统内置' : '用户新增'}
-                  </span>
-                ) : null}
-              </div>
-              <div className="dataset-card-meta">
-                {s.category && <span className="kv-chip-sf">{s.category}</span>}
-                {s.split && <span className="kv-chip-sf">{s.split}</span>}
-                <span className="kv-chip-sf">{s.oracleType}</span>
-              </div>
-              <div className="dataset-card-task">{s.task}</div>
-            </button>
-          ))}
+          {filtered.map(s => {
+            // EVAL-V2 M3b: cap at 3 tag chips on the card so a tag-heavy
+            // scenario (some seeds carry 6-8 tags) doesn't blow up vertical
+            // rhythm; the drawer renders the full list. Bound to a
+            // non-empty slice so we don't render an empty `<div>` strip.
+            const tagPreview = (s.tags ?? []).slice(0, 3);
+            const hasMoreTags = (s.tags?.length ?? 0) > tagPreview.length;
+            return (
+              <button
+                key={s.id}
+                className={`dataset-card s-${s.status}`}
+                onClick={() => setOpened(s)}
+              >
+                <div className="dataset-card-h">
+                  <h4>{s.name}</h4>
+                  {tab === 'agent' ? (
+                    <span className={`sess-status s-${s.status === 'active' ? 'idle' : s.status === 'draft' ? 'waiting' : 'error'}`}>
+                      {s.status}
+                    </span>
+                  ) : s.source ? (
+                    <span className="kv-chip-sf" title={s.source}>
+                      {s.source === 'classpath' ? '系统内置' : '用户新增'}
+                    </span>
+                  ) : null}
+                </div>
+                <div className="dataset-card-meta">
+                  {s.category && <span className="kv-chip-sf">{s.category}</span>}
+                  {s.split && <span className="kv-chip-sf">{s.split}</span>}
+                  <span className="kv-chip-sf">{s.oracleType}</span>
+                  {/* EVAL-V2 M3b: tag preview chips (max 3) inline with the
+                      meta row so card height stays consistent whether tags
+                      exist or not — no separate row that would shift layout. */}
+                  {tagPreview.map(t => (
+                    <span
+                      key={`tag-${t}`}
+                      className="kv-chip-sf"
+                      style={{ opacity: 0.75 }}
+                      title={t}
+                    >
+                      #{t}
+                    </span>
+                  ))}
+                  {hasMoreTags && (
+                    <span
+                      className="kv-chip-sf"
+                      style={{ opacity: 0.55 }}
+                      // EVAL-V2 M3b r2 W1: surface the actually-hidden tag
+                      // names on hover so the +N chip is informative, not
+                      // just a count badge.
+                      title={(s.tags ?? []).slice(tagPreview.length).join(', ')}
+                    >
+                      +{s.tags!.length - tagPreview.length}
+                    </span>
+                  )}
+                </div>
+                {/* EVAL-V2 M3b: description preview above the task line gives
+                    cards more information density (痛点 4: "只能看到地址").
+                    Falls back to nothing when description is blank — task
+                    line carries the load on minimal scenarios so card
+                    height stays roughly consistent. The CSS line-clamp on
+                    .dataset-card-task already handles long content. */}
+                {s.description && s.description.trim().length > 0 && (
+                  <div className="dataset-card-desc">{s.description}</div>
+                )}
+                <div className="dataset-card-task">{s.task}</div>
+              </button>
+            );
+          })}
         </div>
       )}
 
