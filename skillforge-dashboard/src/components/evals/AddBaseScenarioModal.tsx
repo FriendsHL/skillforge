@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Select, message } from 'antd';
-import { addBaseScenario, type BaseScenarioInput } from '../../api';
+import { addBaseScenario, type BaseScenarioInput, type ConversationTurn } from '../../api';
 
 const CLOSE_ICON = (
   <svg width={14} height={14} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
@@ -32,6 +32,14 @@ interface AddBaseScenarioModalProps {
  * {@code llm_judge} so a user can omit {@code oracleExpected} and still
  * submit. On 409 (file exists), shows a retry hint without resetting form.
  */
+const ASSISTANT_PLACEHOLDER = '<placeholder>';
+
+const TURN_ROLE_OPTIONS = [
+  { value: 'user', label: 'user' },
+  { value: 'assistant', label: 'assistant (placeholder)' },
+  { value: 'system', label: 'system' },
+];
+
 function AddBaseScenarioModal({ onClose, onAdded }: AddBaseScenarioModalProps) {
   const [name, setName] = useState('');
   const [task, setTask] = useState('');
@@ -41,6 +49,46 @@ function AddBaseScenarioModal({ onClose, onAdded }: AddBaseScenarioModalProps) {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [explicitId, setExplicitId] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  // EVAL-V2 M2: multi-turn editor state. Hidden behind a toggle inside the
+  // advanced disclosure — single-turn flow stays unchanged for everyday use.
+  // r2 fix B2: each row carries a stable `id` used as the React key. Without
+  // it (key=index), removing a middle turn caused React to reconcile DOM
+  // nodes onto the wrong row — textarea state from the deleted row stuck on
+  // the next row, so editing the "right" turn silently mutated the wrong
+  // one. The id is FE-only; stripped at submit time so the BE keeps seeing
+  // the canonical {role, content} payload.
+  type TurnRow = ConversationTurn & { id: string };
+  const newId = () =>
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `t-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  const [multiTurn, setMultiTurn] = useState(false);
+  const [turns, setTurns] = useState<TurnRow[]>(() => [
+    { id: newId(), role: 'user', content: '' },
+    { id: newId(), role: 'assistant', content: ASSISTANT_PLACEHOLDER },
+  ]);
+
+  const updateTurnById = (id: string, patch: Partial<ConversationTurn>) => {
+    setTurns(prev => prev.map(t => {
+      if (t.id !== id) return t;
+      const merged = { ...t, ...patch } as TurnRow;
+      // Assistant turns must use the placeholder literal — enforce in the editor
+      // so submission can never produce an invalid spec.
+      if (merged.role === 'assistant') {
+        merged.content = ASSISTANT_PLACEHOLDER;
+      }
+      return merged;
+    }));
+  };
+  const addTurn = (role: ConversationTurn['role']) => {
+    setTurns(prev => [
+      ...prev,
+      { id: newId(), role, content: role === 'assistant' ? ASSISTANT_PLACEHOLDER : '' },
+    ]);
+  };
+  const removeTurnById = (id: string) => {
+    setTurns(prev => prev.filter(t => t.id !== id));
+  };
 
   // Esc closes — same affordance as AnalyzeCaseModal so the dataset page
   // feels consistent on keyboard.
@@ -50,7 +98,17 @@ function AddBaseScenarioModal({ onClose, onAdded }: AddBaseScenarioModalProps) {
     return () => window.removeEventListener('keydown', h);
   }, [onClose]);
 
-  const canSubmit = name.trim().length > 0 && task.trim().length > 0 && !submitting;
+  // Multi-turn turns must contain at least one user turn with non-empty content.
+  const multiTurnValid =
+    turns.length > 0 &&
+    turns.some(t => t.role === 'user' && t.content.trim().length > 0) &&
+    turns.every(t => t.content.trim().length > 0);
+
+  const canSubmit =
+    name.trim().length > 0 &&
+    task.trim().length > 0 &&
+    !submitting &&
+    (!multiTurn || multiTurnValid);
 
   const handleSubmit = async () => {
     if (!canSubmit) return;
@@ -72,6 +130,17 @@ function AddBaseScenarioModal({ onClose, onAdded }: AddBaseScenarioModalProps) {
         type: oracleType,
         ...(oracleExpected.trim() ? { expected: oracleExpected.trim() } : {}),
       };
+    }
+    // EVAL-V2 M2: forward turns only when the multi-turn toggle is on AND the
+    // editor has valid content. Strip the FE-only `id` field so the BE sees
+    // the canonical {role, content} shape it validates against. Trim user
+    // content; assistant content stays exactly the placeholder literal (BE
+    // rejects anything else).
+    if (multiTurn && multiTurnValid) {
+      payload.conversationTurns = turns.map(t => ({
+        role: t.role,
+        content: t.role === 'assistant' ? ASSISTANT_PLACEHOLDER : t.content.trim(),
+      }));
     }
 
     try {
@@ -123,14 +192,32 @@ function AddBaseScenarioModal({ onClose, onAdded }: AddBaseScenarioModalProps) {
           </div>
 
           <div className="sf-modal-field">
-            <label>Task 指令<span style={{ color: 'var(--danger)' }}> *</span></label>
+            <label>
+              Task 指令<span style={{ color: 'var(--danger)' }}> *</span>
+              {multiTurn && (
+                <span style={{ marginLeft: 8, fontSize: 11, color: 'var(--fg-4)', fontWeight: 400 }}>
+                  multi-turn 仍需要 task summary（用于列表 / 搜索 / fallback 单轮 AB pipeline）
+                </span>
+              )}
+            </label>
             <textarea
               className="agents-search"
               style={{ width: '100%', minHeight: 96, fontFamily: 'var(--font-mono)' }}
-              placeholder={"e.g. Read /tmp/eval/input.txt and return only its first line."}
+              placeholder={multiTurn
+                ? 'e.g. Multi-turn debugging session — agent should ask for stack trace then identify root cause.'
+                : 'e.g. Read /tmp/eval/input.txt and return only its first line.'}
               value={task}
               onChange={e => setTask(e.target.value)}
             />
+            {/* r2 fix B1: surface the missing-task validation when the form
+                is otherwise complete (esp. in multi-turn mode where the user
+                might focus on turns and forget the task summary, hitting a
+                silent disabled-button dead-end). */}
+            {!task.trim() && (multiTurn ? multiTurnValid : name.trim()) && (
+              <p style={{ fontSize: 11, color: 'var(--danger)', marginTop: 4 }}>
+                Task summary 必填{multiTurn ? '（多轮模式也需要简短摘要）' : ''}
+              </p>
+            )}
           </div>
 
           <div className="sf-modal-field">
@@ -176,17 +263,126 @@ function AddBaseScenarioModal({ onClose, onAdded }: AddBaseScenarioModalProps) {
           </button>
 
           {showAdvanced && (
-            <div className="sf-modal-field">
-              <label>id（可选，留空自动生成 UUID）</label>
-              <input
-                className="agents-search"
-                style={{ width: '100%', fontFamily: 'var(--font-mono)' }}
-                placeholder="sc-bs-my-case (a-z 0-9 . _ -)"
-                value={explicitId}
-                onChange={e => setExplicitId(e.target.value)}
-                maxLength={64}
-              />
-            </div>
+            <>
+              <div className="sf-modal-field">
+                <label>id（可选，留空自动生成 UUID）</label>
+                <input
+                  className="agents-search"
+                  style={{ width: '100%', fontFamily: 'var(--font-mono)' }}
+                  placeholder="sc-bs-my-case (a-z 0-9 . _ -)"
+                  value={explicitId}
+                  onChange={e => setExplicitId(e.target.value)}
+                  maxLength={64}
+                />
+              </div>
+
+              {/* EVAL-V2 M2: multi-turn toggle + turns editor. Off by default;
+                  flipping on switches the case to a multi-turn spec. The turns
+                  editor enforces the assistant placeholder literal so the user
+                  can't accidentally bake a real assistant reply into the case. */}
+              <div className="sf-modal-field" style={{ borderTop: '1px solid var(--border-1)', paddingTop: 12 }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <input
+                    type="checkbox"
+                    checked={multiTurn}
+                    onChange={e => setMultiTurn(e.target.checked)}
+                  />
+                  <span>多轮对话 case（multi-turn）</span>
+                </label>
+                <p style={{ fontSize: 11, color: 'var(--fg-4)', marginTop: 4 }}>
+                  开启后场景按 <code>conversation_turns</code> 数组执行。
+                  Assistant turns 自动写入 <code>{ASSISTANT_PLACEHOLDER}</code>，runtime 替换为实际响应。
+                </p>
+              </div>
+
+              {multiTurn && (
+                <div className="sf-modal-field">
+                  <label>Turns（至少 1 个 user turn）</label>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {turns.map((t) => {
+                      const isPlaceholder = t.role === 'assistant';
+                      return (
+                        <div
+                          key={t.id}
+                          style={{
+                            display: 'flex',
+                            gap: 8,
+                            alignItems: 'flex-start',
+                            padding: 8,
+                            background: 'var(--bg-elev-1)',
+                            border: '1px solid var(--border-1)',
+                            borderRadius: 6,
+                          }}
+                        >
+                          <Select
+                            value={t.role}
+                            onChange={(v) => updateTurnById(t.id, { role: v as ConversationTurn['role'] })}
+                            options={TURN_ROLE_OPTIONS}
+                            size="small"
+                            style={{ width: 130, flexShrink: 0 }}
+                          />
+                          <textarea
+                            className="agents-search"
+                            style={{
+                              flex: 1,
+                              minHeight: 48,
+                              fontFamily: 'var(--font-mono)',
+                              fontSize: 12,
+                              opacity: isPlaceholder ? 0.6 : 1,
+                            }}
+                            placeholder={isPlaceholder ? ASSISTANT_PLACEHOLDER : 'turn content'}
+                            value={t.content}
+                            disabled={isPlaceholder}
+                            onChange={e => updateTurnById(t.id, { content: e.target.value })}
+                          />
+                          <button
+                            type="button"
+                            className="btn-ghost-sf"
+                            style={{ height: 28, fontSize: 11, padding: '0 8px', flexShrink: 0 }}
+                            onClick={() => removeTurnById(t.id)}
+                            disabled={turns.length <= 1}
+                            title="Remove turn"
+                          >
+                            ×
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                    <button
+                      type="button"
+                      className="btn-ghost-sf"
+                      style={{ fontSize: 11, padding: '4px 10px' }}
+                      onClick={() => addTurn('user')}
+                    >
+                      + user
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-ghost-sf"
+                      style={{ fontSize: 11, padding: '4px 10px' }}
+                      onClick={() => addTurn('assistant')}
+                    >
+                      + assistant placeholder
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-ghost-sf"
+                      style={{ fontSize: 11, padding: '4px 10px' }}
+                      onClick={() => addTurn('system')}
+                    >
+                      + system
+                    </button>
+                  </div>
+                  {!multiTurnValid && (
+                    <p style={{ fontSize: 11, color: 'var(--danger)', marginTop: 6 }}>
+                      至少需要 1 个 user turn 且所有 turn 的 content 非空
+                    </p>
+                  )}
+                </div>
+              )}
+            </>
           )}
         </div>
         <div className="sf-modal-f">

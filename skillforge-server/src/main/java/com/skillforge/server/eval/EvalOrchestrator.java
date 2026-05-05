@@ -134,9 +134,37 @@ public class EvalOrchestrator {
                     broadcaster.userEvent(userId, evt);
                 }
 
-                ScenarioRunResult runResult = scenarioRunner.runScenario(
-                        evalRunId, scenario, agentDef, userId);
-                EvalJudgeOutput judgeOutput = evalJudge.judge(scenario, runResult);
+                // EVAL-V2 M2: branch to multi-turn execution + multi-turn judge
+                // when the scenario carries a non-empty conversation_turns spec.
+                // Single-turn (NULL/empty) scenarios stay on the legacy path
+                // verbatim — preserves backward compat for the entire pipeline.
+                ScenarioRunResult runResult;
+                EvalJudgeOutput judgeOutput;
+                if (scenario.isMultiTurn()) {
+                    MultiTurnTranscript transcript = new MultiTurnTranscript();
+                    runResult = scenarioRunner.runScenarioMultiTurn(
+                            evalRunId, scenario, agentDef, userId, transcript);
+                    EvalJudgeMultiTurnOutput mt = evalJudge.judgeMultiTurnConversation(
+                            scenario, runResult, transcript);
+                    // Project multi-turn output → legacy EvalJudgeOutput shape so
+                    // the existing scenarioResults JSON / aggregation paths work
+                    // without forking. compositeScore is the single source of truth
+                    // for pass/fail and aggregation; outcomeScore = overallScore,
+                    // efficiencyScore is left at 0 for multi-turn (efficiency
+                    // semantics for multi-turn would need its own design — out of
+                    // M2 scope; the per-turn detail surfaces via metaJudgeRationale).
+                    judgeOutput = new EvalJudgeOutput();
+                    judgeOutput.setOutcomeScore(mt.getOverallScore());
+                    judgeOutput.setEfficiencyScore(0.0);
+                    judgeOutput.setCompositeScore(mt.getCompositeScore());
+                    judgeOutput.setPass(mt.isPass());
+                    judgeOutput.setAttribution(mt.getAttribution());
+                    judgeOutput.setMetaJudgeRationale(mt.getRationale());
+                } else {
+                    runResult = scenarioRunner.runScenario(
+                            evalRunId, scenario, agentDef, userId);
+                    judgeOutput = evalJudge.judge(scenario, runResult);
+                }
 
                 // Collect results
                 Map<String, Object> scenarioResult = new LinkedHashMap<>();

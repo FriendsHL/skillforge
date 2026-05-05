@@ -51,6 +51,15 @@ public class EvalScenarioEntity {
     @Column(columnDefinition = "TEXT")
     private String extractionRationale;
 
+    /**
+     * EVAL-V2 M2: JSON-encoded array of {@code {role, content}} for multi-turn cases.
+     * NULL means single-turn (use {@link #task} / {@link #oracleExpected} via the legacy path).
+     * Stored as TEXT (not JSONB) so we keep parser ownership in the service layer; the
+     * Spring-managed {@code ObjectMapper} handles encode/decode with all modules registered.
+     */
+    @Column(columnDefinition = "TEXT")
+    private String conversationTurns;
+
     @CreatedDate
     private Instant createdAt;
 
@@ -153,6 +162,14 @@ public class EvalScenarioEntity {
 
     public void setExtractionRationale(String extractionRationale) {
         this.extractionRationale = extractionRationale;
+    }
+
+    public String getConversationTurns() {
+        return conversationTurns;
+    }
+
+    public void setConversationTurns(String conversationTurns) {
+        this.conversationTurns = conversationTurns;
     }
 
     public Instant getCreatedAt() {

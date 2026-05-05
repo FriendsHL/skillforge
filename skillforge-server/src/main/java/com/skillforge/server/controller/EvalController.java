@@ -369,6 +369,12 @@ public class EvalController {
             map.put("oracleType", s.getOracle().getType());
             map.put("oracleExpected", s.getOracle().getExpected());
         }
+        // EVAL-V2 M2: surface multi-turn spec to FE so ScenarioDetailDrawer can
+        // render the conversation view. Only emit the key when present so single-turn
+        // cases keep their compact response shape.
+        if (s.getConversationTurns() != null && !s.getConversationTurns().isEmpty()) {
+            map.put("conversationTurns", s.getConversationTurns());
+        }
         return map;
     }
 
@@ -388,6 +394,22 @@ public class EvalController {
         map.put("extractionRationale", entity.getExtractionRationale());
         map.put("createdAt", entity.getCreatedAt());
         map.put("reviewedAt", entity.getReviewedAt());
+        // EVAL-V2 M2: parse conversation_turns String → List<{role, content}> so
+        // the FE drawer can render the multi-turn view. Bad JSON degrades to
+        // a missing key (FE shows single-turn fallback) — matches loader behaviour.
+        String turnsJson = entity.getConversationTurns();
+        if (turnsJson != null && !turnsJson.isBlank()) {
+            try {
+                List<Map<String, Object>> turns = objectMapper.readValue(
+                        turnsJson, new TypeReference<List<Map<String, Object>>>() {});
+                if (!turns.isEmpty()) {
+                    map.put("conversationTurns", turns);
+                }
+            } catch (Exception e) {
+                log.warn("Failed to parse conversation_turns for entity {}: {}",
+                        entity.getId(), e.getMessage());
+            }
+        }
         return map;
     }
 

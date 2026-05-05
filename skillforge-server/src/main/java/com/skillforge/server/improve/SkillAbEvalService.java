@@ -185,6 +185,14 @@ public class SkillAbEvalService {
             int passed = 0;
             for (EvalScenario scenario : heldOutScenarios) {
                 log.info("Skill AB eval scenario: {} ({})", scenario.getId(), scenario.getName());
+                // EVAL-V2 M2 R5: SkillAbEvalService does not support multi-turn yet.
+                // Fall back to single-turn (uses scenario.task) and warn so curators
+                // know the case isn't fully exercised in skill AB eval.
+                if (scenario.isMultiTurn()) {
+                    log.warn("Skill AB eval skipping multi-turn execution for scenario {}; falling back to single-turn. "
+                            + "SkillEvolution does not yet support multi-turn — R5 follow-up.",
+                            scenario.getId());
+                }
                 String candidateStatus;
                 double candidateScore;
                 try {

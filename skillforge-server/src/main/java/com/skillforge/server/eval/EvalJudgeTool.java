@@ -1,5 +1,7 @@
 package com.skillforge.server.eval;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillforge.core.llm.LlmProvider;
 import com.skillforge.core.llm.LlmProviderFactory;
 import com.skillforge.core.llm.LlmRequest;
@@ -12,6 +14,7 @@ import com.skillforge.server.eval.attribution.FailureAttribution;
 import com.skillforge.server.eval.scenario.EvalScenario;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -26,15 +29,29 @@ public class EvalJudgeTool {
 
     private final LlmProviderFactory llmProviderFactory;
     private final AttributionEngine attributionEngine;
+    private final ObjectMapper objectMapper;
     private final String defaultProviderName;
+    /**
+     * EVAL-V2 M2: composite weight for multi-turn judge — weight given to the
+     * "overall outcome" score; the remainder ({@code 1 - overallWeight}) goes
+     * to the average per-turn score. Default 0.7 per tech-design §1.4.
+     * Externalized via {@code skillforge.eval.judge.multi-turn-weight} so we
+     * can tune without code changes.
+     */
+    private final double multiTurnOverallWeight;
 
     public EvalJudgeTool(LlmProviderFactory llmProviderFactory,
                           AttributionEngine attributionEngine,
-                          LlmProperties llmProperties) {
+                          ObjectMapper objectMapper,
+                          LlmProperties llmProperties,
+                          @Value("${skillforge.eval.judge.multi-turn-weight:0.7}") double multiTurnOverallWeight) {
         this.llmProviderFactory = llmProviderFactory;
         this.attributionEngine = attributionEngine;
+        this.objectMapper = objectMapper;
         this.defaultProviderName = llmProperties.getDefaultProvider() != null
                 ? llmProperties.getDefaultProvider() : "claude";
+        // Clamp to [0,1] — a misconfigured value should not silently break math.
+        this.multiTurnOverallWeight = Math.max(0.0, Math.min(1.0, multiTurnOverallWeight));
     }
 
     public EvalJudgeOutput judge(EvalScenario scenario, ScenarioRunResult runResult) {
@@ -217,6 +234,227 @@ public class EvalJudgeTool {
             log.warn("LLM judge call failed: {}", e.getMessage());
             return 0.0;
         }
+    }
+
+    /**
+     * EVAL-V2 M2: judge a multi-turn conversation. Builds a transcript prompt
+     * (per-turn process scoring + overall outcome scoring) and asks the LLM to
+     * return JSON. Failures (no provider / malformed JSON / score out of range)
+     * degrade to a 0-score, NONE attribution — caller's pass threshold (40)
+     * still applies. The runResult is updated with status PASS|FAIL and
+     * {@code oracleScore} so the existing histogram/aggregation paths work
+     * unchanged.
+     *
+     * @param scenario   spec
+     * @param runResult  aggregated multi-turn run signals
+     * @param transcript user/assistant transcript with placeholders replaced
+     */
+    public EvalJudgeMultiTurnOutput judgeMultiTurnConversation(EvalScenario scenario,
+                                                                ScenarioRunResult runResult,
+                                                                MultiTurnTranscript transcript) {
+        EvalJudgeMultiTurnOutput out = new EvalJudgeMultiTurnOutput();
+
+        // ERROR/TIMEOUT: short-circuit to 0 score + signal-driven attribution
+        // matching single-turn judge() behaviour (callers depend on this).
+        if ("ERROR".equals(runResult.getStatus()) || "TIMEOUT".equals(runResult.getStatus())) {
+            out.setCompositeScore(0.0);
+            out.setOverallScore(0.0);
+            out.setPass(false);
+            EvalSignals signals = EvalSignals.builder()
+                    .engineThrewException(runResult.isEngineThrewException())
+                    .taskCompletionOraclePass(false)
+                    .hitLoopLimit("TIMEOUT".equals(runResult.getStatus()))
+                    .skillExecutionFailed(runResult.isSkillExecutionFailed())
+                    .memorySkillCalled(runResult.isMemorySkillCalled())
+                    .memoryResultEmpty(runResult.isMemoryResultEmpty())
+                    .build();
+            out.setAttribution(attributionEngine.compute(signals));
+            runResult.setOracleScore(0.0);
+            runResult.setStatus(runResult.isEngineThrewException() ? "VETO" : runResult.getStatus());
+            return out;
+        }
+
+        String expected = scenario.getOracle() != null ? scenario.getOracle().getExpected() : null;
+        String transcriptText = transcript != null ? transcript.render() : "(no transcript)";
+
+        try {
+            LlmProvider provider = llmProviderFactory.getProvider(defaultProviderName);
+            if (provider == null) {
+                log.warn("No LLM provider available for multi-turn judge, returning 0");
+                out.setCompositeScore(0.0);
+                out.setOverallScore(0.0);
+                out.setAttribution(FailureAttribution.NONE);
+                out.setRationale("No LLM provider available");
+                runResult.setOracleScore(0.0);
+                runResult.setStatus("FAIL");
+                return out;
+            }
+
+            String systemPrompt = """
+                    You are evaluating a multi-turn conversation between a user and an AI agent.
+                    Score per-turn process (Was each assistant response reasonable, informative, non-repetitive?) \
+                    and overall outcome (Did the conversation as a whole resolve the user's request and meet the expected behavior?).
+                    Respond with ONLY a JSON object — no markdown fences, no commentary — matching this shape:
+                    {
+                      "perTurnScores": [{"turnIndex": <int, 0-based among assistant turns>, "score": <0-100>, "comment": "<short>"}],
+                      "overallScore": <0-100>,
+                      "attribution": "<one of: PROMPT_QUALITY|CONTEXT_OVERFLOW|SKILL_MISSING|SKILL_EXECUTION_FAILURE|PERFORMANCE|MEMORY_INTERFERENCE|MEMORY_MISSING|NONE>",
+                      "rationale": "<concise reasoning, may reference specific turn indices>"
+                    }
+                    """;
+
+            String userMsg = String.format("""
+                    Conversation:
+                    ---
+                    %s
+                    ---
+
+                    Expected behavior:
+                    %s
+
+                    Scenario name: %s
+                    Scenario task summary: %s
+                    """,
+                    transcriptText,
+                    expected != null ? expected : "(none provided)",
+                    scenario.getName() != null ? scenario.getName() : scenario.getId(),
+                    scenario.getTask() != null ? scenario.getTask() : "(none)");
+
+            LlmRequest request = new LlmRequest();
+            request.setSystemPrompt(systemPrompt);
+            List<Message> messages = new ArrayList<>();
+            messages.add(Message.user(userMsg));
+            request.setMessages(messages);
+            request.setMaxTokens(1024);
+            request.setTemperature(0.0);
+
+            LlmResponse response = provider.chat(request);
+            String content = response.getContent();
+            if (content == null || content.isBlank()) {
+                log.warn("Multi-turn judge returned empty content for scenario {}", scenario.getId());
+                out.setCompositeScore(0.0);
+                out.setOverallScore(0.0);
+                out.setAttribution(FailureAttribution.NONE);
+                out.setRationale("Empty judge response");
+                runResult.setOracleScore(0.0);
+                runResult.setStatus("FAIL");
+                return out;
+            }
+
+            // Strip optional ```json fences before parsing.
+            String cleaned = content.trim();
+            if (cleaned.startsWith("```")) {
+                cleaned = cleaned.replaceFirst("```(?:json)?\\s*", "");
+                cleaned = cleaned.replaceFirst("\\s*```$", "");
+            }
+
+            JsonNode root;
+            try {
+                root = objectMapper.readTree(cleaned);
+            } catch (Exception parseEx) {
+                log.warn("Multi-turn judge returned non-JSON for scenario {}: {}",
+                        scenario.getId(), parseEx.getMessage());
+                out.setCompositeScore(0.0);
+                out.setOverallScore(0.0);
+                out.setAttribution(FailureAttribution.NONE);
+                out.setRationale("Judge output was not valid JSON: " + truncate(content, 200));
+                runResult.setOracleScore(0.0);
+                runResult.setStatus("FAIL");
+                return out;
+            }
+
+            double overallScore = clamp(root.path("overallScore").asDouble(0.0));
+            JsonNode perTurnNode = root.path("perTurnScores");
+            double perTurnSum = 0.0;
+            int perTurnCount = 0;
+            if (perTurnNode.isArray()) {
+                for (JsonNode turnNode : perTurnNode) {
+                    double s = clamp(turnNode.path("score").asDouble(0.0));
+                    int idx = turnNode.path("turnIndex").asInt(perTurnCount);
+                    String comment = turnNode.path("comment").asText("");
+                    out.getPerTurnScores().add(
+                            new EvalJudgeMultiTurnOutput.PerTurnScore(idx, s, comment));
+                    perTurnSum += s;
+                    perTurnCount++;
+                }
+            }
+            double perTurnAvg = perTurnCount > 0 ? perTurnSum / perTurnCount : overallScore;
+
+            double composite = multiTurnOverallWeight * overallScore
+                    + (1.0 - multiTurnOverallWeight) * perTurnAvg;
+            composite = clamp(composite);
+
+            out.setOverallScore(overallScore);
+            out.setCompositeScore(composite);
+            out.setRationale(root.path("rationale").asText(""));
+
+            FailureAttribution attribution = parseAttribution(root.path("attribution").asText("NONE"));
+            // If the judge omits attribution but the run signals point to a known
+            // failure mode, fall back to attribution engine for consistency with
+            // single-turn behaviour. attribution is non-NONE → trust judge.
+            if (attribution == FailureAttribution.NONE && composite < 60.0) {
+                EvalSignals signals = EvalSignals.builder()
+                        .engineThrewException(runResult.isEngineThrewException())
+                        .taskCompletionOraclePass(composite >= 60.0)
+                        .skillExecutionFailed(runResult.isSkillExecutionFailed())
+                        .skillOutputWasMalformed(runResult.isSkillOutputWasMalformed())
+                        .hitLoopLimit(runResult.getLoopCount() >= scenario.getMaxLoops())
+                        .nearPassOracle(composite >= 40 && composite < 60)
+                        .outputFormatCorrect(composite > 0)
+                        .slowExecution(runResult.getExecutionTimeMs() > scenario.getPerformanceThresholdMs())
+                        .memorySkillCalled(runResult.isMemorySkillCalled())
+                        .memoryResultEmpty(runResult.isMemoryResultEmpty())
+                        .build();
+                attribution = attributionEngine.compute(signals);
+            }
+            out.setAttribution(attribution);
+
+            boolean pass = composite >= 40.0;
+            out.setPass(pass);
+            runResult.setOracleScore(composite);
+            if (pass) {
+                runResult.setStatus("PASS");
+            } else if (runResult.isEngineThrewException()) {
+                runResult.setStatus("VETO");
+            } else {
+                runResult.setStatus("FAIL");
+            }
+            return out;
+        } catch (Exception e) {
+            log.warn("Multi-turn judge failed for scenario {}: {}", scenario.getId(), e.getMessage());
+            out.setCompositeScore(0.0);
+            out.setOverallScore(0.0);
+            out.setAttribution(FailureAttribution.NONE);
+            out.setRationale("Judge call failed: " + e.getMessage());
+            runResult.setOracleScore(0.0);
+            runResult.setStatus("FAIL");
+            return out;
+        }
+    }
+
+    private static double clamp(double v) {
+        if (Double.isNaN(v)) return 0.0;
+        return Math.max(0.0, Math.min(100.0, v));
+    }
+
+    private static FailureAttribution parseAttribution(String raw) {
+        if (raw == null || raw.isBlank()) return FailureAttribution.NONE;
+        String norm = raw.trim().toUpperCase(java.util.Locale.ROOT);
+        // Helpful aliases — multi-turn judge prompt may receive freer-form
+        // attribution names from older prompt iterations or external prompts.
+        if ("TOOL_FAILURE".equals(norm) || "TOOL_ERROR".equals(norm)) {
+            return FailureAttribution.SKILL_EXECUTION_FAILURE;
+        }
+        try {
+            return FailureAttribution.valueOf(norm);
+        } catch (IllegalArgumentException e) {
+            return FailureAttribution.NONE;
+        }
+    }
+
+    private static String truncate(String s, int max) {
+        if (s == null) return "";
+        return s.length() <= max ? s : s.substring(0, max) + "…";
     }
 
     private double callMetaJudge(EvalScenario scenario, ScenarioRunResult runResult, double currentScore) {

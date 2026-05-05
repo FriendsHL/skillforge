@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import {
   getScenarioRecentRuns,
   getAnalysisSessions,
+  type ConversationTurn,
   type EvalDatasetScenario,
   type ScenarioRecentRun,
   type AnalysisSession,
@@ -40,6 +41,61 @@ function fmtTime(iso: string | null | undefined): string {
   if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
   if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+/**
+ * EVAL-V2 M2: render a multi-turn conversation as role-tagged bubbles.
+ * Assistant turns whose content is the literal '<placeholder>' are styled
+ * as faded placeholders (no actual response yet — fills in at runtime). User
+ * turns get a left-aligned filled bubble; assistants and system get a
+ * surface-tinted bubble on the right.
+ */
+function ConversationTurns({ turns }: { turns: ConversationTurn[] }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      {turns.map((t, i) => {
+        const isUser = t.role === 'user';
+        const isPlaceholder = t.role === 'assistant' && t.content === '<placeholder>';
+        const isSystem = t.role === 'system' || t.role === 'tool';
+        return (
+          <div
+            key={i}
+            style={{
+              alignSelf: isUser ? 'flex-start' : 'flex-end',
+              maxWidth: '85%',
+              padding: '8px 12px',
+              borderRadius: 8,
+              background: isUser
+                ? 'var(--bg-elev-1, #1a1a1e)'
+                : isSystem
+                  ? 'var(--bg-elev-2, #232328)'
+                  : 'var(--bg-elev-1, #1a1a1e)',
+              border: '1px solid var(--border-1, #2c2c33)',
+              fontSize: 13,
+              lineHeight: 1.5,
+              opacity: isPlaceholder ? 0.55 : 1,
+              fontStyle: isPlaceholder ? 'italic' : 'normal',
+              color: isPlaceholder ? 'var(--fg-3)' : 'var(--fg-1)',
+            }}
+          >
+            <div style={{
+              fontSize: 10,
+              fontFamily: 'var(--font-mono)',
+              textTransform: 'uppercase',
+              color: 'var(--fg-4)',
+              letterSpacing: 0.5,
+              marginBottom: 4,
+            }}>
+              {t.role}
+            </div>
+            <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+              {isPlaceholder ? '⟨ assistant response — populated at runtime ⟩' : t.content}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 function RecentRunsTrend({ runs }: { runs: ScenarioRecentRun[] }) {
@@ -125,10 +181,41 @@ function ScenarioDetailDrawer({ scenario, userId, onClose, onAnalyze }: Scenario
         </div>
 
         <div className="sf-drawer-body">
-          <div className="scn-detail-section">
-            <h4>Task</h4>
-            <pre>{scenario.task}</pre>
-          </div>
+          {/* EVAL-V2 M2: multi-turn cases render the conversation transcript instead
+              of a single task pre. The summary `task` (a multi-turn synopsis) is still
+              shown in a collapsed disclosure for context. Single-turn cases keep the
+              original task / oracleExpected shape unchanged. */}
+          {scenario.conversationTurns && scenario.conversationTurns.length > 0 ? (
+            <>
+              <div className="scn-detail-section">
+                <h4>
+                  Conversation
+                  <span style={{
+                    marginLeft: 8,
+                    fontSize: 11,
+                    color: 'var(--fg-4)',
+                    fontWeight: 400,
+                  }}>
+                    {scenario.conversationTurns.length} turns · multi-turn
+                  </span>
+                </h4>
+                <ConversationTurns turns={scenario.conversationTurns} />
+              </div>
+              {scenario.task && (
+                <details className="scn-detail-section" style={{ cursor: 'pointer' }}>
+                  <summary style={{ fontWeight: 500, fontSize: 12, color: 'var(--fg-3)' }}>
+                    Task summary
+                  </summary>
+                  <pre style={{ marginTop: 8 }}>{scenario.task}</pre>
+                </details>
+              )}
+            </>
+          ) : (
+            <div className="scn-detail-section">
+              <h4>Task</h4>
+              <pre>{scenario.task}</pre>
+            </div>
+          )}
 
           {scenario.oracleExpected && (
             <div className="scn-detail-section">

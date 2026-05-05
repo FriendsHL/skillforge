@@ -109,6 +109,15 @@ public class AbEvalPipeline {
 
         for (EvalScenario scenario : heldOutScenarios) {
             log.info("AB eval scenario: {} ({})", scenario.getId(), scenario.getName());
+            // EVAL-V2 M2 R5: PromptImprover AB pipeline does not yet support
+            // multi-turn cases — falls back to single-turn (uses scenario.task).
+            // Log a warning so dataset curators know the case isn't fully exercised
+            // here; M2 keeps the AB pipeline working but doesn't crash on multi-turn.
+            if (scenario.isMultiTurn()) {
+                log.warn("AB eval skipping multi-turn execution for scenario {}; falling back to single-turn (task only). "
+                        + "PromptImprover does not yet support multi-turn — R5 follow-up.",
+                        scenario.getId());
+            }
             try {
                 ScenarioRunResult runResult = runSingleScenario(abRun.getId(), scenario, candidateDef);
                 EvalJudgeOutput judgeOutput = evalJudgeTool.judge(scenario, runResult);

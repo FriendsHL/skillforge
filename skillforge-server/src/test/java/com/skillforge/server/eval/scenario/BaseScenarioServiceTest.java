@@ -9,6 +9,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -126,6 +127,123 @@ class BaseScenarioServiceTest {
         assertThatThrownBy(() -> svc.addBaseScenario(validBody("sc-dup")))
                 .isInstanceOf(BaseScenarioService.ScenarioAlreadyExistsException.class)
                 .hasMessageContaining("sc-dup");
+    }
+
+    // ─── EVAL-V2 M2 multi-turn tests ────────────────────────────────────────
+
+    @Test
+    @DisplayName("addBaseScenario M2: multi-turn turns parsed and round-tripped through JSON file")
+    @SuppressWarnings("unchecked")
+    void addBaseScenario_multiTurn_writesAndReadsBack(@TempDir Path tmp) throws IOException {
+        BaseScenarioService svc = newService(tmp);
+        Map<String, Object> body = validBody("sc-mt-01");
+        body.put("conversation_turns", List.of(
+                Map.of("role", "user", "content", "Help debug NPE on line 42"),
+                Map.of("role", "assistant", "content", "<placeholder>"),
+                Map.of("role", "user", "content", "Tried that, still NPE.")
+        ));
+
+        String savedId = svc.addBaseScenario(body);
+
+        assertThat(savedId).isEqualTo("sc-mt-01");
+        Path file = tmp.resolve("sc-mt-01.json");
+        Map<String, Object> parsed = objectMapper.readValue(file.toFile(), Map.class);
+        Object roundTripped = parsed.get("conversation_turns");
+        assertThat(roundTripped).isInstanceOf(List.class);
+        List<Map<String, Object>> turns = (List<Map<String, Object>>) roundTripped;
+        assertThat(turns).hasSize(3);
+        assertThat(turns.get(0)).containsEntry("role", "user")
+                .containsEntry("content", "Help debug NPE on line 42");
+        assertThat(turns.get(1)).containsEntry("role", "assistant")
+                .containsEntry("content", "<placeholder>");
+        assertThat(turns.get(2)).containsEntry("role", "user");
+    }
+
+    @Test
+    @DisplayName("addBaseScenario M2: camelCase 'conversationTurns' alias is accepted")
+    @SuppressWarnings("unchecked")
+    void addBaseScenario_multiTurn_camelCaseAlias(@TempDir Path tmp) throws IOException {
+        BaseScenarioService svc = newService(tmp);
+        Map<String, Object> body = validBody("sc-mt-camel");
+        body.put("conversationTurns", List.of(
+                Map.of("role", "user", "content", "first"),
+                Map.of("role", "assistant", "content", "<placeholder>")
+        ));
+
+        svc.addBaseScenario(body);
+
+        Map<String, Object> parsed = objectMapper.readValue(tmp.resolve("sc-mt-camel.json").toFile(), Map.class);
+        // canonical on-disk key is snake_case
+        assertThat(parsed).containsKey("conversation_turns");
+        assertThat(parsed).doesNotContainKey("conversationTurns");
+    }
+
+    @Test
+    @DisplayName("addBaseScenario M2: empty turns array → IllegalArgumentException")
+    void addBaseScenario_multiTurn_emptyArray_rejected(@TempDir Path tmp) {
+        BaseScenarioService svc = newService(tmp);
+        Map<String, Object> body = validBody("sc-mt-empty");
+        body.put("conversation_turns", List.of());
+
+        assertThatThrownBy(() -> svc.addBaseScenario(body))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("non-empty");
+    }
+
+    @Test
+    @DisplayName("addBaseScenario M2: turns with no user message → IllegalArgumentException")
+    void addBaseScenario_multiTurn_noUser_rejected(@TempDir Path tmp) {
+        BaseScenarioService svc = newService(tmp);
+        Map<String, Object> body = validBody("sc-mt-nouser");
+        body.put("conversation_turns", List.of(
+                Map.of("role", "assistant", "content", "<placeholder>")
+        ));
+
+        assertThatThrownBy(() -> svc.addBaseScenario(body))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("at least one user turn");
+    }
+
+    @Test
+    @DisplayName("addBaseScenario M2: assistant turn with non-placeholder content → IllegalArgumentException")
+    void addBaseScenario_multiTurn_assistantNotPlaceholder_rejected(@TempDir Path tmp) {
+        BaseScenarioService svc = newService(tmp);
+        Map<String, Object> body = validBody("sc-mt-asst");
+        body.put("conversation_turns", List.of(
+                Map.of("role", "user", "content", "hello"),
+                Map.of("role", "assistant", "content", "I baked you a real reply")
+        ));
+
+        assertThatThrownBy(() -> svc.addBaseScenario(body))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("placeholder");
+    }
+
+    @Test
+    @DisplayName("addBaseScenario M2: turn with unknown role → IllegalArgumentException")
+    void addBaseScenario_multiTurn_unknownRole_rejected(@TempDir Path tmp) {
+        BaseScenarioService svc = newService(tmp);
+        Map<String, Object> body = validBody("sc-mt-role");
+        body.put("conversation_turns", List.of(
+                Map.of("role", "user", "content", "hi"),
+                Map.of("role", "ghost", "content", "<placeholder>")
+        ));
+
+        assertThatThrownBy(() -> svc.addBaseScenario(body))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("role");
+    }
+
+    @Test
+    @DisplayName("addBaseScenario M2: malformed turn shape (string instead of object) → IllegalArgumentException")
+    void addBaseScenario_multiTurn_malformedShape_rejected(@TempDir Path tmp) {
+        BaseScenarioService svc = newService(tmp);
+        Map<String, Object> body = validBody("sc-mt-bad");
+        body.put("conversation_turns", List.of("not an object"));
+
+        assertThatThrownBy(() -> svc.addBaseScenario(body))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("must be an object");
     }
 
     @Test

@@ -43,6 +43,13 @@ public class BaseScenarioService {
     private static final List<String> ALLOWED_ORACLE_TYPES =
             List.of("exact_match", "contains", "regex", "llm_judge");
 
+    /**
+     * EVAL-V2 M2: roles allowed in {@code conversation_turns}. Mirrors
+     * {@code SessionMessageEntity.role} domain.
+     */
+    private static final List<String> ALLOWED_TURN_ROLES =
+            List.of("user", "assistant", "system", "tool");
+
     private final ObjectMapper objectMapper;
     private final Path homeDir;
 
@@ -156,6 +163,18 @@ public class BaseScenarioService {
             }
         }
 
+        // EVAL-V2 M2: conversation_turns is optional. Both snake_case (on-disk JSON
+        // matches the spec example) and camelCase (Tool input may use either) are
+        // accepted; we always normalize to snake_case in the written file so the
+        // scenario JSON has a single canonical shape that matches EvalScenario's
+        // @JsonProperty("conversation_turns").
+        Object turnsRaw = body.get("conversation_turns");
+        if (turnsRaw == null) turnsRaw = body.get("conversationTurns");
+        List<Object> validatedTurns = null;
+        if (turnsRaw != null) {
+            validatedTurns = validateConversationTurns(turnsRaw);
+        }
+
         // Build a stable LinkedHashMap so the on-disk JSON has predictable
         // field order (id / name / category / split / task / oracle / etc.).
         Map<String, Object> normalized = new LinkedHashMap<>();
@@ -172,6 +191,8 @@ public class BaseScenarioService {
         if (body.containsKey("performanceThresholdMs"))
             normalized.put("performanceThresholdMs", body.get("performanceThresholdMs"));
         if (body.containsKey("tags")) normalized.put("tags", body.get("tags"));
+        // EVAL-V2 M2: write conversation_turns as the canonical snake_case key.
+        if (validatedTurns != null) normalized.put("conversation_turns", validatedTurns);
 
         Path target = pathFor(id);
         // Defense-in-depth: regex above already rejects traversal characters,
@@ -201,5 +222,76 @@ public class BaseScenarioService {
         if (v == null) return null;
         String s = v.toString().trim();
         return s.isEmpty() ? null : s;
+    }
+
+    /**
+     * EVAL-V2 M2: validate {@code conversation_turns} and return a normalized
+     * {@code List<Map<String,String>>} ready to embed in the on-disk JSON.
+     *
+     * <p>Rules (mirrors PRD §3 M2 / tech-design §1.3 protocol):
+     * <ul>
+     *   <li>must be a non-empty array (single empty arrays are rejected — empty turns
+     *       provide no signal and risk being mistaken for a valid multi-turn case)</li>
+     *   <li>each entry must be {@code {role, content}} with both fields non-blank</li>
+     *   <li>{@code role} must be one of {@link #ALLOWED_TURN_ROLES}</li>
+     *   <li>at least one user turn must exist (eval needs a user-driven conversation)</li>
+     *   <li>assistant turns must use the literal {@link EvalScenario#ASSISTANT_PLACEHOLDER}
+     *       — concrete assistant text is only meaningful at runtime, not at spec time</li>
+     * </ul>
+     */
+    @SuppressWarnings("unchecked")
+    private static List<Object> validateConversationTurns(Object raw) {
+        if (!(raw instanceof List<?> rawList)) {
+            throw new IllegalArgumentException("conversation_turns must be an array");
+        }
+        if (rawList.isEmpty()) {
+            throw new IllegalArgumentException("conversation_turns must be a non-empty array");
+        }
+        List<Object> normalized = new java.util.ArrayList<>(rawList.size());
+        boolean sawUser = false;
+        for (int i = 0; i < rawList.size(); i++) {
+            Object turnRaw = rawList.get(i);
+            if (!(turnRaw instanceof Map<?, ?> turnMap)) {
+                throw new IllegalArgumentException(
+                        "conversation_turns[" + i + "] must be an object with {role, content}");
+            }
+            String role = optionalString(turnMap.get("role"));
+            // content may be a single space; only true null/empty string is invalid.
+            Object contentRaw = turnMap.get("content");
+            String content = contentRaw == null ? null : contentRaw.toString();
+            if (role == null) {
+                throw new IllegalArgumentException(
+                        "conversation_turns[" + i + "].role is required");
+            }
+            String roleNormalized = role.toLowerCase(Locale.ROOT);
+            if (!ALLOWED_TURN_ROLES.contains(roleNormalized)) {
+                throw new IllegalArgumentException(
+                        "conversation_turns[" + i + "].role must be one of: "
+                                + String.join(", ", ALLOWED_TURN_ROLES));
+            }
+            if (content == null || content.isEmpty()) {
+                throw new IllegalArgumentException(
+                        "conversation_turns[" + i + "].content is required");
+            }
+            if ("assistant".equals(roleNormalized)
+                    && !EvalScenario.ASSISTANT_PLACEHOLDER.equals(content)) {
+                throw new IllegalArgumentException(
+                        "conversation_turns[" + i + "].content for an assistant turn must be the placeholder literal "
+                                + "'" + EvalScenario.ASSISTANT_PLACEHOLDER + "' — actual responses are populated at runtime");
+            }
+            if ("user".equals(roleNormalized)) {
+                sawUser = true;
+            }
+            // Build a stable LinkedHashMap so output JSON preserves {role, content} order.
+            Map<String, Object> normTurn = new LinkedHashMap<>();
+            normTurn.put("role", roleNormalized);
+            normTurn.put("content", content);
+            normalized.add(normTurn);
+        }
+        if (!sawUser) {
+            throw new IllegalArgumentException(
+                    "conversation_turns must contain at least one user turn");
+        }
+        return normalized;
     }
 }

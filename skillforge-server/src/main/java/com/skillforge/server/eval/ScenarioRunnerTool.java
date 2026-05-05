@@ -5,6 +5,7 @@ import com.skillforge.core.engine.ChatEventBroadcaster;
 import com.skillforge.core.engine.LoopContext;
 import com.skillforge.core.engine.LoopResult;
 import com.skillforge.core.model.AgentDefinition;
+import com.skillforge.core.model.Message;
 import com.skillforge.core.skill.SkillRegistry;
 import com.skillforge.server.entity.EvalSessionEntity;
 import com.skillforge.server.eval.sandbox.SandboxSkillRegistryFactory;
@@ -20,7 +21,9 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ExecutionException;
@@ -50,6 +53,177 @@ public class ScenarioRunnerTool {
         this.engineFactory = engineFactory;
         this.broadcaster = broadcaster;
         this.evalLoopExecutor = evalLoopExecutor;
+    }
+
+    /**
+     * EVAL-V2 M2: multi-turn execution. Drives the agent through each user turn
+     * sequentially, accumulating prior turns as message history so the agent
+     * sees a normal multi-turn conversation. Assistant placeholders in the
+     * spec are replaced in-memory by actual responses for the judge transcript;
+     * the on-disk EvalScenario is never mutated.
+     *
+     * <p>Single sandbox + single sandbox-registry built once, reused for all
+     * turns (mirroring how a chat session shares its skill registry across
+     * messages). Per-turn execution uses a 25s timeout; the case-level budget
+     * is 90s total — exceeding it returns a TIMEOUT result.
+     *
+     * <p>The returned {@link ScenarioRunResult} aggregates loop count, tool
+     * calls, and tokens across all turns. {@code agentFinalOutput} is the
+     * last turn's response. If any turn errors, the case is reported as ERROR.
+     *
+     * @param transcriptOut populated in-place with the full conversation
+     *                      (user turns verbatim, assistant turns with actual
+     *                      content). Pre-existing entries are preserved.
+     */
+    public ScenarioRunResult runScenarioMultiTurn(String evalRunId, EvalScenario scenario,
+                                                   AgentDefinition agentDef, Long userId,
+                                                   MultiTurnTranscript transcriptOut) {
+        String evalSessionId = "eval_" + UUID.randomUUID().toString();
+
+        EvalSessionEntity evalSession = new EvalSessionEntity();
+        evalSession.setSessionId(evalSessionId);
+        evalSession.setEvalRunId(evalRunId);
+        evalSession.setScenarioId(scenario.getId());
+        evalSession.setStatus("running");
+        evalSession.setStartedAt(Instant.now());
+        evalSessionRepository.save(evalSession);
+
+        long startMs = System.currentTimeMillis();
+        long budgetMs = 90_000L;
+
+        try {
+            writeFixtureFiles(evalRunId, scenario);
+
+            // Build sandbox registry + engine ONCE for the whole conversation.
+            SkillRegistry sandboxRegistry = sandboxFactory.buildSandboxRegistry(evalRunId, scenario.getId());
+            AgentLoopEngine engine = engineFactory.buildEvalEngine(sandboxRegistry);
+            AgentDefinition evalAgentDef = copyAgentDefWithoutEvalOverrides(agentDef);
+
+            Path sandboxRoot = sandboxFactory.getSandboxRoot(evalRunId, scenario.getId());
+
+            // Aggregated counters across turns.
+            ScenarioRunResult agg = new ScenarioRunResult();
+            agg.setScenarioId(scenario.getId());
+            agg.setStatus("PENDING_JUDGE");
+
+            List<Message> history = new ArrayList<>();
+            String lastResponse = null;
+            int totalLoops = 0;
+            long totalInput = 0;
+            long totalOutput = 0;
+
+            // Pre-collect user turn indices so we know when to inject runtime
+            // responses into the transcript output (assistant placeholders are
+            // populated by the immediate prior user-turn's response, in order).
+            List<EvalScenario.ConversationTurn> turns = scenario.getConversationTurns();
+            int userTurnIdx = 0;
+            int totalUserTurns = (int) turns.stream()
+                    .filter(t -> "user".equalsIgnoreCase(t.getRole()))
+                    .count();
+
+            for (int i = 0; i < turns.size(); i++) {
+                EvalScenario.ConversationTurn turn = turns.get(i);
+                String role = turn.getRole();
+                String content = turn.getContent();
+
+                if (!"user".equalsIgnoreCase(role)) {
+                    // Assistant placeholder: skip — the next user turn's engine.run
+                    // call will produce the actual assistant response and the engine's
+                    // returned message list naturally carries it forward.
+                    //
+                    // System / tool turns from the spec are surfaced into the judge
+                    // transcript only (not pushed into agent history) — M2 MVP keeps
+                    // execution semantics simple; agent's authoritative system prompt
+                    // is the AgentDefinition's, not a per-case override.
+                    if (transcriptOut != null && !"assistant".equalsIgnoreCase(role)) {
+                        transcriptOut.add(role, content);
+                    }
+                    continue;
+                }
+
+                long elapsed = System.currentTimeMillis() - startMs;
+                long remaining = budgetMs - elapsed;
+                if (remaining <= 5_000L) {
+                    log.warn("Multi-turn scenario {} timed out at user turn {}/{}",
+                            scenario.getId(), userTurnIdx + 1, totalUserTurns);
+                    return ScenarioRunResult.timeout(scenario.getId(), "90s budget exceeded mid-conversation");
+                }
+
+                // Per-turn execution mirrors the single-turn path's settings.
+                LoopContext ctx = new LoopContext();
+                ctx.setMaxLoops(scenario.getMaxLoops());
+                ctx.setExecutionMode("auto");
+                ctx.setMaxLlmStreamTimeoutMs(20_000L);
+
+                // Substitute /tmp/eval/ → sandbox root (same logic as runSingleScenario).
+                String userMsg = content == null ? "" : content.replace("/tmp/eval/", sandboxRoot.toString() + "/");
+
+                if (transcriptOut != null) transcriptOut.add("user", userMsg);
+
+                LoopResult turnResult;
+                try {
+                    turnResult = engine.run(evalAgentDef, userMsg,
+                            new ArrayList<>(history), evalSessionId, userId, ctx);
+                } catch (Exception turnEx) {
+                    log.error("Multi-turn scenario {} turn {}/{} failed: {}",
+                            scenario.getId(), userTurnIdx + 1, totalUserTurns, turnEx.getMessage());
+                    ScenarioRunResult err = ScenarioRunResult.error(scenario.getId(), turnEx.getMessage());
+                    err.setExecutionTimeMs(System.currentTimeMillis() - startMs);
+                    err.setLoopCount(totalLoops);
+                    err.setInputTokens(totalInput);
+                    err.setOutputTokens(totalOutput);
+                    err.setAgentFinalOutput(lastResponse);
+                    return err;
+                }
+
+                userTurnIdx++;
+
+                String response = turnResult.getFinalResponse();
+                lastResponse = response;
+                totalLoops += turnResult.getLoopCount();
+                totalInput += turnResult.getTotalInputTokens();
+                totalOutput += turnResult.getTotalOutputTokens();
+                agg.applyToolCallSignals(turnResult.getToolCalls());
+
+                if (transcriptOut != null) transcriptOut.add("assistant", response == null ? "" : response);
+
+                // Carry forward conversation history: the engine returned the full message
+                // list including the new user message + assistant + any tool exchanges.
+                // For the next turn, history = previous turns' user+assistant + this turn's
+                // user+assistant. Use the engine's message list directly to preserve any
+                // tool_use/tool_result pairing the engine produced (must stay paired).
+                if (turnResult.getMessages() != null) {
+                    history = new ArrayList<>(turnResult.getMessages());
+                } else {
+                    // Fallback: reconstruct minimally so the next turn still has context.
+                    history.add(Message.user(userMsg));
+                    if (response != null) history.add(Message.assistant(response));
+                }
+            }
+
+            agg.setLoopCount(totalLoops);
+            agg.setInputTokens(totalInput);
+            agg.setOutputTokens(totalOutput);
+            agg.setAgentFinalOutput(lastResponse);
+            agg.setExecutionTimeMs(System.currentTimeMillis() - startMs);
+
+            String sessionStatus = "PENDING_JUDGE".equals(agg.getStatus()) ? "completed" : "failed";
+            evalSession.setStatus(sessionStatus);
+            evalSession.setCompletedAt(Instant.now());
+            evalSessionRepository.save(evalSession);
+
+            return agg;
+        } catch (Exception e) {
+            log.error("Multi-turn scenario {} failed unexpectedly", scenario.getId(), e);
+            evalSession.setStatus("failed");
+            evalSession.setCompletedAt(Instant.now());
+            evalSessionRepository.save(evalSession);
+            ScenarioRunResult err = ScenarioRunResult.error(scenario.getId(), e.getMessage());
+            err.setExecutionTimeMs(System.currentTimeMillis() - startMs);
+            return err;
+        } finally {
+            sandboxFactory.cleanupSandbox(evalRunId, scenario.getId());
+        }
     }
 
     public ScenarioRunResult runScenario(String evalRunId, EvalScenario scenario,

@@ -857,6 +857,15 @@ export const triggerEvalRun = (agentId: string, userId = 1) =>
   api.post('/eval/runs', { agentId, userId });
 export const getEvalScenarios = () => api.get('/eval/scenarios');
 
+// EVAL-V2 M2: one row in a multi-turn conversation case.
+//   role: user | assistant | system | tool
+//   content: turn text. Assistant turns store the literal '<placeholder>'
+//   in the spec; runtime fills in the agent's actual response in-memory only.
+export interface ConversationTurn {
+  role: 'user' | 'assistant' | 'system' | 'tool';
+  content: string;
+}
+
 // EVAL-V2 M0: per-agent dataset = EvalScenarioEntity rows for that agent.
 export interface EvalDatasetScenario {
   id: string;
@@ -879,6 +888,14 @@ export interface EvalDatasetScenario {
    * Per-agent EvalScenarioEntity rows always come from the DB.
    */
   source?: 'classpath' | 'home' | 'db';
+  /**
+   * EVAL-V2 M2: when present and non-empty, this case is multi-turn — the
+   * detail drawer renders a conversation transcript instead of the single
+   * task / oracleExpected view. Wire format on disk is the snake_case key
+   * `conversation_turns`; the BE projection currently uses camelCase here
+   * for FE consumption (the BE may add this field as it surfaces it).
+   */
+  conversationTurns?: ConversationTurn[];
 }
 export const getEvalDatasetScenarios = (agentId: string | number) =>
   api.get<EvalDatasetScenario[]>('/eval/scenarios', { params: { agentId } });
@@ -931,6 +948,14 @@ export interface BaseScenarioInput {
   maxLoops?: number;
   performanceThresholdMs?: number;
   tags?: string[];
+  /**
+   * EVAL-V2 M2: optional multi-turn conversation. When present and non-empty,
+   * the BE writes the case as multi-turn; otherwise it stays single-turn
+   * (uses `task`). camelCase here matches FE convention; BaseScenarioService
+   * accepts both camelCase and the canonical snake_case `conversation_turns`
+   * and normalizes to snake_case on disk.
+   */
+  conversationTurns?: ConversationTurn[];
 }
 export interface BaseScenarioWriteResult {
   id: string;
@@ -955,6 +980,8 @@ export interface BaseScenario {
   oracleType?: string | null;
   oracleExpected?: string | null;
   source?: 'classpath' | 'home';
+  /** EVAL-V2 M2: multi-turn turns when the on-disk JSON has them; NULL/undef = single-turn. */
+  conversationTurns?: ConversationTurn[];
 }
 export const getBaseScenarios = () => api.get<BaseScenario[]>('/eval/scenarios/base');
 

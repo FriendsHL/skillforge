@@ -24,6 +24,9 @@ public class EvalScenario {
     public static final String SOURCE_HOME = "home";
     public static final String SOURCE_DB = "db";
 
+    /** EVAL-V2 M2: assistant turn placeholder literal — runtime replaces with actual model output. */
+    public static final String ASSISTANT_PLACEHOLDER = "<placeholder>";
+
     private String id;
     private String name;
     private String description;
@@ -37,9 +40,43 @@ public class EvalScenario {
     private int maxLoops = 10;
     private List<String> tags;
 
+    /**
+     * EVAL-V2 M2: when non-null/non-empty the scenario is treated as multi-turn —
+     * EvalOrchestrator branches to {@code runMultiTurn}. The wire format on disk /
+     * over the API is {@code [{role, content}, ...]} (snake_case key
+     * {@code conversation_turns}). Assistant turns must use {@link #ASSISTANT_PLACEHOLDER}
+     * literal as content; replacement happens in-memory at runtime so the on-disk
+     * scenario stays a stable input spec.
+     */
+    @com.fasterxml.jackson.annotation.JsonProperty("conversation_turns")
+    private List<ConversationTurn> conversationTurns;
+
     /** Set by ScenarioLoader at load time; not part of the on-disk JSON. */
     @JsonIgnore
     private String source;
+
+    /**
+     * EVAL-V2 M2: one row in a multi-turn conversation. Wire format: {@code {role, content}}.
+     * Roles match {@code SessionMessageEntity.role}: {@code user|assistant|system|tool}.
+     */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class ConversationTurn {
+        private String role;
+        private String content;
+
+        public ConversationTurn() {}
+
+        public ConversationTurn(String role, String content) {
+            this.role = role;
+            this.content = content;
+        }
+
+        public String getRole() { return role; }
+        public void setRole(String role) { this.role = role; }
+
+        public String getContent() { return content; }
+        public void setContent(String content) { this.content = content; }
+    }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class ScenarioSetup {
@@ -103,4 +140,17 @@ public class EvalScenario {
 
     public String getSource() { return source; }
     public void setSource(String source) { this.source = source; }
+
+    public List<ConversationTurn> getConversationTurns() { return conversationTurns; }
+    public void setConversationTurns(List<ConversationTurn> conversationTurns) {
+        this.conversationTurns = conversationTurns;
+    }
+
+    /**
+     * EVAL-V2 M2: returns true when the scenario carries a non-empty multi-turn spec.
+     * Single-turn legacy scenarios (NULL or empty) walk the original task-based path.
+     */
+    public boolean isMultiTurn() {
+        return conversationTurns != null && !conversationTurns.isEmpty();
+    }
 }

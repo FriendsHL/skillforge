@@ -1,5 +1,6 @@
 package com.skillforge.server.eval.scenario;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillforge.server.entity.EvalScenarioEntity;
 import com.skillforge.server.repository.EvalScenarioDraftRepository;
@@ -187,6 +188,22 @@ public class ScenarioLoader {
         oracle.setType(entity.getOracleType());
         oracle.setExpected(entity.getOracleExpected());
         scenario.setOracle(oracle);
+
+        // EVAL-V2 M2: propagate multi-turn turns from the entity's JSON-encoded
+        // String column. Parse failures only log — a malformed row should not
+        // cause the whole eval batch to crash; the scenario simply degrades to
+        // single-turn behaviour (conversationTurns=null).
+        String turnsJson = entity.getConversationTurns();
+        if (turnsJson != null && !turnsJson.isBlank()) {
+            try {
+                List<EvalScenario.ConversationTurn> turns = objectMapper.readValue(
+                        turnsJson, new TypeReference<List<EvalScenario.ConversationTurn>>() {});
+                scenario.setConversationTurns(turns);
+            } catch (Exception e) {
+                log.warn("Failed to parse conversation_turns for scenario id={}: {}",
+                        entity.getId(), e.getMessage());
+            }
+        }
 
         return scenario;
     }

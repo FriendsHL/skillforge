@@ -114,6 +114,27 @@ public class AddEvalScenarioTool implements Tool {
                 "description", "Optional free-form tags",
                 "items", Map.of("type", "string")
         ));
+        // EVAL-V2 M2: optional multi-turn conversation spec. Snake_case key on the
+        // wire (conversation_turns) matches the on-disk JSON; BaseScenarioService
+        // also accepts the camelCase alias for tools that prefer JS conventions.
+        properties.put("conversation_turns", Map.of(
+                "type", "array",
+                "description", "Optional multi-turn conversation. Array of {role, content} where role ∈ "
+                        + "[user|assistant|system|tool]. Assistant turns must use the literal '<placeholder>' "
+                        + "for content — the runtime replaces it with the agent's actual response. At least "
+                        + "one user turn is required. When omitted, the scenario is single-turn (uses 'task').",
+                "items", Map.of(
+                        "type", "object",
+                        "properties", Map.of(
+                                "role", Map.of(
+                                        "type", "string",
+                                        "enum", List.of("user", "assistant", "system", "tool")
+                                ),
+                                "content", Map.of("type", "string")
+                        ),
+                        "required", List.of("role", "content")
+                )
+        ));
         properties.put("force", Map.of(
                 "type", "boolean",
                 "description", "Overwrite existing scenario with the same id (defaults to false). "
