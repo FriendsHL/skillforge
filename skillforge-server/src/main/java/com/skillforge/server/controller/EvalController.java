@@ -4,12 +4,15 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillforge.server.entity.EvalRunEntity;
 import com.skillforge.server.entity.EvalScenarioEntity;
+import com.skillforge.server.entity.SessionEntity;
 import com.skillforge.server.eval.EvalOrchestrator;
+import com.skillforge.server.eval.scenario.BaseScenarioService;
 import com.skillforge.server.eval.scenario.EvalScenario;
 import com.skillforge.server.eval.scenario.ScenarioLoader;
 import com.skillforge.server.repository.EvalRunRepository;
 import com.skillforge.server.repository.EvalScenarioDraftRepository;
 import com.skillforge.server.repository.EvalSessionRepository;
+import com.skillforge.server.repository.SessionRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -50,6 +53,8 @@ public class EvalController {
     private final ExecutorService evalOrchestratorExecutor;
     private final ScenarioLoader scenarioLoader;
     private final EvalScenarioDraftRepository evalScenarioDraftRepository;
+    private final SessionRepository sessionRepository;
+    private final BaseScenarioService baseScenarioService;
 
     public EvalController(EvalOrchestrator evalOrchestrator,
                           EvalRunRepository evalRunRepository,
@@ -57,7 +62,9 @@ public class EvalController {
                           ObjectMapper objectMapper,
                           @Qualifier("evalOrchestratorExecutor") ExecutorService evalOrchestratorExecutor,
                           ScenarioLoader scenarioLoader,
-                          EvalScenarioDraftRepository evalScenarioDraftRepository) {
+                          EvalScenarioDraftRepository evalScenarioDraftRepository,
+                          SessionRepository sessionRepository,
+                          BaseScenarioService baseScenarioService) {
         this.evalOrchestrator = evalOrchestrator;
         this.evalRunRepository = evalRunRepository;
         this.evalSessionRepository = evalSessionRepository;
@@ -65,6 +72,8 @@ public class EvalController {
         this.evalOrchestratorExecutor = evalOrchestratorExecutor;
         this.scenarioLoader = scenarioLoader;
         this.evalScenarioDraftRepository = evalScenarioDraftRepository;
+        this.sessionRepository = sessionRepository;
+        this.baseScenarioService = baseScenarioService;
     }
 
     @PostMapping("/runs")
@@ -183,6 +192,9 @@ public class EvalController {
                     if (s.getSetup() != null && s.getSetup().getFiles() != null) {
                         map.put("setupFiles", new java.util.ArrayList<>(s.getSetup().getFiles().keySet()));
                     }
+                    if (s.getSource() != null) {
+                        map.put("source", s.getSource());
+                    }
                     return map;
                 })
                 .collect(Collectors.toList());
@@ -252,6 +264,112 @@ public class EvalController {
             }
         }
         return ResponseEntity.ok(result);
+    }
+
+    /**
+     * EVAL-V2 Q1: list chat sessions opened to analyze a given eval scenario
+     * (i.e. {@code t_session.source_scenario_id = scenarioId}). Filtered by
+     * {@code userId} so users only see their own analysis sessions.
+     */
+    @GetMapping("/scenarios/{id}/analysis-sessions")
+    public ResponseEntity<List<Map<String, Object>>> listAnalysisSessions(
+            @PathVariable("id") String scenarioId,
+            @RequestParam("userId") Long userId) {
+        if (scenarioId == null || scenarioId.isBlank() || userId == null) {
+            return ResponseEntity.badRequest().body(List.of());
+        }
+        List<SessionEntity> sessions = sessionRepository
+                .findBySourceScenarioIdAndUserIdOrderByUpdatedAtDesc(scenarioId, userId);
+        List<Map<String, Object>> result = sessions.stream()
+                .map(s -> {
+                    Map<String, Object> m = new LinkedHashMap<>();
+                    m.put("id", s.getId());
+                    m.put("agentId", s.getAgentId());
+                    m.put("title", s.getTitle());
+                    m.put("status", s.getStatus());
+                    m.put("runtimeStatus", s.getRuntimeStatus());
+                    m.put("messageCount", s.getMessageCount());
+                    m.put("createdAt", s.getCreatedAt());
+                    m.put("updatedAt", s.getUpdatedAt());
+                    return m;
+                })
+                .collect(Collectors.toList());
+        return ResponseEntity.ok(result);
+    }
+
+    /**
+     * EVAL-V2 Q2: write a base eval scenario JSON to the home dir
+     * ({@code ~/.skillforge/eval-scenarios/<id>.json}). The classpath seed
+     * scenarios stay read-only — anything operators / agents add lands in
+     * the home dir so it can be edited / removed without rebuilding the jar.
+     *
+     * <p>Body is a free-form JSON {@link EvalScenario} payload (id / name /
+     * task / oracle / setup / etc.); validation lives in
+     * {@link BaseScenarioService}.
+     */
+    @PostMapping("/scenarios/base")
+    public ResponseEntity<Map<String, Object>> addBaseScenario(
+            @RequestBody Map<String, Object> body,
+            @RequestParam(value = "force", defaultValue = "false") boolean force) {
+        try {
+            String savedId = baseScenarioService.addBaseScenario(body, force);
+            Map<String, Object> resp = new LinkedHashMap<>();
+            resp.put("id", savedId);
+            resp.put("name", body.get("name"));
+            resp.put("task", body.get("task"));
+            resp.put("category", body.getOrDefault("category", "session_derived"));
+            resp.put("split", body.getOrDefault("split", "held_out"));
+            resp.put("source", EvalScenario.SOURCE_HOME);
+            resp.put("status", "saved");
+            resp.put("path", baseScenarioService.pathFor(savedId).toString());
+            return ResponseEntity.status(201).body(resp);
+        } catch (BaseScenarioService.ScenarioAlreadyExistsException e) {
+            // 409 Conflict — operator must opt in to overwrite via ?force=true
+            return ResponseEntity.status(409).body(Map.of(
+                    "error", e.getMessage(),
+                    "id", e.getId(),
+                    "hint", "pass ?force=true to overwrite"));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        } catch (Exception e) {
+            log.error("Failed to add base scenario", e);
+            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /**
+     * EVAL-V2 Q2/Q3: list "base" scenarios — classpath seeds + home dir
+     * additions, merged by id (classpath wins on collision). Each entry has a
+     * {@code source} field ({@code classpath} | {@code home}) so the UI can
+     * label "system built-in" vs "user-added". No agent filter — base
+     * scenarios are global to the build.
+     */
+    @GetMapping("/scenarios/base")
+    public ResponseEntity<List<Map<String, Object>>> listBaseScenarios() {
+        List<EvalScenario> scenarios = scenarioLoader.loadBaseScenarios()
+                .stream()
+                .sorted(Comparator.comparing(EvalScenario::getId))
+                .toList();
+        List<Map<String, Object>> result = scenarios.stream()
+                .map(this::toBaseScenarioMap)
+                .collect(Collectors.toList());
+        return ResponseEntity.ok(result);
+    }
+
+    private Map<String, Object> toBaseScenarioMap(EvalScenario s) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        map.put("id", s.getId());
+        map.put("name", s.getName());
+        map.put("description", s.getDescription());
+        map.put("category", s.getCategory());
+        map.put("split", s.getSplit());
+        map.put("task", s.getTask());
+        map.put("source", s.getSource());
+        if (s.getOracle() != null) {
+            map.put("oracleType", s.getOracle().getType());
+            map.put("oracleExpected", s.getOracle().getExpected());
+        }
+        return map;
     }
 
     private Map<String, Object> toScenarioEntityMap(EvalScenarioEntity entity) {

@@ -1,9 +1,12 @@
 import React, { useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
   getScenarioRecentRuns,
+  getAnalysisSessions,
   type EvalDatasetScenario,
   type ScenarioRecentRun,
+  type AnalysisSession,
 } from '../../api';
 
 const CLOSE_ICON = (
@@ -14,6 +17,8 @@ const CLOSE_ICON = (
 
 interface ScenarioDetailDrawerProps {
   scenario: EvalDatasetScenario;
+  /** EVAL-V2 Q1: needed to query analysis sessions filtered by current user. */
+  userId?: number;
   onClose: () => void;
   onAnalyze?: (scenario: EvalDatasetScenario) => void;
 }
@@ -57,7 +62,9 @@ function RecentRunsTrend({ runs }: { runs: ScenarioRecentRun[] }) {
   );
 }
 
-function ScenarioDetailDrawer({ scenario, onClose, onAnalyze }: ScenarioDetailDrawerProps) {
+function ScenarioDetailDrawer({ scenario, userId, onClose, onAnalyze }: ScenarioDetailDrawerProps) {
+  const navigate = useNavigate();
+
   // Esc to close
   useEffect(() => {
     const h = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
@@ -69,6 +76,18 @@ function ScenarioDetailDrawer({ scenario, onClose, onAnalyze }: ScenarioDetailDr
     queryKey: ['scenario-recent-runs', scenario.id],
     queryFn: () => getScenarioRecentRuns(scenario.id, 5).then(r => r.data ?? []),
     enabled: !!scenario.id,
+  });
+
+  // EVAL-V2 Q1: list of prior analysis sessions linked to this scenario.
+  // Disabled when userId is not provided (e.g., legacy callers); the BE
+  // requires userId so the empty-userId path would 400 anyway.
+  const { data: analysisSessions = [] } = useQuery({
+    queryKey: ['scenario-analysis-sessions', scenario.id, userId],
+    queryFn: () =>
+      userId != null
+        ? getAnalysisSessions(scenario.id, userId).then(r => r.data ?? [])
+        : Promise.resolve([] as AnalysisSession[]),
+    enabled: !!scenario.id && userId != null,
   });
 
   return (
@@ -158,6 +177,44 @@ function ScenarioDetailDrawer({ scenario, onClose, onAnalyze }: ScenarioDetailDr
               </>
             )}
           </div>
+
+          {/* EVAL-V2 Q1: prior analysis sessions for this scenario. Hidden
+              when there are none so we don't add chrome to first-time uses. */}
+          {analysisSessions.length > 0 && (
+            <div className="scn-detail-section">
+              <h4>Analysis sessions ({analysisSessions.length})</h4>
+              {analysisSessions.map(s => (
+                <button
+                  key={s.id}
+                  type="button"
+                  className="scn-recent-run"
+                  style={{
+                    width: '100%',
+                    background: 'var(--bg-surface)',
+                    border: '1px solid var(--border-1)',
+                    cursor: 'pointer',
+                    font: 'inherit',
+                    color: 'inherit',
+                    textAlign: 'left',
+                  }}
+                  onClick={() => navigate(`/chat/${s.id}`)}
+                  title={`Open analysis session ${s.id}`}
+                >
+                  <div style={{ minWidth: 0 }}>
+                    <div className="rid" style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {s.title || s.id.slice(0, 8)}
+                    </div>
+                    <div style={{ fontSize: 11, color: 'var(--fg-4)', marginTop: 2 }}>
+                      {fmtTime(s.updatedAt ?? s.createdAt)} · {s.messageCount} msgs
+                    </div>
+                  </div>
+                  <span className={`sess-status s-${s.runtimeStatus === 'idle' ? 'idle' : s.runtimeStatus === 'running' ? 'running' : 'waiting'}`}>
+                    {s.runtimeStatus ?? s.status ?? '—'}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       </aside>
     </>

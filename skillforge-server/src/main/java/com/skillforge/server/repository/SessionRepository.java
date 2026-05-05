@@ -30,6 +30,15 @@ public interface SessionRepository extends JpaRepository<SessionEntity, String> 
     List<SessionEntity> findByParentSessionId(String parentSessionId);
 
     /**
+     * EVAL-V2 Q1: list analysis sessions linked to a given eval scenario.
+     * Filtered by userId so one user can't see another user's analysis
+     * sessions (multi-user safety; mirrors the pattern used by listSessions).
+     * Ordered by updatedAt desc so the most-recent analysis bubbles up.
+     */
+    List<SessionEntity> findBySourceScenarioIdAndUserIdOrderByUpdatedAtDesc(
+            String sourceScenarioId, Long userId);
+
+    /**
      * OBS-1 §7.4 R3-WN2 — fallback resolver path for SubAgent TOOL_CALL spans whose
      * output text didn't carry the expected "  childSessionId: <uuid>\n" line.
      *

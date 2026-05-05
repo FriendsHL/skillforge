@@ -155,12 +155,25 @@ public class SessionService {
     }
 
     public SessionEntity createSession(Long userId, Long agentId) {
+        return createSession(userId, agentId, null);
+    }
+
+    /**
+     * EVAL-V2 Q1 overload: creates a session and links it back to an eval
+     * scenario via {@code sourceScenarioId} so the scenario detail drawer
+     * can surface previous analysis sessions for the same case. Pass
+     * {@code null} for normal (non-analysis) sessions.
+     */
+    public SessionEntity createSession(Long userId, Long agentId, String sourceScenarioId) {
         SessionEntity session = new SessionEntity();
         session.setId(UUID.randomUUID().toString());
         session.setUserId(userId);
         session.setAgentId(agentId);
         session.setTitle("New Session");
         session.setMessagesJson("[]");
+        if (sourceScenarioId != null && !sourceScenarioId.isBlank()) {
+            session.setSourceScenarioId(sourceScenarioId);
+        }
         // 初始化 lastUserMessageAt 以免 B3 在空会话上计算出巨大 gap
         session.setLastUserMessageAt(java.time.Instant.now());
         // 创建时从 Agent 拷贝默认 executionMode

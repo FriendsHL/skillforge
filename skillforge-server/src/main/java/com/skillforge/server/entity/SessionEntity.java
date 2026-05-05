@@ -141,6 +141,24 @@ public class SessionEntity {
     @Column(name = "last_extracted_message_seq", nullable = false)
     private long lastExtractedMessageSeq = 0L;
 
+    /**
+     * EVAL-V2 Q1: id of an EvalScenarioEntity (or classpath / home scenario id)
+     * that this session was opened to analyze. Populated by AnalyzeCaseModal
+     * flow when an operator clicks "Analyze" on a case in the eval drawer;
+     * NULL for all regular chat sessions. Used by the scenario detail drawer
+     * to surface "previous analysis sessions for this case" so we don't fan
+     * out duplicate analysis chats.
+     *
+     * <p>Length 64 (not 36) — UUIDs are 36 chars but
+     * {@code BaseScenarioService.SAFE_ID} permits up to 64-char slugs (e.g.
+     * {@code sc-bs-improved-2026-05}); narrowing to 36 would let a long-id
+     * scenario pass validation, write to disk, then fail the Analyze →
+     * createSession insert with a confusing truncation error (reviewer r2
+     * W1, fixed before deploy).
+     */
+    @Column(name = "source_scenario_id", length = 64)
+    private String sourceScenarioId;
+
     @CreatedDate
     private LocalDateTime createdAt;
 
@@ -420,5 +438,13 @@ public class SessionEntity {
 
     public void setChannelPlatform(String channelPlatform) {
         this.channelPlatform = channelPlatform;
+    }
+
+    public String getSourceScenarioId() {
+        return sourceScenarioId;
+    }
+
+    public void setSourceScenarioId(String sourceScenarioId) {
+        this.sourceScenarioId = sourceScenarioId;
     }
 }

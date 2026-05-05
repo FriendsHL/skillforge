@@ -210,6 +210,25 @@ public class SkillForgeConfig {
         return tool;
     }
 
+    /**
+     * EVAL-V2 Q3: AddEvalScenario lets agents (or operators via the dashboard
+     * tool palette) persist a new base eval scenario to the home dir
+     * ({@code ~/.skillforge/eval-scenarios/<id>.json}). Picked up by
+     * {@link com.skillforge.server.eval.scenario.ScenarioLoader} on the next
+     * eval run.
+     */
+    @Bean
+    public com.skillforge.server.tool.AddEvalScenarioTool addEvalScenarioTool(
+            com.skillforge.server.eval.scenario.BaseScenarioService baseScenarioService,
+            ObjectMapper objectMapper,
+            SkillRegistry skillRegistry) {
+        com.skillforge.server.tool.AddEvalScenarioTool tool =
+                new com.skillforge.server.tool.AddEvalScenarioTool(baseScenarioService, objectMapper);
+        skillRegistry.registerTool(tool);
+        log.info("Registered AddEvalScenarioTool into SkillRegistry");
+        return tool;
+    }
+
     @Bean
     public ProposeHookBindingTool proposeHookBindingTool(AgentTargetResolver targetResolver,
                                                          AgentAuthoredHookService agentAuthoredHookService,

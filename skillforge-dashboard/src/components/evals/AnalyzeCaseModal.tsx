@@ -81,7 +81,14 @@ function AnalyzeCaseModal({ scenario, agents, userId, context, onClose }: Analyz
     if (!agentId) return;
     setSubmitting(true);
     try {
-      const res = await createSession({ userId, agentId: Number(agentId) });
+      // EVAL-V2 Q1: pass scenario.id as sourceScenarioId so the BE can link
+      // this analysis session back to the eval scenario, and the scenario
+      // detail drawer can surface previous analyses for the same case.
+      const res = await createSession({
+        userId,
+        agentId: Number(agentId),
+        sourceScenarioId: scenario.id,
+      });
       const newSession = (res.data ?? {}) as { id?: string; sessionId?: string };
       const sid = String(newSession.id ?? newSession.sessionId ?? '');
       if (!sid) throw new Error('no session id returned');

@@ -89,7 +89,12 @@ export const deleteAgent = (id: number) => api.delete(`/agents/${id}`);
 export const getLlmModels = () => api.get<ModelOption[]>('/llm/models');
 
 // Session API
-export const createSession = (data: { userId: number; agentId: number }) => api.post('/chat/sessions', data);
+// EVAL-V2 Q1: `sourceScenarioId` is optional and only set by the Analyze-case
+// flow on the eval drawer — the BE links the new chat session back to the
+// eval scenario being analyzed so the scenario detail drawer can list prior
+// analysis sessions for the same case.
+export const createSession = (data: { userId: number; agentId: number; sourceScenarioId?: string }) =>
+  api.post('/chat/sessions', data);
 export const getSessions = (userId: number) => api.get(`/chat/sessions?userId=${userId}`);
 export const getSessionMessages = (id: string, userId: number) =>
   api.get(`/chat/sessions/${id}/messages`, { params: { userId } });
@@ -868,6 +873,12 @@ export interface EvalDatasetScenario {
   extractionRationale?: string;
   createdAt: string;
   reviewedAt?: string;
+  /**
+   * EVAL-V2 Q3: where this scenario was loaded from. Only populated for the
+   * "Base" tab projection (synthesized from {@link BaseScenario.source}).
+   * Per-agent EvalScenarioEntity rows always come from the DB.
+   */
+  source?: 'classpath' | 'home' | 'db';
 }
 export const getEvalDatasetScenarios = (agentId: string | number) =>
   api.get<EvalDatasetScenario[]>('/eval/scenarios', { params: { agentId } });
@@ -883,6 +894,69 @@ export interface ScenarioRecentRun {
 }
 export const getScenarioRecentRuns = (scenarioId: string, limit = 10) =>
   api.get<ScenarioRecentRun[]>(`/eval/scenarios/${scenarioId}/recent-runs`, { params: { limit } });
+
+// EVAL-V2 Q1: list chat sessions opened to analyze a given eval scenario.
+// Filtered by userId on the BE so users only see their own analysis sessions.
+export interface AnalysisSession {
+  id: string;
+  agentId: number | null;
+  title: string | null;
+  status: string | null;
+  runtimeStatus: string | null;
+  messageCount: number;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+export const getAnalysisSessions = (scenarioId: string, userId: number) =>
+  api.get<AnalysisSession[]>(`/eval/scenarios/${scenarioId}/analysis-sessions`, { params: { userId } });
+
+// EVAL-V2 Q2: write a base eval scenario JSON to ~/.skillforge/eval-scenarios/.
+// Required: id (slug), name, task. Oracle / setup / etc. optional.
+export interface BaseScenarioInput {
+  /**
+   * Stable scenario id. BE auto-generates a UUID when this is omitted /
+   * empty / blank — most operator-driven adds let the BE pick the id;
+   * the explicit form is only useful when porting a known id from
+   * elsewhere.
+   */
+  id?: string;
+  name: string;
+  task: string;
+  description?: string;
+  category?: string;
+  split?: string;
+  oracle?: { type?: string; expected?: string; expectedList?: string[] };
+  setup?: { files?: Record<string, string> };
+  toolsHint?: string[];
+  maxLoops?: number;
+  performanceThresholdMs?: number;
+  tags?: string[];
+}
+export interface BaseScenarioWriteResult {
+  id: string;
+  status: string;
+  path: string;
+}
+export const addBaseScenario = (payload: BaseScenarioInput) =>
+  api.post<BaseScenarioWriteResult>('/eval/scenarios/base', payload);
+
+// EVAL-V2 Q2: "Base" dataset = classpath seeds ∪ home dir scenarios. Each
+// entry's `source` ('classpath' | 'home') lets the UI tag system vs
+// user-added. Backed by GET /eval/scenarios/base. The BE flattens oracle
+// to oracleType / oracleExpected (matches the per-agent endpoint shape) so
+// FE renderers can consume both via the same EvalDatasetScenario projection.
+export interface BaseScenario {
+  id: string;
+  name: string;
+  description?: string | null;
+  category?: string | null;
+  split?: string | null;
+  task: string;
+  oracleType?: string | null;
+  oracleExpected?: string | null;
+  source?: 'classpath' | 'home';
+}
+export const getBaseScenarios = () => api.get<BaseScenario[]>('/eval/scenarios/base');
 
 // ─── Self-Improve Pipeline ───────────────────────────────────────────────────
 

@@ -1,5 +1,6 @@
 package com.skillforge.server.eval.scenario;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 
 import java.util.List;
@@ -7,6 +8,21 @@ import java.util.Map;
 
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class EvalScenario {
+
+    /**
+     * EVAL-V2 Q3: where this scenario was loaded from.
+     * <ul>
+     *   <li>{@code classpath} — bundled jar resource under {@code eval/scenarios/}</li>
+     *   <li>{@code home}      — home dir override (BaseScenarioService.getHomeDir())</li>
+     *   <li>{@code db}        — promoted from {@code t_eval_scenario} (per-agent draft)</li>
+     * </ul>
+     * <p>Not deserialised from JSON; set by {@link ScenarioLoader} at load time so the
+     * UI can label "system" vs "user-added" scenarios. {@code @JsonIgnore} on read so
+     * a hand-edited JSON's stale {@code source} field can't override the loader.
+     */
+    public static final String SOURCE_CLASSPATH = "classpath";
+    public static final String SOURCE_HOME = "home";
+    public static final String SOURCE_DB = "db";
 
     private String id;
     private String name;
@@ -20,6 +36,10 @@ public class EvalScenario {
     private List<String> toolsHint;
     private int maxLoops = 10;
     private List<String> tags;
+
+    /** Set by ScenarioLoader at load time; not part of the on-disk JSON. */
+    @JsonIgnore
+    private String source;
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class ScenarioSetup {
@@ -80,4 +100,7 @@ public class EvalScenario {
 
     public List<String> getTags() { return tags; }
     public void setTags(List<String> tags) { this.tags = tags; }
+
+    public String getSource() { return source; }
+    public void setSource(String source) { this.source = source; }
 }

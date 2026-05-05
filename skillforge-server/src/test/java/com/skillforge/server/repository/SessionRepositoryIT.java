@@ -200,4 +200,42 @@ class SessionRepositoryIT extends AbstractPostgresIT {
         assertThat(nullRows).hasSize(1);
         assertThat(nullRows.get(0).getId()).isEqualTo(withNull.getId());
     }
+
+    // -----------------------------------------------------------------------
+    // EVAL-V2 Q1: findBySourceScenarioIdAndUserIdOrderByUpdatedAtDesc
+    // -----------------------------------------------------------------------
+
+    @Test
+    @DisplayName("findBySourceScenarioIdAndUserId: returns user's analysis sessions for a scenario only")
+    void findBySourceScenarioIdAndUserId_filtersByScenarioAndUser() {
+        // user 1 analyzed scenario A twice
+        SessionEntity a1 = buildSession(1L, 10L);
+        a1.setSourceScenarioId("scenario-a");
+        SessionEntity a2 = buildSession(1L, 10L);
+        a2.setSourceScenarioId("scenario-a");
+
+        // user 1 also analyzed scenario B (different scenario)
+        SessionEntity b1 = buildSession(1L, 10L);
+        b1.setSourceScenarioId("scenario-b");
+
+        // user 2 analyzed scenario A (different user — must not leak)
+        SessionEntity otherUser = buildSession(2L, 10L);
+        otherUser.setSourceScenarioId("scenario-a");
+
+        // a regular non-analysis session (sourceScenarioId NULL)
+        SessionEntity regular = buildSession(1L, 10L);
+
+        sessionRepository.save(a1);
+        sessionRepository.save(a2);
+        sessionRepository.save(b1);
+        sessionRepository.save(otherUser);
+        sessionRepository.save(regular);
+
+        List<SessionEntity> result = sessionRepository
+                .findBySourceScenarioIdAndUserIdOrderByUpdatedAtDesc("scenario-a", 1L);
+
+        assertThat(result).hasSize(2);
+        assertThat(result).allMatch(s -> "scenario-a".equals(s.getSourceScenarioId()));
+        assertThat(result).allMatch(s -> s.getUserId().equals(1L));
+    }
 }

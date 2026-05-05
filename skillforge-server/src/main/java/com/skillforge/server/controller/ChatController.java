@@ -311,7 +311,10 @@ public class ChatController {
 
     @PostMapping("/sessions")
     public ResponseEntity<SessionEntity> createSession(@RequestBody CreateSessionRequest request) {
-        SessionEntity session = sessionService.createSession(request.userId(), request.agentId());
+        // EVAL-V2 Q1: forward sourceScenarioId so analyze-case flow can link
+        // the analysis session back to the eval scenario being analyzed.
+        SessionEntity session = sessionService.createSession(
+                request.userId(), request.agentId(), request.sourceScenarioId());
         return ResponseEntity.ok(session);
     }
 
