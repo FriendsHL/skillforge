@@ -99,10 +99,50 @@ Dataset (name, description, metadata)
 
 ## 5. 用户当前最强诉求（按 chat 顺序 = 优先级信号）
 
-1. **看到 case 列表**（最先提，最痛）
-2. **多轮 vs 单轮区分**
-3. **看到进度**
-4. **看到分数 + 建议**
-5. **整体页面对标**
+1. **看到 case 列表**（最先提，最痛）—— M0+M1 已交付（commit 47b331c）
+2. **多轮 vs 单轮区分** —— M2 待启
+3. **看到进度** —— M0+M1 已交付
+4. **看到分数 + 建议** —— M0+M1 已交付，M3c 重构归因闭环
+5. **整体页面对标** —— M3a-g 持续推进
+6. **闭环完整：评测集 → 任务 → 执行 → 评价 → 归因 → 迭代建议**（2026-05-05 用户用了 M0+M1 后新提出）—— M3a + M3c 解
 
-→ 这指引 PRD M0/M1 优先解 1+3+4，M2 解 2，M3 解 5。
+→ 痛点 6 是 PRD 重写的核心动因（详见 PRD §1）。
+
+## 6. M0+M1 试用反馈（2026-05-05，PRD 重写动因）
+
+用户 2026-05-04 试用 M0+M1+Q123 后提出：
+
+### Gap A — Dataset UI 信息不足
+DatasetBrowser 卡片只显 task 一行；ScenarioDetailDrawer 没显示 description / oracle / setup.files / toolsHint / tags。用户原话："只能看到地址"（实际是 task 文本但信息密度低，看着像只是个文件路径）。→ M3b 解。
+
+### Gap B — Analyze 应绑 EvalRun 不是 Scenario
+当前 AnalyzeCaseModal 通过 `source_scenario_id` 关联 scenario。但同一 scenario 跑过多次 run（不同 score / attribution），分析对象应该是 (scenario, run) 组合而非仅 scenario。→ M3c 解（重构为独立关联表 t_eval_analysis_session 含 task / item / scenario 三种 analysis_type）。
+
+### Gap C — 评测闭环（用户主动设计）
+用户描述："评测集 + agent → 任务表 → 执行（复用 session/trace/span）→ 评价（score + 各维度）→ 归因 → 迭代建议"。这是把 EVAL-V2 从"测试工具"升级到"完整迭代闭环"。→ M3a + M3c 联合解。
+
+### Gap D — t_session 污染问题
+用户问"session/trace/span 表是不是要加字段区分 online vs eval"，主会话 audit 后发现：eval 跑动会创建 t_session 行 + t_llm_trace 行，**污染**用户 chat sessions 列表 / OBS trace dashboard / Cost 页 / Compaction 触发 / Startup recovery 5 处。→ D10 决策：t_session + t_llm_trace 加 `origin VARCHAR(16)` 字段，partial index 高效过滤。spawn child 时父→子继承 origin（跟 OBS-4 root_trace_id 复制逻辑同源）。→ M3a 内一并解。
+
+## 7. 持久化策略（已交付 + 计划）
+
+scenario 三源持久化策略（D3 + D7 + Q2+Q3 落实结果）：
+
+| 来源 | 持久化 | 状态 |
+|---|---|---|
+| 系统内置 | classpath JSON `eval/scenarios/*.json` | 已有，read-only |
+| 用户/Tool 新增 | home dir JSON `${SKILLFORGE_HOME}/eval-scenarios/*.json` | Q2+Q3 已交付（commit 3554569）|
+| session 提取 | DB `t_eval_scenario`（agentId NOT NULL） | 已有（P2-6 / EvalScenarioEntity） |
+
+**已知 trade-off**：scenario 持久化双轨（per-agent → DB / global → JSON）。M3g 真做 dataset versioning 时考虑统一（参 PRD §11 R5）。
+
+任务执行的持久化（D6 / D7 / D8 / D10）：
+
+| 数据 | 落库 | Milestone |
+|---|---|---|
+| 任务调度元数据（agent / dataset_filter / status / counts） | t_eval_task（rename from t_eval_run） | M3a |
+| per-case 评价指标（score / status / loops / tools / latency / attribution / rationale / final output） | t_eval_task_item（替代 jsonb scenarioResults） | M3a |
+| 任务跑动的实际对话轨迹 | t_session + t_llm_trace + t_llm_span（origin='eval'） | M3a 复用 OBS-1/2/4 |
+| 归因汇总 | t_eval_task.attribution_summary + improvement_suggestion 字段 | M3c |
+| 归因 chat session 关联 | t_eval_analysis_session 独立表 | M3c |
+| 人工标注 | t_eval_annotation 独立表 | M3f |
