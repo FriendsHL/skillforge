@@ -97,6 +97,14 @@ public class SubAgentStartupRecovery implements ApplicationRunner {
             return;
         }
         SessionEntity child = childOpt.get();
+        // EVAL-V2 M3a §2.2 R3: eval session 不走 production resume 路径 —— eval task 重启策略
+        // 由 EvalOrchestrator (M3a b2) 决定（重跑或标记失败），这里直接 mark CANCELLED 避免
+        // 跑出 production 风格的 "[Resume from restart]" 续接污染 eval trace。
+        if (SessionEntity.ORIGIN_EVAL.equals(child.getOrigin())) {
+            log.info("Startup recovery: skipping eval session {} (run {})", childId, run.getRunId());
+            markCancelled(run, "Startup recovery: skipped eval session (handled by EvalOrchestrator)");
+            return;
+        }
         String rs = child.getRuntimeStatus();
         if ("running".equals(rs)) {
             // 前次 JVM 挂掉 mid-loop,重新起一个 chatAsync 继续

@@ -5,6 +5,7 @@ import com.skillforge.server.dto.DailyUsageDto;
 import com.skillforge.server.dto.DashboardOverview;
 import com.skillforge.server.dto.ModelUsageDto;
 import com.skillforge.server.entity.ModelUsageEntity;
+import com.skillforge.server.entity.SessionEntity;
 import com.skillforge.server.repository.AgentRepository;
 import com.skillforge.server.repository.ModelUsageRepository;
 import com.skillforge.server.repository.SessionRepository;
@@ -73,8 +74,9 @@ public class DashboardService {
     }
 
     public List<DailyUsageDto> getDailyUsage(int days) {
+        // EVAL-V2 M3a §2.2 R3: dashboard 默认只看 production 流量；eval 流量不算 cost。
         LocalDateTime since = LocalDate.now().minusDays(days).atStartOfDay();
-        List<Object[]> rows = modelUsageRepository.findDailyUsage(since);
+        List<Object[]> rows = modelUsageRepository.findDailyUsage(since, SessionEntity.ORIGIN_PRODUCTION);
         List<DailyUsageDto> result = new ArrayList<>();
         for (Object[] row : rows) {
             String date = row[0].toString();
@@ -86,7 +88,8 @@ public class DashboardService {
     }
 
     public List<ModelUsageDto> getUsageByModel() {
-        List<Object[]> rows = modelUsageRepository.findUsageByModel();
+        // EVAL-V2 M3a §2.2 R3: production 默认。
+        List<Object[]> rows = modelUsageRepository.findUsageByModel(SessionEntity.ORIGIN_PRODUCTION);
         List<ModelUsageDto> result = new ArrayList<>();
         for (Object[] row : rows) {
             String model = (String) row[0];
@@ -97,7 +100,8 @@ public class DashboardService {
     }
 
     public List<AgentUsageDto> getUsageByAgent() {
-        List<Object[]> rows = modelUsageRepository.findUsageByAgent();
+        // EVAL-V2 M3a §2.2 R3: production 默认。
+        List<Object[]> rows = modelUsageRepository.findUsageByAgent(SessionEntity.ORIGIN_PRODUCTION);
         List<AgentUsageDto> result = new ArrayList<>();
         for (Object[] row : rows) {
             String agentName = (String) row[0];

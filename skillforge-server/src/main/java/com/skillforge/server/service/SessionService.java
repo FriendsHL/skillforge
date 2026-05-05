@@ -147,6 +147,9 @@ public class SessionService {
         session.setSubAgentRunId(runId);
         // 子 session 默认继承父的 executionMode
         session.setExecutionMode(parent.getExecutionMode());
+        // EVAL-V2 M3a §2.2: 子 session 复制父 origin。eval 父派 eval 子，整树同 origin，
+        // 不会有 eval 父 → production 子的"窜流"导致 eval cost 进 production dashboard。
+        session.setOrigin(parent.getOrigin());
         AgentEntity agent = agentRepository.findById(childAgentId).orElse(null);
         if (agent != null && agent.getExecutionMode() != null) {
             session.setExecutionMode(agent.getExecutionMode());
@@ -202,8 +205,20 @@ public class SessionService {
     }
 
     public List<SessionEntity> listUserSessions(Long userId) {
+        // EVAL-V2 M3a R3: 默认 origin='production'，避免 eval 派生 session 污染常规列表。
+        return listUserSessions(userId, SessionEntity.ORIGIN_PRODUCTION);
+    }
+
+    /**
+     * EVAL-V2 M3a §2.2 R3: 显式 origin 过滤的 overload，eval 任务 UI 用 origin='eval' 拉
+     * 自己的 session。不允许传 null —— null 等价于 "返回所有 origin"，会破坏过滤的初衷；
+     * 调用方需要这种语义请显式传两条 list 合并。
+     */
+    public List<SessionEntity> listUserSessions(Long userId, String origin) {
+        Objects.requireNonNull(origin, "origin");
         // 只返回顶层 session,SubAgent 派发的子 session 不污染主列表
-        return sessionRepository.findByUserIdAndParentSessionIdIsNullOrderByUpdatedAtDesc(userId);
+        return sessionRepository
+                .findByUserIdAndParentSessionIdIsNullAndOriginOrderByUpdatedAtDesc(userId, origin);
     }
 
     /** 列出某个 parent session 下的所有子 session(SubAgent 派发)。 */

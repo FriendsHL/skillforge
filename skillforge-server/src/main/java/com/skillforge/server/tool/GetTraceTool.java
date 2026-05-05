@@ -136,14 +136,26 @@ public class GetTraceTool implements Tool {
 
     private SkillResult listTraces(Map<String, Object> input, SkillContext context) throws JsonProcessingException {
         String sessionId = resolveSessionId(input, context);
-        assertSessionAccessible(sessionId, context);
+        SessionEntity session = assertSessionAccessible(sessionId, context);
 
         // OBS-2 M4: trace list comes from t_llm_trace (aggregate columns), no longer
         // from t_trace_span where span_type='AGENT_LOOP'. Per-trace LLM-call count is
         // computed via listSpansByTrace(kind={llm}, limit=HARD_MAX_SPANS) — bounded by
         // HARD_MAX_SPANS so no unbounded scan even on long sessions; trace's own
         // toolCallCount / eventCount are reused from the aggregate.
-        List<LlmTraceEntity> traces = traceRepository.findBySessionIdOrderByStartedAtDesc(sessionId);
+        //
+        // EVAL-V2 M3a §2.2 R3 (r2 fix): filter traces by session.origin. caller's session
+        // is already loaded by assertSessionAccessible — reuse it. Without this, an agent
+        // running inside an eval session would see only its own eval traces (origin matches),
+        // and an agent in a production session would see only production traces; b2 onwards
+        // creates real eval sessions so this becomes load-bearing for trace isolation.
+        // Defensive default: if origin is null (legacy row pre-V50, shouldn't happen given
+        // NOT NULL DEFAULT 'production' but JPA could in theory hold a transient null),
+        // fall back to production semantics.
+        String origin = session.getOrigin() != null
+                ? session.getOrigin() : SessionEntity.ORIGIN_PRODUCTION;
+        List<LlmTraceEntity> traces = traceRepository
+                .findBySessionIdAndOriginOrderByStartedAtDesc(sessionId, origin);
         List<Map<String, Object>> summaries = new java.util.ArrayList<>(traces.size());
         for (LlmTraceEntity te : traces) {
             summaries.add(toTraceSummary(te));
@@ -302,12 +314,17 @@ public class GetTraceTool implements Tool {
         return current;
     }
 
-    private void assertSessionAccessible(String sessionId, SkillContext context) {
+    /**
+     * Loads the session, asserts the caller can see it, and returns the entity so callers
+     * can read additional fields (e.g. {@code origin}) without re-fetching.
+     */
+    private SessionEntity assertSessionAccessible(String sessionId, SkillContext context) {
         SessionEntity session = sessionService.getSession(sessionId);
         Long callerUserId = context.getUserId();
         if (callerUserId != null && session.getUserId() != null && !callerUserId.equals(session.getUserId())) {
             throw new IllegalArgumentException("session is not accessible: " + sessionId);
         }
+        return session;
     }
 
     private static String stringValue(Object value) {

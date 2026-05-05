@@ -101,6 +101,12 @@ public class PendingConfirmationStartupRecovery implements SmartLifecycle {
         for (SessionEntity s : all) {
             String rs = s.getRuntimeStatus();
             if (!"running".equals(rs) && !"waiting_user".equals(rs)) continue;
+            // EVAL-V2 M3a §2.2 R3: eval session 不走 production 的 confirmation 修复路径 ——
+            // eval 流程不会出现 install confirmation；万一出现也由 EvalOrchestrator 处理。
+            // 跳过这里防止改写 eval session 的 messages 序列影响后续归因分析。
+            if (SessionEntity.ORIGIN_EVAL.equals(s.getOrigin())) {
+                continue;
+            }
             scanned++;
             try {
                 int orphans = repairSession(s);

@@ -18,6 +18,17 @@ import java.time.LocalDateTime;
 @EntityListeners(AuditingEntityListener.class)
 public class SessionEntity {
 
+    /**
+     * EVAL-V2 M3a §2.2: 来源标签，区分 production / eval 流量。
+     *
+     * <p>Single source of truth — 5 处过滤（SessionService.list*、TracesController.listTraces、
+     * DashboardService 三个 usage query、CompactionService 两条压缩入口、两个 startup recovery）
+     * 和 3 处 spawn（createSubSession / spawnMember / createBranchFromCheckpoint）都引用这两个常量，
+     * 避免散落的 magic string。
+     */
+    public static final String ORIGIN_PRODUCTION = "production";
+    public static final String ORIGIN_EVAL = "eval";
+
     @Id
     private String id;
 
@@ -158,6 +169,17 @@ public class SessionEntity {
      */
     @Column(name = "source_scenario_id", length = 64)
     private String sourceScenarioId;
+
+    /**
+     * EVAL-V2 M3a §2.2: 流量来源标签。{@link #ORIGIN_PRODUCTION} / {@link #ORIGIN_EVAL}。
+     *
+     * <p>V50 ALTER 加 NOT NULL DEFAULT 'production'，老 session 回填 production；新建 session
+     * 默认也是 production。EvalOrchestrator 创建 eval session 时显式 setOrigin("eval")。
+     * 子 session（SubAgent / collab member / compaction branch）由 spawn 路径继承父值，
+     * 保证整树同 origin。
+     */
+    @Column(name = "origin", nullable = false, length = 16)
+    private String origin = ORIGIN_PRODUCTION;
 
     @CreatedDate
     private LocalDateTime createdAt;
@@ -446,5 +468,13 @@ public class SessionEntity {
 
     public void setSourceScenarioId(String sourceScenarioId) {
         this.sourceScenarioId = sourceScenarioId;
+    }
+
+    public String getOrigin() {
+        return origin;
+    }
+
+    public void setOrigin(String origin) {
+        this.origin = origin;
     }
 }

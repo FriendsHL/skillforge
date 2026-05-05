@@ -23,6 +23,13 @@ public interface SessionRepository extends JpaRepository<SessionEntity, String> 
     /** 只取顶层 session(过滤掉 SubAgent 派发出来的子 session) */
     List<SessionEntity> findByUserIdAndParentSessionIdIsNullOrderByUpdatedAtDesc(Long userId);
 
+    /**
+     * EVAL-V2 M3a §2.2 R3: 顶层 session 列表，按 origin 过滤（默认 'production'）。
+     * 防止 EvalOrchestrator 派出的 eval session 污染常规列表视图。
+     */
+    List<SessionEntity> findByUserIdAndParentSessionIdIsNullAndOriginOrderByUpdatedAtDesc(
+            Long userId, String origin);
+
     List<SessionEntity> findByAgentId(Long agentId);
 
     long countByAgentId(Long agentId);

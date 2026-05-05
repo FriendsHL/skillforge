@@ -87,6 +87,17 @@ public class LlmTraceEntity {
     @Column(name = "agent_name", length = 256)
     private String agentName;
 
+    /**
+     * EVAL-V2 M3a §2.2: 流量来源标签 — {@code production} 或 {@code eval}。
+     *
+     * <p>V50 ALTER 加 NOT NULL DEFAULT 'production'，老行回填 production；写入路径
+     * (PgLlmTraceStore native SQL) 不显式 set，依赖 DB DEFAULT 即可（下一个 milestone
+     * 才会让 EvalOrchestrator 创建 origin='eval' 的真实 session，触发 trace 自动继承）。
+     * 仅作为读路径投影使用，配合 partial index {@code idx_trace_origin}。
+     */
+    @Column(name = "origin", nullable = false, length = 16)
+    private String origin = "production";
+
     public LlmTraceEntity() {}
 
     public String getTraceId() { return traceId; }
@@ -127,4 +138,6 @@ public class LlmTraceEntity {
     public void setError(String v) { this.error = v; }
     public String getAgentName() { return agentName; }
     public void setAgentName(String v) { this.agentName = v; }
+    public String getOrigin() { return origin; }
+    public void setOrigin(String v) { this.origin = v; }
 }

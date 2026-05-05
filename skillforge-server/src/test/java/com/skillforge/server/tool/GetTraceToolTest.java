@@ -63,7 +63,10 @@ class GetTraceToolTest {
         LlmTraceEntity te = traceEntity("root", "s1", "Agent loop", t, t.plusMillis(1234),
                 "ok", null, 1234L, 3, 1, "Greeter");
         when(sessionService.getSession("s1")).thenReturn(session("s1", 1L));
-        when(traceRepository.findBySessionIdOrderByStartedAtDesc("s1"))
+        // EVAL-V2 M3a r2 fix: session.origin defaults to 'production' (V50 DEFAULT) → tool
+        // queries findBySessionIdAndOrigin with that value, not the unfiltered overload.
+        when(traceRepository.findBySessionIdAndOriginOrderByStartedAtDesc("s1",
+                SessionEntity.ORIGIN_PRODUCTION))
                 .thenReturn(List.of(te));
         // OBS-2 M4: per-trace LLM call count from t_llm_span.
         when(traceStore.listSpansByTrace(eq("root"), eq(Set.of("llm")), anyInt()))
@@ -154,6 +157,30 @@ class GetTraceToolTest {
     }
 
     @Test
+    void listTraces_evalSession_filtersByEvalOrigin() throws Exception {
+        // EVAL-V2 M3a r2 fix: agent running inside an eval session must only see eval-origin
+        // traces (and equally, production agents see only production). This locks the origin
+        // pass-through from session.origin → repository call argument.
+        Instant t = Instant.parse("2026-04-26T00:00:00Z");
+        LlmTraceEntity evalTrace = traceEntity("eval-root", "eval-s1", "Eval scenario",
+                t, t.plusMillis(500), "ok", null, 500L, 0, 0, "EvalAgent");
+        when(sessionService.getSession("eval-s1")).thenReturn(evalSession("eval-s1", 1L));
+        when(traceRepository.findBySessionIdAndOriginOrderByStartedAtDesc("eval-s1",
+                SessionEntity.ORIGIN_EVAL))
+                .thenReturn(List.of(evalTrace));
+        when(traceStore.listSpansByTrace(eq("eval-root"), eq(Set.of("llm")), anyInt()))
+                .thenReturn(List.of());
+
+        SkillResult result = tool.execute(Map.of("action", "list_traces"),
+                new SkillContext(null, "eval-s1", 1L));
+
+        assertThat(result.isSuccess()).isTrue();
+        JsonNode json = objectMapper.readTree(result.getOutput());
+        assertThat(json.path("count").asInt()).isEqualTo(1);
+        assertThat(json.path("traces").get(0).path("traceId").asText()).isEqualTo("eval-root");
+    }
+
+    @Test
     void rejectsOtherUsersSession() {
         when(sessionService.getSession("other")).thenReturn(session("other", 99L));
 
@@ -191,6 +218,16 @@ class GetTraceToolTest {
         SessionEntity session = new SessionEntity();
         session.setId(id);
         session.setUserId(userId);
+        // SessionEntity constructor seeds origin = 'production'; explicit set for test clarity.
+        session.setOrigin(SessionEntity.ORIGIN_PRODUCTION);
+        return session;
+    }
+
+    private static SessionEntity evalSession(String id, Long userId) {
+        SessionEntity session = new SessionEntity();
+        session.setId(id);
+        session.setUserId(userId);
+        session.setOrigin(SessionEntity.ORIGIN_EVAL);
         return session;
     }
 

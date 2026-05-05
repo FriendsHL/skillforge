@@ -7,6 +7,7 @@ import com.skillforge.observability.entity.LlmTraceEntity;
 import com.skillforge.observability.repository.LlmSpanRepository;
 import com.skillforge.observability.repository.LlmTraceRepository;
 import com.skillforge.server.controller.observability.dto.TraceTreeDto;
+import com.skillforge.server.entity.SessionEntity;
 import com.skillforge.server.repository.SessionMessageRepository;
 import com.skillforge.server.service.TraceTreeService;
 import org.slf4j.Logger;
@@ -79,20 +80,20 @@ public class TracesController {
      */
     @GetMapping
     public ResponseEntity<List<Map<String, Object>>> listTraces(
-            @RequestParam(required = false) String sessionId) {
+            @RequestParam(required = false) String sessionId,
+            @RequestParam(defaultValue = SessionEntity.ORIGIN_PRODUCTION) String origin) {
+        // EVAL-V2 M3a §2.2 R3: 默认 origin='production'，eval task UI 显式带 origin='eval' 拉
+        // eval 流量。空串等价于"按 default 处理"，避免 ?origin= 这种 query string 旁路掉过滤。
+        String effectiveOrigin = (origin == null || origin.isBlank())
+                ? SessionEntity.ORIGIN_PRODUCTION : origin;
         List<LlmTraceEntity> traces;
         if (sessionId != null && !sessionId.isBlank()) {
-            traces = traceRepository.findBySessionIdOrderByStartedAtDesc(sessionId);
+            traces = traceRepository.findBySessionIdAndOriginOrderByStartedAtDesc(sessionId, effectiveOrigin);
         } else {
             // Pre-M3 behaviour returned all traces ordered by recency. We don't expose a
             // global findAllOrderByStartedAtDesc — admins / cron tools call the per-session form.
-            traces = new ArrayList<>(traceRepository.findAll());
-            traces.sort((a, b) -> {
-                if (a.getStartedAt() == null && b.getStartedAt() == null) return 0;
-                if (a.getStartedAt() == null) return 1;
-                if (b.getStartedAt() == null) return -1;
-                return b.getStartedAt().compareTo(a.getStartedAt());
-            });
+            // M3a R3: 全量路径也走 origin 过滤（默认 production）。
+            traces = traceRepository.findByOriginOrderByStartedAtDesc(effectiveOrigin);
         }
 
         // r2 B-1 fix: batch-count llm spans across all traces in a single GROUP BY query

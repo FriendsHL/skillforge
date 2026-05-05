@@ -207,6 +207,9 @@ public class CompactionService implements ContextCompactorCallback {
                 branch.setParentSessionId(source.getId());
                 // branch 是“分叉快照”，深度沿用源会话，避免影响 sub-agent 深度限制。
                 branch.setDepth(source.getDepth());
+                // EVAL-V2 M3a §2.2: branch 复制源 origin（"eval 父"分叉出"eval 子" 而非 production，
+                // 整树 origin 一致；正常 production session 默认 production）。
+                branch.setOrigin(source.getOrigin());
                 branch.setExecutionMode(source.getExecutionMode());
                 branch.setLightContext(source.isLightContext());
                 branch.setMaxLoops(source.getMaxLoops());
@@ -277,6 +280,13 @@ public class CompactionService implements ContextCompactorCallback {
                 SessionEntity session = sessionRepository.findById(sessionId)
                         .orElseThrow(() -> new RuntimeException("Session not found: " + sessionId));
 
+                // EVAL-V2 M3a §2.2 R3: eval session 跳过 compact —— eval case 通常是短 turn,
+                // 没必要跑 compact 流程；让 eval 流程零干扰，trace 直接保留全文用于归因分析。
+                if (SessionEntity.ORIGIN_EVAL.equals(session.getOrigin())) {
+                    log.debug("light compact skipped (eval origin): sessionId={}", sessionId);
+                    return;
+                }
+
                 if ("user-manual".equals(source) && "running".equals(session.getRuntimeStatus())) {
                     throw new IllegalStateException("Cannot compact while session is running");
                 }
@@ -313,6 +323,12 @@ public class CompactionService implements ContextCompactorCallback {
                 SessionEntity session = sessionRepository.findById(sessionId).orElse(null);
                 if (session == null) {
                     out[0] = CompactCallbackResult.noOp(current, "session not found");
+                    return;
+                }
+                // EVAL-V2 M3a §2.2 R3: eval session 直接 no-op，让 engine callback 拿到原 messages。
+                if (SessionEntity.ORIGIN_EVAL.equals(session.getOrigin())) {
+                    log.debug("callback light compact skipped (eval origin): sessionId={}", sessionId);
+                    out[0] = CompactCallbackResult.noOp(current, "eval origin: compact skipped");
                     return;
                 }
                 if (!isBypassGuard(source, "light")) {
@@ -367,6 +383,13 @@ public class CompactionService implements ContextCompactorCallback {
             try {
                 SessionEntity session = sessionRepository.findById(sessionId).orElse(null);
                 if (session == null) {
+                    return null;
+                }
+
+                // EVAL-V2 M3a §2.2 R3: eval session 跳过 full compact —— phase1Success 仍设 false，
+                // 让 finally 把 sessionId 从 fullCompactInFlight 摘出来，避免后续误以为还在跑。
+                if (SessionEntity.ORIGIN_EVAL.equals(session.getOrigin())) {
+                    log.debug("fullCompact skipped (eval origin): sessionId={}", sessionId);
                     return null;
                 }
 

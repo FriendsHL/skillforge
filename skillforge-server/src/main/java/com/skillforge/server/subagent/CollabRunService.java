@@ -171,6 +171,11 @@ public class CollabRunService {
         // 继承同一 root（递归 child of child 也走此路径，决策 Q6 无深度限制）。
         // 注意：必须在 chatAsync 之前 setActiveRootTraceId，让 child 的 chatAsync 能读到。
         child.setActiveRootTraceId(spawningSession.getActiveRootTraceId());
+        // EVAL-V2 M3a §2.2: collab member 从 spawningSession 复制 origin，避免 eval 父
+        // 派生的 collab 子被默认 production 污染（默认在 SessionService.createSubSession 已经
+        // 复制过一次；此处再写一次是 defense-in-depth，因为 createSubSession 历史上不知道
+        // collab 路径，万一未来该方法签名变更不再调它，origin 仍能保证从 collab 路径补上）。
+        child.setOrigin(spawningSession.getOrigin());
         sessionService.saveSession(child);
 
         subAgentRegistry.attachChildSession(run.runId, child.getId());
