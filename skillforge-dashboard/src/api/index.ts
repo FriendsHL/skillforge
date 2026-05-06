@@ -858,6 +858,10 @@ export interface EvalTaskSummary {
   passCount?: number | null;
   failCount?: number | null;
   compositeAvg?: number | null;
+  qualityAvg?: number | null;
+  efficiencyAvg?: number | null;
+  latencyAvg?: number | null;
+  costAvg?: number | null;
   overallPassRate?: number | null;
   avgOracleScore?: number | null;
   primaryAttribution?: string | null;
@@ -1059,6 +1063,38 @@ export const createEvalScenarioFromTrace = (payload: {
   scenarioId?: string;
   name?: string;
 }) => api.post<EvalDatasetScenario>('/eval/scenarios/from-trace', payload);
+
+export interface TraceImportCandidate {
+  traceId: string;
+  rootTraceId: string;
+  sessionId: string;
+  agentId?: string | null;
+  agentName?: string | null;
+  preview?: string | null;
+  status: 'ok' | 'error' | 'running' | 'cancelled';
+  tokenCount: number;
+  llmCallCount: number;
+  toolCallCount: number;
+  reasonCodes: string[];
+  startedAt?: string | null;
+}
+
+// Creates reviewable scenario drafts from selected production trace roots.
+export const batchImportTracesToDataset = (payload: {
+  rootTraceIds: string[];
+  agentId?: string;
+  category?: string;
+}) => api.post<{ count: number; scenarios: EvalDatasetScenario[] }>('/eval/scenarios/batch-import', payload);
+
+export interface TraceSuggestionFilter {
+  minTokens?: number;
+  hasToolCalls?: boolean;
+  status?: 'ok' | 'error' | 'running' | 'cancelled';
+  limit?: number;
+}
+export const suggestTracesForDataset = (filter: TraceSuggestionFilter) => 
+  api.get<TraceImportCandidate[]>('/eval/traces/suggestions', { params: filter });
+
 export const getEvalScenarioVersions = (scenarioId: string) =>
   api.get<EvalDatasetScenario[]>(`/eval/scenarios/${scenarioId}/versions`);
 export const createEvalScenarioVersion = (

@@ -1,14 +1,10 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Select, message } from 'antd';
-import { Link, useNavigate } from 'react-router-dom';
 import {
-  compareEvalTasks,
   getEvalAnnotations,
   getEvalTasks,
   getAgents,
   extractList,
-  type EvalAnnotation,
   type EvalTaskItem,
   type EvalTaskSummary,
 } from '../api';
@@ -19,7 +15,7 @@ import TaskDetailPanel from '../components/evals/TaskDetailPanel';
 import RunEvalDialog from '../components/evals/RunEvalDialog';
 import CompareTasksModal from '../components/evals/CompareTasksModal';
 import AnnotationQueue from '../components/evals/AnnotationQueue';
-import { normalizeEval, scoreColor, fmtTime, PLAY_ICON, ARROW_ICON, type EvalRow, type ProgressState } from '../components/evals/evalUtils';
+import { normalizeEval, scoreColor, PLAY_ICON, type EvalRow, type ProgressState } from '../components/evals/evalUtils';
 import '../components/evals/evals.css';
 
 type TopTab = 'overview' | 'tasks' | 'datasets' | 'review';
@@ -34,7 +30,6 @@ const TAB_LABELS: Array<{ id: TopTab; label: string }> = [
 export default function Eval() {
   const { userId } = useAuth();
   const queryClient = useQueryClient();
-  const navigate = useNavigate();
 
   const [topTab, setTopTab] = useState<TopTab>('overview');
   const [evalDetail, setEvalDetail] = useState<EvalRow | null>(null);
@@ -48,7 +43,7 @@ export default function Eval() {
     queryKey: ['agents'],
     queryFn: () => getAgents(),
   });
-  const rawAgents = useMemo(() => (agentsResp ? extractList(agentsResp) : []), [agentsResp]);
+  const rawAgents = useMemo(() => (agentsResp ? extractList<Record<string, unknown>>(agentsResp) : []), [agentsResp]);
 
   /* ── Tasks ── */
   const { data: evalsData } = useQuery({

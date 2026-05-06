@@ -8,7 +8,6 @@ import {
   getEvalTaskItems,
   getEvalRuns, // Re-import legacy runs API
   type EvalTaskItem,
-  type EvalTaskSummary,
 } from '../../api';
 import ScenarioDraftPanel from '../ScenarioDraftPanel';
 import AnalyzeCaseModal, { type AnalyzeTarget } from './AnalyzeCaseModal';
@@ -16,7 +15,7 @@ import TaskItemCard from './TaskItemCard';
 import { useNavigate } from 'react-router-dom';
 import {
   CLOSE_ICON, PLAY_ICON, ARROW_ICON,
-  scoreColor, scoreTier, fmtTime,
+  scoreColor, fmtTime,
   METRIC_OPTIONS, type EvalMetric,
   type EvalRow,
 } from './evalUtils';
@@ -116,7 +115,7 @@ function ScoreBar({ label, value }: { label: string; value: number | null }) {
 }
 
 /* ── TaskAnalysisSessionRow ── */
-function TaskAnalysisSessionRow({ session }: { session: { sessionId: string; title?: string; analysisType?: string; scenarioId?: string; itemId?: number; runtimeStatus?: string; updatedAt?: string; createdAt?: string } }) {
+function TaskAnalysisSessionRow({ session }: { session: { sessionId: string; title?: string | null; analysisType?: string; scenarioId?: string | null; itemId?: number | null; runtimeStatus?: string | null; updatedAt?: string | null; createdAt?: string | null } }) {
   const navigate = useNavigate();
   const label =
     session.analysisType === 'run_overall' ? 'overall'
@@ -136,7 +135,7 @@ function TaskAnalysisSessionRow({ session }: { session: { sessionId: string; tit
           {session.title || session.sessionId.slice(0, 8)}
         </div>
         <div style={{ fontSize: 11, color: 'var(--fg-4)', marginTop: 2 }}>
-          {label} · {fmtTime(session.updatedAt ?? session.createdAt)}
+          {label} · {fmtTime(session.updatedAt ?? session.createdAt ?? undefined)}
         </div>
       </div>
       <span className={`sess-status s-${session.runtimeStatus === 'idle' ? 'idle' : session.runtimeStatus === 'running' ? 'running' : 'waiting'}`}>
@@ -179,16 +178,13 @@ export default function TaskDetailPanel({ evalRow, onClose, onRun, onOpenAnnotat
   });
 
   // Fetch legacy runs for history tab
-  const { data: allRuns = [], isLoading: runsLoading, error: runsError } = useQuery({
+  const { data: allRuns = [], isLoading: runsLoading } = useQuery({
     queryKey: ['eval-runs'],
     queryFn: async () => {
-      console.log('[TaskDetailPanel] Fetching eval runs...');
       try {
         const res = await getEvalRuns();
-        console.log('[TaskDetailPanel] Eval runs response:', res.data);
         return res.data ?? [];
-      } catch (e) {
-        console.error('[TaskDetailPanel] Failed to fetch eval runs:', e);
+      } catch {
         return [];
       }
     },

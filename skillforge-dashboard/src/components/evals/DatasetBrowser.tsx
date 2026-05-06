@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Select } from 'antd';
+import { Select, Button } from 'antd';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   getEvalDatasetScenarios,
@@ -10,6 +10,7 @@ import {
 import ScenarioDetailDrawer from './ScenarioDetailDrawer';
 import AnalyzeCaseModal from './AnalyzeCaseModal';
 import AddBaseScenarioModal from './AddBaseScenarioModal';
+import TraceImportSuggester from './TraceImportSuggester';
 
 interface DatasetBrowserProps {
   agents: Record<string, unknown>[];
@@ -77,6 +78,7 @@ function DatasetBrowser({ agents, userId }: DatasetBrowserProps) {
   const [opened, setOpened] = useState<EvalDatasetScenario | null>(null);
   const [analyzing, setAnalyzing] = useState<EvalDatasetScenario | null>(null);
   const [adding, setAdding] = useState(false);
+  const [showTraceImporter, setShowTraceImporter] = useState(false);
   const queryClient = useQueryClient();
 
   // EVAL-V2 Q2: Base tab fetches classpath + home-dir scenarios via the new
@@ -154,6 +156,24 @@ function DatasetBrowser({ agents, userId }: DatasetBrowserProps) {
           ))}
         </div>
 
+        {/* Action Buttons Group */}
+        <div style={{ display: 'flex', gap: 8, marginLeft: 'auto' }}>
+          {tab === 'base' && (
+            <Button 
+              onClick={() => setAdding(true)}
+            >
+              + 新增
+            </Button>
+          )}
+          <Button 
+            type="primary"
+            onClick={() => setShowTraceImporter(true)}
+            icon={<span>✨</span>}
+          >
+            Smart Import
+          </Button>
+        </div>
+
         {tab === 'agent' && (
           <Select
             value={agentId || undefined}
@@ -208,18 +228,6 @@ function DatasetBrowser({ agents, userId }: DatasetBrowserProps) {
         <span style={{ marginLeft: 'auto', fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg-4)' }}>
           {filtered.length} of {scenarios.length} cases
         </span>
-        {tab === 'base' && (
-          <button
-            type="button"
-            className="btn-ghost-sf"
-            onClick={() => setAdding(true)}
-            title="新增 Base 评测场景"
-            aria-label="新增 Base 评测场景"
-          >
-            <span aria-hidden="true" style={{ marginRight: 4 }}>+</span>
-            新增
-          </button>
-        )}
       </div>
 
       {tab === 'agent' && !agentId ? (
@@ -260,6 +268,12 @@ function DatasetBrowser({ agents, userId }: DatasetBrowserProps) {
                 <div className="dataset-card-meta">
                   {s.category && <span className="kv-chip-sf">{s.category}</span>}
                   {s.split && <span className="kv-chip-sf">{s.split}</span>}
+                  {/* Multi-turn indicator */}
+                  {s.conversationTurns && s.conversationTurns.length > 1 && (
+                    <span className="kv-chip-sf" style={{ color: 'var(--accent-primary, #d9633a)', fontWeight: 600 }}>
+                      💬 {Math.ceil(s.conversationTurns.length / 2)} turns
+                    </span>
+                  )}
                   {tab === 'agent' && <span className="kv-chip-sf">v{s.version ?? 1}</span>}
                   <span className="kv-chip-sf">{s.oracleType}</span>
                   {/* EVAL-V2 M3b: tag preview chips (max 3) inline with the
@@ -333,6 +347,12 @@ function DatasetBrowser({ agents, userId }: DatasetBrowserProps) {
           }}
         />
       )}
+
+      {/* Smart Import Modal */}
+      <TraceImportSuggester 
+        open={showTraceImporter} 
+        onClose={() => setShowTraceImporter(false)} 
+      />
     </div>
   );
 }

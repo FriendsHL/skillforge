@@ -309,6 +309,46 @@ public class EvalController {
         }
     }
 
+    @GetMapping("/traces/suggestions")
+    public ResponseEntity<List<Map<String, Object>>> suggestTraceImportCandidates(
+            @RequestParam(value = "minTokens", required = false) String minTokens,
+            @RequestParam(value = "hasToolCalls", required = false) String hasToolCalls,
+            @RequestParam(value = "status", required = false) String status,
+            @RequestParam(value = "agentId", required = false) String agentId,
+            @RequestParam(value = "limit", required = false) String limit) {
+        Map<String, Object> filter = new LinkedHashMap<>();
+        putIfPresent(filter, "minTokens", minTokens);
+        putIfPresent(filter, "hasToolCalls", hasToolCalls);
+        putIfPresent(filter, "status", status);
+        putIfPresent(filter, "agentId", agentId);
+        putIfPresent(filter, "limit", limit);
+        List<Map<String, Object>> result = traceScenarioImportService.suggestImportCandidates(filter).stream()
+                .map(this::toTraceImportCandidateMap)
+                .collect(Collectors.toList());
+        return ResponseEntity.ok(result);
+    }
+
+    @PostMapping("/scenarios/batch-import")
+    public ResponseEntity<Map<String, Object>> batchImportTraceDrafts(
+            @RequestBody Map<String, Object> body) {
+        try {
+            List<Map<String, Object>> scenarios = traceScenarioImportService.createDraftsFromTraces(body).stream()
+                    .map(this::toScenarioEntityMap)
+                    .collect(Collectors.toList());
+            Map<String, Object> response = new LinkedHashMap<>();
+            response.put("count", scenarios.size());
+            response.put("scenarios", scenarios);
+            return ResponseEntity.status(201).body(response);
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        } catch (NoSuchElementException e) {
+            return ResponseEntity.status(404).body(Map.of("error", e.getMessage()));
+        } catch (Exception e) {
+            log.error("Failed to create eval scenario drafts from traces", e);
+            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+        }
+    }
+
     /**
      * EVAL-V2 Q2: write a base eval scenario JSON to the home dir
      * ({@code ~/.skillforge/eval-scenarios/<id>.json}). The classpath seed
@@ -447,6 +487,29 @@ public class EvalController {
             }
         }
         return map;
+    }
+
+    private Map<String, Object> toTraceImportCandidateMap(TraceScenarioImportService.TraceImportCandidate c) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        map.put("traceId", c.traceId());
+        map.put("rootTraceId", c.rootTraceId());
+        map.put("sessionId", c.sessionId());
+        map.put("agentId", c.agentId());
+        map.put("agentName", c.agentName());
+        map.put("preview", c.preview());
+        map.put("status", c.status());
+        map.put("tokenCount", c.tokenCount());
+        map.put("llmCallCount", c.llmCallCount());
+        map.put("toolCallCount", c.toolCallCount());
+        map.put("reasonCodes", c.reasonCodes());
+        map.put("startedAt", c.startedAt());
+        return map;
+    }
+
+    private static void putIfPresent(Map<String, Object> target, String key, String value) {
+        if (value != null && !value.isBlank()) {
+            target.put(key, value);
+        }
     }
 
     private Map<String, Object> toSummaryMap(EvalTaskEntity run) {

@@ -1,7 +1,6 @@
 import { useMemo } from 'react';
-import type { EvalAnnotation, EvalTaskSummary } from '../../api';
 import type { EvalRow, ProgressState } from './evalUtils';
-import { scoreColor, fmtTime, PLAY_ICON, TRACE_ICON } from './evalUtils';
+import { scoreColor, PLAY_ICON, TRACE_ICON } from './evalUtils';
 
 interface EvalOverviewProps {
   rows: EvalRow[];
@@ -87,29 +86,17 @@ export default function EvalOverview({
         />
       </div>
 
-      {/* Quick actions */}
-      <div className="eval-quick-actions">
-        <button className="eval-qa-btn primary" onClick={onRunEval}>
-          {PLAY_ICON} Run Eval
-        </button>
-        <button className="eval-qa-btn" onClick={() => onSwitchTab('datasets')}>
-          ＋ New Case
-        </button>
-        <button className="eval-qa-btn" onClick={() => onSwitchTab('tasks')}>
-          {TRACE_ICON} Compare
-        </button>
-        <button className="eval-qa-btn" onClick={() => onSwitchTab('review')}>
-          Review Queue
-          {pendingAnnotations > 0 && <span className="eval-qa-badge">{pendingAnnotations}</span>}
-        </button>
-      </div>
-
       {/* Two-column: recent tasks + dataset summary */}
       <div className="eval-overview-grid">
         <div className="eval-overview-section">
           <div className="eval-overview-section-h">
             <h3>Recent Tasks</h3>
-            <button className="sf-mini-btn" onClick={() => onSwitchTab('tasks')}>View all</button>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button className="sf-mini-btn" onClick={() => onSwitchTab('tasks')}>View all</button>
+              <button className="btn-primary-sf" onClick={onRunEval} style={{ fontSize: 11, padding: '2px 10px' }}>
+                {PLAY_ICON} Run
+              </button>
+            </div>
           </div>
           {recentTasks.length === 0 ? (
             <div className="sf-empty-state" style={{ padding: '24px 0' }}>No eval tasks yet. Run your first eval.</div>

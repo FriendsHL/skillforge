@@ -55,43 +55,73 @@ function fmtTime(iso: string | null | undefined): string {
  */
 function ConversationTurns({ turns }: { turns: ConversationTurn[] }) {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: '8px 0' }}>
       {turns.map((t, i) => {
         const isUser = t.role === 'user';
         const isPlaceholder = t.role === 'assistant' && t.content === '<placeholder>';
-        const isSystem = t.role === 'system' || t.role === 'tool';
+        const isSystem = t.role === 'system';
+        const isTool = t.role === 'tool';
+        
+        // Styling based on role
+        let bg = 'var(--bg-base)';
+        let border = '1px solid var(--border-1)';
+        let align = 'flex-start';
+        let icon = '👤';
+        let label = 'User';
+
+        if (isUser) {
+          bg = 'rgba(99, 102, 241, 0.08)';
+          border = '1px solid rgba(99, 102, 241, 0.2)';
+          icon = '🧑‍💻';
+          label = 'User';
+        } else if (isSystem) {
+          bg = 'var(--bg-hover)';
+          border = '1px dashed var(--border-2)';
+          align = 'center';
+          icon = '⚙️';
+          label = 'System';
+        } else if (isTool) {
+          bg = 'rgba(212, 154, 58, 0.08)';
+          border = '1px solid rgba(212, 154, 58, 0.2)';
+          icon = '🔧';
+          label = 'Tool';
+        } else {
+          // Assistant
+          bg = 'var(--bg-surface)';
+          border = '1px solid var(--border-1)';
+          align = 'flex-end';
+          icon = '🤖';
+          label = 'Assistant';
+        }
+
         return (
-          <div
-            key={i}
-            style={{
-              alignSelf: isUser ? 'flex-start' : 'flex-end',
-              maxWidth: '85%',
-              padding: '8px 12px',
-              borderRadius: 8,
-              background: isUser
-                ? 'var(--bg-elev-1, #1a1a1e)'
-                : isSystem
-                  ? 'var(--bg-elev-2, #232328)'
-                  : 'var(--bg-elev-1, #1a1a1e)',
-              border: '1px solid var(--border-1, #2c2c33)',
+          <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: align, gap: 6 }}>
+            <div style={{ 
+              fontSize: 11, 
+              fontWeight: 600, 
+              color: 'var(--fg-3)', 
+              display: 'flex', 
+              alignItems: 'center', 
+              gap: 4,
+              marginBottom: 2
+            }}>
+              <span>{icon}</span> {label}
+            </div>
+            <div style={{
+              maxWidth: '90%',
+              padding: '12px 16px',
+              borderRadius: 12,
+              background: bg,
+              border: border,
               fontSize: 13,
-              lineHeight: 1.5,
-              opacity: isPlaceholder ? 0.55 : 1,
+              lineHeight: 1.6,
+              opacity: isPlaceholder ? 0.6 : 1,
               fontStyle: isPlaceholder ? 'italic' : 'normal',
               color: isPlaceholder ? 'var(--fg-3)' : 'var(--fg-1)',
-            }}
-          >
-            <div style={{
-              fontSize: 10,
-              fontFamily: 'var(--font-mono)',
-              textTransform: 'uppercase',
-              color: 'var(--fg-4)',
-              letterSpacing: 0.5,
-              marginBottom: 4,
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+              boxShadow: 'var(--shadow-1)'
             }}>
-              {t.role}
-            </div>
-            <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
               {isPlaceholder ? '⟨ assistant response — populated at runtime ⟩' : t.content}
             </div>
           </div>

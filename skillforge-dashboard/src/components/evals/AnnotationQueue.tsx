@@ -9,7 +9,7 @@ import {
   type EvalAnnotation,
   type EvalTaskItem,
 } from '../../api';
-import { fmtTime, TRACE_ICON } from './evalUtils';
+import { TRACE_ICON } from './evalUtils';
 
 export default function AnnotationQueue({
   userId,
