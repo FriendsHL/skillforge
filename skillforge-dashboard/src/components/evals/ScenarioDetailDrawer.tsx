@@ -1,7 +1,9 @@
-import React, { useEffect } from 'react';
+import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
+import { Select } from 'antd';
 import {
+  getEvalScenarioVersions,
   getScenarioRecentRuns,
   getAnalysisSessions,
   type ConversationTurn,
@@ -22,6 +24,7 @@ interface ScenarioDetailDrawerProps {
   userId?: number;
   onClose: () => void;
   onAnalyze?: (scenario: EvalDatasetScenario) => void;
+  onSelectScenarioVersion?: (scenario: EvalDatasetScenario) => void;
 }
 
 function scoreColor(score01: number): string {
@@ -118,8 +121,9 @@ function RecentRunsTrend({ runs }: { runs: ScenarioRecentRun[] }) {
   );
 }
 
-function ScenarioDetailDrawer({ scenario, userId, onClose, onAnalyze }: ScenarioDetailDrawerProps) {
+function ScenarioDetailDrawer({ scenario, userId, onClose, onAnalyze, onSelectScenarioVersion }: ScenarioDetailDrawerProps) {
   const navigate = useNavigate();
+  const supportsVersioning = Boolean(scenario.agentId);
 
   // Esc to close
   useEffect(() => {
@@ -144,6 +148,12 @@ function ScenarioDetailDrawer({ scenario, userId, onClose, onAnalyze }: Scenario
         ? getAnalysisSessions(scenario.id, userId).then(r => r.data ?? [])
         : Promise.resolve([] as AnalysisSession[]),
     enabled: !!scenario.id && userId != null,
+  });
+
+  const { data: versionHistory = [] } = useQuery({
+    queryKey: ['scenario-versions', scenario.id],
+    queryFn: () => getEvalScenarioVersions(scenario.id).then(r => r.data ?? []),
+    enabled: supportsVersioning,
   });
 
   return (
@@ -171,6 +181,9 @@ function ScenarioDetailDrawer({ scenario, userId, onClose, onAnalyze }: Scenario
             <span className={`sess-status s-${scenario.status === 'active' ? 'idle' : scenario.status === 'draft' ? 'waiting' : 'error'}`}>
               {scenario.status}
             </span>
+            {supportsVersioning && (
+              <span className="kv-chip-sf">v{scenario.version ?? 1}</span>
+            )}
             {scenario.sourceSessionId && (
               <span className="kv-chip-sf" title={scenario.sourceSessionId}>
                 source · {scenario.sourceSessionId.slice(0, 8)}
@@ -181,6 +194,40 @@ function ScenarioDetailDrawer({ scenario, userId, onClose, onAnalyze }: Scenario
         </div>
 
         <div className="sf-drawer-body">
+          {supportsVersioning && versionHistory.length > 0 && (
+            <div className="scn-detail-section">
+              <h4>Versions</h4>
+              <div style={{ display: 'grid', gap: 10 }}>
+                <Select
+                  value={scenario.id}
+                  onChange={(value) => {
+                    const selected = versionHistory.find(item => item.id === value);
+                    if (selected && onSelectScenarioVersion) {
+                      onSelectScenarioVersion(selected);
+                    }
+                  }}
+                  options={versionHistory.map(item => ({
+                    value: item.id,
+                    label: `v${item.version ?? 1} · ${fmtTime(item.createdAt)} · ${item.status}`,
+                  }))}
+                  style={{ width: '100%' }}
+                />
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {versionHistory.map(item => (
+                    <span
+                      key={item.id}
+                      className="kv-chip-sf"
+                      style={{ opacity: item.id === scenario.id ? 1 : 0.65 }}
+                      title={item.id}
+                    >
+                      v{item.version ?? 1} · {item.status}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* EVAL-V2 M2: multi-turn cases render the conversation transcript instead
               of a single task pre. The summary `task` (a multi-turn synopsis) is still
               shown in a collapsed disclosure for context. Single-turn cases keep the

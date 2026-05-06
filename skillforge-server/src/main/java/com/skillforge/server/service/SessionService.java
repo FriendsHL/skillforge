@@ -162,10 +162,12 @@ public class SessionService {
     }
 
     /**
-     * EVAL-V2 Q1 overload: creates a session and links it back to an eval
-     * scenario via {@code sourceScenarioId} so the scenario detail drawer
-     * can surface previous analysis sessions for the same case. Pass
-     * {@code null} for normal (non-analysis) sessions.
+     * Legacy compatibility overload from EVAL-V2 Q1.
+     *
+     * <p>M3c introduces {@code t_eval_analysis_session}; new analysis flows
+     * should create ordinary sessions and persist their analysis linkage in the
+     * dedicated table instead of writing {@code sourceScenarioId} here. This
+     * overload remains for backward compatibility with older callers.
      */
     public SessionEntity createSession(Long userId, Long agentId, String sourceScenarioId) {
         SessionEntity session = new SessionEntity();

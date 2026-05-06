@@ -9,7 +9,7 @@ import com.skillforge.core.engine.LoopResult;
 import com.skillforge.core.model.AgentDefinition;
 import com.skillforge.core.skill.SkillRegistry;
 import com.skillforge.server.entity.AgentEntity;
-import com.skillforge.server.entity.EvalRunEntity;
+import com.skillforge.server.entity.EvalTaskEntity;
 import com.skillforge.server.entity.PromptAbRunEntity;
 import com.skillforge.server.entity.PromptVersionEntity;
 import com.skillforge.server.eval.EvalEngineFactory;
@@ -79,7 +79,7 @@ public class AbEvalPipeline {
     }
 
     public void run(PromptAbRunEntity abRun, PromptVersionEntity candidate,
-                    EvalRunEntity baselineRun, AgentEntity originalAgent) {
+                    EvalTaskEntity baselineRun, AgentEntity originalAgent) {
         // 1. Mark as RUNNING
         abRun.setStatus("RUNNING");
         abRun.setStartedAt(Instant.now());
@@ -268,7 +268,7 @@ public class AbEvalPipeline {
         return copy;
     }
 
-    private double computeHeldOutBaselineRate(EvalRunEntity baselineRun, List<EvalScenario> heldOutScenarios) {
+    private double computeHeldOutBaselineRate(EvalTaskEntity baselineRun, List<EvalScenario> heldOutScenarios) {
         if (baselineRun.getScenarioResultsJson() == null) {
             return baselineRun.getOverallPassRate();
         }
@@ -296,11 +296,11 @@ public class AbEvalPipeline {
         }
     }
 
-    private String lookupBaselineStatus(EvalRunEntity baselineRun, String scenarioId) {
+    private String lookupBaselineStatus(EvalTaskEntity baselineRun, String scenarioId) {
         return lookupBaselineField(baselineRun, scenarioId, "status", "UNKNOWN");
     }
 
-    private double lookupBaselineOracleScore(EvalRunEntity baselineRun, String scenarioId) {
+    private double lookupBaselineOracleScore(EvalTaskEntity baselineRun, String scenarioId) {
         String scoreStr = lookupBaselineField(baselineRun, scenarioId, "compositeScore", "0");
         try {
             return Double.parseDouble(scoreStr);
@@ -310,7 +310,7 @@ public class AbEvalPipeline {
     }
 
     @SuppressWarnings("unchecked")
-    private String lookupBaselineField(EvalRunEntity baselineRun, String scenarioId,
+    private String lookupBaselineField(EvalTaskEntity baselineRun, String scenarioId,
                                         String field, String defaultValue) {
         if (baselineRun.getScenarioResultsJson() == null) return defaultValue;
         try {

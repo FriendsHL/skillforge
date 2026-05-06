@@ -116,6 +116,13 @@
   padding: 0 18px 12px;
   display: flex;
   justify-content: flex-end;
+  gap: 8px;
+}
+
+.sf-mini-btn.on {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(99, 102, 241, 0.08);
 }
 
 /* History chart */
@@ -161,6 +168,223 @@
   font-size: 14px;
   color: var(--fg-1);
   font-weight: 500;
+}
+
+.sf-compare-modal {
+  width: min(1120px, 96vw);
+  max-height: 88vh;
+}
+
+.compare-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.compare-summary-card {
+  padding: 12px 14px;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-md);
+  background: var(--bg-base);
+}
+
+.compare-summary-title {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--fg-2);
+  margin-bottom: 8px;
+}
+
+.compare-summary-stats {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.compare-table-wrap {
+  overflow: auto;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-md);
+}
+
+.compare-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 880px;
+}
+
+.compare-table thead th {
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--fg-4);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  background: var(--bg-base);
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-1);
+}
+
+.compare-table tbody td {
+  vertical-align: top;
+  padding: 12px;
+  border-bottom: 1px solid var(--border-1);
+}
+
+.compare-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.compare-entry-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.compare-entry-meta {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  color: var(--fg-3);
+  font-family: var(--font-mono);
+}
+
+.compare-entry-empty {
+  color: var(--fg-4);
+  font-family: var(--font-mono);
+}
+
+.compare-delta {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+  font-family: var(--font-mono);
+  color: var(--fg-2);
+}
+
+.annotation-queue {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.annotation-queue-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.annotation-queue-head h3 {
+  margin: 0 0 6px;
+  font-size: 16px;
+}
+
+.annotation-queue-head p {
+  margin: 0;
+  color: var(--fg-3);
+  font-size: 12px;
+}
+
+.annotation-filter-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.annotation-draft-card,
+.annotation-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-md);
+  padding: 14px 16px;
+}
+
+.annotation-draft-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.annotation-draft-grid label,
+.annotation-draft-textarea {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--fg-3);
+}
+
+.annotation-draft-grid input,
+.annotation-draft-textarea textarea {
+  border: 1px solid var(--border-1);
+  border-radius: 8px;
+  background: var(--bg-base);
+  color: var(--fg-1);
+  padding: 10px 12px;
+  font: inherit;
+}
+
+.annotation-draft-textarea {
+  margin-top: 12px;
+}
+
+.annotation-draft-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.annotation-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.annotation-card-h {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  margin-bottom: 10px;
+}
+
+.annotation-title {
+  color: var(--fg-2);
+  margin-bottom: 6px;
+}
+
+.annotation-meta {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.annotation-score-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  margin-bottom: 10px;
+  color: var(--fg-2);
+}
+
+.annotation-pre {
+  margin: 8px 0;
+  padding: 10px 12px;
+  background: var(--bg-base);
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--fg-2);
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 /* Radio options */

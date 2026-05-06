@@ -311,8 +311,8 @@ public class ChatController {
 
     @PostMapping("/sessions")
     public ResponseEntity<SessionEntity> createSession(@RequestBody CreateSessionRequest request) {
-        // EVAL-V2 Q1: forward sourceScenarioId so analyze-case flow can link
-        // the analysis session back to the eval scenario being analyzed.
+        // Legacy compatibility: older FE flows may still send sourceScenarioId.
+        // M3c analysis flows now use dedicated /api/eval/*/analyze endpoints.
         SessionEntity session = sessionService.createSession(
                 request.userId(), request.agentId(), request.sourceScenarioId());
         return ResponseEntity.ok(session);

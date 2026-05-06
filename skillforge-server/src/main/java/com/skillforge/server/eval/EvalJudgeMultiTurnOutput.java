@@ -11,7 +11,7 @@ import java.util.List;
  * <p>Distinguished from {@link EvalJudgeOutput} (single-turn) so the multi-turn
  * scoring shape (per-turn + overall + composite) doesn't pollute the single-turn
  * surface. The {@code compositeScore} is the value that flows back into the
- * standard eval pipeline (pass/fail + EvalRunEntity aggregation), while the
+ * standard eval pipeline (pass/fail + EvalTaskEntity aggregation), while the
  * {@code perTurnScores} and {@code overallScore} are surfaced for diagnostics.
  */
 public class EvalJudgeMultiTurnOutput {

@@ -60,6 +60,12 @@ public class EvalScenarioEntity {
     @Column(columnDefinition = "TEXT")
     private String conversationTurns;
 
+    @Column(nullable = false)
+    private Integer version = 1;
+
+    @Column(length = 64)
+    private String parentScenarioId;
+
     @CreatedDate
     private Instant createdAt;
 
@@ -170,6 +176,22 @@ public class EvalScenarioEntity {
 
     public void setConversationTurns(String conversationTurns) {
         this.conversationTurns = conversationTurns;
+    }
+
+    public Integer getVersion() {
+        return version;
+    }
+
+    public void setVersion(Integer version) {
+        this.version = version;
+    }
+
+    public String getParentScenarioId() {
+        return parentScenarioId;
+    }
+
+    public void setParentScenarioId(String parentScenarioId) {
+        this.parentScenarioId = parentScenarioId;
     }
 
     public Instant getCreatedAt() {

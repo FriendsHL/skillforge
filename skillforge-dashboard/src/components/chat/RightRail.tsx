@@ -105,21 +105,16 @@ const SPAN_COLORS: Record<string, string> = {
   TOOL_CALL: '#f59e0b',
 };
 
-/** Tool names that spawn child agent sessions */
-const SUBAGENT_TOOL_NAMES = new Set(['SubAgent', 'TeamCreate', 'TeamSend', 'TeamKill']);
-
 function ActivityTab({
   inflightTools,
   runtimeStatus,
   loopSpans,
   sessionId,
-  userId,
 }: {
   inflightTools: Record<string, InflightTool>;
   runtimeStatus: string;
   loopSpans?: LoopSpan[];
   sessionId?: string | null;
-  userId?: number;
 }) {
   const [now, setNow] = useState(Date.now());
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -446,7 +441,6 @@ function ActivityTab({
                                 return aT - bT;
                               })
                               .map((cs) => {
-                                const csStart = cs.startedAt ? new Date(cs.startedAt).getTime() : 0;
                                 const csDur = cs.latencyMs ?? 0;
                                 const csKind = cs.kind === 'llm' ? 'llm' : cs.kind === 'event' ? 'event' : 'tool';
                                 const csLabel = cs.name ?? cs.model ?? csKind;
@@ -1428,7 +1422,7 @@ function RightRail({
           />
         )}
         {tab === 'activity' && (
-          <ActivityTab inflightTools={inflightTools} runtimeStatus={runtimeStatus} loopSpans={loopSpans} sessionId={sessionId} userId={userId} />
+          <ActivityTab inflightTools={inflightTools} runtimeStatus={runtimeStatus} loopSpans={loopSpans} sessionId={sessionId} />
         )}
         {tab === 'subagent' && (
           <SubAgentTab sessionId={sessionId} userId={userId} />

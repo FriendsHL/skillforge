@@ -37,10 +37,9 @@ public interface SessionRepository extends JpaRepository<SessionEntity, String> 
     List<SessionEntity> findByParentSessionId(String parentSessionId);
 
     /**
-     * EVAL-V2 Q1: list analysis sessions linked to a given eval scenario.
-     * Filtered by userId so one user can't see another user's analysis
-     * sessions (multi-user safety; mirrors the pattern used by listSessions).
-     * Ordered by updatedAt desc so the most-recent analysis bubbles up.
+     * Legacy compatibility query for pre-M3c analysis sessions that were
+     * linked via {@code t_session.source_scenario_id}. New code should query
+     * {@code t_eval_analysis_session} instead.
      */
     List<SessionEntity> findBySourceScenarioIdAndUserIdOrderByUpdatedAtDesc(
             String sourceScenarioId, Long userId);

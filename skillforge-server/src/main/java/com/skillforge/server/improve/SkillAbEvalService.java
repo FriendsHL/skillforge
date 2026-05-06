@@ -11,7 +11,7 @@ import com.skillforge.core.model.SkillDefinition;
 import com.skillforge.core.skill.SkillPackageLoader;
 import com.skillforge.core.skill.SkillRegistry;
 import com.skillforge.server.entity.AgentEntity;
-import com.skillforge.server.entity.EvalRunEntity;
+import com.skillforge.server.entity.EvalTaskEntity;
 import com.skillforge.server.entity.SkillAbRunEntity;
 import com.skillforge.server.entity.SkillEntity;
 import com.skillforge.server.eval.EvalEngineFactory;
@@ -21,7 +21,7 @@ import com.skillforge.server.eval.ScenarioRunResult;
 import com.skillforge.server.eval.sandbox.SandboxSkillRegistryFactory;
 import com.skillforge.server.eval.scenario.EvalScenario;
 import com.skillforge.server.eval.scenario.ScenarioLoader;
-import com.skillforge.server.repository.EvalRunRepository;
+import com.skillforge.server.repository.EvalTaskRepository;
 import com.skillforge.server.repository.SkillAbRunRepository;
 import com.skillforge.server.repository.SkillRepository;
 import com.skillforge.server.service.AgentService;
@@ -58,7 +58,7 @@ public class SkillAbEvalService {
 
     private final SkillRepository skillRepository;
     private final SkillAbRunRepository skillAbRunRepository;
-    private final EvalRunRepository evalRunRepository;
+    private final EvalTaskRepository evalRunRepository;
     private final AgentService agentService;
     private final ScenarioLoader scenarioLoader;
     private final SandboxSkillRegistryFactory sandboxFactory;
@@ -73,7 +73,7 @@ public class SkillAbEvalService {
 
     public SkillAbEvalService(SkillRepository skillRepository,
                               SkillAbRunRepository skillAbRunRepository,
-                              EvalRunRepository evalRunRepository,
+                              EvalTaskRepository evalRunRepository,
                               AgentService agentService,
                               ScenarioLoader scenarioLoader,
                               SandboxSkillRegistryFactory sandboxFactory,
@@ -167,7 +167,7 @@ public class SkillAbEvalService {
 
             double baselineRate = 0.0;
             if (abRun.getBaselineEvalRunId() != null) {
-                Optional<EvalRunEntity> baselineRun = evalRunRepository.findById(abRun.getBaselineEvalRunId());
+                Optional<EvalTaskEntity> baselineRun = evalRunRepository.findById(abRun.getBaselineEvalRunId());
                 if (baselineRun.isPresent()) {
                     baselineRate = computeHeldOutBaselineRate(baselineRun.get(), heldOutScenarios);
                 }
@@ -423,7 +423,7 @@ public class SkillAbEvalService {
         return copy;
     }
 
-    private double computeHeldOutBaselineRate(EvalRunEntity baselineRun, List<EvalScenario> heldOutScenarios) {
+    private double computeHeldOutBaselineRate(EvalTaskEntity baselineRun, List<EvalScenario> heldOutScenarios) {
         if (baselineRun.getScenarioResultsJson() == null) {
             return baselineRun.getOverallPassRate();
         }

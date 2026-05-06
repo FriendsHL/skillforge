@@ -229,6 +229,42 @@ public class SkillForgeConfig {
         return tool;
     }
 
+    /**
+     * EVAL-V2 M3a (b2): RunEvalTask lets agents kick off a new eval task against
+     * an agent definition. Mirrors the operator-facing
+     * {@code POST /api/eval/tasks} endpoint. Async dispatch via
+     * {@code evalOrchestratorExecutor} (separate pool from
+     * {@code evalLoopExecutor} to avoid nested-pool deadlock).
+     */
+    @Bean
+    public com.skillforge.server.tool.RunEvalTaskTool runEvalTaskTool(
+            com.skillforge.server.eval.EvalOrchestrator evalOrchestrator,
+            com.skillforge.server.repository.EvalTaskRepository evalTaskRepository,
+            @org.springframework.beans.factory.annotation.Qualifier("evalOrchestratorExecutor")
+            java.util.concurrent.ExecutorService evalOrchestratorExecutor,
+            ObjectMapper objectMapper,
+            SkillRegistry skillRegistry) {
+        com.skillforge.server.tool.RunEvalTaskTool tool =
+                new com.skillforge.server.tool.RunEvalTaskTool(
+                        evalOrchestrator, evalTaskRepository,
+                        evalOrchestratorExecutor, objectMapper);
+        skillRegistry.registerTool(tool);
+        log.info("Registered RunEvalTaskTool into SkillRegistry");
+        return tool;
+    }
+
+    @Bean
+    public com.skillforge.server.tool.AnalyzeEvalTaskTool analyzeEvalTaskTool(
+            com.skillforge.server.repository.EvalTaskRepository evalTaskRepository,
+            ObjectMapper objectMapper,
+            SkillRegistry skillRegistry) {
+        com.skillforge.server.tool.AnalyzeEvalTaskTool tool =
+                new com.skillforge.server.tool.AnalyzeEvalTaskTool(evalTaskRepository, objectMapper);
+        skillRegistry.registerTool(tool);
+        log.info("Registered AnalyzeEvalTaskTool into SkillRegistry");
+        return tool;
+    }
+
     @Bean
     public ProposeHookBindingTool proposeHookBindingTool(AgentTargetResolver targetResolver,
                                                          AgentAuthoredHookService agentAuthoredHookService,

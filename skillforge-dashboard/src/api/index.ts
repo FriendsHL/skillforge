@@ -89,10 +89,8 @@ export const deleteAgent = (id: number) => api.delete(`/agents/${id}`);
 export const getLlmModels = () => api.get<ModelOption[]>('/llm/models');
 
 // Session API
-// EVAL-V2 Q1: `sourceScenarioId` is optional and only set by the Analyze-case
-// flow on the eval drawer — the BE links the new chat session back to the
-// eval scenario being analyzed so the scenario detail drawer can list prior
-// analysis sessions for the same case.
+// Ordinary session creation. Eval analysis flows use dedicated /api/eval/*/analyze
+// endpoints so new code no longer writes t_session.source_scenario_id.
 export const createSession = (data: { userId: number; agentId: number; sourceScenarioId?: string }) =>
   api.post('/chat/sessions', data);
 export const getSessions = (userId: number) => api.get(`/chat/sessions?userId=${userId}`);
@@ -851,6 +849,132 @@ export const reviewScenarioDraft = (
   api.patch<EvalScenarioDraft>(`/agents/scenario-drafts/${id}`, { action, ...edits }).then(r => r.data);
 
 // ─── Eval Pipeline ────────────────────────────────────────────────────────────
+export interface EvalTaskSummary {
+  id: string;
+  agentDefinitionId: string;
+  status: string;
+  scenarioCount?: number | null;
+  totalScenarios?: number | null;
+  passCount?: number | null;
+  failCount?: number | null;
+  compositeAvg?: number | null;
+  overallPassRate?: number | null;
+  avgOracleScore?: number | null;
+  primaryAttribution?: string | null;
+  attributionSummary?: string | null;
+  improvementSuggestion?: string | null;
+  analysisSessionId?: string | null;
+  datasetFilter?: string | null;
+  itemCount?: number | null;
+  errorMessage?: string | null;
+  startedAt?: string | null;
+  completedAt?: string | null;
+}
+
+export interface EvalTaskItem {
+  id: number;
+  taskId: string;
+  scenarioId: string;
+  scenarioSource?: string | null;
+  sessionId?: string | null;
+  rootTraceId?: string | null;
+  compositeScore?: number | null;
+  status: string;
+  loopCount?: number | null;
+  toolCallCount?: number | null;
+  latencyMs?: number | null;
+  attribution?: string | null;
+  judgeRationale?: string | null;
+  agentFinalOutput?: string | null;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  createdAt?: string | null;
+}
+
+export interface EvalTaskAnalysisSession {
+  sessionId: string;
+  analysisType: string;
+  taskId: string;
+  itemId?: number | null;
+  scenarioId?: string | null;
+  title?: string | null;
+  runtimeStatus?: string | null;
+  messageCount: number;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+}
+
+export interface EvalTaskCompareEntry {
+  taskId: string;
+  status: string;
+  compositeScore?: number | null;
+  attribution?: string | null;
+  latencyMs?: number | null;
+  loopCount?: number | null;
+  toolCallCount?: number | null;
+  rootTraceId?: string | null;
+  agentFinalOutput?: string | null;
+}
+
+export interface EvalTaskCompareRow {
+  scenarioId: string;
+  entries: EvalTaskCompareEntry[];
+  scoreDelta: number;
+  outputDiffers: boolean;
+}
+
+export interface EvalTaskCompareResult {
+  taskCount: number;
+  scenarioCount: number;
+  tasks: EvalTaskSummary[];
+  rows: EvalTaskCompareRow[];
+}
+
+export interface EvalAnnotation {
+  id: number;
+  taskItemId: number;
+  annotatorId: number;
+  originalScore?: number | null;
+  correctedScore?: number | null;
+  correctedExpected?: string | null;
+  status: 'pending' | 'applied';
+  createdAt?: string | null;
+  appliedAt?: string | null;
+  taskId?: string | null;
+  scenarioId?: string | null;
+  scenarioSource?: string | null;
+  itemStatus?: string | null;
+  attribution?: string | null;
+  rootTraceId?: string | null;
+  judgeRationale?: string | null;
+  agentFinalOutput?: string | null;
+  agentDefinitionId?: string | null;
+  taskStatus?: string | null;
+}
+
+export const getEvalTasks = () => api.get<EvalTaskSummary[]>('/eval/tasks');
+export const getEvalTask = (id: string) => api.get<EvalTaskSummary>(`/eval/tasks/${id}`);
+export const getEvalTaskItems = (id: string) => api.get<EvalTaskItem[]>(`/eval/tasks/${id}/items`);
+export const getEvalTaskAnalysisSessions = (id: string, userId: number) =>
+  api.get<EvalTaskAnalysisSession[]>(`/eval/tasks/${id}/analysis-sessions`, { params: { userId } });
+export const compareEvalTasks = (ids: string[]) =>
+  api.post<EvalTaskCompareResult>('/eval/tasks/compare', null, { params: { ids: ids.join(',') } });
+export const getEvalAnnotations = (status?: 'pending' | 'applied') =>
+  api.get<EvalAnnotation[]>('/eval/annotations', { params: status ? { status } : undefined });
+export const createEvalAnnotation = (data: {
+  taskItemId: number;
+  annotatorId: number;
+  correctedScore?: number | null;
+  correctedExpected?: string | null;
+}) => api.post<EvalAnnotation>('/eval/annotations', data);
+export const updateEvalAnnotation = (
+  id: number,
+  data: { status: 'pending' | 'applied'; correctedScore?: number | null; correctedExpected?: string | null },
+) => api.patch<EvalAnnotation>(`/eval/annotations/${id}`, data);
+export const triggerEvalTask = (agentId: string, userId = 1) =>
+  api.post('/eval/tasks', { agentId, userId });
+
+// Legacy run endpoints retained while the remaining FE surfaces migrate.
 export const getEvalRuns = () => api.get('/eval/runs');
 export const getEvalRun = (id: string) => api.get(`/eval/runs/${id}`);
 export const triggerEvalRun = (agentId: string, userId = 1) =>
@@ -870,6 +994,8 @@ export interface ConversationTurn {
 export interface EvalDatasetScenario {
   id: string;
   agentId: string;
+  version?: number;
+  parentScenarioId?: string | null;
   name: string;
   description?: string;
   category: string;
@@ -913,6 +1039,26 @@ export interface EvalDatasetScenario {
 }
 export const getEvalDatasetScenarios = (agentId: string | number) =>
   api.get<EvalDatasetScenario[]>('/eval/scenarios', { params: { agentId } });
+export const createEvalScenarioFromTrace = (payload: {
+  rootTraceId: string;
+  scenarioId?: string;
+  name?: string;
+}) => api.post<EvalDatasetScenario>('/eval/scenarios/from-trace', payload);
+export const getEvalScenarioVersions = (scenarioId: string) =>
+  api.get<EvalDatasetScenario[]>(`/eval/scenarios/${scenarioId}/versions`);
+export const createEvalScenarioVersion = (
+  scenarioId: string,
+  payload: {
+    name?: string;
+    description?: string;
+    task?: string;
+    oracleExpected?: string;
+    oracleType?: string;
+    category?: string;
+    split?: string;
+    status?: 'draft' | 'active' | 'discarded';
+  },
+) => api.post<EvalDatasetScenario>(`/eval/scenarios/${scenarioId}/version`, payload);
 
 // EVAL-V2 M0: recent eval runs in which a given scenario participated.
 export interface ScenarioRecentRun {
@@ -938,6 +1084,25 @@ export interface AnalysisSession {
   createdAt: string | null;
   updatedAt: string | null;
 }
+export const analyzeScenario = (scenarioId: string, data: { userId: number; agentId: number }) =>
+  api.post<{ sessionId: string; analysisType: string; scenarioId: string }>(
+    `/eval/scenarios/${scenarioId}/analyze`,
+    data,
+  );
+export const analyzeEvalTask = (taskId: string, data: { userId: number; agentId: number }) =>
+  api.post<{ sessionId: string; analysisType: string; taskId: string }>(
+    `/eval/tasks/${taskId}/analyze`,
+    data,
+  );
+export const analyzeEvalTaskItem = (
+  taskId: string,
+  itemId: number,
+  data: { userId: number; agentId: number },
+) =>
+  api.post<{ sessionId: string; analysisType: string; taskId: string; itemId: number; scenarioId: string }>(
+    `/eval/tasks/${taskId}/items/${itemId}/analyze`,
+    data,
+  );
 export const getAnalysisSessions = (scenarioId: string, userId: number) =>
   api.get<AnalysisSession[]>(`/eval/scenarios/${scenarioId}/analysis-sessions`, { params: { userId } });
 
@@ -986,6 +1151,8 @@ export const addBaseScenario = (payload: BaseScenarioInput) =>
 // FE renderers can consume both via the same EvalDatasetScenario projection.
 export interface BaseScenario {
   id: string;
+  version?: number;
+  parentScenarioId?: string | null;
   name: string;
   description?: string | null;
   category?: string | null;

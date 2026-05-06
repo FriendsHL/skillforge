@@ -158,7 +158,7 @@ const ToolList: React.FC = () => {
                     <div><span className={`tool-danger-sf ${d.cls}`}>{d.text}</span></div>
                     <div className="tools-flags-sf">
                       {t.readOnly && <span className="tool-flag-sf">RO</span>}
-                      {t.toolSchema && <span className="tool-flag-sf">Schema</span>}
+                      {Boolean(t.toolSchema) && <span className="tool-flag-sf">Schema</span>}
                     </div>
                     <div />
                   </button>

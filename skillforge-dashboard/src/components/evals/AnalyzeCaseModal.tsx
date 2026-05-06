@@ -1,8 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Select, message } from 'antd';
 import { useNavigate } from 'react-router-dom';
-import { createSession, sendMessage } from '../../api';
-import type { EvalDatasetScenario } from '../../api';
+import { analyzeEvalTask, analyzeEvalTaskItem, analyzeScenario, sendMessage } from '../../api';
+import type { EvalDatasetScenario, EvalTaskItem, EvalTaskSummary } from '../../api';
 
 const CLOSE_ICON = (
   <svg width={14} height={14} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
@@ -22,21 +22,25 @@ const CLOSE_ICON = (
  * the parent can pre-fill those via {@link AnalyzeContext}; otherwise the
  * opening message references just the scenario name + source session.
  */
-export interface AnalyzeContext {
+export interface ScenarioAnalyzeContext {
   evalRunId?: string;
   compositeScore?: number;
   attribution?: string;
 }
 
+export type AnalyzeTarget =
+  | { kind: 'scenario'; scenario: EvalDatasetScenario; context?: ScenarioAnalyzeContext }
+  | { kind: 'task'; task: EvalTaskSummary }
+  | { kind: 'item'; task: EvalTaskSummary; item: EvalTaskItem };
+
 interface AnalyzeCaseModalProps {
-  scenario: EvalDatasetScenario;
+  target: AnalyzeTarget;
   agents: Record<string, unknown>[];
   userId: number;
-  context?: AnalyzeContext;
   onClose: () => void;
 }
 
-function AnalyzeCaseModal({ scenario, agents, userId, context, onClose }: AnalyzeCaseModalProps) {
+function AnalyzeCaseModal({ target, agents, userId, onClose }: AnalyzeCaseModalProps) {
   const navigate = useNavigate();
   const [agentId, setAgentId] = useState<string>('');
   const [submitting, setSubmitting] = useState(false);
@@ -49,46 +53,137 @@ function AnalyzeCaseModal({ scenario, agents, userId, context, onClose }: Analyz
 
   const buildPrompt = (): string => {
     const lines: string[] = [];
-    lines.push(`Please analyze the eval case "${scenario.name}".`);
-    if (scenario.sourceSessionId) {
-      lines.push(`Source session id: ${scenario.sourceSessionId}`);
-    }
-    if (context?.evalRunId) {
-      lines.push(`Eval run id: ${context.evalRunId}`);
-    }
-    if (context?.compositeScore != null) {
-      lines.push(`Score: ${Math.round(context.compositeScore)}%`);
-    }
-    if (context?.attribution && context.attribution !== 'NONE') {
-      lines.push(`Failure attribution: ${context.attribution}`);
-    }
-    lines.push('');
-    lines.push('Task:');
-    lines.push(scenario.task);
-    if (scenario.oracleExpected) {
+    if (target.kind === 'scenario') {
+      const { scenario, context } = target;
+      lines.push(`Please analyze the eval case "${scenario.name}".`);
+      if (scenario.sourceSessionId) {
+        lines.push(`Source session id: ${scenario.sourceSessionId}`);
+      }
+      if (context?.evalRunId) {
+        lines.push(`Eval task id: ${context.evalRunId}`);
+      }
+      if (context?.compositeScore != null) {
+        lines.push(`Score: ${Math.round(context.compositeScore)}%`);
+      }
+      if (context?.attribution && context.attribution !== 'NONE') {
+        lines.push(`Failure attribution: ${context.attribution}`);
+      }
       lines.push('');
-      lines.push('Expected output:');
-      lines.push(scenario.oracleExpected);
+      lines.push('Task:');
+      lines.push(scenario.task);
+      if (scenario.oracleExpected) {
+        lines.push('');
+        lines.push('Expected output:');
+        lines.push(scenario.oracleExpected);
+      }
+      lines.push('');
+      lines.push('Please give:');
+      lines.push('1. A failure attribution analysis (skill missing / prompt quality / context overflow / etc.)');
+      lines.push('2. Concrete improvement suggestions for the agent prompt or skills.');
+      return lines.join('\n');
+    }
+
+    if (target.kind === 'task') {
+      const { task } = target;
+      lines.push(`Please analyze eval task ${task.id}.`);
+      lines.push(`Status: ${task.status}`);
+      if (task.scenarioCount != null) {
+        lines.push(`Scenarios: ${task.scenarioCount}`);
+      }
+      if (task.passCount != null || task.failCount != null) {
+        lines.push(`Pass/fail: ${task.passCount ?? 0}/${task.failCount ?? 0}`);
+      }
+      if (task.compositeAvg != null) {
+        lines.push(`Average score: ${Math.round(task.compositeAvg)}%`);
+      }
+      if (task.primaryAttribution) {
+        lines.push(`Primary attribution: ${task.primaryAttribution}`);
+      }
+      if (task.datasetFilter) {
+        lines.push(`Dataset filter: ${task.datasetFilter}`);
+      }
+      if (task.attributionSummary) {
+        lines.push('');
+        lines.push('Existing attribution summary:');
+        lines.push(task.attributionSummary);
+      }
+      if (task.improvementSuggestion) {
+        lines.push('');
+        lines.push('Existing improvement suggestion:');
+        lines.push(task.improvementSuggestion);
+      }
+      lines.push('');
+      lines.push('Please provide:');
+      lines.push('1. An overall attribution summary for the task.');
+      lines.push('2. The most important failure patterns across cases.');
+      lines.push('3. Concrete prompt or skill improvements with priority order.');
+      lines.push('4. After the analysis, call AnalyzeEvalTask to persist the summary and suggestion back to the task.');
+      return lines.join('\n');
+    }
+
+    const { task, item } = target;
+    lines.push(`Please analyze eval task item ${item.id} from task ${task.id}.`);
+    lines.push(`Scenario id: ${item.scenarioId}`);
+    lines.push(`Status: ${item.status}`);
+    if (item.compositeScore != null) {
+      lines.push(`Score: ${Math.round(item.compositeScore)}%`);
+    }
+    if (item.attribution) {
+      lines.push(`Attribution: ${item.attribution}`);
+    }
+    if (item.sessionId) {
+      lines.push(`Execution session id: ${item.sessionId}`);
+    }
+    if (item.rootTraceId) {
+      lines.push(`Root trace id: ${item.rootTraceId}`);
+    }
+    if (item.judgeRationale) {
+      lines.push('');
+      lines.push('Judge rationale:');
+      lines.push(item.judgeRationale);
+    }
+    if (item.agentFinalOutput) {
+      lines.push('');
+      lines.push('Agent final output:');
+      lines.push(item.agentFinalOutput);
     }
     lines.push('');
-    lines.push('Please give:');
-    lines.push('1. A failure attribution analysis (skill missing / prompt quality / context overflow / etc.)');
-    lines.push('2. Concrete improvement suggestions for the agent prompt or skills.');
+    lines.push('Please provide:');
+    lines.push('1. Why this specific case failed or underperformed.');
+    lines.push('2. Whether the root cause is prompt, skill, tool execution, or context related.');
+    lines.push('3. Concrete changes that would most likely improve this case.');
     return lines.join('\n');
   };
+
+  const createAnalysisSession = async () => {
+    if (target.kind === 'scenario') {
+      return analyzeScenario(target.scenario.id, { userId, agentId: Number(agentId) });
+    }
+    if (target.kind === 'task') {
+      return analyzeEvalTask(target.task.id, { userId, agentId: Number(agentId) });
+    }
+    return analyzeEvalTaskItem(target.task.id, target.item.id, { userId, agentId: Number(agentId) });
+  };
+
+  const title =
+    target.kind === 'task'
+      ? 'Analyze task'
+      : target.kind === 'item'
+        ? 'Analyze case run'
+        : 'Analyze case';
+
+  const description =
+    target.kind === 'task'
+      ? 'Spawns a new chat for whole-task attribution and improvement planning.'
+      : target.kind === 'item'
+        ? 'Spawns a new chat focused on this specific case execution and its trace context.'
+        : "Spawns a new chat with this case's task, score, and source context for historical analysis.";
 
   const handleSubmit = async () => {
     if (!agentId) return;
     setSubmitting(true);
     try {
-      // EVAL-V2 Q1: pass scenario.id as sourceScenarioId so the BE can link
-      // this analysis session back to the eval scenario, and the scenario
-      // detail drawer can surface previous analyses for the same case.
-      const res = await createSession({
-        userId,
-        agentId: Number(agentId),
-        sourceScenarioId: scenario.id,
-      });
+      const res = await createAnalysisSession();
       const newSession = (res.data ?? {}) as { id?: string; sessionId?: string };
       const sid = String(newSession.id ?? newSession.sessionId ?? '');
       if (!sid) throw new Error('no session id returned');
@@ -106,14 +201,12 @@ function AnalyzeCaseModal({ scenario, agents, userId, context, onClose }: Analyz
     <div className="sf-modal-scrim" onClick={onClose}>
       <div className="sf-modal" onClick={e => e.stopPropagation()} style={{ width: 'min(520px, 94vw)' }}>
         <div className="sf-modal-h">
-          <h3>Analyze case</h3>
+          <h3>{title}</h3>
           <button className="sf-drawer-close" onClick={onClose} aria-label="Close">{CLOSE_ICON}</button>
         </div>
         <div className="sf-modal-body">
           <p style={{ fontSize: 12, color: 'var(--fg-3)', marginTop: 0 }}>
-            Spawns a new chat with the selected agent, prefilled with this case's task,
-            score, and source session reference. Useful for asking an analysis agent for
-            failure attribution + improvement ideas.
+            {description}
           </p>
           <div className="sf-modal-field">
             <label>Analysis agent</label>

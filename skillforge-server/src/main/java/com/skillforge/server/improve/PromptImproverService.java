@@ -9,12 +9,12 @@ import com.skillforge.core.llm.LlmResponse;
 import com.skillforge.core.model.Message;
 import com.skillforge.server.config.LlmProperties;
 import com.skillforge.server.entity.AgentEntity;
-import com.skillforge.server.entity.EvalRunEntity;
+import com.skillforge.server.entity.EvalTaskEntity;
 import com.skillforge.server.entity.PromptAbRunEntity;
 import com.skillforge.server.entity.PromptVersionEntity;
 import com.skillforge.server.eval.attribution.FailureAttribution;
 import com.skillforge.server.repository.AgentRepository;
-import com.skillforge.server.repository.EvalRunRepository;
+import com.skillforge.server.repository.EvalTaskRepository;
 import com.skillforge.server.repository.PromptAbRunRepository;
 import com.skillforge.server.repository.PromptVersionRepository;
 import org.slf4j.Logger;
@@ -42,7 +42,7 @@ public class PromptImproverService {
             FailureAttribution.PROMPT_QUALITY, FailureAttribution.CONTEXT_OVERFLOW);
 
     private final AgentRepository agentRepository;
-    private final EvalRunRepository evalRunRepository;
+    private final EvalTaskRepository evalRunRepository;
     private final PromptVersionRepository promptVersionRepository;
     private final PromptAbRunRepository promptAbRunRepository;
     private final AbEvalPipeline abEvalPipeline;
@@ -53,7 +53,7 @@ public class PromptImproverService {
     private final String defaultProviderName;
 
     public PromptImproverService(AgentRepository agentRepository,
-                                  EvalRunRepository evalRunRepository,
+                                  EvalTaskRepository evalRunRepository,
                                   PromptVersionRepository promptVersionRepository,
                                   PromptAbRunRepository promptAbRunRepository,
                                   AbEvalPipeline abEvalPipeline,
@@ -79,7 +79,7 @@ public class PromptImproverService {
     public ImprovementStartResult startImprovement(String agentId, String evalRunId, long userId) {
         AgentEntity agent = agentRepository.findById(Long.parseLong(agentId))
                 .orElseThrow(() -> new RuntimeException("Agent not found: " + agentId));
-        EvalRunEntity evalRun = evalRunRepository.findById(evalRunId)
+        EvalTaskEntity evalRun = evalRunRepository.findById(evalRunId)
                 .orElseThrow(() -> new RuntimeException("Eval run not found: " + evalRunId));
 
         // 1. Check eligibility
@@ -123,7 +123,7 @@ public class PromptImproverService {
         return new ImprovementStartResult(agentId, abRun.getId(), version.getId(), "PENDING");
     }
 
-    private void checkEligibility(AgentEntity agent, EvalRunEntity evalRun) {
+    private void checkEligibility(AgentEntity agent, EvalTaskEntity evalRun) {
         if (!"COMPLETED".equals(evalRun.getStatus())) {
             throw new ImprovementIneligibleException("EVAL_NOT_COMPLETED");
         }
@@ -149,7 +149,7 @@ public class PromptImproverService {
                     .orElseThrow(() -> new RuntimeException("Version not found: " + versionId));
             PromptAbRunEntity abRun = promptAbRunRepository.findById(abRunId)
                     .orElseThrow(() -> new RuntimeException("AB run not found: " + abRunId));
-            EvalRunEntity evalRun = evalRunRepository.findById(evalRunId)
+            EvalTaskEntity evalRun = evalRunRepository.findById(evalRunId)
                     .orElseThrow(() -> new RuntimeException("Eval run not found: " + evalRunId));
             AgentEntity agent = agentRepository.findById(Long.parseLong(agentId))
                     .orElseThrow(() -> new RuntimeException("Agent not found: " + agentId));
@@ -180,7 +180,7 @@ public class PromptImproverService {
     }
 
     @SuppressWarnings("unchecked")
-    private String generateCandidatePrompt(AgentEntity agent, EvalRunEntity evalRun) {
+    private String generateCandidatePrompt(AgentEntity agent, EvalTaskEntity evalRun) {
         String currentPrompt = agent.getSystemPrompt() != null ? agent.getSystemPrompt() : "";
 
         // Build failure analysis from scenarioResultsJson

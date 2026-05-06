@@ -1,12 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
-import { getTraces, getTraceSpans, extractList } from '../api';
+import { Link, useSearchParams } from 'react-router-dom';
+import { message } from 'antd';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { createEvalScenarioFromTrace, getTraces, getTraceSpans, extractList } from '../api';
 import '../components/traces/traces.css';
 import '../components/skills/skills.css';
 
 interface TraceRun {
   id: string;
+  rootTraceId: string;
   name: string;
   title: string;
   session: string;
@@ -46,8 +48,11 @@ function normalizeRun(raw: Record<string, unknown>): TraceRun {
   const inputStr = String(raw.input || '');
   const title = inputStr.length > 50 ? inputStr.slice(0, 50) + '…' : inputStr;
   const sessionFullId = String(raw.sessionId || '');
+  const traceId = String(raw.traceId || '');
+  const rootTraceId = String(raw.rootTraceId || traceId);
   return {
-    id: String(raw.traceId || ''),
+    id: traceId,
+    rootTraceId,
     name: String(raw.name || 'Agent loop'),
     title: title || String(raw.name || 'Agent loop'),
     session: sessionFullId.slice(0, 12),
@@ -108,6 +113,8 @@ function fmtTime(iso: string): string {
 }
 
 const Traces: React.FC = () => {
+  const queryClient = useQueryClient();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [q, setQ] = useState('');
   const [statusFilter, setStatusFilter] = useState<string | null>(null);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
@@ -129,8 +136,27 @@ const Traces: React.FC = () => {
     });
   }, [runs, q, statusFilter]);
 
+  const traceIdFromUrl = searchParams.get('traceId');
+
+  useEffect(() => {
+    if (!traceIdFromUrl) return;
+    const match = runs.find(r => r.id === traceIdFromUrl);
+    if (match && selectedRunId !== match.id) {
+      setSelectedRunId(match.id);
+      setSelectedSpanId(null);
+    }
+  }, [runs, selectedRunId, traceIdFromUrl]);
+
   const selectedRun = filteredRuns.find(r => r.id === selectedRunId) || filteredRuns[0] || null;
   const activeRunId = selectedRun?.id || null;
+
+  useEffect(() => {
+    if (!selectedRun?.id) return;
+    if (searchParams.get('traceId') === selectedRun.id) return;
+    const next = new URLSearchParams(searchParams);
+    next.set('traceId', selectedRun.id);
+    setSearchParams(next, { replace: true });
+  }, [searchParams, selectedRun?.id, setSearchParams]);
 
   // Fetch spans for selected run
   const { data: spansData } = useQuery({
@@ -154,6 +180,24 @@ const Traces: React.FC = () => {
 
   const toggleStatus = (v: string) => setStatusFilter(s => s === v ? null : v);
 
+  const importTraceMutation = useMutation({
+    mutationFn: (rootTraceId: string) => createEvalScenarioFromTrace({ rootTraceId }),
+    onSuccess: ({ data }) => {
+      message.success(`Added to dataset: ${data.name || data.id}`);
+      queryClient.invalidateQueries({ queryKey: ['eval-dataset-scenarios'] });
+    },
+    onError: (error: unknown) => {
+      const text =
+        error &&
+        typeof error === 'object' &&
+        'response' in error &&
+        typeof (error as { response?: { data?: { error?: unknown } } }).response?.data?.error === 'string'
+          ? String((error as { response?: { data?: { error?: string } } }).response?.data?.error)
+          : 'Failed to add trace to dataset';
+      message.error(text);
+    },
+  });
+
   return (
     <div className="tr-surface">
       {/* Left: runs list */}
@@ -171,7 +215,10 @@ const Traces: React.FC = () => {
             <button
               key={r.id}
               className={`tr-run ${r.id === activeRunId ? 'sel' : ''} ${r.status !== 'ok' ? 'err' : ''}`}
-              onClick={() => { setSelectedRunId(r.id); setSelectedSpanId(null); }}
+              onClick={() => {
+                setSelectedRunId(r.id);
+                setSelectedSpanId(null);
+              }}
             >
               <div className="tr-run-top">
                 <span className={`tr-dot ${r.status === 'ok' ? 'ok' : 'err'}`} />
@@ -201,7 +248,11 @@ const Traces: React.FC = () => {
       {/* Right: detail */}
       {selectedRun ? (
         <section className="tr-detail">
-          <RunHeader run={selectedRun} />
+          <RunHeader
+            run={selectedRun}
+            importing={importTraceMutation.isPending}
+            onImport={() => importTraceMutation.mutate(selectedRun.rootTraceId || selectedRun.id)}
+          />
           <div className="tr-detail-split">
             <Waterfall
               spans={spans}
@@ -221,7 +272,11 @@ const Traces: React.FC = () => {
   );
 };
 
-function RunHeader({ run }: { run: TraceRun }) {
+function RunHeader({ run, importing, onImport }: {
+  run: TraceRun;
+  importing: boolean;
+  onImport: () => void;
+}) {
   return (
     <div className="tr-run-header">
       <div className="tr-run-header-top">
@@ -239,15 +294,26 @@ function RunHeader({ run }: { run: TraceRun }) {
             <span>{run.at}</span>
           </div>
         </div>
-        {run.sessionFullId && (
-          <Link
-            to={`/sessions/${run.sessionFullId}`}
-            className="btn-ghost-sf"
-            title="Open this trace's session in the merged LLM/Tool view"
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            className="btn-primary-sf"
+            onClick={onImport}
+            disabled={importing}
+            title="Create an eval dataset scenario from this trace"
           >
-            🔬 在 Session 视图打开
-          </Link>
-        )}
+            {importing ? 'Adding…' : 'Add to dataset'}
+          </button>
+          {run.sessionFullId && (
+            <Link
+              to={`/sessions/${run.sessionFullId}`}
+              className="btn-ghost-sf"
+              title="Open this trace's session in the merged LLM/Tool view"
+            >
+              🔬 在 Session 视图打开
+            </Link>
+          )}
+        </div>
       </div>
       <div className="tr-stats-bar">
         <StatItem label="Latency" value={fmtMs(run.totalMs)} />

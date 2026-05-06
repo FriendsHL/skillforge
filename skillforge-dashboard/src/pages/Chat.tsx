@@ -42,7 +42,7 @@ import {
 import { z } from 'zod';
 import { AgentSchema, SessionSchema, safeParseList } from '../api/schemas';
 import { useChatWebSocket } from '../hooks/useChatWebSocket';
-import { useChatMessages, type InflightTool, type LoopSpan } from '../hooks/useChatMessages';
+import { useChatMessages, type InflightTool } from '../hooks/useChatMessages';
 import { useCollabState } from '../hooks/useCollabState';
 import {
   useChatSession,

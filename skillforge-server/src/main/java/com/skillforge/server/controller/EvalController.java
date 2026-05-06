@@ -2,17 +2,17 @@ package com.skillforge.server.controller;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.skillforge.server.entity.EvalRunEntity;
+import com.skillforge.server.entity.EvalTaskEntity;
 import com.skillforge.server.entity.EvalScenarioEntity;
-import com.skillforge.server.entity.SessionEntity;
 import com.skillforge.server.eval.EvalOrchestrator;
 import com.skillforge.server.eval.scenario.BaseScenarioService;
 import com.skillforge.server.eval.scenario.EvalScenario;
 import com.skillforge.server.eval.scenario.ScenarioLoader;
-import com.skillforge.server.repository.EvalRunRepository;
+import com.skillforge.server.repository.EvalTaskRepository;
 import com.skillforge.server.repository.EvalScenarioDraftRepository;
 import com.skillforge.server.repository.EvalSessionRepository;
-import com.skillforge.server.repository.SessionRepository;
+import com.skillforge.server.service.EvalScenarioVersionService;
+import com.skillforge.server.service.TraceScenarioImportService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -33,6 +33,7 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.NoSuchElementException;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.stream.Collectors;
@@ -44,7 +45,7 @@ public class EvalController {
     private static final Logger log = LoggerFactory.getLogger(EvalController.class);
 
     private final EvalOrchestrator evalOrchestrator;
-    private final EvalRunRepository evalRunRepository;
+    private final EvalTaskRepository evalRunRepository;
     private final EvalSessionRepository evalSessionRepository;
     private final ObjectMapper objectMapper;
     // Use evalOrchestratorExecutor (not evalLoopExecutor) to prevent nested-pool deadlock:
@@ -53,18 +54,20 @@ public class EvalController {
     private final ExecutorService evalOrchestratorExecutor;
     private final ScenarioLoader scenarioLoader;
     private final EvalScenarioDraftRepository evalScenarioDraftRepository;
-    private final SessionRepository sessionRepository;
     private final BaseScenarioService baseScenarioService;
+    private final EvalScenarioVersionService evalScenarioVersionService;
+    private final TraceScenarioImportService traceScenarioImportService;
 
     public EvalController(EvalOrchestrator evalOrchestrator,
-                          EvalRunRepository evalRunRepository,
+                          EvalTaskRepository evalRunRepository,
                           EvalSessionRepository evalSessionRepository,
                           ObjectMapper objectMapper,
                           @Qualifier("evalOrchestratorExecutor") ExecutorService evalOrchestratorExecutor,
                           ScenarioLoader scenarioLoader,
                           EvalScenarioDraftRepository evalScenarioDraftRepository,
-                          SessionRepository sessionRepository,
-                          BaseScenarioService baseScenarioService) {
+                          BaseScenarioService baseScenarioService,
+                          EvalScenarioVersionService evalScenarioVersionService,
+                          TraceScenarioImportService traceScenarioImportService) {
         this.evalOrchestrator = evalOrchestrator;
         this.evalRunRepository = evalRunRepository;
         this.evalSessionRepository = evalSessionRepository;
@@ -72,8 +75,9 @@ public class EvalController {
         this.evalOrchestratorExecutor = evalOrchestratorExecutor;
         this.scenarioLoader = scenarioLoader;
         this.evalScenarioDraftRepository = evalScenarioDraftRepository;
-        this.sessionRepository = sessionRepository;
         this.baseScenarioService = baseScenarioService;
+        this.evalScenarioVersionService = evalScenarioVersionService;
+        this.traceScenarioImportService = traceScenarioImportService;
     }
 
     @PostMapping("/runs")
@@ -93,7 +97,7 @@ public class EvalController {
 
     @GetMapping("/runs")
     public ResponseEntity<List<Map<String, Object>>> listEvalRuns() {
-        List<EvalRunEntity> runs = evalRunRepository.findAll();
+        List<EvalTaskEntity> runs = evalRunRepository.findAll();
         List<Map<String, Object>> result = runs.stream()
                 .sorted((a, b) -> {
                     if (a.getStartedAt() == null || b.getStartedAt() == null) return 0;
@@ -156,8 +160,7 @@ public class EvalController {
         // (per-agent dataset). Without agentId, retain legacy behavior of returning
         // classpath YAML scenarios (used by other consumers).
         if (agentId != null && !agentId.isBlank()) {
-            List<EvalScenarioEntity> rows = evalScenarioDraftRepository
-                    .findByAgentIdOrderByCreatedAtDesc(agentId);
+            List<EvalScenarioEntity> rows = evalScenarioVersionService.listLatestScenarios(agentId);
             List<Map<String, Object>> result = rows.stream()
                     .map(this::toScenarioEntityMap)
                     .collect(Collectors.toList());
@@ -233,14 +236,14 @@ public class EvalController {
         }
         String agentId = scenarioEntity.getAgentId();
         int fetchLimit = Math.max(safeLimit * 5, safeLimit);
-        List<EvalRunEntity> runs = evalRunRepository
+        List<EvalTaskEntity> runs = evalRunRepository
                 .findByAgentDefinitionIdOrderByStartedAtDesc(agentId, PageRequest.of(0, fetchLimit))
                 .stream()
                 .filter(r -> r.getScenarioResultsJson() != null && !r.getScenarioResultsJson().isBlank())
                 .toList();
 
         List<Map<String, Object>> result = new ArrayList<>();
-        for (EvalRunEntity run : runs) {
+        for (EvalTaskEntity run : runs) {
             if (result.size() >= safeLimit) break;
             try {
                 List<Map<String, Object>> scenarioResults = objectMapper.readValue(
@@ -266,35 +269,44 @@ public class EvalController {
         return ResponseEntity.ok(result);
     }
 
-    /**
-     * EVAL-V2 Q1: list chat sessions opened to analyze a given eval scenario
-     * (i.e. {@code t_session.source_scenario_id = scenarioId}). Filtered by
-     * {@code userId} so users only see their own analysis sessions.
-     */
-    @GetMapping("/scenarios/{id}/analysis-sessions")
-    public ResponseEntity<List<Map<String, Object>>> listAnalysisSessions(
-            @PathVariable("id") String scenarioId,
-            @RequestParam("userId") Long userId) {
-        if (scenarioId == null || scenarioId.isBlank() || userId == null) {
-            return ResponseEntity.badRequest().body(List.of());
+    @GetMapping("/scenarios/{id}/versions")
+    public ResponseEntity<List<Map<String, Object>>> listScenarioVersions(@PathVariable("id") String scenarioId) {
+        try {
+            List<Map<String, Object>> result = evalScenarioVersionService.listVersions(scenarioId).stream()
+                    .map(this::toScenarioEntityMap)
+                    .collect(Collectors.toList());
+            return ResponseEntity.ok(result);
+        } catch (NoSuchElementException e) {
+            return ResponseEntity.notFound().build();
         }
-        List<SessionEntity> sessions = sessionRepository
-                .findBySourceScenarioIdAndUserIdOrderByUpdatedAtDesc(scenarioId, userId);
-        List<Map<String, Object>> result = sessions.stream()
-                .map(s -> {
-                    Map<String, Object> m = new LinkedHashMap<>();
-                    m.put("id", s.getId());
-                    m.put("agentId", s.getAgentId());
-                    m.put("title", s.getTitle());
-                    m.put("status", s.getStatus());
-                    m.put("runtimeStatus", s.getRuntimeStatus());
-                    m.put("messageCount", s.getMessageCount());
-                    m.put("createdAt", s.getCreatedAt());
-                    m.put("updatedAt", s.getUpdatedAt());
-                    return m;
-                })
-                .collect(Collectors.toList());
-        return ResponseEntity.ok(result);
+    }
+
+    @PostMapping("/scenarios/{id}/version")
+    public ResponseEntity<Map<String, Object>> createScenarioVersion(
+            @PathVariable("id") String scenarioId,
+            @RequestBody Map<String, Object> body) {
+        try {
+            EvalScenarioEntity created = evalScenarioVersionService.createVersion(scenarioId, body);
+            return ResponseEntity.status(201).body(toScenarioEntityMap(created));
+        } catch (NoSuchElementException e) {
+            return ResponseEntity.notFound().build();
+        }
+    }
+
+    @PostMapping("/scenarios/from-trace")
+    public ResponseEntity<Map<String, Object>> createScenarioFromTrace(
+            @RequestBody Map<String, Object> body) {
+        try {
+            EvalScenarioEntity created = traceScenarioImportService.importFromTrace(body);
+            return ResponseEntity.status(201).body(toScenarioEntityMap(created));
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        } catch (NoSuchElementException e) {
+            return ResponseEntity.status(404).body(Map.of("error", e.getMessage()));
+        } catch (Exception e) {
+            log.error("Failed to import eval scenario from trace", e);
+            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+        }
     }
 
     /**
@@ -412,6 +424,8 @@ public class EvalController {
         map.put("oracleType", entity.getOracleType());
         map.put("oracleExpected", entity.getOracleExpected());
         map.put("status", entity.getStatus());
+        map.put("version", entity.getVersion());
+        map.put("parentScenarioId", entity.getParentScenarioId());
         map.put("sourceSessionId", entity.getSourceSessionId());
         map.put("extractionRationale", entity.getExtractionRationale());
         map.put("createdAt", entity.getCreatedAt());
@@ -435,7 +449,7 @@ public class EvalController {
         return map;
     }
 
-    private Map<String, Object> toSummaryMap(EvalRunEntity run) {
+    private Map<String, Object> toSummaryMap(EvalTaskEntity run) {
         Map<String, Object> map = new LinkedHashMap<>();
         map.put("id", run.getId());
         map.put("agentDefinitionId", run.getAgentDefinitionId());
@@ -443,7 +457,10 @@ public class EvalController {
         map.put("overallPassRate", run.getOverallPassRate());
         map.put("avgOracleScore", run.getAvgOracleScore());
         map.put("totalScenarios", run.getTotalScenarios());
-        map.put("passedScenarios", run.getPassedScenarios());
+        // EVAL-V2 M3a (b2): API key kept as legacy "passedScenarios" so the
+        // FE drawer + improver lookups don't break; entity getter renamed to
+        // getPassCount() (DB column pass_count).
+        map.put("passedScenarios", run.getPassCount());
         map.put("failedScenarios", run.getFailedScenarios());
         map.put("timeoutScenarios", run.getTimeoutScenarios());
         map.put("vetoScenarios", run.getVetoScenarios());

@@ -25,6 +25,27 @@ public class ScenarioRunResult {
     private boolean engineThrewException;
     private String errorMessage;
 
+    /**
+     * EVAL-V2 M3a (b2): real {@code t_session.id} (origin='eval') the scenario
+     * ran on. Replaces the legacy synthetic "eval_<UUID>" id so OBS trace
+     * drill-down can follow {@code t_eval_task_item.session_id → t_session.id}.
+     */
+    private String sessionId;
+
+    /**
+     * EVAL-V2 M3a (b2): root trace id captured at scenario completion. Lets
+     * the OBS spans drawer pre-filter to "this case's spans" without
+     * re-deriving from session_id.
+     */
+    private String rootTraceId;
+
+    /**
+     * EVAL-V2 M3a (b2): tool call count derived from the engine's loop result
+     * tool_calls list size (mirrors what {@link #applyToolCallSignals(java.util.List)}
+     * iterates over).
+     */
+    private int toolCallCount;
+
     public ScenarioRunResult() {
     }
 
@@ -101,8 +122,18 @@ public class ScenarioRunResult {
     public String getErrorMessage() { return errorMessage; }
     public void setErrorMessage(String errorMessage) { this.errorMessage = errorMessage; }
 
+    public String getSessionId() { return sessionId; }
+    public void setSessionId(String sessionId) { this.sessionId = sessionId; }
+
+    public String getRootTraceId() { return rootTraceId; }
+    public void setRootTraceId(String rootTraceId) { this.rootTraceId = rootTraceId; }
+
+    public int getToolCallCount() { return toolCallCount; }
+    public void setToolCallCount(int toolCallCount) { this.toolCallCount = toolCallCount; }
+
     public void applyToolCallSignals(List<ToolCallRecord> toolCalls) {
         if (toolCalls == null) return;
+        toolCallCount = toolCalls.size();
         for (ToolCallRecord record : toolCalls) {
             if (record == null) continue;
             if (!record.isSuccess()) {

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Select } from 'antd';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -38,6 +38,8 @@ function baseToDataset(s: BaseScenario): EvalDatasetScenario {
   return {
     id: s.id,
     agentId: '',
+    version: s.version ?? 1,
+    parentScenarioId: s.parentScenarioId ?? null,
     name: s.name,
     description: s.description ?? undefined,
     category: s.category ?? 'base',
@@ -259,6 +261,7 @@ function DatasetBrowser({ agents, userId }: DatasetBrowserProps) {
                 <div className="dataset-card-meta">
                   {s.category && <span className="kv-chip-sf">{s.category}</span>}
                   {s.split && <span className="kv-chip-sf">{s.split}</span>}
+                  {tab === 'agent' && <span className="kv-chip-sf">v{s.version ?? 1}</span>}
                   <span className="kv-chip-sf">{s.oracleType}</span>
                   {/* EVAL-V2 M3b: tag preview chips (max 3) inline with the
                       meta row so card height stays consistent whether tags
@@ -308,12 +311,13 @@ function DatasetBrowser({ agents, userId }: DatasetBrowserProps) {
           userId={userId}
           onClose={() => setOpened(null)}
           onAnalyze={(scn) => setAnalyzing(scn)}
+          onSelectScenarioVersion={(scn) => setOpened(scn)}
         />
       )}
 
       {analyzing && (
         <AnalyzeCaseModal
-          scenario={analyzing}
+          target={{ kind: 'scenario', scenario: analyzing }}
           agents={agents}
           userId={userId}
           onClose={() => setAnalyzing(null)}

@@ -29,6 +29,10 @@ public interface SessionMessageRepository extends JpaRepository<SessionMessageEn
     Optional<SessionMessageEntity> findTopBySessionIdAndMsgTypeAndPrunedAtIsNullOrderBySeqNoDesc(
             String sessionId, String msgType);
 
+    Optional<SessionMessageEntity> findTopByTraceIdAndRoleOrderBySeqNoAsc(String traceId, String role);
+
+    Optional<SessionMessageEntity> findTopByTraceIdAndRoleOrderBySeqNoDesc(String traceId, String role);
+
     Page<SessionMessageEntity> findBySessionIdAndSeqNoGreaterThanEqualOrderBySeqNoAsc(
             String sessionId, long seqNo, Pageable pageable);
 

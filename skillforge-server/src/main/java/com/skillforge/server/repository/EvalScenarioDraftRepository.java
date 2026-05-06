@@ -9,6 +9,8 @@ public interface EvalScenarioDraftRepository extends JpaRepository<EvalScenarioE
 
     List<EvalScenarioEntity> findByAgentIdOrderByCreatedAtDesc(String agentId);
 
+    List<EvalScenarioEntity> findByAgentId(String agentId);
+
     List<EvalScenarioEntity> findByStatus(String status);
 
     List<EvalScenarioEntity> findByAgentIdAndStatus(String agentId, String status);

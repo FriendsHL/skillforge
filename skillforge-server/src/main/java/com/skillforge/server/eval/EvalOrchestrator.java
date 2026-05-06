@@ -4,17 +4,21 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillforge.core.engine.ChatEventBroadcaster;
 import com.skillforge.core.model.AgentDefinition;
 import com.skillforge.server.entity.CollabRunEntity;
-import com.skillforge.server.entity.EvalRunEntity;
+import com.skillforge.server.entity.EvalTaskEntity;
+import com.skillforge.server.entity.EvalTaskItemEntity;
 import com.skillforge.server.eval.attribution.FailureAttribution;
 import com.skillforge.server.eval.scenario.EvalScenario;
 import com.skillforge.server.eval.scenario.ScenarioLoader;
 import com.skillforge.server.repository.CollabRunRepository;
-import com.skillforge.server.repository.EvalRunRepository;
+import com.skillforge.server.repository.EvalTaskItemRepository;
+import com.skillforge.server.repository.EvalTaskRepository;
 import com.skillforge.server.service.AgentService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -31,7 +35,8 @@ public class EvalOrchestrator {
     private final ScenarioLoader scenarioLoader;
     private final ScenarioRunnerTool scenarioRunner;
     private final EvalJudgeTool evalJudge;
-    private final EvalRunRepository evalRunRepository;
+    private final EvalTaskRepository evalRunRepository;
+    private final EvalTaskItemRepository evalTaskItemRepository;
     private final CollabRunRepository collabRunRepository;
     private final AgentService agentService;
     private final ObjectMapper objectMapper;
@@ -40,7 +45,8 @@ public class EvalOrchestrator {
     public EvalOrchestrator(ScenarioLoader scenarioLoader,
                             ScenarioRunnerTool scenarioRunner,
                             EvalJudgeTool evalJudge,
-                            EvalRunRepository evalRunRepository,
+                            EvalTaskRepository evalRunRepository,
+                            EvalTaskItemRepository evalTaskItemRepository,
                             CollabRunRepository collabRunRepository,
                             AgentService agentService,
                             ObjectMapper objectMapper,
@@ -49,6 +55,7 @@ public class EvalOrchestrator {
         this.scenarioRunner = scenarioRunner;
         this.evalJudge = evalJudge;
         this.evalRunRepository = evalRunRepository;
+        this.evalTaskItemRepository = evalTaskItemRepository;
         this.collabRunRepository = collabRunRepository;
         this.agentService = agentService;
         this.objectMapper = objectMapper;
@@ -59,8 +66,8 @@ public class EvalOrchestrator {
         log.info("Starting eval run: evalRunId={}, agentId={}", evalRunId, agentDefinitionId);
 
         // 1. Goodhart rate limit: no active/completed eval in last 30 minutes for this agent.
-        // Only count RUNNING or COMPLETED runs — FAILED ghost runs must not extend the window indefinitely.
-        List<EvalRunEntity> recentRuns = evalRunRepository.findByAgentDefinitionIdAndStatusInAndStartedAtAfter(
+        // Only count RUNNING or COMPLETED tasks — FAILED ghost tasks must not extend the window indefinitely.
+        List<EvalTaskEntity> recentRuns = evalRunRepository.findByAgentDefinitionIdAndStatusInAndStartedAtAfter(
                 agentDefinitionId, List.of("RUNNING", "COMPLETED"), Instant.now().minusSeconds(30 * 60));
         if (!recentRuns.isEmpty()) {
             log.warn("Eval rate limited: agent {} already ran eval within 30 minutes", agentDefinitionId);
@@ -73,7 +80,7 @@ public class EvalOrchestrator {
         List<EvalScenario> scenarios = scenarioLoader.loadAll();
         if (scenarios.isEmpty()) {
             log.error("No eval scenarios found");
-            EvalRunEntity run = createEvalRun(evalRunId, agentDefinitionId, userId);
+            EvalTaskEntity run = createEvalTask(evalRunId, agentDefinitionId, userId);
             run.setStatus("FAILED");
             run.setErrorMessage("No eval scenarios found on classpath");
             run.setCompletedAt(Instant.now());
@@ -81,9 +88,11 @@ public class EvalOrchestrator {
             return;
         }
 
-        // 3. Create EvalRunEntity
-        EvalRunEntity evalRun = createEvalRun(evalRunId, agentDefinitionId, userId);
+        // 3. Create EvalTaskEntity (still using legacy "run" naming on the
+        //    in-method var to keep diff small; persisted entity is on t_eval_task).
+        EvalTaskEntity evalRun = createEvalTask(evalRunId, agentDefinitionId, userId);
         evalRun.setTotalScenarios(scenarios.size());
+        evalRun.setScenarioCount(scenarios.size());
         evalRunRepository.save(evalRun);
 
         // 4. Create CollabRunEntity for eval
@@ -98,8 +107,9 @@ public class EvalOrchestrator {
 
         try {
             // Resolve AgentDefinition
+            Long agentIdLong = Long.parseLong(agentDefinitionId);
             AgentDefinition agentDef = agentService.toAgentDefinition(
-                    agentService.getAgent(Long.parseLong(agentDefinitionId)));
+                    agentService.getAgent(agentIdLong));
 
             // 5. Run each scenario sequentially (v1.0)
             List<Map<String, Object>> scenarioResults = new ArrayList<>();
@@ -134,6 +144,8 @@ public class EvalOrchestrator {
                     broadcaster.userEvent(userId, evt);
                 }
 
+                Instant scenarioStartedAt = Instant.now();
+
                 // EVAL-V2 M2: branch to multi-turn execution + multi-turn judge
                 // when the scenario carries a non-empty conversation_turns spec.
                 // Single-turn (NULL/empty) scenarios stay on the legacy path
@@ -143,7 +155,7 @@ public class EvalOrchestrator {
                 if (scenario.isMultiTurn()) {
                     MultiTurnTranscript transcript = new MultiTurnTranscript();
                     runResult = scenarioRunner.runScenarioMultiTurn(
-                            evalRunId, scenario, agentDef, userId, transcript);
+                            evalRunId, scenario, agentDef, agentIdLong, userId, transcript);
                     EvalJudgeMultiTurnOutput mt = evalJudge.judgeMultiTurnConversation(
                             scenario, runResult, transcript);
                     // Project multi-turn output → legacy EvalJudgeOutput shape so
@@ -162,11 +174,19 @@ public class EvalOrchestrator {
                     judgeOutput.setMetaJudgeRationale(mt.getRationale());
                 } else {
                     runResult = scenarioRunner.runScenario(
-                            evalRunId, scenario, agentDef, userId);
+                            evalRunId, scenario, agentDef, agentIdLong, userId);
                     judgeOutput = evalJudge.judge(scenario, runResult);
                 }
 
-                // Collect results
+                // Promote final scenario status from PENDING_JUDGE → judge verdict
+                // PASS/FAIL so the t_eval_task_item.status reflects the eventual
+                // judge result, not the loop runner's interim PENDING_JUDGE.
+                if ("PENDING_JUDGE".equals(runResult.getStatus())) {
+                    runResult.setStatus(judgeOutput.isPass() ? "PASS" : "FAIL");
+                }
+
+                // Collect results (legacy jsonb shape — kept during dual-write
+                // transition; the new t_eval_task_item row is the canonical source).
                 Map<String, Object> scenarioResult = new LinkedHashMap<>();
                 scenarioResult.put("scenarioId", scenario.getId());
                 scenarioResult.put("name", scenario.getName());
@@ -200,6 +220,38 @@ public class EvalOrchestrator {
                     scenarioResult.put("judgeRationale", judgeOutput.getMetaJudgeRationale());
                 }
                 scenarioResults.add(scenarioResult);
+
+                // EVAL-V2 M3a (b2): dual-write per-case row to t_eval_task_item.
+                // Wrapped in try/catch so a row-level write failure doesn't lose
+                // the whole task — the legacy jsonb still captures it.
+                try {
+                    EvalTaskItemEntity item = new EvalTaskItemEntity();
+                    item.setTaskId(evalRunId);
+                    item.setScenarioId(scenario.getId());
+                    item.setScenarioSource(scenario.getSource());
+                    item.setSessionId(runResult.getSessionId());
+                    item.setRootTraceId(runResult.getRootTraceId());
+                    item.setCompositeScore(BigDecimal.valueOf(judgeOutput.getCompositeScore())
+                            .setScale(2, RoundingMode.HALF_UP));
+                    item.setStatus(runResult.getStatus());
+                    item.setLoopCount(runResult.getLoopCount());
+                    item.setToolCallCount(runResult.getToolCallCount());
+                    item.setLatencyMs(runResult.getExecutionTimeMs());
+                    item.setAttribution(judgeOutput.getAttribution() != null
+                            ? judgeOutput.getAttribution().name() : null);
+                    item.setJudgeRationale(judgeOutput.getMetaJudgeRationale());
+                    item.setAgentFinalOutput(runResult.getAgentFinalOutput());
+                    item.setStartedAt(scenarioStartedAt);
+                    item.setCompletedAt(Instant.now());
+                    item.touchCreatedAtIfMissing();
+                    evalTaskItemRepository.save(item);
+                } catch (Exception itemSaveEx) {
+                    // EVAL-V2 M3a (b2): tolerate item-row write failure — the legacy
+                    // jsonb still captures the case, and the orchestrator continues.
+                    // Logged at WARN so flaky DB doesn't silently lose data.
+                    log.warn("Failed to persist EvalTaskItemEntity for task={} scenario={}: {}",
+                            evalRunId, scenario.getId(), itemSaveEx.getMessage(), itemSaveEx);
+                }
 
                 totalOracleScore += judgeOutput.getCompositeScore();
 
@@ -261,11 +313,11 @@ public class EvalOrchestrator {
             // 8. Goodhart delta monitoring
             int consecutiveDecline = computeConsecutiveDeclineCount(agentDefinitionId, passRate);
 
-            // 9. Persist EvalRunEntity
+            // 9. Persist EvalTaskEntity (final aggregates)
             evalRun.setStatus("COMPLETED");
             evalRun.setOverallPassRate(passRate);
             evalRun.setAvgOracleScore(avgOracleScore);
-            evalRun.setPassedScenarios(passed);
+            evalRun.setPassCount(passed);
             evalRun.setFailedScenarios(failed);
             evalRun.setTimeoutScenarios(timeouts);
             evalRun.setVetoScenarios(vetos);
@@ -279,6 +331,13 @@ public class EvalOrchestrator {
             evalRun.setAttrMemoryMissing(attrHistogram.getOrDefault(FailureAttribution.MEMORY_MISSING, 0));
             evalRun.setConsecutiveDeclineCount(consecutiveDecline);
             evalRun.setCompletedAt(Instant.now());
+
+            // EVAL-V2 M3a (b2) new aggregates
+            // failCount = anything that didn't pass (failed + timeouts + vetos + errors).
+            evalRun.setFailCount(scenarios.size() - passed);
+            // composite_avg = mean of per-case composite score, scale=2.
+            evalRun.setCompositeAvg(BigDecimal.valueOf(avgOracleScore)
+                    .setScale(2, RoundingMode.HALF_UP));
 
             try {
                 evalRun.setScenarioResultsJson(objectMapper.writeValueAsString(scenarioResults));
@@ -337,8 +396,8 @@ public class EvalOrchestrator {
         }
     }
 
-    private EvalRunEntity createEvalRun(String evalRunId, String agentDefinitionId, Long userId) {
-        EvalRunEntity run = new EvalRunEntity();
+    private EvalTaskEntity createEvalTask(String evalRunId, String agentDefinitionId, Long userId) {
+        EvalTaskEntity run = new EvalTaskEntity();
         run.setId(evalRunId);
         run.setAgentDefinitionId(agentDefinitionId);
         run.setStatus("RUNNING");
@@ -405,7 +464,7 @@ public class EvalOrchestrator {
                 agentDefinitionId, "COMPLETED");
         if (previousRun.isEmpty()) return 0;
 
-        EvalRunEntity prev = previousRun.get();
+        EvalTaskEntity prev = previousRun.get();
         if (currentPassRate < prev.getOverallPassRate() - 5.0) {
             int count = prev.getConsecutiveDeclineCount() + 1;
             if (count >= 3) {
