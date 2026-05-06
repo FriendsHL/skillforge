@@ -2,6 +2,7 @@ package com.skillforge.server.eval;
 
 import com.skillforge.core.engine.ToolCallRecord;
 
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -45,6 +46,7 @@ public class ScenarioRunResult {
      * iterates over).
      */
     private int toolCallCount;
+    private BigDecimal costUsd;
 
     public ScenarioRunResult() {
     }
@@ -130,6 +132,9 @@ public class ScenarioRunResult {
 
     public int getToolCallCount() { return toolCallCount; }
     public void setToolCallCount(int toolCallCount) { this.toolCallCount = toolCallCount; }
+
+    public BigDecimal getCostUsd() { return costUsd; }
+    public void setCostUsd(BigDecimal costUsd) { this.costUsd = costUsd; }
 
     public void applyToolCallSignals(List<ToolCallRecord> toolCalls) {
         if (toolCalls == null) return;

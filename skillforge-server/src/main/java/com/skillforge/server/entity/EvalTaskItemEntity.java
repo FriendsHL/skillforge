@@ -57,6 +57,27 @@ public class EvalTaskItemEntity {
     @Column(name = "composite_score", precision = 5, scale = 2)
     private BigDecimal compositeScore;
 
+    @Column(name = "quality_score", precision = 5, scale = 2)
+    private BigDecimal qualityScore;
+
+    @Column(name = "efficiency_score", precision = 5, scale = 2)
+    private BigDecimal efficiencyScore;
+
+    @Column(name = "latency_score", precision = 5, scale = 2)
+    private BigDecimal latencyScore;
+
+    @Column(name = "cost_score", precision = 5, scale = 2)
+    private BigDecimal costScore;
+
+    @Column(name = "cost_usd", precision = 12, scale = 6)
+    private BigDecimal costUsd;
+
+    @Column(name = "score_formula_version", length = 32)
+    private String scoreFormulaVersion;
+
+    @Column(name = "score_breakdown_json", columnDefinition = "TEXT")
+    private String scoreBreakdownJson;
+
     /** PASS | FAIL | TIMEOUT | VETO | ERROR (mirrors {@code ScenarioRunResult.status}). */
     @Column(name = "status", length = 16, nullable = false)
     private String status;
@@ -119,6 +140,27 @@ public class EvalTaskItemEntity {
 
     public BigDecimal getCompositeScore() { return compositeScore; }
     public void setCompositeScore(BigDecimal compositeScore) { this.compositeScore = compositeScore; }
+
+    public BigDecimal getQualityScore() { return qualityScore; }
+    public void setQualityScore(BigDecimal qualityScore) { this.qualityScore = qualityScore; }
+
+    public BigDecimal getEfficiencyScore() { return efficiencyScore; }
+    public void setEfficiencyScore(BigDecimal efficiencyScore) { this.efficiencyScore = efficiencyScore; }
+
+    public BigDecimal getLatencyScore() { return latencyScore; }
+    public void setLatencyScore(BigDecimal latencyScore) { this.latencyScore = latencyScore; }
+
+    public BigDecimal getCostScore() { return costScore; }
+    public void setCostScore(BigDecimal costScore) { this.costScore = costScore; }
+
+    public BigDecimal getCostUsd() { return costUsd; }
+    public void setCostUsd(BigDecimal costUsd) { this.costUsd = costUsd; }
+
+    public String getScoreFormulaVersion() { return scoreFormulaVersion; }
+    public void setScoreFormulaVersion(String scoreFormulaVersion) { this.scoreFormulaVersion = scoreFormulaVersion; }
+
+    public String getScoreBreakdownJson() { return scoreBreakdownJson; }
+    public void setScoreBreakdownJson(String scoreBreakdownJson) { this.scoreBreakdownJson = scoreBreakdownJson; }
 
     public String getStatus() { return status; }
     public void setStatus(String status) { this.status = status; }

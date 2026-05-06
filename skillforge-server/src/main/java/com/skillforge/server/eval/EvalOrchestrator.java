@@ -1,6 +1,8 @@
 package com.skillforge.server.eval;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.skillforge.observability.entity.LlmTraceEntity;
+import com.skillforge.observability.repository.LlmTraceRepository;
 import com.skillforge.core.engine.ChatEventBroadcaster;
 import com.skillforge.core.model.AgentDefinition;
 import com.skillforge.server.entity.CollabRunEntity;
@@ -15,6 +17,7 @@ import com.skillforge.server.repository.EvalTaskRepository;
 import com.skillforge.server.service.AgentService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -41,6 +44,8 @@ public class EvalOrchestrator {
     private final AgentService agentService;
     private final ObjectMapper objectMapper;
     private final ChatEventBroadcaster broadcaster;
+    private final LlmTraceRepository llmTraceRepository;
+    private final BigDecimal globalCostThresholdUsd;
 
     public EvalOrchestrator(ScenarioLoader scenarioLoader,
                             ScenarioRunnerTool scenarioRunner,
@@ -50,7 +55,10 @@ public class EvalOrchestrator {
                             CollabRunRepository collabRunRepository,
                             AgentService agentService,
                             ObjectMapper objectMapper,
-                            ChatEventBroadcaster broadcaster) {
+                            ChatEventBroadcaster broadcaster,
+                            LlmTraceRepository llmTraceRepository,
+                            @Value("${skillforge.eval.score.global-cost-threshold-usd:0.01}")
+                            String globalCostThresholdUsd) {
         this.scenarioLoader = scenarioLoader;
         this.scenarioRunner = scenarioRunner;
         this.evalJudge = evalJudge;
@@ -60,6 +68,8 @@ public class EvalOrchestrator {
         this.agentService = agentService;
         this.objectMapper = objectMapper;
         this.broadcaster = broadcaster;
+        this.llmTraceRepository = llmTraceRepository;
+        this.globalCostThresholdUsd = new BigDecimal(globalCostThresholdUsd);
     }
 
     public void runEval(String agentDefinitionId, Long userId, String evalRunId) {
@@ -178,6 +188,21 @@ public class EvalOrchestrator {
                     judgeOutput = evalJudge.judge(scenario, runResult);
                 }
 
+                BigDecimal observedCostUsd = aggregateTraceTreeCost(runResult.getRootTraceId());
+                runResult.setCostUsd(observedCostUsd);
+                EvalScoreFormula.Result scoreResult = EvalScoreFormula.calculate(
+                        judgeOutput.getOutcomeScore(),
+                        judgeOutput.getEfficiencyScore(),
+                        runResult.getExecutionTimeMs(),
+                        scenario.getPerformanceThresholdMs(),
+                        observedCostUsd,
+                        globalCostThresholdUsd,
+                        runResult.getLoopCount(),
+                        runResult.getToolCallCount()
+                );
+                judgeOutput.setCompositeScore(scoreResult.compositeScore());
+                judgeOutput.setPass(scoreResult.compositeScore() >= EvalScoreFormula.PASS_THRESHOLD);
+
                 // Promote final scenario status from PENDING_JUDGE → judge verdict
                 // PASS/FAIL so the t_eval_task_item.status reflects the eventual
                 // judge result, not the loop runner's interim PENDING_JUDGE.
@@ -195,7 +220,13 @@ public class EvalOrchestrator {
                 scenarioResult.put("status", runResult.getStatus());
                 scenarioResult.put("outcomeScore", judgeOutput.getOutcomeScore());
                 scenarioResult.put("efficiencyScore", judgeOutput.getEfficiencyScore());
+                scenarioResult.put("qualityScore", scoreResult.qualityScore());
+                scenarioResult.put("latencyScore", scoreResult.latencyScore());
+                scenarioResult.put("costScore", scoreResult.costScore());
                 scenarioResult.put("compositeScore", judgeOutput.getCompositeScore());
+                scenarioResult.put("costUsd", observedCostUsd);
+                scenarioResult.put("scoreFormulaVersion", scoreResult.formulaVersion());
+                scenarioResult.put("scoreBreakdownJson", scoreResult.breakdownJson());
                 scenarioResult.put("pass", judgeOutput.isPass());
                 scenarioResult.put("attribution", judgeOutput.getAttribution().name());
                 scenarioResult.put("executionTimeMs", runResult.getExecutionTimeMs());
@@ -233,6 +264,14 @@ public class EvalOrchestrator {
                     item.setRootTraceId(runResult.getRootTraceId());
                     item.setCompositeScore(BigDecimal.valueOf(judgeOutput.getCompositeScore())
                             .setScale(2, RoundingMode.HALF_UP));
+                    item.setQualityScore(toScaledDecimal(scoreResult.qualityScore()));
+                    item.setEfficiencyScore(toScaledDecimal(scoreResult.efficiencyScore()));
+                    item.setLatencyScore(toScaledDecimal(scoreResult.latencyScore()));
+                    item.setCostScore(toScaledDecimal(scoreResult.costScore()));
+                    item.setCostUsd(observedCostUsd != null
+                            ? observedCostUsd.setScale(6, RoundingMode.HALF_UP) : null);
+                    item.setScoreFormulaVersion(scoreResult.formulaVersion());
+                    item.setScoreBreakdownJson(scoreResult.breakdownJson());
                     item.setStatus(runResult.getStatus());
                     item.setLoopCount(runResult.getLoopCount());
                     item.setToolCallCount(runResult.getToolCallCount());
@@ -457,6 +496,30 @@ public class EvalOrchestrator {
         if (totalCount <= 0) return false;
         if (stride <= 0) return false;
         return (i % stride == 0) || (i == totalCount - 1);
+    }
+
+    private BigDecimal aggregateTraceTreeCost(String rootTraceId) {
+        if (rootTraceId == null || rootTraceId.isBlank()) {
+            return null;
+        }
+        List<LlmTraceEntity> traces = llmTraceRepository.findByRootTraceIdOrderByStartedAtAsc(rootTraceId);
+        if (traces.isEmpty()) {
+            return null;
+        }
+        BigDecimal total = BigDecimal.ZERO;
+        boolean observed = false;
+        for (LlmTraceEntity trace : traces) {
+            if (trace.getTotalCostUsd() == null) {
+                continue;
+            }
+            total = total.add(trace.getTotalCostUsd());
+            observed = true;
+        }
+        return observed ? total : null;
+    }
+
+    private static BigDecimal toScaledDecimal(double value) {
+        return BigDecimal.valueOf(value).setScale(2, RoundingMode.HALF_UP);
     }
 
     private int computeConsecutiveDeclineCount(String agentDefinitionId, double currentPassRate) {

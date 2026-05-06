@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Select } from 'antd';
+import { Select, message } from 'antd';
 import { Link, useNavigate } from 'react-router-dom';
 import {
+  applyEvalTaskImprovement,
   compareEvalTasks,
   createEvalAnnotation,
   createEvalScenarioVersion,
@@ -159,6 +160,45 @@ function FilterItem({ label, count, active, onClick }: { label: string; count: n
 }
 
 type TopTab = 'runs' | 'datasets' | 'annotations';
+type EvalMetric = 'composite' | 'quality' | 'efficiency' | 'latency' | 'cost';
+
+const METRIC_OPTIONS: Array<{ value: EvalMetric; label: string }> = [
+  { value: 'composite', label: 'Composite' },
+  { value: 'quality', label: 'Quality' },
+  { value: 'efficiency', label: 'Efficiency' },
+  { value: 'latency', label: 'Latency' },
+  { value: 'cost', label: 'Cost' },
+];
+
+function getMetricValue(item: Pick<EvalTaskItem, 'compositeScore' | 'qualityScore' | 'efficiencyScore' | 'latencyScore' | 'costScore'>, metric: EvalMetric): number | null {
+  switch (metric) {
+    case 'quality':
+      return item.qualityScore ?? null;
+    case 'efficiency':
+      return item.efficiencyScore ?? null;
+    case 'latency':
+      return item.latencyScore ?? null;
+    case 'cost':
+      return item.costScore ?? null;
+    case 'composite':
+    default:
+      return item.compositeScore ?? null;
+  }
+}
+
+function formatMetricValue(value: number | null | undefined): string {
+  return value == null || !Number.isFinite(value) ? '—' : `${Math.round(value)}%`;
+}
+
+function computeMetricDelta(entries: EvalTaskCompareEntry[], metric: EvalMetric): number | null {
+  const values = entries
+    .map((entry) => getMetricValue(entry, metric))
+    .filter((value): value is number => value != null && Number.isFinite(value));
+  if (values.length < 2) {
+    return null;
+  }
+  return Math.max(...values) - Math.min(...values);
+}
 
 const Eval: React.FC = () => {
   const queryClient = useQueryClient();
@@ -482,6 +522,9 @@ interface EvalDrawerProps {
 }
 
 function EvalDrawer({ evalRow, tab, setTab, onClose, onRun, onOpenAnnotations, agents, userId }: EvalDrawerProps) {
+  const queryClient = useQueryClient();
+  const [metric, setMetric] = useState<EvalMetric>('composite');
+  const [applyingImprovement, setApplyingImprovement] = useState(false);
   useEffect(() => {
     const h = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', h);
@@ -507,6 +550,27 @@ function EvalDrawer({ evalRow, tab, setTab, onClose, onRun, onOpenAnnotations, a
   });
 
   const [analyzing, setAnalyzing] = useState<AnalyzeTarget | null>(null);
+
+  const handleApplyImprovement = async () => {
+    if (!runDetail?.id || !runDetail.improvementSuggestion || applyingImprovement) {
+      return;
+    }
+    setApplyingImprovement(true);
+    try {
+      const res = await applyEvalTaskImprovement(runDetail.id, userId);
+      message.success(`Improvement started: ${res.data.abRunId}`);
+      queryClient.invalidateQueries({ queryKey: ['eval-task', evalRow.id] });
+    } catch (error: unknown) {
+      const apiMessage =
+        error && typeof error === 'object' && 'response' in error
+          ? (error as { response?: { data?: { message?: string; error?: string } } }).response?.data?.message
+            ?? (error as { response?: { data?: { message?: string; error?: string } } }).response?.data?.error
+          : null;
+      message.error(apiMessage || 'Failed to apply improvement suggestion');
+    } finally {
+      setApplyingImprovement(false);
+    }
+  };
 
   const tabs = [
     { id: 'cases', label: 'Cases' },
@@ -576,14 +640,30 @@ function EvalDrawer({ evalRow, tab, setTab, onClose, onRun, onOpenAnnotations, a
                   )}
                   {runDetail?.improvementSuggestion && (
                     <div className="scn-detail-section" style={{ marginBottom: 0 }}>
-                      <h4>Improvement suggestion</h4>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center' }}>
+                        <h4 style={{ marginBottom: 0 }}>Improvement suggestion</h4>
+                        <button
+                          className="sf-mini-btn"
+                          disabled={applyingImprovement}
+                          onClick={handleApplyImprovement}
+                        >
+                          {applyingImprovement ? 'Applying…' : 'Apply suggestion'}
+                        </button>
+                      </div>
                       <pre>{runDetail.improvementSuggestion}</pre>
                     </div>
                   )}
                 </div>
               )}
               <div className="sf-section-h" style={{ marginBottom: 10 }}>
-                {taskItems.length} cases
+                <span>{taskItems.length} cases</span>
+                <Select<EvalMetric>
+                  size="small"
+                  value={metric}
+                  onChange={setMetric}
+                  style={{ minWidth: 140 }}
+                  options={METRIC_OPTIONS}
+                />
               </div>
               {taskItems.length === 0 ? (
                 <div className="sf-empty-state">No task items available.</div>
@@ -593,6 +673,7 @@ function EvalDrawer({ evalRow, tab, setTab, onClose, onRun, onOpenAnnotations, a
                     <TaskItemCard
                       key={item.id}
                       item={item}
+                      metric={metric}
                       onAnalyze={() => {
                         if (!runDetail) return;
                         setAnalyzing({ kind: 'item', task: runDetail, item });
@@ -650,14 +731,15 @@ function EvalDrawer({ evalRow, tab, setTab, onClose, onRun, onOpenAnnotations, a
 
 interface TaskItemCardProps {
   item: EvalTaskItem;
+  metric: EvalMetric;
   onAnalyze: () => void;
   onAnnotate: () => void;
 }
 
-function TaskItemCard({ item, onAnalyze, onAnnotate }: TaskItemCardProps) {
+function TaskItemCard({ item, metric, onAnalyze, onAnnotate }: TaskItemCardProps) {
   const [showRationale, setShowRationale] = useState(false);
   const [showOutput, setShowOutput] = useState(false);
-  const score = item.compositeScore ?? 0;
+  const score = getMetricValue(item, metric) ?? item.compositeScore ?? 0;
   const score01 = score / 100;
   const tier = score >= 80 ? 'pass' : score >= 60 ? 'warn' : item.status === 'PASS' ? 'pass' : 'fail';
 
@@ -674,7 +756,7 @@ function TaskItemCard({ item, onAnalyze, onAnnotate }: TaskItemCardProps) {
           </span>
         </div>
         <div className="scn-result-score" style={{ color: scoreColor(score01) }}>
-          {item.compositeScore != null ? Math.round(score) : '—'}<em>%</em>
+          {formatMetricValue(score)}<em>{metric === 'composite' ? '' : ` · ${metric}`}</em>
         </div>
       </div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
@@ -690,9 +772,16 @@ function TaskItemCard({ item, onAnalyze, onAnnotate }: TaskItemCardProps) {
             trace · {item.rootTraceId.slice(0, 8)}
           </span>
         )}
+        <span className={`kv-chip-sf ${metric === 'composite' ? 'on' : ''}`}>composite · {formatMetricValue(item.compositeScore)}</span>
+        <span className={`kv-chip-sf ${metric === 'quality' ? 'on' : ''}`}>quality · {formatMetricValue(item.qualityScore)}</span>
+        <span className={`kv-chip-sf ${metric === 'efficiency' ? 'on' : ''}`}>efficiency · {formatMetricValue(item.efficiencyScore)}</span>
+        <span className={`kv-chip-sf ${metric === 'latency' ? 'on' : ''}`}>latency score · {formatMetricValue(item.latencyScore)}</span>
+        <span className={`kv-chip-sf ${metric === 'cost' ? 'on' : ''}`}>cost score · {formatMetricValue(item.costScore)}</span>
+        {item.costUsd != null && <span className="kv-chip-sf">cost · ${item.costUsd.toFixed(4)}</span>}
         {item.loopCount != null && <span className="kv-chip-sf">loops · {item.loopCount}</span>}
         {item.toolCallCount != null && <span className="kv-chip-sf">tools · {item.toolCallCount}</span>}
         {item.latencyMs != null && <span className="kv-chip-sf">latency · {item.latencyMs}ms</span>}
+        {item.scoreFormulaVersion && <span className="kv-chip-sf">formula · {item.scoreFormulaVersion}</span>}
       </div>
 
       {item.judgeRationale && (
@@ -785,6 +874,7 @@ function RunEvalDialog({ agents, userId, onClose, onSuccess }: {
 }
 
 function CompareTasksModal({ taskIds, onClose }: { taskIds: string[]; onClose: () => void }) {
+  const [metric, setMetric] = useState<EvalMetric>('composite');
   const { data, isLoading } = useQuery({
     queryKey: ['eval-task-compare', taskIds],
     queryFn: () => compareEvalTasks(taskIds).then(res => res.data),
@@ -796,6 +886,13 @@ function CompareTasksModal({ taskIds, onClose }: { taskIds: string[]; onClose: (
       <div className="sf-modal sf-compare-modal" onClick={e => e.stopPropagation()}>
         <div className="sf-modal-h">
           <h3>Compare tasks</h3>
+          <Select<EvalMetric>
+            size="small"
+            value={metric}
+            onChange={setMetric}
+            style={{ minWidth: 140, marginLeft: 'auto', marginRight: 12 }}
+            options={METRIC_OPTIONS}
+          />
           <button className="sf-drawer-close" onClick={onClose} aria-label="Close">{CLOSE_ICON}</button>
         </div>
         <div className="sf-modal-body">
@@ -839,12 +936,13 @@ function CompareTasksModal({ taskIds, onClose }: { taskIds: string[]; onClose: (
                           <td key={`${row.scenarioId}-${taskId}`}>
                             <CompareEntryCell
                               entry={row.entries.find(entry => entry.taskId === taskId) ?? null}
+                              metric={metric}
                             />
                           </td>
                         ))}
                         <td>
                           <div className="compare-delta">
-                            <span>{Math.round(row.scoreDelta)}%</span>
+                            <span>{formatMetricValue(computeMetricDelta(row.entries, metric))}</span>
                             {row.outputDiffers && <span className="kv-chip-sf">output diff</span>}
                           </div>
                         </td>
@@ -861,20 +959,27 @@ function CompareTasksModal({ taskIds, onClose }: { taskIds: string[]; onClose: (
   );
 }
 
-function CompareEntryCell({ entry }: { entry: EvalTaskCompareEntry | null }) {
+function CompareEntryCell({ entry, metric }: { entry: EvalTaskCompareEntry | null; metric: EvalMetric }) {
   if (!entry) {
     return <div className="compare-entry-empty">—</div>;
   }
+  const metricScore = getMetricValue(entry, metric);
   return (
     <div className="compare-entry-cell">
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 6 }}>
         <span className={`sess-status s-${entry.status === 'PASS' ? 'idle' : entry.status === 'TIMEOUT' ? 'waiting' : 'error'}`}>
           {entry.status}
         </span>
-        {entry.compositeScore != null && <span className="kv-chip-sf">{Math.round(entry.compositeScore)}%</span>}
+        <span className="kv-chip-sf">{formatMetricValue(metricScore)}</span>
+        {entry.compositeScore != null && metric !== 'composite' && <span className="kv-chip-sf">composite · {formatMetricValue(entry.compositeScore)}</span>}
         {entry.attribution && <span className="kv-chip-sf">{entry.attribution}</span>}
       </div>
       <div className="compare-entry-meta">
+        {entry.qualityScore != null && <span>quality {formatMetricValue(entry.qualityScore)}</span>}
+        {entry.efficiencyScore != null && <span>efficiency {formatMetricValue(entry.efficiencyScore)}</span>}
+        {entry.latencyScore != null && <span>latency {formatMetricValue(entry.latencyScore)}</span>}
+        {entry.costScore != null && <span>cost {formatMetricValue(entry.costScore)}</span>}
+        {entry.costUsd != null && <span>${entry.costUsd.toFixed(4)}</span>}
         {entry.latencyMs != null && <span>{entry.latencyMs}ms</span>}
         {entry.loopCount != null && <span>{entry.loopCount} loops</span>}
         {entry.toolCallCount != null && <span>{entry.toolCallCount} tools</span>}

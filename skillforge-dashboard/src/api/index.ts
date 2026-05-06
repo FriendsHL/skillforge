@@ -879,6 +879,13 @@ export interface EvalTaskItem {
   sessionId?: string | null;
   rootTraceId?: string | null;
   compositeScore?: number | null;
+  qualityScore?: number | null;
+  efficiencyScore?: number | null;
+  latencyScore?: number | null;
+  costScore?: number | null;
+  costUsd?: number | null;
+  scoreFormulaVersion?: string | null;
+  scoreBreakdownJson?: string | null;
   status: string;
   loopCount?: number | null;
   toolCallCount?: number | null;
@@ -908,6 +915,12 @@ export interface EvalTaskCompareEntry {
   taskId: string;
   status: string;
   compositeScore?: number | null;
+  qualityScore?: number | null;
+  efficiencyScore?: number | null;
+  latencyScore?: number | null;
+  costScore?: number | null;
+  costUsd?: number | null;
+  scoreFormulaVersion?: string | null;
   attribution?: string | null;
   latencyMs?: number | null;
   loopCount?: number | null;
@@ -973,6 +986,8 @@ export const updateEvalAnnotation = (
 ) => api.patch<EvalAnnotation>(`/eval/annotations/${id}`, data);
 export const triggerEvalTask = (agentId: string, userId = 1) =>
   api.post('/eval/tasks', { agentId, userId });
+export const applyEvalTaskImprovement = (taskId: string, userId = 1) =>
+  api.post<ImprovementStartResult>(`/eval/tasks/${taskId}/apply-improvement`, { userId });
 
 // Legacy run endpoints retained while the remaining FE surfaces migrate.
 export const getEvalRuns = () => api.get('/eval/runs');

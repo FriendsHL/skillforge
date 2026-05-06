@@ -8,6 +8,10 @@ import com.skillforge.server.entity.EvalTaskItemEntity;
 import com.skillforge.server.entity.EvalAnalysisSessionEntity;
 import com.skillforge.server.entity.SessionEntity;
 import com.skillforge.server.eval.EvalOrchestrator;
+import com.skillforge.server.improve.ImprovementConflictException;
+import com.skillforge.server.improve.ImprovementIneligibleException;
+import com.skillforge.server.improve.ImprovementStartResult;
+import com.skillforge.server.improve.PromptImproverService;
 import com.skillforge.server.repository.EvalTaskItemRepository;
 import com.skillforge.server.repository.EvalTaskRepository;
 import com.skillforge.server.service.EvalAnalysisSessionService;
@@ -66,19 +70,22 @@ public class EvalTaskController {
     private final ExecutorService evalOrchestratorExecutor;
     private final ObjectMapper objectMapper;
     private final EvalAnalysisSessionService evalAnalysisSessionService;
+    private final PromptImproverService promptImproverService;
 
     public EvalTaskController(EvalOrchestrator evalOrchestrator,
                                EvalTaskRepository evalTaskRepository,
                                EvalTaskItemRepository evalTaskItemRepository,
                                @Qualifier("evalOrchestratorExecutor") ExecutorService evalOrchestratorExecutor,
                                ObjectMapper objectMapper,
-                               EvalAnalysisSessionService evalAnalysisSessionService) {
+                               EvalAnalysisSessionService evalAnalysisSessionService,
+                               PromptImproverService promptImproverService) {
         this.evalOrchestrator = evalOrchestrator;
         this.evalTaskRepository = evalTaskRepository;
         this.evalTaskItemRepository = evalTaskItemRepository;
         this.evalOrchestratorExecutor = evalOrchestratorExecutor;
         this.objectMapper = objectMapper;
         this.evalAnalysisSessionService = evalAnalysisSessionService;
+        this.promptImproverService = promptImproverService;
     }
 
     @PostMapping
@@ -326,6 +333,37 @@ public class EvalTaskController {
         ));
     }
 
+    @PostMapping("/{id}/apply-improvement")
+    public ResponseEntity<?> applyImprovement(@PathVariable String id,
+                                              @RequestBody(required = false) Map<String, Object> request) {
+        EvalTaskEntity task = evalTaskRepository.findById(id).orElse(null);
+        if (task == null) {
+            return ResponseEntity.notFound().build();
+        }
+        if (task.getImprovementSuggestion() == null || task.getImprovementSuggestion().isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "improvementSuggestion is required"));
+        }
+
+        long userId = 1L;
+        if (request != null && request.get("userId") instanceof Number number) {
+            userId = number.longValue();
+        }
+
+        try {
+            ImprovementStartResult result = promptImproverService.startImprovement(
+                    task.getAgentDefinitionId(),
+                    task.getId(),
+                    userId,
+                    task.getImprovementSuggestion()
+            );
+            return ResponseEntity.accepted().body(result);
+        } catch (ImprovementConflictException e) {
+            return ResponseEntity.status(409).body(Map.of("error", "ALREADY_IMPROVING", "message", e.getMessage()));
+        } catch (ImprovementIneligibleException e) {
+            return ResponseEntity.unprocessableEntity().body(Map.of("error", e.getReason(), "message", e.getMessage()));
+        }
+    }
+
     private Map<String, Object> toSummaryMap(EvalTaskEntity task) {
         Map<String, Object> map = new LinkedHashMap<>();
         map.put("id", task.getId());
@@ -365,6 +403,13 @@ public class EvalTaskController {
         map.put("sessionId", item.getSessionId());
         map.put("rootTraceId", item.getRootTraceId());
         map.put("compositeScore", item.getCompositeScore());
+        map.put("qualityScore", item.getQualityScore());
+        map.put("efficiencyScore", item.getEfficiencyScore());
+        map.put("latencyScore", item.getLatencyScore());
+        map.put("costScore", item.getCostScore());
+        map.put("costUsd", item.getCostUsd());
+        map.put("scoreFormulaVersion", item.getScoreFormulaVersion());
+        map.put("scoreBreakdownJson", item.getScoreBreakdownJson());
         map.put("status", item.getStatus());
         map.put("loopCount", item.getLoopCount());
         map.put("toolCallCount", item.getToolCallCount());
@@ -387,6 +432,12 @@ public class EvalTaskController {
                     entry.put("taskId", item.getTaskId());
                     entry.put("status", item.getStatus());
                     entry.put("compositeScore", item.getCompositeScore());
+                    entry.put("qualityScore", item.getQualityScore());
+                    entry.put("efficiencyScore", item.getEfficiencyScore());
+                    entry.put("latencyScore", item.getLatencyScore());
+                    entry.put("costScore", item.getCostScore());
+                    entry.put("costUsd", item.getCostUsd());
+                    entry.put("scoreFormulaVersion", item.getScoreFormulaVersion());
                     entry.put("attribution", item.getAttribution());
                     entry.put("latencyMs", item.getLatencyMs());
                     entry.put("loopCount", item.getLoopCount());

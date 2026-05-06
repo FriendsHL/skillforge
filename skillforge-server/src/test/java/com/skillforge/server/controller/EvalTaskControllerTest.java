@@ -7,6 +7,10 @@ import com.skillforge.server.entity.EvalTaskEntity;
 import com.skillforge.server.entity.EvalTaskItemEntity;
 import com.skillforge.server.entity.SessionEntity;
 import com.skillforge.server.eval.EvalOrchestrator;
+import com.skillforge.server.improve.ImprovementConflictException;
+import com.skillforge.server.improve.ImprovementIneligibleException;
+import com.skillforge.server.improve.ImprovementStartResult;
+import com.skillforge.server.improve.PromptImproverService;
 import com.skillforge.server.repository.EvalTaskItemRepository;
 import com.skillforge.server.repository.EvalTaskRepository;
 import com.skillforge.server.service.EvalAnalysisSessionService;
@@ -51,6 +55,7 @@ class EvalTaskControllerTest {
     @Mock private EvalTaskItemRepository evalTaskItemRepository;
     @Mock private ExecutorService evalOrchestratorExecutor;
     @Mock private EvalAnalysisSessionService evalAnalysisSessionService;
+    @Mock private PromptImproverService promptImproverService;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -60,7 +65,7 @@ class EvalTaskControllerTest {
     void setUp() {
         controller = new EvalTaskController(
                 evalOrchestrator, evalTaskRepository, evalTaskItemRepository,
-                evalOrchestratorExecutor, objectMapper, evalAnalysisSessionService);
+                evalOrchestratorExecutor, objectMapper, evalAnalysisSessionService, promptImproverService);
         when(evalTaskRepository.save(any(EvalTaskEntity.class)))
                 .thenAnswer(inv -> inv.getArgument(0));
     }
@@ -183,6 +188,8 @@ class EvalTaskControllerTest {
         assertThat(resp.getBody()).hasSize(1);
         assertThat(resp.getBody().get(0).get("scenarioId")).isEqualTo("scenario-A");
         assertThat(resp.getBody().get(0).get("status")).isEqualTo("PASS");
+        assertThat(resp.getBody().get(0).get("qualityScore")).isEqualTo(new BigDecimal("82.00"));
+        assertThat(resp.getBody().get(0).get("scoreFormulaVersion")).isEqualTo("M4_V1");
     }
 
     @Test
@@ -235,6 +242,10 @@ class EvalTaskControllerTest {
         assertThat(row).containsEntry("scenarioId", "scenario-A");
         assertThat(row).containsEntry("outputDiffers", true);
         assertThat(row).containsEntry("scoreDelta", 14.0);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> entries = (List<Map<String, Object>>) row.get("entries");
+        assertThat(entries.get(0)).containsEntry("qualityScore", new BigDecimal("82.00"));
+        assertThat(entries.get(0)).containsEntry("scoreFormulaVersion", "M4_V1");
     }
 
     @Test
@@ -244,6 +255,60 @@ class EvalTaskControllerTest {
 
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         assertThat(resp.getBody()).containsEntry("error", "compare requires exactly 2 task ids");
+    }
+
+    @Test
+    @DisplayName("POST /api/eval/tasks/{id}/apply-improvement: 400 when task has no suggestion")
+    void applyImprovement_missingSuggestion_400() {
+        EvalTaskEntity task = makeTask("t-1", "10", "COMPLETED", Instant.now());
+        when(evalTaskRepository.findById("t-1")).thenReturn(Optional.of(task));
+
+        ResponseEntity<?> resp = controller.applyImprovement("t-1", Map.of("userId", 7));
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+    }
+
+    @Test
+    @DisplayName("POST /api/eval/tasks/{id}/apply-improvement: 202 when prompt improver starts")
+    void applyImprovement_presentSuggestion_accepted() {
+        EvalTaskEntity task = makeTask("t-1", "10", "COMPLETED", Instant.now());
+        task.setImprovementSuggestion("Tighten tool-use instructions.");
+        when(evalTaskRepository.findById("t-1")).thenReturn(Optional.of(task));
+        when(promptImproverService.startImprovement("10", "t-1", 7L, "Tighten tool-use instructions."))
+                .thenReturn(new ImprovementStartResult("10", "ab-1", "pv-1", "PENDING"));
+
+        ResponseEntity<?> resp = controller.applyImprovement("t-1", Map.of("userId", 7));
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
+        assertThat(resp.getBody()).isEqualTo(new ImprovementStartResult("10", "ab-1", "pv-1", "PENDING"));
+    }
+
+    @Test
+    @DisplayName("POST /api/eval/tasks/{id}/apply-improvement: 409 when already improving")
+    void applyImprovement_conflict_409() {
+        EvalTaskEntity task = makeTask("t-1", "10", "COMPLETED", Instant.now());
+        task.setImprovementSuggestion("Tighten tool-use instructions.");
+        when(evalTaskRepository.findById("t-1")).thenReturn(Optional.of(task));
+        when(promptImproverService.startImprovement("10", "t-1", 1L, "Tighten tool-use instructions."))
+                .thenThrow(new ImprovementConflictException("busy"));
+
+        ResponseEntity<?> resp = controller.applyImprovement("t-1", Map.of());
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+    }
+
+    @Test
+    @DisplayName("POST /api/eval/tasks/{id}/apply-improvement: 422 when ineligible")
+    void applyImprovement_ineligible_422() {
+        EvalTaskEntity task = makeTask("t-1", "10", "COMPLETED", Instant.now());
+        task.setImprovementSuggestion("Tighten tool-use instructions.");
+        when(evalTaskRepository.findById("t-1")).thenReturn(Optional.of(task));
+        when(promptImproverService.startImprovement("10", "t-1", 1L, "Tighten tool-use instructions."))
+                .thenThrow(new ImprovementIneligibleException("INELIGIBLE_ATTRIBUTION"));
+
+        ResponseEntity<?> resp = controller.applyImprovement("t-1", Map.of());
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
     }
 
     @Test
@@ -341,6 +406,13 @@ class EvalTaskControllerTest {
         i.setScenarioId(scenarioId);
         i.setStatus(status);
         i.setCompositeScore(new BigDecimal("75.00"));
+        i.setQualityScore(new BigDecimal("82.00"));
+        i.setEfficiencyScore(new BigDecimal("68.00"));
+        i.setLatencyScore(new BigDecimal("91.00"));
+        i.setCostScore(new BigDecimal("77.00"));
+        i.setCostUsd(new BigDecimal("0.004500"));
+        i.setScoreFormulaVersion("M4_V1");
+        i.setScoreBreakdownJson("{\"formulaVersion\":\"M4_V1\"}");
         i.setLoopCount(2);
         i.setToolCallCount(3);
         i.setLatencyMs(1000L);

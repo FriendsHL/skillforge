@@ -77,6 +77,14 @@ public class PromptImproverService {
 
     @Transactional
     public ImprovementStartResult startImprovement(String agentId, String evalRunId, long userId) {
+        return startImprovement(agentId, evalRunId, userId, null);
+    }
+
+    @Transactional
+    public ImprovementStartResult startImprovement(String agentId,
+                                                   String evalRunId,
+                                                   long userId,
+                                                   String improvementSuggestion) {
         AgentEntity agent = agentRepository.findById(Long.parseLong(agentId))
                 .orElseThrow(() -> new RuntimeException("Agent not found: " + agentId));
         EvalTaskEntity evalRun = evalRunRepository.findById(evalRunId)
@@ -103,6 +111,9 @@ public class PromptImproverService {
         version.setSource("auto_improve");
         version.setSourceEvalRunId(evalRunId);
         version.setBaselinePassRate(evalRun.getOverallPassRate());
+        if (improvementSuggestion != null && !improvementSuggestion.isBlank()) {
+            version.setImprovementRationale(improvementSuggestion.trim());
+        }
         promptVersionRepository.save(version);
 
         // 4. Create PromptAbRunEntity (unique index on active runs prevents races)
@@ -155,7 +166,7 @@ public class PromptImproverService {
                     .orElseThrow(() -> new RuntimeException("Agent not found: " + agentId));
 
             // 1. Generate candidate prompt via LLM
-            String candidatePrompt = generateCandidatePrompt(agent, evalRun);
+            String candidatePrompt = generateCandidatePrompt(agent, evalRun, version.getImprovementRationale());
             version.setContent(candidatePrompt);
             promptVersionRepository.save(version);
 
@@ -180,7 +191,9 @@ public class PromptImproverService {
     }
 
     @SuppressWarnings("unchecked")
-    private String generateCandidatePrompt(AgentEntity agent, EvalTaskEntity evalRun) {
+    private String generateCandidatePrompt(AgentEntity agent,
+                                           EvalTaskEntity evalRun,
+                                           String improvementSuggestion) {
         String currentPrompt = agent.getSystemPrompt() != null ? agent.getSystemPrompt() : "";
 
         // Build failure analysis from scenarioResultsJson
@@ -235,6 +248,10 @@ public class PromptImproverService {
                 - Keep the prompt concise and actionable
                 - Do not add meta-commentary or explanations""";
 
+        String suggestionSection = (improvementSuggestion == null || improvementSuggestion.isBlank())
+                ? ""
+                : "\nAnalysis improvement suggestion:\n" + improvementSuggestion.trim() + "\n";
+
         String userMessage = String.format("""
                 Current system prompt:
                 ---
@@ -250,12 +267,15 @@ public class PromptImproverService {
                 Passing scenario examples:
                 %s
 
+                %s
+
                 Generate an improved system prompt that addresses these failure patterns.""",
                 currentPrompt,
                 evalRun.getPrimaryAttribution() != null ? evalRun.getPrimaryAttribution().name() : "UNKNOWN",
                 evalRun.getOverallPassRate(),
                 failureAnalysis.length() > 0 ? failureAnalysis.toString() : "(none)",
-                passExamples.length() > 0 ? passExamples.toString() : "(none)");
+                passExamples.length() > 0 ? passExamples.toString() : "(none)",
+                suggestionSection);
 
         LlmProvider provider = llmProviderFactory.getProvider(defaultProviderName);
         if (provider == null) {
