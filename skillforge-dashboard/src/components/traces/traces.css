@@ -72,6 +72,7 @@
   flex-direction: column;
   gap: 4px;
   padding: 10px 14px;
+  min-height: 76px;
   border: 0;
   border-bottom: 1px solid var(--border-1);
   background: transparent;
@@ -90,6 +91,7 @@
   display: flex;
   align-items: center;
   gap: 7px;
+  min-width: 0;
 }
 .tr-dot {
   width: 7px;
@@ -111,11 +113,16 @@
   display: flex;
   align-items: center;
   gap: 4px;
+  min-width: 0;
+  overflow: hidden;
   font-family: var(--font-mono);
   font-size: 10.5px;
   color: var(--fg-3);
 }
 .tr-run-sep { color: var(--fg-4); }
+.tr-run-meta > span {
+  white-space: nowrap;
+}
 .tr-session {
   max-width: 80px;
   overflow: hidden;
@@ -126,13 +133,19 @@
   display: flex;
   align-items: center;
   gap: 4px;
+  min-width: 0;
+  overflow: hidden;
   font-family: var(--font-mono);
   font-size: 10px;
   color: var(--fg-4);
 }
+.tr-run-stats > span {
+  white-space: nowrap;
+}
 .tr-run-when {
   margin-left: auto;
   font-size: 10px;
+  flex-shrink: 0;
 }
 
 /* Right: detail section */
@@ -145,6 +158,7 @@
 
 .tr-run-header {
   padding: 16px 20px 12px;
+  min-height: 136px;
   border-bottom: 1px solid var(--border-1);
   background: var(--bg-base);
 }
@@ -154,10 +168,15 @@
   align-items: flex-start;
   gap: 12px;
 }
+.tr-run-header-top > div:first-child {
+  flex: 1;
+  min-width: 0;
+}
 .tr-run-header-title {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
 }
 .tr-run-header-title h2 {
   font-family: var(--font-serif);
@@ -166,15 +185,24 @@
   color: var(--fg-1);
   margin: 0;
   letter-spacing: -0.01em;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .tr-run-header-sub {
   display: flex;
   align-items: center;
   gap: 6px;
   margin-top: 4px;
+  min-width: 0;
+  overflow: hidden;
   font-family: var(--font-mono);
   font-size: 10.5px;
   color: var(--fg-4);
+}
+.tr-run-header-sub > span {
+  white-space: nowrap;
 }
 .tr-run-tags {
   display: flex;

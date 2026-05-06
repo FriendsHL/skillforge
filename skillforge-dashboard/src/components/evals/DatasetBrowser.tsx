@@ -137,24 +137,23 @@ function DatasetBrowser({ agents, userId }: DatasetBrowserProps) {
 
   return (
     <div className="dataset-browser">
-      <div className="dataset-tab-row" role="tablist" style={{ marginBottom: 12 }}>
-        {(['base', 'agent'] as DatasetTab[]).map(t => (
-          <button
-            key={t}
-            role="tab"
-            aria-selected={tab === t}
-            className={`eval-toptab ${tab === t ? 'on' : ''}`}
-            onClick={() => setTab(t)}
-          >
-            {t === 'base' ? 'Base' : 'Agent'}
-            <span className="eval-toptab-count">
-              {t === 'base' ? baseRaw.length : (tab === 'agent' ? agentScenarios.length : '')}
-            </span>
-          </button>
-        ))}
-      </div>
-
       <div className="dataset-toolbar">
+        {/* Segmented Control for Base/Agent */}
+        <div className="dataset-segmented-control">
+          {(['base', 'agent'] as DatasetTab[]).map(t => (
+            <button
+              key={t}
+              className={`dataset-segment-btn ${tab === t ? 'on' : ''}`}
+              onClick={() => setTab(t)}
+            >
+              {t === 'base' ? 'Base' : 'Agent'}
+              <span className="dataset-segment-count">
+                {t === 'base' ? baseRaw.length : agentScenarios.length}
+              </span>
+            </button>
+          ))}
+        </div>
+
         {tab === 'agent' && (
           <Select
             value={agentId || undefined}

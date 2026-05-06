@@ -23,6 +23,10 @@ interface TraceDetailPanelProps {
   trace: TraceOverview | null;
   /** Selected span - if set, show span detail instead of trace overview */
   span: SpanSummary | null;
+  /** Callback to add current trace to dataset */
+  onAddToDataset?: () => void;
+  /** Whether the add-to-dataset operation is pending */
+  isAddingToDataset?: boolean;
 }
 
 function fmtTime(iso: string): string {
@@ -54,7 +58,7 @@ function copyText(text: string) {
  *
  * Visual style mirrors the Traces tab `tr-span-detail` layout for consistency.
  */
-const TraceDetailPanel: React.FC<TraceDetailPanelProps> = ({ trace, span }) => {
+const TraceDetailPanel: React.FC<TraceDetailPanelProps> = ({ trace, span, onAddToDataset, isAddingToDataset }) => {
   // Span selected → delegate to existing data-fetching detail views,
   // wrapped in tr-span-detail so spacing/borders match the trace tab.
   if (span) {
@@ -114,6 +118,21 @@ const TraceDetailPanel: React.FC<TraceDetailPanelProps> = ({ trace, span }) => {
             )}
           </div>
         </div>
+        
+        {/* Add to dataset button */}
+        {onAddToDataset && (
+          <div style={{ marginTop: 8 }}>
+            <button
+              type="button"
+              className="btn-primary-sf"
+              onClick={onAddToDataset}
+              disabled={isAddingToDataset}
+              style={{ fontSize: 12, padding: '6px 14px' }}
+            >
+              {isAddingToDataset ? 'Adding…' : '➕ Add to Dataset'}
+            </button>
+          </div>
+        )}
 
         <div className="tr-span-detail-body">
           {/* User query */}

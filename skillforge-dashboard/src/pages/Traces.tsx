@@ -1,8 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { message } from 'antd';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { createEvalScenarioFromTrace, getTraces, getTraceSpans, extractList } from '../api';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { getTraces, getTraceSpans, extractList } from '../api';
 import '../components/traces/traces.css';
 import '../components/skills/skills.css';
 
@@ -120,6 +119,9 @@ const Traces: React.FC = () => {
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [selectedSpanId, setSelectedSpanId] = useState<string | null>(null);
 
+  // Debug: log renders
+  // console.log('Traces rendered, selectedRunId:', selectedRunId);
+
   const { data: rawTraces = [] } = useQuery({
     queryKey: ['traces'],
     queryFn: () => getTraces().then(res => extractList<Record<string, unknown>>(res)),
@@ -138,25 +140,36 @@ const Traces: React.FC = () => {
 
   const traceIdFromUrl = searchParams.get('traceId');
 
+  // Sync local state with URL
   useEffect(() => {
-    if (!traceIdFromUrl) return;
-    const match = runs.find(r => r.id === traceIdFromUrl);
-    if (match && selectedRunId !== match.id) {
-      setSelectedRunId(match.id);
+    if (traceIdFromUrl && traceIdFromUrl !== selectedRunId) {
+      setSelectedRunId(traceIdFromUrl);
       setSelectedSpanId(null);
     }
-  }, [runs, selectedRunId, traceIdFromUrl]);
+  }, [traceIdFromUrl]);
 
-  const selectedRun = filteredRuns.find(r => r.id === selectedRunId) || filteredRuns[0] || null;
+  // First try to find the run by ID from URL, then fallback to first filtered run
+  const selectedRun = useMemo(() => {
+    if (traceIdFromUrl) {
+      const match = runs.find(r => r.id === traceIdFromUrl);
+      if (match) return match;
+    }
+    return filteredRuns[0] || null;
+  }, [runs, filteredRuns, traceIdFromUrl]);
+
   const activeRunId = selectedRun?.id || null;
 
+  // Update URL when user manually selects a run (not when URL changes)
   useEffect(() => {
-    if (!selectedRun?.id) return;
-    if (searchParams.get('traceId') === selectedRun.id) return;
-    const next = new URLSearchParams(searchParams);
-    next.set('traceId', selectedRun.id);
-    setSearchParams(next, { replace: true });
-  }, [searchParams, selectedRun?.id, setSearchParams]);
+    if (!selectedRunId) return;
+    if (searchParams.get('traceId') !== selectedRunId) {
+      setSearchParams(prev => {
+        const next = new URLSearchParams(prev);
+        next.set('traceId', selectedRunId);
+        return next;
+      }, { replace: true });
+    }
+  }, [selectedRunId]);
 
   // Fetch spans for selected run
   const { data: spansData } = useQuery({
@@ -179,24 +192,6 @@ const Traces: React.FC = () => {
   const selectedSpan = spans.find(s => s.id === selectedSpanId) || spans[0] || null;
 
   const toggleStatus = (v: string) => setStatusFilter(s => s === v ? null : v);
-
-  const importTraceMutation = useMutation({
-    mutationFn: (rootTraceId: string) => createEvalScenarioFromTrace({ rootTraceId }),
-    onSuccess: ({ data }) => {
-      message.success(`Added to dataset: ${data.name || data.id}`);
-      queryClient.invalidateQueries({ queryKey: ['eval-dataset-scenarios'] });
-    },
-    onError: (error: unknown) => {
-      const text =
-        error &&
-        typeof error === 'object' &&
-        'response' in error &&
-        typeof (error as { response?: { data?: { error?: unknown } } }).response?.data?.error === 'string'
-          ? String((error as { response?: { data?: { error?: string } } }).response?.data?.error)
-          : 'Failed to add trace to dataset';
-      message.error(text);
-    },
-  });
 
   return (
     <div className="tr-surface">
@@ -246,37 +241,33 @@ const Traces: React.FC = () => {
       </aside>
 
       {/* Right: detail */}
-      {selectedRun ? (
-        <section className="tr-detail">
-          <RunHeader
-            run={selectedRun}
-            importing={importTraceMutation.isPending}
-            onImport={() => importTraceMutation.mutate(selectedRun.rootTraceId || selectedRun.id)}
-          />
-          <div className="tr-detail-split">
-            <Waterfall
-              spans={spans}
-              totalMs={selectedRun.totalMs || 1}
-              selectedSpanId={selectedSpan?.id || null}
-              onSelect={id => setSelectedSpanId(id)}
-            />
-            <SpanDetail span={selectedSpan} runId={selectedRun.id} session={selectedRun.session} />
+      <section className="tr-detail" style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+        {selectedRun ? (
+          <>
+            <div style={{ flexShrink: 0 }}>
+              <RunHeader run={selectedRun} />
+            </div>
+            <div className="tr-detail-split" style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+              <Waterfall
+                spans={spans}
+                totalMs={selectedRun.totalMs || 1}
+                selectedSpanId={selectedSpan?.id || null}
+                onSelect={id => setSelectedSpanId(id)}
+              />
+              <SpanDetail span={selectedSpan} runId={selectedRun.id} session={selectedRun.session} />
+            </div>
+          </>
+        ) : (
+          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <div className="tr-empty">Select a run to inspect.</div>
           </div>
-        </section>
-      ) : (
-        <section className="tr-detail">
-          <div className="tr-empty">Select a run to inspect.</div>
-        </section>
-      )}
+        )}
+      </section>
     </div>
   );
 };
 
-function RunHeader({ run, importing, onImport }: {
-  run: TraceRun;
-  importing: boolean;
-  onImport: () => void;
-}) {
+function RunHeader({ run }: { run: TraceRun }) {
   return (
     <div className="tr-run-header">
       <div className="tr-run-header-top">
@@ -295,15 +286,6 @@ function RunHeader({ run, importing, onImport }: {
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <button
-            type="button"
-            className="btn-primary-sf"
-            onClick={onImport}
-            disabled={importing}
-            title="Create an eval dataset scenario from this trace"
-          >
-            {importing ? 'Adding…' : 'Add to dataset'}
-          </button>
           {run.sessionFullId && (
             <Link
               to={`/sessions/${run.sessionFullId}`}

@@ -1,7 +1,8 @@
 import React, { useMemo, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
-import { getSession, getSessionMessages, getTraces, getTraceTree } from '../api';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { message } from 'antd';
+import { getSession, getSessionMessages, getTraces, getTraceTree, createEvalScenarioFromTrace } from '../api';
 import { useAuth } from '../contexts/AuthContext';
 import TraceSidebar, { type TraceInfo } from '../components/sessions/detail/TraceSidebar';
 import SessionWaterfallPanel from '../components/sessions/detail/SessionWaterfallPanel';
@@ -95,8 +96,28 @@ const SessionDetail: React.FC = () => {
   const { id: sessionId } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { userId } = useAuth();
+  const queryClient = useQueryClient();
   const [selectedSpanId, setSelectedSpanId] = useState<string | null>(null);
   const [selectedTraceId, setSelectedTraceId] = useState<string | null>(null);
+
+  // Mutation to add trace to dataset
+  const importTraceMutation = useMutation({
+    mutationFn: (rootTraceId: string) => createEvalScenarioFromTrace({ rootTraceId }),
+    onSuccess: ({ data }) => {
+      message.success(`Added to dataset: ${data.name || data.id}`);
+      queryClient.invalidateQueries({ queryKey: ['eval-dataset-scenarios'] });
+    },
+    onError: (error: unknown) => {
+      const text =
+        error &&
+        typeof error === 'object' &&
+        'response' in error &&
+        typeof (error as { response?: { data?: { error?: unknown } } }).response?.data?.error === 'string'
+          ? String((error as { response?: { data?: { error?: string } } }).response?.data?.error)
+          : 'Failed to add trace to dataset';
+      message.error(text);
+    },
+  });
 
   // Session info
   const sessionQuery = useQuery({
@@ -335,6 +356,8 @@ const SessionDetail: React.FC = () => {
         <TraceDetailPanel
           trace={selectedTraceOverview}
           span={selectedSpan}
+          onAddToDataset={selectedTraceOverview ? () => importTraceMutation.mutate(selectedTraceOverview.id) : undefined}
+          isAddingToDataset={importTraceMutation.isPending}
         />
       </div>
 
