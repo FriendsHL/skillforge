@@ -478,6 +478,19 @@ public class ChatService {
                 log.info("Tool filtering: only allowing {} tools for session={}", toolIdList.size(), sessionId);
             }
 
+            // P11 MCP-CLIENT INV-4: per-agent enable filter for MCP-sourced tools.
+            // Always set (incl. empty set) so the engine treats absence of an MCP entry
+            // as "no MCP tools allowed" rather than the legacy "all tools allowed"
+            // semantic of allowedToolNames=null. Default agent.mcp_server_ids="" → empty set.
+            String mcpServerIdsCsv = agentEntity.getMcpServerIds();
+            Set<String> allowedMcpServers = new HashSet<>(
+                    com.skillforge.server.mcp.service.McpServerService.parseServerIds(mcpServerIdsCsv));
+            preCtx.setAllowedMcpServerNames(allowedMcpServers);
+            if (!allowedMcpServers.isEmpty()) {
+                log.info("MCP filter: agent allows servers={} for session={}",
+                        allowedMcpServers, sessionId);
+            }
+
             // Apply maxLoops: session override > agent config > engine default (25)
             Integer sessionMaxLoops = freshSession.getMaxLoops();
             if (sessionMaxLoops != null && sessionMaxLoops > 0) {

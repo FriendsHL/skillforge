@@ -88,6 +88,24 @@ public class LoopContext {
     private Set<String> allowedToolNames;
 
     /**
+     * P11 MCP-CLIENT INV-4: per-agent enable filter for MCP-sourced tools.
+     *
+     * <p>Tools registered by the MCP layer use the {@code mcp_<server>_<tool>} naming
+     * convention. When this set is {@code null} the engine applies <strong>no</strong> MCP
+     * filtering (legacy / MCP feature disabled). When it is non-null (incl. empty) the
+     * engine restricts MCP tool exposure and execution to the listed server names:
+     * <ul>
+     *   <li>Empty set → no MCP tools available (default for any agent that didn't enable any)</li>
+     *   <li>{"time", "github"} → only {@code mcp_time_*} and {@code mcp_github_*} are allowed</li>
+     * </ul>
+     *
+     * <p>Non-MCP tools (built-in Java tools without the {@code mcp_} prefix) are
+     * <strong>not</strong> affected by this set; their visibility is governed by
+     * {@link #allowedToolNames} as before.
+     */
+    private Set<String> allowedMcpServerNames;
+
+    /**
      * How long the session was idle before this run started, in seconds.
      * -1 = unknown / not set (cold cleanup will not trigger).
      * Set by the server layer (ChatService) from session.lastUserMessageAt.
@@ -315,6 +333,15 @@ public class LoopContext {
 
     public void setAllowedToolNames(Set<String> allowedToolNames) {
         this.allowedToolNames = allowedToolNames;
+    }
+
+    /** P11 MCP INV-4: see field doc on {@link #allowedMcpServerNames}. */
+    public Set<String> getAllowedMcpServerNames() {
+        return allowedMcpServerNames;
+    }
+
+    public void setAllowedMcpServerNames(Set<String> allowedMcpServerNames) {
+        this.allowedMcpServerNames = allowedMcpServerNames;
     }
 
     /** Enqueue a user message to be injected at the next iteration boundary. Thread-safe. */

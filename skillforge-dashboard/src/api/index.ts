@@ -71,6 +71,14 @@ export interface CreateAgentRequest {
   reasoningEffort?: 'low' | 'medium' | 'high' | 'max';
   /** P1 Skill Control Plane: JSON-array string of system-skill names this agent has opted out of. */
   disabledSystemSkills?: string;
+  /**
+   * MCP-CLIENT-MVP — comma-separated list of MCP server names this agent enables
+   * (e.g. `"time,github"`, or `""` for none). Stored as VARCHAR(512) on
+   * `t_agent.mcp_server_ids`. **Not** a JSON array — see `schemas.ts#mcpServerIds`
+   * for the rationale (server names are restricted to `[a-z0-9_]+` so commas
+   * are unambiguous).
+   */
+  mcpServerIds?: string;
 }
 
 export interface UpdateAgentRequest extends Partial<CreateAgentRequest> {

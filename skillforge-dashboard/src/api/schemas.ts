@@ -20,6 +20,12 @@ export const AgentSchema = z.object({
   // P1 Skill Control Plane: JSON array of system-skill names this agent has opted out of.
   // Stored as a JSON string by the backend; UI parses to string[] in the System Skills toggle.
   disabledSystemSkills: z.string().optional().nullable(),
+  // MCP-CLIENT-MVP: comma-separated list of MCP server names ("time,github") this agent enables.
+  // Stored as a VARCHAR(512) on `t_agent.mcp_server_ids` per the V61 migration. Empty string =
+  // no MCP servers enabled. Differs from `skillIds`/`toolIds` (which are JSON-array strings) —
+  // tech-design.md settled on comma-list for MCP because server names already conform to
+  // `[a-z0-9_]+` so commas can never appear inside a name and disambiguation is trivial.
+  mcpServerIds: z.string().optional().nullable(),
   // Surface `public` flag for visibility edits; omitted values preserve current state.
   public: z.boolean().optional(),
   // Thinking Mode v1 (see docs/design-thinking-mode.md). Both fields are

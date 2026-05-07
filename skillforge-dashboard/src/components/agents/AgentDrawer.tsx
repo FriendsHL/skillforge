@@ -11,6 +11,8 @@ import {
   type CustomBehaviorRule,
   type CustomRuleSeverity,
 } from '../../api';
+import { listMcpServers } from '../../api/mcpServers';
+import { useAuth } from '../../contexts/AuthContext';
 import type { AgentDto, ThinkingMode, ReasoningEffort } from '../../api/schemas';
 import { initials, guessRole } from './AgentCard';
 import BehaviorRulesEditor from '../BehaviorRulesEditor';
@@ -50,6 +52,21 @@ function parseArr(raw: unknown): string[] {
   if (Array.isArray(raw)) return raw.map(String);
   if (typeof raw === 'string') {
     try { const a = JSON.parse(raw); return Array.isArray(a) ? a.map(String) : []; } catch { return []; }
+  }
+  return [];
+}
+
+/**
+ * MCP-CLIENT-MVP: `agent.mcpServerIds` is a comma-list VARCHAR (e.g.
+ * `"time,github"` or `""`) — distinct from `skillIds`/`toolIds` which are
+ * JSON-array strings. Trims segments and drops empties so a stray
+ * `","` round-trips as `[]` instead of `[""]`.
+ */
+function parseCommaList(raw: unknown): string[] {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw.map(String).map((s) => s.trim()).filter(Boolean);
+  if (typeof raw === 'string') {
+    return raw.split(',').map((s) => s.trim()).filter(Boolean);
   }
   return [];
 }
@@ -178,6 +195,7 @@ interface AgentDrawerProps {
 
 const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
   const queryClient = useQueryClient();
+  const { userId } = useAuth();
   const { options: modelOptions } = useLlmModels();
   const [tab, setTab] = useState('overview');
   const [mdFile, setMdFile] = useState<'AGENT.md' | 'SOUL.md' | 'MEMORY.md'>('AGENT.md');
@@ -220,15 +238,23 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
     () => parseDisabledSystemSkills(agent.disabledSystemSkills),
     [agent.disabledSystemSkills],
   );
+  // MCP-CLIENT-MVP: mcpServerIds is a comma-list VARCHAR (not JSON-array);
+  // see `parseCommaList` for the rationale.
+  const initialMcpServers = useMemo(
+    () => parseCommaList(agent.mcpServerIds),
+    [agent.mcpServerIds],
+  );
   const [skills, setSkills] = useState<string[]>(initialSkills);
   const [tools, setTools] = useState<string[]>(initialTools);
   // P1-C-3: tracked as the *disabled* set (matches the persisted column),
   // rendered as enable/disable toggles in the System Skills panel.
   const [disabledSystem, setDisabledSystem] = useState<string[]>(initialDisabledSystem);
+  const [mcpServerNames, setMcpServerNames] = useState<string[]>(initialMcpServers);
   const toolsSkillsDirty =
     JSON.stringify(skills) !== JSON.stringify(initialSkills) ||
     JSON.stringify(tools) !== JSON.stringify(initialTools) ||
-    JSON.stringify([...disabledSystem].sort()) !== JSON.stringify([...initialDisabledSystem].sort());
+    JSON.stringify([...disabledSystem].sort()) !== JSON.stringify([...initialDisabledSystem].sort()) ||
+    JSON.stringify([...mcpServerNames].sort()) !== JSON.stringify([...initialMcpServers].sort());
   const hooksCount = useMemo(() => countHookEntries(agent.lifecycleHooks), [agent.lifecycleHooks]);
 
   // Overview — model + maxLoops + thinking edit
@@ -343,6 +369,44 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
     queryFn: () => getTools().then(res => extractList<Record<string, unknown>>(res)),
     staleTime: 60_000,
   });
+
+  // MCP-CLIENT-MVP: source MCP server options from the global pool. We
+  // intentionally include disabled servers in the option list so an agent
+  // that already enables a server which was later disabled can still see
+  // it as a chip — UX would be confusing if the chip vanished after
+  // someone toggles the server off. Disabled servers are visually
+  // de-emphasised via the option label.
+  const {
+    data: mcpServersCatalog = [],
+    error: mcpServersError,
+  } = useQuery({
+    queryKey: ['mcp-servers', 'agent-drawer', userId],
+    queryFn: () => listMcpServers(userId).then((r) => r.data ?? []),
+    staleTime: 30_000,
+    // tanstack/react-query v5 dropped onError; surface fetch failures via
+    // an explicit `useEffect` below so the multi-select empty state can't
+    // be silently mistaken for "no MCP servers configured".
+    retry: 1,
+  });
+  // r2 W2 fix — without this notice the user would see an empty multi-
+  // select and assume no servers are configured (rather than "fetch
+  // failed"). Fires once per distinct error instance; React Strict Mode
+  // double-fire in dev is acceptable (won't reach prod).
+  useEffect(() => {
+    if (mcpServersError) {
+      message.warning(
+        'Failed to load MCP servers — multi-select may be incomplete.',
+      );
+    }
+  }, [mcpServersError]);
+  const mcpServerOptions = useMemo(
+    () =>
+      mcpServersCatalog.map((s) => ({
+        label: s.enabled ? s.name : `${s.name} (disabled)`,
+        value: s.name,
+      })),
+    [mcpServersCatalog],
+  );
   const toolCatalogItems = useMemo<CatalogItem[]>(
     () => toolsCatalog.map(t => ({ id: String(t.name), desc: t.description ? String(t.description) : undefined, tag: t.category ? String(t.category) : undefined })),
     [toolsCatalog],
@@ -421,12 +485,16 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
   const handleSaveToolsSkills = () => {
     // P1-C-3: persisted as the *disabled* names (not enabled). Reviewer
     // self-check footgun: do NOT send `enabled - selectedNames` here.
+    // MCP-CLIENT-MVP: mcpServerIds is a comma-list VARCHAR — do NOT
+    // JSON.stringify here, that would store the literal `["time"]` and
+    // the BE LIKE-based reference check (INV-12) would never match.
     updateMutation.mutate({
       id: agent.id,
       payload: {
         skillIds: JSON.stringify(skills),
         toolIds: JSON.stringify(tools),
         disabledSystemSkills: JSON.stringify(disabledSystem),
+        mcpServerIds: mcpServerNames.join(','),
       },
     });
   };
@@ -804,6 +872,43 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
                     })}
                   </div>
                 )}
+              </div>
+
+              {/* MCP-CLIENT-MVP: per-agent MCP server enablement.
+                  Multi-select uses Ant Design Select (mode="multiple")
+                  rather than the AttachPicker chip pattern because MCP
+                  servers are a small, curated set (admin-managed) and we
+                  want a familiar, searchable picker. */}
+              <div className="spec-block" data-testid="mcp-servers-panel">
+                <div className="spec-h">
+                  <h3>
+                    MCP servers{' '}
+                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--fg-4)' }}>
+                      — {mcpServerNames.length === 0 ? 'none' : mcpServerNames.length}
+                    </span>
+                  </h3>
+                </div>
+                <Select
+                  mode="multiple"
+                  size="middle"
+                  value={mcpServerNames}
+                  options={mcpServerOptions}
+                  onChange={(v) => setMcpServerNames(v as string[])}
+                  placeholder="Select MCP servers to enable for this agent"
+                  style={{ width: '100%' }}
+                  showSearch
+                  optionFilterProp="label"
+                  data-testid="mcp-servers-select"
+                  notFoundContent={
+                    mcpServersCatalog.length === 0
+                      ? 'No MCP servers configured — visit /mcp-servers to add one.'
+                      : 'No matching server'
+                  }
+                />
+                <div style={{ fontSize: 11, color: 'var(--fg-4)', marginTop: 6 }}>
+                  Tools from selected servers are auto-injected as{' '}
+                  <code>mcp_&lt;name&gt;_&lt;tool&gt;</code>.
+                </div>
               </div>
 
               <div className="spec-block">

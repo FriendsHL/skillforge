@@ -1511,6 +1511,8 @@ public class AgentLoopEngine {
 
         // 内置 Tool (filter out excluded skills for depth-aware multi-agent collab,
         // and apply allowedToolNames whitelist if configured) — view 不影响这一段。
+        java.util.Set<String> allowedMcpServers = loopCtx != null
+                ? loopCtx.getAllowedMcpServerNames() : null;
         for (Tool tool : skillRegistry.getAllTools()) {
             if (SKILL_LOADER_TOOL_NAME.equals(tool.getName())) {
                 continue;
@@ -1520,6 +1522,12 @@ public class AgentLoopEngine {
             }
             if (allowedToolNames != null && !allowedToolNames.isEmpty()
                     && !allowedToolNames.contains(tool.getName())) {
+                continue;
+            }
+            // P11 MCP INV-4: per-agent enable filter for mcp_<server>_<tool> tools.
+            // When allowedMcpServers is non-null, only expose mcp tools whose server prefix
+            // appears in the set; null = no filter (legacy / MCP feature disabled).
+            if (allowedMcpServers != null && !isMcpToolAllowed(tool.getName(), allowedMcpServers)) {
                 continue;
             }
             ToolSchema schema = tool.getToolSchema();
@@ -1546,6 +1554,30 @@ public class AgentLoopEngine {
         }
 
         return tools;
+    }
+
+    /**
+     * P11 MCP INV-4 helper: a tool name like {@code mcp_<server>_<tool>} is allowed iff
+     * its {@code <server>} segment appears in {@code allowedServers}. Non-MCP names
+     * (anything not starting with {@code "mcp_"}) are always allowed by this gate —
+     * the caller is responsible for any other whitelist (allowedToolNames).
+     *
+     * <p>Server segment extraction uses {@link String#indexOf(int, int)} so a server
+     * name like {@code "time"} does not accidentally match {@code "time2"} (the
+     * separator is the first {@code '_'} after the server prefix, not a substring).
+     */
+    private static boolean isMcpToolAllowed(String toolName, java.util.Set<String> allowedServers) {
+        if (toolName == null || !toolName.startsWith("mcp_")) {
+            return true; // gate only applies to mcp-prefixed tool names
+        }
+        int afterPrefix = "mcp_".length();
+        int sep = toolName.indexOf('_', afterPrefix);
+        if (sep < 0) {
+            // No tool segment — malformed registration; reject defensively.
+            return false;
+        }
+        String server = toolName.substring(afterPrefix, sep);
+        return allowedServers.contains(server);
     }
 
     public static ToolSchema skillLoaderToolSchema(List<SkillDefinition> visibleSkillDefs) {
@@ -2515,6 +2547,33 @@ public class AgentLoopEngine {
         log.debug("Executing tool call: skill={}, id={}", skillName, toolUseId);
 
         try {
+            // P11 MCP INV-4: per-agent enable filter for MCP-sourced tools. Hallucinated /
+            // out-of-list mcp_<server>_<tool> calls are rejected before dispatch even if the
+            // tool happens to exist in skillRegistry (LLM may know the name from a prior
+            // session or a sibling agent's view). Treat as NOT_ALLOWED so the anti-hijack
+            // counter (further down) catches repeat offenders.
+            java.util.Set<String> allowedMcpServers = loopContext != null
+                    ? loopContext.getAllowedMcpServerNames() : null;
+            if (allowedMcpServers != null && skillName != null && skillName.startsWith("mcp_")
+                    && !isMcpToolAllowed(skillName, allowedMcpServers)) {
+                int notAllowedCount = loopContext.incrementNotAllowedCount(skillName);
+                long denyDuration = System.currentTimeMillis() - startTime;
+                String hint;
+                if (notAllowedCount >= 2) {
+                    loopContext.setAbortToolUse(true);
+                    hint = "[ABORTED] MCP tool '" + skillName + "' is not enabled for this agent. "
+                            + "Repeated calls (n=" + notAllowedCount + ") detected — aborting tool_use loop.";
+                } else {
+                    hint = "[NOT ALLOWED] MCP tool '" + skillName + "' belongs to a server "
+                            + "that is not enabled for this agent. Stop calling it.";
+                }
+                toolCallRecords.add(new ToolCallRecord(skillName, input, hint, false, denyDuration, startTime));
+                log.warn("MCP NOT_ALLOWED short-circuit: tool={}, count={}", skillName, notAllowedCount);
+                recordTelemetry(skillName, false, SkillResult.ErrorType.NOT_ALLOWED.name());
+                return Message.toolResult(toolUseId, hint, true,
+                        SkillResult.ErrorType.NOT_ALLOWED.name());
+            }
+
             // Plan r2 §5 (B-4) — view 授权前置检查（反 hijack 短路）。
             // 仅对 NON-built-in name 生效；built-in Tool / 引擎特殊 tool（ask_user / compact_context）
             // 不进 view，直接走原路径。

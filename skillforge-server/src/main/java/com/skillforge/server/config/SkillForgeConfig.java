@@ -150,6 +150,27 @@ public class SkillForgeConfig {
     }
 
     /**
+     * P11 MCP-CLIENT: process-wide registry of live {@link com.skillforge.tools.mcp.session.McpServerSession}s.
+     * Owned by {@code McpServerLifecycle}; consumed by {@code McpToolRegistrar} +
+     * controller status responses.
+     */
+    @Bean
+    public com.skillforge.tools.mcp.session.McpServerSessionRegistry mcpServerSessionRegistry() {
+        return new com.skillforge.tools.mcp.session.McpServerSessionRegistry();
+    }
+
+    /**
+     * P11 MCP-CLIENT: registers MCP tool descriptors as {@code mcp_<server>_<tool>}
+     * entries in the global SkillRegistry. Stateless; safe to re-call across
+     * lifecycle reconnects.
+     */
+    @Bean
+    public com.skillforge.server.mcp.service.McpToolRegistrar mcpToolRegistrar(
+            SkillRegistry skillRegistry, ObjectMapper objectMapper) {
+        return new com.skillforge.server.mcp.service.McpToolRegistrar(skillRegistry, objectMapper);
+    }
+
+    /**
      * CodeSandboxTool — lets Code Agent test-run bash/node/java snippets in an isolated sandbox
      * before registering them as hook methods.
      */

@@ -88,6 +88,10 @@ public class AgentService {
         if (updated.getThinkingMode() != null) existing.setThinkingMode(updated.getThinkingMode());
         if (updated.getReasoningEffort() != null) existing.setReasoningEffort(updated.getReasoningEffort());
         if (updated.isPublic() != null) existing.setPublic(updated.isPublic());
+        // P11 MCP-CLIENT: agent's MCP server enable list (comma-separated names).
+        // Treat any non-null value as "user explicitly set this", including empty string
+        // which means "clear the whitelist" — null = "leave as-is".
+        if (updated.getMcpServerIds() != null) existing.setMcpServerIds(updated.getMcpServerIds());
         AgentEntity saved = agentRepository.save(existing);
         log.info("Agent {} updated: fields={}", id, nonNullFieldNames(updated));
         return saved;
@@ -133,6 +137,7 @@ public class AgentService {
         if (a.getThinkingMode() != null) fields.add("thinkingMode");
         if (a.getReasoningEffort() != null) fields.add("reasoningEffort");
         if (a.isPublic() != null) fields.add("isPublic");
+        if (a.getMcpServerIds() != null) fields.add("mcpServerIds");
         return fields;
     }
 

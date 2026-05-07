@@ -15,6 +15,7 @@ import Eval from './pages/Eval';
 import HookMethods from './pages/HookMethods';
 import Channels from './pages/Channels';
 import Schedules from './pages/Schedules';
+import McpServers from './pages/McpServers';
 import Login from './pages/Login';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { AuthProvider } from './contexts/AuthContext';
@@ -48,6 +49,7 @@ function App() {
             <Route path="hooks" element={<ErrorBoundary context="Hook Methods"><HookMethods /></ErrorBoundary>} />
             <Route path="channels" element={<ErrorBoundary context="Channels"><Channels /></ErrorBoundary>} />
             <Route path="schedules" element={<ErrorBoundary context="Schedules"><Schedules /></ErrorBoundary>} />
+            <Route path="mcp-servers" element={<ErrorBoundary context="MCP Servers"><McpServers /></ErrorBoundary>} />
             <Route path="chat" element={<ErrorBoundary context="Chat"><Chat /></ErrorBoundary>} />
             <Route path="chat/:sessionId" element={<ErrorBoundary context="Chat"><Chat /></ErrorBoundary>} />
           </Route>

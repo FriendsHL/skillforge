@@ -38,6 +38,12 @@ spring:
 
 # SkillForge configuration
 skillforge:
+  # P11 MCP-CLIENT: feature flag for the MCP client subsystem.
+  # true (default) → McpServerLifecycle starts enabled servers from t_mcp_server on boot,
+  # listens to CRUD events, exposes mcp_<server>_<tool> tools per agent.mcp_server_ids.
+  # false → no MCP servers spawned; existing agents see no mcp_* tools (INV-4 default).
+  mcp:
+    enabled: true
   # OBS-1: LLM trace observability (plan §3.4 / §6.2 / §10.1)
   observability:
     blob:

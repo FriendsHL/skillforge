@@ -26,6 +26,7 @@ const primaryNav: NavItem[] = [
   { key: 'traces', path: '/traces', label: 'Traces' },
   { key: 'channels', path: '/channels', label: 'Channels' },
   { key: 'schedules', path: '/schedules', label: 'Schedules' },
+  { key: 'mcp-servers', path: '/mcp-servers', label: 'MCP' },
 ];
 
 const paletteItems: PaletteItem[] = primaryNav.map((i) => ({

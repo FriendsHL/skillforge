@@ -92,6 +92,18 @@ vi.mock('../../../api', () => {
   };
 });
 
+// MCP-CLIENT-MVP: AgentDrawer now imports `listMcpServers` from
+// `../../api/mcpServers` to populate the per-agent MCP server multi-select.
+// Mock it here as a no-op so the drawer's `useQuery({queryFn: listMcpServers...})`
+// resolves immediately to `[]` instead of hitting the unmocked axios layer.
+// Pre-existing AgentDrawer Hooks-tab failures are unrelated to this mock
+// (verified by reverting AgentDrawer.tsx to HEAD baseline → same 5 fails),
+// but adding the mock keeps the test surface defensive against any future
+// async-state churn introduced by this query.
+vi.mock('../../../api/mcpServers', () => ({
+  listMcpServers: vi.fn(() => Promise.resolve({ data: [] })),
+}));
+
 // Mock the Ant Design message to spy on warning calls without real DOM toasts.
 const warningSpy = vi.fn();
 vi.mock('antd', async () => {

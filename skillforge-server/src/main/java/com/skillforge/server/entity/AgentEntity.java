@@ -102,6 +102,15 @@ public class AgentEntity {
     @Column(length = 36)
     private String activePromptVersionId;
 
+    /**
+     * P11 MCP-CLIENT INV-4: comma-separated list of MCP server names this agent enables.
+     * Empty string = no MCP tools exposed. Matches the same comma-list convention as
+     * {@link #skillIds}. Resolved at session start in ChatService → propagated to
+     * {@code LoopContext.allowedMcpServerNames}.
+     */
+    @Column(name = "mcp_server_ids", length = 512, nullable = false)
+    private String mcpServerIds = "";
+
     private boolean autoImprovePaused = false;
 
     private int abDeclineCount = 0;
@@ -309,6 +318,14 @@ public class AgentEntity {
 
     public void setActivePromptVersionId(String activePromptVersionId) {
         this.activePromptVersionId = activePromptVersionId;
+    }
+
+    public String getMcpServerIds() {
+        return mcpServerIds;
+    }
+
+    public void setMcpServerIds(String mcpServerIds) {
+        this.mcpServerIds = mcpServerIds != null ? mcpServerIds : "";
     }
 
     public boolean isAutoImprovePaused() {
