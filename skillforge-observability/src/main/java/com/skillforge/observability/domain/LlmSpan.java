@@ -22,6 +22,11 @@ import java.util.Map;
  *   <li>{@code eventType} — 仅 {@code kind="event"} 时填；{@code "ask_user"} | {@code "install_confirm"} | {@code "compact"} | {@code "agent_confirm"}</li>
  *   <li>{@code name} — tool name (kind=tool) / event name (kind=event) / null for kind=llm（走 model）</li>
  * </ul>
+ *
+ * <p>PROMPT-CACHE-MVP Phase 4 新增字段：
+ * <ul>
+ *   <li>{@code cacheCreationTokens} — Anthropic cache_creation_input_tokens；其他 provider 留空。</li>
+ * </ul>
  */
 public record LlmSpan(
         String spanId,
@@ -42,6 +47,7 @@ public record LlmSpan(
         int inputTokens,
         int outputTokens,
         Integer cacheReadTokens,
+        Integer cacheCreationTokens,
         String usageJson,
         BigDecimal costUsd,
         long latencyMs,
@@ -81,7 +87,8 @@ public record LlmSpan(
 
     /**
      * Backward-compatible constructor for OBS-1 callers — defaults
-     * {@code kind="llm"}, {@code eventType=null}, {@code name=null}.
+     * {@code kind="llm"}, {@code eventType=null}, {@code name=null},
+     * {@code cacheCreationTokens=null}.
      * OBS-2 callers (tool / event spans) should use the full canonical constructor.
      */
     public LlmSpan(
@@ -119,7 +126,8 @@ public record LlmSpan(
         this(spanId, traceId, parentSpanId, sessionId, agentId, provider, model,
                 iterationIndex, stream, inputSummary, outputSummary,
                 inputBlobRef, outputBlobRef, rawSseBlobRef, blobStatus,
-                inputTokens, outputTokens, cacheReadTokens, usageJson,
+                inputTokens, outputTokens, cacheReadTokens, /* cacheCreationTokens */ null,
+                usageJson,
                 costUsd, latencyMs, startedAt, endedAt,
                 finishReason, requestId, reasoningContent,
                 error, errorType, toolUseId, attributes, source,

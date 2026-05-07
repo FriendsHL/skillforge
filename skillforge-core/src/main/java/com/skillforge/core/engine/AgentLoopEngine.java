@@ -376,20 +376,31 @@ public class AgentLoopEngine {
         ensureSkillViewResolved(loopCtx, agentDef);
 
         // 4. 构建 system prompt（注入全局 CLAUDE.md）
+        // PROMPT-CACHE-MVP §Q3: split prompt into stable + dynamic sections so Anthropic
+        // can attach a cache_control breakpoint at the boundary. The stable prefix carries
+        // CLAUDE.md / agent prompts / behavior rules / tool guidelines; the dynamic suffix
+        // carries the Context block (current_date, env), Session Context, User Memories,
+        // and the loop-ending reminder appended later via promptSuffix.
         String claudeMd = claudeMdProvider != null ? claudeMdProvider.apply(userId) : null;
         List<SkillDefinition> skillDefs = resolveVisibleSkillDefs(loopCtx);
-        String systemPrompt = new SystemPromptBuilder(agentDef, skillDefs, contextProviders).build(claudeMd);
+        com.skillforge.core.llm.cache.SystemPromptParts promptParts =
+                new SystemPromptBuilder(agentDef, skillDefs, contextProviders)
+                        .buildWithBoundary(claudeMd);
+        String stableSection = promptParts.stable();
+        StringBuilder dynamicSection = new StringBuilder(promptParts.dynamic());
 
         // 4.0.1 注入 Session Context (userId / sessionId) — 让 Agent 自动知道当前用户/会话
         if (userId != null || loopCtx.getSessionId() != null) {
-            StringBuilder userCtx = new StringBuilder("\n\n## Session Context\n");
+            if (dynamicSection.length() > 0) dynamicSection.append("\n\n");
+            dynamicSection.append("## Session Context\n");
             if (userId != null) {
-                userCtx.append("- userId: ").append(sanitizePromptValue(String.valueOf(userId))).append("\n");
+                dynamicSection.append("- userId: ")
+                        .append(sanitizePromptValue(String.valueOf(userId))).append("\n");
             }
             if (loopCtx.getSessionId() != null) {
-                userCtx.append("- sessionId: ").append(sanitizePromptValue(loopCtx.getSessionId())).append("\n");
+                dynamicSection.append("- sessionId: ")
+                        .append(sanitizePromptValue(loopCtx.getSessionId())).append("\n");
             }
-            systemPrompt = systemPrompt + userCtx;
         }
 
         // 4.1 注入用户记忆到 system prompt (skip if lightContext / skip_memory flag set)
@@ -400,11 +411,26 @@ public class AgentLoopEngine {
         if (memoryProvider != null && !skipMemory) {
             MemoryInjection mi = memoryProvider.apply(userId, userMessage);
             if (mi != null && mi.text() != null && !mi.text().isBlank()) {
-                systemPrompt = systemPrompt + "\n\n## User Memories\n\n" + mi.text();
+                if (dynamicSection.length() > 0) dynamicSection.append("\n\n");
+                dynamicSection.append("## User Memories\n\n").append(mi.text());
             }
             if (mi != null && mi.injectedIds() != null && !mi.injectedIds().isEmpty()) {
                 loopCtx.setInjectedMemoryIds(mi.injectedIds());
             }
+        }
+
+        // Compose final systemPrompt with cache boundary marker. Providers that recognise
+        // the marker (ClaudeProvider) split on it to install a cache_control breakpoint;
+        // others ignore it (the marker is a benign HTML comment).
+        String systemPrompt;
+        if (dynamicSection.length() == 0) {
+            systemPrompt = stableSection;
+        } else if (stableSection.isEmpty()) {
+            systemPrompt = dynamicSection.toString();
+        } else {
+            systemPrompt = stableSection
+                    + com.skillforge.core.llm.cache.CacheBoundary.MARKER_WITH_NEWLINES
+                    + dynamicSection;
         }
 
         // 5. 收集 tools: 内置 Tool 的 ToolSchema + SkillDefinition 的描述 + (可选) ask_user + compact_context
@@ -677,8 +703,23 @@ public class AgentLoopEngine {
             }
 
             LlmRequest request = new LlmRequest();
-            request.setSystemPrompt(promptSuffix.isEmpty() ? systemPrompt
-                    : systemPrompt + promptSuffix);
+            // PROMPT-CACHE-MVP r2 W3: promptSuffix is dynamic (loop-ending reminder /
+            // notice / wrap-up hint). If systemPrompt has no MARKER yet (dynamicSection
+            // was empty earlier), promptSuffix would otherwise leak into the stable
+            // cache-eligible block and silently break cache hits. Force-insert MARKER
+            // before appending promptSuffix when no marker is present.
+            if (promptSuffix.isEmpty()) {
+                request.setSystemPrompt(systemPrompt);
+            } else if (systemPrompt.contains(
+                    com.skillforge.core.llm.cache.CacheBoundary.MARKER)) {
+                // Marker already in place — promptSuffix lands inside the dynamic block.
+                request.setSystemPrompt(systemPrompt + promptSuffix);
+            } else {
+                // No marker yet: insert one so promptSuffix stays out of the stable block.
+                request.setSystemPrompt(systemPrompt
+                        + com.skillforge.core.llm.cache.CacheBoundary.MARKER_WITH_NEWLINES
+                        + promptSuffix.toString().stripLeading());
+            }
             request.setMessages(messages);
             request.setTools(tools);
             request.setModel(actualModelId);

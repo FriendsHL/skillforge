@@ -63,7 +63,8 @@ class LlmTraceStoreFailDoesNotBlockChatIT {
             }
         };
         observer = new TraceLlmCallObserver(blobStore, traceStore, syncExecutor,
-                new ObjectMapper().findAndRegisterModules());
+                new ObjectMapper().findAndRegisterModules(),
+                new com.skillforge.observability.cache.CacheBreakDetector());
     }
 
     @Test

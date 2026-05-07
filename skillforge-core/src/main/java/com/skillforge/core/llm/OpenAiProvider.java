@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.skillforge.core.llm.cache.UsageNormalizer;
 import com.skillforge.core.llm.observer.LlmCallContext;
 import com.skillforge.core.llm.observer.LlmCallObserverRegistry;
 import com.skillforge.core.llm.observer.RawHttpRequest;
@@ -794,14 +795,15 @@ public class OpenAiProvider implements LlmProvider {
             llmResponse.setToolUseBlocks(toolUseBlocks);
         }
 
-        // usage
+        // usage — PROMPT-CACHE-MVP Phase 3: route through UsageNormalizer so DeepSeek /
+        // Qwen / OpenAI / mimo cache fields all land on the canonical Usage record.
+        // INV-5: we do NOT touch the request body here — OpenAI-shape providers auto-cache
+        // server-side and reject manual cache_control hints.
         JsonNode usageNode = root.path("usage");
         if (!usageNode.isMissingNode()) {
-            LlmResponse.Usage usage = new LlmResponse.Usage(
-                    usageNode.path("prompt_tokens").asInt(0),
-                    usageNode.path("completion_tokens").asInt(0)
-            );
-            llmResponse.setUsage(usage);
+            ProviderProtocolFamily family = ProviderProtocolFamilyResolver.resolve(
+                    root.path("model").asText(defaultModel));
+            llmResponse.setUsage(UsageNormalizer.parse(usageNode, family));
         }
 
         log.debug("{} response: stopReason={}, toolUseBlocks={}, textLength={}",
@@ -885,12 +887,14 @@ public class OpenAiProvider implements LlmProvider {
 
                 // 开启 stream_options.include_usage 后,最后一个 chunk 会带 usage 字段且 choices 为空。
                 // 必须在 choices 为空判断之前提取,否则会被下面的 continue 跳掉。
+                // PROMPT-CACHE-MVP Phase 3: UsageNormalizer captures provider-specific cache
+                // fields (DeepSeek prompt_cache_hit_tokens / Qwen+OpenAI cached_tokens).
                 JsonNode usageNode = event.path("usage");
                 if (usageNode.isObject()) {
-                    capturedUsage = new LlmResponse.Usage(
-                            usageNode.path("prompt_tokens").asInt(0),
-                            usageNode.path("completion_tokens").asInt(0)
-                    );
+                    String streamModel = event.path("model").asText(defaultModel);
+                    ProviderProtocolFamily streamFamily =
+                            ProviderProtocolFamilyResolver.resolve(streamModel);
+                    capturedUsage = UsageNormalizer.parse(usageNode, streamFamily);
                 }
 
                 JsonNode choices = event.path("choices");

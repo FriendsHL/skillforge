@@ -1,5 +1,6 @@
 package com.skillforge.observability.store;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillforge.observability.api.LlmTraceStore;
 import com.skillforge.observability.api.LlmTraceWriteRequest;
 import com.skillforge.observability.domain.LlmSpan;
@@ -111,6 +112,10 @@ public class PgLlmTraceStore implements LlmTraceStore {
     private final LlmTraceRepository traceRepository;
     private final LlmSpanRepository spanRepository;
     private final ThreadPoolTaskExecutor executor;
+    /** PROMPT-CACHE-MVP Phase 4: serialize {@link LlmSpan#attributes()} into the JSONB
+     *  {@code attributes_json} column so {@code cache_break} (and any future ad-hoc
+     *  attrs) round-trip through DB cleanly. */
+    private final ObjectMapper objectMapper;
     /**
      * OBS-2 M1: explicit TransactionTemplate so async methods (writeToolSpan / writeEventSpan /
      * finalizeTrace) running on {@code llmObservabilityExecutor} get a real transaction
@@ -123,11 +128,13 @@ public class PgLlmTraceStore implements LlmTraceStore {
     public PgLlmTraceStore(LlmTraceRepository traceRepository,
                            LlmSpanRepository spanRepository,
                            @Qualifier("llmObservabilityExecutor") ThreadPoolTaskExecutor executor,
-                           PlatformTransactionManager transactionManager) {
+                           PlatformTransactionManager transactionManager,
+                           ObjectMapper objectMapper) {
         this.traceRepository = traceRepository;
         this.spanRepository = spanRepository;
         this.executor = executor;
         this.txTemplate = new TransactionTemplate(transactionManager);
+        this.objectMapper = objectMapper;
     }
 
     @Override
@@ -178,6 +185,7 @@ public class PgLlmTraceStore implements LlmTraceStore {
         e.setInputTokens(s.inputTokens());
         e.setOutputTokens(s.outputTokens());
         e.setCacheReadTokens(s.cacheReadTokens());
+        e.setCacheCreationTokens(s.cacheCreationTokens());
         e.setUsageJson(s.usageJson());
         e.setCostUsd(s.costUsd());
         e.setLatencyMs(s.latencyMs());
@@ -194,7 +202,17 @@ public class PgLlmTraceStore implements LlmTraceStore {
         e.setEventType(s.eventType());
         e.setName(s.name());
         e.setCreatedAt(Instant.now());
-        // attributes_json serialized by caller into LlmSpan if needed; this layer doesn't re-encode.
+        // PROMPT-CACHE-MVP Phase 4: serialize attrs (cache_break / sse_truncated /
+        // blob_truncated) into the JSONB attributes_json column. Empty map → leave NULL
+        // so we don't create churn for callers that don't carry attributes.
+        if (s.attributes() != null && !s.attributes().isEmpty()) {
+            try {
+                e.setAttributesJson(objectMapper.writeValueAsString(s.attributes()));
+            } catch (Exception je) {
+                log.warn("Failed to serialize span attributes_json (dropped): spanId={}",
+                        s.spanId(), je);
+            }
+        }
         spanRepository.save(e);
     }
 
@@ -459,18 +477,34 @@ public class PgLlmTraceStore implements LlmTraceStore {
                 e.getInputSummary(), e.getOutputSummary(),
                 e.getInputBlobRef(), e.getOutputBlobRef(), e.getRawSseBlobRef(),
                 e.getBlobStatus(),
-                e.getInputTokens(), e.getOutputTokens(), e.getCacheReadTokens(),
+                e.getInputTokens(), e.getOutputTokens(),
+                e.getCacheReadTokens(), e.getCacheCreationTokens(),
                 e.getUsageJson(),
                 e.getCostUsd(), e.getLatencyMs(),
                 e.getStartedAt(), e.getEndedAt(),
                 e.getFinishReason(), e.getRequestId(),
                 e.getReasoningContent(),
                 e.getError(), e.getErrorType(), e.getToolUseId(),
-                java.util.Map.of(),
+                deserializeAttributes(e.getAttributesJson(), e.getSpanId()),
                 LlmSpanSource.fromWire(e.getSource()),
                 e.getKind() != null ? e.getKind() : "llm",
                 e.getEventType(),
                 e.getName());
+    }
+
+    /**
+     * PROMPT-CACHE-MVP Phase 4: best-effort decode of {@code attributes_json}. Failures
+     * fall back to empty map (we never break the read path because of stale JSON).
+     */
+    @SuppressWarnings("unchecked")
+    private java.util.Map<String, Object> deserializeAttributes(String json, String spanId) {
+        if (json == null || json.isBlank()) return java.util.Map.of();
+        try {
+            return objectMapper.readValue(json, java.util.Map.class);
+        } catch (Exception je) {
+            log.debug("attributes_json decode failed (returning empty): spanId={}", spanId, je);
+            return java.util.Map.of();
+        }
     }
 
     /** Test-only accessor for the executor (lets tests await async writes). */

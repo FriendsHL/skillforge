@@ -69,13 +69,43 @@ public class LlmSpanController {
                 s.outputBlobRef() != null,
                 s.rawSseBlobRef() != null,
                 null, null, null);
+        // PROMPT-CACHE-MVP Phase 4: surface hit-rate-friendly fields. Usage map carries
+        // cache-aware token counts so the dashboard can compute hit rate without re-reading
+        // the parsed response. Empty / missing attributes never produce false positives.
+        Map<String, Object> usage = new java.util.LinkedHashMap<>();
+        usage.put("inputTokens", s.inputTokens());
+        usage.put("outputTokens", s.outputTokens());
+        if (s.cacheReadTokens() != null) usage.put("cacheReadInputTokens", s.cacheReadTokens());
+        if (s.cacheCreationTokens() != null) usage.put("cacheCreationInputTokens", s.cacheCreationTokens());
+
+        // PROMPT-CACHE-MVP Phase 4 r2 (FE B2 wire-shape fix): expose a single
+        // metadata map keyed by snake_case so FE's `metadata.cache_break` shape
+        // matches BE attributes_json directly. The map is always non-null (empty when
+        // no flags) so FE can chain `metadata?.cache_break` without accommodating null.
+        Map<String, Object> metadata = new java.util.LinkedHashMap<>();
+        Map<String, Object> attrs = s.attributes();
+        if (attrs != null) {
+            Object cb = attrs.get("cache_break");
+            // Coerce String("true") -> true to tolerate stale rows where attributes_json
+            // contained a stringified boolean. Boolean instances pass through verbatim.
+            boolean broken = (cb instanceof Boolean b && b)
+                    || (cb != null && Boolean.parseBoolean(cb.toString()));
+            if (broken) {
+                metadata.put("cache_break", true);
+                Object reason = attrs.get("cache_break_reason");
+                if (reason != null) metadata.put("cache_break_reason", reason);
+            }
+        }
+
         LlmSpanDetailDto dto = new LlmSpanDetailDto(
                 s.spanId(), s.traceId(), s.parentSpanId(), s.sessionId(),
                 s.provider(), s.model(),
                 s.iterationIndex(), s.stream(),
                 s.inputSummary(), s.outputSummary(),
                 s.cacheReadTokens(),
-                Map.of("inputTokens", s.inputTokens(), "outputTokens", s.outputTokens()),
+                s.cacheCreationTokens(),
+                metadata,
+                usage,
                 s.costUsd(), s.latencyMs(),
                 s.startedAt(), s.endedAt(),
                 s.finishReason(), s.requestId(),

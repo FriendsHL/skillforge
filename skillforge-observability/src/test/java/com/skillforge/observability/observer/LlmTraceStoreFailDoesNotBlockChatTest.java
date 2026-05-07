@@ -63,7 +63,10 @@ class LlmTraceStoreFailDoesNotBlockChatTest {
             }
         };
         objectMapper = new ObjectMapper().findAndRegisterModules();
-        observer = new TraceLlmCallObserver(blobStore, traceStore, syncExecutor, objectMapper);
+        // PROMPT-CACHE-MVP: pass a real CacheBreakDetector — its in-memory state has no
+        // external dependencies; tests don't need to mock it.
+        observer = new TraceLlmCallObserver(blobStore, traceStore, syncExecutor, objectMapper,
+                new com.skillforge.observability.cache.CacheBreakDetector());
     }
 
     @Test

@@ -70,6 +70,12 @@ public class LlmSpanEntity {
     @Column(name = "cache_read_tokens")
     private Integer cacheReadTokens;
 
+    /** PROMPT-CACHE-MVP Phase 4: Anthropic cache_creation_input_tokens. Nullable for
+     *  backward compat with rows pre-V62 and for providers (DeepSeek/Qwen/OpenAI/mimo)
+     *  that do not surface a creation counter. */
+    @Column(name = "cache_creation_tokens")
+    private Integer cacheCreationTokens;
+
     @Column(name = "usage_json", columnDefinition = "JSONB")
     @JdbcTypeCode(SqlTypes.JSON)
     private String usageJson;
@@ -164,6 +170,8 @@ public class LlmSpanEntity {
     public void setOutputTokens(int v) { this.outputTokens = v; }
     public Integer getCacheReadTokens() { return cacheReadTokens; }
     public void setCacheReadTokens(Integer v) { this.cacheReadTokens = v; }
+    public Integer getCacheCreationTokens() { return cacheCreationTokens; }
+    public void setCacheCreationTokens(Integer v) { this.cacheCreationTokens = v; }
     public String getUsageJson() { return usageJson; }
     public void setUsageJson(String v) { this.usageJson = v; }
     public BigDecimal getCostUsd() { return costUsd; }

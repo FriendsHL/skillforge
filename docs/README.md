@@ -34,6 +34,7 @@
 
 | ID | 标题 | 需求包 | 技术方案 |
 | --- | --- | --- | --- |
+| PROMPT-CACHE-MVP | Prompt Cache MVP（5 provider 全链路 + Claude 3 breakpoint + dashboard hit rate） | [需求包](requirements/archive/2026-05-08-PROMPT-CACHE-MVP/index.md) | [方案](requirements/archive/2026-05-08-PROMPT-CACHE-MVP/tech-design.md) |
 | MCP-CLIENT-MVP | MCP Client MVP（stdio + per-agent + dashboard CRUD + dogfood time） | [需求包](requirements/archive/2026-05-07-MCP-CLIENT-MVP/index.md) | [方案](requirements/archive/2026-05-07-MCP-CLIENT-MVP/tech-design.md) |
 | P10 | 聊天斜杠命令 MVP（8 命令 + dashboard popup + channel BE 拦截） | [需求包](requirements/archive/2026-05-07-P10-slash-commands/index.md) | [方案](requirements/archive/2026-05-07-P10-slash-commands/tech-design.md) |
 | P12 | 定时任务 MVP（user-type cron + one-shot + 5 Tool + dashboard） | [需求包](requirements/archive/2026-05-07-P12-scheduled-tasks/index.md) | [方案](requirements/archive/2026-05-07-P12-scheduled-tasks/tech-design.md) |

@@ -11,13 +11,13 @@ import com.skillforge.observability.api.BlobRef;
 import com.skillforge.observability.api.BlobStore;
 import com.skillforge.observability.api.LlmTraceStore;
 import com.skillforge.observability.api.LlmTraceWriteRequest;
+import com.skillforge.observability.cache.CacheBreakDetector;
 import com.skillforge.observability.domain.LlmSpan;
 import com.skillforge.observability.domain.LlmSpanSource;
 import com.skillforge.observability.domain.LlmTrace;
 import com.skillforge.observability.domain.ProviderName;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.stereotype.Component;
@@ -50,6 +50,8 @@ public class TraceLlmCallObserver implements LlmCallObserver {
     private final LlmTraceStore traceStore;
     private final ThreadPoolTaskExecutor executor;
     private final ObjectMapper objectMapper;
+    /** PROMPT-CACHE-MVP Phase 4: optional break detector — null in legacy / test wiring. */
+    private final CacheBreakDetector cacheBreakDetector;
 
     /** R2-W3: per-spanId state for streaming callers. */
     private final Map<String, CallState> state = new java.util.concurrent.ConcurrentHashMap<>();
@@ -57,11 +59,13 @@ public class TraceLlmCallObserver implements LlmCallObserver {
     public TraceLlmCallObserver(BlobStore blobStore,
                                 LlmTraceStore traceStore,
                                 @Qualifier("llmObservabilityExecutor") ThreadPoolTaskExecutor executor,
-                                @Autowired ObjectMapper objectMapper) {
+                                ObjectMapper objectMapper,
+                                CacheBreakDetector cacheBreakDetector) {
         this.blobStore = blobStore;
         this.traceStore = traceStore;
         this.executor = executor;
         this.objectMapper = objectMapper;
+        this.cacheBreakDetector = cacheBreakDetector;
     }
 
     @Override
@@ -180,10 +184,35 @@ public class TraceLlmCallObserver implements LlmCallObserver {
                 ? parsed.getUsage().getInputTokens() : 0;
         int outTokens = parsed != null && parsed.getUsage() != null
                 ? parsed.getUsage().getOutputTokens() : 0;
+        // PROMPT-CACHE-MVP Phase 4: pull cache fields from the parsed usage. Anthropic is
+        // the only family that surfaces creation tokens; for OpenAI-compat providers
+        // creation stays at 0 and we persist NULL so the dashboard renders "—" rather
+        // than a misleading 0.
+        int cacheReadRaw = parsed != null && parsed.getUsage() != null
+                ? parsed.getUsage().getCacheReadInputTokens() : 0;
+        int cacheCreationRaw = parsed != null && parsed.getUsage() != null
+                ? parsed.getUsage().getCacheCreationInputTokens() : 0;
+        Integer cacheReadTokens = cacheReadRaw > 0 ? cacheReadRaw : null;
+        Integer cacheCreationTokens = cacheCreationRaw > 0 ? cacheCreationRaw : null;
 
         Map<String, Object> attrs = new HashMap<>();
         if (capture != null && capture.sseTruncated()) attrs.put("sse_truncated", true);
         if (truncated) attrs.put("blob_truncated", true);
+
+        // PROMPT-CACHE-MVP Phase 4: cache break detection — write to attrs so the
+        // dashboard can show a red badge. INV-9: first call always returns false; INV-10:
+        // detector exception MUST NOT propagate.
+        if (cacheBreakDetector != null && !isError) {
+            try {
+                if (cacheBreakDetector.check(ctx.sessionId(), cacheReadRaw)) {
+                    attrs.put("cache_break", true);
+                    attrs.put("cache_break_reason", "drop>2K_and_<95%_of_prev");
+                }
+            } catch (Throwable t) {
+                log.debug("CacheBreakDetector.check failed (ignored): spanId={}",
+                        ctx.spanId(), t);
+            }
+        }
 
         String provider = ProviderName.coerce(ctx.providerName());
         if (!ProviderName.isCanonical(ctx.providerName())) {
@@ -197,7 +226,8 @@ public class TraceLlmCallObserver implements LlmCallObserver {
                 ctx.iterationIndex(), ctx.stream(),
                 inputSummary, outputSummary,
                 inputRef, outputRef, sseRef, blobStatus,
-                inTokens, outTokens, null,
+                inTokens, outTokens,
+                cacheReadTokens, cacheCreationTokens,
                 null, /* usageJson */
                 null, /* costUsd */
                 latency,
@@ -209,7 +239,8 @@ public class TraceLlmCallObserver implements LlmCallObserver {
                 isError && err != null ? err.getClass().getSimpleName() : null,
                 null,
                 attrs,
-                LlmSpanSource.LIVE);
+                LlmSpanSource.LIVE,
+                "llm", null, null);
 
         LlmTrace trace = new LlmTrace(
                 ctx.traceId(), ctx.sessionId(),

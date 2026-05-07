@@ -165,16 +165,40 @@ export interface BlobMeta {
 }
 
 /**
+ * PROMPT-CACHE-MVP Phase 4 — known metadata keys carried on `LlmSpanDetail`.
+ *
+ * Backend writes `cache_break: true` + a human-readable `cache_break_reason`
+ * to `t_llm_span` metadata when {@code CacheBreakDetector} flags a prefix
+ * regression (5% tolerance + 2K-token threshold). Keys use snake_case to
+ * match the on-the-wire JSON exactly — do not rename to camelCase.
+ *
+ * Index signature kept open so future telemetry keys land here without an
+ * FE coordinated update; consumers should narrow before use.
+ */
+export interface LlmSpanMetadata {
+  cache_break?: boolean;
+  cache_break_reason?: string;
+  [key: string]: unknown;
+}
+
+/**
  * Mirror of backend `LlmSpanDetailDto`.
  *
  * Notes vs the summary DTO:
  *   - blob presence is nested under `blobs` (not flat hasRawXxx fields)
  *   - per-call token counts are exposed via the summary DTO; the detail DTO
- *     surfaces only `cacheReadTokens` + the raw provider `usage` payload
+ *     surfaces only `cacheReadTokens` + `cacheCreationTokens` + the raw
+ *     provider `usage` payload
  *   - `usage` is opaque (Java `Object`) — keep `unknown` and let the UI
  *     stringify on render
  *   - inputSummary/outputSummary are truncated to ≤ 32KB by backend; full
  *     bytes accessible via the blob endpoint
+ *   - `cacheCreationTokens` is nullable — older spans persisted before
+ *     V62__add_llm_span_cache_creation_tokens.sql have NULL; FE renders 0
+ *     in that case (PRD INV-11)
+ *   - `metadata` carries free-form telemetry (see {@link LlmSpanMetadata});
+ *     {@code metadata.cache_break === true} drives the red "cache broken"
+ *     badge in the Meta tab
  */
 export interface LlmSpanDetail {
   spanId: string;
@@ -188,6 +212,7 @@ export interface LlmSpanDetail {
   inputSummary: string | null;
   outputSummary: string | null;
   cacheReadTokens?: number | null;
+  cacheCreationTokens?: number | null;
   usage?: unknown;
   costUsd?: number | null;
   latencyMs: number;
@@ -201,6 +226,7 @@ export interface LlmSpanDetail {
   source: LlmSpanSource;
   blobStatus: BlobStatus | null;
   blobs: BlobMeta;
+  metadata?: LlmSpanMetadata | null;
 }
 
 /** Mirror of backend `ToolSpanDetailDto`. */

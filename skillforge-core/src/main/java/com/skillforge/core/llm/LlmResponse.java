@@ -116,18 +116,48 @@ public class LlmResponse {
 
     /**
      * Token 用量统计。
+     *
+     * <p>PROMPT-CACHE-MVP (Phase 3): {@code cacheReadInputTokens} +
+     * {@code cacheCreationInputTokens} added so providers can report prompt-cache hits.
+     * The 2-arg constructor is preserved for backward compat — callers that don't yet
+     * surface cache numbers (legacy SSE paths in non-Anthropic providers, tests) can
+     * still build a Usage without breaking.
+     *
+     * <p>r3 semantic contract (FE r2 push-back fix): {@link #getInputTokens() inputTokens}
+     * across all provider families represents the <em>non-cached</em> input tokens.
+     * Total prompt size = {@code inputTokens + cacheReadInputTokens +
+     * cacheCreationInputTokens}. {@link com.skillforge.core.llm.cache.UsageNormalizer}
+     * normalizes provider-specific wire fields (Claude's {@code input_tokens} is already
+     * non-cached; DeepSeek/Qwen/OpenAI wire {@code prompt_tokens} is TOTAL and gets the
+     * cached portion subtracted on parse).
      */
     public static class Usage {
 
+        /** Non-cached input tokens (uniform across all providers — see class JavaDoc). */
         private int inputTokens;
         private int outputTokens;
+        /** Prompt-cache read tokens (Anthropic: cache_read_input_tokens; DeepSeek:
+         *  prompt_cache_hit_tokens; OpenAI-shape: prompt_tokens_details.cached_tokens). */
+        private int cacheReadInputTokens;
+        /** Prompt-cache write/creation tokens (Anthropic only). NULL on the wire is mapped
+         *  to 0 here; on the persistence layer the corresponding column is nullable for
+         *  backward compat with rows pre-V62 (INV-11). */
+        private int cacheCreationInputTokens;
 
         public Usage() {
         }
 
+        /** Backward-compat constructor — leaves cache fields at 0. */
         public Usage(int inputTokens, int outputTokens) {
+            this(inputTokens, outputTokens, 0, 0);
+        }
+
+        public Usage(int inputTokens, int outputTokens,
+                     int cacheReadInputTokens, int cacheCreationInputTokens) {
             this.inputTokens = inputTokens;
             this.outputTokens = outputTokens;
+            this.cacheReadInputTokens = cacheReadInputTokens;
+            this.cacheCreationInputTokens = cacheCreationInputTokens;
         }
 
         public int getInputTokens() {
@@ -144,6 +174,22 @@ public class LlmResponse {
 
         public void setOutputTokens(int outputTokens) {
             this.outputTokens = outputTokens;
+        }
+
+        public int getCacheReadInputTokens() {
+            return cacheReadInputTokens;
+        }
+
+        public void setCacheReadInputTokens(int cacheReadInputTokens) {
+            this.cacheReadInputTokens = cacheReadInputTokens;
+        }
+
+        public int getCacheCreationInputTokens() {
+            return cacheCreationInputTokens;
+        }
+
+        public void setCacheCreationInputTokens(int cacheCreationInputTokens) {
+            this.cacheCreationInputTokens = cacheCreationInputTokens;
         }
     }
 }

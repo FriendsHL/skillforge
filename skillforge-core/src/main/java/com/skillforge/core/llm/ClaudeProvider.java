@@ -6,6 +6,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.skillforge.core.llm.cache.CacheBoundary;
+import com.skillforge.core.llm.cache.CacheControlMarker;
+import com.skillforge.core.llm.cache.ToolNormalizer;
+import com.skillforge.core.llm.cache.UsageNormalizer;
 import com.skillforge.core.llm.observer.LlmCallContext;
 import com.skillforge.core.llm.observer.LlmCallObserverRegistry;
 import com.skillforge.core.llm.observer.RawHttpRequest;
@@ -392,9 +396,43 @@ public class ClaudeProvider implements LlmProvider {
             root.put("stream", true);
         }
 
-        // system prompt
-        if (request.getSystemPrompt() != null && !request.getSystemPrompt().isBlank()) {
-            root.put("system", request.getSystemPrompt());
+        // system prompt — PROMPT-CACHE-MVP §Q3 (Phase 2 BREAKPOINT 1):
+        // Split on the boundary marker so the stable prefix becomes a cache_control'd
+        // text block. If no marker (caller didn't go through buildWithBoundary or there
+        // was no dynamic section), the entire prompt becomes the stable block — still
+        // cache-eligible.
+        String systemPromptRaw = request.getSystemPrompt();
+        if (systemPromptRaw != null && !systemPromptRaw.isBlank()) {
+            ArrayNode systemArray = objectMapper.createArrayNode();
+            int idx = systemPromptRaw.indexOf(CacheBoundary.MARKER);
+            String stableText;
+            String dynamicText;
+            if (idx < 0) {
+                stableText = systemPromptRaw;
+                dynamicText = "";
+            } else {
+                stableText = systemPromptRaw.substring(0, idx);
+                dynamicText = systemPromptRaw.substring(idx + CacheBoundary.MARKER.length());
+            }
+            // Strip surrounding whitespace introduced by MARKER_WITH_NEWLINES so the
+            // prompt that lands on the wire is identical-up-to-trim across calls (INV-1).
+            stableText = stableText.stripTrailing();
+            dynamicText = dynamicText.stripLeading();
+            if (!stableText.isEmpty()) {
+                ObjectNode stableBlock = systemArray.addObject();
+                stableBlock.put("type", "text");
+                stableBlock.put("text", stableText);
+                stableBlock.set("cache_control", CacheControlMarker.ephemeral(objectMapper));
+            }
+            if (!dynamicText.isEmpty()) {
+                ObjectNode dynamicBlock = systemArray.addObject();
+                dynamicBlock.put("type", "text");
+                dynamicBlock.put("text", dynamicText);
+                // No cache_control on the dynamic block — INV-4: only stable carries it.
+            }
+            if (systemArray.size() > 0) {
+                root.set("system", systemArray);
+            }
         }
 
         // messages
@@ -404,15 +442,44 @@ public class ClaudeProvider implements LlmProvider {
             messagesNode.add(msgNode);
         }
 
-        // tools
+        // PROMPT-CACHE-MVP Phase 2 BREAKPOINT 3: cache_control on the last block of the
+        // last user message. Walked via the messages we just added so we always tag the
+        // wire-final element (claude code's mode — not all sliding-window history).
+        if (messagesNode.size() > 0) {
+            JsonNode lastMsg = messagesNode.get(messagesNode.size() - 1);
+            if (lastMsg instanceof ObjectNode lastMsgObj
+                    && "user".equals(lastMsgObj.path("role").asText())) {
+                JsonNode contentNode = lastMsgObj.path("content");
+                if (contentNode.isArray() && contentNode.size() > 0) {
+                    JsonNode lastBlock = contentNode.get(contentNode.size() - 1);
+                    if (lastBlock instanceof ObjectNode lastBlockObj) {
+                        lastBlockObj.set("cache_control",
+                                CacheControlMarker.ephemeral(objectMapper));
+                    }
+                }
+                // contentNode may be a plain string for legacy paths — Anthropic accepts
+                // string content but we cannot attach cache_control there; skip silently.
+            }
+        }
+
+        // tools — PROMPT-CACHE-MVP §INV-12: explicit sort by name (do not trust upstream).
+        // BREAKPOINT 2 — cache_control on the LAST tool in the sorted array.
         if (request.getTools() != null && !request.getTools().isEmpty()) {
             ArrayNode toolsNode = root.putArray("tools");
-            for (ToolSchema tool : request.getTools()) {
+            java.util.List<ToolSchema> sortedTools = ToolNormalizer.sortByName(request.getTools());
+            ObjectNode lastToolNode = null;
+            for (ToolSchema tool : sortedTools) {
                 ObjectNode toolNode = objectMapper.createObjectNode();
                 toolNode.put("name", tool.getName());
-                toolNode.put("description", tool.getDescription());
-                toolNode.set("input_schema", objectMapper.valueToTree(tool.getInputSchema()));
+                toolNode.put("description",
+                        ToolNormalizer.normalizeDescription(tool.getDescription()));
+                toolNode.set("input_schema", objectMapper.valueToTree(
+                        ToolNormalizer.normalizeSchema(tool.getInputSchema())));
                 toolsNode.add(toolNode);
+                lastToolNode = toolNode;
+            }
+            if (lastToolNode != null) {
+                lastToolNode.set("cache_control", CacheControlMarker.ephemeral(objectMapper));
             }
         }
 
@@ -429,14 +496,10 @@ public class ClaudeProvider implements LlmProvider {
         // stop_reason
         llmResponse.setStopReason(root.path("stop_reason").asText("end_turn"));
 
-        // usage
+        // usage — PROMPT-CACHE-MVP Phase 3: normalize Claude usage incl. cache fields.
         JsonNode usageNode = root.path("usage");
         if (!usageNode.isMissingNode()) {
-            LlmResponse.Usage usage = new LlmResponse.Usage(
-                    usageNode.path("input_tokens").asInt(0),
-                    usageNode.path("output_tokens").asInt(0)
-            );
-            llmResponse.setUsage(usage);
+            llmResponse.setUsage(UsageNormalizer.parse(usageNode, ProviderProtocolFamily.CLAUDE));
         }
 
         // content blocks
@@ -564,10 +627,23 @@ public class ClaudeProvider implements LlmProvider {
                             }
                             JsonNode usageNode = event.path("usage");
                             if (!usageNode.isMissingNode()) {
-                                usage = new LlmResponse.Usage(
-                                        usageNode.path("input_tokens").asInt(0),
-                                        usageNode.path("output_tokens").asInt(0)
-                                );
+                                // PROMPT-CACHE-MVP: message_delta carries the FINAL usage
+                                // including cache_creation / cache_read.
+                                LlmResponse.Usage finalUsage = UsageNormalizer.parse(
+                                        usageNode, ProviderProtocolFamily.CLAUDE);
+                                if (usage == null) {
+                                    usage = finalUsage;
+                                } else {
+                                    // message_start may have arrived first with input_tokens.
+                                    // Merge: take output / cache fields from delta, keep input
+                                    // from start unless delta provides one.
+                                    if (finalUsage.getInputTokens() > 0) {
+                                        usage.setInputTokens(finalUsage.getInputTokens());
+                                    }
+                                    usage.setOutputTokens(finalUsage.getOutputTokens());
+                                    usage.setCacheReadInputTokens(finalUsage.getCacheReadInputTokens());
+                                    usage.setCacheCreationInputTokens(finalUsage.getCacheCreationInputTokens());
+                                }
                             }
                         }
 
@@ -575,10 +651,12 @@ public class ClaudeProvider implements LlmProvider {
                             JsonNode message = event.path("message");
                             JsonNode usageNode = message.path("usage");
                             if (!usageNode.isMissingNode()) {
-                                usage = new LlmResponse.Usage(
-                                        usageNode.path("input_tokens").asInt(0),
-                                        usageNode.path("output_tokens").asInt(0)
-                                );
+                                // PROMPT-CACHE-MVP: message_start carries early input/cache
+                                // tokens; output_tokens is usually 0 here. Use UsageNormalizer
+                                // so cache_read_input_tokens is captured even if message_delta
+                                // is dropped (some Claude proxies do this).
+                                usage = UsageNormalizer.parse(
+                                        usageNode, ProviderProtocolFamily.CLAUDE);
                             }
                         }
 

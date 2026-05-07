@@ -5,6 +5,7 @@ import { getLlmSpanDetail, getLlmSpanBlob } from '../../../api';
 import { useAuth } from '../../../contexts/AuthContext';
 import PayloadViewer from './PayloadViewer';
 import SpanDetailTabs from './SpanDetailTabs';
+import CacheStatsRow from './CacheStatsRow';
 
 interface LlmSpanDetailViewProps {
   span: LlmSpanSummary;
@@ -104,9 +105,18 @@ const LlmSpanDetailView: React.FC<LlmSpanDetailViewProps> = ({ span }) => {
               <span className="obs-span-meta-k">tokens</span>
               <span className="obs-span-meta-v mono-sm">
                 in {totalIn.toLocaleString()} / out {totalOut.toLocaleString()}
-                {data.cacheReadTokens != null ? ` / cache ${data.cacheReadTokens.toLocaleString()}` : ''}
               </span>
             </div>
+            {/* r2 B1 fix: pass the *non-cached* input tokens (Anthropic
+                `input_tokens` semantics; mirrored on `LlmSpanSummary.inputTokens`).
+                CacheStatsRow internally sums the three buckets for the hit-rate
+                denominator so `cache_read / prompt_total` stays in [0, 100%]. */}
+            <CacheStatsRow
+              cacheReadTokens={data.cacheReadTokens}
+              cacheCreationTokens={data.cacheCreationTokens}
+              nonCachedInputTokens={totalIn}
+              metadata={data.metadata}
+            />
             <div className="obs-span-meta-row">
               <span className="obs-span-meta-k">latency</span>
               <span className="obs-span-meta-v mono-sm">{data.latencyMs} ms</span>
