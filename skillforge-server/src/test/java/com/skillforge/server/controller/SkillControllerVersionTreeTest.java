@@ -71,7 +71,7 @@ class SkillControllerVersionTreeTest {
     void happyPath_returns200() {
         when(skillService.getVersionTree(eq(2L), eq(7L))).thenReturn(mockTree());
 
-        ResponseEntity<?> resp = controller.getVersionTree(2L, 7L);
+        ResponseEntity<?> resp = controller.getVersionTree(2L, 7L, null);
 
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
         Map<String, Object> body = (Map<String, Object>) resp.getBody();
@@ -85,7 +85,7 @@ class SkillControllerVersionTreeTest {
         when(skillService.getVersionTree(eq(2L), eq(7L)))
                 .thenThrow(new RuntimeException("Skill not found: 2"));
 
-        ResponseEntity<?> resp = controller.getVersionTree(2L, 7L);
+        ResponseEntity<?> resp = controller.getVersionTree(2L, 7L, null);
 
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
     }
@@ -97,7 +97,7 @@ class SkillControllerVersionTreeTest {
         when(skillService.getVersionTree(eq(2L), eq(99L)))
                 .thenThrow(new RuntimeException("Caller userId=99 does not own skill id=2"));
 
-        ResponseEntity<?> resp = controller.getVersionTree(2L, 99L);
+        ResponseEntity<?> resp = controller.getVersionTree(2L, 99L, null);
 
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
         Map<String, Object> body = (Map<String, Object>) resp.getBody();
@@ -110,7 +110,7 @@ class SkillControllerVersionTreeTest {
         when(skillService.getVersionTree(eq(2L), eq(7L)))
                 .thenThrow(new RuntimeException("Cannot expose version tree for system skill: 2"));
 
-        ResponseEntity<?> resp = controller.getVersionTree(2L, 7L);
+        ResponseEntity<?> resp = controller.getVersionTree(2L, 7L, null);
 
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
     }

@@ -44,6 +44,7 @@ import static org.mockito.Mockito.when;
 class SkillDraftControllerTest {
 
     @Mock private SkillDraftService skillDraftService;
+    @Mock private com.skillforge.server.repository.SkillDraftRepository skillDraftRepository;
     private ExecutorService coordinatorExecutor;
     private SkillDraftController controller;
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -51,7 +52,7 @@ class SkillDraftControllerTest {
     @BeforeEach
     void setUp() {
         coordinatorExecutor = Executors.newSingleThreadExecutor();
-        controller = new SkillDraftController(skillDraftService, coordinatorExecutor);
+        controller = new SkillDraftController(skillDraftService, skillDraftRepository, coordinatorExecutor);
     }
 
     private SkillDraftEntity newApprovedResult(String id) {

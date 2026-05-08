@@ -512,6 +512,99 @@ public class SkillService {
      * @return a map with {@code ancestors}, {@code current}, {@code descendants}
      * @throws RuntimeException if the skill is not found OR userId mismatches the owner
      */
+    /**
+     * SKILL-DASHBOARD-POLISH-V2.5 §7 — recursive root-tree shape returning
+     * {@code { id, name, version, status, latestScore, children: [...] }}
+     * starting from the family root (oldest ancestor) down to all leaves.
+     * Easier for FE that wants pure recursive rendering without keeping
+     * track of the "current" pointer.
+     */
+    @Transactional(readOnly = true)
+    public Map<String, Object> getVersionTreeRoot(Long skillId, Long userId) {
+        SkillEntity current = skillRepository.findById(skillId)
+                .orElseThrow(() -> new RuntimeException("Skill not found: " + skillId));
+        if (current.isSystem()) {
+            throw new RuntimeException("Cannot expose version tree for system skill: " + skillId);
+        }
+        if (userId != null && current.getOwnerId() != null
+                && !current.getOwnerId().equals(userId)) {
+            throw new RuntimeException("Caller userId=" + userId
+                    + " does not own skill id=" + skillId);
+        }
+
+        final int MAX_DEPTH = 10;
+
+        // Walk up to the root (oldest ancestor with parentSkillId == null).
+        java.util.Set<Long> visitedUp = new java.util.HashSet<>();
+        SkillEntity cursor = current;
+        visitedUp.add(cursor.getId());
+        for (int i = 0; i < MAX_DEPTH; i++) {
+            Long parentId = cursor.getParentSkillId();
+            if (parentId == null || !visitedUp.add(parentId)) {
+                break;
+            }
+            SkillEntity parent = skillRepository.findById(parentId).orElse(null);
+            if (parent == null) {
+                break;
+            }
+            cursor = parent;
+        }
+        // cursor is now the root.
+
+        // Build full tree from root using the same descendants walk.
+        java.util.Set<Long> visitedTree = new java.util.HashSet<>();
+        visitedTree.add(cursor.getId());
+        Map<String, Object> root = toRootTreeNode(cursor, current.getId());
+        root.put("children", buildRootTreeChildren(cursor.getId(), current.getId(), visitedTree, 1, MAX_DEPTH));
+        return root;
+    }
+
+    private List<Map<String, Object>> buildRootTreeChildren(Long parentId,
+                                                            Long currentId,
+                                                            java.util.Set<Long> visited,
+                                                            int depth,
+                                                            int maxDepth) {
+        if (depth > maxDepth) {
+            return List.of();
+        }
+        List<SkillEntity> children = skillRepository.findByParentSkillId(parentId);
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (SkillEntity child : children) {
+            if (child.getId() == null || !visited.add(child.getId())) {
+                continue;
+            }
+            Map<String, Object> node = toRootTreeNode(child, currentId);
+            node.put("children", buildRootTreeChildren(child.getId(), currentId, visited, depth + 1, maxDepth));
+            result.add(node);
+        }
+        return result;
+    }
+
+    private Map<String, Object> toRootTreeNode(SkillEntity entity, Long currentId) {
+        Map<String, Object> node = new java.util.LinkedHashMap<>();
+        node.put("id", entity.getId());
+        node.put("name", entity.getName());
+        node.put("version", entity.getSemver());
+        node.put("status", entity.isEnabled() ? "enabled" : "disabled");
+        node.put("source", entity.getSource());
+        node.put("createdAt", entity.getCreatedAt());
+        node.put("isCurrent", entity.getId().equals(currentId));
+        Double latestScore = null;
+        try {
+            SkillEvalHistoryEntity latest = skillEvalHistoryRepository
+                    .findFirstBySkillIdOrderByCreatedAtDesc(entity.getId())
+                    .orElse(null);
+            if (latest != null) {
+                latestScore = latest.getCompositeScore();
+            }
+        } catch (Exception e) {
+            log.warn("getVersionTreeRoot: latestScore lookup failed for skillId={}: {}",
+                    entity.getId(), e.getMessage());
+        }
+        node.put("latestScore", latestScore);
+        return node;
+    }
+
     @Transactional(readOnly = true)
     public Map<String, Object> getVersionTree(Long skillId, Long userId) {
         SkillEntity current = skillRepository.findById(skillId)

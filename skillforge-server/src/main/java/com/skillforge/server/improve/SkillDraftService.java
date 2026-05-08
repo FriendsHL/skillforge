@@ -438,47 +438,6 @@ public class SkillDraftService {
     }
 
     /**
-     * SKILL-DASHBOARD-POLISH-V2 §H — Rename branch of the merge UX modal.
-     *
-     * <p>When the operator hits a 409 NAME_CONFLICT and chooses "Rename and create new",
-     * the FE re-submits the approve PATCH with {@code newName} populated. The controller
-     * calls this method first, then continues into the normal {@link #approveDraft} path
-     * which re-runs the exact-name + high-sim gates against the new name.
-     *
-     * <p>Why this lives here (not inline in the controller):
-     * <ul>
-     *   <li>Holds the pessimistic write lock so a concurrent approve/discard can't race.</li>
-     *   <li>Validates the draft is still in {@code draft} status before mutating name.</li>
-     *   <li>Empty/blank newName is rejected — the controller already filtered, but defense in depth.</li>
-     * </ul>
-     *
-     * <p>This method does NOT trigger the exact-name precheck itself — that's
-     * deliberate, the subsequent {@link #approveDraft} call does it. If the new
-     * name still collides, the operator gets another 409 and can pick again.
-     *
-     * @param draftId    UUID of the draft row
-     * @param newName    new draft name (non-blank)
-     * @param reviewedBy user id of the operator (for audit; the actual {@code reviewedBy}
-     *                   stamp on the draft row is set by the subsequent approve call)
-     * @return the renamed draft (still {@code status='draft'})
-     */
-    @Transactional
-    public SkillDraftEntity renameDraft(String draftId, String newName, Long reviewedBy) {
-        if (newName == null || newName.isBlank()) {
-            throw new IllegalArgumentException("newName must not be blank");
-        }
-        SkillDraftEntity draft = skillDraftRepository.findByIdForUpdate(draftId)
-                .orElseThrow(() -> new RuntimeException("Skill draft not found: " + draftId));
-        if (!"draft".equals(draft.getStatus())) {
-            throw new RuntimeException("Draft is not in 'draft' status: " + draftId);
-        }
-        draft.setName(newName.trim());
-        SkillDraftEntity saved = skillDraftRepository.save(draft);
-        log.info("Renamed draft id={} to name='{}' by reviewer={}", draftId, draft.getName(), reviewedBy);
-        return saved;
-    }
-
-    /**
      * SKILL-DASHBOARD-POLISH-V2 §H — merge a draft into an existing user skill.
      *
      * <p>Steps:

@@ -303,8 +303,16 @@ public class SkillController {
      */
     @GetMapping("/{id}/version-tree")
     public ResponseEntity<?> getVersionTree(@PathVariable Long id,
-                                            @RequestParam(value = "userId", required = true) Long userId) {
+                                            @RequestParam(value = "userId", required = true) Long userId,
+                                            @RequestParam(value = "format", required = false) String format) {
         try {
+            // SKILL-DASHBOARD-POLISH-V2.5 §7 — `?format=tree` returns a single
+            // recursive root tree (FE-friendly) instead of the V2 default
+            // {ancestors, current, descendants} 3-segment shape (kept default
+            // for V2 FE compat).
+            if ("tree".equalsIgnoreCase(format)) {
+                return ResponseEntity.ok(skillService.getVersionTreeRoot(id, userId));
+            }
             return ResponseEntity.ok(skillService.getVersionTree(id, userId));
         } catch (RuntimeException e) {
             String msg = e.getMessage() != null ? e.getMessage() : "";
@@ -649,6 +657,12 @@ public class SkillController {
             Map<String, Object> body = new HashMap<>();
             body.put("content", content);
             body.put("path", md.toString());
+            // SKILL-DASHBOARD-POLISH-V2.5 — file mtime as updatedAt for FE diff freshness check.
+            try {
+                body.put("updatedAt", Files.getLastModifiedTime(md).toInstant().toString());
+            } catch (IOException ignored) {
+                // mtime is best-effort; don't fail the read just because we can't stat.
+            }
             return ResponseEntity.ok(body);
         } catch (IOException e) {
             return ResponseEntity.internalServerError()

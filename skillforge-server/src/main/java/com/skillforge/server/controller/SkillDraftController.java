@@ -4,9 +4,12 @@ import com.skillforge.server.entity.SkillDraftEntity;
 import com.skillforge.server.improve.HighSimilarityRejectedException;
 import com.skillforge.server.improve.SkillDraftService;
 import com.skillforge.server.improve.SkillNameConflictException;
+import com.skillforge.server.repository.SkillDraftRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -31,11 +34,14 @@ public class SkillDraftController {
     private static final Logger log = LoggerFactory.getLogger(SkillDraftController.class);
 
     private final SkillDraftService skillDraftService;
+    private final SkillDraftRepository skillDraftRepository;
     private final ExecutorService coordinatorExecutor;
 
     public SkillDraftController(SkillDraftService skillDraftService,
+                                SkillDraftRepository skillDraftRepository,
                                 @Qualifier("abEvalCoordinatorExecutor") ExecutorService coordinatorExecutor) {
         this.skillDraftService = skillDraftService;
+        this.skillDraftRepository = skillDraftRepository;
         this.coordinatorExecutor = coordinatorExecutor;
     }
 
@@ -167,6 +173,64 @@ public class SkillDraftController {
         } catch (RuntimeException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
+    }
+
+    // ───────────────────────────────────────────────────────────────────────
+    // SKILL-DASHBOARD-POLISH-V2.5 — alias endpoints under /api/skills/drafts/*
+    // FE migrated to the new path style (POST approve/reject + paged GET).
+    // Old PATCH /api/skill-drafts/{id} is preserved for V1 callers.
+    // ───────────────────────────────────────────────────────────────────────
+
+    /** Paged listing with optional status filter. */
+    @GetMapping("/skills/drafts")
+    public ResponseEntity<Map<String, Object>> listDraftsPaged(
+            @RequestParam(name = "userId", required = true) Long userId,
+            @RequestParam(name = "status", required = false) String status,
+            @RequestParam(name = "page", defaultValue = "1") int page,
+            @RequestParam(name = "pageSize", defaultValue = "20") int pageSize) {
+        int safePage = Math.max(1, page);
+        int safePageSize = Math.min(100, Math.max(1, pageSize));
+        // Spring Data is 0-indexed; FE-friendly 1-based input.
+        PageRequest pr = PageRequest.of(safePage - 1, safePageSize);
+        Page<SkillDraftEntity> result = (status != null && !status.isBlank())
+                ? skillDraftRepository.findByOwnerIdAndStatus(userId, status, pr)
+                : skillDraftRepository.findByOwnerId(userId, pr);
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("items", result.getContent().stream().map(this::toMap).collect(Collectors.toList()));
+        body.put("page", safePage);
+        body.put("pageSize", safePageSize);
+        body.put("total", result.getTotalElements());
+        body.put("totalPages", result.getTotalPages());
+        return ResponseEntity.ok(body);
+    }
+
+    /** Pending-count badge endpoint. */
+    @GetMapping("/skills/drafts/count")
+    public ResponseEntity<Map<String, Object>> draftsCount(
+            @RequestParam(name = "userId", required = true) Long userId,
+            @RequestParam(name = "status", defaultValue = "draft") String status) {
+        long count = skillDraftRepository.countByOwnerIdAndStatus(userId, status);
+        return ResponseEntity.ok(Map.of("count", count, "status", status));
+    }
+
+    /** POST alias for approve (delegates to PATCH reviewDraft with action='approve'). */
+    @PostMapping("/skills/drafts/{id}/approve")
+    public ResponseEntity<Map<String, Object>> approveAlias(
+            @PathVariable String id,
+            @RequestBody(required = false) Map<String, Object> body) {
+        Map<String, Object> req = body != null ? new LinkedHashMap<>(body) : new LinkedHashMap<>();
+        req.put("action", "approve");
+        return reviewDraft(id, req);
+    }
+
+    /** POST alias for reject (delegates to PATCH reviewDraft with action='discard'). */
+    @PostMapping("/skills/drafts/{id}/reject")
+    public ResponseEntity<Map<String, Object>> rejectAlias(
+            @PathVariable String id,
+            @RequestBody(required = false) Map<String, Object> body) {
+        Map<String, Object> req = body != null ? new LinkedHashMap<>(body) : new LinkedHashMap<>();
+        req.put("action", "discard");
+        return reviewDraft(id, req);
     }
 
     private Map<String, Object> toMap(SkillDraftEntity entity) {
