@@ -584,6 +584,36 @@ export interface SkillMdResponse {
 export const getSkillMd = (skillId: number, userId: number) =>
   api.get<SkillMdResponse>(`/skills/${skillId}/skill-md`, { params: { userId } });
 
+// V2.5 — generic file tree (recursive list under skillPath, .clawhub / _meta.json filtered).
+export interface SkillFileEntry {
+  path: string;        // relative to skillPath (forward-slash form)
+  size: number;
+  mtime?: string;
+}
+export interface SkillFilesResponse {
+  path: string;        // absolute skill dir
+  files: SkillFileEntry[];
+  error?: string;
+}
+export const getSkillFiles = (skillId: number | string, userId: number) =>
+  api.get<SkillFilesResponse>(`/skills/${skillId}/files`, { params: { userId } });
+
+export interface SkillFileContentResponse {
+  path: string;
+  content: string;
+  size?: number;
+  mtime?: string;
+  binary?: boolean;
+}
+export const getSkillFileContent = (
+  skillId: number | string,
+  filePath: string,
+  userId: number
+) =>
+  api.get<SkillFileContentResponse>(`/skills/${skillId}/files/content`, {
+    params: { path: filePath, userId },
+  });
+
 // ─── Skill Evolution (P1-4) ─────────────────────────────────────────────────
 
 export interface SkillEvolutionRun {

@@ -1,5 +1,5 @@
-import React, { useMemo, useState } from 'react';
-import { Tag, Tooltip, message, Drawer, Table, Button } from 'antd';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Tag, Tooltip, message, Drawer, Table, Button, Modal } from 'antd';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   evaluateSkill,
@@ -57,13 +57,8 @@ export const EvalHistoryPanel: React.FC<EvalHistoryPanelProps> = ({
 
   // Check if an evaluation was triggered very recently (within last 30s)
   const [recentlyTriggered, setRecentlyTriggered] = useState(false);
-  useEffect(() => {
-    if (evaluateMutation.isSuccess) {
-      setRecentlyTriggered(true);
-      const timer = setTimeout(() => setRecentlyTriggered(false), 5000);
-      return () => clearTimeout(timer);
-    }
-  }, [evaluateMutation.isSuccess]);
+  // V2.5 — Eval Detail modal state (replaces "Detail view coming soon" placeholder).
+  const [detailRecord, setDetailRecord] = useState<EvalHistoryEntry | null>(null);
   const latestVisual = visualForScore(latest?.compositeScore);
 
   const evaluateMutation = useMutation({
@@ -90,6 +85,15 @@ export const EvalHistoryPanel: React.FC<EvalHistoryPanelProps> = ({
       message.error(e.response?.data?.error || e.message || 'Failed to evaluate skill');
     },
   });
+
+  // After evaluateMutation is initialized, register the success-side-effect.
+  useEffect(() => {
+    if (evaluateMutation.isSuccess) {
+      setRecentlyTriggered(true);
+      const timer = setTimeout(() => setRecentlyTriggered(false), 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [evaluateMutation.isSuccess]);
 
   const disabled = evaluateMutation.isPending || !currentUserId || agentId == null;
   const disabledReason =
@@ -210,11 +214,11 @@ export const EvalHistoryPanel: React.FC<EvalHistoryPanelProps> = ({
                 title: 'Action',
                 key: 'action',
                 render: (_, record) => (
-                  <Button 
-                    type="link" 
-                    size="small" 
-                    icon={<EyeOutlined />} 
-                    onClick={() => { /* TODO: Open detail drawer for record.evalRunId */ message.info('Detail view coming soon'); }}
+                  <Button
+                    type="link"
+                    size="small"
+                    icon={<EyeOutlined />}
+                    onClick={() => setDetailRecord(record)}
                   >
                     Details
                   </Button>
@@ -224,6 +228,78 @@ export const EvalHistoryPanel: React.FC<EvalHistoryPanelProps> = ({
           />
         )}
       </div>
+
+      <Modal
+        title="Evaluation Detail"
+        open={detailRecord !== null}
+        onCancel={() => setDetailRecord(null)}
+        footer={[
+          <Button key="close" onClick={() => setDetailRecord(null)}>Close</Button>,
+        ]}
+        width={520}
+      >
+        {detailRecord && (() => {
+          const dims: Array<[string, number | null | undefined]> = [
+            ['Composite', detailRecord.compositeScore],
+            ['Quality', detailRecord.qualityScore],
+            ['Efficiency', detailRecord.efficiencyScore],
+            ['Latency', detailRecord.latencyScore],
+            ['Cost', detailRecord.costScore],
+          ];
+          return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                <div style={{ fontSize: 12, color: 'var(--fg-4, #8a8a93)' }}>
+                  {new Date(detailRecord.createdAt).toLocaleString()}
+                </div>
+                <Tag color={detailRecord.triggeredBy === 'manual' ? 'blue' : 'default'}>
+                  {detailRecord.triggeredBy}
+                </Tag>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                {dims.map(([label, val]) => {
+                  const visual = visualForScore(val ?? undefined);
+                  return (
+                    <div
+                      key={label}
+                      style={{
+                        padding: '10px 12px',
+                        background: 'var(--bg-hover, #1d1d22)',
+                        borderRadius: 6,
+                        borderLeft: `3px solid ${visual.color}`,
+                      }}
+                    >
+                      <div style={{ fontSize: 10, color: 'var(--fg-4, #8a8a93)', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                        {label}
+                      </div>
+                      <div style={{ fontSize: 22, fontWeight: 700, color: visual.color }}>
+                        {formatScore(val ?? undefined)}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {detailRecord.evalRunId ? (
+                <div style={{ fontSize: 11, color: 'var(--fg-4, #8a8a93)', fontFamily: 'var(--font-mono, monospace)' }}>
+                  evalRunId: {detailRecord.evalRunId}
+                </div>
+              ) : (
+                <div style={{ fontSize: 11, fontStyle: 'italic', color: 'var(--fg-4, #8a8a93)' }}>
+                  No eval run id (synthetic / manual baseline-only entry).
+                </div>
+              )}
+
+              <div style={{ fontSize: 11, color: 'var(--fg-4, #8a8a93)', lineHeight: 1.5 }}>
+                Per-scenario details (judge rationale / agent output) are available
+                via the EVAL framework once an evalRunId-linked detail endpoint is
+                wired (V3 follow-up).
+              </div>
+            </div>
+          );
+        })()}
+      </Modal>
     </div>
   );
 };

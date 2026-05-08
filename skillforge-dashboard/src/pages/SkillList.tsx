@@ -516,7 +516,6 @@ const SkillList: React.FC = () => {
                 
                 return Array.from(map.entries()).map(([name, versions]) => {
                   const primary = versions.find(v => v.enabled) || versions[0];
-                  const candidateCount = versions.filter(v => !v.enabled).length;
                   const totalVersions = versions.length;
                   const score = primary.latestEvalScore || 0;
                   const scoreColor = score >= 80 ? '#52c41a' : score >= 60 ? '#faad14' : '#ff4d4f';
@@ -628,17 +627,11 @@ const SkillList: React.FC = () => {
                           }}></span>
                           <span>{totalVersions} version{totalVersions > 1 ? 's' : ''}</span>
                         </div>
-                        {candidateCount > 0 && (
-                          <span style={{ 
-                            color: 'var(--accent-primary, #6366f1)', 
-                            fontWeight: 600,
-                            background: 'rgba(99, 102, 241, 0.1)',
-                            padding: '2px 8px',
-                            borderRadius: 12
-                          }}>
-                            {candidateCount} update{candidateCount > 1 ? 's' : ''} ready
-                          </span>
-                        )}
+                        {/* V2.5 — removed "X updates ready" badge per user 2026-05-08.
+                            It conflated disabled candidate / archived / broken / orphan
+                            rows under a single misleading "ready to promote" label.
+                            The flat version list inside the drawer shows the exact
+                            state per row. */}
                       </div>
                     </div>
                   );
@@ -663,6 +656,14 @@ const SkillList: React.FC = () => {
           currentUserId={currentUserId}
           sourceAgentId={selectedAgentId}
           onOpenSkill={openSkillById}
+          /* V2.5 — pass all rows that share this name so the drawer's left
+             pane shows a flat version list (orphans included). Falls back to
+             [open] if the parent never aggregates (defensive). */
+          siblingVersions={
+            open.system
+              ? undefined
+              : rows.filter(r => r.name === open.name)
+          }
         />
       )}
 

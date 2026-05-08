@@ -348,7 +348,7 @@ export const SkillAbPanel: React.FC<SkillAbPanelProps> = ({ skillId, agentId, sk
           
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
             <div>
-              <div style={{ fontSize: 10, color: 'var(--fg-3)', marginBottom: 4 }}>BASELINE (v{skill.semver})</div>
+              <div style={{ fontSize: 10, color: 'var(--fg-3)', marginBottom: 4 }}>BASELINE ({skill.semver?.startsWith('v') ? skill.semver : `v${skill.semver}`})</div>
               <div style={{ fontSize: 20, fontWeight: 700 }}>{formatPct(latest.baselinePassRate)}</div>
               <div style={{ fontSize: 10, color: 'var(--fg-4)' }}>Pass Rate</div>
             </div>
@@ -399,19 +399,40 @@ export const SkillAbPanel: React.FC<SkillAbPanelProps> = ({ skillId, agentId, sk
       )}
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 2, flexWrap: 'wrap' }}>
-        <button
-          className="btn-ghost-sf"
-          disabled={busy || agentId == null}
-          onClick={() => abMutation.mutate()}
-          style={{ fontSize: 11, padding: '3px 10px' }}
-          title={
-            agentId == null
-              ? 'Pick a source agent in the Skills header first'
-              : 'Fork this skill and launch an A/B test against the parent'
-          }
+        {/* Wrap in Antd Tooltip so the disabled-reason hint is visibly discoverable
+            (native `title` requires long hover and is easy to miss). When agentId
+            is null, also intercept clicks with message.warning so a single misclick
+            gets visible feedback instead of nothing. */}
+        <Tooltip
+          title={agentId == null ? 'Pick a source agent in the Skills header first' : ''}
         >
-          {busy ? 'Starting…' : 'Fork & A/B Test'}
-        </button>
+          <span style={{ display: 'inline-block' }}>
+            <button
+              className="btn-ghost-sf"
+              disabled={busy}
+              onClick={() => {
+                if (agentId == null) {
+                  message.warning('Pick a source agent in the Skills header before running A/B Test.');
+                  return;
+                }
+                abMutation.mutate();
+              }}
+              style={{
+                fontSize: 11,
+                padding: '3px 10px',
+                opacity: agentId == null ? 0.55 : 1,
+                cursor: agentId == null ? 'not-allowed' : 'pointer',
+              }}
+              title={
+                agentId == null
+                  ? 'Pick a source agent in the Skills header first'
+                  : 'Fork this skill and launch an A/B test against the parent'
+              }
+            >
+              {busy ? 'Starting…' : 'Fork & A/B Test'}
+            </button>
+          </span>
+        </Tooltip>
 
         {showManualPromote && (
           <button

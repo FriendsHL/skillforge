@@ -625,6 +625,142 @@ public class SkillController {
      *   <li>500 on transient I/O failure</li>
      * </ul>
      */
+    /**
+     * V2.5 — recursive file tree of the skill's package directory.
+     *
+     * <p>Skills are file packages (SKILL.md + scripts/ + references/ + assets/ + hooks/),
+     * not just a single .md. {@link #getSkillDetail} only collects a fixed set of names
+     * (SKILL.md, reference.md, docs/*.md, scripts/*); files under {@code references/} or
+     * {@code assets/} were silently dropped. This endpoint walks the directory generically.
+     *
+     * <p>Skips conventionally-internal artifacts: {@code .clawhub/}, {@code _meta.json},
+     * {@code .DS_Store}.
+     *
+     * <p>Response:
+     * <pre>{ "path": "/abs/skill/dir", "files": [ {"path": "SKILL.md", "size": 1234,
+     * "mtime": "2026-..."}, ... ] }</pre>
+     */
+    @GetMapping("/{id}/files")
+    public ResponseEntity<?> listSkillFiles(@PathVariable String id,
+                                            @RequestParam(value = "userId", required = false) Long userId) {
+        Path skillDir = resolveSkillDir(id, userId);
+        if (skillDir == null) {
+            return ResponseEntity.notFound().build();
+        }
+        if (!Files.isDirectory(skillDir)) {
+            return ResponseEntity.ok(Map.of(
+                    "path", skillDir.toString(),
+                    "files", List.of(),
+                    "error", "skill directory not found on disk"));
+        }
+        List<Map<String, Object>> files = new ArrayList<>();
+        try (java.util.stream.Stream<Path> stream = Files.walk(skillDir)) {
+            stream.filter(Files::isRegularFile)
+                    .filter(p -> {
+                        Path rel = skillDir.relativize(p);
+                        String first = rel.getNameCount() > 0 ? rel.getName(0).toString() : "";
+                        // Skip internal / metadata / OS junk.
+                        if (".clawhub".equals(first)) return false;
+                        String fileName = p.getFileName().toString();
+                        if ("_meta.json".equals(fileName) || ".DS_Store".equals(fileName)) return false;
+                        return true;
+                    })
+                    .sorted()
+                    .forEach(p -> {
+                        Map<String, Object> entry = new java.util.LinkedHashMap<>();
+                        entry.put("path", skillDir.relativize(p).toString().replace('\\', '/'));
+                        try {
+                            entry.put("size", Files.size(p));
+                        } catch (IOException ignored) {
+                            entry.put("size", -1L);
+                        }
+                        try {
+                            entry.put("mtime", Files.getLastModifiedTime(p).toInstant().toString());
+                        } catch (IOException ignored) {
+                            // mtime best-effort
+                        }
+                        files.add(entry);
+                    });
+        } catch (IOException e) {
+            return ResponseEntity.internalServerError()
+                    .body(Map.of("error", "Failed to walk skill dir: " + e.getMessage()));
+        }
+        return ResponseEntity.ok(Map.of(
+                "path", skillDir.toString(),
+                "files", files));
+    }
+
+    /**
+     * V2.5 — read content of a specific file inside the skill's package directory.
+     * Path traversal is rejected (file must resolve under skillDir).
+     *
+     * <p>Returns {@code {content, path, size, mtime}}.
+     */
+    @GetMapping("/{id}/files/content")
+    public ResponseEntity<?> readSkillFile(@PathVariable String id,
+                                           @RequestParam("path") String relPath,
+                                           @RequestParam(value = "userId", required = false) Long userId) {
+        Path skillDir = resolveSkillDir(id, userId);
+        if (skillDir == null) {
+            return ResponseEntity.notFound().build();
+        }
+        if (relPath == null || relPath.isBlank() || relPath.contains("..")) {
+            return ResponseEntity.badRequest().body(Map.of("error", "invalid path"));
+        }
+        Path target = skillDir.resolve(relPath).normalize();
+        if (!target.startsWith(skillDir)) {
+            return ResponseEntity.badRequest().body(Map.of("error", "path traversal rejected"));
+        }
+        if (!Files.exists(target) || !Files.isRegularFile(target)) {
+            return ResponseEntity.notFound().build();
+        }
+        try {
+            String content = Files.readString(target);
+            Map<String, Object> body = new java.util.LinkedHashMap<>();
+            body.put("path", relPath);
+            body.put("content", content);
+            body.put("size", Files.size(target));
+            try {
+                body.put("mtime", Files.getLastModifiedTime(target).toInstant().toString());
+            } catch (IOException ignored) {}
+            return ResponseEntity.ok(body);
+        } catch (java.nio.charset.MalformedInputException e) {
+            return ResponseEntity.ok(Map.of(
+                    "path", relPath,
+                    "content", "[Binary file — preview not supported]",
+                    "binary", true));
+        } catch (IOException e) {
+            return ResponseEntity.internalServerError()
+                    .body(Map.of("error", "Failed to read file: " + e.getMessage()));
+        }
+    }
+
+    /**
+     * Resolve skillDir for both numeric (user skill) and "system-X" (system skill) ids.
+     * Returns null when the id is invalid or the user lacks ownership.
+     */
+    private Path resolveSkillDir(String id, Long userId) {
+        if (id == null) return null;
+        if (id.startsWith("system-")) {
+            String name = id.substring("system-".length());
+            return skillRegistry.getSkillDefinition(name)
+                    .map(def -> def.getSkillPath() == null ? null : Path.of(def.getSkillPath()))
+                    .orElse(null);
+        }
+        try {
+            Long numericId = Long.parseLong(id);
+            SkillEntity entity = skillRepository.findById(numericId).orElse(null);
+            if (entity == null) return null;
+            if (entity.getOwnerId() != null && userId != null
+                    && !entity.getOwnerId().equals(userId) && !entity.isPublic()) {
+                return null;
+            }
+            return entity.getSkillPath() == null ? null : Path.of(entity.getSkillPath());
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
     @GetMapping("/{id}/skill-md")
     public ResponseEntity<?> getSkillMd(@PathVariable Long id,
                                         @RequestParam(value = "userId", required = false) Long userId) {
