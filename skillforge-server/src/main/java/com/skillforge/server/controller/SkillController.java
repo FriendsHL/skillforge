@@ -671,6 +671,77 @@ public class SkillController {
     }
 
     /**
+     * V2.5 manual edit — write SKILL.md content to a candidate skill's isolated
+     * skillPath. Gated to disabled candidates (parentSkillId != null && !enabled)
+     * so users can't bypass the A/B path by editing the active version directly.
+     *
+     * <p>After write, re-registers the candidate's SkillDefinition in SkillRegistry
+     * so subsequent A/B runs see the updated content.
+     *
+     * <p>Body: {@code { "content": "...", "userId": Long }}
+     */
+    @PutMapping("/{id}/skill-md")
+    public ResponseEntity<?> updateSkillMd(@PathVariable Long id,
+                                           @RequestBody Map<String, Object> body) {
+        SkillEntity entity = skillRepository.findById(id)
+                .orElse(null);
+        if (entity == null) {
+            return ResponseEntity.notFound().build();
+        }
+        if (entity.isSystem()) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of("error", "Cannot edit system skill SKILL.md"));
+        }
+        if (entity.getParentSkillId() == null || entity.isEnabled()) {
+            // Only editable on disabled candidates. Active rows must go through Fork &
+            // A/B Test → edit candidate → promote to avoid in-place changes that bypass
+            // evaluation. System and root rows are similarly off-limits.
+            return ResponseEntity.status(HttpStatus.CONFLICT)
+                    .body(Map.of("error",
+                            "SKILL.md edit only allowed on disabled candidate (parentSkillId != null && enabled=false). "
+                            + "Use Fork & A/B Test to create an editable candidate first."));
+        }
+        Long userId = body.get("userId") instanceof Number n ? n.longValue() : null;
+        if (entity.getOwnerId() != null && userId != null
+                && !entity.getOwnerId().equals(userId)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of("error", "forbidden"));
+        }
+        String content = body.get("content") instanceof String s ? s : null;
+        if (content == null) {
+            return ResponseEntity.badRequest().body(Map.of("error", "content (string) required"));
+        }
+        String skillPath = entity.getSkillPath();
+        if (skillPath == null || skillPath.isBlank()) {
+            return ResponseEntity.status(HttpStatus.CONFLICT)
+                    .body(Map.of("error", "Candidate has no skillPath. Re-fork from parent first."));
+        }
+        try {
+            Path dir = Path.of(skillPath);
+            Files.createDirectories(dir);
+            Path md = dir.resolve("SKILL.md");
+            Files.writeString(md, content);
+            // Re-register candidate's definition so SkillAbEvalService sees latest content.
+            try {
+                SkillDefinition def = skillService.buildSkillDefinitionFor(entity);
+                skillRegistry.registerSkillDefinition(def);
+            } catch (Exception e) {
+                // Registry refresh is best-effort; the file write is the canonical source.
+                // Caller will hit the new content next time SkillEvalService loads it.
+                // Log only.
+            }
+            return ResponseEntity.ok(Map.of(
+                    "ok", true,
+                    "id", entity.getId(),
+                    "path", md.toString(),
+                    "bytes", content.length()));
+        } catch (IOException e) {
+            return ResponseEntity.internalServerError()
+                    .body(Map.of("error", "Failed to write SKILL.md: " + e.getMessage()));
+        }
+    }
+
+    /**
      * SKILL-DASHBOARD-POLISH D — manual promote override. The auto-promote thresholds
      * (delta ≥ 15pp + candidate ≥ 40pp, see {@link SkillAbEvalService}) sometimes
      * reject candidates the operator wants to ship anyway; this endpoint reuses the

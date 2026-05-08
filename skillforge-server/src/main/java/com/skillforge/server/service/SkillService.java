@@ -157,23 +157,98 @@ public class SkillService {
     }
 
     /**
-     * 删除 Skill，包括文件和数据库记录。
+     * 删除 Skill — sibling-aware to avoid wiping out the active version when
+     * deleting a candidate / archived row that shares (ownerId, name) and/or
+     * skillPath with siblings.
+     *
+     * <p>Two pre-V2.5 bugs this method fixes:
+     * <ol>
+     *   <li><b>Bug A — Registry over-unregister</b>: the old code called
+     *       {@code skillRegistry.unregisterSkillDefinition(name)} unconditionally,
+     *       which removed the active sibling from the registry too (agent could no
+     *       longer dispatch the skill). Fix: when an enabled sibling remains,
+     *       re-register that sibling so the registry continues serving its
+     *       definition.</li>
+     *   <li><b>Bug B — Shared dir wipe</b>: {@link #forkSkill} (pre-V2.5) reused
+     *       the parent's skillPath, so deleting a "Fork &amp; A/B Test" candidate
+     *       physically removed the parent's SKILL.md directory. Fix: skip the
+     *       directory removal when any sibling row still references the same
+     *       path.</li>
+     * </ol>
      */
+    @Transactional
     public void deleteSkill(Long id) {
         SkillEntity entity = skillRepository.findById(id)
                 .orElseThrow(() -> new RuntimeException("Skill not found: " + id));
 
-        // 从 SkillRegistry 注销
-        skillRegistry.unregisterSkillDefinition(entity.getName());
+        // Enumerate siblings BEFORE the delete so we know which cleanup paths to skip.
+        List<SkillEntity> siblings = (entity.getOwnerId() != null && entity.getName() != null)
+                ? skillRepository.findByOwnerIdAndName(entity.getOwnerId(), entity.getName())
+                        .stream().filter(s -> !id.equals(s.getId())).toList()
+                : List.of();
+        SkillEntity activeSibling = siblings.stream()
+                .filter(SkillEntity::isEnabled)
+                .findFirst().orElse(null);
+        boolean dirSharedWithSibling = entity.getSkillPath() != null
+                && siblings.stream().anyMatch(s -> entity.getSkillPath().equals(s.getSkillPath()));
 
-        // 删除文件目录
-        if (entity.getSkillPath() != null) {
-            deleteDirectoryQuietly(Path.of(entity.getSkillPath()));
+        // Delete DB row first so registry / dir cleanup decisions reflect post-delete state.
+        skillRepository.deleteById(id);
+
+        // Bug A — registry handoff: only fully unregister when no enabled sibling
+        // remains. Otherwise re-register the sibling's definition so the registry
+        // continues to serve the skill name correctly.
+        if (activeSibling != null) {
+            try {
+                SkillDefinition def = activeSibling.getSkillPath() != null
+                        ? skillPackageLoader.loadFromDirectory(Path.of(activeSibling.getSkillPath()))
+                        : metadataOnlyDefinition(activeSibling);
+                skillRegistry.registerSkillDefinition(def);
+                log.info("Skill deleted: id={} name={} — re-registered active sibling id={} (skillPath={})",
+                        id, entity.getName(), activeSibling.getId(), activeSibling.getSkillPath());
+            } catch (Exception e) {
+                log.warn("Skill deleted: id={} name={} — failed to re-register active sibling id={}: {}",
+                        id, entity.getName(), activeSibling.getId(), e.getMessage());
+            }
+        } else {
+            skillRegistry.unregisterSkillDefinition(entity.getName());
+            log.info("Skill deleted: id={} name={} — no enabled sibling, unregistered name", id, entity.getName());
         }
 
-        // 删除数据库记录
-        skillRepository.deleteById(id);
-        log.info("Skill deleted: id={}, name={}", id, entity.getName());
+        // Bug B — physical dir cleanup: only when no other row references the same path.
+        if (entity.getSkillPath() != null && !dirSharedWithSibling) {
+            deleteDirectoryQuietly(Path.of(entity.getSkillPath()));
+        } else if (dirSharedWithSibling) {
+            log.info("Skill deleted: id={} name={} — kept dir={} (shared with sibling)",
+                    id, entity.getName(), entity.getSkillPath());
+        }
+    }
+
+    /** Fallback metadata-only SkillDefinition (used when sibling has no on-disk SKILL.md). */
+    private SkillDefinition metadataOnlyDefinition(SkillEntity skill) {
+        SkillDefinition def = new SkillDefinition();
+        def.setId(String.valueOf(skill.getId()));
+        def.setName(skill.getName());
+        def.setDescription(skill.getDescription());
+        return def;
+    }
+
+    /**
+     * Public helper for callers that need a {@link SkillDefinition} from a
+     * {@link SkillEntity} (e.g. SkillController's {@code PUT /skill-md} after
+     * writing user-edited content needs to re-register the registry entry).
+     * Tries on-disk SKILL.md first; falls back to metadata-only if missing.
+     */
+    public SkillDefinition buildSkillDefinitionFor(SkillEntity skill) {
+        if (skill.getSkillPath() != null) {
+            try {
+                return skillPackageLoader.loadFromDirectory(Path.of(skill.getSkillPath()));
+            } catch (IOException e) {
+                log.warn("buildSkillDefinitionFor: failed to load from {}, falling back to metadata: {}",
+                        skill.getSkillPath(), e.getMessage());
+            }
+        }
+        return metadataOnlyDefinition(skill);
     }
 
     /**
@@ -369,7 +444,6 @@ public class SkillService {
         SkillEntity child = new SkillEntity();
         child.setName(parent.getName());
         child.setDescription(parent.getDescription());
-        child.setSkillPath(parent.getSkillPath());
         child.setTriggers(parent.getTriggers());
         child.setRequiredTools(parent.getRequiredTools());
         child.setOwnerId(ownerId != null ? ownerId : parent.getOwnerId());
@@ -380,8 +454,42 @@ public class SkillService {
         child.setSemver(nextSemver(parent.getSemver()));
         child.setEnabled(false);
 
+        // Bug B fix — V2.5: allocate isolated skillPath + copy parent's SKILL.md so
+        // the candidate is physically independent. Two reasons:
+        //   1. delete v2 (candidate) used to wipe v1 (parent) shared dir
+        //   2. user manual edit on candidate must NOT corrupt parent's SKILL.md
+        // SkillEvolutionService used to override skillPath after forkSkill to work
+        // around this; that override is now redundant but harmless.
+        Path isolatedDir = null;
+        try {
+            String childIdPlaceholder = java.util.UUID.randomUUID().toString();
+            Long ownerForPath = child.getOwnerId() != null ? child.getOwnerId() : 0L;
+            isolatedDir = skillStorageService.allocate(SkillSource.EVOLUTION_FORK,
+                    AllocationContext.forEvolutionFork(
+                            String.valueOf(ownerForPath),
+                            String.valueOf(parentId),
+                            childIdPlaceholder));
+            // Copy parent SKILL.md content to isolated dir if parent has one.
+            if (parent.getSkillPath() != null) {
+                Path parentMd = Path.of(parent.getSkillPath(), "SKILL.md");
+                if (Files.exists(parentMd)) {
+                    Files.createDirectories(isolatedDir);
+                    Files.copy(parentMd, isolatedDir.resolve("SKILL.md"),
+                            java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                }
+            }
+            child.setSkillPath(isolatedDir.toString());
+        } catch (Exception e) {
+            log.warn("forkSkill: failed to allocate isolated dir for parent id={}, falling back to "
+                    + "shared path (delete safety still guarded by sibling-aware deleteSkill): {}",
+                    parentId, e.getMessage());
+            // Fallback to legacy shared path. Sibling-aware deleteSkill protects parent dir.
+            child.setSkillPath(parent.getSkillPath());
+        }
+
         SkillEntity saved = skillRepository.save(child);
-        log.info("Forked skill id={} (semver={}) from parent id={}", saved.getId(), saved.getSemver(), parentId);
+        log.info("Forked skill id={} (semver={}) from parent id={} into skillPath={}",
+                saved.getId(), saved.getSemver(), parentId, saved.getSkillPath());
         return saved;
     }
 

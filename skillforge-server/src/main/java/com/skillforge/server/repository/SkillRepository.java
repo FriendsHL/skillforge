@@ -27,6 +27,13 @@ public interface SkillRepository extends JpaRepository<SkillEntity, Long> {
      */
     Optional<SkillEntity> findFirstByOwnerIdAndNameAndEnabledTrue(Long ownerId, String name);
 
+    /**
+     * Bug A — sibling-aware delete needs to enumerate every (owner_id, name) row
+     * (regardless of enabled state) so deleteSkill can decide whether to
+     * unregister the SkillRegistry name or hand it off to a still-enabled row.
+     */
+    List<SkillEntity> findByOwnerIdAndName(Long ownerId, String name);
+
     List<SkillEntity> findBySource(String source);
 
     List<SkillEntity> findByParentSkillId(Long parentSkillId);
