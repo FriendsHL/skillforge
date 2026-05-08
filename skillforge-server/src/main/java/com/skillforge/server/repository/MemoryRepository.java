@@ -97,4 +97,24 @@ public interface MemoryRepository extends JpaRepository<MemoryEntity, Long> {
     @Query(value = "UPDATE t_memory SET embedding = CAST(:embedding AS vector) WHERE id = :id",
            nativeQuery = true)
     void updateEmbedding(@Param("id") Long id, @Param("embedding") String embedding);
+
+    /**
+     * MEMORY-DREAM-CONSOLIDATION: fetch (id, embedding text) for all ACTIVE memories of a user
+     * that have an embedding populated. Used by {@code MemoryConsolidator}'s pairwise dedup
+     * step. Returns embedding in pgvector text format (e.g. {@code "[0.1,0.2,...]"}); caller
+     * parses via {@link com.skillforge.server.util.VectorUtils#parseVectorString(String)}.
+     *
+     * <p>Skips rows where {@code embedding IS NULL} so callers never get nulls back; if
+     * pgvector is not installed in the cluster the {@code embedding} column itself will not
+     * exist and this query throws — the consolidator wraps the call in try/catch and
+     * gracefully skips dedup in that case.
+     */
+    @Query(value = """
+        SELECT id, embedding::text AS embedding_text
+        FROM t_memory
+        WHERE user_id = :userId
+          AND status = 'ACTIVE'
+          AND embedding IS NOT NULL
+        """, nativeQuery = true)
+    List<Object[]> findEmbeddingsForActiveByUser(@Param("userId") Long userId);
 }

@@ -1,5 +1,11 @@
 /* ============== SKILLS SURFACE ============== */
 
+/* Wide Drawer for Version Center */
+.sf-drawer--wide {
+  width: 1200px !important;
+  max-width: 90vw !important;
+}
+
 /* Skill grid cards */
 .skills-grid-sf {
   display: grid;

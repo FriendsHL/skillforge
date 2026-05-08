@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { message, Modal, Tooltip } from 'antd';
+import { message, Modal, Tooltip, Tag } from 'antd';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   forkSkill, startSkillAbTest, getSkillAbTests,
@@ -75,7 +75,9 @@ function abBadgeStyle(run: SkillAbRun): AbStatusBadgeStyle {
  * glyphs against each axis so the operator can see at a glance which
  * threshold drove the decision.
  */
-function badgeTooltipBody(run: SkillAbRun): React.ReactNode {
+function badgeTooltipBody(run: SkillAbRun | undefined): React.ReactNode {
+  if (!run) return 'No A/B run data available.';
+  
   if (run.status === 'FAILED') {
     return run.failureReason || 'A/B run failed without a recorded reason.';
   }
@@ -86,18 +88,19 @@ function badgeTooltipBody(run: SkillAbRun): React.ReactNode {
     return `Skipped: ${run.skipReason}`;
   }
   // COMPLETED branch — show threshold pass / fail breakdown.
-  const delta = run.deltaPassRate;
-  const cand = run.candidatePassRate;
-  const deltaPass = delta != null && delta >= PROMOTE_DELTA_THRESHOLD;
-  const candPass = cand != null && cand >= PROMOTE_CANDIDATE_FLOOR;
+  const delta = run.deltaPassRate ?? 0;
+  const cand = run.candidatePassRate ?? 0;
+  const deltaPass = delta >= PROMOTE_DELTA_THRESHOLD;
+  const candPass = cand >= PROMOTE_CANDIDATE_FLOOR;
+  
   return (
     <div style={{ fontFamily: 'var(--font-mono, monospace)', fontSize: 11.5, lineHeight: 1.55 }}>
       <div>
-        delta = {formatDeltaPp(delta)}{' '}
+        delta = {formatDeltaPp(run.deltaPassRate)}{' '}
         {deltaPass ? '≥ 15 ✓' : `< ${PROMOTE_DELTA_THRESHOLD} ✗`}
       </div>
       <div>
-        candidate = {formatPct(cand)}{' '}
+        candidate = {formatPct(run.candidatePassRate)}{' '}
         {candPass ? `≥ ${PROMOTE_CANDIDATE_FLOOR}% ✓` : `< ${PROMOTE_CANDIDATE_FLOOR}% ✗`}
       </div>
       {run.manuallyPromoted && (
@@ -264,16 +267,39 @@ export const SkillAbPanel: React.FC<SkillAbPanelProps> = ({ skillId, agentId, sk
         gap: 6,
       }}
     >
+      {/* A/B Test Status & Fork Info */}
+      <div style={{ marginBottom: 8 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+          <span style={{ fontWeight: 600, fontSize: 12, color: 'var(--fg-1)' }}>A/B Testing</span>
+          {latest && (
+            <Tooltip title={badgeTooltipBody(latest)}>
+              <Tag color={abBadgeStyle(latest).color}>{latest.status}</Tag>
+            </Tooltip>
+          )}
+        </div>
+        
+        {latest && latest.candidateSkillId && (
+          <div style={{ fontSize: 11, color: 'var(--fg-3)', marginBottom: 8 }}>
+            Comparing: <strong>v{skill.semver}</strong> vs <strong>Candidate #{latest.candidateSkillId}</strong>
+          </div>
+        )}
+
+        {latest?.status === 'RUNNING' && (
+          <div style={{ height: 4, background: 'var(--bg-hover)', borderRadius: 2, overflow: 'hidden', marginBottom: 8 }}>
+            <div style={{ width: '100%', height: '100%', background: 'var(--accent-primary, #6366f1)', animation: 'pulse 1.5s infinite' }}></div>
+          </div>
+        )}
+      </div>
+
       <div
         style={{
           display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
           fontSize: 11, color: 'var(--fg-4, #8a8a93)',
         }}
       >
-        <span style={{ fontWeight: 600, color: 'var(--fg-3, #a8a8b1)' }}>A/B test</span>
         {isLoading && <span>Loading…</span>}
         {isError && <span style={{ color: 'var(--color-err, #f0616d)' }}>Failed to load runs</span>}
-        {!isLoading && !isError && !latest && <span>No runs yet</span>}
+        {!isLoading && !isError && !latest && <span>No runs yet. Start one below.</span>}
         {latest && (() => {
           const s = abBadgeStyle(latest);
           const badgeEl = (
@@ -304,14 +330,47 @@ export const SkillAbPanel: React.FC<SkillAbPanelProps> = ({ skillId, agentId, sk
         })()}
       </div>
 
+      {/* Enhanced Comparison Dashboard */}
       {latest && (latest.baselinePassRate != null || latest.candidatePassRate != null) && (
-        <div
-          style={{
-            fontSize: 11, color: 'var(--fg-4, #8a8a93)',
-            fontFamily: 'var(--font-mono, monospace)',
-          }}
-        >
-          Baseline: {formatPct(latest.baselinePassRate)} · Candidate: {formatPct(latest.candidatePassRate)} · Δ {formatDeltaPp(latest.deltaPassRate)}
+        <div style={{ 
+          background: 'var(--bg-hover)', 
+          borderRadius: 8, 
+          padding: 16, 
+          marginTop: 8,
+          border: '1px solid var(--border-subtle)'
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12, fontSize: 12, fontWeight: 600 }}>
+            <span>Performance Comparison</span>
+            <span style={{ color: latest.deltaPassRate > 0 ? '#52c41a' : '#ff4d4f' }}>
+              Delta: {formatDeltaPp(latest.deltaPassRate)}
+            </span>
+          </div>
+          
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+            <div>
+              <div style={{ fontSize: 10, color: 'var(--fg-3)', marginBottom: 4 }}>BASELINE (v{skill.semver})</div>
+              <div style={{ fontSize: 20, fontWeight: 700 }}>{formatPct(latest.baselinePassRate)}</div>
+              <div style={{ fontSize: 10, color: 'var(--fg-4)' }}>Pass Rate</div>
+            </div>
+            <div>
+              <div style={{ fontSize: 10, color: 'var(--fg-3)', marginBottom: 4 }}>CANDIDATE (Fork)</div>
+              <div style={{ fontSize: 20, fontWeight: 700, color: '#6366f1' }}>{formatPct(latest.candidatePassRate)}</div>
+              <div style={{ fontSize: 10, color: 'var(--fg-4)' }}>Pass Rate</div>
+            </div>
+          </div>
+
+          {/* Progress Bar if Running */}
+          {latest.status === 'RUNNING' && (
+            <div style={{ marginTop: 12 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, marginBottom: 4 }}>
+                <span>Evaluation Progress</span>
+                <span>Processing...</span>
+              </div>
+              <div style={{ height: 4, background: 'var(--bg-base)', borderRadius: 2, overflow: 'hidden' }}>
+                <div style={{ width: '60%', height: '100%', background: '#6366f1', transition: 'width 0.5s' }}></div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

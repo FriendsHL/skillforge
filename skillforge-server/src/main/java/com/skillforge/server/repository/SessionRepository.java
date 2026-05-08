@@ -158,4 +158,23 @@ public interface SessionRepository extends JpaRepository<SessionEntity, String> 
               AND s.agentId IS NOT NULL
             """)
     List<Long> findDistinctAgentIdsWithRecentUserMessage(@Param("since") java.time.Instant since);
+
+    /**
+     * MEMORY-DREAM-CONSOLIDATION — userIds whose top-level sessions saw a real user
+     * message after {@code since}. Mirrors {@link #findDistinctAgentIdsWithRecentUserMessage}
+     * but at the user grain. Used by {@code MemoryConsolidationScheduler} to pick which
+     * users get a nightly memory consolidation pass.
+     *
+     * <p>"User activity" anchor: {@code lastUserMessageAt} (java.md footgun #2 — same INV
+     * as the agent variant: {@code updatedAt} is polluted by runtime status / smart-title
+     * writes and must NOT be used as an activity proxy).
+     */
+    @Query("""
+            SELECT DISTINCT s.userId FROM SessionEntity s
+            WHERE s.parentSessionId IS NULL
+              AND s.lastUserMessageAt IS NOT NULL
+              AND s.lastUserMessageAt >= :since
+              AND s.userId IS NOT NULL
+            """)
+    List<Long> findDistinctUserIdsWithRecentUserMessage(@Param("since") java.time.Instant since);
 }

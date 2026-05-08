@@ -36,6 +36,7 @@ public class MemoryProperties {
     private Extraction extraction = new Extraction();
     private Dedup dedup = new Dedup();
     private Eviction eviction = new Eviction();
+    private Consolidation consolidation = new Consolidation();
 
     public String getExtractionMode() {
         return extractionMode;
@@ -83,6 +84,14 @@ public class MemoryProperties {
 
     public void setEviction(Eviction eviction) {
         this.eviction = eviction != null ? eviction : new Eviction();
+    }
+
+    public Consolidation getConsolidation() {
+        return consolidation;
+    }
+
+    public void setConsolidation(Consolidation consolidation) {
+        this.consolidation = consolidation != null ? consolidation : new Consolidation();
     }
 
     public boolean isLlmMode() {
@@ -155,6 +164,39 @@ public class MemoryProperties {
 
         public void setCosineMergeThreshold(double cosineMergeThreshold) {
             this.cosineMergeThreshold = cosineMergeThreshold;
+        }
+    }
+
+    /**
+     * MEMORY-DREAM-CONSOLIDATION — knobs for the nightly cron driving
+     * {@link com.skillforge.server.memory.MemoryConsolidator#consolidate}.
+     */
+    public static class Consolidation {
+        /** Window for picking active users (sessions with a user message inside this period). */
+        private int activeUserLookbackDays = 7;
+
+        /**
+         * Mirrors the {@code skillforge.memory.consolidation.scheduled-enabled} property
+         * read directly by {@link com.skillforge.server.memory.MemoryConsolidationScheduler}
+         * via {@code @Value}. Held here so the bag of nested properties stays binding-safe
+         * (otherwise Spring would warn about an unknown {@code scheduled-enabled} key).
+         */
+        private boolean scheduledEnabled = true;
+
+        public int getActiveUserLookbackDays() {
+            return activeUserLookbackDays;
+        }
+
+        public void setActiveUserLookbackDays(int activeUserLookbackDays) {
+            this.activeUserLookbackDays = activeUserLookbackDays;
+        }
+
+        public boolean isScheduledEnabled() {
+            return scheduledEnabled;
+        }
+
+        public void setScheduledEnabled(boolean scheduledEnabled) {
+            this.scheduledEnabled = scheduledEnabled;
         }
     }
 

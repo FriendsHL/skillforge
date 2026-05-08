@@ -202,6 +202,12 @@ skillforge:
       archive-after-days: 60
       delete-after-days: 90
       max-active-per-user: 1500
+    # MEMORY-DREAM-CONSOLIDATION — nightly cron driven by MemoryConsolidationScheduler
+    consolidation:
+      # window for picking active users (sessions with a user message in this period)
+      active-user-lookback-days: 7
+      # gate the cron without restart; default true
+      scheduled-enabled: true
 
   # Embedding provider for memory vector search (disabled by default for dev)
   embedding:

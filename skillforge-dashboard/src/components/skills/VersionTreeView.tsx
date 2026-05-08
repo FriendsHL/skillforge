@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { Spin, Tag } from 'antd';
+import { Spin, Tag, Tooltip } from 'antd';
 import { useQuery } from '@tanstack/react-query';
 import {
   getSkillVersionTree,
@@ -10,12 +10,14 @@ import {
 interface VersionTreeViewProps {
   skillId: number;
   userId: number;
+  currentLiveId?: number; // The ID of the version currently used by agents
   /**
    * V2 §I — clicking a sibling/parent node's "Open" link should swap the
    * drawer's `currentSkillId`. The page-level state owner passes this in.
    * If omitted, "Open" renders as plain text (fallback when the parent
    * can't switch drawers — see SkillDrawer comments).
    */
+  onPreview?: (skillId: number) => void;
   onOpenSkill?: (skillId: number) => void;
 }
 
@@ -97,8 +99,10 @@ const formatDate = (iso: string | undefined): string => {
 
 const Row: React.FC<{
   node: RenderableNode;
+  currentLiveId?: number;
+  onView?: (skillId: number) => void;
   onOpenSkill?: (skillId: number) => void;
-}> = React.memo(({ node, onOpenSkill }) => {
+}> = React.memo(({ node, currentLiveId, onView, onOpenSkill }) => {
   const isCurrent = node.bucket === 'current';
   const indent = node.depth * 18;
   return (
@@ -126,64 +130,62 @@ const Row: React.FC<{
       <span style={{ opacity: 0.5, width: 16, flexShrink: 0 }}>
         {node.depth > 0 ? '└─' : '▶'}
       </span>
-      <span style={{ fontWeight: isCurrent ? 600 : 500 }}>
-        {node.semver ?? `#${node.id}`}
-      </span>
-      <span style={{ opacity: 0.7 }}>·</span>
-      <span style={{ opacity: 0.85 }}>{node.name}</span>
-      <span style={{ opacity: 0.7 }}>·</span>
-      <Tag
-        color={node.enabled ? 'green' : 'default'}
-        style={{ marginInlineEnd: 0, textTransform: 'lowercase', fontSize: 10 }}
+      <div 
+        style={{ 
+          display: 'flex', 
+          alignItems: 'center', 
+          gap: 8, 
+          flex: 1, 
+          minWidth: 0,
+          cursor: 'pointer',
+          padding: '4px 8px',
+          borderRadius: 6,
+          background: isCurrent ? 'rgba(99, 102, 241, 0.1)' : 'transparent',
+          border: isCurrent ? '1px solid rgba(99, 102, 241, 0.3)' : '1px solid transparent'
+        }}
+        onClick={() => {
+          if (onView) onView(node.id);
+          else if (onOpenSkill) onOpenSkill(node.id);
+        }}
       >
-        {node.enabled ? 'enabled' : 'disabled'}
-      </Tag>
-      {node.createdAt && (
-        <>
-          <span style={{ opacity: 0.7 }}>·</span>
-          <span style={{ opacity: 0.7 }}>{formatDate(node.createdAt)}</span>
-        </>
-      )}
-      <span style={{ opacity: 0.7 }}>·</span>
-      <span>score {formatScore(node.latestScore)}</span>
+        {/* Version Number */}
+        <span style={{ 
+          fontWeight: isCurrent ? 700 : 600, 
+          fontFamily: 'monospace', 
+          fontSize: 13, 
+          whiteSpace: 'nowrap',
+          color: isCurrent ? 'var(--accent-primary, #6366f1)' : 'inherit'
+        }}>
+          {node.semver?.startsWith('v') ? node.semver : `v${node.semver ?? node.id}`}
+        </span>
 
-      {isCurrent && (
-        <span
-          style={{
-            marginLeft: 6,
-            color: 'var(--accent-primary, #6366f1)',
-            fontWeight: 600,
-          }}
-        >
-          ← current
+        {/* Live Badge - The only indicator needed for "Agent is using this" */}
+        {node.enabled && (
+          <span style={{ 
+            fontSize: 9, 
+            padding: '1px 6px', 
+            borderRadius: 10, 
+            background: '#52c41a', 
+            color: '#fff', 
+            fontWeight: 700,
+            letterSpacing: 0.5
+          }}>
+            LIVE
+          </span>
+        )}
+
+        {/* Skill Name (Truncated) */}
+        <span style={{ 
+          fontSize: 11, 
+          color: 'var(--fg-3)', 
+          overflow: 'hidden', 
+          textOverflow: 'ellipsis', 
+          whiteSpace: 'nowrap',
+          marginLeft: 4
+        }}>
+          {node.name}
         </span>
-      )}
-      {!isCurrent && onOpenSkill && (
-        <button
-          type="button"
-          className="sf-mini-btn"
-          style={{
-            marginLeft: 'auto',
-            fontSize: 10,
-            padding: '2px 8px',
-          }}
-          onClick={() => onOpenSkill(node.id)}
-          data-testid={`version-tree-open-${node.id}`}
-        >
-          Open
-        </button>
-      )}
-      {!isCurrent && !onOpenSkill && (
-        <span
-          style={{
-            marginLeft: 'auto',
-            fontSize: 10,
-            opacity: 0.6,
-          }}
-        >
-          #{node.id}
-        </span>
-      )}
+      </div>
     </div>
   );
 });
@@ -197,7 +199,7 @@ Row.displayName = 'VersionTreeRow';
  * versions" caption (instead of leaving the tab blank).
  */
 export const VersionTreeView: React.FC<VersionTreeViewProps> = React.memo(
-  ({ skillId, userId, onOpenSkill }) => {
+  ({ skillId, userId, currentLiveId, onView, onOpenSkill }) => {
     const { data, isLoading, isError, error } = useQuery<SkillVersionTreeResponse>({
       queryKey: ['skill-version-tree', skillId, userId],
       queryFn: () => getSkillVersionTree(skillId, userId).then((r) => r.data),
@@ -264,6 +266,8 @@ export const VersionTreeView: React.FC<VersionTreeViewProps> = React.memo(
             <Row
               key={`${node.bucket}-${node.id}`}
               node={node}
+              currentLiveId={currentLiveId}
+              onView={onView}
               onOpenSkill={onOpenSkill}
             />
           ))}

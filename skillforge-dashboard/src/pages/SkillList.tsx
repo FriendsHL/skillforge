@@ -505,9 +505,145 @@ const SkillList: React.FC = () => {
             <div className="sf-empty-state">No skills match your filters.</div>
           ) : view === 'grid' ? (
             <div className="skills-grid-sf">
-              {rows.map(s => (
-                <SkillCard key={s.id} skill={s} onClick={() => openDetail(s)} />
-              ))}
+              {/* SKILL-DASHBOARD-POLISH: Aggregate by name to avoid duplicates */}
+              {(() => {
+                const map = new Map<string, SkillRow[]>();
+                rows.forEach(s => {
+                  const key = s.name.trim();
+                  if (!map.has(key)) map.set(key, []);
+                  map.get(key)!.push(s);
+                });
+                
+                return Array.from(map.entries()).map(([name, versions]) => {
+                  const primary = versions.find(v => v.enabled) || versions[0];
+                  const candidateCount = versions.filter(v => !v.enabled).length;
+                  const totalVersions = versions.length;
+                  const score = primary.latestEvalScore || 0;
+                  const scoreColor = score >= 80 ? '#52c41a' : score >= 60 ? '#faad14' : '#ff4d4f';
+                  
+                  return (
+                    <div 
+                      key={name}
+                      className="skill-card-aggregate"
+                      onClick={() => openDetail(primary)}
+                      style={{
+                        // Use the project's standard surface variable for theme consistency
+                        background: 'var(--bg-surface)', 
+                        border: '1px solid var(--border-subtle, #e5e7eb)',
+                        color: 'var(--fg-1)',
+                        boxShadow: 'var(--shadow-sm, 0 1px 3px rgba(0,0,0,0.1))',
+                        borderRadius: 16,
+                        padding: 24,
+                        cursor: 'pointer',
+                        transition: 'all 0.3s ease',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 16,
+                        position: 'relative',
+                        overflow: 'hidden'
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.transform = 'translateY(-4px)';
+                        e.currentTarget.style.borderColor = 'var(--accent-primary, #6366f1)';
+                        e.currentTarget.style.boxShadow = '0 12px 32px rgba(99, 102, 241, 0.15)';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.transform = 'none';
+                        e.currentTarget.style.borderColor = 'var(--border-subtle, #e5e7eb)';
+                        e.currentTarget.style.boxShadow = 'var(--shadow-sm, 0 1px 3px rgba(0,0,0,0.1))';
+                      }}
+                    >
+                      {/* Header: Name & Status */}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+                          <h3 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: 'var(--fg-1)', lineHeight: 1.3, wordBreak: 'break-word' }}>
+                            {name}
+                          </h3>
+                          {primary.enabled ? (
+                            <span style={{ flexShrink: 0, fontSize: 10, padding: '2px 8px', borderRadius: 12, background: 'rgba(82, 196, 26, 0.15)', color: '#52c41a', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                              LIVE
+                            </span>
+                          ) : (
+                            <span style={{ flexShrink: 0, fontSize: 10, padding: '2px 8px', borderRadius: 12, background: 'rgba(138, 138, 147, 0.15)', color: '#8a8a93', whiteSpace: 'nowrap' }}>
+                              DISABLED
+                            </span>
+                          )}
+                        </div>
+                        
+                        {/* Tool Badges Row */}
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                          {(() => {
+                            const textContent = (primary.skillMd || primary.description || '').toLowerCase();
+                            const tools = [];
+                            
+                            // 1. Check for explicit tool schema
+                            if (primary.toolSchema && typeof primary.toolSchema === 'object') {
+                              tools.push('Custom Tool');
+                            }
+                            
+                            // 2. Keyword detection in description or markdown
+                            if (textContent.includes('bash') || textContent.includes('shell') || textContent.includes('command')) tools.push('Bash');
+                            if (textContent.includes('python') || textContent.includes('script')) tools.push('Python');
+                            if (textContent.includes('web') || textContent.includes('browser') || textContent.includes('search')) tools.push('Web');
+                            if (textContent.includes('file') || textContent.includes('read') || textContent.includes('write')) tools.push('File Ops');
+                            
+                            // Fallback if no specific tool found but it's a complex skill
+                            if (tools.length === 0 && primary.toolSchema) tools.push('Advanced');
+
+                            return tools.slice(0, 3).map((t, i) => (
+                              <span key={i} style={{ 
+                                fontSize: 10, padding: '2px 8px', borderRadius: 4, 
+                                background: 'var(--bg-hover)', 
+                                color: 'var(--fg-3)', border: '1px solid var(--border-subtle)',
+                                fontWeight: 500
+                              }}>
+                                {t}
+                              </span>
+                            ));
+                          })()}
+                        </div>
+                      </div>
+
+                      {/* Description */}
+                      <p style={{ margin: 0, fontSize: 13, color: 'var(--fg-2)', lineHeight: 1.6, flex: 1, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                        {primary.description || 'No description provided.'}
+                      </p>
+
+                      {/* Footer: Version Info & Status */}
+                      <div style={{ 
+                        display: 'flex', 
+                        justifyContent: 'space-between', 
+                        alignItems: 'center', 
+                        paddingTop: 16,
+                        borderTop: '1px solid var(--border-subtle, #e5e7eb)',
+                        fontSize: 12, 
+                        color: 'var(--fg-3, #8a8a93)' 
+                      }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <span style={{ 
+                            width: 6, 
+                            height: 6, 
+                            borderRadius: '50%', 
+                            background: totalVersions > 1 ? 'var(--accent-primary, #6366f1)' : 'var(--fg-4, #d1d5db)' 
+                          }}></span>
+                          <span>{totalVersions} version{totalVersions > 1 ? 's' : ''}</span>
+                        </div>
+                        {candidateCount > 0 && (
+                          <span style={{ 
+                            color: 'var(--accent-primary, #6366f1)', 
+                            fontWeight: 600,
+                            background: 'rgba(99, 102, 241, 0.1)',
+                            padding: '2px 8px',
+                            borderRadius: 12
+                          }}>
+                            {candidateCount} update{candidateCount > 1 ? 's' : ''} ready
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                });
+              })()}
             </div>
           ) : (
             <SkillTable rows={rows} onOpenDetail={openDetail} histories={skillHistories} />

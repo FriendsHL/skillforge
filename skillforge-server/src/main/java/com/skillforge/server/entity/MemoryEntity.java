@@ -55,6 +55,14 @@ public class MemoryEntity {
     private Instant archivedAt;
 
     /**
+     * MEMORY-DREAM-CONSOLIDATION: tracking why this memory was archived
+     * ({@code expired_ttl} / {@code capacity_demote} / {@code dedup_merge_with_<id>}).
+     * Nullable — legacy rows archived before V66 keep NULL.
+     */
+    @Column(name = "archived_reason", length = 128)
+    private String archivedReason;
+
+    /**
      * Importance promoted from the legacy {@code tags = "importance:*"} CSV token
      * to a dedicated column. Default 'medium' matches the legacy fallback.
      */
@@ -163,6 +171,14 @@ public class MemoryEntity {
 
     public void setArchivedAt(Instant archivedAt) {
         this.archivedAt = archivedAt;
+    }
+
+    public String getArchivedReason() {
+        return archivedReason;
+    }
+
+    public void setArchivedReason(String archivedReason) {
+        this.archivedReason = archivedReason;
     }
 
     public String getImportance() {
