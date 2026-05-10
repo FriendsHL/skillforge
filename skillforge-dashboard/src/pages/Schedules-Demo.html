@@ -1,0 +1,1010 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Schedules Page Demo</title>
+  <style>
+    :root {
+      --bg-base: #faf9f7;
+      --bg-surface: #fff;
+      --bg-hover: #f5f3f0;
+      --fg-1: #1a1817;
+      --fg-2: #4a4642;
+      --fg-3: #7a7570;
+      --fg-4: #a8a3a0;
+      --border-1: #e8e4e0;
+      --border-2: #d4d0cc;
+      --accent: #6366f1;
+      --accent-muted: rgba(99, 102, 241, 0.08);
+      --color-ok: #5c8a4a;
+      --color-warn: #d49a3a;
+      --color-err: #b84147;
+      --font-serif: "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      --font-mono: "SF Mono", "Fira Code", "Consolas", monospace;
+      --font-size-sm: 13px;
+      --font-size-xs: 11px;
+      --radius-sm: 6px;
+      --radius-md: 8px;
+      --radius-lg: 12px;
+      --radius-pill: 999px;
+      --sp-4: 12px;
+      --sp-5: 16px;
+      --sp-6: 20px;
+      --sp-8: 24px;
+      --transition-base: 0.15s ease;
+      --text-on-accent: #fff;
+    }
+
+    [data-theme="dark"] {
+      --bg-base: #1a1a1e;
+      --bg-surface: #252529;
+      --bg-hover: #2a2a2e;
+      --fg-1: #f0f0f2;
+      --fg-2: #c0c0c2;
+      --fg-3: #909092;
+      --fg-4: #606062;
+      --border-1: #353538;
+      --border-2: #454548;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: var(--font-serif);
+      background: var(--bg-base);
+      color: var(--fg-1);
+      line-height: 1.5;
+    }
+
+    /* Page container */
+    .sched-page {
+      padding: var(--sp-6) var(--sp-8);
+      max-width: 1400px;
+      margin: 0 auto;
+    }
+
+    /* Header */
+    .sched-head {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      margin-bottom: var(--sp-6);
+      gap: var(--sp-4);
+    }
+
+    .sched-head-title {
+      font-family: var(--font-serif);
+      font-size: 28px;
+      font-weight: 500;
+      letter-spacing: -0.02em;
+      color: var(--fg-1);
+      margin: 0 0 4px 0;
+      line-height: 1.2;
+    }
+
+    .sched-head-sub {
+      color: var(--fg-3);
+      font-size: var(--font-size-sm);
+      margin: 0;
+    }
+
+    .sched-btn-add {
+      border: 0;
+      background: var(--accent);
+      color: var(--text-on-accent);
+      font: inherit;
+      font-weight: 500;
+      padding: 8px 16px;
+      border-radius: var(--radius-md);
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      font-size: var(--font-size-sm);
+      transition: filter var(--transition-base);
+    }
+
+    .sched-btn-add:hover { filter: brightness(0.94); }
+
+    /* Stats bar */
+    .sched-stats-bar {
+      display: flex;
+      gap: 12px;
+      margin-bottom: var(--sp-5);
+    }
+
+    .sched-stat-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 14px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-1);
+      border-radius: var(--radius-md);
+      font-size: var(--font-size-sm);
+    }
+
+    .sched-stat-icon {
+      width: 18px;
+      height: 18px;
+      color: var(--fg-3);
+    }
+
+    .sched-stat-count {
+      font-family: var(--font-mono);
+      font-size: 16px;
+      font-weight: 500;
+      color: var(--fg-1);
+    }
+
+    .sched-stat-label {
+      color: var(--fg-3);
+      font-size: 12px;
+    }
+
+    /* Table */
+    .sched-table-wrap {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-1);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+    }
+
+    .sched-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: var(--font-size-sm);
+    }
+
+    .sched-table thead th {
+      background: var(--bg-base);
+      text-align: left;
+      font-family: var(--font-mono);
+      font-size: 10.5px;
+      font-weight: 600;
+      color: var(--fg-4);
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border-1);
+    }
+
+    .sched-table tbody tr {
+      cursor: pointer;
+      transition: background var(--transition-base);
+    }
+
+    .sched-table tbody tr:hover { background: var(--bg-hover); }
+    .sched-table tbody td {
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border-1);
+      vertical-align: middle;
+    }
+
+    .sched-table tbody tr:last-child td { border-bottom: 0; }
+
+    /* Name cell */
+    .sched-name-cell {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .sched-name-icon {
+      width: 36px;
+      height: 36px;
+      background: var(--accent-muted);
+      border-radius: var(--radius-md);
+      display: grid;
+      place-items: center;
+      color: var(--accent);
+      flex-shrink: 0;
+    }
+
+    .sched-name-icon svg {
+      width: 18px;
+      height: 18px;
+    }
+
+    .sched-name-text {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .sched-name-main {
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--fg-1);
+    }
+
+    .sched-name-id {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      color: var(--fg-4);
+    }
+
+    /* Agent cell */
+    .sched-agent-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      background: rgba(92, 138, 74, 0.08);
+      border: 1px solid rgba(92, 138, 74, 0.15);
+      border-radius: var(--radius-sm);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: #4a7a3c;
+    }
+
+    .sched-agent-badge svg {
+      width: 12px;
+      height: 12px;
+    }
+
+    /* Trigger cell - the hero */
+    .sched-trigger-cell {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .sched-trigger-type {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-family: var(--font-mono);
+      font-size: 10px;
+      font-weight: 500;
+      letter-spacing: 0.08em;
+      padding: 3px 8px;
+      border-radius: var(--radius-pill);
+      text-transform: uppercase;
+    }
+
+    .sched-trigger-type.cron {
+      background: rgba(99, 102, 241, 0.12);
+      color: #5a5aaa;
+    }
+
+    .sched-trigger-type.oneshot {
+      background: rgba(168, 99, 102, 0.12);
+      color: #8a5a5a;
+    }
+
+    .sched-trigger-expr {
+      font-family: var(--font-mono);
+      font-size: 13px;
+      color: var(--fg-1);
+      background: var(--bg-base);
+      padding: 4px 8px;
+      border-radius: var(--radius-sm);
+      display: inline-block;
+    }
+
+    .sched-trigger-hint {
+      font-size: 11px;
+      color: var(--fg-4);
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    /* Time cell */
+    .sched-time-cell {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .sched-time-main {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      color: var(--fg-1);
+    }
+
+    .sched-time-relative {
+      font-size: 11px;
+      color: var(--fg-3);
+    }
+
+    .sched-time-relative.soon {
+      color: var(--color-warn);
+      font-weight: 500;
+    }
+
+    .sched-time-empty {
+      color: var(--fg-4);
+      font-size: 12px;
+    }
+
+    /* Status pill */
+    .sched-status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-family: var(--font-mono);
+      font-size: 10.5px;
+      font-weight: 500;
+      padding: 4px 10px;
+      border-radius: var(--radius-pill);
+      letter-spacing: 0.04em;
+    }
+
+    .sched-status-pill.idle {
+      background: var(--bg-hover);
+      color: var(--fg-3);
+      border: 1px solid var(--border-1);
+    }
+
+    .sched-status-pill.running {
+      background: rgba(99, 102, 241, 0.12);
+      color: #5a5aaa;
+      border: 1px solid rgba(99, 102, 241, 0.2);
+    }
+
+    .sched-status-pill.success {
+      background: rgba(92, 138, 74, 0.12);
+      color: #4a7a3c;
+      border: 1px solid rgba(92, 138, 74, 0.2);
+    }
+
+    .sched-status-pill.failed {
+      background: rgba(180, 60, 60, 0.12);
+      color: #8a3030;
+      border: 1px solid rgba(180, 60, 60, 0.2);
+    }
+
+    .sched-status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+
+    .sched-status-pill.running .sched-status-dot {
+      animation: pulse 1.5s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    /* Toggle */
+    .sched-toggle-wrap {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .sched-switch {
+      width: 36px;
+      height: 20px;
+      background: var(--border-2);
+      border-radius: 10px;
+      cursor: pointer;
+      position: relative;
+      transition: background var(--transition-base);
+    }
+
+    .sched-switch.on { background: var(--color-ok); }
+
+    .sched-switch::after {
+      content: '';
+      position: absolute;
+      width: 16px;
+      height: 16px;
+      background: #fff;
+      border-radius: 50%;
+      top: 2px;
+      left: 2px;
+      transition: left var(--transition-base);
+    }
+
+    .sched-switch.on::after { left: 18px; }
+
+    /* Actions */
+    .sched-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      justify-content: flex-end;
+    }
+
+    .sched-btn-action {
+      border: 1px solid var(--border-1);
+      background: var(--bg-surface);
+      color: var(--fg-3);
+      font: inherit;
+      font-size: var(--font-size-xs);
+      padding: 5px 10px;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      transition: all var(--transition-base);
+    }
+
+    .sched-btn-action:hover {
+      color: var(--fg-1);
+      border-color: var(--border-2);
+      background: var(--bg-hover);
+    }
+
+    .sched-btn-action.run:hover {
+      color: var(--accent);
+      border-color: rgba(99, 102, 241, 0.3);
+    }
+
+    .sched-btn-action.history:hover {
+      color: #4a7a3c;
+      border-color: rgba(92, 138, 74, 0.3);
+    }
+
+    .sched-btn-action.delete:hover {
+      color: var(--color-err);
+      border-color: rgba(180, 60, 60, 0.3);
+    }
+
+    .sched-btn-action svg {
+      width: 12px;
+      height: 12px;
+    }
+
+    /* Empty state */
+    .sched-empty {
+      padding: 48px 24px;
+      text-align: center;
+    }
+
+    .sched-empty-icon {
+      width: 56px;
+      height: 56px;
+      margin: 0 auto 16px;
+      background: var(--bg-hover);
+      border-radius: var(--radius-lg);
+      display: grid;
+      place-items: center;
+      color: var(--fg-4);
+    }
+
+    .sched-empty-icon svg {
+      width: 24px;
+      height: 24px;
+    }
+
+    .sched-empty-title {
+      font-size: 15px;
+      font-weight: 500;
+      color: var(--fg-2);
+      margin: 0 0 6px;
+    }
+
+    .sched-empty-desc {
+      font-size: var(--font-size-sm);
+      color: var(--fg-4);
+      margin: 0 0 20px;
+    }
+
+    /* Icons */
+    .icon-clock {
+      stroke-width: 1.5;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      fill: none;
+      stroke: currentColor;
+    }
+
+    .icon-agent {
+      stroke-width: 1.5;
+      stroke-linecap: round;
+      fill: none;
+      stroke: currentColor;
+    }
+  </style>
+</head>
+<body>
+  <div class="sched-page">
+    <!-- Header -->
+    <header class="sched-head">
+      <div>
+        <h1 class="sched-head-title">Scheduled Tasks</h1>
+        <p class="sched-head-sub">Cron-based or one-shot agent triggers. Auto-restored on app restart.</p>
+      </div>
+      <button class="sched-btn-add">
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+          <path d="M8 3v10M3 8h10"/>
+        </svg>
+        New schedule
+      </button>
+    </header>
+
+    <!-- Stats bar -->
+    <div class="sched-stats-bar">
+      <div class="sched-stat-item">
+        <svg class="sched-stat-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <circle cx="12" cy="12" r="10"/>
+          <path d="M12 6v6l4 2"/>
+        </svg>
+        <span class="sched-stat-count">5</span>
+        <span class="sched-stat-label">active</span>
+      </div>
+      <div class="sched-stat-item">
+        <svg class="sched-stat-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <rect x="3" y="4" width="18" height="18" rx="2"/>
+          <path d="M16 2v4M8 2v4M3 10h18"/>
+        </svg>
+        <span class="sched-stat-count">3</span>
+        <span class="sched-stat-label">cron</span>
+      </div>
+      <div class="sched-stat-item">
+        <svg class="sched-stat-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <circle cx="12" cy="12" r="4"/>
+          <path d="M12 2v2M12 20v2M2 12h2M20 12h2"/>
+        </svg>
+        <span class="sched-stat-count">2</span>
+        <span class="sched-stat-label">one-shot</span>
+      </div>
+      <div class="sched-stat-item">
+        <svg class="sched-stat-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M22 11.08V12a10 10 0 11-5.93-9.14"/>
+          <path d="M22 4L12 14.01l-3-3"/>
+        </svg>
+        <span class="sched-stat-count">128</span>
+        <span class="sched-stat-label">runs</span>
+      </div>
+    </div>
+
+    <!-- Table -->
+    <div class="sched-table-wrap">
+      <table class="sched-table">
+        <thead>
+          <tr>
+            <th style="padding-left: 20px;">Task</th>
+            <th>Agent</th>
+            <th>Trigger</th>
+            <th>Next fire</th>
+            <th>Last fire</th>
+            <th>Status</th>
+            <th>Enabled</th>
+            <th style="text-align: right; padding-right: 20px;">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          <!-- Row 1: Cron, running -->
+          <tr>
+            <td style="padding-left: 20px;">
+              <div class="sched-name-cell">
+                <div class="sched-name-icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <circle cx="12" cy="12" r="10"/>
+                    <path d="M12 6v6l4 2"/>
+                  </svg>
+                </div>
+                <div class="sched-name-text">
+                  <span class="sched-name-main">Daily Summary Report</span>
+                  <span class="sched-name-id">#42</span>
+                </div>
+              </div>
+            </td>
+            <td>
+              <span class="sched-agent-badge">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                  <rect x="3" y="4" width="18" height="6" rx="2"/>
+                  <rect x="3" y="14" width="18" height="6" rx="2"/>
+                  <circle cx="7" cy="7" r="1" fill="currentColor"/>
+                  <circle cx="7" cy="17" r="1" fill="currentColor"/>
+                </svg>
+                Reporter Agent
+              </span>
+            </td>
+            <td>
+              <div class="sched-trigger-cell">
+                <span class="sched-trigger-type cron">cron</span>
+                <span class="sched-trigger-expr">0 9 * * *</span>
+                <span class="sched-trigger-hint">
+                  <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
+                    <circle cx="8" cy="8" r="6"/>
+                    <path d="M8 4v4l2.5 1.5"/>
+                  </svg>
+                  Every day at 09:00 UTC
+                </span>
+              </div>
+            </td>
+            <td>
+              <div class="sched-time-cell">
+                <span class="sched-time-main">2026-05-11 09:00</span>
+                <span class="sched-time-relative soon">in 23 hours</span>
+              </div>
+            </td>
+            <td>
+              <div class="sched-time-cell">
+                <span class="sched-time-main">2026-05-10 09:00</span>
+                <span class="sched-time-relative">1 hour ago</span>
+              </div>
+            </td>
+            <td>
+              <span class="sched-status-pill running">
+                <span class="sched-status-dot"></span>
+                running
+              </span>
+            </td>
+            <td>
+              <div class="sched-toggle-wrap">
+                <div class="sched-switch on"></div>
+              </div>
+            </td>
+            <td style="padding-right: 20px;">
+              <div class="sched-actions">
+                <button class="sched-btn-action run">
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M4 3l8 5-8 5V3z" fill="currentColor"/>
+                  </svg>
+                  Run
+                </button>
+                <button class="sched-btn-action history">
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M2 8a6 6 0 1012 0M2 8h3M14 8h-3"/>
+                    <circle cx="8" cy="8" r="2"/>
+                  </svg>
+                  History
+                </button>
+                <button class="sched-btn-action delete">
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M3 4h10M5 4V3h6v1M6 7v5M10 7v5M4 4l1 10h6l1-10"/>
+                  </svg>
+                </button>
+              </div>
+            </td>
+          </tr>
+
+          <!-- Row 2: Cron, success -->
+          <tr>
+            <td style="padding-left: 20px;">
+              <div class="sched-name-cell">
+                <div class="sched-name-icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <circle cx="12" cy="12" r="10"/>
+                    <path d="M12 6v6l4 2"/>
+                  </svg>
+                </div>
+                <div class="sched-name-text">
+                  <span class="sched-name-main">Weekly Cleanup</span>
+                  <span class="sched-name-id">#38</span>
+                </div>
+              </div>
+            </td>
+            <td>
+              <span class="sched-agent-badge">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                  <rect x="3" y="4" width="18" height="6" rx="2"/>
+                  <rect x="3" y="14" width="18" height="6" rx="2"/>
+                  <circle cx="7" cy="7" r="1" fill="currentColor"/>
+                  <circle cx="7" cy="17" r="1" fill="currentColor"/>
+                </svg>
+                Cleaner Bot
+              </span>
+            </td>
+            <td>
+              <div class="sched-trigger-cell">
+                <span class="sched-trigger-type cron">cron</span>
+                <span class="sched-trigger-expr">0 2 * * 0</span>
+                <span class="sched-trigger-hint">
+                  <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
+                    <circle cx="8" cy="8" r="6"/>
+                    <path d="M8 4v4l2.5 1.5"/>
+                  </svg>
+                  Every Sunday at 02:00 UTC
+                </span>
+              </div>
+            </td>
+            <td>
+              <div class="sched-time-cell">
+                <span class="sched-time-main">2026-05-12 02:00</span>
+                <span class="sched-time-relative">in 2 days</span>
+              </div>
+            </td>
+            <td>
+              <div class="sched-time-cell">
+                <span class="sched-time-main">2026-05-05 02:00</span>
+                <span class="sched-time-relative">5 days ago</span>
+              </div>
+            </td>
+            <td>
+              <span class="sched-status-pill success">
+                <span class="sched-status-dot"></span>
+                success
+              </span>
+            </td>
+            <td>
+              <div class="sched-toggle-wrap">
+                <div class="sched-switch on"></div>
+              </div>
+            </td>
+            <td style="padding-right: 20px;">
+              <div class="sched-actions">
+                <button class="sched-btn-action run">
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M4 3l8 5-8 5V3z" fill="currentColor"/>
+                  </svg>
+                  Run
+                </button>
+                <button class="sched-btn-action history">
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M2 8a6 6 0 1012 0M2 8h3M14 8h-3"/>
+                    <circle cx="8" cy="8" r="2"/>
+                  </svg>
+                  History
+                </button>
+                <button class="sched-btn-action delete">
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M3 4h10M5 4V3h6v1M6 7v5M10 7v5M4 4l1 10h6l1-10"/>
+                  </svg>
+                </button>
+              </div>
+            </td>
+          </tr>
+
+          <!-- Row 3: One-shot, pending -->
+          <tr>
+            <td style="padding-left: 20px;">
+              <div class="sched-name-cell">
+                <div class="sched-name-icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <circle cx="12" cy="12" r="4"/>
+                    <path d="M12 2v2M12 20v2M2 12h2M20 12h2"/>
+                  </svg>
+                </div>
+                <div class="sched-name-text">
+                  <span class="sched-name-main">Migration Task</span>
+                  <span class="sched-name-id">#45</span>
+                </div>
+              </div>
+            </td>
+            <td>
+              <span class="sched-agent-badge">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                  <rect x="3" y="4" width="18" height="6" rx="2"/>
+                  <rect x="3" y="14" width="18" height="6" rx="2"/>
+                  <circle cx="7" cy="7" r="1" fill="currentColor"/>
+                  <circle cx="7" cy="17" r="1" fill="currentColor"/>
+                </svg>
+                Migration Agent
+              </span>
+            </td>
+            <td>
+              <div class="sched-trigger-cell">
+                <span class="sched-trigger-type oneshot">one-shot</span>
+                <span class="sched-trigger-expr">2026-05-15 03:00</span>
+                <span class="sched-trigger-hint">
+                  <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
+                    <circle cx="8" cy="8" r="6"/>
+                    <path d="M8 4v4l2.5 1.5"/>
+                  </svg>
+                  Single execution
+                </span>
+              </div>
+            </td>
+            <td>
+              <div class="sched-time-cell">
+                <span class="sched-time-main">2026-05-15 03:00</span>
+                <span class="sched-time-relative">in 5 days</span>
+              </div>
+            </td>
+            <td>
+              <span class="sched-time-empty">— never</span>
+            </td>
+            <td>
+              <span class="sched-status-pill idle">
+                <span class="sched-status-dot"></span>
+                pending
+              </span>
+            </td>
+            <td>
+              <div class="sched-toggle-wrap">
+                <div class="sched-switch on"></div>
+              </div>
+            </td>
+            <td style="padding-right: 20px;">
+              <div class="sched-actions">
+                <button class="sched-btn-action run">
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M4 3l8 5-8 5V3z" fill="currentColor"/>
+                  </svg>
+                  Run
+                </button>
+                <button class="sched-btn-action history">
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M2 8a6 6 0 1012 0M2 8h3M14 8h-3"/>
+                    <circle cx="8" cy="8" r="2"/>
+                  </svg>
+                  History
+                </button>
+                <button class="sched-btn-action delete">
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M3 4h10M5 4V3h6v1M6 7v5M10 7v5M4 4l1 10h6l1-10"/>
+                  </svg>
+                </button>
+              </div>
+            </td>
+          </tr>
+
+          <!-- Row 4: Cron, failed -->
+          <tr>
+            <td style="padding-left: 20px;">
+              <div class="sched-name-cell">
+                <div class="sched-name-icon" style="background: rgba(180, 60, 60, 0.08); color: #8a3030;">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <circle cx="12" cy="12" r="10"/>
+                    <path d="M12 6v6l4 2"/>
+                  </svg>
+                </div>
+                <div class="sched-name-text">
+                  <span class="sched-name-main">Data Sync</span>
+                  <span class="sched-name-id">#31</span>
+                </div>
+              </div>
+            </td>
+            <td>
+              <span class="sched-agent-badge">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                  <rect x="3" y="4" width="18" height="6" rx="2"/>
+                  <rect x="3" y="14" width="18" height="6" rx="2"/>
+                  <circle cx="7" cy="7" r="1" fill="currentColor"/>
+                  <circle cx="7" cy="17" r="1" fill="currentColor"/>
+                </svg>
+                Syncer
+              </span>
+            </td>
+            <td>
+              <div class="sched-trigger-cell">
+                <span class="sched-trigger-type cron">cron</span>
+                <span class="sched-trigger-expr">*/15 * * * *</span>
+                <span class="sched-trigger-hint">
+                  <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
+                    <circle cx="8" cy="8" r="6"/>
+                    <path d="M8 4v4l2.5 1.5"/>
+                  </svg>
+                  Every 15 minutes
+                </span>
+              </div>
+            </td>
+            <td>
+              <div class="sched-time-cell">
+                <span class="sched-time-main">2026-05-10 10:15</span>
+                <span class="sched-time-relative soon">in 15 min</span>
+              </div>
+            </td>
+            <td>
+              <div class="sched-time-cell">
+                <span class="sched-time-main">2026-05-10 10:00</span>
+                <span class="sched-time-relative" style="color: var(--color-err);">failed</span>
+              </div>
+            </td>
+            <td>
+              <span class="sched-status-pill failed">
+                <span class="sched-status-dot"></span>
+                failed
+              </span>
+            </td>
+            <td>
+              <div class="sched-toggle-wrap">
+                <div class="sched-switch on"></div>
+              </div>
+            </td>
+            <td style="padding-right: 20px;">
+              <div class="sched-actions">
+                <button class="sched-btn-action run">
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M4 3l8 5-8 5V3z" fill="currentColor"/>
+                  </svg>
+                  Run
+                </button>
+                <button class="sched-btn-action history">
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M2 8a6 6 0 1012 0M2 8h3M14 8h-3"/>
+                    <circle cx="8" cy="8" r="2"/>
+                  </svg>
+                  History
+                </button>
+                <button class="sched-btn-action delete">
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M3 4h10M5 4V3h6v1M6 7v5M10 7v5M4 4l1 10h6l1-10"/>
+                  </svg>
+                </button>
+              </div>
+            </td>
+          </tr>
+
+          <!-- Row 5: Disabled -->
+          <tr style="opacity: 0.6;">
+            <td style="padding-left: 20px;">
+              <div class="sched-name-cell">
+                <div class="sched-name-icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <circle cx="12" cy="12" r="10"/>
+                    <path d="M12 6v6l4 2"/>
+                  </svg>
+                </div>
+                <div class="sched-name-text">
+                  <span class="sched-name-main">Paused Task</span>
+                  <span class="sched-name-id">#28</span>
+                </div>
+              </div>
+            </td>
+            <td>
+              <span class="sched-agent-badge">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                  <rect x="3" y="4" width="18" height="6" rx="2"/>
+                  <rect x="3" y="14" width="18" height="6" rx="2"/>
+                  <circle cx="7" cy="7" r="1" fill="currentColor"/>
+                  <circle cx="7" cy="17" r="1" fill="currentColor"/>
+                </svg>
+                Worker
+              </span>
+            </td>
+            <td>
+              <div class="sched-trigger-cell">
+                <span class="sched-trigger-type cron">cron</span>
+                <span class="sched-trigger-expr">0 0 * * *</span>
+                <span class="sched-trigger-hint">
+                  <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
+                    <circle cx="8" cy="8" r="6"/>
+                    <path d="M8 4v4l2.5 1.5"/>
+                  </svg>
+                  Every hour
+                </span>
+              </div>
+            </td>
+            <td>
+              <span class="sched-time-empty">— disabled</span>
+            </td>
+            <td>
+              <div class="sched-time-cell">
+                <span class="sched-time-main">2026-05-09 14:00</span>
+                <span class="sched-time-relative">1 day ago</span>
+              </div>
+            </td>
+            <td>
+              <span class="sched-status-pill idle">
+                <span class="sched-status-dot"></span>
+                paused
+              </span>
+            </td>
+            <td>
+              <div class="sched-toggle-wrap">
+                <div class="sched-switch"></div>
+              </div>
+            </td>
+            <td style="padding-right: 20px;">
+              <div class="sched-actions">
+                <button class="sched-btn-action run">
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M4 3l8 5-8 5V3z" fill="currentColor"/>
+                  </svg>
+                  Run
+                </button>
+                <button class="sched-btn-action history">
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M2 8a6 6 0 1012 0M2 8h3M14 8h-3"/>
+                    <circle cx="8" cy="8" r="2"/>
+                  </svg>
+                  History
+                </button>
+                <button class="sched-btn-action delete">
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M3 4h10M5 4V3h6v1M6 7v5M10 7v5M4 4l1 10h6l1-10"/>
+                  </svg>
+                </button>
+              </div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</body>
+</html>
