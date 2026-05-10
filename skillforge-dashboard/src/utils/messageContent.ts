@@ -50,7 +50,12 @@ function isReminderBlock(b: unknown): boolean {
 /**
  * Strip `<system-reminder>` content blocks from a message's `content` field.
  *
- * - String content → returned as-is (no reminder possible in legacy shape).
+ * - String content → returned as-is, EXCEPT when the entire string is itself a
+ *   reminder wrapper (RecoveryPayloadBuilder D6 wraps payload as
+ *   `"<system-reminder>\n…\n</system-reminder>\n"` String content). In that
+ *   case we return `""` so the caller can decide to skip render. The render-
+ *   path side filter for RECOVERY_PAYLOAD msgType in `useChatMessages.ts` is
+ *   the primary mechanism; this is a defensive second layer.
  * - Non-array, non-string content (`null`, `undefined`, `{}`, etc.) → returned as-is.
  * - Array content → reminder blocks removed. If filtering leaves exactly one
  *   text block (and no other blocks), the value is collapsed back to a String
@@ -60,7 +65,9 @@ function isReminderBlock(b: unknown): boolean {
  *   same reason. Otherwise the filtered array is returned.
  */
 export function stripSystemReminderBlocks(content: unknown): unknown {
-  if (typeof content === 'string') return content;
+  if (typeof content === 'string') {
+    return isReminderText(content) ? '' : content;
+  }
   if (!Array.isArray(content)) return content;
 
   // Fast path — nothing to strip, return original reference unchanged.

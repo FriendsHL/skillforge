@@ -30,6 +30,27 @@ describe('stripSystemReminderBlocks', () => {
     expect(stripSystemReminderBlocks('')).toBe('');
   });
 
+  it('Item 2: collapses entire-string-is-reminder to empty string (recovery payload D6 wrap)', () => {
+    // RecoveryPayloadBuilder D6: payload is wrapped as a single
+    // <system-reminder>…</system-reminder>\n String. The strip helper returns ""
+    // so any caller that accidentally feeds this through (e.g. bypassing the
+    // RECOVERY_PAYLOAD msgType filter) doesn't render raw framework noise.
+    const recoveryPayload =
+      '<system-reminder>\n[Recovery] Recently read files:\n- /abs/foo.java\n</system-reminder>\n';
+    expect(stripSystemReminderBlocks(recoveryPayload)).toBe('');
+
+    // No-trailing-newline variant
+    expect(stripSystemReminderBlocks('<system-reminder>x</system-reminder>')).toBe('');
+
+    // String that merely contains the tag (e.g. user typed it) is NOT stripped
+    expect(stripSystemReminderBlocks('What is <system-reminder>?')).toBe(
+      'What is <system-reminder>?',
+    );
+    expect(
+      stripSystemReminderBlocks('prefix <system-reminder>x</system-reminder> suffix'),
+    ).toBe('prefix <system-reminder>x</system-reminder> suffix');
+  });
+
   it('returns non-array, non-string content as-is', () => {
     expect(stripSystemReminderBlocks(null)).toBeNull();
     expect(stripSystemReminderBlocks(undefined)).toBeUndefined();

@@ -61,6 +61,16 @@ export function normalizeMessages(list: any[]): ChatMessage[] {
       continue;
     }
 
+    if (msgType === 'RECOVERY_PAYLOAD') {
+      // REMINDER-MVP D6: post-compact recovery payload is wrapped as a single
+      // <system-reminder>…</system-reminder> String — system framework noise,
+      // not for end-user display. Skip the row entirely (parallels how
+      // COMPACT_BOUNDARY is filtered above). The string-shape branch in
+      // stripSystemReminderBlocks is a second-layer defense for any future
+      // call site that bypasses this filter.
+      continue;
+    }
+
     if (messageType === 'ask_user' || messageType === 'confirmation') {
       const metadata = m.metadata && typeof m.metadata === 'object'
         ? (m.metadata as Record<string, unknown>)
