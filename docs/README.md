@@ -1,6 +1,6 @@
 # SkillForge 文档
 
-> 更新于：2026-05-07
+> 更新于：2026-05-10
 > Agent 规则：先读这里，再只打开当前任务链接到的文档。
 
 编辑 docs 前，先读 [DOCS-GOVERNANCE.md](DOCS-GOVERNANCE.md)。
