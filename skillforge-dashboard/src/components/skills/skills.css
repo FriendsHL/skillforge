@@ -1253,3 +1253,204 @@
   background: rgba(184, 65, 47, 0.12);
 }
 .btn-discard:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ============== SKILL EVOLUTION PANEL ============== */
+
+.skill-evolution-panel {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-1);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.evolution-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 11px;
+}
+
+.evolution-title {
+  font-weight: 600;
+  color: var(--fg-3);
+}
+
+.evolution-loading,
+.evolution-empty {
+  color: var(--fg-4);
+}
+
+.evolution-error {
+  color: var(--color-err);
+}
+
+.evolution-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  padding: 1px 7px;
+  border-radius: 10px;
+  font-family: var(--font-mono);
+}
+
+.evolution-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.evolution-stats {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--fg-3);
+  font-family: var(--font-mono);
+}
+
+.evolution-stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.evolution-stat .stat-icon {
+  font-size: 10px;
+}
+
+.evolution-stat.best-score {
+  color: var(--color-ok);
+}
+
+/* Timeline */
+.evolution-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin-top: 8px;
+  padding: 10px 0;
+}
+
+.timeline-node {
+  display: flex;
+  align-items: flex-start;
+  gap: 0;
+  position: relative;
+  padding-left: 20px;
+}
+
+.timeline-node .timeline-line {
+  position: absolute;
+  left: 6px;
+  top: 12px;
+  bottom: -8px;
+  width: 2px;
+  background: var(--border-1);
+}
+
+.timeline-node:last-child .timeline-line {
+  display: none;
+}
+
+.timeline-node .timeline-dot {
+  position: absolute;
+  left: 3px;
+  top: 4px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 2px solid var(--bg-surface);
+}
+
+.timeline-content {
+  flex: 1;
+  padding-bottom: 12px;
+}
+
+.timeline-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.timeline-version {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-1);
+}
+
+.timeline-status {
+  font-size: 9px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-family: var(--font-mono);
+}
+
+.timeline-time {
+  font-size: 10px;
+  color: var(--fg-4);
+}
+
+.timeline-scores {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.score-before {
+  color: var(--fg-3);
+}
+
+.score-arrow {
+  color: var(--fg-4);
+}
+
+.score-after {
+  font-weight: 600;
+}
+
+.score-improve {
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.timeline-error {
+  margin-top: 4px;
+  font-size: 10px;
+  color: var(--color-err);
+  font-style: italic;
+}
+
+.evolution-current {
+  font-size: 11px;
+  color: var(--fg-4);
+  font-family: var(--font-mono);
+}
+
+.evolution-failure {
+  font-size: 11px;
+  color: var(--color-err);
+  font-style: italic;
+}
+
+.evolution-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.evolution-flash {
+  font-size: 11px;
+  color: var(--accent);
+}
