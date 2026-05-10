@@ -4,8 +4,7 @@ import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/rea
 import {
   getSkills, uploadSkill, deleteSkill,
   toggleSkill, extractList,
-  getSkillDrafts, triggerSkillExtraction, reviewSkillDraft,
-  mergeDraftIntoSkill,
+  getSkillDrafts, triggerSkillExtraction,
   getAgents,
   rescanSkills,
   getSkillEvalHistory,
@@ -13,8 +12,8 @@ import {
   type RescanReport,
   type EvalHistoryEntry,
 } from '../api';
-import { extractNameConflict, openNameConflictModal } from '../components/skills/draftApproveHelpers';
 import { useAuth } from '../contexts/AuthContext';
+import { useNavigate } from 'react-router-dom';
 import '../components/agents/agents.css';
 import '../components/skills/skills.css';
 import type { SkillRow } from '../components/skills/types';
@@ -24,21 +23,16 @@ import { FilterItem } from '../components/skills/FilterItem';
 import { SkillTable } from '../components/skills/SkillTable';
 import { SkillDrawer } from '../components/skills/SkillDrawer';
 import { NewSkillModal } from '../components/skills/NewSkillModal';
-import { SkillDraftsSection } from '../components/skills/SkillDraftPanel';
 
 interface AgentRow {
   id: number;
   name: string;
 }
 
-/** P1-C-8 dedup: above this similarity score the BE flags the candidate as a near-duplicate. */
-const HIGH_SIMILARITY_THRESHOLD = 0.85;
-
 const SkillList: React.FC = () => {
   const queryClient = useQueryClient();
   const { userId: currentUserId } = useAuth();
-  // P1-C-7: page-level state replaces DEFAULT_SOURCE_AGENT_ID. Until the user
-  // picks one, extract / A-B / evolution actions are disabled with a tooltip.
+  const navigate = useNavigate();
   const [selectedAgentId, setSelectedAgentId] = useState<number | null>(null);
   const [view, setView] = useState<'grid' | 'table'>('grid');
   const [q, setQ] = useState('');
@@ -47,7 +41,6 @@ const SkillList: React.FC = () => {
   const [open, setOpen] = useState<SkillRow | null>(null);
   const [drawerTab, setDrawerTab] = useState('readme');
   const [creating, setCreating] = useState(false);
-  const [draftsOpen, setDraftsOpen] = useState(false);
   const [extracting, setExtracting] = useState(false);
   const [rescanning, setRescanning] = useState(false);
 
@@ -56,8 +49,6 @@ const SkillList: React.FC = () => {
     queryFn: () => getSkills().then(res => extractList<Record<string, unknown>>(res)),
   });
 
-  // Agent catalog for the source-agent selector. We don't yet have a shared
-  // useAgents hook (CLAUDE.md frontend rule §"文件组织" — extract when reused).
   const { data: agentRows = [] } = useQuery<AgentRow[]>({
     queryKey: ['agents-min'],
     queryFn: () =>
@@ -81,110 +72,6 @@ const SkillList: React.FC = () => {
   const drafts: SkillDraft[] = draftsData ?? [];
   const pendingDrafts = useMemo(() => drafts.filter(d => d.status === 'draft'), [drafts]);
 
-  /**
-   * Invalidate the standard set of caches after any draft mutation. Pulled
-   * out so the merge-UX path (which doesn't go through the mutation
-   * onSuccess callback) stays consistent.
-   */
-  const invalidateAfterDraftMutation = () => {
-    queryClient.invalidateQueries({ queryKey: ['skill-drafts'] });
-    queryClient.invalidateQueries({ queryKey: ['skills'] });
-    queryClient.invalidateQueries({ queryKey: ['dashboard-skill-summary'] });
-  };
-
-  /**
-   * Approve flow has two error branches that need different UX:
-   *   - 409 `name_conflict` → open merge UX modal (V2 §H)
-   *   - anything else → red toast
-   * So we hand-roll the catch instead of using the mutation's `onError`.
-   */
-  const approveDraftCore = async (id: string, opts?: { forceCreate?: boolean }) => {
-    const draft = drafts.find((d) => d.id === id);
-    try {
-      await reviewSkillDraft(id, 'approve', currentUserId, opts);
-      invalidateAfterDraftMutation();
-      message.success('Skill approved');
-    } catch (err: unknown) {
-      const conflict = draft ? extractNameConflict(err) : null;
-      if (conflict && draft) {
-        openNameConflictModal({
-          draft,
-          conflict,
-          onMerge: async (targetSkillId) => {
-            await mergeDraftIntoSkill(id, targetSkillId, currentUserId);
-            invalidateAfterDraftMutation();
-            message.success(`Merged into skill #${targetSkillId}`);
-          },
-          onRename: async (newName) => {
-            await reviewSkillDraft(id, 'approve', currentUserId, { newName });
-            invalidateAfterDraftMutation();
-            message.success(`Approved as "${newName}"`);
-          },
-          onReject: async () => {
-            await reviewSkillDraft(id, 'discard', currentUserId);
-            invalidateAfterDraftMutation();
-            message.success('Draft rejected');
-          },
-        });
-        return;
-      }
-      const e = err as { response?: { data?: { error?: string } } };
-      message.error(e.response?.data?.error || 'Failed to approve draft');
-    }
-  };
-
-  const approveMutation = useMutation({
-    mutationFn: (vars: { id: string; forceCreate?: boolean }) =>
-      approveDraftCore(vars.id, { forceCreate: vars.forceCreate }),
-  });
-
-  const discardMutation = useMutation({
-    mutationFn: (id: string) => reviewSkillDraft(id, 'discard', currentUserId),
-    onSuccess: () => {
-      invalidateAfterDraftMutation();
-      message.success('Draft discarded');
-    },
-    onError: () => message.error('Failed to discard draft'),
-  });
-
-  /**
-   * Approve handler: when the BE flags a near-duplicate (similarity ≥ 0.85),
-   * confirm with the operator and only then send `forceCreate=true` (P1-C-8).
-   * After force-create the BE may still 409 on exact-name match; that's
-   * handled inside `approveDraftCore` (merge UX).
-   */
-  const handleApproveDraft = (id: string) => {
-    const draft = drafts.find(d => d.id === id);
-    const similarity = draft?.similarity ?? 0;
-    if (draft && similarity >= HIGH_SIMILARITY_THRESHOLD) {
-      Modal.confirm({
-        title: 'Possible duplicate skill',
-        content: (
-          <div>
-            <p>
-              Skill <strong>{draft.name}</strong> looks similar to existing skill{' '}
-              <strong>{draft.mergeCandidateName ?? draft.mergeCandidateId ?? 'unknown'}</strong>{' '}
-              (similarity {Math.round(similarity * 100)}%).
-            </p>
-            <p>Create anyway?</p>
-          </div>
-        ),
-        okText: 'Create anyway',
-        cancelText: 'Cancel',
-        okButtonProps: { danger: true },
-        onOk: () => approveMutation.mutate({ id, forceCreate: true }),
-      });
-      return;
-    }
-    approveMutation.mutate({ id });
-  };
-
-  /**
-   * P1-D rescan: trigger a synchronous filesystem reconciliation and surface
-   * the report. We use Modal.info (not message.success) so the multi-line
-   * summary stays on screen long enough for the operator to read each count
-   * — auto-dismissing toasts hide too quickly for diagnostic data.
-   */
   const handleRescan = async () => {
     setRescanning(true);
     try {
@@ -229,7 +116,8 @@ const SkillList: React.FC = () => {
       } else {
         message.success('Extraction started — check back in a moment');
       }
-      setDraftsOpen(true);
+      // Navigate to drafts page after extraction
+      navigate('/skill-drafts');
     } catch {
       message.error('Failed to start skill extraction');
     } finally {
@@ -238,11 +126,7 @@ const SkillList: React.FC = () => {
   };
 
   // WS: auto-refresh drafts when backend finishes extraction +
-  //     surface SKILL-EVOLVE-LOOP `skill_auto_upgraded` event (Phase 5
-  //     self-improve cron). The same socket carries multiple event
-  //     types — we discriminate on `msg.type` and only react to the
-  //     two we care about. Cleanup must close the socket (frontend.md
-  //     footgun #2: an unclosed WS keeps setState'ing after unmount).
+  //     surface SKILL-EVOLVE-LOOP `skill_auto_upgraded` event
   useEffect(() => {
     if (!currentUserId) return;
     const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
@@ -263,7 +147,6 @@ const SkillList: React.FC = () => {
         };
         if (msg.type === 'skill_draft_extracted') {
           queryClient.invalidateQueries({ queryKey: ['skill-drafts'] });
-          setDraftsOpen(true);
           return;
         }
         if (msg.type === 'skill_auto_upgraded') {
@@ -279,8 +162,6 @@ const SkillList: React.FC = () => {
             description: `Skill ${skillLabel}${versionPart} promoted via A/B (baseline ${baseline} → candidate ${candidate}).`,
             duration: 6,
           });
-          // Refresh both the list (latest score column) and per-skill
-          // history / evolution panels.
           queryClient.invalidateQueries({ queryKey: ['skills'] });
           queryClient.invalidateQueries({ queryKey: ['skill-eval-history-list'] });
           if (msg.skillId != null) {
@@ -296,15 +177,6 @@ const SkillList: React.FC = () => {
 
   const all = useMemo<SkillRow[]>(() => rawSkills.map(normalizeSkill), [rawSkills]);
 
-  // SKILL-EVOLVE-LOOP Phase 6 — batch-fetch eval history for every skill row
-  // so the table can render Latest Score + Trend without N round-trips on
-  // open. We use one `useQueries` call instead of one query per `<tr>` so
-  // tanstack does the parallelism (one HTTP per skill, dedup'd cache).
-  //
-  // Performance note: at ~100 skills this fires 100 GET /eval-history
-  // requests on mount. Acceptable for V1 (system has fewer than that
-  // today); when skill count grows we'll add a batch endpoint or
-  // server-side aggregate cached in `t_skill`. Marked V2 in tech-design.
   const numericSkillIds = useMemo<number[]>(
     () =>
       all
@@ -320,7 +192,6 @@ const SkillList: React.FC = () => {
         getSkillEvalHistory(id, currentUserId, 10).then((r) => r.data),
       enabled: !!currentUserId,
       staleTime: 60_000,
-      // Don't retry hard — a missing eval-history is not an error path.
       retry: 1,
     })),
   });
@@ -362,7 +233,6 @@ const SkillList: React.FC = () => {
     onSuccess: () => { message.success('Skill deleted'); queryClient.invalidateQueries({ queryKey: ['skills'] }); },
     onError: (err: unknown) => {
       const e = err as { response?: { data?: { error?: string }; status?: number } };
-      // BE returns 403 when attempting to delete a system skill (P1-C-8 BE收口).
       if (e.response?.status === 403) {
         message.error(e.response?.data?.error || 'System skills cannot be deleted');
       } else {
@@ -387,12 +257,6 @@ const SkillList: React.FC = () => {
 
   const openDetail = (s: SkillRow) => { setOpen(s); setDrawerTab('readme'); };
 
-  /**
-   * SKILL-DASHBOARD-POLISH-V2 §I — Version Tree "Open" handler. Looks up
-   * the target skill in the already-loaded list (no extra fetch) and swaps
-   * the drawer's currentSkill. Falls through silently when the id isn't
-   * in `all` (e.g. cross-owner version that the operator can't see).
-   */
   const openSkillById = (id: number) => {
     const target = all.find((s) => s.id === id);
     if (!target) {
@@ -429,8 +293,6 @@ const SkillList: React.FC = () => {
             <p className="agents-head-sub">{rows.length} of {all.length} · reusable building blocks for agents</p>
           </div>
           <div className="agents-head-actions">
-            {/* P1-C-7: source-agent selector replaces hardcoded agentId=1.
-                Disables extract / A-B / evolution until set. */}
             <Select<number>
               size="small"
               style={{ minWidth: 180 }}
@@ -454,7 +316,7 @@ const SkillList: React.FC = () => {
                   display: 'inline-flex', alignItems: 'center', gap: 6,
                   borderStyle: 'dashed', color: 'var(--accent-primary, #6366f1)',
                 }}
-                onClick={() => setDraftsOpen(o => !o)}
+                onClick={() => navigate('/skill-drafts')}
                 title="Review extracted skill drafts"
               >
                 {pendingDrafts.length} pending draft{pendingDrafts.length > 1 ? 's' : ''}
@@ -485,26 +347,11 @@ const SkillList: React.FC = () => {
           </div>
         </header>
 
-        {draftsOpen && (
-          <SkillDraftsSection
-            drafts={drafts}
-            pendingCount={pendingDrafts.length}
-            onClose={() => setDraftsOpen(false)}
-            onApprove={handleApproveDraft}
-            onDiscard={(id) => discardMutation.mutate(id)}
-            approvingId={
-              approveMutation.isPending ? approveMutation.variables?.id ?? null : null
-            }
-            discardingId={discardMutation.isPending ? discardMutation.variables ?? null : null}
-          />
-        )}
-
         <div className="agents-body">
           {rows.length === 0 ? (
             <div className="sf-empty-state">No skills match your filters.</div>
           ) : view === 'grid' ? (
             <div className="skills-grid-sf">
-              {/* SKILL-DASHBOARD-POLISH: Aggregate by name to avoid duplicates */}
               {(() => {
                 const map = new Map<string, SkillRow[]>();
                 rows.forEach(s => {
@@ -523,7 +370,6 @@ const SkillList: React.FC = () => {
                       className="skill-card-aggregate"
                       onClick={() => openDetail(primary)}
                       style={{
-                        // Use the project's standard surface variable for theme consistency
                         background: 'var(--bg-surface)', 
                         border: '1px solid var(--border-subtle, #e5e7eb)',
                         color: 'var(--fg-1)',
@@ -549,7 +395,6 @@ const SkillList: React.FC = () => {
                         e.currentTarget.style.boxShadow = 'var(--shadow-sm, 0 1px 3px rgba(0,0,0,0.1))';
                       }}
                     >
-                      {/* Header: Name & Status */}
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
                           <h3 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: 'var(--fg-1)', lineHeight: 1.3, wordBreak: 'break-word' }}>
@@ -566,24 +411,20 @@ const SkillList: React.FC = () => {
                           )}
                         </div>
                         
-                        {/* Tool Badges Row */}
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                           {(() => {
                             const textContent = (primary.description || '').toLowerCase();
                             const tools = [];
                             
-                            // 1. Check for explicit tool schema
                             if (primary.toolSchema && typeof primary.toolSchema === 'object') {
                               tools.push('Custom Tool');
                             }
                             
-                            // 2. Keyword detection in description or markdown
                             if (textContent.includes('bash') || textContent.includes('shell') || textContent.includes('command')) tools.push('Bash');
                             if (textContent.includes('python') || textContent.includes('script')) tools.push('Python');
                             if (textContent.includes('web') || textContent.includes('browser') || textContent.includes('search')) tools.push('Web');
                             if (textContent.includes('file') || textContent.includes('read') || textContent.includes('write')) tools.push('File Ops');
                             
-                            // Fallback if no specific tool found but it's a complex skill
                             if (tools.length === 0 && primary.toolSchema) tools.push('Advanced');
 
                             return tools.slice(0, 3).map((t, i) => (
@@ -600,12 +441,10 @@ const SkillList: React.FC = () => {
                         </div>
                       </div>
 
-                      {/* Description */}
                       <p style={{ margin: 0, fontSize: 13, color: 'var(--fg-2)', lineHeight: 1.6, flex: 1, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
                         {primary.description || 'No description provided.'}
                       </p>
 
-                      {/* Footer: Version Info & Status */}
                       <div style={{ 
                         display: 'flex', 
                         justifyContent: 'space-between', 
@@ -624,11 +463,6 @@ const SkillList: React.FC = () => {
                           }}></span>
                           <span>{totalVersions} version{totalVersions > 1 ? 's' : ''}</span>
                         </div>
-                        {/* V2.5 — removed "X updates ready" badge per user 2026-05-08.
-                            It conflated disabled candidate / archived / broken / orphan
-                            rows under a single misleading "ready to promote" label.
-                            The flat version list inside the drawer shows the exact
-                            state per row. */}
                       </div>
                     </div>
                   );
@@ -653,9 +487,6 @@ const SkillList: React.FC = () => {
           currentUserId={currentUserId}
           sourceAgentId={selectedAgentId}
           onOpenSkill={openSkillById}
-          /* V2.5 — pass all rows that share this name so the drawer's left
-             pane shows a flat version list (orphans included). Falls back to
-             [open] if the parent never aggregates (defensive). */
           siblingVersions={
             open.system
               ? undefined
