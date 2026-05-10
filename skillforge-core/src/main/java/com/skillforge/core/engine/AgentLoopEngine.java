@@ -321,14 +321,44 @@ public class AgentLoopEngine {
      * 带 externalContext 的重载:允许调用方(ChatService)在 run 之前先拿到 LoopContext 引用,
      * 注册到 CancellationRegistry 等外部组件,然后交给 engine 驱动。
      * externalContext 为 null 时行为等同于旧版 run。
+     *
+     * <p>Delegates to the 7-arg form with {@code userMessageBlock=null} so the engine
+     * builds a plain {@code Message.user(userMessage)} (legacy String-only path).
      */
     public LoopResult run(AgentDefinition agentDef, String userMessage,
+                          List<Message> history, String sessionId, Long userId,
+                          LoopContext externalContext) {
+        return run(agentDef, userMessage, null, history, sessionId, userId, externalContext);
+    }
+
+    /**
+     * Q2 reminder fix (2026-05-10): 7-arg overload accepting a pre-constructed
+     * {@code userMessageBlock}. ChatService builds the user-facing {@link Message}
+     * via {@code buildUserMessageWithReminder()} (may carry an array content with
+     * a leading {@code <system-reminder>} block) and passes it here so the engine
+     * appends the SAME object to its in-memory message list rather than rebuilding
+     * a String-content {@code Message.user(userMessage)} that drops the reminder.
+     *
+     * <p>Behavior:
+     * <ul>
+     *   <li>{@code userMessageBlock != null} → engine appends it verbatim to messages
+     *       (reminder reaches LLM + persisted-vs-replay byte parity for cache).</li>
+     *   <li>{@code userMessageBlock == null} → fallback to legacy
+     *       {@code Message.user(userMessage)} build (preserves all non-Q2 callers).</li>
+     * </ul>
+     *
+     * <p>The raw {@code userMessage} String is still consumed by memory recall
+     * (taskContext anchor) + observability rootSpan.input; reminder text never
+     * leaks into those because they read the raw user input not the assembled block.
+     */
+    public LoopResult run(AgentDefinition agentDef, String userMessage,
+                          Message userMessageBlock,
                           List<Message> history, String sessionId, Long userId,
                           LoopContext externalContext) {
         log.info("AgentLoop started for agent={}, session={}, user={}", agentDef.getName(), sessionId, userId);
 
         try {
-            return runInternal(agentDef, userMessage, history, sessionId, userId, externalContext);
+            return runInternal(agentDef, userMessage, userMessageBlock, history, sessionId, userId, externalContext);
         } finally {
             // P9-5: evict per-session file cache regardless of how run() exits (normal return,
             // max_loops, exception, etc.).  Idempotent when cache absent or already evicted.
@@ -342,9 +372,10 @@ public class AgentLoopEngine {
         }
     }
 
-    /** Internal body of {@link #run(AgentDefinition, String, List, String, Long, LoopContext)}; the
-     *  public {@code run()} only adds a try-finally around this for P9-5 cache eviction. */
+    /** Internal body of {@link #run(AgentDefinition, String, Message, List, String, Long, LoopContext)};
+     *  the public {@code run()} only adds a try-finally around this for P9-5 cache eviction. */
     private LoopResult runInternal(AgentDefinition agentDef, String userMessage,
+                                   Message userMessageBlock,
                                    List<Message> history, String sessionId, Long userId,
                                    LoopContext externalContext) {
 
@@ -367,11 +398,28 @@ public class AgentLoopEngine {
         }
 
         // 组装 messages: history + user message
+        // Q2 reminder fix: prefer caller-supplied userMessageBlock (may carry a
+        // leading <system-reminder> ContentBlock from ChatService) over the
+        // legacy String-only build. Memory + observability still use the raw
+        // userMessage String so reminder text doesn't pollute taskContext / span input.
         List<Message> messages = new ArrayList<>();
         if (history != null) {
             messages.addAll(history);
         }
-        if (userMessage != null) {
+        // INVARIANT (Q2 reminder fix, 2026-05-10): userMessageBlock is the *same* Message
+        // object reference that ChatService persisted to DB via appendNormalMessages —
+        // we share it (no defensive copy) to keep request history byte-identical across
+        // turns (BP2/BP3 prompt-cache hits). Safe because all current compactor paths
+        // (LightCompactStrategy / TimeBasedColdCleanup / SessionMemoryCompactStrategy)
+        // do NOT mutate text-typed ContentBlocks on user messages — they only drop or
+        // replace whole entries.
+        // FUTURE-CHANGE GUARD: if a compactor rule is ever added that mutates user-msg
+        // text blocks in place (e.g. truncate-long-user-msg), this MUST become a shallow
+        // copy of the content list before append, otherwise the in-place mutation would
+        // corrupt the DB-bound object and drift cache bytes across turns.
+        if (userMessageBlock != null) {
+            messages.add(userMessageBlock);
+        } else if (userMessage != null) {
             messages.add(Message.user(userMessage));
         }
         context.setMessages(messages);

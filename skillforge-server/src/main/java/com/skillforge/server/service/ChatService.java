@@ -340,7 +340,13 @@ public class ChatService {
             final List<Message> historyForLoop = history;
             final String capturedTraceId = traceId;
             final String capturedRootTraceId = rootTraceId;
-            chatLoopExecutor.execute(() -> runLoop(sessionId, userMessage, userId, agentEntity, historyForLoop, capturedTraceId, capturedRootTraceId));
+            // Q2 reminder fix (2026-05-10): capture the constructed userMsg (may have
+            // <system-reminder> ContentBlock prepended) so the engine receives the same
+            // Message object it persisted to DB. Without this the engine would rebuild
+            // Message.user(userMessage) from the raw string and drop the reminder.
+            final Message userMsgWithReminder = userMsg;
+            chatLoopExecutor.execute(() -> runLoop(sessionId, userMessage, userMsgWithReminder, userId,
+                    agentEntity, historyForLoop, capturedTraceId, capturedRootTraceId));
         }
     }
 
@@ -367,7 +373,7 @@ public class ChatService {
      */
     private void runLoop(String sessionId, String userMessage, Long userId,
                          AgentEntity agentEntity, List<Message> history) {
-        runLoop(sessionId, userMessage, userId, agentEntity, history, null, null);
+        runLoop(sessionId, userMessage, null, userId, agentEntity, history, null, null);
     }
 
     /**
@@ -377,7 +383,17 @@ public class ChatService {
     private void runLoop(String sessionId, String userMessage, Long userId,
                          AgentEntity agentEntity, List<Message> history,
                          String externalTraceId) {
-        runLoop(sessionId, userMessage, userId, agentEntity, history, externalTraceId, null);
+        runLoop(sessionId, userMessage, null, userId, agentEntity, history, externalTraceId, null);
+    }
+
+    /** Legacy 7-arg overload (no userMsgWithReminder) — delegates with null block so
+     *  engine builds plain {@code Message.user(userMessage)} (callers that didn't go
+     *  through Q2 buildUserMessageWithReminder, e.g. answerAsk / answerConfirmation). */
+    private void runLoop(String sessionId, String userMessage, Long userId,
+                         AgentEntity agentEntity, List<Message> history,
+                         String externalTraceId, String externalRootTraceId) {
+        runLoop(sessionId, userMessage, null, userId, agentEntity, history,
+                externalTraceId, externalRootTraceId);
     }
 
     /**
@@ -388,8 +404,13 @@ public class ChatService {
      * <p>OBS-4 §2.2: 加 externalRootTraceId 参数 — 由 chatAsync / answerAsk / answerConfirmation
      * 决策后透传到 engine（engine 写入 t_llm_trace.root_trace_id）。null 时存储层 SQL
      * COALESCE 兜底为 traceId 自身（自己当 root）。
+     * <p>Q2 reminder fix (2026-05-10): {@code userMsgWithReminder} 是 ChatService.chatAsync
+     * 通过 {@code buildUserMessageWithReminder()} 构造的 Message（可能含 reminder ContentBlock）。
+     * 透传给 engine 让其追加同一对象到 in-memory message list，避免引擎 rebuild
+     * {@code Message.user(userMessage)} 丢失 reminder。null 时 engine 走 legacy String 路径。
      */
-    private void runLoop(String sessionId, String userMessage, Long userId,
+    private void runLoop(String sessionId, String userMessage,
+                         Message userMsgWithReminder, Long userId,
                          AgentEntity agentEntity, List<Message> history,
                          String externalTraceId, String externalRootTraceId) {
         // OBS-2 M1 §D.8.2: 显式 startedAt 给 §D.8.3 catch 块 finalize 使用。
@@ -536,7 +557,11 @@ public class ChatService {
             }
 
             cancellationRegistry.register(sessionId, preCtx);
-            LoopResult result = agentLoopEngine.run(agentDef, userMessage, history, sessionId, userId, preCtx);
+            // Q2 reminder fix: pass userMsgWithReminder through new 7-arg engine.run
+            // overload. null → engine builds plain Message.user(userMessage) (legacy
+            // path used by answerAsk / answerConfirmation that don't run reminder build).
+            LoopResult result = agentLoopEngine.run(agentDef, userMessage, userMsgWithReminder,
+                    history, sessionId, userId, preCtx);
             finalMessage = result.getFinalResponse();
             toolCallCount = result.getToolCalls() != null ? result.getToolCalls().size() : 0;
             boolean waitingUser = "waiting_user".equals(result.getStatus());

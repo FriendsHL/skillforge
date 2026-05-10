@@ -28,6 +28,7 @@ import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -58,6 +59,17 @@ class ChatServiceModelOverrideTest {
 
     @BeforeEach
     void setUp() {
+        chatService = buildChatService(null /* reminderBuilder — default tests don't exercise it */);
+    }
+
+    /**
+     * Build a fresh {@link ChatService} with a synchronous chat-loop executor and the
+     * provided {@link com.skillforge.core.reminder.ReminderBuilder}. Class-field mocks
+     * ({@code agentService}, {@code sessionService}, {@code skillRegistry},
+     * {@code agentLoopEngine}) are re-assigned so test wiring + verification target the
+     * same instances embedded in the returned ChatService.
+     */
+    private ChatService buildChatService(com.skillforge.core.reminder.ReminderBuilder reminderBuilder) {
         agentService = mock(AgentService.class);
         sessionService = mock(SessionService.class);
         skillRegistry = mock(SkillRegistry.class);
@@ -79,7 +91,7 @@ class ChatServiceModelOverrideTest {
         };
         lenient().when(compactionService.lockFor(anyString())).thenAnswer(inv -> new Object());
 
-        chatService = new ChatService(agentService, sessionService, skillRegistry,
+        return new ChatService(agentService, sessionService, skillRegistry,
                 agentLoopEngine, modelUsageRepository, broadcaster, sync,
                 sessionTitleService, subAgentRegistry, cancellationRegistry, compactionService,
                 null, null, new ObjectMapper(), null,
@@ -87,7 +99,7 @@ class ChatServiceModelOverrideTest {
                 new SessionConfirmCache(), new PendingConfirmationRegistry(),
                 sid -> sid, mock(LlmTraceStore.class),
                 mock(org.springframework.context.ApplicationEventPublisher.class),
-                null /* reminderBuilder — Q2: null = no reminder injected */);
+                reminderBuilder);
     }
 
     @Test
@@ -135,6 +147,66 @@ class ChatServiceModelOverrideTest {
         assertThat(captured.getModelId()).isEqualTo("claude:claude-sonnet-4-20250514");
     }
 
+    /**
+     * Q2 reminder fix regression (2026-05-10): when {@link com.skillforge.core.reminder.ReminderBuilder}
+     * emits a non-empty {@code <system-reminder>} block, ChatService must hand the engine the
+     * <em>same</em> two-block {@code Message} it persisted (reminder block first, raw user text
+     * second). Without the 7-arg engine.run wiring the engine would rebuild
+     * {@code Message.user(userMessage)} from the raw string and silently drop the reminder.
+     */
+    @Test
+    @DisplayName("reminder emits → 7-arg engine.run receives 2-block Message [reminder, raw user text]")
+    void reminderEnabled_passesArrayShapeMessageToEngineRun() {
+        // Build a real ReminderBuilder with a deterministic single source that always emits.
+        com.skillforge.core.reminder.ReminderSource fixed = new com.skillforge.core.reminder.ReminderSource() {
+            @Override public String getName() { return "test-source"; }
+            @Override public boolean shouldEmit(com.skillforge.core.reminder.ReminderContext ctx) {
+                return true;
+            }
+            @Override public com.skillforge.core.reminder.ReminderEntry emit(
+                    com.skillforge.core.reminder.ReminderContext ctx) {
+                return new com.skillforge.core.reminder.ReminderEntry("Context: 80% used (W/T tokens)", 5);
+            }
+        };
+        com.skillforge.core.reminder.ReminderBuilder builder =
+                new com.skillforge.core.reminder.ReminderBuilder(List.of(fixed), 5_000, true);
+        chatService = buildChatService(builder);
+
+        SessionEntity sess = newSession("sess-rmd", null);
+        AgentEntity agent = newAgent(100L, "claude:claude-sonnet-4-20250514");
+        AgentDefinition def = newDef("claude:claude-sonnet-4-20250514");
+        // ReminderContext.maxTokens reads agentDef config; ensure non-null systemPrompt so
+        // buildUserMessageWithReminder doesn't NPE on the path through to ReminderBuilder.build().
+        def.setSystemPrompt("hi");
+        wireBaseMocks(sess, agent, def);
+
+        chatService.chatAsync("sess-rmd", "hello world", 7L);
+
+        // Capture the Message that ChatService passed as the 7-arg userMessageBlock.
+        ArgumentCaptor<com.skillforge.core.model.Message> msgCaptor =
+                ArgumentCaptor.forClass(com.skillforge.core.model.Message.class);
+        org.mockito.Mockito.verify(agentLoopEngine).run(
+                any(AgentDefinition.class), anyString(),
+                msgCaptor.capture(),
+                anyList(), anyString(), anyLong(),
+                any(com.skillforge.core.engine.LoopContext.class));
+
+        com.skillforge.core.model.Message captured = msgCaptor.getValue();
+        assertThat(captured).isNotNull();
+        assertThat(captured.getContent()).isInstanceOf(List.class);
+        @SuppressWarnings("unchecked")
+        List<com.skillforge.core.model.ContentBlock> blocks =
+                (List<com.skillforge.core.model.ContentBlock>) captured.getContent();
+        assertThat(blocks).hasSize(2);
+        // Block 0: reminder, text starts with the literal `<system-reminder>` tag.
+        assertThat(blocks.get(0).getType()).isEqualTo("text");
+        assertThat(blocks.get(0).getText()).startsWith("<system-reminder>");
+        assertThat(blocks.get(0).getText()).contains("Context: 80% used");
+        // Block 1: raw user input, untouched.
+        assertThat(blocks.get(1).getType()).isEqualTo("text");
+        assertThat(blocks.get(1).getText()).isEqualTo("hello world");
+    }
+
     // -------------------------- helpers --------------------------
 
     private void wireBaseMocks(SessionEntity sess, AgentEntity agent, AgentDefinition def) {
@@ -149,14 +221,35 @@ class ChatServiceModelOverrideTest {
         LoopResult result = new LoopResult();
         result.setMessages(new ArrayList<>());
         result.setToolCalls(new ArrayList<>());
-        when(agentLoopEngine.run(any(AgentDefinition.class), anyString(), any(), anyString(), anyLong(), any()))
+        // Q2 reminder fix (2026-05-10): engine.run now has a 7-arg overload accepting
+        // a pre-constructed Message userMessageBlock. The legacy 6-arg overload still
+        // delegates with null block, but ChatService now calls the 7-arg form directly.
+        // Mockito needs typed matchers (`any(Message.class)`, `anyList()`) to
+        // disambiguate from the 5/6-arg overloads — `any()` alone is `Object` and the
+        // compiler can't pick the right method.
+        // NULL-MATCHING NOTE: `any(Message.class)` is equivalent to `isA(Message.class)`
+        // and does NOT match a null argument. This is currently safe because
+        // ChatService.buildUserMessageWithReminder() always returns a non-null Message
+        // (legacy path falls back to Message.user(userMessage) when reminderBuilder is
+        // null or yields empty text). If a future ChatService path passes null as the
+        // userMsgWithReminder argument to the 7-arg engine.run, this stub will silently
+        // miss the call and the test will see "null" verify failures — switch to
+        // `nullable(com.skillforge.core.model.Message.class)` here, or add a separate
+        // stub branch for the null case.
+        when(agentLoopEngine.run(any(AgentDefinition.class), anyString(),
+                any(com.skillforge.core.model.Message.class),
+                anyList(), anyString(), anyLong(),
+                any(com.skillforge.core.engine.LoopContext.class)))
                 .thenReturn(result);
     }
 
     private AgentDefinition captureAgentDef() {
         ArgumentCaptor<AgentDefinition> cap = ArgumentCaptor.forClass(AgentDefinition.class);
         org.mockito.Mockito.verify(agentLoopEngine).run(
-                cap.capture(), anyString(), any(), anyString(), anyLong(), any());
+                cap.capture(), anyString(),
+                any(com.skillforge.core.model.Message.class),
+                anyList(), anyString(), anyLong(),
+                any(com.skillforge.core.engine.LoopContext.class));
         return cap.getValue();
     }
 

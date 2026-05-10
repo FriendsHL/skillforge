@@ -43,37 +43,41 @@ public class TodoWriteTool implements Tool {
 
     @Override
     public ToolSchema getToolSchema() {
-        Map<String, Object> taskProperties = new LinkedHashMap<>();
-        taskProperties.put("id", Map.of(
+        // Schema parameter is named `todos` to align with Anthropic Claude Code's
+        // canonical TodoWrite tool — Claude-family models call this tool with
+        // `{"todos": [...]}` from training memory; using `tasks` previously caused
+        // [RETRY NEEDED] tool_error misfires when the LLM emitted the canonical name.
+        Map<String, Object> todoProperties = new LinkedHashMap<>();
+        todoProperties.put("id", Map.of(
                 "type", "string",
-                "description", "Unique task ID"
+                "description", "Unique todo ID"
         ));
-        taskProperties.put("title", Map.of(
+        todoProperties.put("title", Map.of(
                 "type", "string",
-                "description", "Task description"
+                "description", "Todo description"
         ));
-        taskProperties.put("status", Map.of(
+        todoProperties.put("status", Map.of(
                 "type", "string",
-                "description", "Task status: pending, in_progress, or completed",
+                "description", "Todo status: pending, in_progress, or completed",
                 "enum", List.of("pending", "in_progress", "completed")
         ));
 
-        Map<String, Object> taskSchema = new LinkedHashMap<>();
-        taskSchema.put("type", "object");
-        taskSchema.put("properties", taskProperties);
-        taskSchema.put("required", List.of("id", "title", "status"));
+        Map<String, Object> todoSchema = new LinkedHashMap<>();
+        todoSchema.put("type", "object");
+        todoSchema.put("properties", todoProperties);
+        todoSchema.put("required", List.of("id", "title", "status"));
 
         Map<String, Object> properties = new LinkedHashMap<>();
-        properties.put("tasks", Map.of(
+        properties.put("todos", Map.of(
                 "type", "array",
-                "description", "List of task objects",
-                "items", taskSchema
+                "description", "List of todo objects",
+                "items", todoSchema
         ));
 
         Map<String, Object> schema = new LinkedHashMap<>();
         schema.put("type", "object");
         schema.put("properties", properties);
-        schema.put("required", List.of("tasks"));
+        schema.put("required", List.of("todos"));
 
         return new ToolSchema(getName(), getDescription(), schema);
     }
@@ -87,48 +91,48 @@ public class TodoWriteTool implements Tool {
                 return SkillResult.error("Session ID is required for TodoWrite");
             }
 
-            Object tasksObj = input.get("tasks");
-            if (tasksObj == null) {
-                return SkillResult.error("tasks is required");
+            Object todosObj = input.get("todos");
+            if (todosObj == null) {
+                return SkillResult.error("todos is required");
             }
 
-            List<Map<String, Object>> tasks;
-            if (tasksObj instanceof List) {
-                tasks = (List<Map<String, Object>>) tasksObj;
+            List<Map<String, Object>> todos;
+            if (todosObj instanceof List) {
+                todos = (List<Map<String, Object>>) todosObj;
             } else {
-                return SkillResult.error("tasks must be an array");
+                return SkillResult.error("todos must be an array");
             }
 
-            // Validate tasks
-            for (Map<String, Object> task : tasks) {
-                String id = (String) task.get("id");
-                String title = (String) task.get("title");
-                String status = (String) task.get("status");
+            // Validate todos
+            for (Map<String, Object> todo : todos) {
+                String id = (String) todo.get("id");
+                String title = (String) todo.get("title");
+                String status = (String) todo.get("status");
 
                 if (id == null || id.isBlank()) {
-                    return SkillResult.error("Each task must have a non-empty 'id'");
+                    return SkillResult.error("Each todo must have a non-empty 'id'");
                 }
                 if (title == null || title.isBlank()) {
-                    return SkillResult.error("Each task must have a non-empty 'title'");
+                    return SkillResult.error("Each todo must have a non-empty 'title'");
                 }
                 if (status == null || !List.of("pending", "in_progress", "completed").contains(status)) {
-                    return SkillResult.error("Task '" + id + "' has invalid status: " + status
+                    return SkillResult.error("Todo '" + id + "' has invalid status: " + status
                             + ". Must be one of: pending, in_progress, completed");
                 }
             }
 
-            // Store tasks as JSON
-            String tasksJson = objectMapper.writeValueAsString(tasks);
-            todoStore.setTasks(sessionId, tasksJson);
+            // Store todos as JSON (TodoStore method names retain `tasks` for backward compat)
+            String todosJson = objectMapper.writeValueAsString(todos);
+            todoStore.setTasks(sessionId, todosJson);
 
             // Format output
             StringBuilder sb = new StringBuilder();
-            sb.append("Tasks updated (").append(tasks.size()).append(" total):\n");
+            sb.append("Todos updated (").append(todos.size()).append(" total):\n");
 
-            for (Map<String, Object> task : tasks) {
-                String id = (String) task.get("id");
-                String title = (String) task.get("title");
-                String status = (String) task.get("status");
+            for (Map<String, Object> todo : todos) {
+                String id = (String) todo.get("id");
+                String title = (String) todo.get("title");
+                String status = (String) todo.get("status");
 
                 String marker;
                 switch (status) {
@@ -150,7 +154,7 @@ public class TodoWriteTool implements Tool {
 
             return SkillResult.success(sb.toString().trim());
         } catch (Exception e) {
-            return SkillResult.error("Failed to update tasks: " + e.getMessage());
+            return SkillResult.error("Failed to update todos: " + e.getMessage());
         }
     }
 }
