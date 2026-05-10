@@ -661,7 +661,47 @@ public class SessionService {
             requiredTxTemplate.execute(status -> {
                 List<Message> persistedContext = getContextMessages(id);
                 int prefixLen = commonPrefixSize(persistedContext, messages);
-                if (prefixLen == 0 && !persistedContext.isEmpty() && messages != null && !messages.isEmpty()) {
+                // Divergence guard (2026-05-10, post-Q2/Q3 hardening):
+                // Trigger rewrite whenever ANY persistedContext row didn't match engine's
+                // view, not just the all-or-nothing prefixLen==0 case. The original
+                // prefixLen==0 check missed mid-prefix divergence — engine's state diverged
+                // from DB at some inner index but matched at index 0, so the else-branch
+                // silently appended `messages.subList(prefixLen, ...)` as delta. Combined
+                // with row-store dedup-by-id, this materialised as DUP user-msg rows
+                // (Q2 commit bdb0453 hit it: ChatService persisted array-shape userMsg with
+                // <system-reminder>, engine rebuilt String-shape Message.user(text), prefix
+                // diverged at the user-msg index, append-delta dup-wrote the engine version
+                // as seq N+1 — visible as two identical user bubbles in chat).
+                //
+                // Q3 commit cc87776 fixed the specific Q2 path by threading the same Message
+                // object through engine.run; this guard is the structural backstop catching
+                // the same shape-divergence pattern from any future code path. Compact paths
+                // (light/full via CompactionService callback) sync DB BEFORE this is called,
+                // so they remain prefix-matching and don't trip the guard.
+                // prefixLen<size already implies persistedContext non-empty
+                // (prefixLen>=0 cannot be < 0).
+                boolean prefixMismatch = prefixLen < persistedContext.size()
+                        && messages != null && !messages.isEmpty();
+                if (prefixMismatch) {
+                    if (prefixLen > 0) {
+                        // Mid-prefix divergence — strong indicator of a shape/content
+                        // mismatch bug between ChatService persistence and engine output.
+                        // Log diagnostic context (incl. content shape — ArrayList vs String —
+                        // so Q2-style shape divergence is one-glance diagnosable). Only the
+                        // class simple name is logged; raw content is intentionally omitted
+                        // to avoid leaking PII / sensitive payloads.
+                        Message persistRow = persistedContext.get(prefixLen);
+                        Message engineRow = messages.size() > prefixLen ? messages.get(prefixLen) : null;
+                        Object persistContent = persistRow.getContent();
+                        Object engineContent = engineRow != null ? engineRow.getContent() : null;
+                        String persistContentType = persistContent == null ? "null" : persistContent.getClass().getSimpleName();
+                        String engineContentType = engineContent == null ? "null" : engineContent.getClass().getSimpleName();
+                        log.warn("updateSessionMessages mid-prefix divergence: sessionId={}, divergeAt={}, persistedSize={}, engineSize={}, persistRole={}, engineRole={}, persistContentType={}, engineContentType={}",
+                                id, prefixLen, persistedContext.size(), messages.size(),
+                                persistRow.getRole(),
+                                engineRow == null ? "<missing>" : engineRow.getRole(),
+                                persistContentType, engineContentType);
+                    }
                     // 兼容兜底：优先保留最后一个 boundary 之前的完整历史，避免破坏 full-compact 断点。
                     List<StoredMessage> fullRecords = getFullHistoryRecords(id);
                     int lastBoundary = -1;
