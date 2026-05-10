@@ -1,17 +1,14 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import {
-  Button,
   Modal,
-  Space,
   Switch,
-  Table,
   Tooltip,
   Typography,
   message,
   List,
   Empty,
+  Spin,
 } from 'antd';
-import type { ColumnsType } from 'antd/es/table';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   listMcpServers,
@@ -22,9 +19,9 @@ import {
   isDeleteConflict,
 } from '../api/mcpServers';
 import { useAuth } from '../contexts/AuthContext';
-import type { McpServer, McpToolDescriptor } from '../types/mcpServer';
-import McpServerStatusTag from '../components/mcp/McpServerStatusTag';
+import type { McpServer, McpToolDescriptor, McpServerStatus } from '../types/mcpServer';
 import McpServerEditDrawer from '../components/mcp/McpServerEditDrawer';
+import './McpServers.css';
 
 const { Text, Paragraph } = Typography;
 
@@ -34,18 +31,69 @@ const PLUS_ICON = (
   </svg>
 );
 
+const SERVER_ICON = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden>
+    <rect x="3" y="4" width="18" height="6" rx="2" />
+    <rect x="3" y="14" width="18" height="6" rx="2" />
+    <circle cx="7" cy="7" r="1" fill="currentColor" />
+    <circle cx="7" cy="17" r="1" fill="currentColor" />
+  </svg>
+);
+
+const TEST_ICON = (
+  <svg width={12} height={12} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden>
+    <path d="M2 8l4 4 8-8" />
+  </svg>
+);
+
+const EDIT_ICON = (
+  <svg width={12} height={12} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden>
+    <path d="M11.5 2.5l2 2M3 13l8-8 2 2-8 8H3z" />
+  </svg>
+);
+
+const DELETE_ICON = (
+  <svg width={12} height={12} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden>
+    <path d="M3 4h10M5 4V3h6v1M6 7v5M10 7v5M4 4l1 10h6l1-10" />
+  </svg>
+);
+
+const SPINNER_ICON = (
+  <svg width={12} height={12} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden style={{ animation: 'mcp-spin 0.8s linear infinite' }}>
+    <circle cx="8" cy="8" r="6" strokeDasharray="30" strokeDashoffset="10" />
+  </svg>
+);
+
 /**
- * Render the `command + args` columns as a single mono-styled cell — keeps
- * the table dense and lets the user paste the rendered string back into a
- * shell as-is for spot debugging.
+ * Render command cell with mono styling
  */
-function renderCommandCell(server: McpServer): React.ReactNode {
+function renderCommand(server: McpServer): string {
   const args = (server.args ?? []).join(' ');
+  return args ? `${server.command} ${args}` : server.command;
+}
+
+/**
+ * Status pill component with visual indicators
+ */
+function StatusPill({ status }: { status?: McpServerStatus }) {
+  const resolved: McpServerStatus = status ?? 'disconnected';
   return (
-    <Text style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>
-      {server.command}
-      {args ? ` ${args}` : ''}
-    </Text>
+    <span className={`mcp-status-pill ${resolved}`}>
+      <span className="mcp-status-icon" />
+      {resolved}
+    </span>
+  );
+}
+
+/**
+ * Tool count badge
+ */
+function ToolBadge({ count }: { count?: number }) {
+  const hasTools = typeof count === 'number' && count > 0;
+  return (
+    <span className={`mcp-tool-badge ${hasTools ? '' : 'zero'}`}>
+      {hasTools ? count : '—'}
+    </span>
   );
 }
 
@@ -54,7 +102,6 @@ const McpServers: React.FC = () => {
   const { userId } = useAuth();
   const [editOpen, setEditOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<McpServer | null>(null);
-  /** Per-row spinner state for the "Test" button. Like P12 Schedules.tsx. */
   const [testingId, setTestingId] = useState<number | null>(null);
 
   const { data: servers = [], isLoading } = useQuery({
@@ -63,6 +110,15 @@ const McpServers: React.FC = () => {
     staleTime: 15_000,
   });
 
+  // Compute stats for quick bar
+  const stats = useMemo(() => {
+    const connected = servers.filter(s => s.status === 'connected').length;
+    const disconnected = servers.filter(s => s.status === 'disconnected' || !s.status).length;
+    const error = servers.filter(s => s.status === 'error').length;
+    const totalTools = servers.reduce((sum, s) => sum + (s.toolCount ?? 0), 0);
+    return { connected, disconnected, error, totalTools, total: servers.length };
+  }, [servers]);
+
   const { mutate: removeServer } = useMutation({
     mutationFn: (id: number) => deleteMcpServer(id, userId),
     onSuccess: () => {
@@ -70,9 +126,6 @@ const McpServers: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: ['mcp-servers'] });
     },
     onError: (e: unknown) => {
-      // INV-12: 409 + agentNames means "still referenced by N agents".
-      // Surface a Modal listing them rather than a generic toast so the
-      // user can see exactly which agents to unbind first.
       if (isDeleteConflict(e)) {
         const agentNames = parseDeleteConflict(e);
         Modal.warning({
@@ -227,122 +280,158 @@ const McpServers: React.FC = () => {
     [userId],
   );
 
-  const columns: ColumnsType<McpServer> = [
-    {
-      title: 'Name',
-      dataIndex: 'name',
-      key: 'name',
-      render: (name: string, server) => (
-        <div>
-          <div style={{ fontWeight: 600, fontFamily: 'var(--font-mono)' }}>{name}</div>
-          <Text type="secondary" style={{ fontSize: 11 }}>
-            #{server.id}
-          </Text>
-        </div>
-      ),
-    },
-    {
-      title: 'Command',
-      key: 'command',
-      render: (_, server) => renderCommandCell(server),
-    },
-    {
-      title: 'Status',
-      dataIndex: 'status',
-      key: 'status',
-      width: 140,
-      render: (status: McpServer['status']) => <McpServerStatusTag status={status} />,
-    },
-    {
-      title: 'Tools',
-      dataIndex: 'toolCount',
-      key: 'toolCount',
-      width: 80,
-      render: (n: number | undefined) => (
-        <Text style={{ fontFamily: 'var(--font-mono)' }}>
-          {typeof n === 'number' ? n : '—'}
-        </Text>
-      ),
-    },
-    {
-      title: 'Enabled',
-      dataIndex: 'enabled',
-      key: 'enabled',
-      width: 90,
-      render: (enabled: boolean, server) => (
-        <Switch
-          checked={enabled}
-          size="small"
-          onChange={(checked) => toggleEnabled({ id: server.id, enabled: checked })}
-        />
-      ),
-    },
-    {
-      title: 'Actions',
-      key: 'actions',
-      width: 240,
-      render: (_, server) => (
-        <Space size="small">
-          <Tooltip title="Edit">
-            <Button size="small" onClick={() => handleOpenEdit(server)}>
-              Edit
-            </Button>
-          </Tooltip>
-          <Tooltip title="Dry-run: spawn → initialize → tools/list → close">
-            <Button
-              size="small"
-              loading={testingId === server.id}
-              onClick={() => handleTestConnection(server)}
-            >
-              Test
-            </Button>
-          </Tooltip>
-          <Tooltip title="Delete">
-            <Button size="small" danger onClick={() => handleDelete(server)}>
-              Delete
-            </Button>
-          </Tooltip>
-        </Space>
-      ),
-    },
-  ];
-
   return (
-    <div style={{ padding: '24px 32px', maxWidth: 1400, margin: '0 auto' }}>
-      <header
-        style={{
-          display: 'flex',
-          alignItems: 'flex-end',
-          justifyContent: 'space-between',
-          marginBottom: 24,
-          gap: 16,
-        }}
-      >
+    <div className="mcp-page">
+      {/* Header */}
+      <header className="mcp-head">
         <div>
-          <h1 style={{ margin: 0, fontSize: 24, fontWeight: 600 }}>MCP Servers</h1>
-          <p style={{ margin: '4px 0 0', color: 'var(--fg-3)', fontSize: 13 }}>
+          <h1 className="mcp-head-title">MCP Servers</h1>
+          <p className="mcp-head-sub">
             External Model Context Protocol servers. Tools are auto-injected as{' '}
             <code>mcp_&lt;name&gt;_&lt;tool&gt;</code> for agents that opt-in.
           </p>
         </div>
-        <Button type="primary" icon={PLUS_ICON} onClick={handleOpenCreate}>
-          New MCP server
-        </Button>
+        <div className="mcp-head-actions">
+          <button className="mcp-btn-add" onClick={handleOpenCreate}>
+            {PLUS_ICON}
+            New MCP server
+          </button>
+        </div>
       </header>
 
-      <Table<McpServer>
-        rowKey="id"
-        columns={columns}
-        dataSource={servers}
-        loading={isLoading}
-        pagination={{ pageSize: 20 }}
-        size="middle"
-        locale={{
-          emptyText:
-            'No MCP servers configured yet — click "New MCP server" to add one.',
-        }}
-      />
+      {/* Quick stats bar */}
+      {servers.length > 0 && (
+        <div className="mcp-stats-bar">
+          <div className="mcp-stat-item">
+            <span className="mcp-stat-dot connected" />
+            <span className="mcp-stat-count">{stats.connected}</span>
+            <span className="mcp-stat-label">connected</span>
+          </div>
+          <div className="mcp-stat-item">
+            <span className="mcp-stat-dot disconnected" />
+            <span className="mcp-stat-count">{stats.disconnected}</span>
+            <span className="mcp-stat-label">idle</span>
+          </div>
+          {stats.error > 0 && (
+            <div className="mcp-stat-item">
+              <span className="mcp-stat-dot error" />
+              <span className="mcp-stat-count">{stats.error}</span>
+              <span className="mcp-stat-label">error</span>
+            </div>
+          )}
+          <div className="mcp-stat-item">
+            <span className="mcp-stat-count">{stats.totalTools}</span>
+            <span className="mcp-stat-label">tools</span>
+          </div>
+        </div>
+      )}
 
+      {/* Table */}
+      <div className="mcp-table-wrap">
+        {isLoading ? (
+          <div className="mcp-loading">
+            <Spin />
+          </div>
+        ) : servers.length === 0 ? (
+          <div className="mcp-empty">
+            <div className="mcp-empty-icon">
+              {SERVER_ICON}
+            </div>
+            <h3 className="mcp-empty-title">No MCP servers configured</h3>
+            <p className="mcp-empty-desc">
+              Add an MCP server to inject external tools into your agents.
+            </p>
+            <button className="mcp-btn-add" onClick={handleOpenCreate}>
+              {PLUS_ICON}
+              Add first server
+            </button>
+          </div>
+        ) : (
+          <table className="mcp-table">
+            <thead>
+              <tr>
+                <th style={{ paddingLeft: 20 }}>Server</th>
+                <th>Command</th>
+                <th>Status</th>
+                <th>Tools</th>
+                <th>Enabled</th>
+                <th style={{ textAlign: 'right', paddingRight: 20 }}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {servers.map((server) => (
+                <tr key={server.id} onClick={() => handleOpenEdit(server)}>
+                  <td style={{ paddingLeft: 20 }}>
+                    <div className="mcp-name-cell">
+                      <span className={`mcp-name-dot ${server.status ?? 'disconnected'}`} />
+                      <div className="mcp-name-text">
+                        <span className="mcp-name-main">{server.name}</span>
+                        {server.description && (
+                          <span className="mcp-name-desc">{server.description}</span>
+                        )}
+                      </div>
+                    </div>
+                  </td>
+                  <td>
+                    <span className="mcp-cmd-cell">{renderCommand(server)}</span>
+                  </td>
+                  <td>
+                    <StatusPill status={server.status} />
+                  </td>
+                  <td>
+                    <ToolBadge count={server.toolCount} />
+                  </td>
+                  <td>
+                    <div className="mcp-toggle-wrap">
+                      <Switch
+                        checked={server.enabled}
+                        size="small"
+                        onChange={(checked) => {
+                          toggleEnabled({ id: server.id, enabled: checked });
+                        }}
+                        onClick={(_, e) => e.stopPropagation()}
+                      />
+                    </div>
+                  </td>
+                  <td style={{ paddingRight: 20 }}>
+                    <div className="mcp-actions" onClick={(e) => e.stopPropagation()}>
+                      <Tooltip title="Edit configuration">
+                        <button
+                          className="mcp-btn-action edit"
+                          onClick={() => handleOpenEdit(server)}
+                        >
+                          {EDIT_ICON}
+                          Edit
+                        </button>
+                      </Tooltip>
+                      <Tooltip title="Test connection: spawn → initialize → tools/list → close">
+                        <button
+                          className={`mcp-btn-action test ${testingId === server.id ? 'loading' : ''}`}
+                          onClick={() => handleTestConnection(server)}
+                          disabled={testingId === server.id}
+                        >
+                          {testingId === server.id ? SPINNER_ICON : TEST_ICON}
+                          Test
+                        </button>
+                      </Tooltip>
+                      <Tooltip title="Delete server">
+                        <button
+                          className="mcp-btn-action delete"
+                          onClick={() => handleDelete(server)}
+                        >
+                          {DELETE_ICON}
+                        </button>
+                      </Tooltip>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {/* Edit drawer */}
       <McpServerEditDrawer
         open={editOpen}
         server={editTarget}

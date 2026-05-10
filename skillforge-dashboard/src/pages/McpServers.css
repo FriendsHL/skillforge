@@ -1,0 +1,504 @@
+/* ============== MCP SERVERS PAGE ============== */
+
+.mcp-page {
+  padding: var(--sp-6) var(--sp-8);
+  max-width: 1400px;
+  margin: 0 auto;
+  min-height: calc(100vh - var(--header-height, 44px));
+}
+
+/* Header */
+.mcp-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  margin-bottom: var(--sp-6);
+  gap: var(--sp-4);
+}
+
+.mcp-head-title {
+  font-family: var(--font-serif);
+  font-size: 28px;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  color: var(--fg-1);
+  margin: 0 0 4px 0;
+  line-height: 1.2;
+}
+
+.mcp-head-sub {
+  color: var(--fg-3);
+  font-size: var(--font-size-sm);
+  margin: 0;
+  line-height: 1.5;
+}
+
+.mcp-head-sub code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: var(--bg-surface);
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: var(--fg-2);
+}
+
+/* Primary button */
+.mcp-btn-add {
+  border: 0;
+  background: var(--accent);
+  color: var(--text-on-accent);
+  font: inherit;
+  font-weight: 500;
+  padding: 8px 16px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: var(--font-size-sm);
+  transition: filter var(--transition-base), transform 0.08s ease;
+}
+
+.mcp-btn-add:hover {
+  filter: brightness(0.94);
+}
+
+.mcp-btn-add:active {
+  transform: scale(0.98);
+}
+
+/* Table wrapper */
+.mcp-table-wrap {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+/* Custom table */
+.mcp-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-size-sm);
+}
+
+.mcp-table thead th {
+  background: var(--bg-base);
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--fg-4);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-1);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.mcp-table thead th:first-child {
+  padding-left: 20px;
+}
+
+.mcp-table tbody tr {
+  cursor: pointer;
+  transition: background var(--transition-base);
+}
+
+.mcp-table tbody tr:hover {
+  background: var(--bg-hover);
+}
+
+.mcp-table tbody td {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border-1);
+  vertical-align: middle;
+}
+
+.mcp-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+/* Name column */
+.mcp-name-cell {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.mcp-name-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  position: relative;
+}
+
+.mcp-name-dot.connected {
+  background: var(--color-ok);
+}
+
+.mcp-name-dot.connected::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  border: 2px solid var(--color-ok);
+  opacity: 0.3;
+  animation: mcp-pulse 2s ease-in-out infinite;
+}
+
+.mcp-name-dot.disconnected {
+  background: var(--fg-4);
+}
+
+.mcp-name-dot.error {
+  background: var(--color-err);
+}
+
+@keyframes mcp-pulse {
+  0%, 100% { opacity: 0.3; transform: scale(1); }
+  50% { opacity: 0.15; transform: scale(1.2); }
+}
+
+.mcp-name-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mcp-name-main {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--fg-1);
+  letter-spacing: -0.01em;
+}
+
+.mcp-name-desc {
+  font-size: 12px;
+  color: var(--fg-3);
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Status pill */
+.mcp-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+  letter-spacing: 0.04em;
+}
+
+.mcp-status-pill.connected {
+  background: rgba(92, 138, 74, 0.12);
+  color: #4a7a3c;
+  border: 1px solid rgba(92, 138, 74, 0.2);
+}
+
+.mcp-status-pill.disconnected {
+  background: var(--bg-hover);
+  color: var(--fg-3);
+  border: 1px solid var(--border-1);
+}
+
+.mcp-status-pill.error {
+  background: rgba(180, 60, 60, 0.12);
+  color: #8a3030;
+  border: 1px solid rgba(180, 60, 60, 0.2);
+}
+
+[data-theme="dark"] .mcp-status-pill.connected {
+  background: rgba(92, 138, 74, 0.18);
+  color: #8fca8f;
+  border-color: rgba(92, 138, 74, 0.3);
+}
+
+[data-theme="dark"] .mcp-status-pill.error {
+  background: rgba(180, 60, 60, 0.18);
+  color: #e08a8a;
+  border-color: rgba(180, 60, 60, 0.3);
+}
+
+.mcp-status-icon {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.mcp-status-pill.connected .mcp-status-icon {
+  background: currentColor;
+  animation: mcp-blink 1.5s steps(2) infinite;
+}
+
+.mcp-status-pill.disconnected .mcp-status-icon {
+  background: transparent;
+  border: 1.5px solid currentColor;
+}
+
+.mcp-status-pill.error .mcp-status-icon {
+  background: transparent;
+  border: 1.5px solid currentColor;
+  position: relative;
+}
+
+.mcp-status-pill.error .mcp-status-icon::before,
+.mcp-status-pill.error .mcp-status-icon::after {
+  content: '';
+  position: absolute;
+  background: currentColor;
+  width: 6px;
+  height: 1.5px;
+  top: 50%;
+  left: 50%;
+}
+
+.mcp-status-pill.error .mcp-status-icon::before {
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+
+.mcp-status-pill.error .mcp-status-icon::after {
+  transform: translate(-50%, -50%) rotate(-45deg);
+}
+
+@keyframes mcp-blink {
+  50% { opacity: 0.4; }
+}
+
+/* Command cell */
+.mcp-cmd-cell {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--fg-2);
+  background: var(--bg-base);
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  display: inline-block;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Tool count badge */
+.mcp-tool-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  background: rgba(99, 102, 241, 0.08);
+  color: #5a5aaa;
+  border: 1px solid rgba(99, 102, 241, 0.15);
+}
+
+.mcp-tool-badge.zero {
+  background: var(--bg-hover);
+  color: var(--fg-4);
+  border-color: var(--border-1);
+}
+
+[data-theme="dark"] .mcp-tool-badge {
+  background: rgba(99, 102, 241, 0.12);
+  color: #a8a8e8;
+  border-color: rgba(99, 102, 241, 0.2);
+}
+
+/* Enabled toggle */
+.mcp-toggle-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Actions */
+.mcp-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.mcp-btn-action {
+  border: 1px solid var(--border-1);
+  background: var(--bg-surface);
+  color: var(--fg-3);
+  font: inherit;
+  font-size: var(--font-size-xs);
+  padding: 5px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: all var(--transition-base);
+}
+
+.mcp-btn-action:hover {
+  color: var(--fg-1);
+  border-color: var(--border-2);
+  background: var(--bg-hover);
+}
+
+.mcp-btn-action.test:hover {
+  color: #4a7a3c;
+  border-color: rgba(92, 138, 74, 0.3);
+}
+
+.mcp-btn-action.edit:hover {
+  color: var(--accent);
+  border-color: rgba(99, 102, 241, 0.3);
+}
+
+.mcp-btn-action.delete:hover {
+  color: var(--color-err);
+  border-color: rgba(180, 60, 60, 0.3);
+}
+
+.mcp-btn-action.loading {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+/* Empty state */
+.mcp-empty {
+  padding: 48px 24px;
+  text-align: center;
+}
+
+.mcp-empty-icon {
+  width: 56px;
+  height: 56px;
+  margin: 0 auto 16px;
+  background: var(--bg-hover);
+  border-radius: var(--radius-lg);
+  display: grid;
+  place-items: center;
+  color: var(--fg-4);
+}
+
+.mcp-empty-icon svg {
+  width: 24px;
+  height: 24px;
+  stroke-width: 1.5;
+}
+
+.mcp-empty-title {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--fg-2);
+  margin: 0 0 6px;
+}
+
+.mcp-empty-desc {
+  font-size: var(--font-size-sm);
+  color: var(--fg-4);
+  margin: 0 0 20px;
+  line-height: 1.5;
+}
+
+/* Loading state */
+.mcp-loading {
+  padding: 40px;
+  text-align: center;
+  color: var(--fg-3);
+  font-size: var(--font-size-sm);
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .mcp-page {
+    padding: var(--sp-4) var(--sp-5);
+  }
+
+  .mcp-head {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--sp-3);
+  }
+
+  .mcp-head-actions {
+    width: 100%;
+  }
+
+  .mcp-btn-add {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .mcp-table thead th {
+    padding: 10px 12px;
+    font-size: 9.5px;
+  }
+
+  .mcp-table tbody td {
+    padding: 12px;
+  }
+
+  .mcp-cmd-cell {
+    max-width: 160px;
+    font-size: 11px;
+  }
+
+  .mcp-actions {
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .mcp-btn-action {
+    width: 100%;
+    justify-content: center;
+  }
+}
+
+/* Quick stats bar */
+.mcp-stats-bar {
+  display: flex;
+  gap: 12px;
+  margin-bottom: var(--sp-5);
+}
+
+.mcp-stat-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-sm);
+}
+
+.mcp-stat-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.mcp-stat-dot.connected { background: var(--color-ok); }
+.mcp-stat-dot.disconnected { background: var(--fg-4); }
+.mcp-stat-dot.error { background: var(--color-err); }
+
+.mcp-stat-count {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--fg-1);
+}
+
+.mcp-stat-label {
+  color: var(--fg-3);
+  font-size: 12px;
+}
