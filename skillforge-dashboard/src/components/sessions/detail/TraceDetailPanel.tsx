@@ -51,6 +51,19 @@ function copyText(text: string) {
   }
 }
 
+/** Copy button with tooltip */
+const CopyBtn: React.FC<{ text: string; title?: string }> = ({ text, title = 'Copy' }) => (
+  <button
+    type="button"
+    className="mini-btn"
+    onClick={() => copyText(text)}
+    title={title}
+    style={{ padding: '2px 6px', fontSize: 11 }}
+  >
+    📋
+  </button>
+);
+
 /**
  * Right pane that shows either:
  * - Trace overview (user input + assistant output) when no span selected
@@ -67,7 +80,8 @@ const TraceDetailPanel: React.FC<TraceDetailPanelProps> = ({ trace, span, onAddT
         <div className="tr-span-detail-h">
           <div className="tr-span-detail-title">
             <span className={`tr-kind-tag k-${span.kind}`}>{span.kind}</span>
-            <b className="mono-sm">{span.spanId.slice(0, 12)}</b>
+            <b className="mono-sm">{span.spanId.slice(0, 12)}…</b>
+            <CopyBtn text={span.spanId} title="Copy span ID" />
             <span className="kv-chip-sf">{fmtTime(span.startedAt)}</span>
           </div>
         </div>
@@ -107,7 +121,8 @@ const TraceDetailPanel: React.FC<TraceDetailPanelProps> = ({ trace, span, onAddT
             )}
           </div>
           <div className="tr-run-header-sub">
-            <span>{trace.id.slice(0, 16)}</span>
+            <span className="mono-sm">{trace.id.slice(0, 16)}…</span>
+            <CopyBtn text={trace.id} title="Copy trace ID" />
             <span>·</span>
             <span>{fmtTime(trace.startTime)}</span>
             {trace.model && trace.model !== '—' && (
