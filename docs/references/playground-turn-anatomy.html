@@ -1,0 +1,680 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SkillForge — Agent Turn Anatomy</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #0e0f12;
+    --bg-elev-1: #16181d;
+    --bg-elev-2: #1d2026;
+    --bg-elev-3: #262a31;
+    --border: #2a2e36;
+    --border-strong: #3a4049;
+    --text: #e6e8eb;
+    --text-dim: #9aa0a8;
+    --text-muted: #5a606a;
+    --accent: #8b5cf6;
+    --accent-soft: #c4b5fd;
+    --green: #4ade80;
+    --orange: #fb923c;
+    --red: #f87171;
+    --yellow: #fbbf24;
+    --blue: #60a5fa;
+    --cyan: #22d3ee;
+    --mono: 'JetBrains Mono', 'Fira Code', ui-monospace, 'SF Mono', Menlo, monospace;
+  }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    line-height: 1.55; min-height: 100vh; font-size: 14px;
+  }
+  .layout { display: grid; grid-template-columns: 320px 1fr; min-height: 100vh; }
+
+  /* sidebar */
+  aside {
+    border-right: 1px solid var(--border);
+    background: var(--bg-elev-1);
+    padding: 20px 18px;
+    overflow-y: auto;
+    height: 100vh;
+    position: sticky;
+    top: 0;
+  }
+  .brand {
+    font-size: 13px; font-weight: 600; letter-spacing: 0.04em;
+    color: var(--accent-soft); margin-bottom: 4px;
+  }
+  h1 {
+    font-size: 17px; font-weight: 600; line-height: 1.3;
+    margin-bottom: 4px;
+  }
+  .subtitle {
+    color: var(--text-dim); font-size: 12px; margin-bottom: 22px;
+  }
+  .section { margin-bottom: 22px; }
+  .section-label {
+    font-size: 11px; font-weight: 600; letter-spacing: 0.06em;
+    color: var(--text-dim); text-transform: uppercase; margin-bottom: 10px;
+  }
+
+  /* presets */
+  .presets { display: flex; flex-direction: column; gap: 6px; }
+  .preset {
+    text-align: left; padding: 10px 12px; border-radius: 6px;
+    background: var(--bg-elev-2); border: 1px solid var(--border);
+    color: var(--text); cursor: pointer; transition: all 0.12s;
+    font-size: 12.5px;
+  }
+  .preset:hover { border-color: var(--border-strong); background: var(--bg-elev-3); }
+  .preset.active {
+    border-color: var(--accent);
+    background: linear-gradient(180deg, rgba(139,92,246,0.12) 0%, rgba(139,92,246,0.04) 100%);
+  }
+  .preset .pname { font-weight: 500; }
+  .preset .pdesc { color: var(--text-muted); font-size: 11px; margin-top: 2px; }
+
+  /* toggle */
+  .toggle-row {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 7px 0; gap: 10px;
+  }
+  .toggle-label { font-size: 12.5px; color: var(--text); flex: 1; }
+  .toggle-label .dim { color: var(--text-muted); font-size: 11px; }
+  .switch {
+    position: relative; width: 32px; height: 18px;
+    background: var(--bg-elev-3); border-radius: 10px; cursor: pointer;
+    border: 1px solid var(--border-strong); flex-shrink: 0;
+  }
+  .switch::after {
+    content: ''; position: absolute; top: 1px; left: 1px;
+    width: 14px; height: 14px; background: var(--text-muted);
+    border-radius: 50%; transition: all 0.15s;
+  }
+  .switch.on { background: var(--accent); border-color: var(--accent); }
+  .switch.on::after { left: 15px; background: white; }
+
+  /* slider */
+  .slider-row { padding: 6px 0; }
+  .slider-row label {
+    display: flex; justify-content: space-between;
+    font-size: 12px; margin-bottom: 5px;
+  }
+  .slider-row label .val { font-family: var(--mono); color: var(--accent-soft); }
+  .slider {
+    width: 100%; height: 4px; background: var(--bg-elev-3);
+    border-radius: 2px; -webkit-appearance: none; appearance: none;
+  }
+  .slider::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 14px; height: 14px; background: var(--accent);
+    border-radius: 50%; cursor: pointer;
+  }
+
+  /* main */
+  main { padding: 30px 36px 200px; max-width: 1100px; }
+  .top {
+    display: flex; align-items: baseline; justify-content: space-between;
+    margin-bottom: 6px;
+  }
+  .top h2 {
+    font-size: 22px; font-weight: 600; letter-spacing: -0.01em;
+  }
+  .top .scenario-tag {
+    font-family: var(--mono); font-size: 11px;
+    padding: 4px 10px; border-radius: 4px;
+    background: var(--bg-elev-2); color: var(--accent-soft);
+    border: 1px solid var(--border-strong);
+  }
+  .lead {
+    color: var(--text-dim); margin-bottom: 28px; font-size: 13px;
+  }
+
+  /* stages */
+  .stage {
+    background: var(--bg-elev-1); border: 1px solid var(--border);
+    border-radius: 8px; padding: 18px 20px; margin-bottom: 14px;
+    position: relative;
+  }
+  .stage.dimmed { opacity: 0.45; }
+  .stage-head {
+    display: flex; align-items: baseline; justify-content: space-between;
+    margin-bottom: 10px;
+  }
+  .stage-num {
+    font-family: var(--mono); font-size: 11px; font-weight: 700;
+    color: var(--accent); letter-spacing: 0.05em;
+  }
+  .stage-title {
+    font-size: 15px; font-weight: 600; margin-left: 8px;
+  }
+  .stage-flag {
+    font-family: var(--mono); font-size: 10px; padding: 2px 7px;
+    border-radius: 3px; letter-spacing: 0.04em; text-transform: uppercase;
+  }
+  .stage-flag.green { background: rgba(74,222,128,0.12); color: var(--green); }
+  .stage-flag.orange { background: rgba(251,146,60,0.12); color: var(--orange); }
+  .stage-flag.red { background: rgba(248,113,113,0.12); color: var(--red); }
+  .stage-flag.blue { background: rgba(96,165,250,0.12); color: var(--blue); }
+
+  .stage-body { color: var(--text-dim); font-size: 13px; }
+  .code-block {
+    font-family: var(--mono); font-size: 12px; line-height: 1.6;
+    background: var(--bg); padding: 12px 14px; border-radius: 6px;
+    border: 1px solid var(--border); overflow-x: auto;
+    color: var(--text); margin: 8px 0;
+    white-space: pre-wrap; word-break: break-word;
+  }
+  .annot {
+    margin-top: 6px; padding-left: 10px;
+    border-left: 2px solid var(--border-strong);
+    color: var(--text-dim); font-size: 12px;
+  }
+  .annot.invariant { border-left-color: var(--green); }
+  .annot.warn { border-left-color: var(--orange); }
+  .annot.danger { border-left-color: var(--red); }
+
+  /* cache visualization */
+  .cache-stack {
+    display: grid; grid-template-columns: 1fr; gap: 4px;
+    border: 1px solid var(--border-strong); border-radius: 6px;
+    padding: 4px; background: var(--bg);
+  }
+  .cache-row {
+    display: grid; grid-template-columns: 70px 1fr 80px;
+    align-items: center; gap: 12px; padding: 8px 12px;
+    background: var(--bg-elev-2); border-radius: 4px;
+    font-size: 12px;
+  }
+  .cache-row .bp {
+    font-family: var(--mono); font-size: 10px; font-weight: 700;
+    color: var(--text-muted); letter-spacing: 0.04em;
+  }
+  .cache-row .seg-name {
+    font-family: var(--mono); font-size: 11.5px; color: var(--text);
+  }
+  .cache-row .hit-status {
+    font-family: var(--mono); font-size: 10px; padding: 2px 6px;
+    border-radius: 3px; text-align: center; letter-spacing: 0.04em;
+  }
+  .cache-row.hit .bp { color: var(--green); }
+  .cache-row.hit .hit-status { background: rgba(74,222,128,0.18); color: var(--green); }
+  .cache-row.miss .bp { color: var(--orange); }
+  .cache-row.miss .hit-status { background: rgba(251,146,60,0.18); color: var(--orange); }
+
+  /* prompt output */
+  .prompt-bar {
+    position: fixed; bottom: 0; left: 320px; right: 0;
+    background: var(--bg-elev-1); border-top: 1px solid var(--border-strong);
+    padding: 14px 36px; display: flex; gap: 16px; align-items: flex-start;
+    max-height: 220px; overflow-y: auto;
+  }
+  .prompt-content {
+    flex: 1;
+  }
+  .prompt-label {
+    font-size: 11px; font-weight: 600; color: var(--text-dim);
+    letter-spacing: 0.05em; text-transform: uppercase; margin-bottom: 6px;
+  }
+  #prompt {
+    font-family: var(--mono); font-size: 12px; line-height: 1.65;
+    color: var(--text); white-space: pre-wrap;
+  }
+  .copy-btn {
+    background: var(--accent); color: white;
+    border: none; padding: 8px 16px; border-radius: 5px;
+    font-size: 12px; font-weight: 500; cursor: pointer;
+    flex-shrink: 0; transition: all 0.12s;
+  }
+  .copy-btn:hover { background: #7c3aed; }
+  .copy-btn.copied { background: var(--green); color: var(--bg); }
+
+  .legend {
+    display: flex; flex-wrap: wrap; gap: 14px; margin-bottom: 16px;
+    font-size: 11px; color: var(--text-dim);
+  }
+  .legend .dot { display: inline-block; width: 8px; height: 8px;
+    border-radius: 50%; margin-right: 5px; vertical-align: middle; }
+  .legend .dot.g { background: var(--green); }
+  .legend .dot.o { background: var(--orange); }
+  .legend .dot.r { background: var(--red); }
+  .legend .dot.b { background: var(--blue); }
+</style>
+</head>
+<body>
+<div class="layout">
+  <aside>
+    <div class="brand">SKILLFORGE</div>
+    <h1>Agent Turn Anatomy</h1>
+    <p class="subtitle">单次 agent loop turn 的内部结构 + cache 边界 + 各种 toggle 下的行为差异</p>
+
+    <div class="section">
+      <div class="section-label">Scenario Presets</div>
+      <div class="presets" id="presets"></div>
+    </div>
+
+    <div class="section">
+      <div class="section-label">Toggles</div>
+      <div id="toggles"></div>
+    </div>
+
+    <div class="section">
+      <div class="section-label">Counts</div>
+      <div id="sliders"></div>
+    </div>
+  </aside>
+
+  <main>
+    <div class="top">
+      <h2>Turn # <span id="turn-num">7</span></h2>
+      <div class="scenario-tag" id="scenario-tag">Mid Conversation</div>
+    </div>
+    <p class="lead">演示 SkillForge 一次 agent loop turn 内部 5 个阶段：context 拼装 → user msg 持久化 → LLM 调用 → response 解析 → tool dispatch → 持久化回写。每个 toggle 改变某阶段的行为。</p>
+
+    <div class="legend">
+      <span><span class="dot g"></span>Cache hit / 不变量保持</span>
+      <span><span class="dot o"></span>Cache miss / 该 turn 触发</span>
+      <span><span class="dot r"></span>风险 / 历史 bug</span>
+      <span><span class="dot b"></span>Q3 防御性 guard</span>
+    </div>
+
+    <div id="stages"></div>
+  </main>
+</div>
+
+<div class="prompt-bar">
+  <div class="prompt-content">
+    <div class="prompt-label">Prompt 给 Claude 让它继续讲解</div>
+    <div id="prompt"></div>
+  </div>
+  <button class="copy-btn" id="copy-btn">Copy Prompt</button>
+</div>
+
+<script>
+const DEFAULTS = {
+  reminder: false,
+  lightCompact: false,
+  fullCompact: false,
+  subAgent: false,
+  showCache: true,
+  showQ3Guard: false,
+  turn: 7,
+  contextPct: 45,
+  history: 12,
+  toolCalls: 1,
+};
+
+const PRESETS = [
+  { id: 'cold', name: 'Cold Start', desc: 'Turn #1，无 history，无 reminder',
+    state: { reminder: false, lightCompact: false, fullCompact: false, subAgent: false, turn: 1, contextPct: 8, history: 0, toolCalls: 0 } },
+  { id: 'mid', name: 'Mid Conversation', desc: '正常对话，cache 命中所有层',
+    state: { reminder: false, lightCompact: false, fullCompact: false, subAgent: false, turn: 7, contextPct: 45, history: 12, toolCalls: 1 } },
+  { id: 'reminder', name: 'Reminder Fires (≥70%)', desc: 'context 跨 70% threshold，Q2/Q3 reminder 注入',
+    state: { reminder: true, lightCompact: false, fullCompact: false, subAgent: false, turn: 12, contextPct: 71, history: 22, toolCalls: 1 } },
+  { id: 'light', name: 'After Light Compact', desc: '50KB tool_result 截到 5KB，content 形态变化',
+    state: { reminder: true, lightCompact: true, fullCompact: false, subAgent: false, turn: 14, contextPct: 65, history: 28, toolCalls: 2 } },
+  { id: 'full', name: 'After Full Compact', desc: 'boundary + summary + retained + recovery 入 DB',
+    state: { reminder: true, lightCompact: false, fullCompact: true, subAgent: false, turn: 18, contextPct: 30, history: 45, toolCalls: 0 } },
+  { id: 'subagent', name: 'Sub-Agent Dispatch', desc: 'TeamCreate → 子 agent 接 task brief',
+    state: { reminder: false, lightCompact: false, fullCompact: false, subAgent: true, turn: 5, contextPct: 38, history: 8, toolCalls: 1 } },
+];
+
+const TOGGLES = [
+  { key: 'reminder', label: 'Reminder block enabled', desc: 'Q2/Q3: 拼进 user msg content array' },
+  { key: 'lightCompact', label: 'Light compact this turn', desc: '50KB tool_result truncate' },
+  { key: 'fullCompact', label: 'Full compact this turn', desc: 'boundary + summary + retained' },
+  { key: 'subAgent', label: 'Sub-agent dispatch', desc: 'SubAgentTool / TeamCreate' },
+  { key: 'showCache', label: 'Show cache breakpoints', desc: 'BP1/BP2/BP3 hit/miss' },
+  { key: 'showQ3Guard', label: 'Show Q3 divergence guard', desc: 'updateSessionMessages mid-prefix mismatch' },
+];
+
+const SLIDERS = [
+  { key: 'turn', label: 'Turn #', min: 1, max: 30, step: 1 },
+  { key: 'contextPct', label: 'Context usage %', min: 0, max: 95, step: 1 },
+  { key: 'history', label: 'History messages', min: 0, max: 100, step: 1 },
+  { key: 'toolCalls', label: 'Tool calls this turn', min: 0, max: 5, step: 1 },
+];
+
+let state = { ...DEFAULTS };
+let activePresetId = 'mid';
+
+// ---------- render sidebar controls ----------
+function renderPresets() {
+  const container = document.getElementById('presets');
+  container.innerHTML = PRESETS.map(p => `
+    <button class="preset ${activePresetId === p.id ? 'active' : ''}" data-preset="${p.id}">
+      <div class="pname">${p.name}</div>
+      <div class="pdesc">${p.desc}</div>
+    </button>
+  `).join('');
+  container.querySelectorAll('.preset').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const p = PRESETS.find(x => x.id === btn.dataset.preset);
+      activePresetId = p.id;
+      state = { ...DEFAULTS, ...p.state, showCache: state.showCache, showQ3Guard: state.showQ3Guard };
+      renderPresets(); renderToggles(); renderSliders(); updateAll();
+    });
+  });
+}
+
+function renderToggles() {
+  const container = document.getElementById('toggles');
+  container.innerHTML = TOGGLES.map(t => `
+    <div class="toggle-row">
+      <div class="toggle-label">${t.label}<br><span class="dim">${t.desc}</span></div>
+      <div class="switch ${state[t.key] ? 'on' : ''}" data-toggle="${t.key}"></div>
+    </div>
+  `).join('');
+  container.querySelectorAll('.switch').forEach(sw => {
+    sw.addEventListener('click', () => {
+      const k = sw.dataset.toggle;
+      state[k] = !state[k];
+      activePresetId = ''; renderPresets(); renderToggles(); updateAll();
+    });
+  });
+}
+
+function renderSliders() {
+  const container = document.getElementById('sliders');
+  container.innerHTML = SLIDERS.map(s => `
+    <div class="slider-row">
+      <label>${s.label}<span class="val">${state[s.key]}${s.key === 'contextPct' ? '%' : ''}</span></label>
+      <input type="range" class="slider" min="${s.min}" max="${s.max}" step="${s.step}" value="${state[s.key]}" data-slider="${s.key}">
+    </div>
+  `).join('');
+  container.querySelectorAll('.slider').forEach(sl => {
+    sl.addEventListener('input', () => {
+      state[sl.dataset.slider] = parseInt(sl.value, 10);
+      activePresetId = ''; renderPresets();
+      // update label without full re-render
+      sl.previousElementSibling.querySelector('.val').textContent =
+        sl.value + (sl.dataset.slider === 'contextPct' ? '%' : '');
+      updateAll();
+    });
+  });
+}
+
+// ---------- render stages ----------
+function renderStages() {
+  const stages = [];
+
+  // Stage 1: Context Assembly
+  stages.push(stageCard(1, 'Context Assembly',
+    state.fullCompact ? { txt: 'FULL COMPACT INJECTED', cls: 'red' } : { txt: 'STABLE', cls: 'green' },
+    `
+    <p>从 DB load history（pre-userMsg），拼 system prompt + tools + messages。Q3 后 system prompt <strong>不再每 turn 变化</strong>（Q2 reminder 已迁出）。</p>
+    <div class="code-block">systemPrompt = stableSection         <span style="color:var(--text-muted)"># agent.systemPrompt + skills + behaviorRules + tools 描述</span>
+                + (promptSuffix ? MARKER + dynamic : '')
+
+tools = SkillRegistry filter by agent.skill_ids + mcp_server_ids
+       .sort(by name)              <span style="color:var(--text-muted)"># INV-12 显式排序保证 cache prefix 一致</span>
+
+history = ${state.fullCompact ? '[boundary, summary, retained, recovery]  // 见下方 Stage 6' : (state.lightCompact ? 'getContextMessages() 返 light-compacted 后的 list（content 已 truncate）' : 'getContextMessages() 返最新 boundary 后所有 NORMAL 行')}</div>
+    <div class="annot invariant">INV：stable section 跨 turn 字节一致 → BP1 cache 命中</div>
+    `
+  ));
+
+  // Stage 2: User Message
+  const userMsgShape = state.reminder
+    ? `Message {
+  role: USER,
+  content: [
+    { type: "text", text: "<system-reminder>\\nContext: ${state.contextPct}% used (${Math.round(state.contextPct * 1.4)}K/200K tokens)\\n</system-reminder>\\n" },
+    { type: "text", text: "${state.subAgent ? 'task brief from parent agent' : '用户实际输入'}" }
+  ]
+}`
+    : `Message.user("${state.subAgent ? 'task brief from parent agent' : '用户实际输入'}")     // 等同于 { role: USER, content: "..." }`;
+
+  stages.push(stageCard(2, 'User Message Build & Persist',
+    state.reminder ? { txt: 'ARRAY (Q2 SHAPE)', cls: 'orange' } : { txt: 'STRING', cls: 'green' },
+    `
+    <p>ChatService.chatAsync 评估 ReminderBuilder.build(ctx)，${state.reminder
+      ? '<strong>非空</strong> → 构造 array shape Message（含 reminder ContentBlock）'
+      : '<strong>空</strong> → 走 legacy String content'}。</p>
+    <div class="code-block">${userMsgShape}</div>
+    <div class="annot ${state.reminder ? 'warn' : 'invariant'}">${state.reminder
+      ? 'Q3 fix：这个对象引用必须透传到 engine.run 的 7-arg overload，否则丢 reminder（cc87776 修了）'
+      : 'Cache 视角：最简单形态，跨 turn 字节一致'}</div>
+    <div class="annot invariant">${state.reminder
+      ? '持久化进 t_session_message.content_json，Q2 cache 修复的关键：跨 turn replay 字节一致'
+      : '持久化进 t_session_message.content_json'}</div>
+    `
+  ));
+
+  // Stage 3: LLM Request + Cache breakpoints
+  const showCache = state.showCache;
+  const bp1Hit = !state.fullCompact;
+  const bp2Hit = bp1Hit && !state.lightCompact && state.turn > 1;
+  const bp3Hit = bp2Hit && state.turn > 1;
+
+  let cacheRows = '';
+  if (showCache) {
+    cacheRows = `
+    <div class="cache-stack" style="margin-top:10px">
+      <div class="cache-row ${bp1Hit ? 'hit' : 'miss'}">
+        <span class="bp">BP1</span>
+        <span class="seg-name">system stable section (${Math.round(state.history * 0.05 + 8)}K tokens)</span>
+        <span class="hit-status">${bp1Hit ? 'CACHE HIT' : 'CACHE MISS'}</span>
+      </div>
+      <div class="cache-row ${bp2Hit ? 'hit' : 'miss'}">
+        <span class="bp">BP2</span>
+        <span class="seg-name">tools array (${state.subAgent ? '~6K' : '~12K'} tokens, sorted)</span>
+        <span class="hit-status">${bp2Hit ? 'CACHE HIT' : 'CACHE MISS'}</span>
+      </div>
+      <div class="cache-row ${bp3Hit ? 'hit' : 'miss'}">
+        <span class="bp">BP3</span>
+        <span class="seg-name">last user msg prefix（含全部 history）</span>
+        <span class="hit-status">${bp3Hit ? 'CACHE HIT' : 'CACHE MISS'}</span>
+      </div>
+    </div>
+    `;
+  }
+
+  stages.push(stageCard(3, 'LLM Provider Request',
+    bp3Hit ? { txt: 'FULL CACHE HIT', cls: 'green' } : { txt: 'PARTIAL', cls: 'orange' },
+    `
+    <p>ClaudeProvider.buildRequestBody（或 OpenAiProvider）拼 HTTP request，3 处 cache_control breakpoint：</p>
+    <div class="code-block">{
+  "model": "${state.subAgent ? 'claude-haiku-4-5' : 'mimo-v2.5-pro'}",
+  "system": [
+    { "type": "text", "text": "...stable...", "cache_control": { "type": "ephemeral" } },   <span style="color:var(--green)">// ← BP1</span>${state.reminder
+    ? `
+    { "type": "text", "text": "...dynamic..." }                                              <span style="color:var(--text-muted)">// 无 cache_control（旧路径，Q2 后空）</span>`
+    : ''}
+  ],
+  "tools": [...sorted by name..., { ..., "cache_control": { "type": "ephemeral" } }],         <span style="color:var(--green)">// ← BP2</span>
+  "messages": [
+    ...history,
+    { "role": "user", "content": [..., { ..., "cache_control": { "type": "ephemeral" } }] }   <span style="color:var(--green)">// ← BP3</span>
+  ]
+}</div>
+    ${cacheRows}
+    <div class="annot ${bp3Hit ? 'invariant' : 'warn'}">命中数 = ${[bp1Hit, bp2Hit, bp3Hit].filter(Boolean).length}/3 → 节省约 ${Math.round([bp1Hit ? 8 : 0, bp2Hit ? 12 : 0, bp3Hit ? state.history * 0.5 : 0].reduce((a,b)=>a+b))}K input tokens</div>
+    `
+  ));
+
+  // Stage 4: LLM Response
+  stages.push(stageCard(4, 'LLM Response Streaming',
+    state.toolCalls > 0 ? { txt: 'TOOL_USE', cls: 'blue' } : { txt: 'TEXT ONLY', cls: 'green' },
+    `
+    <p>SSE stream 解析，每 chunk 推 delta 给 FE + handler 累积 content blocks。</p>
+    <div class="code-block">${state.toolCalls > 0 ? `Message {
+  role: ASSISTANT,
+  content: [
+    { type: "text", text: "我来帮你跑测试..." },
+    ${Array(state.toolCalls).fill().map((_, i) => `{ type: "tool_use", id: "call_${(Math.random()*1e9|0).toString(36)}", name: "${['Bash', 'Read', 'Grep', 'Edit', 'Write'][i % 5]}", input: {...} }`).join(',\n    ')}
+  ]
+}` : `Message {
+  role: ASSISTANT,
+  content: [{ type: "text", text: "（assistant 回答文字）" }]
+}`}</div>
+    ${state.toolCalls > 0 ? `<div class="annot warn">tool_use_id 必须配对下一 user msg 的 tool_result.tool_use_id（不变量；compact 不能拆配对）</div>` : ''}
+    `
+  ));
+
+  // Stage 5: Tool Dispatch
+  if (state.toolCalls > 0) {
+    stages.push(stageCard(5, 'Tool Dispatch & Result',
+      { txt: 'EXECUTE', cls: 'blue' },
+      `
+      <p>Engine 解析 tool_use blocks，逐个 dispatch 到 SkillRegistry → 实际 Tool.execute()。${state.subAgent ? '子 agent 场景下 SubAgentTool 异步派发到 child session。' : ''}</p>
+      <div class="code-block">// 同 turn 的下一条"user" msg（实际是 tool_result wrapper）
+Message {
+  role: USER,
+  content: [
+    { type: "tool_result", tool_use_id: "call_xxx", content: "${state.lightCompact ? '... [42891 chars truncated, original size: 50000 chars (85% reduced)] ...' : 'tool 实际输出 ${Math.round(Math.random()*30+5)}KB'}" }
+  ]
+}</div>
+      ${state.lightCompact ? `<div class="annot warn">原文 50KB 在 t_llm_span.output_summary 完整保留；t_session_message.content_json 已被 light compactor 截断</div>` : ''}
+      `
+    ));
+  }
+
+  // Stage 6: Compact (conditional)
+  if (state.lightCompact || state.fullCompact) {
+    if (state.lightCompact) {
+      stages.push(stageCard(6, 'Light Compact (in-engine)',
+        { txt: 'TRUNCATE', cls: 'orange' },
+        `
+        <p>LightCompactStrategy.apply() 就地修改 in-memory messages list。</p>
+        <div class="code-block">// LightCompactStrategy 4 条规则（按顺序应用）：
+1. truncate-large-tool-output  → tool_result content > 10KB → 头 4096 + 尾 2048 chars
+2. dedup-consecutive-tools     → 连续 3 个相同 tool_use → 删中间
+3. fold-failed-retries          → 重试失败序列 → 折成 1 条
+4. drop-empty-narration         → 空 assistant text → 删
+
+CompactionService.persistCompactResult level=light
+  → ChatService.updateSessionMessages
+  → SessionService.rewriteMessages（snapshot trace_id by seq_no → patch null traceId）</div>
+        <div class="annot invariant">Q1 fix（a4100f7）：rewriteMessages 不再清 trace_id 列 — observability 的"trace 输入输出空"问题修了</div>
+        `
+      ));
+    }
+    if (state.fullCompact) {
+      stages.push(stageCard(6, 'Full Compact (LLM-driven)',
+        { txt: 'SUMMARIZE', cls: 'red' },
+        `
+        <p>专门调一次 LLM 把前 N 条总结，加 boundary marker。</p>
+        <div class="code-block">CompactionService.persistCompactResult level=full
+  appendMessages([
+    { role: SYSTEM,   content: "Conversation compacted",         msgType: COMPACT_BOUNDARY },
+    { role: USER,     content: "<LLM 生成的总结文本>",            msgType: SUMMARY },
+    ...retained young-gen messages（保留原 trace_id）,
+    { role: USER,     content: "<system-reminder>...recent files...</system-reminder>", msgType: RECOVERY_PAYLOAD }
+  ])
+
+// 老行 NOT deleted — DB 全保留作 archive
+// getContextMessages 从最新 boundary 后取 → LLM 看不见 pre-boundary</div>
+        <div class="annot invariant">Q1 fix：retained 块用 7-arg AppendMessage 透传原 trace_id（findTailTraceIds 查 last N）</div>
+        `
+      ));
+    }
+  }
+
+  // Stage 7: Persist Loop
+  stages.push(stageCard(7, 'Persist & Loop Back',
+    state.showQ3Guard ? { txt: 'GUARD ON', cls: 'blue' } : { txt: 'APPEND-DELTA', cls: 'green' },
+    `
+    <p>SessionService.updateSessionMessages 对账 persistedContext (DB) vs result.getMessages() (engine)：</p>
+    <div class="code-block">prefixLen = commonPrefixSize(persistedContext, finalMessages)
+                = JSON 字节比较找最长前缀
+
+if (prefixLen < persistedContext.size()) {
+  ${state.showQ3Guard ? `// Q3 guard (b2c7039)：mid-prefix divergence 立即 log.warn + rewrite
+  log.warn("mid-prefix divergence: divergeAt=" + prefixLen +
+           ", persistContentType=" + persistRow.content.class +
+           ", engineContentType=" + engineRow.content.class);
+  rewriteRowsInNewTransaction(...);  // 全删 + 重写，保 identity 列` : `// 旧逻辑只在 prefixLen == 0 时 rewrite，0 < prefixLen < size 时
+  // silently 把 messages.subList(prefixLen, ...) 当 delta append → DUP（Q2 bug）`}
+} else {
+  // 正常路径：prefix 完整匹配 → append delta（new assistant + 后续）
+  appendRowsOnce(delta);
+}</div>
+    ${state.showQ3Guard
+      ? `<div class="annot invariant">Q3 guard 防 Q2-style "持久化 array vs engine String" shape mismatch silent dup；同类未来 bug 第一次发生就 log.warn</div>`
+      : `<div class="annot danger">Q2 bdb0453 此处漏检：mid-prefix mismatch silent append → 5 条 dup 行（已手工清理）</div>`}
+    ${state.subAgent
+      ? `<div class="annot warn">Sub-agent: 父 agent loop 调 SubAgentTool 异步派发，不阻塞父 turn；子 child session 自己跑 chatAsync 完整循环</div>`
+      : ''}
+    `
+  ));
+
+  document.getElementById('stages').innerHTML = stages.join('');
+}
+
+function stageCard(num, title, flag, body) {
+  return `
+    <div class="stage">
+      <div class="stage-head">
+        <div>
+          <span class="stage-num">STAGE ${String(num).padStart(2, '0')}</span>
+          <span class="stage-title">${title}</span>
+        </div>
+        ${flag ? `<span class="stage-flag ${flag.cls}">${flag.txt}</span>` : ''}
+      </div>
+      <div class="stage-body">${body}</div>
+    </div>
+  `;
+}
+
+// ---------- prompt output ----------
+function updatePrompt() {
+  const parts = [];
+  parts.push(`我在学习 SkillForge 一次 agent loop turn 的内部结构。`);
+  parts.push(`当前场景配置：turn #${state.turn}, context ${state.contextPct}% used, history ${state.history} messages, ${state.toolCalls} tool calls。`);
+
+  const flags = [];
+  if (state.reminder) flags.push('Q2/Q3 reminder block 触发（context ≥70%）');
+  if (state.lightCompact) flags.push('light compact 本 turn 触发（50KB tool_result 截断）');
+  if (state.fullCompact) flags.push('full compact 本 turn 触发（boundary + summary + retained + recovery）');
+  if (state.subAgent) flags.push('sub-agent dispatch（SubAgentTool 异步）');
+  if (state.showQ3Guard) flags.push('Q3 mid-prefix divergence guard 启用');
+  if (flags.length > 0) parts.push(`关键 toggle：${flags.join('；')}。`);
+
+  parts.push('');
+  parts.push('请给我讲解：');
+  parts.push('1. 这次 turn 中，3 个 cache breakpoint (BP1/BP2/BP3) 各自命中状况和原因');
+  if (state.reminder) parts.push('2. Q3 fix（cc87776）如何让 reminder 真正到达 LLM —— ChatService 怎么透传同一个 Message 对象引用到 engine.run');
+  if (state.lightCompact) parts.push((state.reminder ? '3' : '2') + '. Light compact 改写 t_session_message.content_json 时 Q1 fix 怎么 preserve trace_id 列');
+  if (state.fullCompact) parts.push('. Full compact 为什么用 APPEND 老行不删（archive 保留 + getContextMessages 跳过 pre-boundary）');
+  if (state.showQ3Guard) parts.push('. Q3 mid-prefix divergence guard（b2c7039）的 trigger 条件 + log.warn 含哪些诊断字段');
+  parts.push('');
+  parts.push('请用具体代码引用（指出文件 line 号），帮我建立 mental model。');
+
+  document.getElementById('prompt').textContent = parts.join('\n');
+}
+
+// ---------- top tag + turn num ----------
+function updateTopBar() {
+  document.getElementById('turn-num').textContent = state.turn;
+  const preset = PRESETS.find(p => p.id === activePresetId);
+  document.getElementById('scenario-tag').textContent = preset ? preset.name : 'Custom';
+}
+
+// ---------- copy ----------
+document.getElementById('copy-btn').addEventListener('click', () => {
+  const txt = document.getElementById('prompt').textContent;
+  navigator.clipboard.writeText(txt);
+  const btn = document.getElementById('copy-btn');
+  btn.textContent = 'Copied!';
+  btn.classList.add('copied');
+  setTimeout(() => { btn.textContent = 'Copy Prompt'; btn.classList.remove('copied'); }, 1500);
+});
+
+// ---------- main update ----------
+function updateAll() {
+  renderStages();
+  updatePrompt();
+  updateTopBar();
+}
+
+// init
+renderPresets();
+renderToggles();
+renderSliders();
+updateAll();
+</script>
+</body>
+</html>
