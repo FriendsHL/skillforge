@@ -14,6 +14,8 @@ import '../components/skills/skills.css';
 const HIGH_SIMILARITY_THRESHOLD = 0.85;
 const SUGGEST_MERGE_THRESHOLD = 0.60;
 
+type DraftStatusFilter = 'all' | 'draft' | 'approved' | 'discarded';
+
 /**
  * SKILL-DRAFTS-REDESIGN — dual-pane layout with list + detail preview.
  */
@@ -22,6 +24,7 @@ const SkillDraftsPage: React.FC = () => {
   const { userId: currentUserId } = useAuth();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState<DraftStatusFilter>('draft');
 
   const { data: draftsData, isLoading } = useQuery({
     queryKey: ['skill-drafts', currentUserId],
@@ -31,24 +34,35 @@ const SkillDraftsPage: React.FC = () => {
 
   const drafts: SkillDraft[] = useMemo(() => draftsData ?? [], [draftsData]);
   const pendingDrafts = useMemo(() => drafts.filter(d => d.status === 'draft'), [drafts]);
+  const approvedDrafts = useMemo(() => drafts.filter(d => d.status === 'approved'), [drafts]);
+  const discardedDrafts = useMemo(() => drafts.filter(d => d.status === 'discarded'), [drafts]);
 
-  /** Filter drafts by search query */
+  /** Drafts filtered by status */
+  const statusFilteredDrafts = useMemo(() => {
+    if (statusFilter === 'all') return drafts;
+    return drafts.filter(d => d.status === statusFilter);
+  }, [drafts, statusFilter]);
+
+  /** Further filter by search query */
   const filteredDrafts = useMemo(() => {
-    if (!searchQuery.trim()) return pendingDrafts;
+    if (!searchQuery.trim()) return statusFilteredDrafts;
     const q = searchQuery.toLowerCase();
-    return pendingDrafts.filter(d =>
+    return statusFilteredDrafts.filter(d =>
       d.name.toLowerCase().includes(q) ||
       d.description?.toLowerCase().includes(q) ||
       d.triggers?.toLowerCase().includes(q)
     );
-  }, [pendingDrafts, searchQuery]);
+  }, [statusFilteredDrafts, searchQuery]);
 
-  /** Auto-select first pending draft */
+  /** Auto-select first draft in current filter */
   useEffect(() => {
-    if (!selectedId && pendingDrafts.length > 0) {
-      setSelectedId(pendingDrafts[0].id);
+    if (!selectedId && filteredDrafts.length > 0) {
+      setSelectedId(filteredDrafts[0].id);
+    } else if (selectedId && !filteredDrafts.find(d => d.id === selectedId)) {
+      // Selected draft no longer in filter, select first available
+      setSelectedId(filteredDrafts[0]?.id ?? null);
     }
-  }, [pendingDrafts, selectedId]);
+  }, [filteredDrafts, selectedId]);
 
   /** Keyboard navigation */
   useEffect(() => {
@@ -208,9 +222,6 @@ const SkillDraftsPage: React.FC = () => {
     [drafts, selectedId]
   );
 
-  const approvedCount = drafts.filter(d => d.status === 'approved').length;
-  const discardedCount = drafts.filter(d => d.status === 'discarded').length;
-
   return (
     <div className="drafts-page">
       {/* Header */}
@@ -219,24 +230,41 @@ const SkillDraftsPage: React.FC = () => {
           <h1 className="drafts-title">Skill Drafts</h1>
           <p className="drafts-sub">Review and approve candidates extracted from recent sessions</p>
           <div className="drafts-stats">
-            <span className="draft-stat pending">
+            <button
+              className={`draft-stat pending ${statusFilter === 'draft' ? 'active' : ''}`}
+              onClick={() => setStatusFilter('draft')}
+            >
               <span className="dot" />
               {pendingDrafts.length} pending
-            </span>
-            <span className="draft-stat approved">
+            </button>
+            <button
+              className={`draft-stat approved ${statusFilter === 'approved' ? 'active' : ''}`}
+              onClick={() => setStatusFilter('approved')}
+            >
               <span className="dot" />
-              {approvedCount} approved
-            </span>
-            <span className="draft-stat discarded">
+              {approvedDrafts.length} approved
+            </button>
+            <button
+              className={`draft-stat discarded ${statusFilter === 'discarded' ? 'active' : ''}`}
+              onClick={() => setStatusFilter('discarded')}
+            >
               <span className="dot" />
-              {discardedCount} discarded
-            </span>
+              {discardedDrafts.length} discarded
+            </button>
+            <button
+              className={`draft-stat ${statusFilter === 'all' ? 'active' : ''}`}
+              onClick={() => setStatusFilter('all')}
+            >
+              {drafts.length} total
+            </button>
           </div>
         </div>
         <div className="drafts-head-actions">
-          <button className="btn-ghost-sf" onClick={handleApproveAllSafe}>
-            Approve all safe
-          </button>
+          {statusFilter === 'draft' && pendingDrafts.length > 0 && (
+            <button className="btn-ghost-sf" onClick={handleApproveAllSafe}>
+              Approve all safe
+            </button>
+          )}
         </div>
       </header>
 
@@ -257,7 +285,7 @@ const SkillDraftsPage: React.FC = () => {
             <div className="drafts-empty">Loading drafts...</div>
           ) : filteredDrafts.length === 0 ? (
             <div className="drafts-empty">
-              {searchQuery ? 'No matching drafts' : 'No pending drafts. Run extraction to generate candidates.'}
+              {searchQuery ? 'No matching drafts' : `No ${statusFilter === 'all' ? '' : statusFilter} drafts`}
             </div>
           ) : (
             <div className="drafts-list-body">
@@ -273,7 +301,7 @@ const SkillDraftsPage: React.FC = () => {
           )}
 
           <div className="drafts-list-footer">
-            {filteredDrafts.length} drafts
+            {filteredDrafts.length} {statusFilter === 'all' ? 'drafts' : statusFilter}
           </div>
         </aside>
 
@@ -307,7 +335,9 @@ const SkillDraftsPage: React.FC = () => {
 };
 
 /** Status indicator style based on similarity */
-function getDraftStatus(draft: SkillDraft): 'new' | 'warn' | 'err' {
+function getDraftStatus(draft: SkillDraft): 'new' | 'warn' | 'err' | 'approved' | 'discarded' {
+  if (draft.status === 'approved') return 'approved';
+  if (draft.status === 'discarded') return 'discarded';
   const sim = draft.similarity ?? 0;
   if (sim >= HIGH_SIMILARITY_THRESHOLD) return 'err';
   if (sim >= SUGGEST_MERGE_THRESHOLD) return 'warn';
@@ -335,16 +365,24 @@ const DraftListItem: React.FC<{
           <StatusBadge status={status} similarity={draft.similarity} />
         </div>
         <div className="item-meta">
-          {status !== 'new' && draft.mergeCandidateName && (
+          {status !== 'new' && status !== 'approved' && status !== 'discarded' && draft.mergeCandidateName && (
             <span className="sim">→ {draft.mergeCandidateName}</span>
           )}
-          <span>{triggers.length} triggers</span>
+          {status === 'approved' && draft.reviewedAt && (
+            <span className="approved-time">Approved {new Date(draft.reviewedAt).toLocaleDateString()}</span>
+          )}
+          {status === 'discarded' && draft.reviewedAt && (
+            <span className="discarded-time">Discarded {new Date(draft.reviewedAt).toLocaleDateString()}</span>
+          )}
+          {triggers.length > 0 && <span>{triggers.length} triggers</span>}
         </div>
-        <div className="item-triggers">
-          {triggers.slice(0, 4).map(t => (
-            <span key={t} className="trigger-chip">{t}</span>
-          ))}
-        </div>
+        {triggers.length > 0 && (
+          <div className="item-triggers">
+            {triggers.slice(0, 4).map(t => (
+              <span key={t} className="trigger-chip">{t}</span>
+            ))}
+          </div>
+        )}
         {draft.description && (
           <div className="item-desc">{draft.description}</div>
         )}
@@ -355,10 +393,12 @@ const DraftListItem: React.FC<{
 
 /** Status badge */
 const StatusBadge: React.FC<{
-  status: 'new' | 'warn' | 'err';
+  status: 'new' | 'warn' | 'err' | 'approved' | 'discarded';
   similarity?: number;
 }> = ({ status, similarity }) => {
   const label = useMemo(() => {
+    if (status === 'approved') return 'Approved';
+    if (status === 'discarded') return 'Discarded';
     if (status === 'err') return `High ${Math.round((similarity ?? 0) * 100)}%`;
     if (status === 'warn') return `Merge ${Math.round((similarity ?? 0) * 100)}%`;
     return 'New';
@@ -380,6 +420,7 @@ const DraftDetailPanel: React.FC<{
   const triggers = (draft.triggers ?? '').split(',').map(t => t.trim()).filter(Boolean);
   const tools = (draft.requiredTools ?? '').split(',').map(t => t.trim()).filter(Boolean);
   const status = getDraftStatus(draft);
+  const isProcessed = draft.status === 'approved' || draft.status === 'discarded';
 
   return (
     <div className="draft-detail-content">
@@ -394,8 +435,33 @@ const DraftDetailPanel: React.FC<{
         )}
       </div>
 
+      {/* Processed info */}
+      {isProcessed && draft.reviewedAt && (
+        <div className="detail-section">
+          <div className="processed-info">
+            {draft.status === 'approved' ? (
+              <div className="processed-approved">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <polyline points="20 6 9 17 4 12" />
+                </svg>
+                Approved on {new Date(draft.reviewedAt).toLocaleString()}
+                {draft.skillId && ` → Skill #${draft.skillId}`}
+              </div>
+            ) : (
+              <div className="processed-discarded">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+                Discarded on {new Date(draft.reviewedAt).toLocaleString()}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Similarity warning */}
-      {status !== 'new' && (
+      {status !== 'new' && status !== 'approved' && status !== 'discarded' && (
         <div className="detail-section">
           <SimilarityCard draft={draft} />
         </div>
@@ -476,23 +542,25 @@ const DraftDetailPanel: React.FC<{
         </div>
       )}
 
-      {/* Footer */}
-      <div className="draft-detail-footer">
-        <button
-          className="btn-discard"
-          disabled={approving || discarding}
-          onClick={() => onDiscard(draft.id)}
-        >
-          {discarding ? 'Discarding...' : 'Discard'}
-        </button>
-        <button
-          className="btn-approve"
-          disabled={approving || discarding}
-          onClick={() => onApprove(draft.id)}
-        >
-          {approving ? 'Approving...' : 'Approve'}
-        </button>
-      </div>
+      {/* Footer - only show for pending drafts */}
+      {!isProcessed && (
+        <div className="draft-detail-footer">
+          <button
+            className="btn-discard"
+            disabled={approving || discarding}
+            onClick={() => onDiscard(draft.id)}
+          >
+            {discarding ? 'Discarding...' : 'Discard'}
+          </button>
+          <button
+            className="btn-approve"
+            disabled={approving || discarding}
+            onClick={() => onApprove(draft.id)}
+          >
+            {approving ? 'Approving...' : 'Approve'}
+          </button>
+        </div>
+      )}
     </div>
   );
 };

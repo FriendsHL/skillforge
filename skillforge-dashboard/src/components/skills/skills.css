@@ -880,6 +880,46 @@
   color: #e08a8a;
 }
 
+.badge-approved {
+  background: rgba(92, 138, 74, 0.18);
+  color: var(--color-ok);
+}
+[data-theme="dark"] .badge-approved {
+  background: rgba(92, 138, 74, 0.25);
+  color: #8fca8f;
+}
+
+.badge-discarded {
+  background: rgba(138, 138, 147, 0.14);
+  color: var(--fg-3);
+}
+[data-theme="dark"] .badge-discarded {
+  background: rgba(138, 138, 147, 0.2);
+  color: var(--fg-3);
+}
+
+/* Draft stat buttons */
+.draft-stat {
+  cursor: pointer;
+  transition: background var(--transition-base), border-color var(--transition-base), color var(--transition-base);
+}
+.draft-stat:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-2);
+}
+.draft-stat.active {
+  background: var(--accent-muted);
+  border-color: var(--accent);
+  color: var(--fg-1);
+}
+
+/* Draft list item - approved/discarded states */
+.draft-list-item[data-status="approved"]::before { background: var(--color-ok); opacity: 0.5; }
+.draft-list-item[data-status="discarded"]::before { background: var(--fg-4); opacity: 0.4; }
+
+.item-meta .approved-time { color: var(--color-ok); }
+.item-meta .discarded-time { color: var(--fg-3); }
+
 .item-meta {
   font-family: var(--font-mono);
   font-size: 11px;
@@ -981,6 +1021,30 @@
   color: var(--fg-2);
   line-height: 1.6;
   margin: 0 0 16px;
+}
+
+/* Processed info (approved/discarded) */
+.processed-info {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-md);
+  padding: 12px 16px;
+}
+
+.processed-approved {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--color-ok);
+}
+
+.processed-discarded {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--fg-3);
 }
 
 .detail-section {
