@@ -77,8 +77,8 @@
 }
 .agents-filters-h:first-child { margin-top: 0; }
 .agents-search {
-  width: 100%;
-  max-width: 200px;
+  width: calc(100% - 0px);
+  max-width: 180px;
   padding: 7px 10px;
   background: var(--bg-surface);
   border: 1px solid var(--border-1);
