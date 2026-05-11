@@ -17,9 +17,8 @@ import java.util.Optional;
 /**
  * OBS-2 M3 — read path cut-over for tool / event span detail endpoints.
  *
- * <p>Pre-M3 ToolSpanController read {@code t_trace_span where span_type='TOOL_CALL'} via
- * {@code TraceSpanRepository}. After M3 it routes through {@link LlmTraceStore#readSpan}
- * and dispatches by {@code kind}:
+ * <p>Pre-M3 ToolSpanController read {@code t_trace_span where span_type='TOOL_CALL'}.
+ * After M3 it routes through {@link LlmTraceStore#readSpan} and dispatches by {@code kind}:
  * <ul>
  *   <li>{@code GET /api/observability/tool-spans/{spanId}} → returns {@link ToolSpanDetailDto}
  *   when the underlying row has {@code kind='tool'}</li>

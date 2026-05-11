@@ -11,10 +11,6 @@ import com.skillforge.core.engine.hook.LifecycleHooksConfig;
 import com.skillforge.server.dto.HookHistoryDto;
 import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.repository.AgentRepository;
-import com.skillforge.server.repository.TraceSpanRepository;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -26,21 +22,16 @@ import java.util.UUID;
 @Service
 public class LifecycleHookService {
 
-    private static final Logger log = LoggerFactory.getLogger(LifecycleHookService.class);
-
     private static final int HOOK_HISTORY_MAX_LIMIT = 200;
 
     private final AgentRepository agentRepository;
-    private final TraceSpanRepository traceSpanRepository;
     private final ObjectMapper objectMapper;
     private final Map<Class<? extends HookHandler>, HandlerRunner<?>> runners;
 
     public LifecycleHookService(AgentRepository agentRepository,
-                                TraceSpanRepository traceSpanRepository,
                                 ObjectMapper objectMapper,
                                 List<HandlerRunner<?>> runnerBeans) {
         this.agentRepository = agentRepository;
-        this.traceSpanRepository = traceSpanRepository;
         this.objectMapper = objectMapper;
 
         Map<Class<? extends HookHandler>, HandlerRunner<?>> map = new HashMap<>();
@@ -124,9 +115,10 @@ public class LifecycleHookService {
         // agent.getOwnerId() matches the caller's userId
 
         int clampedLimit = Math.max(1, Math.min(limit, HOOK_HISTORY_MAX_LIMIT));
-        return traceSpanRepository.findHookHistoryByAgentId(agentId, PageRequest.of(0, clampedLimit))
-                .stream()
-                .map(HookHistoryDto::from)
-                .toList();
+        // OBS-2 M6: legacy LIFECYCLE_HOOK rows lived only in t_trace_span, which is now
+        // dropped after the read-only observation window. Hook dry-run remains supported;
+        // historical hook spans are intentionally retired until a new unified hook-event
+        // writer is introduced.
+        return List.of();
     }
 }

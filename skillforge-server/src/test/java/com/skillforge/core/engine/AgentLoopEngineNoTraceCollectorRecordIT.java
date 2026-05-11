@@ -45,13 +45,10 @@ import static org.mockito.Mockito.verify;
  * {@link TraceCollector#record(TraceSpan)} after the legacy {@code t_trace_span}
  * write path is closed.
  *
- * <p>Equivalent to a "{@code SELECT count(*) FROM t_trace_span} does not grow" check
- * on a real DB: {@code TraceCollectorImpl.record(...)} is the only entry into
- * {@code TraceSpanRepository.save(...)}, so if AgentLoopEngine never calls
- * {@code .record()} during a chat run, no row can ever land in
- * {@code t_trace_span} via the engine. We mock {@code TraceCollector} so the IT
- * needs no DB harness while still tightly coupling the assertion to the real
- * write boundary.
+ * <p>Equivalent to asserting the legacy trace collector boundary is no longer used:
+ * after OBS-2 M6 the {@code t_trace_span} table is gone and {@code TraceCollectorImpl}
+ * is a compatibility no-op. We mock {@code TraceCollector} so the IT needs no DB
+ * harness while still tightly coupling the assertion to the old write boundary.
  *
  * <p>The same chat run also exercises the OBS-2 lifecycle sink path
  * ({@code TraceLifecycleSink.upsertTraceStub} + {@code writeToolSpan} +

@@ -1,6 +1,6 @@
 # SkillForge 文档
 
-> 更新于：2026-05-10
+> 更新于：2026-05-11
 > Agent 规则：先读这里，再只打开当前任务链接到的文档。
 
 编辑 docs 前，先读 [DOCS-GOVERNANCE.md](DOCS-GOVERNANCE.md)。
@@ -35,8 +35,12 @@
 
 | ID | 标题 | 需求包 | 技术方案 |
 | --- | --- | --- | --- |
+| OBS-2 | Trace 数据模型统一（`t_llm_trace` / `t_llm_span` 单轨 + `t_trace_span` drop） | [需求包](requirements/archive/2026-05-02-OBS-2-trace-data-model-unification/index.md) | [方案](requirements/archive/2026-05-02-OBS-2-trace-data-model-unification/tech-design.md) |
+| SKILL-DASHBOARD-POLISH-V2 | Skill Dashboard Polish V2（概览卡 + draft merge UX + version tree） | [需求包](requirements/archive/2026-05-08-SKILL-DASHBOARD-POLISH-V2/index.md) | — (Lite, decisions in index.md) |
+| SKILL-DASHBOARD-POLISH | Skill Dashboard Polish V1（同名聚合 + evolution detail + A/B 手动操作 + Drafts 入口） | [需求包](requirements/archive/2026-05-08-SKILL-DASHBOARD-POLISH/index.md) | — (Lite, decisions in index.md) |
 | REMINDER-MVP | system-reminder 框架 Phase A（ReminderBuilder + 3 source + P9-5 recovery payload 迁移到 `<system-reminder>` 包装） | [需求包](requirements/archive/2026-05-09-REMINDER-MVP/index.md) | [方案](requirements/archive/2026-05-09-REMINDER-MVP/tech-design.md) |
 | P9-5 | Post-compact 恢复（FileStateCache + recovery payload + 4 路径自动注入） | [需求包](requirements/archive/2026-05-09-P9-5-post-compact-recovery/index.md) | [方案](requirements/archive/2026-05-09-P9-5-post-compact-recovery/tech-design.md) |
+| MEMORY-DREAM-CONSOLIDATION | Dream Consolidation cron（夜间 memory 整理 + embedding dedup + archived_reason + 手动触发） | [需求包](requirements/archive/2026-05-08-MEMORY-DREAM-CONSOLIDATION/index.md) | — (Lite, decisions in index.md) |
 | PROMPT-CACHE-MVP | Prompt Cache MVP（5 provider 全链路 + Claude 3 breakpoint + dashboard hit rate） | [需求包](requirements/archive/2026-05-08-PROMPT-CACHE-MVP/index.md) | [方案](requirements/archive/2026-05-08-PROMPT-CACHE-MVP/tech-design.md) |
 | MCP-CLIENT-MVP | MCP Client MVP（stdio + per-agent + dashboard CRUD + dogfood time） | [需求包](requirements/archive/2026-05-07-MCP-CLIENT-MVP/index.md) | [方案](requirements/archive/2026-05-07-MCP-CLIENT-MVP/tech-design.md) |
 | P10 | 聊天斜杠命令 MVP（8 命令 + dashboard popup + channel BE 拦截） | [需求包](requirements/archive/2026-05-07-P10-slash-commands/index.md) | [方案](requirements/archive/2026-05-07-P10-slash-commands/tech-design.md) |

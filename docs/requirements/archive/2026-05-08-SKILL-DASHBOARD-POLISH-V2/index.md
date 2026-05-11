@@ -3,16 +3,16 @@
 ---
 id: SKILL-DASHBOARD-POLISH-V2
 mode: lite
-status: prd-ready
+status: done
 priority: P1
 risk: Mid
 created: 2026-05-08
-updated: 2026-05-08
+updated: 2026-05-11
 ---
 
 ## 背景
 
-接 [SKILL-DASHBOARD-POLISH](../../archive/2026-05-08-SKILL-DASHBOARD-POLISH/)（V1 commit `5cfd03b`）。V1 解决 6 个 P0/P1 缺口；V2 收尾 3 项 P2/P3 优化。
+接 [SKILL-DASHBOARD-POLISH](../2026-05-08-SKILL-DASHBOARD-POLISH/)（V1 commit `5cfd03b`）。V1 解决 6 个 P0/P1 缺口；V2 收尾 3 项 P2/P3 优化。
 
 ## 范围
 
@@ -82,12 +82,18 @@ drawer 加 "Version Tree" tab：
 
 ## 验收
 
-- [ ] Dashboard / SkillList 顶部新增概览卡 + 5 个数字
-- [ ] approve draft 撞同名 → Modal 3 选项（Update existing / Rename / Reject）
-- [ ] Update existing → 写 SKILL.md 到 target 目录 + draft 标 approved
-- [ ] drawer "Version Tree" tab 显示 ancestor + descendant 链
-- [ ] `mvn test` 全套绿（保 1120+）
-- [ ] `npm run build` EXIT=0
+- [x] Dashboard / SkillList 顶部新增概览卡 + 5 个数字
+- [x] approve draft 撞同名 → Modal 3 选项（Update existing / Rename / Reject）
+- [x] Update existing → 写 SKILL.md 到 target 目录 + draft 标 approved
+- [x] drawer "Version Tree" tab 显示 ancestor + descendant 链
+- [x] `mvn test` 全套绿（保 1120+）
+- [x] `npm run build` EXIT=0
+
+## 交付状态
+
+**已交付（2026-05-08，commit `311ff34`）**。
+
+交付内容包括：Dashboard skill summary card、draft 同名冲突 merge UX、version tree endpoint + drawer tab，以及对应 service/controller/frontend 测试。
 
 ## 实施
 

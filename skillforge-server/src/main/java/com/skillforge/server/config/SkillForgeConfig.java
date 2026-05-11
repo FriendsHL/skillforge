@@ -74,7 +74,6 @@ import com.skillforge.server.tool.scheduling.DeleteScheduledTaskTool;
 import com.skillforge.server.tool.scheduling.GetScheduledTaskTool;
 import com.skillforge.server.tool.scheduling.ListScheduledTasksTool;
 import com.skillforge.server.tool.scheduling.UpdateScheduledTaskTool;
-import com.skillforge.server.repository.TraceSpanRepository;
 import com.skillforge.server.subagent.AgentRoster;
 import com.skillforge.server.subagent.CollabRunService;
 import com.skillforge.server.subagent.SubAgentRegistry;
@@ -492,10 +491,7 @@ public class SkillForgeConfig {
                                      SessionService sessionService,
                                      ObjectMapper objectMapper,
                                      SkillRegistry skillRegistry) {
-        // OBS-2 M4: read path moved from t_trace_span (legacy TraceSpanRepository) to
-        // unified t_llm_trace + t_llm_span via LlmTraceStore. The legacy
-        // TraceSpanRepository bean stays alive for other consumers (SessionSpansService /
-        // R__migrate_legacy_trace_span ETL etc.) until M5/M6 cleanup migrations.
+        // OBS-2 M6: read path is fully unified on t_llm_trace + t_llm_span.
         GetTraceTool tool = new GetTraceTool(llmTraceStore, llmTraceRepository, sessionService, objectMapper);
         skillRegistry.registerTool(tool);
         log.info("Registered GetTraceTool into SkillRegistry");

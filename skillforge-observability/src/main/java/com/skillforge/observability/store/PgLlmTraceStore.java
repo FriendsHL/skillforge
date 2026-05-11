@@ -400,8 +400,7 @@ public class PgLlmTraceStore implements LlmTraceStore {
      * terminal 状态不被覆盖。失败 log.warn + drop。
      *
      * <p>R2-W5 已知限制：与 writeToolSpan 共享多线程池（corePoolSize=2/maxPoolSize=4），
-     * 调度顺序不保证。M1 双写期对前端透明（读路径仍走 t_trace_span）；M3 评估时再决定是否
-     * 用 sequential flush 策略。
+     * 调度顺序不保证。M3 后读路径切到统一 trace/span 表，当前无需 sequential flush 策略。
      */
     @Override
     public void finalizeTrace(TraceFinalizeRequest request) {

@@ -2,7 +2,6 @@ package com.skillforge.server.service.observability;
 
 import com.skillforge.observability.domain.LlmSpan;
 import com.skillforge.server.entity.SessionEntity;
-import com.skillforge.server.entity.TraceSpanEntity;
 import com.skillforge.server.repository.SessionRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -19,7 +18,7 @@ import java.util.regex.Pattern;
  *
  * <p>双源解析：
  * <ol>
- *   <li>Primary: parse {@code TraceSpan.output} for {@code "  childSessionId: <uuid>\n"}
+     *   <li>Primary: parse span output for {@code "  childSessionId: <uuid>\n"}
  *   (字面格式与 {@code SubAgentTool.java:174} 严格一致)</li>
  *   <li>Fallback: find a child session whose {@code parentSessionId == span.sessionId} AND
  *   {@code createdAt >= span.startTime} (use earliest match)</li>
@@ -41,18 +40,6 @@ public class SubagentSessionResolver {
 
     public SubagentSessionResolver(SessionRepository sessionRepository) {
         this.sessionRepository = sessionRepository;
-    }
-
-    /**
-     * Resolve the child sessionId for a SubAgent TOOL_CALL span. Never throws — exceptions
-     * are swallowed and {@code null} is returned (UI gracefully omits the jump link).
-     */
-    public String resolve(TraceSpanEntity span) {
-        if (span == null) return null;
-        if (!"TOOL_CALL".equals(span.getSpanType())) return null;
-        if (!"SubAgent".equals(span.getName())) return null;
-        return resolve(span.getId(), span.getName(), span.getSessionId(),
-                span.getOutput(), span.getStartTime());
     }
 
     /**

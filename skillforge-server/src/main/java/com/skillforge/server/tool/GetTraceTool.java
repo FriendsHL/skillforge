@@ -25,9 +25,9 @@ import java.util.Map;
 /**
  * Read-only self-inspection tool for trace summaries and span trees.
  *
- * <p>OBS-2 M4 — read path migrated from {@code t_trace_span} (legacy
- * {@code TraceSpanRepository}) to the unified {@code t_llm_trace} +
- * {@code t_llm_span} tables via {@link LlmTraceStore}.
+ * <p>OBS-2 M4/M6 — read path migrated from {@code t_trace_span} to the unified
+ * {@code t_llm_trace} + {@code t_llm_span} tables via {@link LlmTraceStore};
+ * the legacy table is now dropped.
  *
  * <p>Output shape stays close to the pre-M4 form so existing LLM prompt
  * habits keep working:

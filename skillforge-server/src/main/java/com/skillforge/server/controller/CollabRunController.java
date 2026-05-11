@@ -3,10 +3,10 @@ package com.skillforge.server.controller;
 import com.skillforge.server.entity.CollabRunEntity;
 import com.skillforge.server.entity.SessionEntity;
 import com.skillforge.server.entity.SubAgentPendingResultEntity;
-import com.skillforge.server.entity.TraceSpanEntity;
+import com.skillforge.observability.entity.LlmSpanEntity;
+import com.skillforge.observability.repository.LlmSpanRepository;
 import com.skillforge.server.repository.CollabRunRepository;
 import com.skillforge.server.repository.SubAgentPendingResultRepository;
-import com.skillforge.server.repository.TraceSpanRepository;
 import com.skillforge.server.service.AgentService;
 import com.skillforge.server.service.SessionService;
 import com.skillforge.server.subagent.AgentRoster;
@@ -32,7 +32,7 @@ public class CollabRunController {
     private final SessionService sessionService;
     private final AgentService agentService;
     private final SubAgentPendingResultRepository pendingResultRepository;
-    private final TraceSpanRepository traceSpanRepository;
+    private final LlmSpanRepository llmSpanRepository;
     private final CollabRunRepository collabRunRepository;
 
     public CollabRunController(CollabRunService collabRunService,
@@ -40,14 +40,14 @@ public class CollabRunController {
                                SessionService sessionService,
                                AgentService agentService,
                                SubAgentPendingResultRepository pendingResultRepository,
-                               TraceSpanRepository traceSpanRepository,
+                               LlmSpanRepository llmSpanRepository,
                                CollabRunRepository collabRunRepository) {
         this.collabRunService = collabRunService;
         this.agentRoster = agentRoster;
         this.sessionService = sessionService;
         this.agentService = agentService;
         this.pendingResultRepository = pendingResultRepository;
-        this.traceSpanRepository = traceSpanRepository;
+        this.llmSpanRepository = llmSpanRepository;
         this.collabRunRepository = collabRunRepository;
     }
 
@@ -170,7 +170,7 @@ public class CollabRunController {
         }
 
         List<String> sessionIds = sessions.stream().map(SessionEntity::getId).toList();
-        List<TraceSpanEntity> spans = traceSpanRepository.findBySessionIdInOrderByStartTimeAsc(sessionIds);
+        List<LlmSpanEntity> spans = llmSpanRepository.findBySessionIdInOrderByStartedAtAsc(sessionIds);
 
         // Build session metadata lookup
         Map<String, Map<String, Object>> sessionMeta = new LinkedHashMap<>();
@@ -195,9 +195,9 @@ public class CollabRunController {
         }
 
         List<Map<String, Object>> spanList = new ArrayList<>();
-        for (TraceSpanEntity span : spans) {
+        for (LlmSpanEntity span : spans) {
             Map<String, Object> s = new LinkedHashMap<>();
-            s.put("id", span.getId());
+            s.put("id", span.getSpanId());
             s.put("sessionId", span.getSessionId());
             Map<String, Object> meta = sessionMeta.get(span.getSessionId());
             if (meta != null) {
@@ -205,17 +205,17 @@ public class CollabRunController {
                 s.put("agentName", meta.get("agentName"));
             }
             s.put("parentSpanId", span.getParentSpanId());
-            s.put("spanType", span.getSpanType());
+            s.put("spanType", legacySpanType(span));
             s.put("name", span.getName());
-            s.put("input", span.getInput());
-            s.put("output", span.getOutput());
-            s.put("startTime", span.getStartTime());
-            s.put("endTime", span.getEndTime());
-            s.put("durationMs", span.getDurationMs());
+            s.put("input", span.getInputSummary());
+            s.put("output", span.getOutputSummary());
+            s.put("startTime", span.getStartedAt());
+            s.put("endTime", span.getEndedAt());
+            s.put("durationMs", span.getLatencyMs());
             s.put("inputTokens", span.getInputTokens());
             s.put("outputTokens", span.getOutputTokens());
-            s.put("modelId", span.getModelId());
-            s.put("success", span.isSuccess());
+            s.put("modelId", span.getModel());
+            s.put("success", span.getError() == null || span.getError().isBlank());
             s.put("error", span.getError());
             spanList.add(s);
         }
@@ -242,17 +242,17 @@ public class CollabRunController {
         List<SessionEntity> sessions = sessionService.listByCollabRunId(collabRunId);
         List<String> sessionIds = sessions.stream().map(SessionEntity::getId).toList();
 
-        // Query all trace spans for counting
-        List<TraceSpanEntity> allSpans = sessionIds.isEmpty()
+        // Query unified spans for counting.
+        List<LlmSpanEntity> allSpans = sessionIds.isEmpty()
                 ? List.of()
-                : traceSpanRepository.findBySessionIdInOrderByStartTimeAsc(sessionIds);
+                : llmSpanRepository.findBySessionIdInOrderByStartedAtAsc(sessionIds);
 
         // Build per-session span counts
         Map<String, int[]> sessionSpanCounts = new LinkedHashMap<>();
         // int[0] = toolCalls, int[1] = llmCalls, int[2] = peerMessages
-        for (TraceSpanEntity span : allSpans) {
+        for (LlmSpanEntity span : allSpans) {
             int[] counts = sessionSpanCounts.computeIfAbsent(span.getSessionId(), k -> new int[3]);
-            switch (span.getSpanType()) {
+            switch (legacySpanType(span)) {
                 case "TOOL_CALL" -> counts[0]++;
                 case "LLM_CALL" -> counts[1]++;
                 case "PEER_MESSAGE" -> counts[2]++;
@@ -330,5 +330,16 @@ public class CollabRunController {
         result.put("members", memberList);
 
         return ResponseEntity.ok(result);
+    }
+
+    private static String legacySpanType(LlmSpanEntity span) {
+        String kind = span.getKind();
+        if ("llm".equals(kind)) return "LLM_CALL";
+        if ("tool".equals(kind)) return "TOOL_CALL";
+        if ("event".equals(kind)) {
+            String eventType = span.getEventType();
+            return eventType == null ? "EVENT" : eventType.toUpperCase(java.util.Locale.ROOT);
+        }
+        return kind == null ? "UNKNOWN" : kind.toUpperCase(java.util.Locale.ROOT);
     }
 }

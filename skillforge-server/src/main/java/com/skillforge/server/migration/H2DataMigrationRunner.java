@@ -30,7 +30,7 @@ public class H2DataMigrationRunner implements ApplicationRunner {
     private static final String[] TABLES = {
         "t_agent", "t_skill", "t_user_config",
         "t_session", "t_memory", "t_model_usage",
-        "t_activity_log", "t_trace_span", "t_compaction_event",
+        "t_activity_log", "t_compaction_event",
         "t_subagent_run", "t_subagent_pending_result", "t_collab_run"
     };
 

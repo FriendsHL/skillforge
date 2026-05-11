@@ -3,11 +3,11 @@
 ---
 id: SKILL-DASHBOARD-POLISH
 mode: lite
-status: prd-ready
+status: done
 priority: P0
 risk: Mid
 created: 2026-05-08
-updated: 2026-05-08
+updated: 2026-05-11
 ---
 
 ## 用户原话（2026-05-08）
@@ -45,14 +45,20 @@ SKILL-EVOLVE-LOOP 闭环已通，但 dashboard UX 缺：
 
 ## 验收
 
-- [ ] SkillList 同 name 折叠：v1+v2 共 1 行，可展开看 candidates
-- [ ] Drawer "Evolution Detail" tab：左右 SKILL.md diff + reasoning + per-scenario 表
-- [ ] A/B Tag hover Tooltip 显示阈值理由
-- [ ] Promoted candidate row 有 "Rollback" 按钮 / Not-promoted candidate 有 "Promote anyway" 按钮
-- [ ] Sidebar Drafts 入口 + pending count 红点
-- [ ] cron 跑下次不再产同名 draft
-- [ ] `mvn test` 全套绿（保 1105+）
-- [ ] `npm run build` EXIT=0
+- [x] SkillList 同 name 折叠：v1+v2 共 1 行，可展开看 candidates
+- [x] Drawer "Evolution Detail" tab：左右 SKILL.md diff + reasoning + per-scenario 表
+- [x] A/B Tag hover Tooltip 显示阈值理由
+- [x] Promoted candidate row 有 "Rollback" 按钮 / Not-promoted candidate 有 "Promote anyway" 按钮
+- [x] Sidebar Drafts 入口 + pending count 红点
+- [x] cron 跑下次不再产同名 draft
+- [x] `mvn test` 全套绿（保 1105+）
+- [x] `npm run build` EXIT=0
+
+## 交付状态
+
+**已交付（2026-05-08，commit `5cfd03b`）**。
+
+交付内容包括：同名 skill 聚合展示、Evolution Detail diff/推理/场景表、A/B 决策 tooltip、手动 promote/rollback、Drafts 顶层入口与 pending count、同名 draft 跳过逻辑，以及对应后端 endpoint 与测试。
 
 ## 实施
 

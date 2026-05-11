@@ -65,8 +65,7 @@ public interface LlmTraceStore {
     /**
      * OBS-2 M1: 写入 t_llm_span (kind='tool') — 异步执行（{@code llmObservabilityExecutor}）。
      *
-     * <p>tool 执行完成后由 AgentLoopEngine 调用，与现有 t_trace_span TOOL_CALL 双写。
-     * 失败 → log.warn + drop（与 OBS-1 pattern 一致）。
+     * <p>tool 执行完成后由 AgentLoopEngine 调用。失败 → log.warn + drop（与 OBS-1 pattern 一致）。
      */
     void writeToolSpan(ToolSpanWriteRequest request);
 

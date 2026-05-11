@@ -24,6 +24,8 @@ public interface LlmSpanRepository extends JpaRepository<LlmSpanEntity, String> 
     List<LlmSpanEntity> findBySessionIdAndKindInOrderByStartedAtAsc(
             String sessionId, Set<String> kinds, Pageable pageable);
 
+    List<LlmSpanEntity> findBySessionIdInOrderByStartedAtAsc(Collection<String> sessionIds);
+
     List<LlmSpanEntity> findByTraceIdOrderByStartedAtAsc(String traceId);
 
     /**

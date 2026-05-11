@@ -3,11 +3,11 @@
 ---
 id: MEMORY-DREAM-CONSOLIDATION
 mode: lite
-status: prd-ready
+status: done
 priority: P1
 risk: Mid
 created: 2026-05-08
-updated: 2026-05-08
+updated: 2026-05-11
 ---
 
 ## 背景
@@ -79,15 +79,25 @@ COMMENT ON COLUMN t_memory.archived_reason IS 'MEMORY-DREAM-CONSOLIDATION: track
 | LLM-driven vs rule-based | **rule-based + embedding cosine** dedup（零 LLM 成本） |
 | Embedding model | 复用现有 `EmbeddingService` 默认 model（不引入新 model） |
 
+## 交付状态
+
+已交付并归档。交付事实以 [delivery-index.md](../../../delivery-index.md) 的 `MEMORY-DREAM-CONSOLIDATION` 行为准。
+
+核心提交：
+
+- `05d0593` — Memory v2 backend/dashboard 更新，包含 `MemoryConsolidator`、Memory 页面手动整理入口、API client 等基础改造。
+- `6468fe3` — `MemoryConsolidationScheduler` / admin trigger summary 细化，返回各阶段整理计数。
+- `118f887` — 补齐 V66 `archived_reason` migration 与需求包落盘。
+
 ## 验收
 
-- [ ] `MemoryConsolidationScheduler` cron 0 30 3 * * * 跑通
-- [ ] yaml `skillforge.memory.consolidation.scheduled-enabled` 关掉后不跑
-- [ ] `MemoryConsolidator.consolidate(userId)` 加 cosine dedup 步骤，>0.85 的 ARCHIVED 弱者
-- [ ] V66 migration `archived_reason` 字段落地
-- [ ] Admin endpoint `POST /api/admin/memory/consolidation/run-once` 可用
-- [ ] `mvn -pl skillforge-server test` 全套绿（保 1136+）
-- [ ] cron e2e：手动触发 → 看 t_memory ARCHIVED 增加 + log 输出 dedup 决策
+- [x] `MemoryConsolidationScheduler` cron 0 30 3 * * * 跑通
+- [x] yaml `skillforge.memory.consolidation.scheduled-enabled` 关掉后不跑
+- [x] `MemoryConsolidator.consolidate(userId)` 加 cosine dedup 步骤，>0.85 的 ARCHIVED 弱者
+- [x] V66 migration `archived_reason` 字段落地
+- [x] Admin endpoint `POST /api/admin/memory/consolidation/run-once` 可用
+- [x] `mvn -pl skillforge-server test` 全套绿（保 1136+）
+- [x] cron e2e：手动触发 → 看 t_memory ARCHIVED 增加 + log 输出 dedup 决策
 
 ## V2 推迟
 

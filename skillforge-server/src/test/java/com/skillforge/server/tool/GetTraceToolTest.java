@@ -34,10 +34,10 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 
 /**
- * OBS-2 M4 — GetTraceTool reads from {@link LlmTraceStore} (unified
- * {@code t_llm_trace} + {@code t_llm_span}) instead of the legacy
- * {@code TraceSpanRepository} ({@code t_trace_span}). Mocks reflect the new
- * read path; output shape is asserted to stay close to the pre-M4 form.
+ * OBS-2 M4/M6 — GetTraceTool reads from {@link LlmTraceStore} (unified
+ * {@code t_llm_trace} + {@code t_llm_span}); the legacy {@code t_trace_span}
+ * table is dropped. Mocks reflect the new read path; output shape is asserted
+ * to stay close to the pre-M4 form.
  */
 @ExtendWith(MockitoExtension.class)
 class GetTraceToolTest {
