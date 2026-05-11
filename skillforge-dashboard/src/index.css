@@ -1389,7 +1389,6 @@ body {
   flex: 1;
   overflow: auto;
   min-height: 0;
-  padding: 16px 24px;
 }
 .sf-content--chat {
   overflow: hidden;
