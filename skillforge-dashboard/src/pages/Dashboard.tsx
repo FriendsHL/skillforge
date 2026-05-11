@@ -261,7 +261,7 @@ const Dashboard: React.FC = () => {
   };
 
   return (
-    <div style={{ padding: '16px 24px' }}>
+    <div>
       {/* KPI cards */}
       <Row gutter={[16, 16]}>
         {kpis.map((k) => (
