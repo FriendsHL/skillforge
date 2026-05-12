@@ -1,6 +1,6 @@
 # SkillForge ToDo
 
-> 更新于：2026-05-11(MEMORY-LLM-SYNTHESIS 交付 — LLM 驱动梦境 dogfood option A 完整闭环 / V68+V69 / 6 proposal 真产出 verify)
+> 更新于：2026-05-12（TEAM-COORDINATOR-FOUNDATION 完整 Plan 对抗后被搁置 — 现有 RightRail/Activity 已覆盖核心可见性需求，ROI 不抵改动成本）
 > 规则：这里只放当前执行状态；需求和方案细节放在链接的需求包中。
 > 旧版：重整前长版 ToDo 已保留在 [references/legacy-todo-2026-04-28.md](references/legacy-todo-2026-04-28.md)。
 
