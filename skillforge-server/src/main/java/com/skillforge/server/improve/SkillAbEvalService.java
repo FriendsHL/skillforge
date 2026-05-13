@@ -7,6 +7,7 @@ import com.skillforge.core.engine.ChatEventBroadcaster;
 import com.skillforge.core.engine.LoopContext;
 import com.skillforge.core.engine.LoopResult;
 import com.skillforge.core.model.AgentDefinition;
+import com.skillforge.core.model.Message;
 import com.skillforge.core.model.SkillDefinition;
 import com.skillforge.core.skill.SkillPackageLoader;
 import com.skillforge.core.skill.SkillRegistry;
@@ -19,7 +20,9 @@ import com.skillforge.server.event.SkillAbCompletedEvent;
 import com.skillforge.server.event.SkillAbCompletedEventPublisher;
 import com.skillforge.server.eval.EvalEngineFactory;
 import com.skillforge.server.eval.EvalJudgeOutput;
+import com.skillforge.server.eval.EvalJudgeMultiTurnOutput;
 import com.skillforge.server.eval.EvalJudgeTool;
+import com.skillforge.server.eval.MultiTurnTranscript;
 import com.skillforge.server.eval.EvalScoreFormula;
 import com.skillforge.server.eval.ScenarioRunResult;
 import com.skillforge.server.eval.sandbox.SandboxSkillRegistryFactory;
@@ -384,23 +387,31 @@ public class SkillAbEvalService {
             int passed = 0;
             for (EvalScenario scenario : heldOutScenarios) {
                 log.info("Skill AB eval scenario: {} ({})", scenario.getId(), scenario.getName());
-                // EVAL-V2 M2 R5: SkillAbEvalService does not support multi-turn yet.
-                // Fall back to single-turn (uses scenario.task) and warn so curators
-                // know the case isn't fully exercised in skill AB eval.
-                if (scenario.isMultiTurn()) {
-                    log.warn("Skill AB eval skipping multi-turn execution for scenario {}; falling back to single-turn. "
-                            + "SkillEvolution does not yet support multi-turn — R5 follow-up.",
-                            scenario.getId());
-                }
                 String candidateStatus;
                 double candidateScore;
                 try {
-                    ScenarioRunResult runResult = runSingleScenario(abRunId, scenario, agentDef, candidateSkillDef);
-                    EvalJudgeOutput judgeOutput = evalJudgeTool.judge(scenario, runResult);
-                    candidateStatus = runResult.getStatus();
-                    candidateScore = judgeOutput.getCompositeScore();
-                    if (judgeOutput.isPass()) {
-                        passed++;
+                    if (scenario.isMultiTurn()) {
+                        MultiTurnTranscript transcript = new MultiTurnTranscript();
+                        ScenarioRunResult runResult = runMultiTurnScenario(
+                                abRunId, scenario, agentDef, candidateSkillDef, transcript);
+                        EvalJudgeMultiTurnOutput judgeOutput = evalJudgeTool.judgeMultiTurnConversation(
+                                scenario, runResult, transcript);
+                        if ("PENDING_JUDGE".equals(runResult.getStatus())) {
+                            runResult.setStatus(judgeOutput.isPass() ? "PASS" : "FAIL");
+                        }
+                        candidateStatus = runResult.getStatus();
+                        candidateScore = judgeOutput.getCompositeScore();
+                        if (judgeOutput.isPass()) {
+                            passed++;
+                        }
+                    } else {
+                        ScenarioRunResult runResult = runSingleScenario(abRunId, scenario, agentDef, candidateSkillDef);
+                        EvalJudgeOutput judgeOutput = evalJudgeTool.judge(scenario, runResult);
+                        candidateStatus = runResult.getStatus();
+                        candidateScore = judgeOutput.getCompositeScore();
+                        if (judgeOutput.isPass()) {
+                            passed++;
+                        }
                     }
                 } catch (Exception e) {
                     log.error("Skill AB eval scenario {} failed: {}", scenario.getId(), e.getMessage());
@@ -711,6 +722,163 @@ public class SkillAbEvalService {
             return ScenarioRunResult.error(scenario.getId(), e.getMessage());
         } finally {
             sandboxFactory.cleanupSandbox(abRunId, scenario.getId());
+        }
+    }
+
+    private ScenarioRunResult runMultiTurnScenario(String abRunId, EvalScenario scenario,
+                                                   AgentDefinition agentDef,
+                                                   SkillDefinition candidateSkillDef,
+                                                   MultiTurnTranscript transcriptOut) {
+        long startMs = System.currentTimeMillis();
+        long budgetMs = 90_000L;
+        try {
+            SkillRegistry sandboxRegistry = sandboxFactory.buildSandboxRegistryWithSkills(
+                    abRunId, scenario.getId(), List.of(candidateSkillDef));
+            AgentLoopEngine engine = evalEngineFactory.buildEvalEngine(sandboxRegistry);
+
+            String evalSessionId = UUID.randomUUID().toString();
+            AgentDefinition evalDef = copyWithoutEvalOverrides(agentDef);
+            Path sandboxRoot = sandboxFactory.getSandboxRoot(abRunId, scenario.getId());
+
+            writeFixtureFiles(scenario, sandboxRoot);
+
+            ScenarioRunResult agg = new ScenarioRunResult();
+            agg.setScenarioId(scenario.getId());
+            agg.setStatus("PENDING_JUDGE");
+            agg.setSessionId(evalSessionId);
+
+            List<Message> history = new ArrayList<>();
+            String lastResponse = null;
+            int totalLoops = 0;
+            long totalInput = 0;
+            long totalOutput = 0;
+            String capturedRootTraceId = null;
+
+            List<EvalScenario.ConversationTurn> turns = scenario.getConversationTurns();
+            int userTurnIdx = 0;
+            int totalUserTurns = (int) turns.stream()
+                    .filter(t -> "user".equalsIgnoreCase(t.getRole()))
+                    .count();
+
+            for (EvalScenario.ConversationTurn turn : turns) {
+                String role = turn.getRole();
+                String content = turn.getContent();
+                if (!"user".equalsIgnoreCase(role)) {
+                    if (transcriptOut != null && !"assistant".equalsIgnoreCase(role)) {
+                        transcriptOut.add(role, content);
+                    }
+                    continue;
+                }
+
+                long remaining = budgetMs - (System.currentTimeMillis() - startMs);
+                if (remaining <= 5_000L) {
+                    log.warn("Skill AB multi-turn scenario {} timed out at user turn {}/{}",
+                            scenario.getId(), userTurnIdx + 1, totalUserTurns);
+                    ScenarioRunResult timeout = ScenarioRunResult.timeout(
+                            scenario.getId(), "90s budget exceeded mid-conversation");
+                    timeout.setSessionId(evalSessionId);
+                    timeout.setExecutionTimeMs(System.currentTimeMillis() - startMs);
+                    timeout.setLoopCount(totalLoops);
+                    timeout.setInputTokens(totalInput);
+                    timeout.setOutputTokens(totalOutput);
+                    timeout.setAgentFinalOutput(lastResponse);
+                    return timeout;
+                }
+
+                LoopContext ctx = new LoopContext();
+                ctx.setMaxLoops(scenario.getMaxLoops());
+                ctx.setExecutionMode("auto");
+                ctx.setMaxLlmStreamTimeoutMs(20_000L);
+
+                String userMsg = content == null ? "" : content.replace("/tmp/eval/", sandboxRoot.toString() + "/");
+                if (transcriptOut != null) {
+                    transcriptOut.add("user", userMsg);
+                }
+
+                List<Message> historySnapshot = new ArrayList<>(history);
+                Future<LoopResult> future = loopExecutor.submit(
+                        () -> engine.run(evalDef, userMsg, historySnapshot, evalSessionId, null, ctx));
+                LoopResult turnResult;
+                try {
+                    turnResult = future.get(Math.min(25_000L, remaining), TimeUnit.MILLISECONDS);
+                } catch (TimeoutException e) {
+                    future.cancel(true);
+                    ScenarioRunResult timeout = ScenarioRunResult.timeout(
+                            scenario.getId(), "25s skill AB eval turn timeout");
+                    timeout.setSessionId(evalSessionId);
+                    timeout.setExecutionTimeMs(System.currentTimeMillis() - startMs);
+                    timeout.setLoopCount(totalLoops);
+                    timeout.setInputTokens(totalInput);
+                    timeout.setOutputTokens(totalOutput);
+                    timeout.setAgentFinalOutput(lastResponse);
+                    return timeout;
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    future.cancel(true);
+                    ScenarioRunResult interrupted = ScenarioRunResult.error(
+                            scenario.getId(), "skill AB eval interrupted");
+                    interrupted.setSessionId(evalSessionId);
+                    interrupted.setExecutionTimeMs(System.currentTimeMillis() - startMs);
+                    interrupted.setLoopCount(totalLoops);
+                    interrupted.setInputTokens(totalInput);
+                    interrupted.setOutputTokens(totalOutput);
+                    interrupted.setAgentFinalOutput(lastResponse);
+                    return interrupted;
+                }
+
+                userTurnIdx++;
+                String response = turnResult.getFinalResponse();
+                lastResponse = response;
+                totalLoops += turnResult.getLoopCount();
+                totalInput += turnResult.getTotalInputTokens();
+                totalOutput += turnResult.getTotalOutputTokens();
+                agg.applyToolCallSignals(turnResult.getToolCalls());
+
+                if (capturedRootTraceId == null && ctx.getRootTraceId() != null) {
+                    capturedRootTraceId = ctx.getRootTraceId();
+                }
+                if (transcriptOut != null) {
+                    transcriptOut.add("assistant", response == null ? "" : response);
+                }
+
+                if (turnResult.getMessages() != null) {
+                    history = new ArrayList<>(turnResult.getMessages());
+                } else {
+                    history.add(Message.user(userMsg));
+                    if (response != null) {
+                        history.add(Message.assistant(response));
+                    }
+                }
+            }
+
+            agg.setLoopCount(totalLoops);
+            agg.setInputTokens(totalInput);
+            agg.setOutputTokens(totalOutput);
+            agg.setAgentFinalOutput(lastResponse);
+            agg.setExecutionTimeMs(System.currentTimeMillis() - startMs);
+            agg.setRootTraceId(capturedRootTraceId);
+            return agg;
+        } catch (Exception e) {
+            log.error("Skill AB eval multi-turn scenario failed: {}", scenario.getId(), e);
+            ScenarioRunResult err = ScenarioRunResult.error(scenario.getId(), e.getMessage());
+            err.setExecutionTimeMs(System.currentTimeMillis() - startMs);
+            return err;
+        } finally {
+            sandboxFactory.cleanupSandbox(abRunId, scenario.getId());
+        }
+    }
+
+    private void writeFixtureFiles(EvalScenario scenario, Path sandboxRoot) throws IOException {
+        if (scenario.getSetup() == null || scenario.getSetup().getFiles() == null) {
+            return;
+        }
+        java.nio.file.Files.createDirectories(sandboxRoot);
+        for (Map.Entry<String, String> entry : scenario.getSetup().getFiles().entrySet()) {
+            Path filePath = sandboxRoot.resolve(entry.getKey());
+            if (filePath.getParent() != null) {
+                java.nio.file.Files.createDirectories(filePath.getParent());
+            }
+            java.nio.file.Files.writeString(filePath, entry.getValue());
         }
     }
 

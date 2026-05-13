@@ -1,6 +1,6 @@
 # SkillForge 文档
 
-> 更新于：2026-05-12
+> 更新于：2026-05-13
 > Agent 规则：先读这里，再只打开当前任务链接到的文档。
 
 编辑 docs 前，先读 [DOCS-GOVERNANCE.md](DOCS-GOVERNANCE.md)。
@@ -19,7 +19,7 @@
 
 | ID | 标题 | 状态 | 需求包 | MRD | PRD | 技术方案 | 交付 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| _(空)_ | — | — | — | — | — | — | — |
+| SKILL-AB-MULTITURN-FIX | Skill A/B 多轮评测修复 | design-draft | [需求包](requirements/active/SKILL-AB-MULTITURN-FIX/index.md) | [MRD](requirements/active/SKILL-AB-MULTITURN-FIX/mrd.md) | [PRD](requirements/active/SKILL-AB-MULTITURN-FIX/prd.md) | [技术方案](requirements/active/SKILL-AB-MULTITURN-FIX/tech-design.md) | — |
 
 ## Backlog 和暂缓
 
@@ -28,6 +28,7 @@
 | SEC-1 | Channel 配置加密 | deferred | [需求包](requirements/backlog/SEC-1-channel-config-encryption/index.md) |
 | BUG-G | 防御性 follow-up | deferred | [需求包](requirements/deferred/BUG-G-defensive-hardening/index.md) |
 | P9-4 | Partial compact（按位置切） | deferred | [需求包](requirements/deferred/P9-4-partial-compact/index.md) |
+| EVAL-DYNAMIC-USER-SIM | 动态用户模拟多轮评测（Phase 2/3） | backlog | 见 [todo.md](todo.md) |
 | TEAM-COORDINATOR-FOUNDATION | 多 Agent 协作可见性基础 | deferred | [需求包](requirements/deferred/TEAM-COORDINATOR-FOUNDATION/index.md) |
 
 ## 已交付方案
