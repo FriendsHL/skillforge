@@ -52,4 +52,39 @@ public interface CanaryRolloutRepository extends JpaRepository<CanaryRolloutEnti
             ORDER BY c.id ASC
             """)
     List<CanaryRolloutEntity> findByRolloutStage(@Param("stage") String stage);
+
+    /**
+     * Phase 1.3: pre-check used by {@code CanaryRolloutService.startCanary} to
+     * reject a second active canary on the same (agentId, surfaceType) pair.
+     *
+     * <p>The {@code uq_canary_active} partial UNIQUE INDEX (Postgres-only) enforces
+     * the same invariant at the DB layer; this method is an explicit application-side
+     * check that gives a clean {@code 409 Conflict} response on H2 unit tests + a
+     * descriptive error message instead of a raw {@link org.springframework.dao.DataIntegrityViolationException}.
+     */
+    @Query("""
+            SELECT c FROM CanaryRolloutEntity c
+            WHERE c.agentId = :agentId
+              AND c.surfaceType = :surfaceType
+              AND c.rolloutStage = 'canary'
+            """)
+    Optional<CanaryRolloutEntity> findActiveCanaryByAgentAndSurface(
+            @Param("agentId") Long agentId,
+            @Param("surfaceType") String surfaceType);
+
+    /**
+     * Phase 1.3: list all canary rollouts for an agent + surface, regardless of stage.
+     * Backs the {@code GET /api/canary/rollouts/agent/{agentId}/active-canaries}
+     * dashboard endpoint. Ordered newest-first so the most recently-started canary
+     * shows at the top.
+     */
+    @Query("""
+            SELECT c FROM CanaryRolloutEntity c
+            WHERE c.agentId = :agentId
+              AND c.surfaceType = :surfaceType
+            ORDER BY c.startedAt DESC, c.id DESC
+            """)
+    List<CanaryRolloutEntity> findByAgentIdAndSurfaceType(
+            @Param("agentId") Long agentId,
+            @Param("surfaceType") String surfaceType);
 }

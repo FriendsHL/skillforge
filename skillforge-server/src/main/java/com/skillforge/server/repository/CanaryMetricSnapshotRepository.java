@@ -32,4 +32,18 @@ public interface CanaryMetricSnapshotRepository extends JpaRepository<CanaryMetr
             """)
     List<CanaryMetricSnapshotEntity> findByCanaryIdOrderByBucketAtDesc(
             @Param("canaryId") Long canaryId, Pageable pageable);
+
+    /**
+     * Phase 1.3 autoRollbackCheck: load every snapshot for a canary so the
+     * service can sum samples + failure counts across the canary's lifetime.
+     * Ordered newest-first for consistency with the paginated variant; volume
+     * is bounded by the canary's lifetime in hours (24 per day × small N days),
+     * well within memory for the rollback decision path.
+     */
+    @Query("""
+            SELECT s FROM CanaryMetricSnapshotEntity s
+            WHERE s.canaryId = :canaryId
+            ORDER BY s.bucketAt DESC
+            """)
+    List<CanaryMetricSnapshotEntity> findAllByCanaryId(@Param("canaryId") Long canaryId);
 }
