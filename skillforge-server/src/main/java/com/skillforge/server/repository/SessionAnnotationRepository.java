@@ -11,6 +11,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * PROD-LABEL-CLUSTER V1: JPA access for {@link SessionAnnotationEntity}.
@@ -120,4 +121,36 @@ public interface SessionAnnotationRepository extends JpaRepository<SessionAnnota
             @Param("source") String source,
             @Param("confidence") BigDecimal confidence,
             @Param("reasoning") String reasoning);
+
+    /**
+     * SKILL-CANARY-ROLLOUT V2 Phase 1.2: look up the canary group annotation
+     * (if any) previously written by {@code CanaryAllocator} for this session
+     * + surface type. Used to keep a session pinned to the same skill version
+     * across its lifetime (ratify decision: "session 锁版本" — sessions never
+     * switch skill version mid-flight).
+     *
+     * <p>Value format is {@code <surfaceType>:<skillName>} (e.g.
+     * {@code "skill:my-skill"}). We filter by the surface prefix here so the
+     * caller only needs to provide the surface; multiple surfaces can coexist
+     * per session in the future (prompt, behavior_rule, ...).
+     *
+     * <p>Returns at most one row (the {@code DESC} ordering + {@code LIMIT 1}
+     * picks the most recent if more than one was somehow written despite
+     * {@code uq_session_annotation} — defensive). The UNIQUE constraint on
+     * (session_id, annotation_type, annotation_value, source) means the same
+     * value never repeats, but two different values for the same surface
+     * are theoretically possible if the allocator ever mis-fired; this query
+     * deterministically picks the latest.
+     */
+    @Query(value = """
+            SELECT a.annotation_value FROM t_session_annotation a
+            WHERE a.session_id = :sessionId
+              AND a.annotation_type = 'canary_group'
+              AND a.annotation_value LIKE CONCAT(:surfaceType, ':%')
+            ORDER BY a.created_at DESC, a.id DESC
+            LIMIT 1
+            """, nativeQuery = true)
+    Optional<String> findCanaryGroup(
+            @Param("sessionId") String sessionId,
+            @Param("surfaceType") String surfaceType);
 }

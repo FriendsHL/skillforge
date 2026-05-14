@@ -123,6 +123,26 @@ public class SkillEntity {
     @Column(name = "shadowed_by", length = 255)
     private String shadowedBy;
 
+    /**
+     * SKILL-CANARY-ROLLOUT V2 (V78 migration): rollout stage for this skill row.
+     * One of {@code production / canary / rolled_back / disabled}. Default
+     * {@code production} preserves the existing one-shot promote behaviour for
+     * every skill row at migration time — only operators that explicitly
+     * "start canary" via the dashboard transition rows out of {@code production}.
+     */
+    @Column(name = "rollout_stage", length = 32, nullable = false)
+    private String rolloutStage = "production";
+
+    /**
+     * SKILL-CANARY-ROLLOUT V2 (V78 migration): percentage of sessions allocated
+     * to this skill row when it is a canary candidate, 0..100. Default
+     * {@code 100} means "everyone gets this version" — i.e. the existing
+     * "一刀切" semantics. The CanaryAllocator (Phase 1.2) only sub-samples
+     * when an associated {@code t_canary_rollout} row is active.
+     */
+    @Column(name = "rollout_percentage", nullable = false)
+    private Integer rolloutPercentage = 100;
+
     public SkillEntity() {
     }
 
@@ -324,5 +344,21 @@ public class SkillEntity {
 
     public void setShadowedBy(String shadowedBy) {
         this.shadowedBy = shadowedBy;
+    }
+
+    public String getRolloutStage() {
+        return rolloutStage;
+    }
+
+    public void setRolloutStage(String rolloutStage) {
+        this.rolloutStage = rolloutStage;
+    }
+
+    public Integer getRolloutPercentage() {
+        return rolloutPercentage;
+    }
+
+    public void setRolloutPercentage(Integer rolloutPercentage) {
+        this.rolloutPercentage = rolloutPercentage;
     }
 }
