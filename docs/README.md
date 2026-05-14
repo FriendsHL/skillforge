@@ -19,6 +19,7 @@
 
 | ID | 标题 | 状态 | 需求包 | MRD | PRD | 技术方案 | 交付 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| SKILL-CANARY-ROLLOUT | Skill 灰度（架构保留）+ 生产指标回流（飞轮 V2）| ratified | [需求包](requirements/active/SKILL-CANARY-ROLLOUT/index.md) | [MRD](requirements/active/SKILL-CANARY-ROLLOUT/mrd.md) | [PRD](requirements/active/SKILL-CANARY-ROLLOUT/prd.md) | [技术方案](requirements/active/SKILL-CANARY-ROLLOUT/tech-design.md) | — |
 | SKILL-AB-MULTITURN-FIX | Skill A/B 多轮评测修复 | design-draft | [需求包](requirements/active/SKILL-AB-MULTITURN-FIX/index.md) | [MRD](requirements/active/SKILL-AB-MULTITURN-FIX/mrd.md) | [PRD](requirements/active/SKILL-AB-MULTITURN-FIX/prd.md) | [技术方案](requirements/active/SKILL-AB-MULTITURN-FIX/tech-design.md) | — |
 
 > 整体方案：[plans/PROD-OPTIMIZATION-FLYWHEEL/plan.md](plans/PROD-OPTIMIZATION-FLYWHEEL/plan.md) —— 数据飞轮 / 优化闭环 6 版本拆分

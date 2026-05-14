@@ -8,8 +8,8 @@
 
 | 顺序  | ID        | 标题                                | 模式   | 状态        | 优先级 | 风险   | 文档                                                        | 下一步                                   |
 | --- | --------- | --------------------------------- | ---- | --------- | --- | ---- | --------------------------------------------------------- | ------------------------------------- |
-| 1 | SKILL-AB-MULTITURN-FIX | Skill A/B 多轮评测修复 | Mid | design-draft | P1 | Mid | [需求包](requirements/active/SKILL-AB-MULTITURN-FIX/index.md) | 评审 Phase 1-only 方案；先证伪 fallback warning + 红测试，不开始实现 |
-| 2 | V2 SKILL-CANARY-ROLLOUT（飞轮 V2）| Full | **plan B-level ratified，待 V1 dogfood** | P1 | Full | [整体方案 §V2](plans/PROD-OPTIMIZATION-FLYWHEEL/plan.md) | V1 跑 1 周 dogfood 看 outcome 标签准确率 + pattern 是否有效，再开 V2 需求包 |
+| 1 | SKILL-CANARY-ROLLOUT | Skill 灰度 + 生产指标回流（飞轮 V2）| Full | **ratified** | P1 | Full | [需求包](requirements/active/SKILL-CANARY-ROLLOUT/index.md) / [整体方案 §V2](plans/PROD-OPTIMIZATION-FLYWHEEL/plan.md) | Phase 1.0 证伪起步（AgentLoopEngine spawn 入口位置 + SkillEntity 2 列扩展 + V1 t_session_annotation 复用 canary_group 可行性）|
+| 2 | SKILL-AB-MULTITURN-FIX | Skill A/B 多轮评测修复 | Mid | design-draft | P1 | Mid | [需求包](requirements/active/SKILL-AB-MULTITURN-FIX/index.md) | **可与 V2 并行**（代码不重叠）；评审 Phase 1-only 方案；先证伪 fallback warning + 红测试 |
 
 ## 阻塞 / 待决策
 
