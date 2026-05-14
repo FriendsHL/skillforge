@@ -19,7 +19,6 @@
 
 | ID | 标题 | 状态 | 需求包 | MRD | PRD | 技术方案 | 交付 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| PROD-LABEL-CLUSTER | 生产 Session 标注 + 失败聚类（飞轮 V1）| design-draft | [需求包](requirements/active/PROD-LABEL-CLUSTER/index.md) | [MRD](requirements/active/PROD-LABEL-CLUSTER/mrd.md) | [PRD](requirements/active/PROD-LABEL-CLUSTER/prd.md) | [技术方案](requirements/active/PROD-LABEL-CLUSTER/tech-design.md) | — |
 | SKILL-AB-MULTITURN-FIX | Skill A/B 多轮评测修复 | design-draft | [需求包](requirements/active/SKILL-AB-MULTITURN-FIX/index.md) | [MRD](requirements/active/SKILL-AB-MULTITURN-FIX/mrd.md) | [PRD](requirements/active/SKILL-AB-MULTITURN-FIX/prd.md) | [技术方案](requirements/active/SKILL-AB-MULTITURN-FIX/tech-design.md) | — |
 
 > 整体方案：[plans/PROD-OPTIMIZATION-FLYWHEEL/plan.md](plans/PROD-OPTIMIZATION-FLYWHEEL/plan.md) —— 数据飞轮 / 优化闭环 6 版本拆分
@@ -40,6 +39,7 @@
 
 | ID | 标题 | 需求包 | 技术方案 |
 | --- | --- | --- | --- |
+| PROD-LABEL-CLUSTER | 生产 Session 标注 + 失败聚类（飞轮 V1）— BE+FE 闭环 + Phase 2 review + W2 Blocker fix | [需求包](requirements/archive/2026-05-14-PROD-LABEL-CLUSTER/index.md) | [方案](requirements/archive/2026-05-14-PROD-LABEL-CLUSTER/tech-design.md) |
 | MULTIMODAL-MVP | 多模态输入 Phase 1（图片 + PDF 上传 + agent 独立多模态模型 + 上传 gate） | [需求包](requirements/archive/2026-05-14-MULTIMODAL-MVP/index.md) | [方案](requirements/archive/2026-05-14-MULTIMODAL-MVP/tech-design.md) |
 | SKILL-SECURITY-SCAN | Skill 安装时快速静态安全扫描 | [需求包](requirements/archive/2026-05-13-SKILL-SECURITY-SCAN/index.md) | [方案](requirements/archive/2026-05-13-SKILL-SECURITY-SCAN/tech-design.md) |
 | MEMORY-LLM-SYNTHESIS | LLM 驱动梦境系统（完全 dogfood option A / 4 类 proposal + 人审 gate / V68+V69） | [需求包](requirements/archive/2026-05-11-MEMORY-LLM-SYNTHESIS/index.md) | [方案](requirements/archive/2026-05-11-MEMORY-LLM-SYNTHESIS/tech-design.md) |
