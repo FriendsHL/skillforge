@@ -1,3 +1,5 @@
 package com.skillforge.server.dto;
 
-public record ChatRequest(String message, Long userId) {}
+import java.util.List;
+
+public record ChatRequest(String message, Long userId, List<String> attachmentIds) {}

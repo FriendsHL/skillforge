@@ -14,7 +14,11 @@ import com.skillforge.server.entity.CompactionEventEntity;
 import com.skillforge.server.entity.SessionEntity;
 import com.skillforge.server.dto.SessionReplayDto;
 import com.skillforge.server.repository.ChannelConversationRepository;
+import com.skillforge.server.entity.AgentEntity;
+import com.skillforge.server.exception.AgentNotFoundException;
+import com.skillforge.server.service.AgentService;
 import com.skillforge.server.service.ChatService;
+import com.skillforge.server.service.ChatAttachmentService;
 import com.skillforge.server.service.CompactionService;
 import com.skillforge.server.service.ContextBreakdownService;
 import com.skillforge.server.service.ReplayService;
@@ -32,6 +36,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -50,7 +55,9 @@ public class ChatController {
     private static final String DEFAULT_CHANNEL_PLATFORM = "web";
 
     private final ChatService chatService;
+    private final ChatAttachmentService chatAttachmentService;
     private final SessionService sessionService;
+    private final AgentService agentService;
     private final PendingAskRegistry pendingAskRegistry;
     private final PendingConfirmationRegistry pendingConfirmationRegistry;
     private final SubAgentRegistry subAgentRegistry;
@@ -61,7 +68,9 @@ public class ChatController {
     private final ContextBreakdownService contextBreakdownService;
 
     public ChatController(ChatService chatService,
+                          ChatAttachmentService chatAttachmentService,
                           SessionService sessionService,
+                          AgentService agentService,
                           PendingAskRegistry pendingAskRegistry,
                           PendingConfirmationRegistry pendingConfirmationRegistry,
                           SubAgentRegistry subAgentRegistry,
@@ -71,7 +80,9 @@ public class ChatController {
                           ChannelConversationRepository channelConversationRepository,
                           ContextBreakdownService contextBreakdownService) {
         this.chatService = chatService;
+        this.chatAttachmentService = chatAttachmentService;
         this.sessionService = sessionService;
+        this.agentService = agentService;
         this.pendingAskRegistry = pendingAskRegistry;
         this.pendingConfirmationRegistry = pendingConfirmationRegistry;
         this.subAgentRegistry = subAgentRegistry;
@@ -167,12 +178,21 @@ public class ChatController {
         if (!check.getStatusCode().is2xxSuccessful()) {
             return ResponseEntity.status(check.getStatusCode()).build();
         }
+        boolean hasMessage = request.message() != null && !request.message().isBlank();
+        boolean hasAttachments = request.attachmentIds() != null && !request.attachmentIds().isEmpty();
+        if (!hasMessage && !hasAttachments) {
+            return ResponseEntity.badRequest().body(Map.of("error", "message or attachmentIds required"));
+        }
         try {
-            chatService.chatAsync(sessionId, request.message(), request.userId());
+            chatService.chatAsync(sessionId, request.message(), request.userId(), request.attachmentIds());
         } catch (RejectedExecutionException e) {
             Map<String, Object> body = new LinkedHashMap<>();
             body.put("error", "Server is busy, please try again later");
             return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(body);
+        } catch (IllegalArgumentException e) {
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("error", e.getMessage());
+            return ResponseEntity.badRequest().body(body);
         } catch (IllegalStateException e) {
             Map<String, Object> body = new LinkedHashMap<>();
             body.put("error", e.getMessage());
@@ -182,6 +202,77 @@ public class ChatController {
         body.put("sessionId", sessionId);
         body.put("status", "accepted");
         return ResponseEntity.accepted().body(body);
+    }
+
+    @PostMapping("/sessions/{sessionId}/attachments")
+    public ResponseEntity<Map<String, Object>> uploadAttachment(@PathVariable String sessionId,
+                                                               @RequestParam Long userId,
+                                                               @RequestParam(value = "file", required = false) MultipartFile file) {
+        // MULTIMODAL-MVP gate order (matters):
+        //   1) session ownership (404/403/400) — never leak session existence
+        //   2) agent.multimodalModelId presence (409 MULTIMODAL_MODEL_NOT_CONFIGURED)
+        //   3) file presence (400) — fail before AttachmentService.upload() opens a stream,
+        //      so no orphan files land in the storage root when the gate fails.
+        ResponseEntity<SessionEntity> check = requireOwnedSession(sessionId, userId);
+        if (!check.getStatusCode().is2xxSuccessful()) {
+            return ResponseEntity.status(check.getStatusCode()).build();
+        }
+        SessionEntity session = check.getBody();
+        ResponseEntity<Map<String, Object>> gate = requireMultimodalModelConfigured(session);
+        if (gate != null) {
+            return gate;
+        }
+        if (file == null || file.isEmpty()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "file is required"));
+        }
+        try {
+            var attachment = chatAttachmentService.upload(sessionId, userId, file);
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("id", attachment.getId());
+            body.put("sessionId", attachment.getSessionId());
+            body.put("kind", attachment.getKind());
+            body.put("mimeType", attachment.getMimeType());
+            body.put("filename", attachment.getFilename());
+            body.put("sizeBytes", attachment.getSizeBytes());
+            body.put("pageCount", attachment.getPageCount());
+            body.put("status", attachment.getStatus());
+            return ResponseEntity.ok(body);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        } catch (IllegalStateException e) {
+            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /**
+     * MULTIMODAL-MVP §6/§9 ratify: BE must independently reject uploads when
+     * the session's agent has no {@code multimodalModelId} configured, even if
+     * the FE upload-button gate is bypassed (curl / replayed request / stale FE).
+     *
+     * @return null when the gate passes; a 409 ResponseEntity with body
+     *         {@code {"code":"MULTIMODAL_MODEL_NOT_CONFIGURED","error":...}}
+     *         when blocked; 404/500 ResponseEntity when the agent lookup itself fails.
+     */
+    private ResponseEntity<Map<String, Object>> requireMultimodalModelConfigured(SessionEntity session) {
+        if (session == null || session.getAgentId() == null) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of(
+                    "code", "MULTIMODAL_MODEL_NOT_CONFIGURED",
+                    "error", "Session is not bound to an agent"));
+        }
+        AgentEntity agent;
+        try {
+            agent = agentService.getAgent(session.getAgentId());
+        } catch (AgentNotFoundException e) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of(
+                    "error", "agent not found: " + session.getAgentId()));
+        }
+        String mm = agent.getMultimodalModelId();
+        if (mm == null || mm.isBlank()) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of(
+                    "code", "MULTIMODAL_MODEL_NOT_CONFIGURED",
+                    "error", "Agent has not configured a multimodal model"));
+        }
+        return null;
     }
 
     /**

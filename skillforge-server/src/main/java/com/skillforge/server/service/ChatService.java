@@ -23,11 +23,13 @@ import com.skillforge.core.reminder.ReminderContext;
 import com.skillforge.core.skill.SkillRegistry;
 import com.skillforge.observability.api.LlmTraceStore;
 import com.skillforge.observability.api.LlmTraceStore.TraceFinalizeRequest;
+import com.skillforge.server.config.LlmProperties;
 import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.CollabRunEntity;
 import com.skillforge.server.entity.ModelUsageEntity;
 import com.skillforge.server.entity.SessionEntity;
 import com.skillforge.server.entity.SessionMessageEntity;
+import com.skillforge.server.exception.MultimodalNoVisionException;
 import com.skillforge.server.repository.CollabRunRepository;
 import com.skillforge.server.repository.ModelUsageRepository;
 import com.skillforge.server.memory.SessionDigestExtractor;
@@ -36,6 +38,7 @@ import com.skillforge.server.subagent.CollabRunService;
 import com.skillforge.server.subagent.SubAgentRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
@@ -90,6 +93,13 @@ public class ChatService {
      * setups that don't care about reminders can pass {@code null}.
      */
     private final ReminderBuilder reminderBuilder;
+    private final ChatAttachmentService chatAttachmentService;
+    /**
+     * MULTIMODAL-MVP Task #4: per-provider vision allowlist. Null in test setups
+     * disables the capability check (Phase 1 test compatibility). Wired by
+     * Spring with {@link LlmProperties} bean in production.
+     */
+    private final LlmProperties llmProperties;
 
     /**
      * P12: publishes {@link SessionLoopFinishedEvent} in the loop teardown finally
@@ -98,6 +108,7 @@ public class ChatService {
      */
     private final ApplicationEventPublisher applicationEventPublisher;
 
+    @Autowired
     public ChatService(AgentService agentService,
                        SessionService sessionService,
                        SkillRegistry skillRegistry,
@@ -119,7 +130,9 @@ public class ChatService {
                        RootSessionLookup rootSessionLookup,
                        LlmTraceStore traceStore,
                        ApplicationEventPublisher applicationEventPublisher,
-                       ReminderBuilder reminderBuilder) {
+                       ReminderBuilder reminderBuilder,
+                       ChatAttachmentService chatAttachmentService,
+                       LlmProperties llmProperties) {
         this.agentService = agentService;
         this.sessionService = sessionService;
         this.skillRegistry = skillRegistry;
@@ -142,6 +155,83 @@ public class ChatService {
         this.traceStore = traceStore;
         this.applicationEventPublisher = applicationEventPublisher;
         this.reminderBuilder = reminderBuilder;
+        this.chatAttachmentService = chatAttachmentService;
+        this.llmProperties = llmProperties;
+    }
+
+    /**
+     * <b>TEST ONLY.</b> Production must use the 24-arg constructor (Spring-injected).
+     * Wires {@code chatAttachmentService} and {@code llmProperties} to null so legacy
+     * non-multimodal tests don't have to mock either dependency. r2 W7: if a multimodal
+     * turn is ever exercised through this path, {@code runLoop} throws
+     * {@link IllegalStateException} rather than silently skipping the vision check.
+     */
+    public ChatService(AgentService agentService,
+                       SessionService sessionService,
+                       SkillRegistry skillRegistry,
+                       AgentLoopEngine agentLoopEngine,
+                       ModelUsageRepository modelUsageRepository,
+                       ChatEventBroadcaster broadcaster,
+                       @Qualifier("chatLoopExecutor") ThreadPoolExecutor chatLoopExecutor,
+                       SessionTitleService sessionTitleService,
+                       SubAgentRegistry subAgentRegistry,
+                       CancellationRegistry cancellationRegistry,
+                       CompactionService compactionService,
+                       CollabRunRepository collabRunRepository,
+                       CollabRunService collabRunService,
+                       ObjectMapper objectMapper,
+                       SessionDigestExtractor sessionDigestExtractor,
+                       LifecycleHookDispatcher lifecycleHookDispatcher,
+                       SessionConfirmCache sessionConfirmCache,
+                       PendingConfirmationRegistry pendingConfirmationRegistry,
+                       RootSessionLookup rootSessionLookup,
+                       LlmTraceStore traceStore,
+                       ApplicationEventPublisher applicationEventPublisher,
+                       ReminderBuilder reminderBuilder) {
+        this(agentService, sessionService, skillRegistry, agentLoopEngine, modelUsageRepository,
+                broadcaster, chatLoopExecutor, sessionTitleService, subAgentRegistry,
+                cancellationRegistry, compactionService, collabRunRepository, collabRunService,
+                objectMapper, sessionDigestExtractor, lifecycleHookDispatcher, sessionConfirmCache,
+                pendingConfirmationRegistry, rootSessionLookup, traceStore, applicationEventPublisher,
+                reminderBuilder, null, null);
+    }
+
+    /**
+     * <b>TEST ONLY.</b> Production must use the 24-arg constructor (Spring-injected).
+     * Used by multimodal-MVP tests that mock {@code chatAttachmentService} but don't
+     * exercise the vision capability check — passes {@code null} for {@link LlmProperties}.
+     * r2 W7: if a multimodal turn reaches the runLoop through this path,
+     * {@code IllegalStateException} fires rather than silent vision-check skip.
+     */
+    public ChatService(AgentService agentService,
+                       SessionService sessionService,
+                       SkillRegistry skillRegistry,
+                       AgentLoopEngine agentLoopEngine,
+                       ModelUsageRepository modelUsageRepository,
+                       ChatEventBroadcaster broadcaster,
+                       @Qualifier("chatLoopExecutor") ThreadPoolExecutor chatLoopExecutor,
+                       SessionTitleService sessionTitleService,
+                       SubAgentRegistry subAgentRegistry,
+                       CancellationRegistry cancellationRegistry,
+                       CompactionService compactionService,
+                       CollabRunRepository collabRunRepository,
+                       CollabRunService collabRunService,
+                       ObjectMapper objectMapper,
+                       SessionDigestExtractor sessionDigestExtractor,
+                       LifecycleHookDispatcher lifecycleHookDispatcher,
+                       SessionConfirmCache sessionConfirmCache,
+                       PendingConfirmationRegistry pendingConfirmationRegistry,
+                       RootSessionLookup rootSessionLookup,
+                       LlmTraceStore traceStore,
+                       ApplicationEventPublisher applicationEventPublisher,
+                       ReminderBuilder reminderBuilder,
+                       ChatAttachmentService chatAttachmentService) {
+        this(agentService, sessionService, skillRegistry, agentLoopEngine, modelUsageRepository,
+                broadcaster, chatLoopExecutor, sessionTitleService, subAgentRegistry,
+                cancellationRegistry, compactionService, collabRunRepository, collabRunService,
+                objectMapper, sessionDigestExtractor, lifecycleHookDispatcher, sessionConfirmCache,
+                pendingConfirmationRegistry, rootSessionLookup, traceStore, applicationEventPublisher,
+                reminderBuilder, chatAttachmentService, null);
     }
 
     /**
@@ -155,7 +245,11 @@ public class ChatService {
      * @throws RejectedExecutionException 线程池满(controller 层捕获返 429)
      */
     public void chatAsync(String sessionId, String userMessage, Long userId) {
-        chatAsync(sessionId, userMessage, userId, false);
+        chatAsync(sessionId, userMessage, userId, List.of(), false);
+    }
+
+    public void chatAsync(String sessionId, String userMessage, Long userId, List<String> attachmentIds) {
+        chatAsync(sessionId, userMessage, userId, attachmentIds, false);
     }
 
     /**
@@ -172,6 +266,13 @@ public class ChatService {
      */
     public void chatAsync(String sessionId, String userMessage, Long userId,
                           boolean preserveActiveRoot) {
+        chatAsync(sessionId, userMessage, userId, List.of(), preserveActiveRoot);
+    }
+
+    public void chatAsync(String sessionId, String userMessage, Long userId,
+                          List<String> attachmentIds, boolean preserveActiveRoot) {
+        List<String> normalizedAttachmentIds = attachmentIds != null ? attachmentIds : List.of();
+        String normalizedUserMessage = userMessage != null ? userMessage : "";
         // 1. 读当前 session 和 agent
         SessionEntity session = sessionService.getSession(sessionId);
         AgentEntity agentEntity = agentService.getAgent(session.getAgentId());
@@ -193,17 +294,20 @@ public class ChatService {
                                 SessionService.MESSAGE_TYPE_ASK_USER,
                                 ask.getControlId(),
                                 "superseded",
-                                userMessage,
+                                normalizedUserMessage,
                                 "direct_input"));
             }
 
             // If session is already running, enqueue the message instead of starting a new loop
             if ("running".equals(session.getRuntimeStatus())) {
+                if (!normalizedAttachmentIds.isEmpty()) {
+                    throw new IllegalStateException("Attachments cannot be queued while the session is running");
+                }
                 LoopContext ctx = cancellationRegistry.getContext(sessionId);
                 if (ctx != null) {
-                    ctx.enqueueUserMessage(userMessage);
+                    ctx.enqueueUserMessage(normalizedUserMessage);
                     try {
-                        sessionService.appendNormalMessages(sessionId, List.of(Message.user(userMessage)));
+                        sessionService.appendNormalMessages(sessionId, List.of(Message.user(normalizedUserMessage)));
                         session.setLastUserMessageAt(java.time.Instant.now());
                         sessionService.saveSession(session);
                     } catch (Exception e) {
@@ -216,7 +320,7 @@ public class ChatService {
                     // OBS-2 M1 §A.1 row 3: enqueue path → traceId=null (corresponding trace not yet created;
                     // 队列消息归并到当前 running loop 的下一轮 LLM call，本身不开新 trace)。
                     if (broadcaster != null) {
-                        broadcaster.messageAppended(sessionId, null, Message.user(userMessage));
+                        broadcaster.messageAppended(sessionId, null, Message.user(normalizedUserMessage));
                     }
                     log.info("Enqueued user message for running session {}", sessionId);
                     return;
@@ -287,13 +391,18 @@ public class ChatService {
             // ContentBlock when there is something to remind. Persisting the block on the
             // message itself keeps history byte-identical across turns (BP2/BP3 cache hits).
             Message userMsg = buildUserMessageWithReminder(
-                    sessionId, userId, userMessage, history, agentEntity);
-            sessionService.appendNormalMessages(sessionId, List.of(userMsg), traceId);
+                    sessionId, userId, normalizedUserMessage, history, agentEntity);
+            userMsg = withAttachmentRefs(sessionId, userId, userMsg, normalizedAttachmentIds);
+            long userSeqNo = sessionService.appendNormalMessages(sessionId, List.of(userMsg), traceId);
+            if (chatAttachmentService != null && !normalizedAttachmentIds.isEmpty()) {
+                chatAttachmentService.bindToMessage(sessionId, userId, normalizedAttachmentIds, userSeqNo);
+            }
 
             // 2.1 第一条 user message 时立即生成截断标题(同步,极快)
             // 同时触发 SessionStart lifecycle hook（仅在首条消息时，非每轮）
             if (fullHistory.isEmpty()) {
-                sessionTitleService.applyImmediateTitle(sessionId, userMessage);
+                sessionTitleService.applyImmediateTitle(sessionId,
+                        !normalizedUserMessage.isBlank() ? normalizedUserMessage : "Attachment");
                 try {
                     AgentDefinition sessionStartDef = agentService.toAgentDefinition(agentEntity);
                     boolean keepGoing = lifecycleHookDispatcher.fireSessionStart(
@@ -345,9 +454,71 @@ public class ChatService {
             // Message object it persisted to DB. Without this the engine would rebuild
             // Message.user(userMessage) from the raw string and drop the reminder.
             final Message userMsgWithReminder = userMsg;
-            chatLoopExecutor.execute(() -> runLoop(sessionId, userMessage, userMsgWithReminder, userId,
+            chatLoopExecutor.execute(() -> runLoop(sessionId, normalizedUserMessage, userMsgWithReminder, userId,
                     agentEntity, historyForLoop, capturedTraceId, capturedRootTraceId));
         }
+    }
+
+    /**
+     * MULTIMODAL-MVP: returns true when {@code message.content} is a block list
+     * containing any block of type {@code image_ref} or {@code pdf_ref}.
+     * Used by {@link #runLoop} to decide whether this turn switches to
+     * {@code agent.multimodalModelId}.
+     *
+     * <p>Block objects can be either {@link ContentBlock} instances (in-memory) or
+     * {@link Map} (after Jackson deserialization of persisted messages). Both forms
+     * are handled.</p>
+     *
+     * <p>String-content messages have no blocks → returns false. tool_result blocks
+     * carrying nested image content are intentionally NOT counted here — only the
+     * current user-message-level reference blocks trigger the model switch,
+     * matching PRD Ratify #7 semantics.</p>
+     *
+     * <p>r2 (N2 fix): the materialized {@code image} type is NOT included.
+     * Post-B2-fix, the engine's messages list is guaranteed to be in
+     * {@code image_ref} / {@code pdf_ref} shape only — materialized {@code image}
+     * blocks live exclusively inside the transient request copy built by
+     * {@code MessageMaterializer.expandForProvider} and never appear here.</p>
+     */
+    static boolean messageHasMultimodalBlocks(Message message) {
+        if (message == null || !(message.getContent() instanceof List<?> blocks)) {
+            return false;
+        }
+        for (Object block : blocks) {
+            String type = null;
+            if (block instanceof ContentBlock cb) {
+                type = cb.getType();
+            } else if (block instanceof Map<?, ?> map && map.get("type") != null) {
+                type = map.get("type").toString();
+            }
+            if ("image_ref".equals(type) || "pdf_ref".equals(type)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private Message withAttachmentRefs(String sessionId, Long userId, Message userMsg, List<String> attachmentIds) {
+        if (attachmentIds == null || attachmentIds.isEmpty()) {
+            return userMsg;
+        }
+        List<ContentBlock> refs = chatAttachmentService.referenceBlocks(sessionId, userId, attachmentIds);
+        List<Object> blocks = new ArrayList<>();
+        Object content = userMsg.getContent();
+        if (content instanceof List<?> existing) {
+            blocks.addAll(existing);
+        } else {
+            String text = content instanceof String ? (String) content : userMsg.getTextContent();
+            if (text != null && !text.isBlank()) {
+                blocks.add(ContentBlock.text(text));
+            }
+        }
+        blocks.addAll(refs);
+        Message out = new Message();
+        out.setRole(userMsg.getRole());
+        out.setContent(blocks);
+        out.setReasoningContent(userMsg.getReasoningContent());
+        return out;
     }
 
     /**
@@ -425,14 +596,58 @@ public class ChatService {
             // 解析 agent definition,并把 session 的 executionMode 注入 config
             AgentDefinition agentDef = agentService.toAgentDefinition(agentEntity);
             SessionEntity freshSession = sessionService.getSession(sessionId);
-            // P10 INV-4: session-scoped /model override takes precedence over
-            // agent.modelId. Override the AgentDefinition modelId in-place so all
-            // downstream paths (resolveProvider in AgentLoopEngine, ModelUsage
-            // logging at line 556 / 585, request token estimation) see the
-            // overridden value. NULL on session = no override → keep agent default.
+            // MULTIMODAL-MVP §7/§9 + tech-design "effective model":
+            //   priority is `agent.multimodalModelId` (when current turn has multimodal
+            //   blocks AND the field is configured) > `session.runtimeModelOverride`
+            //   (`/model`) > `agent.modelId`. Since `agentDef` is a fresh copy built
+            //   from `toAgentDefinition` (not the persisted entity), mutating its
+            //   modelId here does NOT touch `agentEntity` — next turn without
+            //   multimodal blocks naturally falls back to the normal model.
+            //
+            // Phase 1 follow-up: `LlmCallObserver` does not yet take a
+            //   `ctx.attributes()` map for per-call span attrs (see
+            //   skillforge-core/llm/observer/LlmCallObserver). When that wiring lands,
+            //   emit `llm.effective_model` + `llm.model_source` here. Tracked in PRD
+            //   §observability checklist.
             String runtimeOverride = freshSession.getRuntimeModelOverride();
-            if (runtimeOverride != null && !runtimeOverride.isBlank()) {
+            String multimodalModelId = agentEntity.getMultimodalModelId();
+            boolean hasMultimodalBlocks = userMsgWithReminder != null
+                    && messageHasMultimodalBlocks(userMsgWithReminder);
+            if (hasMultimodalBlocks
+                    && multimodalModelId != null
+                    && !multimodalModelId.isBlank()) {
+                agentDef.setModelId(multimodalModelId);
+                log.info("Multimodal turn: switching effective model to {} for session={}",
+                        multimodalModelId, sessionId);
+            } else if (runtimeOverride != null && !runtimeOverride.isBlank()) {
+                // P10 INV-4: /model runtime override takes precedence over agent.modelId
+                // for non-multimodal turns. Multimodal turns override this (MULTIMODAL-MVP
+                // Ratify #7: structural switch beats user temp switch).
                 agentDef.setModelId(runtimeOverride);
+            }
+
+            // MULTIMODAL-MVP Task #4 / PRD Ratify #9: when this turn carries
+            // multimodal blocks, refuse if the resolved effective model is not in any
+            // provider's visionModels allowlist. Throwing here lets the existing
+            // catch (Exception) block on line ~847 surface it as runtimeError + WS
+            // sessionStatus("error") — caller (FE) can map the code to a "please
+            // switch model" hint. Do NOT silently fall back to agent.modelId
+            // (that would re-introduce the silent-drop class of bugs this prevents).
+            //
+            // r2 (W7 fix): in production, `llmProperties` MUST be wired (the 24-arg
+            // constructor is the Spring-injected path). The 22/23-arg constructors
+            // pass null for test compat only — but if a multimodal turn ever reaches
+            // a null-llmProperties code path, fail loud rather than silently skip
+            // the capability check (which would re-create the silent-drop bug class).
+            if (hasMultimodalBlocks) {
+                if (llmProperties == null) {
+                    throw new IllegalStateException(
+                            "LlmProperties not wired — cannot validate vision capability for multimodal turn. "
+                                    + "Production code path must use the 24-arg ChatService constructor.");
+                }
+                if (!llmProperties.supportsVision(agentDef.getModelId())) {
+                    throw new MultimodalNoVisionException(agentDef.getModelId());
+                }
             }
             String mode = freshSession.getExecutionMode();
             if (mode == null || mode.isBlank()) {
@@ -492,6 +707,15 @@ public class ChatService {
             // OBS-4 §2.2: 透传 rootTraceId 到 engine，让 t_llm_trace.root_trace_id 写入对应 root。
             // null 时存储层 SQL 用 COALESCE 兜底为 trace_id 自身（自己当 root）。
             preCtx.setRootTraceId(externalRootTraceId);
+            // MULTIMODAL-MVP r2 (B2 fix): wire the engine-boundary materializer so
+            // `image_ref` / `pdf_ref` blocks in the persisted user message expand to
+            // provider-bound `image` / text blocks ONLY for the LLM request. The engine's
+            // messages list and the DB row keep the reference form — preventing
+            // mid-prefix divergence guard rewrites that would persist base64 image bytes
+            // into t_session_message.content_json (PRD §"Attachment 存储" / persistence-shape-invariant.md).
+            if (chatAttachmentService != null) {
+                preCtx.setMessageMaterializer(chatAttachmentService);
+            }
 
             // Depth-aware tool filtering: if session is in a collab run and at max depth,
             // exclude TeamCreate and SubAgent skills to prevent leaf agents from spawning further agents
@@ -560,6 +784,15 @@ public class ChatService {
             // Q2 reminder fix: pass userMsgWithReminder through new 7-arg engine.run
             // overload. null → engine builds plain Message.user(userMessage) (legacy
             // path used by answerAsk / answerConfirmation that don't run reminder build).
+            //
+            // MULTIMODAL-MVP r2 (B2 fix): hand the engine the IMAGE_REF (persisted) form,
+            // NOT the materialized base64 `image` form. The engine's messages list must
+            // mirror the DB row shape so updateSessionMessages' commonPrefixSize byte-
+            // comparison doesn't trigger the mid-prefix divergence guard and rewrite the
+            // session with base64. Materialization happens engine-side via
+            // LoopContext.messageMaterializer right before each chatStream call (see
+            // AgentLoopEngine.applyMaterializer) — purely transient, never escapes the
+            // request boundary.
             LoopResult result = agentLoopEngine.run(agentDef, userMessage, userMsgWithReminder,
                     history, sessionId, userId, preCtx);
             finalMessage = result.getFinalResponse();
@@ -1105,6 +1338,16 @@ public class ChatService {
      */
     private static String toFriendlyChatError(Throwable e) {
         for (Throwable c = e; c != null; c = c.getCause()) {
+            if (c instanceof MultimodalNoVisionException mnv) {
+                // MULTIMODAL-MVP Task #4: stable error code on the wire so FE can
+                // detect and prompt "please choose a vision-capable multimodal
+                // model in agent config". Keep model id in the message so users
+                // know which config to fix.
+                return MultimodalNoVisionException.CODE + ": 当前 agent 配置的多模态模型 `"
+                        + mnv.getModelId() + "` 不支持图像 / PDF 输入。"
+                        + "请在 agent 配置面选择 vision-capable 模型，"
+                        + "或在 application.yml 的 provider.vision-models 中加入此模型。";
+            }
             if (c instanceof java.net.SocketTimeoutException) {
                 return "模型响应超时：流式响应中长时间未收到新 chunk。"
                         + "推理模型深度思考时常见，可重试，或在 application.yml 调高对应 provider 的 read-timeout-seconds。";

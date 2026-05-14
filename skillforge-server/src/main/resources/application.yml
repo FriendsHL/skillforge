@@ -217,6 +217,12 @@ skillforge:
           - mimo-v2-pro
           - mimo-v2-omni
           - mimo-v2-tts
+        # MULTIMODAL-MVP: allowlist of vision-capable models. ChatService refuses
+        # multimodal turns whose effective model is not listed here (BE side of
+        # PRD Ratify #9 — no silent fallback to text-only). Add additional model
+        # ids when they gain vision support.
+        vision-models:
+          - mimo-v2-omni
         # Context windows resolved per-model via ModelConfig.KNOWN_MODEL_WINDOWS
         # (V2.5 / V2-Pro = 1M tokens, V2-Omni = 256K, TTS variants = 1M tokenizer-aligned).
         # Note: TTS models (-tts / -tts-voiceclone / -tts-voicedesign) are listed for

@@ -50,6 +50,31 @@ public class LlmProperties {
         this.providers = providers;
     }
 
+    /**
+     * MULTIMODAL-MVP Task #4: returns true if the given model id appears in any
+     * provider's {@code visionModels} allowlist. Case-sensitive exact match
+     * (model ids are deployment-defined identifiers — fuzzy matching would
+     * mask configuration typos).
+     *
+     * <p>{@code null} / blank input returns false (no model = no vision).
+     */
+    public boolean supportsVision(String modelId) {
+        if (modelId == null || modelId.isBlank()) {
+            return false;
+        }
+        if (providers == null) {
+            return false;
+        }
+        for (ProviderConfig provider : providers.values()) {
+            if (provider == null) continue;
+            List<String> visionModels = provider.getVisionModels();
+            if (visionModels != null && visionModels.contains(modelId)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     public static class ProviderConfig {
 
         private String type;
@@ -61,6 +86,16 @@ public class LlmProperties {
          * Empty means fallback to the single {@link #model}.
          */
         private List<String> models = new ArrayList<>();
+        /**
+         * MULTIMODAL-MVP: allowlist of model ids served by this provider that
+         * accept vision input (image / image_url / page-image content blocks).
+         * When the resolved effective model for a multimodal turn is NOT in any
+         * provider's {@code visionModels} list, ChatService raises
+         * {@code MULTIMODAL_MODEL_NO_VISION_CAPABILITY} instead of silently
+         * dropping the image block (PRD Ratify #9).
+         * <p>Default empty → conservative refusal until explicitly configured.
+         */
+        private List<String> visionModels = new ArrayList<>();
         /** Optional read timeout override (seconds). Null = use ModelConfig default. */
         private Integer readTimeoutSeconds;
         /** Optional max retries override (on SocketTimeoutException only). Null = use ModelConfig default. */
@@ -140,6 +175,14 @@ public class LlmProperties {
 
         public void setModels(List<String> models) {
             this.models = models != null ? models : new ArrayList<>();
+        }
+
+        public List<String> getVisionModels() {
+            return visionModels;
+        }
+
+        public void setVisionModels(List<String> visionModels) {
+            this.visionModels = visionModels != null ? visionModels : new ArrayList<>();
         }
     }
 

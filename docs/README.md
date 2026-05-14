@@ -1,6 +1,6 @@
 # SkillForge 文档
 
-> 更新于：2026-05-13
+> 更新于：2026-05-14
 > Agent 规则：先读这里，再只打开当前任务链接到的文档。
 
 编辑 docs 前，先读 [DOCS-GOVERNANCE.md](DOCS-GOVERNANCE.md)。
@@ -37,6 +37,7 @@
 
 | ID | 标题 | 需求包 | 技术方案 |
 | --- | --- | --- | --- |
+| MULTIMODAL-MVP | 多模态输入 Phase 1（图片 + PDF 上传 + agent 独立多模态模型 + 上传 gate） | [需求包](requirements/archive/2026-05-14-MULTIMODAL-MVP/index.md) | [方案](requirements/archive/2026-05-14-MULTIMODAL-MVP/tech-design.md) |
 | SKILL-SECURITY-SCAN | Skill 安装时快速静态安全扫描 | [需求包](requirements/archive/2026-05-13-SKILL-SECURITY-SCAN/index.md) | [方案](requirements/archive/2026-05-13-SKILL-SECURITY-SCAN/tech-design.md) |
 | MEMORY-LLM-SYNTHESIS | LLM 驱动梦境系统（完全 dogfood option A / 4 类 proposal + 人审 gate / V68+V69） | [需求包](requirements/archive/2026-05-11-MEMORY-LLM-SYNTHESIS/index.md) | [方案](requirements/archive/2026-05-11-MEMORY-LLM-SYNTHESIS/tech-design.md) |
 | OBS-2 | Trace 数据模型统一（`t_llm_trace` / `t_llm_span` 单轨 + `t_trace_span` drop） | [需求包](requirements/archive/2026-05-02-OBS-2-trace-data-model-unification/index.md) | [方案](requirements/archive/2026-05-02-OBS-2-trace-data-model-unification/tech-design.md) |

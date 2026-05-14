@@ -56,6 +56,20 @@ class MessageGetTextContentTest {
         assertThat(msg.getTextContent()).isEqualTo("first\nsecond");
     }
 
+    @Test
+    @DisplayName("image_ref and pdf_ref blocks render safe attachment placeholders")
+    void attachmentRefBlocksRenderPlaceholders() {
+        Message msg = new Message();
+        msg.setRole(Message.Role.USER);
+        msg.setContent(List.of(
+                ContentBlock.text("please inspect"),
+                ContentBlock.imageRef("att-1", "image/png", "screen.png"),
+                ContentBlock.pdfRef("att-2", "paper.pdf", 12)));
+
+        assertThat(msg.getTextContent())
+                .isEqualTo("please inspect\n[Image attachment: screen.png]\n[PDF attachment: paper.pdf]");
+    }
+
     // -----------------------------------------------------------------------
     // tool_result ContentBlock with String content
     // -----------------------------------------------------------------------

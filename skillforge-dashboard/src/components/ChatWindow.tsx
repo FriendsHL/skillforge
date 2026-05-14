@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { message } from 'antd';
+import { Tooltip, message } from 'antd';
 import { type ToolCall } from './ToolCallTimeline';
 import MarkdownRenderer from './MarkdownRenderer';
 import PendingAskCard from './PendingAskCard';
@@ -71,18 +71,63 @@ export interface SlashCommandHandlers {
 
 interface ChatInputProps {
   disabled?: boolean;
-  onSend: (text: string) => void;
+  onSend: (text: string, files?: File[]) => void;
   /** Optional — when present, enables slash-command interception. */
   slashCommands?: SlashCommandHandlers;
+  /**
+   * MULTIMODAL-MVP — Chat upload gate. When `false` (or undefined), the attach
+   * button is rendered DISABLED (visible, but `aria-disabled`) with a tooltip
+   * pointing the user to the agent config. The button is never hidden so the
+   * affordance stays discoverable. Source: `activeAgent.multimodalModelId`.
+   */
+  multimodalEnabled?: boolean;
+  /** Called when user clicks the in-tooltip "open agent config" link. */
+  onOpenAgentConfig?: () => void;
+  /**
+   * Bumped by parent on session switch — forces the in-flight `files` state to
+   * reset so picks don't carry across sessions (PRD §"session 切换时清理未发送
+   * 的本地 selected/uploading 状态").
+   */
+  sessionResetKey?: string;
+}
+
+const MULTIMODAL_GATE_TOOLTIP = '请先在 agent 配置中选择多模态模型';
+
+/**
+ * r2 W1 — Attachment chip metadata. Format bytes as `B / KB / MB`. Single
+ * non-decimal digit for KB and one decimal for MB keeps chips compact while
+ * staying scan-able. Used by the attachment tray rendering below.
+ */
+function formatBytes(b: number): string {
+  if (b < 1024) return `${b} B`;
+  if (b < 1024 * 1024) return `${(b / 1024).toFixed(0)} KB`;
+  return `${(b / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/**
+ * r2 W1 — Compact type badge derived from the picked file's MIME. We only
+ * accept image/* and application/pdf (enforced upstream in handleFileChange),
+ * so the dichotomy below is exhaustive.
+ */
+function chipKindLabel(mime: string): 'PDF' | 'IMG' {
+  return mime === 'application/pdf' ? 'PDF' : 'IMG';
 }
 
 const ChatInput: React.FC<ChatInputProps> = React.memo(
-  ({ disabled, onSend, slashCommands }) => {
+  ({ disabled, onSend, slashCommands, multimodalEnabled, onOpenAgentConfig, sessionResetKey }) => {
     const [input, setInput] = useState('');
     const [popupOpen, setPopupOpen] = useState(false);
     const [selectedIdx, setSelectedIdx] = useState(0);
     const [executing, setExecuting] = useState(false);
+    const [files, setFiles] = useState<File[]>([]);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
+    const fileInputRef = useRef<HTMLInputElement>(null);
+
+    // Drop in-flight selections when the active session changes — prevents
+    // accidentally re-sending a previous session's pick to the next one.
+    useEffect(() => {
+      setFiles([]);
+    }, [sessionResetKey]);
 
     const autosize = useCallback(() => {
       const el = textareaRef.current;
@@ -201,14 +246,42 @@ const ChatInput: React.FC<ChatInputProps> = React.memo(
 
     const handleSend = () => {
       const text = input.trim();
-      if (!text) return;
+      const selectedFiles = files;
+      if (!text && selectedFiles.length === 0) return;
+      // Defense-in-depth: even though the picker is gated, refuse to ship
+      // attachments when multimodal is not configured. Mirrors PRD Ratify #6
+      // and the BE 409 MULTIMODAL_MODEL_NOT_CONFIGURED check.
+      if (selectedFiles.length > 0 && !multimodalEnabled) {
+        message.error(MULTIMODAL_GATE_TOOLTIP);
+        return;
+      }
       // First-character `/` always routes to slash-command path (INV-Q5 (a)).
       if (slashCommands && text.startsWith('/')) {
+        if (selectedFiles.length > 0) {
+          message.warning('Slash commands do not support attachments');
+          return;
+        }
         void runSlashCommand(text);
         return;
       }
       setInput('');
-      onSend(text);
+      setFiles([]);
+      if (selectedFiles.length > 0) {
+        onSend(text, selectedFiles);
+      } else {
+        onSend(text);
+      }
+    };
+
+    const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+      const next = Array.from(e.target.files ?? []).filter((file) => {
+        return file.type.startsWith('image/') || file.type === 'application/pdf';
+      });
+      if (next.length !== (e.target.files?.length ?? 0)) {
+        message.warning('Only images and PDFs are supported');
+      }
+      setFiles((prev) => [...prev, ...next].slice(0, 5));
+      e.target.value = '';
     };
 
     const handlePopupSelect = useCallback(
@@ -277,11 +350,107 @@ const ChatInput: React.FC<ChatInputProps> = React.memo(
             onHover={setSelectedIdx}
           />
         )}
+        {files.length > 0 && (
+          <div className="attachment-tray">
+            {files.map((file, idx) => (
+              <span
+                className="attachment-chip"
+                key={`${file.name}-${idx}`}
+                data-testid="attachment-chip"
+              >
+                {/* r2 W1 — PRD §Chat 上传 "必须" content: filename + type + size.
+                    Status indicator stays implicit for Phase 1 (chip presence
+                    = pending-send; failure → message.error toast covers it). */}
+                <span className="att-kind" data-testid="attachment-chip-kind">
+                  {chipKindLabel(file.type)}
+                </span>
+                <span className="att-name">{file.name}</span>
+                <span className="att-size" data-testid="attachment-chip-size">
+                  {formatBytes(file.size)}
+                </span>
+                <button
+                  type="button"
+                  aria-label={`Remove ${file.name}`}
+                  onClick={() => setFiles((prev) => prev.filter((_, i) => i !== idx))}
+                >
+                  <IconX s={10} />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
         <div className="composer">
           <div className="comp-left-tools">
-            <button type="button" className="comp-btn" title="Attach" aria-label="Attach">
-              <IconAttach s={14} />
-            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*,application/pdf"
+              multiple
+              style={{ display: 'none' }}
+              onChange={handleFileChange}
+              data-testid="chat-attach-file-input"
+            />
+            {/* MULTIMODAL-MVP gate (PRD Ratify #6): button is **visible but
+                disabled** when the active agent has no multimodalModelId, so
+                the affordance stays discoverable. Click handler short-circuits
+                in the disabled branch as a defense in depth (in case AntD's
+                Tooltip wrapper interferes with the native disabled attr). */}
+            <Tooltip
+              title={
+                !multimodalEnabled ? (
+                  <span data-testid="multimodal-tooltip-content">
+                    {MULTIMODAL_GATE_TOOLTIP}
+                    {onOpenAgentConfig && (
+                      <>
+                        {' · '}
+                        <a
+                          role="link"
+                          data-testid="multimodal-tooltip-link"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            onOpenAgentConfig();
+                          }}
+                          style={{ color: 'var(--accent)', cursor: 'pointer' }}
+                        >
+                          打开 agent 配置
+                        </a>
+                      </>
+                    )}
+                  </span>
+                ) : ''
+              }
+              placement="top"
+              // 0-delay makes the overlay mount synchronously on hover —
+              // matters in jsdom where AntD's default 100ms enter/leave
+              // delays interact poorly with `waitFor` defaults.
+              mouseEnterDelay={0}
+              mouseLeaveDelay={0}
+            >
+              {/* r2 W4 — drop native `disabled`, keep aria-disabled + onClick
+                  guard. Native `disabled` on <button> removes it from the tab
+                  order, which means keyboard users can't focus the button to
+                  discover the gate tooltip — defeats the "不隐藏按钮" intent.
+                  CSS rule `.comp-btn[aria-disabled="true"]` (added in
+                  index.css) keeps the visual disabled cue. */}
+              <button
+                type="button"
+                className="comp-btn"
+                title="Attach"
+                aria-label="Attach"
+                aria-disabled={!multimodalEnabled || disabled || executing}
+                data-testid="chat-attach-button"
+                onClick={() => {
+                  if (!multimodalEnabled || disabled || executing) {
+                    // Single short-circuit guard handles all gated states
+                    // (gate not configured / parent-disabled / mid-execution).
+                    return;
+                  }
+                  fileInputRef.current?.click();
+                }}
+              >
+                <IconAttach s={14} />
+              </button>
+            </Tooltip>
           </div>
           <textarea
             ref={textareaRef}
@@ -300,7 +469,16 @@ const ChatInput: React.FC<ChatInputProps> = React.memo(
             type="button"
             className="send-btn"
             onClick={handleSend}
-            disabled={disabled || executing || !input.trim()}
+            disabled={
+              disabled ||
+              executing ||
+              (!input.trim() && files.length === 0) ||
+              // Defense in depth: refuse to enable Send when files are queued
+              // but multimodal is not configured. The picker gate already
+              // prevents reaching this state, but a stale agent change after
+              // picking would otherwise leave Send enabled.
+              (files.length > 0 && !multimodalEnabled)
+            }
             aria-label="Send"
           >
             <IconSend s={15} />
@@ -361,7 +539,7 @@ export interface ChatWindowSlashCommandConfig {
 interface ChatWindowProps {
   messages: ChatMessage[];
   loading: boolean;
-  onSend: (text: string) => void;
+  onSend: (text: string, files?: File[]) => void;
   inputDisabled?: boolean;
   inflightTools?: Record<string, InflightTool>;
   streamingText?: string;
@@ -373,6 +551,12 @@ interface ChatWindowProps {
   onConfirmDecision?: (confirmationId: string, decision: ConfirmationDecision) => void;
   /** Optional — when provided, enables `/`-prefixed slash commands. */
   slashCommandConfig?: ChatWindowSlashCommandConfig;
+  /** MULTIMODAL-MVP: Chat upload gate (active agent has multimodalModelId). */
+  multimodalEnabled?: boolean;
+  /** Called when user clicks the in-tooltip "open agent config" link. */
+  onOpenAgentConfig?: () => void;
+  /** Bumped by parent on session switch to flush in-flight file picks. */
+  sessionResetKey?: string;
 }
 
 interface ToolCallRowProps {
@@ -484,13 +668,16 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
   onAnswerAsk,
   onConfirmDecision,
   slashCommandConfig,
+  multimodalEnabled,
+  onOpenAgentConfig,
+  sessionResetKey,
 }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const onSendRef = useRef(onSend);
   useEffect(() => { onSendRef.current = onSend; }, [onSend]);
-  const stableOnSend = useCallback((text: string) => onSendRef.current(text), []);
+  const stableOnSend = useCallback((text: string, files?: File[]) => onSendRef.current(text, files), []);
 
   // ─── P10 slash-command modal state ───────────────────────────────────────
   const [commandModalOpen, setCommandModalOpen] = useState(false);
@@ -710,6 +897,9 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
         disabled={inputDisabled}
         onSend={stableOnSend}
         slashCommands={slashHandlers}
+        multimodalEnabled={multimodalEnabled}
+        onOpenAgentConfig={onOpenAgentConfig}
+        sessionResetKey={sessionResetKey}
       />
       <CommandResultModal
         open={commandModalOpen}

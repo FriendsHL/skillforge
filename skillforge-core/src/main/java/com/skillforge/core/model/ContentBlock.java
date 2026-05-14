@@ -6,7 +6,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.Map;
 
 /**
- * 消息内容块，支持 text / tool_use / tool_result 三种类型。
+ * 消息内容块，支持 text / tool_use / tool_result / attachment reference types.
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class ContentBlock {
@@ -36,6 +36,19 @@ public class ContentBlock {
      */
     @JsonProperty("error_type")
     private String errorType;
+
+    // attachment reference types: image_ref / pdf_ref
+    @JsonProperty("attachment_id")
+    private String attachmentId;
+    @JsonProperty("mime_type")
+    private String mimeType;
+    private String filename;
+    @JsonProperty("page_count")
+    private Integer pageCount;
+
+    // provider-bound materialized image type; never persisted in session history.
+    @JsonProperty("data_base64")
+    private String dataBase64;
 
     public ContentBlock() {
     }
@@ -79,6 +92,32 @@ public class ContentBlock {
         block.setContent(content);
         block.setIsError(isError);
         block.setErrorType(errorType);
+        return block;
+    }
+
+    public static ContentBlock imageRef(String attachmentId, String mimeType, String filename) {
+        ContentBlock block = new ContentBlock();
+        block.setType("image_ref");
+        block.setAttachmentId(attachmentId);
+        block.setMimeType(mimeType);
+        block.setFilename(filename);
+        return block;
+    }
+
+    public static ContentBlock pdfRef(String attachmentId, String filename, Integer pageCount) {
+        ContentBlock block = new ContentBlock();
+        block.setType("pdf_ref");
+        block.setAttachmentId(attachmentId);
+        block.setFilename(filename);
+        block.setPageCount(pageCount);
+        return block;
+    }
+
+    public static ContentBlock image(String mimeType, String dataBase64) {
+        ContentBlock block = new ContentBlock();
+        block.setType("image");
+        block.setMimeType(mimeType);
+        block.setDataBase64(dataBase64);
         return block;
     }
 
@@ -152,5 +191,45 @@ public class ContentBlock {
 
     public void setErrorType(String errorType) {
         this.errorType = errorType;
+    }
+
+    public String getAttachmentId() {
+        return attachmentId;
+    }
+
+    public void setAttachmentId(String attachmentId) {
+        this.attachmentId = attachmentId;
+    }
+
+    public String getMimeType() {
+        return mimeType;
+    }
+
+    public void setMimeType(String mimeType) {
+        this.mimeType = mimeType;
+    }
+
+    public String getFilename() {
+        return filename;
+    }
+
+    public void setFilename(String filename) {
+        this.filename = filename;
+    }
+
+    public Integer getPageCount() {
+        return pageCount;
+    }
+
+    public void setPageCount(Integer pageCount) {
+        this.pageCount = pageCount;
+    }
+
+    public String getDataBase64() {
+        return dataBase64;
+    }
+
+    public void setDataBase64(String dataBase64) {
+        this.dataBase64 = dataBase64;
     }
 }

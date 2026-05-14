@@ -545,3 +545,103 @@ describe('AgentDrawer Overview — Thinking Mode v1', () => {
   });
 });
 
+// MULTIMODAL-MVP — Task #5: Multimodal model picker on Overview tab.
+describe('AgentDrawer Overview — Multimodal model picker', () => {
+  beforeEach(() => {
+    warningSpy.mockClear();
+    vi.mocked(updateAgent).mockClear();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('renders the Multimodal model picker on Overview with the helper text', async () => {
+    renderDrawer(makeAgent());
+    await waitFor(() => {
+      expect(screen.getByTestId('multimodal-model-select')).toBeInTheDocument();
+    });
+    // Helper text is in the same card; assertion uses a substring so we
+    // don't break on copy whitespace nits.
+    expect(
+      screen.getByTestId('multimodal-model-card').textContent ?? '',
+    ).toMatch(/仅在用户发送带图片\/PDF 的消息时使用/);
+  });
+
+  it('defaults the value from agent.multimodalModelId when present', async () => {
+    renderDrawer(
+      makeAgent({
+        modelId: 'openai:gpt-4o',
+        multimodalModelId: 'deepseek:deepseek-v4-pro',
+      } as AgentDto),
+    );
+    await waitFor(() => {
+      const card = screen.getByTestId('multimodal-model-card');
+      expect(card.textContent ?? '').toMatch(/deepseek:deepseek-v4-pro/);
+    });
+  });
+
+  it('Save sends multimodalModelId in the patch payload (set value)', async () => {
+    renderDrawer(
+      makeAgent({
+        id: 7,
+        modelId: 'openai:gpt-4o',
+        multimodalModelId: '',
+      } as AgentDto),
+    );
+    // Force Overview dirty via Max Loops (a simpler-to-drive control than
+    // an AntD Select inside jsdom).
+    const loopsInput = await screen.findByRole('spinbutton');
+    fireEvent.change(loopsInput, { target: { value: '11' } });
+
+    const saveBtn = await screen.findByRole('button', { name: /^Save$/ });
+    fireEvent.click(saveBtn);
+
+    await waitFor(() => {
+      expect(vi.mocked(updateAgent)).toHaveBeenCalled();
+    });
+    const lastCall = vi.mocked(updateAgent).mock.calls.at(-1)!;
+    const [agentId, payload] = lastCall;
+    expect(agentId).toBe(7);
+    // No selection made → empty string is preserved & sent (BE clear-to-NULL
+    // semantics; do NOT collapse to undefined).
+    expect(payload).toHaveProperty('multimodalModelId', '');
+  });
+
+  it('Save sends multimodalModelId="" when previously-set value is cleared', async () => {
+    renderDrawer(
+      makeAgent({
+        id: 9,
+        modelId: 'openai:gpt-4o',
+        multimodalModelId: 'deepseek:deepseek-v4-pro',
+      } as AgentDto),
+    );
+    // Wait for the picker to render with the prior value.
+    await waitFor(() => {
+      const card = screen.getByTestId('multimodal-model-card');
+      expect(card.textContent ?? '').toMatch(/deepseek:deepseek-v4-pro/);
+    });
+
+    // AntD Select renders a clear button (`.ant-select-clear`) when allowClear
+    // is on and a value is present. Click it to clear the draft.
+    const clearBtn = screen
+      .getByTestId('multimodal-model-card')
+      .querySelector('.ant-select-clear') as HTMLElement | null;
+    expect(clearBtn).not.toBeNull();
+    fireEvent.mouseDown(clearBtn!);
+    fireEvent.click(clearBtn!);
+
+    // Save and inspect payload.
+    const saveBtn = await screen.findByRole('button', { name: /^Save$/ });
+    await waitFor(() => expect(saveBtn).toBeEnabled());
+    fireEvent.click(saveBtn);
+
+    await waitFor(() => {
+      expect(vi.mocked(updateAgent)).toHaveBeenCalled();
+    });
+    const lastCall = vi.mocked(updateAgent).mock.calls.at(-1)!;
+    const [, payload] = lastCall;
+    expect(payload).toHaveProperty('multimodalModelId', '');
+  });
+});
+

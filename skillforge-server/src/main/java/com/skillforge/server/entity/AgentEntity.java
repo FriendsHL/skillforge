@@ -36,6 +36,16 @@ public class AgentEntity {
 
     private String modelId;
 
+    /**
+     * MULTIMODAL-MVP: optional model id used only when the current user turn
+     * carries {@code image_ref} / {@code pdf_ref} content blocks. Null means
+     * "no multimodal model configured" → upload UI is disabled and the upload
+     * REST endpoint returns {@code 409 MULTIMODAL_MODEL_NOT_CONFIGURED}.
+     * V71 migration. Independent of {@link #modelId}.
+     */
+    @Column(name = "multimodal_model_id", length = 64)
+    private String multimodalModelId;
+
     @Column(columnDefinition = "TEXT")
     private String systemPrompt;
 
@@ -164,6 +174,14 @@ public class AgentEntity {
 
     public void setModelId(String modelId) {
         this.modelId = modelId;
+    }
+
+    public String getMultimodalModelId() {
+        return multimodalModelId;
+    }
+
+    public void setMultimodalModelId(String multimodalModelId) {
+        this.multimodalModelId = multimodalModelId;
     }
 
     public String getSystemPrompt() {

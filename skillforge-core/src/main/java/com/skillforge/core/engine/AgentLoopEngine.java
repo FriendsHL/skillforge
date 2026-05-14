@@ -910,6 +910,11 @@ public class AgentLoopEngine {
                         .iterationIndex(loopCtx.getLoopCount())
                         .stream(true)
                         .build();
+                // MULTIMODAL-MVP r2 (B2 fix): expand image_ref / pdf_ref blocks ONLY for the
+                // provider request, never for the engine's messages list (which mirrors DB
+                // persistence shape). Materializer is a no-op when no attachments present.
+                List<Message> providerMessages = applyMaterializer(loopCtx, request.getMessages());
+                request.setMessages(providerMessages);
                 llmProvider.chatStream(request, llmCtx, new com.skillforge.core.llm.LlmStreamHandler() {
                     @Override public void onStreamStart(Runnable cancelAction) {
                         if (cancelAction != null) {
@@ -1521,6 +1526,10 @@ public class AgentLoopEngine {
                     .iterationIndex(loopCtx.getLoopCount())
                     .stream(true)
                     .build();
+            // MULTIMODAL-MVP r2 (B2 fix): same materialization as the primary call —
+            // continuation re-sends the trimmed request messages (may still contain
+            // image_ref blocks) so the provider needs the expanded form again.
+            contRequest.setMessages(applyMaterializer(loopCtx, contRequest.getMessages()));
             llmProvider.chatStream(contRequest, llmCtx, new com.skillforge.core.llm.LlmStreamHandler() {
                 @Override public boolean isCancelled() {
                     return loopCtx.isCancelled();
@@ -2427,6 +2436,36 @@ public class AgentLoopEngine {
             return true;
         }
         return (System.currentTimeMillis() - openedAt) > BREAKER_HALF_OPEN_WINDOW_MS;
+    }
+
+    /**
+     * MULTIMODAL-MVP r2 (B2 fix): apply the LoopContext's {@link MessageMaterializer}
+     * just before an outbound LLM call, returning a provider-ready copy with
+     * {@code image_ref} / {@code pdf_ref} blocks expanded inline. When no
+     * materializer is wired (legacy text-only callers, tests) or no expansion
+     * is needed, the input list is returned unchanged.
+     *
+     * <p>Failures in materialization are logged but do NOT abort the LLM call —
+     * fall back to the unmaterialized list rather than blow up the whole turn
+     * (the model may still produce a useful text-only response, and the user
+     * will see "image dropped" downstream rather than a 500).
+     */
+    static List<Message> applyMaterializer(LoopContext loopCtx, List<Message> messages) {
+        if (loopCtx == null || messages == null) {
+            return messages;
+        }
+        MessageMaterializer materializer = loopCtx.getMessageMaterializer();
+        if (materializer == null) {
+            return messages;
+        }
+        try {
+            List<Message> expanded = materializer.expandForProvider(loopCtx.getSessionId(), messages);
+            return expanded != null ? expanded : messages;
+        } catch (Exception e) {
+            log.warn("MessageMaterializer.expandForProvider failed (sessionId={}); falling back to raw messages: {}",
+                    loopCtx.getSessionId(), e.toString());
+            return messages;
+        }
     }
 
     /**

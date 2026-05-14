@@ -137,6 +137,28 @@ class OpenAiProviderConvertMessagesTest {
     }
 
     @Test
+    @DisplayName("user message with text + materialized image → emits OpenAI multimodal content array")
+    void textPlusMaterializedImage_emitsMultimodalContentArray() throws Exception {
+        Message msg = userBlocks(
+                ContentBlock.text("look at this"),
+                ContentBlock.image("image/png", "abc123"));
+
+        JsonNode b = body(reqWith(msg));
+
+        List<JsonNode> ms = nonSystemMessages(b);
+        assertThat(ms).hasSize(1);
+        assertThat(ms.get(0).path("role").asText()).isEqualTo("user");
+        JsonNode content = ms.get(0).path("content");
+        assertThat(content.isArray()).isTrue();
+        assertThat(content).hasSize(2);
+        assertThat(content.get(0).path("type").asText()).isEqualTo("text");
+        assertThat(content.get(0).path("text").asText()).isEqualTo("look at this");
+        assertThat(content.get(1).path("type").asText()).isEqualTo("image_url");
+        assertThat(content.get(1).path("image_url").path("url").asText())
+                .isEqualTo("data:image/png;base64,abc123");
+    }
+
+    @Test
     @DisplayName("String-content user message → simple-text branch unchanged")
     void stringContentUserMessage_simpleTextBranch() throws Exception {
         JsonNode b = body(reqWith(Message.user("hi")));

@@ -103,6 +103,10 @@ public class Message {
                         text = block.getText();
                     } else if ("tool_result".equals(block.getType()) && block.getContent() != null) {
                         text = extractToolResultText(block.getContent());
+                    } else if ("image_ref".equals(block.getType())) {
+                        text = attachmentPlaceholder("Image", block.getFilename(), block.getAttachmentId());
+                    } else if ("pdf_ref".equals(block.getType())) {
+                        text = attachmentPlaceholder("PDF", block.getFilename(), block.getAttachmentId());
                     }
                 } else if (obj instanceof Map<?, ?> map) {
                     Object type = map.get("type");
@@ -112,6 +116,10 @@ public class Message {
                     } else if ("tool_result".equals(type)) {
                         Object c = map.get("content");
                         text = c != null ? extractToolResultText(c) : null;
+                    } else if ("image_ref".equals(type)) {
+                        text = attachmentPlaceholder("Image", map.get("filename"), firstPresent(map, "attachment_id", "attachmentId"));
+                    } else if ("pdf_ref".equals(type)) {
+                        text = attachmentPlaceholder("PDF", map.get("filename"), firstPresent(map, "attachment_id", "attachmentId"));
                     }
                 }
                 if (text != null) {
@@ -124,6 +132,19 @@ public class Message {
             return sb.toString();
         }
         return "";
+    }
+
+    private static Object firstPresent(Map<?, ?> map, String firstKey, String secondKey) {
+        Object value = map.get(firstKey);
+        return value != null ? value : map.get(secondKey);
+    }
+
+    private static String attachmentPlaceholder(String label, Object filename, Object attachmentId) {
+        Object display = filename != null && !filename.toString().isBlank() ? filename : attachmentId;
+        if (display == null || display.toString().isBlank()) {
+            return "[" + label + " attachment]";
+        }
+        return "[" + label + " attachment: " + display + "]";
     }
 
     /**

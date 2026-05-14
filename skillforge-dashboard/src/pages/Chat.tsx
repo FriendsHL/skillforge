@@ -22,6 +22,7 @@ import {
   getSessions,
   getSessionMessages,
   sendMessage,
+  uploadChatAttachment,
   cancelChat,
   answerAsk,
   setSessionMode,
@@ -341,7 +342,7 @@ const Chat: React.FC = () => {
     }
   };
 
-  const handleSend = async (text: string) => {
+  const handleSend = async (text: string, files: File[] = []) => {
     if (!activeSessionId) {
       if (!selectedAgent) {
         message.warning('Please select an agent first');
@@ -353,22 +354,76 @@ const Chat: React.FC = () => {
         const sid = String(newSession.id ?? newSession.sessionId);
         setActiveSessionId(sid);
         setSessions((prev) => [newSession, ...prev]);
-        await doSend(sid, text);
+        await doSend(sid, text, files);
       } catch {
         message.error('Failed to create session');
       }
       return;
     }
-    await doSend(activeSessionId, text);
+    await doSend(activeSessionId, text, files);
   };
 
-  const doSend = async (sid: string, text: string) => {
+  const doSend = async (sid: string, text: string, files: File[] = []) => {
     setLoopSpans([]);
-    setRawMessages((prev) => [...prev, { role: 'user', content: text }]);
+    const attachmentLabel = files.length > 0
+      ? `${text ? `${text}\n` : ''}${files.map((file) => `[Attachment: ${file.name}]`).join('\n')}`
+      : text;
+    setRawMessages((prev) => [...prev, { role: 'user', content: attachmentLabel }]);
     setRuntimeStatus('running');
     setRuntimeStep('Starting');
+    // MULTIMODAL-MVP — upload phase is its own try/catch so we can surface
+    // the precise per-file failure (409 MULTIMODAL_MODEL_NOT_CONFIGURED,
+    // 413 too large, 415 wrong type, 500) without conflating it with the
+    // chat send error path. We bail before sending if any file fails.
+    const uploaded: string[] = [];
+    for (const file of files) {
+      try {
+        const res = await uploadChatAttachment(sid, userId, file);
+        uploaded.push(res.data.id);
+      } catch (e: unknown) {
+        const resp = (e as { response?: { status?: number; data?: { code?: string; message?: string; error?: string } } })?.response;
+        const status = resp?.status;
+        const code = resp?.data?.code;
+        const beMessage = resp?.data?.message ?? resp?.data?.error;
+        if (status === 409 && code === 'MULTIMODAL_MODEL_NOT_CONFIGURED') {
+          // r2 W2 — tech-design §前端设计 "tooltip 文案 + **跳转链接**".
+          // AntD message.error accepts a ReactNode; embed an inline link to
+          // the agent config so the user can recover in one click. duration=6
+          // (vs default 3) gives time to click before auto-dismiss.
+          // Inline the navigate call rather than forward-ref handleOpenAgentConfig
+          // (declared further down the component); avoids ordering coupling.
+          message.error(
+            <span data-testid="multimodal-409-jump">
+              请先在 agent 配置中选择多模态模型 ·{' '}
+              <a
+                data-testid="multimodal-409-jump-link"
+                onClick={() => {
+                  if (selectedAgent == null) {
+                    navigate('/agents');
+                  } else {
+                    navigate(`/agents?openAgentId=${selectedAgent}&tab=overview`);
+                  }
+                }}
+                style={{ color: 'inherit', textDecoration: 'underline', cursor: 'pointer' }}
+              >
+                打开 agent 配置
+              </a>
+            </span>,
+            6,
+          );
+        } else if (status === 413) {
+          message.error(beMessage || `${file.name}: file too large`);
+        } else if (status === 415) {
+          message.error(beMessage || `${file.name}: unsupported file type`);
+        } else {
+          message.error(beMessage || `Failed to upload ${file.name}`);
+        }
+        setRuntimeStatus('idle');
+        return;
+      }
+    }
     try {
-      await sendMessage(sid, { message: text, userId });
+      await sendMessage(sid, { message: text, userId, attachmentIds: uploaded });
     } catch (e: unknown) {
       const status = (e as { response?: { status?: number } })?.response?.status;
       if (status === 429) {
@@ -674,7 +729,22 @@ const Chat: React.FC = () => {
   const activeSession = sessions.find(
     (s) => String(s.id) === String(activeSessionId),
   );
-  const agentName = agents.find((a) => a.id === selectedAgent)?.name;
+  const activeAgent = agents.find((a) => a.id === selectedAgent);
+  const agentName = activeAgent?.name;
+  // MULTIMODAL-MVP gate: empty string / null / undefined → button disabled.
+  const multimodalEnabled =
+    typeof activeAgent?.multimodalModelId === 'string' &&
+    activeAgent.multimodalModelId.length > 0;
+  const handleOpenAgentConfig = useCallback(() => {
+    if (selectedAgent == null) {
+      navigate('/agents');
+      return;
+    }
+    // PRD/tech-design says AgentList consumes `?openAgentId=` to auto-open
+    // the drawer; we pair that with `tab=overview` so the picker is visible
+    // immediately. The actual openAgentId effect lives in AgentList.tsx.
+    navigate(`/agents?openAgentId=${selectedAgent}&tab=overview`);
+  }, [selectedAgent, navigate]);
   const sessionTitle =
     (activeSession?.title && activeSession.title !== 'New Session'
       ? activeSession.title
@@ -890,6 +960,9 @@ const Chat: React.FC = () => {
                   onAnswerAsk={handleAnswerAskMessage}
                   onConfirmDecision={handleConfirmDecisionMessage}
                   slashCommandConfig={slashCommandConfig}
+                  multimodalEnabled={multimodalEnabled}
+                  onOpenAgentConfig={handleOpenAgentConfig}
+                  sessionResetKey={activeSessionId ?? ''}
                 />
               </>
             ) : (

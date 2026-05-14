@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Form, Input, InputNumber, Select, Modal, Tabs, message } from 'antd';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useSearchParams } from 'react-router-dom';
 import { getAgents, createAgent, getTools, getSkills, extractList, type CreateAgentRequest } from '../api';
 import { AgentSchema, safeParseList, type AgentDto } from '../api/schemas';
 import AgentCard, { initials, parseCount, guessRole } from '../components/agents/AgentCard';
@@ -90,6 +91,12 @@ const AgentList: React.FC = () => {
   const [openAgent, setOpenAgent] = useState<AgentDto | null>(null);
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [form] = Form.useForm();
+  // MULTIMODAL-MVP — deep link from Chat tooltip ("打开 agent 配置") lands here
+  // with `?openAgentId=<id>` and we auto-open the drawer for that agent so
+  // the user doesn't have to hunt for the row. The `tab` param is read by
+  // AgentDrawer if it ever wires the initial-tab argument; ignored here.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const openAgentIdParam = searchParams.get('openAgentId');
 
   const { data: agents = [], isLoading: loading, isError: agentsError } = useQuery({
     queryKey: ['agents'],
@@ -99,6 +106,25 @@ const AgentList: React.FC = () => {
   useEffect(() => {
     if (agentsError) message.error('Failed to load agents');
   }, [agentsError]);
+
+  // Auto-open the drawer when arriving with `?openAgentId=…`. Strip the
+  // param after consumption so navigating away + back doesn't keep popping
+  // the drawer; honour the deep link only on the first match.
+  useEffect(() => {
+    if (!openAgentIdParam || agents.length === 0) return;
+    const target = agents.find((a: AgentDto) => String(a.id) === openAgentIdParam);
+    if (!target) return;
+    setOpenAgent(target);
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete('openAgentId');
+        next.delete('tab');
+        return next;
+      },
+      { replace: true },
+    );
+  }, [openAgentIdParam, agents, setSearchParams]);
 
   const { data: tools = [] } = useQuery({
     queryKey: ['tools'],

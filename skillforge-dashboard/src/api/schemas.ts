@@ -10,6 +10,10 @@ export const AgentSchema = z.object({
   soulPrompt: z.string().optional().nullable(),
   toolsPrompt: z.string().optional().nullable(),
   modelId: z.string().optional().nullable(),
+  // MULTIMODAL-MVP: optional secondary model used only on turns where the user
+  // attaches an image_ref / pdf_ref. Empty string / null = not configured →
+  // Chat upload button is disabled. Lives on `t_agent.multimodal_model_id` (V71).
+  multimodalModelId: z.string().optional().nullable(),
   executionMode: z.enum(['ask', 'auto']).optional(),
   skillIds: z.union([z.string(), z.array(z.string()), z.array(z.number())]).optional().nullable(),
   toolIds: z.union([z.string(), z.array(z.string())]).optional().nullable(),

@@ -78,6 +78,14 @@ export interface CreateAgentRequest {
   soulPrompt?: string;
   toolsPrompt?: string;
   modelId?: string;
+  /**
+   * MULTIMODAL-MVP — secondary model id used only on turns where the user
+   * attaches image / PDF blocks. Wire format is camelCase to match
+   * `AgentEntity#multimodalModelId` (BE Java field). An explicit empty string
+   * (`""`) on PATCH signals "clear to NULL"; sending `undefined` would skip
+   * the field entirely under the BE partial-update semantics.
+   */
+  multimodalModelId?: string;
   executionMode?: 'ask' | 'auto';
   maxLoops?: number;
   skillIds?: string;
@@ -138,8 +146,29 @@ export const deleteSessions = (ids: string[], userId: number) =>
   api.delete<DeleteSessionsResponse>('/chat/sessions', { data: { ids }, params: { userId } });
 
 // Chat API
-export const sendMessage = (sessionId: string, data: { message: string; userId: number }) =>
+export const sendMessage = (sessionId: string, data: { message: string; userId: number; attachmentIds?: string[] }) =>
   api.post(`/chat/${sessionId}`, data);
+
+export interface ChatAttachmentResponse {
+  id: string;
+  sessionId: string;
+  kind: 'image' | 'pdf';
+  mimeType: string;
+  filename: string;
+  sizeBytes: number;
+  pageCount?: number;
+  status: string;
+}
+
+export const uploadChatAttachment = (sessionId: string, userId: number, file: File) => {
+  const form = new FormData();
+  form.append('file', file);
+  return api.post<ChatAttachmentResponse>(
+    `/chat/sessions/${sessionId}/attachments`,
+    form,
+    { params: { userId } },
+  );
+};
 export const cancelChat = (sessionId: string, userId: number) =>
   api.post(`/chat/${sessionId}/cancel`, null, { params: { userId } });
 export const answerAsk = (sessionId: string, askId: string, answer: string, userId: number) =>

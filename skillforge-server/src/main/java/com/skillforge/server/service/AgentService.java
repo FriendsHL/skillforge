@@ -73,6 +73,15 @@ public class AgentService {
             existing.setRole(role.isEmpty() ? null : role);
         }
         if (updated.getModelId() != null) existing.setModelId(updated.getModelId());
+        // MULTIMODAL-MVP: explicit empty string = "clear to null" (lets FE remove the
+        // multimodal config without sending a separate DELETE). null in the payload still
+        // means "leave as-is" per the standard partial-update convention used above.
+        // FE contract: AgentDrawer sends "" when the user picks the "(no multimodal model)"
+        // option; sends `null` (omitted in payload) when the field was not touched.
+        if (updated.getMultimodalModelId() != null) {
+            String mm = updated.getMultimodalModelId();
+            existing.setMultimodalModelId(mm.isBlank() ? null : mm);
+        }
         if (updated.getSystemPrompt() != null) existing.setSystemPrompt(updated.getSystemPrompt());
         if (updated.getSkillIds() != null) existing.setSkillIds(updated.getSkillIds());
         if (updated.getToolIds() != null) existing.setToolIds(updated.getToolIds());
@@ -122,6 +131,7 @@ public class AgentService {
         if (a.getDescription() != null) fields.add("description");
         if (a.getRole() != null) fields.add("role");
         if (a.getModelId() != null) fields.add("modelId");
+        if (a.getMultimodalModelId() != null) fields.add("multimodalModelId");
         if (a.getSystemPrompt() != null) fields.add("systemPrompt");
         if (a.getSkillIds() != null) fields.add("skillIds");
         if (a.getToolIds() != null) fields.add("toolIds");

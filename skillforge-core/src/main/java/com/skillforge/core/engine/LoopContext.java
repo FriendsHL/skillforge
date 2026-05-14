@@ -155,6 +155,18 @@ public class LoopContext {
     /** Per-skill NOT_ALLOWED 计数（B-4 反 hijack）。跨 turn 累计。 */
     private final ConcurrentHashMap<String, Integer> notAllowedCount = new ConcurrentHashMap<>();
 
+    /**
+     * MULTIMODAL-MVP r2 (B2 fix): optional callback applied by the engine right
+     * before each {@code LlmProvider.chatStream} call to expand attachment
+     * reference blocks ({@code image_ref} / {@code pdf_ref}) into provider-bound
+     * forms (base64 image / extracted PDF text). The engine's own {@link #messages}
+     * list keeps the reference form, matching what {@code SessionService.updateSessionMessages}
+     * sees on the DB row — preventing {@code mid-prefix divergence} guard rewrites
+     * that would otherwise persist base64 image data into {@code t_session_message.content_json}.
+     * <p>{@code null} (default) → no materialization, messages pass through unchanged.
+     */
+    private MessageMaterializer messageMaterializer;
+
     public LoopContext() {
         this.messages = new ArrayList<>();
         this.maxLoops = 25;
@@ -560,4 +572,11 @@ public class LoopContext {
         return notAllowedCount.getOrDefault(skillName, 0);
     }
 
+    public MessageMaterializer getMessageMaterializer() {
+        return messageMaterializer;
+    }
+
+    public void setMessageMaterializer(MessageMaterializer messageMaterializer) {
+        this.messageMaterializer = messageMaterializer;
+    }
 }

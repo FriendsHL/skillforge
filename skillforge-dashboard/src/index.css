@@ -3128,6 +3128,64 @@ html[data-density="spacious"] { --density: 1; }
   border-color: var(--border-3);
   box-shadow: var(--shadow-2);
 }
+.attachment-tray {
+  max-width: 760px;
+  margin: 0 auto 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  padding: 4px 8px;
+  border: 1px solid var(--border-1);
+  border-radius: 6px;
+  background: var(--bg-elev);
+  color: var(--fg-2);
+  font-size: 12px;
+}
+.attachment-chip button {
+  border: 0;
+  background: transparent;
+  color: var(--fg-4);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  padding: 0;
+}
+/* r2 W1 — chip metadata badges (PRD: filename + 类型 + 大小 + 移除). */
+.attachment-chip .att-kind {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--bg-1, #1a1a1e);
+  color: var(--fg-3);
+  text-transform: uppercase;
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+.attachment-chip .att-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.attachment-chip .att-size {
+  color: var(--fg-4);
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+/* r2 W4 — preserve visual disabled cue for the attach button after we drop
+   native `disabled` (kept aria-disabled for screen readers + tab order). */
+.comp-btn[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
 .composer textarea {
   flex: 1;
   border: 0;

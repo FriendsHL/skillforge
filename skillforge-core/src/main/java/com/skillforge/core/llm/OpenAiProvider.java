@@ -579,10 +579,12 @@ public class OpenAiProvider implements LlmProvider {
                         messagesNode.add(userMsg);
                     }
                 } else {
-                    // Regular user message with content blocks - extract text
+                    // Regular user message with content blocks. Multimodal payloads
+                    // are only allowed here; tool_result replay is handled above.
                     ObjectNode userMsg = objectMapper.createObjectNode();
                     userMsg.put("role", "user");
-                    userMsg.put("content", msg.getTextContent());
+                    JsonNode userContent = openAiUserContent(blocks, msg.getTextContent());
+                    userMsg.set("content", userContent);
                     messagesNode.add(userMsg);
                 }
 
@@ -645,6 +647,107 @@ public class OpenAiProvider implements LlmProvider {
                 messagesNode.add(simpleMsg);
             }
         }
+    }
+
+    private JsonNode openAiUserContent(List<?> blocks, String fallbackText) {
+        ArrayNode content = objectMapper.createArrayNode();
+        boolean hasNonText = false;
+        for (Object block : blocks) {
+            String type = blockType(block);
+            if ("text".equals(type)) {
+                String text = blockText(block);
+                if (text != null && !text.isEmpty()) {
+                    ObjectNode textNode = objectMapper.createObjectNode();
+                    textNode.put("type", "text");
+                    textNode.put("text", text);
+                    content.add(textNode);
+                }
+            } else if ("image".equals(type)) {
+                String dataBase64 = blockString(block, "data_base64", "dataBase64");
+                String mimeType = blockString(block, "mime_type", "mimeType");
+                if (dataBase64 == null || dataBase64.isBlank()) {
+                    throw new IllegalArgumentException("Materialized image block is missing data_base64");
+                }
+                if (mimeType == null || mimeType.isBlank()) {
+                    mimeType = "image/png";
+                }
+                ObjectNode imageNode = objectMapper.createObjectNode();
+                imageNode.put("type", "image_url");
+                ObjectNode imageUrl = objectMapper.createObjectNode();
+                imageUrl.put("url", "data:" + mimeType + ";base64," + dataBase64);
+                imageNode.set("image_url", imageUrl);
+                content.add(imageNode);
+                hasNonText = true;
+            } else if ("image_ref".equals(type) || "pdf_ref".equals(type)) {
+                ObjectNode textNode = objectMapper.createObjectNode();
+                textNode.put("type", "text");
+                textNode.put("text", attachmentRefText(block, type));
+                content.add(textNode);
+                hasNonText = true;
+            } else if (type != null && !type.isBlank()) {
+                throw new IllegalArgumentException("Unsupported user content block type for OpenAI provider: " + type);
+            }
+        }
+        if (!hasNonText) {
+            return objectMapper.getNodeFactory().textNode(fallbackText != null ? fallbackText : "");
+        }
+        if (content.isEmpty()) {
+            ObjectNode textNode = objectMapper.createObjectNode();
+            textNode.put("type", "text");
+            textNode.put("text", fallbackText != null ? fallbackText : "");
+            content.add(textNode);
+        }
+        return content;
+    }
+
+    private static String blockType(Object block) {
+        if (block instanceof ContentBlock cb) {
+            return cb.getType();
+        }
+        if (block instanceof Map<?, ?> map) {
+            Object value = map.get("type");
+            return value != null ? value.toString() : null;
+        }
+        return null;
+    }
+
+    private static String blockText(Object block) {
+        if (block instanceof ContentBlock cb) {
+            return cb.getText();
+        }
+        return blockString(block, "text", "text");
+    }
+
+    private static String blockString(Object block, String snakeKey, String camelKey) {
+        Object value = null;
+        if (block instanceof ContentBlock cb) {
+            value = switch (snakeKey) {
+                case "data_base64" -> cb.getDataBase64();
+                case "mime_type" -> cb.getMimeType();
+                case "filename" -> cb.getFilename();
+                case "attachment_id" -> cb.getAttachmentId();
+                case "text" -> cb.getText();
+                default -> null;
+            };
+        } else if (block instanceof Map<?, ?> map) {
+            value = map.get(snakeKey);
+            if (value == null) {
+                value = map.get(camelKey);
+            }
+        }
+        return value != null ? value.toString() : null;
+    }
+
+    private static String attachmentRefText(Object block, String type) {
+        String label = "image_ref".equals(type) ? "Image attachment" : "PDF attachment";
+        String filename = blockString(block, "filename", "filename");
+        if (filename != null && !filename.isBlank()) {
+            return "[" + label + ": " + filename + "]";
+        }
+        String attachmentId = blockString(block, "attachment_id", "attachmentId");
+        return attachmentId != null && !attachmentId.isBlank()
+                ? "[" + label + ": " + attachmentId + "]"
+                : "[" + label + "]";
     }
 
     private List<ToolUseBlock> validToolUseBlocks(List<ToolUseBlock> toolUseBlocks) {
