@@ -48,7 +48,7 @@ updated: 2026-05-15
 |---|---|
 | `SkillDraftService.java` | 加 `createDraftFromAttribution(eventId, ...)` 新入口；现行 `extractFromRecentSessions` 不动 |
 | `PromptImproverService.java` | 加 `startImprovementFromAttribution(eventId, agentId, ...)` 新入口；现行 `startImprovement` 不动 |
-| `EvalAnalysisSessionEntity.java` | analysisType enum 加 PATTERN_LEVEL 值（不破现有 case）|
+| `EvalAnalysisSessionEntity.java` | analysisType 是 `String length=32`（Phase 1.0 BE-Dev 校对，不是 @Enumerated / @Convert）；加 `PATTERN_LEVEL` 常量 100% 安全（grep 0 switch/case 命中），加 `TYPE_PATTERN_LEVEL` 常量保持惯例 |
 | `SkillForgeConfig.java` | 注册 4 新 tool（PatternRead / SessionAnnotationRead / ProposeOptimization / WriteOptimizationEvent）|
 
 ### Phase 1.0 证伪步骤
@@ -233,7 +233,8 @@ WHERE NOT EXISTS (SELECT 1 FROM t_scheduled_task WHERE name='attribution-dispatc
 | attribution-curator 跑空 pattern（V1 dogfood 数据少）| dispatcher 跳过 member_count < 3 + suspect_surface not in (skill, prompt) |
 | 24h cooldown 计算精度 | 写 cooldown_expires_at = NOW() + INTERVAL '24h'，cron 查 WHERE cooldown_expires_at < NOW() |
 | candidate generation 调失败（外部 LLM API down）| 写 event stage=candidate_failed + retry 路径（手动）|
-| EvalAnalysisSessionEntity analysisType enum 扩展破现有 case | grep 现有 switch / case 全覆盖 |
+| ~~EvalAnalysisSessionEntity analysisType enum 扩展破现有 case~~ | Phase 1.0 BE-Dev 已校对：analysisType 是 String length=32 不是 enum，grep 0 switch/case 命中 → 加新值 100% 安全 |
+| **PromptImprover 双 cooldown 冲突**（V3 24h pattern-level vs 现行 `checkEligibility` 24h `agent.lastPromotedAt`）| **Phase 1.3 必须 ratify**：attribution 路径是否 bypass agent-level cooldown。推荐"bypass"（attribution 自带 pattern-level 24h 已足够，agent-level cooldown 是 manual / cron path 用）|
 | Iron Law（不改 6 核心文件 + GetTraceTool） | reviewer 显式 grep 验证 |
 
 ## 7. 与现有规则的关系
@@ -246,3 +247,4 @@ WHERE NOT EXISTS (SELECT 1 FROM t_scheduled_task WHERE name='attribution-dispatc
 ## 8. 变更记录
 
 - 2026-05-15：claude 初稿（ratified，6 ratify 决策按 plan.md §V3 + V1/V2 ratify 锁定）
+- 2026-05-15：Phase 1.0 BE-Dev 校对 + 修 2 push back：(1) §0.3 + §6 EvalAnalysisSession enum 措辞改为 String 字段（实际不是 enum，加值 100% 安全）；(2) §6 加 PromptImprover 双 cooldown 冲突风险条目，Phase 1.3 必须 ratify attribution 路径是否 bypass agent-level cooldown（推荐 bypass）；其它 5 项调研全 ✅ 复用计划成立
