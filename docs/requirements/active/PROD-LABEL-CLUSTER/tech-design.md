@@ -419,10 +419,13 @@ signature = outcome + "|" + suspect_surface + "|" + top_failing_tool + "|" + age
   - ✅ 7 单测 `SessionAnnotationLlmServiceTest` + 5 单测 `AnnotateSessionToolTest`（Mockito 风格，无 Docker 依赖）
   - **mvn 1428/0/0/71 → BUILD SUCCESS**（+12 test 全绿）；核心文件 6 个 `git diff HEAD` 零行
   - 端到端 dispatch manual test 推迟到 Phase Final（与 cron `*/2 * * * * *` 那次合并）
-- [ ] **Phase 1.4：Clustering + InsightsController**
-  - `SessionPatternClusterService.recompute(window)` + 幂等测试
-  - `RecomputeClustersTool` 薄包装
-  - `InsightsController` 2 endpoint
+- [x] **Phase 1.4：Clustering + InsightsController** ✅ 2026-05-14
+  - ✅ `SessionPatternClusterService.recompute(Duration)` — 4-dim bucket on (outcome × suspect_surface × top_failing_tool × agent_id)，准入 outcome≠success + confidence≥0.5 + member≥3；增量 add member（不删老 pattern）；signature 拼接 null tool/agent 渲染为空串；upsert via `findBySignature` + DB UNIQUE on signature；member 幂等 via composite PK + catch DataIntegrityViolationException
+  - ✅ `RecomputeClustersTool` 薄包装（window_days clamp [1, 30], default 7）+ `SkillForgeConfig.recomputeClustersTool` @Bean 紧跟 `annotateSessionTool`
+  - ✅ `InsightsController`：`GET /api/insights/patterns` (filters: outcome / surface / agent / limit clamp [1, 200] default 50, sort ORDER BY member_count DESC, last_seen_at DESC) + `GET /api/insights/patterns/{id}/members` (limit clamp [1, 500] default 100, sort added_at DESC, 404 when pattern missing, runtime_error truncate 200, batch agent-name lookup)
+  - ✅ Repository 加 3 个查询方法：`SessionAnnotationRepository.findDistinctSessionIdsCreatedSince(Instant)` / `SessionPatternRepository.findWithFilters(outcome, surface, agentId, Pageable)` / `PatternSessionMemberRepository.findByPatternIdOrderByAddedAtDesc(patternId, Pageable)`
+  - ✅ 21 单测（7 cluster service + 4 tool + 8 controller + 2 buildSignature edge cases）全绿
+  - **mvn 1449/0/0/71 → BUILD SUCCESS in 27.577s**（+21 test）；核心文件 11 个 `git diff HEAD` 零行（SessionEntity / SessionMessageEntity / ChatService / SessionService / CompactionService / AgentLoopEngine / GetTraceTool / Phase 1.2-1.3 落地的 SessionAnnotation{Signal,Llm}Service / AnnotateSessionTool / DetectSignalAnnotationsTool）
 - [ ] **Phase 1.5：Dashboard 页**
   - `Insights.tsx` + `PatternList` + `PatternDetailDrawer`
   - 路由 + nav

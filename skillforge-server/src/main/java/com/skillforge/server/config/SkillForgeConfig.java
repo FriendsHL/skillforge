@@ -741,6 +741,26 @@ public class SkillForgeConfig {
         return tool;
     }
 
+    /**
+     * PROD-LABEL-CLUSTER V1 Phase 1.4 — STEP 3 of the session-annotator agent
+     * pipeline. Bucket production sessions by their LLM-judged 4-tuple
+     * (outcome × suspect_surface × top_failing_tool × agent_id), upsert
+     * {@code t_session_pattern} rows for buckets with ≥ 3 members, and append
+     * {@code t_pattern_session_member} rows for any new sessions in those
+     * buckets. Tool name matches the V75 seed {@code tool_ids} array.
+     */
+    @Bean
+    public com.skillforge.server.tool.sessionannotation.RecomputeClustersTool recomputeClustersTool(
+            com.skillforge.server.sessionannotation.SessionPatternClusterService clusterService,
+            ObjectMapper objectMapper,
+            SkillRegistry skillRegistry) {
+        com.skillforge.server.tool.sessionannotation.RecomputeClustersTool tool =
+                new com.skillforge.server.tool.sessionannotation.RecomputeClustersTool(clusterService, objectMapper);
+        skillRegistry.registerTool(tool);
+        log.info("Registered RecomputeClustersTool into SkillRegistry");
+        return tool;
+    }
+
     @Bean
     public SkillPackageLoader skillPackageLoader() {
         return new SkillPackageLoader();

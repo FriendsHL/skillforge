@@ -6,6 +6,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
 
@@ -57,4 +58,18 @@ public interface SessionAnnotationRepository extends JpaRepository<SessionAnnota
     List<String> findSessionIdsWithSource(
             @Param("sessionIds") Collection<String> sessionIds,
             @Param("source") String source);
+
+    /**
+     * Phase 1.4: distinct session ids with at least one annotation created on or
+     * after {@code since}. Used by
+     * {@code SessionPatternClusterService.recompute(window)} to find the working
+     * set of sessions to fold into cluster signatures. Per-session annotation
+     * fetch is then done via {@link #findBySessionId(String)}; volumes in V1
+     * dogfood are small enough that this hop is fine.
+     */
+    @Query("""
+            SELECT DISTINCT a.sessionId FROM SessionAnnotationEntity a
+            WHERE a.createdAt >= :since
+            """)
+    List<String> findDistinctSessionIdsCreatedSince(@Param("since") Instant since);
 }
