@@ -7,6 +7,7 @@ import com.skillforge.server.config.LlmProperties;
 import com.skillforge.server.entity.ChatAttachmentEntity;
 import com.skillforge.server.entity.SessionEntity;
 import com.skillforge.server.repository.ChannelConversationRepository;
+import com.skillforge.server.repository.ChatAttachmentRepository;
 import com.skillforge.server.service.AgentService;
 import com.skillforge.server.service.ChatAttachmentService;
 import com.skillforge.server.service.ChatService;
@@ -47,6 +48,7 @@ class ChatControllerAttachmentDataTest {
 
     @Mock private ChatService chatService;
     @Mock private ChatAttachmentService chatAttachmentService;
+    @Mock private ChatAttachmentRepository chatAttachmentRepository;
     @Mock private SessionService sessionService;
     @Mock private AgentService agentService;
     @Mock private LlmProperties llmProperties;
@@ -64,7 +66,8 @@ class ChatControllerAttachmentDataTest {
     @BeforeEach
     void setUp() {
         controller = new ChatController(
-                chatService, chatAttachmentService, sessionService, agentService, llmProperties,
+                chatService, chatAttachmentService, chatAttachmentRepository,
+                sessionService, agentService, llmProperties,
                 pendingAskRegistry, pendingConfirmationRegistry, subAgentRegistry,
                 cancellationRegistry, compactionService, replayService,
                 channelConversationRepository, contextBreakdownService);

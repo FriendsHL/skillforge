@@ -27,6 +27,8 @@ import com.skillforge.server.service.ReplayService;
 import com.skillforge.server.service.SessionService;
 import com.skillforge.server.subagent.SubAgentRegistry;
 import com.skillforge.server.subagent.SubAgentRegistry.SubAgentRun;
+import com.skillforge.server.repository.ChatAttachmentRepository;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -56,8 +58,12 @@ public class ChatController {
     /** 默认渠道：没有 channel conversation 绑定的 session 视为 web。 */
     private static final String DEFAULT_CHANNEL_PLATFORM = "web";
 
+    /** V73 / OBS-COLUMNS: max page size for the admin chat-attachments query (hard cap). */
+    private static final int ADMIN_ATTACHMENTS_MAX_LIMIT = 500;
+
     private final ChatService chatService;
     private final ChatAttachmentService chatAttachmentService;
+    private final ChatAttachmentRepository chatAttachmentRepository;
     private final SessionService sessionService;
     private final AgentService agentService;
     private final LlmProperties llmProperties;
@@ -72,6 +78,7 @@ public class ChatController {
 
     public ChatController(ChatService chatService,
                           ChatAttachmentService chatAttachmentService,
+                          ChatAttachmentRepository chatAttachmentRepository,
                           SessionService sessionService,
                           AgentService agentService,
                           LlmProperties llmProperties,
@@ -85,6 +92,7 @@ public class ChatController {
                           ContextBreakdownService contextBreakdownService) {
         this.chatService = chatService;
         this.chatAttachmentService = chatAttachmentService;
+        this.chatAttachmentRepository = chatAttachmentRepository;
         this.sessionService = sessionService;
         this.agentService = agentService;
         this.llmProperties = llmProperties;
@@ -305,6 +313,116 @@ public class ChatController {
         headers.add("Content-Disposition",
                 "inline; filename=\"" + attachment.getFilename().replace("\"", "_") + "\"");
         return new ResponseEntity<>(bytes, headers, HttpStatus.OK);
+    }
+
+    /**
+     * V73 / MULTIMODAL-OBSERVABILITY-COLUMNS: admin query endpoint to filter
+     * the {@code t_chat_attachment} table by {@code error_code} /
+     * {@code processing_mode} / {@code session_id}. Lets operators answer "why
+     * did this PDF not extract?" / "show me everything in PDF_TEXT_EMPTY state
+     * today" without grep-ing server logs.
+     *
+     * <p><b>RBAC follow-up</b>: this endpoint is currently gated only by the
+     * project's userId convention — there is no admin-role check (the project
+     * has no full RBAC model yet). Add admin-role enforcement when the broader
+     * permissions story lands. For now this is acceptable because (a) only the
+     * caller's userId appears in {@code Authorization: Bearer ...} responses
+     * elsewhere — but this endpoint intentionally exposes other users' rows.
+     * In dev / single-tenant deployments that is fine; in multi-tenant it MUST
+     * be locked down.</p>
+     *
+     * <p>Wire field names use camelCase ({@code errorCode} / {@code errorMessage}
+     * / {@code processingMode} / {@code extractedTextChars}) — see java.md
+     * footgun #6 (FE-BE contract drift).</p>
+     */
+    @GetMapping("/admin/chat-attachments")
+    public ResponseEntity<List<Map<String, Object>>> listAttachments(
+            @RequestParam Long userId,
+            @RequestParam(required = false) String errorCode,
+            @RequestParam(required = false) String processingMode,
+            @RequestParam(required = false) String sessionId,
+            @RequestParam(defaultValue = "100") int limit) {
+        if (userId == null) {
+            return ResponseEntity.badRequest().build();
+        }
+        if (limit <= 0) {
+            return ResponseEntity.badRequest().build();
+        }
+        // Clamp to hard cap rather than 400 — admin tool convenience.
+        int effectiveLimit = Math.min(limit, ADMIN_ATTACHMENTS_MAX_LIMIT);
+        // Normalize empty strings to null so the JPQL "IS NULL OR equals"
+        // pattern treats "filter not provided" and "filter is blank" the same.
+        String ec = (errorCode != null && !errorCode.isBlank()) ? errorCode : null;
+        String pm = (processingMode != null && !processingMode.isBlank()) ? processingMode : null;
+        String sid = (sessionId != null && !sessionId.isBlank()) ? sessionId : null;
+
+        List<ChatAttachmentEntity> rows = chatAttachmentRepository.findByFilters(
+                ec, pm, sid, PageRequest.of(0, effectiveLimit));
+
+        List<Map<String, Object>> out = new ArrayList<>(rows.size());
+        for (ChatAttachmentEntity row : rows) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("id", row.getId());
+            m.put("sessionId", row.getSessionId());
+            m.put("userId", row.getUserId());
+            m.put("kind", row.getKind());
+            m.put("mimeType", row.getMimeType());
+            m.put("filename", row.getFilename());
+            m.put("sizeBytes", row.getSizeBytes());
+            m.put("pageCount", row.getPageCount());
+            m.put("status", row.getStatus());
+            // V73 OBS fields
+            m.put("processingMode", row.getProcessingMode());
+            m.put("errorCode", row.getErrorCode());
+            m.put("errorMessage", row.getErrorMessage());
+            m.put("extractedTextChars", row.getExtractedTextChars());
+            m.put("createdAt", row.getCreatedAt());
+            m.put("boundAt", row.getBoundAt());
+            out.add(m);
+        }
+        return ResponseEntity.ok(out);
+    }
+
+    /**
+     * ATTACHMENT-CLEANUP (Wave1-B): admin manual trigger for the orphan-cleanup sweep.
+     *
+     * <p>Same userId convention as the {@code listAttachments} admin endpoint above —
+     * the project does not have a full RBAC model yet, and {@code userId} is used
+     * purely as a non-empty caller-identity check (NOT a role check). Add proper
+     * admin-role enforcement when the broader permissions story lands; tracked
+     * alongside the listAttachments follow-up.</p>
+     *
+     * <p>Effective URL: {@code POST /api/chat/admin/chat-attachments/cleanup}. Query
+     * params:</p>
+     * <ul>
+     *   <li>{@code userId} — required, non-empty caller-identity check</li>
+     *   <li>{@code thresholdHours} — default 24; override for tests / one-offs</li>
+     *   <li>{@code dryRun} — default false; true → no deletes, only would-be counts</li>
+     * </ul>
+     *
+     * <p>Response body mirrors {@link ChatAttachmentService.CleanupResult} plus
+     * {@code dryRun} and {@code thresholdHours} echoes for caller-side logging.</p>
+     */
+    @PostMapping("/admin/chat-attachments/cleanup")
+    public ResponseEntity<Map<String, Object>> runCleanup(
+            @RequestParam Long userId,
+            @RequestParam(defaultValue = "24") int thresholdHours,
+            @RequestParam(defaultValue = "false") boolean dryRun) {
+        if (userId == null) {
+            return ResponseEntity.badRequest().body(Map.of("error", "userId is required"));
+        }
+        if (thresholdHours <= 0) {
+            return ResponseEntity.badRequest().body(Map.of("error", "thresholdHours must be > 0"));
+        }
+        ChatAttachmentService.CleanupResult result =
+                chatAttachmentService.cleanupOrphans(thresholdHours, dryRun);
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("orphanRowsDeleted", result.orphanRowsDeleted());
+        body.put("filesDeleted", result.filesDeleted());
+        body.put("errors", result.errors());
+        body.put("dryRun", dryRun);
+        body.put("thresholdHours", thresholdHours);
+        return ResponseEntity.ok(body);
     }
 
     /**

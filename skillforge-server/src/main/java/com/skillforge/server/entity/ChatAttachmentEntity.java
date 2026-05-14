@@ -53,6 +53,36 @@ public class ChatAttachmentEntity {
     @Column(name = "status", length = 16, nullable = false)
     private String status = "uploaded";
 
+    // ─── Observability columns (V73, MULTIMODAL-OBSERVABILITY-COLUMNS) ───
+    // All four are nullable. Wire-level field names use camelCase
+    // (errorCode / errorMessage / processingMode / extractedTextChars) — see
+    // java.md footgun #6 (FE-BE contract drift). Future Wave 2 IMAGE-COMPRESSION
+    // and Wave 2 PDF-SCAN-FALLBACK will add new processingMode values
+    // (IMAGE_BLOCK_COMPRESSED / PDF_PAGE_IMAGE) and populate error_code on
+    // failure paths (PDF_PARSE_FAILED, PDF_TEXT_EMPTY_NEEDS_VISION,
+    // IMAGE_TOO_LARGE, etc.).
+
+    /** Short stable code for the failure that produced this row (or null on success). */
+    @Column(name = "error_code", length = 80)
+    private String errorCode;
+
+    /** Free-text human-readable failure detail (truncated to ~1KB at write site). */
+    @Column(name = "error_message", columnDefinition = "TEXT")
+    private String errorMessage;
+
+    /**
+     * Which materialization path produced this attachment. Populated on the success
+     * path: {@code IMAGE_BLOCK_INLINE} for images at upload, {@code PDF_TEXT} for PDFs
+     * at upload (refined to {@code PDF_TEXT_TRUNCATED} / {@code PDF_TEXT_EMPTY} when
+     * the engine first materializes the row). Empty string / null means no signal.
+     */
+    @Column(name = "processing_mode", length = 50)
+    private String processingMode;
+
+    /** Number of characters extracted from PDF text (informational; only PDF path uses today). */
+    @Column(name = "extracted_text_chars")
+    private Integer extractedTextChars;
+
     @CreatedDate
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
@@ -82,6 +112,14 @@ public class ChatAttachmentEntity {
     public void setStoragePath(String storagePath) { this.storagePath = storagePath; }
     public String getStatus() { return status; }
     public void setStatus(String status) { this.status = status; }
+    public String getErrorCode() { return errorCode; }
+    public void setErrorCode(String errorCode) { this.errorCode = errorCode; }
+    public String getErrorMessage() { return errorMessage; }
+    public void setErrorMessage(String errorMessage) { this.errorMessage = errorMessage; }
+    public String getProcessingMode() { return processingMode; }
+    public void setProcessingMode(String processingMode) { this.processingMode = processingMode; }
+    public Integer getExtractedTextChars() { return extractedTextChars; }
+    public void setExtractedTextChars(Integer extractedTextChars) { this.extractedTextChars = extractedTextChars; }
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
     public Instant getBoundAt() { return boundAt; }

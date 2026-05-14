@@ -19,12 +19,16 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Stream;
 
 @Service
 public class ChatAttachmentService implements MessageMaterializer {
@@ -34,6 +38,22 @@ public class ChatAttachmentService implements MessageMaterializer {
     private static final long MAX_IMAGE_BYTES = 10L * 1024 * 1024;
     private static final long MAX_PDF_BYTES = 25L * 1024 * 1024;
     private static final int MAX_PDF_TEXT_CHARS = 20_000;
+    /**
+     * V73 — MULTIMODAL-OBSERVABILITY-COLUMNS. Cap stored {@code error_message}
+     * so a misbehaving stack trace can't blow up the row. UI displays a "see
+     * server log" hint when truncation occurs.
+     */
+    private static final int MAX_ERROR_MESSAGE_CHARS = 1024;
+
+    // ─── processing_mode values (V73, MULTIMODAL-OBSERVABILITY-COLUMNS) ───
+    // String constants (NOT an enum). DB stores VARCHAR(50); wire payload is JSON
+    // strings; Wave 2 IMAGE-COMPRESSION + PDF-SCAN-FALLBACK will add more values
+    // (e.g. IMAGE_BLOCK_COMPRESSED / PDF_PAGE_IMAGE). Keeping these as String
+    // constants avoids an enum contract that future waves would have to extend.
+    public static final String MODE_IMAGE_BLOCK_INLINE = "IMAGE_BLOCK_INLINE";
+    public static final String MODE_PDF_TEXT = "PDF_TEXT";
+    public static final String MODE_PDF_TEXT_TRUNCATED = "PDF_TEXT_TRUNCATED";
+    public static final String MODE_PDF_TEXT_EMPTY = "PDF_TEXT_EMPTY";
     /**
      * MULTIMODAL-MVP r2 W5 / tech-design §"安全与限制": cap pages extracted from a
      * PDF. Prevents a 500-page PDF from spending memory + CPU on full extraction
@@ -79,6 +99,14 @@ public class ChatAttachmentService implements MessageMaterializer {
         byte[] head = readHeader(file);
         DetectedMime detected = detectMagic(head);
         String headerMime = file.getContentType() != null ? file.getContentType() : "";
+        // V73 / OBS-COLUMNS: every rejection path below throws BEFORE we ever
+        // call repository.save(...). The Iron Law: a rejected upload writes NO
+        // DB row (we intentionally do NOT persist a "FAILED" placeholder for
+        // unsupported / mime-mismatched / oversized uploads). The
+        // ChatAttachmentServiceMagicBytesTest cases verify-no-save covers this.
+        // Future enhancement candidate: persist FAILED rows so admins can see
+        // attempted-but-rejected uploads in the same query view. Out of scope
+        // for Wave 1-A; tracked in the MULTIMODAL-OBSERVABILITY-COLUMNS spec.
         if (detected == null) {
             throw new IllegalArgumentException("Unsupported or unrecognized file content "
                     + "(only PNG / JPEG / WebP / PDF accepted)");
@@ -135,6 +163,14 @@ public class ChatAttachmentService implements MessageMaterializer {
         entity.setStatus("uploaded");
         if ("pdf".equals(kind)) {
             entity.setPageCount(readPdfPageCountQuietly(target));
+            // V73 / OBS-COLUMNS: default the processing_mode at upload time so an
+            // attachment that is never materialized still carries a "intended" mode
+            // signal. Refined to PDF_TEXT_TRUNCATED / PDF_TEXT_EMPTY at first
+            // materialize. Wave 2 PDF-SCAN-FALLBACK may overwrite with PDF_PAGE_IMAGE.
+            entity.setProcessingMode(MODE_PDF_TEXT);
+        } else if ("image".equals(kind)) {
+            // Wave 2 IMAGE-COMPRESSION may overwrite with IMAGE_BLOCK_COMPRESSED.
+            entity.setProcessingMode(MODE_IMAGE_BLOCK_INLINE);
         }
         return attachmentRepository.save(entity);
     }
@@ -285,7 +321,22 @@ public class ChatAttachmentService implements MessageMaterializer {
                 ChatAttachmentEntity attachment = attachmentRepository.findById(attachmentId)
                         .filter(a -> sessionId.equals(a.getSessionId()))
                         .orElseThrow(() -> new IllegalArgumentException("PDF attachment not found: " + attachmentId));
+                // V73 / OBS-COLUMNS: pdfTextBlock additionally mutates the entity
+                // (extracted_text_chars + refined processing_mode based on outcome).
+                // We persist the refined entity here because pdfTextBlock has the
+                // smallest diff path — it already has the entity in scope. The
+                // alternative (compute textLen here, refine mode here, leave
+                // pdfTextBlock pure) would duplicate the text-empty / truncated
+                // detection logic. Saving once per pdf_ref expansion: typical
+                // message has 0–2 PDF refs so DB write cost is acceptable.
+                String previousMode = attachment.getProcessingMode();
+                Integer previousChars = attachment.getExtractedTextChars();
                 out.add(ContentBlock.text(pdfTextBlock(attachment)));
+                boolean refined = !java.util.Objects.equals(previousMode, attachment.getProcessingMode())
+                        || !java.util.Objects.equals(previousChars, attachment.getExtractedTextChars());
+                if (refined) {
+                    attachmentRepository.save(attachment);
+                }
                 changed = true;
             } else {
                 out.add(block);
@@ -428,6 +479,203 @@ public class ChatAttachmentService implements MessageMaterializer {
         }
     }
 
+    // ------------------------------------------------------------------
+    // ATTACHMENT-CLEANUP (Wave1-B): nightly cron + admin manual trigger.
+    // ------------------------------------------------------------------
+
+    /**
+     * ATTACHMENT-CLEANUP result envelope returned by {@link #cleanupOrphans}.
+     *
+     * @param orphanRowsDeleted DB rows removed (status=uploaded, never bound, older than threshold)
+     * @param filesDeleted      physical files removed (orphan-row files + DB-less files on disk)
+     * @param errors            per-step error messages (best-effort — cleanup never throws)
+     */
+    public record CleanupResult(int orphanRowsDeleted, int filesDeleted, List<String> errors) {}
+
+    /** Expose the configured storage root so the scheduler / admin endpoint can log it. */
+    public Path getStorageRoot() {
+        return storageRoot;
+    }
+
+    /**
+     * Daily / admin-triggered orphan cleanup. Two phases:
+     *
+     * <ol>
+     *   <li><b>Step A — orphan DB rows:</b> {@code status='uploaded' AND seq_no IS NULL AND
+     *   created_at &lt; now - thresholdHours}. For each row, delete the on-disk file (best
+     *   effort, logged on failure, continue) then delete the DB row.</li>
+     *   <li><b>Step B — DB-less disk files:</b> walk {@code skillforge.chat.attachments.root}
+     *   and compute the set difference vs {@link ChatAttachmentRepository#findAllStoragePaths()}.
+     *   Files on disk with no corresponding DB row are removed. This covers files orphaned
+     *   by {@code ON DELETE CASCADE} when a session row is deleted (the DB CASCADE drops
+     *   the {@code t_chat_attachment} row but the physical file stays).</li>
+     * </ol>
+     *
+     * <p>{@code dryRun=true} runs the same scans but skips every delete; the returned counts
+     * reflect what <i>would</i> be deleted. INFO-level log line summarizes regardless.</p>
+     *
+     * <p><b>Transactional choice:</b> intentionally NOT {@code @Transactional} at method
+     * level. Step A row deletes use Spring Data's per-row {@code delete()} (each runs in its
+     * own short JPA transaction), so a single bad row doesn't roll back the whole sweep.
+     * Step B is filesystem-only — no DB writes. This matches the brief's "row-by-row deletes"
+     * option and minimises lock duration on {@code t_chat_attachment}.</p>
+     *
+     * <p><b>Symlink loops:</b> {@link Files#walk(Path, java.nio.file.FileVisitOption...)} with
+     * no options does <i>not</i> follow symbolic links — protects against an attacker (or
+     * careless ops) wiring {@code storageRoot/sess/x} to {@code /etc} and the cron happily
+     * deleting "unreferenced" /etc/* files.</p>
+     *
+     * <p><b>Failure isolation:</b> every per-row / per-file action is wrapped in try/catch
+     * and contributes a string to {@code errors}. This method never throws — the scheduler
+     * relies on that contract.</p>
+     *
+     * <p><b>Multi-JVM note:</b> in a 2+ replica deployment two JVMs would each fire the cron
+     * at the same wall-clock time. Both racing against {@code t_chat_attachment} is benign —
+     * {@code deleteIfExists} + {@code attachmentRepository.delete()} on a missing row are
+     * idempotent; the loser logs nothing scary. We do not currently use a leader-election
+     * lock because SkillForge runs single-instance; revisit if we cluster.</p>
+     */
+    public CleanupResult cleanupOrphans(int thresholdHours, boolean dryRun) {
+        int hours = Math.max(thresholdHours, 1);
+        Instant before = Instant.now().minus(hours, ChronoUnit.HOURS);
+        List<String> errors = new ArrayList<>();
+        int orphanRowsDeleted = 0;
+        int filesDeleted = 0;
+
+        // ---------- Step A: orphan DB rows (uploaded but never bound) ----------
+        List<ChatAttachmentEntity> orphanRows;
+        try {
+            orphanRows = attachmentRepository
+                    .findByStatusAndSeqNoIsNullAndCreatedAtBefore("uploaded", before);
+        } catch (RuntimeException e) {
+            errors.add("findByStatusAndSeqNoIsNullAndCreatedAtBefore failed: " + e.getMessage());
+            orphanRows = List.of();
+        }
+
+        Set<String> orphanRowPaths = new HashSet<>();
+        for (ChatAttachmentEntity row : orphanRows) {
+            String storagePath = row.getStoragePath();
+            if (storagePath != null) {
+                orphanRowPaths.add(normalizeForCompare(storagePath));
+            }
+            try {
+                // File first, then row. If file delete fails, the row still gets removed so
+                // we don't keep retrying the broken pair every night. The file (if any) then
+                // becomes a Step B orphan on the next sweep and gets cleaned then. The
+                // symmetric ordering (row first) risked the inverse: file kept while row
+                // gone — which Step B can't see because we no longer know which session the
+                // file belonged to.
+                if (storagePath != null) {
+                    try {
+                        if (!dryRun) {
+                            if (Files.deleteIfExists(Path.of(storagePath))) {
+                                filesDeleted++;
+                            }
+                        } else if (Files.exists(Path.of(storagePath))) {
+                            // dry-run: count the file we WOULD delete
+                            filesDeleted++;
+                        }
+                    } catch (IOException ioe) {
+                        log.warn("ATTACHMENT-CLEANUP: failed to delete orphan file path={} reason={}",
+                                storagePath, ioe.getMessage());
+                        errors.add("delete file " + storagePath + ": " + ioe.getMessage());
+                    }
+                }
+                if (!dryRun) {
+                    attachmentRepository.delete(row);
+                }
+                orphanRowsDeleted++;
+            } catch (RuntimeException e) {
+                log.warn("ATTACHMENT-CLEANUP: failed to delete orphan row id={} reason={}",
+                        row.getId(), e.getMessage());
+                errors.add("delete row " + row.getId() + ": " + e.getMessage());
+            }
+        }
+
+        // ---------- Step B: physical files with no DB row ----------
+        try {
+            Set<String> referencedPaths = new HashSet<>();
+            try {
+                for (String p : attachmentRepository.findAllStoragePaths()) {
+                    if (p != null) referencedPaths.add(normalizeForCompare(p));
+                }
+            } catch (RuntimeException e) {
+                errors.add("findAllStoragePaths failed: " + e.getMessage());
+            }
+
+            if (Files.exists(storageRoot)) {
+                // Files.walk default: does NOT follow symbolic links. Intentional —
+                // see method-level javadoc for the symlink-loop defense rationale.
+                try (Stream<Path> stream = Files.walk(storageRoot)) {
+                    List<Path> diskFiles = stream
+                            .filter(Files::isRegularFile)
+                            .toList();
+                    for (Path file : diskFiles) {
+                        String norm = normalizeForCompare(file.toString());
+                        if (referencedPaths.contains(norm)) continue;
+                        // Files we just deleted (or would delete) in Step A are already
+                        // counted; skip them in the unreferenced sweep to avoid double counting.
+                        if (orphanRowPaths.contains(norm)) continue;
+                        try {
+                            if (!dryRun) {
+                                if (Files.deleteIfExists(file)) {
+                                    filesDeleted++;
+                                }
+                            } else {
+                                filesDeleted++;
+                            }
+                        } catch (IOException ioe) {
+                            log.warn("ATTACHMENT-CLEANUP: failed to delete unreferenced file path={} reason={}",
+                                    file, ioe.getMessage());
+                            errors.add("delete unreferenced " + file + ": " + ioe.getMessage());
+                        }
+                    }
+                }
+            }
+        } catch (IOException e) {
+            log.warn("ATTACHMENT-CLEANUP: storage walk failed at root={} reason={}",
+                    storageRoot, e.getMessage());
+            errors.add("walk " + storageRoot + ": " + e.getMessage());
+        } catch (RuntimeException e) {
+            log.warn("ATTACHMENT-CLEANUP: unexpected error during Step B reason={}", e.getMessage());
+            errors.add("step B: " + e.getMessage());
+        }
+
+        log.info("ATTACHMENT-CLEANUP: {} orphanRowsDeleted={} filesDeleted={} errors={} thresholdHours={}",
+                dryRun ? "[DRY-RUN]" : "[LIVE]", orphanRowsDeleted, filesDeleted, errors.size(), hours);
+        return new CleanupResult(orphanRowsDeleted, filesDeleted, errors);
+    }
+
+    /**
+     * Path compare uses absolute + normalized form so a relative path stored in DB
+     * (e.g. {@code ./data/chat-attachments/sess/x.png}) matches an absolute path returned
+     * by {@code Files.walk(storageRoot)}.
+     */
+    private static String normalizeForCompare(String raw) {
+        try {
+            return Path.of(raw).toAbsolutePath().normalize().toString();
+        } catch (RuntimeException e) {
+            return raw;
+        }
+    }
+
+    /**
+     * Extract text from the given PDF attachment AND (V73) refine the entity's
+     * {@code processing_mode} + {@code extracted_text_chars} fields based on
+     * the outcome. The caller in {@link #materializeForProvider} is responsible
+     * for persisting these mutations (it has the repository in scope).
+     *
+     * <p>Outcomes:</p>
+     * <ul>
+     *   <li>Text within budget → {@code PDF_TEXT} (unchanged from upload-time default).</li>
+     *   <li>Text exceeded {@link #MAX_PDF_TEXT_CHARS} and was truncated → {@code PDF_TEXT_TRUNCATED}.</li>
+     *   <li>No text could be extracted (scan-only PDF, parse failure, zero pages) → {@code PDF_TEXT_EMPTY}.</li>
+     * </ul>
+     *
+     * <p>{@code extracted_text_chars} records what the LLM actually sees
+     * (post-truncation), useful for the admin endpoint to flag suspicious
+     * 0-char PDFs that should fall back to OCR (Wave 2 PDF-SCAN-FALLBACK).</p>
+     */
     private String pdfTextBlock(ChatAttachmentEntity attachment) {
         String text = "";
         try (PDDocument doc = Loader.loadPDF(Path.of(attachment.getStoragePath()).toFile())) {
@@ -448,11 +696,25 @@ public class ChatAttachmentService implements MessageMaterializer {
         } catch (IOException e) {
             text = "";
         }
-        if (text == null || text.isBlank()) {
-            return "[PDF attachment: " + attachment.getFilename() + "]";
-        }
-        if (text.length() > MAX_PDF_TEXT_CHARS) {
+        boolean empty = text == null || text.isBlank();
+        boolean truncated = false;
+        if (!empty && text.length() > MAX_PDF_TEXT_CHARS) {
             text = text.substring(0, MAX_PDF_TEXT_CHARS);
+            truncated = true;
+        }
+        // V73 / OBS-COLUMNS: record post-truncation char count + refine
+        // processing_mode based on outcome. Caller persists if mutated.
+        int extractedChars = empty ? 0 : text.length();
+        attachment.setExtractedTextChars(extractedChars);
+        if (empty) {
+            attachment.setProcessingMode(MODE_PDF_TEXT_EMPTY);
+        } else if (truncated) {
+            attachment.setProcessingMode(MODE_PDF_TEXT_TRUNCATED);
+        } else {
+            attachment.setProcessingMode(MODE_PDF_TEXT);
+        }
+        if (empty) {
+            return "[PDF attachment: " + attachment.getFilename() + "]";
         }
         return "[PDF attachment: " + attachment.getFilename() + "]\n" + text;
     }

@@ -63,6 +63,31 @@
             <version>3.0.3</version>
         </dependency>
         <dependency>
+            <!-- POI 5.2.5 needs commons-io 2.15.x for the new
+                 UnsynchronizedByteArrayOutputStream.builder() API; PDFBox brings
+                 the older 2.11.0 transitively, so pin explicitly here. -->
+            <groupId>commons-io</groupId>
+            <artifactId>commons-io</artifactId>
+            <version>2.15.1</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.poi</groupId>
+            <artifactId>poi</artifactId>
+            <version>5.2.5</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.poi</groupId>
+            <artifactId>poi-ooxml</artifactId>
+            <version>5.2.5</version>
+        </dependency>
+        <dependency>
+            <!-- HWPF (.doc binary) lives here, not in poi-core. Needed for
+                 WordDocumentParser legacy .doc support. -->
+            <groupId>org.apache.poi</groupId>
+            <artifactId>poi-scratchpad</artifactId>
+            <version>5.2.5</version>
+        </dependency>
+        <dependency>
             <groupId>com.larksuite.oapi</groupId>
             <artifactId>oapi-sdk</artifactId>
             <version>2.4.0</version>

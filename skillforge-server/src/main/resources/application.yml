@@ -77,6 +77,25 @@ skillforge:
     backfill-enabled: true
     max-backfill-sessions-per-startup: 300
 
+  # MULTIMODAL: chat attachment storage + ATTACHMENT-CLEANUP cron (Wave1-B).
+  #
+  # `root` was previously inlined as the @Value default in ChatAttachmentService;
+  # surfaced here so ops can override without recompiling.
+  #
+  # The cleanup cron drops:
+  #   (1) DB rows status='uploaded' AND seq_no IS NULL AND created_at < now - threshold-hours
+  #       (users uploaded then closed the page without sending), and
+  #   (2) physical files under root that have no DB row (orphaned by session
+  #       ON DELETE CASCADE).
+  # Manual trigger: POST /api/chat/admin/chat-attachments/cleanup?...&dryRun=true|false.
+  chat:
+    attachments:
+      root: ./data/chat-attachments
+      cleanup:
+        enabled: true
+        cron: "0 0 4 * * *"           # daily 04:00, after 03:00/03:30 memory crons
+        threshold-hours: 24
+
   # P9-5 post-compact recovery: after a full compact, append a recovery payload (recently-read
   # file heads) so the LLM does not "lose" file context.  enabled=false skips emission while
   # keeping the FileStateCache hot (cheap; per-session mem only).
