@@ -248,7 +248,7 @@ prompt 文件 `classpath:session-annotator-system-prompt.md` 由 `SessionAnnotat
 
 | 类 | 位置 | 复用程度 |
 |---|---|---|
-| `TraceScenarioImportService` 内部 reason 检测 | 现有 service line 134-152 内联在 `suggestImportCandidates` 循环里 | **Phase 1.1 先抽 package-private `detectReasons(LlmTraceEntity, List<LlmSpanEntity>, int tokens, int toolCalls, int llmCalls, int minTokens) -> List<String>`** helper（零行为漂移 + `TraceScenarioImportServiceTest:102` 必须保留绿色）；之后 V1 `DetectSignalAnnotationsTool` 调它 |
+| `TraceScenarioImportService` 内部 reason 检测 | 现有 service line 134-152 内联在 `suggestImportCandidates` 循环里 | **Phase 1.2 已抽 `public static detectReasons(LlmTraceEntity, List<LlmSpanEntity>, int totalTokens, int totalToolCalls, int totalLlmCalls, int minTokens) -> List<String>`** helper（**注**：原稿写 package-private，BE-Dev 落地时改 public static 因为 `SessionAnnotationSignalService` 在 `com.skillforge.server.sessionannotation` 跨包；行为零漂移 + `TraceScenarioImportServiceTest` 9/9 绿）；V1 `DetectSignalAnnotationsTool` 通过 service 间接调它 |
 | `LlmTraceRepository` / `LlmSpanRepository` | 现有 | 直接调（取 sessionId → trace 集 + traceId → span 集） |
 | `SubAgentRegistry` + `SubAgentTool` | 现有 | session-annotator 派发走它，**零改动**（Phase 1.0 BE-Dev 已确认） |
 | `MemoryCuratorBootstrap` 模板 | 现有 | 复制成 `SessionAnnotatorBootstrap` —— 改 `AGENT_NAME` + `PROMPT_RESOURCE_PATH` 两常量 |
@@ -404,11 +404,12 @@ signature = outcome + "|" + suspect_surface + "|" + top_failing_tool + "|" + age
   - ✅ `session-annotator-system-prompt.md`（resources/ 根目录，verbatim copy §4.1）
   - ✅ `SessionAnnotationPersistenceIT` 4 测试（save + UNIQUE 约束 + findBySignature + CASCADE delete）
   - ⚠️ **本机 Docker 未安装 → 4 个 IT skip**（与项目其它 14+ AbstractPostgresIT 子类同款行为，CI 真跑）。代码层 regression 验证：`mvn -pl skillforge-server -am test` **1402 / 0 / 0 / 72 → BUILD SUCCESS in 27.7s**，无 modified existing files
-- [ ] **Phase 1.2：Signal Service + DetectSignalAnnotationsTool**
-  - 重构 `TraceScenarioImportService.detectReasons` package-private（零行为漂移 + TraceScenarioImportServiceTest:102 保持绿色）
-  - `SessionAnnotationSignalService.detectAndPersist(window)` + 单测
-  - `DetectSignalAnnotationsTool` 薄包装
-  - **删红测试 `@Disabled`** → 翻绿
+- [x] **Phase 1.2：Signal Service + DetectSignalAnnotationsTool** ✅ 2026-05-14
+  - ✅ 重构 `TraceScenarioImportService.detectReasons` 抽 **`public static`**（跨包必需，原稿"package-private"修正）—— `TraceScenarioImportServiceTest` 9/9 绿 + 加 6 个 detectReasons 直测单测
+  - ✅ `SessionAnnotationSignalService.detectAndPersist(Duration window)` + 4 单测（写标注 / 幂等 / skip eval / empty）—— UNIQUE 约束 + try-catch DataIntegrityViolationException 幂等
+  - ✅ `DetectSignalAnnotationsTool` 薄包装（window_hours clamp [1, 168]）+ 2 单测；在 `SkillForgeConfig` 加 `@Bean` 注册
+  - ✅ 删 Phase 1.0 红测试占位 `SignalAnnotationJobRedTest.java`（包名收口到 sessionannotation）
+  - **mvn 1416/0/0/71 → BUILD SUCCESS in 28.3s**（+14 test，-1 skipped）；核心文件 6 个 `git diff HEAD` 零行
 - [ ] **Phase 1.3：AnnotateSessionTool + 端到端 dispatch**
   - `AnnotateSessionTool`（agent 决策 outcome/surface/confidence/reasoning，tool 只持久化）
   - 派一次 dispatch 端到端 manual test（手动 trigger session-annotator 跑一次）

@@ -131,25 +131,7 @@ public class TraceScenarioImportService {
                     .toList();
             int llmCalls = (int) spans.stream().filter(span -> "llm".equals(span.getKind())).count();
 
-            Set<String> reasons = new LinkedHashSet<>();
-            if ("error".equals(primary.getStatus()) || "cancelled".equals(primary.getStatus()) || isPresent(primary.getError())) {
-                reasons.add("agent_error");
-            }
-            if (spans.stream().anyMatch(this::isToolFailure)) {
-                reasons.add("tool_failure");
-            }
-            if (spans.stream().anyMatch(this::isNonToolSpanError)) {
-                reasons.add("span_error");
-            }
-            if (tokens >= minTokens) {
-                reasons.add("high_token");
-            }
-            if (llmCalls >= 2) {
-                reasons.add("multi_turn");
-            }
-            if (toolCalls > 0) {
-                reasons.add("has_tool_calls");
-            }
+            List<String> reasons = detectReasons(primary, spans, tokens, toolCalls, llmCalls, minTokens);
 
             if (reasons.isEmpty()) {
                 continue;
@@ -173,7 +155,7 @@ public class TraceScenarioImportService {
                     tokens,
                     llmCalls,
                     toolCalls,
-                    List.copyOf(reasons),
+                    reasons,
                     primary.getStartedAt() == null ? null : primary.getStartedAt().toString()
             ));
             if (result.size() >= limit) {
@@ -287,11 +269,67 @@ public class TraceScenarioImportService {
         }
     }
 
-    private boolean isToolFailure(LlmSpanEntity span) {
+    /**
+     * Package-private helper extracted from {@link #suggestImportCandidates} so the
+     * PROD-LABEL-CLUSTER V1 signal-annotation pipeline can reuse the exact same reason
+     * detection logic. Zero behavior drift from the previous inline implementation
+     * (the existing {@code suggestImportCandidates_returnsReasonedCandidates} test in
+     * {@code TraceScenarioImportServiceTest} locks the contract).
+     *
+     * <p>Returned list is an immutable {@code List.copyOf} over a {@link LinkedHashSet}
+     * so the reason order is deterministic and stable:
+     * {@code agent_error → tool_failure → span_error → high_token → multi_turn → has_tool_calls}.
+     * Reasons not satisfied are simply absent (no nulls / placeholders).
+     *
+     * <p>Reason semantics:
+     * <ul>
+     *   <li>{@code agent_error} — primary trace status is {@code error} or {@code cancelled},
+     *       or {@code error} field is non-empty</li>
+     *   <li>{@code tool_failure} — any tool-kind span has non-empty error
+     *       OR {@code finishReason == "error"}</li>
+     *   <li>{@code span_error} — any non-tool span has non-empty error
+     *       OR {@code finishReason == "error"}</li>
+     *   <li>{@code high_token} — total tokens (input + output across all traces in
+     *       the root group) ≥ {@code minTokens}</li>
+     *   <li>{@code multi_turn} — ≥ 2 LLM-kind spans in the root group</li>
+     *   <li>{@code has_tool_calls} — total tool calls > 0</li>
+     * </ul>
+     */
+    public static List<String> detectReasons(LlmTraceEntity primary,
+                                             List<LlmSpanEntity> spans,
+                                             int totalTokens,
+                                             int totalToolCalls,
+                                             int totalLlmCalls,
+                                             int minTokens) {
+        Set<String> reasons = new LinkedHashSet<>();
+        if ("error".equals(primary.getStatus())
+                || "cancelled".equals(primary.getStatus())
+                || isPresent(primary.getError())) {
+            reasons.add("agent_error");
+        }
+        if (spans.stream().anyMatch(TraceScenarioImportService::isToolFailure)) {
+            reasons.add("tool_failure");
+        }
+        if (spans.stream().anyMatch(TraceScenarioImportService::isNonToolSpanError)) {
+            reasons.add("span_error");
+        }
+        if (totalTokens >= minTokens) {
+            reasons.add("high_token");
+        }
+        if (totalLlmCalls >= 2) {
+            reasons.add("multi_turn");
+        }
+        if (totalToolCalls > 0) {
+            reasons.add("has_tool_calls");
+        }
+        return List.copyOf(reasons);
+    }
+
+    private static boolean isToolFailure(LlmSpanEntity span) {
         return "tool".equals(span.getKind()) && (isPresent(span.getError()) || "error".equals(span.getFinishReason()));
     }
 
-    private boolean isNonToolSpanError(LlmSpanEntity span) {
+    private static boolean isNonToolSpanError(LlmSpanEntity span) {
         return !"tool".equals(span.getKind()) && (isPresent(span.getError()) || "error".equals(span.getFinishReason()));
     }
 

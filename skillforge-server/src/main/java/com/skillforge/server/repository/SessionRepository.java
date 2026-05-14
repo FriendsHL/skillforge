@@ -177,4 +177,24 @@ public interface SessionRepository extends JpaRepository<SessionEntity, String> 
               AND s.userId IS NOT NULL
             """)
     List<Long> findDistinctUserIdsWithRecentUserMessage(@Param("since") java.time.Instant since);
+
+    /**
+     * PROD-LABEL-CLUSTER V1 (Phase 1.2): top-level production sessions that finished
+     * within the configured window. Used by
+     * {@code SessionAnnotationSignalService.detectAndPersist(window)} to pick targets
+     * for hourly signal annotation. Sub sessions (parentSessionId NOT NULL) and eval
+     * sessions (origin='eval') are excluded — we only annotate the user-facing
+     * production traffic.
+     */
+    @Query("""
+            SELECT s FROM SessionEntity s
+            WHERE s.parentSessionId IS NULL
+              AND s.origin = :origin
+              AND s.completedAt IS NOT NULL
+              AND s.completedAt >= :since
+            ORDER BY s.completedAt ASC
+            """)
+    List<SessionEntity> findCompletedByOriginSince(
+            @Param("origin") String origin,
+            @Param("since") java.time.Instant since);
 }

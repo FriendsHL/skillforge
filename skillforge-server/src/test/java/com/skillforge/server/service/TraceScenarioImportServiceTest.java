@@ -127,6 +127,84 @@ class TraceScenarioImportServiceTest {
         assertThat(candidates.get(1).reasonCodes()).contains("high_token");
     }
 
+    // ────────────────────────────────────────────────────────────────────────
+    // detectReasons unit tests (Phase 1.2 — pure-function helper extracted
+    // from suggestImportCandidates; the integration-level coverage above
+    // (suggestImportCandidates_returnsReasonedCandidates) locks the wiring,
+    // these tests lock the per-reason boolean behavior at the helper level.
+    // ────────────────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("detectReasons returns agent_error when trace status is error")
+    void detectReasons_returnsAgentError_whenTraceStatusIsError() {
+        LlmTraceEntity t = trace("t-1", "t-1", "s-1", 1L, "error", 0, 0, 0);
+
+        List<String> reasons = TraceScenarioImportService.detectReasons(t, List.of(), 0, 0, 0, 2000);
+
+        assertThat(reasons).containsExactly("agent_error");
+    }
+
+    @Test
+    @DisplayName("detectReasons returns tool_failure when any tool span has error")
+    void detectReasons_returnsToolFailure_whenAnyToolSpanHasError() {
+        LlmTraceEntity t = trace("t-2", "t-2", "s-2", 1L, "ok", 0, 0, 0);
+        com.skillforge.observability.entity.LlmSpanEntity sp = span("sp-1", "t-2", "tool", "ok");
+        sp.setError("boom");
+
+        List<String> reasons = TraceScenarioImportService.detectReasons(
+                t, List.of(sp), 0, 1, 0, 2000);
+
+        assertThat(reasons).containsExactly("tool_failure", "has_tool_calls");
+    }
+
+    @Test
+    @DisplayName("detectReasons returns high_token when tokens above minTokens")
+    void detectReasons_returnsHighToken_whenTokensAboveMin() {
+        LlmTraceEntity t = trace("t-3", "t-3", "s-3", 1L, "ok", 1500, 600, 0);
+
+        List<String> reasons = TraceScenarioImportService.detectReasons(t, List.of(), 2100, 0, 0, 2000);
+
+        assertThat(reasons).containsExactly("high_token");
+    }
+
+    @Test
+    @DisplayName("detectReasons returns multi_turn when llmCalls >= 2")
+    void detectReasons_returnsMultiTurn_whenLlmCallsGte2() {
+        LlmTraceEntity t = trace("t-4", "t-4", "s-4", 1L, "ok", 0, 0, 0);
+
+        List<String> reasons = TraceScenarioImportService.detectReasons(t, List.of(), 0, 0, 3, 2000);
+
+        assertThat(reasons).containsExactly("multi_turn");
+    }
+
+    @Test
+    @DisplayName("detectReasons returns empty list when all conditions fail")
+    void detectReasons_emptyList_whenAllConditionsFail() {
+        LlmTraceEntity t = trace("t-5", "t-5", "s-5", 1L, "ok", 0, 0, 0);
+
+        List<String> reasons = TraceScenarioImportService.detectReasons(t, List.of(), 0, 0, 0, 2000);
+
+        assertThat(reasons).isEmpty();
+    }
+
+    @Test
+    @DisplayName("detectReasons combines agent_error + tool_failure + has_tool_calls when both conditions hit")
+    void detectReasons_combination_returnsAllApplicableReasons() {
+        LlmTraceEntity t = trace("t-6", "t-6", "s-6", 1L, "error", 0, 0, 1);
+        t.setError("Loop failed");
+        com.skillforge.observability.entity.LlmSpanEntity toolFail = span("sp-tool", "t-6", "tool", "error");
+        toolFail.setError("Tool died");
+        com.skillforge.observability.entity.LlmSpanEntity llmErr = span("sp-llm", "t-6", "llm", "error");
+        llmErr.setError("Provider 500");
+
+        List<String> reasons = TraceScenarioImportService.detectReasons(
+                t, List.of(toolFail, llmErr), 2500, 1, 2, 2000);
+
+        // Deterministic ordering: agent_error → tool_failure → span_error → high_token → multi_turn → has_tool_calls.
+        assertThat(reasons).containsExactly(
+                "agent_error", "tool_failure", "span_error", "high_token", "multi_turn", "has_tool_calls");
+    }
+
     @Test
     @DisplayName("createDraftsFromTraces imports selected root traces as reviewable drafts")
     void createDraftsFromTraces_createsDrafts() {

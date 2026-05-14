@@ -700,6 +700,26 @@ public class SkillForgeConfig {
         return tool;
     }
 
+    /**
+     * PROD-LABEL-CLUSTER V1 Phase 1.2 — STEP 1 of the session-annotator agent
+     * pipeline. AnnotateSession (STEP 2) + RecomputeClusters (STEP 3) land in
+     * Phase 1.3 / 1.4 respectively. Until both ship, session-annotator agent
+     * runs that reach STEP 2 will partial-fail (tool not in toolRegistry) — see
+     * §4.1 prompt CONSTRAINT "If a tool returns an error, log it and proceed";
+     * STEP 1 still succeeds and writes source='signal' rows.
+     */
+    @Bean
+    public com.skillforge.server.tool.sessionannotation.DetectSignalAnnotationsTool detectSignalAnnotationsTool(
+            com.skillforge.server.sessionannotation.SessionAnnotationSignalService signalService,
+            ObjectMapper objectMapper,
+            SkillRegistry skillRegistry) {
+        com.skillforge.server.tool.sessionannotation.DetectSignalAnnotationsTool tool =
+                new com.skillforge.server.tool.sessionannotation.DetectSignalAnnotationsTool(signalService, objectMapper);
+        skillRegistry.registerTool(tool);
+        log.info("Registered DetectSignalAnnotationsTool into SkillRegistry");
+        return tool;
+    }
+
     @Bean
     public SkillPackageLoader skillPackageLoader() {
         return new SkillPackageLoader();
