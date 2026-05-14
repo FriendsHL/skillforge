@@ -8,8 +8,8 @@
 
 | 顺序  | ID        | 标题                                | 模式   | 状态        | 优先级 | 风险   | 文档                                                        | 下一步                                   |
 | --- | --------- | --------------------------------- | ---- | --------- | --- | ---- | --------------------------------------------------------- | ------------------------------------- |
-| 1 | SKILL-AB-MULTITURN-FIX | Skill A/B 多轮评测修复 | Mid | design-draft | P1 | Mid | [需求包](requirements/active/SKILL-AB-MULTITURN-FIX/index.md) | 评审 Phase 1-only 方案；先证伪 fallback warning + 红测试 |
-| 2 | V3 ATTRIBUTION-AGENT（飞轮 V3）| Full | **plan B-level ratified，待 V1+V2 dogfood** | P1 | Full | [整体方案 §V3](plans/PROD-OPTIMIZATION-FLYWHEEL/plan.md) | V1+V2 跑 1-2 周 dogfood 看 attribution pattern 是否真有 actionable 信号，再开 V3 需求包 |
+| 1 | ATTRIBUTION-AGENT | 飞轮归因 + Optimization Event 因果链（飞轮 V3）| Full | **ratified** | P1 | Full | [需求包](requirements/active/ATTRIBUTION-AGENT/index.md) / [整体方案 §V3](plans/PROD-OPTIMIZATION-FLYWHEEL/plan.md) | Phase 1.0 证伪起步（EvalAnalysisSession enum 扩 + SkillDraftService/PromptImproverService 接入点 + SubAgentRegistry 派 attribution-curator 可行性）|
+| 2 | SKILL-AB-MULTITURN-FIX | Skill A/B 多轮评测修复 | Mid | design-draft | P1 | Mid | [需求包](requirements/active/SKILL-AB-MULTITURN-FIX/index.md) | **可与 V3 并行**；评审 Phase 1-only 方案；先证伪 fallback warning + 红测试 |
 
 ## 阻塞 / 待决策
 
