@@ -4,12 +4,10 @@ import com.skillforge.server.entity.SessionAnnotationEntity;
 import com.skillforge.server.repository.SessionAnnotationRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
-import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -35,14 +33,19 @@ import java.util.Set;
  *
  * <p>Idempotency: the {@code uq_session_annotation} UNIQUE constraint covers
  * (session_id, annotation_type, annotation_value, source). An identical re-run
- * (same outcome / surface / tool tuple) triggers
- * {@link DataIntegrityViolationException} per-row, which we catch and skip —
- * matching the signal-stage idempotency contract. A re-judgment with a
- * different value (e.g. outcome changed from {@code failure} to
- * {@code partial_success}) is intentionally NOT prevented; both rows persist
- * and downstream consumers use the most-recent {@code createdAt}. This matches
- * PRD §52 "同 source 内幂等（重跑不重复写）" — only the exact 4-tuple is
- * deduped, not the per-session judgment.
+ * (same outcome / surface / tool tuple) is handled by the repository's native
+ * {@code INSERT ... ON CONFLICT DO NOTHING} upsert — a returned id of
+ * {@code null} signals the row already existed and is silently dropped from
+ * the result list. A re-judgment with a different value (e.g. outcome changed
+ * from {@code failure} to {@code partial_success}) is intentionally NOT
+ * prevented; both rows persist and downstream consumers use the most-recent
+ * {@code createdAt}. This matches PRD §52 "同 source 内幂等（重跑不重复写）"
+ * — only the exact 4-tuple is deduped, not the per-session judgment.
+ *
+ * <p>V1 W2 fix note: the prior implementation used {@code saveAndFlush + catch
+ * DataIntegrityViolationException}, which on Postgres aborts the surrounding
+ * transaction on the first conflict and silently drops subsequent rows. The
+ * native upsert keeps the transaction healthy and the dedup signal per-row.
  */
 @Service
 public class SessionAnnotationLlmService {
@@ -78,18 +81,17 @@ public class SessionAnnotationLlmService {
                                       String topFailingTool) {
         validate(sessionId, outcome, suspectSurface, confidence, reasoning);
 
-        Instant now = Instant.now();
         List<Long> ids = new ArrayList<>(3);
         ids.addAll(tryWrite(sessionId,
                 SessionAnnotationConstants.TYPE_OUTCOME, outcome,
-                confidence, reasoning, now));
+                confidence, reasoning));
         ids.addAll(tryWrite(sessionId,
                 SessionAnnotationConstants.TYPE_SUSPECT_SURFACE, suspectSurface,
-                confidence, reasoning, now));
+                confidence, reasoning));
         if (topFailingTool != null && !topFailingTool.isBlank()) {
             ids.addAll(tryWrite(sessionId,
                     SessionAnnotationConstants.TYPE_TOP_FAILING_TOOL, topFailingTool.trim(),
-                    confidence, reasoning, now));
+                    confidence, reasoning));
         }
         log.info("[llm] sessionId={} outcome={} suspectSurface={} topFailingTool={} rowsWritten={}",
                 sessionId, outcome, suspectSurface,
@@ -135,34 +137,32 @@ public class SessionAnnotationLlmService {
     }
 
     /**
-     * Insert one row, catch the UNIQUE conflict, return the saved id (or empty
-     * on conflict). saveAndFlush so the constraint fires inside this method —
-     * otherwise the whole transaction would roll back at commit and we'd lose
-     * the per-row dedup signal.
+     * Insert one row via Postgres-native {@code ON CONFLICT DO NOTHING RETURNING id}.
+     * On UNIQUE conflict the repository returns {@code null} and we drop the row
+     * silently — same idempotency contract as the prior catch-DIVE flow, but
+     * without poisoning the surrounding transaction (see class-level Javadoc
+     * "V1 W2 fix note"). {@code created_at} is set server-side by the SQL
+     * {@code NOW()} default so the timestamp reflects the actual insert, which
+     * also keeps the 2-3 rows in this batch consistent with each other.
      */
     private List<Long> tryWrite(String sessionId,
                                 String annotationType,
                                 String annotationValue,
                                 BigDecimal confidence,
-                                String reasoning,
-                                Instant now) {
-        SessionAnnotationEntity row = new SessionAnnotationEntity();
-        row.setSessionId(sessionId);
-        row.setAnnotationType(annotationType);
-        row.setAnnotationValue(annotationValue);
-        row.setSource(SessionAnnotationEntity.SOURCE_LLM);
-        row.setConfidence(confidence);
-        row.setReasoning(reasoning);
-        row.setCreatedAt(now);
-        try {
-            SessionAnnotationEntity saved = sessionAnnotationRepository.saveAndFlush(row);
-            return List.of(saved.getId());
-        } catch (DataIntegrityViolationException dive) {
-            // exact-tuple re-run; idempotency contract holds.
+                                String reasoning) {
+        Long insertedId = sessionAnnotationRepository.upsertSkipDuplicate(
+                sessionId,
+                annotationType,
+                annotationValue,
+                SessionAnnotationEntity.SOURCE_LLM,
+                confidence,
+                reasoning);
+        if (insertedId == null) {
             log.debug("[llm] sessionId={} type={} value={} already llm-annotated — skipping",
                     sessionId, annotationType, annotationValue);
             return List.of();
         }
+        return List.of(insertedId);
     }
 
     /**

@@ -15,12 +15,13 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.dao.DataIntegrityViolationException;
 
+import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -80,25 +81,33 @@ class SessionAnnotationSignalServiceTest {
                 .thenReturn(List.of(trace));
         when(llmSpanRepository.findByTraceIdInOrderByStartedAtAsc(List.of("trace-1")))
                 .thenReturn(List.of(toolErr));
-        when(sessionAnnotationRepository.saveAndFlush(any(SessionAnnotationEntity.class)))
-                .thenAnswer(inv -> inv.getArgument(0));
+        AtomicLong idGen = new AtomicLong(500L);
+        when(sessionAnnotationRepository.upsertSkipDuplicate(
+                anyString(), anyString(), anyString(), anyString(), any(BigDecimal.class), any()))
+                .thenAnswer(inv -> idGen.getAndIncrement());
 
         int written = service.detectAndPersist(Duration.ofHours(1));
 
         assertThat(written).isEqualTo(2);  // tool_failure + has_tool_calls
-        ArgumentCaptor<SessionAnnotationEntity> cap = ArgumentCaptor.forClass(SessionAnnotationEntity.class);
-        verify(sessionAnnotationRepository, times(2)).saveAndFlush(cap.capture());
-        List<String> reasons = cap.getAllValues().stream().map(SessionAnnotationEntity::getAnnotationType).toList();
-        assertThat(reasons).containsExactly("tool_failure", "has_tool_calls");
+        ArgumentCaptor<String> typeCap = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> valueCap = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> sourceCap = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<BigDecimal> confCap = ArgumentCaptor.forClass(BigDecimal.class);
+        ArgumentCaptor<String> reasonCap = ArgumentCaptor.forClass(String.class);
+        verify(sessionAnnotationRepository, times(2)).upsertSkipDuplicate(
+                eq("sess-1"),
+                typeCap.capture(),
+                valueCap.capture(),
+                sourceCap.capture(),
+                confCap.capture(),
+                reasonCap.capture());
 
-        // Spot-check first row fields per the §4.3 contract.
-        SessionAnnotationEntity first = cap.getAllValues().get(0);
-        assertThat(first.getSessionId()).isEqualTo("sess-1");
-        assertThat(first.getAnnotationValue()).isEqualTo("true");
-        assertThat(first.getSource()).isEqualTo("signal");
-        assertThat(first.getConfidence().toPlainString()).isEqualTo("1.00");
-        assertThat(first.getReasoning()).isNull();
-        assertThat(first.getCreatedAt()).isNotNull();
+        assertThat(typeCap.getAllValues()).containsExactly("tool_failure", "has_tool_calls");
+        // §4.3 contract: value 'true', source 'signal', confidence 1.00, reasoning null.
+        assertThat(valueCap.getAllValues()).containsOnly("true");
+        assertThat(sourceCap.getAllValues()).containsOnly("signal");
+        assertThat(confCap.getValue().toPlainString()).isEqualTo("1.00");
+        assertThat(reasonCap.getValue()).isNull();
     }
 
     @Test
@@ -114,16 +123,19 @@ class SessionAnnotationSignalServiceTest {
                 .thenReturn(List.of(trace));
         when(llmSpanRepository.findByTraceIdInOrderByStartedAtAsc(List.of("trace-2")))
                 .thenReturn(List.of());
-        // Simulate "row already exists" — UNIQUE conflict.
-        when(sessionAnnotationRepository.saveAndFlush(any(SessionAnnotationEntity.class)))
-                .thenThrow(new DataIntegrityViolationException(
-                        "duplicate key value violates unique constraint \"uq_session_annotation\""));
+        // V1 W2 fix: native ON CONFLICT DO NOTHING returns null on UNIQUE conflict
+        // (no longer throws DataIntegrityViolationException, which would have aborted
+        // the surrounding PG transaction and silently dropped subsequent rows).
+        when(sessionAnnotationRepository.upsertSkipDuplicate(
+                anyString(), anyString(), anyString(), anyString(), any(BigDecimal.class), any()))
+                .thenReturn(null);
 
         int written = service.detectAndPersist(Duration.ofHours(1));
 
-        // The single agent_error row would have been written, but UNIQUE catches → 0 net writes.
+        // The single agent_error row would have been written, but UNIQUE skipped → 0 net writes.
         assertThat(written).isEqualTo(0);
-        verify(sessionAnnotationRepository, times(1)).saveAndFlush(any(SessionAnnotationEntity.class));
+        verify(sessionAnnotationRepository, times(1)).upsertSkipDuplicate(
+                anyString(), anyString(), anyString(), anyString(), any(BigDecimal.class), any());
     }
 
     @Test
@@ -141,7 +153,8 @@ class SessionAnnotationSignalServiceTest {
         // No traces / spans / annotations should be touched.
         verifyNoInteractions(llmTraceRepository);
         verifyNoInteractions(llmSpanRepository);
-        verify(sessionAnnotationRepository, never()).saveAndFlush(any(SessionAnnotationEntity.class));
+        verify(sessionAnnotationRepository, never()).upsertSkipDuplicate(
+                anyString(), anyString(), anyString(), anyString(), any(BigDecimal.class), any());
     }
 
     @Test

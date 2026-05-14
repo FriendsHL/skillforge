@@ -11,7 +11,6 @@ import com.skillforge.server.repository.SessionRepository;
 import com.skillforge.server.service.TraceScenarioImportService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -47,9 +46,14 @@ import java.util.stream.Collectors;
  *
  * <p>Idempotency: the {@code uq_session_annotation} UNIQUE constraint (see
  * {@link SessionAnnotationEntity} {@code @Table} declaration) prevents duplicate
- * rows on re-run; we catch {@link DataIntegrityViolationException} per-row and
- * carry on. This keeps the hourly cron safe even if it re-runs a window that
- * already produced annotations (e.g. after a crash / restart).
+ * rows on re-run; we go through
+ * {@link SessionAnnotationRepository#upsertSkipDuplicate} which uses Postgres'
+ * native {@code ON CONFLICT DO NOTHING RETURNING id} — conflicts return
+ * {@code null} and are silently skipped without aborting the surrounding
+ * transaction (V1 W2 fix: the prior {@code saveAndFlush + catch DIVE} loop
+ * silently lost subsequent rows once PG marked the tx aborted). This keeps
+ * the hourly cron safe even if it re-runs a window that already produced
+ * annotations (e.g. after a crash / restart).
  *
  * <p>Window semantics: {@code window} is interpreted as "sessions completed
  * within the last {@code window} duration". Default 1h matches the V75 hourly
@@ -233,22 +237,21 @@ public class SessionAnnotationSignalService {
         }
 
         int written = 0;
-        Instant now = Instant.now();
+        BigDecimal fullConfidence = new BigDecimal("1.00");
         for (String reason : reasons) {
-            SessionAnnotationEntity row = new SessionAnnotationEntity();
-            row.setSessionId(sessionId);
-            row.setAnnotationType(reason);
-            row.setAnnotationValue("true");
-            row.setSource(SessionAnnotationEntity.SOURCE_SIGNAL);
-            row.setConfidence(new BigDecimal("1.00"));
-            row.setReasoning(null);
-            row.setCreatedAt(now);
-            try {
-                sessionAnnotationRepository.saveAndFlush(row);
+            // V1 W2 fix: use native ON CONFLICT DO NOTHING to keep the per-row
+            // dedup signal without aborting the outer transaction on conflict.
+            // null = already-existed (UNIQUE skip); non-null = newly inserted id.
+            Long insertedId = sessionAnnotationRepository.upsertSkipDuplicate(
+                    sessionId,
+                    reason,
+                    "true",
+                    SessionAnnotationEntity.SOURCE_SIGNAL,
+                    fullConfidence,
+                    null);
+            if (insertedId != null) {
                 written++;
-            } catch (DataIntegrityViolationException dive) {
-                // UNIQUE constraint hit — already annotated this (session, type, value, source)
-                // by a prior run. That's the idempotency guarantee; counter unchanged.
+            } else {
                 log.debug("[signal] sessionId={} reason={} already annotated — skipping",
                         sessionId, reason);
             }

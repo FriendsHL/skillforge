@@ -1,6 +1,5 @@
 package com.skillforge.server.sessionannotation;
 
-import com.skillforge.server.entity.SessionAnnotationEntity;
 import com.skillforge.server.repository.SessionAnnotationRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -9,7 +8,6 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.dao.DataIntegrityViolationException;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -18,6 +16,8 @@ import java.util.concurrent.atomic.AtomicLong;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -57,12 +57,9 @@ class SessionAnnotationLlmServiceTest {
     @DisplayName("writes outcome + suspect_surface rows in the minimum case")
     void annotateSession_writesOutcomeAndSuspectSurfaceRows_minimumCase() {
         AtomicLong idGen = new AtomicLong(100L);
-        when(sessionAnnotationRepository.saveAndFlush(any(SessionAnnotationEntity.class)))
-                .thenAnswer(inv -> {
-                    SessionAnnotationEntity e = inv.getArgument(0);
-                    e.setId(idGen.getAndIncrement());
-                    return e;
-                });
+        when(sessionAnnotationRepository.upsertSkipDuplicate(
+                anyString(), anyString(), anyString(), anyString(), any(BigDecimal.class), any()))
+                .thenAnswer(inv -> idGen.getAndIncrement());
 
         List<Long> ids = service.annotateSession(
                 "sess-A",
@@ -74,33 +71,28 @@ class SessionAnnotationLlmServiceTest {
 
         assertThat(ids).hasSize(2).containsExactly(100L, 101L);
 
-        ArgumentCaptor<SessionAnnotationEntity> cap = ArgumentCaptor.forClass(SessionAnnotationEntity.class);
-        verify(sessionAnnotationRepository, times(2)).saveAndFlush(cap.capture());
+        ArgumentCaptor<String> typeCap = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> valueCap = ArgumentCaptor.forClass(String.class);
+        verify(sessionAnnotationRepository, times(2)).upsertSkipDuplicate(
+                eq("sess-A"),
+                typeCap.capture(),
+                valueCap.capture(),
+                eq("llm"),
+                eq(new BigDecimal("0.85")),
+                eq("FileWrite returned non-zero status"));
 
-        SessionAnnotationEntity outcome = cap.getAllValues().get(0);
-        assertThat(outcome.getSessionId()).isEqualTo("sess-A");
-        assertThat(outcome.getAnnotationType()).isEqualTo("outcome");
-        assertThat(outcome.getAnnotationValue()).isEqualTo("failure");
-        assertThat(outcome.getSource()).isEqualTo("llm");
-        assertThat(outcome.getConfidence()).isEqualByComparingTo("0.85");
-        assertThat(outcome.getReasoning()).isEqualTo("FileWrite returned non-zero status");
-        assertThat(outcome.getCreatedAt()).isNotNull();
-
-        SessionAnnotationEntity surface = cap.getAllValues().get(1);
-        assertThat(surface.getAnnotationType()).isEqualTo("suspect_surface");
-        assertThat(surface.getAnnotationValue()).isEqualTo("skill");
+        // First call = outcome row, second = suspect_surface row (order preserved).
+        assertThat(typeCap.getAllValues()).containsExactly("outcome", "suspect_surface");
+        assertThat(valueCap.getAllValues()).containsExactly("failure", "skill");
     }
 
     @Test
     @DisplayName("writes the top_failing_tool row when supplied")
     void annotateSession_writesTopFailingToolRow_whenProvided() {
         AtomicLong idGen = new AtomicLong(200L);
-        when(sessionAnnotationRepository.saveAndFlush(any(SessionAnnotationEntity.class)))
-                .thenAnswer(inv -> {
-                    SessionAnnotationEntity e = inv.getArgument(0);
-                    e.setId(idGen.getAndIncrement());
-                    return e;
-                });
+        when(sessionAnnotationRepository.upsertSkipDuplicate(
+                anyString(), anyString(), anyString(), anyString(), any(BigDecimal.class), any()))
+                .thenAnswer(inv -> idGen.getAndIncrement());
 
         List<Long> ids = service.annotateSession(
                 "sess-B",
@@ -111,24 +103,24 @@ class SessionAnnotationLlmServiceTest {
                 "BashTool");
 
         assertThat(ids).hasSize(3).containsExactly(200L, 201L, 202L);
-        ArgumentCaptor<SessionAnnotationEntity> cap = ArgumentCaptor.forClass(SessionAnnotationEntity.class);
-        verify(sessionAnnotationRepository, times(3)).saveAndFlush(cap.capture());
-
-        SessionAnnotationEntity tool = cap.getAllValues().get(2);
-        assertThat(tool.getAnnotationType()).isEqualTo("top_failing_tool");
-        assertThat(tool.getAnnotationValue()).isEqualTo("BashTool");
-        assertThat(tool.getSource()).isEqualTo("llm");
+        // 3rd call must be the top_failing_tool row.
+        verify(sessionAnnotationRepository).upsertSkipDuplicate(
+                eq("sess-B"),
+                eq("top_failing_tool"),
+                eq("BashTool"),
+                eq("llm"),
+                eq(new BigDecimal("0.60")),
+                eq("agent recovered after one retry"));
+        verify(sessionAnnotationRepository, times(3)).upsertSkipDuplicate(
+                anyString(), anyString(), anyString(), anyString(), any(BigDecimal.class), any());
     }
 
     @Test
     @DisplayName("omits the top_failing_tool row when null or blank")
     void annotateSession_omitsTopFailingToolRow_whenNullOrBlank() {
-        when(sessionAnnotationRepository.saveAndFlush(any(SessionAnnotationEntity.class)))
-                .thenAnswer(inv -> {
-                    SessionAnnotationEntity e = inv.getArgument(0);
-                    e.setId(1L);
-                    return e;
-                });
+        when(sessionAnnotationRepository.upsertSkipDuplicate(
+                anyString(), anyString(), anyString(), anyString(), any(BigDecimal.class), any()))
+                .thenReturn(1L);
 
         // null
         List<Long> idsNull = service.annotateSession(
@@ -140,8 +132,9 @@ class SessionAnnotationLlmServiceTest {
                 "sess-N", "success", "unclear", BigDecimal.ONE, "all good", "   ");
         assertThat(idsBlank).hasSize(2);
 
-        // 2 calls × 2 rows = 4 saves total; the third row was never attempted
-        verify(sessionAnnotationRepository, times(4)).saveAndFlush(any(SessionAnnotationEntity.class));
+        // 2 calls × 2 rows = 4 upserts total; the third row was never attempted
+        verify(sessionAnnotationRepository, times(4)).upsertSkipDuplicate(
+                anyString(), anyString(), anyString(), anyString(), any(BigDecimal.class), any());
     }
 
     @Test
@@ -151,7 +144,8 @@ class SessionAnnotationLlmServiceTest {
                 "sess-X", "kinda_ok", "skill", BigDecimal.ONE, "...", null))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("outcome");
-        verify(sessionAnnotationRepository, never()).saveAndFlush(any(SessionAnnotationEntity.class));
+        verify(sessionAnnotationRepository, never()).upsertSkipDuplicate(
+                anyString(), anyString(), anyString(), anyString(), any(BigDecimal.class), any());
     }
 
     @Test
@@ -161,7 +155,8 @@ class SessionAnnotationLlmServiceTest {
                 "sess-X", "failure", "skill_v2", BigDecimal.ONE, "...", null))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("suspect_surface");
-        verify(sessionAnnotationRepository, never()).saveAndFlush(any(SessionAnnotationEntity.class));
+        verify(sessionAnnotationRepository, never()).upsertSkipDuplicate(
+                anyString(), anyString(), anyString(), anyString(), any(BigDecimal.class), any());
     }
 
     @Test
@@ -179,7 +174,8 @@ class SessionAnnotationLlmServiceTest {
                 "sess-X", "failure", "skill", null, "...", null))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("confidence");
-        verify(sessionAnnotationRepository, never()).saveAndFlush(any(SessionAnnotationEntity.class));
+        verify(sessionAnnotationRepository, never()).upsertSkipDuplicate(
+                anyString(), anyString(), anyString(), anyString(), any(BigDecimal.class), any());
     }
 
     @Test
@@ -197,15 +193,18 @@ class SessionAnnotationLlmServiceTest {
                 "sess-X", "failure", "skill", BigDecimal.ONE, "", null))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("reasoning");
-        verify(sessionAnnotationRepository, never()).saveAndFlush(any(SessionAnnotationEntity.class));
+        verify(sessionAnnotationRepository, never()).upsertSkipDuplicate(
+                anyString(), anyString(), anyString(), anyString(), any(BigDecimal.class), any());
     }
 
     @Test
-    @DisplayName("idempotent on identical re-run — UNIQUE conflict caught, ids omitted")
+    @DisplayName("idempotent on identical re-run — ON CONFLICT returns null, ids omitted")
     void annotateSession_isIdempotent_onIdenticalRerun() {
-        when(sessionAnnotationRepository.saveAndFlush(any(SessionAnnotationEntity.class)))
-                .thenThrow(new DataIntegrityViolationException(
-                        "duplicate key value violates unique constraint \"uq_session_annotation\""));
+        // V1 W2 fix: repository now returns null on UNIQUE conflict (native
+        // ON CONFLICT DO NOTHING RETURNING id) instead of throwing DIVE.
+        when(sessionAnnotationRepository.upsertSkipDuplicate(
+                anyString(), anyString(), anyString(), anyString(), any(BigDecimal.class), any()))
+                .thenReturn(null);
 
         List<Long> ids = service.annotateSession(
                 "sess-DUP", "failure", "skill",
@@ -213,6 +212,7 @@ class SessionAnnotationLlmServiceTest {
 
         // All 3 rows conflicted on UNIQUE — no ids returned, no throw to caller.
         assertThat(ids).isEmpty();
-        verify(sessionAnnotationRepository, times(3)).saveAndFlush(any(SessionAnnotationEntity.class));
+        verify(sessionAnnotationRepository, times(3)).upsertSkipDuplicate(
+                anyString(), anyString(), anyString(), anyString(), any(BigDecimal.class), any());
     }
 }

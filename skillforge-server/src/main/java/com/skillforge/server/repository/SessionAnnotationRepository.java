@@ -3,9 +3,11 @@ package com.skillforge.server.repository;
 import com.skillforge.server.entity.SessionAnnotationEntity;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
@@ -72,4 +74,50 @@ public interface SessionAnnotationRepository extends JpaRepository<SessionAnnota
             WHERE a.createdAt >= :since
             """)
     List<String> findDistinctSessionIdsCreatedSince(@Param("since") Instant since);
+
+    /**
+     * V1 W2 fix (Postgres aborted-tx bug): native PG upsert that inserts a new
+     * row or skips silently on UNIQUE conflict. Returns the generated id of the
+     * newly-inserted row, or {@code null} when the UNIQUE constraint
+     * {@code uq_session_annotation} matched an existing row (caller treats that
+     * as a no-op duplicate).
+     *
+     * <p><b>Why native</b>: the prior implementation called
+     * {@code saveAndFlush} inside a {@code try/catch DataIntegrityViolationException}
+     * loop. On Postgres, the first UNIQUE conflict aborts the entire transaction
+     * — subsequent {@code saveAndFlush} calls throw {@link org.springframework.orm.jpa.JpaSystemException}
+     * ("current transaction is aborted, commands ignored until end of transaction
+     * block"), not {@code DataIntegrityViolationException}, so the catch misses
+     * them and the caller's per-session {@code catch (Exception)} silently
+     * swallows the remainder of the batch. {@code ON CONFLICT DO NOTHING} is
+     * a single statement that never marks the transaction aborted, restoring
+     * the intended per-row idempotency.
+     *
+     * <p>H2 (unit-test dialect) does not support the {@code ON CONFLICT} clause;
+     * the IT suite ({@code SessionAnnotationPersistenceIT}) covers real-PG
+     * behaviour, while service unit tests mock this method.
+     *
+     * @return the generated row id, or {@code null} if the row already existed
+     *         (UNIQUE conflict on {@code uq_session_annotation}).
+     */
+    @Modifying
+    @Query(value = """
+            INSERT INTO t_session_annotation (
+                session_id, annotation_type, annotation_value, source,
+                confidence, reasoning, created_at
+            ) VALUES (
+                :sessionId, :annotationType, :annotationValue, :source,
+                :confidence, :reasoning, NOW()
+            )
+            ON CONFLICT ON CONSTRAINT uq_session_annotation
+            DO NOTHING
+            RETURNING id
+            """, nativeQuery = true)
+    Long upsertSkipDuplicate(
+            @Param("sessionId") String sessionId,
+            @Param("annotationType") String annotationType,
+            @Param("annotationValue") String annotationValue,
+            @Param("source") String source,
+            @Param("confidence") BigDecimal confidence,
+            @Param("reasoning") String reasoning);
 }
