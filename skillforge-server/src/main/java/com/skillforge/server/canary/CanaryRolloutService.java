@@ -11,6 +11,7 @@ import com.skillforge.server.repository.SkillRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
@@ -326,10 +327,21 @@ public class CanaryRolloutService {
      * (empty snapshot list → candidateSamples=0 → returns false). Safe to call
      * speculatively from Phase 1.3 dashboards.
      *
+     * <p><b>Phase 1.4 r1 W2 — REQUIRES_NEW</b>: {@link CanaryMetricsService#recompute}
+     * is itself {@code @Transactional(REQUIRED)} and iterates every active
+     * canary calling this method. With the default {@code REQUIRED} propagation,
+     * a {@code rollback()} side-effect that throws any {@link RuntimeException}
+     * would mark the outer transaction as rollback-only — Spring's
+     * {@code UnexpectedRollbackException} on commit would then nullify every
+     * snapshot written that hour. {@code REQUIRES_NEW} suspends the outer
+     * transaction so this method's success or failure cannot poison the
+     * surrounding {@code recompute} tick.
+     *
      * @return {@code true} if rollback was triggered; {@code false} for "stage
      *         not canary" / "not enough samples" / "control rate is zero
      *         (cannot compute ratio)" / "ratio under threshold".
      */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public boolean autoRollbackCheck(Long canaryId) {
         CanaryRolloutEntity c = canaryRepository.findById(canaryId).orElse(null);
         if (c == null || !CanaryRolloutEntity.STAGE_CANARY.equals(c.getRolloutStage())) {

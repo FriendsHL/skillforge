@@ -371,13 +371,43 @@ public class CanaryAllocator {
 2. 对每个 canary：
    - 查 t_session_annotation 过去 window 内 (annotationType IN ('outcome','canary_group')) 关联 session
    - join canary_group annotation → 分组 control / candidate
-   - join outcome annotation → 计算 success/failure count
+   - join outcome annotation → 计算 success/failure count（**outcome 4 值映射见下方决策**）
    - join eval task item（如有）→ 4 维分数平均
    - 写 t_canary_metric_snapshot bucket=hour boundary（UNIQUE 防重）
 3. 触发 auto-rollback 检查：
    - 取最近 N 个 snapshot（or rolling window）
    - 累计 candidate_sample_size >= 50 且 candidate_fail_rate / control_fail_rate > 1.5 → trigger
    - `CanaryRolloutService.rollback(canaryId, reason='auto')` → percentage=0 + stage=rolled_back + 写 t_optimization_event（V3 才有，V2 暂存 dashboard 通知）
+
+### 6.1 outcome 4 值映射（Phase 1.4 review 后 ratify，2026-05-15）
+
+session-annotator agent 给每个 session 打的 `outcome` 标签是 `success / partial_success / failure / cancelled` 4 选 1，metric 聚合时映射：
+
+| outcome 标签值 | 映射到 metric 维度 |
+|---|---|
+| `success` | `*_success_count`（计成功）|
+| `partial_success` | `*_success_count`（**算成功**，per Phase 1.4 BE-Dev brief 决定）|
+| `failure` | `*_failure_count`（计失败）|
+| `cancelled` | `*_failure_count`（**算失败**，per Phase 1.4 BE-Dev brief 决定）|
+
+**所有 4 类都计入 `*_sample_size`**（不丢任何 session）。
+
+**为何 partial_success → success**：候选 skill 部分完成用户请求 > baseline 完全失败时，candidate 应算改进。
+
+**为何 cancelled → failure**：cancelled 包含 "用户中断"（候选体验差用户主动取消）+ "系统超时"（候选效率退化）；归为失败让 auto-rollback 能捕获这类退化。
+
+**已知风险**：基础设施 infra cancelled（如网络故障、上游 LLM 超时）会污染 fail_rate_ratio。V2 dogfood 阶段接受此简化；V3 attribution agent 接入后由 attribution 区分 infra vs skill-caused cancelled，前者不计入。
+
+### 6.2 empty-window snapshot 行为（Phase 1.4 review 后 ratify，2026-05-15）
+
+`recompute` 对每个 active canary 都写一行 `t_canary_metric_snapshot`（包括窗口内 0 outcome 样本的情况，写 0/0/0/0 行）。
+
+**为什么不按原稿"无数据 → 不写"**：
+- Dashboard FE 渲染时间序列图时，需要连续 hour bucket（含 0 sample 段）才不会让用户误以为系统挂了
+- 空 row 占用磁盘可忽略（active canary 数 × 24 row/day × 16 column ≈ KB/day）
+- ON CONFLICT 仍保幂等
+
+**已知 trade-off**：dashboard 看到 long stretch of 0 sample 时应 surface 警告（"canary 流量太低，结果不可信"）。Phase 1.5 FE 实现此 UX。
 
 ## 7. Dashboard
 
@@ -463,3 +493,4 @@ public class CanaryAllocator {
 
 - 2026-05-14：claude 初稿（ratified，6 ratify 决策按 plan.md §V2 推荐全部锁定）
 - 2026-05-14：Phase 1.0 BE-Dev 校对发现 spawn skill 实际 hook 点是 `SessionSkillResolver`（server 层 / skill name-based）不是 AgentLoopEngine（engine 层 / skill id-based）—— §0.3 + §1 + §2.1 + §5 全部按 name 抽象修正；t_canary_rollout 字段 `*_version_id BIGINT` → `*_skill_name VARCHAR(64)`；AgentLoopEngine 改动从原计划 ≤30 行降到 ≤3 行（Iron Law 几乎不触）
+- 2026-05-15：Phase 1.4 review 后锁 2 决策（reviewer 误读两次的歧义点）—— §6.1 outcome 4 值映射明确（partial_success→success、cancelled→failure，避免下一轮 reviewer 复议）+ §6.2 empty-window snapshot 写 0/0/0 行（UX 需要 continuous hour bucket，磁盘可忽略，FE 应 surface low-sample 警告）；W2 tx 隔离修法走 `@Transactional(REQUIRES_NEW)` on `autoRollbackCheck`

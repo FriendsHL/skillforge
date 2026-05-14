@@ -153,4 +153,24 @@ public interface SessionAnnotationRepository extends JpaRepository<SessionAnnota
     Optional<String> findCanaryGroup(
             @Param("sessionId") String sessionId,
             @Param("surfaceType") String surfaceType);
+
+    /**
+     * SKILL-CANARY-ROLLOUT V2 Phase 1.4: window-scoped fetch for one annotation
+     * type, used by {@code CanaryMetricsService.recompute} to pull every
+     * {@code annotation_type='outcome'} row written by the V1 session-annotator
+     * within the last hour bucket.
+     *
+     * <p>Ordering is newest-first by {@code created_at} so callers can early-cut
+     * a stream when needed; volumes per hour are bounded by the V1 dogfood
+     * session count, so no pagination needed.
+     */
+    @Query("""
+            SELECT a FROM SessionAnnotationEntity a
+            WHERE a.annotationType = :annotationType
+              AND a.createdAt >= :since
+            ORDER BY a.createdAt DESC, a.id DESC
+            """)
+    List<SessionAnnotationEntity> findByTypeCreatedSince(
+            @Param("annotationType") String annotationType,
+            @Param("since") Instant since);
 }

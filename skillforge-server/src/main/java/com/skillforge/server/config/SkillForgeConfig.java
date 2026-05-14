@@ -761,6 +761,24 @@ public class SkillForgeConfig {
         return tool;
     }
 
+    /**
+     * SKILL-CANARY-ROLLOUT V2 Phase 1.4 — sole step of the {@code metrics-collector}
+     * agent pipeline. The V79-seeded {@code ScheduledTask} fires this agent
+     * hourly; the agent invokes {@code RecomputeMetrics} with default
+     * {@code window_hours=1}. Service is auto-discovered (constructor injection).
+     */
+    @Bean
+    public com.skillforge.server.tool.canary.RecomputeMetricsTool recomputeMetricsTool(
+            com.skillforge.server.canary.CanaryMetricsService metricsService,
+            ObjectMapper objectMapper,
+            SkillRegistry skillRegistry) {
+        com.skillforge.server.tool.canary.RecomputeMetricsTool tool =
+                new com.skillforge.server.tool.canary.RecomputeMetricsTool(metricsService, objectMapper);
+        skillRegistry.registerTool(tool);
+        log.info("Registered RecomputeMetricsTool into SkillRegistry");
+        return tool;
+    }
+
     @Bean
     public SkillPackageLoader skillPackageLoader() {
         return new SkillPackageLoader();
