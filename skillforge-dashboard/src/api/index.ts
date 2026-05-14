@@ -144,11 +144,14 @@ export const sendMessage = (sessionId: string, data: { message: string; userId: 
 export interface ChatAttachmentResponse {
   id: string;
   sessionId: string;
-  kind: 'image' | 'pdf';
+  /** Wave 3 — adds word / excel / csv kinds (BE emits lowercase). */
+  kind: 'image' | 'pdf' | 'word' | 'excel' | 'csv';
   mimeType: string;
   filename: string;
   sizeBytes: number;
   pageCount?: number;
+  /** Excel only — sheet count populated by BE parser. */
+  sheetCount?: number;
   status: string;
 }
 

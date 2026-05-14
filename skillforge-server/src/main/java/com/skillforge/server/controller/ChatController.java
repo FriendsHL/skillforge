@@ -231,12 +231,22 @@ public class ChatController {
             return ResponseEntity.status(check.getStatusCode()).build();
         }
         SessionEntity session = check.getBody();
-        ResponseEntity<Map<String, Object>> gate = requireVisionCapableModel(session);
-        if (gate != null) {
-            return gate;
-        }
         if (file == null || file.isEmpty()) {
             return ResponseEntity.badRequest().body(Map.of("error", "file is required"));
+        }
+        // Wave 3 WORD-EXCEL: gate vision-capability ONLY for kinds that actually
+        // need vision (image / pdf). word / excel / csv are text-extraction
+        // paths and work fine on non-vision-capable agents. previewKind reads
+        // only the leading bytes — no DB / disk side effects — so it's safe to
+        // run before the upload-side magic-byte validation in upload(). When
+        // previewKind returns null (unrecognized), fall through to upload() and
+        // let it produce the canonical "Unsupported or unrecognized" rejection.
+        String previewKind = chatAttachmentService.previewKind(file);
+        if (previewKind == null || "image".equals(previewKind) || "pdf".equals(previewKind)) {
+            ResponseEntity<Map<String, Object>> gate = requireVisionCapableModel(session);
+            if (gate != null) {
+                return gate;
+            }
         }
         try {
             var attachment = chatAttachmentService.upload(sessionId, userId, file);

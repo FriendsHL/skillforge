@@ -32,7 +32,7 @@ class ExcelDocumentParserTest {
     private static Path quotedCsv;
     private static Path hugeXlsx;
 
-    private final ExcelDocumentParser parser = new ExcelDocumentParser();
+    // Wave 3 r2: ExcelDocumentParser is now a static utility — call methods directly.
 
     @BeforeAll
     static void buildFixtures() throws Exception {
@@ -117,7 +117,7 @@ class ExcelDocumentParserTest {
     @Test
     @DisplayName("parseToMarkdown(two-sheet.xlsx) renders both sheets with headers + tables")
     void parseToMarkdown_xlsx_rendersAllSheets() throws Exception {
-        String md = parser.parseToMarkdown(twoSheetXlsx);
+        String md = ExcelDocumentParser.parseToMarkdown(twoSheetXlsx);
         assertThat(md).contains("## Sheet: Metrics");
         assertThat(md).contains("| name | score | active |");
         assertThat(md).contains("|---|---|---|");
@@ -137,7 +137,7 @@ class ExcelDocumentParserTest {
     @Test
     @DisplayName("parseToMarkdown rejects sheet exceeding row cap")
     void parseToMarkdown_tooManyRows_throws() {
-        assertThatThrownBy(() -> parser.parseToMarkdown(tooManyRowsXlsx))
+        assertThatThrownBy(() -> ExcelDocumentParser.parseToMarkdown(tooManyRowsXlsx))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageStartingWith("EXCEL_SHEET_TOO_LARGE:")
                 .hasMessageContaining("Big");
@@ -146,7 +146,7 @@ class ExcelDocumentParserTest {
     @Test
     @DisplayName("parseToMarkdown(simple.csv) renders header + body table")
     void parseToMarkdown_csv_rendersTable() throws Exception {
-        String md = parser.parseToMarkdown(csvFile);
+        String md = ExcelDocumentParser.parseToMarkdown(csvFile);
         assertThat(md).contains("## Sheet: simple.csv");
         assertThat(md).contains("| name | score | active |");
         assertThat(md).contains("| alice | 99 | true |");
@@ -156,7 +156,7 @@ class ExcelDocumentParserTest {
     @Test
     @DisplayName("parseToMarkdown(quoted.csv) handles RFC 4180 quoted fields with comma and escaped quote")
     void parseToMarkdown_csv_quoted_handlesRfc4180() throws Exception {
-        String md = parser.parseToMarkdown(quotedCsv);
+        String md = ExcelDocumentParser.parseToMarkdown(quotedCsv);
         // The comma inside quotes must NOT split the field
         assertThat(md).contains("| Hello, world | He said \"hi\" |");
         assertThat(md).contains("| plain | trailing |");
@@ -174,7 +174,7 @@ class ExcelDocumentParserTest {
     @Test
     @DisplayName("parseToMarkdown truncates xlsx output at MAX_OUTPUT_CHARS with marker")
     void parseToMarkdown_huge_truncates() throws Exception {
-        String md = parser.parseToMarkdown(hugeXlsx);
+        String md = ExcelDocumentParser.parseToMarkdown(hugeXlsx);
         assertThat(md).endsWith(ExcelDocumentParser.TRUNCATION_MARKER);
         int expected = ExcelDocumentParser.MAX_OUTPUT_CHARS
                 + ExcelDocumentParser.TRUNCATION_MARKER.length();
@@ -185,7 +185,7 @@ class ExcelDocumentParserTest {
     @DisplayName("parseToMarkdown(missing.xlsx) throws EXCEL_PARSE_FAILED")
     void parseToMarkdown_missingFile_throws() {
         Path nope = tmp.resolve("does-not-exist.xlsx");
-        assertThatThrownBy(() -> parser.parseToMarkdown(nope))
+        assertThatThrownBy(() -> ExcelDocumentParser.parseToMarkdown(nope))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageStartingWith("EXCEL_PARSE_FAILED:");
     }
@@ -195,9 +195,26 @@ class ExcelDocumentParserTest {
     void parseToMarkdown_unsupportedExtension_throws() throws Exception {
         Path bogus = tmp.resolve("data.tsv");
         Files.writeString(bogus, "a\tb\n");
-        assertThatThrownBy(() -> parser.parseToMarkdown(bogus))
+        assertThatThrownBy(() -> ExcelDocumentParser.parseToMarkdown(bogus))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("EXCEL_PARSE_FAILED")
                 .hasMessageContaining("unsupported extension");
+    }
+
+    @Test
+    @DisplayName("parseToMarkdownWithMetadata exposes sheet_count from a two-sheet workbook")
+    void parseToMarkdownWithMetadata_xlsx_capturesSheetCount() throws Exception {
+        ExcelDocumentParser.ExcelParseResult result = ExcelDocumentParser.parseToMarkdownWithMetadata(twoSheetXlsx);
+        assertThat(result.sheetCount()).isEqualTo(2);
+        assertThat(result.markdown()).contains("## Sheet: Metrics");
+        assertThat(result.markdown()).contains("## Sheet: Totals");
+    }
+
+    @Test
+    @DisplayName("parseToMarkdownWithMetadata returns sheetCount=1 for CSV files")
+    void parseToMarkdownWithMetadata_csv_singleSheet() throws Exception {
+        ExcelDocumentParser.ExcelParseResult result = ExcelDocumentParser.parseToMarkdownWithMetadata(csvFile);
+        assertThat(result.sheetCount()).isEqualTo(1);
+        assertThat(result.markdown()).contains("## Sheet: simple.csv");
     }
 }

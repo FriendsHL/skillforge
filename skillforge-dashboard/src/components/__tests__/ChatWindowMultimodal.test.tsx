@@ -241,6 +241,70 @@ describe('ChatInput — MULTIMODAL-MVP attach button gate', () => {
     });
   });
 
+  it('Wave 3 — accepts .docx file, rejects unsupported (.mp3) type', async () => {
+    const handlers: Handlers = {
+      onSend: vi.fn(),
+      onOpenAgentConfig: vi.fn(),
+    };
+    render(
+      <ChatInput
+        onSend={handlers.onSend}
+        multimodalEnabled={true}
+        onOpenAgentConfig={handlers.onOpenAgentConfig}
+        sessionResetKey="sess-A"
+      />,
+    );
+    const fileInput = screen.getByTestId('chat-attach-file-input') as HTMLInputElement;
+    // .docx: canonical OpenXML word mime
+    const docx = new File([new Uint8Array(1024)], 'report.docx', {
+      type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    });
+    // .mp3: unsupported, should be filtered out
+    const mp3 = new File([new Uint8Array(2048)], 'song.mp3', { type: 'audio/mpeg' });
+    await act(async () => {
+      fireEvent.change(fileInput, { target: { files: [docx, mp3] } });
+    });
+    // Only the docx chip should appear; mp3 dropped silently with warning.
+    const chips = await screen.findAllByTestId('attachment-chip');
+    expect(chips).toHaveLength(1);
+    expect(chips[0].textContent ?? '').toMatch(/DOC/);
+    expect(chips[0].textContent ?? '').toMatch(/report\.docx/);
+  });
+
+  it('Wave 3 — accepts .xlsx and .csv files (including ms-excel-mime csv fallback)', async () => {
+    const handlers: Handlers = {
+      onSend: vi.fn(),
+      onOpenAgentConfig: vi.fn(),
+    };
+    render(
+      <ChatInput
+        onSend={handlers.onSend}
+        multimodalEnabled={true}
+        onOpenAgentConfig={handlers.onOpenAgentConfig}
+        sessionResetKey="sess-A"
+      />,
+    );
+    const fileInput = screen.getByTestId('chat-attach-file-input') as HTMLInputElement;
+    const xlsx = new File([new Uint8Array(2048)], 'data.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    const csv = new File([new Uint8Array(512)], 'data.csv', { type: 'text/csv' });
+    // Windows fallback: some browsers report empty mime for .csv — must still
+    // pass via filename extension fallback.
+    const csvNoMime = new File([new Uint8Array(256)], 'legacy.csv', { type: '' });
+    await act(async () => {
+      fireEvent.change(fileInput, { target: { files: [xlsx, csv, csvNoMime] } });
+    });
+    const chips = await screen.findAllByTestId('attachment-chip');
+    expect(chips).toHaveLength(3);
+    expect(chips[0].textContent ?? '').toMatch(/XLS/);
+    expect(chips[0].textContent ?? '').toMatch(/data\.xlsx/);
+    expect(chips[1].textContent ?? '').toMatch(/CSV/);
+    expect(chips[1].textContent ?? '').toMatch(/data\.csv/);
+    expect(chips[2].textContent ?? '').toMatch(/CSV/);
+    expect(chips[2].textContent ?? '').toMatch(/legacy\.csv/);
+  });
+
   it('Send is disabled when files are queued but multimodal becomes unavailable', async () => {
     const handlers: Handlers = {
       onSend: vi.fn(),

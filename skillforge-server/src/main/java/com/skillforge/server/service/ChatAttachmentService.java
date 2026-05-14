@@ -5,8 +5,10 @@ import com.skillforge.core.model.ContentBlock;
 import com.skillforge.core.model.Message;
 import com.skillforge.server.entity.ChatAttachmentEntity;
 import com.skillforge.server.repository.ChatAttachmentRepository;
+import com.skillforge.server.service.document.ExcelDocumentParser;
 import com.skillforge.server.service.document.ImageScaler;
 import com.skillforge.server.service.document.PdfPageImageRenderer;
+import com.skillforge.server.service.document.WordDocumentParser;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.text.PDFTextStripper;
@@ -27,6 +29,7 @@ import java.util.Base64;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -40,6 +43,10 @@ public class ChatAttachmentService implements MessageMaterializer {
     private static final long MAX_IMAGE_BYTES = 10L * 1024 * 1024;
     private static final long MAX_PDF_BYTES = 25L * 1024 * 1024;
     private static final int MAX_PDF_TEXT_CHARS = 20_000;
+    /** Wave 3 WORD-EXCEL: per-upload size caps for text-extraction file types. */
+    private static final long MAX_WORD_BYTES = 20L * 1024 * 1024;
+    private static final long MAX_EXCEL_BYTES = 20L * 1024 * 1024;
+    private static final long MAX_CSV_BYTES = 10L * 1024 * 1024;
     /**
      * V73 — MULTIMODAL-OBSERVABILITY-COLUMNS. Cap stored {@code error_message}
      * so a misbehaving stack trace can't blow up the row. UI displays a "see
@@ -84,6 +91,32 @@ public class ChatAttachmentService implements MessageMaterializer {
      */
     public static final String MODE_PDF_PAGE_IMAGE = "PDF_PAGE_IMAGE";
 
+    // ─── Wave 3 WORD-EXCEL processing_mode constants ───
+    /** Word document (.doc / .docx) was/will be parsed to markdown text. */
+    public static final String MODE_WORD_TEXT = "WORD_TEXT";
+    /** Excel workbook (.xlsx / .xls) was/will be parsed to markdown tables. */
+    public static final String MODE_EXCEL_TEXT = "EXCEL_TEXT";
+    /** CSV file was/will be parsed to a single markdown table. */
+    public static final String MODE_CSV_TEXT = "CSV_TEXT";
+    /** Word parser threw at materialization — text-only placeholder shipped. */
+    public static final String WORD_PARSE_FAILED = "WORD_PARSE_FAILED";
+    /** Excel parser threw at materialization — text-only placeholder shipped. */
+    public static final String EXCEL_PARSE_FAILED = "EXCEL_PARSE_FAILED";
+    /** CSV parser threw at materialization — text-only placeholder shipped. */
+    public static final String CSV_PARSE_FAILED = "CSV_PARSE_FAILED";
+    /** Magic bytes didn't match the declared Office MIME (e.g. .docx not actually a ZIP). */
+    public static final String WORD_MIME_MISMATCH = "WORD_MIME_MISMATCH";
+    public static final String EXCEL_MIME_MISMATCH = "EXCEL_MIME_MISMATCH";
+    /** CSV upload contained non-printable bytes (likely a binary file masquerading as CSV). */
+    public static final String CSV_NOT_TEXT = "CSV_NOT_TEXT";
+
+    // ─── Wave 3 WORD-EXCEL MIME allowlist (top-of-file for visibility) ───
+    static final String MIME_DOC = "application/msword";
+    static final String MIME_DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+    static final String MIME_XLS = "application/vnd.ms-excel";
+    static final String MIME_XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+    static final String MIME_CSV = "text/csv";
+
     /**
      * Wave 2 PDF-SCAN-FALLBACK error code — recorded on
      * {@link ChatAttachmentEntity#getErrorCode()} when text extraction yielded near-empty
@@ -123,6 +156,29 @@ public class ChatAttachmentService implements MessageMaterializer {
     private static final byte[] WEBP_WEBP = new byte[]{'W', 'E', 'B', 'P'};
     private static final byte[] PDF_MAGIC = new byte[]{'%', 'P', 'D', 'F', '-'};
 
+    /**
+     * Wave 3 WORD-EXCEL: ZIP local file header. Both {@code .docx} and {@code .xlsx}
+     * are PKZIP-wrapped OOXML packages — first 4 bytes are {@code PK\x03\x04}. Unlike
+     * PNG / JPEG / PDF, we <em>cannot</em> distinguish docx vs xlsx from the leader
+     * alone (and reading the central directory + content_types.xml is heavy).
+     *
+     * <p><b>Pragmatic policy</b>: when magic bytes are ZIP, defer kind binding to
+     * the client {@code Content-Type} header (the FE allowlist gates to docx /
+     * xlsx MIMEs specifically before sending). The server validates: detected =
+     * ZIP + header in {@link #MIME_DOCX} / {@link #MIME_XLSX} → accept and bind
+     * kind from header. Generic {@code application/zip} or absent header → reject.
+     */
+    private static final byte[] ZIP_MAGIC = new byte[]{'P', 'K', 0x03, 0x04};
+
+    /**
+     * Wave 3 WORD-EXCEL: OLE Compound File Binary (CFB) signature. Used by legacy
+     * {@code .doc} and {@code .xls}. Same as ZIP-OOXML, we can't tell {@code .doc}
+     * from {@code .xls} from the leader alone — defer to Content-Type the same way.
+     */
+    private static final byte[] OLE_MAGIC = new byte[]{
+            (byte) 0xD0, (byte) 0xCF, (byte) 0x11, (byte) 0xE0,
+            (byte) 0xA1, (byte) 0xB1, (byte) 0x1A, (byte) 0xE1};
+
     private final ChatAttachmentRepository attachmentRepository;
     private final Path storageRoot;
 
@@ -144,8 +200,12 @@ public class ChatAttachmentService implements MessageMaterializer {
         // detected MIME conflict (e.g. ZIP renamed .png with Content-Type=image/png),
         // refuse — this is almost always malicious or misconfigured.
         byte[] head = readHeader(file);
-        DetectedMime detected = detectMagic(head);
         String headerMime = file.getContentType() != null ? file.getContentType() : "";
+        // Wave 3 WORD-EXCEL: detection takes headerMime to disambiguate ZIP-based
+        // OOXML (.docx / .xlsx) and OLE-based legacy Office (.doc / .xls) — see
+        // detectMagic javadoc for the "ZIP / OLE leader same across family,
+        // bind kind from header" policy. CSV similarly requires header trust.
+        DetectedMime detected = detectMagic(head, headerMime);
         // V73 / OBS-COLUMNS: every rejection path below throws BEFORE we ever
         // call repository.save(...). The Iron Law: a rejected upload writes NO
         // DB row (we intentionally do NOT persist a "FAILED" placeholder for
@@ -174,6 +234,20 @@ public class ChatAttachmentService implements MessageMaterializer {
         }
         if ("pdf".equals(kind) && size > MAX_PDF_BYTES) {
             throw new IllegalArgumentException("PDF attachment exceeds 25MB");
+        }
+        // Wave 3 WORD-EXCEL: size caps for text-extraction file types. These are
+        // bytes-on-disk limits, NOT parse-time memory limits — POI can still OOM
+        // on a 20MB .xlsx with millions of populated cells. Parse-time bounds
+        // live in ExcelDocumentParser (MAX_ROWS_PER_SHEET / MAX_COLS / MAX_SHEETS)
+        // which raise EXCEL_SHEET_TOO_LARGE before the row scan blows memory.
+        if ("word".equals(kind) && size > MAX_WORD_BYTES) {
+            throw new IllegalArgumentException("Word attachment exceeds 20MB");
+        }
+        if ("excel".equals(kind) && size > MAX_EXCEL_BYTES) {
+            throw new IllegalArgumentException("Excel attachment exceeds 20MB");
+        }
+        if ("csv".equals(kind) && size > MAX_CSV_BYTES) {
+            throw new IllegalArgumentException("CSV attachment exceeds 10MB");
         }
 
         String id = UUID.randomUUID().toString();
@@ -218,8 +292,47 @@ public class ChatAttachmentService implements MessageMaterializer {
         } else if ("image".equals(kind)) {
             // Wave 2 IMAGE-COMPRESSION may overwrite with IMAGE_BLOCK_COMPRESSED.
             entity.setProcessingMode(MODE_IMAGE_BLOCK_INLINE);
+        } else if ("word".equals(kind)) {
+            // Wave 3 WORD-EXCEL: parser runs at first materialize. Failure path
+            // sets error_code=WORD_PARSE_FAILED there.
+            entity.setProcessingMode(MODE_WORD_TEXT);
+        } else if ("excel".equals(kind)) {
+            // sheet_count populated by the parser on first materialize.
+            entity.setProcessingMode(MODE_EXCEL_TEXT);
+        } else if ("csv".equals(kind)) {
+            entity.setProcessingMode(MODE_CSV_TEXT);
         }
         return attachmentRepository.save(entity);
+    }
+
+    /**
+     * Wave 3 WORD-EXCEL: peek at the leading bytes of a multipart upload to
+     * classify the kind <em>without</em> persisting anything (no DB row, no
+     * file write, no disk I/O beyond reading the in-memory upload). Used by
+     * {@code ChatController.uploadAttachment} to decide whether the
+     * vision-capability gate applies (image/pdf require it; word/excel/csv
+     * are text-extraction paths and don't).
+     *
+     * <p>Returns one of {@code image} / {@code pdf} / {@code word} /
+     * {@code excel} / {@code csv}, or {@code null} when the file can't be
+     * classified (the upload itself will reject with the same {@code null}
+     * branch). Re-reading the head from the same {@link MultipartFile} is
+     * safe — Spring's MultipartFile implementations buffer to memory / temp
+     * file and {@code getInputStream()} returns a fresh stream each call.</p>
+     */
+    public String previewKind(MultipartFile file) {
+        if (file == null || file.isEmpty()) {
+            return null;
+        }
+        byte[] head;
+        try {
+            head = readHeader(file);
+        } catch (RuntimeException e) {
+            return null;
+        }
+        String headerMime = file.getContentType() != null ? file.getContentType() : "";
+        DetectedMime detected = detectMagic(head, headerMime);
+        return detected == null ? null : detected.kind;
     }
 
     /**
@@ -257,18 +370,67 @@ public class ChatAttachmentService implements MessageMaterializer {
     }
 
     /**
-     * MULTIMODAL-MVP r2 B1: detect MIME by leading bytes. Returns {@code null} when
-     * the content does not match any allowed format. WebP requires both the RIFF
-     * leader AND the WEBP tag at offset 8 (RIFF alone could be WAV / AVI).
+     * MULTIMODAL-MVP r2 B1 + Wave 3 WORD-EXCEL: detect MIME by leading bytes.
+     * Returns {@code null} when the content does not match any allowed format.
+     *
+     * <p>For unambiguous formats (PNG / JPEG / WebP / PDF) the detection is by
+     * magic bytes alone. For ZIP-based OOXML (.docx / .xlsx) and OLE-based legacy
+     * Office (.doc / .xls), the leader is the <em>same</em> across the format
+     * family — we additionally consult the declared {@code Content-Type} header
+     * to disambiguate. {@code headerMime} may be {@code null} or blank; in that
+     * case we cannot disambiguate ZIP/OLE and return {@code null} (reject).</p>
+     *
+     * <p>CSV has no reliable magic — we trust the {@code text/csv} header AND
+     * verify the leading bytes contain no embedded NUL (binary-file guard).</p>
      */
-    private static DetectedMime detectMagic(byte[] head) {
+    private static DetectedMime detectMagic(byte[] head, String headerMime) {
         if (startsWith(head, PNG_MAGIC)) return new DetectedMime("image/png", "image");
         if (startsWith(head, JPEG_MAGIC)) return new DetectedMime("image/jpeg", "image");
         if (startsWith(head, WEBP_RIFF) && head.length >= 12 && matchesAt(head, 8, WEBP_WEBP)) {
             return new DetectedMime("image/webp", "image");
         }
         if (startsWith(head, PDF_MAGIC)) return new DetectedMime("application/pdf", "pdf");
+        // Wave 3 WORD-EXCEL: ZIP-based OOXML — bind kind from declared header.
+        if (startsWith(head, ZIP_MAGIC)) {
+            String h = headerMime == null ? "" : headerMime.toLowerCase(Locale.ROOT);
+            if (MIME_DOCX.equals(h)) return new DetectedMime(MIME_DOCX, "word");
+            if (MIME_XLSX.equals(h)) return new DetectedMime(MIME_XLSX, "excel");
+            // ZIP bytes without a Word/Excel header are not in our allowlist —
+            // refuse rather than guess (could be jar / unrelated zip).
+            return null;
+        }
+        // Wave 3 WORD-EXCEL: OLE CFB — legacy .doc / .xls. Bind kind from header.
+        if (startsWith(head, OLE_MAGIC)) {
+            String h = headerMime == null ? "" : headerMime.toLowerCase(Locale.ROOT);
+            if (MIME_DOC.equals(h)) return new DetectedMime(MIME_DOC, "word");
+            if (MIME_XLS.equals(h)) return new DetectedMime(MIME_XLS, "excel");
+            return null;
+        }
+        // Wave 3 WORD-EXCEL: CSV — no magic signature exists. Trust header IFF
+        // the header is exactly text/csv AND the leading bytes are printable
+        // ASCII (no NUL). This is a pragmatic guard: an attacker can still
+        // upload garbage labeled "text/csv" as long as it's not binary, but the
+        // downstream parser will reject malformed content with CSV_PARSE_FAILED
+        // and the LLM only ever sees the extracted-text envelope.
+        if (MIME_CSV.equals(headerMime == null ? "" : headerMime.toLowerCase(Locale.ROOT))
+                && looksPrintableAscii(head)) {
+            return new DetectedMime(MIME_CSV, "csv");
+        }
         return null;
+    }
+
+    /**
+     * Wave 3 WORD-EXCEL: returns true when {@code head} contains no embedded NUL
+     * byte. NUL is a strong signal of a binary file masquerading as text/csv.
+     * Empty / null header is treated as "looks fine" (the caller is reading 12
+     * bytes; tiny CSV files might genuinely be that small).
+     */
+    private static boolean looksPrintableAscii(byte[] head) {
+        if (head == null) return true;
+        for (byte b : head) {
+            if (b == 0) return false;
+        }
+        return true;
     }
 
     private static boolean startsWith(byte[] src, byte[] prefix) {
@@ -336,6 +498,19 @@ public class ChatAttachmentService implements MessageMaterializer {
                 blocks.add(ContentBlock.imageRef(attachment.getId(), attachment.getMimeType(), attachment.getFilename()));
             } else if ("pdf".equals(attachment.getKind())) {
                 blocks.add(ContentBlock.pdfRef(attachment.getId(), attachment.getFilename(), attachment.getPageCount()));
+            } else if ("word".equals(attachment.getKind())) {
+                // Wave 3 WORD-EXCEL: no structural metadata at this point — the
+                // parser runs in materializeForProvider.
+                blocks.add(ContentBlock.wordRef(attachment.getId(), attachment.getFilename()));
+            } else if ("excel".equals(attachment.getKind())) {
+                // sheet_count starts null at upload; refined by the materializer
+                // on first parse and persisted back via attachment.pageCount
+                // (dual semantics: pages for PDF, sheets for Excel). Subsequent
+                // materializations of the same row carry the cached count.
+                blocks.add(ContentBlock.excelRef(attachment.getId(), attachment.getFilename(),
+                        attachment.getPageCount()));
+            } else if ("csv".equals(attachment.getKind())) {
+                blocks.add(ContentBlock.csvRef(attachment.getId(), attachment.getFilename()));
             }
         }
         return blocks;
@@ -477,6 +652,113 @@ public class ChatAttachmentService implements MessageMaterializer {
                         || fallbackEngaged
                         || PDF_TEXT_EMPTY_NEEDS_VISION.equals(attachment.getErrorCode());
                 if (refined) {
+                    attachmentRepository.save(attachment);
+                }
+                changed = true;
+            } else if ("word_ref".equals(type)) {
+                // Wave 3 WORD-EXCEL: text extraction at materialization. Mirror
+                // pdf_ref's failure semantics — never fail the LLM call; emit a
+                // placeholder text block and persist error_code for admin
+                // observability. Persistence-shape invariant unchanged: the
+                // engine's in-memory message list keeps the word_ref shape, only
+                // the transient request copy carries the expanded text.
+                ChatAttachmentEntity attachment = attachmentRepository.findById(attachmentId)
+                        .filter(a -> sessionId.equals(a.getSessionId()))
+                        .orElseThrow(() -> new IllegalArgumentException("Word attachment not found: " + attachmentId));
+                boolean wordEntityChanged = false;
+                try {
+                    String markdown = WordDocumentParser.parseToMarkdown(Path.of(attachment.getStoragePath()));
+                    out.add(ContentBlock.text("[Word Document: " + attachment.getFilename() + "]\n\n" + markdown));
+                    // Success → clear any prior parse-failure error_code (re-uploaded
+                    // file might fix a previously corrupted blob).
+                    if (WORD_PARSE_FAILED.equals(attachment.getErrorCode())) {
+                        attachment.setErrorCode(null);
+                        attachment.setErrorMessage(null);
+                        wordEntityChanged = true;
+                    }
+                } catch (Exception e) {
+                    log.warn("Word parsing failed for attachment {} (filename={}): {}",
+                            attachment.getId(), attachment.getFilename(), e.toString());
+                    if (!WORD_PARSE_FAILED.equals(attachment.getErrorCode())) {
+                        attachment.setErrorCode(WORD_PARSE_FAILED);
+                        attachment.setErrorMessage(truncateErrorMessage(e.toString()));
+                        wordEntityChanged = true;
+                    }
+                    out.add(ContentBlock.text("[Word Document: " + attachment.getFilename()
+                            + "]\n\n(failed to parse: see error log)"));
+                }
+                if (wordEntityChanged) {
+                    attachmentRepository.save(attachment);
+                }
+                changed = true;
+            } else if ("excel_ref".equals(type)) {
+                ChatAttachmentEntity attachment = attachmentRepository.findById(attachmentId)
+                        .filter(a -> sessionId.equals(a.getSessionId()))
+                        .orElseThrow(() -> new IllegalArgumentException("Excel attachment not found: " + attachmentId));
+                boolean excelEntityChanged = false;
+                try {
+                    ExcelDocumentParser.ExcelParseResult result =
+                            ExcelDocumentParser.parseToMarkdownWithMetadata(Path.of(attachment.getStoragePath()));
+                    int sheetCount = result.sheetCount();
+                    String header = "[Excel Spreadsheet: " + attachment.getFilename()
+                            + " (" + sheetCount + " sheet" + (sheetCount == 1 ? "" : "s") + ")]";
+                    out.add(ContentBlock.text(header + "\n\n" + result.markdown()));
+                    // Persist sheet_count onto the entity's pageCount column —
+                    // dual semantics (pages for PDF, sheets for Excel). Subsequent
+                    // materializations + referenceBlocks see the cached value
+                    // and FE chip can show "(N sheets)" without re-parsing.
+                    if (attachment.getPageCount() == null || attachment.getPageCount() != sheetCount) {
+                        attachment.setPageCount(sheetCount);
+                        excelEntityChanged = true;
+                    }
+                    if (EXCEL_PARSE_FAILED.equals(attachment.getErrorCode())) {
+                        attachment.setErrorCode(null);
+                        attachment.setErrorMessage(null);
+                        excelEntityChanged = true;
+                    }
+                } catch (Exception e) {
+                    log.warn("Excel parsing failed for attachment {} (filename={}): {}",
+                            attachment.getId(), attachment.getFilename(), e.toString());
+                    if (!EXCEL_PARSE_FAILED.equals(attachment.getErrorCode())) {
+                        attachment.setErrorCode(EXCEL_PARSE_FAILED);
+                        attachment.setErrorMessage(truncateErrorMessage(e.toString()));
+                        excelEntityChanged = true;
+                    }
+                    out.add(ContentBlock.text("[Excel Spreadsheet: " + attachment.getFilename()
+                            + "]\n\n(failed to parse: see error log)"));
+                }
+                if (excelEntityChanged) {
+                    attachmentRepository.save(attachment);
+                }
+                changed = true;
+            } else if ("csv_ref".equals(type)) {
+                ChatAttachmentEntity attachment = attachmentRepository.findById(attachmentId)
+                        .filter(a -> sessionId.equals(a.getSessionId()))
+                        .orElseThrow(() -> new IllegalArgumentException("CSV attachment not found: " + attachmentId));
+                boolean csvEntityChanged = false;
+                try {
+                    // ExcelDocumentParser handles CSV via the .csv branch; we
+                    // intentionally reuse it (single parser surface for
+                    // tabular data) rather than spawning a separate CsvParser.
+                    String markdown = ExcelDocumentParser.parseToMarkdown(Path.of(attachment.getStoragePath()));
+                    out.add(ContentBlock.text("[CSV File: " + attachment.getFilename() + "]\n\n" + markdown));
+                    if (CSV_PARSE_FAILED.equals(attachment.getErrorCode())) {
+                        attachment.setErrorCode(null);
+                        attachment.setErrorMessage(null);
+                        csvEntityChanged = true;
+                    }
+                } catch (Exception e) {
+                    log.warn("CSV parsing failed for attachment {} (filename={}): {}",
+                            attachment.getId(), attachment.getFilename(), e.toString());
+                    if (!CSV_PARSE_FAILED.equals(attachment.getErrorCode())) {
+                        attachment.setErrorCode(CSV_PARSE_FAILED);
+                        attachment.setErrorMessage(truncateErrorMessage(e.toString()));
+                        csvEntityChanged = true;
+                    }
+                    out.add(ContentBlock.text("[CSV File: " + attachment.getFilename()
+                            + "]\n\n(failed to parse: see error log)"));
+                }
+                if (csvEntityChanged) {
                     attachmentRepository.save(attachment);
                 }
                 changed = true;

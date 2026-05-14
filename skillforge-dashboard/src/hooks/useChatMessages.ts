@@ -52,9 +52,16 @@ export function normalizeMessages(list: RawMessage[]): ChatMessage[] {
           toolUseBlocks.push(b);
         } else if (b.type === 'tool_result') {
           toolResultBlocks.push(b);
-        } else if (b.type === 'image_ref' || b.type === 'pdf_ref') {
-          // MULTIMODAL-MVP Phase 2: collect refs so ChatWindow can render
-          // inline thumbnails (image) / chips (pdf) via AttachmentThumbnail.
+        } else if (
+          b.type === 'image_ref' ||
+          b.type === 'pdf_ref' ||
+          b.type === 'word_ref' ||
+          b.type === 'excel_ref' ||
+          b.type === 'csv_ref'
+        ) {
+          // MULTIMODAL-MVP Phase 2 / Wave 3: collect refs so ChatWindow can
+          // render inline thumbnails (image) / chips (pdf / word / excel /
+          // csv) via AttachmentThumbnail.
           // The earlier Phase 1 emoji+filename string injection here was a
           // placeholder until Phase 2 thumbnails landed — keeping it now would
           // double-render alongside the chip.
@@ -63,6 +70,8 @@ export function normalizeMessages(list: RawMessage[]): ChatMessage[] {
             attachment_id?: unknown;
             page_count?: unknown;
             pageCount?: unknown;
+            sheet_count?: unknown;
+            sheetCount?: unknown;
           };
           const attachmentId =
             typeof ref.attachment_id === 'string' ? ref.attachment_id : '';
@@ -71,14 +80,30 @@ export function normalizeMessages(list: RawMessage[]): ChatMessage[] {
             typeof ref.filename === 'string' && ref.filename.length > 0
               ? ref.filename
               : attachmentId;
+          // BE Jackson emits snake_case (`page_count` / `sheet_count`). Some
+          // legacy / hand-rolled call sites use camelCase — read both per
+          // existing pattern.
           const rawPages = ref.page_count ?? ref.pageCount;
           const pageCount =
             typeof rawPages === 'number' && Number.isFinite(rawPages) ? rawPages : undefined;
+          const rawSheets = ref.sheet_count ?? ref.sheetCount;
+          const sheetCount =
+            typeof rawSheets === 'number' && Number.isFinite(rawSheets) ? rawSheets : undefined;
+          let kind: ChatAttachmentRef['kind'];
+          switch (b.type) {
+            case 'image_ref': kind = 'image'; break;
+            case 'pdf_ref':   kind = 'pdf'; break;
+            case 'word_ref':  kind = 'word'; break;
+            case 'excel_ref': kind = 'excel'; break;
+            case 'csv_ref':   kind = 'csv'; break;
+            default:          continue;
+          }
           attachmentRefs.push({
-            kind: b.type === 'image_ref' ? 'image' : 'pdf',
+            kind,
             attachmentId,
             filename,
             pageCount,
+            sheetCount,
           });
         }
       }

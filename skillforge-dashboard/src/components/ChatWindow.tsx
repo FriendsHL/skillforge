@@ -106,12 +106,52 @@ function formatBytes(b: number): string {
 }
 
 /**
- * r2 W1 — Compact type badge derived from the picked file's MIME. We only
- * accept image/* and application/pdf (enforced upstream in handleFileChange),
- * so the dichotomy below is exhaustive.
+ * Wave 3 — MIME allowlist for chat upload. Constants exposed at module scope so
+ * `handleFileChange` filter + `accept=` attr + `chipKindLabel` stay in sync.
+ * Word/Excel/CSV MIMEs are the canonical Office / OpenDocument values. Note
+ * some browsers (notably older Windows variants) report `.csv` with
+ * `application/vnd.ms-excel` instead of `text/csv` — we accept both via the
+ * Excel branch so the file at least passes the filter; the BE parser
+ * disambiguates by extension.
  */
-function chipKindLabel(mime: string): 'PDF' | 'IMG' {
-  return mime === 'application/pdf' ? 'PDF' : 'IMG';
+const WORD_MIMES = [
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+];
+const EXCEL_MIMES = [
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+];
+const CSV_MIMES = ['text/csv'];
+
+function isAcceptedMime(mime: string): boolean {
+  return (
+    mime.startsWith('image/') ||
+    mime === 'application/pdf' ||
+    WORD_MIMES.includes(mime) ||
+    EXCEL_MIMES.includes(mime) ||
+    CSV_MIMES.includes(mime)
+  );
+}
+
+/**
+ * Wave 3 — Compact type badge derived from the picked file's MIME. The
+ * accepted MIME set is enforced upstream in handleFileChange. Empty-string MIME
+ * (some browsers, esp. for .csv) falls through to a filename-extension probe.
+ */
+function chipKindLabel(file: File): 'PDF' | 'IMG' | 'DOC' | 'XLS' | 'CSV' {
+  const mime = file.type;
+  if (mime === 'application/pdf') return 'PDF';
+  if (mime.startsWith('image/')) return 'IMG';
+  if (WORD_MIMES.includes(mime)) return 'DOC';
+  if (EXCEL_MIMES.includes(mime)) return 'XLS';
+  if (CSV_MIMES.includes(mime)) return 'CSV';
+  // Fallback via filename ext — covers browsers that report mime=''.
+  const lower = file.name.toLowerCase();
+  if (lower.endsWith('.csv')) return 'CSV';
+  if (lower.endsWith('.doc') || lower.endsWith('.docx')) return 'DOC';
+  if (lower.endsWith('.xls') || lower.endsWith('.xlsx')) return 'XLS';
+  return 'IMG';
 }
 
 const ChatInput: React.FC<ChatInputProps> = React.memo(
@@ -275,11 +315,23 @@ const ChatInput: React.FC<ChatInputProps> = React.memo(
     };
 
     const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-      const next = Array.from(e.target.files ?? []).filter((file) => {
-        return file.type.startsWith('image/') || file.type === 'application/pdf';
+      const incoming = Array.from(e.target.files ?? []);
+      const next = incoming.filter((file) => {
+        // Wave 3 — accept image / pdf / word / excel / csv. Some browsers
+        // report mime='' for .csv — fall back to filename extension so the
+        // user isn't silently blocked.
+        if (isAcceptedMime(file.type)) return true;
+        const lower = file.name.toLowerCase();
+        return (
+          lower.endsWith('.csv') ||
+          lower.endsWith('.doc') ||
+          lower.endsWith('.docx') ||
+          lower.endsWith('.xls') ||
+          lower.endsWith('.xlsx')
+        );
       });
-      if (next.length !== (e.target.files?.length ?? 0)) {
-        message.warning('Only images and PDFs are supported');
+      if (next.length !== incoming.length) {
+        message.warning('Only images, PDFs, Word, Excel, and CSV files are supported');
       }
       setFiles((prev) => [...prev, ...next].slice(0, 5));
       e.target.value = '';
@@ -363,7 +415,7 @@ const ChatInput: React.FC<ChatInputProps> = React.memo(
                     Status indicator stays implicit for Phase 1 (chip presence
                     = pending-send; failure → message.error toast covers it). */}
                 <span className="att-kind" data-testid="attachment-chip-kind">
-                  {chipKindLabel(file.type)}
+                  {chipKindLabel(file)}
                 </span>
                 <span className="att-name">{file.name}</span>
                 <span className="att-size" data-testid="attachment-chip-size">
@@ -385,7 +437,7 @@ const ChatInput: React.FC<ChatInputProps> = React.memo(
             <input
               ref={fileInputRef}
               type="file"
-              accept="image/*,application/pdf"
+              accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx,.csv"
               multiple
               style={{ display: 'none' }}
               onChange={handleFileChange}
@@ -505,15 +557,18 @@ ChatInput.displayName = 'ChatInput';
 // the existing module layout.
 export { ChatInput };
 
-/** MULTIMODAL-MVP Phase 2: lightweight reference to an uploaded attachment,
- *  carried inline on the chat bubble so the thumbnail can render via
- *  `AttachmentThumbnail`. Mirrors BE `image_ref` / `pdf_ref` content blocks. */
+/** MULTIMODAL-MVP Phase 2 / Wave 3: lightweight reference to an uploaded
+ *  attachment, carried inline on the chat bubble so the thumbnail can render
+ *  via `AttachmentThumbnail`. Mirrors BE `image_ref` / `pdf_ref` / `word_ref`
+ *  / `excel_ref` / `csv_ref` content blocks. */
 export interface ChatAttachmentRef {
-  kind: 'image' | 'pdf';
+  kind: 'image' | 'pdf' | 'word' | 'excel' | 'csv';
   attachmentId: string;
   filename: string;
   /** PDF only — page count surfaced in the chip. */
   pageCount?: number;
+  /** Excel only — sheet count surfaced in the chip. */
+  sheetCount?: number;
 }
 
 export interface ChatMessage {
@@ -873,6 +928,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
                           attachmentId={att.attachmentId}
                           filename={att.filename}
                           pageCount={att.pageCount}
+                          sheetCount={att.sheetCount}
                           userId={slashCommandConfig.userId}
                           sessionId={slashCommandConfig.sessionId}
                         />

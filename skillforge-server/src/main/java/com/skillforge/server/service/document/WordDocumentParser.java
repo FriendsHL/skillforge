@@ -42,7 +42,12 @@ public final class WordDocumentParser {
     /** Marker appended when output is truncated. */
     public static final String TRUNCATION_MARKER = "\n\n[Document truncated at 20000 chars]";
 
-    public String parseToMarkdown(Path file) throws IOException {
+    /** Wave 1-C designated this as a static utility — no instances allowed. */
+    private WordDocumentParser() {
+        throw new UnsupportedOperationException("WordDocumentParser is a static utility");
+    }
+
+    public static String parseToMarkdown(Path file) throws IOException {
         if (file == null) {
             throw new IllegalStateException("WORD_PARSE_FAILED: file is null");
         }
@@ -73,7 +78,7 @@ public final class WordDocumentParser {
 
     // ------------------------------------------------------------------ .docx
 
-    private String parseDocx(Path file) throws IOException {
+    private static String parseDocx(Path file) throws IOException {
         StringBuilder out = new StringBuilder();
         try (InputStream in = Files.newInputStream(file);
              XWPFDocument doc = new XWPFDocument(in)) {
@@ -101,7 +106,7 @@ public final class WordDocumentParser {
         return out.toString();
     }
 
-    private void appendParagraph(StringBuilder out, XWPFParagraph p) {
+    private static void appendParagraph(StringBuilder out, XWPFParagraph p) {
         // text() concatenates all run text; embedded images/drawings already
         // contribute no characters here, so we don't need to scrub anything
         // extra.
@@ -144,7 +149,7 @@ public final class WordDocumentParser {
         return 0;
     }
 
-    private void appendTable(StringBuilder out, XWPFTable table) {
+    private static void appendTable(StringBuilder out, XWPFTable table) {
         List<XWPFTableRow> rows = table.getRows();
         if (rows.isEmpty()) {
             return;
@@ -163,7 +168,7 @@ public final class WordDocumentParser {
         out.append('\n');
     }
 
-    private void appendDocxRow(StringBuilder out, XWPFTableRow row) {
+    private static void appendDocxRow(StringBuilder out, XWPFTableRow row) {
         out.append('|');
         for (XWPFTableCell cell : row.getTableCells()) {
             String cellText = cell.getText();
@@ -179,7 +184,7 @@ public final class WordDocumentParser {
 
     // ------------------------------------------------------------------- .doc
 
-    private String parseDoc(Path file) throws IOException {
+    private static String parseDoc(Path file) throws IOException {
         try (InputStream in = Files.newInputStream(file);
              HWPFDocument doc = new HWPFDocument(in);
              WordExtractor extractor = new WordExtractor(doc)) {

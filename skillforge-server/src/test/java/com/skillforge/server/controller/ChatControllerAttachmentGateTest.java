@@ -112,6 +112,15 @@ class ChatControllerAttachmentGateTest {
         return new MockMultipartFile("file", "screen.png", "image/png", new byte[]{1, 2, 3});
     }
 
+    private MultipartFile docxFile() {
+        // Wave 3 WORD-EXCEL gate-bypass tests use this. The bytes don't need
+        // valid magic — chatAttachmentService is a @Mock so previewKind() is
+        // stubbed explicitly per-test and upload() is also stubbed.
+        return new MockMultipartFile("file", "report.docx",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                new byte[]{'P', 'K', 0x03, 0x04, 0, 0, 0, 0});
+    }
+
     private SessionEntity ownedSession() {
         SessionEntity session = new SessionEntity();
         session.setId(SESSION_ID);
@@ -214,8 +223,11 @@ class ChatControllerAttachmentGateTest {
     @Test
     @DisplayName("upload returns 400 when file is missing")
     void upload_missingFile_returns400() {
+        // Wave 3 WORD-EXCEL (2026-05-14): file-presence check moved BEFORE the
+        // vision gate so the controller can peek at previewKind (needs a file)
+        // to decide whether the vision gate applies. The 400 still fires before
+        // ChatAttachmentService is touched — Iron Law preserved.
         when(sessionService.getSession(SESSION_ID)).thenReturn(ownedSession());
-        when(agentService.getAgent(AGENT_ID)).thenReturn(agentWithModel(VISION_MODEL));
 
         ResponseEntity<Map<String, Object>> response =
                 controller.uploadAttachment(SESSION_ID, USER_ID, null);
@@ -223,6 +235,45 @@ class ChatControllerAttachmentGateTest {
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         assertThat(response.getBody()).containsEntry("error", "file is required");
         verify(chatAttachmentService, never()).upload(any(), any(), any());
+        // Vision gate not reached because we returned 400 at file-presence first.
+        verify(agentService, never()).getAgent(any());
+    }
+
+    @Test
+    @DisplayName("Wave 3: upload returns 200 when uploading .docx on a non-vision agent (gate bypass)")
+    void upload_wordOnNonVisionModel_returns200() {
+        // Wave 3 WORD-EXCEL (2026-05-14): the central behavioral change is that
+        // word / excel / csv uploads MUST work on non-vision-capable agents
+        // (text-extraction doesn't need vision). previewKind="word" → gate
+        // bypassed → upload proceeds → 200 with kind=word in response body.
+        when(sessionService.getSession(SESSION_ID)).thenReturn(ownedSession());
+        when(chatAttachmentService.previewKind(any(MultipartFile.class))).thenReturn("word");
+
+        ChatAttachmentEntity stored = new ChatAttachmentEntity();
+        stored.setId("att-doc-1");
+        stored.setSessionId(SESSION_ID);
+        stored.setUserId(USER_ID);
+        stored.setKind("word");
+        stored.setMimeType(
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+        stored.setFilename("report.docx");
+        stored.setSizeBytes(8L);
+        stored.setStatus("uploaded");
+        when(chatAttachmentService.upload(eq(SESSION_ID), eq(USER_ID), any(MultipartFile.class)))
+                .thenReturn(stored);
+
+        ResponseEntity<Map<String, Object>> response =
+                controller.uploadAttachment(SESSION_ID, USER_ID, docxFile());
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getBody())
+                .containsEntry("id", "att-doc-1")
+                .containsEntry("kind", "word")
+                .containsEntry("filename", "report.docx");
+        // The point of this test: vision gate NEVER consulted the agent's model
+        // because previewKind="word" routed around it.
+        verify(agentService, never()).getAgent(any());
+        verify(chatAttachmentService).upload(eq(SESSION_ID), eq(USER_ID), any(MultipartFile.class));
     }
 
     @Test

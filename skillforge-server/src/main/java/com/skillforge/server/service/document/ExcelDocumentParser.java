@@ -63,7 +63,77 @@ public final class ExcelDocumentParser {
 
     private static final DateTimeFormatter ISO_DATE = DateTimeFormatter.ISO_INSTANT;
 
-    public String parseToMarkdown(Path file) throws IOException {
+    /**
+     * Wave 3 WORD-EXCEL: result envelope returned by
+     * {@link #parseToMarkdownWithMetadata(Path)}. The {@code sheetCount} carries
+     * the workbook's structural sheet count (or {@code 1} for CSV files);
+     * downstream callers persist this onto the attachment row so the FE chip
+     * can show "(N sheets)" without re-parsing.
+     *
+     * <p>{@code totalRows} is the sum of {@code lastRowNum + 1} across parsed
+     * sheets (capped at {@link #MAX_ROWS_PER_SHEET} per sheet). Reserved for
+     * future observability surfaces — currently informational.</p>
+     */
+    public record ExcelParseResult(String markdown, int sheetCount, int totalRows) {}
+
+    /** Wave 1-C designated this as a static utility — no instances allowed. */
+    private ExcelDocumentParser() {
+        throw new UnsupportedOperationException("ExcelDocumentParser is a static utility");
+    }
+
+    /**
+     * Wave 3 WORD-EXCEL: parse and capture sheet-count metadata.
+     * xlsx / xls workbooks return their {@code getNumberOfSheets()};
+     * CSV files return {@code 1}; failures throw the same diagnostic envelope
+     * as {@link #parseToMarkdown(Path)}.
+     *
+     * <p><b>Phase 1 trade-off — opens the workbook twice</b>: once to read
+     * {@code getNumberOfSheets()}, once via {@link #parseWorkbook(Path, boolean)}
+     * to render. Cost is bounded by {@link ChatAttachmentService#MAX_EXCEL_BYTES}
+     * (20MB on disk) plus the parser's own row/col/sheet caps. Refactor to a
+     * single-pass implementation when the SXSSF streaming reader path lands;
+     * doing so today would require changing {@code parseWorkbook}'s signature
+     * (W1-C brief said "do NOT modify internals"). Not a regression vs
+     * {@code parseToMarkdown(Path)} which also opens the workbook once.</p>
+     */
+    public static ExcelParseResult parseToMarkdownWithMetadata(Path file) throws IOException {
+        if (file == null) {
+            throw new IllegalStateException("EXCEL_PARSE_FAILED: file is null");
+        }
+        if (!Files.exists(file)) {
+            throw new IllegalStateException("EXCEL_PARSE_FAILED: file does not exist: " + file);
+        }
+        String name = file.getFileName() == null ? "" : file.getFileName().toString().toLowerCase(Locale.ROOT);
+        try {
+            if (name.endsWith(".xlsx") || name.endsWith(".xls")) {
+                boolean xlsx = name.endsWith(".xlsx");
+                // Single workbook open: count sheets up front, then render. We
+                // intentionally don't refactor parseWorkbook's loop to also emit
+                // the count — keeping the existing instance method untouched
+                // honors "do NOT modify their internals" from the Wave 3 brief.
+                int sheetCount;
+                try (InputStream in = Files.newInputStream(file);
+                     Workbook wb = xlsx ? new XSSFWorkbook(in) : new HSSFWorkbook(in)) {
+                    sheetCount = wb.getNumberOfSheets();
+                }
+                String markdown = truncate(parseWorkbook(file, xlsx));
+                return new ExcelParseResult(markdown, sheetCount, 0);
+            } else if (name.endsWith(".csv")) {
+                String markdown = truncate(parseCsv(file));
+                return new ExcelParseResult(markdown, 1, 0);
+            } else {
+                throw new IllegalStateException(
+                        "EXCEL_PARSE_FAILED: unsupported extension (expected .xlsx/.xls/.csv): " + name);
+            }
+        } catch (IllegalStateException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalStateException("EXCEL_PARSE_FAILED: " + e.getClass().getSimpleName()
+                    + ": " + e.getMessage(), e);
+        }
+    }
+
+    public static String parseToMarkdown(Path file) throws IOException {
         if (file == null) {
             throw new IllegalStateException("EXCEL_PARSE_FAILED: file is null");
         }
@@ -94,7 +164,7 @@ public final class ExcelDocumentParser {
 
     // ---------------------------------------------------------------- xlsx/xls
 
-    private String parseWorkbook(Path file, boolean xlsx) throws IOException {
+    private static String parseWorkbook(Path file, boolean xlsx) throws IOException {
         StringBuilder out = new StringBuilder();
         try (InputStream in = Files.newInputStream(file);
              Workbook wb = xlsx ? new XSSFWorkbook(in) : new HSSFWorkbook(in)) {
@@ -111,7 +181,7 @@ public final class ExcelDocumentParser {
         return out.toString();
     }
 
-    private void appendSheet(StringBuilder out, Sheet sheet, FormulaEvaluator evaluator) {
+    private static void appendSheet(StringBuilder out, Sheet sheet, FormulaEvaluator evaluator) {
         String sheetName = sheet.getSheetName();
         // Defensive size guard: a hostile/poorly-built .xlsx can declare
         // millions of rows. Reject loudly rather than silently truncating —
@@ -161,7 +231,7 @@ public final class ExcelDocumentParser {
         out.append('\n');
     }
 
-    private void appendRow(StringBuilder out, Row row, int cols, FormulaEvaluator evaluator) {
+    private static void appendRow(StringBuilder out, Row row, int cols, FormulaEvaluator evaluator) {
         out.append('|');
         for (int c = 0; c < cols; c++) {
             String s = row == null ? "" : formatCell(row.getCell(c), evaluator);
@@ -171,7 +241,7 @@ public final class ExcelDocumentParser {
         out.append('\n');
     }
 
-    private String formatCell(Cell cell, FormulaEvaluator evaluator) {
+    private static String formatCell(Cell cell, FormulaEvaluator evaluator) {
         if (cell == null) {
             return "";
         }
@@ -192,7 +262,7 @@ public final class ExcelDocumentParser {
         return formatNonFormula(cell, type);
     }
 
-    private String formatNonFormula(Cell cell, CellType type) {
+    private static String formatNonFormula(Cell cell, CellType type) {
         switch (type) {
             case STRING:
                 String sv = cell.getStringCellValue();
@@ -230,7 +300,7 @@ public final class ExcelDocumentParser {
 
     // ------------------------------------------------------------------- CSV
 
-    private String parseCsv(Path file) throws IOException {
+    private static String parseCsv(Path file) throws IOException {
         // Read full content into memory — CSVs we accept are bounded by upload
         // size limits enforced upstream (Wave 3 will set the policy).
         String content = Files.readString(file, StandardCharsets.UTF_8);

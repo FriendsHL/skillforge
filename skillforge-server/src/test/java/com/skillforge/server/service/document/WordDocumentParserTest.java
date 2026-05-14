@@ -30,7 +30,7 @@ class WordDocumentParserTest {
     private static Path withTableDocx;
     private static Path hugeDocx;
 
-    private final WordDocumentParser parser = new WordDocumentParser();
+    // Wave 3 r2: WordDocumentParser is now a static utility — call methods directly.
 
     @BeforeAll
     static void buildFixtures() throws Exception {
@@ -98,7 +98,7 @@ class WordDocumentParserTest {
     @Test
     @DisplayName("parseToMarkdown(simple.docx) renders heading + paragraphs")
     void parseToMarkdown_simple_returnsMarkdownShape() throws Exception {
-        String md = parser.parseToMarkdown(simpleDocx);
+        String md = WordDocumentParser.parseToMarkdown(simpleDocx);
         assertThat(md).contains("# Top Heading");
         assertThat(md).contains("First plain paragraph.");
         assertThat(md).contains("Second plain paragraph.");
@@ -109,7 +109,7 @@ class WordDocumentParserTest {
     @Test
     @DisplayName("parseToMarkdown(table.docx) renders markdown table with header + rows")
     void parseToMarkdown_table_rendersMarkdownTable() throws Exception {
-        String md = parser.parseToMarkdown(withTableDocx);
+        String md = WordDocumentParser.parseToMarkdown(withTableDocx);
         assertThat(md).contains("## Table Section");
         // Header row + separator row + body rows
         assertThat(md).contains("| Name | Score |");
@@ -121,7 +121,7 @@ class WordDocumentParserTest {
     @Test
     @DisplayName("parseToMarkdown truncates output at MAX_OUTPUT_CHARS with marker")
     void parseToMarkdown_huge_truncatesWithMarker() throws Exception {
-        String md = parser.parseToMarkdown(hugeDocx);
+        String md = WordDocumentParser.parseToMarkdown(hugeDocx);
         assertThat(md).endsWith(WordDocumentParser.TRUNCATION_MARKER);
         // Output length = exactly MAX_OUTPUT_CHARS + marker (or one char less if
         // surrogate-pair guard tripped, which it won't here for ASCII fixture).
@@ -134,7 +134,7 @@ class WordDocumentParserTest {
     @DisplayName("parseToMarkdown(missing.docx) throws WORD_PARSE_FAILED")
     void parseToMarkdown_missingFile_throws() {
         Path nope = tmp.resolve("does-not-exist.docx");
-        assertThatThrownBy(() -> parser.parseToMarkdown(nope))
+        assertThatThrownBy(() -> WordDocumentParser.parseToMarkdown(nope))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageStartingWith("WORD_PARSE_FAILED:");
     }
@@ -144,7 +144,7 @@ class WordDocumentParserTest {
     void parseToMarkdown_unsupportedExtension_throws() throws Exception {
         Path bogus = tmp.resolve("data.rtf");
         Files.writeString(bogus, "{\\rtf1}");
-        assertThatThrownBy(() -> parser.parseToMarkdown(bogus))
+        assertThatThrownBy(() -> WordDocumentParser.parseToMarkdown(bogus))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("WORD_PARSE_FAILED")
                 .hasMessageContaining("unsupported extension");

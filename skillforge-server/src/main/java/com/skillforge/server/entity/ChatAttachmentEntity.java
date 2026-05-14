@@ -44,6 +44,26 @@ public class ChatAttachmentEntity {
     @Column(name = "size_bytes", nullable = false)
     private long sizeBytes;
 
+    /**
+     * Structural unit count for the attachment, nullable.
+     *
+     * <p><b>Dual semantics (Wave 3 WORD-EXCEL, 2026-05-14)</b>: reused for Excel
+     * sheet count when {@link #kind} = {@code "excel"}. Wire JSON serializes as
+     * {@code page_count} on {@code pdf_ref} ContentBlocks and as
+     * {@code sheet_count} on {@code excel_ref} ContentBlocks — the column name
+     * stays {@code page_count} for backward compatibility with the V70 schema
+     * + existing FE consumers that expect {@code pageCount} on the upload
+     * response. Consider rename to {@code unitCount} or split into two columns
+     * in a future migration if a third kind needs its own count semantics.</p>
+     *
+     * <p>Population sites:</p>
+     * <ul>
+     *   <li>PDF: set at upload via {@code readPdfPageCountQuietly}.</li>
+     *   <li>Excel: starts null at upload; refined on first {@code materializeForProvider}
+     *       once the parser exposes {@code sheetCount}.</li>
+     *   <li>Image / Word / CSV: always null (no structural unit semantics).</li>
+     * </ul>
+     */
     @Column(name = "page_count")
     private Integer pageCount;
 

@@ -37,7 +37,7 @@ public class ContentBlock {
     @JsonProperty("error_type")
     private String errorType;
 
-    // attachment reference types: image_ref / pdf_ref
+    // attachment reference types: image_ref / pdf_ref / word_ref / excel_ref / csv_ref
     @JsonProperty("attachment_id")
     private String attachmentId;
     @JsonProperty("mime_type")
@@ -45,6 +45,16 @@ public class ContentBlock {
     private String filename;
     @JsonProperty("page_count")
     private Integer pageCount;
+    /**
+     * Wave 3 WORD-EXCEL: number of sheets in an Excel workbook for {@code excel_ref}
+     * blocks. Nullable Integer — left null at upload time and refined on first
+     * materialization once the parser actually opens the workbook. Other ref
+     * types (image_ref / pdf_ref / word_ref / csv_ref) leave this null. Wire field
+     * name {@code sheet_count} matches the snake_case convention used by image_ref /
+     * pdf_ref (FE collapses to camelCase via the same Jackson path).
+     */
+    @JsonProperty("sheet_count")
+    private Integer sheetCount;
 
     // provider-bound materialized image type; never persisted in session history.
     @JsonProperty("data_base64")
@@ -118,6 +128,46 @@ public class ContentBlock {
         block.setType("image");
         block.setMimeType(mimeType);
         block.setDataBase64(dataBase64);
+        return block;
+    }
+
+    /**
+     * Wave 3 WORD-EXCEL: reference block for a Word document (.doc / .docx)
+     * attachment. Persisted in {@code t_session_message.content_json}; the
+     * materializer expands this to a single text block carrying the markdown
+     * extraction at provider-call time.
+     */
+    public static ContentBlock wordRef(String attachmentId, String filename) {
+        ContentBlock block = new ContentBlock();
+        block.setType("word_ref");
+        block.setAttachmentId(attachmentId);
+        block.setFilename(filename);
+        return block;
+    }
+
+    /**
+     * Wave 3 WORD-EXCEL: reference block for an Excel workbook (.xlsx / .xls)
+     * attachment. {@code sheetCount} is left null at upload time and refined on
+     * first materialization (parser exposes the count).
+     */
+    public static ContentBlock excelRef(String attachmentId, String filename, Integer sheetCount) {
+        ContentBlock block = new ContentBlock();
+        block.setType("excel_ref");
+        block.setAttachmentId(attachmentId);
+        block.setFilename(filename);
+        block.setSheetCount(sheetCount);
+        return block;
+    }
+
+    /**
+     * Wave 3 WORD-EXCEL: reference block for a CSV file attachment. No structural
+     * metadata up front — CSV is parsed inline by the materializer.
+     */
+    public static ContentBlock csvRef(String attachmentId, String filename) {
+        ContentBlock block = new ContentBlock();
+        block.setType("csv_ref");
+        block.setAttachmentId(attachmentId);
+        block.setFilename(filename);
         return block;
     }
 
@@ -231,5 +281,13 @@ public class ContentBlock {
 
     public void setDataBase64(String dataBase64) {
         this.dataBase64 = dataBase64;
+    }
+
+    public Integer getSheetCount() {
+        return sheetCount;
+    }
+
+    public void setSheetCount(Integer sheetCount) {
+        this.sheetCount = sheetCount;
     }
 }
