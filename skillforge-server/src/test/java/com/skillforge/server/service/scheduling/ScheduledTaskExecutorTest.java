@@ -160,6 +160,73 @@ class ScheduledTaskExecutorTest {
     }
 
     @Test
+    @DisplayName("fire (session_mode=reuse) syncs reusedSessionId onto outer task ref before save (stale-entity overwrite guard)")
+    void fire_reuseSession_syncsSessionIdOntoTaskBeforeSave() {
+        // Regression for the prod bug where two consecutive fires of a reuse-mode
+        // task both opened fresh sessions and the t_scheduled_task.reused_session_id
+        // column stayed NULL: fire() reads `task` at the top, openSessionForTask
+        // saves the new id on a separate `refreshed` instance, but the outer
+        // task ref is stale (reusedSessionId=null) — the trailing save(task) at
+        // the end of fire() emits a full JPA UPDATE and wipes the column. The fix
+        // syncs the session id onto the outer ref before that save. This test
+        // deliberately does NOT echo the persisted id back onto `task` in the
+        // save mock — that echo trick is what masked the bug in the older test
+        // case below; here we want the assertion to fail loudly without the fix.
+        // CRITICAL: outer fire() and openSessionForTask each call findById and
+        // get back separate managed entities in prod (Hibernate); using a
+        // single shared instance here would let the openSessionForTask write
+        // bleed onto the outer ref and mask the very bug we're testing. Two
+        // independent instances reproduce the real JPA behavior.
+        ScheduledTaskEntity outerTask = newReuseTask(11L);
+        ScheduledTaskEntity innerTask = newReuseTask(11L);
+        when(repository.findById(11L))
+                .thenReturn(Optional.of(outerTask))   // fire() top
+                .thenReturn(Optional.of(innerTask));  // openSessionForTask body
+        when(userTaskScheduler.tryMarkRunning(11L)).thenReturn(true);
+        when(scheduledTaskService.markRunStart(11L, false)).thenReturn(runFor(11L, 1100L, false));
+        when(sessionService.createSession(7L, 42L)).thenReturn(newSession("sess-sync"));
+        when(repository.save(any(ScheduledTaskEntity.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        executor.fire(11L, false);
+
+        // Two saves: (1) openSessionForTask saves `refreshed` with new
+        // reused_session_id, (2) fire() saves outer `task` with last_fire_at +
+        // status. The fix is that save (2) also carries the session id.
+        ArgumentCaptor<ScheduledTaskEntity> saveCaptor = ArgumentCaptor.forClass(ScheduledTaskEntity.class);
+        verify(repository, times(2)).save(saveCaptor.capture());
+        ScheduledTaskEntity outerSave = saveCaptor.getAllValues().get(1);
+        assertThat(outerSave.getReusedSessionId())
+                .as("outer save must carry reused_session_id; otherwise the JPA full UPDATE wipes the column")
+                .isEqualTo("sess-sync");
+        assertThat(outerSave.getLastFireAt()).isNotNull();
+        assertThat(outerSave.getStatus()).isEqualTo(ScheduledTaskEntity.STATUS_RUNNING);
+    }
+
+    @Test
+    @DisplayName("fire (session_mode=new) does NOT mutate task.reusedSessionId on the outer save")
+    void fire_newSession_doesNotTouchReusedSessionId() {
+        // Symmetry guard for the reuse-mode fix: session_mode=new must leave
+        // reused_session_id alone on the outer save (otherwise we'd start writing
+        // ephemeral session ids on tasks the user explicitly opted out of reuse for).
+        ScheduledTaskEntity task = newCronTask(12L);
+        when(repository.findById(12L)).thenReturn(Optional.of(task));
+        when(userTaskScheduler.tryMarkRunning(12L)).thenReturn(true);
+        when(scheduledTaskService.markRunStart(12L, false)).thenReturn(runFor(12L, 1200L, false));
+        when(sessionService.createSession(7L, 42L)).thenReturn(newSession("sess-new-only"));
+        when(repository.save(any(ScheduledTaskEntity.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        executor.fire(12L, false);
+
+        // session_mode=new takes the second branch in openSessionForTask, which
+        // does not save a `refreshed` row — so only the outer fire() save runs.
+        ArgumentCaptor<ScheduledTaskEntity> saveCaptor = ArgumentCaptor.forClass(ScheduledTaskEntity.class);
+        verify(repository, times(1)).save(saveCaptor.capture());
+        assertThat(saveCaptor.getValue().getReusedSessionId())
+                .as("session_mode=new must never set reused_session_id")
+                .isNull();
+    }
+
+    @Test
     @DisplayName("fire bypasses enabled flag when manual=true (INV-10)")
     void fire_manual_bypassesEnabled() {
         ScheduledTaskEntity task = newCronTask(4L);

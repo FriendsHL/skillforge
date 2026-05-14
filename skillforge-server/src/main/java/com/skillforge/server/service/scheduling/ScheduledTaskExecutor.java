@@ -157,6 +157,12 @@ public class ScheduledTaskExecutor {
             // Update last_fire_at for FE display.
             task.setLastFireAt(Instant.now());
             task.setStatus(ScheduledTaskEntity.STATUS_RUNNING);
+            // reuse 模式：openSessionForTask 内部用 refreshed 实例 save 了 reused_session_id，
+            // 但本地 task 引用是 fire() 开头 findById 拿的快照（reusedSessionId=null）。
+            // 不同步就会被下面的 save(task) 用 null 覆盖回去，导致每次 fire 都建新 session。
+            if (ScheduledTaskEntity.SESSION_MODE_REUSE.equals(task.getSessionMode())) {
+                task.setReusedSessionId(sessionId);
+            }
             repository.save(task);
             // Hand off to ChatService — it submits to chatLoopExecutor (does not block).
             chatService.chatAsync(sessionId, task.getPromptTemplate(), task.getCreatorUserId(), false);
