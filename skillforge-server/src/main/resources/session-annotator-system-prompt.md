@@ -11,10 +11,27 @@ STEP 1 — Signal detection (deterministic):
 
 STEP 2 — LLM annotation (your job):
   For each sessionId in sessions_needing_llm (cap at 10):
-    Call AnnotateSession(sessionId).
-    AnnotateSession returns the trace summary + recent message tail; you
-    decide outcome + suspect_surface + confidence + reasoning, and the
-    tool writes source=llm annotation in one round-trip.
+
+    STEP 2.1 — Fetch trace context (deterministic):
+      Call GetTrace(action="list_traces", sessionId=<sessionId>).
+      Returns the trace summary list. Pick the most recent trace (or all
+      if a cross-trace pattern matters).
+      Then call GetTrace(action="get_trace", traceId=<picked>) to get the
+      span tree (default maxSpans=30, hard cap 100).
+
+    STEP 2.2 — Judge + annotate (LLM reasoning):
+      Based on the trace + span info from STEP 2.1, decide:
+        - outcome:          success | partial_success | failure | cancelled
+        - suspect_surface:  skill | prompt | behavior_rule | other | unclear
+        - confidence:       0..1
+        - reasoning:        1-2 sentences, cite a specific span if relevant
+        - top_failing_tool: optional, name of the tool that errored most
+                            (null if none)
+      Call AnnotateSession(sessionId, outcome, suspect_surface, confidence,
+                           reasoning, top_failing_tool).
+      The tool writes 2-3 rows to t_session_annotation (source=llm) and
+      returns the annotation IDs.
+
   If sessions_needing_llm is empty, skip to step 3.
 
 STEP 3 — Clustering (deterministic):

@@ -410,10 +410,15 @@ signature = outcome + "|" + suspect_surface + "|" + top_failing_tool + "|" + age
   - ✅ `DetectSignalAnnotationsTool` 薄包装（window_hours clamp [1, 168]）+ 2 单测；在 `SkillForgeConfig` 加 `@Bean` 注册
   - ✅ 删 Phase 1.0 红测试占位 `SignalAnnotationJobRedTest.java`（包名收口到 sessionannotation）
   - **mvn 1416/0/0/71 → BUILD SUCCESS in 28.3s**（+14 test，-1 skipped）；核心文件 6 个 `git diff HEAD` 零行
-- [ ] **Phase 1.3：AnnotateSessionTool + 端到端 dispatch**
-  - `AnnotateSessionTool`（agent 决策 outcome/surface/confidence/reasoning，tool 只持久化）
-  - 派一次 dispatch 端到端 manual test（手动 trigger session-annotator 跑一次）
-  - 校验 source=llm 标注真写进 t_session_annotation
+- [x] **Phase 1.3：AnnotateSessionTool + GetTrace 复用** ✅ 2026-05-14
+  - ✅ V76 migration：`UPDATE t_agent.tool_ids` 加 `GetTrace` + `AnnotateSession`（dep order：DetectSignal → GetTrace → AnnotateSession → RecomputeClusters）；同时 reset `system_prompt` 回 `SEE_FILE:*` placeholder 让 `SessionAnnotatorBootstrap` 下次启动重新加载更新过的 prompt md（Bootstrap 现行逻辑识别 sentinel 是否仍存在 → 是则重读，避免改 Bootstrap）
+  - ✅ `session-annotator-system-prompt.md` STEP 2 拆为 2.1 `GetTrace(list_traces + get_trace)` 取 trace 上下文 + 2.2 `AnnotateSession(outcome, suspect_surface, confidence, reasoning, top_failing_tool)` 写 llm 标注；STEP 1 / STEP 3 / heuristics / constraints 不动
+  - ✅ **复用现有 `GetTraceTool`** 而非新建 `SessionFetchTool`（user-confirmed Option D）—— 减重复实现 + agent 已熟悉双 action 接口；V1 单租户 dogfood (session.userId = agent.owner_id = 1) `assertSessionAccessible` 不触发；V2+ 多租户需 system-agent context bypass（backlog，不在本包）
+  - ✅ `SessionAnnotationLlmService.annotateSession(sessionId, outcome, suspect_surface, confidence, reasoning, top_failing_tool)` 写 2-3 行（outcome + suspect_surface + 可选 top_failing_tool）以 `source='llm'`；enum + range + blank 校验集中 `SessionAnnotationConstants`；UNIQUE 幂等同 signal-stage（exact-tuple skip，不同 value append）
+  - ✅ `AnnotateSessionTool` 薄包装（input/output JSON 解析 + service 调用）+ `SkillForgeConfig` 注册紧跟 `detectSignalAnnotationsTool` Bean
+  - ✅ 7 单测 `SessionAnnotationLlmServiceTest` + 5 单测 `AnnotateSessionToolTest`（Mockito 风格，无 Docker 依赖）
+  - **mvn 1428/0/0/71 → BUILD SUCCESS**（+12 test 全绿）；核心文件 6 个 `git diff HEAD` 零行
+  - 端到端 dispatch manual test 推迟到 Phase Final（与 cron `*/2 * * * * *` 那次合并）
 - [ ] **Phase 1.4：Clustering + InsightsController**
   - `SessionPatternClusterService.recompute(window)` + 幂等测试
   - `RecomputeClustersTool` 薄包装

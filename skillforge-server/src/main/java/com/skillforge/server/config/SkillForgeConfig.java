@@ -702,11 +702,11 @@ public class SkillForgeConfig {
 
     /**
      * PROD-LABEL-CLUSTER V1 Phase 1.2 — STEP 1 of the session-annotator agent
-     * pipeline. AnnotateSession (STEP 2) + RecomputeClusters (STEP 3) land in
-     * Phase 1.3 / 1.4 respectively. Until both ship, session-annotator agent
-     * runs that reach STEP 2 will partial-fail (tool not in toolRegistry) — see
-     * §4.1 prompt CONSTRAINT "If a tool returns an error, log it and proceed";
-     * STEP 1 still succeeds and writes source='signal' rows.
+     * pipeline. AnnotateSession (STEP 2.2, registered below) lands in Phase 1.3;
+     * RecomputeClusters (STEP 3) lands in Phase 1.4. Until RecomputeClusters
+     * ships, session-annotator agent runs that reach STEP 3 will partial-fail
+     * (tool not in toolRegistry) — see §4.1 prompt CONSTRAINT "If a tool returns
+     * an error, log it and proceed"; STEP 1 + STEP 2 still succeed.
      */
     @Bean
     public com.skillforge.server.tool.sessionannotation.DetectSignalAnnotationsTool detectSignalAnnotationsTool(
@@ -717,6 +717,27 @@ public class SkillForgeConfig {
                 new com.skillforge.server.tool.sessionannotation.DetectSignalAnnotationsTool(signalService, objectMapper);
         skillRegistry.registerTool(tool);
         log.info("Registered DetectSignalAnnotationsTool into SkillRegistry");
+        return tool;
+    }
+
+    /**
+     * PROD-LABEL-CLUSTER V1 Phase 1.3 — STEP 2.2 of the session-annotator agent
+     * pipeline. After STEP 2.1 (the agent calls {@code GetTrace} to fetch trace
+     * summary + span tree — that tool already exists, wired through
+     * {@code GetTraceTool}'s own @Bean), this tool persists the LLM judgment as
+     * 2-3 {@code source='llm'} rows in {@code t_session_annotation}. V76
+     * migration adds {@code GetTrace} + {@code AnnotateSession} to the
+     * session-annotator's tool_ids.
+     */
+    @Bean
+    public com.skillforge.server.tool.sessionannotation.AnnotateSessionTool annotateSessionTool(
+            com.skillforge.server.sessionannotation.SessionAnnotationLlmService llmService,
+            ObjectMapper objectMapper,
+            SkillRegistry skillRegistry) {
+        com.skillforge.server.tool.sessionannotation.AnnotateSessionTool tool =
+                new com.skillforge.server.tool.sessionannotation.AnnotateSessionTool(llmService, objectMapper);
+        skillRegistry.registerTool(tool);
+        log.info("Registered AnnotateSessionTool into SkillRegistry");
         return tool;
     }
 
