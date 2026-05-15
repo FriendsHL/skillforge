@@ -1,6 +1,6 @@
 # SkillForge 文档
 
-> 更新于：2026-05-14
+> 更新于：2026-05-15
 > Agent 规则：先读这里，再只打开当前任务链接到的文档。
 
 编辑 docs 前，先读 [DOCS-GOVERNANCE.md](DOCS-GOVERNANCE.md)。
@@ -19,7 +19,6 @@
 
 | ID | 标题 | 状态 | 需求包 | MRD | PRD | 技术方案 | 交付 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| ATTRIBUTION-AGENT | 飞轮归因 + Optimization Event 因果链（飞轮 V3）| ratified | [需求包](requirements/active/ATTRIBUTION-AGENT/index.md) | [MRD](requirements/active/ATTRIBUTION-AGENT/mrd.md) | [PRD](requirements/active/ATTRIBUTION-AGENT/prd.md) | [技术方案](requirements/active/ATTRIBUTION-AGENT/tech-design.md) | — |
 | SKILL-AB-MULTITURN-FIX | Skill A/B 多轮评测修复 | design-draft | [需求包](requirements/active/SKILL-AB-MULTITURN-FIX/index.md) | [MRD](requirements/active/SKILL-AB-MULTITURN-FIX/mrd.md) | [PRD](requirements/active/SKILL-AB-MULTITURN-FIX/prd.md) | [技术方案](requirements/active/SKILL-AB-MULTITURN-FIX/tech-design.md) | — |
 
 > 整体方案：[plans/PROD-OPTIMIZATION-FLYWHEEL/plan.md](plans/PROD-OPTIMIZATION-FLYWHEEL/plan.md) —— 数据飞轮 / 优化闭环 6 版本拆分
@@ -40,6 +39,7 @@
 
 | ID | 标题 | 需求包 | 技术方案 |
 | --- | --- | --- | --- |
+| ATTRIBUTION-AGENT | 飞轮归因 + Optimization Event 因果链（飞轮 V3）— BE+FE 闭环 + 5 phase review + 2 BLOCKER tx-propagation fix + sentinel race-window 防御 + bypass-cooldown ratify | [需求包](requirements/archive/2026-05-15-ATTRIBUTION-AGENT/index.md) | [方案](requirements/archive/2026-05-15-ATTRIBUTION-AGENT/tech-design.md) |
 | SKILL-CANARY-ROLLOUT | Skill 灰度（架构保留）+ 生产指标回流（飞轮 V2）— BE+FE 闭环 + 3 phase review + tx-isolation fix + silent-failure fix | [需求包](requirements/archive/2026-05-15-SKILL-CANARY-ROLLOUT/index.md) | [方案](requirements/archive/2026-05-15-SKILL-CANARY-ROLLOUT/tech-design.md) |
 | PROD-LABEL-CLUSTER | 生产 Session 标注 + 失败聚类（飞轮 V1）— BE+FE 闭环 + Phase 2 review + W2 Blocker fix | [需求包](requirements/archive/2026-05-14-PROD-LABEL-CLUSTER/index.md) | [方案](requirements/archive/2026-05-14-PROD-LABEL-CLUSTER/tech-design.md) |
 | MULTIMODAL-MVP | 多模态输入 Phase 1（图片 + PDF 上传 + agent 独立多模态模型 + 上传 gate） | [需求包](requirements/archive/2026-05-14-MULTIMODAL-MVP/index.md) | [方案](requirements/archive/2026-05-14-MULTIMODAL-MVP/tech-design.md) |
