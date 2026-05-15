@@ -152,6 +152,63 @@ class SkillAbEvalServiceMultiTurnTest {
     }
 
     @Test
+    @DisplayName("multi-turn engine.run failure isolates to per-scenario ERROR result; AB run still COMPLETED")
+    void runAbTestAsync_multiTurnScenario_perScenarioErrorIsolated() throws Exception {
+        // SKILL-AB-MULTITURN-FIX 验收 #6 explicit coverage:
+        // engine.run 在某一 multi-turn user turn 抛异常时，runMultiTurnScenario 内部的
+        // try/catch (SkillAbEvalService.java:1013-1017) 把它转成 ScenarioRunResult.error，
+        // 然后 runCandidateEvalSet (SkillAbEvalService.java:579-602) 把 ERROR runResult
+        // 喂给 multi-turn judge 并把 candidateStatus 钉成 "ERROR" (:588) / candidateScore
+        // = 0.0 (:589 via judge output)；外层 runAbTestAsync 的 try/catch (:603-607 mirror
+        // + :501-522 outer) 不会被触发 — abRun.setStatus("COMPLETED") at :464 仍执行。
+        // PRD 验收点："A/B run 失败场景有明确 per-scenario error result，run 状态和事件不回退"。
+        SkillAbRunEntity abRun = abRun();
+        SkillEntity candidate = candidateSkill();
+        EvalScenario scenario = multiTurnScenario();
+        AgentDefinition agentDef = agentDefinition();
+
+        when(skillAbRunRepository.findById("ab-1")).thenReturn(Optional.of(abRun));
+        when(skillAbRunRepository.save(any(SkillAbRunEntity.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(scenarioLoader.loadAll()).thenReturn(List.of(scenario));
+        when(skillRepository.findById(2L)).thenReturn(Optional.of(candidate));
+        when(agentService.getAgent(10L)).thenReturn(new AgentEntity());
+        when(agentService.toAgentDefinition(any(AgentEntity.class))).thenReturn(agentDef);
+        when(sandboxFactory.buildSandboxRegistryWithSkills(eq("ab-1"), eq("multi-1"), any()))
+                .thenReturn(skillRegistry);
+        when(sandboxFactory.getSandboxRoot("ab-1", "multi-1")).thenReturn(Path.of("/tmp/eval-ab"));
+        when(evalEngineFactory.buildEvalEngine(skillRegistry)).thenReturn(engine);
+        // Force per-scenario failure by making engine.run throw on the user turn.
+        when(engine.run(any(), anyString(), any(), anyString(), any(), any()))
+                .thenThrow(new RuntimeException("simulated turn failure"));
+        // Judge is still called with the ERROR runResult (per :583); mock a low-score
+        // output so we don't NPE in the judge wiring + isolate the assertion to per-scenario
+        // ERROR mapping rather than judge implementation detail.
+        EvalJudgeMultiTurnOutput defaultLowOutput = new EvalJudgeMultiTurnOutput();
+        defaultLowOutput.setCompositeScore(0.0);
+        defaultLowOutput.setPass(false);
+        when(evalJudgeTool.judgeMultiTurnConversation(eq(scenario), any(), any(MultiTurnTranscript.class)))
+                .thenReturn(defaultLowOutput);
+
+        // Must not throw — per-scenario error isolation invariant.
+        ReflectionTestUtils.invokeMethod(service, "runAbTestAsync", "ab-1");
+
+        // AB run reaches COMPLETED (per-scenario error did NOT escalate to outer
+        // runAbTestAsync catch which would set status=FAILED at :504).
+        ArgumentCaptor<SkillAbRunEntity> savedCaptor = ArgumentCaptor.forClass(SkillAbRunEntity.class);
+        verify(skillAbRunRepository, org.mockito.Mockito.atLeastOnce()).save(savedCaptor.capture());
+        SkillAbRunEntity finalSave = savedCaptor.getAllValues().get(savedCaptor.getAllValues().size() - 1);
+        assertThat(finalSave.getStatus()).isEqualTo("COMPLETED");
+        assertThat(finalSave.getFailureReason()).isNull();
+        // Per-scenario ERROR + 0.0 score serialized into ab_scenario_results_json.
+        assertThat(finalSave.getAbScenarioResultsJson()).contains("\"status\":\"ERROR\"");
+        assertThat(finalSave.getAbScenarioResultsJson()).contains("\"oracleScore\":0.0");
+        // With 0 / 1 passed, candidate pass rate must be 0.0 (does NOT trip promote).
+        assertThat(finalSave.getCandidatePassRate()).isEqualTo(0.0);
+        // Single-turn judge MUST NOT be called as a fallback.
+        verify(evalJudgeTool, never()).judge(eq(scenario), any());
+    }
+
+    @Test
     @DisplayName("single-turn held-out scenario keeps existing single-turn judge path")
     void runAbTestAsync_singleTurnScenario_usesSingleTurnJudge() throws Exception {
         SkillAbRunEntity abRun = abRun();

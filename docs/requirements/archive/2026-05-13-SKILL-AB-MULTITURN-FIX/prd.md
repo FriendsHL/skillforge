@@ -2,14 +2,16 @@
 
 ---
 id: SKILL-AB-MULTITURN-FIX
-status: design-draft
+status: delivered
 owner: youren
 priority: P1
 risk: Mid
 mrd: ./mrd.md
 tech_design: ./tech-design.md
 created: 2026-05-13
-updated: 2026-05-13
+updated: 2026-05-16
+delivered_commit: 6a78dd5
+gap_fill_commit: TBD
 ---
 
 ## 摘要

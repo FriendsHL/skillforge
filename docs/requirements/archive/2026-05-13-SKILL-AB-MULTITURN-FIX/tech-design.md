@@ -2,11 +2,13 @@
 
 ---
 id: SKILL-AB-MULTITURN-FIX
-status: design-draft
+status: delivered
 prd: ./prd.md
 risk: Mid
 created: 2026-05-13
-updated: 2026-05-13
+updated: 2026-05-16
+delivered_commit: 6a78dd5
+gap_fill_commit: TBD
 ---
 
 ## TL;DR
@@ -15,11 +17,15 @@ updated: 2026-05-13
 
 ## 现状证据
 
-- `skillforge-server/src/main/java/com/skillforge/server/improve/SkillAbEvalService.java:387-393` 明确标注 EVAL-V2 M2 R5：multi-turn 不支持，warning 后 fallback single-turn。
-- `skillforge-server/src/main/java/com/skillforge/server/improve/SkillAbEvalService.java:398` fallback 后仍调用 `runSingleScenario(...)`。
-- `skillforge-server/src/main/java/com/skillforge/server/improve/SkillAbEvalService.java:655-660` 的 single-turn A/B 通过 `sandboxFactory.buildSandboxRegistryWithSkills(abRunId, scenarioId, List.of(candidateSkillDef))` 注入 candidate skill。
-- `skillforge-server/src/main/java/com/skillforge/server/eval/ScenarioRunnerTool.java:132-146` 的 multi-turn runner 会自己调用 `sandboxFactory.buildSandboxRegistry(evalRunId, scenarioId)`，没有 candidate skill override 参数。
-- `skillforge-server/src/main/java/com/skillforge/server/eval/EvalOrchestrator.java:159-185` 已证明普通 eval 路径能对 multi-turn scenario 使用 `runScenarioMultiTurn(...)` + `judgeMultiTurnConversation(...)`。
+> **2026-05-16 行号更新**：commit `6a78dd5` (修复) + V3 / V4 后续改动后行号漂移，下表反映 archive 时点真实代码状态。原 design-draft 行号 (387-393 / 398 / 655-660 / ScenarioRunnerTool 132-146) 已 stale，保留备份在本节末尾。
+
+- `skillforge-server/src/main/java/com/skillforge/server/improve/SkillAbEvalService.java:579-602` `runCandidateEvalSet` 已分支：`scenario.isMultiTurn()` → 新 `runMultiTurnScenario(...)` + `evalJudgeTool.judgeMultiTurnConversation(...)`；否则走 `runSingleScenario(...)` + `evalJudgeTool.judge(...)`。
+- `skillforge-server/src/main/java/com/skillforge/server/improve/SkillAbEvalService.java:880-1021` 新增 `runMultiTurnScenario(abRunId, scenario, agentDef, candidateSkillDef, transcriptOut)` 私有 method（142 行），887-888 行用 `sandboxFactory.buildSandboxRegistryWithSkills(abRunId, scenario.getId(), List.of(candidateSkillDef))` 注入 candidate skill。
+- `skillforge-server/src/main/java/com/skillforge/server/improve/SkillAbEvalService.java:822-823` 既有 single-turn `runSingleScenario` 同样使用 `sandboxFactory.buildSandboxRegistryWithSkills(abRunId, scenario.getId(), List.of(candidateSkillDef))` 注入 candidate skill (行为零漂移)。
+- `skillforge-server/src/main/java/com/skillforge/server/eval/ScenarioRunnerTool.java:132-144` 的 multi-turn runner 仍只调用 `sandboxFactory.buildSandboxRegistry(evalRunId, scenarioId)`，无 candidate skill override 参数 — 故 skill A/B 必须保留私有 `runMultiTurnScenario` 而不复用此入口。
+- `skillforge-server/src/main/java/com/skillforge/server/eval/EvalOrchestrator.java:159-185` 普通 eval 路径对 multi-turn scenario 使用 `runScenarioMultiTurn(...)` + `judgeMultiTurnConversation(...)`，模式被 skill A/B 借鉴。
+
+**原 design-draft (2026-05-13) 行号**（备查）：`SkillAbEvalService.java:387-393` (fallback warning) / `:398` (fallback `runSingleScenario`) / `:655-660` (single-turn `buildSandboxRegistryWithSkills`)。
 
 ## 范围决策
 

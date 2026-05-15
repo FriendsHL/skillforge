@@ -3,11 +3,13 @@
 ---
 id: SKILL-AB-MULTITURN-FIX
 mode: mid
-status: design-draft
+status: delivered
 priority: P1
 risk: Mid
 created: 2026-05-13
-updated: 2026-05-13
+updated: 2026-05-16
+delivered_commit: 6a78dd5
+gap_fill_commit: TBD
 ---
 
 ## 摘要
