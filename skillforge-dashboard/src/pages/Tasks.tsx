@@ -1,20 +1,18 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Typography, Table, Tag, Tooltip, Select, Space, Button } from 'antd';
 import { useQuery } from '@tanstack/react-query';
 import type { ColumnsType } from 'antd/es/table';
 import { listTaskRuns, type TaskRunItem, type TaskRunSource } from '../api/tasks';
 import SchedulesPage from './Schedules';
+import TabBar from '../components/TabBar';
 
-const { Title, Paragraph, Text } = Typography;
+const { Text } = Typography;
 
 /**
  * Unified Tasks page — shows runs across all subsystems (scheduled tasks,
  * sub-agents, skill evolution, A/B evals, multi-agent collab) so operators
  * have a single feed for "what has been running".
- *
- * Filter `source` to narrow to one subsystem. Default = combined feed, sort
- * by triggeredAt DESC.
  */
 
 const SOURCE_OPTIONS: { value: TaskRunSource; label: string; color: string }[] = [
@@ -68,36 +66,105 @@ function fmtDuration(start: string | null, end: string | null): string {
   return `${(ms / 60_000).toFixed(1)}m`;
 }
 
-const tabBtn = (active: boolean): React.CSSProperties => ({
-  padding: '10px 16px',
-  background: 'none',
-  border: 'none',
-  borderBottom: active ? '2px solid var(--accent-primary, #6366f1)' : '2px solid transparent',
-  color: active ? 'var(--fg-1, #111827)' : 'var(--fg-3, #8a8a93)',
-  cursor: active ? 'default' : 'pointer',
-  fontSize: 13,
-  fontWeight: active ? 600 : 500,
-});
+/* ─── Stats bar (mirrors Schedules stats pattern) ─── */
 
-const TabBar: React.FC<{ activeTab: 'runs' | 'schedules'; onSwitch: (t: 'runs' | 'schedules') => void }> = ({ activeTab, onSwitch }) => (
-  <div style={{ display: 'flex', alignItems: 'center', gap: 0, borderBottom: '1px solid var(--border, #e5e7eb)', flexShrink: 0 }}>
-    <button style={tabBtn(activeTab === 'runs')} onClick={() => onSwitch('runs')}>Runs</button>
-    <button style={tabBtn(activeTab === 'schedules')} onClick={() => onSwitch('schedules')}>Schedules</button>
-  </div>
-);
+const statsBar: React.CSSProperties = {
+  display: 'flex',
+  gap: 12,
+  marginBottom: 20,
+};
+
+const statItem: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  padding: '8px 14px',
+  background: 'var(--bg-surface)',
+  border: '1px solid var(--border-1)',
+  borderRadius: 'var(--radius-md)',
+  fontSize: 'var(--font-size-sm)',
+};
+
+const statCount: React.CSSProperties = {
+  fontFamily: 'var(--font-mono)',
+  fontSize: 16,
+  fontWeight: 500,
+  color: 'var(--fg-1)',
+};
+
+const statLabel: React.CSSProperties = {
+  color: 'var(--fg-3)',
+  fontSize: 12,
+};
+
+/* ─── Empty state ─── */
+
+const emptyWrap: React.CSSProperties = {
+  padding: '48px 24px',
+  textAlign: 'center',
+};
+
+const emptyIcon: React.CSSProperties = {
+  width: 56,
+  height: 56,
+  margin: '0 auto 16px',
+  background: 'var(--bg-hover)',
+  borderRadius: 'var(--radius-lg)',
+  display: 'grid',
+  placeItems: 'center',
+  color: 'var(--fg-4)',
+};
+
+const emptyTitle: React.CSSProperties = {
+  fontSize: 15,
+  fontWeight: 500,
+  color: 'var(--fg-2)',
+  margin: '0 0 6px',
+};
+
+const emptyDesc: React.CSSProperties = {
+  fontSize: 'var(--font-size-sm)',
+  color: 'var(--fg-4)',
+  margin: 0,
+};
+
+/* ─── Main component ─── */
 
 const Tasks: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<'runs' | 'schedules'>('runs');
+  const [activeTab, setActiveTab] = useState('runs');
   const [source, setSource] = useState<TaskRunSource | undefined>(undefined);
   const [limit] = useState(50);
 
   const { data, isLoading, refetch, isFetching } = useQuery({
     queryKey: ['task-runs', source, limit],
     queryFn: () => listTaskRuns({ source, limit }).then((r) => r.data ?? []),
-    refetchInterval: 30_000, // light auto-refresh — running tasks change fast
+    refetchInterval: 30_000,
   });
 
   const rows: TaskRunItem[] = data ?? [];
+
+  /* Stats computed from all rows (unfiltered) */
+  const { data: allRows = [] } = useQuery({
+    queryKey: ['task-runs', undefined, 200],
+    queryFn: () => listTaskRuns({ limit: 200 }).then((r) => r.data ?? []),
+    staleTime: 30_000,
+  });
+
+  const stats = useMemo(() => {
+    const running = allRows.filter((r) => {
+      const s = (r.status ?? '').toLowerCase();
+      return s === 'running' || s === 'pending' || s === 'in_progress';
+    }).length;
+    const failed = allRows.filter((r) => {
+      const s = (r.status ?? '').toLowerCase();
+      return s === 'failed' || s === 'error' || s === 'timeout';
+    }).length;
+    const succeeded = allRows.filter((r) => {
+      const s = (r.status ?? '').toLowerCase();
+      return s === 'success' || s === 'completed' || s === 'promoted' || s === 'ok';
+    }).length;
+    return { total: allRows.length, running, failed, succeeded };
+  }, [allRows]);
 
   const columns: ColumnsType<TaskRunItem> = [
     {
@@ -183,10 +250,7 @@ const Tasks: React.FC = () => {
       render: (msg: string | null) =>
         msg ? (
           <Tooltip title={msg} placement="topLeft">
-            <Text
-              ellipsis
-              style={{ fontSize: 12, maxWidth: 320, display: 'inline-block' }}
-            >
+            <Text ellipsis style={{ fontSize: 12, maxWidth: 320, display: 'inline-block' }}>
               {msg}
             </Text>
           </Tooltip>
@@ -202,11 +266,7 @@ const Tasks: React.FC = () => {
       render: (msg: string | null) =>
         msg ? (
           <Tooltip title={msg} placement="topLeft">
-            <Text
-              type="danger"
-              ellipsis
-              style={{ fontSize: 12, maxWidth: 200, display: 'inline-block' }}
-            >
+            <Text type="danger" ellipsis style={{ fontSize: 12, maxWidth: 200, display: 'inline-block' }}>
               {msg}
             </Text>
           </Tooltip>
@@ -214,10 +274,17 @@ const Tasks: React.FC = () => {
     },
   ];
 
+  const TAB_ITEMS = [
+    { key: 'runs', label: 'Runs' },
+    { key: 'schedules', label: 'Schedules' },
+  ];
+
+  const contentMaxWidth: React.CSSProperties = { maxWidth: 1400, margin: '0 auto' };
+
   if (activeTab === 'schedules') {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - var(--header-height, 44px))' }}>
-        <TabBar activeTab={activeTab} onSwitch={setActiveTab} />
+        <TabBar tabs={TAB_ITEMS} activeTab={activeTab} onSwitch={setActiveTab} />
         <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
           <SchedulesPage />
         </div>
@@ -227,8 +294,29 @@ const Tasks: React.FC = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - var(--header-height, 44px))' }}>
-      <TabBar activeTab={activeTab} onSwitch={setActiveTab} />
-      <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '24px 32px' }}>
+      <TabBar tabs={TAB_ITEMS} activeTab={activeTab} onSwitch={setActiveTab} />
+      <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: 'var(--sp-6, 24px) var(--sp-8, 32px)', ...contentMaxWidth }}>
+        {/* Stats */}
+        <div style={statsBar}>
+          <div style={statItem}>
+            <span style={statCount}>{stats.total}</span>
+            <span style={statLabel}>total</span>
+          </div>
+          <div style={statItem}>
+            <span style={{ ...statCount, color: 'var(--color-warn, #d49a3a)' }}>{stats.running}</span>
+            <span style={statLabel}>running</span>
+          </div>
+          <div style={statItem}>
+            <span style={{ ...statCount, color: 'var(--color-err, #b8412f)' }}>{stats.failed}</span>
+            <span style={statLabel}>failed</span>
+          </div>
+          <div style={statItem}>
+            <span style={{ ...statCount, color: 'var(--color-ok, #5c8a4a)' }}>{stats.succeeded}</span>
+            <span style={statLabel}>succeeded</span>
+          </div>
+        </div>
+
+        {/* Toolbar */}
         <Space style={{ marginBottom: 16 }} size="middle">
           <Select<TaskRunSource | undefined>
             allowClear
@@ -246,14 +334,27 @@ const Tasks: React.FC = () => {
           </Text>
         </Space>
 
-        <Table<TaskRunItem>
-          rowKey="runId"
-          columns={columns}
-          dataSource={rows}
-          loading={isLoading}
-          pagination={{ pageSize: 25, showSizeChanger: false }}
-          size="small"
-        />
+        {/* Table or empty state */}
+        {!isLoading && rows.length === 0 ? (
+          <div style={emptyWrap}>
+            <div style={emptyIcon}>
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+              </svg>
+            </div>
+            <p style={emptyTitle}>No task runs yet</p>
+            <p style={emptyDesc}>Runs from scheduled tasks, sub-agents, skill evolution, and A/B evals will appear here.</p>
+          </div>
+        ) : (
+          <Table<TaskRunItem>
+            rowKey="runId"
+            columns={columns}
+            dataSource={rows}
+            loading={isLoading}
+            pagination={{ pageSize: 25, showSizeChanger: false }}
+            size="small"
+          />
+        )}
       </div>
     </div>
   );
