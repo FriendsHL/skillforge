@@ -159,7 +159,15 @@ public class ScheduledTaskService {
     public ScheduledTaskEntity get(Long id, Long currentUserId) {
         ScheduledTaskEntity task = scheduledTaskRepository.findById(id)
                 .orElseThrow(() -> new ScheduledTaskNotFoundException(id));
-        assertOwnership(task, currentUserId);
+        // SYSTEM task (creator_user_id=0) read-exempt for any authenticated user
+        // — matches the update() partial-perm pattern (any user can toggle
+        // enabled / view config / view run history; only owner-creatable tasks
+        // require owner match). Fixes "Schedules run history shows nothing for
+        // session-annotator / memory-curator / attribution-dispatcher" (V3
+        // dogfood 2026-05-15).
+        if (!isSystemTask(task)) {
+            assertOwnership(task, currentUserId);
+        }
         return task;
     }
 

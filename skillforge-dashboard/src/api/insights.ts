@@ -48,6 +48,11 @@ export interface PatternMemberItem {
   completedAt: string | null;
   /** Truncated to 200 chars + "…" by BE; nullable. */
   runtimeError: string | null;
+  /** LLM-annotated outcome value (success / partial_success / failure / cancelled). */
+  outcome: string | null;
+  /** LLM annotator's per-session reasoning explaining why this row exists.
+   *  Truncated to 200 chars + "…" by BE; nullable when no annotation. */
+  outcomeReasoning: string | null;
 }
 
 export interface ListPatternsParams {

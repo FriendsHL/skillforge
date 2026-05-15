@@ -8,6 +8,7 @@ import com.skillforge.server.entity.SessionEntity;
 import com.skillforge.server.entity.SessionPatternEntity;
 import com.skillforge.server.repository.AgentRepository;
 import com.skillforge.server.repository.PatternSessionMemberRepository;
+import com.skillforge.server.repository.SessionAnnotationRepository;
 import com.skillforge.server.repository.SessionPatternRepository;
 import com.skillforge.server.repository.SessionRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -49,6 +50,7 @@ class InsightsControllerTest {
     @Mock private PatternSessionMemberRepository patternSessionMemberRepository;
     @Mock private SessionRepository sessionRepository;
     @Mock private AgentRepository agentRepository;
+    @Mock private SessionAnnotationRepository sessionAnnotationRepository;
 
     private InsightsController controller;
 
@@ -58,7 +60,8 @@ class InsightsControllerTest {
                 sessionPatternRepository,
                 patternSessionMemberRepository,
                 sessionRepository,
-                agentRepository);
+                agentRepository,
+                sessionAnnotationRepository);
     }
 
     @Test
@@ -155,11 +158,13 @@ class InsightsControllerTest {
         sA.setId("sess-A");
         sA.setAgentId(7L);
         sA.setCompletedAt(t);
+        sA.setRuntimeStatus("error");  // V3 dogfood: only surface runtime_error when status=error
         sA.setRuntimeError("boom");
         SessionEntity sB = new SessionEntity();
         sB.setId("sess-B");
         sB.setAgentId(7L);
         sB.setCompletedAt(t.minusSeconds(60));
+        sB.setRuntimeStatus("error");
         // Long error to verify truncation kicks in
         String longErr = "x".repeat(InsightsController.RUNTIME_ERROR_TRUNCATE_LEN + 50);
         sB.setRuntimeError(longErr);
@@ -180,13 +185,14 @@ class InsightsControllerTest {
         assertThat(first.sessionId()).isEqualTo("sess-A");
         assertThat(first.agentName()).isEqualTo("code-agent");
         assertThat(first.completedAt()).isEqualTo(t);
-        assertThat(first.runtimeError()).isEqualTo("boom");
+        // V3 dogfood 2026-05-15: runtime_error no longer returned at pattern
+        // member granularity (repetitive when pattern clustering signature
+        // already encodes the failure). Per-session error visible by drilling
+        // into SessionDetail.
+        assertThat(first.runtimeError()).isNull();
 
         PatternMemberItem second = body.get(1);
-        // Long runtime error truncated to 200 chars + ellipsis
-        assertThat(second.runtimeError())
-                .hasSize(InsightsController.RUNTIME_ERROR_TRUNCATE_LEN + 1)
-                .endsWith("…");
+        assertThat(second.runtimeError()).isNull();
     }
 
     @Test

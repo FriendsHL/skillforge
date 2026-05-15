@@ -2,10 +2,12 @@ package com.skillforge.server.controller;
 
 import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.PatternSessionMemberEntity;
+import com.skillforge.server.entity.SessionAnnotationEntity;
 import com.skillforge.server.entity.SessionEntity;
 import com.skillforge.server.entity.SessionPatternEntity;
 import com.skillforge.server.repository.AgentRepository;
 import com.skillforge.server.repository.PatternSessionMemberRepository;
+import com.skillforge.server.repository.SessionAnnotationRepository;
 import com.skillforge.server.repository.SessionPatternRepository;
 import com.skillforge.server.repository.SessionRepository;
 import org.slf4j.Logger;
@@ -60,15 +62,18 @@ public class InsightsController {
     private final PatternSessionMemberRepository patternSessionMemberRepository;
     private final SessionRepository sessionRepository;
     private final AgentRepository agentRepository;
+    private final SessionAnnotationRepository sessionAnnotationRepository;
 
     public InsightsController(SessionPatternRepository sessionPatternRepository,
                               PatternSessionMemberRepository patternSessionMemberRepository,
                               SessionRepository sessionRepository,
-                              AgentRepository agentRepository) {
+                              AgentRepository agentRepository,
+                              SessionAnnotationRepository sessionAnnotationRepository) {
         this.sessionPatternRepository = sessionPatternRepository;
         this.patternSessionMemberRepository = patternSessionMemberRepository;
         this.sessionRepository = sessionRepository;
         this.agentRepository = agentRepository;
+        this.sessionAnnotationRepository = sessionAnnotationRepository;
     }
 
     @GetMapping("/patterns")
@@ -141,20 +146,41 @@ public class InsightsController {
             }
         }
 
+        // Batch fetch LLM outcome annotations for all member sessions.
+        // Per session there's at most one (sessionId, 'outcome', 'llm') row by
+        // UNIQUE uq_session_annotation. Show the LLM's "why did this fail"
+        // reasoning + the outcome value (failure / partial_success / etc.) —
+        // this is the per-row insight runtime_error couldn't provide after
+        // the V1 W2 mass-cleanup replaced everything with the same legacy text.
+        Map<String, SessionAnnotationEntity> outcomeBySession = new HashMap<>();
+        for (String sid : sessionIds) {
+            for (SessionAnnotationEntity a : sessionAnnotationRepository.findBySessionId(sid)) {
+                if ("outcome".equals(a.getAnnotationType())
+                        && SessionAnnotationEntity.SOURCE_LLM.equals(a.getSource())) {
+                    outcomeBySession.put(sid, a);
+                    break;
+                }
+            }
+        }
+
         List<PatternMemberItem> out = new ArrayList<>(members.size());
         for (PatternSessionMemberEntity m : members) {
             SessionEntity s = sessionById.get(m.getSessionId());
             String agentName = null;
             Instant completedAt = null;
-            String runtimeError = null;
             if (s != null) {
                 if (s.getAgentId() != null) {
                     agentName = agentNameById.get(s.getAgentId());
                 }
                 completedAt = s.getCompletedAt();
-                runtimeError = truncate(s.getRuntimeError(), RUNTIME_ERROR_TRUNCATE_LEN);
             }
-            out.add(new PatternMemberItem(m.getSessionId(), agentName, completedAt, runtimeError));
+            SessionAnnotationEntity outcomeRow = outcomeBySession.get(m.getSessionId());
+            String outcomeValue = outcomeRow != null ? outcomeRow.getAnnotationValue() : null;
+            String outcomeReasoning = outcomeRow != null
+                    ? truncate(outcomeRow.getReasoning(), RUNTIME_ERROR_TRUNCATE_LEN)
+                    : null;
+            out.add(new PatternMemberItem(m.getSessionId(), agentName, completedAt,
+                    null, outcomeValue, outcomeReasoning));
         }
         log.debug("listPatternMembers patternId={} limit={} returned={}",
                 patternId, effLimit, out.size());
@@ -179,15 +205,19 @@ public class InsightsController {
     ) {}
 
     /**
-     * Pattern member row. {@code runtimeError} is truncated to
-     * {@link #RUNTIME_ERROR_TRUNCATE_LEN} chars in the drawer; the FE links
-     * out to {@code /traces?sessionId=...} for the full trace.
+     * Pattern member row. {@code runtimeError} field retained for wire-shape
+     * back-compat but always {@code null} since V3 dogfood 2026-05-15 — see
+     * {@code listPatternMembers} comment. {@code outcomeReasoning} is the LLM
+     * annotator's per-session "why did this fail" explanation, much more
+     * informative than the duplicated runtime_error.
      */
     public record PatternMemberItem(
             String sessionId,
             String agentName,
             Instant completedAt,
-            String runtimeError
+            String runtimeError,
+            String outcome,
+            String outcomeReasoning
     ) {}
 
     private static int clamp(Integer value, int defaultValue, int min, int max) {

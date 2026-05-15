@@ -128,18 +128,27 @@ const PatternDetailDrawer: React.FC<PatternDetailDrawerProps> = ({
         ),
     },
     {
-      title: 'Runtime error',
-      dataIndex: 'runtimeError',
-      key: 'runtimeError',
+      title: 'Outcome',
+      dataIndex: 'outcome',
+      key: 'outcome',
+      width: 110,
+      render: (outcome: string | null) =>
+        outcome ? (
+          <Text style={{ fontSize: 12 }}>{outcome}</Text>
+        ) : (
+          <Text type="secondary">—</Text>
+        ),
+    },
+    {
+      title: 'Reasoning',
+      dataIndex: 'outcomeReasoning',
+      key: 'outcomeReasoning',
       render: (msg: string | null) =>
         msg ? (
-          // BE already truncated to 200 chars + "…"; tooltip shows the same
-          // truncated text since the full string is not on the wire.
           <Tooltip title={msg} placement="topLeft">
             <Text
-              type="danger"
               ellipsis
-              style={{ fontSize: 12, maxWidth: 320, display: 'inline-block' }}
+              style={{ fontSize: 12, maxWidth: 360, display: 'inline-block' }}
             >
               {msg}
             </Text>

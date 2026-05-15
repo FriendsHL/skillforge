@@ -36,6 +36,7 @@ const primaryNav: NavItem[] = [
   { key: 'traces', path: '/traces', label: 'Traces' },
   { key: 'channels', path: '/channels', label: 'Channels' },
   { key: 'schedules', path: '/schedules', label: 'Schedules' },
+  { key: 'tasks', path: '/tasks', label: 'Tasks' },
   { key: 'insights', path: '/insights/patterns', label: 'Insights' },
   { key: 'optimization-events', path: '/insights/optimization-events', label: 'Optimization' },
 ];
