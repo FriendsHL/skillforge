@@ -348,7 +348,7 @@ const SkillList: React.FC = () => {
             )}
           </button>
         </div>
-        <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+        <div style={{ flex: 1, minHeight: 0, overflow: 'auto', scrollbarGutter: 'stable' }}>
           <SkillDraftsPage />
         </div>
       </div>
