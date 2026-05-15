@@ -10,6 +10,7 @@ import {
 } from '../api/insights';
 import PatternList from '../components/insights/PatternList';
 import PatternDetailDrawer from '../components/insights/PatternDetailDrawer';
+import OptimizationEventsPage from './OptimizationEvents';
 
 const { Title, Paragraph, Text } = Typography;
 
@@ -38,6 +39,24 @@ const SURFACE_OPTIONS: { value: SuspectSurface; label: string }[] = [
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
 
+const insightsTabBtn = (active: boolean): React.CSSProperties => ({
+  padding: '10px 16px',
+  background: 'none',
+  border: 'none',
+  borderBottom: active ? '2px solid var(--accent-primary, #6366f1)' : '2px solid transparent',
+  color: active ? 'var(--fg-1, #111827)' : 'var(--fg-3, #8a8a93)',
+  cursor: active ? 'default' : 'pointer',
+  fontSize: 13,
+  fontWeight: active ? 600 : 500,
+});
+
+const InsightsTabBar: React.FC<{ activeTab: 'patterns' | 'optimization'; onSwitch: (t: 'patterns' | 'optimization') => void }> = ({ activeTab, onSwitch }) => (
+  <div style={{ display: 'flex', alignItems: 'center', gap: 0, borderBottom: '1px solid var(--border, #e5e7eb)', flexShrink: 0 }}>
+    <button style={insightsTabBtn(activeTab === 'patterns')} onClick={() => onSwitch('patterns')}>Patterns</button>
+    <button style={insightsTabBtn(activeTab === 'optimization')} onClick={() => onSwitch('optimization')}>Optimization</button>
+  </div>
+);
+
 /**
  * PROD-LABEL-CLUSTER Phase 1.5 — `/insights/patterns` page.
  *
@@ -46,6 +65,7 @@ const MAX_LIMIT = 200;
  * presentational components.
  */
 const Insights: React.FC = () => {
+  const [activeTab, setActiveTab] = useState<'patterns' | 'optimization'>('patterns');
   const [filters, setFilters] = useState<ListPatternsParams>({ limit: DEFAULT_LIMIT });
   const [selectedPattern, setSelectedPattern] = useState<PatternListItem | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);

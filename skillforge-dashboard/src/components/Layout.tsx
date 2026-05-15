@@ -31,10 +31,8 @@ const primaryNav: NavItem[] = [
   { key: 'memories', path: '/memories', label: 'Memory' },
   { key: 'traces', path: '/traces', label: 'Traces' },
   { key: 'channels', path: '/channels', label: 'Channels' },
-  { key: 'schedules', path: '/schedules', label: 'Schedules' },
   { key: 'tasks', path: '/tasks', label: 'Tasks' },
   { key: 'insights', path: '/insights/patterns', label: 'Insights' },
-  { key: 'optimization-events', path: '/insights/optimization-events', label: 'Optimization' },
 ];
 
 const paletteItems: PaletteItem[] = primaryNav.map((i) => ({

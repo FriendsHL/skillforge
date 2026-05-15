@@ -4,6 +4,7 @@ import { Typography, Table, Tag, Tooltip, Select, Space, Button } from 'antd';
 import { useQuery } from '@tanstack/react-query';
 import type { ColumnsType } from 'antd/es/table';
 import { listTaskRuns, type TaskRunItem, type TaskRunSource } from '../api/tasks';
+import SchedulesPage from './Schedules';
 
 const { Title, Paragraph, Text } = Typography;
 
@@ -67,7 +68,26 @@ function fmtDuration(start: string | null, end: string | null): string {
   return `${(ms / 60_000).toFixed(1)}m`;
 }
 
+const tabBtn = (active: boolean): React.CSSProperties => ({
+  padding: '10px 16px',
+  background: 'none',
+  border: 'none',
+  borderBottom: active ? '2px solid var(--accent-primary, #6366f1)' : '2px solid transparent',
+  color: active ? 'var(--fg-1, #111827)' : 'var(--fg-3, #8a8a93)',
+  cursor: active ? 'default' : 'pointer',
+  fontSize: 13,
+  fontWeight: active ? 600 : 500,
+});
+
+const TabBar: React.FC<{ activeTab: 'runs' | 'schedules'; onSwitch: (t: 'runs' | 'schedules') => void }> = ({ activeTab, onSwitch }) => (
+  <div style={{ display: 'flex', alignItems: 'center', gap: 0, borderBottom: '1px solid var(--border, #e5e7eb)', flexShrink: 0 }}>
+    <button style={tabBtn(activeTab === 'runs')} onClick={() => onSwitch('runs')}>Runs</button>
+    <button style={tabBtn(activeTab === 'schedules')} onClick={() => onSwitch('schedules')}>Schedules</button>
+  </div>
+);
+
 const Tasks: React.FC = () => {
+  const [activeTab, setActiveTab] = useState<'runs' | 'schedules'>('runs');
   const [source, setSource] = useState<TaskRunSource | undefined>(undefined);
   const [limit] = useState(50);
 
@@ -194,41 +214,47 @@ const Tasks: React.FC = () => {
     },
   ];
 
+  if (activeTab === 'schedules') {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - var(--header-height, 44px))' }}>
+        <TabBar activeTab={activeTab} onSwitch={setActiveTab} />
+        <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+          <SchedulesPage />
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div style={{ padding: '24px 32px' }}>
-      <Title level={3} style={{ marginBottom: 4 }}>
-        Tasks
-      </Title>
-      <Paragraph type="secondary" style={{ marginBottom: 20, fontSize: 13 }}>
-        Unified view of all task / agent runs across scheduled tasks, sub-agents,
-        skill evolution, A/B evals, and multi-agent collabs. Auto-refresh every 30s.
-      </Paragraph>
+    <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - var(--header-height, 44px))' }}>
+      <TabBar activeTab={activeTab} onSwitch={setActiveTab} />
+      <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '24px 32px' }}>
+        <Space style={{ marginBottom: 16 }} size="middle">
+          <Select<TaskRunSource | undefined>
+            allowClear
+            placeholder="Filter by source"
+            value={source}
+            onChange={(v) => setSource(v)}
+            options={SOURCE_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+            style={{ width: 200 }}
+          />
+          <Button onClick={() => refetch()} loading={isFetching}>
+            Refresh
+          </Button>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            {rows.length} run{rows.length === 1 ? '' : 's'}
+          </Text>
+        </Space>
 
-      <Space style={{ marginBottom: 16 }} size="middle">
-        <Select<TaskRunSource | undefined>
-          allowClear
-          placeholder="Filter by source"
-          value={source}
-          onChange={(v) => setSource(v)}
-          options={SOURCE_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
-          style={{ width: 200 }}
+        <Table<TaskRunItem>
+          rowKey="runId"
+          columns={columns}
+          dataSource={rows}
+          loading={isLoading}
+          pagination={{ pageSize: 25, showSizeChanger: false }}
+          size="small"
         />
-        <Button onClick={() => refetch()} loading={isFetching}>
-          Refresh
-        </Button>
-        <Text type="secondary" style={{ fontSize: 12 }}>
-          {rows.length} run{rows.length === 1 ? '' : 's'}
-        </Text>
-      </Space>
-
-      <Table<TaskRunItem>
-        rowKey="runId"
-        columns={columns}
-        dataSource={rows}
-        loading={isLoading}
-        pagination={{ pageSize: 25, showSizeChanger: false }}
-        size="small"
-      />
+      </div>
     </div>
   );
 };

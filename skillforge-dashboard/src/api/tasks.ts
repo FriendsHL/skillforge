@@ -1,4 +1,4 @@
-import { api } from './index';
+import api from './index';
 
 /**
  * Unified task-run row from BE TasksController. Most fields are nullable
