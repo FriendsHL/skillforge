@@ -840,11 +840,12 @@ public class SkillForgeConfig {
     @Bean
     public com.skillforge.server.tool.attribution.WriteOptimizationEventTool writeOptimizationEventTool(
             com.skillforge.server.repository.OptimizationEventRepository eventRepository,
+            com.skillforge.server.repository.SessionPatternRepository patternRepository,
             ObjectMapper objectMapper,
             SkillRegistry skillRegistry) {
         com.skillforge.server.tool.attribution.WriteOptimizationEventTool tool =
                 new com.skillforge.server.tool.attribution.WriteOptimizationEventTool(
-                        eventRepository, objectMapper);
+                        eventRepository, patternRepository, objectMapper);
         skillRegistry.registerTool(tool);
         log.info("Registered WriteOptimizationEventTool into SkillRegistry");
         return tool;

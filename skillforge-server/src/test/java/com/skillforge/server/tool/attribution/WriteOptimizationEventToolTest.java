@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillforge.core.skill.SkillResult;
 import com.skillforge.server.entity.OptimizationEventEntity;
 import com.skillforge.server.repository.OptimizationEventRepository;
+import com.skillforge.server.repository.SessionPatternRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -28,12 +29,13 @@ import static org.mockito.Mockito.when;
 class WriteOptimizationEventToolTest {
 
     @Mock private OptimizationEventRepository eventRepository;
+    @Mock private SessionPatternRepository patternRepository;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private WriteOptimizationEventTool tool;
 
     @BeforeEach
     void setUp() {
-        tool = new WriteOptimizationEventTool(eventRepository, objectMapper);
+        tool = new WriteOptimizationEventTool(eventRepository, patternRepository, objectMapper);
     }
 
     private OptimizationEventEntity sampleEvent() {

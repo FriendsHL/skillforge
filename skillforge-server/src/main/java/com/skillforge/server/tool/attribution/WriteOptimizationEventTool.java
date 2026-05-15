@@ -6,7 +6,9 @@ import com.skillforge.core.skill.SkillContext;
 import com.skillforge.core.skill.SkillResult;
 import com.skillforge.core.skill.Tool;
 import com.skillforge.server.entity.OptimizationEventEntity;
+import com.skillforge.server.entity.SessionPatternEntity;
 import com.skillforge.server.repository.OptimizationEventRepository;
+import com.skillforge.server.repository.SessionPatternRepository;
 import com.skillforge.server.util.SkillInputUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -69,11 +71,14 @@ public class WriteOptimizationEventTool implements Tool {
             OptimizationEventEntity.STAGE_VERIFIED);
 
     private final OptimizationEventRepository eventRepository;
+    private final SessionPatternRepository patternRepository;
     private final ObjectMapper objectMapper;
 
     public WriteOptimizationEventTool(OptimizationEventRepository eventRepository,
+                                      SessionPatternRepository patternRepository,
                                       ObjectMapper objectMapper) {
         this.eventRepository = eventRepository;
+        this.patternRepository = patternRepository;
         this.objectMapper = objectMapper;
     }
 
@@ -182,17 +187,41 @@ public class WriteOptimizationEventTool implements Tool {
                         .findByPatternIdAndStage(patternId,
                                 OptimizationEventEntity.STAGE_DISPATCH_INITIATED);
                 if (sentinels.isEmpty()) {
-                    return SkillResult.validationError(
-                            "no dispatch_initiated sentinel found for patternId=" + patternId
-                                    + " (call this tool with eventId directly if writing a "
-                                    + "non-sentinel row)");
+                    // V3.1 bug fix (2026-05-15 dogfood): no sentinel = agent was
+                    // invoked outside the cron-dispatcher flow (operator chat,
+                    // manual session, or curator self-decided to rewrite stage
+                    // without going through ProposeOptimization first). Auto-INSERT
+                    // a new event row instead of failing. Pulls agent_id +
+                    // surface_type from t_session_pattern so the row is well-formed.
+                    Optional<SessionPatternEntity> patternOpt = patternRepository.findById(patternId);
+                    if (patternOpt.isEmpty()) {
+                        return SkillResult.validationError(
+                                "patternId not found in t_session_pattern: " + patternId);
+                    }
+                    SessionPatternEntity pattern = patternOpt.get();
+                    OptimizationEventEntity created = new OptimizationEventEntity();
+                    created.setPatternId(patternId);
+                    created.setAgentId(pattern.getAgentId() != null ? pattern.getAgentId() : 0L);
+                    created.setSurfaceType(pattern.getSuspectSurface() != null
+                            ? pattern.getSuspectSurface() : "unclear");
+                    created.setStage(newStage);
+                    // attribution_session_id stamped from caller context so the
+                    // timeline can drill back to the originating session.
+                    if (context != null && context.getSessionId() != null) {
+                        created.setAttributionSessionId(context.getSessionId());
+                    }
+                    log.info("[WriteOptimizationEvent] auto-INSERT (no sentinel): patternId={} "
+                            + "newStage={} surfaceType={} (operator-triggered curator path)",
+                            patternId, newStage, created.getSurfaceType());
+                    event = created;
+                } else {
+                    if (sentinels.size() > 1) {
+                        log.warn("[WriteOptimizationEvent] {} sentinels for patternId={} — "
+                                + "using oldest by createdAt (id={})",
+                                sentinels.size(), patternId, sentinels.get(0).getId());
+                    }
+                    event = sentinels.get(0);
                 }
-                if (sentinels.size() > 1) {
-                    log.warn("[WriteOptimizationEvent] {} sentinels for patternId={} — "
-                            + "using oldest by createdAt (id={})",
-                            sentinels.size(), patternId, sentinels.get(0).getId());
-                }
-                event = sentinels.get(0);
             }
             String previousStage = event.getStage();
             event.setStage(newStage);
