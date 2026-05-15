@@ -1,7 +1,10 @@
 package com.skillforge.server.improve;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.skillforge.core.llm.LlmProvider;
 import com.skillforge.core.llm.LlmProviderFactory;
+import com.skillforge.core.llm.LlmRequest;
+import com.skillforge.core.llm.LlmResponse;
 import com.skillforge.server.config.LlmProperties;
 import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.PromptVersionEntity;
@@ -80,11 +83,22 @@ class PromptImproverServiceAttributionTest {
         return a;
     }
 
+    /** V3.1: stub LLM provider to return a fixed improved-prompt response. */
+    private LlmProvider stubLlmReturning(String responseContent) {
+        LlmProvider provider = org.mockito.Mockito.mock(LlmProvider.class);
+        LlmResponse response = new LlmResponse();
+        response.setContent(responseContent);
+        when(provider.chat(any(LlmRequest.class))).thenReturn(response);
+        when(llmProviderFactory.getProvider("test")).thenReturn(provider);
+        return provider;
+    }
+
     @Test
     @DisplayName("happy path: persists candidate PromptVersionEntity with source='attribution', no PromptAbRun")
     void startImprovementFromAttribution_happyPath_persistsAttributionCandidate() {
         when(agentRepository.findById(10L)).thenReturn(Optional.of(agent(10L)));
         when(promptVersionRepository.findMaxVersionNumber("10")).thenReturn(Optional.of(3));
+        stubLlmReturning("Be concise. Always validate Bash exit codes before proceeding.");
         ArgumentCaptor<PromptVersionEntity> captor = ArgumentCaptor.forClass(PromptVersionEntity.class);
         when(promptVersionRepository.save(captor.capture())).thenAnswer(inv -> inv.getArgument(0));
 
@@ -109,9 +123,10 @@ class PromptImproverServiceAttributionTest {
                 "Tune system prompt to add explicit Bash error handling");
         assertThat(saved.getSourceEvalRunId()).isNull();
         assertThat(saved.getBaselinePassRate()).isNull();
-        // Phase 1.3 placeholder content — Phase 1.4+ async LLM job fills it.
-        // Empty-string (NOT null) because the column is NOT NULL.
-        assertThat(saved.getContent()).isEmpty();
+        // V3.1: content now populated by synchronous LLM call (no longer empty
+        // placeholder). The actual text matches what the stubbed provider returned.
+        assertThat(saved.getContent())
+                .isEqualTo("Be concise. Always validate Bash exit codes before proceeding.");
 
         // Critical: NO PromptAbRunEntity creation (attribution path doesn't have an eval baseline).
         verify(promptAbRunRepository, never()).save(any());
@@ -126,6 +141,7 @@ class PromptImproverServiceAttributionTest {
         recentlyPromoted.setLastPromotedAt(Instant.now().minusSeconds(3600));
         when(agentRepository.findById(20L)).thenReturn(Optional.of(recentlyPromoted));
         when(promptVersionRepository.findMaxVersionNumber("20")).thenReturn(Optional.of(0));
+        stubLlmReturning("Improved prompt for bypass path");
         when(promptVersionRepository.save(any(PromptVersionEntity.class)))
                 .thenAnswer(inv -> inv.getArgument(0));
 

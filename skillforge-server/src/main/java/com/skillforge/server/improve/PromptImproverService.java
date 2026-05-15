@@ -148,23 +148,44 @@ public class PromptImproverService {
         PromptVersionEntity version = new PromptVersionEntity();
         version.setId(UUID.randomUUID().toString());
         version.setAgentId(agentId);
-        // Placeholder content — Phase 1.4+ async LLM job fills this. Empty
-        // string (NOT null) because the column is NOT NULL.
-        version.setContent("");
         version.setVersionNumber(nextVersion);
         version.setStatus("candidate");
         // "attribution" source distinguishes these versions from "auto_improve"
         // (eval-driven) and "manual" (operator-edited) in dashboard listings.
         version.setSource("attribution");
         // sourceEvalRunId / baselinePassRate intentionally null — there's no
-        // eval-run baseline to compare against. Phase 1.4 A/B will set its own
-        // baseline by reading the agent's current production prompt.
+        // eval-run baseline to compare against. The A/B at V3.2 will set its
+        // own baseline by reading the agent's current production prompt.
         version.setImprovementRationale(attributedDescription.trim());
+
+        // V3.1 (2026-05-15): synchronous LLM fill. Phase 1.3 originally wrote
+        // content="" placeholder and deferred the actual generation to "Phase 1.4+
+        // async", but Phase 1.4 ended up not wiring it (dogfood found: empty
+        // candidate cannot be A/B'd, full breaker for the prompt-surface arm of
+        // the flywheel). Generate inline here so candidate_ready truly means
+        // "candidate has content + ready for A/B". On LLM failure the caller
+        // (AttributionApprovalService) catches and writes stage=candidate_failed.
+        try {
+            String improved = generateCandidatePromptFromAttribution(agent, attributedDescription);
+            version.setContent(improved);
+        } catch (RuntimeException llmEx) {
+            // Preserve audit trail of attempt: save row with content="" + log,
+            // then rethrow so the outer approve() catches and writes
+            // candidate_failed. Without saving the version row first we'd lose
+            // the audit-trail eventId link.
+            version.setContent("");
+            promptVersionRepository.save(version);
+            log.error("Attribution prompt-version LLM fill FAILED: versionId={} agentId={} eventId={}: {}",
+                    version.getId(), agentId, eventId, llmEx.getMessage());
+            throw llmEx;
+        }
+
         promptVersionRepository.save(version);
 
         log.info("Attribution-derived prompt version created: versionId={} agentId={} eventId={} "
-                        + "ownerId={} versionNumber={} (BYPASSING checkEligibility per ratify)",
-                version.getId(), agentId, eventId, ownerId, nextVersion);
+                        + "ownerId={} versionNumber={} contentLen={} (BYPASSING checkEligibility per ratify)",
+                version.getId(), agentId, eventId, ownerId, nextVersion,
+                version.getContent().length());
 
         // abRunId left null — caller (AttributionApprovalService) doesn't yet
         // create a PromptAbRunEntity; Phase 1.4+ wires that. agent.getId() is
@@ -284,6 +305,64 @@ public class PromptImproverService {
                 }
             });
         }
+    }
+
+    /**
+     * V3.1 attribution-path candidate generator. Mirrors the rule structure of
+     * {@link #generateCandidatePrompt} but without the {@link EvalTaskEntity}
+     * dependency — attribution flow only has the curator's
+     * {@code attributedDescription} as failure context (no scenario-level pass
+     * rates, no eligible-failure breakdown). System prompt + temperature kept
+     * identical so the two paths produce comparable candidates.
+     */
+    private String generateCandidatePromptFromAttribution(AgentEntity agent,
+                                                          String attributedDescription) {
+        String currentPrompt = agent.getSystemPrompt() != null ? agent.getSystemPrompt() : "";
+
+        String systemPrompt = """
+                You are an expert prompt engineer. Your task is to analyze an attribution \
+                report from a curator agent and generate an improved system prompt.
+
+                Rules:
+                - Output ONLY the improved system prompt text, nothing else
+                - Preserve the core intent and capabilities of the original prompt
+                - Focus on addressing the specific failure pattern described
+                - Keep the prompt concise and actionable
+                - Do not add meta-commentary or explanations""";
+
+        String userMessage = String.format("""
+                Current system prompt:
+                ---
+                %s
+                ---
+
+                Attribution analysis (from curator agent):
+                %s
+
+                Generate an improved system prompt that addresses the failure pattern \
+                described above.""",
+                currentPrompt,
+                attributedDescription.trim());
+
+        LlmProvider provider = llmProviderFactory.getProvider(defaultProviderName);
+        if (provider == null) {
+            throw new RuntimeException("No LLM provider available for prompt generation");
+        }
+
+        LlmRequest request = new LlmRequest();
+        request.setSystemPrompt(systemPrompt);
+        List<Message> messages = new ArrayList<>();
+        messages.add(Message.user(userMessage));
+        request.setMessages(messages);
+        request.setMaxTokens(2000);
+        request.setTemperature(0.3);
+
+        LlmResponse response = provider.chat(request);
+        String content = response.getContent();
+        if (content == null || content.isBlank()) {
+            throw new RuntimeException("LLM returned empty candidate prompt for attribution flow");
+        }
+        return content.trim();
     }
 
     @SuppressWarnings("unchecked")
