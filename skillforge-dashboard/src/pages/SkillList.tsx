@@ -14,7 +14,7 @@ import {
 } from '../api';
 import { useAuth } from '../contexts/AuthContext';
 import { useTaskTracker, newTaskId } from '../contexts/TaskTrackerContext';
-import { useNavigate } from 'react-router-dom';
+import SkillDraftsPage from './SkillDrafts';
 import '../components/agents/agents.css';
 import '../components/skills/skills.css';
 import type { SkillRow } from '../components/skills/types';
@@ -33,8 +33,8 @@ interface AgentRow {
 const SkillList: React.FC = () => {
   const queryClient = useQueryClient();
   const { userId: currentUserId } = useAuth();
-  const navigate = useNavigate();
   const { addTask, updateTask } = useTaskTracker();
+  const [activeTab, setActiveTab] = useState<'skills' | 'drafts'>('skills');
   const [selectedAgentId, setSelectedAgentId] = useState<number | null>(null);
   const [view, setView] = useState<'grid' | 'table'>('grid');
   const [q, setQ] = useState('');
@@ -112,7 +112,7 @@ const SkillList: React.FC = () => {
     }
     setExtracting(true);
     // Pre-register a running task keyed by agentId so the panel survives
-    // the navigate('/skill-drafts') below; the WS event handler in Layout
+    // the setActiveTab('drafts') below; the WS event handler in Layout
     // resolves it by `relatedId === String(agentId)`.
     const taskId = newTaskId();
     const agentName =
@@ -136,7 +136,7 @@ const SkillList: React.FC = () => {
           detail: `${res.data.count ?? 0} 条 draft 已在 review 队列`,
         });
       }
-      navigate('/skill-drafts');
+      setActiveTab('drafts');
     } catch {
       updateTask(taskId, { state: 'failed', detail: '请求失败' });
     } finally {
@@ -288,6 +288,73 @@ const SkillList: React.FC = () => {
 
   const noAgentTooltip = 'Pick a source agent first';
 
+  if (activeTab === 'drafts') {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - var(--header-height, 44px))' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 0, padding: '0 0 0 16px', borderBottom: '1px solid var(--border, #e5e7eb)', flexShrink: 0 }}>
+          <button
+            onClick={() => setActiveTab('skills')}
+            style={{
+              padding: '10px 16px',
+              background: 'none',
+              border: 'none',
+              borderBottom: '2px solid transparent',
+              color: 'var(--fg-3, #8a8a93)',
+              cursor: 'pointer',
+              fontSize: 13,
+              fontWeight: 500,
+            }}
+          >
+            Skills
+            {pendingDrafts.length > 0 && (
+              <span style={{
+                marginLeft: 6,
+                background: 'var(--accent-primary, #6366f1)',
+                color: '#fff',
+                borderRadius: 10,
+                padding: '1px 7px',
+                fontSize: 11,
+                fontWeight: 600,
+              }}>
+                {pendingDrafts.length}
+              </span>
+            )}
+          </button>
+          <button
+            style={{
+              padding: '10px 16px',
+              background: 'none',
+              border: 'none',
+              borderBottom: '2px solid var(--accent-primary, #6366f1)',
+              color: 'var(--fg-1, #111827)',
+              cursor: 'default',
+              fontSize: 13,
+              fontWeight: 600,
+            }}
+          >
+            Drafts
+            {pendingDrafts.length > 0 && (
+              <span style={{
+                marginLeft: 6,
+                background: 'var(--color-warning, #f59e0b)',
+                color: '#fff',
+                borderRadius: 10,
+                padding: '1px 7px',
+                fontSize: 11,
+                fontWeight: 600,
+              }}>
+                {pendingDrafts.length}
+              </span>
+            )}
+          </button>
+        </div>
+        <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+          <SkillDraftsPage />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="agents-view">
       {/* Filter sidebar */}
@@ -306,6 +373,50 @@ const SkillList: React.FC = () => {
 
       {/* Main */}
       <section className="agents-main">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 0, borderBottom: '1px solid var(--border, #e5e7eb)' }}>
+          <button
+            style={{
+              padding: '10px 16px',
+              background: 'none',
+              border: 'none',
+              borderBottom: '2px solid var(--accent-primary, #6366f1)',
+              color: 'var(--fg-1, #111827)',
+              cursor: 'default',
+              fontSize: 13,
+              fontWeight: 600,
+            }}
+          >
+            Skills
+          </button>
+          <button
+            onClick={() => setActiveTab('drafts')}
+            style={{
+              padding: '10px 16px',
+              background: 'none',
+              border: 'none',
+              borderBottom: '2px solid transparent',
+              color: 'var(--fg-3, #8a8a93)',
+              cursor: 'pointer',
+              fontSize: 13,
+              fontWeight: 500,
+            }}
+          >
+            Drafts
+            {pendingDrafts.length > 0 && (
+              <span style={{
+                marginLeft: 6,
+                background: 'var(--accent-primary, #6366f1)',
+                color: '#fff',
+                borderRadius: 10,
+                padding: '1px 7px',
+                fontSize: 11,
+                fontWeight: 600,
+              }}>
+                {pendingDrafts.length}
+              </span>
+            )}
+          </button>
+        </div>
         <header className="agents-head">
           <div>
             <h1 className="agents-head-title">Skills</h1>
@@ -335,7 +446,7 @@ const SkillList: React.FC = () => {
                   display: 'inline-flex', alignItems: 'center', gap: 6,
                   borderStyle: 'dashed', color: 'var(--accent-primary, #6366f1)',
                 }}
-                onClick={() => navigate('/skill-drafts')}
+                onClick={() => setActiveTab('drafts')}
                 title="Review extracted skill drafts"
               >
                 {pendingDrafts.length} pending draft{pendingDrafts.length > 1 ? 's' : ''}

@@ -163,7 +163,7 @@ export const SkillSummaryCard: React.FC<SkillSummaryCardProps> = React.memo(({ u
       value: summary?.pendingDraftsCount,
       sub: 'Awaiting review',
       icon: <BulbOutlined />,
-      onClick: () => navigate('/skill-drafts'),
+      onClick: () => navigate('/skills'),
       tooltip: 'Click to review extracted skill drafts',
     },
     {

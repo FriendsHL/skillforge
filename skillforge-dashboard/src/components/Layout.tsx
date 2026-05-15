@@ -24,11 +24,7 @@ const primaryNav: NavItem[] = [
   { key: 'chat', path: '/chat', label: 'Chat' },
   { key: 'agents', path: '/agents', label: 'Agents' },
   { key: 'skills', path: '/skills', label: 'Skills' },
-  // SKILL-DASHBOARD-POLISH §E — Drafts top-level entry. Sits next to Skills
-  // since the draft → skill approve flow is mostly a Skills-page sibling.
-  { key: 'skill-drafts', path: '/skill-drafts', label: 'Drafts' },
   { key: 'tools', path: '/tools', label: 'Tools & MCP' },
-  { key: 'teams', path: '/teams', label: 'Teams' },
   { key: 'sessions', path: '/sessions', label: 'Sessions' },
   { key: 'hooks', path: '/hooks', label: 'Hooks' },
   { key: 'evals', path: '/eval', label: 'Evals' },
@@ -240,7 +236,7 @@ const AppLayoutInner: React.FC = () => {
         <nav className="topbar-nav" aria-label="Primary">
           {primaryNav.map((item) => {
             const active = navItemActive(item, location.pathname);
-            const showBadge = item.key === 'skill-drafts' && pendingDraftCount > 0;
+            const showBadge = item.key === 'skills' && pendingDraftCount > 0;
             return (
               <Link
                 key={item.key}
