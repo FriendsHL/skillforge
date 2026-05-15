@@ -152,6 +152,20 @@ public interface OptimizationEventRepository extends JpaRepository<OptimizationE
     List<OptimizationEventEntity> findByCandidateSkillId(Long candidateSkillId);
 
     /**
+     * V4 MULTI-SURFACE-FLYWHEEL Phase 1.3 stage-mirror listener: find the
+     * optimization event whose candidate {@link com.skillforge.server.entity.BehaviorRuleVersionEntity}
+     * row was just promoted. At most one per candidate (each attribution-derived
+     * behavior_rule version is written exactly once by
+     * {@code AttributionApprovalService.dispatchBehaviorRuleSurface}).
+     *
+     * <p>Distinct from the prompt/skill counterparts because
+     * {@code candidate_behavior_rule_version_id} is VARCHAR(36) (UUID, matches
+     * {@code BehaviorRuleVersionEntity.id}) rather than BIGINT — so the
+     * V3.2 listener doesn't need the legacy {@code Long.parseLong} skip path.
+     */
+    List<OptimizationEventEntity> findByCandidateBehaviorRuleVersionId(String candidateBehaviorRuleVersionId);
+
+    /**
      * Phase 1.4 reviewer fix (W2/W3): unified pageable list with optional
      * {@code stage} / {@code agentId} / {@code surfaceType} filters. Each
      * parameter may be null to skip that dimension; passing all-null returns

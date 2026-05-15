@@ -60,6 +60,7 @@ class PromptImproverServiceTest {
         LlmProperties props = new LlmProperties();
         props.setDefaultProvider("test");
 
+        PromptEvalService mockEvalService = org.mockito.Mockito.mock(PromptEvalService.class);
         service = new PromptImproverService(
                 agentRepository,
                 evalTaskRepository,
@@ -71,8 +72,15 @@ class PromptImproverServiceTest {
                 new com.fasterxml.jackson.databind.ObjectMapper(),
                 coordinatorExecutor,
                 props,
-                org.mockito.Mockito.mock(com.skillforge.server.improve.surface.PromptSurface.class)
+                org.mockito.Mockito.mock(com.skillforge.server.improve.surface.PromptSurface.class),
+                mockEvalService
         );
+        // Phase 1.2 reviewer-r1 fix: wire mock EvalService<PromptVersionEntity>
+        // back to service.runEvalSetInternal (which preserves the pre-refactor
+        // abEvalPipeline.run delegation).
+        when(mockEvalService.run(any(), any(PromptVersionEntity.class)))
+                .thenAnswer(inv -> service.runEvalSetInternal(
+                        inv.getArgument(0), inv.getArgument(1)));
 
         when(promptVersionRepository.findMaxVersionNumber("10")).thenReturn(Optional.of(3));
         when(promptVersionRepository.save(any(PromptVersionEntity.class)))

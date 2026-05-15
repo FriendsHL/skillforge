@@ -2,6 +2,7 @@ package com.skillforge.server.attribution;
 
 import com.skillforge.server.entity.OptimizationEventEntity;
 import com.skillforge.server.event.SkillAbCompletedEvent;
+import com.skillforge.server.improve.event.BehaviorRulePromotedEvent;
 import com.skillforge.server.improve.event.PromptPromotedEvent;
 import com.skillforge.server.repository.OptimizationEventRepository;
 
@@ -33,6 +34,11 @@ import org.springframework.transaction.annotation.Transactional;
  *       {@code ab_failed} otherwise.</li>
  *   <li>{@link PromptPromotedEvent} → find optimization event by
  *       candidate_prompt_version_id; set stage to {@code promoted}.</li>
+ *   <li>{@link BehaviorRulePromotedEvent} → find optimization event by
+ *       candidate_behavior_rule_version_id; set stage to {@code promoted}
+ *       (V4 MULTI-SURFACE-FLYWHEEL Phase 1.3). Unlike the prompt variant
+ *       this lookup is direct (no Long.parseLong skip) because the V83 column
+ *       is VARCHAR(36) matching {@link com.skillforge.server.entity.BehaviorRuleVersionEntity#getId()}.</li>
  * </ul>
  *
  * <p>{@code @Transactional(REQUIRES_NEW)} so the listener's write is
@@ -149,6 +155,60 @@ public class AttributionStageListener {
             oe.setUpdatedAt(Instant.now());
             eventRepository.save(oe);
             log.info("[AttributionStageListener] prompt-promoted mirrored: eventId={} {} → promoted "
+                    + "(versionId={})", oe.getId(), previousStage, versionId);
+            broadcaster.broadcastStageTransition(oe, previousStage);
+        }
+    }
+
+    /**
+     * V4 MULTI-SURFACE-FLYWHEEL Phase 1.3: behavior_rule promotion → mirror
+     * to {@code promoted} stage. Fired by
+     * {@code BehaviorRulePromotionService.promote} after the candidate row's
+     * {@code status='active' + promotedAt=now} flip + retire of the prior
+     * active row (V82 partial UNIQUE invariant preserved).
+     *
+     * <p>Like {@link #onPromptPromoted} but without the {@code Long.parseLong}
+     * skip path — {@code candidate_behavior_rule_version_id} is VARCHAR(36)
+     * (matches {@code BehaviorRuleVersionEntity.id}), so the lookup is direct.
+     *
+     * <p>{@code REQUIRES_NEW} same rationale as the sister listeners: the
+     * promote service's tx has already committed when this listener fires
+     * (Spring 6.1 default ApplicationEvent ordering), so we need our own tx
+     * to issue the stage-mirror write.
+     */
+    @EventListener
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void onBehaviorRulePromoted(BehaviorRulePromotedEvent event) {
+        String versionId = event.versionId();
+        if (versionId == null || versionId.isBlank()) {
+            log.debug("[AttributionStageListener] behavior-rule-promoted event has blank versionId — skip");
+            return;
+        }
+        List<OptimizationEventEntity> matches = eventRepository
+                .findByCandidateBehaviorRuleVersionId(versionId);
+        if (matches.isEmpty()) {
+            // Not an attribution-originated behavior_rule promote — normal
+            // for manual / dashboard-direct paths.
+            log.debug("[AttributionStageListener] no optimization event linked to "
+                    + "candidateBehaviorRuleVersionId={} — skip", versionId);
+            return;
+        }
+        for (OptimizationEventEntity oe : matches) {
+            String previousStage = oe.getStage();
+            // Accept advancing from either ab_passed (typical path once
+            // behavior_rule A/B wired in Phase 1.4) or candidate_ready
+            // (operator skipped A/B and promoted directly via dashboard).
+            // Same predicate as PromptPromoted listener.
+            if (!OptimizationEventEntity.STAGE_AB_PASSED.equals(previousStage)
+                    && !OptimizationEventEntity.STAGE_CANDIDATE_READY.equals(previousStage)) {
+                log.debug("[AttributionStageListener] event {} not in ab_passed / candidate_ready "
+                        + "(was={}) — skip behavior-rule-promote mirror", oe.getId(), previousStage);
+                continue;
+            }
+            oe.setStage(OptimizationEventEntity.STAGE_PROMOTED);
+            oe.setUpdatedAt(Instant.now());
+            eventRepository.save(oe);
+            log.info("[AttributionStageListener] behavior-rule-promoted mirrored: eventId={} {} → promoted "
                     + "(versionId={})", oe.getId(), previousStage, versionId);
             broadcaster.broadcastStageTransition(oe, previousStage);
         }

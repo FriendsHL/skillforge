@@ -77,7 +77,10 @@ class SkillAbEvalServiceManualPromoteTest {
                 sandboxFactory, evalEngineFactory, evalJudgeTool, skillPackageLoader,
                 objectMapper, broadcaster, coordinatorExecutor, loopExecutor,
                 skillRegistry, abCompletedEventPublisher,
-                org.mockito.Mockito.mock(com.skillforge.server.improve.surface.SkillSurface.class));
+                org.mockito.Mockito.mock(com.skillforge.server.improve.surface.SkillSurface.class),
+                org.mockito.Mockito.mock(SkillEvalService.class));
+        // manualPromote does NOT invoke AbstractAbEvalRunner.run() (direct
+        // V64-safe promote path), so no SkillEvalService.run setup needed.
     }
 
     private SkillAbRunEntity newAbRun(String status, boolean promoted,

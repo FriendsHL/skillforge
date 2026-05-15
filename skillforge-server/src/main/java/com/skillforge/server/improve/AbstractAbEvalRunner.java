@@ -48,12 +48,17 @@ public abstract class AbstractAbEvalRunner<V> {
     protected static final Logger log = LoggerFactory.getLogger(AbstractAbEvalRunner.class);
 
     protected final OptimizableSurface<V> surface;
+    protected final EvalService<V> evalService;
 
-    protected AbstractAbEvalRunner(OptimizableSurface<V> surface) {
+    protected AbstractAbEvalRunner(OptimizableSurface<V> surface, EvalService<V> evalService) {
         if (surface == null) {
             throw new IllegalArgumentException("surface must not be null");
         }
+        if (evalService == null) {
+            throw new IllegalArgumentException("evalService must not be null");
+        }
         this.surface = surface;
+        this.evalService = evalService;
     }
 
     /**
@@ -110,29 +115,22 @@ public abstract class AbstractAbEvalRunner<V> {
     }
 
     /**
-     * Hook 1 — surface-specific eval-set runner. Called once for baseline and
-     * once for candidate. Subclasses use the {@code version} arg to know which
-     * side they're computing (skill uses {@code version.getId() ==
-     * parentSkillId} as the baseline discriminator; prompt uses object-identity
-     * comparison against the synthetic baseline placeholder placed by its
-     * orchestrator).
+     * Protected non-abstract helper — delegates to the injected
+     * {@link EvalService}. Subclasses MAY override (e.g. for tests) but are
+     * NOT required to: providing a surface-specific {@code EvalService<V>}
+     * bean is the normal extension point.
      *
-     * <p>Returns {@link EvalRun} containing the side's pass-rate + scenario
-     * count. For surfaces where the baseline is precomputed (skill from a
-     * stored baselineEvalRunId; prompt from an EvalTaskEntity row), the
-     * baseline-side {@code runEvalSet} reads from those stores rather than
-     * actually re-running. For surfaces with no historical baseline data
-     * (behavior_rule when added in Phase 1.3+), both sides run scenarios fresh.
-     *
-     * <p>Brief §1 design judgment (2026-05-15): {@code runEvalSet} is the 5th
-     * abstract hook (the 4 ratified hooks in §3.2 are
-     * injectForSandbox/judgeAndCompare/shouldPromote/promoteIfNeeded). Keeping
-     * eval-set running surface-specific avoids forcing a common eval pipeline
-     * across 3 surfaces with very different shapes (V2 SkillAbEvalService
-     * per-scenario sandbox vs V3 AbEvalPipeline monolithic per-version sandbox).
-     * Phase 1.3+ may unify if behavior_rule's eval shape suggests a common path.
+     * <p><b>Not an abstract hook</b> — Phase 1.2 reviewer-r1 fix: ratify #3
+     * locks the 4-hook count (injectForSandbox via {@link OptimizableSurface}
+     * + judgeAndCompare + shouldPromote + promoteIfNeeded). Earlier draft made
+     * this method abstract and was flagged for violating the lock; the fix
+     * uses {@link EvalService} dependency injection to accomplish the same
+     * surface-specific eval customization without growing the abstract method
+     * count.
      */
-    protected abstract EvalRun runEvalSet(SandboxContext ctx, V version);
+    protected EvalRun runEvalSet(SandboxContext ctx, V version) {
+        return evalService.run(ctx, version);
+    }
 
     /**
      * Hook 2 — compare two completed eval runs and produce a surface-specific

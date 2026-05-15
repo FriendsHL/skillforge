@@ -2,6 +2,7 @@ package com.skillforge.server.attribution;
 
 import com.skillforge.server.entity.OptimizationEventEntity;
 import com.skillforge.server.entity.SkillDraftEntity;
+import com.skillforge.server.improve.BehaviorRuleImproverService;
 import com.skillforge.server.improve.ImprovementStartResult;
 import com.skillforge.server.improve.PromptImproverService;
 import com.skillforge.server.improve.SkillDraftService;
@@ -62,6 +63,7 @@ class AttributionApprovalServiceTest {
     @Mock private OptimizationEventRepository eventRepository;
     @Mock private SkillDraftService skillDraftService;
     @Mock private PromptImproverService promptImproverService;
+    @Mock private BehaviorRuleImproverService behaviorRuleImproverService;
     @Mock private AttributionEventBroadcaster broadcaster;
 
     private AttributionApprovalService service;
@@ -69,7 +71,8 @@ class AttributionApprovalServiceTest {
     @BeforeEach
     void setUp() {
         service = new AttributionApprovalService(
-                eventRepository, skillDraftService, promptImproverService, broadcaster);
+                eventRepository, skillDraftService, promptImproverService,
+                behaviorRuleImproverService, broadcaster);
         // Save returns the input arg unchanged (covers stage transitions).
         org.mockito.Mockito.lenient().when(eventRepository.save(any(OptimizationEventEntity.class)))
                 .thenAnswer(inv -> inv.getArgument(0));

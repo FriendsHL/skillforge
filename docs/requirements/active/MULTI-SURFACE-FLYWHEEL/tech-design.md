@@ -23,8 +23,8 @@ Template Method，把 3 个 surface 的 A/B 评测共同骨架收口。
 - **Phase 1.0** ✅ Phase 1.0 调研 + 5 ratify 锁定（2026-05-15）
 - **Phase 1.1** ✅ behavior_rule surface 落地 + OptimizableSurface 接口填实 + 3 实现类 + JPA IT（2026-05-15 commit `6da1801`，1627 test BUILD SUCCESS，核心 7+1 文件 0 diff）
 - **Phase 1.2** ✅ AbstractAbEvalRunner Template Method 填实 + SkillAbEvalService / PromptImproverService 重构继承 + Surface inject 状态机（2026-05-15，1637 test BUILD SUCCESS = 1627 baseline + 10 new；零行为漂移；新增：AbstractAbEvalRunnerTest×4 / SkillSurfaceInjectTest×3 / PromptSurfaceInjectTest×3；核心 7+1 文件 0 diff）
-- **Phase 1.3** ⏳ CanaryAllocator 泛型化 + behavior_rule canary 接入 + V3 attribution dispatchBehaviorRuleSurface
-- **Phase 1.4** ⏳ Dashboard behavior rule panel（复用 V2 canary panel 模板）
+- **Phase 1.3** ✅ V3 attribution `dispatchBehaviorRuleSurface` 分支 + V83 schema (candidate_behavior_rule_version_id + 跨 surface uq_canary_active) + V2 CanaryAllocator 4-arg 泛型 (3-arg 保留为 wrapper, zero V2 diff) + V3.2 AttributionStageListener.onBehaviorRulePromoted + Phase Final gap fix: BehaviorRuleSurface.injectForSandbox 从 stub 改为 sessionId-keyed ConcurrentMap 实现 + BehaviorRuleSurfaceInjectTest×3（2026-05-15，1662 test BUILD SUCCESS = 1637 baseline + 22 Phase 1.3 + 3 gap fix；零行为漂移；新增：AttributionApprovalServiceBehaviorRuleTest×6 / CanaryAllocatorGenericTest×11 / AttributionStageListenerBehaviorRuleTest×5 / BehaviorRuleSurfaceInjectTest×3；核心 7+1 文件 0 diff）
+- **Phase 1.4** ⏳ Dashboard behavior rule panel（复用 V2 canary panel 模板）+ ProposeOptimizationTool 放开 behavior_rule（curator 端真发 V4 surface）+ CanaryRolloutService.startCanary 真接 behavior_rule 创建
 - **Phase Final** ⏳ e2e + 真启 cron 跑一遍 + 归档
 
 ---
@@ -213,39 +213,75 @@ final run(abRunId):
   5. 写 abRun.status + 发 publishedAbCompletedEvent (公共)
 ```
 
-### 3.2 hook 签名
+### 3.2 hook 签名（ratify #3 4-hook 锁定 — Phase 1.2 reviewer-r1 fix 后）
+
+> **Phase 1.2 reviewer-r1 fix (2026-05-15)**：ratify #3 锁的是 abstract method 数量 **4**（surface 特化必填行为）。早期 Phase 1.2 draft 把 `runEvalSet` 做成第 5 个 abstract hook → 违反 ratify 锁。fix 改成 **`runEvalSet` 是 protected 非 abstract helper**，通过注入的 `EvalService<V>` 接口委派 eval 执行 —— 每个 surface 自己提供 `EvalService<V>` @Component 实现 bean 来"扩展" eval 跑法，**不增 abstract surface**。
 
 ```java
+/** Surface-specific eval-set runner，注入给 AbstractAbEvalRunner */
+@FunctionalInterface
+public interface EvalService<V> {
+    AbstractAbEvalRunner.EvalRun run(SandboxContext ctx, V version);
+}
+
 public abstract class AbstractAbEvalRunner<V> {
 
     protected final OptimizableSurface<V> surface;
+    protected final EvalService<V> evalService;
 
-    protected AbstractAbEvalRunner(OptimizableSurface<V> surface) {
+    protected AbstractAbEvalRunner(OptimizableSurface<V> surface, EvalService<V> evalService) {
         this.surface = surface;
+        this.evalService = evalService;
     }
 
     /** Template method — 子类不可 override */
-    public final AbRunResult run(String abRunId, V baseline, V candidate,
-                                 SandboxContext ctx) {
-        // ...公共骨架，调下面 4 hook
+    public final AbRunResult run(String abRunId, V baseline, V candidate, SandboxContext ctx) {
+        surface.injectForSandbox(ctx, baseline);
+        EvalRun baselineRun = runEvalSet(ctx, baseline);
+        surface.injectForSandbox(ctx, candidate);
+        EvalRun candidateRun = runEvalSet(ctx, candidate);
+        Comparison comparison = judgeAndCompare(baselineRun, candidateRun);
+        boolean shouldPromote = shouldPromote(comparison);
+        if (shouldPromote) promoteIfNeeded(candidate, comparison);
+        return new AbRunResult(abRunId, baselineRun, candidateRun, comparison, shouldPromote);
     }
 
-    /** Hook 1: 替换 sandbox 视角的 surface 内容（已在 OptimizableSurface 接口里） */
+    /** Protected 非 abstract helper — 走注入的 evalService。子类**可**override（不强制） */
+    protected EvalRun runEvalSet(SandboxContext ctx, V version) {
+        return evalService.run(ctx, version);
+    }
+
+    // === 4 abstract hooks (ratify #3 锁) ===
+
+    /** Hook 1 of 4: 替换 sandbox 视角的 surface 内容（在 OptimizableSurface 接口里） */
     // 直接调 surface.injectForSandbox(ctx, version)
 
-    /** Hook 2: 跑完 baseline + candidate 后比对（surface 特化 — 不同 surface
-     *  scoreboard 维度可能不同：skill 看 pass_rate, prompt 看 composite, behavior_rule
-     *  看 violation_count 等） */
+    /** Hook 2 of 4: 跑完 baseline + candidate 后比对（surface 特化） */
     protected abstract Comparison judgeAndCompare(EvalRun baseline, EvalRun candidate);
 
-    /** Hook 3: 通过门槛判定（surface 特化 — 默认 pass_rate 差 ≥ 5pp 则 promote，但
-     *  behavior_rule 可能用 violation 减少率） */
+    /** Hook 3 of 4: 通过门槛判定（surface 特化） */
     protected abstract boolean shouldPromote(Comparison comparison);
 
-    /** Hook 4: promote 路径（surface 特化 — 走 OptimizableSurface.promote） */
+    /** Hook 4 of 4: promote 路径（surface 特化） */
     protected abstract void promoteIfNeeded(V candidate, Comparison comparison);
 }
 ```
+
+**Ratify #3 4-hook 清单**（任何 PR 想扩 abstract surface 必须先 ratify）：
+
+| # | Hook | 位置 | 描述 |
+|---|---|---|---|
+| 1 | `injectForSandbox(ctx, version)` | `OptimizableSurface<V>` | sandbox 中注入版本 |
+| 2 | `judgeAndCompare(baseline, candidate)` | `AbstractAbEvalRunner` | comparison 形成 |
+| 3 | `shouldPromote(comparison)` | `AbstractAbEvalRunner` | promote gate |
+| 4 | `promoteIfNeeded(candidate, comparison)` | `AbstractAbEvalRunner` | 真 promote 副作用 |
+
+`runEvalSet` **不在锁单内** — 是 protected 非 abstract helper，扩展点走 `EvalService<V>` 依赖注入（不是继承）。
+
+**两个 thin adapter（Phase 1.2 reviewer-r1 fix）**：
+
+- `SkillEvalService implements EvalService<SkillEntity>` — `@Lazy SkillAbEvalService` 反向引用，`run()` delegate 给 `SkillAbEvalService.runEvalSetInternal`（public method）
+- `PromptEvalService implements EvalService<PromptVersionEntity>` — 同款，delegate 给 `PromptImproverService.runEvalSetInternal`
 
 ### 3.3 现有代码 → 重构 map（Phase 1.2 落地实测）
 
@@ -409,33 +445,72 @@ runtime 按需触发，不延长 spring boot up 时间。
 
 ## §5 Canary rollout 泛型化 (Phase 1.3)
 
-### 5.1 CanaryAllocator 改泛型
+### 5.1 CanaryAllocator 改泛型（Phase 1.3 落地实测）
 
-V2 现行 `allocate(sessionId, agentId, baselineSkillName)` 只支持 skill。Phase 1.3 改成：
+V2 现行 `allocate(sessionId, agentId, baselineSkillName)` 只支持 skill。Phase 1.3 实际落地形态：
 
 ```java
 public class CanaryAllocator {
+
+    /** V2 legacy 3-arg — 零行为漂移；DefaultSessionSkillResolver 仍用此入口。
+     *  内部仍走 findActiveCanaryForSkill (JPQL hard-code skill) 保现有 test mock 全绿。 */
+    public String allocate(String sessionId, Long agentId, String baselineSkillName) { ... }
+
+    /** V4 新 4-arg 泛型入口。internal 走新 findActiveCanaryByAgentSurfaceBaseline。 */
     public String allocate(String sessionId, Long agentId, String surfaceType,
                            String baselineIdentity) {
-        // ... 现行 hash-based 分流逻辑保留
+        // 同 V2 hash-based 分流 / 100/0 短路 / session-pin 复用 / upsertSkipDuplicate 持久化
         // baselineIdentity 替代原 skill name —— skill 传 skill name, prompt 传
         // promptVersionId, behavior_rule 传 behavior_rule version id
     }
 }
 ```
 
-`t_session_annotation` 写 `annotation_type='canary_group_<surface_type>'`（V1 写 `canary_group`
-保留，V4 加细分；查询时 union 两边）。
+**annotation_type 设计判断（Phase 1.3 dev judgment）**：
+
+- 保留 `annotation_type='canary_group'` 常量（V2 contract 不变）
+- 通过 `annotation_value='<surfaceType>:<identity>'` 前缀 discriminate surface
+  - skill 行：`"skill:my-skill-v2"`
+  - behavior_rule 行：`"behavior_rule:<versionId>"`
+- `SessionAnnotationRepository.findCanaryGroup` JPQL 已经支持 `WHERE annotation_value LIKE CONCAT(:surfaceType, ':%')` — V2 时期就预留好了 surface 入参
+- **零 V2 row 破坏 / 零 schema 迁移**；废弃 V1 早期草稿中"annotation_type 加 surface 后缀"方案（会让 V2 历史 row 查不到）
 
 ### 5.2 canary 互斥（5 ratify #4 锁）
 
-保留 "**同 agent 1 active canary，跨所有 surface**" 约束（V2 partial UNIQUE 已实现）。这意味着：
+保留 "**同 agent 1 active canary，跨所有 surface**" 约束。Phase 1.3 V83 migration 落实：
 
-- agent X 当前在 skill canary 中 → 不能同时起 prompt canary
+- **V77 旧形态**：`uq_canary_active ON t_canary_rollout(agent_id, surface_type) WHERE rollout_stage='canary'` —
+  仅每个 `(agent_id, surface_type)` 1 active；不同 surface 上的并行 canary 是允许的
+- **V83 新形态**：`uq_canary_active ON t_canary_rollout(agent_id) WHERE rollout_stage='canary'` —
+  每个 agent 在所有 surface 上至多 1 active canary
+
+这意味着：
+
+- agent X 当前在 skill canary 中 → 不能同时起 prompt 或 behavior_rule canary（DB 层 partial UNIQUE 拦截）
 - 防止多 surface 同时变动导致 confounding（多变量变动无法归因哪个生效）
 - 串行：skill canary 完成 → promote → 再起 prompt canary
 
 V5+ user simulator 后允许 true multi-arm trials 时再放开。
+
+**Phase 1.3 真接 canary 限界**：`CanaryRolloutService.startCanary` 的 `normalizeSurfaceType`
+仍只接受 `'skill'`，behavior_rule canary 创建路径留 Phase 1.4 dashboard 接入时再开。V83 跨 surface
+UNIQUE 提前落地是为了避免 Phase 1.4 时 migration 来回改，且现在 dormant（无 non-skill canary
+能被创建，约束不会真触发）。
+
+### 5.3 OptimizationEvent ↔ behavior_rule version 链接
+
+V83 给 `t_optimization_event` 加 `candidate_behavior_rule_version_id VARCHAR(36)`：
+
+- 类比 V80 已有的 `candidate_skill_id BIGINT` + `candidate_prompt_version_id BIGINT`
+- **类型不同**：BehaviorRuleVersionEntity.id 是 UUID 字符串（V82 schema），所以这一列是 VARCHAR(36) 而非 BIGINT
+- `AttributionApprovalService.dispatchBehaviorRuleSurface` 用此列直接持久化 candidate version id（不需要 description prefix 解析）
+- `AttributionStageListener.onBehaviorRulePromoted` 用此列查询 mirror target event — UUID 直接 match，**不需要** prompt/skill 路径里的 `Long.parseLong` skip workaround
+
+**为什么选 (A) 新加列 而非 (B) reuse description prefix / (C) reuse attribution_session_id**：
+
+- (A) 新加列：4 行 migration + Entity field/getter/setter + 1 finder JPQL；保持 entity column 一一对应 surface 的现有模式 ← **采用**
+- (B) description prefix：0 schema 变动，但 description 不再纯净；下游 dashboard 渲染要解析；audit-trail 不清晰
+- (C) reuse attribution_session_id：含义错位（该列是 curator agent 跑的 session id），audit 难追
 
 ---
 
@@ -526,4 +601,6 @@ aborted-tx bug。
 - 2026-05-15：claude 初稿（Phase 1.0 调研报告衍生）；5 ratify 决策全 user 锁定（lifecycle hook→V5 / 6-method 接口 / 4-hook Template Method / canary 跨 surface 互斥 / behavior_rule LLM=defaultProvider）；Phase 1.1 scope 锁定
 - 2026-05-15：tech-design 中文化（user 偏好）
 - 2026-05-15：**Phase 1.1 交付**——V82 migration + OptimizableSurface<V> 6-method 接口 + SandboxContext / SandboxSurfaceFactory placeholder + 3 surface 实现（SkillSurface / PromptSurface adapter；BehaviorRuleSurface 真新实现 + 5min TTL cache）+ BehaviorRuleImproverService（V3.1 attribution audit-trail rethrow 模式）+ BehaviorRulePromotionService（partial UNIQUE 保活）+ SurfaceRegistry + AbstractAbEvalRunner skeleton + 10 new test（3 ImproverServiceTest + 3 SurfaceRegistryTest + 4 PersistenceIT）。核心 7+1 文件 0 diff，1627 test BUILD SUCCESS
-- 2026-05-15：**Phase 1.2 交付**——AbstractAbEvalRunner.run() 5-step Template Method 填实（ratify #3 顺序锁定）+ 5th abstract hook `runEvalSet` 加入（dev judgment：避免强行统一 V2 per-scenario sandbox vs V3 monolithic pipeline）+ SkillAbEvalService extends AbstractAbEvalRunner<SkillEntity>（runAbTestAsync 走 template，V64 partial-UNIQUE promote 路径保留，baseline 用 synthetic placeholder SkillEntity 做对象身份区分避免无谓的 parent skill 查询）+ PromptImproverService extends AbstractAbEvalRunner<PromptVersionEntity>（runImprovementAsync 走 template，ThreadLocal `PromptRunState` 共享 hook 状态，shouldPromote 永远返回 true 由 PromotionService 真 gate）+ SkillSurface/PromptSurface 加 sessionId-keyed `injectedBySession` ConcurrentMap + `@Lazy` 切构造器循环 + 10 new test（AbstractAbEvalRunnerTest×4 / SkillSurfaceInjectTest×3 / PromptSurfaceInjectTest×3）。**1637 test BUILD SUCCESS = 1627 baseline + 10 new**，零行为漂移（既有 PromptImproverServiceTest / PromptImproverServiceAttributionTest / SkillAbEvalServiceMultiTurnTest / SkillAbEvalServiceRunBaselineOnlyTest / SkillAbEvalServiceManualPromoteTest / SkillAbEvalServiceAggregateBaselineHistoryTest 等套件全绿），核心 7+1 文件继续 0 diff
+- 2026-05-15：**Phase 1.2 交付**（commit `885f261`）——AbstractAbEvalRunner.run() 5-step Template Method 填实（ratify #3 顺序锁定）+ SkillAbEvalService extends AbstractAbEvalRunner<SkillEntity>（runAbTestAsync 走 template，V64 partial-UNIQUE promote 路径保留，baseline 用 synthetic placeholder SkillEntity 做对象身份区分避免无谓的 parent skill 查询）+ PromptImproverService extends AbstractAbEvalRunner<PromptVersionEntity>（runImprovementAsync 走 template，ThreadLocal `PromptRunState` 共享 hook 状态，shouldPromote 永远返回 true 由 PromotionService 真 gate）+ SkillSurface/PromptSurface 加 sessionId-keyed `injectedBySession` ConcurrentMap + `@Lazy` 切构造器循环 + 10 new test。**1637 test BUILD SUCCESS = 1627 baseline + 10 new**，零行为漂移
+- 2026-05-15：**Phase 1.2 reviewer-r1 fix**——team-lead 发现 `885f261` 把 `runEvalSet` 做成第 5 个 abstract hook 违反 ratify #3 4-hook 锁。fix 改 **Option A（EvalService<V> 依赖注入）**：新增 `EvalService<V>` interface + `SkillEvalService` / `PromptEvalService` 两个 @Component thin adapter（实现 `EvalService<SkillEntity>` / `EvalService<PromptVersionEntity>`，分别 `@Lazy SkillAbEvalService` / `@Lazy PromptImproverService` 反向引用回各自 service 的 `runEvalSetInternal` public 方法）+ `AbstractAbEvalRunner` 构造器从 1-arg 改 2-arg `(surface, evalService)`，`runEvalSet` 改 protected 非 abstract 默认 delegating to `evalService.run(...)`。4 ratify hook（injectForSandbox / judgeAndCompare / shouldPromote / promoteIfNeeded）保持不变。1637+ test 仍全过（AbstractAbEvalRunnerTest×4 改用 TracingEvalService 注入 + 验 evalService 调用顺序；既有 service test 用 Mockito mock EvalService + when().thenAnswer 委派回 service.runEvalSetInternal 保零行为漂移）；核心 7+1 文件继续 0 diff
+- 2026-05-15：**Phase 1.3 交付**——V83 migration（`t_optimization_event.candidate_behavior_rule_version_id VARCHAR(36)` + `idx_oe_candidate_brv_id` + DROP/CREATE `uq_canary_active` 从 `(agent_id, surface_type)` 改成 `(agent_id)` 跨 surface 锁，ratify #4 schema-side enforcement）+ `OptimizationEventEntity` 加 `candidateBehaviorRuleVersionId` 字段 + `OptimizationEventRepository.findByCandidateBehaviorRuleVersionId` finder + `AttributionApprovalService` 加 `BehaviorRuleImproverService` 注入 / `APPROVABLE_SURFACES` 扩 behavior_rule / `dispatchBehaviorRuleSurface` 分支（同步 LLM fill via REQUIRES_NEW improver，failure → candidate_failed via 外层 catch）+ `AttributionStageListener.onBehaviorRulePromoted` 加 `@EventListener(REQUIRES_NEW)` mirror to `stage=promoted`（VARCHAR(36) UUID 直接 lookup，无需 Long.parseLong skip）+ `CanaryAllocator` 4-arg 泛型 `allocate(sessionId, agentId, surfaceType, baselineIdentity)` 加入（3-arg V2 版本保留作 deprecated wrapper，**继续走 findActiveCanaryForSkill old finder** 以保 existing V2 test mock 全绿；新泛型走 `findActiveCanaryByAgentSurfaceBaseline` new finder）+ `CanaryRolloutRepository.findActiveCanaryByAgentSurfaceBaseline` 泛型 JPQL 加入。`annotation_type='canary_group'` 常量保留跨 surface（**dev judgment**：通过 `annotation_value='<surface>:<identity>'` 前缀 discriminate，zero V2 row 破坏 / zero migration；废弃 V1 草稿"annotation_type 加 surface 后缀"方案）。`CanaryRolloutService.startCanary` Phase 1.3 仍只接受 surfaceType='skill'，behavior_rule canary 真创建留 Phase 1.4 dashboard。`ProposeOptimizationTool.ALLOWED_SURFACES` 不动（curator 端 Phase 1.3 不放开 behavior_rule，Phase 1.4 配合 dashboard 一起放）。22 new test（AttributionApprovalServiceBehaviorRuleTest×6 / CanaryAllocatorGenericTest×11 / AttributionStageListenerBehaviorRuleTest×5）+ AttributionApprovalServiceTest 既有套件构造器更新（4-arg → 5-arg 加 behaviorRuleImproverService mock）。**1659 test BUILD SUCCESS = 1637 baseline + 22 new**，零行为漂移（V2 CanaryAllocatorTest×11 / V3 AttributionApprovalServiceTest×11 / V3.2 AttributionStageListenerTest×6 / V2 CanaryRolloutServiceTest / V2 DefaultSessionSkillResolverCanaryTest 全绿），核心 7+1 文件继续 0 diff

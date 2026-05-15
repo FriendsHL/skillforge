@@ -139,6 +139,19 @@ public class OptimizationEventEntity {
     @Column(name = "candidate_prompt_version_id")
     private Long candidatePromptVersionId;
 
+    /**
+     * V4 MULTI-SURFACE-FLYWHEEL Phase 1.3: type-safe link to the
+     * {@link com.skillforge.server.entity.BehaviorRuleVersionEntity} produced
+     * by {@code AttributionApprovalService.dispatchBehaviorRuleSurface} when
+     * {@link #surfaceType} = {@code behavior_rule}. Mirrors
+     * {@link #candidateSkillId} / {@link #candidatePromptVersionId} but
+     * VARCHAR(36) because {@code BehaviorRuleVersionEntity.id} is a UUID
+     * string (V82 column type). The V3.2 stage-mirror listener uses this
+     * column to look up the matching event on a {@code BehaviorRulePromotedEvent}.
+     */
+    @Column(name = "candidate_behavior_rule_version_id", length = 36)
+    private String candidateBehaviorRuleVersionId;
+
     @Column(name = "ab_run_id")
     private Long abRunId;
 
@@ -227,6 +240,11 @@ public class OptimizationEventEntity {
     public Long getCandidatePromptVersionId() { return candidatePromptVersionId; }
     public void setCandidatePromptVersionId(Long candidatePromptVersionId) {
         this.candidatePromptVersionId = candidatePromptVersionId;
+    }
+
+    public String getCandidateBehaviorRuleVersionId() { return candidateBehaviorRuleVersionId; }
+    public void setCandidateBehaviorRuleVersionId(String candidateBehaviorRuleVersionId) {
+        this.candidateBehaviorRuleVersionId = candidateBehaviorRuleVersionId;
     }
 
     public Long getAbRunId() { return abRunId; }

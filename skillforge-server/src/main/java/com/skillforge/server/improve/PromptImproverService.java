@@ -96,11 +96,19 @@ public class PromptImproverService extends AbstractAbEvalRunner<PromptVersionEnt
                                   ObjectMapper objectMapper,
                                   @Qualifier("abEvalCoordinatorExecutor") ExecutorService coordinatorExecutor,
                                   LlmProperties llmProperties,
-                                  @Lazy PromptSurface promptSurface) {
+                                  @Lazy PromptSurface promptSurface,
+                                  PromptEvalService promptEvalService) {
         // @Lazy on promptSurface breaks the DI cycle: PromptSurface's @Lazy
         // injection of PromptImproverService bootstrap order. Super constructor
         // only stores the reference (no method call), so proxy is safe.
-        super(promptSurface);
+        //
+        // Phase 1.2 reviewer-r1 fix: promptEvalService is the
+        // EvalService<PromptVersionEntity> adapter that
+        // AbstractAbEvalRunner.run() delegates to via runEvalSet (preserves
+        // ratify #3 4-hook count). Not @Lazy because the reverse @Lazy
+        // (PromptEvalService → PromptImproverService) breaks the cycle from
+        // the other side.
+        super(promptSurface, promptEvalService);
         this.agentRepository = agentRepository;
         this.evalRunRepository = evalRunRepository;
         this.promptVersionRepository = promptVersionRepository;
@@ -402,12 +410,16 @@ public class PromptImproverService extends AbstractAbEvalRunner<PromptVersionEnt
      * persisted). For candidate side, delegates to {@link AbEvalPipeline#run}
      * which writes all abRun fields exactly as the pre-1.2 path.
      */
-    @Override
-    protected AbstractAbEvalRunner.EvalRun runEvalSet(SandboxContext ctx, PromptVersionEntity version) {
+    /**
+     * Eval-set runner (public so {@link PromptEvalService} adapter can
+     * delegate here). Phase 1.2 reviewer-r1 fix: NOT @Override (template's
+     * runEvalSet is non-abstract now, delegating to injected EvalService).
+     */
+    public AbstractAbEvalRunner.EvalRun runEvalSetInternal(SandboxContext ctx, PromptVersionEntity version) {
         PromptRunState state = currentRun.get();
         if (state == null) {
             throw new IllegalStateException(
-                    "PromptImproverService.runEvalSet called outside runImprovementAsync orchestration "
+                    "PromptImproverService.runEvalSetInternal called outside runImprovementAsync orchestration "
                             + "(currentRun ThreadLocal is empty)");
         }
         if (version == state.baseline) {

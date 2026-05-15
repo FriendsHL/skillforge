@@ -130,12 +130,19 @@ public class SkillAbEvalService extends AbstractAbEvalRunner<SkillEntity> {
                               @Qualifier("abEvalLoopExecutor") ExecutorService loopExecutor,
                               SkillRegistry skillRegistry,
                               SkillAbCompletedEventPublisher abCompletedEventPublisher,
-                              @Lazy SkillSurface skillSurface) {
+                              @Lazy SkillSurface skillSurface,
+                              SkillEvalService skillEvalService) {
         // @Lazy on skillSurface breaks the DI cycle: SkillSurface's @Lazy
-        // injection of SkillAbEvalService bootstrap order. The super()
-        // constructor just stores the reference (no method call), so the
-        // @Lazy proxy is fine here.
-        super(skillSurface);
+        // injection of SkillAbEvalService bootstrap order. super() only stores
+        // the reference (no method call), so the @Lazy proxy is fine.
+        //
+        // Phase 1.2 reviewer-r1 fix: skillEvalService is the
+        // EvalService<SkillEntity> adapter that AbstractAbEvalRunner.run()
+        // delegates to via runEvalSet (preserving ratify #3 4-hook count by
+        // moving eval-set execution out of the abstract method surface).
+        // Not @Lazy because the reverse @Lazy (SkillEvalService →
+        // SkillAbEvalService) already breaks the cycle from the other side.
+        super(skillSurface, skillEvalService);
         this.skillRepository = skillRepository;
         this.skillAbRunRepository = skillAbRunRepository;
         this.evalRunRepository = evalRunRepository;
@@ -525,12 +532,18 @@ public class SkillAbEvalService extends AbstractAbEvalRunner<SkillEntity> {
      * intentionally reference-based (not {@code Long}-id-based) because in
      * unit tests the same SkillEntity object is asserted on both sides.
      */
-    @Override
-    protected EvalRun runEvalSet(SandboxContext ctx, SkillEntity version) {
+    /**
+     * Eval-set runner (public so {@link SkillEvalService} adapter can delegate
+     * here from its {@link EvalService#run} impl). Phase 1.2 reviewer-r1 fix:
+     * NOT an @Override (template's {@code runEvalSet} is non-abstract now,
+     * delegating to injected {@link EvalService}); SkillEvalService is the
+     * EvalService<SkillEntity> bean wired via super() constructor.
+     */
+    public EvalRun runEvalSetInternal(SandboxContext ctx, SkillEntity version) {
         SkillRunState state = currentRun.get();
         if (state == null) {
             throw new IllegalStateException(
-                    "SkillAbEvalService.runEvalSet called outside runAbTestAsync orchestration "
+                    "SkillAbEvalService.runEvalSetInternal called outside runAbTestAsync orchestration "
                             + "(currentRun ThreadLocal is empty)");
         }
         if (version == state.baseline) {

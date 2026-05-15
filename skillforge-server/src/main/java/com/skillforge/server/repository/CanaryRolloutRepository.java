@@ -42,6 +42,31 @@ public interface CanaryRolloutRepository extends JpaRepository<CanaryRolloutEnti
             @Param("baselineSkillName") String baselineSkillName);
 
     /**
+     * V4 MULTI-SURFACE-FLYWHEEL Phase 1.3: generic active-canary lookup
+     * parameterized by surfaceType. Mirrors {@link #findActiveCanaryForSkill}
+     * but accepts any surface_type ({@code "skill"} / {@code "prompt"} /
+     * {@code "behavior_rule"}). {@code baselineIdentity} maps to the existing
+     * V77 {@code baseline_skill_name} column — that column is leaky-named but
+     * holds surface-agnostic identifier values (a future migration may rename
+     * it once dashboard wiring matures).
+     *
+     * <p>Used by {@link com.skillforge.server.canary.CanaryAllocator#allocate(String, Long, String, String)}.
+     * The V2 3-arg allocator entry point still uses the original
+     * {@link #findActiveCanaryForSkill} so existing test mocks stay green.
+     */
+    @Query("""
+            SELECT c FROM CanaryRolloutEntity c
+            WHERE c.agentId = :agentId
+              AND c.surfaceType = :surfaceType
+              AND c.baselineSkillName = :baselineIdentity
+              AND c.rolloutStage = 'canary'
+            """)
+    Optional<CanaryRolloutEntity> findActiveCanaryByAgentSurfaceBaseline(
+            @Param("agentId") Long agentId,
+            @Param("surfaceType") String surfaceType,
+            @Param("baselineIdentity") String baselineIdentity);
+
+    /**
      * Phase 1.4: list all rollouts in a given stage. Used by metrics-collector
      * to iterate {@code rollout_stage='canary'} rows during hourly aggregation.
      * Ordered by id so iteration is deterministic across ticks.

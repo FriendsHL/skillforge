@@ -13,6 +13,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 
 /**
  * MULTI-SURFACE-FLYWHEEL V4 Phase 1.1 — third surface (behavior_rule)
@@ -63,6 +64,29 @@ public class BehaviorRuleSurface implements OptimizableSurface<BehaviorRuleVersi
      * Phase 1.1 — V5+ may revisit if multi-node deploys become routine).
      */
     private final ConcurrentHashMap<Long, CachedEntry> activeCache = new ConcurrentHashMap<>();
+
+    /**
+     * Phase 1.3 — session-scoped registry of which {@link BehaviorRuleVersionEntity}
+     * is currently injected for which sandbox session. Same shape + semantics as
+     * {@code SkillSurface.injectedBySession} / {@code PromptSurface.injectedBySession}:
+     * populated by {@link #injectForSandbox}, queryable by
+     * {@link #getInjectedVersion}, removed when a {@code version=null} inject
+     * arrives. Concurrent because two A/B runs (different agents) may inject
+     * disjoint sessionId keys in parallel.
+     *
+     * <p>This map is the **inject side** of the cache; {@link #activeCache}
+     * is the **loadActive side** (per-agent active version). They're separate
+     * concerns and intentionally not unified — sandbox state is per-session,
+     * production active is per-agent.
+     *
+     * <p>Phase 1.2 callers (Skill / Prompt subclass orchestrators) pass the
+     * version directly to {@code runEvalSet}, so this map is NOT consumed by
+     * the template's run() path today. Reserved for Phase 1.3+ surface-aware
+     * dispatch (e.g. a sandbox-scoped {@code BehaviorRuleRegistry} override
+     * that wants to see the candidate rules during sandbox eval).
+     */
+    private final ConcurrentMap<String, BehaviorRuleVersionEntity> injectedBySession =
+            new ConcurrentHashMap<>();
 
     public BehaviorRuleSurface(BehaviorRuleVersionRepository versionRepository,
                                 BehaviorRuleImproverService improverService,
@@ -170,15 +194,38 @@ public class BehaviorRuleSurface implements OptimizableSurface<BehaviorRuleVersi
 
     @Override
     public void injectForSandbox(SandboxContext ctx, BehaviorRuleVersionEntity version) {
-        // Phase 1.1: signature locked; full sandbox plumbing (a sandbox-scoped
-        // BehaviorRuleRegistry override) arrives with AbstractAbEvalRunner in
-        // Phase 1.2. Throwing UnsupportedOperationException here is the
-        // spec-conformant behavior — see tech-design §3 + §7.1 "AbstractAbEvalRunner
-        // skeleton only" + §2.1 javadoc on injectForSandbox.
-        throw new UnsupportedOperationException(
-                "BehaviorRuleSurface.injectForSandbox: Phase 1.2 (AbstractAbEvalRunner) "
-                        + "will wire sandbox-scoped registry override. "
-                        + "Today's surface is loadActive / loadVersion / createCandidate / promote / rollback only.");
+        // Phase 1.3: stash the version under the sandbox session id (same shape
+        // as SkillSurface / PromptSurface Phase 1.2 r1 inject pattern). Full
+        // sandbox-scoped BehaviorRuleRegistry override remains future work — the
+        // map is registry-only, no I/O. The Phase 1.2 r1 design judgment was
+        // that surfaces own the per-session inject state (rather than the
+        // AbstractAbEvalRunner template), so behavior_rule must hold the same
+        // contract even though no Phase 1.3 caller consumes it yet (Phase 1.4
+        // dashboard surface-aware dispatch is the first consumer).
+        //
+        // Passing version=null deletes the entry (used by external callers to
+        // tear down after a sandbox session ends).
+        if (ctx == null || ctx.sessionId() == null || ctx.sessionId().isBlank()) {
+            throw new IllegalArgumentException(
+                    "SandboxContext.sessionId is required for injectForSandbox");
+        }
+        if (version == null) {
+            injectedBySession.remove(ctx.sessionId());
+        } else {
+            injectedBySession.put(ctx.sessionId(), version);
+        }
+    }
+
+    /**
+     * Phase 1.3 helper — return the {@link BehaviorRuleVersionEntity} most
+     * recently injected for the given sandbox session, or {@code null} when no
+     * entry exists. Mirrors {@code SkillSurface.getInjectedVersion} /
+     * {@code PromptSurface.getInjectedVersion} so dashboard surface-aware
+     * dispatch (Phase 1.4) can read sandbox version state uniformly across
+     * the three surfaces via {@link OptimizableSurface} pattern.
+     */
+    public BehaviorRuleVersionEntity getInjectedVersion(String sessionId) {
+        return sessionId == null ? null : injectedBySession.get(sessionId);
     }
 
     @Override

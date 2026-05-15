@@ -2,6 +2,7 @@ package com.skillforge.server.attribution;
 
 import com.skillforge.server.entity.OptimizationEventEntity;
 import com.skillforge.server.entity.SkillDraftEntity;
+import com.skillforge.server.improve.BehaviorRuleImproverService;
 import com.skillforge.server.improve.ImprovementStartResult;
 import com.skillforge.server.improve.PromptImproverService;
 import com.skillforge.server.improve.SkillDraftService;
@@ -74,10 +75,18 @@ public class AttributionApprovalService {
      * {@code ProposeOptimizationTool.ALLOWED_SURFACES} — we re-check at the
      * approval layer because the operator could in theory approve a row whose
      * surface column was hand-edited via SQL.
+     *
+     * <p>V4 MULTI-SURFACE-FLYWHEEL Phase 1.3: {@code behavior_rule} added.
+     * {@link ProposeOptimizationTool} curator emission still rejects
+     * {@code behavior_rule} (it's not yet a curator-output surface; events with
+     * this surface arrive via direct admin insertion / Phase 1.4 dashboard
+     * creation), but operator-driven {@code approve()} on such an event flows
+     * through {@link #dispatchBehaviorRuleSurface}.
      */
     static final Set<String> APPROVABLE_SURFACES = Set.of(
             OptimizationEventEntity.SURFACE_SKILL,
-            OptimizationEventEntity.SURFACE_PROMPT);
+            OptimizationEventEntity.SURFACE_PROMPT,
+            OptimizationEventEntity.SURFACE_BEHAVIOR_RULE);
 
     /**
      * Stage flow whitelist. Read as: from-stage → set of legal next stages.
@@ -122,15 +131,18 @@ public class AttributionApprovalService {
     private final OptimizationEventRepository eventRepository;
     private final SkillDraftService skillDraftService;
     private final PromptImproverService promptImproverService;
+    private final BehaviorRuleImproverService behaviorRuleImproverService;
     private final AttributionEventBroadcaster broadcaster;
 
     public AttributionApprovalService(OptimizationEventRepository eventRepository,
                                       SkillDraftService skillDraftService,
                                       PromptImproverService promptImproverService,
+                                      BehaviorRuleImproverService behaviorRuleImproverService,
                                       AttributionEventBroadcaster broadcaster) {
         this.eventRepository = eventRepository;
         this.skillDraftService = skillDraftService;
         this.promptImproverService = promptImproverService;
+        this.behaviorRuleImproverService = behaviorRuleImproverService;
         this.broadcaster = broadcaster;
     }
 
@@ -156,7 +168,7 @@ public class AttributionApprovalService {
         if (!APPROVABLE_SURFACES.contains(event.getSurfaceType())) {
             throw new IllegalStateException("approve: unsupported surface=" + event.getSurfaceType()
                     + " for eventId=" + eventId
-                    + " (V3 ratify #6 — only skill/prompt approvable)");
+                    + " (V4 ratify — approvable: skill / prompt / behavior_rule)");
         }
 
         // Stage 1: proposal_pending → proposal_approved
@@ -199,7 +211,7 @@ public class AttributionApprovalService {
         if (!APPROVABLE_SURFACES.contains(event.getSurfaceType())) {
             throw new IllegalStateException("retry: unsupported surface=" + event.getSurfaceType()
                     + " for eventId=" + eventId
-                    + " (V3 ratify #6 — only skill/prompt retryable)");
+                    + " (V4 ratify — retryable: skill / prompt / behavior_rule)");
         }
         log.info("[AttributionApproval] retrying eventId={} approverUserId={} surface={} (was candidate_failed)",
                 eventId, approverUserId, event.getSurfaceType());
@@ -251,6 +263,8 @@ public class AttributionApprovalService {
             switch (event.getSurfaceType()) {
                 case OptimizationEventEntity.SURFACE_SKILL -> dispatchSkillSurface(event, approverUserId);
                 case OptimizationEventEntity.SURFACE_PROMPT -> dispatchPromptSurface(event, approverUserId);
+                case OptimizationEventEntity.SURFACE_BEHAVIOR_RULE ->
+                        dispatchBehaviorRuleSurface(event, approverUserId);
                 default ->
                         // Unreachable due to caller validation, but keep switch exhaustive.
                         throw new IllegalStateException(
@@ -334,6 +348,43 @@ public class AttributionApprovalService {
         // now; Phase 1.4 may revisit (e.g. add candidatePromptVersionUuid or
         // change column type) once the dashboard surface concretely needs it.
         log.info("[AttributionApproval] eventId={} → prompt version created (versionId={})",
+                event.getId(), result.promptVersionId());
+    }
+
+    /**
+     * V4 MULTI-SURFACE-FLYWHEEL Phase 1.3: behavior_rule surface dispatch
+     * branch. Mirrors {@link #dispatchPromptSurface} (also delegates to a
+     * REQUIRES_NEW improver service that does synchronous LLM fill +
+     * audit-trail rethrow), with the key difference that
+     * {@link OptimizationEventEntity#getCandidateBehaviorRuleVersionId()} is
+     * VARCHAR(36) (UUID), so the link can be persisted directly here rather
+     * than relying on a post-hoc lookup by description prefix.
+     *
+     * <p><b>Tx isolation</b>: {@code BehaviorRuleImproverService.startImprovementFromAttribution}
+     * uses {@code Propagation.REQUIRES_NEW} (same pattern as V3.1
+     * PromptImproverService). Any LLM failure surfaces as a thrown exception
+     * that the outer {@link #runCandidateGeneration} catch-block converts to
+     * {@code stage=candidate_failed} without rolling back the child tx's
+     * version row save (audit trail preserved per V3.1 reviewer fix).
+     *
+     * @param event          optimization event in {@code candidate_generating} stage
+     * @param approverUserId operator triggering the approve (logged for audit)
+     */
+    private void dispatchBehaviorRuleSurface(OptimizationEventEntity event, Long approverUserId) {
+        if (event.getAgentId() == null) {
+            throw new IllegalStateException("dispatchBehaviorRuleSurface: eventId=" + event.getId()
+                    + " has null agentId — cannot generate behavior_rule version");
+        }
+        ImprovementStartResult result = behaviorRuleImproverService.startImprovementFromAttribution(
+                event.getId(),
+                String.valueOf(event.getAgentId()),
+                event.getDescription(),
+                approverUserId);
+        // BehaviorRuleVersionEntity.id is a UUID string → fits cleanly in the
+        // V83 candidate_behavior_rule_version_id VARCHAR(36) column, no skip
+        // path needed (unlike the skill/prompt Long-vs-UUID mismatch above).
+        event.setCandidateBehaviorRuleVersionId(result.promptVersionId());
+        log.info("[AttributionApproval] eventId={} → behavior_rule version created (versionId={})",
                 event.getId(), result.promptVersionId());
     }
 

@@ -75,13 +75,23 @@ class SkillAbEvalServiceMultiTurnTest {
 
     @BeforeEach
     void setUp() throws Exception {
+        SkillEvalService mockEvalService = org.mockito.Mockito.mock(SkillEvalService.class);
         service = new SkillAbEvalService(
                 skillRepository, skillAbRunRepository, evalRunRepository,
                 skillEvalHistoryRepository, agentService, scenarioLoader,
                 sandboxFactory, evalEngineFactory, evalJudgeTool, skillPackageLoader,
                 new ObjectMapper(), broadcaster, coordinatorExecutor, loopExecutor,
                 skillRegistry, abCompletedEventPublisher,
-                org.mockito.Mockito.mock(com.skillforge.server.improve.surface.SkillSurface.class));
+                org.mockito.Mockito.mock(com.skillforge.server.improve.surface.SkillSurface.class),
+                mockEvalService);
+        // Phase 1.2 reviewer-r1 fix: SkillEvalService is the EvalService<SkillEntity>
+        // adapter. In production it @Lazy-delegates back to runEvalSetInternal;
+        // here in tests we mock the adapter and rewire its run() to delegate
+        // back to service.runEvalSetInternal — preserves the pre-refactor
+        // sandboxFactory / evalJudgeTool assertion paths.
+        when(mockEvalService.run(any(), any(SkillEntity.class)))
+                .thenAnswer(inv -> service.runEvalSetInternal(
+                        inv.getArgument(0), inv.getArgument(1)));
 
         when(loopExecutor.submit(anyCallable())).thenAnswer(inv -> {
             Callable<LoopResult> callable = inv.getArgument(0);

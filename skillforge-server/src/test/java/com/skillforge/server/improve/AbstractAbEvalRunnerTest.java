@@ -34,21 +34,24 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class AbstractAbEvalRunnerTest {
 
     @Test
-    @DisplayName("happy path: 5 hooks called in spec ratify §3.1 order, promote=true → promoteIfNeeded called")
+    @DisplayName("happy path: hooks called in spec ratify §3 order (4 hooks + injected EvalService), promote=true")
     void run_happyPath_hookOrderMatchesSpec() {
         List<String> trace = new ArrayList<>();
         TracingSurface surface = new TracingSurface(trace);
-        TracingRunner runner = new TracingRunner(surface, trace, /* promoteGate */ true);
+        TracingEvalService evalService = new TracingEvalService(trace);
+        TracingRunner runner = new TracingRunner(surface, evalService, trace, /* promoteGate */ true);
 
         SandboxContext ctx = new SandboxContext(42L, "session-1", null);
         AbstractAbEvalRunner.AbRunResult result = runner.run("ab-1", "BASELINE", "CANDIDATE", ctx);
 
         // Ratified hook order — ANY deviation here is a spec violation.
+        // Note: runEvalSet is delegated to injected EvalService (not abstract,
+        // see Phase 1.2 reviewer-r1 fix preserving ratify #3 4-hook count).
         assertThat(trace).containsExactly(
                 "inject:BASELINE",
-                "runEvalSet:BASELINE",
+                "evalService.run:BASELINE",
                 "inject:CANDIDATE",
-                "runEvalSet:CANDIDATE",
+                "evalService.run:CANDIDATE",
                 "judgeAndCompare:50.0,75.0",
                 "shouldPromote:25.0",
                 "promoteIfNeeded:CANDIDATE,25.0");
@@ -64,7 +67,8 @@ class AbstractAbEvalRunnerTest {
     void run_shouldPromoteFalse_shortCircuitsPromote() {
         List<String> trace = new ArrayList<>();
         TracingSurface surface = new TracingSurface(trace);
-        TracingRunner runner = new TracingRunner(surface, trace, /* promoteGate */ false);
+        TracingEvalService evalService = new TracingEvalService(trace);
+        TracingRunner runner = new TracingRunner(surface, evalService, trace, /* promoteGate */ false);
 
         SandboxContext ctx = new SandboxContext(42L, "session-1", null);
         AbstractAbEvalRunner.AbRunResult result = runner.run("ab-2", "BASELINE", "CANDIDATE", ctx);
@@ -72,17 +76,13 @@ class AbstractAbEvalRunnerTest {
         // promoteIfNeeded MUST be absent — gate said no.
         assertThat(trace).containsExactly(
                 "inject:BASELINE",
-                "runEvalSet:BASELINE",
+                "evalService.run:BASELINE",
                 "inject:CANDIDATE",
-                "runEvalSet:CANDIDATE",
+                "evalService.run:CANDIDATE",
                 "judgeAndCompare:50.0,75.0",
                 "shouldPromote:25.0");
         assertThat(trace).doesNotContain("promoteIfNeeded:CANDIDATE,25.0");
         assertThat(result.promoted()).isFalse();
-        // The result still carries baseline + candidate + comparison
-        // (Phase 1.2 invariant: AbRunResult is internally consistent even
-        // when the gate denies promotion — orchestrators rely on this to
-        // write skipReason from the same Comparison).
         assertThat(result.comparison().delta()).isEqualTo(25.0);
     }
 
@@ -91,7 +91,8 @@ class AbstractAbEvalRunnerTest {
     void run_nullArgs_rejectedBeforeAnyHook() {
         List<String> trace = new ArrayList<>();
         TracingSurface surface = new TracingSurface(trace);
-        TracingRunner runner = new TracingRunner(surface, trace, true);
+        TracingEvalService evalService = new TracingEvalService(trace);
+        TracingRunner runner = new TracingRunner(surface, evalService, trace, true);
         SandboxContext ctx = new SandboxContext(42L, "session-1", null);
 
         assertThatThrownBy(() -> runner.run(null, "B", "C", ctx))
@@ -115,11 +116,19 @@ class AbstractAbEvalRunnerTest {
     }
 
     @Test
-    @DisplayName("constructor rejects null surface (defense against accidental null injection)")
-    void constructor_nullSurface_throws() {
-        assertThatThrownBy(() -> new TracingRunner(null, new ArrayList<>(), true))
+    @DisplayName("constructor rejects null surface and null evalService (defense against accidental null injection)")
+    void constructor_nullArgs_throws() {
+        List<String> trace = new ArrayList<>();
+        TracingSurface surface = new TracingSurface(trace);
+        TracingEvalService evalService = new TracingEvalService(trace);
+        // null surface
+        assertThatThrownBy(() -> new TracingRunner(null, evalService, trace, true))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("surface must not be null");
+        // null evalService (Phase 1.2 reviewer-r1 fix added this validation)
+        assertThatThrownBy(() -> new TracingRunner(surface, null, trace, true))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("evalService must not be null");
     }
 
     // ─────── Test doubles ───────
@@ -143,26 +152,35 @@ class AbstractAbEvalRunnerTest {
     }
 
     /**
-     * Tracing subclass that records every hook entry. {@code runEvalSet} returns
-     * deterministic per-side rates (baseline=50.0, candidate=75.0) so
-     * judgeAndCompare can produce a stable Comparison(50, 75, 25).
+     * Stub {@link EvalService} that returns deterministic per-side rates
+     * (baseline=50.0, candidate=75.0) so judgeAndCompare produces a stable
+     * Comparison(50, 75, 25). Records every invocation into the shared trace.
+     */
+    private static class TracingEvalService implements EvalService<String> {
+        private final List<String> trace;
+        TracingEvalService(List<String> trace) { this.trace = trace; }
+        @Override
+        public AbstractAbEvalRunner.EvalRun run(SandboxContext ctx, String version) {
+            trace.add("evalService.run:" + version);
+            double rate = "BASELINE".equals(version) ? 50.0 : 75.0;
+            return new AbstractAbEvalRunner.EvalRun("er-" + version, rate, 0);
+        }
+    }
+
+    /**
+     * Tracing subclass — records the 3 abstract hooks here (judgeAndCompare
+     * / shouldPromote / promoteIfNeeded). Phase 1.2 reviewer-r1 fix: no
+     * {@code runEvalSet} override (eval delegated to injected EvalService).
      */
     private static class TracingRunner extends AbstractAbEvalRunner<String> {
         private final List<String> trace;
         private final boolean promoteGate;
 
-        TracingRunner(OptimizableSurface<String> surface, List<String> trace, boolean promoteGate) {
-            super(surface);
+        TracingRunner(OptimizableSurface<String> surface, EvalService<String> evalService,
+                      List<String> trace, boolean promoteGate) {
+            super(surface, evalService);
             this.trace = trace;
             this.promoteGate = promoteGate;
-        }
-
-        @Override
-        protected EvalRun runEvalSet(SandboxContext ctx, String version) {
-            trace.add("runEvalSet:" + version);
-            // Deterministic rates so the Comparison is predictable.
-            double rate = "BASELINE".equals(version) ? 50.0 : 75.0;
-            return new EvalRun("er-" + version, rate, 0);
         }
 
         @Override

@@ -73,7 +73,11 @@ class PromptImproverServiceAttributionTest {
                 new ObjectMapper(),
                 coordinatorExecutor,
                 props,
-                org.mockito.Mockito.mock(com.skillforge.server.improve.surface.PromptSurface.class));
+                org.mockito.Mockito.mock(com.skillforge.server.improve.surface.PromptSurface.class),
+                org.mockito.Mockito.mock(PromptEvalService.class));
+        // PromptImproverServiceAttributionTest exercises startImprovementFromAttribution
+        // (V3.1 sync LLM fill path) — does NOT invoke AbstractAbEvalRunner.run(),
+        // so no PromptEvalService.run setup needed.
     }
 
     private AgentEntity agent(long id) {
