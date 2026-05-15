@@ -3,6 +3,7 @@ package com.skillforge.server.tool.attribution;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillforge.core.skill.SkillContext;
 import com.skillforge.core.skill.SkillResult;
+import com.skillforge.server.attribution.AttributionEventBroadcaster;
 import com.skillforge.server.entity.OptimizationEventEntity;
 import com.skillforge.server.entity.SessionPatternEntity;
 import com.skillforge.server.repository.OptimizationEventRepository;
@@ -38,13 +39,14 @@ class ProposeOptimizationToolTest {
 
     @Mock private OptimizationEventRepository eventRepository;
     @Mock private SessionPatternRepository patternRepository;
+    @Mock private AttributionEventBroadcaster broadcaster;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private ProposeOptimizationTool tool;
 
     @BeforeEach
     void setUp() {
         Clock fixed = Clock.fixed(FIXED_NOW, ZoneOffset.UTC);
-        tool = new ProposeOptimizationTool(eventRepository, patternRepository, objectMapper, fixed);
+        tool = new ProposeOptimizationTool(eventRepository, patternRepository, objectMapper, fixed, broadcaster);
     }
 
     private Map<String, Object> validInput() {

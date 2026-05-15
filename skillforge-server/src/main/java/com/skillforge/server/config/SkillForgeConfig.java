@@ -827,10 +827,11 @@ public class SkillForgeConfig {
             com.skillforge.server.repository.SessionPatternRepository patternRepository,
             ObjectMapper objectMapper,
             java.time.Clock clock,
+            com.skillforge.server.attribution.AttributionEventBroadcaster broadcaster,
             SkillRegistry skillRegistry) {
         com.skillforge.server.tool.attribution.ProposeOptimizationTool tool =
                 new com.skillforge.server.tool.attribution.ProposeOptimizationTool(
-                        eventRepository, patternRepository, objectMapper, clock);
+                        eventRepository, patternRepository, objectMapper, clock, broadcaster);
         skillRegistry.registerTool(tool);
         log.info("Registered ProposeOptimizationTool into SkillRegistry");
         return tool;

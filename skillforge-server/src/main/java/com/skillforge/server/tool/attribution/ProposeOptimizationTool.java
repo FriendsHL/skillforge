@@ -5,6 +5,7 @@ import com.skillforge.core.model.ToolSchema;
 import com.skillforge.core.skill.SkillContext;
 import com.skillforge.core.skill.SkillResult;
 import com.skillforge.core.skill.Tool;
+import com.skillforge.server.attribution.AttributionEventBroadcaster;
 import com.skillforge.server.entity.OptimizationEventEntity;
 import com.skillforge.server.entity.SessionPatternEntity;
 import com.skillforge.server.repository.OptimizationEventRepository;
@@ -74,15 +75,18 @@ public class ProposeOptimizationTool implements Tool {
     private final SessionPatternRepository patternRepository;
     private final ObjectMapper objectMapper;
     private final Clock clock;
+    private final AttributionEventBroadcaster broadcaster;
 
     public ProposeOptimizationTool(OptimizationEventRepository eventRepository,
                                    SessionPatternRepository patternRepository,
                                    ObjectMapper objectMapper,
-                                   Clock clock) {
+                                   Clock clock,
+                                   AttributionEventBroadcaster broadcaster) {
         this.eventRepository = eventRepository;
         this.patternRepository = patternRepository;
         this.objectMapper = objectMapper;
         this.clock = clock;
+        this.broadcaster = broadcaster;
     }
 
     @Override
@@ -220,6 +224,7 @@ public class ProposeOptimizationTool implements Tool {
                             OptimizationEventEntity.STAGE_DISPATCH_INITIATED);
 
             OptimizationEventEntity event;
+            String previousStage;
             if (!sentinels.isEmpty()) {
                 if (sentinels.size() > 1) {
                     log.warn("ProposeOptimization: {} dispatch_initiated sentinels for patternId={}; "
@@ -237,6 +242,7 @@ public class ProposeOptimizationTool implements Tool {
                                     + ", found stage=" + event.getStage()
                                     + " patternId=" + event.getPatternId());
                 }
+                previousStage = event.getStage();
                 event.setStage(OptimizationEventEntity.STAGE_PROPOSAL_PENDING);
             } else {
                 log.warn("ProposeOptimization: no dispatch_initiated sentinel for patternId={} — "
@@ -244,6 +250,7 @@ public class ProposeOptimizationTool implements Tool {
                 event = new OptimizationEventEntity();
                 event.setPatternId(patternId);
                 event.setStage(OptimizationEventEntity.STAGE_PROPOSAL_PENDING);
+                previousStage = null;  // INSERT path — no prior stage to broadcast.
             }
             event.setAgentId(agentId);
             event.setSurfaceType(surface);
@@ -260,6 +267,12 @@ public class ProposeOptimizationTool implements Tool {
             // path (column is updatable=false), set by @PrePersist on INSERT path.
 
             OptimizationEventEntity saved = eventRepository.save(event);
+            // Phase 1.4: WS notify dashboard of stage transition. broadcaster
+            // null-safe-tolerates no connected sessions.
+            // Broadcast in-tx (V3 dogfood trade-off; see AttributionApprovalService class javadoc).
+            if (broadcaster != null) {
+                broadcaster.broadcastStageTransition(saved, previousStage);
+            }
 
             Map<String, Object> response = new LinkedHashMap<>();
             response.put("ok", true);

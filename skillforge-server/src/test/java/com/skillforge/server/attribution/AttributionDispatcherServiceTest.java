@@ -60,6 +60,7 @@ class AttributionDispatcherServiceTest {
     @Mock private AgentRepository agentRepository;
     @Mock private SessionService sessionService;
     @Mock private ChatService chatService;
+    @Mock private AttributionEventBroadcaster broadcaster;
 
     private AttributionDispatcherService service;
 
@@ -68,7 +69,7 @@ class AttributionDispatcherServiceTest {
         Clock fixed = Clock.fixed(FIXED_NOW, ZoneOffset.UTC);
         service = new AttributionDispatcherService(
                 patternRepository, eventRepository, agentRepository,
-                sessionService, chatService, fixed);
+                sessionService, chatService, fixed, broadcaster);
 
         // attribution-curator agent lookup succeeds by default; per-test
         // overrides cover the missing-agent path.
@@ -324,6 +325,36 @@ class AttributionDispatcherServiceTest {
         ordered.verify(eventRepository).save(any(OptimizationEventEntity.class));
         ordered.verify(sessionService).createSession(anyLong(), anyLong());
         ordered.verify(chatService).chatAsync(anyString(), anyString(), anyLong());
+    }
+
+    @Test
+    @DisplayName("Phase 1.4 cleanup: deletes sentinels older than ORPHAN_SENTINEL_TTL")
+    void cleanup_deletesSentinelsOlderThanTwoHours() {
+        Instant cutoff = FIXED_NOW.minus(AttributionDispatcherService.ORPHAN_SENTINEL_TTL);
+        OptimizationEventEntity oldSentinel = new OptimizationEventEntity();
+        oldSentinel.setId(555L);
+        oldSentinel.setStage(OptimizationEventEntity.STAGE_DISPATCH_INITIATED);
+        oldSentinel.setCreatedAt(cutoff.minusSeconds(60));
+        when(eventRepository.findByStageAndCreatedAtBefore(
+                eq(OptimizationEventEntity.STAGE_DISPATCH_INITIATED), eq(cutoff)))
+                .thenReturn(List.of(oldSentinel));
+
+        service.cleanupOrphanSentinels();
+
+        verify(eventRepository).deleteAll(List.of(oldSentinel));
+    }
+
+    @Test
+    @DisplayName("Phase 1.4 cleanup: skips when no sentinels older than TTL")
+    void cleanup_skipsRecentSentinels() {
+        Instant cutoff = FIXED_NOW.minus(AttributionDispatcherService.ORPHAN_SENTINEL_TTL);
+        when(eventRepository.findByStageAndCreatedAtBefore(
+                eq(OptimizationEventEntity.STAGE_DISPATCH_INITIATED), eq(cutoff)))
+                .thenReturn(List.of());
+
+        service.cleanupOrphanSentinels();
+
+        verify(eventRepository, never()).deleteAll(any(Iterable.class));
     }
 
     @Test

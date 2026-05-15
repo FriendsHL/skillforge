@@ -13,9 +13,13 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -66,6 +70,16 @@ public class AttributionDispatcherService {
     public static final long SYSTEM_USER_ID = 0L;
 
     /**
+     * Phase 1.4 — orphan sentinel TTL. The attribution-curator agent is
+     * configured for ~minutes of LLM time; if a {@code dispatch_initiated}
+     * row sits unchanged for more than this window the agent must have
+     * crashed / been killed / never started. {@link #cleanupOrphanSentinels}
+     * removes such rows so they don't permanently block future dispatcher
+     * scans on the same pattern (Phase 1.3 code-reviewer MEDIUM).
+     */
+    public static final Duration ORPHAN_SENTINEL_TTL = Duration.ofHours(2);
+
+    /**
      * Surfaces V3 auto-dispatches (ratify #6). {@code behavior_rule} is V4,
      * {@code other / unclear} are recorded but never approved.
      */
@@ -110,19 +124,22 @@ public class AttributionDispatcherService {
     private final SessionService sessionService;
     private final ChatService chatService;
     private final Clock clock;
+    private final AttributionEventBroadcaster broadcaster;
 
     public AttributionDispatcherService(SessionPatternRepository patternRepository,
                                         OptimizationEventRepository eventRepository,
                                         AgentRepository agentRepository,
                                         SessionService sessionService,
                                         ChatService chatService,
-                                        Clock clock) {
+                                        Clock clock,
+                                        AttributionEventBroadcaster broadcaster) {
         this.patternRepository = patternRepository;
         this.eventRepository = eventRepository;
         this.agentRepository = agentRepository;
         this.sessionService = sessionService;
         this.chatService = chatService;
         this.clock = clock;
+        this.broadcaster = broadcaster;
     }
 
     /**
@@ -272,6 +289,16 @@ public class AttributionDispatcherService {
         // populates them when the curator finishes. createdAt / updatedAt are
         // auto-populated by @PrePersist.
         OptimizationEventEntity persistedSentinel = eventRepository.save(sentinel);
+        // Phase 1.4: WS notify dashboard the moment a curator run kicks off
+        // (previousStage=null because the event row is brand-new). broadcaster
+        // is null-safe for unit tests without a Spring context.
+        // Note: dispatcher itself is NOT @Transactional (Phase 1.2 reviewer
+        // fix), so this broadcast does not have the in-tx phantom risk that
+        // AttributionApprovalService's broadcasts carry — see ApprovalService
+        // class javadoc for the in-tx trade-off discussion.
+        if (broadcaster != null) {
+            broadcaster.broadcastStageTransition(persistedSentinel, null);
+        }
         log.debug("[AttributionDispatcher] sentinel written for patternId={} eventId={}",
                 pattern.getId(), persistedSentinel.getId());
 
@@ -280,6 +307,44 @@ public class AttributionDispatcherService {
         chatService.chatAsync(session.getId(), prompt, SYSTEM_USER_ID);
         log.info("[AttributionDispatcher] dispatched curator for patternId={} sessionId={} sentinelEventId={}",
                 pattern.getId(), session.getId(), persistedSentinel.getId());
+    }
+
+    /**
+     * Phase 1.4 — orphan sentinel TTL cleanup (Phase 1.3 reviewer MEDIUM fix).
+     *
+     * <p>Multi-sentinel races / agent crashes can leave {@code dispatch_initiated}
+     * rows that never transition into {@code proposal_pending}. Without cleanup
+     * those rows would permanently match Filter 4 ({@code ACTIVE_STAGES}
+     * contains {@code dispatch_initiated}) and block all future dispatcher
+     * runs on the same pattern. We DELETE rows whose
+     * {@code stage='dispatch_initiated'} AND {@code createdAt < NOW() - 2h}
+     * (longer than any reasonable curator run).
+     *
+     * <p>Cron {@code 0 50 * * * *} = every hour at :50. Intentionally offset
+     * from V81 hourly dispatcher (':15'), V79 metrics-collector (':30'), V75
+     * session-annotator (':00') so the four flywheel jobs don't collide on
+     * top-of-hour spikes.
+     *
+     * <p>{@code @Transactional(REQUIRES_NEW)} per Phase 1.2 reviewer fix
+     * lesson: never JOIN whatever (if any) outer transaction the cron runner
+     * carries. The cleanup is independent of any other dispatcher work.
+     */
+    @Scheduled(cron = "0 50 * * * *")
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void cleanupOrphanSentinels() {
+        Instant cutoff = clock.instant().minus(ORPHAN_SENTINEL_TTL);
+        // Pull candidate rows then delete in a batch. Volume is bounded by
+        // SCAN_PAGE_SIZE × hourly cadence, so the find-then-delete is fine
+        // (and a single DELETE-by-condition is awkward in derived JPQL syntax).
+        List<OptimizationEventEntity> sentinels = eventRepository.findByStageAndCreatedAtBefore(
+                OptimizationEventEntity.STAGE_DISPATCH_INITIATED, cutoff);
+        if (sentinels.isEmpty()) {
+            log.debug("[AttributionDispatcher.cleanupOrphanSentinels] no orphan sentinels older than {}", cutoff);
+            return;
+        }
+        eventRepository.deleteAll(sentinels);
+        log.info("[AttributionDispatcher.cleanupOrphanSentinels] deleted {} orphan sentinel(s) older than {} (TTL={})",
+                sentinels.size(), cutoff, ORPHAN_SENTINEL_TTL);
     }
 
     /**

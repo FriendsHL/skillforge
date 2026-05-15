@@ -62,13 +62,14 @@ class AttributionApprovalServiceTest {
     @Mock private OptimizationEventRepository eventRepository;
     @Mock private SkillDraftService skillDraftService;
     @Mock private PromptImproverService promptImproverService;
+    @Mock private AttributionEventBroadcaster broadcaster;
 
     private AttributionApprovalService service;
 
     @BeforeEach
     void setUp() {
         service = new AttributionApprovalService(
-                eventRepository, skillDraftService, promptImproverService);
+                eventRepository, skillDraftService, promptImproverService, broadcaster);
         // Save returns the input arg unchanged (covers stage transitions).
         org.mockito.Mockito.lenient().when(eventRepository.save(any(OptimizationEventEntity.class)))
                 .thenAnswer(inv -> inv.getArgument(0));
@@ -232,5 +233,77 @@ class AttributionApprovalServiceTest {
         assertThatThrownBy(() -> service.approve(9999L, 7L))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("not found");
+    }
+
+    @Test
+    @DisplayName("Phase 1.4 retry happy path: candidate_failed → candidate_generating → candidate_ready")
+    void retry_happyPath_resetsToCandidateGenerating_thenReady() {
+        OptimizationEventEntity event = pendingEvent(200L, OptimizationEventEntity.SURFACE_SKILL);
+        event.setStage(OptimizationEventEntity.STAGE_CANDIDATE_FAILED);
+        event.setDescription("[candidate_failed] LLM timeout");
+        when(eventRepository.findById(200L)).thenReturn(Optional.of(event));
+        SkillDraftEntity stubDraft = new SkillDraftEntity();
+        stubDraft.setId("draft-uuid-retry-1");
+        when(skillDraftService.createDraftFromAttribution(
+                anyLong(), anyLong(), anyString(), anyString(), anyString(), anyLong(), anyString()))
+                .thenReturn(stubDraft);
+
+        OptimizationEventEntity returned = service.retryCandidateGeneration(200L, 7L);
+
+        assertThat(returned.getStage()).isEqualTo(OptimizationEventEntity.STAGE_CANDIDATE_READY);
+        verify(skillDraftService).createDraftFromAttribution(
+                eq(200L), anyLong(), anyString(), anyString(), anyString(), eq(7L), anyString());
+    }
+
+    @Test
+    @DisplayName("Phase 1.4 retry: throws when stage != candidate_failed (per ALLOWED_TRANSITIONS)")
+    void retry_throwsWhenStageNotCandidateFailed() {
+        OptimizationEventEntity event = pendingEvent(201L, OptimizationEventEntity.SURFACE_SKILL);
+        // proposal_pending → candidate_generating is NOT in ALLOWED_TRANSITIONS.
+        when(eventRepository.findById(201L)).thenReturn(Optional.of(event));
+
+        assertThatThrownBy(() -> service.retryCandidateGeneration(201L, 7L))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Illegal stage transition")
+                .hasMessageContaining(OptimizationEventEntity.STAGE_CANDIDATE_GENERATING);
+        verify(skillDraftService, never()).createDraftFromAttribution(
+                anyLong(), anyLong(), anyString(), anyString(), anyString(), anyLong(), anyString());
+    }
+
+    @Test
+    @DisplayName("Phase 1.4 retry: candidate gen still failing → stage rests on candidate_failed (looped)")
+    void retry_candidateGenStillFailing_persistsCandidateFailed() {
+        OptimizationEventEntity event = pendingEvent(202L, OptimizationEventEntity.SURFACE_SKILL);
+        event.setStage(OptimizationEventEntity.STAGE_CANDIDATE_FAILED);
+        when(eventRepository.findById(202L)).thenReturn(Optional.of(event));
+        when(skillDraftService.createDraftFromAttribution(
+                anyLong(), anyLong(), anyString(), anyString(), anyString(), anyLong(), anyString()))
+                .thenThrow(new RuntimeException("LLM still down"));
+
+        OptimizationEventEntity returned = service.retryCandidateGeneration(202L, 7L);
+
+        // Despite being in CANDIDATE_FAILED at start, the retry transitions
+        // through CANDIDATE_GENERATING (validated) → catch-block sets it back
+        // to CANDIDATE_FAILED with the new failure prefix.
+        assertThat(returned.getStage()).isEqualTo(OptimizationEventEntity.STAGE_CANDIDATE_FAILED);
+        assertThat(returned.getDescription()).contains("[candidate_failed]").contains("LLM still down");
+    }
+
+    @Test
+    @DisplayName("Phase 1.4 broadcaster: each stage transition fires broadcastStageTransition")
+    void broadcaster_firesOnEveryTransition() {
+        OptimizationEventEntity event = pendingEvent(300L, OptimizationEventEntity.SURFACE_PROMPT);
+        when(eventRepository.findById(300L)).thenReturn(Optional.of(event));
+        when(promptImproverService.startImprovementFromAttribution(
+                anyLong(), anyString(), anyString(), anyLong()))
+                .thenReturn(new ImprovementStartResult("7", null, "v1", "PENDING"));
+
+        service.approve(300L, 7L);
+
+        // approve flow saves 3 times (proposal_pending→approved, approved→generating,
+        // generating→ready) → 3 broadcast invocations. We verify ≥ 2 to allow for
+        // future internal save() reorganization without brittle test churn.
+        verify(broadcaster, org.mockito.Mockito.atLeast(2))
+                .broadcastStageTransition(any(OptimizationEventEntity.class), anyString());
     }
 }

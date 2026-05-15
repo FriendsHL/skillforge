@@ -1,6 +1,7 @@
 package com.skillforge.server.repository;
 
 import com.skillforge.server.entity.OptimizationEventEntity;
+import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
@@ -117,4 +118,45 @@ public interface OptimizationEventRepository extends JpaRepository<OptimizationE
      */
     @Query("SELECT COUNT(e) FROM OptimizationEventEntity e WHERE e.patternId = :patternId")
     long countByPatternId(@Param("patternId") Long patternId);
+
+    /**
+     * Phase 1.4 orphan sentinel cleanup: rows in a given stage that were
+     * created before the cutoff. Used by
+     * {@code AttributionDispatcherService.cleanupOrphanSentinels} to find
+     * {@code dispatch_initiated} sentinels older than the curator-run TTL.
+     */
+    List<OptimizationEventEntity> findByStageAndCreatedAtBefore(String stage, Instant cutoff);
+
+    /**
+     * Phase 1.4 reviewer fix (W2/W3): unified pageable list with optional
+     * {@code stage} / {@code agentId} / {@code surfaceType} filters. Each
+     * parameter may be null to skip that dimension; passing all-null returns
+     * every event. Returns a {@link Page} so the controller can surface a
+     * truthful {@code total} for FE pagination (was previously stream-filtered
+     * post-query, breaking pagination math).
+     *
+     * <p>ORDER BY is fixed to {@code createdAt DESC}; the {@code Pageable}'s
+     * sort spec is intentionally ignored (the @Query embeds the sort so plan
+     * is stable, and the dashboard timeline view is always newest-first).
+     *
+     * <p>Indexable: when {@code stage} or {@code agentId} pins down a
+     * selective predicate, PostgreSQL hits
+     * {@code idx_optimization_event_stage_time} / {@code idx_optimization_event_agent}
+     * respectively. Worst case (all-null) does a full sequential scan, which
+     * is fine at V3 dogfood data volume.
+     */
+    @Query(value = "SELECT e FROM OptimizationEventEntity e WHERE " +
+                   "(:stage IS NULL OR e.stage = :stage) AND " +
+                   "(:agentId IS NULL OR e.agentId = :agentId) AND " +
+                   "(:surfaceType IS NULL OR e.surfaceType = :surfaceType) " +
+                   "ORDER BY e.createdAt DESC",
+           countQuery = "SELECT COUNT(e) FROM OptimizationEventEntity e WHERE " +
+                        "(:stage IS NULL OR e.stage = :stage) AND " +
+                        "(:agentId IS NULL OR e.agentId = :agentId) AND " +
+                        "(:surfaceType IS NULL OR e.surfaceType = :surfaceType)")
+    Page<OptimizationEventEntity> findFiltered(
+            @Param("stage") String stage,
+            @Param("agentId") Long agentId,
+            @Param("surfaceType") String surfaceType,
+            Pageable pageable);
 }

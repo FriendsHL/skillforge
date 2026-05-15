@@ -22,6 +22,19 @@ import java.util.Set;
  * candidate-generation pipeline (skill draft creation OR prompt version
  * creation, per the proposal's surface).
  *
+ * <p><b>WS broadcast trade-off (Phase 1.4 reviewer-noted)</b>: stage transitions
+ * are broadcast via {@link AttributionEventBroadcaster} synchronously inside
+ * the {@code @Transactional(REQUIRED)} boundary, BEFORE the outer commit. This
+ * means if the outer tx subsequently rolls back, FE clients receive a phantom
+ * stage notification. For V3 dogfood this is accepted: (1) all sub-service
+ * failures are absorbed in {@link #runCandidateGeneration}'s catch-block;
+ * (2) child services use {@code REQUIRES_NEW} so their rollback doesn't
+ * propagate; (3) remaining rollback paths (DB connection loss after first save)
+ * are rare. Production deployment SHOULD wrap broadcasts in
+ * {@code TransactionSynchronizationManager.registerSynchronization(afterCommit)}
+ * matching the {@link com.skillforge.server.improve.SkillDraftService}
+ * approveDraft pattern.
+ *
  * <p>Stage state machine (enforced via {@link #ALLOWED_TRANSITIONS}):
  * <pre>
  *   dispatch_initiated  → proposal_pending          (ProposeOptimizationTool, NOT this service)
@@ -88,6 +101,11 @@ public class AttributionApprovalService {
             Map.entry(OptimizationEventEntity.STAGE_CANDIDATE_GENERATING, Set.of(
                     OptimizationEventEntity.STAGE_CANDIDATE_READY,
                     OptimizationEventEntity.STAGE_CANDIDATE_FAILED)),
+            // Phase 1.4 — operator-triggered manual retry. Re-enters the
+            // candidate generation pipeline; same outcome edges as the
+            // initial proposal_approved → candidate_generating transition.
+            Map.entry(OptimizationEventEntity.STAGE_CANDIDATE_FAILED, Set.of(
+                    OptimizationEventEntity.STAGE_CANDIDATE_GENERATING)),
             Map.entry(OptimizationEventEntity.STAGE_CANDIDATE_READY, Set.of(
                     OptimizationEventEntity.STAGE_AB_RUNNING)),
             Map.entry(OptimizationEventEntity.STAGE_AB_RUNNING, Set.of(
@@ -104,13 +122,16 @@ public class AttributionApprovalService {
     private final OptimizationEventRepository eventRepository;
     private final SkillDraftService skillDraftService;
     private final PromptImproverService promptImproverService;
+    private final AttributionEventBroadcaster broadcaster;
 
     public AttributionApprovalService(OptimizationEventRepository eventRepository,
                                       SkillDraftService skillDraftService,
-                                      PromptImproverService promptImproverService) {
+                                      PromptImproverService promptImproverService,
+                                      AttributionEventBroadcaster broadcaster) {
         this.eventRepository = eventRepository;
         this.skillDraftService = skillDraftService;
         this.promptImproverService = promptImproverService;
+        this.broadcaster = broadcaster;
     }
 
     /**
@@ -139,42 +160,113 @@ public class AttributionApprovalService {
         }
 
         // Stage 1: proposal_pending → proposal_approved
+        String stagePending = event.getStage();
         event.setStage(OptimizationEventEntity.STAGE_PROPOSAL_APPROVED);
         event = eventRepository.save(event);
+        // Broadcast in-tx (V3 dogfood trade-off; see class javadoc).
+        broadcaster.broadcastStageTransition(event, stagePending);
         log.info("[AttributionApproval] approved eventId={} approverUserId={} surface={}",
                 eventId, approverUserId, event.getSurfaceType());
 
-        // Stage 2: proposal_approved → candidate_generating (interim state visible
-        // to dashboard during the (potentially-slow) candidate gen call).
+        return runCandidateGeneration(event, approverUserId,
+                OptimizationEventEntity.STAGE_PROPOSAL_APPROVED);
+    }
+
+    /**
+     * Phase 1.4 — operator-triggered manual retry for {@code candidate_failed}
+     * events (e.g. transient LLM provider outage that the original
+     * {@link #approve} catch-block recorded). Re-enters the candidate generation
+     * pipeline; same {@code candidate_generating → candidate_ready /
+     * candidate_failed} outcome edges as {@link #approve}.
+     *
+     * <p>Per tech-design.md §6 + Phase 1.3 reviewer fix: auto-retry is NOT done
+     * by the cron dispatcher (would burn LLM budget on systematic failures);
+     * retry is exclusively operator-driven via this method.
+     *
+     * @param eventId         {@code candidate_failed} event id
+     * @param approverUserId  operator triggering retry (logged for audit)
+     * @return event in {@code candidate_ready} (success) or
+     *         {@code candidate_failed} (still failing) state
+     * @throws IllegalStateException     if stage != candidate_failed or surface unsupported
+     * @throws IllegalArgumentException  if eventId null / not found
+     */
+    public OptimizationEventEntity retryCandidateGeneration(Long eventId, Long approverUserId) {
+        if (eventId == null) throw new IllegalArgumentException("eventId is required");
+        OptimizationEventEntity event = eventRepository.findById(eventId)
+                .orElseThrow(() -> new IllegalArgumentException("optimization event not found: " + eventId));
+
+        validateTransition(event.getStage(), OptimizationEventEntity.STAGE_CANDIDATE_GENERATING);
+        if (!APPROVABLE_SURFACES.contains(event.getSurfaceType())) {
+            throw new IllegalStateException("retry: unsupported surface=" + event.getSurfaceType()
+                    + " for eventId=" + eventId
+                    + " (V3 ratify #6 — only skill/prompt retryable)");
+        }
+        log.info("[AttributionApproval] retrying eventId={} approverUserId={} surface={} (was candidate_failed)",
+                eventId, approverUserId, event.getSurfaceType());
+
+        return runCandidateGeneration(event, approverUserId,
+                OptimizationEventEntity.STAGE_CANDIDATE_FAILED);
+    }
+
+    /**
+     * Shared candidate-generation runner used by both {@link #approve} (after
+     * the proposal_pending → proposal_approved write) and
+     * {@link #retryCandidateGeneration} (after the candidate_failed →
+     * candidate_generating write — well, this method handles that write
+     * internally so the caller doesn't repeat it).
+     *
+     * <p>Steps:
+     * <ol>
+     *   <li>Stage → candidate_generating + save + broadcast (if not already there)</li>
+     *   <li>switch surface → SkillDraftService / PromptImproverService</li>
+     *   <li>On success: stage → candidate_ready</li>
+     *   <li>On RuntimeException: stage → candidate_failed + description prefix</li>
+     *   <li>save final state + broadcast</li>
+     * </ol>
+     *
+     * @param event             event currently in {@code proposal_approved}
+     *                          (called from approve) or {@code candidate_failed}
+     *                          (called from retry)
+     * @param approverUserId    user triggering the action
+     * @param previousStageHint stage we just transitioned out of (for broadcast
+     *                          previousStage field on the candidate_generating
+     *                          event)
+     */
+    private OptimizationEventEntity runCandidateGeneration(OptimizationEventEntity event,
+                                                            Long approverUserId,
+                                                            String previousStageHint) {
+        // Move to candidate_generating (interim state visible to dashboard
+        // during the potentially-slow candidate gen call).
         event.setStage(OptimizationEventEntity.STAGE_CANDIDATE_GENERATING);
         event = eventRepository.save(event);
+        // Broadcast in-tx (V3 dogfood trade-off; see class javadoc).
+        broadcaster.broadcastStageTransition(event, previousStageHint);
 
-        // Stage 3: dispatch surface-specific candidate generation. catch ALL to
-        // surface failures as candidate_failed rather than rolling the whole
-        // transaction — the operator needs to see "we tried and it failed" not
-        // "approval mysteriously didn't take".
+        // Dispatch surface-specific candidate generation. catch RuntimeException
+        // to surface failures as candidate_failed rather than rolling the outer
+        // transaction (Phase 1.3 reviewer fix used REQUIRES_NEW on the child
+        // services to prevent rollback contamination).
+        String stageGenerating = OptimizationEventEntity.STAGE_CANDIDATE_GENERATING;
         try {
             switch (event.getSurfaceType()) {
                 case OptimizationEventEntity.SURFACE_SKILL -> dispatchSkillSurface(event, approverUserId);
                 case OptimizationEventEntity.SURFACE_PROMPT -> dispatchPromptSurface(event, approverUserId);
                 default ->
-                        // Unreachable due to validation above, but keep switch exhaustive
-                        // so future surface additions force a compile-time decision.
-                        throw new IllegalStateException("approve: unhandled surface=" + event.getSurfaceType());
+                        // Unreachable due to caller validation, but keep switch exhaustive.
+                        throw new IllegalStateException(
+                                "runCandidateGeneration: unhandled surface=" + event.getSurfaceType());
             }
-            // Successful generation → candidate_ready (Phase 1.4 will wire the
-            // automatic candidate_ready → ab_running transition).
             event.setStage(OptimizationEventEntity.STAGE_CANDIDATE_READY);
         } catch (RuntimeException e) {
             log.error("[AttributionApproval] candidate generation FAILED for eventId={} surface={}: {}",
-                    eventId, event.getSurfaceType(), e.getMessage(), e);
+                    event.getId(), event.getSurfaceType(), e.getMessage(), e);
             event.setStage(OptimizationEventEntity.STAGE_CANDIDATE_FAILED);
-            // Stash the failure reason in description (overrides curator's
-            // proposal description). Phase 1.4 dashboard timeline can render
-            // both via attributionEventId pivot if needed.
             event.setDescription("[candidate_failed] " + e.getMessage());
         }
-        return eventRepository.save(event);
+        OptimizationEventEntity saved = eventRepository.save(event);
+        // Broadcast in-tx (V3 dogfood trade-off; see class javadoc).
+        broadcaster.broadcastStageTransition(saved, stageGenerating);
+        return saved;
     }
 
     /**
@@ -193,6 +285,7 @@ public class AttributionApprovalService {
                 .orElseThrow(() -> new IllegalArgumentException("optimization event not found: " + eventId));
 
         validateTransition(event.getStage(), OptimizationEventEntity.STAGE_PROPOSAL_REJECTED);
+        String previousStage = event.getStage();
         event.setStage(OptimizationEventEntity.STAGE_PROPOSAL_REJECTED);
         if (reason != null && !reason.isBlank()) {
             // Prefix description so the original curator-authored text is
@@ -201,6 +294,8 @@ public class AttributionApprovalService {
             event.setDescription("[rejected: " + reason.trim() + "] " + existing);
         }
         OptimizationEventEntity saved = eventRepository.save(event);
+        // Broadcast in-tx (V3 dogfood trade-off; see class javadoc).
+        broadcaster.broadcastStageTransition(saved, previousStage);
         log.info("[AttributionApproval] rejected eventId={} approverUserId={} reason={}",
                 eventId, approverUserId, reason == null ? "(none)" : reason);
         return saved;
