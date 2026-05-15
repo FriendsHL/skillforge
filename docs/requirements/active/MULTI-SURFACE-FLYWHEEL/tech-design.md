@@ -342,6 +342,20 @@ public class BehaviorRuleImproverService {
 
 ### 4.3 BehaviorRuleRegistry 扩展
 
+**Phase 1.1 实施决策（dev judgment ratified by reviewer 2026-05-15）**：
+`getActiveVersion(agentId)` 实际**实现在 server 层 `BehaviorRuleSurface.loadActive`**，
+而**不是** `core` 模块的 `BehaviorRuleRegistry`。原因：
+
+- `skillforge-core` 模块的 `BehaviorRuleRegistry` 不能引 server 层的
+  `BehaviorRuleVersionRepository` + `BehaviorRuleVersionEntity`（JPA + server-only
+  依赖）→ 反向依赖造成模块循环
+- Phase 1.0 调研里 spec §4.3 假设两层可互相引用，落地时发现不成立
+- Phase 1.1 落点：cache + DB 查询逻辑全在 `BehaviorRuleSurface`（server）；
+  `BehaviorRuleRegistry`（core）现行 startup 加载 `behavior-rules.json` 行为完全保留
+- Phase 1.3 `AttributionApprovalService.dispatchBehaviorRuleSurface` 调
+  `BehaviorRuleSurface.loadActive()` 获取 baseline，**不**调 `BehaviorRuleRegistry`
+- 下面这段保留作 "本来设想的 API 形态" 参考，**不**是当前实现
+
 ```java
 @Component
 public class BehaviorRuleRegistry {
