@@ -37,6 +37,7 @@ const primaryNav: NavItem[] = [
   { key: 'channels', path: '/channels', label: 'Channels' },
   { key: 'schedules', path: '/schedules', label: 'Schedules' },
   { key: 'insights', path: '/insights/patterns', label: 'Insights' },
+  { key: 'optimization-events', path: '/insights/optimization-events', label: 'Optimization' },
 ];
 
 const paletteItems: PaletteItem[] = primaryNav.map((i) => ({
@@ -47,8 +48,10 @@ const paletteItems: PaletteItem[] = primaryNav.map((i) => ({
 
 const navItemActive = (item: NavItem, pathname: string): boolean => {
   if (item.path === '/') return pathname === '/';
-  const rootPath = '/' + item.path.split('/').filter(Boolean)[0];
-  return pathname === rootPath || pathname.startsWith(rootPath + '/');
+  // Exact match on item.path so siblings sharing a route prefix (e.g. both
+  // /insights/patterns and /insights/optimization-events live under /insights)
+  // don't both light up. Sub-routes under item.path still count as active.
+  return pathname === item.path || pathname.startsWith(item.path + '/');
 };
 
 const AppLayoutInner: React.FC = () => {

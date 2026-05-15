@@ -18,6 +18,7 @@ import HookMethods from './pages/HookMethods';
 import Channels from './pages/Channels';
 import Schedules from './pages/Schedules';
 import Insights from './pages/Insights';
+import OptimizationEvents from './pages/OptimizationEvents';
 import Login from './pages/Login';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { AuthProvider } from './contexts/AuthContext';
@@ -64,6 +65,7 @@ function App() {
             <Route path="channels" element={<ErrorBoundary context="Channels"><Channels /></ErrorBoundary>} />
             <Route path="schedules" element={<ErrorBoundary context="Schedules"><Schedules /></ErrorBoundary>} />
             <Route path="insights/patterns" element={<ErrorBoundary context="Insights"><Insights /></ErrorBoundary>} />
+            <Route path="insights/optimization-events" element={<ErrorBoundary context="OptimizationEvents"><OptimizationEvents /></ErrorBoundary>} />
             <Route path="chat/:sessionId?" element={<ErrorBoundary context="Chat"><Chat /></ErrorBoundary>} />
           </Route>
         </Routes>
