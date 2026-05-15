@@ -70,9 +70,24 @@ public class OptimizationEventEntity {
     public static final String SURFACE_UNCLEAR = "unclear";
 
     // stage state machine
+    /**
+     * Phase 1.3 — sentinel row written by AttributionDispatcherService BEFORE
+     * chatAsync. Closes the race window where a parallel dispatcher tick could
+     * see "no event for this pattern" and double-fire. ProposeOptimizationTool
+     * later UPDATEs the sentinel into proposal_pending (or proposal_rejected)
+     * once the curator agent finishes.
+     */
+    public static final String STAGE_DISPATCH_INITIATED = "dispatch_initiated";
     public static final String STAGE_PROPOSAL_PENDING = "proposal_pending";
     public static final String STAGE_PROPOSAL_APPROVED = "proposal_approved";
     public static final String STAGE_PROPOSAL_REJECTED = "proposal_rejected";
+    /** Phase 1.3 — set by AttributionApprovalService.approve() once it kicks off candidate generation. */
+    public static final String STAGE_CANDIDATE_GENERATING = "candidate_generating";
+    /** Phase 1.3 — set by AttributionApprovalService.approve() after candidate gen returns successfully. */
+    public static final String STAGE_CANDIDATE_READY = "candidate_ready";
+    /** Phase 1.3 — set by AttributionApprovalService.approve() if candidate generation throws. */
+    public static final String STAGE_CANDIDATE_FAILED = "candidate_failed";
+    /** Legacy alias kept for callers that pre-existed Phase 1.3 stage rename (Phase 1.2 ProposeOptimizationTool javadoc). */
     public static final String STAGE_CANDIDATE_CREATED = "candidate_created";
     public static final String STAGE_AB_RUNNING = "ab_running";
     public static final String STAGE_AB_PASSED = "ab_passed";

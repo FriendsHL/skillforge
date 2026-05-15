@@ -91,6 +91,16 @@ class AttributionDispatcherServiceTest {
         SessionEntity sess = new SessionEntity();
         sess.setId("sess-curator-stub");
         org.mockito.Mockito.lenient().when(sessionService.createSession(anyLong(), anyLong())).thenReturn(sess);
+
+        // Phase 1.3 sentinel write — default stub returns the input arg with id
+        // assigned so dispatchOne()'s persistedSentinel.getId() doesn't NPE.
+        // Per-test overrides cover the failure path.
+        org.mockito.Mockito.lenient().when(eventRepository.save(any(OptimizationEventEntity.class)))
+                .thenAnswer(inv -> {
+                    OptimizationEventEntity arg = inv.getArgument(0);
+                    if (arg.getId() == null) arg.setId(999L);
+                    return arg;
+                });
     }
 
     private SessionPatternEntity pattern(Long id, String surface, int memberCount) {
@@ -285,5 +295,56 @@ class AttributionDispatcherServiceTest {
         verify(chatService).chatAsync(eq("sess-curator-42"),
                 org.mockito.ArgumentMatchers.contains("patternId=42"),
                 eq(AttributionDispatcherService.SYSTEM_USER_ID));
+    }
+
+    @Test
+    @DisplayName("Phase 1.3 sentinel: dispatchOne writes dispatch_initiated event BEFORE chatAsync (race-window close)")
+    void dispatcher_writesSentinelBeforeChatAsync() {
+        SessionPatternEntity p = pattern(42L, OptimizationEventEntity.SURFACE_SKILL, 5);
+        when(patternRepository.findWithFilters(any(), any(), any(), any(Pageable.class)))
+                .thenReturn(List.of(p));
+        org.mockito.ArgumentCaptor<OptimizationEventEntity> captor =
+                org.mockito.ArgumentCaptor.forClass(OptimizationEventEntity.class);
+        when(eventRepository.save(captor.capture())).thenAnswer(inv -> {
+            OptimizationEventEntity arg = inv.getArgument(0);
+            arg.setId(123L);
+            return arg;
+        });
+        org.mockito.InOrder ordered = org.mockito.Mockito.inOrder(eventRepository, sessionService, chatService);
+
+        AttributionDispatcherService.DispatchResult result =
+                service.dispatchPendingPatterns(5);
+
+        assertThat(result.dispatched()).isEqualTo(1);
+        OptimizationEventEntity sentinel = captor.getValue();
+        assertThat(sentinel.getStage()).isEqualTo(OptimizationEventEntity.STAGE_DISPATCH_INITIATED);
+        assertThat(sentinel.getPatternId()).isEqualTo(42L);
+        assertThat(sentinel.getSurfaceType()).isEqualTo(OptimizationEventEntity.SURFACE_SKILL);
+        // Strict ordering: sentinel save → createSession → chatAsync.
+        ordered.verify(eventRepository).save(any(OptimizationEventEntity.class));
+        ordered.verify(sessionService).createSession(anyLong(), anyLong());
+        ordered.verify(chatService).chatAsync(anyString(), anyString(), anyLong());
+    }
+
+    @Test
+    @DisplayName("Phase 1.3 sentinel: chatAsync NOT invoked when sentinel write fails (no orphan curator session)")
+    void dispatcher_doesNotCallChatAsync_whenSentinelWriteFails() {
+        SessionPatternEntity p = pattern(42L, OptimizationEventEntity.SURFACE_SKILL, 5);
+        when(patternRepository.findWithFilters(any(), any(), any(), any(Pageable.class)))
+                .thenReturn(List.of(p));
+        // Override default save stub to throw a DB error on first attempt.
+        when(eventRepository.save(any(OptimizationEventEntity.class)))
+                .thenThrow(new DataAccessResourceFailureException("simulated sentinel write failure"));
+
+        AttributionDispatcherService.DispatchResult result =
+                service.dispatchPendingPatterns(5);
+
+        assertThat(result.scanned()).isEqualTo(1);
+        assertThat(result.dispatched()).isZero();
+        // Per-pattern catch swallowed the DB error (V1 W2 lesson: narrow catch +
+        // continue). Critical assertion: chatAsync was NOT invoked → no orphan
+        // curator session waiting for an event row that doesn't exist.
+        verify(sessionService, never()).createSession(anyLong(), anyLong());
+        verify(chatService, never()).chatAsync(anyString(), anyString(), anyLong());
     }
 }

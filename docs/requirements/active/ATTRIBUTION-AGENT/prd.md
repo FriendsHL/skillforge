@@ -43,7 +43,7 @@ V3 飞轮第③⑤⑥步：attribution-curator agent 自动归因 V1 pattern →
    - 后端 service 读 event proposal payload
    - surface=skill → 调 `SkillDraftService.createDraftFromAttribution(...)` 生成 candidate skill draft
    - surface=prompt → 调 `PromptImproverService.startImprovement(agentId, abRunId=null, ...)` 生成 candidate prompt version
-   - 写 event stage=candidate_created
+   - 写 event stage=candidate_ready (intermediate `candidate_generating` is set during the actual SkillDraft / PromptVersion creation; `candidate_failed` if creation throws)
 6. candidate 生成完触发现有 SkillAbEvalService 或 AbEvalPipeline A/B：
    - 写 event stage=ab_running
    - A/B 完成 → stage=ab_passed / ab_failed
@@ -66,7 +66,7 @@ V3 飞轮第③⑤⑥步：attribution-curator agent 自动归因 V1 pattern →
 - `expected_impact` TEXT — agent 期望指标变化（结构化 JSON 或自然语言）
 - `confidence` DECIMAL(3,2) 0..1
 - `risk` VARCHAR(16) — 'low' / 'medium' / 'high'
-- `stage` VARCHAR(32) — `proposal_pending` / `proposal_approved` / `proposal_rejected` / `candidate_created` / `ab_running` / `ab_passed` / `ab_failed` / `canary_started` / `promoted` / `rolled_back` / `verified`
+- `stage` VARCHAR(32) — `dispatch_initiated` / `proposal_pending` / `proposal_approved` / `proposal_rejected` / `candidate_generating` / `candidate_ready` / `candidate_failed` / `ab_running` / `ab_passed` / `ab_failed` / `canary_started` / `promoted` / `rolled_back` / `verified` (legacy alias `candidate_created` retained as constant for backward compat)
 - `candidate_skill_id` BIGINT NULL — surface=skill 时填
 - `candidate_prompt_version_id` BIGINT NULL — surface=prompt 时填
 - `ab_run_id` BIGINT NULL — 关联 SkillAbRunEntity 或 PromptAbRunEntity（用 polymorphic 或 separate columns）
@@ -153,7 +153,7 @@ CONSTRAINTS:
 - [ ] `attribution-curator` system agent 跑通：dispatcher 触发 → agent 输出可读 proposal → 写 event
 - [ ] 4 个新 tool（PatternRead / SessionAnnotationRead / ProposeOptimization / WriteOptimizationEvent）单测 + 注册
 - [ ] 24h cooldown 工作（同 pattern 短时间内不重派）
-- [ ] proposal approve 后自动触发 candidate generator（skill OR prompt 分支）+ 写 event stage=candidate_created
+- [ ] proposal approve 后自动触发 candidate generator（skill OR prompt 分支）+ 写 event stage=candidate_ready (经 candidate_generating intermediate)
 - [ ] candidate 生成完 → 触发 A/B（写 ab_running → ab_passed/ab_failed）
 - [ ] ab_passed → 触发 V2 publish 按钮 enable（前端 stage 显示）
 - [ ] canary 路径接通：ab_passed → 用户 publish/canary → 写 event stage=canary_started → V2 metrics → promoted/rolled_back

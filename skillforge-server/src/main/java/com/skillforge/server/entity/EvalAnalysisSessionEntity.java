@@ -14,6 +14,17 @@ public class EvalAnalysisSessionEntity {
     public static final String TYPE_SCENARIO_HISTORY = "scenario_history";
     public static final String TYPE_RUN_CASE = "run_case";
     public static final String TYPE_RUN_OVERALL = "run_overall";
+    /**
+     * V3 ATTRIBUTION-AGENT Phase 1.3 — links an attribution-curator agent run
+     * (the session that produced an optimization proposal) to its source pattern
+     * via {@code scenarioId} populated with {@code "pattern:" + patternId}.
+     * Lets the dashboard timeline (Phase 1.4/1.5) replay the curator's chat trail
+     * by pivoting from a {@code t_optimization_event.attribution_session_id} to
+     * this analysis-session row. analysisType is a free-form String column
+     * (length 32), grep confirmed no switch/case branches gate on the value, so
+     * adding a new constant is a pure additive change.
+     */
+    public static final String TYPE_PATTERN_LEVEL = "pattern_level";
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)

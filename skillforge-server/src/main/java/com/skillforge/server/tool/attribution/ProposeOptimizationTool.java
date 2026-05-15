@@ -202,8 +202,49 @@ public class ProposeOptimizationTool implements Tool {
             Instant now = clock.instant();
             Instant cooldownExpiresAt = now.plus(COOLDOWN_DURATION);
 
-            OptimizationEventEntity event = new OptimizationEventEntity();
-            event.setPatternId(patternId);
+            // Phase 1.3 ratify: AttributionDispatcherService writes a
+            // dispatch_initiated sentinel BEFORE chatAsync; this tool UPDATEs
+            // that sentinel into proposal_pending. UPDATE preserves the original
+            // createdAt (the real dispatch time), avoids INSERT-then-DELETE
+            // cascade noise, and keeps the row's id stable for downstream
+            // consumers (Phase 1.4 dashboard / WS notify).
+            //
+            // Fallback INSERT path retained for resilience: if a curator session
+            // somehow runs without a dispatcher-written sentinel (e.g. manual
+            // tool invocation during dogfood, future REST-triggered curator
+            // run), we still write a fresh proposal_pending row. The
+            // dispatcher's own contract is "always sentinel first" so this
+            // path is purely defensive.
+            List<OptimizationEventEntity> sentinels = eventRepository
+                    .findByPatternIdAndStage(patternId,
+                            OptimizationEventEntity.STAGE_DISPATCH_INITIATED);
+
+            OptimizationEventEntity event;
+            if (!sentinels.isEmpty()) {
+                if (sentinels.size() > 1) {
+                    log.warn("ProposeOptimization: {} dispatch_initiated sentinels for patternId={}; "
+                            + "using oldest (id={}) and leaving the rest for ops cleanup",
+                            sentinels.size(), patternId, sentinels.get(0).getId());
+                }
+                event = sentinels.get(0);
+                // Defensive contract check — should never fire because the
+                // findByPatternIdAndStage filter pins both axes, but reviewers
+                // asked for explicit guard.
+                if (!OptimizationEventEntity.STAGE_DISPATCH_INITIATED.equals(event.getStage())
+                        || !patternId.equals(event.getPatternId())) {
+                    throw new IllegalStateException(
+                            "Expected dispatch_initiated sentinel for patternId=" + patternId
+                                    + ", found stage=" + event.getStage()
+                                    + " patternId=" + event.getPatternId());
+                }
+                event.setStage(OptimizationEventEntity.STAGE_PROPOSAL_PENDING);
+            } else {
+                log.warn("ProposeOptimization: no dispatch_initiated sentinel for patternId={} — "
+                        + "creating fresh proposal_pending row (defensive fallback)", patternId);
+                event = new OptimizationEventEntity();
+                event.setPatternId(patternId);
+                event.setStage(OptimizationEventEntity.STAGE_PROPOSAL_PENDING);
+            }
             event.setAgentId(agentId);
             event.setSurfaceType(surface);
             event.setChangeType(changeType.trim());
@@ -211,12 +252,12 @@ public class ProposeOptimizationTool implements Tool {
             event.setExpectedImpact(expectedImpact.trim());
             event.setConfidence(confidence.setScale(2, RoundingMode.HALF_UP));
             event.setRisk(risk);
-            event.setStage(OptimizationEventEntity.STAGE_PROPOSAL_PENDING);
             event.setCooldownExpiresAt(cooldownExpiresAt);
             if (context != null && !isBlank(context.getSessionId())) {
                 event.setAttributionSessionId(context.getSessionId());
             }
-            // createdAt / updatedAt are auto-populated by @PrePersist (Phase 1.1 fix).
+            // updatedAt auto-populated by @PreUpdate; createdAt preserved on UPDATE
+            // path (column is updatable=false), set by @PrePersist on INSERT path.
 
             OptimizationEventEntity saved = eventRepository.save(event);
 

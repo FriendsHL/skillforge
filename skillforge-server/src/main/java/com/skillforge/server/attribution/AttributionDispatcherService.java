@@ -76,11 +76,29 @@ public class AttributionDispatcherService {
     /**
      * Pre-terminal event stages — having any of these for a pattern means an
      * earlier optimization is still in flight, so the dispatcher must not start
-     * a competing curator run.
+     * a competing curator run. Phase 1.3 added {@code dispatch_initiated} (the
+     * sentinel row written before chatAsync — closes the race window where two
+     * concurrent dispatcher ticks could both see "no event") and
+     * {@code candidate_generating} (set by AttributionApprovalService.approve).
+     *
+     * <p>Phase 1.3 reviewer fix: also includes {@code candidate_failed}.
+     * Per tech-design.md §6, {@code candidate_failed} is terminal until the
+     * operator manually retries via the Phase 1.4 REST endpoint — auto-retrying
+     * by re-dispatching would burn LLM budget on systematic failures (e.g. the
+     * curator's proposal contradicts a hard constraint of the surface).
+     * Other terminal stages ({@code proposal_rejected}, {@code ab_failed},
+     * {@code rolled_back}, {@code verified}) are NOT in this set because
+     * either (a) operator already explicitly closed the loop, or (b)
+     * downstream Phase 1.4+ wiring will re-evaluate the pattern in the
+     * normal scan after enough new evidence accumulates.
      */
     static final Set<String> ACTIVE_STAGES = Set.of(
+            OptimizationEventEntity.STAGE_DISPATCH_INITIATED,
             OptimizationEventEntity.STAGE_PROPOSAL_PENDING,
             OptimizationEventEntity.STAGE_PROPOSAL_APPROVED,
+            OptimizationEventEntity.STAGE_CANDIDATE_GENERATING,
+            OptimizationEventEntity.STAGE_CANDIDATE_READY,
+            OptimizationEventEntity.STAGE_CANDIDATE_FAILED,
             OptimizationEventEntity.STAGE_CANDIDATE_CREATED,
             OptimizationEventEntity.STAGE_AB_RUNNING,
             OptimizationEventEntity.STAGE_AB_PASSED,
@@ -225,13 +243,43 @@ public class AttributionDispatcherService {
      * user-message that the system prompt expects. The agent's first tool call
      * (PatternRead) consumes the patternId; the rest of its 4-STEP pipeline
      * follows from there.
+     *
+     * <p>Phase 1.3 ratify: writes a {@code dispatch_initiated} sentinel
+     * {@link OptimizationEventEntity} BEFORE invoking chatAsync. This closes
+     * the race window where two concurrent dispatcher ticks could both observe
+     * "no event for this pattern" and double-fire the curator. The sentinel is
+     * later UPDATEd into {@code proposal_pending} (or {@code proposal_rejected})
+     * by {@code ProposeOptimizationTool} once the curator finishes.
+     *
+     * <p>If the sentinel write fails the exception propagates to the caller
+     * loop's {@code DataAccessException} handler — chatAsync is intentionally
+     * NOT invoked on a failed sentinel write (would orphan a curator session
+     * with no event row to anchor it).
      */
     void dispatchOne(SessionPatternEntity pattern, Long curatorAgentId) {
+        OptimizationEventEntity sentinel = new OptimizationEventEntity();
+        sentinel.setPatternId(pattern.getId());
+        // pattern.agentId may be null on legacy V1 rows pre-V75; substitute the
+        // curator agent id rather than violate NOT NULL — Phase 1.3 reviewers
+        // can re-evaluate if observability data shows null pattern agentIds in
+        // production.
+        sentinel.setAgentId(pattern.getAgentId() != null ? pattern.getAgentId() : curatorAgentId);
+        sentinel.setSurfaceType(pattern.getSuspectSurface());
+        sentinel.setStage(OptimizationEventEntity.STAGE_DISPATCH_INITIATED);
+        // All other fields (changeType / description / expectedImpact / confidence
+        // / risk / cooldownExpiresAt / candidate*Id / abRunId / canaryId /
+        // attributionSessionId) intentionally left null — ProposeOptimizationTool
+        // populates them when the curator finishes. createdAt / updatedAt are
+        // auto-populated by @PrePersist.
+        OptimizationEventEntity persistedSentinel = eventRepository.save(sentinel);
+        log.debug("[AttributionDispatcher] sentinel written for patternId={} eventId={}",
+                pattern.getId(), persistedSentinel.getId());
+
         SessionEntity session = sessionService.createSession(SYSTEM_USER_ID, curatorAgentId);
         String prompt = composeDispatchPrompt(pattern);
         chatService.chatAsync(session.getId(), prompt, SYSTEM_USER_ID);
-        log.info("[AttributionDispatcher] dispatched curator for patternId={} sessionId={}",
-                pattern.getId(), session.getId());
+        log.info("[AttributionDispatcher] dispatched curator for patternId={} sessionId={} sentinelEventId={}",
+                pattern.getId(), session.getId(), persistedSentinel.getId());
     }
 
     /**

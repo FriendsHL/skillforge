@@ -27,6 +27,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -307,6 +308,114 @@ public class SkillDraftService {
             }
             return 0;
         }
+    }
+
+    /**
+     * V3 ATTRIBUTION-AGENT Phase 1.3 — attribution-aware draft creation.
+     *
+     * <p>Called by {@code AttributionApprovalService.approve} when a curator's
+     * proposal targets {@code surface=skill}. Skips the LLM extraction path
+     * (the curator's {@code description} + {@code expectedImpact} already encode
+     * the proposed change at the "direction" level — see attribution-curator
+     * system prompt CONSTRAINT 4); persists a deterministic SkillDraftEntity
+     * tagged with the originating eventId so the dashboard can pivot back to
+     * the curator's reasoning chain.
+     *
+     * <p>No new schema column added (per Phase 1.3 brief): the {@code eventId} +
+     * {@code patternId} + {@code changeType} are folded into
+     * {@link SkillDraftEntity#getExtractionRationale()} as a structured prefix.
+     * Reviewers can grep {@code [attribution:eventId=} to find every
+     * attribution-derived draft. {@code sourceSessionId} stays null because
+     * an attribution proposal isn't anchored to a single session — it generalises
+     * across the pattern's member sessions.
+     *
+     * <p>Existing {@link #extractFromRecentSessions} signature unchanged.
+     *
+     * @param eventId               the {@code t_optimization_event.id} that triggered
+     *                              this draft (folded into extractionRationale)
+     * @param patternId             the {@code t_session_pattern.id} the proposal targets
+     * @param attributedDescription curator's 1-3 sentence change description
+     * @param expectedImpact        curator's expected metric change
+     * @param changeType            curator's free-form change type identifier
+     * @param ownerId               draft owner (typically pattern's agent owner)
+     * @param suggestedSkillName    suggested name for the draft (typically derived
+     *                              from changeType + patternId by caller)
+     */
+    /*
+     * REQUIRES_NEW (Phase 1.3 reviewer fix — V2 W2 same lesson):
+     * AttributionApprovalService.approve runs in @Transactional(REQUIRED) and
+     * catches RuntimeException from this method to persist
+     * stage=candidate_failed. If we JOIN that outer tx (default REQUIRED),
+     * a draft-write failure would mark the outer tx setRollbackOnly →
+     * approve's candidate_failed save() would commit but the surrounding
+     * tx still rolls back → operator never sees the failure.
+     * REQUIRES_NEW gives this method an independent tx that commits or
+     * rolls back without touching the outer one.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public SkillDraftEntity createDraftFromAttribution(Long eventId,
+                                                      Long patternId,
+                                                      String attributedDescription,
+                                                      String expectedImpact,
+                                                      String changeType,
+                                                      Long ownerId,
+                                                      String suggestedSkillName) {
+        if (eventId == null) throw new IllegalArgumentException("eventId is required");
+        if (patternId == null) throw new IllegalArgumentException("patternId is required");
+        if (ownerId == null) throw new IllegalArgumentException("ownerId is required");
+        if (attributedDescription == null || attributedDescription.isBlank()) {
+            throw new IllegalArgumentException("attributedDescription is required and must be non-blank");
+        }
+        if (suggestedSkillName == null || suggestedSkillName.isBlank()) {
+            throw new IllegalArgumentException("suggestedSkillName is required and must be non-blank");
+        }
+
+        SkillDraftEntity draft = new SkillDraftEntity();
+        draft.setId(UUID.randomUUID().toString());
+        draft.setOwnerId(ownerId);
+        // sourceSessionId left null intentionally — attribution proposals
+        // generalise across pattern members, not a single session anchor.
+        draft.setName(suggestedSkillName.trim());
+        draft.setDescription(attributedDescription.trim());
+        // Triggers / requiredTools deliberately blank — the curator works at
+        // the "direction" level (per system prompt CONSTRAINT 4), not the
+        // implementation level. Approve flow's render step will attempt to
+        // synthesize a SKILL.md from description + promptHint; operator can
+        // refine before approving.
+        draft.setTriggers("");
+        draft.setRequiredTools("");
+        StringBuilder hint = new StringBuilder();
+        hint.append("[attribution-derived skill draft]\n\n");
+        hint.append("Proposed change: ").append(attributedDescription.trim()).append("\n\n");
+        if (expectedImpact != null && !expectedImpact.isBlank()) {
+            hint.append("Expected impact: ").append(expectedImpact.trim()).append("\n\n");
+        }
+        hint.append("This draft was generated from optimization event #").append(eventId)
+                .append(" attributing pattern #").append(patternId).append(".");
+        draft.setPromptHint(hint.toString());
+        // extractionRationale carries the structured attribution metadata so
+        // future grep / dashboard queries can pivot back to the source event
+        // without needing a new FK column (Phase 1.3 brief: prefer field reuse
+        // over schema migration).
+        StringBuilder rationale = new StringBuilder();
+        rationale.append("[attribution:eventId=").append(eventId)
+                .append("|patternId=").append(patternId);
+        if (changeType != null && !changeType.isBlank()) {
+            rationale.append("|changeType=").append(changeType.trim());
+        }
+        rationale.append("] ").append(attributedDescription.trim());
+        draft.setExtractionRationale(rationale.toString());
+        draft.setStatus("draft");
+        // Skip dedupe / similarity scoring — attribution drafts are deterministic
+        // outputs of a curator decision, not LLM-extracted batches that need
+        // collision detection. If two attribution events target the same pattern
+        // (24h cooldown should prevent this) the operator sees both drafts in
+        // the dashboard and can pick / merge manually.
+
+        SkillDraftEntity saved = skillDraftRepository.save(draft);
+        log.info("Attribution-derived skill draft created: draftId={} eventId={} patternId={} ownerId={}",
+                saved.getId(), eventId, patternId, ownerId);
+        return saved;
     }
 
     /** Backwards-compat overload — defaults forceCreate=false. */

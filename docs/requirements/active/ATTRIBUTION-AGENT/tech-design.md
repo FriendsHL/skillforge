@@ -97,7 +97,7 @@ updated: 2026-05-15
         │    .createDraftFromAttribution(...)   │
         │  - surface=prompt → PromptImprover    │
         │    .startImprovementFromAttribution() │
-        │  → 写 event stage=candidate_created   │
+        │  → 写 event stage=candidate_ready     │
         └────────────────┬─────────────────────┘
                          │ candidate 生成完
                          ▼
@@ -220,7 +220,7 @@ WHERE NOT EXISTS (SELECT 1 FROM t_scheduled_task WHERE name='attribution-dispatc
 - [ ] **Phase 1.0** 证伪 + 红测试（5 项 grep 见 §0.3）
 - [ ] **Phase 1.1** V80 + V81 migration + Entity + Repository + Bootstrap + classpath prompt + JPA IT
 - [ ] **Phase 1.2** AttributionDispatcherService + 4 tool（PatternRead / SessionAnnotationRead / ProposeOptimization / WriteOptimizationEvent）+ tool 单测
-- [ ] **Phase 1.3** AttributionApprovalService + 接现有 SkillDraftService + PromptImproverService（attribution-aware 入口）+ 写 event stage 转换
+- [ ] **Phase 1.3** AttributionApprovalService（approve / reject + stage transition validation）+ 接现有 SkillDraftService.createDraftFromAttribution + PromptImproverService.startImprovementFromAttribution（attribution-aware 入口，bypass agent-level cooldown per 2026-05-15 ratify）+ AttributionDispatcherService 加 `dispatch_initiated` sentinel（race window 防御，per 2026-05-15 ratify）+ stage 流转写 event 行
 - [ ] **Phase 1.4** AttributionEventController + REST + WS notify
 - [ ] **Phase 1.5** FE OptimizationEvents page + Pending Approvals queue + Timeline 视图 + 嵌入 SkillEvolutionPanel context
 - [ ] **Phase Final** mvn / npm build / 真启 attribution-dispatcher cron 跑一次 / 归档
@@ -234,7 +234,8 @@ WHERE NOT EXISTS (SELECT 1 FROM t_scheduled_task WHERE name='attribution-dispatc
 | 24h cooldown 计算精度 | 写 cooldown_expires_at = NOW() + INTERVAL '24h'，cron 查 WHERE cooldown_expires_at < NOW() |
 | candidate generation 调失败（外部 LLM API down）| 写 event stage=candidate_failed + retry 路径（手动）|
 | ~~EvalAnalysisSessionEntity analysisType enum 扩展破现有 case~~ | Phase 1.0 BE-Dev 已校对：analysisType 是 String length=32 不是 enum，grep 0 switch/case 命中 → 加新值 100% 安全 |
-| **PromptImprover 双 cooldown 冲突**（V3 24h pattern-level vs 现行 `checkEligibility` 24h `agent.lastPromotedAt`）| **Phase 1.3 必须 ratify**：attribution 路径是否 bypass agent-level cooldown。推荐"bypass"（attribution 自带 pattern-level 24h 已足够，agent-level cooldown 是 manual / cron path 用）|
+| **PromptImprover 双 cooldown 冲突**（V3 24h pattern-level vs 现行 `checkEligibility` 24h `agent.lastPromotedAt`）| **已 ratify 2026-05-15: BYPASS agent-level cooldown**。attribution 路径走 `startImprovementFromAttribution` 不调 `checkEligibility`，仅依赖 V3 自带 24h pattern-level cooldown + risk gating。理由：attribution 是精准驱动（cluster 出 ≥3 个失败 member + 高 confidence），跟 manual / cron-job-spam 不是同一保护场景。|
+| **dispatcher race window**（cron tick + manual trigger 在 LLM 处理窗口双发同一 pattern）| **已 ratify 2026-05-15: 加 sentinel**。dispatcher 在调 `chatService.chatAsync` 前先写一条 `stage='dispatch_initiated'` event row，ACTIVE_STAGES 含该 stage，后续 Filter 4 自动跳过。ProposeOptimizationTool 写 `proposal_pending` 时同时 update 老 sentinel 行的 stage（或 delete + insert，取决于实现）。同时 dispatch_initiated 进 KNOWN_STAGES。|
 | Iron Law（不改 6 核心文件 + GetTraceTool） | reviewer 显式 grep 验证 |
 
 ## 7. 与现有规则的关系
@@ -248,3 +249,4 @@ WHERE NOT EXISTS (SELECT 1 FROM t_scheduled_task WHERE name='attribution-dispatc
 
 - 2026-05-15：claude 初稿（ratified，6 ratify 决策按 plan.md §V3 + V1/V2 ratify 锁定）
 - 2026-05-15：Phase 1.0 BE-Dev 校对 + 修 2 push back：(1) §0.3 + §6 EvalAnalysisSession enum 措辞改为 String 字段（实际不是 enum，加值 100% 安全）；(2) §6 加 PromptImprover 双 cooldown 冲突风险条目，Phase 1.3 必须 ratify attribution 路径是否 bypass agent-level cooldown（推荐 bypass）；其它 5 项调研全 ✅ 复用计划成立
+- 2026-05-15：Phase 1.3 开工前 2 ratify 锁定：(1) PromptImprover 双 cooldown → **BYPASS agent-level cooldown**（仅 V3 24h pattern-level + risk gating）；(2) dispatcher race window → **加 `dispatch_initiated` sentinel**（chatAsync 前写 sentinel event，ACTIVE_STAGES / KNOWN_STAGES 同步加该 stage）。§5 Phase 1.3 措辞更新，§6 两条风险条目从"Phase 1.3 必须 ratify"改为"已 ratify"

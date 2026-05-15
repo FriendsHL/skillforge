@@ -22,6 +22,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
@@ -78,6 +79,101 @@ public class PromptImproverService {
     @Transactional
     public ImprovementStartResult startImprovement(String agentId, String evalRunId, long userId) {
         return startImprovement(agentId, evalRunId, userId, null);
+    }
+
+    /**
+     * V3 ATTRIBUTION-AGENT Phase 1.3 — attribution-aware improvement entry.
+     *
+     * <p>Called by {@code AttributionApprovalService.approve} when a curator's
+     * proposal targets {@code surface=prompt}.
+     *
+     * <p>Per ratify decision (2026-05-15): this path BYPASSES
+     * {@link #checkEligibility} entirely — V3 enforces its own 24h pattern-level
+     * cooldown via {@code t_optimization_event.cooldown_expires_at}, written by
+     * {@code ProposeOptimizationTool}. Layering the existing
+     * {@code agent.lastPromotedAt} 24h cooldown on top would double-gate (and
+     * confuse the operator about which window is in effect). Risk gating
+     * (low/medium/high → maybe future auto-reject of high) is reserved for
+     * Phase 2; for now all approved attribution proposals proceed.
+     *
+     * <p>Existing {@link #startImprovement} signatures unchanged — this is a
+     * new entry point.
+     *
+     * <p>Phase 1.3 scope: produces a {@link PromptVersionEntity} placeholder
+     * (status=candidate, source="attribution", improvementRationale set,
+     * sourceEvalRunId=null, baselinePassRate=null, content empty). Does NOT
+     * create a {@link PromptAbRunEntity} — there's no eval run to anchor an A/B
+     * baseline against. Phase 1.4+ wires the actual LLM candidate generation +
+     * A/B trigger; for Phase 1.3 the version row exists so
+     * {@code OptimizationEvent.candidatePromptVersionId} can link to it and
+     * downstream timeline queries work.
+     *
+     * @param eventId               originating optimization event id (logged for audit)
+     * @param agentId               target agent id (string per existing column type)
+     * @param attributedDescription curator's change description (stored as
+     *                              {@link PromptVersionEntity#getImprovementRationale()})
+     * @param ownerId               approver user id (logged for audit)
+     */
+    /*
+     * REQUIRES_NEW (Phase 1.3 reviewer fix — V2 W2 same lesson):
+     * AttributionApprovalService.approve runs in @Transactional(REQUIRED) and
+     * catches RuntimeException from this method to persist
+     * stage=candidate_failed. If we JOIN that outer tx (default REQUIRED),
+     * any prompt-version-write failure would mark the outer tx
+     * setRollbackOnly → approve's candidate_failed save() would commit but
+     * the surrounding tx still rolls back → operator never sees the failure.
+     * REQUIRES_NEW gives this method an independent tx that commits or
+     * rolls back without touching the outer one.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public ImprovementStartResult startImprovementFromAttribution(Long eventId,
+                                                                  String agentId,
+                                                                  String attributedDescription,
+                                                                  Long ownerId) {
+        if (eventId == null) throw new IllegalArgumentException("eventId is required");
+        if (agentId == null || agentId.isBlank()) {
+            throw new IllegalArgumentException("agentId is required");
+        }
+        if (attributedDescription == null || attributedDescription.isBlank()) {
+            throw new IllegalArgumentException("attributedDescription is required and must be non-blank");
+        }
+
+        // Verify the agent exists; load fully so future Phase 1.4 LLM call has
+        // currentPrompt available (we don't use it in 1.3 placeholder write,
+        // but the lookup proves the FK is valid up front).
+        AgentEntity agent = agentRepository.findById(Long.parseLong(agentId))
+                .orElseThrow(() -> new RuntimeException("Agent not found: " + agentId));
+
+        int nextVersion = promptVersionRepository.findMaxVersionNumber(agentId).orElse(0) + 1;
+        PromptVersionEntity version = new PromptVersionEntity();
+        version.setId(UUID.randomUUID().toString());
+        version.setAgentId(agentId);
+        // Placeholder content — Phase 1.4+ async LLM job fills this. Empty
+        // string (NOT null) because the column is NOT NULL.
+        version.setContent("");
+        version.setVersionNumber(nextVersion);
+        version.setStatus("candidate");
+        // "attribution" source distinguishes these versions from "auto_improve"
+        // (eval-driven) and "manual" (operator-edited) in dashboard listings.
+        version.setSource("attribution");
+        // sourceEvalRunId / baselinePassRate intentionally null — there's no
+        // eval-run baseline to compare against. Phase 1.4 A/B will set its own
+        // baseline by reading the agent's current production prompt.
+        version.setImprovementRationale(attributedDescription.trim());
+        promptVersionRepository.save(version);
+
+        log.info("Attribution-derived prompt version created: versionId={} agentId={} eventId={} "
+                        + "ownerId={} versionNumber={} (BYPASSING checkEligibility per ratify)",
+                version.getId(), agentId, eventId, ownerId, nextVersion);
+
+        // abRunId left null — caller (AttributionApprovalService) doesn't yet
+        // create a PromptAbRunEntity; Phase 1.4+ wires that. agent.getId() is
+        // returned as a string to match existing ImprovementStartResult shape.
+        return new ImprovementStartResult(
+                String.valueOf(agent.getId()),
+                null,
+                version.getId(),
+                "PENDING");
     }
 
     @Transactional

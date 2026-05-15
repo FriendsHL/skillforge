@@ -51,13 +51,31 @@ public interface OptimizationEventRepository extends JpaRepository<OptimizationE
 
     /**
      * Phase 1.2 / 1.3 cross-check: events for a specific pattern in a specific
-     * stage. Used by the approval service to confirm a proposal hasn't already
-     * advanced past {@code proposal_pending}, and by the dispatcher to find
-     * the latest event row for timeline reconstruction.
+     * stage, ordered oldest-first. Used by:
+     * <ul>
+     *   <li>{@code ProposeOptimizationTool} to find the dispatcher-written
+     *       sentinel (Phase 1.3 reviewer fix made the ordering explicit so
+     *       {@code .get(0)} is deterministically the oldest sentinel — was
+     *       previously a derived-query name with no ORDER BY).</li>
+     *   <li>{@code AttributionDispatcherService} Filter 4 alternate path
+     *       (currently routed through
+     *       {@link #existsByPatternIdAndStageIn} for performance).</li>
+     *   <li>Future {@code AttributionApprovalService} cross-checks (e.g.
+     *       confirming a proposal hasn't already advanced past
+     *       {@code proposal_pending}).</li>
+     * </ul>
      *
-     * <p>Backed by {@code idx_optimization_event_pattern (pattern_id, stage)}.
+     * <p>Backed by {@code idx_optimization_event_pattern (pattern_id, stage)};
+     * the {@code ORDER BY createdAt ASC} is a small in-memory sort over the
+     * filtered rows (typically 1, occasionally 2 if a duplicate sentinel
+     * landed during a race).
      */
-    List<OptimizationEventEntity> findByPatternIdAndStage(Long patternId, String stage);
+    @Query("SELECT e FROM OptimizationEventEntity e " +
+           "WHERE e.patternId = :patternId AND e.stage = :stage " +
+           "ORDER BY e.createdAt ASC")
+    List<OptimizationEventEntity> findByPatternIdAndStage(
+            @Param("patternId") Long patternId,
+            @Param("stage") String stage);
 
     /**
      * Phase 1.2 reviewer fix (N+1 collapse): single-query check whether any

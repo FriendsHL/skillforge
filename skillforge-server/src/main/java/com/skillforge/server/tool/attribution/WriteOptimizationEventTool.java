@@ -52,10 +52,14 @@ public class WriteOptimizationEventTool implements Tool {
     private static final Logger log = LoggerFactory.getLogger(WriteOptimizationEventTool.class);
 
     static final Set<String> KNOWN_STAGES = Set.of(
+            OptimizationEventEntity.STAGE_DISPATCH_INITIATED,
             OptimizationEventEntity.STAGE_PROPOSAL_PENDING,
             OptimizationEventEntity.STAGE_PROPOSAL_APPROVED,
             OptimizationEventEntity.STAGE_PROPOSAL_REJECTED,
-            OptimizationEventEntity.STAGE_CANDIDATE_CREATED,
+            OptimizationEventEntity.STAGE_CANDIDATE_GENERATING,
+            OptimizationEventEntity.STAGE_CANDIDATE_READY,
+            OptimizationEventEntity.STAGE_CANDIDATE_FAILED,
+            OptimizationEventEntity.STAGE_CANDIDATE_CREATED,  // legacy alias
             OptimizationEventEntity.STAGE_AB_RUNNING,
             OptimizationEventEntity.STAGE_AB_PASSED,
             OptimizationEventEntity.STAGE_AB_FAILED,

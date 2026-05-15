@@ -20,6 +20,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -119,6 +120,60 @@ class ProposeOptimizationToolTest {
         SkillResult result = tool.execute(validInput(), null);
 
         assertThat(result.isSuccess()).isFalse();
+        verify(eventRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("Phase 1.3 sentinel UPDATE: dispatch_initiated row is updated in place to proposal_pending (not new INSERT)")
+    void propose_updatesSentinel_whenDispatchInitiatedExists() {
+        when(patternRepository.findById(42L)).thenReturn(Optional.of(new SessionPatternEntity()));
+        // Pre-existing sentinel row — id=555 already persisted by dispatcher.
+        OptimizationEventEntity sentinel = new OptimizationEventEntity();
+        sentinel.setId(555L);
+        sentinel.setPatternId(42L);
+        sentinel.setStage(OptimizationEventEntity.STAGE_DISPATCH_INITIATED);
+        when(eventRepository.findByPatternIdAndStage(42L,
+                OptimizationEventEntity.STAGE_DISPATCH_INITIATED))
+                .thenReturn(List.of(sentinel));
+        ArgumentCaptor<OptimizationEventEntity> captor = ArgumentCaptor.forClass(OptimizationEventEntity.class);
+        when(eventRepository.save(captor.capture())).thenAnswer(inv -> inv.getArgument(0));
+
+        SkillResult result = tool.execute(validInput(), null);
+
+        assertThat(result.isSuccess()).isTrue();
+        OptimizationEventEntity saved = captor.getValue();
+        // Crucial: same id as the sentinel — UPDATE not INSERT.
+        assertThat(saved.getId()).isEqualTo(555L);
+        assertThat(saved.getStage()).isEqualTo(OptimizationEventEntity.STAGE_PROPOSAL_PENDING);
+        assertThat(saved.getCooldownExpiresAt())
+                .isEqualTo(FIXED_NOW.plus(ProposeOptimizationTool.COOLDOWN_DURATION));
+        // Curator's per-call payload populated on the same row.
+        assertThat(saved.getDescription()).contains("Bash retries");
+        assertThat(saved.getConfidence()).isEqualByComparingTo(new BigDecimal("0.72"));
+    }
+
+    @Test
+    @DisplayName("Phase 1.3 sentinel guard: row found but with mismatched stage triggers wrapped IllegalStateException")
+    void propose_returnsErrorWhenSentinelStageMismatched() {
+        when(patternRepository.findById(42L)).thenReturn(Optional.of(new SessionPatternEntity()));
+        // Hand-edited sentinel that somehow has stage=ab_running — defensive guard
+        // ensures we don't silently overwrite mid-pipeline state.
+        OptimizationEventEntity broken = new OptimizationEventEntity();
+        broken.setId(666L);
+        broken.setPatternId(42L);
+        broken.setStage(OptimizationEventEntity.STAGE_AB_RUNNING);
+        // Repository returns it because the test stubs it for the dispatch_initiated
+        // query — simulates a corrupted finder result. In production the stage
+        // filter would prevent this; the explicit guard catches the inconsistency.
+        when(eventRepository.findByPatternIdAndStage(42L,
+                OptimizationEventEntity.STAGE_DISPATCH_INITIATED))
+                .thenReturn(List.of(broken));
+
+        SkillResult result = tool.execute(validInput(), null);
+
+        assertThat(result.isSuccess()).isFalse();
+        // Wrapped by the tool's catch-all into SkillResult.error.
+        assertThat(result.getError()).contains("Expected dispatch_initiated sentinel");
         verify(eventRepository, never()).save(any());
     }
 }
