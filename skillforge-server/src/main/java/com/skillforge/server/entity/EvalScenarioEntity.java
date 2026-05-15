@@ -66,6 +66,30 @@ public class EvalScenarioEntity {
     @Column(length = 64)
     private String parentScenarioId;
 
+    /**
+     * V5 EVAL-DYNAMIC-USER-SIM Phase 1.1 (V84): 6 business-semantic fields used
+     * by Phase 1.2 UserSimulatorAgent to drive multi-turn trials with persona +
+     * business goal context. All nullable — historical scenarios pre-V84 keep
+     * them NULL and existing eval flows still work.
+     */
+    @Column(columnDefinition = "TEXT")
+    private String businessGoal;
+
+    @Column(columnDefinition = "TEXT")
+    private String successCriteria;
+
+    @Column(columnDefinition = "TEXT")
+    private String userPersona;
+
+    @Column(columnDefinition = "TEXT")
+    private String userConstraints;
+
+    @Column(columnDefinition = "TEXT")
+    private String failureSignals;
+
+    @Column(columnDefinition = "TEXT")
+    private String expectedOutcome;
+
     @CreatedDate
     private Instant createdAt;
 
@@ -208,5 +232,55 @@ public class EvalScenarioEntity {
 
     public void setReviewedAt(Instant reviewedAt) {
         this.reviewedAt = reviewedAt;
+    }
+
+    // V5 EVAL-DYNAMIC-USER-SIM Phase 1.1 (V84) 6 business-semantic fields.
+
+    public String getBusinessGoal() {
+        return businessGoal;
+    }
+
+    public void setBusinessGoal(String businessGoal) {
+        this.businessGoal = businessGoal;
+    }
+
+    public String getSuccessCriteria() {
+        return successCriteria;
+    }
+
+    public void setSuccessCriteria(String successCriteria) {
+        this.successCriteria = successCriteria;
+    }
+
+    public String getUserPersona() {
+        return userPersona;
+    }
+
+    public void setUserPersona(String userPersona) {
+        this.userPersona = userPersona;
+    }
+
+    public String getUserConstraints() {
+        return userConstraints;
+    }
+
+    public void setUserConstraints(String userConstraints) {
+        this.userConstraints = userConstraints;
+    }
+
+    public String getFailureSignals() {
+        return failureSignals;
+    }
+
+    public void setFailureSignals(String failureSignals) {
+        this.failureSignals = failureSignals;
+    }
+
+    public String getExpectedOutcome() {
+        return expectedOutcome;
+    }
+
+    public void setExpectedOutcome(String expectedOutcome) {
+        this.expectedOutcome = expectedOutcome;
     }
 }

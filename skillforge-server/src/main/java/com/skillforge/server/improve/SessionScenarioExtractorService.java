@@ -35,6 +35,17 @@ public class SessionScenarioExtractorService {
     private static final int MAX_MESSAGE_CHARS = 4000;
     private static final int MAX_SCENARIOS = 5;
 
+    /**
+     * V5 EVAL-DYNAMIC-USER-SIM ratify #5b (2026-05-16): scenario extraction switched
+     * from {@code defaultProviderName} (bailian / qwen-max — token expired) to
+     * hardcoded xiaomi-mimo / mimo-v2.5-pro. Mirrors {@code SkillDraftService.
+     * EXTRACT_PROVIDER_NAME / EXTRACT_MODEL} pattern. Falls back to default
+     * provider with {@code log.warn} when xiaomi-mimo isn't registered (graceful
+     * degrade for self-hosted / unit-test setups).
+     */
+    private static final String EXTRACT_PROVIDER_NAME = "xiaomi-mimo";
+    private static final String EXTRACT_MODEL = "mimo-v2.5-pro";
+
     private final SessionRepository sessionRepository;
     private final EvalScenarioDraftRepository evalScenarioDraftRepository;
     private final LlmProviderFactory llmProviderFactory;
@@ -91,6 +102,12 @@ public class SessionScenarioExtractorService {
         }
 
         // Call LLM
+        // V5 EVAL-DYNAMIC-USER-SIM Phase 1.1: extended JSON schema adds 6 business-
+        // semantic fields (businessGoal / successCriteria / userPersona /
+        // userConstraints / failureSignals / expectedOutcome). All 6 are optional —
+        // if the LLM emits legacy JSON without them they stay null (entity columns
+        // are nullable per V84 migration). Used downstream by V5 Phase 1.2
+        // UserSimulatorAgent to drive multi-turn trials with persona + goal context.
         String systemPrompt = """
                 You are an expert at analyzing AI agent conversation histories and extracting \
                 representative, repeatable evaluation scenarios from them.
@@ -101,12 +118,24 @@ public class SessionScenarioExtractorService {
                 - Each scenario must be evaluable: oracleExpected should describe what a correct completion looks like
                 - Filter out casual chat, greetings, or conversations with no substantive task
                 - Output ONLY a JSON array (no markdown fences, no explanation)
-                - Each element: {"name", "description", "task", "oracleType": "llm_judge", "oracleExpected", "extractionRationale"}
-                - Maximum 5 scenarios
-                - name: short identifier (2-5 words)
-                - task: the user request that the agent should handle
-                - oracleExpected: description of what a correct response looks like
-                - extractionRationale: why this session makes a good eval scenario""";
+                - Each element MUST include the legacy fields and SHOULD include the V5 business-semantic fields:
+                  {
+                    "name": "...",                  // short identifier (2-5 words)
+                    "description": "...",           // 1-2 sentence summary
+                    "task": "...",                  // the user request the agent should handle
+                    "oracleType": "llm_judge",
+                    "oracleExpected": "...",        // what a correct response looks like
+                    "extractionRationale": "...",   // why this session makes a good eval scenario
+
+                    // V5 business-semantic fields (omit if not inferable from the session):
+                    "businessGoal": "...",          // 用户真正要达成的业务目标 (1 句话)
+                    "successCriteria": "...",       // 完成的客观可验证标准 (1-3 句 / 短列表)
+                    "userPersona": "...",           // 用户画像: 角色 / 性格 / 技术水平
+                    "userConstraints": "...",       // 隐性约束: 不能做的事 / 必须遵守的规则
+                    "failureSignals": "...",        // 失败信号: 用户什么样的行为代表放弃 / 不满意
+                    "expectedOutcome": "..."        // 期望最终结果 (理想路径)
+                  }
+                - Maximum 5 scenarios""";
 
         String userMessage = String.format("""
                 Here are the recent session histories for an AI agent. \
@@ -114,9 +143,20 @@ public class SessionScenarioExtractorService {
 
                 %s""", sessionSummaries);
 
-        LlmProvider provider = llmProviderFactory.getProvider(defaultProviderName);
+        // V5 ratify #5b: try xiaomi-mimo / mimo-v2.5-pro first (bailian expired),
+        // fallback to defaultProvider for graceful degrade in self-hosted / test
+        // setups that don't register xiaomi-mimo.
+        LlmProvider provider = llmProviderFactory.getProvider(EXTRACT_PROVIDER_NAME);
+        String activeProviderName = EXTRACT_PROVIDER_NAME;
         if (provider == null) {
-            log.error("No LLM provider available for scenario extraction");
+            log.warn("Extractor provider '{}' unavailable, falling back to '{}'",
+                    EXTRACT_PROVIDER_NAME, defaultProviderName);
+            provider = llmProviderFactory.getProvider(defaultProviderName);
+            activeProviderName = defaultProviderName;
+        }
+        if (provider == null) {
+            log.error("No LLM provider available for scenario extraction (tried '{}' + '{}')",
+                    EXTRACT_PROVIDER_NAME, defaultProviderName);
             return 0;
         }
 
@@ -125,7 +165,14 @@ public class SessionScenarioExtractorService {
         List<Message> messages = new ArrayList<>();
         messages.add(Message.user(userMessage));
         request.setMessages(messages);
-        request.setMaxTokens(3000);
+        // mimo-v2.5-pro is a reasoning model — reserve generous max_tokens so the
+        // reasoning_tokens budget doesn't squeeze content output to empty. Only
+        // applied when xiaomi-mimo is active; fallback providers ignore unknown
+        // model names (provider routes by its own registered model list).
+        if (EXTRACT_PROVIDER_NAME.equals(activeProviderName)) {
+            request.setModel(EXTRACT_MODEL);
+        }
+        request.setMaxTokens(4000);
         request.setTemperature(0.3);
 
         LlmResponse response = provider.chat(request);
@@ -170,6 +217,15 @@ public class SessionScenarioExtractorService {
             entity.setOracleExpected(item.get("oracleExpected"));
             entity.setExtractionRationale(item.get("extractionRationale"));
             entity.setStatus("draft");
+            // V5 EVAL-DYNAMIC-USER-SIM Phase 1.1 — 6 business-semantic fields.
+            // Map.get returns null when the key is absent (LLM emitting legacy
+            // JSON), keeping the columns NULL for backward compat.
+            entity.setBusinessGoal(item.get("businessGoal"));
+            entity.setSuccessCriteria(item.get("successCriteria"));
+            entity.setUserPersona(item.get("userPersona"));
+            entity.setUserConstraints(item.get("userConstraints"));
+            entity.setFailureSignals(item.get("failureSignals"));
+            entity.setExpectedOutcome(item.get("expectedOutcome"));
             toSave.add(entity);
         }
 

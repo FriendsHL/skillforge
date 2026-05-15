@@ -124,16 +124,27 @@ INSERT INTO t_agent (
 
 ### V86 `t_session.origin` CHECK 扩展
 
+> **2026-05-16 Phase 1.0 grep 校正**：原 spec 写"existing 实际值需 grep V1/V40-V80 migration 精确确认 (可能 'production', 'eval', 'analysis' 等)"。be-dev grep 实际结果:
+> - V50 `V50__add_origin_to_session_and_trace.sql:28` 加 `origin VARCHAR(16) NOT NULL DEFAULT 'production'` + partial index `WHERE origin != 'production'`
+> - **不存在 CHECK constraint** (现状无约束)
+> - 实际 enum 值只有 2 个: `'production'` (DB default) + `'eval'` (EvalOrchestrator 显式 set)；**不存在 'analysis'**
+> - app-layer 常量 `SessionEntity.java:29-30`: `ORIGIN_PRODUCTION` / `ORIGIN_EVAL`
+
+V86 实施（Phase 1.3）**新加 CHECK** (首次)：
+
 ```sql
-ALTER TABLE t_session DROP CONSTRAINT IF EXISTS chk_session_origin;
+-- V86: 首次给 t_session.origin 加 CHECK，含全部 enum 值含 V5 新加 'user_sim'
 ALTER TABLE t_session ADD CONSTRAINT chk_session_origin
-    CHECK (origin IN ('<existing>', 'user_sim'));
--- existing 实际值需 grep V1/V40-V80 migration 精确确认 (可能 'production', 'eval', 'analysis' 等)
+    CHECK (origin IN ('production', 'eval', 'user_sim'));
 ```
+
+partial index `WHERE origin != 'production'` 自动接 user_sim row，不动。
 
 ## 服务层设计
 
 ### 1. SessionScenarioExtractorService 改造 (F1)
+
+> **2026-05-16 Phase 1.0 grep 校正**：原 spec 提到 `extractFromSession(SessionEntity)` 单数版，实际 grep 后该 method 是**纯机械解析**（无 LLM），只被 5 个 test 调，main code 无 caller。**LLM-based 路径是 `extractFromSessions(String agentId, Long userId)` 复数 batch 版**，被 `EvalScenarioDraftController.java:65` 调。Phase 1.1 改造的是**复数版**。
 
 ```java
 @Service
@@ -142,7 +153,8 @@ public class SessionScenarioExtractorService {
     private static final String EXTRACT_PROVIDER_NAME = "xiaomi-mimo";
     private static final String EXTRACT_MODEL = "mimo-v2.5-pro";
 
-    public EvalScenarioEntity extractFromSession(SessionEntity session) {
+    // 复数版：LLM-based batch 抽取（生产 caller 实际路径）
+    public int extractFromSessions(String agentId, Long userId) {
         String prompt = buildExtractionPrompt(session); // 扩 6 字段 instruction (JSON schema)
         LlmProvider provider = llmProviderFactory.getProvider(EXTRACT_PROVIDER_NAME);
         if (provider == null) {
