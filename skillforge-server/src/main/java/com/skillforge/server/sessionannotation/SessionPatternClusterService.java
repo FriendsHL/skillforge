@@ -106,6 +106,18 @@ public class SessionPatternClusterService {
             return new RecomputeResult(0, 0);
         }
 
+        // V5 EVAL-DYNAMIC-USER-SIM Phase 1.3 isolation: drop any session whose origin
+        // is 'user_sim' (UserSimulatorAgent trial transcript) before bucketing. V1
+        // SessionAnnotationSignalService already filters origin=production at the
+        // signal-writing step, so this is defense-in-depth — guards future direct
+        // annotation paths (e.g. operator UI / agent-authored annotations) against
+        // leaking user_sim sessions into the production attribution flywheel.
+        sessionIds = excludeUserSimSessions(sessionIds);
+        if (sessionIds.isEmpty()) {
+            log.info("[cluster] no production-origin sessions in window {} since {}", window, since);
+            return new RecomputeResult(0, 0);
+        }
+
         // Build per-session 4-tuples by folding their annotations.
         Map<String, SessionTuple> tupleBySession = new HashMap<>();
         Map<String, Long> agentIdBySession = loadAgentIds(sessionIds);
@@ -233,6 +245,29 @@ public class SessionPatternClusterService {
         Map<String, Long> out = new HashMap<>();
         for (SessionEntity s : sessionRepository.findAllById(sessionIds)) {
             out.put(s.getId(), s.getAgentId());
+        }
+        return out;
+    }
+
+    /**
+     * V5 EVAL-DYNAMIC-USER-SIM Phase 1.3: filter out user_sim-origin sessions before
+     * clustering. Preserves input list order. Defense-in-depth — see
+     * {@link #recompute(Duration)} javadoc.
+     */
+    private List<String> excludeUserSimSessions(List<String> sessionIds) {
+        if (sessionIds.isEmpty()) return sessionIds;
+        Map<String, SessionEntity> byId = new HashMap<>();
+        for (SessionEntity s : sessionRepository.findAllById(sessionIds)) {
+            byId.put(s.getId(), s);
+        }
+        List<String> out = new ArrayList<>(sessionIds.size());
+        for (String id : sessionIds) {
+            SessionEntity s = byId.get(id);
+            // Unknown sessions (not yet loaded / deleted) pass through — clustering
+            // will skip them at tuple-build time when agentId is null.
+            if (s == null || !"user_sim".equals(s.getOrigin())) {
+                out.add(id);
+            }
         }
         return out;
     }

@@ -64,7 +64,7 @@ V5 只做 2 件事：**抽取多轮评测集**（升级 SessionScenarioExtractor
 - **V85 Flyway seed** `user-simulator` system agent（pattern 同 V75/V79/V81）:
   - `owner_id=1` / `is_public=TRUE`
   - `llm_provider='xiaomi-mimo'` / `llm_model='mimo-v2.5-pro'` (ratify #5)
-  - `tool_ids=["RunSimulatorTrial", "RecordSimulationResult"]`
+  - `tool_ids=["RecordSimulationResult"]` (per 2026-05-16 Phase 1.2.0 草图设计 ratify #2: `RunSimulatorTrial` 是 Java 外部启动 tool 不在 UserSim agent loop 内部调用 — spec 内部矛盾修复)
   - `status='active'`
 - **System prompt** 写在 `skillforge-server/src/main/resources/system-agents/user-simulator.system.md`:
   - 描述任务: 扮演用户跟 candidate agent 多轮对话直到任务完成 / 失败信号触发 / 超 max_turns

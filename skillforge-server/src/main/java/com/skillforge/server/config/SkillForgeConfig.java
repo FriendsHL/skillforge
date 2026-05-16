@@ -107,7 +107,8 @@ import java.util.concurrent.TimeUnit;
         SessionMessageStoreProperties.class,
         MemoryProperties.class,
         SkillImportProperties.class,
-        SkillSecurityScanProperties.class
+        SkillSecurityScanProperties.class,
+        EvalUserSimulatorProperties.class
 })
 public class SkillForgeConfig {
 
@@ -416,6 +417,39 @@ public class SkillForgeConfig {
                 new com.skillforge.server.tool.AnalyzeEvalTaskTool(evalTaskRepository, objectMapper);
         skillRegistry.registerTool(tool);
         log.info("Registered AnalyzeEvalTaskTool into SkillRegistry");
+        return tool;
+    }
+
+    /**
+     * V5 EVAL-DYNAMIC-USER-SIM Phase 1.2: register {@code RunSimulatorTrial}
+     * (programmatic kickoff for REST controller / future agent dispatch — NOT
+     * UserSim-consumed) into the global SkillRegistry.
+     */
+    @Bean
+    public com.skillforge.server.tool.sim.RunSimulatorTrial runSimulatorTrialTool(
+            com.skillforge.server.eval.usersim.SimulatorTrialOrchestrator orchestrator,
+            ObjectMapper objectMapper,
+            SkillRegistry skillRegistry) {
+        com.skillforge.server.tool.sim.RunSimulatorTrial tool =
+                new com.skillforge.server.tool.sim.RunSimulatorTrial(orchestrator, objectMapper);
+        skillRegistry.registerTool(tool);
+        log.info("Registered RunSimulatorTrial into SkillRegistry");
+        return tool;
+    }
+
+    /**
+     * V5 EVAL-DYNAMIC-USER-SIM Phase 1.2: register {@code RecordSimulationResult}
+     * (UserSim self-call on termination) into the global SkillRegistry.
+     */
+    @Bean
+    public com.skillforge.server.tool.sim.RecordSimulationResult recordSimulationResultTool(
+            com.skillforge.server.repository.SimulatorTrialRepository trialRepository,
+            ObjectMapper objectMapper,
+            SkillRegistry skillRegistry) {
+        com.skillforge.server.tool.sim.RecordSimulationResult tool =
+                new com.skillforge.server.tool.sim.RecordSimulationResult(trialRepository, objectMapper);
+        skillRegistry.registerTool(tool);
+        log.info("Registered RecordSimulationResult into SkillRegistry");
         return tool;
     }
 

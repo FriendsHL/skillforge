@@ -111,6 +111,12 @@ public class SessionAnnotationSignalService {
             throw new IllegalArgumentException("window must be a positive Duration; got " + window);
         }
         Instant since = Instant.now().minus(window);
+        // V5 EVAL-DYNAMIC-USER-SIM Phase 1.3: filter origin=production strictly.
+        // This call already excludes 'eval' (EvalOrchestrator) and 'user_sim'
+        // (UserSimulatorAgent trials) — defense-in-depth holds because the JPQL
+        // matches origin equality, not inequality. Acts as the upstream gate for
+        // downstream PatternClusterService + CanaryMetricsService isolation
+        // (they consume rows we write here).
         List<SessionEntity> sessions = sessionRepository.findCompletedByOriginSince(
                 SessionEntity.ORIGIN_PRODUCTION, since);
         if (sessions.isEmpty()) {

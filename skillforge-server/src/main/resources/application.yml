@@ -96,6 +96,24 @@ skillforge:
         cron: "0 0 4 * * *"           # daily 04:00, after 03:00/03:30 memory crons
         threshold-hours: 24
 
+  # V5 EVAL-DYNAMIC-USER-SIM Phase 1.2 — 5 fixed personas + max-turns + reasoning-model
+  # tokens budget. The 5 persona strings are ratify-locked: orchestrator passes one of
+  # these (or a custom one via SDK override) into UserSim system prompt template.
+  # max-tokens=4096: Phase 1.0 footgun — mimo-v2.5-pro reasoning model needs ≥4000
+  # budget; below this the thinking + tool-call iteration gets truncated.
+  eval:
+    user-simulator:
+      personas:
+        - "销售经理急性子 — 短句催进度、商业语言、不耐烦细节"
+        - "数据分析师细心 — 多确认、问细节、追究边界条件"
+        - "CEO 高高在上 — 命令式、不解释、只要结果"
+        - "实习生小白 — 问基础概念、需要铺垫、抓不准重点"
+        - "DBA 老手 — 跳过初级解释、直接问深问题、对效率敏感"
+      max-turns: 10
+      max-tokens: 4096
+      turn-timeout-ms: 25000
+      trial-budget-ms: 90000
+
   # P9-5 post-compact recovery: after a full compact, append a recovery payload (recently-read
   # file heads) so the LLM does not "lose" file context.  enabled=false skips emission while
   # keeping the FileStateCache hot (cheap; per-session mem only).

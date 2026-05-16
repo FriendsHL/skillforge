@@ -16,6 +16,7 @@ import java.math.RoundingMode;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -91,15 +92,18 @@ public class CanaryMetricsService {
     private final CanaryMetricSnapshotRepository snapshotRepository;
     private final SessionAnnotationRepository annotationRepository;
     private final CanaryRolloutService canaryRolloutService;
+    private final com.skillforge.server.repository.SessionRepository sessionRepository;
 
     public CanaryMetricsService(CanaryRolloutRepository canaryRepository,
                                 CanaryMetricSnapshotRepository snapshotRepository,
                                 SessionAnnotationRepository annotationRepository,
-                                CanaryRolloutService canaryRolloutService) {
+                                CanaryRolloutService canaryRolloutService,
+                                com.skillforge.server.repository.SessionRepository sessionRepository) {
         this.canaryRepository = canaryRepository;
         this.snapshotRepository = snapshotRepository;
         this.annotationRepository = annotationRepository;
         this.canaryRolloutService = canaryRolloutService;
+        this.sessionRepository = sessionRepository;
     }
 
     /**
@@ -145,6 +149,12 @@ public class CanaryMetricsService {
 
         // Per-session latest outcome (defensive — agent typically writes one per session).
         Map<String, SessionAnnotationEntity> latestOutcomePerSession = loadLatestOutcomes(since);
+
+        // V5 EVAL-DYNAMIC-USER-SIM Phase 1.3 isolation: drop any outcome that belongs to
+        // a user_sim-origin session. V1 annotation upstream filters origin=production so
+        // these maps should be empty for user_sim, but defense-in-depth covers operator-
+        // injected annotations + future agent-authored paths.
+        excludeUserSimOutcomes(latestOutcomePerSession);
 
         // Bucket outcomes into per-canary aggregates.
         Map<Long, Aggregates> perCanary = new HashMap<>();
@@ -202,6 +212,40 @@ public class CanaryMetricsService {
     }
 
     // ───────────────────────── helpers ─────────────────────────
+
+    /**
+     * V5 EVAL-DYNAMIC-USER-SIM Phase 1.3: remove outcomes whose session has
+     * origin='user_sim' so trial-driven outcomes never aggregate into canary
+     * snapshots (would corrupt fail-rate-ratio used by auto-rollback).
+     */
+    private void excludeUserSimOutcomes(Map<String, SessionAnnotationEntity> outcomes) {
+        if (outcomes == null || outcomes.isEmpty()) return;
+        java.util.Iterator<Map.Entry<String, SessionAnnotationEntity>> it = outcomes.entrySet().iterator();
+        int dropped = 0;
+        // Pre-load session origins in one shot to avoid N+1.
+        Map<String, String> originBySession = new HashMap<>();
+        try {
+            for (com.skillforge.server.entity.SessionEntity s :
+                    sessionRepository.findAllById(new ArrayList<>(outcomes.keySet()))) {
+                originBySession.put(s.getId(), s.getOrigin());
+            }
+        } catch (DataAccessException e) {
+            log.warn("CanaryMetricsService.excludeUserSimOutcomes: failed to load session origins: {}",
+                    e.getMessage());
+            return;   // fail-open: keep outcomes — upstream V1 filter is the real guard
+        }
+        while (it.hasNext()) {
+            Map.Entry<String, SessionAnnotationEntity> entry = it.next();
+            if ("user_sim".equals(originBySession.get(entry.getKey()))) {
+                it.remove();
+                dropped++;
+            }
+        }
+        if (dropped > 0) {
+            log.info("CanaryMetricsService: excluded {} user_sim-origin outcomes from canary aggregation",
+                    dropped);
+        }
+    }
 
     /**
      * Pull every outcome annotation written within the window + collapse to

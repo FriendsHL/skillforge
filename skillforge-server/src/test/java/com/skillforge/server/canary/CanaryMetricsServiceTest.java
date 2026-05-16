@@ -63,13 +63,18 @@ class CanaryMetricsServiceTest {
     @Mock private CanaryMetricSnapshotRepository snapshotRepository;
     @Mock private SessionAnnotationRepository annotationRepository;
     @Mock private CanaryRolloutService canaryRolloutService;
+    @Mock private com.skillforge.server.repository.SessionRepository sessionRepository;
 
     private CanaryMetricsService service;
 
     @BeforeEach
     void setUp() {
         service = new CanaryMetricsService(canaryRepository, snapshotRepository,
-                annotationRepository, canaryRolloutService);
+                annotationRepository, canaryRolloutService, sessionRepository);
+        // V5 Phase 1.3: existing tests don't simulate user_sim sessions — return empty
+        // so excludeUserSimOutcomes is a no-op (all annotations pass through unchanged).
+        lenient().when(sessionRepository.findAllById(any(Iterable.class)))
+                .thenReturn(java.util.Collections.emptyList());
         // Default: upsert returns 1 (inserted). Tests override for ON CONFLICT / throw cases.
         lenient().when(snapshotRepository.upsertSnapshotSkipDuplicate(
                 anyLong(), any(Instant.class), anyInt(), anyInt(), anyInt(),

@@ -117,7 +117,7 @@ INSERT INTO t_agent (
     '<SEE: system-agents/user-simulator.system.md>',
     'xiaomi-mimo', 'mimo-v2.5-pro',
     1, TRUE, 'active',
-    '["RunSimulatorTrial", "RecordSimulationResult"]',
+    '["RecordSimulationResult"]',  -- per Phase 1.2.0 ratify #2 修 spec 内部矛盾: RunSimulatorTrial 是 Java 外部启动 tool 不在 UserSim agent loop 内部用
     ...
 );
 ```
@@ -405,6 +405,24 @@ public class DynamicSimController {
 - 需求包 active → archive
 - delivery-index.md 加 V5 Phase 2/3 交付行
 - todo.md / README.md 同步
+
+## 已知 limitation (V5 不解决，记 backlog)
+
+### behavior_rule surface 不支持 dynamic sim
+
+**症状**：V5 Phase 1.2 起 `RunSimulatorTrial` tool / `DynamicSimController POST /trials` / `SimulatorTrialOrchestrator.runTrial` 三处对 `candidateSurfaceType='behavior_rule'` 显式拒绝（tool 返回 validationError；REST 返回 400 BadRequest；service 抛 IllegalArgumentException）。
+
+**根因**：`BehaviorRuleSurface.getInjectedVersion(sessionId)` 把 candidate 版本写进 session-keyed map，但 `AgentLoopEngine` 在加载 agent behavior_rules 时**不查这个 map** —— 要让 candidate behavior_rule 真生效，必须改 AgentLoopEngine（核心 7+1 文件，Iron Law 不许碰）。
+
+**为什么 skill / prompt 可以**：
+- **prompt** —— 我们直接改 `candidateDef.systemPrompt`，engine.run 用的就是这个 def，candidate 真生效
+- **skill** —— V4 `SandboxSkillRegistryFactory.buildSandboxRegistryWithSkills` 是现成机制，让 sandbox SkillRegistry 含 candidate skill，candidate engine 用此 registry 解析 tool_use（V4 `SkillAbEvalService.runMultiTurnScenario` 也用这套）
+
+**为什么 behavior_rule 没现成机制**：`BehaviorRuleRegistry` 是 SkillForge boot-time singleton，没有 sandbox-by-session 变体；BehaviorRuleSurface 的 `injectForSandbox` 只是占位（registers to map, no consumer）。
+
+**V5.1 backlog**：要么 (a) 给 BehaviorRuleRegistry 加 per-session override（要改 BehaviorRuleRegistry + AgentLoopEngine 读取路径，触红灯走 Full pipeline），要么 (b) 把 behavior_rule candidate 编译到 candidateDef 上类似 prompt（要扩 AgentDefinition 字段 + 触红灯）。两方案都要触红灯，留 backlog 单独排期。
+
+**FE Phase 1.4 同步处理**：candidate surface 选择器 disable 'behavior_rule' 选项（灰显 + tooltip "暂不支持，仅 prompt + skill 可用 — V5.1 backlog"）。
 
 ## 风险与边界
 
