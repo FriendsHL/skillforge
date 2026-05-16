@@ -1,6 +1,6 @@
 # SkillForge 文档
 
-> 更新于：2026-05-15
+> 更新于：2026-05-16
 > Agent 规则：先读这里，再只打开当前任务链接到的文档。
 
 编辑 docs 前，先读 [DOCS-GOVERNANCE.md](DOCS-GOVERNANCE.md)。
@@ -19,9 +19,23 @@
 
 | ID | 标题 | 状态 | 需求包 | MRD | PRD | 技术方案 | 交付 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| _(队列空闲)_ | — | — | — | — | — | — | — |
+| **FLYWHEEL-LOOP-CLOSURE** | 飞轮 ⑤ A/B 闭环真接 + canary logic disable + system agent eval | design-draft (Mid ~4-6d) | [需求包](requirements/active/FLYWHEEL-LOOP-CLOSURE/index.md) | [MRD](requirements/active/FLYWHEEL-LOOP-CLOSURE/mrd.md) | [PRD](requirements/active/FLYWHEEL-LOOP-CLOSURE/prd.md) | [tech-design](requirements/active/FLYWHEEL-LOOP-CLOSURE/tech-design.md) | — |
 
-> 整体方案：[plans/PROD-OPTIMIZATION-FLYWHEEL/plan.md](plans/PROD-OPTIMIZATION-FLYWHEEL/plan.md) —— 数据飞轮 / 优化闭环 6 版本拆分
+> 整体方案：[plans/PROD-OPTIMIZATION-FLYWHEEL/plan.md](plans/PROD-OPTIMIZATION-FLYWHEEL/plan.md) —— 数据飞轮 / 优化闭环 6 版本拆分（V1-V5 已交付，**V6 FLYWHEEL-LOOP-CLOSURE 进行中**）
+
+### V6 FLYWHEEL-LOOP-CLOSURE 当前 scope (2026-05-16 ratify)
+
+修飞轮 ⑤ A/B 真闭环 3 缺口 + 砍 canary（dogfood 单用户阶段暂不需要）+ system agent 也能跑 A/B:
+
+| 缺口 | 修法 | 状态 |
+|---|---|---|
+| A: V3 attribution candidate 没 A/B endpoint | 加 `POST /api/agents/{id}/prompt-versions/{versionId}/run-ab` (skill 同款 endpoint) | 设计完，待实施 |
+| B+C: candidate_ready → A/B 没 EventListener | 加 `@EventListener` 接 OptimizationEvent stage_change | 设计完，待实施 |
+| D: SkillDraft attribution 路径是 stub | `SkillDraftService.createDraftFromAttribution` 加 sync LLM fill（跟 V3.1 PromptImprover 同款 BYPASS pattern） | 设计完，待实施 |
+| F: system agent 没 EvalScenario | `/run-ab` endpoint 加 fallback: 没 scenario 时从 pattern.members 动态抽 N session 生成临时 scenario | 设计完，待实施 |
+| **副作用: canary logic disable** | FE 隐藏 canary UI / BE 状态机跳过 canary / metrics-collector cron disable / **保留 t_canary_* schema + V2 service code dormant** | 设计完，待实施 |
+
+4 ratify 决策已锁: canary logic disable / SkillDraft fill 跟 V3.1 同款 / A/B trigger @EventListener / system agent eval 同期做。
 
 ## Backlog 和暂缓
 
