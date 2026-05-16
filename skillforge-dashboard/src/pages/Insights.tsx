@@ -12,6 +12,7 @@ import PatternList from '../components/insights/PatternList';
 import PatternDetailDrawer from '../components/insights/PatternDetailDrawer';
 import OptimizationEventsPage from './OptimizationEvents';
 import BehaviorRuleEvolutionPage from './BehaviorRuleEvolution';
+import DynamicSimPage from './DynamicSim';
 import TabBar from '../components/TabBar';
 
 const { Title, Paragraph, Text } = Typography;
@@ -47,6 +48,11 @@ const INSIGHTS_TABS = [
   // MULTI-SURFACE-FLYWHEEL V4 Phase 1.4 — behavior_rule canary management
   // surface lives as a third sibling tab (mirrors the Optimization pattern).
   { key: 'behavior-rules', label: 'Behavior Rules' },
+  // EVAL-DYNAMIC-USER-SIM V5 Phase 1.4 — user-simulator trial harness;
+  // 4th sibling tab, same in-page-tab pattern as the V4 BehaviorRule
+  // tab (no separate route). Note: behavior_rule surface is disabled
+  // inside the panel — V5.1 backlog limitation.
+  { key: 'dynamic-sim', label: 'Dynamic Sim' },
 ];
 
 /**
@@ -122,6 +128,17 @@ const Insights: React.FC = () => {
         <TabBar tabs={INSIGHTS_TABS} activeTab={activeTab} onSwitch={setActiveTab} />
         <div style={{ flex: 1, minHeight: 0, overflow: 'auto', scrollbarGutter: 'stable' }}>
           <BehaviorRuleEvolutionPage />
+        </div>
+      </div>
+    );
+  }
+
+  if (activeTab === 'dynamic-sim') {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - var(--header-height, 44px))' }}>
+        <TabBar tabs={INSIGHTS_TABS} activeTab={activeTab} onSwitch={setActiveTab} />
+        <div style={{ flex: 1, minHeight: 0, overflow: 'auto', scrollbarGutter: 'stable' }}>
+          <DynamicSimPage />
         </div>
       </div>
     );
