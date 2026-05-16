@@ -111,6 +111,8 @@
 > | 🟦 P3 | P10-INLINE-CMD-RESULT | Mid ~80-150 行 FE | 低 — UX 优化 | 用户觉得 modal 体验差 |
 > | 🟦 P3 | SKILL-EXTRACT-MODEL-PICKER | Mid ~80-150 行 | 低-中 — 切模型不用改代码重启 | 想给非默认 provider 跑抽取 / 多 provider 对比 |
 > | 🟦 P3 | SKILL-EXTRACT-AND-AB-VIA-AGENT | Full ~500-800 行 | 中-高 — 抽取 + A/B Eval 都走 agent loop | LLM 单 prompt 抽得不够准 / A/B Eval 想用 tool 拿 session 细节 / 想接 session 外数据源 |
+> | 🟡 P2 | **FLYWHEEL-VISUAL-STATUS** | Mid ~2-3 天 | 中-高 — 飞轮 9 步 + 三 surface 完整可视化，operator 一眼看现在到哪步 | dogfood 期数据多了 / 想跟 stakeholder 演示 / 看 attribution-curator 跑得对不对 |
+> | 🟡 P2 | **DYNAMIC-SIM-LIVE-TRANSCRIPT** | Light ~30 行 BE | 中 — V5 UserSim trial 跑过程中 dashboard 实时刷 transcript | 不用 polling 不优雅，等 BE `SimulatorTrialOrchestrator.runPingPongLoop` append 后 publish WS event 接 useChatWebSocket 同款 topic |
 > | 🟦 P4 | SKILL-VERSION-MAIN-DETAIL-REFACTOR | Full 红灯 ~600-1000 行 | 中 — 架构改善 | 多 owner / multi-tenant 需要时 |
 > | 🔴 P2-P3 调研 | GEN-UI-HTML-RENDERING | Full ~600-1000 行（先调研选型）| 高 — 跟上 LLM 直产 HTML 趋势（Claude Artifacts / MCP Apps SDK / Generative UI）| 用户报需 chart 可视化 / 接 MCP UI client / 竞品压力 |
 > | 🟦 deferred | P9-4 partial compact | — | — | microcompact 覆盖大部分 |
