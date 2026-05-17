@@ -33,6 +33,11 @@ export const AgentSchema = z.object({
   // persist these columns round-trips without schema strip.
   thinkingMode: z.enum(['auto', 'enabled', 'disabled']).optional().nullable(),
   reasoningEffort: z.enum(['low', 'medium', 'high', 'max']).optional().nullable(),
+  // Agent-level loop budget (BE: AgentEntity.maxLoops Long). Pre-existing FE schema gap
+  // discovered 2026-05-17 during FLYWHEEL-LOOP-CLOSURE Phase 1.6 dogfood — without this
+  // field zod silently strips the BE-returned value, AgentDrawer's `agent as ... & { maxLoops? }`
+  // cast becomes a no-op, and saved maxLoops never re-renders after refresh.
+  maxLoops: z.number().int().nullable().optional(),
 });
 export type AgentDto = z.infer<typeof AgentSchema>;
 

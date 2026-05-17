@@ -76,6 +76,82 @@ public class PromptImproveController {
         }
     }
 
+    /**
+     * FLYWHEEL-LOOP-CLOSURE Phase 1.4 (2026-05-16) — manual /run-ab endpoint
+     * exposed for operator-triggered A/B against an existing candidate prompt
+     * version (the auto-triggered path goes via
+     * {@code OptimizationEventAutoTriggerListener.dispatchPromptAutoAb} which
+     * calls the same {@link PromptImproverService#runAbTestAgainst}).
+     *
+     * <p>Body schema (both fields optional):
+     * <pre>{@code
+     * {
+     *   "baselineVersionId": "<uuid>",        // null = agent's current active prompt
+     *   "evalScenarioIds": ["<id>", ...]      // null/empty = held-out → ephemeral fallback
+     * }
+     * }</pre>
+     *
+     * <p>Response: {@code {"abRunId": "...", "candidateVersionId": "...",
+     * "agentId": "..."}}. Status mapping:
+     * <ul>
+     *   <li>IllegalArgumentException → 400 (bad input / candidate not found)</li>
+     *   <li>IllegalStateException → 409 (conflict: agent already has active A/B
+     *       run, OR no scenarios + no pattern fallback path)</li>
+     *   <li>ImprovementConflictException → 409 (parallel run gate)</li>
+     * </ul>
+     */
+    @PostMapping("/{agentId}/prompt-versions/{versionId}/run-ab")
+    public ResponseEntity<?> runAbAgainstCandidate(@PathVariable String agentId,
+                                                    @PathVariable String versionId,
+                                                    @RequestBody(required = false) Map<String, Object> request) {
+        String baselineVersionId = null;
+        List<String> evalScenarioIds = null;
+        if (request != null) {
+            Object bv = request.get("baselineVersionId");
+            if (bv instanceof String s && !s.isBlank()) baselineVersionId = s;
+            Object esi = request.get("evalScenarioIds");
+            if (esi instanceof List<?> l) {
+                evalScenarioIds = l.stream()
+                        .filter(java.util.Objects::nonNull)
+                        .map(Object::toString)
+                        .filter(s -> !s.isBlank())
+                        .toList();
+                if (evalScenarioIds.isEmpty()) evalScenarioIds = null;
+            }
+        }
+
+        try {
+            String abRunId = promptImproverService.runAbTestAgainst(
+                    agentId, baselineVersionId, versionId, evalScenarioIds);
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("abRunId", abRunId);
+            body.put("candidateVersionId", versionId);
+            body.put("agentId", agentId);
+            return ResponseEntity.accepted().body(body);
+        } catch (IllegalArgumentException e) {
+            // F3 fix (Phase 2 r2): log internal detail server-side; return
+            // generic message client-side (java.md security: don't leak
+            // architecture internals like "V88 sidecar populated?" / migration
+            // version names through HTTP response). Heuristic "not found"
+            // string match preserved here so future 404 disambiguation has the
+            // same hook (currently we always return 400 on this path — prompt
+            // surface controller doesn't 404-discriminate, that's only on the
+            // skill draft controller side).
+            log.warn("[/run-ab] bad request agentId={} versionId={}: {}",
+                    agentId, versionId, e.getMessage(), e);
+            String msg = e.getMessage() == null ? "" : e.getMessage();
+            boolean notFound = msg.contains("not found");
+            return ResponseEntity.status(notFound ? 404 : 400)
+                    .body(Map.of("error", notFound ? "NOT_FOUND" : "BAD_REQUEST",
+                            "message", notFound ? "Resource not found" : "Invalid request"));
+        } catch (ImprovementConflictException | IllegalStateException e) {
+            log.warn("[/run-ab] conflict agentId={} versionId={}: {}",
+                    agentId, versionId, e.getMessage(), e);
+            return ResponseEntity.status(409).body(Map.of("error", "CONFLICT",
+                    "message", "Operation conflicts with current state"));
+        }
+    }
+
     @GetMapping("/{agentId}/prompt-improve/{abRunId}")
     public ResponseEntity<?> getAbRun(@PathVariable String agentId, @PathVariable String abRunId) {
         return promptAbRunRepository.findById(abRunId)

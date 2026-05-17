@@ -46,6 +46,77 @@ public class SkillDraftController {
     }
 
     /**
+     * FLYWHEEL-LOOP-CLOSURE Phase 1.4 (2026-05-16) — manual /abtest-from-draft
+     * endpoint exposed for operator-triggered A/B against an existing
+     * SkillDraft. Auto-trigger path goes via
+     * {@code OptimizationEventAutoTriggerListener.dispatchSkillAutoAb} which
+     * calls the same {@link SkillDraftService#startAbTestFromDraft}.
+     *
+     * <p>Body schema:
+     * <pre>{@code
+     * {
+     *   "candidateDraftId": "<uuid>",       // REQUIRED — V88 sidecar UUID
+     *   "evalScenarioIds": ["<id>", ...]    // null/empty = ephemeral fallback
+     * }
+     * }</pre>
+     *
+     * <p>{@code parentSkillId} is currently unused (attribution path treats
+     * parent as empty SKILL.md per ratify #7-B); kept in the URL for future
+     * "improve existing skill" curator capability. Returns
+     * {@code {"abRunId", "candidateDraftId", "parentSkillId"}}.
+     */
+    @PostMapping("/skills/{parentSkillId}/abtest-from-draft")
+    public ResponseEntity<?> abtestFromDraft(@PathVariable Long parentSkillId,
+                                              @RequestBody Map<String, Object> request) {
+        if (request == null) {
+            return ResponseEntity.badRequest().body(Map.of("error", "BAD_REQUEST",
+                    "message", "request body is required"));
+        }
+        Object draftIdRaw = request.get("candidateDraftId");
+        if (!(draftIdRaw instanceof String candidateDraftId) || candidateDraftId.isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "BAD_REQUEST",
+                    "message", "candidateDraftId is required"));
+        }
+        List<String> evalScenarioIds = null;
+        Object esi = request.get("evalScenarioIds");
+        if (esi instanceof List<?> l) {
+            evalScenarioIds = l.stream()
+                    .filter(java.util.Objects::nonNull)
+                    .map(Object::toString)
+                    .filter(s -> !s.isBlank())
+                    .toList();
+            if (evalScenarioIds.isEmpty()) evalScenarioIds = null;
+        }
+
+        try {
+            String abRunId = skillDraftService.startAbTestFromDraft(candidateDraftId, evalScenarioIds);
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("abRunId", abRunId);
+            body.put("candidateDraftId", candidateDraftId);
+            body.put("parentSkillId", parentSkillId);
+            return ResponseEntity.accepted().body(body);
+        } catch (IllegalArgumentException e) {
+            // F3 fix (Phase 2 r2): log internal detail server-side; return
+            // generic message client-side (java.md security). "not found"
+            // string match preserved as the 404-vs-400 routing pivot (W2
+            // message-text lock test asserts the routing, not the leaked
+            // internal message).
+            log.warn("[/abtest-from-draft] bad request parentSkillId={} draftId={}: {}",
+                    parentSkillId, candidateDraftId, e.getMessage(), e);
+            String msg = e.getMessage() == null ? "" : e.getMessage();
+            boolean notFound = msg.contains("not found");
+            return ResponseEntity.status(notFound ? 404 : 400)
+                    .body(Map.of("error", notFound ? "NOT_FOUND" : "BAD_REQUEST",
+                            "message", notFound ? "Resource not found" : "Invalid request"));
+        } catch (IllegalStateException e) {
+            log.warn("[/abtest-from-draft] conflict parentSkillId={} draftId={}: {}",
+                    parentSkillId, candidateDraftId, e.getMessage(), e);
+            return ResponseEntity.status(409).body(Map.of("error", "CONFLICT",
+                    "message", "Operation conflicts with current state"));
+        }
+    }
+
+    /**
      * Plan r2 §8 — userId required (was {@code ownerId} with default=0). agentId stays as
      * a path variable. The BE writes ownerId from the validated userId — never accepts an
      * ownerId input from FE.

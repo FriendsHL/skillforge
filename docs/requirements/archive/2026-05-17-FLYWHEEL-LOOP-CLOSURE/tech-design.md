@@ -2,11 +2,12 @@
 
 ---
 id: FLYWHEEL-LOOP-CLOSURE
-status: design-draft
+status: delivered
 prd: ./prd.md
-risk: Mid
-mode: mid
+risk: Mid → upgraded Full
+mode: mid → upgraded full
 created: 2026-05-16
+completed: 2026-05-17
 ---
 
 ## TL;DR
@@ -50,15 +51,18 @@ created: 2026-05-16
 | 决策 | 结论 | 理由 |
 |---|---|---|
 | canary 砍法 | **Logic disable 不删 code** (ratify #1) | 未来加回灰度 ~2 行改动；删 V2/V4 工作高风险 |
-| SkillDraft auto-fill pattern | **跟 V3.1 PromptImprover 同款 sync LLM** (ratify #2) | 复用成熟 hardcoded xiaomi-mimo / REQUIRES_NEW / audit-trail rethrow pattern |
+| SkillDraft auto-fill pattern | **跟 SkillDraftService.extractFromRecentSessions 同款 sync LLM** (ratify #2，2026-05-16 Phase 1.0 修正) | 复用 SkillDraftService 内已有的 `EXTRACT_PROVIDER_NAME="xiaomi-mimo"` + `EXTRACT_MODEL="mimo-v2.5-pro"` 常量 (L65-66) + LlmProviderFactory 注入 + maxTokens=4000。注：V3.1 PromptImproverService 用的是 `defaultProviderName` + maxTokens=2000 不硬编 mimo，跟 SkillDraft 现有路径不同 → 选 SkillDraft 自己 service 内一致的模板更干净。REQUIRES_NEW / audit-trail rethrow 与 V3.1 同款保留。|
 | A/B trigger 机制 | **`@EventListener`** (ratify #3) | 跟 V3.2 SkillAbCompletedEvent / V4 BehaviorRulePromotedEvent 同款 pattern, 及时 |
 | system agent eval fallback | **`/run-ab` endpoint 加 fallback 从 pattern.members 生临时 scenario** (ratify #4 同期做) | 让 attribution-curator self-improve 路径也能跑通 ~1 天 leg |
 | ALLOWED_TRANSITIONS 改法 | **加 ab_passed → promoted 直接边** (保留 ab_passed → canary_started 向后兼容) | V3 attribution 路径走新边，未来加回 canary 走老边 |
-| V3.2 link bug fix | **顺手 fix** (在 AttributionApprovalService.runCandidateGeneration 加 setCandidatePromptVersionId 等) | 小修，但暴露后必修 |
+| V3.2 link 接通 (UUID 旁路列) | **V88 加 nullable `candidate_prompt_version_uuid` + `candidate_skill_draft_uuid` VARCHAR(36) 旁路列** (ratify #5，2026-05-16 Phase 1.0 修正) | Phase 1.0 证伪发现"V3.2 漏 setBack"实际是 type mismatch：`PromptVersion.id`/`SkillDraftEntity.id` 是 String UUID，老 `candidatePromptVersionId/candidateSkillId` 是 Long，AttributionApprovalService L346-349 / L328-331 已有显式注释 "can't fit UUID into BIGINT — log link for now"。最小干预：加 2 个 nullable VARCHAR(36) 旁路列，旧 Long 列留空（UUID surface 表示），0 数据迁移 + 向后兼容。behavior_rule 已有 `candidate_behavior_rule_version_id VARCHAR(36)` (V83) 不动。|
+| Phase 1.3/1.4 边界 (dispatch* 实现节奏) | **Phase 1.3 dispatch* 实现为 placeholder log，Phase 1.4 替换 log → service call + ephemeral fallback** (ratify #6，2026-05-16 Phase 1.3 mini-review 修正) | Phase 1.3 mini-review 抓到 dispatch* 直接调 service stub method (`PromptImproverService.runAbTestAgainst` / `SkillDraftService.startAbTestFromDraft`)，但 service stub 在 `evalScenarioIds=null` 时 throw → listener catch → broadcast ab_failed。attribution path 永远 null scenarios → Phase 1.6 dogfood 满屏假 ab_failed。修法：listener dispatch* 改成 placeholder log "PHASE 1.4 PENDING"，service stub method (signature + input validation) **保留**作为 endpoint signature lock。Phase 1.4 实施时只替换 dispatch* method body 内的 log call 为真 service call + ratify #4 ephemeral scenario fallback，0 接口变化 / 0 测试断签名变。|
+| Phase 1.4 升 Full 档 + a/b 拆批 | **Phase 1.4a (本期已交付) ~40% + Phase 1.4b (后续) ~60%** (ratify #7，2026-05-16 dev NEEDS_CONTEXT 调研 + 主动拆批) | Phase 1.4 brief 1.5d 估算被 dev 调研证伪（AbEvalPipeline 紧绑 EvalTaskEntity / SkillDraftEntity 跟 SkillAbEvalService.createAndTrigger 不兼容 / Brief 假设 "compose existing" 无现成可用模板）。升 Full 档 + 5 design ratify (#7-A 加 AbEvalPipeline overload / #7-B SkillDraft 临时 promote / #7-C prompt baseline = active version / #7-D listener re-wire 真 service / #7-E ephemeral scenario fallback)。Phase 1.4a 真交付 PromptImproverService.runAbTestAgainst + listener re-wire + SkillDraftService.startAbTestFromDraft scaffold (synthetic abRunId 防 W1 flood)；Phase 1.4b 剩 AbEvalPipeline overload + promoteDraftToTransientSkill helper + 2 controllers + 6 endpoint tests + SkillDraftService 5 dep injection + 5 test 文件 constructor params。|
+| SkillEntity transient identity 标识 | **`enabled=false` + dev 自选 metadata 字段 (非 `status` — SkillEntity 没此字段)** (ratify #7-B 修正，2026-05-16 Phase 1.4a 现场验证) | 原 ratify #7-B 写 `SkillEntity.status='ab_candidate'`，但 dev grep SkillEntity 0 hits 该字段（实际字段：`enabled / artifactStatus / rolloutStage`）。Phase 1.4b dev 自选最语义合适字段标识"A/B candidate 临时身份"：候选 (a) name 后缀 `_candidate_<uuid>` (已在 ratify #7-B 写) + (b) `artifactStatus="ab_candidate"` if VARCHAR 无 CHECK + (c) 加 `isTransientAbCandidate` boolean 字段 (要 V89 migration — 不推荐 ROI 不够)。胜出后 promote 路径复用 approveDraft 逻辑，败出后 delete by name 后缀 query。|
 
 ## 数据模型
 
-### 唯一 migration: V87 (disable metrics-collector cron)
+### Migration V87 (disable metrics-collector cron)
 
 ```sql
 -- V87__disable_canary_metrics_collector.sql
@@ -71,7 +75,31 @@ created: 2026-05-16
 UPDATE t_scheduled_task SET enabled = false WHERE name = 'metrics-collector-hourly';
 ```
 
-无其它 schema 改动。
+### Migration V88 (candidate_*_uuid 旁路列，ratify #5)
+
+```sql
+-- V88__add_candidate_uuid_sidecar_columns.sql
+
+-- 2026-05-16: Phase 1.0 证伪发现 V3.2 "漏 setBack" 实际是 type mismatch
+-- (PromptVersion.id/SkillDraftEntity.id 是 String UUID, 老 candidate_*_id 是 Long)。
+-- 加 nullable VARCHAR(36) 旁路列，0 数据迁移 + 向后兼容。
+-- UUID 路径写新列，旧 Long 列留 null 表示 UUID surface。
+-- 老 candidate_*_id Long 列保留向后兼容（如未来 SkillDraft merge → SkillEntity 时仍 setBack BIGINT）。
+-- behavior_rule 已有 VARCHAR(36) (V83) 不动。
+
+ALTER TABLE t_optimization_event
+    ADD COLUMN candidate_prompt_version_uuid VARCHAR(36) NULL,
+    ADD COLUMN candidate_skill_draft_uuid    VARCHAR(36) NULL;
+```
+
+`OptimizationEventEntity` 加 2 字段：
+```java
+@Column(name = "candidate_prompt_version_uuid", length = 36)
+private String candidatePromptVersionUuid;
+
+@Column(name = "candidate_skill_draft_uuid", length = 36)
+private String candidateSkillDraftUuid;
+```
 
 ### Ephemeral EvalScenario (Fallback path)
 
@@ -131,7 +159,7 @@ public AbRunStartResult runAbTestAgainst(
 private List<EvalScenarioEntity> createEphemeralScenariosFromPatternMembers(
         PromptVersionEntity candidate, int n) {
     // 1. find optimization_event linked to this candidate
-    OptimizationEventEntity event = optimizationEventRepository.findByCandidatePromptVersionId(candidate.getId());
+    OptimizationEventEntity event = optimizationEventRepository.findByCandidatePromptVersionUuid(candidate.getId());  // V88 加 UUID 旁路列 query
     if (event == null || event.getPatternId() == null) {
         throw new IllegalStateException("No EvalScenario for agent + no pattern linkage; cannot run A/B");
     }
@@ -154,11 +182,12 @@ private List<EvalScenarioEntity> createEphemeralScenariosFromPatternMembers(
 ### 2. SkillDraftService.createDraftFromAttribution 加 sync LLM fill
 
 ```java
-// 加常量 (跟 V3.1 PromptImprover 同款)
-private static final String EXTRACT_PROVIDER_NAME = "xiaomi-mimo";
-private static final String EXTRACT_MODEL = "mimo-v2.5-pro";
+// 复用 SkillDraftService 现有常量 (L65-66 已定义 by extractFromRecentSessions)
+// private static final String EXTRACT_PROVIDER_NAME = "xiaomi-mimo";   // 已存在
+// private static final String EXTRACT_MODEL = "mimo-v2.5-pro";          // 已存在
+// LlmProviderFactory llmProviderFactory                                  // 已注入 (L75)
 
-@Transactional(propagation = Propagation.REQUIRES_NEW)  // 防外层 rollback-only 污染
+@Transactional(propagation = Propagation.REQUIRES_NEW)  // 防外层 rollback-only 污染 (现已有 L355)
 public SkillDraftEntity createDraftFromAttribution(Long eventId, Long patternId,
                                                     String attributedDescription,
                                                     String expectedImpact,
@@ -169,18 +198,16 @@ public SkillDraftEntity createDraftFromAttribution(Long eventId, Long patternId,
 
     try {
         // V6 新加: sync LLM fill (跟 V3.1 PromptImproverService.generateCandidatePromptFromAttribution 同款 pattern)
-        SkillContentResult result = generateCandidateSkillMdFromAttribution(parentSkill, attributedDescription);
-        draft.setSkillPath(result.skillPath());
+        SkillContentResult result = generateCandidateSkillMdFromAttribution(attributedDescription, expectedImpact);
         draft.setTriggers(result.triggers());
         draft.setRequiredTools(result.requiredTools());
-        // 真 SKILL.md content 存哪? SkillEntity 用 skill_path 指 file; SkillDraft 应该 inline 存
-        // → 加 SkillDraft.skillMdContent TEXT 字段? 或复用 prompt_hint?
-        draft.setPromptHint(result.skillMdBody());  // 暂用 promptHint inline 存
+        draft.setPromptHint(result.skillMdBody());  // inline 存 SKILL.md body (SkillDraftEntity 无 skill_path 列,
+                                                    // 待 approveDraft 时 skillStorageService.allocate() 分配 path)
     } catch (RuntimeException llmEx) {
         // Audit-trail rethrow (跟 V3.1 同款): save with empty content + log + rethrow
-        draft.setSkillPath("");
         draft.setTriggers("");
         draft.setRequiredTools("");
+        draft.setPromptHint("");
         skillDraftRepository.save(draft);
         log.error("Attribution skill-draft LLM fill FAILED: draftId={} eventId={} patternId={}: {}",
                 draft.getId(), eventId, patternId, llmEx.getMessage());
@@ -190,40 +217,50 @@ public SkillDraftEntity createDraftFromAttribution(Long eventId, Long patternId,
     return skillDraftRepository.save(draft);
 }
 
-private SkillContentResult generateCandidateSkillMdFromAttribution(SkillEntity parent, String attributionDesc) {
+// 跟 SkillDraftService.extractFromRecentSessions (L170-193) 同款 provider 选择 + LLM 调用模板
+private SkillContentResult generateCandidateSkillMdFromAttribution(String attributedDescription, String expectedImpact) {
     LlmProvider provider = llmProviderFactory.getProvider(EXTRACT_PROVIDER_NAME);
     if (provider == null) {
+        log.warn("Preferred provider {} unavailable, falling back to default {}", EXTRACT_PROVIDER_NAME, defaultProviderName);
         provider = llmProviderFactory.getProvider(defaultProviderName);
     }
-    String prompt = buildSkillMdGenPrompt(parent, attributionDesc);
+    String prompt = buildSkillMdGenPrompt(attributedDescription, expectedImpact);
     LlmRequest req = LlmRequest.builder()
             .model(EXTRACT_MODEL)
             .messages(List.of(Message.user(prompt)))
-            .maxTokens(4000)  // mimo-v2.5-pro reasoning footgun
+            .maxTokens(4000)  // 跟 extractFromRecentSessions 同款 mimo-v2.5-pro reasoning 防吃光
+            .temperature(0.3)
             .build();
     LlmResponse resp = provider.chat(req);
     return parseSkillMdOutput(resp.getContent());  // 期望 frontmatter 格式
 }
 
+// SkillContentResult record (3 字段 — 不含 skillPath 因 SkillDraftEntity schema 无此列；
+// approveDraft → SkillEntity 时由 skillStorageService.allocate() 分配 path):
+//   public record SkillContentResult(String triggers, String requiredTools, String skillMdBody) {}
+
 // LLM 输出 prompt 例:
 // ```
-// 你是一个 SkillForge skill 优化器。基于以下 attribution 反馈，改进 SKILL.md。
-//
-// 现有 parent skill 内容:
-// {parent.path}  triggers: {...} required_tools: {...}
+// 你是一个 SkillForge skill 优化器。基于以下 attribution 反馈，生成新 SKILL.md。
 //
 // Attribution 反馈:
 // {attributedDescription}
 //
-// 输出严格 markdown frontmatter 格式:
+// 期望影响:
+// {expectedImpact}
+//
+// 输出严格 markdown frontmatter 格式 (不输 skill_path —— 由 approveDraft 阶段分配):
 // ---
-// skill_path: <relative path>
 // triggers: [<trigger1>, <trigger2>]
 // required_tools: [<tool1>, <tool2>]
 // ---
-// <实际 SKILL.md 改进 body>
+// <实际 SKILL.md body 内容>
 // ```
 ```
+
+> **2026-05-16 Phase 1.1 Concern 5 ratify**：`SkillDraftEntity` 无 `skill_path` 列（dev 现场验证 0 hits）。SkillContentResult 改 3 字段 (triggers / requiredTools / skillMdBody)，LLM prompt 不再要求 `skill_path:` 行。skill_path 仍在 SkillEntity 上由 `approveDraft → skillStorageService.allocate()` 分配。**不需要 V89 加列**。
+>
+> **2026-05-16 Phase 1.1 C2 fix ratify (C2 解决)**：删 `generateCandidateSkillMdFromAttribution` 的 `SkillEntity parent` 第 1 参 + LLM prompt builder 内 "improve existing skill" if-branch + `createDraftFromAttribution` 内 `parentSkill` lookup（findFirstByOwnerIdAndNameAndEnabledTrue）— attribution 合成名永不匹配 = 真死代码。未来真做 "improve existing skill" 路径时干净加回来比保留无意义死分支清晰。
 
 ### 3. OptimizationEventStageChangeEvent + Listener
 
@@ -236,8 +273,8 @@ public record OptimizationEventStageChangeEvent(
     String surfaceType,
     Long agentId,
     Long patternId,
-    String candidatePromptVersionId,  // 顺手 fix V3.2 漏 link
-    String candidateSkillId,
+    String candidatePromptVersionUuid,  // V88 旁路列 (String UUID, ratify #5)
+    String candidateSkillDraftUuid,     // V88 旁路列 (String UUID, ratify #5)
     String candidateBehaviorRuleVersionId
 ) {}
 
@@ -263,15 +300,15 @@ public class OptimizationEventAutoTriggerListener {
 
         switch (event.surfaceType()) {
             case "prompt":
-                if (event.candidatePromptVersionId() == null) {
-                    log.warn("candidate_ready event {} has no candidatePromptVersionId, skip auto A/B",
+                if (event.candidatePromptVersionUuid() == null) {
+                    log.warn("candidate_ready event {} has no candidatePromptVersionUuid, skip auto A/B",
                             event.eventId());
                     return;
                 }
                 promptImproverService.runAbTestAgainst(
                         String.valueOf(event.agentId()),
                         null,  // baseline = current active
-                        event.candidatePromptVersionId(),
+                        event.candidatePromptVersionUuid(),
                         null   // scenarios = agent default or fallback
                 );
                 break;
@@ -320,26 +357,30 @@ private static final Map<String, Set<String>> ALLOWED_TRANSITIONS = Map.ofEntrie
 
 保留 api/canary.ts (未来加回时 import 复用)。
 
-### 6. V3.2 link bug fix
+### 6. V3.2 link 接通 (用 V88 加的 UUID 旁路列)
 
 ```java
-// AttributionApprovalService.runCandidateGeneration() 修
+// AttributionApprovalService.runCandidateGeneration() 改:
 case SURFACE_PROMPT -> {
     ImprovementStartResult result = dispatchPromptSurface(event, approverUserId);
-    event.setCandidatePromptVersionId(result.promptVersionId());  // ← V6 新加
+    // V88 新加 candidate_prompt_version_uuid VARCHAR(36) 旁路列接 PromptVersion.id (String UUID)
+    event.setCandidatePromptVersionUuid(result.promptVersionId());
+    // 老 candidatePromptVersionId Long 列留 null (UUID surface 表示)
 }
 case SURFACE_SKILL -> {
     SkillDraftEntity draft = dispatchSkillSurface(event, approverUserId);
-    // SkillDraft 是 UUID String; t_optimization_event.candidate_skill_id 是 BIGINT
-    // 不直接 link draft → 等 draft merge → SkillEntity 时再 setCandidateSkillId
-    // 或: 加 candidate_skill_draft_id VARCHAR(36) 字段 (V88 migration)
-    // 简化: 暂用 draft 的 description 关联，不动 schema
+    // V88 新加 candidate_skill_draft_uuid VARCHAR(36) 旁路列接 SkillDraftEntity.id (String UUID)
+    event.setCandidateSkillDraftUuid(draft.getId());
+    // 老 candidateSkillId Long 列留 null；未来 SkillDraft merge → SkillEntity (BIGINT PK) 时
+    // 再 setCandidateSkillId Long 表示已 merged surface
 }
 case SURFACE_BEHAVIOR_RULE -> {
     String versionId = dispatchBehaviorRuleSurface(event, approverUserId);
-    event.setCandidateBehaviorRuleVersionId(versionId);
+    event.setCandidateBehaviorRuleVersionId(versionId);  // VARCHAR(36) 早已就绪 (V83)
 }
 ```
+
+**Listener / Endpoint 读侧**: `OptimizationEventStageChangeEvent` record 字段全用 String UUID (`candidatePromptVersionUuid / candidateSkillDraftUuid`)。`OptimizationEventAutoTriggerListener` 优先读 UUID 旁路列，Long 列作未来 merged surface 信号。
 
 ## 实施计划
 
@@ -357,7 +398,7 @@ case SURFACE_BEHAVIOR_RULE -> {
 
 ### Phase 1.2 — V3.2 link bug fix + ALLOWED_TRANSITIONS 加边 (0.5 天)
 
-- AttributionApprovalService.runCandidateGeneration 加 setCandidatePromptVersionId / Behavior
+- AttributionApprovalService.runCandidateGeneration 加 setCandidatePromptVersionUuid / setCandidateSkillDraftUuid (V88 旁路列) + behavior_rule 已有逻辑保留
 - ALLOWED_TRANSITIONS 加 ab_passed → promoted 直接边
 - Test: AttributionApprovalServiceTest 加 link 写回 regression case
 

@@ -41,6 +41,8 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import org.springframework.data.domain.PageRequest;
 
@@ -193,13 +195,56 @@ public class SkillAbEvalService extends AbstractAbEvalRunner<SkillEntity> {
         abRun.setTriggeredByUserId(triggeredByUserId);
         SkillAbRunEntity saved = skillAbRunRepository.save(abRun);
 
-        try {
-            coordinatorExecutor.submit(() -> runAbTestAsync(saved.getId()));
-        } catch (RejectedExecutionException e) {
-            saved.setStatus("FAILED");
-            saved.setFailureReason("Coordinator executor rejected task: " + e.getMessage());
-            skillAbRunRepository.save(saved);
-            throw new RuntimeException("Failed to schedule A/B test: executor is full or shutdown", e);
+        // R4 fix (Phase 1.6 dogfood, 2026-05-17): caller is typically inside
+        // an @Transactional method (SkillDraftService.startAbTestFromDraft is
+        // @Transactional → same outer tx joins via default REQUIRED). If we
+        // submit the async task immediately, the coordinator pool thread races
+        // the outer commit — runAbTestAsync's findById(abRunId) returns empty
+        // → silently skip → abRun stays PENDING forever (e2e event 19 reproed
+        // the race: 1ms gap, 100% lost). Defer submit to after-commit so the
+        // row is guaranteed visible. Mirrors Phase 2 r2 F4 pattern for the
+        // sibling PromptImproverService.runAbTestAgainst.
+        //
+        // Fallback path (no active tx synchronization) keeps backward compat
+        // for callers that invoke createAndTrigger outside a tx (e.g. legacy
+        // tests / future direct REST entrypoints that bypass @Transactional).
+        final String capturedAbRunId = saved.getId();
+        final Runnable submitTask = () -> {
+            try {
+                coordinatorExecutor.submit(() -> runAbTestAsync(capturedAbRunId));
+            } catch (RejectedExecutionException e) {
+                // Best-effort: mark the abRun as FAILED so the dashboard
+                // surfaces the problem; can't rethrow from afterCommit since
+                // the tx already committed.
+                log.error("R4 fallback: coordinator executor rejected task for abRunId={}: {}",
+                        capturedAbRunId, e.getMessage());
+                skillAbRunRepository.findById(capturedAbRunId).ifPresent(reloaded -> {
+                    reloaded.setStatus("FAILED");
+                    reloaded.setFailureReason(
+                            "Coordinator executor rejected task: " + e.getMessage());
+                    skillAbRunRepository.save(reloaded);
+                });
+            }
+        };
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(
+                    new TransactionSynchronization() {
+                        @Override
+                        public void afterCommit() {
+                            submitTask.run();
+                        }
+                    });
+        } else {
+            // No active tx → safe to submit immediately (no commit race).
+            try {
+                coordinatorExecutor.submit(() -> runAbTestAsync(capturedAbRunId));
+            } catch (RejectedExecutionException e) {
+                saved.setStatus("FAILED");
+                saved.setFailureReason("Coordinator executor rejected task: " + e.getMessage());
+                skillAbRunRepository.save(saved);
+                throw new RuntimeException(
+                        "Failed to schedule A/B test: executor is full or shutdown", e);
+            }
         }
         log.info("Created skill AB run: id={} parentSkillId={} candidateSkillId={}",
                 saved.getId(), parentSkillId, candidateSkillId);

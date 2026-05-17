@@ -57,6 +57,8 @@ class AttributionApprovalServiceBehaviorRuleTest {
     @Mock private PromptImproverService promptImproverService;
     @Mock private BehaviorRuleImproverService behaviorRuleImproverService;
     @Mock private AttributionEventBroadcaster broadcaster;
+    // Phase 1.3 — domain event publisher for OptimizationEventAutoTriggerListener.
+    @Mock private org.springframework.context.ApplicationEventPublisher eventPublisher;
 
     private AttributionApprovalService service;
 
@@ -64,7 +66,7 @@ class AttributionApprovalServiceBehaviorRuleTest {
     void setUp() {
         service = new AttributionApprovalService(
                 eventRepository, skillDraftService, promptImproverService,
-                behaviorRuleImproverService, broadcaster);
+                behaviorRuleImproverService, broadcaster, eventPublisher);
         // save() echo so we can inspect the in-flight entity.
         org.mockito.Mockito.lenient().when(eventRepository.save(any(OptimizationEventEntity.class)))
                 .thenAnswer(inv -> inv.getArgument(0));

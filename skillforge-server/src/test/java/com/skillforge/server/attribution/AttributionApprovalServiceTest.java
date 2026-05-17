@@ -65,6 +65,8 @@ class AttributionApprovalServiceTest {
     @Mock private PromptImproverService promptImproverService;
     @Mock private BehaviorRuleImproverService behaviorRuleImproverService;
     @Mock private AttributionEventBroadcaster broadcaster;
+    // Phase 1.3 — domain event publisher for OptimizationEventAutoTriggerListener.
+    @Mock private org.springframework.context.ApplicationEventPublisher eventPublisher;
 
     private AttributionApprovalService service;
 
@@ -72,7 +74,7 @@ class AttributionApprovalServiceTest {
     void setUp() {
         service = new AttributionApprovalService(
                 eventRepository, skillDraftService, promptImproverService,
-                behaviorRuleImproverService, broadcaster);
+                behaviorRuleImproverService, broadcaster, eventPublisher);
         // Save returns the input arg unchanged (covers stage transitions).
         org.mockito.Mockito.lenient().when(eventRepository.save(any(OptimizationEventEntity.class)))
                 .thenAnswer(inv -> inv.getArgument(0));
@@ -308,5 +310,123 @@ class AttributionApprovalServiceTest {
         // future internal save() reorganization without brittle test churn.
         verify(broadcaster, org.mockito.Mockito.atLeast(2))
                 .broadcastStageTransition(any(OptimizationEventEntity.class), anyString());
+    }
+
+    // -------------------------------------------------------------------------
+    // FLYWHEEL-LOOP-CLOSURE Phase 1.2 (V88 sidecar columns) — link setBack
+    // regression coverage + ALLOWED_TRANSITIONS canary-skip path.
+    // -------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("Phase 1.2 link setBack: surface=prompt → event.candidatePromptVersionUuid set to "
+            + "PromptVersionEntity.id (V3.2 missing-link bug closed via V88 sidecar)")
+    void approve_promptSurface_writesCandidatePromptVersionUuidSidecar() {
+        OptimizationEventEntity event = pendingEvent(400L, OptimizationEventEntity.SURFACE_PROMPT);
+        when(eventRepository.findById(400L)).thenReturn(Optional.of(event));
+        // PromptVersionEntity.id is a String UUID (e.g. UUID.randomUUID().toString());
+        // simulate that shape so the sidecar column receives a real UUID-shaped value.
+        String promptVersionUuid = "2c66e958-aaaa-4242-9999-deadbeefdead";
+        when(promptImproverService.startImprovementFromAttribution(
+                anyLong(), anyString(), anyString(), anyLong()))
+                .thenReturn(new ImprovementStartResult("7", null, promptVersionUuid, "PENDING"));
+
+        OptimizationEventEntity returned = service.approve(400L, /*approverUserId*/ 7L);
+
+        assertThat(returned.getStage()).isEqualTo(OptimizationEventEntity.STAGE_CANDIDATE_READY);
+        // Phase 1.2 contract: the UUID sidecar carries the link.
+        assertThat(returned.getCandidatePromptVersionUuid()).isEqualTo(promptVersionUuid);
+        // Legacy BIGINT column stays null on attribution-prompt path
+        // (PromptVersion.id is a UUID String, won't fit in Long).
+        assertThat(returned.getCandidatePromptVersionId()).isNull();
+        // No cross-contamination into the skill-draft sidecar.
+        assertThat(returned.getCandidateSkillDraftUuid()).isNull();
+    }
+
+    @Test
+    @DisplayName("Phase 1.2 link setBack: surface=skill → event.candidateSkillDraftUuid set to "
+            + "SkillDraftEntity.id (V88 sidecar; legacy candidateSkillId stays null until approveDraft)")
+    void approve_skillSurface_writesCandidateSkillDraftUuidSidecar() {
+        OptimizationEventEntity event = pendingEvent(401L, OptimizationEventEntity.SURFACE_SKILL);
+        when(eventRepository.findById(401L)).thenReturn(Optional.of(event));
+        SkillDraftEntity stubDraft = new SkillDraftEntity();
+        String draftUuid = "draft-uuid-401-aaaa-bbbb-ccccdddd0000";
+        stubDraft.setId(draftUuid);
+        when(skillDraftService.createDraftFromAttribution(
+                anyLong(), anyLong(), anyString(), anyString(), anyString(), anyLong(), anyString()))
+                .thenReturn(stubDraft);
+
+        OptimizationEventEntity returned = service.approve(401L, 7L);
+
+        assertThat(returned.getStage()).isEqualTo(OptimizationEventEntity.STAGE_CANDIDATE_READY);
+        // Phase 1.2 contract: the SkillDraft UUID gets persisted via the sidecar.
+        assertThat(returned.getCandidateSkillDraftUuid()).isEqualTo(draftUuid);
+        // Legacy candidateSkillId stays null at draft creation time — it gets
+        // populated later in SkillDraftService.approveDraft when the draft is
+        // promoted into a SkillEntity (BIGINT PK).
+        assertThat(returned.getCandidateSkillId()).isNull();
+        assertThat(returned.getCandidatePromptVersionUuid()).isNull();
+    }
+
+    @Test
+    @DisplayName("Phase 1.3 publishStageChange: approve happy path publishes "
+            + "OptimizationEventStageChangeEvent for each stage transition (≥3 in approve flow) "
+            + "with V88 sidecar UUID + correct from→to stages")
+    void approve_publishesStageChangeEventsForListener() {
+        OptimizationEventEntity event = pendingEvent(500L, OptimizationEventEntity.SURFACE_PROMPT);
+        when(eventRepository.findById(500L)).thenReturn(Optional.of(event));
+        String promptVersionUuid = "phase13-uuid-1234-5678-90abcdef0500";
+        when(promptImproverService.startImprovementFromAttribution(
+                anyLong(), anyString(), anyString(), anyLong()))
+                .thenReturn(new ImprovementStartResult("7", null, promptVersionUuid, "PENDING"));
+
+        service.approve(500L, /*approverUserId*/ 7L);
+
+        // approve flow: 3 publishStageChange invocations
+        //   1) proposal_pending → proposal_approved
+        //   2) proposal_approved → candidate_generating
+        //   3) candidate_generating → candidate_ready
+        ArgumentCaptor<OptimizationEventStageChangeEvent> publishCaptor =
+                ArgumentCaptor.forClass(OptimizationEventStageChangeEvent.class);
+        verify(eventPublisher, org.mockito.Mockito.times(3)).publishEvent(publishCaptor.capture());
+
+        java.util.List<OptimizationEventStageChangeEvent> published = publishCaptor.getAllValues();
+        // First publish: proposal_pending → proposal_approved (eventId / surface preserved).
+        assertThat(published.get(0).eventId()).isEqualTo(500L);
+        assertThat(published.get(0).fromStage()).isEqualTo(OptimizationEventEntity.STAGE_PROPOSAL_PENDING);
+        assertThat(published.get(0).toStage()).isEqualTo(OptimizationEventEntity.STAGE_PROPOSAL_APPROVED);
+        assertThat(published.get(0).surfaceType()).isEqualTo(OptimizationEventEntity.SURFACE_PROMPT);
+        // Last publish: candidate_generating → candidate_ready + V88 sidecar UUID populated
+        // (so the AFTER_COMMIT listener can route to PromptImproverService.runAbTestAgainst).
+        OptimizationEventStageChangeEvent terminal = published.get(2);
+        assertThat(terminal.toStage()).isEqualTo(OptimizationEventEntity.STAGE_CANDIDATE_READY);
+        assertThat(terminal.fromStage()).isEqualTo(OptimizationEventEntity.STAGE_CANDIDATE_GENERATING);
+        assertThat(terminal.candidatePromptVersionUuid()).isEqualTo(promptVersionUuid);
+        // No cross-contamination from skill / behavior_rule columns.
+        assertThat(terminal.candidateSkillDraftUuid()).isNull();
+        assertThat(terminal.candidateBehaviorRuleVersionId()).isNull();
+    }
+
+    @Test
+    @DisplayName("Phase 1.2 ALLOWED_TRANSITIONS: ab_passed → promoted is now a direct edge "
+            + "(canary-skip); ab_passed → canary_started stays legal (backward-compat)")
+    void allowedTransitions_abPassedCanarySkipPath() {
+        // New edge: dogfood single-user path skips canary entirely.
+        service.validateTransition(OptimizationEventEntity.STAGE_AB_PASSED,
+                OptimizationEventEntity.STAGE_PROMOTED);
+        // Legacy edge: still legal so a future multi-user canary re-enable doesn't
+        // need to touch this map again.
+        service.validateTransition(OptimizationEventEntity.STAGE_AB_PASSED,
+                OptimizationEventEntity.STAGE_CANARY_STARTED);
+
+        // Sanity: random non-adjacent jumps from ab_passed still rejected (the
+        // new direct edge only added promoted, not a free pass to everything).
+        assertThatThrownBy(() -> service.validateTransition(
+                OptimizationEventEntity.STAGE_AB_PASSED,
+                OptimizationEventEntity.STAGE_AB_RUNNING))
+                .isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(() -> service.validateTransition(
+                OptimizationEventEntity.STAGE_AB_PASSED,
+                OptimizationEventEntity.STAGE_PROPOSAL_PENDING))
+                .isInstanceOf(IllegalStateException.class);
     }
 }

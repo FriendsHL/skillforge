@@ -166,6 +166,27 @@ public interface OptimizationEventRepository extends JpaRepository<OptimizationE
     List<OptimizationEventEntity> findByCandidateBehaviorRuleVersionId(String candidateBehaviorRuleVersionId);
 
     /**
+     * FLYWHEEL-LOOP-CLOSURE Phase 1.4 (V88 sidecar lookup): used by
+     * {@code PromptImproverService.runAbTestAgainst} ephemeral fallback path
+     * to walk candidate prompt UUID → originating attribution event → pattern
+     * id → pattern session members. The V88 sidecar column
+     * {@code candidate_prompt_version_uuid} is written by
+     * {@code AttributionApprovalService.dispatchPromptSurface} (Phase 1.2)
+     * with the {@code PromptVersionEntity.id} String UUID. At most one event
+     * per candidate by construction.
+     */
+    List<OptimizationEventEntity> findByCandidatePromptVersionUuid(String candidatePromptVersionUuid);
+
+    /**
+     * FLYWHEEL-LOOP-CLOSURE Phase 1.4 (V88 sidecar lookup): twin of
+     * {@link #findByCandidatePromptVersionUuid(String)} for the skill surface.
+     * Read by {@code SkillDraftService.startAbTestFromDraft} ephemeral
+     * fallback to recover the {@code patternId} for pattern-member scenario
+     * extraction.
+     */
+    List<OptimizationEventEntity> findByCandidateSkillDraftUuid(String candidateSkillDraftUuid);
+
+    /**
      * Phase 1.4 reviewer fix (W2/W3): unified pageable list with optional
      * {@code stage} / {@code agentId} / {@code surfaceType} filters. Each
      * parameter may be null to skip that dimension; passing all-null returns

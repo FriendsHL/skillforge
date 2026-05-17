@@ -69,6 +69,14 @@ public class SkillSelfImproveLoop {
     private final AgentService agentService;
     private final SkillEvolutionService skillEvolutionService;
     private final UserWebSocketHandler userWebSocketHandler;
+    /**
+     * Phase 1.6 R3 fix (2026-05-17) — used by
+     * {@link #cleanupAttributionLoserCandidate} to remove the on-disk SKILL.md
+     * file when an attribution transient candidate loses its A/B run. Pre-R3
+     * only the DB row was deleted, leaking the file under
+     * {@code ~/.skillforge/skills/evolution-fork/...}.
+     */
+    private final com.skillforge.server.skill.SkillStorageService skillStorageService;
 
     private final boolean enabled;
     private final double scoreThreshold;
@@ -78,6 +86,7 @@ public class SkillSelfImproveLoop {
                                 AgentService agentService,
                                 SkillEvolutionService skillEvolutionService,
                                 UserWebSocketHandler userWebSocketHandler,
+                                com.skillforge.server.skill.SkillStorageService skillStorageService,
                                 @Value("${skillforge.skill-self-improve.scheduled-enabled:true}")
                                 boolean enabled,
                                 @Value("${skillforge.skill-self-improve.score-threshold:60.0}")
@@ -87,6 +96,7 @@ public class SkillSelfImproveLoop {
         this.agentService = agentService;
         this.skillEvolutionService = skillEvolutionService;
         this.userWebSocketHandler = userWebSocketHandler;
+        this.skillStorageService = skillStorageService;
         this.enabled = enabled;
         this.scoreThreshold = scoreThreshold;
     }
@@ -186,6 +196,14 @@ public class SkillSelfImproveLoop {
             log.info("SelfImproveLoop: A/B not promoted skillId={} abRunId={} baseline={} candidate={}",
                     event.getSkillId(), event.getEvolutionAbRunId(),
                     event.getBaselineScore(), event.getCandidateScore());
+            // FLYWHEEL-LOOP-CLOSURE Phase 1.4f (2026-05-17) — loser cleanup
+            // for attribution-derived transient candidate skills. Dual pivot
+            // (source + name suffix regex) means production A/B losers from
+            // other sources (V2/V4 dedicated forks, manual operator A/B) are
+            // untouched. Best-effort: any failure logs WARN but does not
+            // propagate (we're in an AFTER_COMMIT listener — original A/B
+            // outcome has been persisted regardless).
+            cleanupAttributionLoserCandidate(event.getSkillId());
             return;
         }
 
@@ -218,6 +236,70 @@ public class SkillSelfImproveLoop {
         } catch (Exception e) {
             log.warn("SelfImproveLoop: WS push failed skillId={} ownerId={}: {}",
                     event.getSkillId(), ownerId, e.getMessage());
+        }
+    }
+
+    /**
+     * FLYWHEEL-LOOP-CLOSURE Phase 1.4f (2026-05-17) — loser cleanup for
+     * attribution transient candidate (Ratify #7-B path (a) cleanup arm).
+     *
+     * <p>Dual pivot for safety:
+     * <ol>
+     *   <li>{@code source == "attribution_ab_transient"} — written by
+     *       {@code SkillDraftService.promoteDraftToTransientSkill} (Phase 1.4c).</li>
+     *   <li>name regex {@code .*_candidate_[0-9a-f]{8}$} — the 8-char hex
+     *       UUID slice suffix written by the same helper.</li>
+     * </ol>
+     * Both must match before delete — defence against false-positive cleanup
+     * of any production skill that happens to share one marker.
+     *
+     * <p>Paired baseline (same name + {@code "_baseline_empty"} suffix,
+     * source {@code "attribution_ab_baseline_empty"}) deleted with same dual
+     * pivot.
+     *
+     * <p>Package-private for unit-test access; pure best-effort (catches any
+     * thrown to avoid masking original A/B outcome path).
+     */
+    void cleanupAttributionLoserCandidate(Long candidateSkillId) {
+        if (candidateSkillId == null) return;
+        try {
+            SkillEntity candidate = skillRepository.findById(candidateSkillId).orElse(null);
+            if (candidate == null
+                    || !"attribution_ab_transient".equals(candidate.getSource())
+                    || candidate.getName() == null
+                    || !candidate.getName().matches(".*_candidate_[0-9a-f]{8}$")) {
+                // Not an attribution transient candidate — leave it alone
+                // (e.g., V2/V4 production fork that lost its A/B).
+                return;
+            }
+            String baselineName = candidate.getName() + "_baseline_empty";
+            // R3 fix (Phase 1.6 dogfood, 2026-05-17): capture skillPath BEFORE
+            // the DB row delete so we can clean up the on-disk SKILL.md file
+            // afterwards (pre-R3 the row went away but the file leaked).
+            String candidateSkillPath = candidate.getSkillPath();
+            skillRepository.delete(candidate);
+            if (candidateSkillPath != null && !candidateSkillPath.isBlank()) {
+                skillStorageService.delete(java.nio.file.Path.of(candidateSkillPath));
+            }
+            log.info("SelfImproveLoop: cleaned up loser transient candidate skillId={} "
+                            + "(name={} source={} skillPath={})",
+                    candidate.getId(), candidate.getName(), candidate.getSource(),
+                    candidateSkillPath);
+            skillRepository.findByName(baselineName)
+                    .filter(b -> "attribution_ab_baseline_empty".equals(b.getSource()))
+                    .ifPresent(b -> {
+                        String baselineSkillPath = b.getSkillPath();
+                        skillRepository.delete(b);
+                        if (baselineSkillPath != null && !baselineSkillPath.isBlank()) {
+                            skillStorageService.delete(java.nio.file.Path.of(baselineSkillPath));
+                        }
+                        log.info("SelfImproveLoop: cleaned up paired baseline skillId={} "
+                                        + "(name={} skillPath={})",
+                                b.getId(), b.getName(), baselineSkillPath);
+                    });
+        } catch (RuntimeException e) {
+            log.warn("SelfImproveLoop: loser cleanup failed for candidateSkillId={}: {}",
+                    candidateSkillId, e.getMessage());
         }
     }
 

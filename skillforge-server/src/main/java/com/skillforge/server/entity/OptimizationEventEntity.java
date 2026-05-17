@@ -152,6 +152,30 @@ public class OptimizationEventEntity {
     @Column(name = "candidate_behavior_rule_version_id", length = 36)
     private String candidateBehaviorRuleVersionId;
 
+    /**
+     * FLYWHEEL-LOOP-CLOSURE Phase 1.2 (V88, 2026-05-16) — UUID sidecar for
+     * {@link #candidatePromptVersionId}. {@code PromptVersionEntity.id} is a
+     * String UUID that won't fit in the legacy BIGINT column, so the
+     * attribution dispatch path writes the link here instead. Phase 1.3
+     * listener and Phase 1.4 /run-ab endpoint read from this column. The
+     * legacy BIGINT column stays for backward compatibility but remains NULL
+     * on the attribution-prompt path.
+     */
+    @Column(name = "candidate_prompt_version_uuid", length = 36)
+    private String candidatePromptVersionUuid;
+
+    /**
+     * FLYWHEEL-LOOP-CLOSURE Phase 1.2 (V88, 2026-05-16) — UUID sidecar for the
+     * SkillDraft the attribution dispatcher just created.
+     * {@code SkillDraftEntity.id} is a String UUID; the legacy
+     * {@link #candidateSkillId} BIGINT gets populated only later when the
+     * draft is approved into a SkillEntity row (in
+     * {@code SkillDraftService.approveDraft}). Until then, this sidecar is
+     * the canonical pointer back to the draft.
+     */
+    @Column(name = "candidate_skill_draft_uuid", length = 36)
+    private String candidateSkillDraftUuid;
+
     @Column(name = "ab_run_id")
     private Long abRunId;
 
@@ -245,6 +269,16 @@ public class OptimizationEventEntity {
     public String getCandidateBehaviorRuleVersionId() { return candidateBehaviorRuleVersionId; }
     public void setCandidateBehaviorRuleVersionId(String candidateBehaviorRuleVersionId) {
         this.candidateBehaviorRuleVersionId = candidateBehaviorRuleVersionId;
+    }
+
+    public String getCandidatePromptVersionUuid() { return candidatePromptVersionUuid; }
+    public void setCandidatePromptVersionUuid(String candidatePromptVersionUuid) {
+        this.candidatePromptVersionUuid = candidatePromptVersionUuid;
+    }
+
+    public String getCandidateSkillDraftUuid() { return candidateSkillDraftUuid; }
+    public void setCandidateSkillDraftUuid(String candidateSkillDraftUuid) {
+        this.candidateSkillDraftUuid = candidateSkillDraftUuid;
     }
 
     public Long getAbRunId() { return abRunId; }

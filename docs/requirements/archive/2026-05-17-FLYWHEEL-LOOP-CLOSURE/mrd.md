@@ -2,8 +2,9 @@
 
 ---
 id: FLYWHEEL-LOOP-CLOSURE
-status: design-draft
+status: delivered
 created: 2026-05-16
+completed: 2026-05-17
 ---
 
 ## 痛点

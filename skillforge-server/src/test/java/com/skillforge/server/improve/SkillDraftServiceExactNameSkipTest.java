@@ -67,7 +67,14 @@ class SkillDraftServiceExactNameSkipTest {
                 sessionRepository, skillDraftRepository, skillRepository,
                 llmProviderFactory, new ObjectMapper(), props,
                 userWebSocketHandler, creatorService, packageLoader, skillRegistry,
-                skillStorageService);
+                skillStorageService,
+                // Phase 1.4e — 6 mock deps for startAbTestFromDraft path.
+                org.mockito.Mockito.mock(com.skillforge.server.repository.EvalScenarioDraftRepository.class),
+                org.mockito.Mockito.mock(com.skillforge.server.repository.OptimizationEventRepository.class),
+                org.mockito.Mockito.mock(com.skillforge.server.repository.PatternSessionMemberRepository.class),
+                org.mockito.Mockito.mock(com.skillforge.server.improve.SessionScenarioExtractorService.class),
+                org.mockito.Mockito.mock(com.skillforge.server.improve.EphemeralScenarioCleanupService.class),
+                org.mockito.Mockito.mock(com.skillforge.server.improve.SkillAbEvalService.class));
     }
 
     /** Build an LLM response containing a single draft with the given name. */

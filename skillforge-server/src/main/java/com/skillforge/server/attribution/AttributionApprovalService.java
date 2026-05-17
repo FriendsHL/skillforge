@@ -9,6 +9,7 @@ import com.skillforge.server.improve.SkillDraftService;
 import com.skillforge.server.repository.OptimizationEventRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -120,8 +121,15 @@ public class AttributionApprovalService {
             Map.entry(OptimizationEventEntity.STAGE_AB_RUNNING, Set.of(
                     OptimizationEventEntity.STAGE_AB_PASSED,
                     OptimizationEventEntity.STAGE_AB_FAILED)),
+            // FLYWHEEL-LOOP-CLOSURE Phase 1.2 (2026-05-16): add the direct
+            // ab_passed → promoted edge so the dogfood single-user flow can
+            // skip the canary stage entirely (V6 logic disable; the canary
+            // schema + code stays dormant for a future multi-user re-enable).
+            // ab_passed → canary_started is kept for backward compatibility:
+            // when canary is re-enabled, the old edge is the natural path.
             Map.entry(OptimizationEventEntity.STAGE_AB_PASSED, Set.of(
-                    OptimizationEventEntity.STAGE_CANARY_STARTED)),
+                    OptimizationEventEntity.STAGE_CANARY_STARTED,
+                    OptimizationEventEntity.STAGE_PROMOTED)),
             Map.entry(OptimizationEventEntity.STAGE_CANARY_STARTED, Set.of(
                     OptimizationEventEntity.STAGE_PROMOTED,
                     OptimizationEventEntity.STAGE_ROLLED_BACK)),
@@ -133,17 +141,53 @@ public class AttributionApprovalService {
     private final PromptImproverService promptImproverService;
     private final BehaviorRuleImproverService behaviorRuleImproverService;
     private final AttributionEventBroadcaster broadcaster;
+    /**
+     * FLYWHEEL-LOOP-CLOSURE Phase 1.3 (2026-05-16) — publishes
+     * {@link OptimizationEventStageChangeEvent} after every stage transition
+     * write so {@link OptimizationEventAutoTriggerListener} can auto-trigger
+     * the surface-specific A/B run on {@code candidate_ready}. AFTER_COMMIT
+     * + REQUIRES_NEW on the listener side means the publish is safe even if
+     * the surrounding tx later rolls back (no event delivery on rollback).
+     */
+    private final ApplicationEventPublisher eventPublisher;
 
     public AttributionApprovalService(OptimizationEventRepository eventRepository,
                                       SkillDraftService skillDraftService,
                                       PromptImproverService promptImproverService,
                                       BehaviorRuleImproverService behaviorRuleImproverService,
-                                      AttributionEventBroadcaster broadcaster) {
+                                      AttributionEventBroadcaster broadcaster,
+                                      ApplicationEventPublisher eventPublisher) {
         this.eventRepository = eventRepository;
         this.skillDraftService = skillDraftService;
         this.promptImproverService = promptImproverService;
         this.behaviorRuleImproverService = behaviorRuleImproverService;
         this.broadcaster = broadcaster;
+        this.eventPublisher = eventPublisher;
+    }
+
+    /**
+     * FLYWHEEL-LOOP-CLOSURE Phase 1.3 (2026-05-16) — single helper that builds
+     * the {@link OptimizationEventStageChangeEvent} record from the current
+     * entity state + publishes via {@link ApplicationEventPublisher}.
+     *
+     * <p>Called immediately after every {@code eventRepository.save(event)} +
+     * existing {@code broadcaster.broadcastStageTransition(...)} so the
+     * AFTER_COMMIT listener observes the same persisted state that the WS
+     * broadcaster pushed. The publish itself is cheap (Spring publishes into
+     * a thread-local sink + replays at commit-time); the actual listener work
+     * happens on the {@code abEvalLoopExecutor} pool in a fresh transaction.
+     */
+    private void publishStageChange(OptimizationEventEntity event, String fromStage) {
+        eventPublisher.publishEvent(new OptimizationEventStageChangeEvent(
+                event.getId(),
+                fromStage,
+                event.getStage(),
+                event.getSurfaceType(),
+                event.getAgentId(),
+                event.getPatternId(),
+                event.getCandidatePromptVersionUuid(),
+                event.getCandidateSkillDraftUuid(),
+                event.getCandidateBehaviorRuleVersionId()));
     }
 
     /**
@@ -177,6 +221,8 @@ public class AttributionApprovalService {
         event = eventRepository.save(event);
         // Broadcast in-tx (V3 dogfood trade-off; see class javadoc).
         broadcaster.broadcastStageTransition(event, stagePending);
+        // Phase 1.3: stage-change domain event for the AFTER_COMMIT listener.
+        publishStageChange(event, stagePending);
         log.info("[AttributionApproval] approved eventId={} approverUserId={} surface={}",
                 eventId, approverUserId, event.getSurfaceType());
 
@@ -253,6 +299,8 @@ public class AttributionApprovalService {
         event = eventRepository.save(event);
         // Broadcast in-tx (V3 dogfood trade-off; see class javadoc).
         broadcaster.broadcastStageTransition(event, previousStageHint);
+        // Phase 1.3: stage-change domain event for the AFTER_COMMIT listener.
+        publishStageChange(event, previousStageHint);
 
         // Dispatch surface-specific candidate generation. catch RuntimeException
         // to surface failures as candidate_failed rather than rolling the outer
@@ -280,6 +328,10 @@ public class AttributionApprovalService {
         OptimizationEventEntity saved = eventRepository.save(event);
         // Broadcast in-tx (V3 dogfood trade-off; see class javadoc).
         broadcaster.broadcastStageTransition(saved, stageGenerating);
+        // Phase 1.3: stage-change domain event for the AFTER_COMMIT listener.
+        // Covers both candidate_ready (success branch) and candidate_failed
+        // (catch branch); the listener filters by toStage == candidate_ready.
+        publishStageChange(saved, stageGenerating);
         return saved;
     }
 
@@ -310,6 +362,9 @@ public class AttributionApprovalService {
         OptimizationEventEntity saved = eventRepository.save(event);
         // Broadcast in-tx (V3 dogfood trade-off; see class javadoc).
         broadcaster.broadcastStageTransition(saved, previousStage);
+        // Phase 1.3: stage-change domain event for the AFTER_COMMIT listener
+        // (listener filters by toStage; proposal_rejected is a no-op there).
+        publishStageChange(saved, previousStage);
         log.info("[AttributionApproval] rejected eventId={} approverUserId={} reason={}",
                 eventId, approverUserId, reason == null ? "(none)" : reason);
         return saved;
@@ -325,10 +380,13 @@ public class AttributionApprovalService {
                 event.getChangeType(),
                 approverUserId != null ? approverUserId : event.getAgentId(),
                 suggestedSkillName);
-        // SkillDraftEntity.id is a String UUID; OptimizationEventEntity stores
-        // candidateSkillId as Long — drafts approved into SkillEntity (BIGINT
-        // PK) will populate candidateSkillId at SkillDraftService.approveDraft
-        // time. For the draft phase we just log the linkage.
+        // FLYWHEEL-LOOP-CLOSURE Phase 1.2 (V88, 2026-05-16): persist the draft
+        // UUID link to the sidecar column so the Phase 1.3 listener / Phase
+        // 1.4 /run-ab endpoint can resolve event → draft.
+        // The legacy BIGINT candidateSkillId is intentionally left null at
+        // draft time — it gets populated later in SkillDraftService.approveDraft
+        // when the draft merges into a SkillEntity (BIGINT PK).
+        event.setCandidateSkillDraftUuid(draft.getId());
         log.info("[AttributionApproval] eventId={} → skill draft created (draftId={})",
                 event.getId(), draft.getId());
     }
@@ -343,10 +401,12 @@ public class AttributionApprovalService {
                 String.valueOf(event.getAgentId()),
                 event.getDescription(),
                 approverUserId);
-        // candidatePromptVersionId is a Long column but PromptVersionEntity.id
-        // is a String UUID. We can't fit a UUID into BIGINT — log the link for
-        // now; Phase 1.4 may revisit (e.g. add candidatePromptVersionUuid or
-        // change column type) once the dashboard surface concretely needs it.
+        // FLYWHEEL-LOOP-CLOSURE Phase 1.2 (V88, 2026-05-16): write the prompt
+        // version UUID to the sidecar column. The legacy BIGINT
+        // candidatePromptVersionId column stays NULL on the attribution path
+        // (PromptVersionEntity.id is a UUID string that won't fit in BIGINT —
+        // documented as a known V3.2 link-bug now resolved via V88 sidecar).
+        event.setCandidatePromptVersionUuid(result.promptVersionId());
         log.info("[AttributionApproval] eventId={} → prompt version created (versionId={})",
                 event.getId(), result.promptVersionId());
     }

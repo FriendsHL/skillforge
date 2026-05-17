@@ -73,7 +73,19 @@ class PromptImproverServiceTest {
                 coordinatorExecutor,
                 props,
                 org.mockito.Mockito.mock(com.skillforge.server.improve.surface.PromptSurface.class),
-                mockEvalService
+                mockEvalService,
+                // Phase 1.4 (2026-05-16) → Phase 1.4d (2026-05-17) — ephemeral-
+                // fallback deps + W5 cleanup service. This test class doesn't
+                // exercise runAbTestAgainst path; null is safe but we switch to
+                // mock(...) so a future test that accidentally calls into one
+                // of these gets a Mockito-friendly NPE rather than a raw NPE
+                // from the service body (W3 fix per reviewer Phase 1.4 r1).
+                org.mockito.Mockito.mock(com.skillforge.server.repository.EvalScenarioDraftRepository.class),
+                org.mockito.Mockito.mock(com.skillforge.server.repository.OptimizationEventRepository.class),
+                org.mockito.Mockito.mock(com.skillforge.server.repository.PatternSessionMemberRepository.class),
+                org.mockito.Mockito.mock(com.skillforge.server.repository.SessionRepository.class),
+                org.mockito.Mockito.mock(SessionScenarioExtractorService.class),
+                org.mockito.Mockito.mock(EphemeralScenarioCleanupService.class)
         );
         // Phase 1.2 reviewer-r1 fix: wire mock EvalService<PromptVersionEntity>
         // back to service.runEvalSetInternal (which preserves the pre-refactor

@@ -2,12 +2,14 @@
 
 ---
 id: FLYWHEEL-LOOP-CLOSURE
-mode: mid
-status: design-draft
+mode: mid → upgraded full
+status: delivered
 priority: P1
-risk: Mid
+risk: Mid → upgraded Full (Phase 1.4 NEEDS_CONTEXT 后用户拍板升 Full)
 created: 2026-05-16
-updated: 2026-05-16
+updated: 2026-05-17
+completed: 2026-05-17
+commits: pending (Phase Final commit)
 ---
 
 ## 摘要

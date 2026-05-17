@@ -5,30 +5,29 @@ import {
   listBehaviorRuleVersions,
   type BehaviorRuleVersionResponse,
 } from '../../api/behaviorRules';
-import { CanaryPanel } from '../canary/CanaryPanel';
 
 /**
- * MULTI-SURFACE-FLYWHEEL V4 Phase 1.4 — behavior_rule canary management
- * surface. Composes:
+ * MULTI-SURFACE-FLYWHEEL V4 Phase 1.4 — behavior_rule evolution panel.
+ *
+ * <p>FLYWHEEL-LOOP-CLOSURE Phase 1.5 (2026-05-16): canary path logic-disabled
+ * for dogfood single-user phase; the embedded CanaryPanel (lifecycle controls
+ * Start/Step-up/Publish/Rollback) has been removed. Promotion now flows via
+ * the V3 attribution candidate → A/B → promoted edge (see
+ * AttributionApprovalService.ALLOWED_TRANSITIONS). The `agentNumericId` prop
+ * is no longer required — `agentId` (stringified) is the only identity the
+ * panel needs to list versions. CanaryPanel + api/canary.ts + BE V2 service
+ * code are retained dormant for future multi-user re-enable.
+ *
+ * <p>Composes:
  *
  * <ol>
  *   <li>Top — active vs candidate version chips with versionNumber / source /
  *       createdAt / collapsible rulesJson preview.</li>
- *   <li>Middle — embedded {@link CanaryPanel} configured with
- *       {@code surfaceType="behavior_rule"} and {@code entityNoun="behavior
- *       rule version"} so the start/step-up/publish/rollback flow reuses the
- *       V2 surface verbatim. The BE column {@code baseline_skill_name}
- *       (VARCHAR(64), legacy name) stores the baseline version id; Phase 1.4
- *       BE-2 lifts the surface guard so {@code behavior_rule} is accepted.</li>
- *   <li>(Action buttons are owned by CanaryPanel — Start / Step-up / Publish /
- *       Rollback — so we don't duplicate the lifecycle controls here.)</li>
  * </ol>
  *
  * <p>Graceful degradation: if BE has not yet exposed
  * {@code GET /api/behavior-rules/versions}, the version-list query rejects;
- * the panel surfaces a non-blocking banner ("BE endpoint not wired up yet")
- * and still renders the CanaryPanel underneath so canary state is visible
- * once BE-2 lands.
+ * the panel surfaces a non-blocking banner.
  */
 
 export interface BehaviorRuleEvolutionPanelProps {
@@ -38,8 +37,6 @@ export interface BehaviorRuleEvolutionPanelProps {
    * stringifies before passing through.
    */
   agentId: string;
-  /** Numeric agent id (passed straight through to CanaryPanel). */
-  agentNumericId: number;
 }
 
 function statusColor(status: BehaviorRuleVersionResponse['status']): string {
@@ -221,7 +218,6 @@ const VersionCard: React.FC<VersionCardProps> = ({ label, version, accent }) => 
 
 export const BehaviorRuleEvolutionPanel: React.FC<BehaviorRuleEvolutionPanelProps> = ({
   agentId,
-  agentNumericId,
 }) => {
   // List ALL statuses; pick the first active + first candidate by versionNumber
   // DESC (BE-expected ordering). Two queries would cost an extra round-trip
@@ -284,16 +280,14 @@ export const BehaviorRuleEvolutionPanel: React.FC<BehaviorRuleEvolutionPanelProp
       </div>
 
       {isError && (
-        // BE endpoint missing or transient failure: keep the canary subpanel
-        // visible underneath rather than blocking the whole surface — Phase
-        // 1.4 BE-2 is in parallel; the operator may still want to look at the
-        // canary state once it's wired up.
+        // BE endpoint missing or transient failure: keep the banner
+        // non-blocking so the panel header / agent context remains visible.
         <Alert
           type="warning"
           showIcon
           style={{ marginBottom: 12 }}
           message="Could not load behavior rule versions."
-          description="Backend endpoint /api/behavior-rules/versions may not be exposed yet, or the request failed. Canary state below is still queryable."
+          description="Backend endpoint /api/behavior-rules/versions may not be exposed yet, or the request failed."
         />
       )}
 
@@ -338,19 +332,10 @@ export const BehaviorRuleEvolutionPanel: React.FC<BehaviorRuleEvolutionPanelProp
         </div>
       )}
 
-      {/* CanaryPanel owns the lifecycle controls (Start / Step-up / Publish /
-          Rollback). We pass the version IDs as the baseline/candidate identity
-          strings — BE column is VARCHAR(64), version IDs are 36-char UUIDs so
-          they fit. Without a candidate version we still mount the panel so the
-          operator can see an in-flight or terminal rollout (CanaryPanel's
-          Start button stays disabled until a candidate exists). */}
-      <CanaryPanel
-        agentId={agentNumericId}
-        surfaceType="behavior_rule"
-        entityNoun="behavior rule version"
-        parentSkillName={activeVersion?.id ?? ''}
-        candidateSkillName={candidateVersion?.id ?? null}
-      />
+      {/* FLYWHEEL-LOOP-CLOSURE Phase 1.5 (2026-05-16): CanaryPanel embed removed.
+          behavior_rule promotion now flows through V3 attribution → A/B →
+          promoted. Restore <CanaryPanel surfaceType="behavior_rule" ... /> here
+          (and the `agentNumericId` prop above) when canary path is re-enabled. */}
     </div>
   );
 };

@@ -9,6 +9,7 @@ import com.skillforge.core.llm.LlmResponse;
 import com.skillforge.core.model.Message;
 import com.skillforge.server.config.LlmProperties;
 import com.skillforge.server.entity.AgentEntity;
+import com.skillforge.server.entity.EvalScenarioEntity;
 import com.skillforge.server.entity.EvalTaskEntity;
 import com.skillforge.server.entity.PromptAbRunEntity;
 import com.skillforge.server.entity.PromptVersionEntity;
@@ -86,6 +87,23 @@ public class PromptImproverService extends AbstractAbEvalRunner<PromptVersionEnt
      */
     private final ThreadLocal<PromptRunState> currentRun = new ThreadLocal<>();
 
+    /**
+     * FLYWHEEL-LOOP-CLOSURE Phase 1.4: ephemeral-fallback dependencies used
+     * only by {@link #runAbTestAgainst}. Nullable so existing tests that
+     * don't exercise the auto-trigger path can pass {@code null} for these
+     * five constructor params (Mockito @Mock supplies them in attribution
+     * tests). Wired to non-null in production via Spring DI.
+     */
+    private final com.skillforge.server.repository.EvalScenarioDraftRepository evalScenarioRepository;
+    private final com.skillforge.server.repository.OptimizationEventRepository optimizationEventRepository;
+    private final com.skillforge.server.repository.PatternSessionMemberRepository patternSessionMemberRepository;
+    private final com.skillforge.server.repository.SessionRepository sessionRepository;
+    private final SessionScenarioExtractorService sessionScenarioExtractor;
+    // W5 fix (Phase 1.4d, 2026-05-17) — separate bean lets @Transactional
+    // (REQUIRES_NEW) actually take effect for ephemeral cleanup that runs in
+    // async coordinatorExecutor finally (publisher tx is already committed).
+    private final EphemeralScenarioCleanupService ephemeralScenarioCleanupService;
+
     public PromptImproverService(AgentRepository agentRepository,
                                   EvalTaskRepository evalRunRepository,
                                   PromptVersionRepository promptVersionRepository,
@@ -97,7 +115,13 @@ public class PromptImproverService extends AbstractAbEvalRunner<PromptVersionEnt
                                   @Qualifier("abEvalCoordinatorExecutor") ExecutorService coordinatorExecutor,
                                   LlmProperties llmProperties,
                                   @Lazy PromptSurface promptSurface,
-                                  PromptEvalService promptEvalService) {
+                                  PromptEvalService promptEvalService,
+                                  com.skillforge.server.repository.EvalScenarioDraftRepository evalScenarioRepository,
+                                  com.skillforge.server.repository.OptimizationEventRepository optimizationEventRepository,
+                                  com.skillforge.server.repository.PatternSessionMemberRepository patternSessionMemberRepository,
+                                  com.skillforge.server.repository.SessionRepository sessionRepository,
+                                  SessionScenarioExtractorService sessionScenarioExtractor,
+                                  EphemeralScenarioCleanupService ephemeralScenarioCleanupService) {
         // @Lazy on promptSurface breaks the DI cycle: PromptSurface's @Lazy
         // injection of PromptImproverService bootstrap order. Super constructor
         // only stores the reference (no method call), so proxy is safe.
@@ -120,6 +144,12 @@ public class PromptImproverService extends AbstractAbEvalRunner<PromptVersionEnt
         this.coordinatorExecutor = coordinatorExecutor;
         this.defaultProviderName = llmProperties.getDefaultProvider() != null
                 ? llmProperties.getDefaultProvider() : "claude";
+        this.evalScenarioRepository = evalScenarioRepository;
+        this.optimizationEventRepository = optimizationEventRepository;
+        this.patternSessionMemberRepository = patternSessionMemberRepository;
+        this.sessionRepository = sessionRepository;
+        this.sessionScenarioExtractor = sessionScenarioExtractor;
+        this.ephemeralScenarioCleanupService = ephemeralScenarioCleanupService;
     }
 
     @Transactional
@@ -242,6 +272,222 @@ public class PromptImproverService extends AbstractAbEvalRunner<PromptVersionEnt
                 version.getId(),
                 "PENDING");
     }
+
+    /**
+     * FLYWHEEL-LOOP-CLOSURE Phase 1.3 (2026-05-16) — called by
+     * {@link com.skillforge.server.attribution.OptimizationEventAutoTriggerListener}
+     * when an attribution event reaches {@code candidate_ready}. Runs an A/B
+     * comparison between {@code baselineVersionId} (or the agent's current
+     * active prompt when null) and {@code candidateVersionId}, using the
+     * supplied {@code evalScenarioIds} (or the agent's held-out scenarios when
+     * null).
+     *
+     * <p><b>Phase 1.3 scope</b>: signature + input validation + empty-scenarios
+     * guard. The actual async fan-out (PromptAbRunEntity creation +
+     * coordinator dispatch + baseline/candidate eval execution) is Phase 1.4's
+     * job — Phase 1.4 will replace the {@link UnsupportedOperationException}
+     * body with the real composition of {@code runImprovementAsync} internals
+     * (per tech-design §服务层设计 #1). Throwing here means the listener's
+     * catch path triggers an {@code ab_failed} WS broadcast, so dogfood can
+     * observe the wiring before the Phase 1.4 implementation lands.
+     *
+     * @param agentId            agent ID (String form; tech-design §1 signature)
+     * @param baselineVersionId  baseline prompt version UUID; {@code null} →
+     *                           use the agent's current active prompt
+     * @param candidateVersionId candidate prompt version UUID (required)
+     * @param evalScenarioIds    explicit scenario IDs; {@code null} or empty →
+     *                           use the agent's held-out scenario set. When
+     *                           held-out is also empty, throws
+     *                           {@link IllegalStateException} (Phase 1.4
+     *                           ratify #4 will add the ephemeral fallback
+     *                           from {@code pattern.members}).
+     * @return the newly-created {@code PromptAbRunEntity.id}
+     * @throws IllegalArgumentException if {@code candidateVersionId} is null
+     *                                  or the candidate / baseline version
+     *                                  cannot be found
+     * @throws IllegalStateException    if no EvalScenarios are available for
+     *                                  the agent (Phase 1.4 ephemeral
+     *                                  fallback not yet implemented)
+     * @throws UnsupportedOperationException Phase 1.3 stub; Phase 1.4 wires
+     *                                       the async fan-out body
+     */
+    @Transactional
+    public String runAbTestAgainst(String agentId,
+                                   String baselineVersionId,
+                                   String candidateVersionId,
+                                   List<String> evalScenarioIds) {
+        if (agentId == null || agentId.isBlank()) {
+            throw new IllegalArgumentException("agentId is required");
+        }
+        if (candidateVersionId == null || candidateVersionId.isBlank()) {
+            throw new IllegalArgumentException("candidateVersionId is required");
+        }
+        PromptVersionEntity candidate = promptVersionRepository.findById(candidateVersionId)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Candidate prompt version not found: " + candidateVersionId));
+        // Baseline resolution per Ratify #7-C — null = agent's current active
+        // prompt (tracked via AgentEntity.activePromptVersionId, consistent
+        // with PromptPromotionService.applyPromotion path).
+        // W7 fix (Phase 1.4d, 2026-05-16) — parse agentId first; NumberFormatException
+        // would otherwise bubble through controller 400-mapping as a 500.
+        long agentIdLong;
+        try {
+            agentIdLong = Long.parseLong(agentId);
+        } catch (NumberFormatException nfe) {
+            throw new IllegalArgumentException(
+                    "agentId must be numeric, got: " + agentId, nfe);
+        }
+        String resolvedBaselineId = baselineVersionId;
+        AgentEntity agent = agentRepository.findById(agentIdLong)
+                .orElseThrow(() -> new IllegalArgumentException("Agent not found: " + agentId));
+        if (resolvedBaselineId == null || resolvedBaselineId.isBlank()) {
+            resolvedBaselineId = agent.getActivePromptVersionId();
+            if (resolvedBaselineId == null) {
+                throw new IllegalStateException("Agent " + agentId
+                        + " has no active prompt version; cannot run A/B without baseline");
+            }
+        }
+        final String baselineId = resolvedBaselineId;
+        PromptVersionEntity baselineVersion = promptVersionRepository.findById(baselineId)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Baseline prompt version not found: " + baselineId));
+
+        // Phase 1.4 Ratify #7-E — ephemeral scenario fallback. Resolve held-out
+        // scenarios, or fall back to extracting from pattern members of the
+        // attribution event that produced this candidate.
+        List<EvalScenarioEntity> scenarios;
+        List<String> ephemeralIds = null;
+        if (evalScenarioIds != null && !evalScenarioIds.isEmpty()) {
+            scenarios = evalScenarioRepository.findAllById(evalScenarioIds);
+        } else {
+            scenarios = evalScenarioRepository.findByAgentIdAndSplit(agentId, "held_out");
+            if (scenarios.isEmpty()) {
+                EphemeralBatch batch = buildEphemeralScenariosForPromptCandidate(candidateVersionId);
+                scenarios = batch.scenarios();
+                ephemeralIds = batch.ephemeralIds();
+            }
+        }
+        if (scenarios.isEmpty()) {
+            throw new IllegalStateException(
+                    "No EvalScenarios available for agent " + agentId
+                            + " and ephemeral fallback yielded none either");
+        }
+
+        // Create PromptAbRunEntity (unique-index gated against duplicate runs
+        // on the same agent, mirroring startImprovement step 4).
+        boolean hasActive = !promptAbRunRepository.findByAgentIdAndStatus(agentId, "PENDING").isEmpty()
+                || !promptAbRunRepository.findByAgentIdAndStatus(agentId, "RUNNING").isEmpty();
+        if (hasActive) {
+            // Cleanup ephemeral before bailing — caller's retry path may want a clean slate.
+            ephemeralScenarioCleanupService.cleanupEphemerals(ephemeralIds);
+            throw new ImprovementConflictException("An A/B run is already active for agent " + agentId);
+        }
+
+        PromptAbRunEntity abRun = new PromptAbRunEntity();
+        abRun.setId(UUID.randomUUID().toString());
+        abRun.setAgentId(agentId);
+        abRun.setPromptVersionId(candidate.getId());
+        // No EvalTaskEntity for the baseline anchor — attribution path doesn't
+        // have a prior eval run. Leave baselineEvalRunId null; downstream
+        // Phase 1.4b AbEvalPipeline attribution overload will populate
+        // baselinePassRate by re-evaluating the active prompt fresh against
+        // the same scenarios.
+        promptAbRunRepository.save(abRun);
+
+        final String abRunId = abRun.getId();
+        final List<String> capturedEphemeralIds = ephemeralIds;
+        // F4 fix (Phase 2 r2, code reviewer HIGH-2): pass IDs, NOT entity
+        // references. This @Transactional method commits after return; if the
+        // async runnable were to hold direct entity refs from the outer tx,
+        // those entities would be detached when the lambda runs on the
+        // coordinator pool thread → JPA mutations would silently no-op and
+        // abRun would stay PENDING forever. Re-load in the async block so the
+        // entities are attached to the lambda's own tx (or no tx, in which
+        // case AbEvalPipeline handles its own persistence via its repo refs).
+        // Mirrors the existing startImprovement → runImprovementAsync pattern.
+        final List<String> capturedScenarioIds = scenarios.stream()
+                .map(EvalScenarioEntity::getId).toList();
+        final String capturedAgentId = String.valueOf(agent.getId());
+        final String capturedBaselineId = baselineId;
+        final String capturedCandidateId = candidateVersionId;
+        coordinatorExecutor.submit(() -> {
+            try {
+                PromptAbRunEntity reloadedAbRun = promptAbRunRepository.findById(abRunId)
+                        .orElseThrow(() -> new RuntimeException(
+                                "AB run not found in async reload: " + abRunId));
+                PromptVersionEntity reloadedCandidate = promptVersionRepository.findById(capturedCandidateId)
+                        .orElseThrow(() -> new RuntimeException(
+                                "Candidate prompt version not found in async reload: " + capturedCandidateId));
+                PromptVersionEntity reloadedBaseline = promptVersionRepository.findById(capturedBaselineId)
+                        .orElseThrow(() -> new RuntimeException(
+                                "Baseline prompt version not found in async reload: " + capturedBaselineId));
+                AgentEntity reloadedAgent = agentRepository.findById(Long.parseLong(capturedAgentId))
+                        .orElseThrow(() -> new RuntimeException(
+                                "Agent not found in async reload: " + capturedAgentId));
+                List<EvalScenarioEntity> reloadedScenarios =
+                        evalScenarioRepository.findAllById(capturedScenarioIds);
+                abEvalPipeline.run(reloadedAbRun, reloadedCandidate, reloadedBaseline,
+                        reloadedAgent, reloadedScenarios);
+                log.info("Attribution A/B run {} dispatched + completed via AbEvalPipeline",
+                        abRunId);
+            } finally {
+                ephemeralScenarioCleanupService.cleanupEphemerals(capturedEphemeralIds);
+            }
+        });
+        return abRunId;
+    }
+
+    /**
+     * Phase 1.4 Ratify #7-E helper — extract 3 ephemeral EvalScenarios from
+     * the pattern members of the attribution event that produced the given
+     * candidate prompt version UUID. Throws {@link IllegalStateException}
+     * when the V88 sidecar link is missing or the pattern has no members.
+     */
+    private EphemeralBatch buildEphemeralScenariosForPromptCandidate(String candidateVersionId) {
+        List<com.skillforge.server.entity.OptimizationEventEntity> events =
+                optimizationEventRepository.findByCandidatePromptVersionUuid(candidateVersionId);
+        if (events.isEmpty()) {
+            throw new IllegalStateException(
+                    "Ephemeral fallback: no OptimizationEvent linked to candidate prompt version "
+                            + candidateVersionId + "; V88 sidecar populated?");
+        }
+        com.skillforge.server.entity.OptimizationEventEntity event = events.get(0);
+        Long patternId = event.getPatternId();
+        if (patternId == null) {
+            throw new IllegalStateException(
+                    "Ephemeral fallback: OptimizationEvent " + event.getId()
+                            + " has no patternId; cannot extract member scenarios");
+        }
+        List<com.skillforge.server.entity.PatternSessionMemberEntity> members =
+                patternSessionMemberRepository.findByPatternIdOrderByAddedAtDesc(
+                        patternId, org.springframework.data.domain.PageRequest.of(0, 3));
+        if (members.isEmpty()) {
+            throw new IllegalStateException(
+                    "Ephemeral fallback: pattern " + patternId + " has no members");
+        }
+        List<EvalScenarioEntity> ephemerals = new ArrayList<>();
+        List<String> ids = new ArrayList<>();
+        for (com.skillforge.server.entity.PatternSessionMemberEntity member : members) {
+            com.skillforge.server.entity.SessionEntity sess =
+                    sessionRepository.findById(member.getSessionId()).orElse(null);
+            if (sess == null) continue;
+            EvalScenarioEntity ephemeral = sessionScenarioExtractor.extractFromSession(sess);
+            if (ephemeral == null) continue;
+            ephemeral.setStatus("ephemeral");
+            ephemerals.add(evalScenarioRepository.save(ephemeral));
+            ids.add(ephemeral.getId());
+        }
+        return new EphemeralBatch(ephemerals, ids);
+    }
+
+    // Phase 1.4d W5 fix (2026-05-17): in-class `cleanupEphemeralScenarios`
+    // helper removed — cleanup now goes through {@link EphemeralScenarioCleanupService}
+    // so @Transactional(REQUIRES_NEW) actually takes effect (Spring AOP proxy
+    // ignores self-invocation, which is why the old in-class method silently
+    // no-op'd the deleteAllById inside the async coordinator finally).
+
+    /** Phase 1.4 internal container for ephemeral scenario batch + their IDs. */
+    private record EphemeralBatch(List<EvalScenarioEntity> scenarios, List<String> ephemeralIds) {}
 
     @Transactional
     public ImprovementStartResult startImprovement(String agentId,

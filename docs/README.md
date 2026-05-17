@@ -19,23 +19,24 @@
 
 | ID | 标题 | 状态 | 需求包 | MRD | PRD | 技术方案 | 交付 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| **FLYWHEEL-LOOP-CLOSURE** | 飞轮 ⑤ A/B 闭环真接 + canary logic disable + system agent eval | design-draft (Mid ~4-6d) | [需求包](requirements/active/FLYWHEEL-LOOP-CLOSURE/index.md) | [MRD](requirements/active/FLYWHEEL-LOOP-CLOSURE/mrd.md) | [PRD](requirements/active/FLYWHEEL-LOOP-CLOSURE/prd.md) | [tech-design](requirements/active/FLYWHEEL-LOOP-CLOSURE/tech-design.md) | — |
+| _(暂无 active 主线需求；FLYWHEEL-LOOP-CLOSURE 已交付归档 2026-05-17)_ | — | — | — | — | — | — | — |
 
-> 整体方案：[plans/PROD-OPTIMIZATION-FLYWHEEL/plan.md](plans/PROD-OPTIMIZATION-FLYWHEEL/plan.md) —— 数据飞轮 / 优化闭环 6 版本拆分（V1-V5 已交付，**V6 FLYWHEEL-LOOP-CLOSURE 进行中**）
+> 整体方案：[plans/PROD-OPTIMIZATION-FLYWHEEL/plan.md](plans/PROD-OPTIMIZATION-FLYWHEEL/plan.md) —— 数据飞轮 / 优化闭环 6 版本拆分（**V1-V6 全部已交付**，⑤ A/B 自动 trigger 真闭环 prompt+skill 双 surface 通）
 
-### V6 FLYWHEEL-LOOP-CLOSURE 当前 scope (2026-05-16 ratify)
+### V6 FLYWHEEL-LOOP-CLOSURE — 已交付 2026-05-17 ✅
 
-修飞轮 ⑤ A/B 真闭环 3 缺口 + 砍 canary（dogfood 单用户阶段暂不需要）+ system agent 也能跑 A/B:
+修飞轮 ⑤ A/B 真闭环 4 缺口 + 砍 canary（dogfood 单用户阶段）+ V3.2 link 接通（V88 旁路列）:
 
 | 缺口 | 修法 | 状态 |
 |---|---|---|
-| A: V3 attribution candidate 没 A/B endpoint | 加 `POST /api/agents/{id}/prompt-versions/{versionId}/run-ab` (skill 同款 endpoint) | 设计完，待实施 |
-| B+C: candidate_ready → A/B 没 EventListener | 加 `@EventListener` 接 OptimizationEvent stage_change | 设计完，待实施 |
-| D: SkillDraft attribution 路径是 stub | `SkillDraftService.createDraftFromAttribution` 加 sync LLM fill（跟 V3.1 PromptImprover 同款 BYPASS pattern） | 设计完，待实施 |
-| F: system agent 没 EvalScenario | `/run-ab` endpoint 加 fallback: 没 scenario 时从 pattern.members 动态抽 N session 生成临时 scenario | 设计完，待实施 |
-| **副作用: canary logic disable** | FE 隐藏 canary UI / BE 状态机跳过 canary / metrics-collector cron disable / **保留 t_canary_* schema + V2 service code dormant** | 设计完，待实施 |
+| A: V3 attribution candidate 没 A/B endpoint | 加 `POST /api/agents/{id}/prompt-versions/{versionId}/run-ab` + `POST /api/skills/{parentSkillId}/abtest-from-draft` | ✅ 已交付 |
+| B+C: candidate_ready → A/B 没 EventListener | `OptimizationEventStageChangeEvent` + `OptimizationEventAutoTriggerListener` 三重注解 (@Async + @TransactionalEventListener AFTER_COMMIT + @Transactional REQUIRES_NEW) | ✅ 已交付 |
+| D: SkillDraft attribution path stub | `SkillDraftService.createDraftFromAttribution` 加 sync LLM fill（跟 `SkillDraftService.extractFromRecentSessions` 同款 xiaomi-mimo/mimo-v2.5-pro pattern，修正 V3.1 假设错） | ✅ 已交付 |
+| F: system agent 没 EvalScenario | `/run-ab` 内 ephemeral scenario fallback 从 `OptimizationEvent.patternId` 反查 → `t_pattern_session_member` 3 session → `extractFromSession` 生 status='ephemeral' + 跑完 `EphemeralScenarioCleanupService` REQUIRES_NEW cleanup | ✅ 已交付 |
+| **副作用: canary logic disable** | FE 删 `<CanaryPanel>` embed (SkillAbPanel + BehaviorRuleEvolutionPanel) + V87 migration disable metrics-collector-hourly cron + ALLOWED_TRANSITIONS 加 `ab_passed → promoted` 直接边跳 canary + **保留 t_canary_* schema + V2 CanaryRolloutService dormant** 未来加回 ~2 行 reverse | ✅ 已交付 |
+| **附加: V3.2 link 接通 (UUID type mismatch fix)** | V88 加 `candidate_prompt_version_uuid` + `candidate_skill_draft_uuid` VARCHAR(36) 旁路列 (旧 Long 列 type mismatch — UUID surface 留 null + 向后兼容) | ✅ 已交付 |
 
-4 ratify 决策已锁: canary logic disable / SkillDraft fill 跟 V3.1 同款 / A/B trigger @EventListener / system agent eval 同期做。
+**8 ratify 决策已锁** (canary disable / SkillDraft fill 跟 SkillDraftService.extractFromRecentSessions / @EventListener / system agent fallback / V88 旁路列 / Phase 1.3-1.4 boundary placeholder / Phase 1.4 升 Full 档 / SkillEntity transient identity name 后缀). **mvn 1750/0/89 BUILD SUCCESS + Iron Law 核心 7+1 BE + 3 FE 0 diff**. 详见 [delivery-index.md](delivery-index.md) FLYWHEEL-LOOP-CLOSURE 行.
 
 ## Backlog 和暂缓
 
@@ -53,6 +54,7 @@
 
 | ID | 标题 | 需求包 | 技术方案 |
 | --- | --- | --- | --- |
+| FLYWHEEL-LOOP-CLOSURE | 飞轮 ⑤ A/B 自动 trigger 真闭环 prompt+skill 双 surface + canary logic disable + V3.2 link 接通（飞轮 V6）— Mid → upgraded Full / 8 sub-phase + Phase 2 r1+r2 / 5 mandatory fix / 8 ratify + 11 reviewer findings 全处置 + dogfood event 42 真跑通 | [需求包](requirements/archive/2026-05-17-FLYWHEEL-LOOP-CLOSURE/index.md) | [方案](requirements/archive/2026-05-17-FLYWHEEL-LOOP-CLOSURE/tech-design.md) |
 | ATTRIBUTION-AGENT | 飞轮归因 + Optimization Event 因果链（飞轮 V3）— BE+FE 闭环 + 5 phase review + 2 BLOCKER tx-propagation fix + sentinel race-window 防御 + bypass-cooldown ratify | [需求包](requirements/archive/2026-05-15-ATTRIBUTION-AGENT/index.md) | [方案](requirements/archive/2026-05-15-ATTRIBUTION-AGENT/tech-design.md) |
 | SKILL-AB-MULTITURN-FIX | Skill A/B 多轮评测修复（EVAL-DYNAMIC-USER-SIM Phase 1 拆分包；fix `SkillAbEvalService` multi-turn fallback warning → 真跑 `conversationTurns` + multi-turn judge + candidate skill 注入） | [需求包](requirements/archive/2026-05-13-SKILL-AB-MULTITURN-FIX/index.md) | [方案](requirements/archive/2026-05-13-SKILL-AB-MULTITURN-FIX/tech-design.md) |
 | SKILL-CANARY-ROLLOUT | Skill 灰度（架构保留）+ 生产指标回流（飞轮 V2）— BE+FE 闭环 + 3 phase review + tx-isolation fix + silent-failure fix | [需求包](requirements/archive/2026-05-15-SKILL-CANARY-ROLLOUT/index.md) | [方案](requirements/archive/2026-05-15-SKILL-CANARY-ROLLOUT/tech-design.md) |

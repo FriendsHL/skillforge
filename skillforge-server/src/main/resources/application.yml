@@ -70,6 +70,14 @@ skillforge:
                                         # After verifying counts in dev DB, revert to 'off'
                                         # so subsequent restarts don't re-run.
 
+  # FLYWHEEL-LOOP-CLOSURE Phase 1.3 (2026-05-16): auto-trigger A/B run on
+  # candidate_ready stage transition. Closes缺口 B+C — without this, attribution
+  # approve → candidate_ready sits idle waiting for an operator to manually click
+  # "Run A/B". Read by @ConditionalOnProperty on OptimizationEventAutoTriggerListener
+  # — false skips the listener bean entirely (no event delivery, no auto-trigger).
+  flywheel:
+    auto-trigger-ab-on-candidate-ready: true
+
   session-message-store:
     row-read-enabled: true
     row-write-enabled: true

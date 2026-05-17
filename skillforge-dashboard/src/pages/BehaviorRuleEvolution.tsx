@@ -120,10 +120,10 @@ const BehaviorRuleEvolution: React.FC = () => {
         <BehaviorRuleEvolutionPanel
           // BE column is VARCHAR(36) (UUID-style) but FE AgentDto.id is a
           // number. We stringify for the API param (BehaviorRuleVersionEntity
-          // matches on the string form) and pass the raw number through to
-          // CanaryPanel which expects `Long agentId`.
+          // matches on the string form). FLYWHEEL-LOOP-CLOSURE Phase 1.5
+          // (2026-05-16) — `agentNumericId` no longer needed since the
+          // embedded CanaryPanel was removed.
           agentId={String(selectedAgent.id)}
-          agentNumericId={selectedAgent.id}
         />
       ) : (
         !isLoading && (

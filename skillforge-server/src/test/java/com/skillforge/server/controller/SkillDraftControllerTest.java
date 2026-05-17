@@ -204,4 +204,91 @@ class SkillDraftControllerTest {
         assertThat(resp.getStatusCode().value()).isEqualTo(200);
         verify(skillDraftService).approveDraft("d1", 11L, true);
     }
+
+    // -------------------------------------------------------------------------
+    // FLYWHEEL-LOOP-CLOSURE Phase 1.4g (2026-05-17) — /abtest-from-draft endpoint
+    // contract tests (Phase 1.4b added the endpoint; tests deferred here).
+    // -------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("abtestFromDraft happy: candidateDraftId body → service.startAbTestFromDraft "
+            + "called + 202 + body abRunId")
+    void abtestFromDraft_happy_returnsAbRunId() {
+        when(skillDraftService.startAbTestFromDraft(eq("draft-uuid-1"), any()))
+                .thenReturn("ab-run-skill-happy");
+
+        Map<String, Object> body = new HashMap<>();
+        body.put("candidateDraftId", "draft-uuid-1");
+        body.put("evalScenarioIds", java.util.List.of("scen-1"));
+
+        ResponseEntity<?> resp = controller.abtestFromDraft(42L, body);
+
+        assertThat(resp.getStatusCode().value()).isEqualTo(202);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> respBody = (Map<String, Object>) resp.getBody();
+        assertThat(respBody).isNotNull();
+        assertThat(respBody.get("abRunId")).isEqualTo("ab-run-skill-happy");
+        assertThat(respBody.get("candidateDraftId")).isEqualTo("draft-uuid-1");
+        assertThat(respBody.get("parentSkillId")).isEqualTo(42L);
+    }
+
+    @Test
+    @DisplayName("abtestFromDraft draft not found: IAE message contains 'not found' → 404 "
+            + "(W2 message-text lock against drift)")
+    void abtestFromDraft_draftNotFound_returns404() {
+        when(skillDraftService.startAbTestFromDraft(eq("missing-draft"), any()))
+                .thenThrow(new IllegalArgumentException(
+                        "Candidate skill draft not found: missing-draft"));
+
+        Map<String, Object> body = new HashMap<>();
+        body.put("candidateDraftId", "missing-draft");
+
+        ResponseEntity<?> resp = controller.abtestFromDraft(42L, body);
+
+        assertThat(resp.getStatusCode().value()).isEqualTo(404);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> respBody = (Map<String, Object>) resp.getBody();
+        assertThat(respBody).isNotNull();
+        assertThat(respBody.get("error")).isEqualTo("NOT_FOUND");
+        // F3 fix (Phase 2 r2): controller now returns generic message body to
+        // avoid leaking internal text ("V88 sidecar populated?" etc.). The
+        // "not found" heuristic IS preserved as a STATUS CODE pivot (404 vs
+        // 400), tested by the 404 status assertion above — the response body
+        // does NOT carry the raw exception text anymore. W2 lock semantic is
+        // intact via the 404 status assertion + canonical generic message.
+        assertThat(respBody.get("message")).isEqualTo("Resource not found");
+    }
+
+    @Test
+    @DisplayName("abtestFromDraft ephemeral fallback: null scenarios → service handles fallback → "
+            + "202 + abRunId (no body field needed for fallback signal)")
+    void abtestFromDraft_ephemeralFallback_returnsAbRunId() {
+        when(skillDraftService.startAbTestFromDraft(eq("draft-fallback"), eq(null)))
+                .thenReturn("ab-run-skill-ephemeral");
+
+        Map<String, Object> body = new HashMap<>();
+        body.put("candidateDraftId", "draft-fallback");
+        // No evalScenarioIds key — controller passes null down to service.
+
+        ResponseEntity<?> resp = controller.abtestFromDraft(42L, body);
+
+        assertThat(resp.getStatusCode().value()).isEqualTo(202);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> respBody = (Map<String, Object>) resp.getBody();
+        assertThat(respBody.get("abRunId")).isEqualTo("ab-run-skill-ephemeral");
+    }
+
+    @Test
+    @DisplayName("abtestFromDraft missing candidateDraftId → 400 BAD_REQUEST")
+    void abtestFromDraft_missingDraftId_returns400() {
+        Map<String, Object> body = new HashMap<>();
+        // Intentionally no candidateDraftId.
+
+        ResponseEntity<?> resp = controller.abtestFromDraft(42L, body);
+
+        assertThat(resp.getStatusCode().value()).isEqualTo(400);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> respBody = (Map<String, Object>) resp.getBody();
+        assertThat(respBody.get("error")).isEqualTo("BAD_REQUEST");
+    }
 }

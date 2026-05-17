@@ -74,7 +74,16 @@ class PromptImproverServiceAttributionTest {
                 coordinatorExecutor,
                 props,
                 org.mockito.Mockito.mock(com.skillforge.server.improve.surface.PromptSurface.class),
-                org.mockito.Mockito.mock(PromptEvalService.class));
+                org.mockito.Mockito.mock(PromptEvalService.class),
+                // Phase 1.4 (2026-05-16) → Phase 1.4d (2026-05-17): ephemeral
+                // fallback deps + W5 cleanup service. mock(...) per W3 fix
+                // (Mockito-friendly NPE if any future test path dereferences).
+                org.mockito.Mockito.mock(com.skillforge.server.repository.EvalScenarioDraftRepository.class),
+                org.mockito.Mockito.mock(com.skillforge.server.repository.OptimizationEventRepository.class),
+                org.mockito.Mockito.mock(com.skillforge.server.repository.PatternSessionMemberRepository.class),
+                org.mockito.Mockito.mock(com.skillforge.server.repository.SessionRepository.class),
+                org.mockito.Mockito.mock(com.skillforge.server.improve.SessionScenarioExtractorService.class),
+                org.mockito.Mockito.mock(com.skillforge.server.improve.EphemeralScenarioCleanupService.class));
         // PromptImproverServiceAttributionTest exercises startImprovementFromAttribution
         // (V3.1 sync LLM fill path) — does NOT invoke AbstractAbEvalRunner.run(),
         // so no PromptEvalService.run setup needed.

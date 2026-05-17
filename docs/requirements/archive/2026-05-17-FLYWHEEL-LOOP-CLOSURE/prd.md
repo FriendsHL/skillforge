@@ -2,14 +2,15 @@
 
 ---
 id: FLYWHEEL-LOOP-CLOSURE
-status: design-draft
+status: delivered
 owner: youren
 priority: P1
-risk: Mid
+risk: Mid → upgraded Full
 mrd: ./mrd.md
 tech_design: ./tech-design.md
 created: 2026-05-16
-updated: 2026-05-16
+updated: 2026-05-17
+completed: 2026-05-17
 ---
 
 ## 摘要

@@ -100,6 +100,35 @@ public class SkillStorageService {
     }
 
     /**
+     * FLYWHEEL-LOOP-CLOSURE Phase 1.6 dogfood R3 fix (2026-05-17) —
+     * best-effort recursive delete of a previously allocated skill artifact
+     * directory. Used by {@code SkillSelfImproveLoop.cleanupAttributionLoserCandidate}
+     * to clean up disk files when an attribution transient candidate loses
+     * its A/B run.
+     *
+     * <p>Safe to call with {@code null} or a non-existent path — both are
+     * treated as no-op. Any per-file delete failure is swallowed + logged at
+     * WARN so the caller's overall cleanup flow doesn't propagate disk-level
+     * errors back into the @TransactionalEventListener body (which already
+     * has its own try/catch).
+     */
+    public void delete(Path dir) {
+        if (dir == null || !Files.isDirectory(dir)) {
+            return;
+        }
+        try (var walk = Files.walk(dir)) {
+            walk.sorted(java.util.Comparator.reverseOrder())
+                    .forEach(p -> {
+                        try { Files.deleteIfExists(p); }
+                        catch (IOException ignored) {}
+                    });
+        } catch (IOException e) {
+            // Best-effort: caller already in a cleanup context; bubbling
+            // disk errors would mask the original A/B outcome.
+        }
+    }
+
+    /**
      * Reject empty / null / traversal / absolute path / separator / null-byte
      * inputs that could let a caller break out of the runtime root layout.
      */

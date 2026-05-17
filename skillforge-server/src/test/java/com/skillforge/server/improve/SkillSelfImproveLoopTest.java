@@ -38,11 +38,14 @@ class SkillSelfImproveLoopTest {
     @Mock private AgentService agentService;
     @Mock private SkillEvolutionService skillEvolutionService;
     @Mock private UserWebSocketHandler userWebSocketHandler;
+    // Phase 1.6 R3 fix — wired for the loser cleanup hook disk-delete path.
+    @Mock private com.skillforge.server.skill.SkillStorageService skillStorageService;
 
     private SkillSelfImproveLoop newLoop(boolean enabled, double threshold) {
         return new SkillSelfImproveLoop(
                 skillRepository, historyRepository, agentService,
                 skillEvolutionService, userWebSocketHandler,
+                skillStorageService,
                 enabled, threshold);
     }
 
@@ -228,5 +231,84 @@ class SkillSelfImproveLoopTest {
         newLoop(true, 60.0).onAbCompleted(event);
 
         verify(userWebSocketHandler, never()).broadcast(any(), any());
+    }
+
+    // -------------------------------------------------------------------------
+    // FLYWHEEL-LOOP-CLOSURE Phase 1.4g (2026-05-17) — loser cleanup hook
+    // coverage for cleanupAttributionLoserCandidate (Concern 10).
+    // -------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("loser transient candidate (source + name regex dual pivot) → "
+            + "delete candidate + paired baseline + R3 disk-file cleanup via "
+            + "skillStorageService.delete(skillPath)")
+    void onAbCompleted_loserTransientCandidate_cleanedUp() {
+        SkillEntity candidate = new SkillEntity();
+        candidate.setId(99L);
+        candidate.setName("ImprovedSkill_candidate_a1b2c3d4");
+        candidate.setSource("attribution_ab_transient");
+        candidate.setOwnerId(7L);
+        // R3 fix: skillPath set so the cleanup verifies disk-file removal.
+        candidate.setSkillPath("/tmp/skillforge/skills/evolution-fork/7/abc/c");
+        when(skillRepository.findById(99L)).thenReturn(Optional.of(candidate));
+
+        SkillEntity baseline = new SkillEntity();
+        baseline.setId(100L);
+        baseline.setName("ImprovedSkill_candidate_a1b2c3d4_baseline_empty");
+        baseline.setSource("attribution_ab_baseline_empty");
+        baseline.setSkillPath("/tmp/skillforge/skills/evolution-fork/7/abc/b");
+        when(skillRepository.findByName("ImprovedSkill_candidate_a1b2c3d4_baseline_empty"))
+                .thenReturn(Optional.of(baseline));
+
+        SkillAbCompletedEvent event = new SkillAbCompletedEvent(
+                99L, "ab-run-loser", false, 50.0, 40.0, "v1", "v2");
+
+        newLoop(true, 60.0).onAbCompleted(event);
+
+        verify(skillRepository).delete(candidate);
+        verify(skillRepository).delete(baseline);
+        // R3 fix: verify skillStorageService.delete called for BOTH candidate
+        // + baseline disk paths (pre-R3 the DB row went away but file leaked).
+        verify(skillStorageService).delete(eq(java.nio.file.Path.of(
+                "/tmp/skillforge/skills/evolution-fork/7/abc/c")));
+        verify(skillStorageService).delete(eq(java.nio.file.Path.of(
+                "/tmp/skillforge/skills/evolution-fork/7/abc/b")));
+        verify(userWebSocketHandler, never()).broadcast(any(), any());
+    }
+
+    @Test
+    @DisplayName("loser NON-transient candidate (source mismatch) → no delete "
+            + "(V2/V4 production fork protected by dual pivot)")
+    void onAbCompleted_loserNonTransient_notCleanedUp() {
+        SkillEntity productionLoser = new SkillEntity();
+        productionLoser.setId(50L);
+        productionLoser.setName("RegularSkill");
+        productionLoser.setSource("user_authored");
+        when(skillRepository.findById(50L)).thenReturn(Optional.of(productionLoser));
+
+        SkillAbCompletedEvent event = new SkillAbCompletedEvent(
+                50L, "ab-run-prod-loser", false, 50.0, 45.0, "v1", "v2");
+
+        newLoop(true, 60.0).onAbCompleted(event);
+
+        verify(skillRepository, never()).delete(any(SkillEntity.class));
+        verify(skillRepository, never()).findByName(anyString());
+    }
+
+    @Test
+    @DisplayName("promoted=true winner → no cleanup (winner path takes existing WS broadcast)")
+    void onAbCompleted_promotedCandidate_notCleanedUp() {
+        SkillEntity winner = skill(60L, 7L);
+        winner.setName("ImprovedSkill_candidate_deadbeef");
+        winner.setSource("attribution_ab_transient");
+        when(skillRepository.findById(60L)).thenReturn(Optional.of(winner));
+
+        SkillAbCompletedEvent event = new SkillAbCompletedEvent(
+                60L, "ab-run-winner", true, 30.0, 80.0, "v1", "v2");
+
+        newLoop(true, 60.0).onAbCompleted(event);
+
+        verify(skillRepository, never()).delete(any(SkillEntity.class));
+        verify(userWebSocketHandler).broadcast(eq(7L), any());
     }
 }

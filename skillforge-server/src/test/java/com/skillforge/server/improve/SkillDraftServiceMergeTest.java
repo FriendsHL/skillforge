@@ -71,7 +71,14 @@ class SkillDraftServiceMergeTest {
                 sessionRepository, skillDraftRepository, skillRepository,
                 llmProviderFactory, new ObjectMapper(), props,
                 userWebSocketHandler, creatorService, packageLoader, skillRegistry,
-                skillStorageService);
+                skillStorageService,
+                // Phase 1.4e — 6 mock deps for startAbTestFromDraft path.
+                org.mockito.Mockito.mock(com.skillforge.server.repository.EvalScenarioDraftRepository.class),
+                org.mockito.Mockito.mock(com.skillforge.server.repository.OptimizationEventRepository.class),
+                org.mockito.Mockito.mock(com.skillforge.server.repository.PatternSessionMemberRepository.class),
+                org.mockito.Mockito.mock(com.skillforge.server.improve.SessionScenarioExtractorService.class),
+                org.mockito.Mockito.mock(com.skillforge.server.improve.EphemeralScenarioCleanupService.class),
+                org.mockito.Mockito.mock(com.skillforge.server.improve.SkillAbEvalService.class));
     }
 
     private SkillDraftEntity newDraft(String status, Long ownerId) {
