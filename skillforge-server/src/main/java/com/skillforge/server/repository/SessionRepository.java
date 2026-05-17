@@ -30,6 +30,24 @@ public interface SessionRepository extends JpaRepository<SessionEntity, String> 
     List<SessionEntity> findByUserIdAndParentSessionIdIsNullAndOriginOrderByUpdatedAtDesc(
             Long userId, String origin);
 
+    /**
+     * SYSTEM-AGENT-TYPING Phase 2 visibility (2026-05-18): list top-level sessions
+     * by the OWNING agent's {@code agent_type} (joined via {@code agentId → AgentEntity}).
+     * userId is intentionally NOT a filter here — system-typed agents are cron-owned
+     * (typically userId=0) but the dashboard operator (userId=1=admin in single-user
+     * dev) is expected to see them. This is the BE Phase B replacement for the
+     * Phase A client-side filter in {@code SessionList.tsx} / {@code Chat.tsx}.
+     *
+     * <p>Cross-entity JPQL mirrors the {@code findIdleExtractionCandidates} pattern
+     * (SessionMessageEntity / SessionEntity); works on H2 and PostgreSQL identically.
+     */
+    @Query("SELECT s FROM SessionEntity s, AgentEntity a " +
+            "WHERE s.agentId = a.id AND a.agentType = :agentType " +
+            "AND s.parentSessionId IS NULL AND s.origin = :origin " +
+            "ORDER BY s.updatedAt DESC")
+    List<SessionEntity> findByAgentTypeAndOriginOrderByUpdatedAtDesc(
+            @Param("agentType") String agentType, @Param("origin") String origin);
+
     List<SessionEntity> findByAgentId(Long agentId);
 
     long countByAgentId(Long agentId);

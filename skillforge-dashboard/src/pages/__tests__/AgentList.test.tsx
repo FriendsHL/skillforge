@@ -1,15 +1,19 @@
 /**
- * SYSTEM-AGENT-TYPING Phase 2.2 — AgentList toggle + monitor inline + Tag.
+ * SYSTEM-AGENT-TYPING Phase 2 UX refactor (2026-05-18) — AgentList Tabs.
  *
- * Cases (per requirements/active/SYSTEM-AGENT-TYPING/index.md task #3 brief):
- *   1. toggle "Show system agents" defaults OFF + persists in localStorage
- *   2. toggle ON re-queries with agentType='all' and shows the System tag +
- *      inline SystemAgentMonitorCard for system-typed agents
+ * Replaces the Phase 2.2 Switch toggle ("Show system agents") with a
+ * top-level Tabs UI ("User Agents" / "System Agents"). The localStorage
+ * key migrates from `agentlist.show_system_agents` (boolean string) to
+ * `agentlist.active_tab` (string 'user' | 'system', default 'user').
+ *
+ * Cases:
+ *   1. Tabs render; "User Agents" is the default active tab; getAgents
+ *      called with 'user' on first mount.
+ *   2. Click "System Agents" tab → re-fetch with 'system'; System tag +
+ *      inline SystemAgentMonitorCard surface for system-typed agents.
  *   3. Run Manually click → POST /api/schedules/{taskId}/trigger
- *
- * We mock the api/api/schedules/systemAgents wrappers so the test stays
- * focused on AgentList behavior (toggle wiring + tag + monitor card rendering
- * + click → trigger). AgentDrawer is mocked to keep noise low.
+ *   4. localStorage `agentlist.active_tab` is read on mount + written on
+ *      switch (so the choice survives reload).
  */
 import React from 'react';
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
@@ -56,10 +60,15 @@ const systemAgent = {
 };
 
 // `getAgents(agentType)` — captures the agentType arg so we can assert the
-// toggle actually re-fetches with the new param.
+// tab switch actually re-fetches with the new param.
 const getAgentsMock = vi.fn();
 function setAgentsResponse(agentType: 'user' | 'system' | 'all' | undefined) {
-  if (agentType === 'all' || agentType === 'system') {
+  // BE contract: 'user' → only user agents; 'system' → only system agents.
+  // 'all' is allowed by the typing but isn't used in the Tabs UX.
+  if (agentType === 'system') {
+    return Promise.resolve({ data: [systemAgent] });
+  }
+  if (agentType === 'all') {
     return Promise.resolve({ data: [userAgent, systemAgent] });
   }
   return Promise.resolve({ data: [userAgent] });
@@ -71,7 +80,7 @@ vi.mock('../../api', async () => {
     ...actual,
     getAgents: (...args: unknown[]) => {
       getAgentsMock(...args);
-      return setAgentsResponse(args[0] as 'user' | 'all' | undefined);
+      return setAgentsResponse(args[0] as 'user' | 'system' | 'all' | undefined);
     },
     getTools: vi.fn(() => Promise.resolve({ data: [] })),
     getSkills: vi.fn(() => Promise.resolve({ data: [] })),
@@ -165,77 +174,83 @@ function renderPage() {
   );
 }
 
-describe('AgentList — Show system agents toggle (SYSTEM-AGENT-TYPING Phase 2.2)', () => {
+// AntD Tabs renders each label as a div with role="tab"; the easiest stable
+// selector is `getByRole('tab', { name: ... })`.
+function getTab(name: 'User Agents' | 'System Agents') {
+  return screen.getByRole('tab', { name });
+}
+
+describe('AgentList — User/System Tabs (SYSTEM-AGENT-TYPING Phase 2 UX refactor)', () => {
   beforeEach(() => {
     window.localStorage.clear();
     getAgentsMock.mockClear();
     vi.mocked(triggerSchedule).mockClear();
   });
 
-  it('defaults toggle OFF and fetches only user agents', async () => {
+  it('defaults to User Agents tab and fetches only user agents', async () => {
     renderPage();
 
-    // Toggle exists + unchecked
-    const toggle = await screen.findByTestId('show-system-agents-toggle');
-    expect(toggle).toBeInTheDocument();
-    expect(toggle).toHaveAttribute('aria-checked', 'false');
+    // Both tabs render
+    const userTab = await screen.findByRole('tab', { name: 'User Agents' });
+    const systemTab = screen.getByRole('tab', { name: 'System Agents' });
+    expect(userTab).toBeInTheDocument();
+    expect(systemTab).toBeInTheDocument();
+
+    // User tab is active by default (aria-selected)
+    expect(userTab).toHaveAttribute('aria-selected', 'true');
+    expect(systemTab).toHaveAttribute('aria-selected', 'false');
 
     // Initial fetch: agentType='user'
     await waitFor(() => {
       expect(getAgentsMock).toHaveBeenCalledWith('user');
     });
 
-    // System agent NOT in the rendered list
+    // System agent NOT in the rendered list (BE filtered server-side)
     expect(await screen.findByText('Main Assistant')).toBeInTheDocument();
     expect(screen.queryByText('session-annotator')).not.toBeInTheDocument();
 
-    // No System tag for the user agent
+    // No System tag (no system agent rendered)
     expect(screen.queryByTestId(`system-agent-tag-${systemAgent.id}`)).not.toBeInTheDocument();
   });
 
-  it('toggle ON re-queries agentType=all and shows System tag + monitor card', async () => {
+  it('clicking System Agents tab re-fetches with agentType=system + shows tag + monitor card', async () => {
     renderPage();
 
-    // Flip toggle on
-    const toggle = await screen.findByTestId('show-system-agents-toggle');
+    const systemTab = await screen.findByRole('tab', { name: 'System Agents' });
     await act(async () => {
-      fireEvent.click(toggle);
+      fireEvent.click(systemTab);
     });
 
-    // Re-fetch with 'all'
+    // Re-fetch with 'system'
     await waitFor(() => {
-      expect(getAgentsMock).toHaveBeenCalledWith('all');
+      expect(getAgentsMock).toHaveBeenCalledWith('system');
     });
 
     // System agent now rendered
     expect(await screen.findByText('session-annotator')).toBeInTheDocument();
-    // System tag is on the system agent's card
+    // System tag is on the system agent's card (redundant but reinforces visually)
     expect(screen.getByTestId(`system-agent-tag-${systemAgent.id}`)).toBeInTheDocument();
-    // User agent does NOT get a tag
-    expect(screen.queryByTestId(`system-agent-tag-${userAgent.id}`)).not.toBeInTheDocument();
+    // User agent isn't in the rendered list at all on the system tab
+    expect(screen.queryByText('Main Assistant')).not.toBeInTheDocument();
 
     // Inline monitor card rendered for the system agent
     const monitor = await screen.findByTestId(`system-agent-monitor-${systemAgent.id}`);
     expect(monitor).toBeInTheDocument();
-    // Status tag visible (last_run_status === 'success')
     expect(monitor).toHaveTextContent(/success/i);
-    // 7d triggers / output counts visible
     expect(monitor).toHaveTextContent(/168/);
     expect(monitor).toHaveTextContent(/29/);
-    // cron visible
     expect(monitor).toHaveTextContent(/0 30 \* \* \* \*/);
 
-    // localStorage persistence
-    expect(window.localStorage.getItem('agentlist.show_system_agents')).toBe('true');
+    // localStorage persistence — new key + new value shape (string, not boolean)
+    expect(window.localStorage.getItem('agentlist.active_tab')).toBe('system');
   });
 
   it('Run Manually click triggers schedule for the resolved taskId', async () => {
     renderPage();
 
-    // Flip toggle on
-    const toggle = await screen.findByTestId('show-system-agents-toggle');
+    const systemTab = await screen.findByRole('tab', { name: 'System Agents' });
     await act(async () => {
-      fireEvent.click(toggle);
+      fireEvent.click(systemTab);
     });
 
     // Wait for monitor card to render
@@ -254,20 +269,37 @@ describe('AgentList — Show system agents toggle (SYSTEM-AGENT-TYPING Phase 2.2
     });
   });
 
-  it('reads toggle state from localStorage on mount', async () => {
-    window.localStorage.setItem('agentlist.show_system_agents', 'true');
+  it('reads `agentlist.active_tab` from localStorage on mount', async () => {
+    window.localStorage.setItem('agentlist.active_tab', 'system');
 
     renderPage();
 
-    // Toggle starts checked because localStorage said true
-    const toggle = await screen.findByTestId('show-system-agents-toggle');
-    expect(toggle).toHaveAttribute('aria-checked', 'true');
+    // The system tab starts active because localStorage said so.
+    const systemTab = await screen.findByRole('tab', { name: 'System Agents' });
+    expect(systemTab).toHaveAttribute('aria-selected', 'true');
 
-    // Initial fetch goes straight to 'all'
+    // Initial fetch goes straight to 'system'
     await waitFor(() => {
-      expect(getAgentsMock).toHaveBeenCalledWith('all');
+      expect(getAgentsMock).toHaveBeenCalledWith('system');
     });
     // 'user' was never requested
     expect(getAgentsMock).not.toHaveBeenCalledWith('user');
+  });
+
+  it('falls back to default `user` tab when localStorage holds an unknown key', async () => {
+    // useLocalStorageString narrows the persisted value via the allowedValues
+    // guard. A garbage value (manual edit / schema drift) MUST fall back to
+    // the default instead of getting passed to Tabs as activeKey (which would
+    // silently render nothing).
+    window.localStorage.setItem('agentlist.active_tab', 'all');
+
+    renderPage();
+
+    const userTab = await screen.findByRole('tab', { name: 'User Agents' });
+    expect(userTab).toHaveAttribute('aria-selected', 'true');
+
+    await waitFor(() => {
+      expect(getAgentsMock).toHaveBeenCalledWith('user');
+    });
   });
 });

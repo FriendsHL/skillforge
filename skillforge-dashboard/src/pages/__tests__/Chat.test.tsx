@@ -13,7 +13,7 @@
  * NOTE: Mocking happens at the top of the file (Vitest hoists `vi.mock`).
  */
 import React from 'react';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 
@@ -186,7 +186,54 @@ vi.mock('../../components/CheckpointModal', () => ({ default: () => <div /> }));
 vi.mock('../../components/RuntimeBanner', () => ({ default: () => <div data-testid="runtime-banner" /> }));
 vi.mock('../../components/PendingAskCard', () => ({ default: () => <div /> }));
 vi.mock('../../components/InstallConfirmationCard', () => ({ default: () => <div /> }));
-vi.mock('../../components/ChatSidebar', () => ({ default: () => <aside /> }));
+// ChatSidebar shim — surface props (activeAgentTab, scoped agent list,
+// selectedAgent, callbacks) so the Phase 2 UX refactor tests can drive tab
+// switches and assert agent picker scope without depending on AntD Tabs
+// internals or the full ChatSidebar DOM.
+//
+// We intentionally re-implement the agentType filter in the mock to match
+// ChatSidebar's actual logic ("agentType=null → user"). This keeps the test
+// honest: if Chat.tsx fails to pass the prop or wires the wrong key, the
+// scoped-list assertion below will catch it.
+vi.mock('../../components/ChatSidebar', () => ({
+  default: (props: {
+    agents?: Array<{ id: number; name: string; agentType?: 'user' | 'system' | null }>;
+    selectedAgent?: number;
+    activeAgentTab?: 'user' | 'system';
+    onSelectAgent?: (id: number) => void;
+    onAgentTabChange?: (next: 'user' | 'system') => void;
+  }) => {
+    const tab = props.activeAgentTab ?? 'user';
+    const scoped = (props.agents ?? []).filter(
+      (a) => (a.agentType ?? 'user') === tab,
+    );
+    return (
+      <aside data-testid="chat-sidebar">
+        <div data-testid="chat-sidebar-active-tab">{tab}</div>
+        <div data-testid="chat-sidebar-selected-agent">
+          {props.selectedAgent == null ? 'none' : String(props.selectedAgent)}
+        </div>
+        <ul data-testid="chat-sidebar-scoped-agents">
+          {scoped.map((a) => (
+            <li key={a.id} data-testid={`sidebar-agent-${a.id}`}>
+              {a.name}
+            </li>
+          ))}
+        </ul>
+        <button
+          type="button"
+          data-testid="chat-sidebar-tab-user"
+          onClick={() => props.onAgentTabChange?.('user')}
+        />
+        <button
+          type="button"
+          data-testid="chat-sidebar-tab-system"
+          onClick={() => props.onAgentTabChange?.('system')}
+        />
+      </aside>
+    );
+  },
+}));
 vi.mock('../../components/chat/RightRail', () => ({ default: () => <aside /> }));
 vi.mock('../../components/chat/primitives', () => ({
   Chip: (props: { children?: React.ReactNode }) => <span>{props.children}</span>,
@@ -218,6 +265,11 @@ describe('Chat — system agent send gate (SYSTEM-AGENT-TYPING Phase 2.3)', () =
   beforeEach(() => {
     getAgentsMock.mockClear();
     getSessionsMock.mockClear();
+    // Phase 2 UX refactor — chat sidebar tab is persisted in localStorage.
+    // Clear between tests so localStorage state from one case doesn't leak
+    // into the next (which would otherwise auto-flip the tab before the
+    // assertion runs).
+    window.localStorage.clear();
   });
 
   it('system agent disables send and shows banner', async () => {
@@ -263,5 +315,76 @@ describe('Chat — system agent send gate (SYSTEM-AGENT-TYPING Phase 2.3)', () =
     // Send gate is only set by the system-agent path; with no pendingAsk /
     // pendingConfirm in this test setup, inputDisabled must be false.
     expect(screen.getByTestId('chat-window-input-disabled').textContent).toBe('false');
+  });
+
+  // ---- Phase 2 UX refactor (2026-05-18) — sidebar Tabs --------------------
+
+  it('sidebar tab auto-switches to System when the selected agent is a system agent', async () => {
+    renderChatWithAgent(systemAgent.id);
+
+    // After agents load, the auto-switch effect in Chat.tsx picks up that
+    // selectedAgent → systemAgent, which has agentType='system', and flips
+    // the sidebar tab. We assert via the ChatSidebar mock's surface.
+    await waitFor(() => {
+      expect(screen.getByTestId('chat-sidebar-active-tab').textContent).toBe('system');
+    });
+    // selectedAgent is preserved (system agent is the picked one).
+    expect(screen.getByTestId('chat-sidebar-selected-agent').textContent).toBe(
+      String(systemAgent.id),
+    );
+    // Scoped agent list shows ONLY the system agent (user agent is filtered
+    // out by the active tab).
+    expect(screen.getByTestId(`sidebar-agent-${systemAgent.id}`)).toBeInTheDocument();
+    expect(screen.queryByTestId(`sidebar-agent-${userAgent.id}`)).not.toBeInTheDocument();
+  });
+
+  // ---- Phase B visibility (2026-05-18) — agentType-aware fetch ------------
+
+  it('selecting a system agent fetches sessions with agentType=system (Phase B)', async () => {
+    renderChatWithAgent(systemAgent.id);
+
+    // The agents=[user,system] list loads via getAgents('all') first, then
+    // Chat's effect runs getSessions(userId, agentType) where agentType
+    // is derived from the selected agent. With selectedAgent=systemAgent.id,
+    // the call MUST include agentType='system' so BE bypasses userId filter
+    // and returns cron-owned (ownerId=0) sessions.
+    await waitFor(() => {
+      expect(getSessionsMock).toHaveBeenCalledWith(1, 'system');
+    });
+  });
+
+  it('selecting a user agent fetches sessions with agentType=user (legacy path)', async () => {
+    renderChatWithAgent(userAgent.id);
+
+    await waitFor(() => {
+      expect(getSessionsMock).toHaveBeenCalledWith(1, 'user');
+    });
+  });
+
+  it('manual sidebar tab switch preserves selectedAgent (cross-tab persistence)', async () => {
+    renderChatWithAgent(userAgent.id);
+
+    // Wait for the user tab to render with the user agent.
+    await waitFor(() => {
+      expect(screen.getByTestId('chat-sidebar-active-tab').textContent).toBe('user');
+    });
+    expect(screen.getByTestId('chat-sidebar-selected-agent').textContent).toBe(
+      String(userAgent.id),
+    );
+
+    // Operator manually switches to the System tab — selectedAgent must
+    // survive (UX intent: "切 tab 不重置 selectedAgent").
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('chat-sidebar-tab-system'));
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('chat-sidebar-active-tab').textContent).toBe('system');
+    });
+    // selectedAgent still points at the user agent (cross-tab state preserved).
+    expect(screen.getByTestId('chat-sidebar-selected-agent').textContent).toBe(
+      String(userAgent.id),
+    );
+    // localStorage persistence — manual switch wins, written to the chat key.
+    expect(window.localStorage.getItem('chat.active_agent_tab')).toBe('system');
   });
 });

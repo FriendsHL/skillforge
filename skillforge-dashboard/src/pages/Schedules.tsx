@@ -7,6 +7,7 @@ import relativeTime from 'dayjs/plugin/relativeTime';
 dayjs.extend(relativeTime);
 import {
   listSchedules,
+  getSchedule,
   deleteSchedule,
   triggerSchedule,
   updateSchedule,
@@ -255,19 +256,46 @@ const Schedules: React.FC = () => {
     setEditOpen(true);
   }, []);
 
-  // SYSTEM-AGENT-TYPING Phase 2 W2 fix — consume `?taskId=N` once `tasks`
-  // loads: open the edit drawer for the matching task. One-shot so the param
-  // doesn't keep re-triggering on every render. Drop the param via
-  // `setSearchParams` regardless of match so a stale link doesn't loop.
+  // SYSTEM-AGENT-TYPING Phase 2 W2 follow-up (2026-05-17) — consume
+  // `?taskId=N` and open the edit drawer for that task.
+  //
+  // The original W2 fix (commit df827c9) looked the task up by scanning the
+  // `tasks` list. That assumed the task was in the page slice the FE happens
+  // to render — which broke against real production data where target tasks
+  // (e.g. id=3 / memory-curator-nightly) aren't guaranteed to be in the
+  // first slice. The fixture-only unit tests passed because they mocked a
+  // list that always contained the target id.
+  //
+  // The robust fix is to fetch the task BY ID via `/api/schedules/{id}`.
+  // No dependency on the list contents — single point of truth. We use
+  // react-query so a refresh of the same param hits cache.
+  const numericTaskIdParam = useMemo(() => {
+    if (!taskIdParam) return null;
+    const n = Number(taskIdParam);
+    return Number.isNaN(n) ? null : n;
+  }, [taskIdParam]);
+
+  const { data: deepLinkTask, status: deepLinkTaskStatus } = useQuery({
+    queryKey: ['schedule', numericTaskIdParam, userId] as const,
+    queryFn: () =>
+      getSchedule(numericTaskIdParam as number, userId).then(
+        (res) => res.data as ScheduledTask | null,
+      ),
+    enabled: numericTaskIdParam !== null,
+    staleTime: 30_000,
+    // 404 / not-owned-by-user → swallow silently; we still drop the URL
+    // param below regardless (no infinite retry, no UI noise).
+    retry: false,
+  });
+
   useEffect(() => {
     if (!taskIdParam) return;
-    if (tasks.length === 0) return;
-    const numericId = Number(taskIdParam);
-    if (!Number.isNaN(numericId)) {
-      const match = tasks.find((t) => t.id === numericId);
-      if (match) {
-        handleOpenEdit(match);
-      }
+    // Wait until the fetch settles before we touch state. Malformed param
+    // (numericTaskIdParam === null) → query is disabled → status stays
+    // 'pending' indefinitely, so we short-circuit straight to "drop param".
+    if (numericTaskIdParam !== null && deepLinkTaskStatus === 'pending') return;
+    if (deepLinkTask) {
+      handleOpenEdit(deepLinkTask);
     }
     setSearchParams(
       (prev) => {
@@ -277,7 +305,14 @@ const Schedules: React.FC = () => {
       },
       { replace: true },
     );
-  }, [taskIdParam, tasks, handleOpenEdit, setSearchParams]);
+  }, [
+    taskIdParam,
+    numericTaskIdParam,
+    deepLinkTask,
+    deepLinkTaskStatus,
+    handleOpenEdit,
+    setSearchParams,
+  ]);
 
   const handleOpenHistory = useCallback((task: ScheduledTask) => {
     setHistoryTarget(task);

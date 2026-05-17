@@ -130,7 +130,15 @@ export const getLlmModels = () => api.get<ModelOption[]>('/llm/models');
 // endpoints so new code no longer writes t_session.source_scenario_id.
 export const createSession = (data: { userId: number; agentId: number; sourceScenarioId?: string }) =>
   api.post('/chat/sessions', data);
-export const getSessions = (userId: number) => api.get(`/chat/sessions?userId=${userId}`);
+// SYSTEM-AGENT-TYPING Phase 2 visibility (2026-05-18): optional `agentType`
+// param. When 'system', BE switches to JOIN-by-agent_type path (userId-agnostic)
+// so the dashboard operator (userId=1=admin) sees cron-owned system sessions
+// (typically ownerId=0). Omitted or 'user' keeps the legacy userId-scoped path.
+export const getSessions = (userId: number, agentType?: 'user' | 'system') => {
+  const params = new URLSearchParams({ userId: String(userId) });
+  if (agentType) params.set('agentType', agentType);
+  return api.get(`/chat/sessions?${params.toString()}`);
+};
 export const getSessionMessages = (id: string, userId: number) =>
   api.get(`/chat/sessions/${id}/messages`, { params: { userId } });
 

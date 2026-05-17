@@ -1,10 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Modal, message } from 'antd';
+import { Modal, Tabs, message } from 'antd';
 import {
   getSessions,
   getSessionMessages,
+  getAgent,
   extractList,
   deleteSessions,
   getContextBreakdown,
@@ -19,6 +20,7 @@ import '../components/skills/skills.css';
 import MarkdownRenderer from '../components/MarkdownRenderer';
 import { stripSystemReminderBlocks } from '../utils/messageContent';
 import type { RawMessage } from '../types/messages';
+import { useLocalStorageString } from '../hooks/useLocalStorageString';
 
 const CLOSE_ICON = (
   <svg width={14} height={14} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
@@ -156,16 +158,46 @@ const SessionList: React.FC = () => {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [deleting, setDeleting] = useState(false);
 
-  const SESSIONS_KEY = useMemo(() => ['sessions', userId] as const, [userId]);
+  // SYSTEM-AGENT-TYPING Phase 2 UX refactor (2026-05-18) — top-level Tabs
+  // splitting sessions by the OWNING agent's `agentType`. Persisted in
+  // localStorage so the choice survives reload. Default 'user': the system
+  // sessions (cron-spawned annotator / curator runs) are noise unless the
+  // operator explicitly opts in.
+  //
+  // Phase B (2026-05-18 visibility follow-up): BE `?agentType=` on
+  // /api/sessions replaces the Phase A client-side filter. System sessions
+  // are cron-owned (ownerId=0); the BE JOIN-by-agent_type path ignores
+  // userId so the dashboard operator (userId=1=admin) actually sees them.
+  // The client-side `scopedAgents` filter is gone — BE returns the right
+  // scope and the FE consumes it directly. (Agents-by-type still loads
+  // separately for the deep-link `?agentId=` lookup; see below.)
+  const SESSION_TAB_KEYS = ['user', 'system'] as const;
+  type SessionTabKey = (typeof SESSION_TAB_KEYS)[number];
+  const [activeTab, setActiveTab] = useLocalStorageString<SessionTabKey>(
+    'sessionlist.active_tab',
+    'user',
+    SESSION_TAB_KEYS,
+  );
+
+  // Re-fetch when the tab changes so the BE-filtered list updates.
+  const SESSIONS_KEY = useMemo(
+    () => ['sessions', userId, activeTab] as const,
+    [userId, activeTab],
+  );
 
   const { data: rawSessions = [] } = useQuery({
     queryKey: SESSIONS_KEY,
-    queryFn: () => getSessions(userId).then(res => extractList<Record<string, unknown>>(res)),
+    queryFn: () =>
+      getSessions(userId, activeTab).then((res) =>
+        extractList<Record<string, unknown>>(res),
+      ),
     staleTime: 0,
   });
 
-  const all = useMemo<SessionRow[]>(() => rawSessions.map(normalizeSession), [rawSessions]);
-  const agents = useMemo(() => Array.from(new Set(all.map(s => s.agent))).sort(), [all]);
+  const all = useMemo<SessionRow[]>(
+    () => rawSessions.map(normalizeSession),
+    [rawSessions],
+  );
   const channels = useMemo(() => Array.from(new Set(all.map(s => s.channel))).sort(), [all]);
 
   const rows = useMemo(() => {
@@ -181,36 +213,76 @@ const SessionList: React.FC = () => {
     });
   }, [all, q, filterStatus, filterAgent, filterChannel]);
 
+  // SYSTEM-AGENT-TYPING Phase 2 W2 follow-up (2026-05-17) — surface the
+  // currently-active agent filter even if it has no sessions in the loaded
+  // list. Without this, deep-linking to an agent with zero sessions yields
+  // "0 of N" with no visible "session-annotator" pill in the sidebar — the
+  // operator has no way to see WHICH filter is on or clear it via UI.
+  const agents = useMemo(() => {
+    const names = new Set(all.map(s => s.agent));
+    if (filterAgent) names.add(filterAgent);
+    return Array.from(names).sort();
+  }, [all, filterAgent]);
+
   const toggleStatus = (v: string) => setFilterStatus(s => s === v ? null : v);
   const toggleAgent = (v: string) => setFilterAgent(a => a === v ? null : v);
   const toggleChannel = (v: string) => setFilterChannel(c => c === v ? null : v);
 
-  // SYSTEM-AGENT-TYPING Phase 2 W2 fix — translate `?agentId=N` into the
-  // existing name-keyed `filterAgent` once sessions load (so the name is
-  // available in `all`). One-shot: drop the URL param after consumption so
-  // refreshes / back-navigation don't keep forcing the filter. If no session
-  // for that agentId exists yet, we still set the filter to the resolved name
-  // (if any agentName lookup succeeds via raw.agentName); otherwise drop the
-  // param silently — the operator just sees the full list, which is correct.
+  // SYSTEM-AGENT-TYPING Phase 2 W2 follow-up (2026-05-17) — translate
+  // `?agentId=N` into the existing name-keyed `filterAgent`.
+  //
+  // The original W2 fix (commit df827c9) looked up the agent NAME by scanning
+  // the sessions list for a matching `agentId`. That assumed the agent had at
+  // least one session in the first page of results, which broke against real
+  // production data (76 sessions, agent 7 / session-annotator's 35 sessions
+  // not all on the first slice the FE happens to render). The fixture-only
+  // unit tests passed because they mocked sessions where agent 7 was present.
+  //
+  // The robust fix is to fetch the agent BY ID — single point of truth, no
+  // dependency on the sessions page contents. We use react-query with a
+  // distinct queryKey so it shares cache with any other agent-by-id consumer
+  // and is short-circuited when the param isn't present (`enabled` gate).
+  const numericAgentIdParam = useMemo(() => {
+    if (!agentIdParam) return null;
+    const n = Number(agentIdParam);
+    return Number.isNaN(n) ? null : n;
+  }, [agentIdParam]);
+
+  const { data: deepLinkAgent, status: deepLinkAgentStatus } = useQuery({
+    queryKey: ['agent', numericAgentIdParam] as const,
+    queryFn: () =>
+      getAgent(numericAgentIdParam as number).then(
+        (res) =>
+          res.data as
+            | { id: number; name?: string; agentType?: 'user' | 'system' | null }
+            | null,
+      ),
+    enabled: numericAgentIdParam !== null,
+    staleTime: 60_000,
+    // 404 / network error → swallow silently; we still want to drop the URL
+    // param below regardless (no infinite retry, no UI noise).
+    retry: false,
+  });
+
   useEffect(() => {
     if (!agentIdParam) return;
-    if (all.length === 0) return;
-    const numericId = Number(agentIdParam);
-    if (Number.isNaN(numericId)) {
-      // Malformed param — strip and move on.
-      setSearchParams(
-        (prev) => {
-          const next = new URLSearchParams(prev);
-          next.delete('agentId');
-          return next;
-        },
-        { replace: true },
-      );
-      return;
+    // Wait until the lookup settles (resolved to success or error) before we
+    // touch state. For a malformed/missing numeric param the query is
+    // disabled (`status === 'pending'` indefinitely) — handle that branch
+    // first by going straight to "drop the URL param".
+    if (numericAgentIdParam !== null && deepLinkAgentStatus === 'pending') return;
+    const name = deepLinkAgent?.name;
+    if (name) {
+      setFilterAgent(name);
     }
-    const match = all.find((s) => Number(s.agentId) === numericId);
-    if (match) {
-      setFilterAgent(match.agent);
+    // SYSTEM-AGENT-TYPING Phase 2 UX refactor — when deep-linking to a
+    // specific agent (`?agentId=N` from SystemAgentMonitorCard "View Sessions"
+    // for example), auto-switch the tab to match that agent's agentType so
+    // the filter is visible (the tab-scope filter would otherwise hide ALL
+    // sessions if the resolved agent's type doesn't match the active tab).
+    const resolvedType = deepLinkAgent?.agentType;
+    if (resolvedType === 'system' || resolvedType === 'user') {
+      if (resolvedType !== activeTab) setActiveTab(resolvedType);
     }
     setSearchParams(
       (prev) => {
@@ -220,7 +292,19 @@ const SessionList: React.FC = () => {
       },
       { replace: true },
     );
-  }, [agentIdParam, all, setSearchParams]);
+    // We intentionally do NOT depend on activeTab — it changes as a result of
+    // this effect, and re-running would either no-op or fight a concurrent
+    // user-initiated tab switch. The effect only needs to fire when the
+    // deep-link itself resolves; subsequent renders are guarded by the
+    // `!agentIdParam` early return (param was dropped above).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    agentIdParam,
+    numericAgentIdParam,
+    deepLinkAgent,
+    deepLinkAgentStatus,
+    setSearchParams,
+  ]);
 
   // Drop stale selections when the underlying list updates (e.g. after delete / WS refresh)
   useEffect(() => {
@@ -383,6 +467,24 @@ const SessionList: React.FC = () => {
             <button className="btn-ghost-sf">Export</button>
           </div>
         </header>
+
+        {/*
+          SYSTEM-AGENT-TYPING Phase 2 UX refactor — top-level Tabs splitting
+          sessions by the owning agent's agentType. Tab choice is persisted
+          via useLocalStorageString; deep-linking `?agentId=` auto-switches
+          the tab to match the resolved agent's type (see effect above) so
+          the filter is always visible.
+        */}
+        <Tabs
+          activeKey={activeTab}
+          onChange={(k) => setActiveTab(k as SessionTabKey)}
+          items={[
+            { key: 'user', label: 'User Sessions' },
+            { key: 'system', label: 'System Sessions' },
+          ]}
+          data-testid="session-type-tabs"
+          style={{ marginBottom: 8 }}
+        />
 
         {selectedIds.size > 0 && (
           <div className="sess-batch-bar" role="toolbar" aria-label="Batch actions">

@@ -615,8 +615,20 @@ public class ChatController {
     }
 
     @GetMapping("/sessions")
-    public ResponseEntity<List<SessionEntity>> listSessions(@RequestParam Long userId) {
-        List<SessionEntity> sessions = sessionService.listUserSessions(userId);
+    public ResponseEntity<List<SessionEntity>> listSessions(
+            @RequestParam Long userId,
+            @RequestParam(required = false) String agentType) {
+        // SYSTEM-AGENT-TYPING Phase 2 visibility (2026-05-18): when the dashboard
+        // requests `?agentType=system`, switch to the JOIN-by-agent_type path that
+        // ignores userId. Rationale: system agents are cron-owned (ownerId=0) but
+        // the dashboard operator (single-user dev = admin) should see them.
+        // `agentType=user` and omitted both keep the legacy userId-scoped path.
+        final List<SessionEntity> sessions;
+        if (agentType != null && "system".equals(agentType)) {
+            sessions = sessionService.listSessionsByAgentType("system");
+        } else {
+            sessions = sessionService.listUserSessions(userId);
+        }
         enrichChannelPlatform(sessions);
         return ResponseEntity.ok(sessions);
     }

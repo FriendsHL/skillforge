@@ -8,7 +8,7 @@ import CheckpointModal from '../components/CheckpointModal';
 import RuntimeBanner from '../components/RuntimeBanner';
 import PendingAskCard from '../components/PendingAskCard';
 import InstallConfirmationCard from '../components/InstallConfirmationCard';
-import ChatSidebar from '../components/ChatSidebar';
+import ChatSidebar, { type ChatAgentTabKey } from '../components/ChatSidebar';
 import RightRail, {
   type CollabMember,
   type PeerMessage,
@@ -54,6 +54,7 @@ import {
 } from '../hooks/useChatSession';
 import { useChatWsEventHandler } from '../hooks/useChatWsEventHandler';
 import { useAuth } from '../contexts/AuthContext';
+import { useLocalStorageString } from '../hooks/useLocalStorageString';
 
 interface PendingAskOption {
   label: string;
@@ -141,6 +142,19 @@ const Chat: React.FC = () => {
   const checkpointLoadSeqRef = useRef(0);
   const checkpointDetailSeqRef = useRef(0);
 
+  // SYSTEM-AGENT-TYPING Phase 2 UX refactor (2026-05-18) — sidebar tab state
+  // lives here (not in ChatSidebar) so it persists across remounts via
+  // useLocalStorageString and so the auto-switch effect below can react to
+  // the active session / selectedAgent changing. Cross-tab selectedAgent
+  // state is preserved by design — switching tabs does NOT clear
+  // selectedAgent (operator may want to keep their pick visible even after
+  // a tab flip away and back).
+  const [activeAgentTab, setActiveAgentTab] = useLocalStorageString<ChatAgentTabKey>(
+    'chat.active_agent_tab',
+    'user',
+    ['user', 'system'],
+  );
+
   useEffect(() => {
     activeSessionIdRef.current = activeSessionId;
   }, [activeSessionId]);
@@ -187,7 +201,18 @@ const Chat: React.FC = () => {
     if (selectedAgent == null) return;
     let cancelled = false;
     setSessionsLoading(true);
-    getSessions(userId)
+    // SYSTEM-AGENT-TYPING Phase 2 visibility (2026-05-18): when the picked
+    // agent is system-typed, fetch with `?agentType=system` so BE returns the
+    // cron-owned (ownerId=0) sessions. Without this, getSessions(userId=1)
+    // returns only user-typed sessions and the system-agent sidebar shows
+    // 0 sessions even when 100+ exist. Resolve agent type from the loaded
+    // `agents` list (loaded via getAgents('all') above); fall back to 'user'
+    // (legacy path) if the agent isn't loaded yet.
+    const pickedAgentType: 'user' | 'system' =
+      agents.find((a) => a.id === selectedAgent)?.agentType === 'system'
+        ? 'system'
+        : 'user';
+    getSessions(userId, pickedAgentType)
       .then((res) => {
         if (cancelled) return;
         const list = safeParseList(SessionSchema, extractList<unknown>(res)).filter(
@@ -212,7 +237,7 @@ const Chat: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [selectedAgent, userId]);
+  }, [selectedAgent, userId, agents]);
 
   useEffect(() => {
     setPendingAsk(null);
@@ -546,6 +571,26 @@ const Chat: React.FC = () => {
   const isSystemAgent =
     agents.find((a) => a.id === selectedAgent)?.agentType === 'system';
 
+  // SYSTEM-AGENT-TYPING Phase 2 UX refactor — auto-switch the sidebar tab
+  // when an existing session resolves to a system agent (so the side picker
+  // actually shows the agent that's active). We only auto-switch ONCE per
+  // resolved selectedAgent change; manual flips by the operator are
+  // preserved because they update activeAgentTab synchronously with the
+  // setSelectedAgent call.
+  useEffect(() => {
+    if (selectedAgent == null) return;
+    const a = agents.find((x) => x.id === selectedAgent);
+    if (!a) return;
+    const t: ChatAgentTabKey = a.agentType === 'system' ? 'system' : 'user';
+    if (t !== activeAgentTab) setActiveAgentTab(t);
+    // Intentionally omit activeAgentTab from deps — the effect only needs to
+    // fire when the upstream resolution changes (selectedAgent or the loaded
+    // agents list). Including activeAgentTab would fight user-initiated
+    // tab switches (operator picks 'system' tab, this effect snaps it back
+    // to 'user' on next render because selectedAgent is still a user agent).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedAgent, agents]);
+
   // §8 定义：runtimeStatus === 'waiting_user' 且 pendingAsk/pendingConfirm 任一非空时 disable。
   // 两 latch 用 OR 连接是防御 —— 后端 B3 fix 已保证两者不并存，但事件顺序抖动时
   // 前端至少不会放行输入。Phase 2.3 加 isSystemAgent OR：system agent 永远只读发送。
@@ -859,6 +904,8 @@ const Chat: React.FC = () => {
         }}
         onNewChat={handleNewSession}
         onSelectSession={setActiveSessionId}
+        activeAgentTab={activeAgentTab}
+        onAgentTabChange={setActiveAgentTab}
       />
 
       <main className="center">

@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import { Tabs } from 'antd';
 import { IconPlus, IconTeam } from './chat/ChatIcons';
 import { ChannelBadge } from './channels/ChannelBadge';
 
@@ -8,7 +9,14 @@ interface AgentLite {
   description?: string | null;
   online?: boolean;
   sessions?: number;
+  // SYSTEM-AGENT-TYPING Phase 2 UX refactor — used to scope the sidebar
+  // agent list to the active tab (user vs system).
+  agentType?: 'user' | 'system' | null;
 }
+
+// SYSTEM-AGENT-TYPING Phase 2 UX refactor — sidebar tab keys mirror the
+// AgentList / SessionList Tabs.
+export type ChatAgentTabKey = 'user' | 'system';
 
 interface SessionLite {
   id?: string;
@@ -31,6 +39,13 @@ interface ChatSidebarProps {
   onNewChat: () => void;
   onSelectSession: (sid: string) => void;
   loading?: boolean;
+  // SYSTEM-AGENT-TYPING Phase 2 UX refactor — active sidebar tab (user vs
+  // system). Owned by Chat.tsx so it can be persisted via the shared
+  // useLocalStorageString hook (cross-page consistency with AgentList /
+  // SessionList) and so selectedAgent state can survive tab switches at
+  // the page level.
+  activeAgentTab: ChatAgentTabKey;
+  onAgentTabChange: (next: ChatAgentTabKey) => void;
 }
 
 const formatRelative = (iso?: string | null): string => {
@@ -69,6 +84,8 @@ function ChatSidebar({
   onNewChat,
   onSelectSession,
   loading,
+  activeAgentTab,
+  onAgentTabChange,
 }: ChatSidebarProps) {
   const agentSessionCounts = useMemo(() => {
     const counts: Record<number, number> = {};
@@ -80,7 +97,18 @@ function ChatSidebar({
     return counts;
   }, [sessions]);
 
-  const onlineCount = agents.filter((a) => a.online).length;
+  // SYSTEM-AGENT-TYPING Phase 2 UX refactor — scope the sidebar agent list
+  // to the active tab. Agents with `agentType == null` (legacy rows / BE
+  // hasn't backfilled) default to 'user' so the sidebar isn't accidentally
+  // empty for older deployments.
+  const scopedAgents = useMemo(() => {
+    return agents.filter((a) => {
+      const t = a.agentType ?? 'user';
+      return t === activeAgentTab;
+    });
+  }, [agents, activeAgentTab]);
+
+  const onlineCount = scopedAgents.filter((a) => a.online).length;
 
   const { todaySessions, earlierSessions } = useMemo(() => {
     const today: SessionLite[] = [];
@@ -139,12 +167,29 @@ function ChatSidebar({
   return (
     <aside className="side">
       <div className="side-head">
+        {/*
+          SYSTEM-AGENT-TYPING Phase 2 UX refactor — sidebar Tabs splitting
+          agent list by agentType. The selectedAgent state lives in Chat.tsx,
+          so flipping tabs preserves the picked agent across tabs (the Chat
+          send gate still fires when a system agent is selected).
+        */}
+        <Tabs
+          activeKey={activeAgentTab}
+          onChange={(k) => onAgentTabChange(k as ChatAgentTabKey)}
+          items={[
+            { key: 'user', label: 'User Agents' },
+            { key: 'system', label: 'System Agents' },
+          ]}
+          data-testid="chat-agent-type-tabs"
+          size="small"
+          style={{ marginBottom: 4 }}
+        />
         <div className="side-label">
           <span>Agents</span>
           <span style={{ color: 'var(--fg-4)' }}>{onlineCount} online</span>
         </div>
         <div className="agent-picker">
-          {agents.map((a) => {
+          {scopedAgents.map((a) => {
             const count = agentSessionCounts[a.id] ?? 0;
             return (
               <button
@@ -159,7 +204,7 @@ function ChatSidebar({
               </button>
             );
           })}
-          {agents.length === 0 && (
+          {scopedAgents.length === 0 && (
             <div style={{ padding: 10, fontSize: 12, color: 'var(--fg-4)' }}>
               No agents available
             </div>

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Form, Input, InputNumber, Select, Modal, Switch, Tabs, message } from 'antd';
+import { Form, Input, InputNumber, Select, Modal, Tabs, message } from 'antd';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { getAgents, createAgent, getTools, getSkills, extractList, type CreateAgentRequest } from '../api';
@@ -12,7 +12,7 @@ import SystemAgentMonitorCard from '../components/agents/SystemAgentMonitorCard'
 import '../components/agents/agents.css';
 import { useAuth } from '../contexts/AuthContext';
 import { useLlmModels } from '../hooks/useLlmModels';
-import { useLocalStorageBoolean } from '../hooks/useLocalStorageBoolean';
+import { useLocalStorageString } from '../hooks/useLocalStorageString';
 
 const { TextArea } = Input;
 
@@ -104,15 +104,24 @@ const AgentList: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const openAgentIdParam = searchParams.get('openAgentId');
 
-  // SYSTEM-AGENT-TYPING Phase 2.2 — "Show system agents" toggle, persisted in
-  // localStorage so the choice survives reload. Default OFF: most operators
-  // work with their own (user) agents day-to-day and the 5 cron-managed
-  // system agents are noise unless explicitly opted in.
-  const [showSystemAgents, setShowSystemAgents] = useLocalStorageBoolean(
-    'agentlist.show_system_agents',
-    false,
+  // SYSTEM-AGENT-TYPING Phase 2 UX refactor (2026-05-18) — replace the
+  // "Show system agents" Switch toggle with top-level Tabs that segment User
+  // vs System agents. Persisted in localStorage so the choice survives reload.
+  // Default 'user': most operators work with their own (user) agents day-to-day
+  // and the 5 cron-managed system agents are surfaced only when explicitly
+  // selected via the "System Agents" tab.
+  const TAB_KEYS = ['user', 'system'] as const;
+  type AgentTabKey = (typeof TAB_KEYS)[number];
+  const [activeTab, setActiveTab] = useLocalStorageString<AgentTabKey>(
+    'agentlist.active_tab',
+    'user',
+    TAB_KEYS,
   );
-  const agentTypeFilter: 'user' | 'all' = showSystemAgents ? 'all' : 'user';
+  const showSystemAgents = activeTab === 'system';
+  // BE param: 'user' tab → fetch only user agents; 'system' tab → fetch only
+  // system agents. (The previous toggle used 'all' for system; narrowing to
+  // 'system' here keeps the query payload minimal and matches the visible UI.)
+  const agentTypeFilter: 'user' | 'system' = activeTab;
 
   const { data: agents = [], isLoading: loading, isError: agentsError } = useQuery({
     // queryKey includes the filter so toggling re-fetches instead of
@@ -330,25 +339,6 @@ const AgentList: React.FC = () => {
             <p className="agents-head-sub">{rows.length} of {agents.length} shown</p>
           </div>
           <div className="agents-head-actions">
-            <label
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 6,
-                fontSize: 12,
-                color: 'var(--fg-2)',
-                cursor: 'pointer',
-              }}
-              title="Show V1-V5 cron-managed system agents (memory-curator, session-annotator, metrics-collector, attribution-curator, user-simulator)."
-            >
-              <Switch
-                size="small"
-                checked={showSystemAgents}
-                onChange={setShowSystemAgents}
-                data-testid="show-system-agents-toggle"
-              />
-              <span>Show system agents</span>
-            </label>
             <div className="view-seg">
               <button className={view === 'grid' ? 'on' : ''} onClick={() => setView('grid')}>{GRID_ICON} Grid</button>
               <button className={view === 'table' ? 'on' : ''} onClick={() => setView('table')}>{ROWS_ICON} Table</button>
@@ -356,6 +346,27 @@ const AgentList: React.FC = () => {
             <button className="btn-primary-sf" onClick={() => setCreateModalOpen(true)}>{PLUS_ICON} New agent</button>
           </div>
         </header>
+
+        {/*
+          SYSTEM-AGENT-TYPING Phase 2 UX refactor — top-level Tabs replacing the
+          Switch toggle. Items are intentionally declarative (`items=`) per
+          AntD docs; the deprecated <TabPane> form is avoided. The activeKey
+          + onChange wire-up is persisted via useLocalStorageString so the
+          choice survives navigation + reload.
+        */}
+        <Tabs
+          activeKey={activeTab}
+          onChange={(k) => setActiveTab(k as AgentTabKey)}
+          items={[
+            { key: 'user', label: 'User Agents' },
+            { key: 'system', label: 'System Agents' },
+          ]}
+          // data-testid surfaces the Tabs root so tests can scope queries.
+          // AntD renders tab buttons with role="tab" + aria-selected, which
+          // is what we assert against (not on the wrapper itself).
+          data-testid="agent-type-tabs"
+          style={{ marginBottom: 8 }}
+        />
 
         <div className="agents-body">
           {loading && (

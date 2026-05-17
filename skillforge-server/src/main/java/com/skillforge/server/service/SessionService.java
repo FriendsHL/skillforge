@@ -241,6 +241,31 @@ public class SessionService {
                 .findByUserIdAndParentSessionIdIsNullAndOriginOrderByUpdatedAtDesc(userId, origin);
     }
 
+    /**
+     * SYSTEM-AGENT-TYPING Phase 2 visibility (2026-05-18) — list top-level sessions
+     * by owning agent's {@code agent_type}. {@code userId} is NOT a filter: system
+     * sessions are cron-owned (typically userId=0) but the dashboard operator
+     * (userId=1=admin in single-user dev) is expected to see them.
+     *
+     * <p>Origin defaults to {@link SessionEntity#ORIGIN_PRODUCTION} so eval-spawned
+     * runs don't pollute the system view (mirrors {@link #listUserSessions(Long)}).
+     *
+     * @param agentType {@code "user"} or {@code "system"}; must not be null/blank
+     */
+    public List<SessionEntity> listSessionsByAgentType(String agentType) {
+        return listSessionsByAgentType(agentType, SessionEntity.ORIGIN_PRODUCTION);
+    }
+
+    /** Origin-explicit overload — eval flows pass {@code 'eval'}. */
+    public List<SessionEntity> listSessionsByAgentType(String agentType, String origin) {
+        Objects.requireNonNull(agentType, "agentType");
+        Objects.requireNonNull(origin, "origin");
+        if (agentType.isBlank()) {
+            throw new IllegalArgumentException("agentType must not be blank");
+        }
+        return sessionRepository.findByAgentTypeAndOriginOrderByUpdatedAtDesc(agentType, origin);
+    }
+
     /** 列出某个 parent session 下的所有子 session(SubAgent 派发)。 */
     public List<SessionEntity> listChildSessions(String parentSessionId) {
         return sessionRepository.findByParentSessionId(parentSessionId);
