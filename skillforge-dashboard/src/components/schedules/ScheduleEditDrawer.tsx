@@ -119,8 +119,12 @@ const ScheduleEditDrawer: React.FC<ScheduleEditDrawerProps> = ({
   const [enabled, setEnabled] = useState(true);
 
   const { data: agentsRaw = [], isLoading: agentsLoading } = useQuery({
-    queryKey: ['agents'],
-    queryFn: () => getAgents().then((r) => extractList<Record<string, unknown>>(r)),
+    // SYSTEM-AGENT-TYPING Phase 2.2: editing a schedule for a system agent
+    // requires that agent to be in the picker. BE default 'user' would hide
+    // them; pass 'all' explicitly with a matching queryKey to keep cache
+    // buckets separate from AgentList's toggle state.
+    queryKey: ['agents', 'all'],
+    queryFn: () => getAgents('all').then((r) => extractList<Record<string, unknown>>(r)),
   });
   const agents = useMemo(() => normalizeAgents(agentsRaw), [agentsRaw]);
 

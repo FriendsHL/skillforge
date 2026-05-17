@@ -208,10 +208,68 @@ public class AgentService {
     }
 
     public List<AgentEntity> listAgents(Long ownerId) {
-        if (ownerId != null) {
-            return agentRepository.findByOwnerId(ownerId);
+        return listAgents(ownerId, null);
+    }
+
+    /**
+     * SYSTEM-AGENT-TYPING Phase 2.1 (PRD F2 / F5): list agents with optional
+     * {@code agentType} filter on top of the existing optional {@code ownerId}
+     * scope.
+     *
+     * <ul>
+     *   <li>{@code agentType=null} or {@code "all"}: no type filter — preserves
+     *       Phase 1 behaviour (callers that don't care: {@code SkillScheduledEvaluator},
+     *       {@code SkillSelfImproveLoop}, {@code NewCommandHandler}).</li>
+     *   <li>{@code agentType="user"} or {@code "system"}: only matching agents
+     *       returned. Composes with {@code ownerId} via in-memory intersection
+     *       (avoids adding a new repository method for a non-hot path —
+     *       FE AgentList scans the result client-side anyway, volume ≤ 20).</li>
+     *   <li>Unrecognised values: defensively treated as {@code "user"} (matches
+     *       {@code AgentController}'s default — single source of truth).</li>
+     * </ul>
+     *
+     * <p>Why no new repository method: {@link AgentRepository#findByAgentType(String)}
+     * already exists from Phase 1 + {@link AgentRepository#findByOwnerId(Long)} from
+     * pre-Phase-1. SkillForge has no cross-tenant visibility concept yet
+     * ({@code SECURITY-ADMIN-RBAC} backlog item), so a 2-source intersect in
+     * Java is both simpler and surface-area-smaller than adding a 4-permutation
+     * derived query.
+     */
+    public List<AgentEntity> listAgents(Long ownerId, String agentType) {
+        String normalised = normaliseAgentType(agentType);
+        if (ownerId == null) {
+            if (normalised == null) {
+                return agentRepository.findAll();
+            }
+            return agentRepository.findByAgentType(normalised);
         }
-        return agentRepository.findAll();
+        List<AgentEntity> byOwner = agentRepository.findByOwnerId(ownerId);
+        if (normalised == null) {
+            return byOwner;
+        }
+        return byOwner.stream()
+                .filter(a -> normalised.equals(a.getAgentType()))
+                .toList();
+    }
+
+    /**
+     * Canonicalise the {@code agentType} query parameter:
+     * <ul>
+     *   <li>{@code null} / {@code blank} / {@code "all"} → null (no filter)</li>
+     *   <li>{@code "user"} / {@code "system"} → returned as-is</li>
+     *   <li>Anything else → {@code "user"} (defensive default; matches the
+     *       AgentController {@code defaultValue} contract so unknown values
+     *       never silently leak system agents)</li>
+     * </ul>
+     */
+    private static String normaliseAgentType(String agentType) {
+        if (agentType == null || agentType.isBlank() || "all".equalsIgnoreCase(agentType)) {
+            return null;
+        }
+        if ("user".equalsIgnoreCase(agentType) || "system".equalsIgnoreCase(agentType)) {
+            return agentType.toLowerCase();
+        }
+        return "user";
     }
 
     public List<AgentEntity> listPublicAgents() {

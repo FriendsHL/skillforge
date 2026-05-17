@@ -3,12 +3,23 @@
 ---
 id: SYSTEM-AGENT-TYPING
 mode: full
-status: design-draft
+status: delivered
 priority: P1
 risk: Mid
 created: 2026-05-16
 updated: 2026-05-17
+delivered: 2026-05-17
+phase1_commit: e659b0a
+phase2_commit: pending
 ---
+
+## 交付 ✅ 2026-05-17
+
+**Phase 1** (commit `e659b0a`, 2026-05-17): agent_type 字段 + V89 migration + 5 Bootstrap idempotent self-heal + session-annotator user agent outcome 覆盖修复 (Hypothesis B starvation in `findRecentByLimit` createdAt DESC) + R1 3-tier annotator (user-first / system backfill / catch-all orphan) + W1 fix per-tier early dedup + FE Zod schema. 真活验证 50s 内 user agent outcome 0 → 9. mvn 1776/0/95. **飞轮 layer 1 root cause 真闭环**.
+
+**Phase 2** (commit pending, 2026-05-17): F2 AgentList toggle + Tag + inline SystemAgentMonitorCard (cron / last_run / 7d trigger+output / Run Manually / View Sessions+Schedule) / F3 AgentDrawer system agent banner + readOnly + Delete disabled + fieldset disabled for behavior_rules/lifecycle_hooks (no Unlock per 2026-05-17 user simplify) / F5 BE GET /api/agents?agentType= filter + GET /api/system-agents/monitor 跨表聚合 endpoint + AgentService overload 不破 3 内部 callers / F6 Chat send gate Alert + double-guarded. **W2 mandatory r1 fix**: SessionList + Schedules 加 useSearchParams 读 ?agentId/?taskId filter consume (F4 partial 修完整). **W3 顺手 confirm**: fieldset disabled 兜底 behavior_rules + lifecycle_hooks editor. mvn 1797/0/95 + tsc + npm build 双绿 + 21 FE tests PASS (5 file) + 0 regression. Iron Law 核心 7+1 BE + 3 FE 0 diff.
+
+
 
 ## 摘要
 

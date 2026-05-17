@@ -40,10 +40,27 @@ public class AgentController {
         this(agentService, null);
     }
 
+    /**
+     * SYSTEM-AGENT-TYPING Phase 2.1 (PRD F2 / F5): {@code agentType} filter
+     * lets the FE {@code AgentList} default to the user's own conversational
+     * agents and opt into system agents on demand via the "Show system agents"
+     * toggle. Accepted values: {@code user} (default — preserves the historical
+     * "no filter for user-created agents" UX), {@code system} (only
+     * cron-driven platform agents), {@code all} (both — used by Phase 2 toggle).
+     * Null / unrecognized values are treated as {@code user} for safe defaults.
+     *
+     * <p>{@code ownerId} composes with {@code agentType}: when both are supplied
+     * the service intersects them (owner's agents narrowed to the requested
+     * type). Existing single-arg internal callers (e.g.
+     * {@code SkillScheduledEvaluator}, {@code SkillSelfImproveLoop},
+     * {@code NewCommandHandler}) keep their pre-Phase-2 semantics via the
+     * 1-arg {@link AgentService#listAgents(Long)} overload.
+     */
     @GetMapping
     public ResponseEntity<List<AgentEntity>> listAgents(
-            @RequestParam(required = false) Long ownerId) {
-        List<AgentEntity> agents = agentService.listAgents(ownerId);
+            @RequestParam(required = false) Long ownerId,
+            @RequestParam(required = false, defaultValue = "user") String agentType) {
+        List<AgentEntity> agents = agentService.listAgents(ownerId, agentType);
         return ResponseEntity.ok(agents);
     }
 

@@ -108,4 +108,13 @@ public interface CanaryMetricSnapshotRepository extends JpaRepository<CanaryMetr
             @Param("candidateAvgLatency") BigDecimal candidateAvgLatency,
             @Param("candidateAvgCost") BigDecimal candidateAvgCost,
             @Param("failRateRatio") BigDecimal failRateRatio);
+
+    /**
+     * SYSTEM-AGENT-TYPING Phase 2.1: 7-day output count for the metrics-collector
+     * monitor card. The table is natively scoped to metrics-collector (no other
+     * cron writes here). Note: V87 disabled the {@code metrics-collector-hourly}
+     * scheduled task so this count is expected to be 0 in dogfood until the
+     * canary path is reactivated.
+     */
+    long countByCreatedAtAfter(Instant since);
 }

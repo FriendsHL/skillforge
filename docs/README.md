@@ -19,13 +19,31 @@
 
 | ID | 标题 | 状态 | 需求包 | MRD | PRD | 技术方案 | 交付 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| SYSTEM-AGENT-TYPING | Phase 2 UX (AgentList toggle + Drawer 锁 + Chat gate + SystemAgents 监控面板) | active (Phase 1 已交付 2026-05-17 ✅, Phase 2 待做 ~2-3d Mid) | [需求包](requirements/active/SYSTEM-AGENT-TYPING/) | [MRD](requirements/active/SYSTEM-AGENT-TYPING/mrd.md) | [PRD](requirements/active/SYSTEM-AGENT-TYPING/prd.md) | [技术方案](requirements/active/SYSTEM-AGENT-TYPING/tech-design.md) | _(Phase 1 已交付 见 delivery-index.md)_ |
+| _(暂无 active 主线需求；SYSTEM-AGENT-TYPING Phase 1+2 整包已交付归档 2026-05-17)_ | — | — | — | — | — | — | — |
 
 > 整体方案：[plans/PROD-OPTIMIZATION-FLYWHEEL/plan.md](plans/PROD-OPTIMIZATION-FLYWHEEL/plan.md) —— 数据飞轮 / 优化闭环 6 版本拆分（**V1-V6 全部已交付**，⑤ A/B 自动 trigger 真闭环 prompt+skill 双 surface 通）
 
-### SYSTEM-AGENT-TYPING Phase 1 — 已交付 2026-05-17 ✅（飞轮 layer 1 真闭环）
+### SYSTEM-AGENT-TYPING Phase 1+2 整包 — 已交付 2026-05-17 ✅（飞轮 layer 1 真闭环 + system agent UX 分辨）
 
-DB SQL 真活反查发现 117 outcome 标注全在 system agent / 110 user agent session **0** outcome → 飞轮原料层 starvation (`findRecentByLimit("signal", cap*3=30)` createdAt DESC 让 5 system agent cron 霸占最近 30 行)。
+Phase 1 (`e659b0a`) DB SQL 反查发现 layer 1 starvation 修飞轮; Phase 2 (pending commit) 给 dashboard 用户 toggle + monitor + 编辑保护 + Chat gate.
+
+#### Phase 2 — system agent UX 分辨 + 监控 inline + 编辑保护
+
+| 项 | 修法 | 状态 |
+|---|---|---|
+| F2 AgentList toggle | "Show system agents" Switch + localStorage 持久化 default off + 紫色 Tag "System" + agentType=user/all query | ✅ 已交付 |
+| F4 SystemAgentMonitorCard inline | inline 进 AgentCard (不开独立 page per user 集中): cron / last_run + status / 7d trigger+output / Run Manually 真触发 / View Sessions + View Schedule deep-link | ✅ 已交付 |
+| F3 AgentDrawer 锁 | banner ⚠️ + 全 form input/textarea/picker/Switch readOnly + 4 Save disabled + ASK/AUTO disabled + Delete button disabled + Tooltip (no Unlock per user simplify) | ✅ 已交付 |
+| W3 fieldset 兜底 | BehaviorRulesEditor + LifecycleHooksPanel 不接 disabled prop → fieldset wrapper 原生 HTML disable 全 descendant + opacity:0.65 | ✅ 已交付 |
+| F5 BE filter + monitor endpoint | AgentController agentType param (default 'user') + AgentService listAgents overload 不破 3 callers + new SystemAgentMonitorController + 跨表聚合 service | ✅ 已交付 |
+| F6 Chat send gate | isSystemAgent → input+send disabled + Alert banner + handleSend 头部 defense guard | ✅ 已交付 |
+| W2 deep-link 真消费 | SessionList + Schedules useSearchParams 读 ?agentId/?taskId (Judge mandatory fix) | ✅ 已交付 |
+
+**mvn 1797/0/95 + tsc + npm build 双绿 + 21 FE tests PASS (5 file) + 0 regression + Iron Law 核心 7+1 BE + 3 FE 0 diff + 3 reviewer 全 PASS (java Opus + ts Opus + Judge Opus) + 1 mandatory W2 fix done + W3 confirm done**. 详见 [delivery-index.md](delivery-index.md) SYSTEM-AGENT-TYPING Phase 2 行.
+
+**3 reviewer 调度教训记账**: 第一次 + 重派 Sonnet (java/ts/code) 全 600s stalled (3059 行 diff watchdog 触发) → 换 Opus 1M context 跑通. 后续大 diff (>2500 行) 默认上 Opus reviewer 不要 Sonnet.
+
+#### Phase 1 — 飞轮 layer 1 真闭环 (commit `e659b0a`)
 
 | 项 | 修法 | 状态 |
 |---|---|---|
@@ -71,6 +89,7 @@ DB SQL 真活反查发现 117 outcome 标注全在 system agent / 110 user agent
 
 | ID | 标题 | 需求包 | 技术方案 |
 | --- | --- | --- | --- |
+| SYSTEM-AGENT-TYPING | agent_type 字段 + 飞轮 layer 1 root cause 真闭环 (Phase 1) + system agent UX 分辨 + 监控 inline + 编辑保护 + Chat gate + deep-link consume (Phase 2) — Full pipeline × 2 / 真活验证 50s 内 user agent outcome 0→9 / mvn 1797 + 21 FE tests + 0 regression + Iron Law 0 diff | [需求包](requirements/archive/2026-05-17-SYSTEM-AGENT-TYPING/index.md) | [方案](requirements/archive/2026-05-17-SYSTEM-AGENT-TYPING/tech-design.md) |
 | FLYWHEEL-LOOP-CLOSURE | 飞轮 ⑤ A/B 自动 trigger 真闭环 prompt+skill 双 surface + canary logic disable + V3.2 link 接通（飞轮 V6）— Mid → upgraded Full / 8 sub-phase + Phase 2 r1+r2 / 5 mandatory fix / 8 ratify + 11 reviewer findings 全处置 + dogfood event 42 真跑通 | [需求包](requirements/archive/2026-05-17-FLYWHEEL-LOOP-CLOSURE/index.md) | [方案](requirements/archive/2026-05-17-FLYWHEEL-LOOP-CLOSURE/tech-design.md) |
 | ATTRIBUTION-AGENT | 飞轮归因 + Optimization Event 因果链（飞轮 V3）— BE+FE 闭环 + 5 phase review + 2 BLOCKER tx-propagation fix + sentinel race-window 防御 + bypass-cooldown ratify | [需求包](requirements/archive/2026-05-15-ATTRIBUTION-AGENT/index.md) | [方案](requirements/archive/2026-05-15-ATTRIBUTION-AGENT/tech-design.md) |
 | SKILL-AB-MULTITURN-FIX | Skill A/B 多轮评测修复（EVAL-DYNAMIC-USER-SIM Phase 1 拆分包；fix `SkillAbEvalService` multi-turn fallback warning → 真跑 `conversationTurns` + multi-turn judge + candidate skill 注入） | [需求包](requirements/archive/2026-05-13-SKILL-AB-MULTITURN-FIX/index.md) | [方案](requirements/archive/2026-05-13-SKILL-AB-MULTITURN-FIX/tech-design.md) |

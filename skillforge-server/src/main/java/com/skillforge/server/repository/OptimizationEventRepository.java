@@ -218,4 +218,12 @@ public interface OptimizationEventRepository extends JpaRepository<OptimizationE
             @Param("agentId") Long agentId,
             @Param("surfaceType") String surfaceType,
             Pageable pageable);
+
+    /**
+     * SYSTEM-AGENT-TYPING Phase 2.1: 7-day output count for the attribution-curator
+     * monitor card. Counts every stage-transition row (each row = one piece of
+     * attribution-curator activity) created since {@code since}. The table is
+     * natively scoped to V3 attribution (no other cron writes here).
+     */
+    long countByCreatedAtAfter(Instant since);
 }

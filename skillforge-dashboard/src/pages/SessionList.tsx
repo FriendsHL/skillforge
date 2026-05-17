@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Modal, message } from 'antd';
 import {
@@ -140,6 +140,13 @@ const SessionList: React.FC = () => {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { userId } = useAuth();
+  // SYSTEM-AGENT-TYPING Phase 2 W2 mandatory fix — deep-link from
+  // SystemAgentMonitorCard "View Sessions" button lands here with `?agentId=N`.
+  // We translate the numeric agentId to the matching agent NAME (the existing
+  // filter UI is keyed by name) once `all` loads, then drop the URL param so
+  // the filter doesn't keep re-applying on subsequent renders / reloads.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const agentIdParam = searchParams.get('agentId');
   const [q, setQ] = useState('');
   const [filterStatus, setFilterStatus] = useState<string | null>(null);
   const [filterAgent, setFilterAgent] = useState<string | null>(null);
@@ -177,6 +184,43 @@ const SessionList: React.FC = () => {
   const toggleStatus = (v: string) => setFilterStatus(s => s === v ? null : v);
   const toggleAgent = (v: string) => setFilterAgent(a => a === v ? null : v);
   const toggleChannel = (v: string) => setFilterChannel(c => c === v ? null : v);
+
+  // SYSTEM-AGENT-TYPING Phase 2 W2 fix — translate `?agentId=N` into the
+  // existing name-keyed `filterAgent` once sessions load (so the name is
+  // available in `all`). One-shot: drop the URL param after consumption so
+  // refreshes / back-navigation don't keep forcing the filter. If no session
+  // for that agentId exists yet, we still set the filter to the resolved name
+  // (if any agentName lookup succeeds via raw.agentName); otherwise drop the
+  // param silently — the operator just sees the full list, which is correct.
+  useEffect(() => {
+    if (!agentIdParam) return;
+    if (all.length === 0) return;
+    const numericId = Number(agentIdParam);
+    if (Number.isNaN(numericId)) {
+      // Malformed param — strip and move on.
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.delete('agentId');
+          return next;
+        },
+        { replace: true },
+      );
+      return;
+    }
+    const match = all.find((s) => Number(s.agentId) === numericId);
+    if (match) {
+      setFilterAgent(match.agent);
+    }
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete('agentId');
+        return next;
+      },
+      { replace: true },
+    );
+  }, [agentIdParam, all, setSearchParams]);
 
   // Drop stale selections when the underlying list updates (e.g. after delete / WS refresh)
   useEffect(() => {

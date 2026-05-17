@@ -162,4 +162,11 @@ public interface SessionAnnotationRepository
     List<SessionAnnotationEntity> findByTypeCreatedSince(
             @Param("annotationType") String annotationType,
             @Param("since") Instant since);
+
+    /**
+     * SYSTEM-AGENT-TYPING Phase 2.1: 7-day output count for the session-annotator
+     * monitor card. The table is natively scoped to session-annotator (no other
+     * cron writes here), so a plain {@code created_at} filter is sufficient.
+     */
+    long countByCreatedAtAfter(Instant since);
 }

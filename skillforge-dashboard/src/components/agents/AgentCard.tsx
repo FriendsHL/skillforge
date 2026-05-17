@@ -1,9 +1,17 @@
 import React from 'react';
+import { Tag } from 'antd';
 import type { AgentDto } from '../../api/schemas';
 
 interface AgentCardProps {
   agent: AgentDto;
   onOpen: (agent: AgentDto) => void;
+  /**
+   * SYSTEM-AGENT-TYPING Phase 2.2 — optional slot rendered at the bottom of
+   * the card (after the meta-row). AgentList passes a `SystemAgentMonitorCard`
+   * here for system-typed agents so the monitor data lives inline with the
+   * agent card instead of on a separate page.
+   */
+  footerSlot?: React.ReactNode;
 }
 
 function initials(name: string): string {
@@ -86,16 +94,40 @@ function guessRole(agent: AgentDto): string {
   return 'leader';
 }
 
-const AgentCard: React.FC<AgentCardProps> = React.memo(({ agent, onOpen }) => {
+const AgentCard: React.FC<AgentCardProps> = React.memo(({ agent, onOpen, footerSlot }) => {
   const role = guessRole(agent);
   const skillCount = parseCount(agent.skillIds);
   const toolCount = parseCount(agent.toolIds);
   const ruleCount = parseBehaviorRuleCount(agent.behaviorRules);
   const hookCount = parseHookCount(agent.lifecycleHooks);
   const mode = agent.executionMode || 'ask';
+  const isSystemAgent = agent.agentType === 'system';
 
   return (
-    <div className="agent-card" onClick={() => onOpen(agent)}>
+    <div
+      className="agent-card"
+      onClick={() => onOpen(agent)}
+      style={{ position: 'relative' }}
+      data-agent-type={agent.agentType ?? 'user'}
+    >
+      {isSystemAgent && (
+        <Tag
+          color="purple"
+          style={{
+            position: 'absolute',
+            top: 8,
+            right: 8,
+            margin: 0,
+            fontSize: 10,
+            lineHeight: '16px',
+            padding: '0 6px',
+            zIndex: 1,
+          }}
+          data-testid={`system-agent-tag-${agent.id}`}
+        >
+          System
+        </Tag>
+      )}
       <div className="agent-card-head">
         <div className={`agent-mark ${role}`}>
           {initials(agent.name)}
@@ -134,6 +166,7 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({ agent, onOpen }) => {
           <Sparkline seed={agent.id * 3} hotAt={6} />
         </span>
       </div>
+      {footerSlot}
     </div>
   );
 });

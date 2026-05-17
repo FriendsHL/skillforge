@@ -1,6 +1,7 @@
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useEffect, useMemo } from 'react';
 import { Modal, Switch, Tooltip, message, Spin } from 'antd';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useSearchParams } from 'react-router-dom';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 dayjs.extend(relativeTime);
@@ -167,6 +168,12 @@ function TimeCell({ iso, status }: { iso: string | null; status?: ScheduledTaskS
 const Schedules: React.FC = () => {
   const queryClient = useQueryClient();
   const { userId } = useAuth();
+  // SYSTEM-AGENT-TYPING Phase 2 W2 mandatory fix — deep-link from
+  // SystemAgentMonitorCard "View Schedule" button lands here with `?taskId=N`.
+  // We open the edit drawer for the matching task once `tasks` loads, then
+  // drop the URL param so reload / back-navigation don't keep re-opening it.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const taskIdParam = searchParams.get('taskId');
   const [editOpen, setEditOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<ScheduledTask | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -180,8 +187,13 @@ const Schedules: React.FC = () => {
   });
 
   const { data: agentsRaw = [] } = useQuery({
-    queryKey: ['agents'],
-    queryFn: () => getAgents().then((r) => extractList<Record<string, unknown>>(r)),
+    // SYSTEM-AGENT-TYPING Phase 2.2: BE /api/agents defaults to agentType='user'.
+    // Schedules list joins agent name by agentId — system agents (V1-V5 cron
+    // bootstrap) have schedules, so we need `'all'` to render their names.
+    // Distinct queryKey from AgentList's `['agents', toggleState]` to keep
+    // react-query buckets separate.
+    queryKey: ['agents', 'all'],
+    queryFn: () => getAgents('all').then((r) => extractList<Record<string, unknown>>(r)),
     staleTime: 60_000,
   });
 
@@ -242,6 +254,30 @@ const Schedules: React.FC = () => {
     setEditTarget(task);
     setEditOpen(true);
   }, []);
+
+  // SYSTEM-AGENT-TYPING Phase 2 W2 fix — consume `?taskId=N` once `tasks`
+  // loads: open the edit drawer for the matching task. One-shot so the param
+  // doesn't keep re-triggering on every render. Drop the param via
+  // `setSearchParams` regardless of match so a stale link doesn't loop.
+  useEffect(() => {
+    if (!taskIdParam) return;
+    if (tasks.length === 0) return;
+    const numericId = Number(taskIdParam);
+    if (!Number.isNaN(numericId)) {
+      const match = tasks.find((t) => t.id === numericId);
+      if (match) {
+        handleOpenEdit(match);
+      }
+    }
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete('taskId');
+        return next;
+      },
+      { replace: true },
+    );
+  }, [taskIdParam, tasks, handleOpenEdit, setSearchParams]);
 
   const handleOpenHistory = useCallback((task: ScheduledTask) => {
     setHistoryTarget(task);

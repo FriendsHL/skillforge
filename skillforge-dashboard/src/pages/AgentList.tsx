@@ -1,13 +1,18 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Form, Input, InputNumber, Select, Modal, Tabs, message } from 'antd';
+import { Form, Input, InputNumber, Select, Modal, Switch, Tabs, message } from 'antd';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { getAgents, createAgent, getTools, getSkills, extractList, type CreateAgentRequest } from '../api';
+import { listSchedules } from '../api/schedules';
+import { getSystemAgentMonitor } from '../api/systemAgents';
 import { AgentSchema, safeParseList, type AgentDto } from '../api/schemas';
 import AgentCard, { initials, parseCount, guessRole } from '../components/agents/AgentCard';
 import AgentDrawer from '../components/agents/AgentDrawer';
+import SystemAgentMonitorCard from '../components/agents/SystemAgentMonitorCard';
 import '../components/agents/agents.css';
+import { useAuth } from '../contexts/AuthContext';
 import { useLlmModels } from '../hooks/useLlmModels';
+import { useLocalStorageBoolean } from '../hooks/useLocalStorageBoolean';
 
 const { TextArea } = Input;
 
@@ -84,6 +89,7 @@ function AgentsTable({ rows, onOpen }: { rows: AgentDto[]; onOpen: (a: AgentDto)
 
 const AgentList: React.FC = () => {
   const queryClient = useQueryClient();
+  const { userId } = useAuth();
   const { options: modelOptionsData } = useLlmModels();
   const [view, setView] = useState<'grid' | 'table'>('grid');
   const [q, setQ] = useState('');
@@ -98,10 +104,59 @@ const AgentList: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const openAgentIdParam = searchParams.get('openAgentId');
 
+  // SYSTEM-AGENT-TYPING Phase 2.2 — "Show system agents" toggle, persisted in
+  // localStorage so the choice survives reload. Default OFF: most operators
+  // work with their own (user) agents day-to-day and the 5 cron-managed
+  // system agents are noise unless explicitly opted in.
+  const [showSystemAgents, setShowSystemAgents] = useLocalStorageBoolean(
+    'agentlist.show_system_agents',
+    false,
+  );
+  const agentTypeFilter: 'user' | 'all' = showSystemAgents ? 'all' : 'user';
+
   const { data: agents = [], isLoading: loading, isError: agentsError } = useQuery({
-    queryKey: ['agents'],
-    queryFn: () => getAgents().then((res) => safeParseList(AgentSchema, extractList<Record<string, unknown>>(res))),
+    // queryKey includes the filter so toggling re-fetches instead of
+    // serving stale cache; distinct from other pages' `['agents', 'all']`.
+    queryKey: ['agents', agentTypeFilter],
+    queryFn: () =>
+      getAgents(agentTypeFilter).then((res) =>
+        safeParseList(AgentSchema, extractList<Record<string, unknown>>(res)),
+      ),
   });
+
+  // SYSTEM-AGENT-TYPING Phase 2.2 — pull monitor rows + scheduled tasks for
+  // the inline SystemAgentMonitorCard. We only fetch when the toggle is on so
+  // pages that hide system agents don't pay the extra round-trip. `enabled`
+  // also short-circuits when there are no system agents in the list yet.
+  const { data: monitorRows = [] } = useQuery({
+    queryKey: ['system-agents', 'monitor'],
+    queryFn: () => getSystemAgentMonitor().then((r) => r.data ?? []),
+    enabled: showSystemAgents,
+    staleTime: 30_000,
+  });
+  const { data: schedulesRaw = [] } = useQuery({
+    queryKey: ['schedules', 'for-system-agents'],
+    // listSchedules returns every schedule visible to this user; we filter to
+    // agent_id → taskId locally so we don't depend on a per-agent BE endpoint.
+    queryFn: () => listSchedules(userId).then((r) => r.data ?? []),
+    enabled: showSystemAgents,
+    staleTime: 30_000,
+  });
+  const scheduledTaskIdByAgentId = useMemo<Record<number, number>>(() => {
+    const m: Record<number, number> = {};
+    for (const s of schedulesRaw) {
+      // If multiple schedules exist for the same agent (rare), keep the
+      // first — running any one of them produces equivalent output. The UI
+      // surface is "Run Manually" which intentionally triggers one schedule.
+      if (s.agentId && m[s.agentId] == null) m[s.agentId] = s.id;
+    }
+    return m;
+  }, [schedulesRaw]);
+  const monitorByAgentId = useMemo(() => {
+    const m = new Map<number, (typeof monitorRows)[number]>();
+    monitorRows.forEach((row) => m.set(row.agentId, row));
+    return m;
+  }, [monitorRows]);
 
   useEffect(() => {
     if (agentsError) message.error('Failed to load agents');
@@ -275,6 +330,25 @@ const AgentList: React.FC = () => {
             <p className="agents-head-sub">{rows.length} of {agents.length} shown</p>
           </div>
           <div className="agents-head-actions">
+            <label
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                fontSize: 12,
+                color: 'var(--fg-2)',
+                cursor: 'pointer',
+              }}
+              title="Show V1-V5 cron-managed system agents (memory-curator, session-annotator, metrics-collector, attribution-curator, user-simulator)."
+            >
+              <Switch
+                size="small"
+                checked={showSystemAgents}
+                onChange={setShowSystemAgents}
+                data-testid="show-system-agents-toggle"
+              />
+              <span>Show system agents</span>
+            </label>
             <div className="view-seg">
               <button className={view === 'grid' ? 'on' : ''} onClick={() => setView('grid')}>{GRID_ICON} Grid</button>
               <button className={view === 'table' ? 'on' : ''} onClick={() => setView('table')}>{ROWS_ICON} Table</button>
@@ -316,7 +390,23 @@ const AgentList: React.FC = () => {
 
           {view === 'grid' && !loading && rows.length > 0 && (
             <div className="agents-grid">
-              {rows.map((a: AgentDto) => <AgentCard key={a.id} agent={a} onOpen={setOpenAgent} />)}
+              {rows.map((a: AgentDto) => {
+                const monitorRow = a.agentType === 'system' ? monitorByAgentId.get(a.id) : undefined;
+                const footerSlot = monitorRow ? (
+                  <SystemAgentMonitorCard
+                    data={monitorRow}
+                    scheduledTaskId={scheduledTaskIdByAgentId[a.id] ?? null}
+                  />
+                ) : undefined;
+                return (
+                  <AgentCard
+                    key={a.id}
+                    agent={a}
+                    onOpen={setOpenAgent}
+                    footerSlot={footerSlot}
+                  />
+                );
+              })}
             </div>
           )}
 

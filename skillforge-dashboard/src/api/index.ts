@@ -107,7 +107,16 @@ export interface UpdateAgentRequest extends Partial<CreateAgentRequest> {
   public?: boolean;
 }
 
-export const getAgents = () => api.get('/agents');
+/**
+ * SYSTEM-AGENT-TYPING Phase 2.2 — list agents with optional `agentType` filter.
+ * BE default = `'user'` (returns user-created agents only). Pass `'all'` to
+ * include system agents (cron-managed) in the response; pass `'system'` to
+ * fetch system agents only. Existing callers (Chat sidebar, hooks editors,
+ * etc.) continue to work without changes because the param is optional —
+ * but when omitted, the BE returns the smaller `'user'` set by design.
+ */
+export const getAgents = (agentType?: 'user' | 'system' | 'all') =>
+  api.get('/agents', { params: agentType ? { agentType } : undefined });
 export const getAgent = (id: number) => api.get(`/agents/${id}`);
 export const createAgent = (data: CreateAgentRequest) => api.post('/agents', data);
 export const updateAgent = (id: number, data: UpdateAgentRequest) => api.put(`/agents/${id}`, data);

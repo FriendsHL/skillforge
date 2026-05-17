@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Modal, message } from 'antd';
+import { Alert, Modal, message } from 'antd';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import ChatWindow from '../components/ChatWindow';
 import SessionReplay from '../components/SessionReplay';
@@ -170,7 +170,13 @@ const Chat: React.FC = () => {
   }, [urlSessionId]);
 
   useEffect(() => {
-    getAgents()
+    // SYSTEM-AGENT-TYPING Phase 2.2: BE /api/agents defaults to agentType='user'.
+    // Chat needs BOTH user and system agents in `agents` so the Phase 2.3 send
+    // gate (`activeAgent?.agentType === 'system' → disable + banner`) can fire
+    // when a user opens an existing session URL whose `?agent=` points to a
+    // system agent. Without `agentType='all'` here, `agents.find(...)` returns
+    // undefined and the gate silently fails open.
+    getAgents('all')
       .then((res) => {
         setAgents(safeParseList(AgentSchema, extractList(res)));
       })
@@ -344,6 +350,16 @@ const Chat: React.FC = () => {
   };
 
   const handleSend = async (text: string, files: File[] = []) => {
+    // SYSTEM-AGENT-TYPING Phase 2.3 — defense-in-depth gate. The textarea +
+    // send button are already `inputDisabled` when activeAgent.agentType ===
+    // 'system' (see `inputDisabled` derivation below). This top-of-handler
+    // check covers slash-command / programmatic paths that might bypass the
+    // disabled state. Surface a warning so the operator understands why the
+    // send was dropped, then no-op.
+    if (activeAgent?.agentType === 'system') {
+      message.warning('System agents are read-only via Chat. Use admin tools to configure.');
+      return;
+    }
     if (!activeSessionId) {
       if (!selectedAgent) {
         message.warning('Please select an agent first');
@@ -521,12 +537,22 @@ const Chat: React.FC = () => {
     }
   };
 
+  // SYSTEM-AGENT-TYPING Phase 2.3 — gate Chat send when the active agent is a
+  // system agent (cron-managed). Resolved from `agents` so the gate works for
+  // both fresh sessions (selectedAgent only) and existing sessions (loaded via
+  // useChatSession). Defined *before* `inputDisabled` so the latch derives
+  // from it; full `activeAgent` lookup repeats below for downstream usage —
+  // keeping a local memo here avoids a forward reference.
+  const isSystemAgent =
+    agents.find((a) => a.id === selectedAgent)?.agentType === 'system';
+
   // §8 定义：runtimeStatus === 'waiting_user' 且 pendingAsk/pendingConfirm 任一非空时 disable。
   // 两 latch 用 OR 连接是防御 —— 后端 B3 fix 已保证两者不并存，但事件顺序抖动时
-  // 前端至少不会放行输入。
+  // 前端至少不会放行输入。Phase 2.3 加 isSystemAgent OR：system agent 永远只读发送。
   const inputDisabled =
-    runtimeStatus === 'waiting_user' &&
-    (pendingAsk != null || pendingConfirm != null);
+    isSystemAgent ||
+    (runtimeStatus === 'waiting_user' &&
+      (pendingAsk != null || pendingConfirm != null));
 
   const combinedInflightTools = useMemo(() => {
     const merged: Record<string, InflightTool> = {};
@@ -934,6 +960,16 @@ const Chat: React.FC = () => {
                 />
               </div>
             </header>
+
+            {isSystemAgent && (
+              <Alert
+                type="info"
+                showIcon
+                title="System agents are read-only via Chat. Use admin tools to configure."
+                data-testid="system-agent-chat-banner"
+                style={{ margin: '8px 16px' }}
+              />
+            )}
 
             {activeSessionId && (
               <RuntimeBanner

@@ -6,6 +6,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
+import java.time.Instant;
 import java.util.List;
 
 /**
@@ -29,4 +30,12 @@ public interface SimulatorTrialRepository extends JpaRepository<SimulatorTrialEn
 
     Page<SimulatorTrialEntity> findByCandidateAgentVersionIdAndCandidateSurfaceType(
             String candidateAgentVersionId, String candidateSurfaceType, Pageable pageable);
+
+    /**
+     * SYSTEM-AGENT-TYPING Phase 2.1: 7-day output count for the user-simulator
+     * monitor card. The table is natively scoped to user-simulator (no other
+     * cron writes here). Each row is one simulated trial run — labelled
+     * "trials" in the FE card.
+     */
+    long countByCreatedAtAfter(Instant since);
 }

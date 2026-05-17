@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { InputNumber, Select, Switch, Tag, message } from 'antd';
+import { Alert, InputNumber, Modal, Select, Switch, Tag, Tooltip, message } from 'antd';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  deleteAgent,
   updateAgent,
   getTools,
   getSkills,
@@ -197,6 +198,12 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
   const queryClient = useQueryClient();
   const { userId } = useAuth();
   const { options: modelOptions } = useLlmModels();
+  // SYSTEM-AGENT-TYPING Phase 2.2 — gate all edit affordances when this drawer
+  // is showing a system agent. The `status` toggle (ASK/AUTO mode in the head)
+  // stays editable per F3 ("allow temporary disable of cron"). The Delete
+  // button stays disabled with a tooltip. No "Unlock for admin edit" affordance
+  // (per 2026-05-17 user simplification — single-user dev = admin already).
+  const isSystemAgent = agent.agentType === 'system';
   const [tab, setTab] = useState('overview');
   const [mdFile, setMdFile] = useState<'AGENT.md' | 'SOUL.md' | 'MEMORY.md'>('AGENT.md');
   const [dirty, setDirty] = useState<Record<string, boolean>>({});
@@ -563,10 +570,71 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
               </div>
             </div>
             <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
-              <div className="mode-seg-sf" title="Execution mode">
-                <button className={mode === 'ask' ? 'on' : ''} onClick={() => handleModeChange('ask')}>ASK</button>
-                <button className={mode === 'auto' ? 'on' : ''} onClick={() => handleModeChange('auto')}>AUTO</button>
+              <div
+                className="mode-seg-sf"
+                title={
+                  isSystemAgent
+                    ? 'System agent — managed by V1-V5 bootstrap; mode is reset on next server restart'
+                    : 'Execution mode'
+                }
+                style={isSystemAgent ? { opacity: 0.5, pointerEvents: 'none' } : undefined}
+                aria-disabled={isSystemAgent}
+                data-testid="execution-mode-toggle"
+              >
+                <button
+                  className={mode === 'ask' ? 'on' : ''}
+                  onClick={() => handleModeChange('ask')}
+                  disabled={isSystemAgent}
+                >
+                  ASK
+                </button>
+                <button
+                  className={mode === 'auto' ? 'on' : ''}
+                  onClick={() => handleModeChange('auto')}
+                  disabled={isSystemAgent}
+                >
+                  AUTO
+                </button>
               </div>
+              <Tooltip
+                title={
+                  isSystemAgent
+                    ? 'System agents cannot be deleted; disable the matching schedule instead'
+                    : 'Delete this agent'
+                }
+              >
+                <button
+                  className="agent-drawer-close"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (isSystemAgent) return;
+                    Modal.confirm({
+                      title: `Delete "${agent.name}"?`,
+                      content:
+                        'This permanently removes the agent and is not reversible. Existing sessions remain but become unowned.',
+                      okText: 'Delete',
+                      okType: 'danger',
+                      cancelText: 'Cancel',
+                      onOk: async () => {
+                        try {
+                          await deleteAgent(agent.id);
+                          message.success('Agent deleted');
+                          queryClient.invalidateQueries({ queryKey: ['agents'] });
+                          onClose();
+                        } catch {
+                          message.error('Failed to delete agent');
+                        }
+                      },
+                    });
+                  }}
+                  disabled={isSystemAgent}
+                  data-testid="delete-agent-btn"
+                  title=""  /* tooltip handled by parent <Tooltip>, suppress native */
+                  style={{ color: isSystemAgent ? 'var(--fg-4)' : 'var(--danger-1, #dc2626)' }}
+                >
+                  Delete
+                </button>
+              </Tooltip>
               <button className="agent-drawer-close" onClick={onClose} title="Close (Esc)">{CLOSE_ICON}</button>
             </div>
           </div>
@@ -581,6 +649,16 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
         </div>
 
         <div className="agent-drawer-body">
+          {isSystemAgent && (
+            <Alert
+              type="warning"
+              showIcon
+              data-testid="system-agent-drawer-banner"
+              title="System agent — managed by V1-V5 bootstrap"
+              description="Edits to system_prompt / tool_ids / behavior_rules / lifecycle_hooks will be overwritten on next server restart. To stop the cron, disable the matching schedule on the /schedules page."
+              style={{ marginBottom: 16 }}
+            />
+          )}
           {tab === 'overview' && (
             <>
               {agent.description && (
@@ -617,6 +695,7 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
                     style={{ width: '100%', marginTop: 4 }}
                     showSearch
                     optionFilterProp="label"
+                    disabled={isSystemAgent}
                     filterOption={(input, option) => {
                       // Custom filter since label is now ReactNode for some options.
                       const opt = modelOptions.find((o) => o.id === option?.value);
@@ -634,6 +713,7 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
                     onChange={(v) => setMaxLoopsDraft(typeof v === 'number' ? v : null)}
                     placeholder="default"  /* clearing reverts to default; cannot save explicit null via API */
                     style={{ width: '100%', marginTop: 4 }}
+                    disabled={isSystemAgent}
                   />
                 </div>
                 <div className="overview-card">
@@ -648,11 +728,13 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
                     ]}
                     onChange={(v) => setThinkingModeDraft(v)}
                     style={{ width: '100%', marginTop: 4 }}
-                    disabled={!supportsThinking}
+                    disabled={!supportsThinking || isSystemAgent}
                     title={
-                      supportsThinking
-                        ? undefined
-                        : 'Selected model does not expose a thinking toggle; value is retained but inactive.'
+                      isSystemAgent
+                        ? 'System agent — managed by bootstrap'
+                        : supportsThinking
+                          ? undefined
+                          : 'Selected model does not expose a thinking toggle; value is retained but inactive.'
                     }
                     data-testid="thinking-mode-select"
                   />
@@ -672,11 +754,13 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
                     onChange={(v) => setReasoningEffortDraft(v ?? null)}
                     placeholder="default"
                     style={{ width: '100%', marginTop: 4 }}
-                    disabled={!supportsEffort}
+                    disabled={!supportsEffort || isSystemAgent}
                     title={
-                      supportsEffort
-                        ? 'low/medium may be remapped by the provider.'
-                        : 'Selected model does not support reasoning effort; value is retained but inactive.'
+                      isSystemAgent
+                        ? 'System agent — managed by bootstrap'
+                        : supportsEffort
+                          ? 'low/medium may be remapped by the provider.'
+                          : 'Selected model does not support reasoning effort; value is retained but inactive.'
                     }
                     data-testid="reasoning-effort-select"
                   />
@@ -693,6 +777,7 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
                     ]}
                     onChange={(v) => setPublicDraft(v === 'public')}
                     style={{ width: '100%', marginTop: 4 }}
+                    disabled={isSystemAgent}
                   />
                 </div>
                 <div className="overview-card">
@@ -707,6 +792,7 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
                     allowClear
                     showSearch
                     optionFilterProp="label"
+                    disabled={isSystemAgent}
                   />
                 </div>
                 <div className="overview-card"><div className="overview-k">ID</div><div className="overview-v mono">{agent.id}</div></div>
@@ -715,7 +801,9 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
                 <button
                   className="btn-primary-sf"
                   onClick={handleSaveOverview}
-                  disabled={!overviewDirty || updateMutation.isPending}
+                  disabled={!overviewDirty || updateMutation.isPending || isSystemAgent}
+                  data-testid="overview-save-btn"
+                  title={isSystemAgent ? 'System agent fields are read-only' : undefined}
                 >
                   {overviewDirty ? 'Save' : 'Saved'}
                 </button>
@@ -762,11 +850,25 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
                         setDirty(d => ({ ...d, [mdFile]: true }));
                       }}
                       spellCheck={false}
+                      readOnly={isSystemAgent}
+                      data-testid="prompt-editor"
                     />
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
-                    <button className="btn-ghost-sf" onClick={() => setDirty(d => ({ ...d, [mdFile]: false }))}>Revert</button>
-                    <button className="btn-primary-sf" onClick={handleSavePrompts}>
+                    <button
+                      className="btn-ghost-sf"
+                      onClick={() => setDirty(d => ({ ...d, [mdFile]: false }))}
+                      disabled={isSystemAgent}
+                    >
+                      Revert
+                    </button>
+                    <button
+                      className="btn-primary-sf"
+                      onClick={handleSavePrompts}
+                      disabled={isSystemAgent}
+                      data-testid="prompts-save-btn"
+                      title={isSystemAgent ? 'System agent prompts are read-only' : undefined}
+                    >
                       {dirty[mdFile] ? 'Save draft' : 'Saved'}
                     </button>
                   </div>
@@ -776,7 +878,16 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
           )}
 
           {tab === 'rules' && (
-            <>
+            // SYSTEM-AGENT-TYPING Phase 2 W3 fix — BehaviorRulesEditor has no
+            // `disabled` prop, so the native `<fieldset disabled>` propagates
+            // disabled state to all descendant form controls (Switch / Radio /
+            // Input). border:0 + padding:0 keeps the visual unchanged for the
+            // non-system case.
+            <fieldset
+              disabled={isSystemAgent}
+              style={{ border: 0, padding: 0, margin: 0, opacity: isSystemAgent ? 0.65 : 1 }}
+              data-testid="rules-tab-fieldset"
+            >
               <BehaviorRulesEditor
                 groupedRules={rulesCtl.groupedRules}
                 templateId={rulesCtl.templateId}
@@ -792,23 +903,36 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
                 <button
                   className="btn-primary-sf"
                   onClick={handleSaveRules}
-                  disabled={!rulesDirty || updateMutation.isPending}
+                  disabled={!rulesDirty || updateMutation.isPending || isSystemAgent}
+                  data-testid="rules-save-btn"
+                  title={isSystemAgent ? 'System agent behavior rules are read-only' : undefined}
                 >
                   {rulesDirty ? 'Save' : 'Saved'}
                 </button>
               </div>
-            </>
+            </fieldset>
           )}
 
           {tab === 'hooks' && (
-            <LifecycleHooksPanel
-              agentId={agent.id}
-              fallbackRawJson={agent.lifecycleHooks}
-              skills={skillsCatalog.map((s) => ({
-                name: String(s.name),
-                description: s.description ? String(s.description) : undefined,
-              }))}
-            />
+            // SYSTEM-AGENT-TYPING Phase 2 W3 fix — LifecycleHooksPanel has no
+            // `disabled` prop. Wrap in `<fieldset disabled>` so all descendant
+            // form controls (Switch / Radio / textarea / Save button) are
+            // disabled at the DOM level — covers cases where the inner Save
+            // button doesn't already gate on `isSystemAgent`.
+            <fieldset
+              disabled={isSystemAgent}
+              style={{ border: 0, padding: 0, margin: 0, opacity: isSystemAgent ? 0.65 : 1 }}
+              data-testid="hooks-tab-fieldset"
+            >
+              <LifecycleHooksPanel
+                agentId={agent.id}
+                fallbackRawJson={agent.lifecycleHooks}
+                skills={skillsCatalog.map((s) => ({
+                  name: String(s.name),
+                  description: s.description ? String(s.description) : undefined,
+                }))}
+              />
+            </fieldset>
           )}
 
           {tab === 'toolsSkills' && (
@@ -819,12 +943,16 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
                 </div>
                 <div className="chip-row-sf">
                   {skills.map(s => (
-                    <span key={s} className="chip-pill-sf skill removable">
+                    <span key={s} className={`chip-pill-sf skill${isSystemAgent ? '' : ' removable'}`}>
                       {s}
-                      <button className="chip-pill-x-sf" onClick={() => removeSkill(s)} title="Remove">{CLOSE_ICON}</button>
+                      {!isSystemAgent && (
+                        <button className="chip-pill-x-sf" onClick={() => removeSkill(s)} title="Remove">{CLOSE_ICON}</button>
+                      )}
                     </span>
                   ))}
-                  <AttachPicker kind="skill" catalog={skillCatalogItemsWithToolDetails} attached={skills} onPick={addSkill} />
+                  {!isSystemAgent && (
+                    <AttachPicker kind="skill" catalog={skillCatalogItemsWithToolDetails} attached={skills} onPick={addSkill} />
+                  )}
                 </div>
               </div>
               {/* P1-C-3: System Skills toggle panel — independent of SEC-2 hooks
@@ -887,6 +1015,7 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
                             size="small"
                             checked={enabled}
                             onChange={(checked) => toggleSystemSkill(name, checked)}
+                            disabled={isSystemAgent}
                             data-testid={`system-skill-toggle-${name}`}
                           />
                         </div>
@@ -920,6 +1049,7 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
                   style={{ width: '100%' }}
                   showSearch
                   optionFilterProp="label"
+                  disabled={isSystemAgent}
                   data-testid="mcp-servers-select"
                   notFoundContent={
                     mcpServersCatalog.length === 0
@@ -940,19 +1070,25 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
                 <div className="chip-row-sf">
                   {tools.length === 0 && <span style={{ color: 'var(--fg-3)', fontSize: 13 }}>No restriction — agent can call any tool.</span>}
                   {tools.map(t => (
-                    <span key={t} className="chip-pill-sf tool removable">
+                    <span key={t} className={`chip-pill-sf tool${isSystemAgent ? '' : ' removable'}`}>
                       {t}
-                      <button className="chip-pill-x-sf" onClick={() => removeTool(t)} title="Remove">{CLOSE_ICON}</button>
+                      {!isSystemAgent && (
+                        <button className="chip-pill-x-sf" onClick={() => removeTool(t)} title="Remove">{CLOSE_ICON}</button>
+                      )}
                     </span>
                   ))}
-                  <AttachPicker kind="tool" catalog={toolCatalogItems} attached={tools} onPick={addTool} />
+                  {!isSystemAgent && (
+                    <AttachPicker kind="tool" catalog={toolCatalogItems} attached={tools} onPick={addTool} />
+                  )}
                 </div>
               </div>
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
                 <button
                   className="btn-primary-sf"
                   onClick={handleSaveToolsSkills}
-                  disabled={!toolsSkillsDirty || updateMutation.isPending}
+                  disabled={!toolsSkillsDirty || updateMutation.isPending || isSystemAgent}
+                  data-testid="tools-skills-save-btn"
+                  title={isSystemAgent ? 'System agent tools/skills are read-only' : undefined}
                 >
                   {toolsSkillsDirty ? 'Save' : 'Saved'}
                 </button>

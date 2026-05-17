@@ -61,4 +61,12 @@ public interface MemoryProposalRepository extends JpaRepository<MemoryProposalEn
             nativeQuery = true)
     List<MemoryProposalEntity> findReferencingMemoryId(@Param("userId") Long userId,
                                                        @Param("jsonId") String jsonIdArray);
+
+    /**
+     * SYSTEM-AGENT-TYPING Phase 2.1: 7-day output count for the memory-curator
+     * monitor card. The table is natively scoped to memory-curator (no other
+     * cron writes here). Each row is one proposed consolidation / dedup /
+     * reflection — colloquially labelled "consolidations" in the FE card.
+     */
+    long countByCreatedAtAfter(Instant since);
 }
