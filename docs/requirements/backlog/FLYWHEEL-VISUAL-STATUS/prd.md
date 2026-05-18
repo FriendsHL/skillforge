@@ -9,7 +9,16 @@ risk: Low
 mrd: ./mrd.md
 tech_design: ./tech-design.md
 created: 2026-05-16
+updated: 2026-05-18
 ---
+
+## 2026-05-18 启动前 ratify (3 处 refine)
+
+启动前补 3 处 refine 体现 V6/V7 land 之后的现状变动 (详见 index.md "2026-05-18 启动前 ratify" section):
+
+- **R1 Tab UX 一致性**: F3 FlywheelStatusPanel 顶部 widget 改 user/system agent Tabs (跟 Phase 2 同款), 不用 agentId Select. localStorage `flywheel.active_tab` 持久化. tab 控制下游所有 useQuery 加 `?agentType=user|system` filter (复用 V7 Phase 2 visibility fix BE endpoint pattern).
+- **R2 Canary 状态 disabled marker**: F2 FlywheelTimeline 对 step ⑦⑧⑨ 加 disabled-state encoding — 灰色 + `<Tag>disabled (V87)</Tag>` 而非 "0 in-flight". 鼠标 hover 显 "V6 V87 暂停 metrics-collector cron, 此 step dormant". 解锁条件: 未来 V8.X 重启 canary cron 时移除 disabled marker.
+- **R3 drill-down query param 真活验证 (Phase 1.0 必须)**: F1 数据源 mapping 9 step × 5 drill-down URL, 每个 target page (Patterns / OptimizationEvents / Canary / etc.) **必须 Phase 1.0 grep 真活验证** 是否真消费 `?stage=` `?surface=` `?agentId=` query filter. W2 已知 footgun (SystemAgentMonitorCard "View Sessions" 跳 ?agentId=N 但 SessionList 没消费, 跟 Schedules ?taskId 同款). Phase 1.0 取证报告必须列每个 URL 真消费 / 不消费 + 不消费的 fix path (补 useSearchParams or 调 link 形态).
 
 ## 摘要
 

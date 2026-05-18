@@ -7,7 +7,58 @@ prd: ./prd.md
 risk: Low
 mode: mid
 created: 2026-05-16
+updated: 2026-05-18
 ---
+
+## 2026-05-18 启动前 ratify (3 处 refine)
+
+详见 index.md / prd.md "2026-05-18 启动前 ratify" section. 关键 tech-design impact:
+
+### R1 Tab UX → useFlywheelState hook 加 agentType param
+```ts
+// Before (V5 时):
+export function useFlywheelState(agentId: string | 'all'): {...}
+
+// After (R1 refine):
+export function useFlywheelState(agentType: 'user' | 'system'): {...}
+// 移除 agentId selector, agentType tab 控制下游 BE query
+// 每个 useQuery URL 加 `?agentType=${activeTab}` filter
+// (BE 已有 endpoint 复用 V7 Phase 2 visibility fix 加的 agentType param)
+```
+
+### R2 Canary 状态 dormant encoding
+```ts
+// FlywheelTimeline.tsx 增量
+const isDormantStep = (step: number) => step >= 7 && step <= 9;
+// step ⑦⑧⑨ 渲染:
+// - 灰色 bar (非 blue/green/red)
+// - <Tag>disabled (V87)</Tag>
+// - tooltip "V6 V87 暂停 metrics-collector cron, 此 step dormant. 未来重启 canary cron 移除标记"
+// 未来 V8.X 重启时改 isDormantStep 返 false (or 改 V90+ migration 后检测)
+```
+
+### R3 Phase 1.0 真活验证 drill-down URL (CRITICAL, 防 W2 同款 silent-drop bug)
+
+Phase 1.0 必跑 5 个 target page 真活验证:
+
+```bash
+# 每个 URL 实际 e2e 验证 query param 真消费 (filter 真生效)
+# 1. Patterns ?surface=skill
+npx agent-browser goto "http://localhost:3001/insights/patterns?surface=skill"
+# 验 PatternList 是否真按 surface=skill filter
+
+# 2. OptimizationEvents ?stage=proposal_pending&surface=skill
+npx agent-browser goto "http://localhost:3001/insights/optimization-events?stage=proposal_pending&surface=skill"
+# 验 OptimizationEvents 是否真按 stage + surface filter
+
+# 3-5. agents skill-evolution / canary / etc.
+```
+
+不消费的 URL **必须**:
+- (a) 顺手补 target page 的 useSearchParams 真消费 (跟 W2 SessionList fix 同 mode), 或
+- (b) 调 link 形态: 跳 page 后无 filter (operator 自己用现有 filter UI 选)
+
+Phase 1.0 取证报告必须列每个 URL "真消费 / 不消费 + fix path" 矩阵, BE-Dev / FE-Dev 据此分工 (大概率纯 FE 修).
 
 ## TL;DR
 

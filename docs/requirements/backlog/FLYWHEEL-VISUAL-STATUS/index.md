@@ -7,8 +7,16 @@ status: design-draft
 priority: P2
 risk: Low
 created: 2026-05-16
-updated: 2026-05-16
+updated: 2026-05-18
 ---
+
+## 2026-05-18 启动前 ratify (Phase 2 follow-up 后重审)
+
+V5 archive 时 (2026-05-16) 创建 design-draft 后, 4 周内 land 了 V6 FLYWHEEL-LOOP-CLOSURE + V7 SYSTEM-AGENT-TYPING Phase 1+2 + dogfood follow-up batch. 启动 V8 前 3 处 refine:
+
+1. **Tab UX 一致性**: 顶部 widget 改 user/system agent Tabs (跟 AgentList/SessionList/Chat Phase 2 同款), 不用 agentId Select. tab 控制 BE fetch agentType filter (复用 V7 Phase 2 visibility fix 的 `?agentType=user|system` pattern).
+2. **Canary 状态 disabled marker**: ⑦⑧⑨ canary step 当前 dormant (V6 V87 metrics-collector-hourly cron disable). FlywheelTimeline 这 3 step 显灰色 `<Tag>disabled (V87)</Tag>` 而非 "0 in-flight" — 防 operator 困惑 "为啥永远 0 candidate".
+3. **drill-down query param 真支持验证 (Phase 1.0 必须)**: V5 时设计假设 target page 真消费 `?stage=` `?surface=` `?agentId=` query filter, 但 W2 follow-up 发现 sessions/schedules 都没消费 (deep-link 跳过去 silently 不 filter). V8 9 step × 5 drill-down URL **必须 Phase 1.0 grep 真活验证每个 target page 真消费 query param**, 否则可能要顺手补 target page 的 useSearchParams 真消费 (跟 W2 same fix mode) 或调整 link 形态.
 
 ## 摘要
 
