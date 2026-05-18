@@ -1,5 +1,6 @@
 package com.skillforge.server.tool;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillforge.core.engine.CancellationRegistry;
 import com.skillforge.core.skill.SkillContext;
 import com.skillforge.core.skill.SkillResult;
@@ -40,12 +41,14 @@ class SubAgentToolTest {
     @Mock
     private AgentService agentService;
 
+    private final ObjectMapper objectMapper = new ObjectMapper();
+
     private SubAgentTool tool;
 
     @BeforeEach
     void setUp() {
         tool = new SubAgentTool(targetResolver, sessionService, chatService, registry,
-                cancellationRegistry, agentService);
+                cancellationRegistry, agentService, objectMapper);
     }
 
     @Test

@@ -1728,6 +1728,14 @@ export const deleteCompiledMethod = (id: number) => api.delete(`/compiled-method
 
 // ─── Skill Drafts ───────────────────────────────────────────────────────────
 
+/**
+ * SKILL-CREATOR-WITH-EVAL Phase 1.3 — `EvaluationResult` mirror lives in
+ * `./skillDrafts.ts` to keep the eval-specific types co-located with their
+ * dedicated endpoint wrappers. Imported here only so `SkillDraft` can
+ * optionally surface a typed result blob alongside the legacy fields.
+ */
+import type { EvaluationResult } from './skillDrafts';
+
 export interface SkillDraft {
   id: string;
   sourceSessionId?: string;
@@ -1738,7 +1746,16 @@ export interface SkillDraft {
   requiredTools?: string;
   promptHint?: string;
   extractionRationale?: string;
-  status: 'draft' | 'approved' | 'discarded';
+  /**
+   * SKILL-CREATOR-WITH-EVAL Phase 1.3 adds `'evaluating'`, `'evaluated_passed'`,
+   * and `'rejected'` (the BE persists them via V91 `t_skill_draft.status` free-
+   * form VARCHAR; tech-design.md "决策记录 D8"). `'evaluating'` is the transient
+   * state `SkillCreatorService.dispatchEvaluation` writes while child sessions
+   * are in-flight; UI shows an "Evaluating…" badge until the coordinator
+   * finalises with `'evaluated_passed'` or `'rejected'`. Older drafts created
+   * before V91 remain `'draft' | 'approved' | 'discarded'`.
+   */
+  status: 'draft' | 'approved' | 'discarded' | 'evaluating' | 'evaluated_passed' | 'rejected';
   skillId?: number;
   createdAt: string;
   reviewedAt?: string;
@@ -1749,6 +1766,26 @@ export interface SkillDraft {
   // Existing skill name/id this draft is most similar to, when similarity is set.
   mergeCandidateId?: string;
   mergeCandidateName?: string;
+
+  // ─── SKILL-CREATOR-WITH-EVAL Phase 1.3 (V91 columns + eval result) ───────
+  /**
+   * Creation source. Free-form VARCHAR on the BE; known values from the
+   * tech-design D8 enum: 'upload' | 'marketplace' | 'natural-language' |
+   * 'extract-from-sessions' | 'attribution' | 'manual' | 'skill-creator-eval'.
+   */
+  source?: string;
+  /** Target agent the draft was evaluated against (V91 `target_agent_id`). */
+  targetAgentId?: number;
+  /** Transient SkillEntity id rendered during evaluation (V91 `candidate_skill_id`). */
+  candidateSkillId?: number;
+  /**
+   * Parsed evaluation result. BE serialises `t_skill_draft.evaluation_result_json`
+   * as a structured object on this field. Absent when the draft has not been
+   * evaluated yet (legacy drafts and pending pipelines).
+   */
+  evaluationResult?: EvaluationResult;
+  /** Convenience: ISO timestamp pulled from `evaluationResult.evaluatedAt`. */
+  evaluatedAt?: string;
 }
 
 export interface SkillExtractionStartResult {

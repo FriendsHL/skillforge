@@ -1,5 +1,7 @@
 package com.skillforge.server.tool;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillforge.core.engine.CancellationRegistry;
 import com.skillforge.core.model.ToolSchema;
 import com.skillforge.core.skill.Tool;
@@ -15,6 +17,7 @@ import com.skillforge.server.subagent.SubAgentRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -42,19 +45,28 @@ public class SubAgentTool implements Tool {
     private final SubAgentRegistry registry;
     private final CancellationRegistry cancellationRegistry;
     private final AgentService agentService;
+    /**
+     * SKILL-CREATOR-WITH-EVAL Phase 1.1 (2026-05-18): used to JSON-serialise
+     * the {@code skillIdsOverride} input list into the child session's
+     * {@code skill_overrides_json} column when the dispatching parent passes
+     * one. Cheap to share — Jackson's mapper is thread-safe post-config.
+     */
+    private final ObjectMapper objectMapper;
 
     public SubAgentTool(AgentTargetResolver targetResolver,
                          SessionService sessionService,
                          ChatService chatService,
                          SubAgentRegistry registry,
                          CancellationRegistry cancellationRegistry,
-                         AgentService agentService) {
+                         AgentService agentService,
+                         ObjectMapper objectMapper) {
         this.targetResolver = targetResolver;
         this.sessionService = sessionService;
         this.chatService = chatService;
         this.registry = registry;
         this.cancellationRegistry = cancellationRegistry;
         this.agentService = agentService;
+        this.objectMapper = objectMapper;
     }
 
     @Override
@@ -111,6 +123,20 @@ public class SubAgentTool implements Tool {
         properties.put("maxLoops", Map.of(
                 "type", "integer",
                 "description", "Override max loop iterations for the child agent (dispatch only; default: agent's configured value or 25)"
+        ));
+        // SKILL-CREATOR-WITH-EVAL Phase 1.1 (2026-05-18): per-dispatch skill
+        // override list, in the same JSON shape as t_agent.skill_ids (array of
+        // skill REGISTRY NAMES). dispatch only; null = use the child agent's
+        // own skillIds (legacy). Empty array = "no skills" baseline. Used by
+        // SkillCreatorService.dispatchEvaluation to spin with_skill /
+        // without_skill child sessions without mutating t_agent.
+        properties.put("skillIdsOverride", Map.of(
+                "type", "array",
+                "items", Map.of("type", "string"),
+                "description", "Override the child agent's skill list with the given registry-name "
+                        + "array (dispatch only; null = use child agent's own skillIds). Used by "
+                        + "the SKILL-CREATOR-WITH-EVAL evaluation gate to run a scenario both with "
+                        + "a candidate skill and without any skill (clean baseline) against the same agent."
         ));
 
         Map<String, Object> schema = new LinkedHashMap<>();
@@ -185,6 +211,26 @@ public class SubAgentTool implements Tool {
             int maxLoops = ((Number) maxLoopsObj).intValue();
             if (maxLoops > 0) {
                 child.setMaxLoops(maxLoops);
+            }
+        }
+        // SKILL-CREATOR-WITH-EVAL Phase 1.1 (2026-05-18): stamp per-dispatch
+        // skillIdsOverride into child.skill_overrides_json so ChatService.runLoop
+        // can swap the child agent's skill list at loop start without mutating
+        // the persistent t_agent row. Empty array (explicit no-skill baseline)
+        // is also serialized as "[]" — distinguishes "user wanted no skills"
+        // from "user didn't pass override" (null). Malformed list values are
+        // logged and ignored (loop will fall back to agent's own skillIds).
+        Object skillOverrideObj = input.get("skillIdsOverride");
+        if (skillOverrideObj instanceof List<?> rawList) {
+            try {
+                List<String> overrideNames = new ArrayList<>();
+                for (Object el : rawList) {
+                    if (el != null) overrideNames.add(el.toString());
+                }
+                child.setSkillOverridesJson(objectMapper.writeValueAsString(overrideNames));
+            } catch (JsonProcessingException e) {
+                log.warn("SubAgent dispatch: failed to serialise skillIdsOverride for child {} — "
+                        + "child will fall back to agent.skillIds: {}", child.getId(), e.getMessage());
             }
         }
         // OBS-4 §2.5 INV-4: 复制父 session 当前 active_root 给 child，让 child 内部 trace 继承同一 root

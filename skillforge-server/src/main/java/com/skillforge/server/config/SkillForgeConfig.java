@@ -567,9 +567,13 @@ public class SkillForgeConfig {
                                        SubAgentRegistry subAgentRegistry,
                                        CancellationRegistry cancellationRegistry,
                                        SkillRegistry skillRegistry,
-                                       AgentService agentService) {
+                                       AgentService agentService,
+                                       com.fasterxml.jackson.databind.ObjectMapper objectMapper) {
+        // SKILL-CREATOR-WITH-EVAL Phase 1.1 (2026-05-18): objectMapper added
+        // so handleDispatch can JSON-serialise the new skillIdsOverride input
+        // list into the child session's skill_overrides_json column.
         SubAgentTool tool = new SubAgentTool(targetResolver, sessionService, chatService,
-                subAgentRegistry, cancellationRegistry, agentService);
+                subAgentRegistry, cancellationRegistry, agentService, objectMapper);
         skillRegistry.registerTool(tool);
         log.info("Registered SubAgentTool into SkillRegistry");
         return tool;

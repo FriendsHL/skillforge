@@ -16,6 +16,25 @@ updated: 2026-05-18
 
 补齐 `system-skills/skill-creator/` skill 的 evaluation 实施 (V1 时 SKILL.md 写了概念没真做). 加 scripts/ + evals/ + `SkillCreatorService.evaluateSkillDraft` + V91 schema + dashboard report panel. 跨 4 skill 创建入口 (上传 / 下载 / 自然语言 / extract) 统一接 evaluation gate. 不动 V1-V7 飞轮 9 步主路径.
 
+## r4 path decision (2026-05-18 用户 Phase 1.0 取证后拍板)
+
+Phase 1.0 be-dev verify 发现 spec D2 "SubAgent path" 实施时必须 (a) 扩 SubAgentTool schema (b) 加 session-level skill override 持久化机制 (c) 改 ChatService.runLoop load override 替换 default agent.skillIds — **触 Iron Law 红灯** (ChatService 核心 7+1).
+
+push back 推荐 Path e (sandbox 复用 V2 SkillAbEvalService pattern, 0 动 Iron Law). 用户**拍板 Path d3** (保 spec D2 SubAgent path, 接受动 Iron Law). 理由: SubAgent path 更"端到端真实跑" (走完整 ChatService 路径, 跟生产对话 100% 一致), 业务上 Sandbox path 更内部.
+
+### d3 实施 path 关键技术点
+
+1. **V92 migration**: ALTER TABLE t_session ADD COLUMN skill_overrides_json TEXT NULL (V91 已 reserve 给 t_skill_draft, 加新 V92)
+2. **SessionEntity** 加 `skillOverridesJson` field + getter/setter
+3. **SubAgentTool schema 扩** `skillIdsOverride: List<Long>` 字段 (现 schema 6 字段, 加第 7)
+4. **SubAgentTool.handleDispatch** 改: if `skillIdsOverride != null` → 创建 child SessionEntity 时 set `skillOverridesJson = JSON.stringify(skillIdsOverride)` 写入 t_session
+5. **ChatService.runLoop 改 (Iron Law 红灯)**: 读 `session.skillOverridesJson` 决定 agent.skillIds 用哪份 — non-null override / null 现有逻辑. **改动量 ~5-10 行 1 个 if-else branch**, 不触 java.md footgun #4 持久化字节一致 / #5 t_session_message identity 列 (本 column 在 t_session 不在 t_session_message)
+6. **SkillCreatorEvalCoordinator** 新 service: `@Async + @Transactional(REQUIRES_NEW)` listen `SessionLoopFinishedEvent` (V1 已 publish ChatService.java:1021 + P12 ScheduledTaskExecutor 已用 — be-dev Phase 1.0 verify ✓), 通过 parentSessionId / subAgentRunId 反查识别 SubAgent child session, 计数 2N 完成 → aggregate + judge + write evaluation_result + status
+7. **SkillCreatorService.dispatchEvaluation(String draftId, List<String> scenarioIds)** 主 caller: render transient SkillEntity 拿 candidate_skill_id (V6 R3 promoteDraftToTransientSkill pattern 复用) + Serial dispatch 2N SubAgent (skillIdsOverride=[candidateSkillId] for with / [] for without) + 注册 coordinator listener + 返 runIds
+8. **Phase 2.0 review 重点**: java-reviewer **必须显式 audit ChatService 改动 Iron Law 红灯**, 按 java.md known footgun 全面 verify (尤其 invariant 不变 + 测试覆盖)
+
+工作量 +1d vs Path e (主要 ChatService 改动 + reviewer 严 + V92 migration).
+
 ## r2 spec review fix (2026-05-18 architect Opus re-review, subagent path — team agent stuck)
 
 r1 fix 后 architect Opus r2 re-review 抓 4 新 must-fix (2 blocker + 2 warning) — r1 fix 真正解 4/6 blocker (A3/A4/A6 + SubAgentTool schema 扩 + risk 3 footgun ✓), 但 A1/A2/A5 各漏一刀. **本 spec 已 r3 inline fix**:

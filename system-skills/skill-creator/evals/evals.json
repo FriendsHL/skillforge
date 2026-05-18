@@ -1,0 +1,40 @@
+{
+  "skill_name": "skill-creator",
+  "description": "Meta-eval: skill-creator skill 自评 — 验证它本身真能产 evaluation pass 的 SKILL.md。给 SKILL-CREATOR-WITH-EVAL 的 dogfood circle 用。",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "帮我创建一个 csv-row-counter skill，能从用户给的 CSV 文件路径返回总行数（含 header 行）。给 2 个使用示例：(1) '/tmp/sales.csv' → '21 rows' (2) '/tmp/empty.csv' → '0 rows'。",
+      "expected_output": "生成的 SKILL.md 应包含：(a) name: csv-row-counter (小写连字符) (b) description 含 'CSV' + '行数' 触发关键词 (c) allowed-tools 至少含 Read 或 Bash (d) promptHint 给出使用 Read / wc -l 的具体步骤",
+      "files": [],
+      "expectations": [
+        "SKILL.md frontmatter 合法 YAML，能被 SkillPackageLoader.loadFromDirectory 解析",
+        "name 符合 lowercase + hyphen 命名规范（小写字母 + 数字 + 连字符）",
+        "description 含 'CSV' / 'count' 相关词以提高触发命中率",
+        "正文 <100 行，专注 procedural 知识，不引入 agent 已知的通用 CSV 知识"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "审计我现有的 'date-parser' skill。它的 SKILL.md 现在是：\n```\nname: date-parser\ndescription: parse dates\n```\n找出至少 3 个问题并提改进建议。",
+      "expected_output": "agent 应识别：(1) description 过于笼统 → 触发率会差，建议加格式 / 语言示例 (2) 缺 allowed-tools → 不知道用哪个工具 (3) 没有正文 / promptHint → agent 没有 procedural 指引 (4) 可选：缺 triggers 列表",
+      "files": [],
+      "expectations": [
+        "agent 至少识别 3 个真实问题（不是凑数）",
+        "每个问题配 1 句具体的改进建议（不是'description 太短'这种空话）",
+        "建议改成的内容 example 是可以直接 copy-paste 进 SKILL.md 的 YAML 片段"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "改进 'json-validator' skill：当前 SKILL.md description 是 'validate json'，要让它在用户说 '检查这个配置文件 / 看看这个 json 对不对 / parse 一下' 时也能命中触发。",
+      "expected_output": "agent 应在 description 中显式包含触发短语 + 给出修改后的 frontmatter 草稿，并解释 triggers 字段的作用",
+      "files": [],
+      "expectations": [
+        "description 中至少包含 2 个中文触发短语（'检查' / '配置文件' / '对不对' 等）",
+        "triggers: [...] 字段被显式建议加入 frontmatter",
+        "解释包含'触发机制 = description + triggers' 的关系，而不是只改 description"
+      ]
+    }
+  ]
+}

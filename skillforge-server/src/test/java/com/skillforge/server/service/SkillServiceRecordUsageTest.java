@@ -37,7 +37,8 @@ class SkillServiceRecordUsageTest {
     @BeforeEach
     void setUp() {
         service = new SkillService(skillRepository, skillRegistry, packageLoader, skillStorageService,
-                skillEvalHistoryRepository);
+                skillEvalHistoryRepository,
+                null, null, null); // SKILL-CREATOR-WITH-EVAL Phase 1.2: eval-gate deps not exercised here
     }
 
     @Test

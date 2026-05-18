@@ -527,7 +527,61 @@ Rejected tab 显示:
 - FE: SkillDraftEvaluationReport.test.tsx (render delta + LLM summary) + RejectedSkillDrafts.test.tsx (list render + iterate button)
 - e2e: BE restart + V91 apply + agent-browser goto /skills/drafts → 看 rejected list / evaluation report panel 真渲
 
+## 实施决策回写 (2026-05-18 Phase 1.1-1.3 完成 + B1 fix)
+
+落地 5 处真实决策, 跟 spec 草案有偏离的回写如下:
+
+### D9 — `skillIdsOverride` 类型 `List<String>` (spec 原 `List<Long>`)
+- **草案**: `SubAgentTool.skillIdsOverride: List<Long>` (skill DB id)
+- **真实施**: `List<String>` (skill **registry NAMES**), 跟 `t_agent.skill_ids` JSON shape 一字一致
+- **理由**: `AgentDefinition.getSkillIds()` 本身就是 `List<String>`, `ChatService.runLoop` override branch 直接 `setSkillIds(overrideNames)` 无需 SkillRepository 注入 + DB lookup translate. 比 `List<Long>` 省 1 个依赖注入 + 1 个 DB query per eval-session loop start.
+- **Round 1 java-reviewer audit PASS** (B1 触发的代码 audit + 本决策列入 stage 2 quality)
+- 影响: F5 表格 "List<Long> 注 id" 应理解为 "List<String> 注 registry names". 未来如要 swap 回 Long id 需补 SkillRepository 注入到 ChatService (核心 7+1 红).
+
+### D10 — `dispatchEvaluation` tx 边界 2 阶段 (B1 fix)
+- **草案 (r1 fix 时已锁)**: SubAgent async × @Transactional 边界用 V6 `OptimizationEventAutoTriggerListener` pattern
+- **真实施**: NEW `SkillEvalDispatchReadyEvent` record + `SkillCreatorEvalCoordinator.onSkillEvalDispatchReady` listener (`@Async + @TransactionalEventListener(AFTER_COMMIT) + @Transactional(REQUIRES_NEW)` 三注解, bit-for-bit parity with V6 `OptimizationEventAutoTriggerListener.onStageCandidateReady`)
+- **Race 病灶**: round 1 reviewer 抓 inline `chatService.chatAsync` 在 outer `@Transactional` 内 fire → async fresh tx 看不到未 commit 的 `skill_overrides_json` → eval misattribute
+- **Fix**: `dispatchEvaluation` 末尾 publish event; listener 在 AFTER_COMMIT 后 fire `chatAsync` per child. round 2 reviewer PASS.
+- **Regression test**: NEW `SkillCreatorServiceDispatchTxBoundaryTest` 4 case (核心: `verify(chatService, never()).chatAsync(...)`)
+
+### D11 — `renderTransientCandidateSkill` 不写磁盘 (Phase 1.1 实施 deviation)
+- **草案**: 跟 V6 R3 `promoteDraftToTransientSkill` 完全同款 (写磁盘 + setSkillPath)
+- **真实施**: 不写磁盘 + `setSkillPath(null)`. transient SkillEntity name 后缀 `_eval_<8char>` + source `skill-creator-eval-transient`
+- **理由**: 本期 `SkillCreatorEvalCoordinator` aggregate 用 runtime_status proxy (D12), 不真跑 SkillRegistry.getSkillDefinition, disk 文件不必要
+- **Phase 1.6 跟进**: 真接 EvalJudgeTool 时如发现需要 disk SKILL.md, 补 V6 R3 同款 disk-write pattern
+
+### D12 — Coordinator aggregate 用 proxy 不真接 EvalJudgeTool (Phase 1.1 实施 deviation)
+- **草案**: `SkillCreatorEvalCoordinator` 调 `EvalJudgeTool.judgeMultiTurnConversation(scenario, ScenarioRunResult, MultiTurnTranscript)` 返 `EvalJudgeMultiTurnOutput` → 5 维 SkillMetrics 拼合
+- **真实施**: proxy 算 `compositeScore = (runtime_status=='completed' ? 1.0 : 0.0)`, `passRate / overallScore` 同 proxy, `avgLatencyMs = completedAt - createdAt`, `cost = 0` placeholder
+- **理由**: EvalJudgeTool 调用要求构造 `ScenarioRunResult + MultiTurnTranscript` — 后者要从 child session t_session_message 拉 + 拼成 conversation, 是非平凡 helper. 工程量超 Phase 1.1 scope.
+- **EvaluationResult JSON shape 已定型** (5 维 SkillMetrics), FE / dashboard 读相同字段, Phase 1.6 只换 source-of-data **不改 shape** (FE 不需 retro 改)
+
+### D13 — Entries 1/2/4 skeleton hook 不真触发 (Phase 1.2 实施 deviation)
+- **草案**: 4 入口 (upload / marketplace / extract-from-sessions / natural-language) 任意 land 立刻 fire `dispatchEvaluation`
+- **真实施**:
+  - **入口 1 SkillService.uploadSkill**: `maybeTriggerEvaluationForUpload` skeleton + `buildEphemeralScenariosFromZip` helper ready, **但 `resolveAnyAgentIdForOwner` 返 null → 实际不 fire**
+  - **入口 2 SkillImportService.importSkill**: `ImportResult.evaluating(draftId)` factory ready, **body 未动**
+  - **入口 4 SkillDraftService.extractFromRecentSessions**: `buildEphemeralScenariosFromSessions` helper ready, **body 未动**
+  - **入口 3 skill-creator skill scripts/+evals/**: NEW `run-eval.md` SubAgent prompt template + `evals/evals.json` 3 self-eval case 真落地
+- **理由**:
+  1. 自动触发需解析 target agent: entries 1+2 zip 没含 agent id, entry 4 多个 source session 选哪个不显然
+  2. 自动触发会影响生产 upload/extract 流量 (每个 upload 默认 fire 2N SubAgent run 风险高)
+  3. spec 没明确 "自动 vs 操作员手动触发", 倾向后者 (dashboard 加按钮)
+- **Phase 1.6 跟进**: dashboard FE picker 让 operator 选 target agent + 手动触发 evaluation. helper 全 ready 等接.
+
 ## 评审记录
 
 - 2026-05-18 创建 design-draft (基于 user CC-SKILL-EVAL-METHODOLOGY 调研结论 + 8 design 决策)
 - ratify 8 项见 prd.md "决策记录" section
+- 2026-05-18 r1 fix (6 spec-vs-code blocker, subagent architect Opus 双 reviewer)
+- 2026-05-18 r2 fix (4 must-fix, subagent architect Opus r2 re-review)
+- 2026-05-18 Phase 1.1-1.3 实施 (be-dev opus + fe-dev opus 并行)
+- 2026-05-18 Phase 2.0 retroactive review round 1 (java-reviewer + typescript-reviewer 双 opus 1M)
+  - BE NEEDS_FIX (B1 blocker: dispatchEvaluation tx 边界 race)
+  - FE PASS-with-warning (W4 rejected 状态 raw string + W5 status union 缺 evaluating)
+- 2026-05-18 Phase 2.0 round 2 fix
+  - be-dev fix B1 (V6 AFTER_COMMIT pattern + SkillEvalDispatchReadyEvent + DispatchTxBoundaryTest 4 case)
+  - 主会话 fix FE W4 + W5 (SkillDraftDetailDrawer 4-way 拆 + status union 加 evaluating)
+- 2026-05-18 Phase 2.0 round 2 java-reviewer opus 1M re-review PASS 0 blocker
+- 2026-05-18 Phase Final commit + archive

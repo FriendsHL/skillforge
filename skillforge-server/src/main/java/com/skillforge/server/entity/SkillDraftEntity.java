@@ -65,6 +65,49 @@ public class SkillDraftEntity {
     @Column(name = "merge_candidate_name", length = 256)
     private String mergeCandidateName;
 
+    /**
+     * SKILL-CREATOR-WITH-EVAL V91 (2026-05-18): evaluation target agent. For
+     * the extract-from-sessions path this is back-filled from
+     * {@code sourceSession.agent_id}; for the upload / marketplace / natural-
+     * language paths the dispatch caller sets it explicitly. NULL until the
+     * dispatch path resolves it (legacy rows pre-V91 stay null forever).
+     */
+    @Column(name = "target_agent_id")
+    private Long targetAgentId;
+
+    /**
+     * SKILL-CREATOR-WITH-EVAL V91 (2026-05-18): id of the transient SkillEntity
+     * rendered for the evaluation pair (with_skill / without_skill SubAgent
+     * runs). Written by {@code SkillCreatorService.dispatchEvaluation} after
+     * the V6 R3 {@code promoteDraftToTransientSkill}-style render; cleaned up
+     * (or promoted to the real candidate) by the approve-flow once the operator
+     * acts on the eval verdict.
+     */
+    @Column(name = "candidate_skill_id")
+    private Long candidateSkillId;
+
+    /**
+     * SKILL-CREATOR-WITH-EVAL V91 (2026-05-18): provenance of the draft.
+     * Free-form VARCHAR(64), no CHECK constraint, so we don't have to migrate
+     * each time a new entry-point lands. Known values:
+     * {@code upload} / {@code marketplace} / {@code natural-language} /
+     * {@code extract-from-sessions} / {@code attribution} / {@code manual}.
+     * NULL for pre-V91 rows (legacy extract / attribution path).
+     */
+    @Column(name = "source", length = 64)
+    private String source;
+
+    /**
+     * SKILL-CREATOR-WITH-EVAL V91 (2026-05-18): Jackson-serialised
+     * {@code EvaluationResult} record written by
+     * {@code SkillCreatorEvalCoordinator} after all 2N SubAgent runs land.
+     * Shape doc in V91__skill_draft_evaluation.sql header. NULL while the
+     * eval is still in flight (status='draft') or for entry-points that
+     * skip evaluation (no eval scenarios in the zip).
+     */
+    @Column(name = "evaluation_result_json", columnDefinition = "TEXT")
+    private String evaluationResultJson;
+
     @CreatedDate
     private Instant createdAt;
 
@@ -209,5 +252,37 @@ public class SkillDraftEntity {
 
     public void setMergeCandidateName(String mergeCandidateName) {
         this.mergeCandidateName = mergeCandidateName;
+    }
+
+    public Long getTargetAgentId() {
+        return targetAgentId;
+    }
+
+    public void setTargetAgentId(Long targetAgentId) {
+        this.targetAgentId = targetAgentId;
+    }
+
+    public Long getCandidateSkillId() {
+        return candidateSkillId;
+    }
+
+    public void setCandidateSkillId(Long candidateSkillId) {
+        this.candidateSkillId = candidateSkillId;
+    }
+
+    public String getSource() {
+        return source;
+    }
+
+    public void setSource(String source) {
+        this.source = source;
+    }
+
+    public String getEvaluationResultJson() {
+        return evaluationResultJson;
+    }
+
+    public void setEvaluationResultJson(String evaluationResultJson) {
+        this.evaluationResultJson = evaluationResultJson;
     }
 }

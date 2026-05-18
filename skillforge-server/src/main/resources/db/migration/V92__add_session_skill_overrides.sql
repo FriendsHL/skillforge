@@ -1,0 +1,57 @@
+-- SKILL-CREATOR-WITH-EVAL Phase 1.1 (2026-05-18):
+-- Per-session skill override applied by ChatService.runLoop in place of
+-- agent.skillIds when present. The evaluation gate ("d3 path", spec D2 +
+-- callback hook design surfaced in Phase 1.0) dispatches 2 SubAgent runs
+-- per scenario:
+--   (a) with_skill    — agent + transient candidate SkillEntity rendered from the draft
+--   (b) without_skill — agent with NO skills (clean baseline matching cc agentskills.io)
+--
+-- The override has to travel from SubAgentTool.handleDispatch (where the parent
+-- agent picks the child agentId + override list) to ChatService.runLoop (where
+-- the child loop reads agent.skillIds to register skills with the engine).
+-- Stamping on t_session is the cleanest carrier: child session inherits the
+-- override on creation, runtime reads it once at loop start, and the parent
+-- agent row stays unmutated (preserving Iron Law INV "don't write t_agent in
+-- the eval path").
+--
+-- JSON shape: List<String> of skill REGISTRY NAMES (matching the existing
+-- t_agent.skill_ids JSON convention — see AgentEntity.java line 43 +
+-- AgentService.toDefinition line 293-302 which round-trips JSON ↔ List<String>).
+-- Storing names (not Long DB ids) keeps ChatService.runLoop free of an extra
+-- DB lookup; the dispatch caller (SubAgentTool / SkillCreatorService) is
+-- responsible for translating its candidate SkillEntity → name before stamping.
+--
+-- NULL = use agent.skillIds (legacy semantics, unchanged for all production
+-- sessions). Empty JSON array [] = explicit "no skills" baseline (without_skill
+-- case in eval). non-empty array = override list of names.
+--
+-- 不触 java.md footgun #4 / #5:
+-- - footgun #4 (persistence-shape invariant): column lives in t_session not
+--   t_session_message; no Message JSON bytes involved.
+-- - footgun #5 (identity-column-on-rewrite): same; rewriteMessages walks
+--   t_session_message rows only.
+
+ALTER TABLE t_session ADD COLUMN skill_overrides_json TEXT NULL;
+
+-- SKILL-CREATOR-WITH-EVAL Phase 1.1 (2026-05-18, paired with V91):
+-- Per-session evaluation context — the marker that lets
+-- SkillCreatorEvalCoordinator (the @TransactionalEventListener on
+-- SessionLoopFinishedEvent — see Phase 1.0 verify report) identify which
+-- finished child session belongs to which draft + scenario + baseline.
+--
+-- JSON shape (set by SkillCreatorService.dispatchEvaluation when spawning the
+-- 2N child sessions per draft):
+--   {
+--     "draftId":        "uuid",                  // SkillDraftEntity.id
+--     "scenarioId":     "sc-…",                  // EvalScenarioEntity.id
+--     "baselineLabel":  "with_skill" | "without_skill"
+--   }
+--
+-- NULL = regular production / SubAgent session (legacy semantics). All
+-- existing pre-V92 sessions stay null forever. The coordinator listener
+-- bails out for null and never touches non-eval sessions.
+ALTER TABLE t_session ADD COLUMN eval_context_json TEXT NULL;
+-- No index added: aggregation only queries by draft id (rare, on completion of
+-- a 2N-run batch). A functional / partial index here would need cross-dialect
+-- syntax compat (Postgres prod + H2 tests); skipping until profiling shows a
+-- real hot spot.

@@ -48,7 +48,8 @@ class SkillServiceRollbackTest {
     @BeforeEach
     void setUp() {
         service = new SkillService(skillRepository, skillRegistry, skillPackageLoader,
-                skillStorageService, skillEvalHistoryRepository);
+                skillStorageService, skillEvalHistoryRepository,
+                null, null, null); // SKILL-CREATOR-WITH-EVAL Phase 1.2: eval-gate deps not exercised here
     }
 
     private SkillEntity newSkill(Long id, Long parentSkillId, boolean enabled, String semver) {

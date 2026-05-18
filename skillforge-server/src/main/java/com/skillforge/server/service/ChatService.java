@@ -607,6 +607,28 @@ public class ChatService {
                 agentDef.setModelId(runtimeOverride);
             }
 
+            // SKILL-CREATOR-WITH-EVAL Phase 1.1 (2026-05-18): per-session skill
+            // override (stamped by SubAgentTool.handleDispatch when the parent
+            // passes skillIdsOverride; see V92 + SessionEntity.skillOverridesJson).
+            // NULL = legacy semantics (use agent.skillIds); "[]" = explicit no-
+            // skill baseline (without_skill case in eval); non-empty list = use
+            // those names. Same JSON shape as t_agent.skill_ids — see
+            // AgentService.toAgentDefinition line ~293-302 for the parent
+            // pattern this mirrors. Iron Law audit: column lives on t_session
+            // not t_session_message, so java.md footgun #4 (persistence-shape)
+            // / #5 (identity-on-rewrite) DO NOT apply.
+            String skillOverridesJson = freshSession.getSkillOverridesJson();
+            if (skillOverridesJson != null && !skillOverridesJson.isBlank()) {
+                try {
+                    List<String> overrideNames = objectMapper.readValue(
+                            skillOverridesJson, new TypeReference<List<String>>() {});
+                    agentDef.setSkillIds(overrideNames);
+                } catch (JsonProcessingException e) {
+                    log.warn("Session {} has malformed skill_overrides_json — falling back to agent.skillIds: {}",
+                            sessionId, e.getMessage());
+                }
+            }
+
             // MULTIMODAL-MVP defense-in-depth: when this turn carries multimodal
             // blocks, refuse if the resolved effective model is not in any provider's
             // visionModels allowlist. The FE upload-button gate + BE upload endpoint

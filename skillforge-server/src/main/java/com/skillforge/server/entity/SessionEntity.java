@@ -190,6 +190,40 @@ public class SessionEntity {
     @Column(name = "runtime_model_override", length = 64)
     private String runtimeModelOverride;
 
+    /**
+     * SKILL-CREATOR-WITH-EVAL V92 (2026-05-18): per-session skill-list override
+     * applied by ChatService.runLoop in place of {@code agent.skillIds} when
+     * non-null. JSON array of skill REGISTRY NAMES (same convention as
+     * {@link AgentEntity#getSkillIds()} — see AgentService.toDefinition for the
+     * round-trip).
+     *
+     * <p>Stamped by SubAgentTool.handleDispatch when the dispatching parent
+     * passes {@code skillIdsOverride}; lets the evaluation gate (Phase 1.1)
+     * spin two child sessions for one scenario (with_skill / without_skill)
+     * without mutating the persistent {@code t_agent} row.
+     *
+     * <p>NULL = legacy semantics (use {@code agent.skillIds}); empty JSON
+     * array {@code "[]"} = explicit "no skills" baseline; non-empty array =
+     * override list of skill names. Does NOT travel with {@code createSubSession}
+     * — eval-only opt-in by the caller.
+     */
+    @Column(name = "skill_overrides_json", columnDefinition = "TEXT")
+    private String skillOverridesJson;
+
+    /**
+     * SKILL-CREATOR-WITH-EVAL V92 (2026-05-18): per-session eval-context marker
+     * for {@code SkillCreatorEvalCoordinator}. Stamped by
+     * {@code SkillCreatorService.dispatchEvaluation} on each of the 2N child
+     * sessions; tells the coordinator listener which draft + scenario + baseline
+     * the finished session belongs to. JSON shape (read+write by the coordinator
+     * + dispatcher only):
+     * <pre>{ "draftId": "...", "scenarioId": "...", "baselineLabel": "with_skill"|"without_skill" }</pre>
+     * NULL for all regular production / non-eval SubAgent sessions; listener
+     * bails on null without further DB work.
+     */
+    @Column(name = "eval_context_json", columnDefinition = "TEXT")
+    private String evalContextJson;
+
     @CreatedDate
     private LocalDateTime createdAt;
 
@@ -493,5 +527,21 @@ public class SessionEntity {
 
     public void setRuntimeModelOverride(String runtimeModelOverride) {
         this.runtimeModelOverride = runtimeModelOverride;
+    }
+
+    public String getSkillOverridesJson() {
+        return skillOverridesJson;
+    }
+
+    public void setSkillOverridesJson(String skillOverridesJson) {
+        this.skillOverridesJson = skillOverridesJson;
+    }
+
+    public String getEvalContextJson() {
+        return evalContextJson;
+    }
+
+    public void setEvalContextJson(String evalContextJson) {
+        this.evalContextJson = evalContextJson;
     }
 }

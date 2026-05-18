@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import { Modal, message } from 'antd';
+import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   getSkillDrafts, reviewSkillDraft, mergeDraftIntoSkill,
@@ -7,6 +8,7 @@ import {
 } from '../api';
 import { useAuth } from '../contexts/AuthContext';
 import { extractNameConflict, openNameConflictModal } from '../components/skills/draftApproveHelpers';
+import { SkillDraftDetailDrawer } from '../components/skillDrafts/SkillDraftDetailDrawer';
 import '../components/agents/agents.css';
 import '../components/skills/skills.css';
 
@@ -14,13 +16,26 @@ import '../components/skills/skills.css';
 const HIGH_SIMILARITY_THRESHOLD = 0.85;
 const SUGGEST_MERGE_THRESHOLD = 0.60;
 
-type DraftStatusFilter = 'all' | 'draft' | 'approved' | 'discarded';
+/**
+ * SKILL-CREATOR-WITH-EVAL Phase 1.3 (F6) — adds 'evaluated_passed' and
+ * 'rejected' as first-class status filters alongside the legacy
+ * draft/approved/discarded triple. BE Phase 1.1 writes these via V91
+ * `t_skill_draft.status`.
+ */
+type DraftStatusFilter =
+  | 'all'
+  | 'draft'
+  | 'approved'
+  | 'discarded'
+  | 'evaluated_passed'
+  | 'rejected';
 
 /**
  * SKILL-DRAFTS-REDESIGN — dual-pane layout with list + detail preview.
  */
 const SkillDraftsPage: React.FC = () => {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const { userId: currentUserId } = useAuth();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -36,6 +51,14 @@ const SkillDraftsPage: React.FC = () => {
   const pendingDrafts = useMemo(() => drafts.filter(d => d.status === 'draft'), [drafts]);
   const approvedDrafts = useMemo(() => drafts.filter(d => d.status === 'approved'), [drafts]);
   const discardedDrafts = useMemo(() => drafts.filter(d => d.status === 'discarded'), [drafts]);
+  const evaluatedDrafts = useMemo(
+    () => drafts.filter(d => d.status === 'evaluated_passed'),
+    [drafts],
+  );
+  const rejectedDrafts = useMemo(
+    () => drafts.filter(d => d.status === 'rejected'),
+    [drafts],
+  );
 
   /** Drafts filtered by status */
   const statusFilteredDrafts = useMemo(() => {
@@ -172,6 +195,21 @@ const SkillDraftsPage: React.FC = () => {
     discardMutation.mutate(id);
   }, [discardMutation]);
 
+  /**
+   * SKILL-CREATOR-WITH-EVAL F6 — operator clicks "Iterate" on a rejected
+   * draft. Deep-links to the skill-creator chat with a prefill payload
+   * containing the reject reason so the next turn can rewrite SKILL.md and
+   * re-trigger evaluation. The target chat surface owns the prefill parse
+   * (`?prefill=` URL param) — out of scope for this phase, so the deep link
+   * is laid down for the FE iterate-loop work item.
+   */
+  const handleIterateDraft = useCallback((id: string) => {
+    const draft = drafts.find(d => d.id === id);
+    const summary = draft?.evaluationResult?.llmSummary ?? 'See evaluation report';
+    const prefill = `Iterate based on reject reason: ${summary}`;
+    navigate(`/chat?prefill=${encodeURIComponent(prefill)}&draftId=${encodeURIComponent(id)}`);
+  }, [drafts, navigate]);
+
   /** Approve all low-risk drafts (similarity < 60%) */
   const handleApproveAllSafe = useCallback(() => {
     const safeDrafts = pendingDrafts.filter(d => (d.similarity ?? 0) < SUGGEST_MERGE_THRESHOLD);
@@ -252,6 +290,22 @@ const SkillDraftsPage: React.FC = () => {
               {discardedDrafts.length} discarded
             </button>
             <button
+              className={`draft-stat approved ${statusFilter === 'evaluated_passed' ? 'active' : ''}`}
+              onClick={() => setStatusFilter('evaluated_passed')}
+              data-testid="filter-evaluated-passed"
+            >
+              <span className="dot" />
+              {evaluatedDrafts.length} evaluated
+            </button>
+            <button
+              className={`draft-stat discarded ${statusFilter === 'rejected' ? 'active' : ''}`}
+              onClick={() => setStatusFilter('rejected')}
+              data-testid="filter-rejected"
+            >
+              <span className="dot" />
+              {rejectedDrafts.length} rejected
+            </button>
+            <button
               className={`draft-stat ${statusFilter === 'all' ? 'active' : ''}`}
               onClick={() => setStatusFilter('all')}
             >
@@ -305,13 +359,16 @@ const SkillDraftsPage: React.FC = () => {
           </div>
         </aside>
 
-        {/* Detail pane */}
+        {/* Detail pane — SKILL-CREATOR-WITH-EVAL F5: now tab-organised
+            (Overview / Evaluation Report / Source) via the extracted
+            SkillDraftDetailDrawer component. */}
         <main className="drafts-detail-pane">
           {selectedDraft ? (
-            <DraftDetailPanel
+            <SkillDraftDetailDrawer
               draft={selectedDraft}
               onApprove={handleApproveDraft}
               onDiscard={handleDiscardDraft}
+              onIterate={handleIterateDraft}
               approving={approveMutation.isPending && approveMutation.variables?.id === selectedDraft.id}
               discarding={discardMutation.isPending && discardMutation.variables === selectedDraft.id}
             />
@@ -334,10 +391,21 @@ const SkillDraftsPage: React.FC = () => {
   );
 };
 
-/** Status indicator style based on similarity */
-function getDraftStatus(draft: SkillDraft): 'new' | 'warn' | 'err' | 'approved' | 'discarded' {
+/** Status indicator style based on similarity / eval verdict. */
+type DraftStatusKind =
+  | 'new'
+  | 'warn'
+  | 'err'
+  | 'approved'
+  | 'discarded'
+  | 'evaluated'
+  | 'rejected';
+
+function getDraftStatus(draft: SkillDraft): DraftStatusKind {
   if (draft.status === 'approved') return 'approved';
   if (draft.status === 'discarded') return 'discarded';
+  if (draft.status === 'evaluated_passed') return 'evaluated';
+  if (draft.status === 'rejected') return 'rejected';
   const sim = draft.similarity ?? 0;
   if (sim >= HIGH_SIMILARITY_THRESHOLD) return 'err';
   if (sim >= SUGGEST_MERGE_THRESHOLD) return 'warn';
@@ -365,14 +433,29 @@ const DraftListItem: React.FC<{
           <StatusBadge status={status} similarity={draft.similarity} />
         </div>
         <div className="item-meta">
-          {status !== 'new' && status !== 'approved' && status !== 'discarded' && draft.mergeCandidateName && (
-            <span className="sim">→ {draft.mergeCandidateName}</span>
-          )}
+          {status !== 'new' &&
+            status !== 'approved' &&
+            status !== 'discarded' &&
+            status !== 'evaluated' &&
+            status !== 'rejected' &&
+            draft.mergeCandidateName && (
+              <span className="sim">→ {draft.mergeCandidateName}</span>
+            )}
           {status === 'approved' && draft.reviewedAt && (
             <span className="approved-time">Approved {new Date(draft.reviewedAt).toLocaleDateString()}</span>
           )}
           {status === 'discarded' && draft.reviewedAt && (
             <span className="discarded-time">Discarded {new Date(draft.reviewedAt).toLocaleDateString()}</span>
+          )}
+          {status === 'evaluated' && draft.evaluationResult && (
+            <span className="approved-time">
+              +{Math.round(draft.evaluationResult.delta.passRate * 100)}pp pass rate
+            </span>
+          )}
+          {status === 'rejected' && draft.evaluationResult && (
+            <span className="discarded-time">
+              {Math.round(draft.evaluationResult.delta.passRate * 100)}pp pass rate
+            </span>
           )}
           {triggers.length > 0 && <span>{triggers.length} triggers</span>}
         </div>
@@ -393,198 +476,20 @@ const DraftListItem: React.FC<{
 
 /** Status badge */
 const StatusBadge: React.FC<{
-  status: 'new' | 'warn' | 'err' | 'approved' | 'discarded';
+  status: DraftStatusKind;
   similarity?: number;
 }> = ({ status, similarity }) => {
   const label = useMemo(() => {
     if (status === 'approved') return 'Approved';
     if (status === 'discarded') return 'Discarded';
+    if (status === 'evaluated') return 'Evaluated';
+    if (status === 'rejected') return 'Rejected';
     if (status === 'err') return `High ${Math.round((similarity ?? 0) * 100)}%`;
     if (status === 'warn') return `Merge ${Math.round((similarity ?? 0) * 100)}%`;
     return 'New';
   }, [status, similarity]);
 
   return <span className={`item-badge badge-${status}`}>{label}</span>;
-};
-
-/** Detail panel */
-const DraftDetailPanel: React.FC<{
-  draft: SkillDraft;
-  onApprove: (id: string) => void;
-  onDiscard: (id: string) => void;
-  approving: boolean;
-  discarding: boolean;
-}> = ({ draft, onApprove, onDiscard, approving, discarding }) => {
-  const [showPromptHint, setShowPromptHint] = useState(false);
-  const [showRationale, setShowRationale] = useState(false);
-  const triggers = (draft.triggers ?? '').split(',').map(t => t.trim()).filter(Boolean);
-  const tools = (draft.requiredTools ?? '').split(',').map(t => t.trim()).filter(Boolean);
-  const status = getDraftStatus(draft);
-  const isProcessed = draft.status === 'approved' || draft.status === 'discarded';
-
-  return (
-    <div className="draft-detail-content">
-      {/* Header */}
-      <div className="detail-head">
-        <h2 className="detail-title">
-          {draft.name}
-          <StatusBadge status={status} similarity={draft.similarity} />
-        </h2>
-        {draft.description && (
-          <p className="detail-desc">{draft.description}</p>
-        )}
-      </div>
-
-      {/* Processed info */}
-      {isProcessed && draft.reviewedAt && (
-        <div className="detail-section">
-          <div className="processed-info">
-            {draft.status === 'approved' ? (
-              <div className="processed-approved">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <polyline points="20 6 9 17 4 12" />
-                </svg>
-                Approved on {new Date(draft.reviewedAt).toLocaleString()}
-                {draft.skillId && ` → Skill #${draft.skillId}`}
-              </div>
-            ) : (
-              <div className="processed-discarded">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <line x1="18" y1="6" x2="6" y2="18" />
-                  <line x1="6" y1="6" x2="18" y2="18" />
-                </svg>
-                Discarded on {new Date(draft.reviewedAt).toLocaleString()}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Similarity warning */}
-      {status !== 'new' && status !== 'approved' && status !== 'discarded' && (
-        <div className="detail-section">
-          <SimilarityCard draft={draft} />
-        </div>
-      )}
-
-      {/* Triggers */}
-      {triggers.length > 0 && (
-        <div className="detail-section">
-          <div className="section-label">Triggers</div>
-          <div className="trigger-row">
-            {triggers.map(t => (
-              <span key={t} className="trigger-pill">{t}</span>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Tools */}
-      {tools.length > 0 && (
-        <div className="detail-section">
-          <div className="section-label">Required Tools</div>
-          <div className="tools-block">
-            {tools.map(t => (
-              <span key={t} className="tool-tag">{t}</span>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Prompt Hint */}
-      {draft.promptHint && (
-        <div className="detail-section">
-          <div className="section-label">Prompt Hint</div>
-          <button
-            className="sf-mini-btn"
-            onClick={() => setShowPromptHint(v => !v)}
-          >
-            {showPromptHint ? 'Hide' : 'Show'} prompt hint
-          </button>
-          {showPromptHint && (
-            <div className="prompt-block">
-              <div className="prompt-bar">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                  <polyline points="14 2 14 8 20 8" />
-                </svg>
-                SKILL.md
-              </div>
-              <pre className="prompt-body">{draft.promptHint}</pre>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Extraction Rationale */}
-      {draft.extractionRationale && (
-        <div className="detail-section">
-          <div className="section-label">Why Extracted?</div>
-          <button
-            className="sf-mini-btn"
-            onClick={() => setShowRationale(v => !v)}
-          >
-            {showRationale ? 'Hide' : 'Show'} rationale
-          </button>
-          {showRationale && (
-            <div className="rationale-block">{draft.extractionRationale}</div>
-          )}
-        </div>
-      )}
-
-      {/* Source */}
-      {draft.sourceSessionId && (
-        <div className="detail-section">
-          <div className="section-label">Source</div>
-          <div className="source-link">
-            Session #{draft.sourceSessionId} · {new Date(draft.createdAt).toLocaleDateString()}
-          </div>
-        </div>
-      )}
-
-      {/* Footer - only show for pending drafts */}
-      {!isProcessed && (
-        <div className="draft-detail-footer">
-          <button
-            className="btn-discard"
-            disabled={approving || discarding}
-            onClick={() => onDiscard(draft.id)}
-          >
-            {discarding ? 'Discarding...' : 'Discard'}
-          </button>
-          <button
-            className="btn-approve"
-            disabled={approving || discarding}
-            onClick={() => onApprove(draft.id)}
-          >
-            {approving ? 'Approving...' : 'Approve'}
-          </button>
-        </div>
-      )}
-    </div>
-  );
-};
-
-/** Similarity warning card */
-const SimilarityCard: React.FC<{ draft: SkillDraft }> = ({ draft }) => {
-  const sim = draft.similarity ?? 0;
-  const level = sim >= HIGH_SIMILARITY_THRESHOLD ? 'high' : 'medium';
-
-  return (
-    <div className="similarity-card">
-      <div className={`sim-indicator ${level}`}>
-        {Math.round(sim * 100)}%
-      </div>
-      <div className="sim-text">
-        <div className="sim-label">
-          {level === 'high' ? 'High similarity detected' : 'Suggest merge'}
-        </div>
-        <div className="sim-desc">
-          Similar to <strong>{draft.mergeCandidateName ?? draft.mergeCandidateId}</strong>
-        </div>
-      </div>
-    </div>
-  );
 };
 
 export default SkillDraftsPage;
