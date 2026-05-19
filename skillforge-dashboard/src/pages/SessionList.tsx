@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Modal, Tabs, message } from 'antd';
+import { Modal, message } from 'antd';
 import {
   getSessions,
   getSessionMessages,
@@ -469,22 +469,22 @@ const SessionList: React.FC = () => {
         </header>
 
         {/*
-          SYSTEM-AGENT-TYPING Phase 2 UX refactor — top-level Tabs splitting
-          sessions by the owning agent's agentType. Tab choice is persisted
-          via useLocalStorageString; deep-linking `?agentId=` auto-switches
-          the tab to match the resolved agent's type (see effect above) so
-          the filter is always visible.
+          SYSTEM-AGENT-TYPING Phase 2 UX refactor — segmented control
+          replacing Ant Design Tabs. Custom .type-seg matches the
+          existing .view-seg visual language.
         */}
-        <Tabs
-          activeKey={activeTab}
-          onChange={(k) => setActiveTab(k as SessionTabKey)}
-          items={[
-            { key: 'user', label: 'User Sessions' },
-            { key: 'system', label: 'System Sessions' },
-          ]}
-          data-testid="session-type-tabs"
-          style={{ marginBottom: 8 }}
-        />
+        <div className="type-seg" data-testid="session-type-tabs" style={{ marginBottom: 8 }}>
+          {SESSION_TAB_KEYS.map((k) => (
+            <button
+              key={k}
+              type="button"
+              className={activeTab === k ? 'on' : ''}
+              onClick={() => setActiveTab(k)}
+            >
+              {k === 'user' ? 'User Sessions' : 'System Sessions'}
+            </button>
+          ))}
+        </div>
 
         {selectedIds.size > 0 && (
           <div className="sess-batch-bar" role="toolbar" aria-label="Batch actions">

@@ -1,5 +1,4 @@
 import React from 'react';
-import { Tag } from 'antd';
 import type { AgentDto } from '../../api/schemas';
 
 interface AgentCardProps {
@@ -111,22 +110,12 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({ agent, onOpen, footerS
       data-agent-type={agent.agentType ?? 'user'}
     >
       {isSystemAgent && (
-        <Tag
-          color="purple"
-          style={{
-            position: 'absolute',
-            top: 8,
-            right: 8,
-            margin: 0,
-            fontSize: 10,
-            lineHeight: '16px',
-            padding: '0 6px',
-            zIndex: 1,
-          }}
+        <span
+          className="agent-type-badge"
           data-testid={`system-agent-tag-${agent.id}`}
         >
           System
-        </Tag>
+        </span>
       )}
       <div className="agent-card-head">
         <div className={`agent-mark ${role}`}>

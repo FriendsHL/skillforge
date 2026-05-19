@@ -1,5 +1,4 @@
 import { useMemo } from 'react';
-import { Tabs } from 'antd';
 import { IconPlus, IconTeam } from './chat/ChatIcons';
 import { ChannelBadge } from './channels/ChannelBadge';
 
@@ -168,22 +167,22 @@ function ChatSidebar({
     <aside className="side">
       <div className="side-head">
         {/*
-          SYSTEM-AGENT-TYPING Phase 2 UX refactor — sidebar Tabs splitting
-          agent list by agentType. The selectedAgent state lives in Chat.tsx,
-          so flipping tabs preserves the picked agent across tabs (the Chat
-          send gate still fires when a system agent is selected).
+          SYSTEM-AGENT-TYPING Phase 2 UX refactor — sidebar segmented control
+          splitting agent list by agentType. Custom .type-seg matches the
+          existing .view-seg visual language.
         */}
-        <Tabs
-          activeKey={activeAgentTab}
-          onChange={(k) => onAgentTabChange(k as ChatAgentTabKey)}
-          items={[
-            { key: 'user', label: 'User Agents' },
-            { key: 'system', label: 'System Agents' },
-          ]}
-          data-testid="chat-agent-type-tabs"
-          size="small"
-          style={{ marginBottom: 4 }}
-        />
+        <div className="type-seg" data-testid="chat-agent-type-tabs" style={{ marginBottom: 4 }}>
+          {(['user', 'system'] as const).map((k) => (
+            <button
+              key={k}
+              type="button"
+              className={activeAgentTab === k ? 'on' : ''}
+              onClick={() => onAgentTabChange(k)}
+            >
+              {k === 'user' ? 'User' : 'System'}
+            </button>
+          ))}
+        </div>
         <div className="side-label">
           <span>Agents</span>
           <span style={{ color: 'var(--fg-4)' }}>{onlineCount} online</span>

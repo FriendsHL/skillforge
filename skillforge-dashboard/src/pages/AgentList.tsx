@@ -348,25 +348,22 @@ const AgentList: React.FC = () => {
         </header>
 
         {/*
-          SYSTEM-AGENT-TYPING Phase 2 UX refactor — top-level Tabs replacing the
-          Switch toggle. Items are intentionally declarative (`items=`) per
-          AntD docs; the deprecated <TabPane> form is avoided. The activeKey
-          + onChange wire-up is persisted via useLocalStorageString so the
-          choice survives navigation + reload.
+          SYSTEM-AGENT-TYPING Phase 2 UX refactor — segmented control
+          replacing the Ant Design Tabs. Custom .type-seg matches the
+          existing .view-seg visual language.
         */}
-        <Tabs
-          activeKey={activeTab}
-          onChange={(k) => setActiveTab(k as AgentTabKey)}
-          items={[
-            { key: 'user', label: 'User Agents' },
-            { key: 'system', label: 'System Agents' },
-          ]}
-          // data-testid surfaces the Tabs root so tests can scope queries.
-          // AntD renders tab buttons with role="tab" + aria-selected, which
-          // is what we assert against (not on the wrapper itself).
-          data-testid="agent-type-tabs"
-          style={{ marginBottom: 8 }}
-        />
+        <div className="type-seg" data-testid="agent-type-tabs" style={{ marginBottom: 8 }}>
+          {TAB_KEYS.map((k) => (
+            <button
+              key={k}
+              type="button"
+              className={activeTab === k ? 'on' : ''}
+              onClick={() => setActiveTab(k)}
+            >
+              {k === 'user' ? 'User Agents' : 'System Agents'}
+            </button>
+          ))}
+        </div>
 
         <div className="agents-body">
           {loading && (

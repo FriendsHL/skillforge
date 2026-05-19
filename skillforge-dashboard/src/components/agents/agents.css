@@ -1351,3 +1351,161 @@
 [data-theme="dark"] .create-agent-modal .sf-modal-scrim {
   background: rgba(0, 0, 0, 0.5);
 }
+
+/* ============== STATUS PILLS (for monitor card) ============== */
+
+.sess-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  letter-spacing: 0.04em;
+}
+.sess-status.s-running  { background: rgba(74, 122, 168, 0.12); color: #4a7aa8; }
+.sess-status.s-idle     { background: rgba(92, 138, 74, 0.12);  color: #5c8a4a; }
+.sess-status.s-done     { background: var(--bg-hover);           color: var(--fg-3); }
+.sess-status.s-error    { background: rgba(184, 65, 47, 0.10);  color: #b84130; }
+.sess-status.s-waiting  { background: rgba(212, 154, 58, 0.12); color: #d49a3a; }
+[data-theme="dark"] .sess-status.s-running { background: rgba(74, 122, 168, 0.18); color: #90b8d8; }
+[data-theme="dark"] .sess-status.s-idle    { background: rgba(92, 138, 74, 0.18);  color: #8fca8f; }
+[data-theme="dark"] .sess-status.s-error   { background: rgba(184, 65, 47, 0.15);  color: #e89090; }
+[data-theme="dark"] .sess-status.s-waiting { background: rgba(212, 154, 58, 0.18); color: #d4b86e; }
+
+/* ============== TYPE SEG (User / System tab switcher) ============== */
+
+.type-seg {
+  display: inline-flex;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-1);
+  border-radius: 7px;
+  padding: 2px;
+  gap: 0;
+}
+.type-seg button {
+  border: 0;
+  background: transparent;
+  font: inherit;
+  color: var(--fg-3);
+  padding: 5px 14px;
+  border-radius: 5px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+  transition: background var(--transition-base), color var(--transition-base);
+}
+.type-seg button:hover:not(.on) {
+  color: var(--fg-2);
+}
+.type-seg button.on {
+  background: var(--bg-hover);
+  color: var(--fg-1);
+  box-shadow: var(--shadow-1);
+}
+.type-seg .type-seg-count {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--fg-4);
+  margin-left: 2px;
+}
+.type-seg button.on .type-seg-count {
+  color: var(--fg-3);
+}
+
+/* ============== AGENT TYPE BADGE ============== */
+
+.agent-type-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  line-height: 1;
+  padding: 3px 7px;
+  border-radius: 4px;
+  background: rgba(122, 79, 107, 0.12);
+  color: #9a6f8a;
+  z-index: 1;
+}
+[data-theme="dark"] .agent-type-badge {
+  background: rgba(180, 130, 165, 0.15);
+  color: #c8a0b8;
+}
+
+/* ============== SYSTEM MONITOR CARD ============== */
+
+.system-monitor-card {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-1);
+  border-radius: 6px;
+  background: var(--bg-base);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.system-monitor-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.system-monitor-row code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-2);
+  background: var(--bg-hover);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+.system-monitor-stats {
+  display: flex;
+  gap: 16px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-3);
+  flex-wrap: wrap;
+}
+.system-monitor-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.system-monitor-actions button {
+  border: 1px solid var(--border-1);
+  background: var(--bg-surface);
+  color: var(--fg-2);
+  font: inherit;
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: border-color var(--transition-base), color var(--transition-base);
+}
+.system-monitor-actions button:hover:not(:disabled) {
+  color: var(--fg-1);
+  border-color: var(--border-2);
+}
+.system-monitor-actions button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.system-monitor-actions button.primary {
+  background: var(--accent);
+  color: var(--text-on-accent, #fff);
+  border-color: transparent;
+}
+.system-monitor-actions button.primary:hover:not(:disabled) {
+  filter: brightness(0.92);
+}

@@ -10,7 +10,7 @@
  * (no scheduled task for this agent), Run Manually is disabled with a tooltip.
  */
 import React from 'react';
-import { Button, Space, Tag, Tooltip, message } from 'antd';
+import { Tooltip, message } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import { triggerSchedule } from '../../api/schedules';
 import { useAuth } from '../../contexts/AuthContext';
@@ -110,65 +110,32 @@ const SystemAgentMonitorCard: React.FC<SystemAgentMonitorCardProps> = ({
 
   return (
     <div
-      className="system-agent-monitor-card"
+      className="system-monitor-card"
       data-testid={`system-agent-monitor-${data.agentId}`}
       onClick={stop}
-      style={{
-        marginTop: 10,
-        padding: '8px 10px',
-        border: '1px solid var(--border-1, #2a2a31)',
-        borderRadius: 6,
-        background: 'var(--bg-primary, #0f0f10)',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 6,
-      }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-        <span
-          style={{
-            fontFamily: 'var(--font-mono, monospace)',
-            fontSize: 11,
-            color: 'var(--fg-3, #8a8a93)',
-          }}
-        >
+      <div className="system-monitor-row">
+        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg-3)' }}>
           cron
         </span>
-        <code
-          style={{
-            fontFamily: 'var(--font-mono, monospace)',
-            fontSize: 11,
-            color: 'var(--fg-2, #b7b7c1)',
-          }}
-        >
-          {data.cronExpression ?? '(no schedule)'}
-        </code>
+        <code>{data.cronExpression ?? '(no schedule)'}</code>
         {data.lastRunStatus && (
-          <Tag
-            color={STATUS_COLOR[data.lastRunStatus]}
-            style={{ marginInlineEnd: 0, fontSize: 10, lineHeight: '16px', padding: '0 4px' }}
+          <span
+            className={`sess-status s-${data.lastRunStatus === 'success' ? 'done' : data.lastRunStatus === 'failure' ? 'error' : data.lastRunStatus === 'running' ? 'running' : 'idle'}`}
             data-testid="last-run-status"
           >
             {data.lastRunStatus}
-          </Tag>
+          </span>
         )}
       </div>
-      <div
-        style={{
-          display: 'flex',
-          gap: 16,
-          fontSize: 11,
-          color: 'var(--fg-3, #8a8a93)',
-          flexWrap: 'wrap',
-        }}
-      >
+      <div className="system-monitor-stats">
         <span data-testid="last-run">last run · {formatLastRun(data.lastRunAt)}</span>
         <span data-testid="trigger-count">7d triggers · {data.sevenDayTriggerCount}</span>
         <span data-testid="output-count">
           7d {OUTPUT_LABEL[data.outputEntityType]} · {data.sevenDayOutputCount}
         </span>
       </div>
-      <Space size="small" wrap>
+      <div className="system-monitor-actions">
         <Tooltip
           title={
             scheduledTaskId == null
@@ -176,27 +143,25 @@ const SystemAgentMonitorCard: React.FC<SystemAgentMonitorCardProps> = ({
               : `Trigger schedule #${scheduledTaskId} now (bypasses enabled gate)`
           }
         >
-          <Button
-            size="small"
+          <button
             onClick={handleRunManually}
             disabled={scheduledTaskId == null}
             data-testid="run-manually-btn"
           >
             Run Manually
-          </Button>
+          </button>
         </Tooltip>
-        <Button size="small" onClick={handleViewSessions} data-testid="view-sessions-btn">
+        <button onClick={handleViewSessions} data-testid="view-sessions-btn">
           View Sessions
-        </Button>
-        <Button
-          size="small"
+        </button>
+        <button
           onClick={handleViewSchedule}
           disabled={scheduledTaskId == null}
           data-testid="view-schedule-btn"
         >
           View Schedule
-        </Button>
-      </Space>
+        </button>
+      </div>
     </div>
   );
 };
