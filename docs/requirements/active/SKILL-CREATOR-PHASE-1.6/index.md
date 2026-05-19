@@ -1,7 +1,7 @@
 ---
 id: SKILL-CREATOR-PHASE-1.6
 mode: mid
-status: backlog
+status: ratified
 priority: P2
 risk: Mid
 created: 2026-05-18
@@ -10,6 +10,20 @@ follows: SKILL-CREATOR-WITH-EVAL
 ---
 
 # SKILL-CREATOR-PHASE-1.6 — skill-creator-with-eval 真接 LLM judge + 真 fire entries
+
+## Ratify (2026-05-18, 启动前拍板)
+
+跟用户 2 小时讨论 (LLM-as-judge vs agent-as-judge vs state-grounded oracle 路径选择) 后**回到原 spec 简单路径**:
+
+| 决策 | 拍板 |
+|---|---|
+| **F1 judge 范式** | LLM-as-judge (复用 V5 EvalJudgeTool.judgeMultiTurnConversation), **不 state-grounded oracle**, 不 agent-as-judge. 跟 cc agentskills.io 同款 transcript-only judge |
+| **F2 entries 触发模式** | operator dashboard **手动 trigger** (F4), 不自动 fire on upload/import/extract. resolveAnyAgentIdForOwner 删, controller 加 `?targetAgentId=N` 参数 |
+| **F3 transient skill 写磁盘** | 条件性 — F1 dev 实施时 grep `SkillRegistry.getSkillDefinition` 看是否真要 disk SKILL.md 才决定. 不需要的话本 F 跳过 (现 ChatService.runLoop 走 skill_overrides_json setSkillIds names, registry name lookup 不一定要 disk) |
+| **F4 dashboard UI** | Modal (不 inline form), trigger button 在 SkillDraftDetailDrawer 现 footer 加 (status='draft' / 'rejected' 时显). target_agent picker = Select (filter agentType=user, 排 system) |
+| **delta threshold** | 沿用 Phase 1.1 hardcode 5pp, 不暴露 operator slider (避免 UX 复杂). 改阈值留 future config |
+| **优化迭代场景** | Phase 1.1 设计天然支持 — `new_version` vs `old_version` 用同款 `skill_overrides_json` dispatch + 同款 aggregate. **不引入新 design**, 不在本期 scope 内验证 (Phase 1.7 候选 dogfood) |
+| **EvalJudgeTool 输入是否够拼 5 维 SkillMetrics** | 够. `EvalJudgeMultiTurnOutput.compositeScore` + `overallScore` 直填; `passRate` = `count(child compositeScore >= 0.7) / N`; `avgLatencyMs` / `totalCostUsd` 从 `t_subagent_run` 拼. shape 跟 Phase 1.1 `EvaluationResult.SkillMetrics` 已定型不改 |
 
 ## 摘要
 
@@ -54,6 +68,26 @@ Mid 档, ~3-4 天 (本期 Phase 1.1-1.3 helper 全 ready 减大半工程量):
 - per-assertion evidence-based grading (`EVAL-ASSERTIONS-EVIDENCE` 单独 backlog)
 - 30 天 NO_SKILL "skill 必要性 check" cron (单独 backlog 候选)
 - blind comparison judge
+
+## Phase 拆分 (Mid pipeline ~3-4d)
+
+| Phase | 内容 | 工程量 | 验证 |
+|---|---|---|---|
+| **Phase 1.0** | be-dev 取证: grep verify `EvalJudgeTool.judgeMultiTurnConversation` 真接口 + `EvalJudgeMultiTurnOutput` shape + `MultiTurnTranscript.render()` + `ScenarioRunResult` 字段 + `t_subagent_run` 真存 latency/cost 字段. SkillRegistry.getSkillDefinition 真要 disk 吗 (决 F3 跳过 or 实施) | ~0.5d | 红测试 1 个: `SkillCreatorEvalCoordinatorJudgeIT` assert aggregate 不调 EvalJudgeTool (compile fail) |
+| **Phase 1.1** | F1 BE — `MultiTurnTranscriptBuilder.fromSession(sessionId)` helper + `ScenarioRunResult` adapter (从 t_subagent_run + t_session 拼) + `SkillCreatorEvalCoordinator.aggregate` 重写调 `EvalJudgeTool.judgeMultiTurnConversation` × N child, aggregate 5 维 SkillMetrics | ~1.5d | mvn test 全绿; aggregateProxyReplacedTest assert 真调 EvalJudgeTool (Mockito verify), output 5 字段真填 |
+| **Phase 1.2** | F2 BE — 3 entry controller 加 `?targetAgentId=N` 参 + service 真调 `dispatchEvaluation`. SkillService.uploadSkill / SkillImportService.importSkill / SkillDraftService.extractFromRecentSessions | ~1d | 3 IT: `SkillServiceUploadEvaluationIT` / `SkillImportServiceEvaluationIT` / `SkillDraftServiceExtractEvaluationIT` |
+| **Phase 1.3** | F4 FE — `TriggerEvaluationModal.tsx` + SkillDraftDetailDrawer footer 加 "Trigger Evaluation" 按钮 (status='draft'/'rejected' 显) + BE controller `POST /api/skill-drafts/{id}/evaluate` | ~1d | vitest 2 case render + click trigger flow |
+| **Phase 1.4** | F3 (条件性, 如 Phase 1.0 取证决需要) — renderTransientCandidateSkill 写磁盘 V6 R3 同款 pattern | ~0.3d (or 0) | 现有测试不破 |
+| **Phase 2.0** | Mid review 对抗 1 轮 + Judge | ~0.5d | java-reviewer + typescript-reviewer 双 opus, blocker 升 Full / warning-only 一次 fix |
+| **Phase Final** | mvn test + dashboard 真 dogfood 跑 1 个 skill end-to-end + commit | ~0.5d | dashboard trigger 真跑 → child session 真 chatAsync → judge 真打分 → Evaluation Report tab 真显 5 维 benchmark |
+
+## Iron Law
+
+- 核心 7+1 BE 0 diff (ChatService 本期 Phase 1.1-1.3 已 +22 行红 audit PASS, Phase 1.6 不动)
+- 核心 3 FE 0 diff
+- V91/V92 schema 不动 (Phase 1.1-1.3 已 land)
+- footgun #4 / #5 不适用 (不动 Message / 不动 t_session_message)
+- footgun #6 跨栈契约: `EvaluationResult` shape Phase 1.1 已定型, Phase 1.6 只换 source-of-data (proxy → EvalJudgeTool), FE 不需 retro 改
 
 ## 链接
 
