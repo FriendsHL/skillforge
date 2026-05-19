@@ -16,7 +16,7 @@
   padding: 0 28px 0 10px;
   border: 1px solid var(--border-subtle, #2a2a31);
   border-radius: 6px;
-  background: var(--bg-recessed, #0a0a0f);
+  background: var(--bg-sidebar);
   color: var(--fg-1);
   font-size: 13px;
   font-family: inherit;
@@ -34,8 +34,8 @@
 }
 
 .dd-trigger.dd-open {
-  border-color: var(--color-accent);
-  box-shadow: 0 0 0 1px var(--color-accent);
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 1px var(--accent-primary);
 }
 
 .dd-trigger.dd-placeholder {
@@ -95,7 +95,7 @@
   top: calc(100% + 4px);
   left: 0;
   min-width: 100%;
-  background: var(--bg-recessed, #0a0a0f);
+  background: var(--bg-sidebar);
   border: 1px solid var(--border-subtle, #2a2a31);
   border-radius: 8px;
   box-shadow:
@@ -172,7 +172,7 @@
 
 /* Checkmark icon for selected */
 .dd-check {
-  color: var(--color-accent);
+  color: var(--accent-primary);
   flex-shrink: 0;
 }
 

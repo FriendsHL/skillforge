@@ -59,7 +59,7 @@
 }
 
 .tp-pulse--on {
-  background: var(--color-accent, #6366f1);
+  background: var(--accent-primary, #6366f1);
   box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.7);
   animation: tp-pulse 1.4s infinite;
 }
@@ -130,7 +130,7 @@
 }
 
 .tp-icon--running {
-  color: var(--color-accent, #818cf8);
+  color: var(--accent-primary, #818cf8);
   background: rgba(99, 102, 241, 0.14);
   animation: tp-spin 1.4s linear infinite;
 }

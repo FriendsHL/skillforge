@@ -24,6 +24,7 @@ follows: SKILL-CREATOR-WITH-EVAL
 | **delta threshold** | 沿用 Phase 1.1 hardcode 5pp, 不暴露 operator slider (避免 UX 复杂). 改阈值留 future config |
 | **优化迭代场景** | Phase 1.1 设计天然支持 — `new_version` vs `old_version` 用同款 `skill_overrides_json` dispatch + 同款 aggregate. **不引入新 design**, 不在本期 scope 内验证 (Phase 1.7 候选 dogfood) |
 | **EvalJudgeTool 输入是否够拼 5 维 SkillMetrics** | 够. `EvalJudgeMultiTurnOutput.compositeScore` + `overallScore` 直填; `passRate` = `count(child compositeScore >= 0.7) / N`; `avgLatencyMs` / `totalCostUsd` 从 `t_subagent_run` 拼. shape 跟 Phase 1.1 `EvaluationResult.SkillMetrics` 已定型不改 |
+| **D14 — eval gate semantics on import (2026-05-19 Phase 2.0 reviewer W1 补)** | **"report 不是 production gate"** — 入口 1/2 (upload/import) 真活先 register 进 prod `SkillRegistry` 立刻 active, eval batch 在 transient sidecar `_eval_<uuid>` 上**并行**跑作 report 落到 `t_skill_draft.evaluation_result_json`. operator 看 dashboard 决定 reject 时通过 `SkillService.deleteSkill` 删 (separate path, 不在本期 scope). **defer-register-until-verdict (真 production gating) 留 backlog** (~1d Mid 候选). spec ratify 没明说要 defer, 且 parallel-report 不破其它 spec; `ImportResult.evaluating(draftId)` 只是 FE hint "report 在跑", **NOT** "skill 还没 prod active". |
 
 ## 摘要
 

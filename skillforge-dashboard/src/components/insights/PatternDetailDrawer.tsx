@@ -197,7 +197,7 @@ const PatternDetailDrawer: React.FC<PatternDetailDrawerProps> = ({
                       <td className="col-mono">
                         <Link
                           to={`/traces?q=${encodeURIComponent(m.sessionId)}`}
-                          style={{ color: 'var(--color-accent)', textDecoration: 'none' }}
+                          style={{ color: 'var(--accent-primary)', textDecoration: 'none' }}
                         >
                           {m.sessionId.slice(0, 16)}…
                         </Link>

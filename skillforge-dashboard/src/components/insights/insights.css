@@ -28,7 +28,7 @@
   padding: 0 28px 0 10px;
   border: 1px solid var(--border-subtle, #2a2a31);
   border-radius: 6px;
-  background: var(--bg-recessed, #0a0a0f);
+  background: var(--bg-sidebar);
   color: var(--fg-1);
   font-size: 13px;
   font-family: inherit;
@@ -42,14 +42,14 @@
 }
 
 .ins-select:hover { border-color: var(--fg-4); }
-.ins-select:focus { outline: none; border-color: var(--color-accent); }
+.ins-select:focus { outline: none; border-color: var(--accent-primary); }
 
 .ins-input-num {
   height: 32px;
   padding: 0 10px;
   border: 1px solid var(--border-subtle, #2a2a31);
   border-radius: 6px;
-  background: var(--bg-recessed, #0a0a0f);
+  background: var(--bg-sidebar);
   color: var(--fg-1);
   font-size: 13px;
   font-family: var(--font-mono, monospace);
@@ -58,7 +58,7 @@
   transition: border-color 0.15s;
 }
 
-.ins-input-num:focus { outline: none; border-color: var(--color-accent); }
+.ins-input-num:focus { outline: none; border-color: var(--accent-primary); }
 
 .ins-input-num-sm { width: 90px; }
 
@@ -83,8 +83,8 @@
 .ins-btn:hover { border-color: var(--fg-4); }
 
 .ins-btn-primary {
-  background: var(--color-accent);
-  border-color: var(--color-accent);
+  background: var(--accent-primary);
+  border-color: var(--accent-primary);
   color: var(--bg-base);
   font-weight: 500;
 }
@@ -100,7 +100,7 @@
 .ins-btn-link {
   background: none;
   border: none;
-  color: var(--color-accent);
+  color: var(--accent-primary);
   font-size: 12px;
   cursor: pointer;
   padding: 0;

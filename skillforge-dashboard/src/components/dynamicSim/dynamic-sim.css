@@ -138,7 +138,7 @@
   padding: 0 28px 0 10px;
   border: 1px solid var(--border-subtle, #2a2a31);
   border-radius: 6px;
-  background: var(--bg-recessed, #0a0a0f);
+  background: var(--bg-sidebar);
   color: var(--fg-1);
   font-size: 13px;
   font-family: inherit;
@@ -153,7 +153,7 @@
 }
 
 .ds-select:hover { border-color: var(--fg-4); }
-.ds-select:focus { outline: none; border-color: var(--color-accent); }
+.ds-select:focus { outline: none; border-color: var(--accent-primary); }
 .ds-select.ds-error { border-color: var(--color-err); }
 
 .ds-select-sm {
@@ -168,7 +168,7 @@
   padding: 0 10px;
   border: 1px solid var(--border-subtle, #2a2a31);
   border-radius: 6px;
-  background: var(--bg-recessed, #0a0a0f);
+  background: var(--bg-sidebar);
   color: var(--fg-1);
   font-size: 13px;
   font-family: inherit;
@@ -179,7 +179,7 @@
 
 .ds-input::placeholder { color: var(--fg-4); }
 .ds-input:hover { border-color: var(--fg-4); }
-.ds-input:focus { outline: none; border-color: var(--color-accent); }
+.ds-input:focus { outline: none; border-color: var(--accent-primary); }
 
 .ds-input-sm {
   height: 28px;
@@ -217,12 +217,12 @@
 }
 
 .ds-persona-check.checked {
-  border-color: var(--color-accent);
-  background: color-mix(in srgb, var(--color-accent) 8%, transparent);
+  border-color: var(--accent-primary);
+  background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
 }
 
 .ds-persona-check input[type="checkbox"] {
-  accent-color: var(--color-accent);
+  accent-color: var(--accent-primary);
   margin-top: 2px;
   flex-shrink: 0;
 }
@@ -255,8 +255,8 @@
 .ds-btn:hover { border-color: var(--fg-4); }
 
 .ds-btn-primary {
-  background: var(--color-accent);
-  border-color: var(--color-accent);
+  background: var(--accent-primary);
+  border-color: var(--accent-primary);
   color: var(--bg-base);
   font-weight: 500;
 }
@@ -278,7 +278,7 @@
 .ds-btn-link {
   background: none;
   border: none;
-  color: var(--color-accent);
+  color: var(--accent-primary);
   font-size: 12px;
   cursor: pointer;
   padding: 0;
@@ -442,7 +442,7 @@
   padding: 0 20px 0 6px;
   border: 1px solid var(--border-subtle, #2a2a31);
   border-radius: 4px;
-  background: var(--bg-recessed, #0a0a0f);
+  background: var(--bg-sidebar);
   color: var(--fg-2);
   font-size: 12px;
   font-family: inherit;
