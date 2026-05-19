@@ -281,6 +281,13 @@ const Chat: React.FC = () => {
     setTotalTokensReclaimed,
   });
 
+  // Short model name for LLM_CALL span labels (strip "provider:" prefix)
+  const llmModelName = useMemo(() => {
+    const a = agents.find((x) => x.id === selectedAgent);
+    if (!a?.modelId) return undefined;
+    return a.modelId.includes(':') ? a.modelId.split(':').pop() : a.modelId;
+  }, [agents, selectedAgent]);
+
   const handleWsEvent = useChatWsEventHandler({
     setRuntimeStatus,
     setRuntimeStep,
@@ -297,6 +304,7 @@ const Chat: React.FC = () => {
     setSessions,
     setCompactionNotice,
     setLoopSpans,
+    llmModelName,
   });
 
   useChatWebSocket(activeSessionId, handleWsEvent);

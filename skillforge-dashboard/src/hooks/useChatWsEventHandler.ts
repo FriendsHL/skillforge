@@ -46,6 +46,8 @@ export interface WsEventHandlerDeps {
   setSessions: Dispatch<SetStateAction<any[]>>;
   setCompactionNotice: Dispatch<SetStateAction<boolean>>;
   setLoopSpans: Dispatch<SetStateAction<LoopSpan[]>>;
+  /** Short model display name for LLM_CALL span labels (e.g. "claude-sonnet-4"). */
+  llmModelName?: string;
 }
 
 export function useChatWsEventHandler(deps: WsEventHandlerDeps) {
@@ -65,6 +67,7 @@ export function useChatWsEventHandler(deps: WsEventHandlerDeps) {
     setSessions,
     setCompactionNotice,
     setLoopSpans,
+    llmModelName,
   } = deps;
 
   const lastSnapshotVersionRef = useRef<number>(-1);
@@ -284,7 +287,7 @@ export function useChatWsEventHandler(deps: WsEventHandlerDeps) {
             activeLlmSpanIdRef.current = llmId;
             setLoopSpans((prev) => [
               ...prev,
-              { id: llmId, type: 'LLM_CALL', name: 'Generating', startTs: Date.now() },
+              { id: llmId, type: 'LLM_CALL', name: llmModelName || 'LLM', startTs: Date.now() },
             ]);
           }
         }
@@ -348,6 +351,7 @@ export function useChatWsEventHandler(deps: WsEventHandlerDeps) {
       setSessions,
       setCompactionNotice,
       setLoopSpans,
+      llmModelName,
     ],
   );
 }
