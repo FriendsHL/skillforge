@@ -13,6 +13,7 @@ import {
   getEvalDatasetScenarios,
   type EvalDatasetScenario,
 } from '../../api';
+import Dropdown from '../ui/Dropdown';
 import './dynamic-sim.css';
 
 /**
@@ -211,21 +212,15 @@ const DynamicSimPanel: React.FC<DynamicSimPanelProps> = ({
         {/* Scenario */}
         <div className="ds-field">
           <label className="ds-field-label">Scenario *</label>
-          <select
-            className={`ds-select ${formErrors.scenario ? 'ds-error' : ''}`}
-            value={formScenarioId ?? ''}
-            onChange={(e) => {
-              setFormScenarioId(e.target.value || undefined);
+          <Dropdown
+            options={scenarioOptions}
+            value={formScenarioId}
+            placeholder={scenariosQuery.isLoading ? 'Loading…' : 'Pick a scenario for this agent'}
+            onChange={(v) => {
+              setFormScenarioId(v || undefined);
               setFormErrors((prev) => ({ ...prev, scenario: '' }));
             }}
-          >
-            <option value="">
-              {scenariosQuery.isLoading ? 'Loading…' : 'Pick a scenario for this agent'}
-            </option>
-            {scenarioOptions.map((o) => (
-              <option key={o.value} value={o.value}>{o.label}</option>
-            ))}
-          </select>
+          />
           {formErrors.scenario && <span className="ds-field-error">{formErrors.scenario}</span>}
         </div>
 
@@ -237,16 +232,17 @@ const DynamicSimPanel: React.FC<DynamicSimPanelProps> = ({
               <span className="ds-field-hint">(?)</span>
             </Tooltip>
           </label>
-          <select
-            className="ds-select"
-            value={formSurface ?? ''}
-            onChange={(e) => setFormSurface((e.target.value || undefined) as CandidateSurfaceType | undefined)}
-          >
-            <option value="">(blank = baseline)</option>
-            <option value="prompt">prompt</option>
-            <option value="skill">skill</option>
-            <option value="behavior_rule" disabled>behavior_rule (disabled)</option>
-          </select>
+          <Dropdown
+            options={[
+              { value: 'prompt', label: 'prompt' },
+              { value: 'skill', label: 'skill' },
+              { value: 'behavior_rule', label: 'behavior_rule (disabled)', disabled: true },
+            ]}
+            value={formSurface}
+            placeholder="(blank = baseline)"
+            allowClear
+            onChange={(v) => setFormSurface((v || undefined) as CandidateSurfaceType | undefined)}
+          />
         </div>
 
         {/* Candidate version id */}
@@ -341,20 +337,17 @@ const DynamicSimPanel: React.FC<DynamicSimPanelProps> = ({
 
         {/* Filters */}
         <div className="ds-filter-bar">
-          <select
-            className="ds-select ds-select-sm"
-            style={{ minWidth: 220 }}
-            value={filterScenarioId ?? ''}
-            onChange={(e) => {
-              setFilterScenarioId(e.target.value || undefined);
+          <Dropdown
+            options={scenarioOptions}
+            value={filterScenarioId}
+            placeholder="Filter by scenario"
+            allowClear
+            onChange={(v) => {
+              setFilterScenarioId(v || undefined);
               setPage(0);
             }}
-          >
-            <option value="">Filter by scenario</option>
-            {scenarioOptions.map((o) => (
-              <option key={o.value} value={o.value}>{o.label}</option>
-            ))}
-          </select>
+            style={{ minWidth: 220 }}
+          />
           <input
             className="ds-input ds-input-sm"
             style={{ width: 220 }}
@@ -365,19 +358,20 @@ const DynamicSimPanel: React.FC<DynamicSimPanelProps> = ({
               setPage(0);
             }}
           />
-          <select
-            className="ds-select ds-select-sm"
-            style={{ width: 160 }}
-            value={filterSurface ?? ''}
-            onChange={(e) => {
-              setFilterSurface((e.target.value || undefined) as CandidateSurfaceType | undefined);
+          <Dropdown
+            options={[
+              { value: 'prompt', label: 'prompt' },
+              { value: 'skill', label: 'skill' },
+            ]}
+            value={filterSurface}
+            placeholder="Filter by surface"
+            allowClear
+            onChange={(v) => {
+              setFilterSurface((v || undefined) as CandidateSurfaceType | undefined);
               setPage(0);
             }}
-          >
-            <option value="">Filter by surface</option>
-            <option value="prompt">prompt</option>
-            <option value="skill">skill</option>
-          </select>
+            style={{ width: 160 }}
+          />
           <button className="ds-btn ds-btn-sm" onClick={onClearFilters}>Clear filters</button>
         </div>
 
@@ -476,17 +470,17 @@ const DynamicSimPanel: React.FC<DynamicSimPanelProps> = ({
                 >
                   Next →
                 </button>
-                <select
-                  value={pageSize}
-                  onChange={(e) => {
-                    setPageSize(Number(e.target.value));
-                    setPage(0);
+                <Dropdown
+                  options={PAGE_SIZE_OPTIONS.map((n) => ({ value: String(n), label: `${n} / page` }))}
+                  value={String(pageSize)}
+                  onChange={(v) => {
+                    if (v) {
+                      setPageSize(Number(v));
+                      setPage(0);
+                    }
                   }}
-                >
-                  {PAGE_SIZE_OPTIONS.map((n) => (
-                    <option key={n} value={n}>{n} / page</option>
-                  ))}
-                </select>
+                  style={{ width: 100 }}
+                />
               </div>
             )}
           </>

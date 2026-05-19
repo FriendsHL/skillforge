@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { extractList, getAgents } from '../api';
 import { AgentSchema, safeParseList, type AgentDto } from '../api/schemas';
 import DynamicSimPanel from '../components/dynamicSim/DynamicSimPanel';
+import Dropdown from '../components/ui/Dropdown';
 import '../components/dynamicSim/dynamic-sim.css';
 
 /**
@@ -86,17 +87,13 @@ const DynamicSim: React.FC = () => {
 
       <div className="ds-agent-row">
         <span className="ds-agent-label">Agent:</span>
-        <select
-          className="ds-select"
+        <Dropdown
+          options={agentOptions}
+          value={selectedAgentId != null ? String(selectedAgentId) : undefined}
+          placeholder={isLoading ? 'Loading…' : 'Pick an agent'}
+          onChange={(v) => setSelectedAgentId(v ? Number(v) : null)}
           style={{ minWidth: 280 }}
-          value={selectedAgentId ?? ''}
-          onChange={(e) => setSelectedAgentId(e.target.value ? Number(e.target.value) : null)}
-        >
-          <option value="" disabled>{isLoading ? 'Loading…' : 'Pick an agent'}</option>
-          {agentOptions.map((o) => (
-            <option key={o.value} value={o.value}>{o.label}</option>
-          ))}
-        </select>
+        />
         {selectedAgent && (
           <span className="ds-agent-mode">
             {selectedAgent.executionMode ?? 'ask'} mode

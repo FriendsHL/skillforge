@@ -13,6 +13,7 @@ import OptimizationEventsPage from './OptimizationEvents';
 import BehaviorRuleEvolutionPage from './BehaviorRuleEvolution';
 import DynamicSimPage from './DynamicSim';
 import TabBar from '../components/TabBar';
+import Dropdown from '../components/ui/Dropdown';
 import '../components/insights/insights.css';
 
 interface FilterFormValues {
@@ -147,29 +148,23 @@ const Insights: React.FC = () => {
         <div className="ins-filter-form">
           <div className="ins-field">
             <label className="ins-field-label">Outcome</label>
-            <select
-              className="ins-select"
-              value={fOutcome ?? ''}
-              onChange={(e) => setFOutcome((e.target.value || undefined) as SessionOutcome | undefined)}
-            >
-              <option value="">any</option>
-              {OUTCOME_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>{o.label}</option>
-              ))}
-            </select>
+            <Dropdown
+              options={OUTCOME_OPTIONS}
+              value={fOutcome}
+              placeholder="any"
+              allowClear
+              onChange={(v) => setFOutcome(v as SessionOutcome | undefined)}
+            />
           </div>
           <div className="ins-field">
             <label className="ins-field-label">Surface</label>
-            <select
-              className="ins-select"
-              value={fSurface ?? ''}
-              onChange={(e) => setFSurface((e.target.value || undefined) as SuspectSurface | undefined)}
-            >
-              <option value="">any</option>
-              {SURFACE_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>{o.label}</option>
-              ))}
-            </select>
+            <Dropdown
+              options={SURFACE_OPTIONS}
+              value={fSurface}
+              placeholder="any"
+              allowClear
+              onChange={(v) => setFSurface(v as SuspectSurface | undefined)}
+            />
           </div>
           <div className="ins-field">
             <label className="ins-field-label">Agent id</label>
