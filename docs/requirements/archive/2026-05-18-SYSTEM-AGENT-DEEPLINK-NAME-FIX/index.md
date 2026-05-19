@@ -1,15 +1,29 @@
 ---
 id: SYSTEM-AGENT-DEEPLINK-NAME-FIX
 mode: mid
-status: backlog
+status: resolved
 priority: P1
 risk: Low
 created: 2026-05-18
 updated: 2026-05-18
+resolved: 2026-05-18
 follows: SYSTEM-AGENT-TYPING
 ---
 
 # SYSTEM-AGENT-DEEPLINK-NAME-FIX — SessionList ?agentId deep-link 显空白
+
+## 2026-05-18 已解决 (commit `7aa8a63`)
+
+**Fix path A** (本 backlog 推荐方案) 已落地:
+- `SessionEntity` 加 `@Transient agentName` 字段 + getter/setter (跟现 channelPlatform 同款 @Transient pattern, 不持久化)
+- `ChatController` 加 `enrichAgentName(sessions)` helper: distinct agentIds → `agentService.getAgent` loop → Map<Long, String> → setAgentName per session. `listSessions` 内调
+
+**真活验证 (2026-05-18 BE restart 后)**:
+- `GET /api/chat/sessions?userId=0&agentType=system` 真返 203 system sessions (之前 0 row)
+- 每个 session JSON 含 `agentName: "attribution-curator"` (之前 `<MISSING>`)
+- FE `SessionList.normalizeSession` `raw.agentName` 优先 → `s.agent = "attribution-curator"` → filter 比 `"attribution-curator" === "attribution-curator"` **真匹配**
+- mvn -pl skillforge-server test: 1838/0/0/104 BUILD SUCCESS
+- Iron Law: 核心 7+1 BE 0 diff (改 ChatController + SessionEntity 非核心)
 
 ## 痛点
 

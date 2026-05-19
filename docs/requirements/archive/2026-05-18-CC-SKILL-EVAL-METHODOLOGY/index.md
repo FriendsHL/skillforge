@@ -1,13 +1,21 @@
 ---
 id: CC-SKILL-EVAL-METHODOLOGY
-status: backlog
+status: superseded
 priority: P3
 mode: tbd
 risk: tbd
 created: 2026-05-18
+superseded_by: SKILL-CREATOR-WITH-EVAL
+superseded_at: 2026-05-18
 ---
 
 # CC-SKILL-EVAL-METHODOLOGY — Claude Code skill 评测方法论借鉴
+
+## 2026-05-18 已被 SKILL-CREATOR-WITH-EVAL 取代 (并入实施)
+
+本调研需求**当天**就转入了 [`SKILL-CREATOR-WITH-EVAL`](../2026-05-18-SKILL-CREATOR-WITH-EVAL-phase-1.1-1.3/index.md) 真实施 — Phase 1.1-1.3 落地了 with_skill vs without_skill baseline (cc 同款 NO_SKILL pattern) + AFTER_COMMIT 派发 + 5 维 SkillMetrics benchmark + EvaluationResult 5-field shape. cc 借鉴的具体点见 SKILL-CREATOR-WITH-EVAL 的 mrd.md "跟 cc agentskills.io 对照" 表 (8 维 ratify).
+
+本文件作为**借鉴来源参考**保留 (链接 + sources 列表) — 实施事实以 SKILL-CREATOR-WITH-EVAL archive + Phase 1.6 backlog 为准.
 
 ## User Request
 
