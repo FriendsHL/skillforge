@@ -1,6 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import { Drawer, Descriptions, Tag, Table, Tooltip, Typography, Empty, Button, Space } from 'antd';
-import type { ColumnsType } from 'antd/es/table';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import dayjs from 'dayjs';
@@ -10,10 +8,9 @@ import {
   type PatternListItem,
   type PatternMemberItem,
 } from '../../api/insights';
+import './insights.css';
 
 dayjs.extend(relativeTime);
-
-const { Text, Paragraph } = Typography;
 
 export interface PatternDetailDrawerProps {
   pattern: PatternListItem | null;
@@ -21,19 +18,19 @@ export interface PatternDetailDrawerProps {
   onClose: () => void;
 }
 
-const OUTCOME_COLORS: Record<string, string> = {
-  success: 'green',
-  partial_success: 'blue',
-  failure: 'red',
-  cancelled: 'default',
+const OUTCOME_CLS: Record<string, string> = {
+  success: 'ins-tag-green',
+  partial_success: 'ins-tag-blue',
+  failure: 'ins-tag-red',
+  cancelled: 'ins-tag-default',
 };
 
-const SURFACE_COLORS: Record<string, string> = {
-  skill: 'geekblue',
-  prompt: 'purple',
-  behavior_rule: 'magenta',
-  other: 'orange',
-  unclear: 'default',
+const SURFACE_CLS: Record<string, string> = {
+  skill: 'ins-tag-geekblue',
+  prompt: 'ins-tag-purple',
+  behavior_rule: 'ins-tag-magenta',
+  other: 'ins-tag-orange',
+  unclear: 'ins-tag-default',
 };
 
 const DEFAULT_LIMIT = 100;
@@ -54,12 +51,8 @@ const PatternDetailDrawer: React.FC<PatternDetailDrawerProps> = ({
   open,
   onClose,
 }) => {
-  // Per-drawer-open limit state — reset when the pattern changes so reopening
-  // a different cluster starts back at the default cap.
   const [limit, setLimit] = useState<number>(DEFAULT_LIMIT);
 
-  // React Query auto-skips when enabled is false; drawer close → no fetch.
-  // queryKey includes (id, limit) so the "+N more" button retriggers fetch.
   const { data: members = [], isLoading } = useQuery({
     queryKey: ['pattern-members', pattern?.id, limit],
     queryFn: () =>
@@ -69,8 +62,6 @@ const PatternDetailDrawer: React.FC<PatternDetailDrawerProps> = ({
     enabled: open && pattern !== null,
   });
 
-  // Reset limit whenever a fresh pattern is loaded into the drawer so each
-  // newly-opened cluster starts at the default cap.
   useEffect(() => {
     setLimit(DEFAULT_LIMIT);
   }, [pattern?.id]);
@@ -81,192 +72,157 @@ const PatternDetailDrawer: React.FC<PatternDetailDrawerProps> = ({
     limit < EXPANDED_LIMIT &&
     members.length === limit;
 
-  const columns: ColumnsType<PatternMemberItem> = [
-    {
-      title: 'Session',
-      dataIndex: 'sessionId',
-      key: 'sessionId',
-      width: 180,
-      render: (sid: string) => (
-        // Jump target — Traces page reads `?q=` search box (verified
-        // 2026-05-14: it does NOT read `?sessionId` despite the OBS-2 spec).
-        // sessionId is UUID-36, substring search is effectively exact match.
-        <Link
-          to={`/traces?q=${encodeURIComponent(sid)}`}
-          style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}
-        >
-          {sid.slice(0, 16)}…
-        </Link>
-      ),
-    },
-    {
-      title: 'Agent',
-      dataIndex: 'agentName',
-      key: 'agentName',
-      width: 140,
-      render: (name: string | null) =>
-        name ? (
-          <Text style={{ fontSize: 12 }}>{name}</Text>
-        ) : (
-          <Text type="secondary">—</Text>
-        ),
-    },
-    {
-      title: 'Completed',
-      dataIndex: 'completedAt',
-      key: 'completedAt',
-      width: 130,
-      render: (iso: string | null) =>
-        iso ? (
-          <Tooltip title={fmtAbsolute(iso)}>
-            <Text style={{ fontSize: 12 }} type="secondary">
-              {fmtRelative(iso)}
-            </Text>
-          </Tooltip>
-        ) : (
-          <Text type="secondary">—</Text>
-        ),
-    },
-    {
-      title: 'Outcome',
-      dataIndex: 'outcome',
-      key: 'outcome',
-      width: 110,
-      render: (outcome: string | null) =>
-        outcome ? (
-          <Text style={{ fontSize: 12 }}>{outcome}</Text>
-        ) : (
-          <Text type="secondary">—</Text>
-        ),
-    },
-    {
-      title: 'Reasoning',
-      dataIndex: 'outcomeReasoning',
-      key: 'outcomeReasoning',
-      render: (msg: string | null) =>
-        msg ? (
-          <Tooltip title={msg} placement="topLeft">
-            <Text
-              ellipsis
-              style={{ fontSize: 12, maxWidth: 360, display: 'inline-block' }}
-            >
-              {msg}
-            </Text>
-          </Tooltip>
-        ) : (
-          <Text type="secondary">—</Text>
-        ),
-    },
-  ];
+  const handleCopy = () => {
+    if (pattern?.signature) {
+      navigator.clipboard.writeText(pattern.signature);
+    }
+  };
 
-  if (!pattern) {
-    return (
-      <Drawer open={open} onClose={onClose} width={900} title="Pattern">
-        <Empty description="No pattern selected" />
-      </Drawer>
-    );
-  }
-
-  const headerTitle = (
-    <Space size="small" wrap>
-      <span>Pattern #{pattern.id}</span>
-      <Tag color={OUTCOME_COLORS[pattern.outcome] ?? 'default'}>{pattern.outcome}</Tag>
-      <Tag color={SURFACE_COLORS[pattern.suspectSurface] ?? 'default'}>
-        {pattern.suspectSurface}
-      </Tag>
-    </Space>
-  );
+  if (!open || !pattern) return null;
 
   return (
-    <Drawer
-      open={open}
-      onClose={onClose}
-      width={900}
-      title={headerTitle}
-      destroyOnClose
-    >
-      {/* Signature — long, monospaced, full width so the user sees the whole tuple. */}
-      <Paragraph
-        copyable={{ text: pattern.signature }}
-        style={{
-          fontFamily: 'var(--font-mono)',
-          fontSize: 12,
-          background: 'var(--bg-2, rgba(0,0,0,0.04))',
-          padding: '8px 12px',
-          borderRadius: 6,
-          marginBottom: 16,
-          wordBreak: 'break-all',
-        }}
-      >
-        {pattern.signature}
-      </Paragraph>
+    <>
+      {/* Overlay */}
+      <div className="ins-drawer-overlay" onClick={onClose} />
 
-      <Descriptions
-        size="small"
-        column={2}
-        bordered
-        style={{ marginBottom: 20 }}
-        labelStyle={{ width: 130, fontSize: 12 }}
-        contentStyle={{ fontSize: 12 }}
-      >
-        <Descriptions.Item label="Top failing tool">
-          {pattern.topFailingTool ?? <Text type="secondary">—</Text>}
-        </Descriptions.Item>
-        <Descriptions.Item label="Agent id">
-          {pattern.agentId !== null && pattern.agentId !== undefined ? (
-            <Text style={{ fontFamily: 'var(--font-mono)' }}>#{pattern.agentId}</Text>
+      {/* Drawer panel */}
+      <div className="ins-drawer">
+        {/* Header */}
+        <div className="ins-drawer-header">
+          <span className="ins-drawer-title">
+            Pattern #{pattern.id}
+          </span>
+          <span className={`ins-tag ${OUTCOME_CLS[pattern.outcome] ?? 'ins-tag-default'}`}>
+            {pattern.outcome}
+          </span>
+          <span className={`ins-tag ${SURFACE_CLS[pattern.suspectSurface] ?? 'ins-tag-default'}`}>
+            {pattern.suspectSurface}
+          </span>
+          <button className="ins-drawer-close" onClick={onClose}>×</button>
+        </div>
+
+        {/* Body */}
+        <div className="ins-drawer-body">
+          {/* Signature block */}
+          <div className="ins-sig-block">
+            {pattern.signature}
+            <button className="ins-sig-copy" onClick={handleCopy} title="Copy signature">
+              ⧉
+            </button>
+          </div>
+
+          {/* Descriptions grid */}
+          <div className="ins-desc-grid">
+            <div className="ins-desc-item">
+              <span className="ins-desc-label">Top failing tool</span>
+              <span className="ins-desc-value">{pattern.topFailingTool ?? '—'}</span>
+            </div>
+            <div className="ins-desc-item">
+              <span className="ins-desc-label">Agent id</span>
+              <span className="ins-desc-value ins-mono">
+                {pattern.agentId !== null && pattern.agentId !== undefined
+                  ? `#${pattern.agentId}`
+                  : '—'}
+              </span>
+            </div>
+            <div className="ins-desc-item">
+              <span className="ins-desc-label">Member count</span>
+              <span className="ins-desc-value" style={{ fontWeight: 600 }}>
+                {pattern.memberCount}
+              </span>
+            </div>
+            <div className="ins-desc-item">
+              <span className="ins-desc-label">Suggested surface</span>
+              <span className="ins-desc-value">
+                {pattern.suggestedSurface ?? <span className="ins-dim">(V2 only)</span>}
+              </span>
+            </div>
+            <div className="ins-desc-item">
+              <span className="ins-desc-label">First seen</span>
+              <span className="ins-desc-value" title={fmtAbsolute(pattern.firstSeenAt)}>
+                {fmtRelative(pattern.firstSeenAt)}
+              </span>
+            </div>
+            <div className="ins-desc-item">
+              <span className="ins-desc-label">Last seen</span>
+              <span className="ins-desc-value" title={fmtAbsolute(pattern.lastSeenAt)}>
+                {fmtRelative(pattern.lastSeenAt)}
+              </span>
+            </div>
+          </div>
+
+          {/* Member sessions */}
+          <div className="ins-section-header">
+            <span className="ins-section-title">
+              Member sessions{' '}
+              <span className="ins-section-meta">
+                ({members.length} of {pattern.memberCount})
+              </span>
+            </span>
+            {showLoadMore && (
+              <button
+                className="ins-btn-link"
+                onClick={() => setLimit(EXPANDED_LIMIT)}
+                disabled={isLoading}
+              >
+                {isLoading ? 'Loading…' : `Load up to ${EXPANDED_LIMIT}`}
+              </button>
+            )}
+          </div>
+
+          {/* Members table */}
+          {isLoading ? (
+            <div className="ins-empty">
+              <p className="ins-empty-title">Loading…</p>
+            </div>
+          ) : members.length === 0 ? (
+            <div className="ins-empty">
+              <p className="ins-empty-title">No member sessions</p>
+            </div>
           ) : (
-            <Text type="secondary">—</Text>
+            <div className="ins-table-wrap">
+              <table className="ins-table">
+                <thead>
+                  <tr>
+                    <th className="col-session">Session</th>
+                    <th className="col-agent-name">Agent</th>
+                    <th className="col-completed">Completed</th>
+                    <th className="col-drawer-outcome">Outcome</th>
+                    <th>Reasoning</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {members.map((m) => (
+                    <tr key={m.sessionId}>
+                      <td className="col-mono">
+                        <Link
+                          to={`/traces?q=${encodeURIComponent(m.sessionId)}`}
+                          style={{ color: 'var(--color-accent)', textDecoration: 'none' }}
+                        >
+                          {m.sessionId.slice(0, 16)}…
+                        </Link>
+                      </td>
+                      <td className="ins-dim">{m.agentName ?? '—'}</td>
+                      <td className="col-dim" title={fmtAbsolute(m.completedAt)}>
+                        {fmtRelative(m.completedAt)}
+                      </td>
+                      <td>{m.outcome ?? '—'}</td>
+                      <td title={m.outcomeReasoning ?? undefined}>
+                        {m.outcomeReasoning ? (
+                          <span style={{ fontSize: 12, display: 'block', maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {m.outcomeReasoning}
+                          </span>
+                        ) : '—'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
-        </Descriptions.Item>
-        <Descriptions.Item label="Member count">
-          <Text strong>{pattern.memberCount}</Text>
-        </Descriptions.Item>
-        <Descriptions.Item label="Suggested surface">
-          {/* V2 attribution — Phase 1.5 always null. */}
-          {pattern.suggestedSurface ?? <Text type="secondary">(V2 only)</Text>}
-        </Descriptions.Item>
-        <Descriptions.Item label="First seen">
-          <Tooltip title={fmtAbsolute(pattern.firstSeenAt)}>
-            {fmtRelative(pattern.firstSeenAt)}
-          </Tooltip>
-        </Descriptions.Item>
-        <Descriptions.Item label="Last seen">
-          <Tooltip title={fmtAbsolute(pattern.lastSeenAt)}>
-            {fmtRelative(pattern.lastSeenAt)}
-          </Tooltip>
-        </Descriptions.Item>
-      </Descriptions>
-
-      <div style={{ marginBottom: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-        <Text strong style={{ fontSize: 13 }}>
-          Member sessions{' '}
-          <Text type="secondary" style={{ fontWeight: 400, fontSize: 12 }}>
-            ({members.length} of {pattern.memberCount})
-          </Text>
-        </Text>
-        {showLoadMore && (
-          <Button
-            size="small"
-            type="link"
-            onClick={() => setLimit(EXPANDED_LIMIT)}
-            loading={isLoading}
-          >
-            Load up to {EXPANDED_LIMIT}
-          </Button>
-        )}
+        </div>
       </div>
-
-      <Table<PatternMemberItem>
-        rowKey="sessionId"
-        columns={columns}
-        dataSource={members}
-        loading={isLoading}
-        size="small"
-        pagination={{ pageSize: 20, showSizeChanger: false, hideOnSinglePage: true }}
-        locale={{ emptyText: 'No member sessions' }}
-      />
-    </Drawer>
+    </>
   );
 };
 
