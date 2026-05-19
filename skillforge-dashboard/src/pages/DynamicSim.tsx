@@ -1,11 +1,9 @@
 import React, { useMemo, useState } from 'react';
-import { Alert, Empty, Select, Typography } from 'antd';
 import { useQuery } from '@tanstack/react-query';
 import { extractList, getAgents } from '../api';
 import { AgentSchema, safeParseList, type AgentDto } from '../api/schemas';
 import DynamicSimPanel from '../components/dynamicSim/DynamicSimPanel';
-
-const { Title, Paragraph } = Typography;
+import '../components/dynamicSim/dynamic-sim.css';
 
 /**
  * V5 EVAL-DYNAMIC-USER-SIM Phase 1.4 — `/insights` Dynamic Sim tab.
@@ -13,16 +11,10 @@ const { Title, Paragraph } = Typography;
  * <p>Composes the agent picker + {@link DynamicSimPanel}. State lives here
  * (selected agent id + persona list); the panel is dumb-presentational.
  *
- * <p>Rendered inside {@code Insights.tsx} as the 4th tab — no standalone
- * route is added to {@code App.tsx} because Phase 1.4 inherits the
- * {@code /insights/patterns} URL and follows the V4 BehaviorRuleEvolution /
- * V3 OptimizationEvents in-page-tab precedent.
- *
  * <p><strong>Personas</strong>: hardcoded mirror of
  * {@code application.yml::skillforge.eval.user-simulator.personas} (5 fixed
- * strings, ratify #4). Dogfood may adjust copy; if a future
- * {@code /api/eval/personas} endpoint lands, swap the constant for a
- * {@code useQuery} call without touching the panel.
+ * strings). If a future {@code /api/eval/personas} endpoint lands, swap
+ * for a {@code useQuery} call.
  */
 
 const HARDCODED_PERSONAS: string[] = [
@@ -49,16 +41,10 @@ const DynamicSim: React.FC = () => {
     staleTime: 60_000,
   });
 
-  // Auto-select the first agent on first land — same UX precedent as V4
-  // BehaviorRuleEvolution: operator's first action is always "pick agent",
-  // so doing it for them shaves a click and shows a useful surface
-  // immediately.
   React.useEffect(() => {
     if (selectedAgentId == null && agents.length > 0) {
       const firstId = agents[0].id;
-      if (typeof firstId === 'number') {
-        setSelectedAgentId(firstId);
-      }
+      if (typeof firstId === 'number') setSelectedAgentId(firstId);
     }
   }, [agents, selectedAgentId]);
 
@@ -79,60 +65,40 @@ const DynamicSim: React.FC = () => {
   );
 
   return (
-    <div
-      style={{
-        padding: 'var(--sp-6, 24px) var(--sp-8, 32px)',
-        maxWidth: 1400,
-        margin: '0 auto',
-      }}
-    >
-      <div style={{ marginBottom: 20 }}>
-        <Title level={3} style={{ marginBottom: 4 }}>
-          Insights — Dynamic Sim Trials
-        </Title>
-        <Paragraph type="secondary" style={{ marginBottom: 0 }}>
+    <div className="ds-page">
+      <div className="ds-page-head">
+        <h1 className="ds-page-title">Insights — Dynamic Sim Trials</h1>
+        <p className="ds-page-desc">
           Drive the user-simulator harness: pick a candidate (skill / prompt
           version) + scenario + persona(s), kick off a trial, and inspect the
           resulting transcript through the existing SessionDetail viewer.
-          Trials persist as {`origin='user_sim'`} sessions, isolated from V1
-          patterns / V2 canary metrics / V3 attribution. {' '}
-          <strong>behavior_rule</strong> surface is unavailable in V5 (V5.1
-          backlog — V4 AgentLoopEngine 7+1 红灯不可改).
-        </Paragraph>
+          Trials persist as origin='user_sim' sessions, isolated from V1
+          patterns / V2 canary metrics / V3 attribution.
+        </p>
       </div>
 
       {isError && (
-        <Alert
-          type="error"
-          showIcon
-          style={{ marginBottom: 16 }}
-          message="Failed to load agents."
-          description="Cannot pick an agent without the list. Retry navigating, or check /api/agents."
-        />
+        <div className="ds-alert ds-alert-error">
+          <div className="ds-alert-title">Failed to load agents.</div>
+          <div>Cannot pick an agent without the list. Retry navigating, or check /api/agents.</div>
+        </div>
       )}
 
-      <div
-        style={{
-          marginBottom: 16,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 12,
-        }}
-      >
-        <span style={{ fontSize: 12, color: 'var(--fg-3)' }}>Agent:</span>
-        <Select
-          loading={isLoading}
-          showSearch
-          optionFilterProp="label"
-          placeholder="Pick an agent"
-          value={selectedAgentId ?? undefined}
-          onChange={(v) => setSelectedAgentId(v ?? null)}
-          options={agentOptions}
+      <div className="ds-agent-row">
+        <span className="ds-agent-label">Agent:</span>
+        <select
+          className="ds-select"
           style={{ minWidth: 280 }}
-          allowClear
-        />
+          value={selectedAgentId ?? ''}
+          onChange={(e) => setSelectedAgentId(e.target.value ? Number(e.target.value) : null)}
+        >
+          <option value="" disabled>{isLoading ? 'Loading…' : 'Pick an agent'}</option>
+          {agentOptions.map((o) => (
+            <option key={o.value} value={o.value}>{o.label}</option>
+          ))}
+        </select>
         {selectedAgent && (
-          <span style={{ fontSize: 11, color: 'var(--fg-4)' }}>
+          <span className="ds-agent-mode">
             {selectedAgent.executionMode ?? 'ask'} mode
           </span>
         )}
@@ -145,17 +111,16 @@ const DynamicSim: React.FC = () => {
         />
       ) : (
         !isLoading && (
-          <Empty
-            image={Empty.PRESENTED_IMAGE_SIMPLE}
-            description={
-              <span style={{ fontSize: 12, color: 'var(--fg-3)' }}>
-                {agents.length === 0
-                  ? 'No agents available — create one from the Agents page first.'
-                  : 'Pick an agent to launch a dynamic-sim trial.'}
-              </span>
-            }
-            style={{ marginTop: 32 }}
-          />
+          <div className="ds-empty" style={{ marginTop: 32 }}>
+            <p className="ds-empty-title">
+              {agents.length === 0
+                ? 'No agents available'
+                : 'Pick an agent to launch a dynamic-sim trial.'}
+            </p>
+            {agents.length === 0 && (
+              <p className="ds-empty-desc">Create one from the Agents page first.</p>
+            )}
+          </div>
         )
       )}
     </div>

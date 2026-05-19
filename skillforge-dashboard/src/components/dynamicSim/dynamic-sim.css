@@ -1,0 +1,533 @@
+/* ============================================================
+   DynamicSim — custom components replacing Ant Design
+   ============================================================ */
+
+/* --- Page layout --- */
+.ds-page {
+  padding: var(--sp-6, 24px) var(--sp-8, 32px);
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+.ds-page-head {
+  margin-bottom: var(--sp-5, 20px);
+}
+
+.ds-page-title {
+  font-family: var(--font-serif);
+  font-size: 28px;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  color: var(--fg-1);
+  margin: 0 0 4px;
+  line-height: 1.2;
+}
+
+.ds-page-desc {
+  color: var(--fg-3);
+  font-size: var(--font-size-sm);
+  margin: 0;
+}
+
+/* --- Agent picker row --- */
+.ds-agent-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.ds-agent-label {
+  font-size: 12px;
+  color: var(--fg-3);
+}
+
+.ds-agent-mode {
+  font-size: 11px;
+  color: var(--fg-4);
+}
+
+/* --- Panel container --- */
+.ds-panel {
+  padding: 14px 16px;
+  border: 1px solid var(--border-subtle, #2a2a31);
+  border-radius: 8px;
+  background: var(--bg-base, transparent);
+}
+
+.ds-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.ds-panel-title {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--fg-1);
+}
+
+.ds-panel-agent {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--fg-4);
+  font-family: var(--font-mono, monospace);
+}
+
+/* --- Alert boxes --- */
+.ds-alert {
+  padding: 10px 14px;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+  margin-bottom: 12px;
+  border: 1px solid;
+}
+
+.ds-alert-info {
+  background: color-mix(in srgb, var(--color-info) 8%, transparent);
+  border-color: color-mix(in srgb, var(--color-info) 25%, transparent);
+  color: var(--color-info);
+}
+
+.ds-alert-error {
+  background: color-mix(in srgb, var(--color-err) 8%, transparent);
+  border-color: color-mix(in srgb, var(--color-err) 25%, transparent);
+  color: var(--color-err);
+}
+
+.ds-alert-title {
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+
+/* --- Form --- */
+.ds-form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.ds-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ds-field-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--fg-2);
+}
+
+.ds-field-hint {
+  color: var(--fg-4);
+  cursor: help;
+}
+
+.ds-field-error {
+  font-size: 11px;
+  color: var(--color-err);
+}
+
+/* --- Custom select --- */
+.ds-select {
+  height: 32px;
+  padding: 0 28px 0 10px;
+  border: 1px solid var(--border-subtle, #2a2a31);
+  border-radius: 6px;
+  background: var(--bg-recessed, #0a0a0f);
+  color: var(--fg-1);
+  font-size: 13px;
+  font-family: inherit;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%238b8b9e' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  cursor: pointer;
+  transition: border-color 0.15s;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.ds-select:hover { border-color: var(--fg-4); }
+.ds-select:focus { outline: none; border-color: var(--color-accent); }
+.ds-select.ds-error { border-color: var(--color-err); }
+
+.ds-select-sm {
+  height: 28px;
+  font-size: 12px;
+  padding: 0 24px 0 8px;
+}
+
+/* --- Custom input --- */
+.ds-input {
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border-subtle, #2a2a31);
+  border-radius: 6px;
+  background: var(--bg-recessed, #0a0a0f);
+  color: var(--fg-1);
+  font-size: 13px;
+  font-family: inherit;
+  width: 100%;
+  box-sizing: border-box;
+  transition: border-color 0.15s;
+}
+
+.ds-input::placeholder { color: var(--fg-4); }
+.ds-input:hover { border-color: var(--fg-4); }
+.ds-input:focus { outline: none; border-color: var(--color-accent); }
+
+.ds-input-sm {
+  height: 28px;
+  font-size: 12px;
+  padding: 0 8px;
+}
+
+.ds-input-num {
+  composes: ds-input;
+  font-family: var(--font-mono, monospace);
+}
+
+/* --- Checkbox grid (personas) --- */
+.ds-personas-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 8px;
+}
+
+.ds-persona-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--border-subtle, #2a2a31);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+  user-select: none;
+}
+
+.ds-persona-check:hover {
+  border-color: var(--fg-4);
+  background: var(--bg-hover, rgba(255,255,255,0.03));
+}
+
+.ds-persona-check.checked {
+  border-color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 8%, transparent);
+}
+
+.ds-persona-check input[type="checkbox"] {
+  accent-color: var(--color-accent);
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+
+.ds-persona-text {
+  font-size: 12px;
+  color: var(--fg-2);
+  line-height: 1.4;
+}
+
+/* --- Button --- */
+.ds-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 16px;
+  border: 1px solid var(--border-subtle, #2a2a31);
+  border-radius: 6px;
+  background: var(--bg-base, transparent);
+  color: var(--fg-2);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+  white-space: nowrap;
+}
+
+.ds-btn:hover { border-color: var(--fg-4); }
+
+.ds-btn-primary {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: var(--bg-base);
+  font-weight: 500;
+}
+
+.ds-btn-primary:hover { opacity: 0.9; }
+
+.ds-btn-sm {
+  height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.ds-btn-group {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.ds-btn-link {
+  background: none;
+  border: none;
+  color: var(--color-accent);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.ds-btn-link:hover { text-decoration: underline; }
+
+/* --- Tag / Badge --- */
+.ds-tag {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  line-height: 1;
+}
+
+.ds-tag-purple {
+  background: color-mix(in srgb, #8b5cf6 15%, transparent);
+  color: #a78bfa;
+}
+
+.ds-tag-green {
+  background: color-mix(in srgb, var(--color-ok) 15%, transparent);
+  color: var(--color-ok);
+}
+
+.ds-tag-red {
+  background: color-mix(in srgb, var(--color-err) 15%, transparent);
+  color: var(--color-err);
+}
+
+.ds-tag-gold {
+  background: color-mix(in srgb, var(--color-warn) 15%, transparent);
+  color: var(--color-warn);
+}
+
+.ds-tag-volcano {
+  background: color-mix(in srgb, #d4380d 15%, transparent);
+  color: #ff7a45;
+}
+
+.ds-tag-default {
+  background: var(--bg-hover, rgba(255,255,255,0.06));
+  color: var(--fg-3);
+}
+
+/* --- Table (CSS grid) --- */
+.ds-table-wrap {
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.ds-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-size-sm);
+  text-wrap: pretty;
+  table-layout: fixed;
+}
+
+.ds-table th,
+.ds-table td {
+  padding: var(--sp-2, 8px) var(--sp-3, 12px);
+  text-align: left;
+  border-bottom: 1px solid var(--border-subtle);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ds-table th {
+  font-weight: 500;
+  font-size: 11px;
+  color: var(--fg-3);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  position: sticky;
+  top: 0;
+  background: var(--bg-base);
+  z-index: 1;
+}
+
+.ds-table tr:hover td {
+  background: var(--bg-hover, rgba(255,255,255,0.03));
+}
+
+.ds-table td.ds-col-mono {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+}
+
+.ds-table td.ds-col-right {
+  text-align: right;
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+}
+
+.ds-table td.ds-col-dim {
+  font-size: 11px;
+  color: var(--fg-3);
+}
+
+.ds-table td.ds-col-action {
+  text-align: right;
+}
+
+/* Column widths */
+.ds-table .col-trial { width: 120px; }
+.ds-table .col-persona { width: auto; }
+.ds-table .col-surface { width: 100px; }
+.ds-table .col-turns { width: 70px; text-align: right; }
+.ds-table .col-term { width: 130px; }
+.ds-table .col-created { width: 160px; }
+.ds-table .col-transcript { width: 130px; text-align: right; }
+
+/* --- Pagination --- */
+.ds-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--fg-3);
+}
+
+.ds-pagination button {
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--border-subtle, #2a2a31);
+  border-radius: 4px;
+  background: var(--bg-base, transparent);
+  color: var(--fg-2);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.ds-pagination button:hover:not(:disabled) {
+  border-color: var(--fg-4);
+}
+
+.ds-pagination button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.ds-pagination-info {
+  color: var(--fg-3);
+  font-size: 12px;
+  min-width: 80px;
+  text-align: center;
+}
+
+.ds-pagination select {
+  height: 28px;
+  padding: 0 20px 0 6px;
+  border: 1px solid var(--border-subtle, #2a2a31);
+  border-radius: 4px;
+  background: var(--bg-recessed, #0a0a0f);
+  color: var(--fg-2);
+  font-size: 12px;
+  font-family: inherit;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg width='8' height='5' viewBox='0 0 8 5' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L4 4L7 1' stroke='%238b8b9e' stroke-width='1.2' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 6px center;
+  cursor: pointer;
+}
+
+/* --- Empty state --- */
+.ds-empty {
+  padding: 48px 24px;
+  text-align: center;
+  color: var(--fg-3);
+}
+
+.ds-empty-icon {
+  margin-bottom: 12px;
+  color: var(--fg-4);
+}
+
+.ds-empty-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--fg-2);
+  margin: 0 0 4px;
+}
+
+.ds-empty-desc {
+  font-size: 12px;
+  color: var(--fg-4);
+  margin: 0;
+  max-width: 320px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* --- Filter bar --- */
+.ds-filter-bar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+/* --- Section divider --- */
+.ds-section {
+  margin-top: 24px;
+  margin-bottom: 12px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-subtle, #2a2a31);
+}
+
+.ds-section-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.ds-section-title {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--fg-1);
+}
+
+.ds-section-meta {
+  font-size: 11px;
+  color: var(--fg-4);
+}
+
+/* --- Misc --- */
+.ds-mono {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+}
+
+.ds-dim {
+  font-size: 11px;
+  color: var(--fg-3);
+}
+
+.ds-sm {
+  font-size: 12px;
+}
