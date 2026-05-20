@@ -7,16 +7,21 @@ import com.skillforge.core.skill.SkillResult;
 import com.skillforge.server.entity.MemoryEntity;
 import com.skillforge.server.service.MemoryService;
 import com.skillforge.server.util.SkillInputUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * Built-in Tool that allows agents to save and delete user memories.
  * Use memory_search to find memories.
  */
 public class MemoryTool implements Tool {
+
+    private static final Logger log = LoggerFactory.getLogger(MemoryTool.class);
 
     private final MemoryService memoryService;
 
@@ -39,7 +44,8 @@ public class MemoryTool implements Tool {
             + "- project: Time-sensitive project context that may expire (e.g., 'sprint ends Friday', 'currently refactoring auth module')\n"
             + "- reference: External system pointers (e.g., 'bugs tracked in Linear INGEST')\n\n"
             + "Do NOT save: code paths, git history, one-time debug steps, or info derivable from code.\n"
-            + "Actions: save, delete. Use memory_search to find memories.";
+            + "Actions: save, delete. Use memory_search to find memories. "
+            + "User context (userId) is provided automatically by the system — no need to pass it.";
     }
 
     @Override
@@ -49,10 +55,6 @@ public class MemoryTool implements Tool {
                 "type", "string",
                 "description", "The action to perform: save or delete",
                 "enum", List.of("save", "delete")
-        ));
-        properties.put("userId", Map.of(
-                "type", "integer",
-                "description", "The user ID"
         ));
         properties.put("type", Map.of(
                 "type", "string",
@@ -93,25 +95,27 @@ public class MemoryTool implements Tool {
             }
 
             return switch (action) {
-                case "save" -> handleSave(input);
-                case "delete" -> handleDelete(input);
+                case "save" -> handleSave(input, context);
+                case "delete" -> handleDelete(input, context);
                 default -> SkillResult.error("Unknown action: " + action + ". Supported: save, delete. Use memory_search to find memories.");
             };
         } catch (Exception e) {
-            return SkillResult.error("Unexpected error: " + e.getMessage());
+            log.warn("Memory tool unexpected error: {}", e.getMessage(), e);
+            return SkillResult.error("Memory tool encountered an unexpected error");
         }
     }
 
-    private SkillResult handleSave(Map<String, Object> input) {
-        Long userId = SkillInputUtils.toLong(input.get("userId"));
+    private SkillResult handleSave(Map<String, Object> input, SkillContext context) {
+        Long userId = context != null ? context.getUserId() : null;
+        if (userId == null) {
+            return SkillResult.error("User context is missing — Memory tool requires session userId");
+        }
+
         String type = (String) input.get("type");
         String title = (String) input.get("title");
         String content = (String) input.get("content");
         String tags = (String) input.get("tags");
 
-        if (userId == null) {
-            return SkillResult.error("userId is required for save");
-        }
         if (type == null || type.isBlank()) {
             return SkillResult.error("type is required for save");
         }
@@ -133,10 +137,22 @@ public class MemoryTool implements Tool {
         return SkillResult.success("Memory saved with id=" + saved.getId() + ", title=\"" + saved.getTitle() + "\"");
     }
 
-    private SkillResult handleDelete(Map<String, Object> input) {
+    private SkillResult handleDelete(Map<String, Object> input, SkillContext context) {
+        Long userId = context != null ? context.getUserId() : null;
+        if (userId == null) {
+            return SkillResult.error("User context is missing — Memory tool requires session userId");
+        }
+
         Long memoryId = SkillInputUtils.toLong(input.get("memoryId"));
         if (memoryId == null) {
             return SkillResult.error("memoryId is required for delete");
+        }
+
+        // F2: collapse not-found + cross-user into one branch to defeat IDOR enumeration —
+        // LLM can't probe whether a memoryId belongs to another user vs. is genuinely absent.
+        MemoryEntity memory = memoryService.findById(memoryId).orElse(null);
+        if (memory == null || !Objects.equals(memory.getUserId(), userId)) {
+            return SkillResult.error("Memory not found: id=" + memoryId);
         }
 
         memoryService.deleteMemory(memoryId);

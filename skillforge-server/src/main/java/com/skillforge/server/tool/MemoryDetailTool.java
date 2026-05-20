@@ -4,6 +4,7 @@ import com.skillforge.core.model.ToolSchema;
 import com.skillforge.core.skill.Tool;
 import com.skillforge.core.skill.SkillContext;
 import com.skillforge.core.skill.SkillResult;
+import com.skillforge.server.entity.MemoryEntity;
 import com.skillforge.server.service.MemoryService;
 import com.skillforge.server.util.SkillInputUtils;
 import org.slf4j.Logger;
@@ -12,6 +13,7 @@ import org.slf4j.LoggerFactory;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * Retrieve the full content of a specific memory by its ID.
@@ -36,7 +38,8 @@ public class MemoryDetailTool implements Tool {
     @Override
     public String getDescription() {
         return "Retrieve the full content of a specific memory by its ID. "
-                + "First call memory_search to get memoryId, then call this tool for full text.";
+                + "First call memory_search to get memoryId, then call this tool for full text. "
+                + "User context (userId) is provided automatically by the system.";
     }
 
     @Override
@@ -63,15 +66,25 @@ public class MemoryDetailTool implements Tool {
     @Override
     public SkillResult execute(Map<String, Object> input, SkillContext context) {
         try {
+            Long userId = context != null ? context.getUserId() : null;
+            if (userId == null) {
+                return SkillResult.error("User context is missing — Memory detail requires session userId");
+            }
+
             Long memoryId = SkillInputUtils.toLong(input.get("memoryId"));
             if (memoryId == null) {
                 return SkillResult.error("memoryId is required");
             }
 
-            return memoryService.findById(memoryId)
-                    .map(m -> SkillResult.success(
-                            "[" + m.getType() + "] " + m.getTitle() + "\n\n" + m.getContent()))
-                    .orElse(SkillResult.error("Memory not found: id=" + memoryId));
+            // F2: collapse not-found + cross-user into one branch to defeat IDOR enumeration —
+            // LLM can't probe whether a memoryId belongs to another user vs. is genuinely absent.
+            MemoryEntity memory = memoryService.findById(memoryId).orElse(null);
+            if (memory == null || !Objects.equals(memory.getUserId(), userId)) {
+                return SkillResult.error("Memory not found: id=" + memoryId);
+            }
+
+            return SkillResult.success(
+                    "[" + memory.getType() + "] " + memory.getTitle() + "\n\n" + memory.getContent());
         } catch (Exception e) {
             log.warn("Memory detail retrieval failed: {}", e.getMessage(), e);
             return SkillResult.error("Failed to retrieve memory");

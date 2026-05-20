@@ -51,16 +51,13 @@ public class MemorySearchTool implements Tool {
         return "Search long-term memories by semantic similarity and keyword matching. "
                 + "Returns a ranked list of snippets (first 100 chars) with memoryId. "
                 + "Call memory_detail to fetch the full content of a specific memory. "
-                + "Use this before answering any question that might benefit from past context.";
+                + "Use this before answering any question that might benefit from past context. "
+                + "User context (userId) is provided automatically by the system.";
     }
 
     @Override
     public ToolSchema getToolSchema() {
         Map<String, Object> properties = new LinkedHashMap<>();
-        properties.put("userId", Map.of(
-                "type", "integer",
-                "description", "The user ID"
-        ));
         properties.put("query", Map.of(
                 "type", "string",
                 "description", "Natural language search query"
@@ -73,7 +70,7 @@ public class MemorySearchTool implements Tool {
         Map<String, Object> schema = new LinkedHashMap<>();
         schema.put("type", "object");
         schema.put("properties", properties);
-        schema.put("required", List.of("userId", "query"));
+        schema.put("required", List.of("query"));
 
         return new ToolSchema(getName(), getDescription(), schema);
     }
@@ -86,13 +83,16 @@ public class MemorySearchTool implements Tool {
     @Override
     public SkillResult execute(Map<String, Object> input, SkillContext context) {
         try {
-            Long userId = SkillInputUtils.toLong(input.get("userId"));
+            Long userId = context != null ? context.getUserId() : null;
             String query = (String) input.get("query");
             int topK = SkillInputUtils.toInt(input.get("topK"), DEFAULT_TOP_K);
             if (topK <= 0 || topK > MAX_TOP_K) topK = DEFAULT_TOP_K;
 
-            if (userId == null || query == null || query.isBlank()) {
-                return SkillResult.error("userId and query are required");
+            if (userId == null) {
+                return SkillResult.error("User context is missing — Memory search requires session userId");
+            }
+            if (query == null || query.isBlank()) {
+                return SkillResult.error("query is required");
             }
 
             // FTS recall (always executed) — status='ACTIVE' filter is enforced inside the SQL.
