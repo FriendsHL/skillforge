@@ -230,7 +230,7 @@ beforeEach(() => {
 describe('FlywheelFlowchart', () => {
   it('renders the panel shell with both tab tiers + flowchart container', async () => {
     renderChart();
-    expect(await screen.findByText(/Production-Driven Optimization Loop/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Insight Loop/i)).toBeInTheDocument();
     expect(screen.getByTestId('agent-type-tabs')).toHaveAttribute(
       'role',
       'tablist',

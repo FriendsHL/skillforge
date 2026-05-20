@@ -59,7 +59,7 @@ const INSIGHTS_TABS = [
   { key: 'optimization', label: 'Optimization' },
   { key: 'behavior-rules', label: 'Behavior Rules' },
   { key: 'dynamic-sim', label: 'Dynamic Sim' },
-  { key: 'flywheel', label: 'Optimization Loop' },
+  { key: 'flywheel', label: 'Insight Loop' },
 ];
 
 const Insights: React.FC = () => {
@@ -238,7 +238,7 @@ const Insights: React.FC = () => {
           <Suspense
             fallback={
               <div style={{ padding: 24, color: 'var(--fg-3)', fontSize: 13 }}>
-                Loading Optimization Loop…
+                Loading Insight Loop…
               </div>
             }
           >

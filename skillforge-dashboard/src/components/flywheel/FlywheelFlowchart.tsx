@@ -421,7 +421,7 @@ const FlywheelFlowchart: React.FC = () => {
       <header className="fw-head">
         <div className="fw-head-row">
           <div className="fw-head-text">
-            <h1 className="fw-head-title">Production-Driven Optimization Loop</h1>
+            <h1 className="fw-head-title">Insight Loop</h1>
             <p className="fw-head-sub">
               Workflow DAG of the full prod-signal → annotate → cluster → attribute →
               candidate → A/B → gate → promote cycle.
