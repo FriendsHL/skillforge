@@ -224,6 +224,32 @@ End-to-end skill lifecycle automation — production / evaluation / optimization
 
 **Dashboard skill summary** — `GET /api/dashboard/skill-summary?userId` returns per-user counters (auto-upgraded this week, pending drafts, failed evolutions, total enabled skills, low-score skills) for the "operations at a glance" Dashboard top card.
 
+**Skill Creator with Eval (Phase 1.6, 2026-05)** — `skill-creator` system skill now ships a full eval loop: every new draft (uploaded, extracted-from-session, marketplace, natural-language) auto-runs `with_skill` vs `without_skill` A/B baseline against target-agent SubAgent children, judged by `EvalJudgeTool.judgeMultiTurnConversation`. Operator triggers manual evaluation via SkillDrafts → "Trigger Evaluation" modal (target-agent picker + auto-built ephemeral scenarios from source session); status flips to `evaluated_passed` (≥5pp delta) or `rejected`. `SkillDraftDetailDrawer` → "Evaluation Report" tab renders 5-dim benchmark table + LLM verdict summary.
+
+### Flywheel Observability Panel
+
+Operator-facing workflow DAG of the entire skill / prompt / behavior-rule flywheel (Insights → **Flywheel** tab, 2026-05):
+
+- **15-step DAG** rendered with **React Flow + dagre** LR auto-layout, arrows show data flow direction (`ENTRY → ① annotate → ② cluster → ③ attribute → G1 approve → ④ candidate → G2 review → ⑤ A/B → ⑥ gate → G3 promote → ⑦⑧⑨ canary/metrics/decide`)
+- **4 node types** with left-border color encoding: 🤖 **AUTO** (blue, cron-driven), 👤 **USER gate** (orange, operator review), 🔀 **HYBRID** (purple, auto + manual triggerable), 🚪 **ENTRY** (green: chat session / upload skill / extract-from-session / write-prompt), ⏸ **DORMANT** (gray, V87 canary disabled)
+- **5 health colors per node** (with H/W/S/D/E letter overlay for color-blind a11y): 🟢 healthy / 🟡 warn / 🔴 stale / ⚪ dormant / ⚫ empty (never lit up)
+- **Running pulse animation** — AUTO + HYBRID nodes with `inFlight > 0` or `cron lastRunStatus='running'` show a 1.5s slow green ring (CSS box-shadow keyframe, compositor-friendly); `prefers-reduced-motion` users get a static green outline instead
+- **Edge animation** — dashed flow when both source + target have `inFlight > 0` (data actively flowing between stages)
+- **Click any node** → right-slide **detail Drawer** with Chinese label + description, 5-dim metrics (in-flight / today aggregate / lag / last activity / 24h error count + pending count for USER gates), recent 24h activity filtered to this step, "在 page 中打开 →" drill-down link footer, Esc / backdrop / close-button to dismiss
+- **Dual tab navigation** — agentType (user / system) × surface (skill / prompt / behavior_rule), localStorage-persisted per first-tier tab, ARIA tablist semantics
+- **Read-only by design** — no action buttons inside the panel (observability ≠ ops console); all operations live on the existing drill-down pages (1B URL-driven routing in Insights / SkillList / SessionList / SkillDrafts ensures drill-down query params are actually consumed)
+- **Lazy-loaded** — reactflow + dagre (~72KB gzipped) ships as a separate chunk and only loads when operator clicks the Flywheel tab
+
+### System Agent Typing
+
+`t_agent.agent_type` column (V89) distinguishes **system agents** (`session-annotator` / `attribution-curator` / `metrics-collector` / `memory-curator` / `user-simulator` — managed by Bootstrap classes, edits overwritten on next restart) from **user agents**:
+
+- **AgentList toggle** — "Show system agents" Switch (localStorage persisted, default off) + purple `<Tag>System</Tag>` chip on system-agent cards
+- **Inline `SystemAgentMonitorCard`** per system agent — cron schedule / last_run + status / 7d trigger count / 7d output count (cross-table aggregate: annotations / proposals / metrics / consolidations / trials) / **Run Manually** button / **View Sessions** + **View Schedule** deep-links
+- **AgentDrawer system-agent banner** — ⚠️ "Managed by Bootstrap, edits overwritten" + all form inputs `readOnly` + Delete button disabled
+- **Chat send gate** — system agents render input + send disabled with Info Alert "System agents are read-only via Chat"
+- **Flywheel layer-1 root-cause fix** — `SessionAnnotationSignalService` rewrites annotation queue selection to user-first / system backfill / catch-all orphan fallback (was starvation: 5 system agents' cron output dominated the top-30 createdAt DESC window → user-agent sessions never got annotated → flywheel never had data; real verification: user-agent outcome 0 → 9 within 50s after fix)
+
 ### Memory System
 
 Persistent memory across sessions, scoped per user:
@@ -279,6 +305,8 @@ AGENT_LOOP (root)
 ```
 
 **Session Replay** — restructures flat message history into Turns → Iterations → Tool calls with timing.
+
+**Chat message timestamps (2026-05)** — every user / agent bubble shows its server-side persisted `t_session_message.created_at` as `HH:MM:SS` on hover (opacity 0 default + `:focus-within` a11y fallback). REST `/api/chat/sessions/{id}/messages` exposes `createdAt`; WS `message_appended` + `messages_snapshot` payloads include envelope-level `createdAt` for live messages.
 
 **Model Usage Dashboard** — daily/by-model/by-agent token consumption and cost tracking.
 

@@ -209,6 +209,32 @@ skillforge/
 - **Skill A/B 验证** — 在评测场景上比较候选 Skill 与基线效果，再决定是否晋升
 - **使用遥测** — 记录 Skill 调用成功/失败信号，供后续演化决策使用
 
+**Skill Creator 带评测（Phase 1.6，2026-05）** — `skill-creator` 系统 skill 现在带完整 eval 闭环：每个新草稿（上传 / session 抽取 / 市场 / 自然语言）都会自动跑 `with_skill` vs `without_skill` A/B 对照评测（基于 target agent 派 SubAgent 子 session），用 `EvalJudgeTool.judgeMultiTurnConversation` 打分。操作员可在 SkillDrafts → "Trigger Evaluation" 弹窗手动触发（target agent picker + 自动从 source session 构造 ephemeral scenario），状态自动翻 `evaluated_passed`（≥5pp delta）或 `rejected`。`SkillDraftDetailDrawer` → "Evaluation Report" tab 渲 5 维 benchmark 表 + LLM 评语。
+
+### 飞轮可观测面板
+
+operator 视角的完整 skill / prompt / behavior_rule 飞轮工作流 DAG（Insights → **Flywheel** tab，2026-05）：
+
+- **15 步 DAG** 用 **React Flow + dagre** LR auto-layout 渲染，箭头表数据流向（`ENTRY → ① 标注 → ② 聚类 → ③ 归因 → G1 审 → ④ 生成候选 → G2 审 SkillDraft → ⑤ A/B → ⑥ 阀门 → G3 上线决定 → ⑦⑧⑨ 灰度/回流/终判`）
+- **4 类节点** 用左边框颜色编码：🤖 **AUTO**（蓝，cron 驱动）、👤 **USER GATE**（橙，操作员审）、🔀 **HYBRID**（紫，auto + 手动可触发）、🚪 **ENTRY**（绿：聊天 / 上传 skill / 从 session 抽 skill / 写 prompt）、⏸ **DORMANT**（灰，V87 canary 暂停）
+- **每节点 5 健康颜色**（H/W/S/D/E 字母 fallback 防色盲）：🟢 healthy / 🟡 warn / 🔴 stale / ⚪ dormant / ⚫ empty（从未活动过）
+- **运行中绿色慢闪 ring 动画** —— AUTO + HYBRID 节点当 `inFlight > 0` 或 `cron lastRunStatus='running'` 时显 1.5s 绿色慢闪 box-shadow（compositor-friendly 无 reflow）；`prefers-reduced-motion` 用户退化为静态绿 outline
+- **边动画** —— 两端节点都 `inFlight > 0` 时显 dashed 流动（表数据正在两阶段之间流动）
+- **点节点 → 右侧 Drawer 滑出** —— 显中文 label + 中文描述 + 5 维 metric（in-flight / today 累计 / lag / lastActivity / 24h 错误数 + USER gate 待审数）+ 该节点最近 24h 活动 + footer "在 page 中打开 →" drill-down 链接，Esc / backdrop / × button 三路关闭
+- **双 tab 导航** —— agentType (user / system) × surface (skill / prompt / behavior_rule)，localStorage 持久化每个 tab 选择，ARIA tablist 语义
+- **只读** —— panel 内无任何操作按钮（observability ≠ ops console），所有操作走现有 drill-down 页（1B URL routing 确保 Insights / SkillList / SessionList / SkillDrafts 真消费 drill-down query param 不 silent drop）
+- **懒加载** —— reactflow + dagre（~72KB gzip）独立 chunk，仅在 operator 点 Flywheel tab 时加载
+
+### System Agent 区分
+
+`t_agent.agent_type` 字段（V89）区分**系统 agent**（`session-annotator` / `attribution-curator` / `metrics-collector` / `memory-curator` / `user-simulator` —— Bootstrap 类管理，下次重启时 dashboard 编辑会被覆盖）跟**用户 agent**：
+
+- **AgentList toggle** —— "Show system agents" Switch（localStorage 持久化，默认关）+ 紫色 `<Tag>System</Tag>` chip
+- **系统 agent 卡片内嵌 `SystemAgentMonitorCard`** —— cron 表达式 / last_run + status / 7d 触发次数 / 7d 输出数（跨表聚合：annotations / proposals / metrics / consolidations / trials）/ **Run Manually** 按钮 / **View Sessions** + **View Schedule** 跳转链接
+- **AgentDrawer 系统 agent 编辑保护** —— ⚠️ banner "Managed by Bootstrap, edits 重启被覆盖" + 全 form input `readOnly` + Delete 按钮 disabled
+- **Chat send gate** —— 系统 agent 的 chat 输入 + send 按钮 disabled + Info Alert "System agents are read-only via Chat"
+- **飞轮 layer-1 root cause 修复** —— `SessionAnnotationSignalService` 改 user-first / system backfill / catch-all orphan fallback 重排（原本 5 system agent 的 cron 输出霸占 top-30 createdAt DESC 窗口 → user agent session 永远到不了 first cap → 飞轮无数据；实测：fix 后 50s 内 user agent outcome 从 0 → 9）
+
 ### 记忆系统
 
 跨会话持久记忆，按用户隔离：
@@ -258,6 +284,8 @@ AGENT_LOOP（根节点）
 ```
 
 **会话回放** — 将平铺的消息历史重组为 Turn → Iteration → Tool 调用，带时间线。
+
+**聊天消息时间戳（2026-05）** — 用户 / agent 气泡 hover 时右上角显示 `HH:MM:SS`（服务端持久化的 `t_session_message.created_at`，默认 opacity 0 + `:focus-within` 键盘 a11y fallback）。REST `/api/chat/sessions/{id}/messages` 返回 `createdAt` 字段；WS `message_appended` + `messages_snapshot` payload 带 envelope-level `createdAt` 满足实时消息。
 
 **模型用量仪表盘** — 按日/按模型/按 Agent 统计 token 消耗和成本。
 
