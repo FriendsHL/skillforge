@@ -338,13 +338,62 @@ public class PromptImproverService extends AbstractAbEvalRunner<PromptVersionEnt
                     "agentId must be numeric, got: " + agentId, nfe);
         }
         String resolvedBaselineId = baselineVersionId;
-        AgentEntity agent = agentRepository.findById(agentIdLong)
+        // PROMPT-IMPROVER-GENESIS-BASELINE (2026-05-21): use findByIdForUpdate
+        // to serialize per-agent prompt-version writes — concurrent flywheel
+        // triggers on the same agentId would otherwise produce 2 v1 genesis
+        // rows in the race window between read-active-version and save (the
+        // UNIQUE (agent_id, version_number) constraint would catch the
+        // duplicate but only by 500'ing the second caller rather than letting
+        // it observe the first caller's genesis row). Mirrors
+        // PromptPromotionService.evaluateAndPromote's pattern.
+        AgentEntity agent = agentRepository.findByIdForUpdate(agentIdLong)
                 .orElseThrow(() -> new IllegalArgumentException("Agent not found: " + agentId));
         if (resolvedBaselineId == null || resolvedBaselineId.isBlank()) {
             resolvedBaselineId = agent.getActivePromptVersionId();
             if (resolvedBaselineId == null) {
-                throw new IllegalStateException("Agent " + agentId
-                        + " has no active prompt version; cannot run A/B without baseline");
+                // GENESIS PATH: first time this agent enters the flywheel —
+                // materialize v1 active baseline from t_agent.system_prompt
+                // so the A/B has something to compare against. Without this
+                // every agent's first attribution-triggered run dies at "no
+                // active prompt version". The genesis row uses
+                // source='genesis' (new source value; no CHECK constraint
+                // on t_prompt_version.source per V4 schema) to distinguish
+                // it from auto_improve / attribution / manual writes in
+                // dashboard listings.
+                //
+                // The PESSIMISTIC_WRITE on the agent row above plus the
+                // UNIQUE (agent_id, version_number) index on t_prompt_version
+                // together prevent duplicate v1 rows under concurrent
+                // attribute-triggered runAbTestAgainst calls.
+                String currentPrompt = agent.getSystemPrompt();
+                if (currentPrompt == null || currentPrompt.isBlank()) {
+                    throw new IllegalStateException("Agent " + agentId
+                            + " has neither active prompt version nor system_prompt — "
+                            + "cannot bootstrap baseline");
+                }
+                PromptVersionEntity genesis = new PromptVersionEntity();
+                genesis.setId(UUID.randomUUID().toString());
+                // agentId here is the String form (schema agent_id is
+                // VARCHAR(36)); agentIdLong is only used for AgentRepository
+                // lookups. Do NOT pass agentIdLong here — would silently
+                // produce a numeric-string in a VARCHAR column that other
+                // lookups (e.g. findMaxVersionNumber) couldn't match.
+                genesis.setAgentId(agentId);
+                genesis.setVersionNumber(1);
+                genesis.setStatus("active");
+                genesis.setSource("genesis");
+                genesis.setContent(currentPrompt);
+                // createdAt left null — @CreatedDate auditing listener
+                // populates it on save; explicit set would race the listener.
+                promptVersionRepository.save(genesis);
+
+                agent.setActivePromptVersionId(genesis.getId());
+                agentRepository.save(agent);
+
+                log.info("[PromptImprover] genesis baseline v1 created for agentId={} "
+                                + "(versionId={}, {} chars, from t_agent.system_prompt)",
+                        agentId, genesis.getId(), currentPrompt.length());
+                resolvedBaselineId = genesis.getId();
             }
         }
         final String baselineId = resolvedBaselineId;
