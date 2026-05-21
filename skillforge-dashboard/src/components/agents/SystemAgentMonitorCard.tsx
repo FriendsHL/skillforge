@@ -32,6 +32,11 @@ const OUTPUT_LABEL: Record<SystemAgentMonitorRow['outputEntityType'], string> = 
   metrics: 'metric snapshots',
   consolidations: 'consolidations',
   trials: 'trials',
+  // V93 ATTRIBUTION-DISPATCHER-AGENT: dispatcher emits one optimization-event
+  // sentinel per dispatched pattern; surfaced as "7d dispatches · N" alongside
+  // the curator's "7d proposals · N". Counts are equal by design (each
+  // dispatch creates the sentinel that the curator updates in place).
+  dispatches: 'dispatches',
   unknown: 'output items',
 };
 
@@ -123,7 +128,14 @@ const SystemAgentMonitorCard: React.FC<SystemAgentMonitorCardProps> = ({
         <span data-testid="last-run">last run · {formatLastRun(data.lastRunAt)}</span>
         <span data-testid="trigger-count">7d triggers · {data.sevenDayTriggerCount}</span>
         <span data-testid="output-count">
-          7d {OUTPUT_LABEL[data.outputEntityType]} · {data.sevenDayOutputCount}
+          {/*
+            W2 fallback: if the BE introduces a new outputEntityType before
+            this FE deploys, OUTPUT_LABEL[unknown-type] would be undefined and
+            render as the literal string "undefined". Fall back through the
+            raw type string, then a generic "output items" label, so the row
+            still reads "7d <something> · N" instead of "7d undefined · N".
+          */}
+          7d {OUTPUT_LABEL[data.outputEntityType] ?? data.outputEntityType ?? 'output items'} · {data.sevenDayOutputCount}
         </span>
       </div>
       <div className="system-monitor-actions">

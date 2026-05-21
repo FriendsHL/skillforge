@@ -68,7 +68,16 @@ public class SystemAgentMonitorService {
             "session-annotator", "annotations",
             "metrics-collector", "metrics",
             "attribution-curator", "proposals",
-            "user-simulator", "trials");
+            "user-simulator", "trials",
+            // ATTRIBUTION-DISPATCHER-AGENT (V93): dispatcher itself emits one
+            // optimization-event sentinel row per dispatched pattern, so its
+            // 7d output count piggy-backs the same OptimizationEventRepository
+            // query as the curator (sevenDayOutputCountFor switch below). The
+            // dispatcher's count being equal to the curator's count is the
+            // expected 1:1 dispatch→event relationship; stage-level health
+            // (proposal_pending vs proposal_rejected vs candidate_failed) is
+            // surfaced separately via /api/optimization-events.
+            "attribution-dispatcher", "dispatches");
 
     private final AgentRepository agentRepository;
     private final ScheduledTaskRepository scheduledTaskRepository;
@@ -227,6 +236,12 @@ public class SystemAgentMonitorService {
             case "metrics-collector" -> canaryMetricSnapshotRepository.countByCreatedAtAfter(cutoff);
             case "memory-curator" -> memoryProposalRepository.countByCreatedAtAfter(cutoff);
             case "user-simulator" -> simulatorTrialRepository.countByCreatedAtAfter(cutoff);
+            // V93: dispatcher row count == curator row count by design (each
+            // dispatch writes one OptimizationEvent sentinel that the curator
+            // then updates in place). Re-using countByCreatedAtAfter keeps the
+            // metric truthful without introducing a parallel "dispatched"
+            // sub-query that would diverge from curator state.
+            case "attribution-dispatcher" -> optimizationEventRepository.countByCreatedAtAfter(cutoff);
             default -> 0L;
         };
     }

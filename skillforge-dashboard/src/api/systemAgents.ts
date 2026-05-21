@@ -48,6 +48,7 @@ export interface SystemAgentMonitorRow {
     | 'metrics'
     | 'consolidations'
     | 'trials'
+    | 'dispatches'
     | 'unknown';
 }
 

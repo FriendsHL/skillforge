@@ -890,6 +890,27 @@ public class SkillForgeConfig {
         return tool;
     }
 
+    /**
+     * ATTRIBUTION-DISPATCHER-AGENT (V93): wraps
+     * {@link com.skillforge.server.attribution.AttributionDispatcherService#dispatchPendingPatterns(int)}
+     * so the dedicated {@code attribution-dispatcher} system agent (seeded by
+     * V93) can invoke the dispatch logic via the standard LLM tool-call path
+     * instead of having a {@code @Scheduled} cron call the service directly.
+     * Consistent with the V81 curator tool-wrap pattern.
+     */
+    @Bean
+    public com.skillforge.server.tool.attribution.DispatchAttributionPatternsTool dispatchAttributionPatternsTool(
+            com.skillforge.server.attribution.AttributionDispatcherService dispatcherService,
+            ObjectMapper objectMapper,
+            SkillRegistry skillRegistry) {
+        com.skillforge.server.tool.attribution.DispatchAttributionPatternsTool tool =
+                new com.skillforge.server.tool.attribution.DispatchAttributionPatternsTool(
+                        dispatcherService, objectMapper);
+        skillRegistry.registerTool(tool);
+        log.info("Registered DispatchAttributionPatternsTool into SkillRegistry");
+        return tool;
+    }
+
     @Bean
     public SkillPackageLoader skillPackageLoader() {
         return new SkillPackageLoader();

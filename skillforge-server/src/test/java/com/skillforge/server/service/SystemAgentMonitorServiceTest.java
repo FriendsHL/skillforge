@@ -164,6 +164,34 @@ class SystemAgentMonitorServiceTest {
     }
 
     @Test
+    @DisplayName("V93 attribution-dispatcher routes to OptimizationEventRepository, outputEntityType='dispatches'")
+    void attributionDispatcher_routesToOptimizationEventRepo_dispatchesLabel() {
+        // V93 ATTRIBUTION-DISPATCHER-AGENT: dispatcher emits one optimization-event
+        // sentinel per dispatched pattern, so its 7d output count piggy-backs the
+        // same countByCreatedAtAfter query as the curator (equal-by-design 1:1
+        // dispatch→event relationship). Verifies OUTPUT_LABELS extension +
+        // sevenDayOutputCountFor switch case both land.
+        AgentEntity a = agent(11L, "attribution-dispatcher", "V93 attribution dispatcher entry");
+        when(agentRepository.findByAgentType("system")).thenReturn(List.of(a));
+        when(scheduledTaskRepository.findByAgentIdIn(any())).thenReturn(List.of(
+                task(1101L, 11L, "0 15 * * * *", Instant.now())));
+        when(scheduledTaskRunRepository.findFirstByTaskIdOrderByTriggeredAtDesc(1101L))
+                .thenReturn(Optional.of(run("success")));
+        when(scheduledTaskRunRepository.countByTaskIdInAndTriggeredAtAfter(anyCollection(), any()))
+                .thenReturn(168L);
+        when(optimizationEventRepository.countByCreatedAtAfter(any())).thenReturn(42L);
+
+        List<SystemAgentMonitorResponse> result = service.monitorAll();
+
+        SystemAgentMonitorResponse got = result.get(0);
+        assertThat(got.outputEntityType()).isEqualTo("dispatches");
+        assertThat(got.sevenDayOutputCount()).isEqualTo(42L);
+        verify(optimizationEventRepository).countByCreatedAtAfter(any());
+        verify(memoryProposalRepository, never()).countByCreatedAtAfter(any());
+        verify(sessionAnnotationRepository, never()).countByCreatedAtAfter(any());
+    }
+
+    @Test
     @DisplayName("user-simulator routes to SimulatorTrialRepository for output count")
     void userSimulator_routesToSimulatorTrialRepo() {
         AgentEntity a = agent(10L, "user-simulator", "V5 dynamic user sim");
