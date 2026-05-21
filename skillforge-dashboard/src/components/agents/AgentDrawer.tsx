@@ -505,12 +505,39 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
     },
   });
 
-  const handleSavePrompts = () => {
+  // KILL-BOOTSTRAP-PROMPT-TO-DB (2026-05-22): system agent prompt is now the
+  // single source of truth in DB (no .md + Bootstrap swap), so we let operators
+  // edit it from this drawer. But mis-editing the prompt of a system agent
+  // (memory-curator / session-annotator / attribution-* / metrics-collector /
+  // user-simulator) can stall production flywheel cron jobs — wrap the save
+  // in an explicit Modal.confirm warning. User agents keep the no-confirm path.
+  const persistPromptChanges = () => {
     updateMutation.mutate({ id: agent.id, payload: {
       systemPrompt: promptDraft['AGENT.md'],
       soulPrompt: promptDraft['SOUL.md'],
     }});
     setDirty({});
+  };
+
+  const handleSavePrompts = () => {
+    if (isSystemAgent) {
+      Modal.confirm({
+        title: 'Editing system agent prompt',
+        content: (
+          <>
+            <strong>{agent.name}</strong> 是系统 agent，运行关键飞轮基础设施
+            （cron / SubAgent fan-out）。误配 prompt 可能让 attribution /
+            annotation / canary 等流水线停摆。Save anyway?
+          </>
+        ),
+        okText: 'Save',
+        okType: 'danger',
+        cancelText: 'Cancel',
+        onOk: persistPromptChanges,
+      });
+      return;
+    }
+    persistPromptChanges();
   };
 
   const handleModeChange = (newMode: 'ask' | 'auto') => {
@@ -892,7 +919,12 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
                         setDirty(d => ({ ...d, [mdFile]: true }));
                       }}
                       spellCheck={false}
-                      readOnly={isSystemAgent}
+                      // KILL-BOOTSTRAP-PROMPT-TO-DB (2026-05-22): system agent
+                      // AGENT.md textarea is editable; Save click triggers a
+                      // confirm modal (handleSavePrompts). SOUL.md remains
+                      // read-only for system agents (only AGENT.md drives the
+                      // flywheel — SOUL.md doesn't apply to system agents).
+                      readOnly={isSystemAgent && mdFile === 'SOUL.md'}
                       data-testid="prompt-editor"
                     />
                   </div>
@@ -900,16 +932,22 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
                     <button
                       className="btn-ghost-sf"
                       onClick={() => setDirty(d => ({ ...d, [mdFile]: false }))}
-                      disabled={isSystemAgent}
+                      disabled={isSystemAgent && mdFile === 'SOUL.md'}
                     >
                       Revert
                     </button>
                     <button
                       className="btn-primary-sf"
                       onClick={handleSavePrompts}
-                      disabled={isSystemAgent}
+                      disabled={isSystemAgent && mdFile === 'SOUL.md'}
                       data-testid="prompts-save-btn"
-                      title={isSystemAgent ? 'System agent prompts are read-only' : undefined}
+                      title={
+                        isSystemAgent && mdFile === 'AGENT.md'
+                          ? 'Editing system agent prompt — confirm dialog will appear before save'
+                          : isSystemAgent && mdFile === 'SOUL.md'
+                            ? 'SOUL.md not applicable to system agents'
+                            : undefined
+                      }
                     >
                       {dirty[mdFile] ? 'Save draft' : 'Saved'}
                     </button>

@@ -1,12 +1,11 @@
 package com.skillforge.server.flywheel;
 
-import com.skillforge.server.attribution.AttributionDispatcherBootstrap;
+import com.skillforge.server.bootstrap.SystemAgentNames;
 import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.SessionEntity;
 import com.skillforge.server.repository.AgentRepository;
 import com.skillforge.server.service.ChatService;
 import com.skillforge.server.service.SessionService;
-import com.skillforge.server.sessionannotation.SessionAnnotatorBootstrap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -203,15 +202,16 @@ public class FlywheelController {
                         HttpStatus.NOT_FOUND, "Agent not found: id=" + agentId));
 
         // Lookup the two system agents the chain delegates to. These rows are
-        // seeded by V75 / V93 migrations + bootstrap helpers; missing rows
-        // would indicate a partially-rolled-out instance — fail fast with 503
-        // so the dashboard can surface a clear "system agent missing" error
+        // seeded by V75 / V93 migrations + V95 inline prompt seed
+        // (KILL-BOOTSTRAP-PROMPT-TO-DB 2026-05-22); missing rows would
+        // indicate a partially-rolled-out instance — fail fast with 503 so
+        // the dashboard can surface a clear "system agent missing" error
         // rather than firing chatAsync into a void.
-        AgentEntity annotatorAgent = agentRepository.findFirstByName(SessionAnnotatorBootstrap.AGENT_NAME)
+        AgentEntity annotatorAgent = agentRepository.findFirstByName(SystemAgentNames.SESSION_ANNOTATOR)
                 .orElseThrow(() -> new ResponseStatusException(
                         HttpStatus.SERVICE_UNAVAILABLE,
                         "session-annotator system agent not seeded; check V75 migration"));
-        AgentEntity dispatcherAgent = agentRepository.findFirstByName(AttributionDispatcherBootstrap.AGENT_NAME)
+        AgentEntity dispatcherAgent = agentRepository.findFirstByName(SystemAgentNames.ATTRIBUTION_DISPATCHER)
                 .orElseThrow(() -> new ResponseStatusException(
                         HttpStatus.SERVICE_UNAVAILABLE,
                         "attribution-dispatcher system agent not seeded; check V93 migration"));

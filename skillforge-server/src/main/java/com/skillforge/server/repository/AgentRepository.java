@@ -21,10 +21,12 @@ public interface AgentRepository extends JpaRepository<AgentEntity, Long> {
     boolean existsByName(String name);
 
     /**
-     * MEMORY-LLM-SYNTHESIS (V69 dogfood): used by {@code MemoryCuratorBootstrap} to find
-     * the seeded `memory-curator` system agent and by {@code AdminMemoryLlmSynthesisController}
-     * to look up its id for manual triggers. Lookup by name is safe here because system
-     * agents (owner_id=NULL) carry deterministic names.
+     * MEMORY-LLM-SYNTHESIS (V69 dogfood) + KILL-BOOTSTRAP-PROMPT-TO-DB
+     * (V95 2026-05-22): used by {@code AdminMemoryLlmSynthesisController}
+     * and {@code FlywheelController} to look up system agents by name
+     * (e.g. {@code SystemAgentNames.MEMORY_CURATOR}) for manual triggers
+     * and per-agent flywheel chain. Lookup by name is safe here because
+     * system agents (owner_id=NULL) carry deterministic names.
      */
     Optional<AgentEntity> findFirstByName(String name);
 

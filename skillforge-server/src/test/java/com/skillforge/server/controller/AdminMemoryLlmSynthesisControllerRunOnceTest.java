@@ -5,7 +5,7 @@ import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.ScheduledTaskEntity;
 import com.skillforge.server.memory.llmsynth.LlmMemorySynthesisScheduler;
 import com.skillforge.server.memory.llmsynth.LlmMemorySynthesisScheduler.SchedulerSummary;
-import com.skillforge.server.memory.llmsynth.MemoryCuratorBootstrap;
+import com.skillforge.server.bootstrap.SystemAgentNames;
 import com.skillforge.server.repository.AgentRepository;
 import com.skillforge.server.repository.MemoryRepository;
 import com.skillforge.server.repository.ScheduledTaskRepository;
@@ -68,7 +68,7 @@ class AdminMemoryLlmSynthesisControllerRunOnceTest {
     void runOnce_dogfoodHappyPath_returnsAccepted() {
         AgentEntity agent = newAgent(101L);
         ScheduledTaskEntity task = newTask(42L, 101L);
-        when(agentRepository.findFirstByName(MemoryCuratorBootstrap.AGENT_NAME))
+        when(agentRepository.findFirstByName(SystemAgentNames.MEMORY_CURATOR))
                 .thenReturn(Optional.of(agent));
         when(scheduledTaskRepository.findAll()).thenReturn(List.of(task));
         when(scheduledTaskExecutor.fireForResult(42L, true))
@@ -99,7 +99,7 @@ class AdminMemoryLlmSynthesisControllerRunOnceTest {
     void runOnce_skipIfRunning_returns409() {
         AgentEntity agent = newAgent(101L);
         ScheduledTaskEntity task = newTask(42L, 101L);
-        when(agentRepository.findFirstByName(MemoryCuratorBootstrap.AGENT_NAME))
+        when(agentRepository.findFirstByName(SystemAgentNames.MEMORY_CURATOR))
                 .thenReturn(Optional.of(agent));
         when(scheduledTaskRepository.findAll()).thenReturn(List.of(task));
         when(scheduledTaskExecutor.fireForResult(42L, true)).thenReturn(Optional.empty());
@@ -113,7 +113,7 @@ class AdminMemoryLlmSynthesisControllerRunOnceTest {
     @Test
     @DisplayName("legacy fallback: no memory-curator agent → calls LlmMemorySynthesisScheduler.runOnce with bypassGate=true (R2-1)")
     void runOnce_noSeededAgent_fallsBackToLegacyScheduler() {
-        when(agentRepository.findFirstByName(MemoryCuratorBootstrap.AGENT_NAME))
+        when(agentRepository.findFirstByName(SystemAgentNames.MEMORY_CURATOR))
                 .thenReturn(Optional.empty());
         // R2-1: controller passes bypassGate=true so default-disabled scheduler still runs.
         when(scheduler.runOnce(eq(7L), eq(true))).thenReturn(new SchedulerSummary(
@@ -139,7 +139,7 @@ class AdminMemoryLlmSynthesisControllerRunOnceTest {
         AgentEntity agent = newAgent(101L);
         // Another task in DB belongs to a different agent.
         ScheduledTaskEntity unrelated = newTask(1L, 999L);
-        when(agentRepository.findFirstByName(MemoryCuratorBootstrap.AGENT_NAME))
+        when(agentRepository.findFirstByName(SystemAgentNames.MEMORY_CURATOR))
                 .thenReturn(Optional.of(agent));
         when(scheduledTaskRepository.findAll()).thenReturn(List.of(unrelated));
         // R2-1: controller calls 2-arg runOnce with bypassGate=true.
@@ -155,7 +155,7 @@ class AdminMemoryLlmSynthesisControllerRunOnceTest {
     private static AgentEntity newAgent(long id) {
         AgentEntity a = new AgentEntity();
         a.setId(id);
-        a.setName(MemoryCuratorBootstrap.AGENT_NAME);
+        a.setName(SystemAgentNames.MEMORY_CURATOR);
         return a;
     }
 

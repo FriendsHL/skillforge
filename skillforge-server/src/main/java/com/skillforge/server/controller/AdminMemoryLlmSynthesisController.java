@@ -8,9 +8,9 @@ import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.MemoryEntity;
 import com.skillforge.server.entity.MemoryProposalEntity;
 import com.skillforge.server.entity.ScheduledTaskEntity;
+import com.skillforge.server.bootstrap.SystemAgentNames;
 import com.skillforge.server.memory.llmsynth.LlmMemorySynthesisScheduler;
 import com.skillforge.server.memory.llmsynth.LlmMemorySynthesisScheduler.SchedulerSummary;
-import com.skillforge.server.memory.llmsynth.MemoryCuratorBootstrap;
 import com.skillforge.server.repository.AgentRepository;
 import com.skillforge.server.repository.MemoryRepository;
 import com.skillforge.server.repository.ScheduledTaskRepository;
@@ -236,7 +236,7 @@ public class AdminMemoryLlmSynthesisController {
      * resolving in two steps keeps the failure mode legible in logs.
      */
     private Optional<ScheduledTaskEntity> findMemoryCuratorTask() {
-        Optional<AgentEntity> agentOpt = agentRepository.findFirstByName(MemoryCuratorBootstrap.AGENT_NAME);
+        Optional<AgentEntity> agentOpt = agentRepository.findFirstByName(SystemAgentNames.MEMORY_CURATOR);
         if (agentOpt.isEmpty()) {
             return Optional.empty();
         }

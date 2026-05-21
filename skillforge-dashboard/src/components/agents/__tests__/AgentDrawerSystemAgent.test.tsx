@@ -13,7 +13,7 @@
  * non-system-agent codepaths in `AgentDrawer.test.tsx`.
  */
 import React from 'react';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import type { AgentDto } from '../../../api/schemas';
@@ -79,7 +79,7 @@ vi.mock('../../../contexts/AuthContext', () => ({
 }));
 
 import AgentDrawer from '../AgentDrawer';
-import { deleteAgent } from '../../../api';
+import { deleteAgent, updateAgent } from '../../../api';
 
 function makeAgent(overrides: Partial<AgentDto> = {}): AgentDto {
   return {
@@ -112,6 +112,7 @@ function renderDrawer(agent: AgentDto) {
 describe('AgentDrawer — system agent read-only gate (SYSTEM-AGENT-TYPING Phase 2.2)', () => {
   beforeEach(() => {
     vi.mocked(deleteAgent).mockClear();
+    vi.mocked(updateAgent).mockClear();
   });
 
 it('disables the Delete button for system agents', () => {
@@ -197,5 +198,118 @@ it('disables the Delete button for system agents', () => {
     fireEvent.click(hooksTab);
     const hooksFs = await screen.findByTestId('hooks-tab-fieldset');
     expect(hooksFs).not.toBeDisabled();
+  });
+
+  // ────────────────────────────────────────────────────────────────────────
+  // KILL-BOOTSTRAP-PROMPT-TO-DB (2026-05-22): Prompts tab AGENT.md textarea
+  // is now editable for system agents (previously locked). Save triggers a
+  // confirm modal warning. SOUL.md remains locked (not used by system agents).
+  // ────────────────────────────────────────────────────────────────────────
+
+  it('Prompts tab AGENT.md textarea is editable for system agents (KILL-BOOTSTRAP-PROMPT-TO-DB)', async () => {
+    renderDrawer(makeAgent({ agentType: 'system' }));
+
+    const promptsTab = await screen.findByRole('button', { name: /^Prompts/ });
+    fireEvent.click(promptsTab);
+
+    const editor = await screen.findByTestId('prompt-editor');
+    expect(editor).not.toHaveAttribute('readonly');
+  });
+
+  // Helper: AntD Modal.confirm renders with class `ant-modal-confirm`; the
+  // Drawer itself uses role=dialog (so `screen.getByRole('dialog')` is
+  // ambiguous). Pick out the confirm modal by class + scope queries to it.
+  function getConfirmModal(): HTMLElement | null {
+    return document.querySelector('.ant-modal-confirm') as HTMLElement | null;
+  }
+
+  it('Save Prompts on system agent opens confirm modal; cancel does NOT call updateAgent', async () => {
+    renderDrawer(makeAgent({ agentType: 'system' }));
+
+    const promptsTab = await screen.findByRole('button', { name: /^Prompts/ });
+    fireEvent.click(promptsTab);
+
+    const editor = await screen.findByTestId('prompt-editor');
+    fireEvent.change(editor, { target: { value: 'edited prompt body' } });
+
+    const saveBtn = screen.getByTestId('prompts-save-btn');
+    fireEvent.click(saveBtn);
+
+    // Wait for AntD Modal.confirm to render into document.body
+    await waitFor(() => {
+      expect(getConfirmModal()).not.toBeNull();
+    });
+    expect(getConfirmModal()!).toHaveTextContent(/Editing system agent prompt/i);
+
+    // Click cancel inside the modal (scoped to the confirm-modal element so
+    // we don't accidentally pick the Drawer's own buttons).
+    const cancelBtn = Array.from(
+      getConfirmModal()!.querySelectorAll('button'),
+    ).find((b) => /^Cancel$/.test(b.textContent ?? ''));
+    expect(cancelBtn).toBeDefined();
+    fireEvent.click(cancelBtn!);
+
+    // updateAgent must NOT have been called
+    await waitFor(() => {
+      expect(updateAgent).not.toHaveBeenCalled();
+    });
+  });
+
+  it('Save Prompts on system agent opens confirm modal; OK calls updateAgent with new systemPrompt', async () => {
+    renderDrawer(makeAgent({ agentType: 'system' }));
+
+    const promptsTab = await screen.findByRole('button', { name: /^Prompts/ });
+    fireEvent.click(promptsTab);
+
+    const editor = await screen.findByTestId('prompt-editor');
+    fireEvent.change(editor, { target: { value: 'edited prompt body' } });
+
+    const saveBtn = screen.getByTestId('prompts-save-btn');
+    fireEvent.click(saveBtn);
+
+    await waitFor(() => {
+      expect(getConfirmModal()).not.toBeNull();
+    });
+
+    // OK button label = okText prop ("Save"); scope to the confirm modal.
+    const okBtn = Array.from(
+      getConfirmModal()!.querySelectorAll('button'),
+    ).find((b) => /^Save$/.test(b.textContent ?? ''));
+    expect(okBtn).toBeDefined();
+    await act(async () => {
+      fireEvent.click(okBtn!);
+    });
+
+    await waitFor(() => {
+      expect(updateAgent).toHaveBeenCalledTimes(1);
+    });
+    const [agentId, payload] = vi.mocked(updateAgent).mock.calls[0];
+    expect(agentId).toBe(7);
+    expect(payload).toEqual(
+      expect.objectContaining({ systemPrompt: 'edited prompt body' }),
+    );
+  });
+
+  it('Save Prompts on user agent does NOT open confirm modal — saves immediately', async () => {
+    renderDrawer(makeAgent({ agentType: 'user' }));
+
+    const promptsTab = await screen.findByRole('button', { name: /^Prompts/ });
+    fireEvent.click(promptsTab);
+
+    const editor = await screen.findByTestId('prompt-editor');
+    fireEvent.change(editor, { target: { value: 'edited prompt body' } });
+
+    const saveBtn = screen.getByTestId('prompts-save-btn');
+    await act(async () => {
+      fireEvent.click(saveBtn);
+    });
+
+    // No AntD confirm modal should appear (Drawer itself is a separate role)
+    expect(getConfirmModal()).toBeNull();
+
+    // updateAgent called immediately
+    await waitFor(() => {
+      expect(updateAgent).toHaveBeenCalledTimes(1);
+    });
   });
 });

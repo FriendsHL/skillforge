@@ -20,9 +20,10 @@ import java.util.Map;
  * {@link CanaryMetricsService#recompute(Duration)}.
  *
  * <p>Sole step of the {@code metrics-collector} agent's hourly pipeline
- * (see {@code metrics-collector-system-prompt.md}). The V79-seeded
- * {@code ScheduledTask metrics-collector-hourly} fires this agent once per
- * hour; the agent calls this tool with default {@code window_hours=1}.
+ * (system_prompt 在 t_agent 表内，V95 inline seed —— KILL-BOOTSTRAP-PROMPT-TO-DB
+ * 2026-05-22). The V79-seeded {@code ScheduledTask metrics-collector-hourly}
+ * fires this agent once per hour; the agent calls this tool with default
+ * {@code window_hours=1}.
  *
  * <p>Wire shape:
  * <ul>

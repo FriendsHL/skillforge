@@ -123,8 +123,8 @@ public class ScheduledTaskService {
 
     /**
      * E2E-2 fix: list both the caller's own scheduled tasks AND SYSTEM-owned tasks
-     * (creator_user_id=0, e.g. the memory-curator nightly seeded by
-     * {@code MemoryCuratorBootstrap}). Single-tenant SkillForge — every authenticated
+     * (creator_user_id=0, e.g. the memory-curator nightly seeded by V69
+     * + V95 inline-prompt). Single-tenant SkillForge — every authenticated
      * user can see system jobs so admin operators can monitor them from the dashboard.
      *
      * <p>SYSTEM tasks render at the top of the list (their ids are smaller in the

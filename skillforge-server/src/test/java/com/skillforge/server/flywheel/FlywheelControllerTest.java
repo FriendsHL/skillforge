@@ -2,13 +2,12 @@ package com.skillforge.server.flywheel;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
-import com.skillforge.server.attribution.AttributionDispatcherBootstrap;
+import com.skillforge.server.bootstrap.SystemAgentNames;
 import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.SessionEntity;
 import com.skillforge.server.repository.AgentRepository;
 import com.skillforge.server.service.ChatService;
 import com.skillforge.server.service.SessionService;
-import com.skillforge.server.sessionannotation.SessionAnnotatorBootstrap;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -169,12 +168,12 @@ class FlywheelControllerTest {
     @DisplayName("POST /agents/{id}/run-loop → 202, fires annotator chatAsync + registers chain hook")
     void runLoop_happyPath_fires202_andWiresChain() throws Exception {
         AgentEntity target = agentEntity(7L, "my-agent", "user");
-        AgentEntity annotator = agentEntity(100L, SessionAnnotatorBootstrap.AGENT_NAME, "system");
-        AgentEntity dispatcher = agentEntity(101L, AttributionDispatcherBootstrap.AGENT_NAME, "system");
+        AgentEntity annotator = agentEntity(100L, SystemAgentNames.SESSION_ANNOTATOR, "system");
+        AgentEntity dispatcher = agentEntity(101L, SystemAgentNames.ATTRIBUTION_DISPATCHER, "system");
         when(agentRepository.findById(7L)).thenReturn(Optional.of(target));
-        when(agentRepository.findFirstByName(SessionAnnotatorBootstrap.AGENT_NAME))
+        when(agentRepository.findFirstByName(SystemAgentNames.SESSION_ANNOTATOR))
                 .thenReturn(Optional.of(annotator));
-        when(agentRepository.findFirstByName(AttributionDispatcherBootstrap.AGENT_NAME))
+        when(agentRepository.findFirstByName(SystemAgentNames.ATTRIBUTION_DISPATCHER))
                 .thenReturn(Optional.of(dispatcher));
 
         SessionEntity annotatorSession = sessionEntity("sess-annot");
@@ -222,7 +221,7 @@ class FlywheelControllerTest {
     void runLoop_annotatorAgentMissing_returns503() throws Exception {
         AgentEntity target = agentEntity(7L, "my-agent", "user");
         when(agentRepository.findById(7L)).thenReturn(Optional.of(target));
-        when(agentRepository.findFirstByName(SessionAnnotatorBootstrap.AGENT_NAME))
+        when(agentRepository.findFirstByName(SystemAgentNames.SESSION_ANNOTATOR))
                 .thenReturn(Optional.empty());
 
         mvc.perform(post("/api/flywheel/agents/7/run-loop"))
@@ -235,11 +234,11 @@ class FlywheelControllerTest {
     @DisplayName("POST /agents/{id}/run-loop → 503 when attribution-dispatcher system agent not seeded (r2 F3 java-reviewer W-2)")
     void runLoop_dispatcherAgentMissing_returns503() throws Exception {
         AgentEntity target = agentEntity(7L, "my-agent", "user");
-        AgentEntity annotator = agentEntity(100L, SessionAnnotatorBootstrap.AGENT_NAME, "system");
+        AgentEntity annotator = agentEntity(100L, SystemAgentNames.SESSION_ANNOTATOR, "system");
         when(agentRepository.findById(7L)).thenReturn(Optional.of(target));
-        when(agentRepository.findFirstByName(SessionAnnotatorBootstrap.AGENT_NAME))
+        when(agentRepository.findFirstByName(SystemAgentNames.SESSION_ANNOTATOR))
                 .thenReturn(Optional.of(annotator));
-        when(agentRepository.findFirstByName(AttributionDispatcherBootstrap.AGENT_NAME))
+        when(agentRepository.findFirstByName(SystemAgentNames.ATTRIBUTION_DISPATCHER))
                 .thenReturn(Optional.empty());
 
         mvc.perform(post("/api/flywheel/agents/7/run-loop"))
@@ -256,12 +255,12 @@ class FlywheelControllerTest {
     @DisplayName("POST /agents/{id}/run-loop?windowHours=999&max=999 → clamped to (168, 20)")
     void runLoop_overlargeParams_clamped() throws Exception {
         AgentEntity target = agentEntity(7L, "my-agent", "user");
-        AgentEntity annotator = agentEntity(100L, SessionAnnotatorBootstrap.AGENT_NAME, "system");
-        AgentEntity dispatcher = agentEntity(101L, AttributionDispatcherBootstrap.AGENT_NAME, "system");
+        AgentEntity annotator = agentEntity(100L, SystemAgentNames.SESSION_ANNOTATOR, "system");
+        AgentEntity dispatcher = agentEntity(101L, SystemAgentNames.ATTRIBUTION_DISPATCHER, "system");
         when(agentRepository.findById(7L)).thenReturn(Optional.of(target));
-        when(agentRepository.findFirstByName(SessionAnnotatorBootstrap.AGENT_NAME))
+        when(agentRepository.findFirstByName(SystemAgentNames.SESSION_ANNOTATOR))
                 .thenReturn(Optional.of(annotator));
-        when(agentRepository.findFirstByName(AttributionDispatcherBootstrap.AGENT_NAME))
+        when(agentRepository.findFirstByName(SystemAgentNames.ATTRIBUTION_DISPATCHER))
                 .thenReturn(Optional.of(dispatcher));
         when(sessionService.createSession(eq(0L), eq(100L)))
                 .thenReturn(sessionEntity("sess-annot"));
