@@ -18,6 +18,8 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.time.Clock;
+import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -71,17 +73,20 @@ public class FlywheelController {
     private final SessionService sessionService;
     private final ChatService chatService;
     private final FlywheelChainOrchestrator chainOrchestrator;
+    private final Clock clock;
 
     public FlywheelController(FlywheelRunsService runsService,
                               AgentRepository agentRepository,
                               SessionService sessionService,
                               ChatService chatService,
-                              FlywheelChainOrchestrator chainOrchestrator) {
+                              FlywheelChainOrchestrator chainOrchestrator,
+                              Clock clock) {
         this.runsService = runsService;
         this.agentRepository = agentRepository;
         this.sessionService = sessionService;
         this.chatService = chatService;
         this.chainOrchestrator = chainOrchestrator;
+        this.clock = clock;
     }
 
     /**
@@ -230,12 +235,23 @@ public class FlywheelController {
         // session goes terminal (idle / error). The annotator's session id is
         // returned to the caller; the dispatcher's session id is logged + can
         // be queried via the /api/flywheel/runs sidebar once it lands.
+        //
+        // FLYWHEEL-CHAIN-VISIBILITY (2026-05-22): also capture agentName +
+        // startedAt + annotatorSessionId so the dispatcher-hook registration
+        // can carry full context for the eventual chain-completed WS
+        // broadcast. startedAt = clock.instant() right here = opt-loop
+        // wall-clock zero, used by the orchestrator to bound the
+        // countByAgentIdAndCreatedAtAfter query window.
         final Long capturedAgentId = agentId;
         final int capturedMax = max;
         final Long dispatcherAgentId = dispatcherAgent.getId();
+        final String capturedAgentName = targetAgent.getName();
+        final String capturedAnnotatorSessionId = annotatorSession.getId();
+        final Instant capturedStartedAt = clock.instant();
         chainOrchestrator.registerAnnotatorEndHook(
                 annotatorSession.getId(),
-                () -> fireDispatcher(capturedAgentId, dispatcherAgentId, capturedMax));
+                () -> fireDispatcher(capturedAgentId, dispatcherAgentId, capturedMax,
+                        capturedAgentName, capturedAnnotatorSessionId, capturedStartedAt));
 
         // 202 ACCEPTED — annotator is queued; dispatcher will fire after it
         // completes. The note field is the user-facing latency hint matching
@@ -258,8 +274,20 @@ public class FlywheelController {
      * containing the {@code agentId=N} keyword. Package-private so the
      * controller test can verify the chained call without going through the
      * orchestrator's polling tick.
+     *
+     * <p>FLYWHEEL-CHAIN-VISIBILITY (2026-05-22): after firing chatAsync, also
+     * register a dispatcher-hook with the orchestrator so the polling tick
+     * can detect dispatcher terminal status + emit the chain-completed WS
+     * broadcast. {@code annotatorStatus} is always {@code "idle"} on this
+     * path — the annotator-end-hook only fires when the annotator session is
+     * terminal, and reaching {@code error} would still execute the hook (the
+     * orchestrator does not distinguish idle vs error when running the
+     * Runnable). We default to "idle" here as the dominant case; a future
+     * refactor that wants to surface annotator-error chains differently can
+     * thread the status through the Runnable contract.
      */
-    void fireDispatcher(Long agentId, Long dispatcherAgentId, int max) {
+    void fireDispatcher(Long agentId, Long dispatcherAgentId, int max,
+                        String agentName, String annotatorSessionId, Instant startedAt) {
         SessionEntity dispatcherSession = sessionService.createSession(SYSTEM_USER_ID, dispatcherAgentId);
         String dispatcherPrompt = String.format(
                 "请只 dispatch agentId=%d 的 pattern (max=%d)。",
@@ -270,6 +298,56 @@ public class FlywheelController {
         // by agent name.
         log.info("[FlywheelChain] dispatcher session created: sessionId={} targetAgentId={} dispatcherAgentId={} max={}",
                 dispatcherSession.getId(), agentId, dispatcherAgentId, max);
+
+        // FLYWHEEL-CHAIN-VISIBILITY: register the dispatcher half of the
+        // chain so the orchestrator polling tick can detect dispatcher
+        // terminal + broadcast chain-completed.
+        try {
+            chainOrchestrator.registerDispatcherHook(
+                    dispatcherSession.getId(),
+                    agentId,
+                    agentName,
+                    annotatorSessionId,
+                    startedAt,
+                    "idle");  // annotator was terminal-idle by the time this hook fired
+        } catch (RuntimeException e) {
+            // Don't propagate — the chatAsync already fired, the dispatcher
+            // session is real; we just lose the chain-completed broadcast for
+            // this click. Log so we can spot a recurring drift in dogfood.
+            log.warn("[FlywheelChain] failed to register dispatcher hook: dispatcherSessionId={} agentId={}: {}",
+                    dispatcherSession.getId(), agentId, e.getMessage());
+        }
+    }
+
+    /**
+     * FLYWHEEL-CHAIN-VISIBILITY (2026-05-22): in-memory snapshot of recent
+     * chain runs (annotator + dispatcher pairs) — the dashboard's per-agent
+     * progress panel reads this on mount to backfill state without waiting
+     * for the next WS event. Empty list when no chain has completed yet
+     * after the last server restart (the cache is process-local, by design).
+     *
+     * <p>Query params:
+     * <ul>
+     *   <li>{@code agentId} — optional filter to a single target agent;
+     *       omitted = all agents.</li>
+     *   <li>{@code limit} — default 20, clamped to [1, 100] (matches
+     *       {@link FlywheelChainOrchestrator#MAX_COMPLETED}).</li>
+     * </ul>
+     *
+     * <p>Returns a JSON array of {@link FlywheelChainOrchestrator.ChainRunResult}
+     * record components (Jackson auto-serializes record components by
+     * accessor name). In-flight runs (dispatcher session still running) have
+     * {@code dispatcherStatus=null} / {@code completedAt=null} so the FE can
+     * render an "in progress" pill; completed runs have both fields filled.
+     */
+    @GetMapping("/chain-runs")
+    public ResponseEntity<?> listChainRuns(
+            @RequestParam(value = "agentId", required = false) Long agentId,
+            @RequestParam(value = "limit", required = false) Integer limit) {
+        int safeLimit = (limit == null || limit < 1) ? DEFAULT_LIMIT : Math.min(limit, MAX_LIMIT);
+        List<FlywheelChainOrchestrator.ChainRunResult> runs =
+                chainOrchestrator.getChainRuns(agentId, safeLimit);
+        return ResponseEntity.ok(runs);
     }
 
     private static int clampWindowHours(Integer raw) {

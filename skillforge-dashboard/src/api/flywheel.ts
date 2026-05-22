@@ -236,3 +236,69 @@ export const runFlywheelLoopForAgent = (
   agentId: number,
   params?: RunFlywheelLoopParams,
 ) => api.post<RunFlywheelLoopResponse>(`/flywheel/agents/${agentId}/run-loop`, null, { params });
+
+// ───────────────── /api/flywheel/chain-runs (chain visibility) ─────────────
+//
+// FLYWHEEL-CHAIN-VISIBILITY — list recent annotator → dispatcher chain runs.
+// Each row represents one on-demand "Run Opt Loop" invocation and surfaces
+// the per-step state (annotator status / dispatcher status / opt event count)
+// so operators can see the chain progress without polling sessions.
+//
+// BE returns a bare array of `ChainRunResult` (sorted startedAt DESC, BE
+// applies its own default limit when `limit` is absent). FE handles 404 /
+// empty response by rendering "no recent runs" — never throws.
+
+/**
+ * One annotator → dispatcher chain run. Field names mirror BE Jackson default
+ * camelCase serialization; keep in lock-step with the BE record (FE-BE
+ * contract footgun #6 per `.claude/rules/java.md`).
+ *
+ * Status mapping:
+ *   annotatorStatus: `running` while annotator session live; `idle` once
+ *     completed; `error` if the session ended in error state.
+ *   dispatcherStatus: `not_fired` when annotator produced no eligible patterns
+ *     (chain stops, dispatcher never spawned); `pending` when annotator still
+ *     running so dispatcher hasn't been triggered yet; `running` / `idle` /
+ *     `error` mirror its session state once spawned. `null` covers the
+ *     pre-dispatch window where BE has emitted the row but not yet classified
+ *     the dispatcher state — FE treats `null` the same as `pending`.
+ *
+ * `optEventCount`: -1 = unknown (chain still running / dispatcher session
+ * not yet inspected); 0 = no OptimizationEvents produced; N>0 = N events.
+ */
+export interface ChainRunResult {
+  agentId: number;
+  agentName: string;
+  annotatorSessionId: string;
+  dispatcherSessionId: string | null;
+  annotatorStatus: 'idle' | 'error' | 'running';
+  dispatcherStatus:
+    | 'idle'
+    | 'error'
+    | 'running'
+    | 'not_fired'
+    | 'pending'
+    | null;
+  optEventCount: number;
+  /** ISO-8601. */
+  startedAt: string;
+  /** ISO-8601; null while chain still running. */
+  completedAt: string | null;
+}
+
+export interface ListChainRunsParams {
+  /** Filter by agent id (optional; absent = all agents). */
+  agentId?: number;
+  /** Cap the number of rows returned (BE default applies when absent). */
+  limit?: number;
+}
+
+/**
+ * `GET /api/flywheel/chain-runs` — returns up to `limit` recent
+ * annotator → dispatcher chain runs sorted by `startedAt` DESC.
+ *
+ * FE callers tolerate 404 / 5xx by rendering "no recent runs" — see
+ * `FlywheelChainRuns` for the consumer.
+ */
+export const getFlywheelChainRuns = (params?: ListChainRunsParams) =>
+  api.get<ChainRunResult[]>('/flywheel/chain-runs', { params });

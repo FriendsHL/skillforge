@@ -228,6 +228,26 @@ public interface OptimizationEventRepository extends JpaRepository<OptimizationE
     long countByCreatedAtAfter(Instant since);
 
     /**
+     * FLYWHEEL-CHAIN-VISIBILITY (2026-05-22): used by
+     * {@code FlywheelChainOrchestrator.completeChainRun} to compute how many
+     * new {@link OptimizationEventEntity} rows landed for {@code agentId}
+     * since the per-agent opt loop started. The returned count drives the
+     * dashboard's "X new opt events" badge on the chain-completed WS event
+     * (and the dispatcher may produce 0 if no eligible pattern existed).
+     *
+     * <p>Backed by {@code idx_optimization_event_agent (agent_id, stage)};
+     * {@code created_at} is filtered post-index in memory which is acceptable
+     * at V3 dogfood volume (a few hundred rows max per agent).
+     *
+     * <p>Returns {@code long} to match the Spring Data JPA derived-query
+     * convention (mirrors {@link #countByCreatedAtAfter}). The orchestrator
+     * narrows to {@code int} (saturating) before stashing into
+     * {@code ChainRunResult.optEventCount} — at V3 dogfood volume this is
+     * always safely under {@link Integer#MAX_VALUE}.
+     */
+    long countByAgentIdAndCreatedAtAfter(Long agentId, Instant createdAt);
+
+    /**
      * FLYWHEEL-PER-RUN — recent attribution runs for the per-run sidebar
      * (no agent filter, hide terminal stages).
      *

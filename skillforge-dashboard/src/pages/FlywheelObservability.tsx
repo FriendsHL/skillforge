@@ -1,16 +1,28 @@
 import React from 'react';
 import FlywheelFlowchart from '../components/flywheel/FlywheelFlowchart';
+import FlywheelChainRuns from '../components/flywheel/FlywheelChainRuns';
 
 /**
- * FLYWHEEL-FLOWCHART — page wrapper for the Insights > Flywheel tab.
+ * FLYWHEEL-FLOWCHART + FLYWHEEL-CHAIN-VISIBILITY — page wrapper for the
+ * Insights > Flywheel tab.
  *
- * Thin shell so the chart can be embedded both as an Insights tab (current
- * usage) and as a standalone route in the future. Replaces the original
- * card-style FlywheelObservabilityPanel (deleted in the same slice) with a
- * workflow DAG view per FLYWHEEL-FLOWCHART requirements.
+ * Layout:
+ *   1. <FlywheelChainRuns /> — top section, surfaces recent annotator →
+ *      dispatcher chain runs from on-demand "Run Opt Loop" invocations
+ *      (gap B). Polls every 5s so running chains visibly progress.
+ *   2. <FlywheelFlowchart /> — the existing DAG view (aggregate or per-run).
+ *
+ * Chain Runs panel sits above the flowchart because operators triggering
+ * the on-demand loop care first about "did my run produce results"; the
+ * DAG below is the broader observability surface.
  */
 const FlywheelObservability: React.FC = () => {
-  return <FlywheelFlowchart />;
+  return (
+    <div className="fw-observability-page">
+      <FlywheelChainRuns />
+      <FlywheelFlowchart />
+    </div>
+  );
 };
 
 export default FlywheelObservability;

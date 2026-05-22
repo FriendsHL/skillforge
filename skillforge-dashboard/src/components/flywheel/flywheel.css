@@ -1398,3 +1398,245 @@ button.fw-step,
   font-weight: 700;
   letter-spacing: 0.02em;
 }
+
+/* Observability page wrapper — stacks ChainRuns + FlywheelFlowchart. */
+.fw-observability-page {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  max-width: 1400px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 16px 32px 0;
+}
+
+.fw-observability-page > .fw-page {
+  padding-top: 0;
+  margin: 0;
+}
+
+/* ─────────────────────── Chain Runs Panel ─────────────────────── */
+/*
+ * FLYWHEEL-CHAIN-VISIBILITY — recent annotator → dispatcher chain runs.
+ * Shares design tokens with .fw-runs-* (per-run sidebar) for visual
+ * consistency; uses pill-shaped step badges to telegraph the 3-step shape.
+ */
+
+.fw-chainruns {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border: 1px solid var(--border-subtle, #e2ded3);
+  border-radius: 10px;
+  background: var(--bg-surface, #fff);
+  box-shadow: var(--shadow-card, 0 1px 3px rgba(0, 0, 0, 0.06));
+  padding: 12px 14px 10px;
+}
+
+.fw-chainruns-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.fw-chainruns-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg-1, #1a1815);
+  margin: 0;
+  letter-spacing: -0.005em;
+}
+
+.fw-chainruns-sub {
+  font-size: 12px;
+  color: var(--fg-3, #7a7770);
+}
+
+.fw-chainruns-filter-chip {
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent-primary, #d9633a);
+  padding: 2px 8px;
+  border: 1px solid var(--accent-primary, #d9633a);
+  border-radius: 10px;
+  background: rgba(217, 99, 58, 0.08);
+}
+
+.fw-chainruns-count {
+  margin-left: auto;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  color: var(--fg-4, #b8b3a8);
+}
+
+.fw-chainruns-empty {
+  padding: 14px 6px 8px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--fg-4, #b8b3a8);
+  font-style: italic;
+}
+
+.fw-chainruns-list {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.fw-chainruns-list::-webkit-scrollbar {
+  width: 8px;
+}
+
+.fw-chainruns-list::-webkit-scrollbar-thumb {
+  background: var(--border-medium, #cfcbc0);
+  border-radius: 4px;
+}
+
+.fw-chainruns-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle, #e2ded3);
+  border-left: 3px solid var(--fg-4, #b8b3a8);
+  border-radius: 6px;
+  background: var(--bg-surface, #fff);
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.fw-chainruns-row:hover {
+  background: var(--bg-hover, #eceae3);
+}
+
+.fw-chainruns-row--running {
+  border-left-color: var(--accent-primary, #d9633a);
+}
+
+.fw-chainruns-row-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.fw-chainruns-row-agent {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-1, #1a1815);
+  flex: 0 1 auto;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fw-chainruns-row-age {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  color: var(--fg-4, #b8b3a8);
+}
+
+.fw-chainruns-row-status {
+  margin-left: auto;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-weight: 600;
+}
+
+.fw-chainruns-row-status--running {
+  color: var(--accent-primary, #d9633a);
+  background: rgba(217, 99, 58, 0.1);
+}
+
+.fw-chainruns-row-status--completed {
+  color: var(--fg-3, #7a7770);
+  background: var(--bg-recessed, #f7f4ec);
+}
+
+.fw-chainruns-row-steps {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.fw-chainruns-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 500;
+  background: var(--bg-recessed, #f7f4ec);
+  border: 1px solid var(--border-subtle, #e2ded3);
+  color: var(--fg-2, #4a4842);
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+
+.fw-chainruns-step--ok {
+  color: var(--color-success, #5c8a4a);
+  border-color: rgba(92, 138, 74, 0.4);
+  background: rgba(92, 138, 74, 0.08);
+}
+
+.fw-chainruns-step--error {
+  color: var(--color-error, #b8412f);
+  border-color: rgba(184, 65, 47, 0.4);
+  background: rgba(184, 65, 47, 0.08);
+}
+
+.fw-chainruns-step--running {
+  color: var(--accent-primary, #d9633a);
+  border-color: rgba(217, 99, 58, 0.4);
+  background: rgba(217, 99, 58, 0.08);
+}
+
+.fw-chainruns-step--skipped {
+  color: var(--fg-4, #b8b3a8);
+  border-style: dashed;
+}
+
+.fw-chainruns-step--pending {
+  color: var(--fg-3, #7a7770);
+  background: var(--bg-recessed, #f7f4ec);
+}
+
+.fw-chainruns-step-mark {
+  font-size: 12px;
+  line-height: 1;
+}
+
+.fw-chainruns-step-label {
+  line-height: 1.2;
+}
+
+.fw-chainruns-step-link {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  line-height: 1.2;
+}
+
+.fw-chainruns-step-link:hover {
+  text-decoration-thickness: 2px;
+}
+
+.fw-chainruns-row-arrow {
+  color: var(--fg-4, #b8b3a8);
+  font-size: 11px;
+  line-height: 1;
+}

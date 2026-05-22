@@ -485,7 +485,7 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
             (annotator: {d.annotatorSessionId.slice(0, 8)}…).{' '}
             Dispatcher fires after ~30s-2min.{' '}
             <a
-              href={`/insights?tab=optimization&agentId=${d.agentId}`}
+              href={`/insights/patterns?tab=optimization&agentId=${d.agentId}`}
               target="_blank"
               rel="noopener noreferrer"
               style={{ color: 'var(--accent)' }}

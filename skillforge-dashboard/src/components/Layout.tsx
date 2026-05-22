@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { Badge } from 'antd';
+import { Badge, notification } from 'antd';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTheme } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -93,10 +93,15 @@ const AppLayoutInner: React.FC = () => {
           error?: string;
           failureReason?: string;
           agentId?: number | string;
+          agentName?: string;
           abRunId?: string;
           status?: string;
           promoted?: boolean;
           deltaPassRate?: number;
+          // FLYWHEEL-CHAIN-VISIBILITY gap A — `flywheel_chain_completed` payload
+          // fields (annotator → dispatcher chain finished).
+          optEventCount?: number;
+          hasResults?: boolean;
         };
         if (msg.type === 'skill_draft_extracted') {
           queryClient.invalidateQueries({ queryKey: ['skill-drafts'] });
@@ -156,6 +161,45 @@ const AppLayoutInner: React.FC = () => {
               relatedId: agentKey ?? undefined,
             });
           }
+        } else if (msg.type === 'flywheel_chain_completed') {
+          // FLYWHEEL-CHAIN-VISIBILITY gap A — annotator → dispatcher chain
+          // finished (triggered by AgentDrawer "Run Opt Loop"). Surface a
+          // persistent notification so the operator sees the outcome even if
+          // they navigated away. Uses `notification.open` with duration=0 so
+          // the user must click × to dismiss; matches the spec from the BE
+          // payload + design.md "designed interaction states" requirement.
+          const agentName = msg.agentName ?? `agent ${msg.agentId ?? '?'}`;
+          const optEventCount = msg.optEventCount ?? 0;
+          const hasResults = msg.hasResults === true;
+          const resultText = hasResults
+            ? `${optEventCount} optimization event${optEventCount > 1 ? 's' : ''} generated`
+            : 'no eligible patterns found';
+          const linkAgentId =
+            msg.agentId !== undefined && msg.agentId !== null
+              ? String(msg.agentId)
+              : null;
+          notification.open({
+            message: `Opt Loop Complete — ${agentName}`,
+            description: (
+              <span>
+                {resultText}.{' '}
+                {hasResults && linkAgentId && (
+                  <a
+                    href={`/insights/patterns?tab=optimization&agentId=${linkAgentId}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    View events →
+                  </a>
+                )}
+              </span>
+            ),
+            duration: 0, // persistent — operator dismisses with × click
+            placement: 'topRight',
+            key: `flywheel-chain-${msg.agentId ?? 'unknown'}-${Date.now()}`,
+          });
+          // Surface as a task in the TaskPanel too (mirrors ab_skill_run_completed).
+          // BE already includes counts in the payload; we don't need to refetch.
         } else if (msg.type === 'ab_skill_run_completed') {
           const abId = msg.abRunId ?? null;
           const isFailed = msg.status === 'FAILED';

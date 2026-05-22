@@ -17,6 +17,9 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.servlet.config.annotation.EnableWebMvc;
 
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.Optional;
 
@@ -53,8 +56,12 @@ class FlywheelControllerTest {
     private SessionService sessionService;
     private ChatService chatService;
     private FlywheelChainOrchestrator chainOrchestrator;
+    private Clock clock;
     private FlywheelController controller;
     private MockMvc mvc;
+
+    /** Fixed instant for clock injection — matches the orchestrator test for stability. */
+    private static final Instant FIXED_NOW = Instant.parse("2026-05-22T10:00:00Z");
 
     @BeforeEach
     void setUp() {
@@ -63,6 +70,9 @@ class FlywheelControllerTest {
         sessionService = mock(SessionService.class);
         chatService = mock(ChatService.class);
         chainOrchestrator = mock(FlywheelChainOrchestrator.class);
+        // Fixed-instant clock so the runLoop captured startedAt is
+        // deterministic — used by the chain-hook registration assertion.
+        clock = Clock.fixed(FIXED_NOW, ZoneId.of("UTC"));
         // r2 W3: mirror Spring autoconfigured ObjectMapper (findAndRegisterModules
         // discovers JavaTimeModule via SPI same way Spring Boot does).
         ObjectMapper objectMapper = new ObjectMapper()
@@ -70,7 +80,7 @@ class FlywheelControllerTest {
                 .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
 
         controller = new FlywheelController(runsService, agentRepository,
-                sessionService, chatService, chainOrchestrator);
+                sessionService, chatService, chainOrchestrator, clock);
         mvc = MockMvcBuilders.standaloneSetup(controller)
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(objectMapper))
                 .build();
@@ -279,16 +289,75 @@ class FlywheelControllerTest {
     }
 
     @Test
-    @DisplayName("fireDispatcher (hook callback): fires dispatcher chatAsync with agentId=N scope keyword")
+    @DisplayName("fireDispatcher (hook callback): fires dispatcher chatAsync with agentId=N scope keyword + registers dispatcher hook")
     void fireDispatcher_unitInvoke_firesDispatcherWithScopedPrompt() {
         SessionEntity dispatcherSession = sessionEntity("sess-disp");
         when(sessionService.createSession(eq(0L), eq(101L))).thenReturn(dispatcherSession);
 
-        controller.fireDispatcher(7L, 101L, 10);
+        Instant startedAt = FIXED_NOW;
+        controller.fireDispatcher(7L, 101L, 10, "my-agent", "sess-annot", startedAt);
 
         ArgumentCaptor<String> prompt = ArgumentCaptor.forClass(String.class);
         verify(chatService).chatAsync(eq("sess-disp"), prompt.capture(), eq(0L));
         assertThat(prompt.getValue()).contains("agentId=7").contains("max=10");
+
+        // FLYWHEEL-CHAIN-VISIBILITY: dispatcher hook is registered with full
+        // context for the chain-completed broadcast.
+        verify(chainOrchestrator).registerDispatcherHook(
+                eq("sess-disp"),
+                eq(7L),
+                eq("my-agent"),
+                eq("sess-annot"),
+                eq(startedAt),
+                eq("idle"));
+    }
+
+    // ─── FLYWHEEL-CHAIN-VISIBILITY (2026-05-22): chain-runs endpoint ──────
+
+    @Test
+    @DisplayName("GET /api/flywheel/chain-runs → 200 with empty array when no chains")
+    void chainRuns_endpoint_returns200WhenEmpty() throws Exception {
+        when(chainOrchestrator.getChainRuns(any(), anyInt())).thenReturn(List.of());
+
+        mvc.perform(get("/api/flywheel/chain-runs"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$").isArray())
+                .andExpect(jsonPath("$.length()").value(0));
+
+        verify(chainOrchestrator).getChainRuns(eq(null), eq(20));
+    }
+
+    @Test
+    @DisplayName("GET /api/flywheel/chain-runs?agentId=7&limit=5 → 200, params passed through")
+    void chainRuns_endpoint_paramsPassedThrough() throws Exception {
+        FlywheelChainOrchestrator.ChainRunResult result = new FlywheelChainOrchestrator.ChainRunResult(
+                7L, "my-agent", "ann-A", "disp-A",
+                Instant.parse("2026-05-22T10:00:00Z"),
+                Instant.parse("2026-05-22T10:01:00Z"),
+                "idle", "idle", 3);
+        when(chainOrchestrator.getChainRuns(eq(7L), eq(5))).thenReturn(List.of(result));
+
+        mvc.perform(get("/api/flywheel/chain-runs")
+                        .param("agentId", "7")
+                        .param("limit", "5"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].agentId").value(7))
+                .andExpect(jsonPath("$[0].agentName").value("my-agent"))
+                .andExpect(jsonPath("$[0].dispatcherStatus").value("idle"))
+                .andExpect(jsonPath("$[0].optEventCount").value(3));
+
+        verify(chainOrchestrator).getChainRuns(eq(7L), eq(5));
+    }
+
+    @Test
+    @DisplayName("GET /api/flywheel/chain-runs?limit=999 → clamped to 100")
+    void chainRuns_endpoint_limitClampedToMax() throws Exception {
+        when(chainOrchestrator.getChainRuns(any(), anyInt())).thenReturn(List.of());
+
+        mvc.perform(get("/api/flywheel/chain-runs").param("limit", "999"))
+                .andExpect(status().isOk());
+
+        verify(chainOrchestrator).getChainRuns(eq(null), eq(100));
     }
 
     // ─── helpers ──────────────────────────────────────────────────────────

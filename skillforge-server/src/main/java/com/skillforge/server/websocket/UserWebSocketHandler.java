@@ -89,6 +89,23 @@ public class UserWebSocketHandler extends TextWebSocketHandler {
         return java.util.Set.copyOf(sessions.keySet());
     }
 
+    /**
+     * FLYWHEEL-CHAIN-VISIBILITY (2026-05-22): broadcast payload to every
+     * connected user. Single-tenant dogfood pattern — there is no
+     * subscription concept yet, so every connected operator is treated as a
+     * recipient of "global" events like flywheel chain completion. Iterates
+     * via {@link #connectedUserIds()} (a {@link Set#copyOf} snapshot) so the
+     * loop is safe even if a new connection arrives / closes during the
+     * fan-out. Each per-user {@link #broadcast} call is independently
+     * non-blocking and error-isolated.
+     */
+    public void broadcastAll(Map<String, Object> payload) {
+        if (payload == null) return;
+        for (Long userId : connectedUserIds()) {
+            broadcast(userId, payload);
+        }
+    }
+
     /** 把任意 payload 广播给某个 userId 的所有连接。线程安全。 */
     public void broadcast(Long userId, Map<String, Object> payload) {
         if (userId == null) return;
