@@ -95,15 +95,14 @@ function prettyJson(raw: string | null): string | null {
 }
 
 /**
- * OPT-REPORT-V1.2 — severity → background/border color tokens. Tuned to
- * sit on `var(--bg-elevated)` and stay readable in the dashboard's dark
- * theme. Aligned with the brief's color spec (high=red / medium=orange /
- * low=blue) so it matches the OptimizationEvents stage chips at a glance.
+ * OPT-REPORT-V1.2 — severity → background/border color tokens.
+ * `fg` uses CSS custom properties defined in index.css with light/dark variants
+ * so severity badges stay readable across both themes.
  */
 const SEVERITY_COLORS: Record<OptReportIssueSeverity, { bg: string; fg: string; border: string }> = {
-  high:   { bg: 'rgba(239, 68, 68, 0.12)', fg: '#fca5a5', border: 'rgba(239, 68, 68, 0.45)' },
-  medium: { bg: 'rgba(245, 158, 11, 0.12)', fg: '#fcd34d', border: 'rgba(245, 158, 11, 0.45)' },
-  low:    { bg: 'rgba(59, 130, 246, 0.12)', fg: '#93c5fd', border: 'rgba(59, 130, 246, 0.45)' },
+  high:   { bg: 'rgba(239, 68, 68, 0.12)', fg: 'var(--sev-high-fg)', border: 'rgba(239, 68, 68, 0.45)' },
+  medium: { bg: 'rgba(245, 158, 11, 0.12)', fg: 'var(--sev-medium-fg)', border: 'rgba(245, 158, 11, 0.45)' },
+  low:    { bg: 'rgba(59, 130, 246, 0.12)', fg: 'var(--sev-low-fg)', border: 'rgba(59, 130, 246, 0.45)' },
 };
 
 const SURFACE_LABELS: Record<OptReportSuspectSurface, string> = {
@@ -226,8 +225,8 @@ const IssueCard: React.FC<IssueCardProps> = ({ reportId, issue }) => {
         onClick={() => mutation.mutate()}
         data-testid={`issue-convert-${issue.id}`}
         style={{
-          background: 'var(--accent, #6366f1)',
-          borderColor: 'var(--accent, #6366f1)',
+          background: 'var(--accent, var(--accent-primary, #d9633a))',
+          borderColor: 'var(--accent, var(--accent-primary, #d9633a))',
         }}
       >
         Convert to OptEvent
@@ -241,8 +240,8 @@ const IssueCard: React.FC<IssueCardProps> = ({ reportId, issue }) => {
     <div
       data-testid={`issue-card-${issue.id}`}
       style={{
-        background: 'var(--bg-elevated, #16161a)',
-        border: '1px solid var(--border-subtle, #2a2a31)',
+        background: 'var(--bg-elevated, var(--bg-surface, #ffffff))',
+        border: '1px solid var(--border-subtle, var(--border-1, #e0dbcf))',
         borderRadius: 8,
         padding: 16,
         display: 'flex',
@@ -311,10 +310,10 @@ const IssueCard: React.FC<IssueCardProps> = ({ reportId, issue }) => {
                     fontFamily: 'var(--font-mono, ui-monospace, Menlo, monospace)',
                     fontSize: 11,
                     color: 'var(--fg-3)',
-                    background: 'var(--bg-primary, #0f0f10)',
+                    background: 'var(--bg-primary, var(--bg-base, #fbfaf7))',
                     padding: '1px 6px',
                     borderRadius: 3,
-                    border: '1px solid var(--border-subtle, #2a2a31)',
+                    border: '1px solid var(--border-subtle, var(--border-1, #e0dbcf))',
                     textDecoration: 'none',
                   }}
                 >
@@ -396,7 +395,7 @@ const IssueCard: React.FC<IssueCardProps> = ({ reportId, issue }) => {
           justifyContent: 'space-between',
           flexWrap: 'wrap',
           paddingTop: 8,
-          borderTop: '1px solid var(--border-subtle, #2a2a31)',
+          borderTop: '1px solid var(--border-subtle, var(--border-1, #e0dbcf))',
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 160 }}>
@@ -406,7 +405,7 @@ const IssueCard: React.FC<IssueCardProps> = ({ reportId, issue }) => {
               flex: 1,
               maxWidth: 140,
               height: 6,
-              background: 'var(--bg-primary, #0f0f10)',
+              background: 'var(--bg-primary, var(--bg-base, #fbfaf7))',
               borderRadius: 3,
               overflow: 'hidden',
             }}
@@ -415,7 +414,7 @@ const IssueCard: React.FC<IssueCardProps> = ({ reportId, issue }) => {
               style={{
                 width: `${confidencePct}%`,
                 height: '100%',
-                background: 'var(--accent, #6366f1)',
+                background: 'var(--accent, var(--accent-primary, #d9633a))',
                 transition: 'width 200ms ease',
               }}
             />
@@ -453,7 +452,7 @@ const IssuesPanel: React.FC<IssuesPanelProps> = ({ reportId, issues }) => {
       <div
         style={{
           paddingTop: 12,
-          borderTop: '1px solid var(--border-subtle, #2a2a31)',
+          borderTop: '1px solid var(--border-subtle, var(--border-1, #e0dbcf))',
         }}
         data-testid="opt-report-issues-panel-empty"
       >
@@ -468,7 +467,7 @@ const IssuesPanel: React.FC<IssuesPanelProps> = ({ reportId, issues }) => {
         flexDirection: 'column',
         gap: 12,
         paddingTop: 12,
-        borderTop: '1px solid var(--border-subtle, #2a2a31)',
+        borderTop: '1px solid var(--border-subtle, var(--border-1, #e0dbcf))',
       }}
       data-testid="opt-report-issues-panel"
     >
@@ -574,8 +573,8 @@ const ReportListPanel: React.FC<ReportListPanelProps> = ({
               textAlign: 'left',
               padding: '10px 12px',
               borderRadius: 6,
-              border: `1px solid ${active ? 'var(--accent, #6366f1)' : 'var(--border-subtle, #2a2a31)'}`,
-              background: active ? 'var(--accent-soft, rgba(99,102,241,0.08))' : 'var(--bg-primary, #0f0f10)',
+              border: `1px solid ${active ? 'var(--accent, #6366f1)' : 'var(--border-subtle, var(--border-1, #e0dbcf))'}`,
+              background: active ? 'var(--accent-soft, rgba(99,102,241,0.08))' : 'var(--bg-primary, var(--bg-base, #fbfaf7))',
               color: 'var(--fg-1)',
               cursor: 'pointer',
               display: 'flex',
@@ -676,7 +675,7 @@ const ReportDetailPanel: React.FC<ReportDetailPanelProps> = ({ reportId, agentNa
           display: 'flex',
           flexDirection: 'column',
           gap: 6,
-          borderBottom: '1px solid var(--border-subtle, #2a2a31)',
+          borderBottom: '1px solid var(--border-subtle, var(--border-1, #e0dbcf))',
           paddingBottom: 12,
         }}
       >
@@ -777,8 +776,8 @@ const ReportDetailPanel: React.FC<ReportDetailPanelProps> = ({ reportId, agentNa
                   style={{
                     margin: 0,
                     padding: 12,
-                    background: 'var(--bg-code, #1a1a1e)',
-                    color: 'var(--text-on-accent, #e7e7ea)',
+                    background: 'var(--bg-code, #1c1c1e)',
+                    color: 'var(--text-on-accent, #ffffff)',
                     fontFamily: 'var(--font-mono, ui-monospace, Menlo, monospace)',
                     fontSize: 12,
                     borderRadius: 6,
@@ -947,16 +946,16 @@ const OptReportsPage: React.FC = () => {
           display: 'grid',
           gridTemplateColumns: 'minmax(280px, 360px) 1fr',
           gap: 16,
-          border: '1px solid var(--border-subtle, #2a2a31)',
+          border: '1px solid var(--border-subtle, var(--border-1, #e0dbcf))',
           borderRadius: 8,
           overflow: 'hidden',
-          background: 'var(--bg-primary, #0f0f10)',
+          background: 'var(--bg-primary, var(--bg-base, #fbfaf7))',
         }}
       >
         <div
           style={{
             overflow: 'auto',
-            borderRight: '1px solid var(--border-subtle, #2a2a31)',
+            borderRight: '1px solid var(--border-subtle, var(--border-1, #e0dbcf))',
             minHeight: 0,
           }}
         >

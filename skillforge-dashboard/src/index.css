@@ -1680,6 +1680,11 @@ body {
   --op-exec: #d4960a;
   --radius: 10px;
   --density: 1;
+
+  /* Severity badge tokens (light) */
+  --sev-high-fg: #b91c1c;
+  --sev-medium-fg: #92400e;
+  --sev-low-fg: #1d4ed8;
 }
 
 html[data-theme="dark"] {
@@ -1694,7 +1699,50 @@ html[data-theme="dark"] {
   --border-1: #2b2823;
   --border-2: #3a3731;
   --border-3: #4a463e;
+
+  /* Severity badge tokens (dark) */
+  --sev-high-fg: #fca5a5;
+  --sev-medium-fg: #fcd34d;
+  --sev-low-fg: #93c5fd;
 }
+
+/* Markdown dark theme overrides */
+html[data-theme="dark"] .markdown-body {
+  color: var(--fg-2);
+}
+html[data-theme="dark"] .markdown-body h1,
+html[data-theme="dark"] .markdown-body h2,
+html[data-theme="dark"] .markdown-body h3,
+html[data-theme="dark"] .markdown-body h4,
+html[data-theme="dark"] .markdown-body h5,
+html[data-theme="dark"] .markdown-body h6 {
+  color: var(--fg-1);
+  border-color: var(--border-2);
+}
+html[data-theme="dark"] .markdown-body a { color: var(--accent, #d9633a); }
+html[data-theme="dark"] .markdown-body code {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--fg-2);
+}
+html[data-theme="dark"] .markdown-body pre {
+  background: var(--bg-code);
+  border-color: var(--border-1);
+}
+html[data-theme="dark"] .markdown-body pre code {
+  background: transparent;
+  color: inherit;
+}
+html[data-theme="dark"] .markdown-body blockquote {
+  border-left-color: var(--border-2);
+  color: var(--fg-3);
+}
+html[data-theme="dark"] .markdown-body table tr { border-color: var(--border-1); }
+html[data-theme="dark"] .markdown-body table td,
+html[data-theme="dark"] .markdown-body table th {
+  border-color: var(--border-1);
+}
+html[data-theme="dark"] .markdown-body hr { border-color: var(--border-1); }
+html[data-theme="dark"] .markdown-body .task-list-item input { accent-color: var(--accent, #d9633a); }
 
 html[data-density="compact"] { --density: 0.82; }
 html[data-density="cozy"] { --density: 0.92; }

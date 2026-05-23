@@ -3,8 +3,10 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { CopyOutlined, CheckOutlined } from '@ant-design/icons';
 import 'github-markdown-css/github-markdown-light.css';
+import { useTheme } from '../contexts/ThemeContext';
 
 interface MarkdownRendererProps {
   content: string;
@@ -12,6 +14,7 @@ interface MarkdownRendererProps {
 
 const CopyButton: React.FC<{ text: string }> = ({ text }) => {
   const [copied, setCopied] = useState(false);
+  const { theme } = useTheme();
   const handleCopy = () => {
     navigator.clipboard.writeText(text).then(() => {
       setCopied(true);
@@ -25,8 +28,8 @@ const CopyButton: React.FC<{ text: string }> = ({ text }) => {
         position: 'absolute',
         top: 8,
         right: 8,
-        background: 'rgba(255,255,255,0.15)',
-        border: '1px solid rgba(255,255,255,0.25)',
+        background: theme === 'dark' ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.06)',
+        border: `1px solid ${theme === 'dark' ? 'rgba(255,255,255,0.25)' : 'rgba(0,0,0,0.15)'}`,
         borderRadius: 4,
         color: 'var(--text-muted)',
         cursor: 'pointer',
@@ -44,6 +47,7 @@ const CopyButton: React.FC<{ text: string }> = ({ text }) => {
 };
 
 const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content }) => {
+  const { theme } = useTheme();
   return (
     <div className="markdown-body" style={{ fontSize: 14, background: 'transparent' }}>
       <ReactMarkdown
@@ -76,7 +80,7 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content }) => {
                   </div>
                   <CopyButton text={codeStr} />
                   <SyntaxHighlighter
-                    style={oneDark as any}
+                    style={(theme === 'dark' ? oneDark : oneLight) as any}
                     language={match[1]}
                     PreTag="div"
                     customStyle={{
