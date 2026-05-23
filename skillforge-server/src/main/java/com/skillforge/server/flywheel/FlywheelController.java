@@ -52,7 +52,7 @@ public class FlywheelController {
      * FLYWHEEL-PER-AGENT-RUN-NOW (2026-05-21) — defaults / clamps for the
      * on-demand per-agent loop trigger.
      */
-    static final int DEFAULT_WINDOW_HOURS = 24;
+    static final int DEFAULT_WINDOW_HOURS = 168;  // 7d — dogfood data稀疏，宽窗口扫到更多 session
     static final int MIN_WINDOW_HOURS = 1;
     static final int MAX_WINDOW_HOURS = 168;  // 7d defensive ceiling, matches DetectSignalAnnotationsTool.MAX_WINDOW_HOURS
     static final int DEFAULT_MAX = 10;

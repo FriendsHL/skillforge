@@ -194,14 +194,14 @@ class FlywheelControllerTest {
                 .andExpect(jsonPath("$.agentId").value(7))
                 .andExpect(jsonPath("$.agentName").value("my-agent"))
                 .andExpect(jsonPath("$.annotatorSessionId").value("sess-annot"))
-                .andExpect(jsonPath("$.windowHours").value(24))
+                .andExpect(jsonPath("$.windowHours").value(168))
                 .andExpect(jsonPath("$.max").value(10))
                 .andExpect(jsonPath("$.status").value("triggered"));
 
         // STEP 1: annotator chatAsync fires with the scope keyword "agentId=7"
         ArgumentCaptor<String> prompt = ArgumentCaptor.forClass(String.class);
         verify(chatService).chatAsync(eq("sess-annot"), prompt.capture(), eq(0L));
-        assertThat(prompt.getValue()).contains("agentId=7").contains("24");
+        assertThat(prompt.getValue()).contains("agentId=7").contains("168");
 
         // STEP 2: chain hook is registered for the annotator session
         verify(chainOrchestrator).registerAnnotatorEndHook(eq("sess-annot"), any(Runnable.class));
