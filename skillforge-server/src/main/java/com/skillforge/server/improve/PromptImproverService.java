@@ -217,10 +217,60 @@ public class PromptImproverService extends AbstractAbEvalRunner<PromptVersionEnt
         // Verify the agent exists; load fully so future Phase 1.4 LLM call has
         // currentPrompt available (we don't use it in 1.3 placeholder write,
         // but the lookup proves the FK is valid up front).
-        AgentEntity agent = agentRepository.findById(Long.parseLong(agentId))
+        //
+        // PROMPT-IMPROVER-GENESIS-BASELINE fix (2026-05-23): switched
+        // findById → findByIdForUpdate (PESSIMISTIC_WRITE) so concurrent
+        // attribution-triggered approvals on the same agent serialize on the
+        // agent row. Without the lock two near-simultaneous callers could both
+        // observe "no prompt versions yet", both try to write v1 baseline, and
+        // the second hits the uq_agent_version UNIQUE constraint (mirrors the
+        // same lock pattern already in runAbTestAgainst).
+        AgentEntity agent = agentRepository.findByIdForUpdate(Long.parseLong(agentId))
                 .orElseThrow(() -> new RuntimeException("Agent not found: " + agentId));
 
-        int nextVersion = promptVersionRepository.findMaxVersionNumber(agentId).orElse(0) + 1;
+        // PROMPT-IMPROVER-GENESIS-BASELINE fix (2026-05-23): materialize v1
+        // baseline FIRST when the agent has no prompt versions yet. Old logic
+        // wrote candidate as v1 directly, so when the V6 listener later kicked
+        // runAbTestAgainst the baseline-genesis path tried to also claim v1 →
+        // uq_agent_version (agent_id, version_number) UNIQUE conflict. Correct
+        // shape: v1=active genesis_baseline (mirrors current agent.system_prompt)
+        // + v2=candidate (LLM-generated from attribution), so the downstream
+        // A/B has a real baseline already present without re-fighting the
+        // UNIQUE index. V106 backfills v1 baseline for any existing agent that
+        // still lacks one.
+        List<PromptVersionEntity> existingVersions =
+                promptVersionRepository.findByAgentIdOrderByVersionNumberDesc(agentId);
+        int nextVersion;
+        if (existingVersions.isEmpty()) {
+            String currentPrompt = agent.getSystemPrompt();
+            if (currentPrompt == null || currentPrompt.isBlank()) {
+                // Caller (AttributionApprovalService) catches RuntimeException
+                // and writes stage=candidate_failed. IllegalStateException is
+                // a RuntimeException, so the same audit path applies.
+                throw new IllegalStateException("Agent " + agentId
+                        + " has empty system_prompt — cannot materialize v1 baseline "
+                        + "for genesis attribution path");
+            }
+            PromptVersionEntity baseline = new PromptVersionEntity();
+            baseline.setId(UUID.randomUUID().toString());
+            baseline.setAgentId(agentId);
+            baseline.setVersionNumber(1);
+            baseline.setStatus("active");
+            baseline.setSource("genesis_baseline");
+            baseline.setContent(currentPrompt);
+            // createdAt left null — @CreatedDate auditing listener populates
+            // on save; explicit set would race the listener.
+            promptVersionRepository.save(baseline);
+            agent.setActivePromptVersionId(baseline.getId());
+            agentRepository.save(agent);
+            log.info("[V6-FIX] Materialized v1 genesis_baseline for agentId={} "
+                            + "(versionId={}, {} chars) before writing attribution candidate",
+                    agentId, baseline.getId(), currentPrompt.length());
+            nextVersion = 2;
+        } else {
+            nextVersion = existingVersions.get(0).getVersionNumber() + 1;
+        }
+
         PromptVersionEntity version = new PromptVersionEntity();
         version.setId(UUID.randomUUID().toString());
         version.setAgentId(agentId);

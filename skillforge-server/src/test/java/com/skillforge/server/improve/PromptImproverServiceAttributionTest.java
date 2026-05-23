@@ -21,13 +21,16 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -107,11 +110,27 @@ class PromptImproverServiceAttributionTest {
         return provider;
     }
 
+    /** Build a fake PromptVersionEntity used to seed "existing versions" mocks. */
+    private PromptVersionEntity versionRow(String agentId, int versionNumber, String status) {
+        PromptVersionEntity v = new PromptVersionEntity();
+        v.setId("v-" + agentId + "-" + versionNumber);
+        v.setAgentId(agentId);
+        v.setVersionNumber(versionNumber);
+        v.setStatus(status);
+        v.setContent("existing content " + versionNumber);
+        return v;
+    }
+
     @Test
     @DisplayName("happy path: persists candidate PromptVersionEntity with source='attribution', no PromptAbRun")
     void startImprovementFromAttribution_happyPath_persistsAttributionCandidate() {
-        when(agentRepository.findById(10L)).thenReturn(Optional.of(agent(10L)));
-        when(promptVersionRepository.findMaxVersionNumber("10")).thenReturn(Optional.of(3));
+        when(agentRepository.findByIdForUpdate(10L)).thenReturn(Optional.of(agent(10L)));
+        // Agent already has v1..v3 → genesis baseline path NOT entered, candidate is v4.
+        when(promptVersionRepository.findByAgentIdOrderByVersionNumberDesc("10"))
+                .thenReturn(List.of(
+                        versionRow("10", 3, "deprecated"),
+                        versionRow("10", 2, "deprecated"),
+                        versionRow("10", 1, "active")));
         stubLlmReturning("Be concise. Always validate Bash exit codes before proceeding.");
         ArgumentCaptor<PromptVersionEntity> captor = ArgumentCaptor.forClass(PromptVersionEntity.class);
         when(promptVersionRepository.save(captor.capture())).thenAnswer(inv -> inv.getArgument(0));
@@ -144,6 +163,10 @@ class PromptImproverServiceAttributionTest {
 
         // Critical: NO PromptAbRunEntity creation (attribution path doesn't have an eval baseline).
         verify(promptAbRunRepository, never()).save(any());
+        // Genesis baseline path NOT entered: only the candidate was saved (one
+        // promptVersionRepository.save invocation, no agent.save for activePromptVersionId).
+        verify(promptVersionRepository, times(1)).save(any(PromptVersionEntity.class));
+        verify(agentRepository, never()).save(any());
     }
 
     @Test
@@ -153,8 +176,15 @@ class PromptImproverServiceAttributionTest {
         // checkEligibility's COOLDOWN_ACTIVE check (24h window).
         AgentEntity recentlyPromoted = agent(20L);
         recentlyPromoted.setLastPromotedAt(Instant.now().minusSeconds(3600));
-        when(agentRepository.findById(20L)).thenReturn(Optional.of(recentlyPromoted));
-        when(promptVersionRepository.findMaxVersionNumber("20")).thenReturn(Optional.of(0));
+        when(agentRepository.findByIdForUpdate(20L)).thenReturn(Optional.of(recentlyPromoted));
+        // PROMPT-IMPROVER-GENESIS-BASELINE: agent has v1..v2 → no genesis path
+        // (the bypass-cooldown semantic this test guards is orthogonal to the
+        // genesis-baseline materialization; covering both in one mock would
+        // collide with the agent.save assertions in other tests).
+        when(promptVersionRepository.findByAgentIdOrderByVersionNumberDesc("20"))
+                .thenReturn(List.of(
+                        versionRow("20", 2, "deprecated"),
+                        versionRow("20", 1, "active")));
         stubLlmReturning("Improved prompt for bypass path");
         when(promptVersionRepository.save(any(PromptVersionEntity.class)))
                 .thenAnswer(inv -> inv.getArgument(0));
@@ -191,12 +221,119 @@ class PromptImproverServiceAttributionTest {
     @Test
     @DisplayName("agent not found: throws clean RuntimeException, no version saved")
     void startImprovementFromAttribution_agentMissing_throws() {
-        when(agentRepository.findById(999L)).thenReturn(Optional.empty());
+        when(agentRepository.findByIdForUpdate(999L)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.startImprovementFromAttribution(
                 99L, "999", "desc", 7L))
                 .isInstanceOf(RuntimeException.class)
                 .hasMessageContaining("Agent not found: 999");
         verify(promptVersionRepository, never()).save(any());
+    }
+
+    // ───────── PROMPT-IMPROVER-GENESIS-BASELINE (V106, 2026-05-23) tests ─────────
+
+    @Test
+    @DisplayName("genesis: first attribution for agent materializes v1 baseline (active, genesis_baseline) + v2 candidate (attribution)")
+    void startImprovementFromAttribution_firstTimeForAgent_materializesBaselineAndCandidate() {
+        AgentEntity fresh = agent(30L);
+        fresh.setSystemPrompt("You are a helpful assistant.");
+        // activePromptVersionId starts null — proves baseline path correctly
+        // patches it to point at the new v1.
+        when(agentRepository.findByIdForUpdate(30L)).thenReturn(Optional.of(fresh));
+        when(promptVersionRepository.findByAgentIdOrderByVersionNumberDesc("30"))
+                .thenReturn(List.of());  // empty → genesis path
+        stubLlmReturning("You are a helpful assistant. Validate Bash exit codes.");
+        ArgumentCaptor<PromptVersionEntity> versionCaptor =
+                ArgumentCaptor.forClass(PromptVersionEntity.class);
+        when(promptVersionRepository.save(versionCaptor.capture()))
+                .thenAnswer(inv -> inv.getArgument(0));
+        ArgumentCaptor<AgentEntity> agentCaptor = ArgumentCaptor.forClass(AgentEntity.class);
+        when(agentRepository.save(agentCaptor.capture())).thenAnswer(inv -> inv.getArgument(0));
+
+        ImprovementStartResult result = service.startImprovementFromAttribution(
+                100L, "30", "Add Bash error handling guidance", 7L);
+
+        assertThat(result.promptVersionId()).isNotBlank();
+
+        // Two prompt_version saves: [0]=baseline, [1]=candidate.
+        List<PromptVersionEntity> savedVersions = versionCaptor.getAllValues();
+        assertThat(savedVersions).hasSize(2);
+
+        PromptVersionEntity baseline = savedVersions.get(0);
+        assertThat(baseline.getVersionNumber()).isEqualTo(1);
+        assertThat(baseline.getStatus()).isEqualTo("active");
+        assertThat(baseline.getSource()).isEqualTo("genesis_baseline");
+        assertThat(baseline.getContent()).isEqualTo("You are a helpful assistant.");
+        assertThat(baseline.getAgentId()).isEqualTo("30");
+
+        PromptVersionEntity candidate = savedVersions.get(1);
+        assertThat(candidate.getVersionNumber()).isEqualTo(2);
+        assertThat(candidate.getStatus()).isEqualTo("candidate");
+        assertThat(candidate.getSource()).isEqualTo("attribution");
+        assertThat(candidate.getContent())
+                .isEqualTo("You are a helpful assistant. Validate Bash exit codes.");
+        assertThat(candidate.getImprovementRationale())
+                .isEqualTo("Add Bash error handling guidance");
+        // Result UUID points to the CANDIDATE (per existing contract — caller
+        // writes this to OptimizationEvent.candidatePromptVersionUuid).
+        assertThat(result.promptVersionId()).isEqualTo(candidate.getId());
+
+        // Agent updated with activePromptVersionId pointing at the new baseline,
+        // so runAbTestAgainst's null-check won't re-fight the genesis path.
+        verify(agentRepository, atLeastOnce()).save(any(AgentEntity.class));
+        AgentEntity savedAgent = agentCaptor.getValue();
+        assertThat(savedAgent.getActivePromptVersionId()).isEqualTo(baseline.getId());
+    }
+
+    @Test
+    @DisplayName("genesis: baseline already exists → skip baseline creation, candidate is next (v2+)")
+    void startImprovementFromAttribution_baselineAlreadyExists_skipsBaselineCreation() {
+        AgentEntity established = agent(40L);
+        established.setSystemPrompt("Established prompt content.");
+        // active_prompt_version_id already set (typical after V106 backfill ran).
+        established.setActivePromptVersionId("v-40-1");
+        when(agentRepository.findByIdForUpdate(40L)).thenReturn(Optional.of(established));
+        when(promptVersionRepository.findByAgentIdOrderByVersionNumberDesc("40"))
+                .thenReturn(List.of(versionRow("40", 1, "active")));
+        stubLlmReturning("Updated prompt with new behavior.");
+        ArgumentCaptor<PromptVersionEntity> versionCaptor =
+                ArgumentCaptor.forClass(PromptVersionEntity.class);
+        when(promptVersionRepository.save(versionCaptor.capture()))
+                .thenAnswer(inv -> inv.getArgument(0));
+
+        ImprovementStartResult result = service.startImprovementFromAttribution(
+                101L, "40", "Tweak behavior", 7L);
+
+        assertThat(result.promptVersionId()).isNotBlank();
+        // Only the candidate is saved (no baseline materialization), at v2.
+        List<PromptVersionEntity> savedVersions = versionCaptor.getAllValues();
+        assertThat(savedVersions).hasSize(1);
+        PromptVersionEntity candidate = savedVersions.get(0);
+        assertThat(candidate.getVersionNumber()).isEqualTo(2);
+        assertThat(candidate.getStatus()).isEqualTo("candidate");
+        assertThat(candidate.getSource()).isEqualTo("attribution");
+
+        // Agent not re-saved (active_prompt_version_id untouched by skip path).
+        verify(agentRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("genesis: blank system_prompt → IllegalStateException (no rows written)")
+    void startImprovementFromAttribution_emptySystemPrompt_throws() {
+        AgentEntity emptyPromptAgent = agent(50L);
+        emptyPromptAgent.setSystemPrompt("   ");  // blank only
+        when(agentRepository.findByIdForUpdate(50L)).thenReturn(Optional.of(emptyPromptAgent));
+        when(promptVersionRepository.findByAgentIdOrderByVersionNumberDesc("50"))
+                .thenReturn(List.of());  // empty → genesis path triggers
+
+        assertThatThrownBy(() -> service.startImprovementFromAttribution(
+                102L, "50", "Make it better", 7L))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("system_prompt")
+                .hasMessageContaining("50");
+
+        // No saves at all — we bailed before writing baseline or candidate.
+        verify(promptVersionRepository, never()).save(any());
+        verify(agentRepository, never()).save(any());
     }
 }
