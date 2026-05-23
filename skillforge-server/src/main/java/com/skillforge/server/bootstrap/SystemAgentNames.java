@@ -35,5 +35,10 @@ public final class SystemAgentNames {
     public static final String ATTRIBUTION_DISPATCHER = "attribution-dispatcher";
     public static final String USER_SIMULATOR = "user-simulator";
 
+    /** OPT-REPORT-V1 (V97 seed): orchestrator for the "Generate Report" flywheel route. */
+    public static final String REPORT_GENERATOR = "report-generator";
+    /** OPT-REPORT-V1 (V97 seed): worker dispatched by report-generator for per-batch session annotation. */
+    public static final String SESSION_BATCH_ANNOTATOR = "session-batch-annotator";
+
     private SystemAgentNames() { }
 }

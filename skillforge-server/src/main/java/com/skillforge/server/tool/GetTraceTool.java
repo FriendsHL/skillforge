@@ -321,7 +321,16 @@ public class GetTraceTool implements Tool {
     private SessionEntity assertSessionAccessible(String sessionId, SkillContext context) {
         SessionEntity session = sessionService.getSession(sessionId);
         Long callerUserId = context.getUserId();
-        if (callerUserId != null && session.getUserId() != null && !callerUserId.equals(session.getUserId())) {
+        Long ownerUserId = session.getUserId();
+        // System sessions (userId=0) and system callers (userId=0) are
+        // globally accessible — the session-annotator agent runs as
+        // SYSTEM_USER_ID=0 and must read user agents' traces to classify
+        // outcome / suspect_surface. Mirrors ObservabilityOwnershipGuard
+        // (HTTP layer) — both must agree on the system-user bypass.
+        boolean isSystemSession = (ownerUserId == null || ownerUserId == 0L);
+        boolean isSystemCaller = (callerUserId != null && callerUserId == 0L);
+        if (!isSystemSession && !isSystemCaller
+                && callerUserId != null && !callerUserId.equals(ownerUserId)) {
             throw new IllegalArgumentException("session is not accessible: " + sessionId);
         }
         return session;

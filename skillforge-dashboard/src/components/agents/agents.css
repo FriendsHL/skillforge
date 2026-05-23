@@ -567,6 +567,9 @@
   font-size: var(--font-size-xs);
   color: var(--fg-4);
   margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .agent-drawer-tabs {

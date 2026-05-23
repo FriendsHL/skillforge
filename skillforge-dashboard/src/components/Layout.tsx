@@ -102,6 +102,12 @@ const AppLayoutInner: React.FC = () => {
           // fields (annotator → dispatcher chain finished).
           optEventCount?: number;
           hasResults?: boolean;
+          // OPT-REPORT-V1 Sub-batch 2 — `opt_report_completed` payload fields
+          // (report-generator finished a 7-day report). See
+          // OptReportService#onReportCompleted for the canonical shape.
+          reportId?: string;
+          summaryHighlight?: string | null;
+          completedAt?: string | null;
         };
         if (msg.type === 'skill_draft_extracted') {
           queryClient.invalidateQueries({ queryKey: ['skill-drafts'] });
@@ -200,6 +206,42 @@ const AppLayoutInner: React.FC = () => {
           });
           // Surface as a task in the TaskPanel too (mirrors ab_skill_run_completed).
           // BE already includes counts in the payload; we don't need to refetch.
+        } else if (msg.type === 'opt_report_completed') {
+          // OPT-REPORT-V1 Sub-batch 2 — report-generator finished. Surface
+          // a persistent toast (duration=0) so the operator can click
+          // "View report →" even after they switched tabs. The deep link
+          // lands on /insights/patterns?tab=reports&agentId=…&reportId=…
+          // so OptReportsPage auto-selects the right row.
+          const reportId = msg.reportId;
+          const agentName = msg.agentName ?? `agent ${msg.agentId ?? '?'}`;
+          const summaryHighlight = msg.summaryHighlight ?? null;
+          const linkAgentId =
+            msg.agentId !== undefined && msg.agentId !== null
+              ? String(msg.agentId)
+              : null;
+          const href =
+            reportId && linkAgentId
+              ? `/insights/patterns?tab=reports&agentId=${linkAgentId}&reportId=${reportId}`
+              : null;
+          notification.open({
+            message: `Report Ready — ${agentName}`,
+            description: (
+              <span>
+                {summaryHighlight ?? 'Report is ready to view.'}
+                {href && (
+                  <>
+                    {' '}
+                    <a href={href} target="_blank" rel="noopener noreferrer">
+                      View report →
+                    </a>
+                  </>
+                )}
+              </span>
+            ),
+            duration: 0,
+            placement: 'topRight',
+            key: `opt-report-${reportId ?? msg.agentId ?? 'unknown'}-${Date.now()}`,
+          });
         } else if (msg.type === 'ab_skill_run_completed') {
           const abId = msg.abRunId ?? null;
           const isFailed = msg.status === 'FAILED';

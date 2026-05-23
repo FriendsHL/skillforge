@@ -13,6 +13,7 @@ import PatternDetailDrawer from '../components/insights/PatternDetailDrawer';
 import OptimizationEventsPage from './OptimizationEvents';
 import BehaviorRuleEvolutionPage from './BehaviorRuleEvolution';
 import DynamicSimPage from './DynamicSim';
+import OptReportsPage from './OptReports';
 // F5 (code BUNDLE-3) — code-split: reactflow + dagre (~220 KB minified, ~72 KB
 // gzipped) only load when the operator actually clicks the Flywheel tab.
 // Static `import` was pulling those deps into the main Insights chunk even
@@ -27,7 +28,7 @@ import '../components/insights/insights.css';
  * outside this allowlist in the `?tab=` URL param falls back to the default
  * `patterns` tab (no silent typo confusion).
  */
-const TAB_KEYS = ['patterns', 'optimization', 'behavior-rules', 'dynamic-sim', 'flywheel'] as const;
+const TAB_KEYS = ['patterns', 'optimization', 'behavior-rules', 'dynamic-sim', 'flywheel', 'reports'] as const;
 type TabKey = (typeof TAB_KEYS)[number];
 
 function normalizeTab(raw: string | null): TabKey {
@@ -60,6 +61,7 @@ const INSIGHTS_TABS = [
   { key: 'behavior-rules', label: 'Behavior Rules' },
   { key: 'dynamic-sim', label: 'Dynamic Sim' },
   { key: 'flywheel', label: 'Optimization Loop' },
+  { key: 'reports', label: 'Reports' },
 ];
 
 const Insights: React.FC = () => {
@@ -244,6 +246,20 @@ const Insights: React.FC = () => {
           >
             <FlywheelObservability />
           </Suspense>
+        </div>
+      </div>
+    );
+  }
+
+  if (activeTab === 'reports') {
+    // OPT-REPORT-V1 Sub-batch 2 — Reports tab. URL state (`?agentId=` /
+    // `?reportId=`) is owned by OptReportsPage so the WS-driven "View
+    // report →" toast in Layout.tsx deep-links straight to the selected row.
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - var(--header-height, 44px))' }}>
+        <TabBar tabs={INSIGHTS_TABS} activeTab={activeTab} onSwitch={onTabSwitch} />
+        <div style={{ flex: 1, minHeight: 0, overflow: 'auto', scrollbarGutter: 'stable' }}>
+          <OptReportsPage />
         </div>
       </div>
     );

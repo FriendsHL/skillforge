@@ -83,6 +83,13 @@ import com.skillforge.server.tool.scheduling.UpdateScheduledTaskTool;
 import com.skillforge.observability.repository.LlmSpanRepository;
 import com.skillforge.observability.repository.LlmTraceRepository;
 import com.skillforge.server.tool.sessionannotation.SpanBehaviorStatsTool;
+import com.skillforge.server.tool.optreport.LoadSessionBatchTool;
+import com.skillforge.server.tool.optreport.RecordBatchAnnotationsTool;
+import com.skillforge.server.tool.optreport.WriteOptReportTool;
+import com.skillforge.server.optreport.OptReportService;
+import com.skillforge.server.repository.OptReportBatchRepository;
+import com.skillforge.server.repository.OptReportRepository;
+import com.skillforge.server.repository.SessionAnnotationRepository;
 import com.skillforge.server.subagent.AgentRoster;
 import com.skillforge.server.subagent.CollabRunService;
 import com.skillforge.server.subagent.SubAgentRegistry;
@@ -778,6 +785,61 @@ public class SkillForgeConfig {
         SpanBehaviorStatsTool tool = new SpanBehaviorStatsTool(spanRepository, traceRepository, objectMapper);
         skillRegistry.registerTool(tool);
         log.info("Registered SpanBehaviorStatsTool into SkillRegistry");
+        return tool;
+    }
+
+    // ---------- OPT-REPORT-V1 (V97) tools ----------
+
+    /**
+     * OPT-REPORT-V1 STEP 1 / STEP 5: load the target agent's recent production
+     * sessions (origin='production', parent_session_id IS NULL, within
+     * windowDays) paginated; each item bundles existing annotations so the
+     * report-generator can fan out / read back annotation state in one call.
+     */
+    @Bean
+    public LoadSessionBatchTool loadSessionBatchTool(
+            com.skillforge.server.repository.SessionRepository sessionRepository,
+            SessionAnnotationRepository annotationRepository,
+            com.skillforge.server.repository.AgentRepository agentRepository,
+            ObjectMapper objectMapper,
+            java.time.Clock clock,
+            SkillRegistry skillRegistry) {
+        LoadSessionBatchTool tool = new LoadSessionBatchTool(
+                sessionRepository, annotationRepository, agentRepository, objectMapper, clock);
+        skillRegistry.registerTool(tool);
+        log.info("Registered LoadSessionBatchTool into SkillRegistry");
+        return tool;
+    }
+
+    /**
+     * OPT-REPORT-V1 STEP 7: persist generated markdown + summary JSON to
+     * t_opt_report (status running → completed). Also fires the
+     * opt_report_completed WS broadcast via OptReportService.onReportCompleted.
+     */
+    @Bean
+    public WriteOptReportTool writeOptReportTool(
+            OptReportRepository reportRepository,
+            OptReportService reportService,
+            ObjectMapper objectMapper,
+            SkillRegistry skillRegistry) {
+        WriteOptReportTool tool = new WriteOptReportTool(reportRepository, reportService, objectMapper);
+        skillRegistry.registerTool(tool);
+        log.info("Registered WriteOptReportTool into SkillRegistry");
+        return tool;
+    }
+
+    /**
+     * OPT-REPORT-V1 STEP B: SubAgent worker reports back batch completion
+     * (annotationsWrittenCount + status) to t_opt_report_batch.
+     */
+    @Bean
+    public RecordBatchAnnotationsTool recordBatchAnnotationsTool(
+            OptReportBatchRepository batchRepository,
+            ObjectMapper objectMapper,
+            SkillRegistry skillRegistry) {
+        RecordBatchAnnotationsTool tool = new RecordBatchAnnotationsTool(batchRepository, objectMapper);
+        skillRegistry.registerTool(tool);
+        log.info("Registered RecordBatchAnnotationsTool into SkillRegistry");
         return tool;
     }
 

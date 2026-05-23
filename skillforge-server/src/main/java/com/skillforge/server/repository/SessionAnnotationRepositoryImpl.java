@@ -25,6 +25,22 @@ public class SessionAnnotationRepositoryImpl implements SessionAnnotationReposit
 
     private static final Logger log = LoggerFactory.getLogger(SessionAnnotationRepositoryImpl.class);
 
+    /**
+     * V100 (OPT-REPORT-V1 followup): UPSERT keyed on (session_id, type, source).
+     * Old behavior was DO NOTHING which left conflicting values stacked. New
+     * behavior:
+     * <ul>
+     *   <li>For source='signal' (sentinel-style 'true' values): keyed on type so
+     *       re-detection of the same signal type is idempotent.</li>
+     *   <li>For source='llm' / 'human': re-annotation replaces the existing row
+     *       <b>only when the new confidence is &gt;= the old one</b>. This makes
+     *       re-runs of {@code generate-report} produce stable annotations and
+     *       prevents the "annotation competition" issue (failure 0.82 + success
+     *       0.80 coexisting on the same session). The DO UPDATE branch returns
+     *       the existing id; the WHERE filter on confidence means a lower-conf
+     *       re-write is skipped (returns null).</li>
+     * </ul>
+     */
     private static final String UPSERT_SQL = """
             INSERT INTO t_session_annotation (
                 session_id, annotation_type, annotation_value, source,
@@ -32,8 +48,13 @@ public class SessionAnnotationRepositoryImpl implements SessionAnnotationReposit
             ) VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, NOW()
             )
-            ON CONFLICT ON CONSTRAINT uq_session_annotation
-            DO NOTHING
+            ON CONFLICT ON CONSTRAINT uq_session_annotation_typed
+            DO UPDATE SET
+                annotation_value = EXCLUDED.annotation_value,
+                confidence = EXCLUDED.confidence,
+                reasoning = EXCLUDED.reasoning,
+                created_at = NOW()
+            WHERE EXCLUDED.confidence >= t_session_annotation.confidence
             RETURNING id
             """;
 

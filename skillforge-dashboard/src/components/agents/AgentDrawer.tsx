@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Button, InputNumber, Modal, Select, Switch, Tag, Tooltip, message } from 'antd';
+import { Button, InputNumber, Modal, Select, Switch, Tag, Tooltip, message, notification } from 'antd';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   deleteAgent,
@@ -14,6 +14,7 @@ import {
 } from '../../api';
 import { listMcpServers } from '../../api/mcpServers';
 import { runFlywheelLoopForAgent } from '../../api/flywheel';
+import { generateOptReport } from '../../api/optReport';
 import { useAuth } from '../../contexts/AuthContext';
 import type { AgentDto, ThinkingMode, ReasoningEffort } from '../../api/schemas';
 import { initials, guessRole } from './AgentCard';
@@ -469,6 +470,34 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
     onError: () => message.error('Failed to update agent'),
   });
 
+  // OPT-REPORT-V1 Sub-batch 2 — sibling of `runFlywheelMutation` for the
+  // "Generate Report" button. Renders an info toast immediately so the
+  // operator knows the report is in flight; the persistent
+  // `opt_report_completed` notification (Layout.tsx) replaces this once the
+  // generator finishes (~1-2 min).
+  const generateReportMutation = useMutation({
+    mutationFn: () => generateOptReport(agent.id),  // omit windowDays → BE default 14d (V1.1)
+    onSuccess: (res) => {
+      const d = res.data;
+      notification.info({
+        message: `Report Generating — ${d.agentName}`,
+        description: `Report ${d.reportId.slice(0, 8)}… 已启动，通常需要 1-2 分钟，完成后会弹通知。`,
+        duration: 6,
+        placement: 'topRight',
+      });
+    },
+    onError: (err: unknown) => {
+      const axiosErr = err as { response?: { status?: number; data?: { message?: string } }; message?: string };
+      const status = axiosErr?.response?.status ?? 0;
+      const msg = axiosErr?.response?.data?.message ?? axiosErr?.message ?? 'Unknown error';
+      notification.error({
+        message: 'Failed to start report',
+        description: `[${status}] ${msg}`,
+        placement: 'topRight',
+      });
+    },
+  });
+
   const runFlywheelMutation = useMutation({
     mutationFn: () => runFlywheelLoopForAgent(agent.id),
     onSuccess: (res) => {
@@ -873,17 +902,38 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
               <div className="spec-block">
                 <div className="spec-h"><h3>Flywheel</h3></div>
                 <p style={{ color: 'var(--fg-3)', fontSize: 12, margin: '0 0 10px' }}>
-                  Triggers session-annotator + attribution-dispatcher on this agent's recent sessions. Async, ~30s-2min.
+                  <strong>Run Opt Loop</strong>: cluster-based auto pipeline (annotator → dispatcher) on recent sessions.
+                  &nbsp;<strong>Generate Report</strong>: 7-day SubAgent fan-out → human-readable markdown report.
                 </p>
-                <Button
-                  size="small"
-                  loading={runFlywheelMutation.isPending}
-                  disabled={runFlywheelMutation.isPending}
-                  onClick={() => runFlywheelMutation.mutate()}
-                  data-testid="run-opt-loop-btn"
-                >
-                  Run Opt Loop
-                </Button>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <Button
+                    size="small"
+                    loading={runFlywheelMutation.isPending}
+                    disabled={runFlywheelMutation.isPending}
+                    onClick={() => runFlywheelMutation.mutate()}
+                    data-testid="run-opt-loop-btn"
+                  >
+                    Run Opt Loop
+                  </Button>
+                  {/* OPT-REPORT-V1 Sub-batch 2 — purple secondary to distinguish
+                      from the primary "Run Opt Loop" CTA. design.md accent var
+                      keeps light/dark themes consistent without overriding
+                      Ant Design's button internals. */}
+                  <Button
+                    size="small"
+                    loading={generateReportMutation.isPending}
+                    disabled={generateReportMutation.isPending}
+                    onClick={() => generateReportMutation.mutate()}
+                    data-testid="generate-report-btn"
+                    style={{
+                      background: 'var(--accent-soft, rgba(99, 102, 241, 0.12))',
+                      color: 'var(--accent, #6366f1)',
+                      borderColor: 'var(--accent-border, rgba(99, 102, 241, 0.4))',
+                    }}
+                  >
+                    Generate Report
+                  </Button>
+                </div>
               </div>
             </>
           )}
