@@ -40,10 +40,12 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
 
 @Component
 public class AbEvalPipeline {
@@ -326,38 +328,62 @@ public class AbEvalPipeline {
         AgentDefinition candidateDef = agentService.toAgentDefinition(agent);
         candidateDef.setSystemPrompt(candidate.getContent());
 
-        List<AbScenarioResult> results = new ArrayList<>();
-        int baselinePassed = 0;
-        int candidatePassed = 0;
+        // ★ 2026-05-24 V1 r3 perf fix: 并行 batch scenarios (fan-out via loopExecutor,
+        // cap=8 pool max). 之前 serial 49 scenarios × 2 side = 40-90 min；并行后
+        // 受 LLM provider QPS 限制实际约 ~8-15 min（5x 加速）。
+        //
+        // 每 scenario 内部 baseline + candidate 仍 serial（共用 sandbox naming +
+        // judge 顺序便于 debug；并行内嵌的 ROI 小）。Scenario 之间无依赖可安全并行。
+        //
+        // ScenarioRunResult / EvalJudgeOutput 都是 fresh 对象，无共享 mutation。
+        // results / passed counts 用 thread-safe collections。
+        AtomicInteger baselinePassedAtomic = new AtomicInteger(0);
+        AtomicInteger candidatePassedAtomic = new AtomicInteger(0);
+        List<CompletableFuture<AbScenarioResult>> futures = new ArrayList<>(scenarios.size());
+
         for (EvalScenarioEntity entity : scenarios) {
             EvalScenario scenario = toEvalScenario(entity);
-            try {
-                // Distinct sandbox ids per side prevent SandboxFactory collision
-                // when baseline + candidate write fixture files to the same path.
-                ScenarioRunResult baselineRun = runSingleScenario(
-                        abRun.getId() + "-baseline", scenario, baselineDef);
-                EvalJudgeOutput baselineJudge = evalJudgeTool.judge(scenario, baselineRun);
-                ScenarioRunResult candidateRun = runSingleScenario(
-                        abRun.getId() + "-candidate", scenario, candidateDef);
-                EvalJudgeOutput candidateJudge = evalJudgeTool.judge(scenario, candidateRun);
+            CompletableFuture<AbScenarioResult> fut = CompletableFuture.supplyAsync(() -> {
+                try {
+                    // Distinct sandbox ids per side prevent SandboxFactory collision
+                    // when baseline + candidate write fixture files to the same path.
+                    ScenarioRunResult baselineRun = runSingleScenario(
+                            abRun.getId() + "-baseline", scenario, baselineDef);
+                    EvalJudgeOutput baselineJudge = evalJudgeTool.judge(scenario, baselineRun);
+                    ScenarioRunResult candidateRun = runSingleScenario(
+                            abRun.getId() + "-candidate", scenario, candidateDef);
+                    EvalJudgeOutput candidateJudge = evalJudgeTool.judge(scenario, candidateRun);
 
-                if (baselineJudge.isPass()) baselinePassed++;
-                if (candidateJudge.isPass()) candidatePassed++;
+                    if (baselineJudge.isPass()) baselinePassedAtomic.incrementAndGet();
+                    if (candidateJudge.isPass()) candidatePassedAtomic.incrementAndGet();
 
-                results.add(new AbScenarioResult(
-                        scenario.getId(), scenario.getName(),
-                        new AbScenarioResult.RunResult(baselineRun.getStatus(),
-                                baselineJudge.getCompositeScore()),
-                        new AbScenarioResult.RunResult(candidateRun.getStatus(),
-                                candidateJudge.getCompositeScore())));
-            } catch (Exception e) {
-                log.error("Attribution A/B scenario {} failed: {}", scenario.getId(), e.getMessage(), e);
-                results.add(new AbScenarioResult(
-                        scenario.getId(), scenario.getName(),
-                        new AbScenarioResult.RunResult("ERROR", 0.0),
-                        new AbScenarioResult.RunResult("ERROR", 0.0)));
-            }
+                    return new AbScenarioResult(
+                            scenario.getId(), scenario.getName(),
+                            new AbScenarioResult.RunResult(baselineRun.getStatus(),
+                                    baselineJudge.getCompositeScore()),
+                            new AbScenarioResult.RunResult(candidateRun.getStatus(),
+                                    candidateJudge.getCompositeScore()));
+                } catch (Exception e) {
+                    log.error("Attribution A/B scenario {} failed: {}", scenario.getId(), e.getMessage(), e);
+                    return new AbScenarioResult(
+                            scenario.getId(), scenario.getName(),
+                            new AbScenarioResult.RunResult("ERROR", 0.0),
+                            new AbScenarioResult.RunResult("ERROR", 0.0));
+                }
+            }, loopExecutor);
+            futures.add(fut);
         }
+
+        // Wait all done (no scenario-level timeout — runSingleScenario 内已有 scenarioTimeoutMs cap)
+        CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+
+        // Collect results in original scenario order (futures preserve order).
+        List<AbScenarioResult> results = new ArrayList<>(futures.size());
+        for (CompletableFuture<AbScenarioResult> f : futures) {
+            results.add(f.join());
+        }
+        int baselinePassed = baselinePassedAtomic.get();
+        int candidatePassed = candidatePassedAtomic.get();
 
         double baselinePassRate = (double) baselinePassed / scenarios.size() * 100;
         double candidatePassRate = (double) candidatePassed / scenarios.size() * 100;

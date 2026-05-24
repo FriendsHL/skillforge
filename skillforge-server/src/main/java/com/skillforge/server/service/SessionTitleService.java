@@ -165,6 +165,12 @@ public class SessionTitleService {
             req.setMessages(reqMsgs);
             req.setMaxTokens(40);
             req.setTemperature(0.3);
+            // 2026-05-24 fix: title 这种简单任务一律 disable thinking — 防御任何
+            // 当前/未来 reasoning model（mimo / qwen3-think / o1 等）的思考链
+            // 被 onText 累积进 textBuf 导致 title = "首先，用户要求我..." 思考独白。
+            // 根因 fix 在 ProviderProtocolFamilyResolver PREFIX 加 mimo，
+            // 此处是兜底防御未注册 reasoning model + reasoning_effort 也设最低。
+            req.setThinkingMode(com.skillforge.core.model.ThinkingMode.DISABLED);
 
             log.info("doSmartRename: calling LLM provider.chatStream...");
             // 使用 chatStream 同步等待:OpenAiProvider.chat() 同步版本在某些 endpoint 上不稳定,

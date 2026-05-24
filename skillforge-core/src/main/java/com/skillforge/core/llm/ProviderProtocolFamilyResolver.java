@@ -35,6 +35,12 @@ public final class ProviderProtocolFamilyResolver {
         PREFIX.put("deepseek-coder",    ProviderProtocolFamily.DEEPSEEK_CHAT_LEGACY);
         // Qwen (DashScope).
         PREFIX.put("qwen",              ProviderProtocolFamily.QWEN_DASHSCOPE);
+        // Xiaomi MiMo — Qwen-derived (also uses enable_thinking field on DashScope-style API).
+        // Without this mapping mimo falls through to GENERIC_OPENAI, missing the
+        // QWEN_ENABLE_THINKING default-off guard at OpenAiProvider.java:467 →
+        // mimo defaults to thinking ON → SessionTitleService renders reasoning_content
+        // ("首先，用户要求我作为..." 思考链) as title (verified 2026-05-24 bug report).
+        PREFIX.put("mimo",              ProviderProtocolFamily.QWEN_DASHSCOPE);
         // OpenAI reasoning series.
         PREFIX.put("o1",                ProviderProtocolFamily.OPENAI_REASONING);
         PREFIX.put("o3",                ProviderProtocolFamily.OPENAI_REASONING);
