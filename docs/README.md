@@ -1,6 +1,6 @@
 # SkillForge 文档
 
-> 更新于：2026-05-17
+> 更新于：2026-05-25
 > Agent 规则：先读这里，再只打开当前任务链接到的文档。
 
 编辑 docs 前，先读 [DOCS-GOVERNANCE.md](DOCS-GOVERNANCE.md)。
@@ -19,59 +19,11 @@
 
 | ID | 标题 | 状态 | 需求包 | MRD | PRD | 技术方案 | 交付 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| _(暂无 active 主线需求；FLYWHEEL-PER-RUN 整包已交付归档 2026-05-20)_ | — | — | — | — | — | — | — |
+| _(暂无 active 主线需求；最近交付 FLYWHEEL-AB-AGENT-AWARE-DATASET V1 commit `5cf5b61` 2026-05-25)_ | — | — | — | — | — | — | — |
 
 > 整体方案：[plans/PROD-OPTIMIZATION-FLYWHEEL/plan.md](plans/PROD-OPTIMIZATION-FLYWHEEL/plan.md) —— 数据飞轮 / 优化闭环 6 版本拆分（**V1-V6 全部已交付**，⑤ A/B 自动 trigger 真闭环 prompt+skill 双 surface 通）
 
-### SYSTEM-AGENT-TYPING Phase 1+2 整包 — 已交付 2026-05-17 ✅（飞轮 layer 1 真闭环 + system agent UX 分辨）
-
-Phase 1 (`e659b0a`) DB SQL 反查发现 layer 1 starvation 修飞轮; Phase 2 (pending commit) 给 dashboard 用户 toggle + monitor + 编辑保护 + Chat gate.
-
-#### Phase 2 — system agent UX 分辨 + 监控 inline + 编辑保护
-
-| 项 | 修法 | 状态 |
-|---|---|---|
-| F2 AgentList toggle | "Show system agents" Switch + localStorage 持久化 default off + 紫色 Tag "System" + agentType=user/all query | ✅ 已交付 |
-| F4 SystemAgentMonitorCard inline | inline 进 AgentCard (不开独立 page per user 集中): cron / last_run + status / 7d trigger+output / Run Manually 真触发 / View Sessions + View Schedule deep-link | ✅ 已交付 |
-| F3 AgentDrawer 锁 | banner ⚠️ + 全 form input/textarea/picker/Switch readOnly + 4 Save disabled + ASK/AUTO disabled + Delete button disabled + Tooltip (no Unlock per user simplify) | ✅ 已交付 |
-| W3 fieldset 兜底 | BehaviorRulesEditor + LifecycleHooksPanel 不接 disabled prop → fieldset wrapper 原生 HTML disable 全 descendant + opacity:0.65 | ✅ 已交付 |
-| F5 BE filter + monitor endpoint | AgentController agentType param (default 'user') + AgentService listAgents overload 不破 3 callers + new SystemAgentMonitorController + 跨表聚合 service | ✅ 已交付 |
-| F6 Chat send gate | isSystemAgent → input+send disabled + Alert banner + handleSend 头部 defense guard | ✅ 已交付 |
-| W2 deep-link 真消费 | SessionList + Schedules useSearchParams 读 ?agentId/?taskId (Judge mandatory fix) | ✅ 已交付 |
-
-**mvn 1797/0/95 + tsc + npm build 双绿 + 21 FE tests PASS (5 file) + 0 regression + Iron Law 核心 7+1 BE + 3 FE 0 diff + 3 reviewer 全 PASS (java Opus + ts Opus + Judge Opus) + 1 mandatory W2 fix done + W3 confirm done**. 详见 [delivery-index.md](delivery-index.md) SYSTEM-AGENT-TYPING Phase 2 行.
-
-**3 reviewer 调度教训记账**: 第一次 + 重派 Sonnet (java/ts/code) 全 600s stalled (3059 行 diff watchdog 触发) → 换 Opus 1M context 跑通. 后续大 diff (>2500 行) 默认上 Opus reviewer 不要 Sonnet.
-
-#### Phase 1 — 飞轮 layer 1 真闭环 (commit `e659b0a`)
-
-| 项 | 修法 | 状态 |
-|---|---|---|
-| 数据模型 | V89 加 `t_agent.agent_type` VARCHAR(16) NOT NULL DEFAULT 'user' + CHECK + UPDATE 5 system agent | ✅ 已交付 |
-| Entity + Bootstrap self-heal | AgentEntity 加字段 (Jackson 自动序列化无需新 DTO) + 5 Bootstrap idempotent `setAgentType('system')` 启动自愈 + 跟 prompt-swap 解耦 | ✅ 已交付 |
-| **R1 3-tier annotator fix** | `SessionAnnotationRepository.findRecentBySourceAndAgentType` 原生 SQL JOIN + `SessionAnnotationSignalService` 改 user-first / system backfill / catch-all orphan fallback | ✅ 已交付 |
-| **W1 per-tier early dedup** | Phase 2 java-reviewer 抓 edge case: Tier 1 全 LLM-annotated 时 guard 看 pre-dedup 跳 Tier 2 → 空 queue. Fix moves dedup to each tier (red-green 4 步真验) | ✅ 已交付 |
-| FE Zod schema | `schemas.ts` AgentSchema 加 `agentType: z.enum(['user', 'system']).optional().nullable()` 防 zod silent strip | ✅ 已交付 |
-| 真活验证 | BE 重启 + V89 apply + 触发 session-annotator-hourly 一轮 → **50s 内 user agent outcome 0 → 9** (Main 5 failure / Design 2 / Research 1 / Session Analyzer 1) | ✅ 已交付 |
-
-**mvn 1776/0/95 BUILD SUCCESS + Iron Law 核心 7+1 BE + 3 FE 0 diff + 3 reviewer (java/db/ts Sonnet) PASS 0 blocker + Judge Opus 1 mandatory W1 fix done**. 详见 [delivery-index.md](delivery-index.md) SYSTEM-AGENT-TYPING Phase 1 行.
-
-**Phase 2 UX 留 SYSTEM-AGENT-TYPING 同包后续 PR** (~2-3d Mid): AgentList toggle + AgentDrawer 锁 + Chat gate + SystemAgents 监控面板 + BE filter endpoint.
-
-### V6 FLYWHEEL-LOOP-CLOSURE — 已交付 2026-05-17 ✅
-
-修飞轮 ⑤ A/B 真闭环 4 缺口 + 砍 canary（dogfood 单用户阶段）+ V3.2 link 接通（V88 旁路列）:
-
-| 缺口 | 修法 | 状态 |
-|---|---|---|
-| A: V3 attribution candidate 没 A/B endpoint | 加 `POST /api/agents/{id}/prompt-versions/{versionId}/run-ab` + `POST /api/skills/{parentSkillId}/abtest-from-draft` | ✅ 已交付 |
-| B+C: candidate_ready → A/B 没 EventListener | `OptimizationEventStageChangeEvent` + `OptimizationEventAutoTriggerListener` 三重注解 (@Async + @TransactionalEventListener AFTER_COMMIT + @Transactional REQUIRES_NEW) | ✅ 已交付 |
-| D: SkillDraft attribution path stub | `SkillDraftService.createDraftFromAttribution` 加 sync LLM fill（跟 `SkillDraftService.extractFromRecentSessions` 同款 xiaomi-mimo/mimo-v2.5-pro pattern，修正 V3.1 假设错） | ✅ 已交付 |
-| F: system agent 没 EvalScenario | `/run-ab` 内 ephemeral scenario fallback 从 `OptimizationEvent.patternId` 反查 → `t_pattern_session_member` 3 session → `extractFromSession` 生 status='ephemeral' + 跑完 `EphemeralScenarioCleanupService` REQUIRES_NEW cleanup | ✅ 已交付 |
-| **副作用: canary logic disable** | FE 删 `<CanaryPanel>` embed (SkillAbPanel + BehaviorRuleEvolutionPanel) + V87 migration disable metrics-collector-hourly cron + ALLOWED_TRANSITIONS 加 `ab_passed → promoted` 直接边跳 canary + **保留 t_canary_* schema + V2 CanaryRolloutService dormant** 未来加回 ~2 行 reverse | ✅ 已交付 |
-| **附加: V3.2 link 接通 (UUID type mismatch fix)** | V88 加 `candidate_prompt_version_uuid` + `candidate_skill_draft_uuid` VARCHAR(36) 旁路列 (旧 Long 列 type mismatch — UUID surface 留 null + 向后兼容) | ✅ 已交付 |
-
-**8 ratify 决策已锁** (canary disable / SkillDraft fill 跟 SkillDraftService.extractFromRecentSessions / @EventListener / system agent fallback / V88 旁路列 / Phase 1.3-1.4 boundary placeholder / Phase 1.4 升 Full 档 / SkillEntity transient identity name 后缀). **mvn 1750/0/89 BUILD SUCCESS + Iron Law 核心 7+1 BE + 3 FE 0 diff**. 详见 [delivery-index.md](delivery-index.md) FLYWHEEL-LOOP-CLOSURE 行.
+> 最近已交付需求（含 SYSTEM-AGENT-TYPING Phase 1+2 / V6 FLYWHEEL-LOOP-CLOSURE 等）见下方"已交付方案"表 + [delivery-index.md](delivery-index.md)。
 
 ## Backlog 和暂缓
 
@@ -89,6 +41,11 @@ Phase 1 (`e659b0a`) DB SQL 反查发现 layer 1 starvation 修飞轮; Phase 2 (p
 
 | ID | 标题 | 需求包 | 技术方案 |
 | --- | --- | --- | --- |
+| FLYWHEEL-AB-AGENT-AWARE-DATASET V1 | A/B agent-role-aware dataset filter + benchmark 通用 vs agent-specific 分类（V117 加 `t_eval_scenario.applicable_agent_roles JSONB` + GIN partial idx + 5 ILIKE backfill + AC-1 RAISE EXCEPTION enforce / 5 role taxonomy general/code/design/research/main_assistant / A/B 跑 target subset + regression subset union / Full pipeline 双 phase r1+r2 fix）| [需求包](requirements/archive/2026-05-25-FLYWHEEL-AB-AGENT-AWARE-DATASET/index.md) | [方案](requirements/archive/2026-05-25-FLYWHEEL-AB-AGENT-AWARE-DATASET/tech-design.md) |
+| BEHAVIOR-RULE-AB-EVAL V1 | behavior_rule surface A/B 评测框架（V114-V116 migration / `BehaviorRuleAbEvalService` filter+fallback + with-vs-without + 复用 `SystemPromptBuilder.appendBehaviorRules` / dual-criteria target≥+10pp 且 regression≥-3pp / Full pipeline 双 phase r1+r2 8 fix / OptimizationEventAutoTriggerListener.dispatchBehaviorRuleAutoAb 真实现替代 stub）| [需求包](requirements/archive/2026-05-24-BEHAVIOR-RULE-AB-EVAL/index.md) | [方案](requirements/archive/2026-05-24-BEHAVIOR-RULE-AB-EVAL/tech-design.md) |
+| EVAL-DATASET-LAYER V1 | Eval 数据层重构（V109-V113 加 source_type/purpose 字段 + EvalDataset 实体 + 30 benchmark scenarios 种子 / GAIA Lv1 12 + τ-bench 6 + AgentBench OS+DB 6 + dogfood 6 全用机器可判分 oracle / Full pipeline 5 round / 解决飞轮 A/B baseline=0% 永不 promote 痛点）| [需求包](requirements/archive/2026-05-24-EVAL-DATASET-LAYER/index.md) | [方案](requirements/archive/2026-05-24-EVAL-DATASET-LAYER/tech-design.md) |
+| MULTI-DIM-ATTRIBUTION | 飞轮多维归因（attribution 加 `infrastructure_failure` + `cost_high` 维 / session-annotator 0-msg error session synthetic agent_error signal / WriteOptimizationEventTool 24h auto-cooldown / `MIN_MEMBERS_INFRA_OUTCOME=2` cluster+dispatcher 对齐 / Full pipeline Plan r1+r2 + Java/Code reviewer Opus 1M + Judge）| [需求包](requirements/archive/2026-05-21-MULTI-DIM-ATTRIBUTION/index.md) | [方案](requirements/archive/2026-05-21-MULTI-DIM-ATTRIBUTION/tech-design.md) |
+| ATTRIBUTION-DISPATCHER-AGENT | 飞轮调度子系统真接 cron（新 `attribution-dispatcher` system agent + `DispatchAttributionPatterns` Tool / V93 seed agent + UPDATE schedule task #6 agent_id 9→12 / SystemAgentMonitorService 5→6 entry / Full pipeline Plan r1+r2 + BE-Dev + 4 reviewer 对抗 / 修 cron #6 直接 fire curator 无 patternId 致 attribution loop 空跑）| [需求包](requirements/archive/2026-05-21-ATTRIBUTION-DISPATCHER-AGENT/index.md) | [方案](requirements/archive/2026-05-21-ATTRIBUTION-DISPATCHER-AGENT/tech-design.md) |
 | FLYWHEEL-PER-RUN | 飞轮 per-run 跟踪视图（在现有 FLYWHEEL-FLOWCHART panel 加 `[Aggregate \| Per-Run]` mode toggle；per-run 模式左侧 Runs sidebar 列最近 N 个 OptimizationEvent + 点选 → DAG 高亮该 run current step + pre-OptEvent 节点灰化 + Drawer 内容 swap to 该 run 信息；BE 1 新 endpoint `/api/flywheel/runs` aggregate；Mid pipeline 双 dev parallel + 2 reviewer 对抗 + r2 4 mandatory fix）| [需求包](requirements/archive/2026-05-20-FLYWHEEL-PER-RUN/index.md) | — (Lite, decisions in index.md) |
 | FLYWHEEL-FLOWCHART | 飞轮工作流流程图视图（替换 FLYWHEEL-VISUAL-STATUS card-style；React Flow + dagre LR auto-layout；4 类节点边框色 + 运行中节点绿色慢闪 ring + reduced-motion outline fallback；edge animated when 相邻 in-flight；read-only invariant；React.lazy + Suspense 让 reactflow+dagre 222KB 推迟到 tab activation，main chunk gzip 反而 -118KB；Mid pipeline 1 dev + 2 reviewer 对抗 + 1 round 5-fix bundle）| [需求包](requirements/archive/2026-05-20-FLYWHEEL-FLOWCHART/index.md) | — (Lite, decisions in index.md) |
 | FLYWHEEL-VISUAL-STATUS | 飞轮可观测面板（observability framing；Insights 第 5 tab `flywheel`；AUTO/USER/HYBRID/ENTRY 4 类节点 + in-flight/lastActivity/lag/recentError/todayAggregate 5 维 metric + healthy/warn/stale/dormant/empty 5 健康颜色（含 H/W/S/D/E 字母 a11y fallback）+ 双 tab agentType × surface + ARIA tablist 语义 + panel 只读 drill-down 跳现有 page；1B URL routing 改 Insights/SkillList/SessionList/SkillDrafts 4 page 真消费 query param；2B BE 3 endpoint：`/skills/abtest` global + `/canary/rollouts` agentId optional + `/skill-drafts?source=` filter；Full pipeline 1.0 取证 + 2 dev parallel + 3 reviewer 对抗 r1+r2 mandatory bundle 8 fix；mvn 1865/0/109 + tsc + vitest 9/9 + Iron Law 0 触碰）| [需求包](requirements/archive/2026-05-20-FLYWHEEL-VISUAL-STATUS/index.md) | [MRD](requirements/archive/2026-05-20-FLYWHEEL-VISUAL-STATUS/mrd.md) / [PRD](requirements/archive/2026-05-20-FLYWHEEL-VISUAL-STATUS/prd.md) / [tech-design](requirements/archive/2026-05-20-FLYWHEEL-VISUAL-STATUS/tech-design.md) |
