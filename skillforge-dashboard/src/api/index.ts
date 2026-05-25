@@ -1446,6 +1446,24 @@ export interface EvalDatasetScenario {
    * categories.
    */
   purpose?: 'baseline_anchor' | 'regression' | 'ablation' | null;
+  /**
+   * FLYWHEEL-AB-AGENT-AWARE-DATASET V1 (V117) — closed-enum JSONB tag list
+   * declaring which agent roles this scenario applies to (e.g.
+   * {@code ['design']} for Design Agent dogfood, {@code ['general']} for
+   * benchmark seeds). Consumed by {@code DatasetBrowser}'s role filter tab.
+   *
+   * <p>Optional in the TS interface for forward-compat: BE may omit the
+   * field on older deploys before V117 lands, and the legacy per-agent
+   * {@code /eval/scenarios} response did not surface it. Always access via
+   * the optional-chain pattern {@code s.applicableAgentRoles?.includes(role)}
+   * so missing data degrades to "no match" instead of TypeError.
+   *
+   * <p>Wire shape: bare string array (BE Jackson JSONB → JsonNode → List).
+   * Typed as the open {@code string[]} not the closed {@code AgentRole[]}
+   * so the FE renders correctly even if BE rolls out a new role before the
+   * union type is updated.
+   */
+  applicableAgentRoles?: string[] | null;
 }
 export const getEvalDatasetScenarios = (
   agentId: string | number,
@@ -1634,6 +1652,14 @@ export interface BaseScenario {
   sourceRef?: string | null;
   /** EVAL-DATASET-LAYER V1 (V109): purpose enum — see EvalDatasetScenario.purpose. */
   purpose?: 'baseline_anchor' | 'regression' | 'ablation' | null;
+  /**
+   * FLYWHEEL-AB-AGENT-AWARE-DATASET V1 (V117): closed-enum JSONB tag list —
+   * see {@link EvalDatasetScenario.applicableAgentRoles}. For base
+   * (classpath / home dir JSON) scenarios this typically arrives as
+   * {@code ['general']} unless the on-disk spec declares otherwise. Null /
+   * undefined when the JSON pre-dates the V117 field.
+   */
+  applicableAgentRoles?: string[] | null;
 }
 export const getBaseScenarios = () => api.get<BaseScenario[]>('/eval/scenarios/base');
 

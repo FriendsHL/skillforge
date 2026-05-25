@@ -1,4 +1,5 @@
 import api from './index';
+import type { AgentRole } from './behaviorRule';
 
 /**
  * EVAL-DATASET-LAYER V1 — REST client for `/api/eval/datasets` +
@@ -76,6 +77,32 @@ export interface EvalScenarioDto {
   /** V109 new — closed enum, NOT NULL. */
   purpose: EvalScenarioPurpose;
   createdAt: string;
+  /**
+   * FLYWHEEL-AB-AGENT-AWARE-DATASET V1 (V117) — JSONB tag list declaring
+   * which agent roles this scenario applies to. Used by
+   * BehaviorRuleAbEvalService to split a dataset into target (matches owner
+   * agent role) vs regression ('general') subsets, and by the DatasetBrowser
+   * role filter tab.
+   *
+   * <p>r2-FE-1 (ts-reviewer W1): typed {@code string[] | null} — same open
+   * shape as {@link import('./index').EvalDatasetScenario.applicableAgentRoles}
+   * — for two reasons:
+   * <ol>
+   *   <li>When BE adds a 6th role, the {@link AgentRole} union doesn't
+   *       break compilation here (avoids forcing FE redeploy on every BE
+   *       enum extension)</li>
+   *   <li>BE may serialize {@code null} (not just omit) for legacy rows;
+   *       open {@code | null} matches the wire shape exactly</li>
+   * </ol>
+   * Closed {@link AgentRole} type is still useful at the call site (e.g.
+   * {@code s.applicableAgentRoles?.includes(roleTab as AgentRole)}) but
+   * the interface keeps the wire shape open.
+   *
+   * <p>Always access via {@code s.applicableAgentRoles?.includes(role)} with
+   * the optional chain (a missing field — undefined — returns false instead
+   * of throwing TypeError).
+   */
+  applicableAgentRoles?: string[] | null;
 }
 
 /** Filter params for the extended `/api/eval/scenarios` endpoint. */
@@ -88,6 +115,18 @@ export interface EvalScenarioListParams {
   purpose?: EvalScenarioPurpose;
   /** V109 new — exact match on `source_ref`. */
   sourceRef?: string;
+  /**
+   * FLYWHEEL-AB-AGENT-AWARE-DATASET V1 (tech-design §4) — OR-semantics
+   * filter: rows whose {@code applicable_agent_roles} JSONB array contains
+   * ANY of the supplied roles are returned. Mirrors the BE
+   * {@code jsonb_exists_any(applicable_agent_roles, CAST(:roles AS text[]))}
+   * query. Serialized as a comma-joined string on the wire — empty array
+   * (or undefined) → no filter applied (matches BE behaviour).
+   *
+   * <p>Combines with {@link agentId} / {@link sourceType} / {@link purpose}
+   * via AND on the BE side (each filter narrows the result set).
+   */
+  roles?: AgentRole[];
 }
 
 /**
@@ -98,9 +137,21 @@ export interface EvalScenarioListParams {
  * full source_type / purpose taxonomy matters.
  *
  * Outer envelope: bare array (BE controller returns `ResponseEntity.ok(list)`).
+ *
+ * <p>FLYWHEEL-AB-AGENT-AWARE-DATASET V1: when {@code params.roles} is a
+ * non-empty array, serialize as a comma-joined string per the BE
+ * {@code @RequestParam String roles} contract. Empty / undefined arrays are
+ * dropped from the request entirely (axios skips undefined keys) so the BE
+ * sees no {@code roles} param and falls back to its no-filter branch.
  */
-export const listEvalScenarios = (params: EvalScenarioListParams = {}) =>
-  api.get<EvalScenarioDto[]>('/eval/scenarios', { params });
+export const listEvalScenarios = (params: EvalScenarioListParams = {}) => {
+  const { roles, ...rest } = params;
+  const wireParams: Record<string, unknown> = { ...rest };
+  if (roles && roles.length > 0) {
+    wireParams.roles = roles.join(',');
+  }
+  return api.get<EvalScenarioDto[]>('/eval/scenarios', { params: wireParams });
+};
 
 // ─── EvalDataset (V110) ───────────────────────────────────────────────────
 

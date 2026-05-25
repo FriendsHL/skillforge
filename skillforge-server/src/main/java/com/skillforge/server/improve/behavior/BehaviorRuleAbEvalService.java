@@ -35,6 +35,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
+import java.util.stream.Collectors;
 
 /**
  * BEHAVIOR-RULE-AB-EVAL V1 — orchestrator for the
@@ -92,6 +93,7 @@ public class BehaviorRuleAbEvalService {
     private final AbEvalPipeline abEvalPipeline;
     private final ChatEventBroadcaster broadcaster;
     private final ObjectMapper objectMapper;
+    private final AgentRoleResolver agentRoleResolver;
     private final ExecutorService coordinatorExecutor;
 
     public BehaviorRuleAbEvalService(
@@ -105,6 +107,7 @@ public class BehaviorRuleAbEvalService {
             AbEvalPipeline abEvalPipeline,
             ChatEventBroadcaster broadcaster,
             ObjectMapper objectMapper,
+            AgentRoleResolver agentRoleResolver,
             @Qualifier("abEvalCoordinatorExecutor") ExecutorService coordinatorExecutor) {
         this.versionRepository = versionRepository;
         this.abRunRepository = abRunRepository;
@@ -116,6 +119,7 @@ public class BehaviorRuleAbEvalService {
         this.abEvalPipeline = abEvalPipeline;
         this.broadcaster = broadcaster;
         this.objectMapper = objectMapper;
+        this.agentRoleResolver = agentRoleResolver;
         this.coordinatorExecutor = coordinatorExecutor;
     }
 
@@ -235,26 +239,60 @@ public class BehaviorRuleAbEvalService {
                             "Agent not found: " + candidate.getAgentId()));
             AgentDefinition baseDef = agentService.toAgentDefinition(agent);
 
-            List<String> tags = candidate.getTargetTriggerTags();
+            // FLYWHEEL-AB-AGENT-AWARE-DATASET V1: replace the V1
+            // candidate.target_trigger_tags-based split with an agent-role-
+            // aware subset (target = scenarios matching the rule_owner_agent's
+            // role, regression = 'general' minus target ids). candidate's
+            // targetTriggerTags field is intentionally retained on the entity
+            // but no longer consulted here — see field-level @Deprecated note
+            // for V2 cleanup path.
+            String ownerRole = agentRoleResolver.resolveRole(agent);
+
             List<EvalScenarioEntity> targetSubset;
             List<EvalScenarioEntity> regressionSubset;
-            if (tags == null || tags.isEmpty()) {
-                // INV-4 fallback: no targeting → everything is regression.
+            if (AgentRoleConstants.GENERAL.equals(ownerRole)) {
+                // UC-4 (prd.md): owner role is GENERAL → fallback to regression-
+                // only mode over the full dataset (matches BEHAVIOR-RULE-AB-EVAL
+                // V1 fallback semantics).
                 targetSubset = List.of();
                 regressionSubset = scenarioRepository.findAllByDatasetVersionId(abRun.getDatasetVersionId());
-                log.info("[BehaviorRuleAb] target_trigger_tags empty for versionId={}, "
-                                + "running in regression-only mode (full dataset, {} scenarios)",
-                        candidate.getId(), regressionSubset.size());
+                log.info("[BehaviorRuleAb] ownerRole=general for versionId={} agentId={} → "
+                                + "regression-only mode (full dataset, {} scenarios)",
+                        candidate.getId(), candidate.getAgentId(), regressionSubset.size());
             } else {
-                String[] tagArr = tags.toArray(new String[0]);
-                targetSubset = scenarioRepository.findTargetSubsetByDatasetVersionAndTags(
-                        abRun.getDatasetVersionId(), tagArr);
-                regressionSubset = scenarioRepository.findRegressionSubsetByDatasetVersionAndTags(
-                        abRun.getDatasetVersionId(), tagArr);
-                if (targetSubset.isEmpty()) {
-                    log.info("[BehaviorRuleAb] target subset empty for versionId={} tags={} — "
-                                    + "fallback to regression-only mode",
-                            candidate.getId(), tags);
+                targetSubset = scenarioRepository.findByDatasetVersionAndAgentRoles(
+                        abRun.getDatasetVersionId(), new String[]{ownerRole});
+                Set<String> targetIds = targetSubset.stream()
+                        .map(EvalScenarioEntity::getId)
+                        .collect(Collectors.toSet());
+                if (targetIds.isEmpty()) {
+                    // No scenarios match this role → regression-only fallback
+                    // (full dataset). Keeps the run informative even before
+                    // role-specific scenarios are seeded for a new agent.
+                    regressionSubset = scenarioRepository.findAllByDatasetVersionId(
+                            abRun.getDatasetVersionId());
+                    log.info("[BehaviorRuleAb] no scenarios match ownerRole={} for versionId={} "
+                                    + "agentId={} → regression-only mode (full dataset, {} scenarios)",
+                            ownerRole, candidate.getId(), candidate.getAgentId(),
+                            regressionSubset.size());
+                } else {
+                    // r1-FIX (architect B2 / database W2): in-Java filter over
+                    // the GENERAL subset replaces a native NOT IN (:excludeIds)
+                    // query to dodge Hibernate 6 + Spring Data JPA
+                    // Collection<String> NOT IN binding footguns. V1 scale
+                    // ≤49 scenarios; O(n) filter is trivial. V2 ≥1000 scale
+                    // can promote to CTE / NOT EXISTS server-side filter.
+                    List<EvalScenarioEntity> generalAll = scenarioRepository
+                            .findByDatasetVersionAndAgentRoles(
+                                    abRun.getDatasetVersionId(),
+                                    new String[]{AgentRoleConstants.GENERAL});
+                    regressionSubset = generalAll.stream()
+                            .filter(s -> !targetIds.contains(s.getId()))
+                            .toList();
+                    log.info("[BehaviorRuleAb] role-aware subset: ownerRole={} target_n={} "
+                                    + "regression_n={} (versionId={} agentId={})",
+                            ownerRole, targetSubset.size(), regressionSubset.size(),
+                            candidate.getId(), candidate.getAgentId());
                 }
             }
             abRun.setTargetCount(targetSubset.size());

@@ -98,4 +98,49 @@ public interface EvalScenarioDraftRepository extends JpaRepository<EvalScenarioE
             """, nativeQuery = true)
     List<EvalScenarioEntity> findAllByDatasetVersionId(
             @Param("datasetVersionId") String datasetVersionId);
+
+    // ─────────────────────────────────────────────────────────────────────
+    // FLYWHEEL-AB-AGENT-AWARE-DATASET V1 (V117): role-aware queries used by
+    // BehaviorRuleAbEvalService to split a dataset version into
+    // (target subset = scenarios matching rule_owner_agent's role) +
+    // (regression subset = scenarios tagged 'general'). FE Dataset role
+    // filter tab also consumes findAllByAgentRoles.
+    //
+    // INV-5: BOTH queries MUST use jsonb_exists_any(jsonb, text[]) function
+    // form — never the ?| operator. See cc7286b hot-fix; Spring Data JPA's
+    // StringQuery parser treats `?` as a positional placeholder and rejects
+    // mixing it with :name placeholders. jsonb_exists_any is the documented
+    // function-form equivalent of ?| (PG 9.4+, identical query plan, same
+    // GIN index idx_eval_scenario_applicable_agent_roles_gin from V117).
+    //
+    // r1-FIX (architect B2 / database W2): the original tech-design had a
+    // 3rd query `findGeneralRegressionByDatasetVersionExcluding` with
+    // NOT IN (:excludeIds). Hibernate 6 + Spring Data JPA native query
+    // Collection<String>→PG NOT IN binding has empty-list and type-form
+    // footguns. Replaced by in-Java filter at the caller (V1 scale ≤49
+    // scenarios, O(n) trivial). V2 may add CTE / NOT EXISTS form when
+    // dataset size grows past ~1000.
+    // ─────────────────────────────────────────────────────────────────────
+
+    @Query(value = """
+            SELECT s.* FROM t_eval_scenario s
+            JOIN t_eval_dataset_version_scenario b ON b.scenario_id = s.id
+            WHERE b.dataset_version_id = :datasetVersionId
+              AND jsonb_exists_any(s.applicable_agent_roles, CAST(:roles AS text[]))
+            """, nativeQuery = true)
+    List<EvalScenarioEntity> findByDatasetVersionAndAgentRoles(
+            @Param("datasetVersionId") String datasetVersionId,
+            @Param("roles") String[] roles);
+
+    /**
+     * FLYWHEEL-AB-AGENT-AWARE-DATASET V1 (V117): FE Dataset role filter tab
+     * (cross-dataset list of scenarios matching any of the supplied roles).
+     * Ordered by created_at DESC so newest scenarios surface first.
+     */
+    @Query(value = """
+            SELECT s.* FROM t_eval_scenario s
+            WHERE jsonb_exists_any(s.applicable_agent_roles, CAST(:roles AS text[]))
+            ORDER BY s.created_at DESC
+            """, nativeQuery = true)
+    List<EvalScenarioEntity> findAllByAgentRoles(@Param("roles") String[] roles);
 }

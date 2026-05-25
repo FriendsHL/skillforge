@@ -43,6 +43,85 @@ export type BehaviorRuleAbRunStatus =
 export type BehaviorRuleAbRunKind = 'with_vs_without' | 'variant_a_vs_b';
 
 /**
+ * FLYWHEEL-AB-AGENT-AWARE-DATASET V1 — closed enum of 5 agent roles used by
+ * {@code BehaviorRuleAbEvalService} to partition the dataset into target
+ * (matches owner agent role) vs regression (general subset) buckets.
+ *
+ * <p>Mirrors BE {@code AgentRoleConstants}:
+ * <pre>
+ *   general        — fallback / generic benchmark scenarios
+ *   code           — Code Agent
+ *   design         — Design Agent
+ *   research       — Research Agent
+ *   main_assistant — Main Assistant
+ * </pre>
+ *
+ * <p>Note: {@link BehaviorRuleAbRun#ownerAgentRole} is typed {@code string | null}
+ * (not {@code AgentRole | null}) so the FE degrades gracefully if BE adds a
+ * new role before the FE union is updated. The {@link roleLabel} / {@link roleColor}
+ * helpers also accept {@code string} for the same reason.
+ */
+export type AgentRole =
+  | 'general'
+  | 'code'
+  | 'design'
+  | 'research'
+  | 'main_assistant';
+
+/**
+ * Human-readable label for an agent role tag. Accepts {@code string} (not
+ * {@link AgentRole}) so callers can pipe through {@code run.ownerAgentRole}
+ * without a type assertion when BE returns a role the FE union doesn't know
+ * yet — unknown values render verbatim as a fallback.
+ */
+export function roleLabel(role: string | null | undefined): string {
+  switch (role) {
+    case 'general':
+      return 'General';
+    case 'code':
+      return 'Code';
+    case 'design':
+      return 'Design';
+    case 'research':
+      return 'Research';
+    case 'main_assistant':
+      return 'Main Assistant';
+    default:
+      return role ?? '';
+  }
+}
+
+/**
+ * AntD preset color for an agent role Tag. Map per tech-design §5.2:
+ * <pre>
+ *   design         → magenta
+ *   code           → cyan
+ *   research       → orange
+ *   main_assistant → blue
+ *   general        → default
+ * </pre>
+ *
+ * <p>Unknown / null / undefined → 'default'. Same defensive {@code string}
+ * signature as {@link roleLabel}.
+ */
+export function roleColor(role: string | null | undefined): string {
+  switch (role) {
+    case 'design':
+      return 'magenta';
+    case 'code':
+      return 'cyan';
+    case 'research':
+      return 'orange';
+    case 'main_assistant':
+      return 'blue';
+    case 'general':
+      return 'default';
+    default:
+      return 'default';
+  }
+}
+
+/**
  * Per-scenario A/B row — mirrors BE {@code AbScenarioResult} record
  * (tech-design §3.5). BE serializes
  * {@code BehaviorRuleAbRunEntity.abScenarioResultsJson} into this list and
@@ -123,6 +202,25 @@ export interface BehaviorRuleAbRun {
    * the list is non-empty; otherwise falls back to aggregate-only view.
    */
   scenarioResults: BehaviorRuleAbScenarioResult[] | null;
+  /**
+   * FLYWHEEL-AB-AGENT-AWARE-DATASET V1 (D5 / AC-8) — the role resolved from
+   * the candidate version's owner agent (via {@code AgentRoleResolver}) at
+   * the moment {@code runAsync} executed. Used by FE row + drawer to render
+   * an owner-role Tag so operators can tell at a glance which role's subset
+   * split produced the deltas (target subset = scenarios tagged with this
+   * role; regression subset = scenarios tagged 'general' minus target).
+   *
+   * <p>Wire shape: {@code String} (one of {@link AgentRole} closed values,
+   * or any future role BE adds). Typed {@code string | null} not
+   * {@code AgentRole | null} so the FE degrades gracefully if BE rolls out a
+   * new role before the FE union is updated — the {@link roleLabel} /
+   * {@link roleColor} helpers render unknown values verbatim with a default
+   * color rather than crashing.
+   *
+   * <p>{@code null} for legacy rows pre-V1.1 that never resolved an owner
+   * role (BE pure-mapper {@code from()} writes null when caller omits role).
+   */
+  ownerAgentRole: string | null;
 }
 
 /** Response shape for {@code POST /api/behavior-rules/versions/{id}/run-ab}. */

@@ -59,7 +59,7 @@ class EvalControllerScenarioVersionTest {
         EvalScenarioEntity latest = scenario("scn-v2", "7", 2, "scn-v1", "Alpha", Instant.parse("2026-05-06T02:00:00Z"));
         when(evalScenarioVersionService.listLatestScenarios("7")).thenReturn(List.of(latest));
 
-        ResponseEntity<List<Map<String, Object>>> response = controller.listScenarios("7", null);
+        ResponseEntity<List<Map<String, Object>>> response = controller.listScenarios("7", null, null);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(response.getBody()).hasSize(1);

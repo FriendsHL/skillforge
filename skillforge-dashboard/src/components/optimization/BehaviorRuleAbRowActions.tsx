@@ -1,7 +1,12 @@
 import React, { useCallback } from 'react';
-import { Modal, message } from 'antd';
+import { Modal, Space, Tag, message } from 'antd';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { behaviorRuleApi, type BehaviorRuleAbRun } from '../../api/behaviorRule';
+import {
+  behaviorRuleApi,
+  roleColor,
+  roleLabel,
+  type BehaviorRuleAbRun,
+} from '../../api/behaviorRule';
 import { BehaviorRuleAbBadge } from './BehaviorRuleAbBadge';
 
 export interface BehaviorRuleAbRowActionsProps {
@@ -101,15 +106,29 @@ export const BehaviorRuleAbRowActions: React.FC<BehaviorRuleAbRowActionsProps> =
     });
   }, [runAbMutation]);
 
+  // FLYWHEEL-AB-AGENT-AWARE-DATASET V1 (D5 / AC-8): surface the resolved
+  // owner-agent role as a leading Tag so operators can tell at a glance
+  // which role's subset-split produced the deltas — without opening the
+  // drawer. Conditional render: when BE returns null (legacy rows / fallback
+  // path) we keep the row clean rather than rendering an empty "general"
+  // placeholder, since an absent tag is itself a signal that role-aware
+  // splitting did not apply.
   return (
-    <BehaviorRuleAbBadge
-      run={run ?? null}
-      loading={isLoading}
-      busy={runAbMutation.isPending || promoteMutation.isPending}
-      onPromote={onPromote}
-      onRetry={onRetry}
-      onOpenDetail={() => onOpenDetail(versionId)}
-    />
+    <Space size="small" wrap>
+      {run?.ownerAgentRole && (
+        <Tag color={roleColor(run.ownerAgentRole)}>
+          {roleLabel(run.ownerAgentRole)}
+        </Tag>
+      )}
+      <BehaviorRuleAbBadge
+        run={run ?? null}
+        loading={isLoading}
+        busy={runAbMutation.isPending || promoteMutation.isPending}
+        onPromote={onPromote}
+        onRetry={onRetry}
+        onOpenDetail={() => onOpenDetail(versionId)}
+      />
+    </Space>
   );
 };
 

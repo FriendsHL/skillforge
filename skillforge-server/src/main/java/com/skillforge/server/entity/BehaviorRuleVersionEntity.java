@@ -165,6 +165,17 @@ public class BehaviorRuleVersionEntity {
     public Instant getPromotedAt() { return promotedAt; }
     public void setPromotedAt(Instant promotedAt) { this.promotedAt = promotedAt; }
 
+    /**
+     * @deprecated FLYWHEEL-AB-AGENT-AWARE-DATASET V1 (2026-05-25):
+     * {@code BehaviorRuleAbEvalService} no longer consults this field — the
+     * target/regression subset split is now agent-role-aware (see
+     * {@link com.skillforge.server.improve.behavior.AgentRoleResolver}).
+     * Kept on the entity + schema so historical V115 rows remain readable
+     * and a future V2 layered tag system can re-introduce rule-level
+     * fine-grained filtering on top of role filtering. Do NOT add new
+     * writers; consider removing in V2 if no consumer materialises.
+     */
+    @Deprecated
     public List<String> getTargetTriggerTags() { return targetTriggerTags; }
     public void setTargetTriggerTags(List<String> targetTriggerTags) {
         this.targetTriggerTags = targetTriggerTags == null ? new ArrayList<>() : targetTriggerTags;

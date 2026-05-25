@@ -32,6 +32,15 @@ import java.util.List;
  * Per java.md footgun #6b "outer envelope shape" rule, any future field
  * addition here requires a synchronized FE base-interface edit + a paired
  * assertion in {@code BehaviorRuleAbRunResponseContractTest}.
+ *
+ * <p>FLYWHEEL-AB-AGENT-AWARE-DATASET V1 (2026-05-25): added
+ * {@link #ownerAgentRole} — closed-set role string (see
+ * {@code AgentRoleConstants}) of the rule_owner agent, surfaced so the FE
+ * Optimization Events row can render the owner role Tag without an extra
+ * round-trip. r1-FIX (java-design W1 / architect W2): caller side resolves
+ * the role and passes it as a String to {@link #from(BehaviorRuleAbRunEntity,
+ * ObjectMapper, String)} — DTO stays a pure mapper (no repository fan-out,
+ * N+1 risk avoided, tests do not need to mock AgentRepository).
  */
 public record BehaviorRuleAbRunResponse(
         String id,
@@ -59,16 +68,29 @@ public record BehaviorRuleAbRunResponse(
          * when the entity column is null/blank or the JSON parse fails — FE
          * degrades gracefully (no detail table).
          */
-        List<AbScenarioResult> scenarioResults) {
+        List<AbScenarioResult> scenarioResults,
+        /**
+         * FLYWHEEL-AB-AGENT-AWARE-DATASET V1 — closed-set agent role of the
+         * rule_owner agent. One of {@code general / code / design / research /
+         * main_assistant} (see {@code AgentRoleConstants}). {@code null} when
+         * the caller could not resolve the role (e.g. agent disappeared mid-
+         * lookup). Surfaced for FE row-action Tag rendering — see
+         * {@code roleColor / roleLabel} in {@code behaviorRule.ts}.
+         */
+        String ownerAgentRole) {
 
     private static final Logger log = LoggerFactory.getLogger(BehaviorRuleAbRunResponse.class);
 
     /**
-     * Field-rich {@link #from} that uses the Spring-managed {@link ObjectMapper}
-     * to parse the per-scenario JSON. Controllers / services that want
-     * scenarioResults populated should call this overload.
+     * Pure-mapper {@link #from} — caller pre-resolves the owner role and
+     * passes it in. Keeps the DTO independent of {@code AgentRepository} /
+     * {@code AgentRoleResolver} (r1-FIX java-design W1). Use the
+     * {@link ObjectMapper} overload when scenarioResults should populate
+     * from the entity's {@code abScenarioResultsJson} column.
      */
-    public static BehaviorRuleAbRunResponse from(BehaviorRuleAbRunEntity e, ObjectMapper objectMapper) {
+    public static BehaviorRuleAbRunResponse from(BehaviorRuleAbRunEntity e,
+                                                  ObjectMapper objectMapper,
+                                                  String ownerAgentRole) {
         if (e == null) return null;
         List<AbScenarioResult> scenarios = parseScenarioResults(e.getAbScenarioResultsJson(), objectMapper);
         return new BehaviorRuleAbRunResponse(
@@ -94,13 +116,24 @@ public record BehaviorRuleAbRunResponse(
                 // missing regression delta), keeping the field non-null on
                 // the wire — simplifies FE rendering.
                 BehaviorRulePromotionService.isDualCriteriaSatisfied(e),
-                scenarios);
+                scenarios,
+                ownerAgentRole);
     }
 
     /**
-     * Backwards-compatible {@link #from} overload — leaves scenarioResults
-     * null. Used by call sites that don't want to depend on an ObjectMapper
-     * (older tests / pure-projection contexts).
+     * Backwards-compatible 2-arg overload — passes {@code ownerAgentRole=null}.
+     * Pre-FLYWHEEL-AB-AGENT-AWARE-DATASET call sites that don't yet resolve
+     * the owner role keep working; FE sees {@code ownerAgentRole=null} and
+     * skips the role Tag.
+     */
+    public static BehaviorRuleAbRunResponse from(BehaviorRuleAbRunEntity e, ObjectMapper objectMapper) {
+        return from(e, objectMapper, /*ownerAgentRole*/ null);
+    }
+
+    /**
+     * Backwards-compatible 1-arg overload — leaves scenarioResults and
+     * ownerAgentRole null. Used by call sites that don't want to depend on
+     * an ObjectMapper (older tests / pure-projection contexts).
      */
     public static BehaviorRuleAbRunResponse from(BehaviorRuleAbRunEntity e) {
         if (e == null) return null;
@@ -123,7 +156,8 @@ public record BehaviorRuleAbRunResponse(
                 e.getStartedAt(),
                 e.getCompletedAt(),
                 BehaviorRulePromotionService.isDualCriteriaSatisfied(e),
-                /*scenarioResults*/ null);
+                /*scenarioResults*/ null,
+                /*ownerAgentRole*/ null);
     }
 
     /**

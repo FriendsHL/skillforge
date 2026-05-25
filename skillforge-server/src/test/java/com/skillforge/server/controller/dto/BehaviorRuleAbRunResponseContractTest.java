@@ -46,7 +46,7 @@ class BehaviorRuleAbRunResponseContractTest {
                 .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
     }
 
-    @DisplayName("JSON shape contains exactly the 19 expected fields (no extras, no missing)")
+    @DisplayName("JSON shape contains exactly the 20 expected fields (no extras, no missing)")
     @Test
     void json_shape_field_names_match_fe_interface() throws Exception {
         BehaviorRuleAbRunResponse resp = sample();
@@ -55,6 +55,7 @@ class BehaviorRuleAbRunResponseContractTest {
 
         // FE TS interface (src/api/behaviorRule.ts) MUST have these fields and
         // ONLY these. Any drift here surfaces as a FE deserialization gap.
+        // FLYWHEEL-AB-AGENT-AWARE-DATASET V1 added ownerAgentRole (field #20).
         Set<String> expected = Set.of(
                 "id", "agentId", "candidateVersionId", "status", "abRunKind",
                 "baselinePassRate", "candidatePassRate", "deltaPassRate",
@@ -62,7 +63,7 @@ class BehaviorRuleAbRunResponseContractTest {
                 "targetCount", "regressionCount",
                 "datasetVersionId", "promoted", "failureReason",
                 "startedAt", "completedAt", "dualCriteriaSatisfied",
-                "scenarioResults");
+                "scenarioResults", "ownerAgentRole");
         Set<String> actual = new java.util.HashSet<>();
         tree.fieldNames().forEachRemaining(actual::add);
         assertThat(actual).containsExactlyInAnyOrderElementsOf(expected);

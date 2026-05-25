@@ -155,6 +155,20 @@ public class EvalScenarioEntity {
     @JdbcTypeCode(SqlTypes.JSON)
     private List<String> ruleTriggerHints = new ArrayList<>();
 
+    /**
+     * FLYWHEEL-AB-AGENT-AWARE-DATASET V1 (V117): JSONB array of agent role
+     * tags (closed enum, see {@code AgentRoleConstants}). Consumed by
+     * {@code BehaviorRuleAbEvalService.runAsync} to compute the target subset
+     * (scenarios matching the rule_owner_agent's role) and regression subset
+     * (scenarios tagged {@code 'general'}). Non-null at the DB layer with
+     * default {@code '[]'::jsonb}; V117 backfills all 49 pre-existing rows
+     * via {@code t_agent.name} ILIKE heuristics that mirror
+     * {@code AgentRoleResolver} — KEEP THE TWO IN SYNC.
+     */
+    @Column(name = "applicable_agent_roles", columnDefinition = "jsonb")
+    @JdbcTypeCode(SqlTypes.JSON)
+    private List<String> applicableAgentRoles = new ArrayList<>();
+
     @CreatedDate
     private Instant createdAt;
 
@@ -383,5 +397,15 @@ public class EvalScenarioEntity {
 
     public void setRuleTriggerHints(List<String> ruleTriggerHints) {
         this.ruleTriggerHints = ruleTriggerHints == null ? new ArrayList<>() : ruleTriggerHints;
+    }
+
+    // FLYWHEEL-AB-AGENT-AWARE-DATASET V1 (V117) getter/setter for applicable_agent_roles.
+
+    public List<String> getApplicableAgentRoles() {
+        return applicableAgentRoles;
+    }
+
+    public void setApplicableAgentRoles(List<String> applicableAgentRoles) {
+        this.applicableAgentRoles = applicableAgentRoles == null ? new ArrayList<>() : applicableAgentRoles;
     }
 }

@@ -5,7 +5,9 @@ import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.skillforge.server.entity.BehaviorRuleVersionEntity;
 import com.skillforge.server.improve.BehaviorRulePromotionService;
+import com.skillforge.server.improve.behavior.AgentRoleResolver;
 import com.skillforge.server.improve.behavior.BehaviorRuleAbEvalService;
+import com.skillforge.server.repository.AgentRepository;
 import com.skillforge.server.repository.BehaviorRuleAbRunRepository;
 import com.skillforge.server.repository.BehaviorRuleVersionRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -39,12 +41,19 @@ class BehaviorRuleVersionControllerTest {
 
     private BehaviorRuleVersionRepository versionRepository;
     private BehaviorRuleAbRunRepository abRunRepository;
+    /**
+     * r2-BE-1: stored as field so tests can stub {@code findById} to exercise
+     * the "agent deleted → ownerAgentRole null" branch in
+     * {@link BehaviorRuleVersionController#latestAbRun(String)}.
+     */
+    private AgentRepository agentRepository;
     private MockMvc mvc;
 
     @BeforeEach
     void setUp() {
         versionRepository = mock(BehaviorRuleVersionRepository.class);
         abRunRepository = mock(BehaviorRuleAbRunRepository.class);
+        agentRepository = mock(AgentRepository.class);
         // java.md footgun #1: register JavaTimeModule so Instant fields
         // serialize as ISO-8601 strings instead of epoch arrays.
         ObjectMapper objectMapper = new ObjectMapper()
@@ -57,7 +66,9 @@ class BehaviorRuleVersionControllerTest {
                         abRunRepository,
                         mock(BehaviorRuleAbEvalService.class),
                         mock(BehaviorRulePromotionService.class),
-                        objectMapper);
+                        objectMapper,
+                        agentRepository,
+                        new AgentRoleResolver());
         mvc = MockMvcBuilders.standaloneSetup(controller)
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(objectMapper))
                 .build();
@@ -206,6 +217,62 @@ class BehaviorRuleVersionControllerTest {
                 .andExpect(jsonPath("$.dualCriteriaSatisfied").exists());
     }
 
+    @Test
+    @DisplayName("r2-BE-1: GET /latest-ab-run — agent deleted (orphan ab_run) → ownerAgentRole null "
+            + "(NOT 'general' which would mislead FE)")
+    void latestAbRun_agentDeleted_ownerRoleNull() throws Exception {
+        com.skillforge.server.entity.BehaviorRuleAbRunEntity run =
+                new com.skillforge.server.entity.BehaviorRuleAbRunEntity();
+        run.setId("ab-orphan");
+        run.setAgentId("999");  // agent_id pointing to a deleted row
+        run.setCandidateVersionId("br-v2-uuid");
+        run.setBaselineVersionId("");
+        run.setStatus("COMPLETED");
+        run.setAbRunKind("with_vs_without");
+        run.setStartedAt(Instant.parse("2026-05-25T10:00:00Z"));
+        when(abRunRepository.findFirstByCandidateVersionIdOrderByStartedAtDesc("br-v2-uuid"))
+                .thenReturn(Optional.of(run));
+        // Simulate orphan: AgentRepository.findById(999) returns empty.
+        when(agentRepository.findById(999L)).thenReturn(Optional.empty());
+
+        mvc.perform(get("/api/behavior-rules/versions/{id}/latest-ab-run", "br-v2-uuid"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value("ab-orphan"))
+                // Critical: ownerAgentRole must serialize as JSON null, NOT
+                // "general" — FE renders `data?.ownerAgentRole && <Tag>` and
+                // would otherwise show a misleading "General" tag for a row
+                // whose agent has been deleted. Jackson serializes null
+                // record fields by default, so the field is present with
+                // value null.
+                .andExpect(jsonPath("$.ownerAgentRole").value(org.hamcrest.Matchers.nullValue()));
+    }
+
+    @Test
+    @DisplayName("r2-BE-1: GET /latest-ab-run — agent exists w/ known name → ownerAgentRole = resolved role")
+    void latestAbRun_agentExists_ownerRoleResolved() throws Exception {
+        com.skillforge.server.entity.BehaviorRuleAbRunEntity run =
+                new com.skillforge.server.entity.BehaviorRuleAbRunEntity();
+        run.setId("ab-design");
+        run.setAgentId("1");
+        run.setCandidateVersionId("br-v2-uuid");
+        run.setBaselineVersionId("");
+        run.setStatus("COMPLETED");
+        run.setAbRunKind("with_vs_without");
+        run.setStartedAt(Instant.parse("2026-05-25T10:00:00Z"));
+        when(abRunRepository.findFirstByCandidateVersionIdOrderByStartedAtDesc("br-v2-uuid"))
+                .thenReturn(Optional.of(run));
+        com.skillforge.server.entity.AgentEntity agent =
+                new com.skillforge.server.entity.AgentEntity();
+        agent.setId(1L);
+        agent.setName("Design Agent");
+        when(agentRepository.findById(1L)).thenReturn(Optional.of(agent));
+
+        mvc.perform(get("/api/behavior-rules/versions/{id}/latest-ab-run", "br-v2-uuid"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value("ab-design"))
+                .andExpect(jsonPath("$.ownerAgentRole").value("design"));
+    }
+
     // ───────────────────────── POST run-ab / promote error mapping (r2-BE-1) ─────────────
 
     @Test
@@ -296,7 +363,9 @@ class BehaviorRuleVersionControllerTest {
         BehaviorRuleVersionController controller =
                 new BehaviorRuleVersionController(
                         versionRepository, abRunRepository,
-                        w.abEvalMock, w.promotionMock, om);
+                        w.abEvalMock, w.promotionMock, om,
+                        agentRepository,
+                        new AgentRoleResolver());
         mvc = MockMvcBuilders.standaloneSetup(controller)
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(om))
                 .build();

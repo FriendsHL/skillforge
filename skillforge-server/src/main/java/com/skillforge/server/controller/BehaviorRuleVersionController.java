@@ -3,11 +3,15 @@ package com.skillforge.server.controller;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillforge.server.controller.dto.BehaviorRuleAbRunResponse;
 import com.skillforge.server.controller.dto.BehaviorRuleVersionResponse;
+import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.BehaviorRuleAbRunEntity;
 import com.skillforge.server.entity.BehaviorRuleVersionEntity;
 import com.skillforge.server.improve.BehaviorRulePromotionService;
 import com.skillforge.server.improve.BehaviorRulePromotionService.PromoteResult;
+import com.skillforge.server.improve.behavior.AgentRoleConstants;
+import com.skillforge.server.improve.behavior.AgentRoleResolver;
 import com.skillforge.server.improve.behavior.BehaviorRuleAbEvalService;
+import com.skillforge.server.repository.AgentRepository;
 import com.skillforge.server.repository.BehaviorRuleAbRunRepository;
 import com.skillforge.server.repository.BehaviorRuleVersionRepository;
 import org.springframework.http.ResponseEntity;
@@ -55,17 +59,23 @@ public class BehaviorRuleVersionController {
     private final BehaviorRuleAbEvalService abEvalService;
     private final BehaviorRulePromotionService promotionService;
     private final ObjectMapper objectMapper;
+    private final AgentRepository agentRepository;
+    private final AgentRoleResolver agentRoleResolver;
 
     public BehaviorRuleVersionController(BehaviorRuleVersionRepository versionRepository,
                                           BehaviorRuleAbRunRepository abRunRepository,
                                           BehaviorRuleAbEvalService abEvalService,
                                           BehaviorRulePromotionService promotionService,
-                                          ObjectMapper objectMapper) {
+                                          ObjectMapper objectMapper,
+                                          AgentRepository agentRepository,
+                                          AgentRoleResolver agentRoleResolver) {
         this.versionRepository = versionRepository;
         this.abRunRepository = abRunRepository;
         this.abEvalService = abEvalService;
         this.promotionService = promotionService;
         this.objectMapper = objectMapper;
+        this.agentRepository = agentRepository;
+        this.agentRoleResolver = agentRoleResolver;
     }
 
     @GetMapping
@@ -184,8 +194,56 @@ public class BehaviorRuleVersionController {
         BehaviorRuleAbRunEntity latest = abRunRepository
                 .findFirstByCandidateVersionIdOrderByStartedAtDesc(id)
                 .orElse(null);
+        // FLYWHEEL-AB-AGENT-AWARE-DATASET V1: caller-side resolve of the
+        // owner agent role so the DTO stays a pure mapper (r1-FIX
+        // java-design W1). Null latest → from() returns null; ownerAgentRole
+        // is irrelevant.
+        String ownerAgentRole = resolveOwnerAgentRole(latest);
         // C4: 200 + null body (NOT 404). C3: ObjectMapper-aware overload so
         // scenarioResults populates from abScenarioResultsJson.
-        return ResponseEntity.ok(BehaviorRuleAbRunResponse.from(latest, objectMapper));
+        return ResponseEntity.ok(BehaviorRuleAbRunResponse.from(latest, objectMapper, ownerAgentRole));
+    }
+
+    /**
+     * Resolve the owner agent role for a given ab-run entity. Returns null
+     * when:
+     * <ul>
+     *   <li>the entity itself is null</li>
+     *   <li>the entity's agent_id is null / blank / non-numeric (malformed row
+     *       — we don't want to 500 the endpoint)</li>
+     *   <li><b>the agent row was deleted</b> (orphan ab_run referencing a
+     *       missing AgentEntity) — returning {@link AgentRoleConstants#GENERAL}
+     *       here would mislead FE into rendering a "General" Tag, suggesting
+     *       the rule is intentionally associated with the general subset when
+     *       in fact the agent is dangling. r2-BE-1 fix.</li>
+     * </ul>
+     * FE handles null by skipping the role Tag (graceful degrade —
+     * {@code data?.ownerAgentRole && <Tag>...</Tag>}).
+     *
+     * <p>Agent exists but name matches no closed-set pattern → still returns
+     * {@link AgentRoleConstants#GENERAL} via {@link AgentRoleResolver}'s
+     * fallback + log.warn (that path remains meaningful: agent is known,
+     * just unclassified).
+     */
+    private String resolveOwnerAgentRole(BehaviorRuleAbRunEntity latest) {
+        if (latest == null || latest.getAgentId() == null || latest.getAgentId().isBlank()) {
+            return null;
+        }
+        AgentEntity agent;
+        try {
+            agent = agentRepository.findById(Long.valueOf(latest.getAgentId())).orElse(null);
+        } catch (NumberFormatException ex) {
+            // Defensive: t_behavior_rule_ab_run.agent_id is String (matches
+            // AgentEntity.id Long via .toString()), but historical rows
+            // could carry non-numeric values. FE degrades to no Tag.
+            return null;
+        }
+        // r2-BE-1: agent deleted (orphan) → null (NOT GENERAL). Distinguishes
+        // "agent missing" from "agent exists but unclassified" so the FE can
+        // skip the misleading Tag rather than show "General".
+        if (agent == null) {
+            return null;
+        }
+        return agentRoleResolver.resolveRole(agent);
     }
 }

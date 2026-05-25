@@ -72,11 +72,12 @@ class BehaviorRuleAbEvalServiceTest {
     @BeforeEach
     void setUp() {
         rulesMapper = new BehaviorRuleVersionToCustomRulesMapper(objectMapper);
+        AgentRoleResolver agentRoleResolver = new AgentRoleResolver();
         service = new BehaviorRuleAbEvalService(
                 versionRepository, abRunRepository, scenarioRepository,
                 evalDatasetService, agentRepository, agentService,
                 rulesMapper, abEvalPipeline, broadcaster, objectMapper,
-                directExecutor);
+                agentRoleResolver, directExecutor);
     }
 
     @DisplayName("startAbForVersion throws when version not in 'candidate' status")
@@ -294,21 +295,28 @@ class BehaviorRuleAbEvalServiceTest {
     @Test
     void runAsync_success_path_persists_dual_deltas() {
         BehaviorRuleVersionEntity v = newCandidateVersion("v1");
-        v.setTargetTriggerTags(List.of("uses_bash"));
         BehaviorRuleAbRunEntity abRun = newAbRun("ab-1", "v1");
         when(abRunRepository.findById("ab-1")).thenReturn(Optional.of(abRun));
         when(versionRepository.findById("v1")).thenReturn(Optional.of(v));
+        // FLYWHEEL-AB-AGENT-AWARE-DATASET V1: ownerRole now drives subset
+        // split (not candidate.target_trigger_tags). Agent name "Design Agent"
+        // → AgentRoleResolver returns DESIGN.
         AgentEntity agent = new AgentEntity();
         agent.setId(100L);
+        agent.setName("Design Agent");
         when(agentRepository.findById(100L)).thenReturn(Optional.of(agent));
         when(agentService.toAgentDefinition(agent)).thenReturn(new AgentDefinition());
 
-        // Two scenarios: tgt-1 in target, reg-1 in regression
+        // Two scenarios: tgt-1 in target (design role), reg-1 in regression (general role)
         com.skillforge.server.entity.EvalScenarioEntity tgt = newScenario("tgt-1");
         com.skillforge.server.entity.EvalScenarioEntity reg = newScenario("reg-1");
-        when(scenarioRepository.findTargetSubsetByDatasetVersionAndTags(eq("dv-1"), any()))
+        when(scenarioRepository.findByDatasetVersionAndAgentRoles(eq("dv-1"),
+                org.mockito.ArgumentMatchers.argThat(roles -> roles != null && roles.length == 1
+                        && AgentRoleConstants.DESIGN.equals(roles[0]))))
                 .thenReturn(List.of(tgt));
-        when(scenarioRepository.findRegressionSubsetByDatasetVersionAndTags(eq("dv-1"), any()))
+        when(scenarioRepository.findByDatasetVersionAndAgentRoles(eq("dv-1"),
+                org.mockito.ArgumentMatchers.argThat(roles -> roles != null && roles.length == 1
+                        && AgentRoleConstants.GENERAL.equals(roles[0]))))
                 .thenReturn(List.of(reg));
 
         // Pipeline returns: candidate passes target but baseline doesn't;

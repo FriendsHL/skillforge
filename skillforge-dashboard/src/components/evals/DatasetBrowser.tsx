@@ -13,6 +13,7 @@ import {
   getDatasetVersion,
   type EvalScenarioSourceType,
 } from '../../api/evalDataset';
+import type { AgentRole } from '../../api/behaviorRule';
 import ScenarioDetailDrawer from './ScenarioDetailDrawer';
 import AnalyzeCaseModal from './AnalyzeCaseModal';
 import AddBaseScenarioModal from './AddBaseScenarioModal';
@@ -46,6 +47,29 @@ const SOURCE_TYPE_TABS: Array<{ id: SourceTypeTab; label: string }> = [
   { id: 'benchmark', label: 'Benchmark' },
   { id: 'session_derived', label: 'Session-derived' },
   { id: 'manual', label: 'Manual' },
+];
+
+/**
+ * FLYWHEEL-AB-AGENT-AWARE-DATASET V1 (tech-design §5.3) — role filter tab on
+ * the scenario browser. 'all' is the existing behaviour; the other five filter
+ * by the new V117 {@code t_eval_scenario.applicable_agent_roles} JSONB tag list.
+ *
+ * <p>Sits parallel to the source_type segmented control (cross-cutting filter
+ * applied on top of source_type / dataset selection).
+ *
+ * <p>Tab id matches the BE wire literal exactly (snake_case for
+ * {@code main_assistant}) — the human-readable label is separate so the UI
+ * reads "Main Assistant" while the BE filter sees {@code 'main_assistant'}.
+ */
+type RoleTab = 'all' | AgentRole;
+
+const ROLE_TABS: Array<{ id: RoleTab; label: string }> = [
+  { id: 'all', label: 'All' },
+  { id: 'general', label: 'General' },
+  { id: 'design', label: 'Design' },
+  { id: 'code', label: 'Code' },
+  { id: 'research', label: 'Research' },
+  { id: 'main_assistant', label: 'Main Assistant' },
 ];
 
 type DatasetTab = 'base' | 'agent';
@@ -93,12 +117,24 @@ function baseToDataset(s: BaseScenario): EvalDatasetScenario {
     sourceType: s.sourceType ?? null,
     sourceRef: s.sourceRef ?? null,
     purpose: s.purpose ?? null,
+    // FLYWHEEL-AB-AGENT-AWARE-DATASET V1 (V117): propagate role tags so the
+    // role tab filter applies to base scenarios too. Legacy on-disk specs
+    // without this key round-trip as null and degrade to "no match" under
+    // any non-'all' filter (deliberate — operator should explicitly opt-in
+    // by adding the field to the spec).
+    applicableAgentRoles: s.applicableAgentRoles ?? null,
   };
 }
 
 function DatasetBrowser({ agents, userId }: DatasetBrowserProps) {
   const [tab, setTab] = useState<DatasetTab>('base');
   const [sourceTypeTab, setSourceTypeTab] = useState<SourceTypeTab>('all');
+  // FLYWHEEL-AB-AGENT-AWARE-DATASET V1 (tech-design §5.3) — role filter tab
+  // sits parallel to sourceTypeTab; applied client-side via
+  // s.applicableAgentRoles?.includes(roleTab) (optional-chain defends
+  // against BE returning the field undefined on legacy / pre-V117 deploys —
+  // missing data → no match instead of TypeError).
+  const [roleTab, setRoleTab] = useState<RoleTab>('all');
   const [datasetIdFilter, setDatasetIdFilter] = useState<string>('');
   const [agentId, setAgentId] = useState<string>(() => {
     const first = agents[0];
@@ -213,13 +249,21 @@ function DatasetBrowser({ agents, userId }: DatasetBrowserProps) {
       // (so this is a no-op there for confirmed-good data), but the base
       // tab loads everything once and filters here.
       if (sourceTypeTab !== 'all' && s.sourceType !== sourceTypeTab) return false;
+      // FLYWHEEL-AB-AGENT-AWARE-DATASET V1 §5.3: client-side role filter.
+      // Uses optional-chain `?.includes(...)` so undefined / null /
+      // missing-field rows (BE pre-V117 deploys, or base scenarios with
+      // legacy on-disk JSON spec) safely return false instead of throwing
+      // "Cannot read properties of undefined". V1 keeps filter client-side
+      // — small dataset scale (≤49 scenarios) makes server-side filtering
+      // unnecessary; V2 can promote to BE query if dataset grows.
+      if (roleTab !== 'all' && !s.applicableAgentRoles?.includes(roleTab)) return false;
       // EVAL-DATASET-LAYER V1 §5.1: dataset selector intersect. When a
       // dataset is picked, restrict to scenarios that belong to its latest
       // version. `null` = no dataset filter active.
       if (datasetScenarioIds && !datasetScenarioIds.has(s.id)) return false;
       return true;
     });
-  }, [scenarios, q, statusFilter, categoryFilter, tab, sourceFilter, sourceTypeTab, datasetScenarioIds]);
+  }, [scenarios, q, statusFilter, categoryFilter, tab, sourceFilter, sourceTypeTab, roleTab, datasetScenarioIds]);
 
   return (
     <div className="dataset-browser">
@@ -234,6 +278,23 @@ function DatasetBrowser({ agents, userId }: DatasetBrowserProps) {
               key={id}
               className={`dataset-segment-btn ${sourceTypeTab === id ? 'on' : ''}`}
               onClick={() => setSourceTypeTab(id)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        {/* FLYWHEEL-AB-AGENT-AWARE-DATASET V1 §5.3 — role filter segmented
+            control, mirrors the source_type visual idiom (custom buttons
+            instead of antd Segmented for consistency with the surrounding
+            toolbar; 6 tabs: All / General / Design / Code / Research /
+            Main Assistant). Cross-cutting filter — applies on top of both
+            base/agent tab and source_type filter. */}
+        <div className="dataset-segmented-control" aria-label="Filter by agent role">
+          {ROLE_TABS.map(({ id, label }) => (
+            <button
+              key={id}
+              className={`dataset-segment-btn ${roleTab === id ? 'on' : ''}`}
+              onClick={() => setRoleTab(id)}
             >
               {label}
             </button>

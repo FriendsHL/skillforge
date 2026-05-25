@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillforge.server.entity.EvalTaskEntity;
 import com.skillforge.server.entity.EvalScenarioEntity;
 import com.skillforge.server.eval.EvalOrchestrator;
+import com.skillforge.server.improve.behavior.AgentRoleConstants;
 import com.skillforge.server.eval.scenario.BaseScenarioService;
 import com.skillforge.server.eval.scenario.EvalScenario;
 import com.skillforge.server.eval.scenario.ScenarioLoader;
@@ -29,6 +30,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -156,7 +158,42 @@ public class EvalController {
     @GetMapping("/scenarios")
     public ResponseEntity<List<Map<String, Object>>> listScenarios(
             @RequestParam(value = "agentId", required = false) String agentId,
-            @RequestParam(value = "sourceType", required = false) String sourceType) {
+            @RequestParam(value = "sourceType", required = false) String sourceType,
+            @RequestParam(value = "roles", required = false) String roles) {
+        // FLYWHEEL-AB-AGENT-AWARE-DATASET V1: new roles filter (V117 closed
+        // enum general / code / design / research / main_assistant). Comma-
+        // separated list, OR semantics ("any role match"). Takes precedence
+        // over sourceType + agentId (matches existing sourceType-before-
+        // agentId precedence). FE Dataset role tab uses this path.
+        // r1-FIX (architect B1): extend existing @GetMapping rather than add
+        // a new method at the same path — would crash startup with
+        // "Ambiguous handler methods" IllegalStateException.
+        if (roles != null && !roles.isBlank()) {
+            String[] roleArr = Arrays.stream(roles.split(","))
+                    .map(String::trim)
+                    .filter(s -> !s.isEmpty())
+                    .toArray(String[]::new);
+            if (roleArr.length == 0) {
+                return ResponseEntity.badRequest().body(List.of(Map.of(
+                        "error", "roles param is empty after split")));
+            }
+            // Validate against closed enum — drop unknown values would silently
+            // confuse the operator; fail loud instead.
+            for (String r : roleArr) {
+                if (!AgentRoleConstants.ALL.contains(r)) {
+                    return ResponseEntity.badRequest().body(List.of(Map.of(
+                            "error", "invalid role '" + r + "'; allowed: "
+                                    + AgentRoleConstants.ALL)));
+                }
+            }
+            List<EvalScenarioEntity> rows = evalScenarioDraftRepository
+                    .findAllByAgentRoles(roleArr);
+            List<Map<String, Object>> result = rows.stream()
+                    .map(this::toScenarioEntityMap)
+                    .collect(Collectors.toList());
+            return ResponseEntity.ok(result);
+        }
+
         // EVAL-DATASET-LAYER V1: new sourceType filter (V109 closed enum
         // benchmark / session_derived / manual). When sourceType is given,
         // return DB-stored EvalScenarioEntity rows of that source_type
@@ -491,6 +528,12 @@ public class EvalController {
         map.put("sourceType", entity.getSourceType());
         map.put("sourceRef", entity.getSourceRef());
         map.put("purpose", entity.getPurpose());
+        // FLYWHEEL-AB-AGENT-AWARE-DATASET V1 (V117): expose
+        // applicable_agent_roles so the FE DatasetBrowser role filter +
+        // role badges have the data they need. r1-FIX (W3-architect): FE
+        // depends on this field — omitting it surfaces as runtime TypeError
+        // (FE `.includes(...)` on undefined).
+        map.put("applicableAgentRoles", entity.getApplicableAgentRoles());
         map.put("createdAt", entity.getCreatedAt());
         map.put("reviewedAt", entity.getReviewedAt());
         // EVAL-V2 M2: parse conversation_turns String → List<{role, content}> so

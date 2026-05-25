@@ -16,6 +16,8 @@ import { useQuery } from '@tanstack/react-query';
 import dayjs from 'dayjs';
 import {
   behaviorRuleApi,
+  roleColor,
+  roleLabel,
   type BehaviorRuleAbRun,
   type BehaviorRuleAbRunStatus,
   type BehaviorRuleAbScenarioResult,
@@ -112,9 +114,19 @@ export const BehaviorRuleAbDetailDrawer: React.FC<BehaviorRuleAbDetailDrawerProp
 
   const headerTitle = useMemo(() => {
     if (!data) return 'Behavior rule A/B';
+    // FLYWHEEL-AB-AGENT-AWARE-DATASET V1 (D5 / AC-8): owner-role chip sits
+    // FIRST in the header (right after the run id) — drawer top per the
+    // tech-design §5.2 placement (after title, before Descriptions). Using
+    // the conditional spread idiom keeps the previous tag order stable when
+    // ownerAgentRole is null on legacy rows.
     return (
       <Space size="small" wrap>
         <span>A/B run #{data.id.slice(0, 8)}…</span>
+        {data.ownerAgentRole && (
+          <Tag color={roleColor(data.ownerAgentRole)}>
+            {roleLabel(data.ownerAgentRole)}
+          </Tag>
+        )}
         <Tag color={statusTagColor(data.status)}>{data.status}</Tag>
         <Tag>{data.abRunKind}</Tag>
         {data.promoted && <Tag color="blue">promoted</Tag>}
