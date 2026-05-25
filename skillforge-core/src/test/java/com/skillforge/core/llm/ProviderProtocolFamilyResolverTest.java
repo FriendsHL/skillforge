@@ -84,4 +84,14 @@ class ProviderProtocolFamilyResolverTest {
     void resolve_claudePrefix() {
         assertThat(resolve("claude-sonnet-4-20250514")).isEqualTo(CLAUDE);
     }
+
+    @Test
+    @DisplayName("mimo prefix resolves to XIAOMI_MIMO (DeepSeek-V4 thinking dialect)")
+    void resolve_mimoPrefix_xiaomiMimo() {
+        // Initial 2026-05-24 mapping to QWEN_DASHSCOPE was wrong: xiaomimimo.com uses
+        // thinking.type:disabled, not enable_thinking:false (curl-verified 2026-05-25).
+        assertThat(resolve("mimo-v2.5-pro")).isEqualTo(XIAOMI_MIMO);
+        assertThat(resolve("mimo-flash")).isEqualTo(XIAOMI_MIMO);
+        assertThat(resolve("MIMO-V2")).isEqualTo(XIAOMI_MIMO);
+    }
 }

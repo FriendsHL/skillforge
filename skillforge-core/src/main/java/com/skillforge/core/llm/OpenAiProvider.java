@@ -464,12 +464,26 @@ public class OpenAiProvider implements LlmProvider {
                 log.debug("thinkingMode={} requested for model '{}' (family {}); ignored (family does not support toggle)",
                         mode, model, family);
             }
-        } else if (family.thinkingFieldDialect == ProviderProtocolFamily.ThinkingFieldDialect.QWEN_ENABLE_THINKING) {
-            // Qwen on DashScope defaults to thinking ON when the field is omitted, which causes the
-            // agent loop to receive only reasoning_content with empty content (and SessionTitleService
-            // to render thinking text as the title). Explicitly default to off; users that want thinking
-            // must set ThinkingMode.ENABLED on the agent.
-            root.put("enable_thinking", false);
+        } else if (family.defaultsThinkingOn) {
+            // Some upstream providers default to thinking ON when the toggle field is omitted
+            // (qwen on DashScope, mimo on xiaomimimo.com — both verified live). That causes
+            // the agent loop to receive only reasoning_content with empty content (and
+            // SessionTitleService to render thinking text as the title). Explicitly write
+            // the dialect-appropriate disabled body; users that want thinking must set
+            // ThinkingMode.ENABLED on the agent.
+            switch (family.thinkingFieldDialect) {
+                case QWEN_ENABLE_THINKING ->
+                        root.put("enable_thinking", false);
+                case DEEPSEEK_V4_THINKING -> {
+                    ObjectNode thinking = objectMapper.createObjectNode();
+                    thinking.put("type", "disabled");
+                    root.set("thinking", thinking);
+                }
+                case NONE -> log.warn(
+                        "BUG: family {} has defaultsThinkingOn=true but ThinkingFieldDialect=NONE; "
+                                + "upstream thinking NOT disabled — check family attribute consistency",
+                        family);
+            }
         }
 
         // --- reasoning_effort (top-level OpenAI standard; accepted by deepseek-v4 + o1/o3). ---

@@ -17,26 +17,56 @@ public enum ProviderProtocolFamily {
      * toggle. {@code reasoning_content} replay on tool_use messages is <em>tolerated</em>
      * when omitted (empty, omitted, placeholder all return 200 OK; plan §10 Test 3);
      * we still emit {@code ""} as fallback for symmetry with DEEPSEEK_V4.
+     * <p>Upstream defaults to thinking ON when the field is omitted (verified live), so
+     * {@code defaultsThinkingOn=true} forces the OpenAiProvider to write the disabled body
+     * when no explicit ThinkingMode is supplied.</p>
      */
     QWEN_DASHSCOPE(
             /* supportsThinkingToggle */          true,
             /* requiresReasoningContentReplay */  true,
             /* dropsReasoningContentOnReplay */   false,
             /* thinkingFieldDialect */            ThinkingFieldDialect.QWEN_ENABLE_THINKING,
-            /* supportsReasoningEffort */         false),
+            /* supportsReasoningEffort */         false,
+            /* defaultsThinkingOn */              true),
 
     /**
      * DeepSeek v4 models ({@code deepseek-v4-*}). Top-level {@code thinking: {type: ...}}
      * + top-level {@code reasoning_effort}. Replay of tool_use with omitted
      * {@code reasoning_content} returns HTTP 400 "must be passed back" (plan §10
-     * Test 3 + Step 0 re-verification).
+     * Test 3 + Step 0 re-verification). Upstream provider default is preserved when
+     * ThinkingMode is null/AUTO (verified test {@code deepseekV4_auto_noFields}); thus
+     * {@code defaultsThinkingOn=false}.
      */
     DEEPSEEK_V4(
             true,
             true,
             false,
             ThinkingFieldDialect.DEEPSEEK_V4_THINKING,
-            true),
+            true,
+            false),
+
+    /**
+     * Xiaomi MiMo ({@code mimo*}) hosted on xiaomimimo.com. Verified live (2026-05-25 curl):
+     * upstream uses DeepSeek-V4-style {@code thinking: {"type": "disabled"}} for the toggle
+     * and <em>completely ignores</em> dashscope-style {@code enable_thinking}; upstream
+     * defaults to thinking ON when the field is omitted (curl A returned content='' +
+     * reasoning_content). Therefore: dialect=DEEPSEEK_V4_THINKING, defaultsThinkingOn=true.
+     * <p>Other attributes are <strong>conservative defaults</strong> (no live multi-turn
+     * tool_use curl coverage for mimo): requiresReasoningContentReplay=false → omit field
+     * rather than emit "" fallback that mimo might reject; supportsReasoningEffort=false →
+     * don't send unverified top-level field. Flip to true after live verification.</p>
+     */
+    XIAOMI_MIMO(
+            /* supportsThinkingToggle */          true,
+            // TODO(live-verify 2026-05-25): mimo 多轮 tool_use replay 是否要求 reasoning_content 字段。
+            // 若 mimo 像 deepseek-v4 一样 reject missing reasoning_content on tool_use replay，
+            // Agent Loop 主 chat 路径会 HTTP 400。failure mode 可见（不是 silent），但未 live 验证。
+            // commit 后跑一次 mimo + multi-turn tool_use smoke test 确认；如挂改为 true。
+            /* requiresReasoningContentReplay */  false,
+            /* dropsReasoningContentOnReplay */   false,
+            /* thinkingFieldDialect */            ThinkingFieldDialect.DEEPSEEK_V4_THINKING,
+            /* supportsReasoningEffort */         false,
+            /* defaultsThinkingOn */              true),
 
     /**
      * DeepSeek R1-style reasoner legacy ({@code deepseek-reasoner}). No tool-calls support;
@@ -49,6 +79,7 @@ public enum ProviderProtocolFamily {
             false,
             true,
             ThinkingFieldDialect.NONE,
+            false,
             false),
 
     /**
@@ -60,6 +91,7 @@ public enum ProviderProtocolFamily {
             false,
             false,
             ThinkingFieldDialect.NONE,
+            false,
             false),
 
     /**
@@ -71,7 +103,8 @@ public enum ProviderProtocolFamily {
             false,
             false,
             ThinkingFieldDialect.NONE,
-            true),
+            true,
+            false),
 
     /**
      * Generic OpenAI-compatible (gpt-4o, llama, mistral, vllm, ollama, bailian:glm-5, …).
@@ -82,6 +115,7 @@ public enum ProviderProtocolFamily {
             false,
             false,
             ThinkingFieldDialect.NONE,
+            false,
             false),
 
     /**
@@ -94,6 +128,7 @@ public enum ProviderProtocolFamily {
             false,
             false,
             ThinkingFieldDialect.NONE,
+            false,
             false);
 
     /** Whether this family supports toggling thinking on/off in the request body. */
@@ -106,17 +141,28 @@ public enum ProviderProtocolFamily {
     public final ThinkingFieldDialect thinkingFieldDialect;
     /** Whether family accepts top-level {@code reasoning_effort}. */
     public final boolean supportsReasoningEffort;
+    /**
+     * Whether the upstream provider defaults to thinking <em>ON</em> when the toggle field
+     * is omitted. When true, OpenAiProvider forces an explicit disabled body whenever
+     * {@link com.skillforge.core.model.ThinkingMode} is null or AUTO — preventing the
+     * agent loop from receiving content='' + reasoning_content. Verified families:
+     * QWEN_DASHSCOPE (true), XIAOMI_MIMO (true), DEEPSEEK_V4 (false: respects null/AUTO
+     * as upstream default-off; see {@code deepseekV4_auto_noFields} test).
+     */
+    public final boolean defaultsThinkingOn;
 
     ProviderProtocolFamily(boolean supportsThinkingToggle,
                            boolean requiresReasoningContentReplay,
                            boolean dropsReasoningContentOnReplay,
                            ThinkingFieldDialect dialect,
-                           boolean supportsReasoningEffort) {
+                           boolean supportsReasoningEffort,
+                           boolean defaultsThinkingOn) {
         this.supportsThinkingToggle = supportsThinkingToggle;
         this.requiresReasoningContentReplay = requiresReasoningContentReplay;
         this.dropsReasoningContentOnReplay = dropsReasoningContentOnReplay;
         this.thinkingFieldDialect = dialect;
         this.supportsReasoningEffort = supportsReasoningEffort;
+        this.defaultsThinkingOn = defaultsThinkingOn;
     }
 
     /** Thinking-field dialect emitted at the top level of the request body. */

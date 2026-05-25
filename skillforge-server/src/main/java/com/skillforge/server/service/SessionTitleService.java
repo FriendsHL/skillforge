@@ -167,23 +167,36 @@ public class SessionTitleService {
             req.setTemperature(0.3);
             // 2026-05-24 fix: title 这种简单任务一律 disable thinking — 防御任何
             // 当前/未来 reasoning model（mimo / qwen3-think / o1 等）的思考链
-            // 被 onText 累积进 textBuf 导致 title = "首先，用户要求我..." 思考独白。
+            // 被 onText 累积导致 title = "首先，用户要求我..." 思考独白。
             // 根因 fix 在 ProviderProtocolFamilyResolver PREFIX 加 mimo，
             // 此处是兜底防御未注册 reasoning model + reasoning_effort 也设最低。
+            // 2026-05-25 升级: doSmartRename 改用 LlmResponse.getContent() 不再走 onText 累积
+            // (见 doSmartRename 内注释)；本 ThinkingMode.DISABLED 仍保留以节省上游推理 cost/latency。
             req.setThinkingMode(com.skillforge.core.model.ThinkingMode.DISABLED);
 
             log.info("doSmartRename: calling LLM provider.chatStream...");
             // 使用 chatStream 同步等待:OpenAiProvider.chat() 同步版本在某些 endpoint 上不稳定,
-            // 改用流式 API 收集 delta + CountDownLatch 等待 onComplete 更可靠。
-            StringBuilder textBuf = new StringBuilder();
+            // 改用流式 API + CountDownLatch 等待 onComplete 更可靠。
+            //
+            // 用 fullResponse.getContent() 而非 onText 累积:
+            // OpenAiProvider.handleStreamingResponse 把 reasoning_content delta 跟 content delta
+            // 都走 handler.onText(...) (前端要流式渲染思考过程是有意设计, 见 OpenAiProvider.java:1023)。
+            // onComplete 时 OpenAiProvider 把两路分别填到 setContent / setReasoningContent (line ~1090),
+            // 这里直接取 getContent() 就只拿真 content, 不会被思考链污染。
+            // 防御所有 reasoning model 不论上游是否真响应 enable_thinking:false。
             CountDownLatch latch = new CountDownLatch(1);
             AtomicReference<Throwable> errRef = new AtomicReference<>();
+            AtomicReference<LlmResponse> respRef = new AtomicReference<>();
             provider.chatStream(req, new LlmStreamHandler() {
                 @Override public void onText(String text) {
-                    if (text != null) textBuf.append(text);
+                    // intentionally empty: title only consumes finalized content from
+                    // onComplete to avoid reasoning_content pollution (see comment above).
                 }
                 @Override public void onToolUse(ToolUseBlock block) { /* unused for title */ }
-                @Override public void onComplete(LlmResponse fullResponse) { latch.countDown(); }
+                @Override public void onComplete(LlmResponse fullResponse) {
+                    respRef.set(fullResponse);
+                    latch.countDown();
+                }
                 @Override public void onError(Throwable error) {
                     errRef.set(error);
                     latch.countDown();
@@ -197,7 +210,13 @@ public class SessionTitleService {
                 log.warn("doSmartRename: LLM stream error: {}", errRef.get().getMessage());
                 return;
             }
-            String raw = textBuf.toString();
+            LlmResponse resp = respRef.get();
+            // content-first + reasoning fallback: mimo / qwen-think 等 reasoning model 即便
+            // enable_thinking:false 仍把全部输出走 reasoning_content 通道，content 通道为空 ——
+            // 直接取 getContent() 会拿到空 title。fallback 到 reasoning_content 让 cleanTitle 的
+            // while-loop 剥裸推理前缀 + 取末尾段逻辑兜底。
+            // 走 content 通道的 provider (claude / openai / deepseek-chat 等) 仍优先用纯净 content。
+            String raw = pickRawForTitle(resp);
             log.info("doSmartRename: LLM returned, raw={}", raw);
             String cleaned = cleanTitle(raw);
             if (cleaned.isBlank()) {
@@ -228,7 +247,29 @@ public class SessionTitleService {
         return t;
     }
 
-    private String cleanTitle(String raw) {
+    /**
+     * Content-first + reasoning fallback. Package-private so tests can exercise the
+     * provider-shape branching directly without mocking the full chatStream loop.
+     *
+     * <p>Why: mimo / qwen-think etc. reasoning models with {@code enable_thinking:false} still
+     * route the entire output into {@code reasoning_content}; {@code content} stays empty.
+     * Using only {@code getContent()} yields an empty title in that case. Falling back to
+     * {@code reasoning_content} lets {@link #cleanTitle(String)}'s while-loop strip the
+     * "首先 / 让我 / 用户要求…" prefixes and keep the trailing title segment.
+     */
+    String pickRawForTitle(LlmResponse resp) {
+        if (resp == null) return "";
+        String content = resp.getContent();
+        if (content != null && !content.isBlank()) return content;
+        String reasoning = resp.getReasoningContent();
+        return reasoning != null ? reasoning : "";
+    }
+
+    /**
+     * Package-private (only) so {@code SessionTitleServiceCleanTitleTest} can exercise the
+     * regex / fallback logic directly. Not part of the public API.
+     */
+    String cleanTitle(String raw) {
         if (raw == null) return "";
         String t = raw;
         // 去掉 reasoning 模型(qwen3.5-plus / deepseek-r1 等)的 <think>...</think> 块
@@ -243,6 +284,46 @@ public class SessionTitleService {
             if (!lines[i].trim().isEmpty()) {
                 t = lines[i].trim();
                 break;
+            }
+        }
+        // 兜底: 即使 <think> 没标签的裸推理文本也要剥掉。reasoning model 末尾常输出
+        // "标题：XX" 或单独一行 XX, 优先取最后一个句末符号后的非空片段; 找不到 break
+        // 或 tail 为空时也必须**至少剥掉 prefix 本身** —— 用户感知 bug 就是 title 以
+        // "首先，用户要求..." 开头, prefix 不剥等于没修。
+        //
+        // 嵌套 prefix（如"首先让我..."=首先+让我）必须反复剥 —— while 循环每次 changed=true
+        // 保证 t 严格变短(剥 prefix ≥2 chars 或 substring 到 break 后)，最坏 O(prefixes.length × t.length())
+        // 收敛。
+        String[] reasoningPrefixes = {"首先", "用户要求", "让我", "我需要", "好的，", "好的,", "嗯，", "嗯,", "<think"};
+        boolean changed = true;
+        while (changed) {
+            changed = false;
+            for (String prefix : reasoningPrefixes) {
+                if (t.startsWith(prefix)) {
+                    int lastBreak = -1;
+                    for (int i = t.length() - 1; i >= 0; i--) {
+                        char c = t.charAt(i);
+                        if (c == '。' || c == '.' || c == '\n' || c == '：' || c == ':') {
+                            lastBreak = i;
+                            break;
+                        }
+                    }
+                    boolean tailUsed = false;
+                    if (lastBreak >= 0 && lastBreak < t.length() - 1) {
+                        String tail = t.substring(lastBreak + 1).trim();
+                        if (!tail.isEmpty()) {
+                            t = tail;
+                            tailUsed = true;
+                        }
+                    }
+                    if (!tailUsed) {
+                        // 没 break char (或 tail 为空) —— 至少剥 prefix
+                        // 例:"首先让我分析..." → 一轮剥 "首先" → "让我分析..." → 二轮剥 "让我" → "分析..."
+                        t = t.substring(prefix.length()).trim();
+                    }
+                    changed = true;
+                    break;   // 重启 prefixes 扫描（已 changed）
+                }
             }
         }
         // 去掉常见包裹符号

@@ -131,6 +131,29 @@ class UsageNormalizerTest {
     }
 
     @Test
+    @DisplayName("XIAOMI_MIMO: inherits OpenAI-shape cached_tokens (locks in 2026-05-25 family split)")
+    void xiaomiMimoUsage() throws Exception {
+        // Before 2026-05-25, mimo resolved to GENERIC_OPENAI / then QWEN_DASHSCOPE — both
+        // used prompt_tokens_details.cached_tokens. After splitting mimo into XIAOMI_MIMO,
+        // the cache shape must continue to land in the same OpenAI-shape branch to avoid
+        // silent regression to cacheRead=0 via the default arm.
+        JsonNode usage = m.readTree("""
+                {
+                  "prompt_tokens": 350,
+                  "completion_tokens": 15,
+                  "prompt_tokens_details": { "cached_tokens": 200 }
+                }
+                """);
+
+        LlmResponse.Usage out = UsageNormalizer.parse(usage,
+                ProviderProtocolFamily.XIAOMI_MIMO);
+
+        assertThat(out.getInputTokens()).isEqualTo(150); // 350 - 200
+        assertThat(out.getCacheReadInputTokens()).isEqualTo(200);
+        assertThat(out.getCacheCreationInputTokens()).isZero();
+    }
+
+    @Test
     @DisplayName("OPENAI_REASONING: independently asserted (regression guard if family arms split)")
     void openAiReasoningUsage() throws Exception {
         // OpenAI o1 / o3 / o4 reasoning models share the gpt-4o cached_tokens shape today

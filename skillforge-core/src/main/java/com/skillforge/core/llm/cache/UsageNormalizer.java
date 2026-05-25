@@ -19,9 +19,11 @@ import com.skillforge.core.llm.ProviderProtocolFamily;
  *       wire is TOTAL — includes cached portion.</li>
  *   <li>{@link ProviderProtocolFamily#QWEN_DASHSCOPE} — OpenAI shape with
  *       {@code prompt_tokens_details.cached_tokens} (read). {@code prompt_tokens} TOTAL.</li>
- *   <li>{@link ProviderProtocolFamily#GENERIC_OPENAI} (incl. OpenAI / xiaomi-mimo / vLLM
- *       / Ollama) — OpenAI shape with {@code prompt_tokens_details.cached_tokens} (read);
+ *   <li>{@link ProviderProtocolFamily#GENERIC_OPENAI} (incl. OpenAI / vLLM / Ollama)
+ *       — OpenAI shape with {@code prompt_tokens_details.cached_tokens} (read);
  *       creation tracked server-side only. {@code prompt_tokens} TOTAL.</li>
+ *   <li>{@link ProviderProtocolFamily#XIAOMI_MIMO} — 同 GENERIC_OPENAI 的 cached_tokens
+ *       shape（2026-05-25 拆分前以 GENERIC_OPENAI 记录）。</li>
  *   <li>{@link ProviderProtocolFamily#OPENAI_REASONING} — same as GENERIC_OPENAI for
  *       cache fields.</li>
  * </ul>
@@ -86,8 +88,10 @@ public final class UsageNormalizer {
                 cacheCreation = 0;
                 input = Math.max(0, input - cacheRead);
             }
-            case OPENAI_REASONING, GENERIC_OPENAI -> {
+            case OPENAI_REASONING, GENERIC_OPENAI, XIAOMI_MIMO -> {
                 // OpenAI / mimo / vLLM / Ollama all advertise cache via cached_tokens.
+                // XIAOMI_MIMO inherits the OpenAI-shape envelope it had as GENERIC_OPENAI before
+                // the 2026-05-25 family split — keeping cache reporting unchanged.
                 cacheRead = usageNode.path("prompt_tokens_details").path("cached_tokens").asInt(0);
                 cacheCreation = 0;
                 input = Math.max(0, input - cacheRead);

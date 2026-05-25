@@ -177,6 +177,65 @@ class OpenAiProviderThinkingTest {
         assertThat(b.has("reasoning_effort")).isFalse();
     }
 
+    // ---------- XIAOMI_MIMO ----------
+
+    @Test
+    @DisplayName("mimo auto → thinking.type=disabled emitted (default-off guard, curl-verified)")
+    void mimo_auto_defaultsThinkingDisabled() throws Exception {
+        // mimo on xiaomimimo.com defaults to thinking ON when the field is omitted
+        // (curl A 2026-05-25 evidence). XIAOMI_MIMO.defaultsThinkingOn=true forces the
+        // dialect-appropriate disabled body. Critical for SessionTitleService and any
+        // agent loop call that doesn't set ThinkingMode explicitly.
+        LlmRequest req = simpleRequest();
+        JsonNode b = body(req, "mimo-v2.5-pro");
+        assertThat(b.has("thinking")).isTrue();
+        assertThat(b.get("thinking").get("type").asText()).isEqualTo("disabled");
+        assertThat(b.has("enable_thinking")).isFalse();
+        assertThat(b.has("reasoning_effort")).isFalse();
+    }
+
+    @Test
+    @DisplayName("mimo mode=AUTO → still defaults thinking.type=disabled")
+    void mimo_modeAuto_defaultsThinkingDisabled() throws Exception {
+        LlmRequest req = simpleRequest();
+        req.setThinkingMode(ThinkingMode.AUTO);
+        JsonNode b = body(req, "mimo-flash");
+        assertThat(b.get("thinking").get("type").asText()).isEqualTo("disabled");
+    }
+
+    @Test
+    @DisplayName("mimo disabled → top-level thinking.type=disabled (curl B verified)")
+    void mimo_disabled_topLevelDisabled() throws Exception {
+        LlmRequest req = simpleRequest();
+        req.setThinkingMode(ThinkingMode.DISABLED);
+        JsonNode b = body(req, "mimo-v2.5-pro");
+        assertThat(b.get("thinking").get("type").asText()).isEqualTo("disabled");
+        assertThat(b.has("enable_thinking")).isFalse();
+    }
+
+    @Test
+    @DisplayName("mimo enabled → top-level thinking.type=enabled")
+    void mimo_enabled_topLevelEnabled() throws Exception {
+        LlmRequest req = simpleRequest();
+        req.setThinkingMode(ThinkingMode.ENABLED);
+        JsonNode b = body(req, "mimo-v2.5-pro");
+        assertThat(b.get("thinking").get("type").asText()).isEqualTo("enabled");
+        assertThat(b.has("enable_thinking")).isFalse();
+    }
+
+    @Test
+    @DisplayName("mimo with reasoning_effort=high → effort not emitted (conservative XIAOMI_MIMO)")
+    void mimo_reasoningEffortIgnored() throws Exception {
+        // XIAOMI_MIMO.supportsReasoningEffort=false until live-verified for mimo. Don't risk
+        // sending an unrecognised top-level field that the upstream might 400 on.
+        LlmRequest req = simpleRequest();
+        req.setThinkingMode(ThinkingMode.DISABLED);
+        req.setReasoningEffort(ReasoningEffort.HIGH);
+        JsonNode b = body(req, "mimo-v2.5-pro");
+        assertThat(b.has("reasoning_effort")).isFalse();
+        assertThat(b.get("thinking").get("type").asText()).isEqualTo("disabled");
+    }
+
     // ---------- DEEPSEEK_REASONER_LEGACY ----------
 
     @Test
