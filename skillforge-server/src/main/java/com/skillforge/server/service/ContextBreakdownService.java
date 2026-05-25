@@ -333,7 +333,8 @@ public class ContextBreakdownService {
         long textTokens = 0L;
         long toolUseTokens = 0L;
         long memoryResultTokens = 0L;
-        long otherResultTokens = 0L;
+        // Per-tool-name token buckets for non-memory tool results.
+        Map<String, Long> otherResultByTool = new LinkedHashMap<>();
 
         // First pass: map tool_use_id → tool name so we can classify tool_results.
         Map<String, String> toolUseIdToName = new HashMap<>();
@@ -376,7 +377,8 @@ public class ContextBreakdownService {
                         if (isMemoryOrigin(srcName)) {
                             memoryResultTokens += t;
                         } else {
-                            otherResultTokens += t;
+                            String toolName = srcName != null ? srcName : "unknown";
+                            otherResultByTool.merge(toolName, t, Long::sum);
                         }
                     }
                     default -> { /* ignore unknown block types */ }
@@ -388,8 +390,40 @@ public class ContextBreakdownService {
         out.add(Segment.leaf("conversation_text", "Conversation text", textTokens));
         out.add(Segment.leaf("tool_use", "Tool calls", toolUseTokens));
         out.add(Segment.leaf("tool_result_memory", "Memory results", memoryResultTokens));
-        out.add(Segment.leaf("tool_result_other", "Other tool results", otherResultTokens));
+        out.add(buildOtherToolResultsSegment(otherResultByTool));
         return out;
+    }
+
+    /**
+     * Build the {@code tool_result_other} parent segment with per-tool children
+     * sorted by tokens descending (largest first — matches the debug intent of
+     * "which tool is eating my context"). The parent's {@code tokens} is the sum
+     * of all children, so the top-level total stays accurate even when children
+     * are collapsed in the UI. Keeps the legacy {@code tool_result_other} key so
+     * any FE state keyed on it (palettes, expanded-set persistence) still works.
+     */
+    private static Segment buildOtherToolResultsSegment(Map<String, Long> otherResultByTool) {
+        long total = 0L;
+        for (long v : otherResultByTool.values()) total += v;
+        if (otherResultByTool.isEmpty()) {
+            return Segment.leaf("tool_result_other", "Other tool results", 0L);
+        }
+        List<Segment> children = otherResultByTool.entrySet().stream()
+                .sorted(Map.Entry.<String, Long>comparingByValue().reversed())
+                .map(e -> Segment.leaf(
+                        "tool_result_" + sanitizeKey(e.getKey()),
+                        e.getKey() + " results",
+                        e.getValue()))
+                .toList();
+        return new Segment("tool_result_other", "Other tool results", total, children);
+    }
+
+    /** Normalize tool name into a key-safe slug so future MCP/LSP/user-defined
+     *  tool names with whitespace or special chars don't break React keys /
+     *  aria-controls IDs ({@code ${idPrefix}-${s.key}}). */
+    private static String sanitizeKey(String toolName) {
+        if (toolName == null || toolName.isBlank()) return "unknown";
+        return toolName.replaceAll("[^A-Za-z0-9_]", "_");
     }
 
     /**
