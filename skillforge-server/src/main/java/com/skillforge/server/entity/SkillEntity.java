@@ -6,6 +6,7 @@ import jakarta.persistence.EntityListeners;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
+import jakarta.persistence.PrePersist;
 import jakarta.persistence.Table;
 import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.annotation.LastModifiedDate;
@@ -144,6 +145,43 @@ public class SkillEntity {
     private Integer rolloutPercentage = 100;
 
     public SkillEntity() {
+    }
+
+    /**
+     * 2026-05-26 — fork-row invariants enforced at insert time. Catches the
+     * id=452 bug class where a row was persisted with {@code source='evolution-fork'}
+     * (a path-allocation hint, not a valid {@link com.skillforge.server.skill.SkillSource}
+     * row value) or a {@code skill_path} under {@code /evolution-fork/} but no
+     * {@code parent_skill_id}. Both signal a buggy fork creation path that
+     * bypassed {@link com.skillforge.server.service.SkillService#forkSkill}
+     * (the canonical path which sets parent + semver via {@code nextSemver}).
+     *
+     * <p>{@code @PrePersist} only — does NOT fire on update, so existing
+     * orphan-fork rows (parent deleted later, leaving dangling
+     * {@code parent_skill_id}) continue to save normally.
+     *
+     * <p>Package-private so {@link com.skillforge.server.entity.SkillEntityForkInvariantsTest}
+     * can drive it without a full JPA persistence context.
+     */
+    @PrePersist
+    void validateForkRowInvariantsOnInsert() {
+        if ("evolution-fork".equals(source)) {
+            throw new IllegalStateException(
+                    "SkillEntity insert rejected: source='evolution-fork' is a path-allocation "
+                            + "hint, not a valid SkillEntity.source value. Forks must inherit "
+                            + "parent.source (clawhub/draft-approve/skillhub/etc). "
+                            + "Use SkillService.forkSkill which sets source + parent + semver "
+                            + "correctly. (name=" + name + " skillPath=" + skillPath + ")");
+        }
+        boolean pathUnderEvolutionFork = skillPath != null
+                && skillPath.contains("/evolution-fork/");
+        if (pathUnderEvolutionFork && parentSkillId == null) {
+            throw new IllegalStateException(
+                    "SkillEntity insert rejected: skill_path under /evolution-fork/ but "
+                            + "parent_skill_id is null. Fork rows must have parent_skill_id set "
+                            + "at insert time. Use SkillService.forkSkill which sets parent + "
+                            + "semver via nextSemver(). (name=" + name + " skillPath=" + skillPath + ")");
+        }
     }
 
     public Long getId() {
