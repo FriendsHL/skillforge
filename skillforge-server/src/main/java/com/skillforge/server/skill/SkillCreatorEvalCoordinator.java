@@ -457,6 +457,28 @@ public class SkillCreatorEvalCoordinator {
             log.debug("[SkillCreatorEvalCoordinator] unregistered transient SkillDefinition "
                             + "name='{}' for draft {}",
                     candidate.getName(), draft.getId());
+
+            // 2026-05-26: also delete the transient SkillEntity row from the DB
+            // and null out the draft's candidateSkillId. Without this, every
+            // skill-creator eval run leaks one row in t_skill (source=
+            // 'skill-creator-eval-transient', enabled=false) that piles up in
+            // the dashboard skill listing forever. Best-effort: any failure
+            // logs WARN but doesn't propagate (registry unregister already
+            // succeeded; DB leak is non-fatal).
+            try {
+                draft.setCandidateSkillId(null);
+                draftRepository.save(draft);
+                skillRepository.delete(candidate);
+                log.info("[SkillCreatorEvalCoordinator] deleted transient SkillEntity "
+                                + "id={} name='{}' for draft {} (candidate_skill_id nullified)",
+                        candidate.getId(), candidate.getName(), draft.getId());
+            } catch (RuntimeException ex) {
+                log.warn("[SkillCreatorEvalCoordinator] failed to delete transient "
+                                + "SkillEntity id={} name='{}' for draft {} (registry "
+                                + "already unregistered, row will leak): {}",
+                        candidate.getId(), candidate.getName(), draft.getId(),
+                        ex.getMessage());
+            }
         } catch (RuntimeException ex) {
             log.warn("[SkillCreatorEvalCoordinator] failed to unregister transient "
                             + "candidate skill for draft {}: {}",

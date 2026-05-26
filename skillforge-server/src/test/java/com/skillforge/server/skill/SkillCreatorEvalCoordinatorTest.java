@@ -3,11 +3,14 @@ package com.skillforge.server.skill;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import com.skillforge.core.skill.SkillRegistry;
 import com.skillforge.server.entity.SessionEntity;
 import com.skillforge.server.entity.SkillDraftEntity;
+import com.skillforge.server.entity.SkillEntity;
 import com.skillforge.server.improve.EphemeralScenarioCleanupService;
 import com.skillforge.server.repository.SessionRepository;
 import com.skillforge.server.repository.SkillDraftRepository;
+import com.skillforge.server.repository.SkillRepository;
 import com.skillforge.server.service.event.SessionLoopFinishedEvent;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -174,6 +177,57 @@ class SkillCreatorEvalCoordinatorTest {
         assertThat(draft.getStatus())
                 .as("equal pass rates → delta = 0 < 0.05 threshold → reject")
                 .isEqualTo(SkillCreatorService.STATUS_REJECTED);
+    }
+
+    @Test
+    @DisplayName("Transient cleanup: aggregate finish deletes SkillEntity row + nulls draft.candidateSkillId")
+    void aggregateFinish_deletesTransientSkillAndNullsDraftFk() {
+        // Wire skillRegistry + skillRepository mocks via the 9-arg ctor so
+        // unregisterTransientCandidate isn't early-returned. (2026-05-26 fix:
+        // previously unregister only removed from in-memory registry and
+        // leaked the t_skill row + dangling draft.candidate_skill_id forever.)
+        SkillRegistry skillRegistry = mock(SkillRegistry.class);
+        SkillRepository skillRepository = mock(SkillRepository.class);
+        SkillCreatorEvalCoordinator wired = new SkillCreatorEvalCoordinator(
+                sessionRepository, draftRepository, cleanupService, objectMapper,
+                null, null, null, skillRegistry, skillRepository);
+
+        // batch-complete fixture identical to the with-skill-better case
+        SessionEntity withSess = newSession("sess-with",
+                evalCtx("draft-cleanup", "sc-a", "with_skill"));
+        withSess.setRuntimeStatus("completed");
+        withSess.setParentSessionId("parent-cleanup");
+        SessionEntity withoutSess = newSession("sess-without",
+                evalCtx("draft-cleanup", "sc-a", "without_skill"));
+        withoutSess.setRuntimeStatus("error");
+        withoutSess.setParentSessionId("parent-cleanup");
+
+        when(sessionRepository.findById("sess-with")).thenReturn(Optional.of(withSess));
+        when(sessionRepository.findByParentSessionId("parent-cleanup"))
+                .thenReturn(Arrays.asList(withSess, withoutSess));
+
+        SkillDraftEntity draft = newDraft("draft-cleanup");
+        draft.setCandidateSkillId(777L);
+        draft.setEvaluationResultJson(pendingStub(2, List.of("sc-a"), "parent-cleanup"));
+        when(draftRepository.findById("draft-cleanup")).thenReturn(Optional.of(draft));
+
+        SkillEntity transientSkill = new SkillEntity();
+        transientSkill.setId(777L);
+        transientSkill.setName("test-skill_eval_abc12345");
+        transientSkill.setSource("skill-creator-eval-transient");
+        when(skillRepository.findById(777L)).thenReturn(Optional.of(transientSkill));
+
+        wired.onSessionLoopFinished(
+                new SessionLoopFinishedEvent("sess-with", "done", "completed", 7L));
+
+        // Registry unregister fires (legacy behavior preserved).
+        verify(skillRegistry).unregisterSkillDefinition("test-skill_eval_abc12345");
+        // NEW: DB row deleted.
+        verify(skillRepository).delete(transientSkill);
+        // NEW: draft FK nullified so the API response no longer dangles.
+        assertThat(draft.getCandidateSkillId())
+                .as("draft.candidate_skill_id should be nullified after transient skill delete")
+                .isNull();
     }
 
     @Test
