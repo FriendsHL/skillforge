@@ -169,8 +169,28 @@ export function useChatWsEventHandler(deps: WsEventHandlerDeps) {
           // RawMessage.content（string | ContentBlock[] | undefined），strip 后仍是
           // 这几种 shape 之一，安全 cast 回 RawMessage.content。
           const cleanedContent = stripSystemReminderBlocks(msg.content) as RawMessage['content'];
+          // CHAT-REASONING-PANEL hotfix: BE Message Java class serializes
+          // reasoningContent as snake_case "reasoning_content" (per
+          // Message.java @JsonProperty("reasoning_content"), required for
+          // upstream LLM API replay roundtrip). FE RawMessage type expects
+          // camelCase reasoningContent (matches REST SessionMessageDto record
+          // field). Bridge them here so message_appended hands off to the
+          // historical ReasoningPanel without dropping the field. Envelope
+          // also carries top-level `reasoningContent` (ChatWebSocketHandler
+          // hotfix), prefer that when present; fall back to message-body
+          // snake_case for older BE / parity.
+          const evtReasoning = (evt as { reasoningContent?: string }).reasoningContent;
+          const msgSnakeReasoning = (msg as { reasoning_content?: string }).reasoning_content;
+          const resolvedReasoning =
+            typeof evtReasoning === 'string' && evtReasoning.length > 0
+              ? evtReasoning
+              : typeof msgSnakeReasoning === 'string' && msgSnakeReasoning.length > 0
+                ? msgSnakeReasoning
+                : msg.reasoningContent;
           const cleanedMsg: RawMessage =
-            cleanedContent === msg.content ? msg : { ...msg, content: cleanedContent };
+            cleanedContent === msg.content && resolvedReasoning === msg.reasoningContent
+              ? msg
+              : { ...msg, content: cleanedContent, reasoningContent: resolvedReasoning };
           setRawMessages((prev) => {
             if (prev.length > 0) {
               const last = prev[prev.length - 1] as { role?: string; content?: unknown } | null;

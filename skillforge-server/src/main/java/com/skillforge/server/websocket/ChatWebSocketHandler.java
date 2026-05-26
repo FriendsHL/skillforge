@@ -214,6 +214,12 @@ public class ChatWebSocketHandler extends TextWebSocketHandler implements ChatEv
         // /api/chat/sessions/{id}/messages history endpoint. ISO-8601 serialization via
         // findAndRegisterModules() above.
         payload.put("createdAt", Instant.now());
+        // CHAT-REASONING-PANEL hotfix: surface reasoningContent at envelope-level so FE
+        // doesn't have to dig into Message body shape (which serializes inconsistently
+        // across String / array-content paths). Mirrors REST SessionMessageDto.reasoningContent.
+        if (message != null && message.getReasoningContent() != null && !message.getReasoningContent().isEmpty()) {
+            payload.put("reasoningContent", message.getReasoningContent());
+        }
         broadcast(sessionId, payload);
     }
 

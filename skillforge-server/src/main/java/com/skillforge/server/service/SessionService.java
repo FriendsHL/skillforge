@@ -347,7 +347,8 @@ public class SessionService {
                     stored.answeredAt(),
                     stored.metadata(),
                     stored.traceId(),
-                    stored.createdAt()
+                    stored.createdAt(),
+                    m.getReasoningContent()
             ));
         }
         return out;

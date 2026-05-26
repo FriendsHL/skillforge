@@ -22,24 +22,32 @@ public record SessionMessageDto(
         Instant answeredAt,
         Map<String, Object> metadata,
         String traceId,
-        Instant createdAt
+        Instant createdAt,
+        String reasoningContent
 ) {
-    /** Backward-compat — defaults createdAt to null. */
+    /** Backward-compat — defaults reasoningContent to null. */
+    public SessionMessageDto(long seqNo, String role, Object content, String msgType,
+                             String messageType, String controlId, Instant answeredAt,
+                             Map<String, Object> metadata, String traceId, Instant createdAt) {
+        this(seqNo, role, content, msgType, messageType, controlId, answeredAt, metadata, traceId, createdAt, null);
+    }
+
+    /** Backward-compat — defaults createdAt + reasoningContent to null. */
     public SessionMessageDto(long seqNo, String role, Object content, String msgType,
                              String messageType, String controlId, Instant answeredAt,
                              Map<String, Object> metadata, String traceId) {
-        this(seqNo, role, content, msgType, messageType, controlId, answeredAt, metadata, traceId, null);
+        this(seqNo, role, content, msgType, messageType, controlId, answeredAt, metadata, traceId, null, null);
     }
 
-    /** Backward-compat — defaults traceId + createdAt to null. */
+    /** Backward-compat — defaults traceId + createdAt + reasoningContent to null. */
     public SessionMessageDto(long seqNo, String role, Object content, String msgType,
                              String messageType, String controlId, Instant answeredAt,
                              Map<String, Object> metadata) {
-        this(seqNo, role, content, msgType, messageType, controlId, answeredAt, metadata, null, null);
+        this(seqNo, role, content, msgType, messageType, controlId, answeredAt, metadata, null, null, null);
     }
 
     public SessionMessageDto(long seqNo, String role, Object content, String msgType,
                              Map<String, Object> metadata) {
-        this(seqNo, role, content, msgType, "normal", null, null, metadata, null, null);
+        this(seqNo, role, content, msgType, "normal", null, null, metadata, null, null, null);
     }
 }
