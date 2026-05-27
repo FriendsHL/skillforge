@@ -54,7 +54,7 @@ const DynamicSim: React.FC = () => {
       agents
         .filter((a: AgentDto) => typeof a.id === 'number')
         .map((a: AgentDto) => ({
-          value: a.id as number,
+          value: String(a.id),
           label: `${a.name} (#${a.id})`,
         })),
     [agents],

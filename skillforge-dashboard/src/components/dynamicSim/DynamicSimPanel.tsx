@@ -7,7 +7,6 @@ import {
   listTrials,
   type CandidateSurfaceType,
   type DynamicSimErrorResponse,
-  type SimulatorTrialResponse,
 } from '../../api/dynamicSim';
 import {
   getEvalDatasetScenarios,
