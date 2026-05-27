@@ -74,20 +74,25 @@ public class MemoryProposalService {
 
         List<Long> sourceIds = parseSourceIds(p.getSourceMemoryIds());
         if (sourceIds.isEmpty()) {
-            throw new IllegalStateException("proposal has no sourceMemoryIds: id=" + proposalId);
+            if (!MemoryProposalEntity.TYPE_REFLECTION.equals(p.getProposalType())) {
+                throw new IllegalStateException("proposal has no sourceMemoryIds: id=" + proposalId);
+            }
         }
 
         // B-4 fix: pessimistic-write lock on source memories.
-        List<MemoryEntity> sources = memoryRepository.findAllByIdForUpdate(sourceIds);
-        if (sources.size() != sourceIds.size()) {
-            // Source memory deleted between propose-time and approve-time → stale.
-            return staleAndPersist(p, "source_memory_missing");
-        }
+        List<MemoryEntity> sources = List.of();
+        if (!sourceIds.isEmpty()) {
+            sources = memoryRepository.findAllByIdForUpdate(sourceIds);
+            if (sources.size() != sourceIds.size()) {
+                // Source memory deleted between propose-time and approve-time → stale.
+                return staleAndPersist(p, "source_memory_missing");
+            }
 
-        // W-3 fix: stale check by proposal_type.
-        StaleCheckResult stale = checkStaleByType(p.getProposalType(), sources);
-        if (stale.isStale()) {
-            return staleAndPersist(p, stale.reason());
+            // W-3 fix: stale check by proposal_type.
+            StaleCheckResult stale = checkStaleByType(p.getProposalType(), sources);
+            if (stale.isStale()) {
+                return staleAndPersist(p, stale.reason());
+            }
         }
 
         // B-3 second line of defense at approve gate.

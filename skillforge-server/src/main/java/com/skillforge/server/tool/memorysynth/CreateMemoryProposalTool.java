@@ -289,8 +289,7 @@ public class CreateMemoryProposalTool implements Tool {
         }
 
         Object evidenceObj = p.get("evidence");
-        String evidenceJson = serializeEvidence(evidenceObj);
-        boolean hasTranscriptEvidence = hasSessionEvidence(evidenceObj);
+        EvidenceValidation evidence = validateEvidence(evidenceObj);
 
         Object sourceMemoryIdsObj = p.get("sourceMemoryIds");
         if (!isArrayLike(sourceMemoryIdsObj)) {
@@ -301,7 +300,10 @@ public class CreateMemoryProposalTool implements Tool {
             if (!MemoryProposalEntity.TYPE_REFLECTION.equals(type)) {
                 return ProposalDraft.fail("sourceMemoryIds may be empty only for transcript-backed reflection proposals");
             }
-            if (!hasTranscriptEvidence) {
+            if (!evidence.ok()) {
+                return ProposalDraft.fail(evidence.error());
+            }
+            if (!evidence.hasSessionEvidence()) {
                 return ProposalDraft.fail("reflection with empty sourceMemoryIds requires session evidence");
             }
         }
@@ -408,7 +410,7 @@ public class CreateMemoryProposalTool implements Tool {
         }
 
         return new ProposalDraft(true, null, type, sourceIds, winnerMemoryId,
-                suggestedTitle, suggestedContent, suggestedImportance, reasoning, evidenceJson, resolvedUserId);
+                suggestedTitle, suggestedContent, suggestedImportance, reasoning, evidence.json(), resolvedUserId);
     }
 
     private boolean alreadyHasEquivalentProposal(Long userId, List<Long> sourceIds, String type) {
@@ -473,34 +475,47 @@ public class CreateMemoryProposalTool implements Tool {
         }
     }
 
-    private String serializeEvidence(Object evidenceObj) {
-        if (!(evidenceObj instanceof List<?> list) || list.isEmpty()) {
-            return null;
+    private EvidenceValidation validateEvidence(Object evidenceObj) {
+        if (evidenceObj == null) {
+            return EvidenceValidation.empty();
+        }
+        if (!(evidenceObj instanceof List<?> list)) {
+            return EvidenceValidation.fail("transcript-backed reflection requires serializable evidence array");
         }
         try {
-            return objectMapper.writeValueAsString(list);
+            String json = list.isEmpty() ? null : objectMapper.writeValueAsString(list);
+            return new EvidenceValidation(true, null, json, hasSessionEvidence(list));
         } catch (Exception e) {
-            log.debug("CreateMemoryProposalTool failed to serialize evidence (ignored): {}", e.getMessage());
-            return null;
+            log.debug("CreateMemoryProposalTool failed to serialize evidence: {}", e.getMessage());
+            return EvidenceValidation.fail("transcript-backed reflection requires serializable evidence array");
         }
     }
 
-    private static boolean hasSessionEvidence(Object evidenceObj) {
-        if (!(evidenceObj instanceof List<?> list)) {
-            return false;
-        }
+    private static boolean hasSessionEvidence(List<?> list) {
         for (Object item : list) {
             if (!(item instanceof Map<?, ?> evidence)) {
                 continue;
             }
             String source = asString(evidence.get("source"));
-            Object sessionId = evidence.get("sessionId");
+            String sessionId = asString(evidence.get("sessionId"));
+            Object seqNo = evidence.get("seqNo");
             String quote = asString(evidence.get("quote"));
-            if ("session".equals(source) && sessionId != null && quote != null && !quote.isBlank()) {
+            if ("session".equals(source)
+                    && sessionId != null && !sessionId.isBlank()
+                    && isIntegralNumber(seqNo)
+                    && quote != null && !quote.isBlank()) {
                 return true;
             }
         }
         return false;
+    }
+
+    private static boolean isIntegralNumber(Object value) {
+        if (!(value instanceof Number number)) {
+            return false;
+        }
+        double d = number.doubleValue();
+        return Double.isFinite(d) && Math.rint(d) == d;
     }
 
     private static List<Long> parseLongList(Object raw) {
@@ -568,6 +583,19 @@ public class CreateMemoryProposalTool implements Tool {
         static ProposalDraft fail(String error) {
             return new ProposalDraft(false, error, null, List.of(), null,
                     null, null, null, null, null, null);
+        }
+    }
+
+    private record EvidenceValidation(boolean ok,
+                                      String error,
+                                      String json,
+                                      boolean hasSessionEvidence) {
+        static EvidenceValidation empty() {
+            return new EvidenceValidation(true, null, null, false);
+        }
+
+        static EvidenceValidation fail(String error) {
+            return new EvidenceValidation(false, error, null, false);
         }
     }
 
