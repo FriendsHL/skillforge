@@ -1,11 +1,13 @@
 package com.skillforge.server.attribution;
 
 import com.skillforge.server.entity.OptimizationEventEntity;
+import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.SkillDraftEntity;
 import com.skillforge.server.improve.BehaviorRuleImproverService;
 import com.skillforge.server.improve.ImprovementStartResult;
 import com.skillforge.server.improve.PromptImproverService;
 import com.skillforge.server.improve.SkillDraftService;
+import com.skillforge.server.repository.AgentRepository;
 import com.skillforge.server.repository.OptimizationEventRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -65,6 +67,7 @@ class AttributionApprovalServiceTest {
     @Mock private PromptImproverService promptImproverService;
     @Mock private BehaviorRuleImproverService behaviorRuleImproverService;
     @Mock private AttributionEventBroadcaster broadcaster;
+    @Mock private AgentRepository agentRepository;
     // Phase 1.3 — domain event publisher for OptimizationEventAutoTriggerListener.
     @Mock private org.springframework.context.ApplicationEventPublisher eventPublisher;
 
@@ -74,10 +77,19 @@ class AttributionApprovalServiceTest {
     void setUp() {
         service = new AttributionApprovalService(
                 eventRepository, skillDraftService, promptImproverService,
-                behaviorRuleImproverService, broadcaster, eventPublisher);
+                behaviorRuleImproverService, broadcaster, eventPublisher, agentRepository);
         // Save returns the input arg unchanged (covers stage transitions).
         org.mockito.Mockito.lenient().when(eventRepository.save(any(OptimizationEventEntity.class)))
                 .thenAnswer(inv -> inv.getArgument(0));
+        org.mockito.Mockito.lenient().when(agentRepository.findById(7L))
+                .thenReturn(Optional.of(agent(7L, 7L)));
+    }
+
+    private AgentEntity agent(long id, Long ownerId) {
+        AgentEntity agent = new AgentEntity();
+        agent.setId(id);
+        agent.setOwnerId(ownerId);
+        return agent;
     }
 
     private OptimizationEventEntity pendingEvent(long id, String surface) {
@@ -116,6 +128,32 @@ class AttributionApprovalServiceTest {
                 anyString());
         verify(promptImproverService, never()).startImprovementFromAttribution(
                 anyLong(), anyString(), anyString(), anyLong());
+    }
+
+    @Test
+    @DisplayName("approve skill uses target agent owner as draft owner, not the approver")
+    void approve_skillSurface_usesTargetAgentOwnerForDraftOwner() {
+        OptimizationEventEntity event = pendingEvent(105L, OptimizationEventEntity.SURFACE_SKILL);
+        event.setPatternId(314L);
+        event.setAgentId(77L);
+        when(eventRepository.findById(105L)).thenReturn(Optional.of(event));
+        when(agentRepository.findById(77L)).thenReturn(Optional.of(agent(77L, 42L)));
+        SkillDraftEntity stubDraft = new SkillDraftEntity();
+        stubDraft.setId("draft-uuid-owner-42");
+        when(skillDraftService.createDraftFromAttribution(
+                anyLong(), anyLong(), anyString(), anyString(), anyString(), anyLong(), anyString()))
+                .thenReturn(stubDraft);
+
+        OptimizationEventEntity returned = service.approve(105L, /*approverUserId*/ 99L);
+
+        assertThat(returned.getStage()).isEqualTo(OptimizationEventEntity.STAGE_CANDIDATE_READY);
+        verify(skillDraftService).createDraftFromAttribution(
+                eq(105L), eq(314L),
+                eq("curator description"),
+                eq("expected impact"),
+                eq("rewrite_skill_md"),
+                eq(42L),
+                anyString());
     }
 
     @Test

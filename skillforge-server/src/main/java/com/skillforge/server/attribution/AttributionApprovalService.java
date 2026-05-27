@@ -1,11 +1,13 @@
 package com.skillforge.server.attribution;
 
+import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.OptimizationEventEntity;
 import com.skillforge.server.entity.SkillDraftEntity;
 import com.skillforge.server.improve.BehaviorRuleImproverService;
 import com.skillforge.server.improve.ImprovementStartResult;
 import com.skillforge.server.improve.PromptImproverService;
 import com.skillforge.server.improve.SkillDraftService;
+import com.skillforge.server.repository.AgentRepository;
 import com.skillforge.server.repository.OptimizationEventRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -148,6 +150,7 @@ public class AttributionApprovalService {
     private final SkillDraftService skillDraftService;
     private final PromptImproverService promptImproverService;
     private final BehaviorRuleImproverService behaviorRuleImproverService;
+    private final AgentRepository agentRepository;
     private final AttributionEventBroadcaster broadcaster;
     /**
      * FLYWHEEL-LOOP-CLOSURE Phase 1.3 (2026-05-16) — publishes
@@ -165,10 +168,23 @@ public class AttributionApprovalService {
                                       BehaviorRuleImproverService behaviorRuleImproverService,
                                       AttributionEventBroadcaster broadcaster,
                                       ApplicationEventPublisher eventPublisher) {
+        this(eventRepository, skillDraftService, promptImproverService, behaviorRuleImproverService,
+                broadcaster, eventPublisher, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public AttributionApprovalService(OptimizationEventRepository eventRepository,
+                                      SkillDraftService skillDraftService,
+                                      PromptImproverService promptImproverService,
+                                      BehaviorRuleImproverService behaviorRuleImproverService,
+                                      AttributionEventBroadcaster broadcaster,
+                                      ApplicationEventPublisher eventPublisher,
+                                      AgentRepository agentRepository) {
         this.eventRepository = eventRepository;
         this.skillDraftService = skillDraftService;
         this.promptImproverService = promptImproverService;
         this.behaviorRuleImproverService = behaviorRuleImproverService;
+        this.agentRepository = agentRepository;
         this.broadcaster = broadcaster;
         this.eventPublisher = eventPublisher;
     }
@@ -317,7 +333,7 @@ public class AttributionApprovalService {
         String stageGenerating = OptimizationEventEntity.STAGE_CANDIDATE_GENERATING;
         try {
             switch (event.getSurfaceType()) {
-                case OptimizationEventEntity.SURFACE_SKILL -> dispatchSkillSurface(event, approverUserId);
+                case OptimizationEventEntity.SURFACE_SKILL -> dispatchSkillSurface(event);
                 case OptimizationEventEntity.SURFACE_PROMPT -> dispatchPromptSurface(event, approverUserId);
                 case OptimizationEventEntity.SURFACE_BEHAVIOR_RULE ->
                         dispatchBehaviorRuleSurface(event, approverUserId);
@@ -378,15 +394,16 @@ public class AttributionApprovalService {
         return saved;
     }
 
-    private void dispatchSkillSurface(OptimizationEventEntity event, Long approverUserId) {
+    private void dispatchSkillSurface(OptimizationEventEntity event) {
         String suggestedSkillName = "AttrSkill" + event.getPatternId() + "_" + event.getId();
+        Long ownerId = resolveSkillOwnerId(event);
         SkillDraftEntity draft = skillDraftService.createDraftFromAttribution(
                 event.getId(),
                 event.getPatternId(),
                 event.getDescription(),
                 event.getExpectedImpact(),
                 event.getChangeType(),
-                approverUserId != null ? approverUserId : event.getAgentId(),
+                ownerId,
                 suggestedSkillName);
         // FLYWHEEL-LOOP-CLOSURE Phase 1.2 (V88, 2026-05-16): persist the draft
         // UUID link to the sidecar column so the Phase 1.3 listener / Phase
@@ -397,6 +414,26 @@ public class AttributionApprovalService {
         event.setCandidateSkillDraftUuid(draft.getId());
         log.info("[AttributionApproval] eventId={} → skill draft created (draftId={})",
                 event.getId(), draft.getId());
+    }
+
+    private Long resolveSkillOwnerId(OptimizationEventEntity event) {
+        Long agentId = event.getAgentId();
+        if (agentId == null) {
+            throw new IllegalStateException("dispatchSkillSurface: eventId=" + event.getId()
+                    + " has null agentId — cannot resolve skill draft owner");
+        }
+        if (agentRepository == null) {
+            return agentId;
+        }
+        AgentEntity agent = agentRepository.findById(agentId)
+                .orElseThrow(() -> new IllegalStateException(
+                        "dispatchSkillSurface: agent not found: " + agentId));
+        Long ownerId = agent.getOwnerId();
+        if (ownerId == null) {
+            throw new IllegalStateException("dispatchSkillSurface: agentId=" + agentId
+                    + " has null ownerId — cannot resolve skill draft owner");
+        }
+        return ownerId;
     }
 
     private void dispatchPromptSurface(OptimizationEventEntity event, Long approverUserId) {
