@@ -1,6 +1,7 @@
 package com.skillforge.server.tool.attribution;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.skillforge.core.model.ToolSchema;
 import com.skillforge.core.skill.SkillContext;
 import com.skillforge.core.skill.SkillResult;
 import com.skillforge.server.attribution.AttributionEventBroadcaster;
@@ -88,6 +89,44 @@ class ProposeOptimizationToolTest {
         assertThat(saved.getAttributionSessionId()).isEqualTo("sess-curator-1");
         assertThat(saved.getCooldownExpiresAt())
                 .isEqualTo(FIXED_NOW.plus(ProposeOptimizationTool.COOLDOWN_DURATION));
+    }
+
+    @Test
+    @DisplayName("schema exposes memoryContextHash and memoryIds as optional fields")
+    @SuppressWarnings("unchecked")
+    void schema_memoryContextFields_optional() {
+        ToolSchema schema = tool.getToolSchema();
+
+        Map<String, Object> inputSchema = schema.getInputSchema();
+        Map<String, Object> properties = (Map<String, Object>) inputSchema.get("properties");
+        List<String> required = (List<String>) inputSchema.get("required");
+
+        assertThat(properties).containsKeys("memoryContextHash", "memoryIds");
+        assertThat(required).doesNotContain("memoryContextHash", "memoryIds");
+        assertThat((Map<String, Object>) properties.get("memoryIds"))
+                .containsEntry("type", "array");
+    }
+
+    @Test
+    @DisplayName("optional memory context hash and numeric ids are persisted as JSON audit fields")
+    void execute_withMemoryContext_persistsHashAndIds() {
+        when(patternRepository.findById(42L)).thenReturn(Optional.of(new SessionPatternEntity()));
+        ArgumentCaptor<OptimizationEventEntity> captor = ArgumentCaptor.forClass(OptimizationEventEntity.class);
+        when(eventRepository.save(captor.capture())).thenAnswer(inv -> {
+            OptimizationEventEntity arg = inv.getArgument(0);
+            arg.setId(125L);
+            return arg;
+        });
+        Map<String, Object> in = validInput();
+        in.put("memoryContextHash", "  abc123  ");
+        in.put("memoryIds", List.of(9, "10", "not-a-number", -2, 9));
+
+        SkillResult result = tool.execute(in, null);
+
+        assertThat(result.isSuccess()).isTrue();
+        OptimizationEventEntity saved = captor.getValue();
+        assertThat(saved.getMemoryContextHash()).isEqualTo("abc123");
+        assertThat(saved.getMemoryContextMemoryIds()).isEqualTo("[9,10]");
     }
 
     @Test

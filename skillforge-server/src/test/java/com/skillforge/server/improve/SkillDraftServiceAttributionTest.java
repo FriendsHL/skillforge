@@ -9,6 +9,8 @@ import com.skillforge.server.config.LlmProperties;
 import com.skillforge.core.skill.SkillPackageLoader;
 import com.skillforge.core.skill.SkillRegistry;
 import com.skillforge.server.entity.SkillDraftEntity;
+import com.skillforge.server.memory.context.MemoryContextProvider;
+import com.skillforge.server.memory.context.MemoryContextSnapshot;
 import com.skillforge.server.repository.SessionRepository;
 import com.skillforge.server.repository.SkillDraftRepository;
 import com.skillforge.server.repository.SkillRepository;
@@ -23,6 +25,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -60,6 +64,7 @@ class SkillDraftServiceAttributionTest {
     @Mock private SkillPackageLoader skillPackageLoader;
     @Mock private SkillRegistry skillRegistry;
     @Mock private SkillStorageService skillStorageService;
+    @Mock private MemoryContextProvider memoryContextProvider;
 
     private SkillDraftService service;
 
@@ -88,7 +93,8 @@ class SkillDraftServiceAttributionTest {
                 org.mockito.Mockito.mock(com.skillforge.server.repository.PatternSessionMemberRepository.class),
                 org.mockito.Mockito.mock(com.skillforge.server.improve.SessionScenarioExtractorService.class),
                 org.mockito.Mockito.mock(com.skillforge.server.improve.EphemeralScenarioCleanupService.class),
-                org.mockito.Mockito.mock(com.skillforge.server.improve.SkillAbEvalService.class));
+                org.mockito.Mockito.mock(com.skillforge.server.improve.SkillAbEvalService.class),
+                memoryContextProvider);
     }
 
     /** Helper — stub the preferred xiaomi-mimo provider to return a canned LLM response. */
@@ -212,6 +218,41 @@ class SkillDraftServiceAttributionTest {
         assertThat(saved.getExtractionRationale())
                 .contains("[attribution:eventId=99")
                 .contains("desc only");
+    }
+
+    @Test
+    @DisplayName("memory context provider output is appended to attribution skill-generation prompt")
+    void createDraftFromAttribution_memoryContextAvailable_includesContextInPrompt() {
+        when(memoryContextProvider.load(7L,
+                "Add Bash pre-validation step before retries\nReduce failure rate"))
+                .thenReturn(new MemoryContextSnapshot(
+                        7L,
+                        "task",
+                        "User prefers dry-run before destructive commands.",
+                        Set.of(101L),
+                        "hash-101"));
+        stubLlmReturns("""
+                ---
+                triggers: [pre-validate]
+                required_tools: [Bash]
+                ---
+                Run dry-run validation first.""");
+        ArgumentCaptor<LlmRequest> requestCaptor = ArgumentCaptor.forClass(LlmRequest.class);
+        when(skillDraftRepository.save(any(SkillDraftEntity.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.createDraftFromAttribution(
+                99L, 42L,
+                "Add Bash pre-validation step before retries",
+                "Reduce failure rate",
+                "rewrite_skill_md",
+                7L,
+                "AttrSkill42_99");
+
+        verify(llmProvider).chat(requestCaptor.capture());
+        String userPrompt = requestCaptor.getValue().getMessages().get(0).getTextContent();
+        assertThat(userPrompt)
+                .contains("Relevant long-term memory context:")
+                .contains("User prefers dry-run before destructive commands.");
     }
 
     @Test

@@ -15,6 +15,8 @@ import com.skillforge.server.config.LlmProperties;
 import com.skillforge.server.entity.SessionEntity;
 import com.skillforge.server.entity.SkillDraftEntity;
 import com.skillforge.server.entity.SkillEntity;
+import com.skillforge.server.memory.context.MemoryContextProvider;
+import com.skillforge.server.memory.context.MemoryContextSnapshot;
 import com.skillforge.server.repository.SessionRepository;
 import com.skillforge.server.repository.SkillDraftRepository;
 import com.skillforge.server.repository.SkillRepository;
@@ -108,6 +110,7 @@ public class SkillDraftService {
     private final SessionScenarioExtractorService sessionScenarioExtractor;
     private final EphemeralScenarioCleanupService ephemeralScenarioCleanupService;
     private final SkillAbEvalService skillAbEvalService;
+    private final MemoryContextProvider memoryContextProvider;
 
     /**
      * Test-only override for the artifact root directory. {@code null} in production —
@@ -134,6 +137,32 @@ public class SkillDraftService {
                              SessionScenarioExtractorService sessionScenarioExtractor,
                              EphemeralScenarioCleanupService ephemeralScenarioCleanupService,
                              @org.springframework.context.annotation.Lazy SkillAbEvalService skillAbEvalService) {
+        this(sessionRepository, skillDraftRepository, skillRepository, llmProviderFactory,
+                objectMapper, llmProperties, userWebSocketHandler, skillCreatorService,
+                skillPackageLoader, skillRegistry, skillStorageService, evalScenarioRepository,
+                optimizationEventRepository, patternSessionMemberRepository, sessionScenarioExtractor,
+                ephemeralScenarioCleanupService, skillAbEvalService, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public SkillDraftService(SessionRepository sessionRepository,
+                             SkillDraftRepository skillDraftRepository,
+                             SkillRepository skillRepository,
+                             LlmProviderFactory llmProviderFactory,
+                             ObjectMapper objectMapper,
+                             LlmProperties llmProperties,
+                             UserWebSocketHandler userWebSocketHandler,
+                             SkillCreatorService skillCreatorService,
+                             SkillPackageLoader skillPackageLoader,
+                             SkillRegistry skillRegistry,
+                             SkillStorageService skillStorageService,
+                             com.skillforge.server.repository.EvalScenarioDraftRepository evalScenarioRepository,
+                             com.skillforge.server.repository.OptimizationEventRepository optimizationEventRepository,
+                             com.skillforge.server.repository.PatternSessionMemberRepository patternSessionMemberRepository,
+                             SessionScenarioExtractorService sessionScenarioExtractor,
+                             EphemeralScenarioCleanupService ephemeralScenarioCleanupService,
+                             @org.springframework.context.annotation.Lazy SkillAbEvalService skillAbEvalService,
+                             MemoryContextProvider memoryContextProvider) {
         this.sessionRepository = sessionRepository;
         this.skillDraftRepository = skillDraftRepository;
         this.skillRepository = skillRepository;
@@ -152,6 +181,7 @@ public class SkillDraftService {
         this.sessionScenarioExtractor = sessionScenarioExtractor;
         this.ephemeralScenarioCleanupService = ephemeralScenarioCleanupService;
         this.skillAbEvalService = skillAbEvalService;
+        this.memoryContextProvider = memoryContextProvider;
     }
 
     // Not @Transactional — LLM call is IO-bound (5-20s); holding a DB connection that long
@@ -449,7 +479,7 @@ public class SkillDraftService {
         // parent prompt branch at that time.)
         try {
             SkillContentResult result =
-                    generateCandidateSkillMdFromAttribution(attributedDescription, expectedImpact);
+                    generateCandidateSkillMdFromAttribution(ownerId, attributedDescription, expectedImpact);
             draft.setTriggers(safeCsv(result.triggers()));
             draft.setRequiredTools(safeCsv(result.requiredTools()));
             draft.setPromptHint(result.skillMdBody());
@@ -497,7 +527,14 @@ public class SkillDraftService {
      */
     private SkillContentResult generateCandidateSkillMdFromAttribution(String attributedDescription,
                                                                        String expectedImpact) {
-        SkillMdPrompt prompt = buildSkillMdGenPrompt(attributedDescription, expectedImpact);
+        return generateCandidateSkillMdFromAttribution(null, attributedDescription, expectedImpact);
+    }
+
+    private SkillContentResult generateCandidateSkillMdFromAttribution(Long ownerUserId,
+                                                                       String attributedDescription,
+                                                                       String expectedImpact) {
+        SkillMdPrompt prompt = buildSkillMdGenPrompt(attributedDescription, expectedImpact,
+                loadRenderedMemoryContext(ownerUserId, attributedDescription, expectedImpact));
 
         LlmProvider provider = llmProviderFactory.getProvider(EXTRACT_PROVIDER_NAME);
         boolean preferredAvailable = provider != null;
@@ -541,7 +578,9 @@ public class SkillDraftService {
      * because future tweaks to the system / user prompt should be diff-able
      * without touching the LLM-call orchestration).
      */
-    private static SkillMdPrompt buildSkillMdGenPrompt(String attributedDescription, String expectedImpact) {
+    private static SkillMdPrompt buildSkillMdGenPrompt(String attributedDescription,
+                                                       String expectedImpact,
+                                                       String memoryContext) {
         String systemPrompt = """
                 You are an expert SkillForge skill author. Convert an attribution proposal \
                 (curator-derived change description) into a concrete SKILL.md file.
@@ -568,8 +607,35 @@ public class SkillDraftService {
         if (expectedImpact != null && !expectedImpact.isBlank()) {
             userPrompt.append("\n\nExpected impact: ").append(expectedImpact.trim());
         }
+        if (memoryContext != null && !memoryContext.isBlank()) {
+            userPrompt.append("\n\nRelevant long-term memory context:\n")
+                    .append(memoryContext.trim());
+        }
         userPrompt.append("\n\nGenerate the SKILL.md per the strict format above.");
         return new SkillMdPrompt(systemPrompt, userPrompt.toString());
+    }
+
+    private String loadRenderedMemoryContext(Long ownerUserId,
+                                             String attributedDescription,
+                                             String expectedImpact) {
+        if (memoryContextProvider == null || ownerUserId == null) {
+            return "";
+        }
+        StringBuilder task = new StringBuilder();
+        if (attributedDescription != null) {
+            task.append(attributedDescription.trim());
+        }
+        if (expectedImpact != null && !expectedImpact.isBlank()) {
+            task.append("\n").append(expectedImpact.trim());
+        }
+        try {
+            MemoryContextSnapshot snapshot = memoryContextProvider.load(ownerUserId, task.toString());
+            return snapshot != null && snapshot.rendered() != null ? snapshot.rendered() : "";
+        } catch (RuntimeException e) {
+            log.warn("Attribution skill-draft memory context load failed ownerUserId={}: {}",
+                    ownerUserId, e.getMessage());
+            return "";
+        }
     }
 
     /** Phase 1.1 prompt holder — private since only {@code generateCandidateSkillMdFromAttribution} consumes it. */

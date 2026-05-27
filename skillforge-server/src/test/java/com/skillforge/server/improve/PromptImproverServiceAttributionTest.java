@@ -8,6 +8,8 @@ import com.skillforge.core.llm.LlmResponse;
 import com.skillforge.server.config.LlmProperties;
 import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.PromptVersionEntity;
+import com.skillforge.server.memory.context.MemoryContextProvider;
+import com.skillforge.server.memory.context.MemoryContextSnapshot;
 import com.skillforge.server.repository.AgentRepository;
 import com.skillforge.server.repository.EvalTaskRepository;
 import com.skillforge.server.repository.PromptAbRunRepository;
@@ -23,6 +25,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -58,6 +61,7 @@ class PromptImproverServiceAttributionTest {
     @Mock private PromptPromotionService promotionService;
     @Mock private LlmProviderFactory llmProviderFactory;
     @Mock private ExecutorService coordinatorExecutor;
+    @Mock private MemoryContextProvider memoryContextProvider;
 
     private PromptImproverService service;
 
@@ -86,7 +90,9 @@ class PromptImproverServiceAttributionTest {
                 org.mockito.Mockito.mock(com.skillforge.server.repository.PatternSessionMemberRepository.class),
                 org.mockito.Mockito.mock(com.skillforge.server.repository.SessionRepository.class),
                 org.mockito.Mockito.mock(com.skillforge.server.improve.SessionScenarioExtractorService.class),
-                org.mockito.Mockito.mock(com.skillforge.server.improve.EphemeralScenarioCleanupService.class));
+                org.mockito.Mockito.mock(com.skillforge.server.improve.EphemeralScenarioCleanupService.class),
+                null,
+                memoryContextProvider);
         // PromptImproverServiceAttributionTest exercises startImprovementFromAttribution
         // (V3.1 sync LLM fill path) — does NOT invoke AbstractAbEvalRunner.run(),
         // so no PromptEvalService.run setup needed.
@@ -95,6 +101,7 @@ class PromptImproverServiceAttributionTest {
     private AgentEntity agent(long id) {
         AgentEntity a = new AgentEntity();
         a.setId(id);
+        a.setOwnerId(7L);
         a.setSystemPrompt("Be concise.");
         a.setAutoImprovePaused(false);
         return a;
@@ -198,6 +205,56 @@ class PromptImproverServiceAttributionTest {
         // Confirm we never even consulted EvalTask — the legacy path needs it
         // for primary attribution; attribution path skips it entirely.
         verify(evalTaskRepository, never()).findById(any(String.class));
+    }
+
+    @Test
+    @DisplayName("memory context provider output is included in attribution prompt generation")
+    void startImprovementFromAttribution_memoryContextAvailable_includesContextInPrompt() {
+        when(agentRepository.findByIdForUpdate(10L)).thenReturn(Optional.of(agent(10L)));
+        when(promptVersionRepository.findByAgentIdOrderByVersionNumberDesc("10"))
+                .thenReturn(List.of(versionRow("10", 1, "active")));
+        when(memoryContextProvider.load(7L, "Add explicit Bash exit-code handling"))
+                .thenReturn(new MemoryContextSnapshot(
+                        7L,
+                        "task",
+                        "User prefers concise fail-fast prompts.",
+                        Set.of(201L),
+                        "hash-201"));
+        LlmProvider provider = stubLlmReturning("Improved prompt");
+        when(promptVersionRepository.save(any(PromptVersionEntity.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+        ArgumentCaptor<LlmRequest> requestCaptor = ArgumentCaptor.forClass(LlmRequest.class);
+
+        service.startImprovementFromAttribution(
+                99L, "10", "Add explicit Bash exit-code handling", 7L);
+
+        verify(provider).chat(requestCaptor.capture());
+        String userPrompt = requestCaptor.getValue().getMessages().get(0).getTextContent();
+        assertThat(userPrompt)
+                .contains("Relevant long-term memory context:")
+                .contains("User prefers concise fail-fast prompts.");
+    }
+
+    @Test
+    @DisplayName("blank memory context is rendered as (none) in attribution prompt generation")
+    void startImprovementFromAttribution_blankMemoryContext_includesNoneMarker() {
+        when(agentRepository.findByIdForUpdate(10L)).thenReturn(Optional.of(agent(10L)));
+        when(promptVersionRepository.findByAgentIdOrderByVersionNumberDesc("10"))
+                .thenReturn(List.of(versionRow("10", 1, "active")));
+        when(memoryContextProvider.load(7L, "Tune prompt"))
+                .thenReturn(new MemoryContextSnapshot(7L, "task", "  ", Set.of(), "hash-empty"));
+        LlmProvider provider = stubLlmReturning("Improved prompt");
+        when(promptVersionRepository.save(any(PromptVersionEntity.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+        ArgumentCaptor<LlmRequest> requestCaptor = ArgumentCaptor.forClass(LlmRequest.class);
+
+        service.startImprovementFromAttribution(99L, "10", "Tune prompt", 7L);
+
+        verify(provider).chat(requestCaptor.capture());
+        String userPrompt = requestCaptor.getValue().getMessages().get(0).getTextContent();
+        assertThat(userPrompt)
+                .contains("Relevant long-term memory context:")
+                .contains("(none)");
     }
 
     @Test

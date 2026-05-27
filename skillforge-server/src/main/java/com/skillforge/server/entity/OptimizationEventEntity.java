@@ -8,6 +8,8 @@ import jakarta.persistence.Id;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -226,6 +228,13 @@ public class OptimizationEventEntity {
     @Column(name = "source_issue_id", length = 64)
     private String sourceIssueId;
 
+    @Column(name = "memory_context_hash", length = 64)
+    private String memoryContextHash;
+
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "memory_context_memory_ids", columnDefinition = "jsonb")
+    private String memoryContextMemoryIds;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
@@ -340,6 +349,16 @@ public class OptimizationEventEntity {
 
     public String getSourceIssueId() { return sourceIssueId; }
     public void setSourceIssueId(String sourceIssueId) { this.sourceIssueId = sourceIssueId; }
+
+    public String getMemoryContextHash() { return memoryContextHash; }
+    public void setMemoryContextHash(String memoryContextHash) {
+        this.memoryContextHash = memoryContextHash;
+    }
+
+    public String getMemoryContextMemoryIds() { return memoryContextMemoryIds; }
+    public void setMemoryContextMemoryIds(String memoryContextMemoryIds) {
+        this.memoryContextMemoryIds = memoryContextMemoryIds;
+    }
 
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }

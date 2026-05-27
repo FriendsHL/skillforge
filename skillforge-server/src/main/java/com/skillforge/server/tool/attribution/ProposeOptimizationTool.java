@@ -19,6 +19,8 @@ import java.math.RoundingMode;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -141,6 +143,13 @@ public class ProposeOptimizationTool implements Tool {
         properties.put("risk", Map.of(
                 "type", "string",
                 "description", "Required: 'low' / 'medium' / 'high'."));
+        properties.put("memoryContextHash", Map.of(
+                "type", "string",
+                "description", "Optional SHA-256 contextHash returned by ListRelevantMemories."));
+        properties.put("memoryIds", Map.of(
+                "type", "array",
+                "items", Map.of("type", "integer"),
+                "description", "Optional memory ids returned by ListRelevantMemories."));
 
         Map<String, Object> schema = new LinkedHashMap<>();
         schema.put("type", "object");
@@ -165,6 +174,8 @@ public class ProposeOptimizationTool implements Tool {
             String expectedImpact = stringify(input.get("expectedImpact"));
             BigDecimal confidence = toBigDecimal(input.get("confidence"));
             String risk = stringify(input.get("risk"));
+            String memoryContextHash = stringify(input.get("memoryContextHash"));
+            List<Long> memoryIds = parseLongList(input.get("memoryIds"));
 
             // Validate required fields.
             if (patternId == null || patternId <= 0) {
@@ -268,6 +279,12 @@ public class ProposeOptimizationTool implements Tool {
             if (context != null && !isBlank(context.getSessionId())) {
                 event.setAttributionSessionId(context.getSessionId());
             }
+            if (!isBlank(memoryContextHash)) {
+                event.setMemoryContextHash(memoryContextHash.trim());
+            }
+            if (!memoryIds.isEmpty()) {
+                event.setMemoryContextMemoryIds(objectMapper.writeValueAsString(memoryIds));
+            }
             // updatedAt auto-populated by @PreUpdate; createdAt preserved on UPDATE
             // path (column is updatable=false), set by @PrePersist on INSERT path.
 
@@ -310,5 +327,19 @@ public class ProposeOptimizationTool implements Tool {
         } catch (NumberFormatException e) {
             return null;
         }
+    }
+
+    private static List<Long> parseLongList(Object value) {
+        if (!(value instanceof List<?> list) || list.isEmpty()) {
+            return List.of();
+        }
+        LinkedHashSet<Long> parsed = new LinkedHashSet<>();
+        for (Object item : list) {
+            Long id = SkillInputUtils.toLong(item);
+            if (id != null && id > 0) {
+                parsed.add(id);
+            }
+        }
+        return new ArrayList<>(parsed);
     }
 }

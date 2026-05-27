@@ -16,6 +16,8 @@ import com.skillforge.server.entity.PromptVersionEntity;
 import com.skillforge.server.eval.attribution.FailureAttribution;
 import com.skillforge.server.improve.surface.PromptSurface;
 import com.skillforge.server.improve.surface.SandboxContext;
+import com.skillforge.server.memory.context.MemoryContextProvider;
+import com.skillforge.server.memory.context.MemoryContextSnapshot;
 import com.skillforge.server.repository.AgentRepository;
 import com.skillforge.server.repository.EvalTaskRepository;
 import com.skillforge.server.repository.PromptAbRunRepository;
@@ -109,8 +111,9 @@ public class PromptImproverService extends AbstractAbEvalRunner<PromptVersionEnt
     // EVAL-DATASET-LAYER V1 (V109): optional collaborator for the new
     // dataset-version path. Nullable so existing Mockito tests with the
     // 17-arg ctor continue to compile; in production Spring DI calls the
-    // 18-arg ctor below via @Autowired.
+    // newest @Autowired ctor below.
     private final com.skillforge.server.service.EvalDatasetService evalDatasetService;
+    private final MemoryContextProvider memoryContextProvider;
 
     public PromptImproverService(AgentRepository agentRepository,
                                   EvalTaskRepository evalRunRepository,
@@ -134,7 +137,7 @@ public class PromptImproverService extends AbstractAbEvalRunner<PromptVersionEnt
              abEvalPipeline, promotionService, llmProviderFactory, objectMapper, coordinatorExecutor,
              llmProperties, promptSurface, promptEvalService, evalScenarioRepository,
              optimizationEventRepository, patternSessionMemberRepository, sessionRepository,
-             sessionScenarioExtractor, ephemeralScenarioCleanupService, null);
+             sessionScenarioExtractor, ephemeralScenarioCleanupService, null, null);
     }
 
     /**
@@ -142,7 +145,6 @@ public class PromptImproverService extends AbstractAbEvalRunner<PromptVersionEnt
      * delegates here with {@code evalDatasetService=null}, preserved for existing
      * unit-test wiring.
      */
-    @org.springframework.beans.factory.annotation.Autowired
     public PromptImproverService(AgentRepository agentRepository,
                                   EvalTaskRepository evalRunRepository,
                                   PromptVersionRepository promptVersionRepository,
@@ -162,6 +164,34 @@ public class PromptImproverService extends AbstractAbEvalRunner<PromptVersionEnt
                                   SessionScenarioExtractorService sessionScenarioExtractor,
                                   EphemeralScenarioCleanupService ephemeralScenarioCleanupService,
                                   com.skillforge.server.service.EvalDatasetService evalDatasetService) {
+        this(agentRepository, evalRunRepository, promptVersionRepository, promptAbRunRepository,
+                abEvalPipeline, promotionService, llmProviderFactory, objectMapper, coordinatorExecutor,
+                llmProperties, promptSurface, promptEvalService, evalScenarioRepository,
+                optimizationEventRepository, patternSessionMemberRepository, sessionRepository,
+                sessionScenarioExtractor, ephemeralScenarioCleanupService, evalDatasetService, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public PromptImproverService(AgentRepository agentRepository,
+                                  EvalTaskRepository evalRunRepository,
+                                  PromptVersionRepository promptVersionRepository,
+                                  PromptAbRunRepository promptAbRunRepository,
+                                  AbEvalPipeline abEvalPipeline,
+                                  PromptPromotionService promotionService,
+                                  LlmProviderFactory llmProviderFactory,
+                                  ObjectMapper objectMapper,
+                                  @Qualifier("abEvalCoordinatorExecutor") ExecutorService coordinatorExecutor,
+                                  LlmProperties llmProperties,
+                                  @Lazy PromptSurface promptSurface,
+                                  PromptEvalService promptEvalService,
+                                  com.skillforge.server.repository.EvalScenarioDraftRepository evalScenarioRepository,
+                                  com.skillforge.server.repository.OptimizationEventRepository optimizationEventRepository,
+                                  com.skillforge.server.repository.PatternSessionMemberRepository patternSessionMemberRepository,
+                                  com.skillforge.server.repository.SessionRepository sessionRepository,
+                                  SessionScenarioExtractorService sessionScenarioExtractor,
+                                  EphemeralScenarioCleanupService ephemeralScenarioCleanupService,
+                                  com.skillforge.server.service.EvalDatasetService evalDatasetService,
+                                  MemoryContextProvider memoryContextProvider) {
         // @Lazy on promptSurface breaks the DI cycle: PromptSurface's @Lazy
         // injection of PromptImproverService bootstrap order. Super constructor
         // only stores the reference (no method call), so proxy is safe.
@@ -191,6 +221,7 @@ public class PromptImproverService extends AbstractAbEvalRunner<PromptVersionEnt
         this.sessionScenarioExtractor = sessionScenarioExtractor;
         this.ephemeralScenarioCleanupService = ephemeralScenarioCleanupService;
         this.evalDatasetService = evalDatasetService;
+        this.memoryContextProvider = memoryContextProvider;
     }
 
     @Transactional
@@ -1015,6 +1046,10 @@ public class PromptImproverService extends AbstractAbEvalRunner<PromptVersionEnt
     private String generateCandidatePromptFromAttribution(AgentEntity agent,
                                                           String attributedDescription) {
         String currentPrompt = agent.getSystemPrompt() != null ? agent.getSystemPrompt() : "";
+        String memoryBlock = loadRenderedMemoryContext(agent.getOwnerId(), attributedDescription);
+        if (memoryBlock.isBlank()) {
+            memoryBlock = "(none)";
+        }
 
         String systemPrompt = """
                 You are an expert prompt engineer. Your task is to analyze an attribution \
@@ -1036,10 +1071,14 @@ public class PromptImproverService extends AbstractAbEvalRunner<PromptVersionEnt
                 Attribution analysis (from curator agent):
                 %s
 
+                Relevant long-term memory context:
+                %s
+
                 Generate an improved system prompt that addresses the failure pattern \
                 described above.""",
                 currentPrompt,
-                attributedDescription.trim());
+                attributedDescription.trim(),
+                memoryBlock);
 
         LlmProvider provider = llmProviderFactory.getProvider(defaultProviderName);
         if (provider == null) {
@@ -1060,6 +1099,19 @@ public class PromptImproverService extends AbstractAbEvalRunner<PromptVersionEnt
             throw new RuntimeException("LLM returned empty candidate prompt for attribution flow");
         }
         return content.trim();
+    }
+
+    private String loadRenderedMemoryContext(Long userId, String attributedDescription) {
+        if (memoryContextProvider == null || userId == null) {
+            return "";
+        }
+        try {
+            MemoryContextSnapshot snapshot = memoryContextProvider.load(userId, attributedDescription);
+            return snapshot != null && snapshot.rendered() != null ? snapshot.rendered().trim() : "";
+        } catch (RuntimeException e) {
+            log.warn("Attribution prompt memory context load failed userId={}: {}", userId, e.getMessage());
+            return "";
+        }
     }
 
     @SuppressWarnings("unchecked")
