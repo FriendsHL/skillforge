@@ -1,5 +1,7 @@
 # DREAMING-MEMORY-EXTENSION — `LlmMemorySynthesizer` 从 memory→memory 升级到 memory + sessions[] → memory
 
+> 2026-05-27 implementation update: V1 实施路线已调整为 `memory-curator` dogfood + transcript tool + `t_memory_proposal.evidence_json` + downstream memory context injection。此前以 legacy `LlmMemorySynthesizer.synthesize(clusters, sessions, instructions)` 为中心的设计不再作为 V1 主路，因为当前生产 run-once 已优先触发 `memory-curator` ScheduledTask。具体执行计划见 [`docs/superpowers/plans/2026-05-27-dreaming-memory-integration.md`](../../../superpowers/plans/2026-05-27-dreaming-memory-integration.md)。
+
 > 创建：2026-05-26
 > 状态：**prd-draft**（PRD 已草拟，tech-design 草稿已下；开 Plan pipeline 时 ratify D1-D6 决策 + Q1-Q5 澄清）
 > 模式：Full pipeline（触红灯 `MemoryClusterer` / `LlmMemorySynthesizer` 子系统 + 新增 2 张 Flyway migration + 新增 1 个 entity + 新增 1 个 class + 协议级 invariant：immutable memory input）
