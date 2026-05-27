@@ -11,6 +11,7 @@
 2. [`mrd.md`](mrd.md) — 用户原话 + 调研来源 + 5 痛点 + Q1-Q5 未澄清
 3. [`prd.md`](prd.md) — 目标 / 非目标 / 工作流 / FR-1 ~ FR-4 / AC-1 ~ AC-7
 4. [`tech-design.md`](tech-design.md) — 8 条 hotspot + 4 phase 实现拆分 + 风险 + 测试计划
+5. **[`spike-evidence.md`](spike-evidence.md) — R-AMA-MEM-5 假设的 spike 验证证据（2026-05-27 跑 user_id=1 真活 dogfood，7 条 actionable observation，假设 ✅ 成立，进 MVP V1 有 ROI 支撑）**
 
 ## 调研来源
 
