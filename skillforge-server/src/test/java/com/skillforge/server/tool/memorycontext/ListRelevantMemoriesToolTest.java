@@ -19,6 +19,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -82,6 +83,25 @@ class ListRelevantMemoriesToolTest {
         assertThat(snapshot.rendered()).isEmpty();
         assertThat(snapshot.memoryIds()).isEmpty();
         assertThat(snapshot.contextHash()).isEqualTo(EMPTY_SHA256);
+    }
+
+    @Test
+    @DisplayName("snapshot freezes memoryIds while preserving insertion order")
+    void snapshot_memoryIds_defensivelyCopiedAndOrdered() throws Exception {
+        LinkedHashSet<Long> originalIds = new LinkedHashSet<>(List.of(101L, 102L));
+        MemoryContextSnapshot snapshot = new MemoryContextSnapshot(
+                42L, "ctx", "rendered", originalIds, "hash");
+
+        originalIds.add(103L);
+
+        assertThat(snapshot.memoryIds()).containsExactly(101L, 102L);
+        assertThatThrownBy(() -> snapshot.memoryIds().add(104L))
+                .isInstanceOf(UnsupportedOperationException.class);
+
+        JsonNode root = objectMapper.readTree(objectMapper.writeValueAsString(snapshot));
+        assertThat(root.path("memoryIds").get(0).asLong()).isEqualTo(101L);
+        assertThat(root.path("memoryIds").get(1).asLong()).isEqualTo(102L);
+        assertThat(root.path("memoryIds")).hasSize(2);
     }
 
     @Test
