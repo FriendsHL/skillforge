@@ -500,10 +500,10 @@ public class CreateMemoryProposalTool implements Tool {
             if (!(item instanceof Map<?, ?> evidence)) {
                 return false;
             }
-            String source = asString(evidence.get("source"));
-            String sessionId = asString(evidence.get("sessionId"));
+            String source = asStrictString(evidence.get("source"));
+            String sessionId = asStrictString(evidence.get("sessionId"));
             Object seqNo = evidence.get("seqNo");
-            String quote = asString(evidence.get("quote"));
+            String quote = asStrictString(evidence.get("quote"));
             if (!"session".equals(source)
                     || sessionId == null || sessionId.isBlank()
                     || !isIntegralNumber(seqNo)
@@ -542,6 +542,10 @@ public class CreateMemoryProposalTool implements Tool {
 
     private static boolean isArrayLike(Object raw) {
         return raw instanceof Iterable<?> || (raw != null && raw.getClass().isArray());
+    }
+
+    private static String asStrictString(Object v) {
+        return v instanceof String s ? s : null;
     }
 
     private static String asString(Object v) {

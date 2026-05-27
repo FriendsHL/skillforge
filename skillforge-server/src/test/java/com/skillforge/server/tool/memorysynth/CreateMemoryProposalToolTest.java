@@ -541,6 +541,58 @@ class CreateMemoryProposalToolTest {
     }
 
     @Test
+    @DisplayName("transcript-backed reflection requires textual sessionId")
+    void execute_transcriptReflectionNonStringSessionId_rejected() throws Exception {
+        SkillResult result = tool.execute(Map.of(
+                "synthesisRunId", "dream-object-session-id",
+                "userId", 42L,
+                "proposals", List.of(Map.of(
+                        "type", "reflection",
+                        "sourceMemoryIds", List.of(),
+                        "suggestedContent", "User prefers implementation plans.",
+                        "evidence", List.of(Map.of(
+                                "source", "session",
+                                "sessionId", List.of("sess-1"),
+                                "seqNo", 7,
+                                "quote", "plan first"
+                        ))
+                ))
+        ), new SkillContext(null, "curator-session", 0L));
+
+        JsonNode root = objectMapper.readTree(result.getOutput());
+        assertThat(root.path("createdCount").asInt()).isZero();
+        assertThat(root.path("rejections").get(0).path("error").asText())
+                .contains("requires only valid session evidence");
+        verify(proposalRepository, never()).saveAll(anyList());
+    }
+
+    @Test
+    @DisplayName("transcript-backed reflection requires textual quote")
+    void execute_transcriptReflectionNonStringQuote_rejected() throws Exception {
+        SkillResult result = tool.execute(Map.of(
+                "synthesisRunId", "dream-object-quote",
+                "userId", 42L,
+                "proposals", List.of(Map.of(
+                        "type", "reflection",
+                        "sourceMemoryIds", List.of(),
+                        "suggestedContent", "User prefers implementation plans.",
+                        "evidence", List.of(Map.of(
+                                "source", "session",
+                                "sessionId", "sess-1",
+                                "seqNo", 7,
+                                "quote", Map.of("x", "y")
+                        ))
+                ))
+        ), new SkillContext(null, "curator-session", 0L));
+
+        JsonNode root = objectMapper.readTree(result.getOutput());
+        assertThat(root.path("createdCount").asInt()).isZero();
+        assertThat(root.path("rejections").get(0).path("error").asText())
+                .contains("requires only valid session evidence");
+        verify(proposalRepository, never()).saveAll(anyList());
+    }
+
+    @Test
     @DisplayName("Gap-2 regression: non-SYSTEM context still rejected on cross-user mismatch")
     void execute_regularContext_acrossUsers_stillDenied() throws Exception {
         // Regular user 2 context trying to author a proposal on user 1's memories — denied.
