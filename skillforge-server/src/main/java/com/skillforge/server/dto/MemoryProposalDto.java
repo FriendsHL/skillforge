@@ -1,6 +1,7 @@
 package com.skillforge.server.dto;
 
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillforge.server.entity.MemoryProposalEntity;
 import org.slf4j.Logger;
@@ -34,6 +35,7 @@ public record MemoryProposalDto(
         String suggestedContent,
         String suggestedImportance,
         String reasoning,
+        JsonNode evidence,
         String llmResponseExcerpt,
         String status,
         Long reviewedByUserId,
@@ -72,6 +74,7 @@ public record MemoryProposalDto(
                 e.getSuggestedContent(),
                 e.getSuggestedImportance(),
                 e.getReasoning(),
+                parseEvidence(e.getEvidenceJson(), mapper),
                 e.getLlmResponseExcerpt(),
                 e.getStatus(),
                 e.getReviewedByUserId(),
@@ -104,6 +107,17 @@ public record MemoryProposalDto(
         } catch (Exception ex) {
             log.warn("MemoryProposalDto: failed to parse sourceMemoryIds={}: {}", json, ex.getMessage());
             return List.of();
+        }
+    }
+
+    private static JsonNode parseEvidence(String json, ObjectMapper mapper) {
+        if (json == null || json.isBlank()) return null;
+        ObjectMapper m = mapper != null ? mapper : FALLBACK_MAPPER;
+        try {
+            return m.readTree(json);
+        } catch (Exception ex) {
+            log.warn("MemoryProposalDto: failed to parse evidenceJson={}: {}", json, ex.getMessage());
+            return null;
         }
     }
 }

@@ -66,6 +66,24 @@ class MemoryProposalDtoTest {
     }
 
     @Test
+    void from_parsesEvidenceJson() {
+        MemoryProposalEntity entity = new MemoryProposalEntity();
+        entity.setId(1L);
+        entity.setUserId(42L);
+        entity.setSynthesisRunId("dream-abc");
+        entity.setProposalType("reflection");
+        entity.setSourceMemoryIds("[]");
+        entity.setReasoning("observed");
+        entity.setEvidenceJson("[{\"source\":\"session\",\"sessionId\":\"sess-1\",\"quote\":\"plan first\"}]");
+        entity.setStatus(MemoryProposalEntity.STATUS_PROPOSED);
+
+        MemoryProposalDto dto = MemoryProposalDto.from(entity, new ObjectMapper());
+
+        assertThat(dto.evidence()).isNotNull();
+        assertThat(dto.evidence().get(0).path("sessionId").asText()).isEqualTo("sess-1");
+    }
+
+    @Test
     @DisplayName("from() preserves all other fields verbatim")
     void from_otherFields_passthrough() {
         MemoryProposalEntity entity = proposal("[5,6]");

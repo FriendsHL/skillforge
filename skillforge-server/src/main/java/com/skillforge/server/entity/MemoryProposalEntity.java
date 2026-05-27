@@ -83,6 +83,10 @@ public class MemoryProposalEntity {
     @Column(name = "reasoning", length = 256)
     private String reasoning;
 
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "evidence_json", columnDefinition = "jsonb")
+    private String evidenceJson;
+
     @Column(name = "llm_prompt_hash", length = 64)
     private String llmPromptHash;
 
@@ -187,6 +191,14 @@ public class MemoryProposalEntity {
 
     public void setReasoning(String reasoning) {
         this.reasoning = reasoning;
+    }
+
+    public String getEvidenceJson() {
+        return evidenceJson;
+    }
+
+    public void setEvidenceJson(String evidenceJson) {
+        this.evidenceJson = evidenceJson;
     }
 
     public String getLlmPromptHash() {

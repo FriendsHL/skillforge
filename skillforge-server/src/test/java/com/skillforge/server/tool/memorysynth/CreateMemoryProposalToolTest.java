@@ -372,6 +372,41 @@ class CreateMemoryProposalToolTest {
     }
 
     @Test
+    @DisplayName("reflection can be backed only by transcript evidence when userId is explicit")
+    void execute_reflectionWithTranscriptEvidence_persistsEvidenceWithoutSourceMemories() throws Exception {
+        SkillResult result = tool.execute(Map.of(
+                "synthesisRunId", "dream-abc",
+                "userId", 42L,
+                "proposals", List.of(Map.of(
+                        "type", "reflection",
+                        "sourceMemoryIds", List.of(),
+                        "suggestedTitle", "Prefers implementation plans",
+                        "suggestedContent", "User prefers concrete implementation plans before code changes.",
+                        "suggestedImportance", "high",
+                        "reasoning", "observed from recent transcript",
+                        "evidence", List.of(Map.of(
+                                "source", "session",
+                                "sessionId", "sess-1",
+                                "seqNo", 7,
+                                "quote", "先整理个具体方案"
+                        ))
+                ))
+        ), new SkillContext(null, "curator-session", 0L));
+
+        assertThat(result.isSuccess()).isTrue();
+        JsonNode root = objectMapper.readTree(result.getOutput());
+        assertThat(root.path("createdCount").asInt()).isEqualTo(1);
+
+        ArgumentCaptor<List<MemoryProposalEntity>> cap = ArgumentCaptor.forClass(List.class);
+        verify(proposalRepository).saveAll(cap.capture());
+        MemoryProposalEntity saved = cap.getValue().get(0);
+        assertThat(saved.getUserId()).isEqualTo(42L);
+        assertThat(saved.getSourceMemoryIds()).isEqualTo("[]");
+        assertThat(saved.getEvidenceJson()).contains("\"sessionId\":\"sess-1\"");
+        assertThat(saved.getEvidenceJson()).contains("\"quote\":\"先整理个具体方案\"");
+    }
+
+    @Test
     @DisplayName("Gap-2 regression: non-SYSTEM context still rejected on cross-user mismatch")
     void execute_regularContext_acrossUsers_stillDenied() throws Exception {
         // Regular user 2 context trying to author a proposal on user 1's memories — denied.
