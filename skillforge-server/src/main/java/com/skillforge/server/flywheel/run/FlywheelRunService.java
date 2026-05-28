@@ -5,8 +5,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillforge.server.websocket.UserWebSocketHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -239,51 +237,6 @@ public class FlywheelRunService {
 
     public Optional<FlywheelRunEntity> findById(String runId) {
         return runRepository.findById(runId);
-    }
-
-    /**
-     * Sprint 4 (FR-5): list runs filtered by any combination of
-     * {@code loopKind / agentId / status}, paginated by {@code limit / offset}
-     * (ORDER BY {@code created_at DESC, id DESC}). Returns a {@link Page} so the
-     * caller can grab {@code totalElements} for the dashboard "X of Y"
-     * indicator without a second count query.
-     *
-     * <p>Limit is clamped to {@code [1, 100]} and offset to {@code >= 0} here
-     * so the Controller can stay a thin parameter-translation layer (mirrors
-     * the OPT-REPORT-V1 {@code OptReportController.clampLimit} pattern).
-     *
-     * @param loopKind     null = don't filter on loopKind
-     * @param agentId      null = don't filter on agentId
-     * @param status       null = don't filter on status
-     * @param limit        clamped to [1, 100]; null defaults to 20
-     * @param offset       clamped to {@code >= 0}; null defaults to 0
-     */
-    @Transactional(readOnly = true)
-    public Page<FlywheelRunEntity> listRuns(String loopKind,
-                                            Long agentId,
-                                            String status,
-                                            Integer limit,
-                                            Integer offset) {
-        int safeLimit = clampLimit(limit);
-        int safeOffset = clampOffset(offset);
-        // The FE pages via offset=K*limit (Plan §2 D1). Spring Data's
-        // PageRequest only models page*size, so we translate offset → page by
-        // integer-dividing. Unaligned offsets snap down to the containing
-        // page — documented contract; the FE never sends those.
-        int page = safeOffset / safeLimit;
-        PageRequest pageable = PageRequest.of(page, safeLimit);
-        return runRepository.findAllWithFilters(loopKind, agentId, status, pageable);
-    }
-
-    private static int clampLimit(Integer raw) {
-        if (raw == null) return 20;
-        if (raw < 1) return 1;
-        return Math.min(raw, 100);
-    }
-
-    private static int clampOffset(Integer raw) {
-        if (raw == null) return 0;
-        return Math.max(raw, 0);
     }
 
     // ─────────────────────────────────────────────────────────────────────

@@ -16,7 +16,6 @@ import EvalDatasets from './pages/EvalDatasets';
 import HookMethods from './pages/HookMethods';
 import Channels from './pages/Channels';
 import Insights from './pages/Insights';
-import FlywheelOrchestratorRuns from './pages/FlywheelOrchestratorRuns';
 import Tasks from './pages/Tasks';
 import Schedules from './pages/Schedules';
 import Login from './pages/Login';
@@ -65,7 +64,6 @@ function App() {
             <Route path="tasks" element={<ErrorBoundary context="Tasks"><Tasks /></ErrorBoundary>} />
             <Route path="schedules" element={<ErrorBoundary context="Schedules"><Schedules /></ErrorBoundary>} />
             <Route path="insights/patterns" element={<ErrorBoundary context="Insights"><Insights /></ErrorBoundary>} />
-            <Route path="flywheel-runs" element={<ErrorBoundary context="FlywheelOrchestratorRuns"><FlywheelOrchestratorRuns /></ErrorBoundary>} />
             <Route path="chat/:sessionId?" element={<ErrorBoundary context="Chat"><Chat /></ErrorBoundary>} />
           </Route>
         </Routes>
