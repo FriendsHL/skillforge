@@ -31,7 +31,9 @@ class FlywheelRunServiceTest {
     private static final Instant FIXED_NOW = Instant.parse("2026-05-28T10:00:00Z");
 
     @Mock private FlywheelRunRepository runRepository;
+    @Mock private FlywheelRunStepRepository stepRepository;
     @Mock private UserWebSocketHandler userWebSocketHandler;
+    @Mock private org.springframework.context.ApplicationEventPublisher applicationEventPublisher;
 
     private FlywheelRunService service;
 
@@ -43,7 +45,8 @@ class FlywheelRunServiceTest {
                 .registerModule(new JavaTimeModule())
                 .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
         Clock clock = Clock.fixed(FIXED_NOW, ZoneId.of("UTC"));
-        service = new FlywheelRunService(runRepository, userWebSocketHandler, objectMapper, clock);
+        service = new FlywheelRunService(runRepository, stepRepository, userWebSocketHandler,
+                objectMapper, clock, applicationEventPublisher);
     }
 
     @Test

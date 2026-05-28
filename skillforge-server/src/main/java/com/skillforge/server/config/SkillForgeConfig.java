@@ -94,9 +94,12 @@ import com.skillforge.server.tool.optreport.LoadSessionBatchTool;
 import com.skillforge.server.tool.optreport.RecordBatchAnnotationsTool;
 import com.skillforge.server.tool.optreport.WriteOptReportTool;
 import com.skillforge.server.optreport.OptReportService;
+import com.skillforge.server.flywheel.orchestrator.OrchestratorAgentExecutor;
 import com.skillforge.server.flywheel.run.FlywheelRunRepository;
 import com.skillforge.server.flywheel.run.FlywheelRunService;
 import com.skillforge.server.flywheel.run.FlywheelRunStepRepository;
+import com.skillforge.server.tool.flywheel.DispatchOrchestrationStep;
+import com.skillforge.server.tool.flywheel.RecordOrchestrationStepResult;
 import com.skillforge.server.repository.SessionAnnotationRepository;
 import com.skillforge.server.subagent.AgentRoster;
 import com.skillforge.server.subagent.CollabRunService;
@@ -882,6 +885,46 @@ public class SkillForgeConfig {
         RecordBatchAnnotationsTool tool = new RecordBatchAnnotationsTool(batchRepository, objectMapper);
         skillRegistry.registerTool(tool);
         log.info("Registered RecordBatchAnnotationsTool into SkillRegistry");
+        return tool;
+    }
+
+    // ---------- OPT-LOOP-FRAMEWORK Sprint 2 (V125) generalised orchestrator tools ----------
+
+    /**
+     * OPT-LOOP-FRAMEWORK Sprint 2 FR-3: parent orchestrator's fan-out Tool.
+     * Wraps {@link com.skillforge.server.flywheel.orchestrator.OrchestratorAgentExecutor}'s
+     * dispatch-and-barrier flow so the LLM sees a single tool_use → tool_result
+     * round-trip.
+     */
+    @Bean
+    public DispatchOrchestrationStep dispatchOrchestrationStepTool(
+            OrchestratorAgentExecutor executor,
+            SessionService sessionService,
+            ObjectMapper objectMapper,
+            SkillRegistry skillRegistry) {
+        DispatchOrchestrationStep tool =
+                new DispatchOrchestrationStep(executor, sessionService, objectMapper);
+        skillRegistry.registerTool(tool);
+        log.info("Registered DispatchOrchestrationStep into SkillRegistry");
+        return tool;
+    }
+
+    /**
+     * OPT-LOOP-FRAMEWORK Sprint 2 FR-3 (2nd Tool): worker SubAgent calls this
+     * to write its structured output back; pairs with
+     * DispatchOrchestrationStep above.
+     */
+    @Bean
+    public RecordOrchestrationStepResult recordOrchestrationStepResultTool(
+            FlywheelRunService flywheelRunService,
+            org.springframework.context.ApplicationEventPublisher applicationEventPublisher,
+            ObjectMapper objectMapper,
+            SkillRegistry skillRegistry) {
+        RecordOrchestrationStepResult tool =
+                new RecordOrchestrationStepResult(
+                        flywheelRunService, applicationEventPublisher, objectMapper);
+        skillRegistry.registerTool(tool);
+        log.info("Registered RecordOrchestrationStepResult into SkillRegistry");
         return tool;
     }
 

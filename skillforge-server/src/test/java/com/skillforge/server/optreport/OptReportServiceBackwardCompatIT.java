@@ -52,9 +52,13 @@ class OptReportServiceBackwardCompatIT extends AbstractPostgresIT {
     private FlywheelRunRepository runRepository;
 
     @Autowired
+    private com.skillforge.server.flywheel.run.FlywheelRunStepRepository stepRepository;
+
+    @Autowired
     private JdbcTemplate jdbcTemplate;
 
     private UserWebSocketHandler userWebSocketHandler;
+    private org.springframework.context.ApplicationEventPublisher applicationEventPublisher;
     private FlywheelRunService flywheelRunService;
 
     @BeforeEach
@@ -69,8 +73,10 @@ class OptReportServiceBackwardCompatIT extends AbstractPostgresIT {
                 .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
         Clock clock = Clock.fixed(FIXED_NOW, ZoneId.of("UTC"));
         userWebSocketHandler = mock(UserWebSocketHandler.class);
+        applicationEventPublisher = mock(org.springframework.context.ApplicationEventPublisher.class);
         flywheelRunService = new FlywheelRunService(
-                runRepository, userWebSocketHandler, objectMapper, clock);
+                runRepository, stepRepository, userWebSocketHandler, objectMapper, clock,
+                applicationEventPublisher);
     }
 
     @Test

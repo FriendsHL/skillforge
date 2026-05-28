@@ -80,6 +80,19 @@ public class FlywheelRunStepEntity {
     @Column(name = "step_kind", nullable = false, length = 32)
     private String stepKind = STEP_KIND_SUBAGENT_DISPATCH;
 
+    /**
+     * V125 new column (OPT-LOOP-FRAMEWORK Sprint 2): free-schema JSONB
+     * populated by {@code RecordOrchestrationStepResult} Tool with the worker
+     * SubAgent's structured output. OPT-REPORT-V1 historical rows + the
+     * {@code RecordBatchAnnotationsTool} path keep this {@code null} — they
+     * still use {@code step_output_count}. nullable on purpose so the V125
+     * ADD COLUMN didn't need a backfill on the 13 pre-existing OPT-REPORT
+     * step rows.
+     */
+    @Column(name = "step_output_json", columnDefinition = "jsonb")
+    @JdbcTypeCode(SqlTypes.JSON)
+    private String stepOutputJson;
+
     @CreatedDate
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
@@ -117,6 +130,9 @@ public class FlywheelRunStepEntity {
 
     public String getStepKind() { return stepKind; }
     public void setStepKind(String stepKind) { this.stepKind = stepKind; }
+
+    public String getStepOutputJson() { return stepOutputJson; }
+    public void setStepOutputJson(String stepOutputJson) { this.stepOutputJson = stepOutputJson; }
 
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
