@@ -58,7 +58,6 @@ class OptReportServiceBackwardCompatIT extends AbstractPostgresIT {
     private JdbcTemplate jdbcTemplate;
 
     private UserWebSocketHandler userWebSocketHandler;
-    private org.springframework.context.ApplicationEventPublisher applicationEventPublisher;
     private FlywheelRunService flywheelRunService;
 
     @BeforeEach
@@ -66,17 +65,15 @@ class OptReportServiceBackwardCompatIT extends AbstractPostgresIT {
         jdbcTemplate.update("DELETE FROM t_flywheel_run_step");
         jdbcTemplate.update("DELETE FROM t_flywheel_run");
 
-        // r1 W2 fix (java.md footgun #1): register JavaTimeModule so future
-        // inputJson payloads carrying Instant/LocalDateTime serialize correctly.
+        // java.md footgun #1: register JavaTimeModule so future inputJson
+        // payloads carrying Instant/LocalDateTime serialize correctly.
         ObjectMapper objectMapper = new ObjectMapper()
                 .registerModule(new JavaTimeModule())
                 .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
         Clock clock = Clock.fixed(FIXED_NOW, ZoneId.of("UTC"));
         userWebSocketHandler = mock(UserWebSocketHandler.class);
-        applicationEventPublisher = mock(org.springframework.context.ApplicationEventPublisher.class);
         flywheelRunService = new FlywheelRunService(
-                runRepository, stepRepository, userWebSocketHandler, objectMapper, clock,
-                applicationEventPublisher);
+                runRepository, stepRepository, userWebSocketHandler, objectMapper, clock);
     }
 
     @Test

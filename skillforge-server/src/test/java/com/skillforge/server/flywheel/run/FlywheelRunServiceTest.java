@@ -33,20 +33,19 @@ class FlywheelRunServiceTest {
     @Mock private FlywheelRunRepository runRepository;
     @Mock private FlywheelRunStepRepository stepRepository;
     @Mock private UserWebSocketHandler userWebSocketHandler;
-    @Mock private org.springframework.context.ApplicationEventPublisher applicationEventPublisher;
 
     private FlywheelRunService service;
 
     @BeforeEach
     void setUp() {
-        // r1 W2 fix (java.md footgun #1): register JavaTimeModule so future
-        // inputJson payloads carrying Instant/LocalDateTime serialize correctly.
+        // java.md footgun #1: register JavaTimeModule so future inputJson
+        // payloads carrying Instant/LocalDateTime serialize correctly.
         ObjectMapper objectMapper = new ObjectMapper()
                 .registerModule(new JavaTimeModule())
                 .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
         Clock clock = Clock.fixed(FIXED_NOW, ZoneId.of("UTC"));
         service = new FlywheelRunService(runRepository, stepRepository, userWebSocketHandler,
-                objectMapper, clock, applicationEventPublisher);
+                objectMapper, clock);
     }
 
     @Test

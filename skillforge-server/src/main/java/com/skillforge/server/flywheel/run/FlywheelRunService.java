@@ -2,11 +2,9 @@ package com.skillforge.server.flywheel.run;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.skillforge.server.flywheel.orchestrator.StepStateChangedEvent;
 import com.skillforge.server.websocket.UserWebSocketHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
@@ -79,20 +77,17 @@ public class FlywheelRunService {
     private final UserWebSocketHandler userWebSocketHandler;
     private final ObjectMapper objectMapper;
     private final Clock clock;
-    private final ApplicationEventPublisher applicationEventPublisher;
 
     public FlywheelRunService(FlywheelRunRepository runRepository,
                               FlywheelRunStepRepository stepRepository,
                               UserWebSocketHandler userWebSocketHandler,
                               ObjectMapper objectMapper,
-                              Clock clock,
-                              ApplicationEventPublisher applicationEventPublisher) {
+                              Clock clock) {
         this.runRepository = runRepository;
         this.stepRepository = stepRepository;
         this.userWebSocketHandler = userWebSocketHandler;
         this.objectMapper = objectMapper;
         this.clock = clock;
-        this.applicationEventPublisher = applicationEventPublisher;
     }
 
     /**
@@ -292,25 +287,21 @@ public class FlywheelRunService {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // OPT-LOOP-FRAMEWORK Sprint 2 — step CRUD + state machine (W-3 option 2)
+    // Step CRUD + state machine
     //
     // OPT-REPORT-V1's RecordBatchAnnotationsTool keeps writing
     // t_flywheel_run_step rows directly via the Repository (UPSERT semantics
-    // are particular to the V99 OPT-REPORT batch flow). The Sprint 2
-    // framework path goes through these methods so step state transitions
-    // emit StepStateChangedEvent for the WS broadcaster, and so dashboard /
-    // IT reads land on the shared @Transactional(readOnly=true) path.
+    // are particular to the V99 OPT-REPORT batch flow). These methods are
+    // the step-level API the future workflow runtime (V2 DSL) will call;
+    // dashboard / IT reads land on the shared @Transactional(readOnly=true) path.
     // ─────────────────────────────────────────────────────────────────────
 
     /**
-     * Sprint 2: insert a {@code pending} step row for an
-     * {@code OrchestratorAgentExecutor.dispatchSubAgents} fan-out worker.
+     * Insert a {@code pending} step row.
      *
      * <p>{@code subAgentSessionId} is left {@code null} here; the caller is
      * expected to follow up with {@link #attachStepSubAgentSession} once it
-     * has spawned the worker session. The split is intentional — the worker
-     * session id is only known after {@code sessionService.createSubSession},
-     * which itself runs in its own transaction.
+     * has spawned the worker session.
      *
      * @return the new step's id (UUID)
      */
@@ -340,9 +331,7 @@ public class FlywheelRunService {
     }
 
     /**
-     * Sprint 2: backfill the worker session id once the executor has spawned
-     * the child loop. Required for the {@code SessionLoopFinishedEvent}
-     * fallback listener to find this step row by session id.
+     * Backfill the worker session id once a child loop has been spawned.
      */
     @Transactional
     public void attachStepSubAgentSession(String stepRunId, String subAgentSessionId) {
@@ -356,14 +345,11 @@ public class FlywheelRunService {
     }
 
     /**
-     * Sprint 2: transition a pending step to a terminal state. Persists the
-     * worker's output JSON (free-schema) + error reason, then publishes a
-     * {@link StepStateChangedEvent} (AFTER_COMMIT consumer broadcasts WS).
+     * Transition a pending step to a terminal state. Persists the worker's
+     * output JSON (free-schema) + error reason.
      *
      * <p>Idempotent: if the row is already in the requested terminal state
-     * the call is a no-op and returns {@code null} — this lets the executor
-     * harmlessly double-transition when both the Tool path and the fallback
-     * listener race.
+     * the call is a no-op and returns {@code null}.
      *
      * @return the updated entity, or {@code null} when the call was a no-op
      */
@@ -402,24 +388,6 @@ public class FlywheelRunService {
             step.setErrorReason(null); // clear stale error on success
         }
         stepRepository.save(step);
-
-        // Publish AFTER the row save — listener is AFTER_COMMIT so even if it
-        // gets routed sync (fallbackExecution=true with no tx around), the row
-        // is observable. WS broadcast itself lives in
-        // FlywheelStepWsBroadcaster, not here (Plan §2 Design 5 Rule 5).
-        //
-        // r2 fix W-1 (4 reviewer overlap): removed null guard around
-        // applicationEventPublisher — constructor-injected Spring Bean is
-        // never null in production, and the guard misleads readers into
-        // thinking the field is optional. Inner try/catch retained so a
-        // misbehaving listener doesn't roll back the row save.
-        try {
-            applicationEventPublisher.publishEvent(new StepStateChangedEvent(
-                    step.getId(), step.getRunId(), oldStatus, newStatus, errorReason));
-        } catch (Exception e) {
-            log.warn("FlywheelRunService.transitionStepStatus: publish event failed for stepRunId={}: {}",
-                    stepRunId, e.getMessage(), e);
-        }
         return step;
     }
 

@@ -4,14 +4,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.skillforge.server.AbstractPostgresIT;
-import com.skillforge.server.flywheel.orchestrator.StepStateChangedEvent;
 import com.skillforge.server.websocket.UserWebSocketHandler;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.time.Clock;
@@ -23,27 +20,19 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.verifyNoInteractions;
 
 /**
- * OPT-LOOP-FRAMEWORK Sprint 2: PostgreSQL integration coverage for the new
- * step CRUD path on {@link FlywheelRunService}. Verifies:
+ * PostgreSQL integration coverage for the step CRUD path on
+ * {@link FlywheelRunService}. Verifies:
  *
  * <ul>
- *   <li>Plan §5 Case 11/12 — V125 add-column migration ran cleanly + nullable
- *       so OPT-REPORT historical rows (the V97 path that writes
- *       {@code step_output_count} but not {@code step_output_json}) keep
- *       working without backfill</li>
- *   <li>Plan §5 Case 14 — appendStep → attachStepSubAgentSession →
- *       transitionStepStatus → listStepsByRunId state machine end-to-end on
- *       real Postgres (no JPA mocks)</li>
- *   <li>Step transition publishes {@link StepStateChangedEvent} (consumed by
- *       FlywheelStepWsBroadcaster in production; mocked here for verify)</li>
- *   <li>Disallowed transition (e.g. {@code pending→running} that doesn't exist
- *       in {@code ALLOWED_STEP_TRANSITIONS}) throws IllegalStateException</li>
+ *   <li>V125 add-column migration ran cleanly + nullable so OPT-REPORT
+ *       historical rows (the V97 path that writes {@code step_output_count}
+ *       but not {@code step_output_json}) keep working without backfill</li>
+ *   <li>appendStep → attachStepSubAgentSession → transitionStepStatus →
+ *       listStepsByRunId state machine end-to-end on real Postgres</li>
+ *   <li>Disallowed transition throws IllegalStateException</li>
  * </ul>
  */
 @DisplayName("FlywheelRunService step CRUD + V125 step_output_json integration")
@@ -56,7 +45,6 @@ class FlywheelRunServiceStepCrudIT extends AbstractPostgresIT {
     @Autowired private JdbcTemplate jdbcTemplate;
 
     private UserWebSocketHandler userWebSocketHandler;
-    private ApplicationEventPublisher applicationEventPublisher;
     private ObjectMapper objectMapper;
     private FlywheelRunService service;
 
@@ -68,9 +56,8 @@ class FlywheelRunServiceStepCrudIT extends AbstractPostgresIT {
                 .registerModule(new JavaTimeModule())
                 .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
         userWebSocketHandler = mock(UserWebSocketHandler.class);
-        applicationEventPublisher = mock(ApplicationEventPublisher.class);
         service = new FlywheelRunService(runRepository, stepRepository, userWebSocketHandler,
-                objectMapper, Clock.fixed(FIXED_NOW, ZoneId.of("UTC")), applicationEventPublisher);
+                objectMapper, Clock.fixed(FIXED_NOW, ZoneId.of("UTC")));
     }
 
     @Test
@@ -114,7 +101,7 @@ class FlywheelRunServiceStepCrudIT extends AbstractPostgresIT {
         FlywheelRunStepEntity afterAttach = stepRepository.findById(stepRunId).orElseThrow();
         assertThat(afterAttach.getSubAgentSessionId()).isEqualTo("child-sess-1");
 
-        // 3) transitionStepStatus(completed) + outputJson written + event fired
+        // 3) transitionStepStatus(completed) + outputJson written
         com.fasterxml.jackson.databind.JsonNode output = objectMapper.valueToTree(
                 Map.of("memoryProposalIds", List.of("mp-1", "mp-2")));
         FlywheelRunStepEntity afterTransition = service.transitionStepStatus(
@@ -123,17 +110,7 @@ class FlywheelRunServiceStepCrudIT extends AbstractPostgresIT {
         assertThat(afterTransition.getStatus()).isEqualTo("completed");
         assertThat(afterTransition.getStepOutputJson()).contains("memoryProposalIds");
 
-        // Event published
-        ArgumentCaptor<Object> evtCaptor = ArgumentCaptor.forClass(Object.class);
-        verify(applicationEventPublisher).publishEvent(evtCaptor.capture());
-        Object evt = evtCaptor.getValue();
-        assertThat(evt).isInstanceOf(StepStateChangedEvent.class);
-        StepStateChangedEvent typed = (StepStateChangedEvent) evt;
-        assertThat(typed.stepRunId()).isEqualTo(stepRunId);
-        assertThat(typed.oldStatus()).isEqualTo("pending");
-        assertThat(typed.newStatus()).isEqualTo("completed");
-
-        // 4) listStepsByRunId (readOnly tx — N-3 consumption)
+        // 4) listStepsByRunId (readOnly tx)
         List<FlywheelRunStepEntity> all = service.listStepsByRunId(runId);
         assertThat(all).hasSize(1);
         assertThat(all.get(0).getId()).isEqualTo(stepRunId);
@@ -153,18 +130,14 @@ class FlywheelRunServiceStepCrudIT extends AbstractPostgresIT {
     }
 
     @Test
-    @DisplayName("transitionStepStatus idempotent — same status no-op returns null + does NOT fire a duplicate event")
+    @DisplayName("transitionStepStatus idempotent — same status no-op returns null")
     void transition_idempotent_noopReturnsNull() {
         String runId = insertRun(7L, "memory_curation");
         String stepRunId = service.appendStep(runId, "{}");
         service.transitionStepStatus(stepRunId, "completed", null, null);
 
-        org.mockito.Mockito.reset(applicationEventPublisher);
-
         FlywheelRunStepEntity again = service.transitionStepStatus(stepRunId, "completed", null, null);
         assertThat(again).isNull(); // no-op signal
-
-        verifyNoInteractions(applicationEventPublisher);
     }
 
     @Test
