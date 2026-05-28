@@ -5,8 +5,8 @@ import com.skillforge.core.model.ToolSchema;
 import com.skillforge.core.skill.SkillContext;
 import com.skillforge.core.skill.SkillResult;
 import com.skillforge.core.skill.Tool;
-import com.skillforge.server.entity.OptReportBatchEntity;
-import com.skillforge.server.repository.OptReportBatchRepository;
+import com.skillforge.server.flywheel.run.FlywheelRunStepEntity;
+import com.skillforge.server.flywheel.run.FlywheelRunStepRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -21,7 +21,7 @@ import java.util.Set;
  *
  * <p>After the worker finishes (or hits errors on) its batch of 1-5
  * sessions, it calls this tool to update the parent
- * {@link OptReportBatchEntity} row with the actual {@code annotations_written_count}
+ * {@link FlywheelRunStepEntity} row with the actual {@code annotations_written_count}
  * and a terminal status ({@code completed} or {@code error}).
  *
  * <p>UPSERT semantics (V99 fix): the parent only generates a fresh UUID and
@@ -36,13 +36,13 @@ public class RecordBatchAnnotationsTool implements Tool {
     private static final Logger log = LoggerFactory.getLogger(RecordBatchAnnotationsTool.class);
 
     private static final Set<String> ALLOWED_STATUS = Set.of(
-            OptReportBatchEntity.STATUS_COMPLETED,
-            OptReportBatchEntity.STATUS_ERROR);
+            FlywheelRunStepEntity.STATUS_COMPLETED,
+            FlywheelRunStepEntity.STATUS_ERROR);
 
-    private final OptReportBatchRepository batchRepository;
+    private final FlywheelRunStepRepository batchRepository;
     private final ObjectMapper objectMapper;
 
-    public RecordBatchAnnotationsTool(OptReportBatchRepository batchRepository,
+    public RecordBatchAnnotationsTool(FlywheelRunStepRepository batchRepository,
                                       ObjectMapper objectMapper) {
         this.batchRepository = batchRepository;
         this.objectMapper = objectMapper;
@@ -120,7 +120,7 @@ public class RecordBatchAnnotationsTool implements Tool {
             }
             String status = asString(input.get("status"));
             if (status == null || status.isBlank()) {
-                status = OptReportBatchEntity.STATUS_COMPLETED;
+                status = FlywheelRunStepEntity.STATUS_COMPLETED;
             }
             if (!ALLOWED_STATUS.contains(status)) {
                 return SkillResult.validationError(
@@ -130,8 +130,8 @@ public class RecordBatchAnnotationsTool implements Tool {
             String reportId = asString(input.get("reportId"));
             Object sessionIdsRaw = input.get("sessionIds");
 
-            Optional<OptReportBatchEntity> opt = batchRepository.findById(batchId);
-            OptReportBatchEntity batch;
+            Optional<FlywheelRunStepEntity> opt = batchRepository.findById(batchId);
+            FlywheelRunStepEntity batch;
             if (opt.isEmpty()) {
                 // First-call path: parent only generates the UUID, this is where
                 // the row gets inserted. Reject if reportId / sessionIds missing.
@@ -149,17 +149,17 @@ public class RecordBatchAnnotationsTool implements Tool {
                 } catch (Exception je) {
                     return SkillResult.validationError("sessionIds could not be serialized: " + je.getMessage());
                 }
-                batch = new OptReportBatchEntity();
+                batch = new FlywheelRunStepEntity();
                 batch.setId(batchId);
-                batch.setReportId(reportId);
-                batch.setSessionIdsJson(sessionIdsJson);
+                batch.setRunId(reportId);
+                batch.setStepInputJson(sessionIdsJson);
                 batch.setSubAgentSessionId(context.getSessionId());
             } else {
                 batch = opt.get();
             }
             batch.setStatus(status);
-            batch.setAnnotationsWrittenCount(count);
-            if (OptReportBatchEntity.STATUS_ERROR.equals(status)) {
+            batch.setStepOutputCount(count);
+            if (FlywheelRunStepEntity.STATUS_ERROR.equals(status)) {
                 batch.setErrorReason(errorReason);
             } else {
                 // Clear stale error_reason on a successful re-write.

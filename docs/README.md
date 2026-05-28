@@ -20,6 +20,7 @@
 | ID | 标题 | 状态 | 需求包 | MRD | PRD | 技术方案 | 交付 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | **DREAMING-MEMORY-EXTENSION** V1 | 借鉴 Anthropic Managed Agents Dreaming `POST /v1/dreams` 协议设计 — `LlmMemorySynthesizer` 从 memory→memory 升 memory+sessions[]→memory 挖未观测 pattern；触红灯 `MemoryClusterer` 子系统 + 2 Flyway migration + immutable input invariant；**V2 留** rollback REST API + executor 隔离 + stream meta-observability。姊妹包 Outcomes 拆到 [backlog](requirements/backlog/OUTCOMES-RUBRIC-FOUNDATION/index.md) | prd-draft | [需求包](requirements/active/2026-05-26-DREAMING-MEMORY-EXTENSION/index.md) | [MRD](requirements/active/2026-05-26-DREAMING-MEMORY-EXTENSION/mrd.md) | [PRD](requirements/active/2026-05-26-DREAMING-MEMORY-EXTENSION/prd.md) | [tech-design](requirements/active/2026-05-26-DREAMING-MEMORY-EXTENSION/tech-design.md) | — |
+| **OPT-LOOP-FRAMEWORK** V1 | 飞轮编排框架抽取 + Run 实体泛化：基于 OPT-REPORT-V1 现成"orchestrator agent + Run + Dashboard + WS push"模式扩展。`OptReportEntity → FlywheelRunEntity`（rename + 补 trigger_source / input_json / loop_kind 3 列 + 兼容视图）+ 抽 `OrchestratorAgentExecutor` Java framework + 新 `DispatchOrchestrationStep` Tool 替代 3 个 orchestrator agent prompt 手写 SubAgent dispatch 段。V1 只接管 memory-curator 验证 framework + 新 `/flywheel-runs` dashboard page。**前置**：DREAMING V1 先 ship + 稳定 1 周（避 memory-curator 双重改造）。**取代旧作废 FLYWHEEL-ORCHESTRATION-DSL**（YAML DSL 方向基于错的现状理解被 git checkout 丢掉）| prd-draft | [需求包](requirements/active/2026-05-27-OPT-LOOP-FRAMEWORK/index.md) | [MRD](requirements/active/2026-05-27-OPT-LOOP-FRAMEWORK/mrd.md) | [PRD](requirements/active/2026-05-27-OPT-LOOP-FRAMEWORK/prd.md) | [tech-design](requirements/active/2026-05-27-OPT-LOOP-FRAMEWORK/tech-design.md) | — |
 
 > 整体方案：[plans/PROD-OPTIMIZATION-FLYWHEEL/plan.md](plans/PROD-OPTIMIZATION-FLYWHEEL/plan.md) —— 数据飞轮 / 优化闭环 6 版本拆分（**V1-V6 全部已交付**，⑤ A/B 自动 trigger 真闭环 prompt+skill 双 surface 通）
 
@@ -31,6 +32,7 @@
 | --- | --- | --- | --- |
 | **OUTCOMES-RUBRIC-FOUNDATION** | 借鉴 Managed Agents Outcomes (`t_rubric` entity + grader 隔离 audit + V2 `AgentLoopEngine` 第 5 轴 exit) — 跟 active DREAMING-MEMORY-EXTENSION 同次研究产出，用户拆开独立 ship | backlog | [需求包](requirements/backlog/OUTCOMES-RUBRIC-FOUNDATION/index.md) |
 | **WEBSEARCH-SEARXNG-BACKEND** | WebSearch SearXNG 自部署 backend。重要不紧急；当每周搜索调用量/费用明显升高，或隐私/内网搜索诉求出现时再启动 | backlog | 见 [todo.md](todo.md) |
+| **AUTORESEARCH-OPTIMIZATION** | AutoResearch 自动调研外部（论文/blog/GitHub via WebSearch+WebFetch）→ 提取业界最佳实践 → 给出 SkillForge 自身的 **skill description / SystemAgent prompt / 代码框架** 优化建议。**跟飞轮 OPT-LOOP-FRAMEWORK 互补**：飞轮看自家生产 session 事实，autoResearch 看外部研究。**优化范围本身需 brainstorm**（3 个粒度优先级 + 互相关系待澄清），可能 phase 拆 | backlog | 见 [todo.md](todo.md) |
 | SEC-1 | Channel 配置加密 | deferred | [需求包](requirements/backlog/SEC-1-channel-config-encryption/index.md) |
 | BUG-G | 防御性 follow-up | deferred | [需求包](requirements/deferred/BUG-G-defensive-hardening/index.md) |
 | P9-4 | Partial compact（按位置切） | deferred | [需求包](requirements/deferred/P9-4-partial-compact/index.md) |

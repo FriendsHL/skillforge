@@ -94,8 +94,9 @@ import com.skillforge.server.tool.optreport.LoadSessionBatchTool;
 import com.skillforge.server.tool.optreport.RecordBatchAnnotationsTool;
 import com.skillforge.server.tool.optreport.WriteOptReportTool;
 import com.skillforge.server.optreport.OptReportService;
-import com.skillforge.server.repository.OptReportBatchRepository;
-import com.skillforge.server.repository.OptReportRepository;
+import com.skillforge.server.flywheel.run.FlywheelRunRepository;
+import com.skillforge.server.flywheel.run.FlywheelRunService;
+import com.skillforge.server.flywheel.run.FlywheelRunStepRepository;
 import com.skillforge.server.repository.SessionAnnotationRepository;
 import com.skillforge.server.subagent.AgentRoster;
 import com.skillforge.server.subagent.CollabRunService;
@@ -856,11 +857,13 @@ public class SkillForgeConfig {
      */
     @Bean
     public WriteOptReportTool writeOptReportTool(
-            OptReportRepository reportRepository,
+            FlywheelRunRepository reportRepository,
+            FlywheelRunService flywheelRunService,
             OptReportService reportService,
             ObjectMapper objectMapper,
             SkillRegistry skillRegistry) {
-        WriteOptReportTool tool = new WriteOptReportTool(reportRepository, reportService, objectMapper);
+        WriteOptReportTool tool = new WriteOptReportTool(
+                reportRepository, flywheelRunService, reportService, objectMapper);
         skillRegistry.registerTool(tool);
         log.info("Registered WriteOptReportTool into SkillRegistry");
         return tool;
@@ -868,11 +871,12 @@ public class SkillForgeConfig {
 
     /**
      * OPT-REPORT-V1 STEP B: SubAgent worker reports back batch completion
-     * (annotationsWrittenCount + status) to t_opt_report_batch.
+     * (annotationsWrittenCount + status) to t_flywheel_run_step (post-V124
+     * rename; legacy name "t_opt_report_batch" served via SQL view).
      */
     @Bean
     public RecordBatchAnnotationsTool recordBatchAnnotationsTool(
-            OptReportBatchRepository batchRepository,
+            FlywheelRunStepRepository batchRepository,
             ObjectMapper objectMapper,
             SkillRegistry skillRegistry) {
         RecordBatchAnnotationsTool tool = new RecordBatchAnnotationsTool(batchRepository, objectMapper);

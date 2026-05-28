@@ -1,11 +1,11 @@
 package com.skillforge.server.optreport;
 
-import com.skillforge.server.entity.OptReportEntity;
 import com.skillforge.server.entity.OptimizationEventEntity;
+import com.skillforge.server.flywheel.run.FlywheelRunEntity;
+import com.skillforge.server.flywheel.run.FlywheelRunRepository;
 import com.skillforge.server.optreport.dto.OptReportIssueDto;
 import com.skillforge.server.optreport.dto.OptReportSummaryJson;
 import com.skillforge.server.optreport.dto.OptReportSummaryParser;
-import com.skillforge.server.repository.OptReportRepository;
 import com.skillforge.server.repository.OptimizationEventRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -68,12 +68,12 @@ public class OptReportToEventBridge {
     /** Distinguishes report-derived events from curator-authored ones. */
     static final String CHANGE_TYPE_FROM_REPORT = "from_opt_report";
 
-    private final OptReportRepository reportRepository;
+    private final FlywheelRunRepository reportRepository;
     private final OptimizationEventRepository eventRepository;
     private final OptReportSummaryParser summaryParser;
     private final Clock clock;
 
-    public OptReportToEventBridge(OptReportRepository reportRepository,
+    public OptReportToEventBridge(FlywheelRunRepository reportRepository,
                                   OptimizationEventRepository eventRepository,
                                   OptReportSummaryParser summaryParser,
                                   Clock clock) {
@@ -108,11 +108,11 @@ public class OptReportToEventBridge {
             throw new IllegalArgumentException("issueId is required");
         }
 
-        OptReportEntity report = reportRepository.findById(reportId)
+        FlywheelRunEntity report = reportRepository.findById(reportId)
                 .orElseThrow(() -> new NoSuchElementException(
                         "Report not found: id=" + reportId));
 
-        if (!OptReportEntity.STATUS_COMPLETED.equals(report.getStatus())) {
+        if (!FlywheelRunEntity.STATUS_COMPLETED.equals(report.getStatus())) {
             throw new IllegalStateException(
                     "Report status must be 'completed' to convert issues; got: "
                             + report.getStatus() + " (reportId=" + reportId + ")");

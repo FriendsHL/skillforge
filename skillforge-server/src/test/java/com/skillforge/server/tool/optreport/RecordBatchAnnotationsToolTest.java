@@ -4,8 +4,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillforge.core.skill.SkillContext;
 import com.skillforge.core.skill.SkillResult;
-import com.skillforge.server.entity.OptReportBatchEntity;
-import com.skillforge.server.repository.OptReportBatchRepository;
+import com.skillforge.server.flywheel.run.FlywheelRunStepEntity;
+import com.skillforge.server.flywheel.run.FlywheelRunStepRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -24,10 +24,10 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
-@DisplayName("RecordBatchAnnotationsTool")
+@DisplayName("RecordBatchAnnotationsTool (post-V124 rename)")
 class RecordBatchAnnotationsToolTest {
 
-    @Mock private OptReportBatchRepository batchRepository;
+    @Mock private FlywheelRunStepRepository batchRepository;
 
     private ObjectMapper objectMapper;
     private RecordBatchAnnotationsTool tool;
@@ -41,7 +41,7 @@ class RecordBatchAnnotationsToolTest {
     @Test
     @DisplayName("happy path: status defaults completed, count saved, error_reason cleared")
     void happyPath_completed() throws Exception {
-        OptReportBatchEntity batch = newBatch("batch-1");
+        FlywheelRunStepEntity batch = newBatch("batch-1");
         batch.setErrorReason("stale prior error");
         when(batchRepository.findById("batch-1")).thenReturn(Optional.of(batch));
 
@@ -51,10 +51,10 @@ class RecordBatchAnnotationsToolTest {
                 new SkillContext(null, null, 0L));
         assertThat(r.isSuccess()).isTrue();
 
-        ArgumentCaptor<OptReportBatchEntity> saved = ArgumentCaptor.forClass(OptReportBatchEntity.class);
+        ArgumentCaptor<FlywheelRunStepEntity> saved = ArgumentCaptor.forClass(FlywheelRunStepEntity.class);
         verify(batchRepository).save(saved.capture());
-        assertThat(saved.getValue().getStatus()).isEqualTo(OptReportBatchEntity.STATUS_COMPLETED);
-        assertThat(saved.getValue().getAnnotationsWrittenCount()).isEqualTo(7);
+        assertThat(saved.getValue().getStatus()).isEqualTo(FlywheelRunStepEntity.STATUS_COMPLETED);
+        assertThat(saved.getValue().getStepOutputCount()).isEqualTo(7);
         assertThat(saved.getValue().getErrorReason()).isNull();
 
         JsonNode root = objectMapper.readTree(r.getOutput());
@@ -65,7 +65,7 @@ class RecordBatchAnnotationsToolTest {
     @Test
     @DisplayName("error status: errorReason persisted")
     void errorStatus_persistsReason() {
-        OptReportBatchEntity batch = newBatch("batch-2");
+        FlywheelRunStepEntity batch = newBatch("batch-2");
         when(batchRepository.findById("batch-2")).thenReturn(Optional.of(batch));
 
         SkillResult r = tool.execute(Map.of(
@@ -76,10 +76,10 @@ class RecordBatchAnnotationsToolTest {
                 new SkillContext(null, null, 0L));
         assertThat(r.isSuccess()).isTrue();
 
-        ArgumentCaptor<OptReportBatchEntity> saved = ArgumentCaptor.forClass(OptReportBatchEntity.class);
+        ArgumentCaptor<FlywheelRunStepEntity> saved = ArgumentCaptor.forClass(FlywheelRunStepEntity.class);
         verify(batchRepository).save(saved.capture());
-        assertThat(saved.getValue().getStatus()).isEqualTo(OptReportBatchEntity.STATUS_ERROR);
-        assertThat(saved.getValue().getAnnotationsWrittenCount()).isZero();
+        assertThat(saved.getValue().getStatus()).isEqualTo(FlywheelRunStepEntity.STATUS_ERROR);
+        assertThat(saved.getValue().getStepOutputCount()).isZero();
         assertThat(saved.getValue().getErrorReason()).isEqualTo("All 5 sessions had 0 traces");
     }
 
@@ -119,7 +119,7 @@ class RecordBatchAnnotationsToolTest {
     @DisplayName("upsert: batchId missing + reportId + sessionIds → creates new row")
     void notFoundBatch_withReportIdAndSessionIds_createsRow() {
         when(batchRepository.findById("new-batch")).thenReturn(Optional.empty());
-        when(batchRepository.save(any(OptReportBatchEntity.class)))
+        when(batchRepository.save(any(FlywheelRunStepEntity.class)))
                 .thenAnswer(inv -> inv.getArgument(0));
 
         SkillResult r = tool.execute(
@@ -131,24 +131,25 @@ class RecordBatchAnnotationsToolTest {
                 new SkillContext(null, "subagent-session-99", 0L));
 
         assertThat(r.isSuccess()).isTrue();
-        org.mockito.ArgumentCaptor<OptReportBatchEntity> captor =
-                org.mockito.ArgumentCaptor.forClass(OptReportBatchEntity.class);
+        ArgumentCaptor<FlywheelRunStepEntity> captor =
+                ArgumentCaptor.forClass(FlywheelRunStepEntity.class);
         verify(batchRepository).save(captor.capture());
-        OptReportBatchEntity saved = captor.getValue();
+        FlywheelRunStepEntity saved = captor.getValue();
         assertThat(saved.getId()).isEqualTo("new-batch");
-        assertThat(saved.getReportId()).isEqualTo("rep-x");
-        assertThat(saved.getSessionIdsJson()).contains("s1").contains("s2").contains("s3");
-        assertThat(saved.getStatus()).isEqualTo(OptReportBatchEntity.STATUS_COMPLETED);
-        assertThat(saved.getAnnotationsWrittenCount()).isEqualTo(7);
+        // V124 column renamed: report_id → run_id
+        assertThat(saved.getRunId()).isEqualTo("rep-x");
+        assertThat(saved.getStepInputJson()).contains("s1").contains("s2").contains("s3");
+        assertThat(saved.getStatus()).isEqualTo(FlywheelRunStepEntity.STATUS_COMPLETED);
+        assertThat(saved.getStepOutputCount()).isEqualTo(7);
         assertThat(saved.getSubAgentSessionId()).isEqualTo("subagent-session-99");
     }
 
-    private static OptReportBatchEntity newBatch(String id) {
-        OptReportBatchEntity b = new OptReportBatchEntity();
+    private static FlywheelRunStepEntity newBatch(String id) {
+        FlywheelRunStepEntity b = new FlywheelRunStepEntity();
         b.setId(id);
-        b.setReportId("rep-x");
-        b.setSessionIdsJson("[\"s1\",\"s2\"]");
-        b.setStatus(OptReportBatchEntity.STATUS_PENDING);
+        b.setRunId("rep-x");
+        b.setStepInputJson("[\"s1\",\"s2\"]");
+        b.setStatus(FlywheelRunStepEntity.STATUS_PENDING);
         return b;
     }
 }

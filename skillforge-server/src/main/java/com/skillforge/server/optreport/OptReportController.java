@@ -1,10 +1,10 @@
 package com.skillforge.server.optreport;
 
 import com.skillforge.server.entity.AgentEntity;
-import com.skillforge.server.entity.OptReportEntity;
 import com.skillforge.server.entity.OptimizationEventEntity;
+import com.skillforge.server.flywheel.run.FlywheelRunEntity;
+import com.skillforge.server.flywheel.run.FlywheelRunRepository;
 import com.skillforge.server.repository.AgentRepository;
-import com.skillforge.server.repository.OptReportRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.PageRequest;
@@ -57,12 +57,12 @@ public class OptReportController {
     static final int MAX_LIMIT = 100;
 
     private final OptReportService reportService;
-    private final OptReportRepository reportRepository;
+    private final FlywheelRunRepository reportRepository;
     private final AgentRepository agentRepository;
     private final OptReportToEventBridge bridge;
 
     public OptReportController(OptReportService reportService,
-                               OptReportRepository reportRepository,
+                               FlywheelRunRepository reportRepository,
                                AgentRepository agentRepository,
                                OptReportToEventBridge bridge) {
         this.reportService = reportService;
@@ -89,7 +89,7 @@ public class OptReportController {
                 .orElseThrow(() -> new ResponseStatusException(
                         HttpStatus.NOT_FOUND, "Agent not found: id=" + agentId));
 
-        OptReportEntity report;
+        FlywheelRunEntity report;
         try {
             report = reportService.startReport(agentId, windowDays);
         } catch (IllegalArgumentException iae) {
@@ -121,10 +121,13 @@ public class OptReportController {
                     "agentId must be a positive long; got " + agentId);
         }
         int limit = clampLimit(limitRaw);
-        List<OptReportEntity> rows = reportRepository.findByAgentIdOrderByCreatedAtDesc(
-                agentId, PageRequest.of(0, limit));
+        // OPT-LOOP-FRAMEWORK Sprint 1: t_flywheel_run now mixes loop_kinds —
+        // scope the lookup to opt_report so the Reports tab keeps showing only
+        // OPT-REPORT rows (matches the pre-V124 query shape exactly).
+        List<FlywheelRunEntity> rows = reportRepository.findByAgentIdAndLoopKindOrderByCreatedAtDesc(
+                agentId, FlywheelRunEntity.LOOP_KIND_OPT_REPORT, PageRequest.of(0, limit));
         List<Map<String, Object>> items = new ArrayList<>(rows.size());
-        for (OptReportEntity r : rows) {
+        for (FlywheelRunEntity r : rows) {
             items.add(toSummaryDto(r));
         }
         Map<String, Object> body = new LinkedHashMap<>();
@@ -138,14 +141,14 @@ public class OptReportController {
         if (reportId == null || reportId.isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "reportId is required");
         }
-        OptReportEntity r = reportRepository.findById(reportId)
+        FlywheelRunEntity r = reportRepository.findById(reportId)
                 .orElseThrow(() -> new ResponseStatusException(
                         HttpStatus.NOT_FOUND, "Report not found: id=" + reportId));
         Map<String, Object> body = toFullDto(r);
         return ResponseEntity.ok(body);
     }
 
-    private Map<String, Object> toSummaryDto(OptReportEntity r) {
+    private Map<String, Object> toSummaryDto(FlywheelRunEntity r) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("reportId", r.getId());
         m.put("agentId", r.getAgentId());
@@ -157,7 +160,7 @@ public class OptReportController {
         return m;
     }
 
-    private Map<String, Object> toFullDto(OptReportEntity r) {
+    private Map<String, Object> toFullDto(FlywheelRunEntity r) {
         Map<String, Object> m = toSummaryDto(r);
         m.put("contentMd", r.getContentMd());
         // Raw JSONB string is retained for backward-compat (FE V1.0/V1.1

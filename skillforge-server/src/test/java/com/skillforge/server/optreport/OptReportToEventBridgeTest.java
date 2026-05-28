@@ -1,10 +1,10 @@
 package com.skillforge.server.optreport;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.skillforge.server.entity.OptReportEntity;
+import com.skillforge.server.flywheel.run.FlywheelRunEntity;
+import com.skillforge.server.flywheel.run.FlywheelRunRepository;
 import com.skillforge.server.entity.OptimizationEventEntity;
 import com.skillforge.server.optreport.dto.OptReportSummaryParser;
-import com.skillforge.server.repository.OptReportRepository;
 import com.skillforge.server.repository.OptimizationEventRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -36,7 +36,7 @@ class OptReportToEventBridgeTest {
 
     private static final Instant FIXED_NOW = Instant.parse("2026-05-23T10:00:00Z");
 
-    @Mock private OptReportRepository reportRepository;
+    @Mock private FlywheelRunRepository reportRepository;
     @Mock private OptimizationEventRepository eventRepository;
 
     private OptReportSummaryParser parser;
@@ -54,7 +54,7 @@ class OptReportToEventBridgeTest {
     void convertIssueToEvent_happyPath_createsEvent() {
         String reportId = "rep-1";
         String issueId = "issue-1";
-        OptReportEntity report = completedReport(reportId, 7L, """
+        FlywheelRunEntity report = completedReport(reportId, 7L, """
                 { "topIssues": [
                     {
                       "id": "issue-1",
@@ -107,7 +107,7 @@ class OptReportToEventBridgeTest {
     void convertIssueToEvent_alreadyExists_returnsExisting() {
         String reportId = "rep-1";
         String issueId = "issue-1";
-        OptReportEntity report = completedReport(reportId, 7L, """
+        FlywheelRunEntity report = completedReport(reportId, 7L, """
                 { "topIssues": [
                     {
                       "id": "issue-1", "title": "x", "severity": "low",
@@ -138,7 +138,7 @@ class OptReportToEventBridgeTest {
     void convertIssueToEvent_otherSurface_throws() {
         String reportId = "rep-1";
         String issueId = "issue-1";
-        OptReportEntity report = completedReport(reportId, 7L, """
+        FlywheelRunEntity report = completedReport(reportId, 7L, """
                 { "topIssues": [
                     {
                       "id": "issue-1", "title": "x", "severity": "low",
@@ -161,7 +161,7 @@ class OptReportToEventBridgeTest {
     void convertIssueToEvent_unclearSurface_throws() {
         String reportId = "rep-1";
         String issueId = "issue-1";
-        OptReportEntity report = completedReport(reportId, 7L, """
+        FlywheelRunEntity report = completedReport(reportId, 7L, """
                 { "topIssues": [
                     {
                       "id": "issue-1", "title": "x", "severity": "low",
@@ -185,7 +185,7 @@ class OptReportToEventBridgeTest {
         String issueId = "issue-1";
         // 经典场景：agent 调 Bash 反复失败 → 根因 surface=skill，
         // 但修复落点是 behavior_rule（加"连续失败后停"的行为规则）。
-        OptReportEntity report = completedReport(reportId, 7L, """
+        FlywheelRunEntity report = completedReport(reportId, 7L, """
                 { "topIssues": [
                     {
                       "id": "issue-1", "title": "Bash 路径循环",
@@ -224,7 +224,7 @@ class OptReportToEventBridgeTest {
     void convertIssueToEvent_fixSurfaceMissing_fallbackToSuspect() {
         String reportId = "rep-legacy";
         String issueId = "issue-1";
-        OptReportEntity report = completedReport(reportId, 7L, """
+        FlywheelRunEntity report = completedReport(reportId, 7L, """
                 { "topIssues": [
                     {
                       "id": "issue-1", "title": "x",
@@ -257,10 +257,10 @@ class OptReportToEventBridgeTest {
     @DisplayName("report not completed → IllegalStateException")
     void convertIssueToEvent_reportRunning_throws() {
         String reportId = "rep-running";
-        OptReportEntity report = new OptReportEntity();
+        FlywheelRunEntity report = new FlywheelRunEntity();
         report.setId(reportId);
         report.setAgentId(7L);
-        report.setStatus(OptReportEntity.STATUS_RUNNING);
+        report.setStatus(FlywheelRunEntity.STATUS_RUNNING);
         report.setSummaryJson("{ \"topIssues\": [] }");
         when(reportRepository.findById(reportId)).thenReturn(Optional.of(report));
 
@@ -283,7 +283,7 @@ class OptReportToEventBridgeTest {
     @DisplayName("issue id not in summary → NoSuchElementException")
     void convertIssueToEvent_issueMissing_throws() {
         String reportId = "rep-1";
-        OptReportEntity report = completedReport(reportId, 7L, """
+        FlywheelRunEntity report = completedReport(reportId, 7L, """
                 { "topIssues": [
                     {
                       "id": "issue-1", "title": "x", "severity": "low",
@@ -304,10 +304,10 @@ class OptReportToEventBridgeTest {
     @DisplayName("schema-invalid summary_json → IllegalArgumentException (operator gets 400)")
     void convertIssueToEvent_invalidSchema_throws() {
         String reportId = "rep-1";
-        OptReportEntity report = new OptReportEntity();
+        FlywheelRunEntity report = new FlywheelRunEntity();
         report.setId(reportId);
         report.setAgentId(7L);
-        report.setStatus(OptReportEntity.STATUS_COMPLETED);
+        report.setStatus(FlywheelRunEntity.STATUS_COMPLETED);
         // Missing severity — parser will throw
         report.setSummaryJson("""
                 { "topIssues": [
@@ -330,7 +330,7 @@ class OptReportToEventBridgeTest {
     @DisplayName("severity → risk mapping for medium and low")
     void convertIssueToEvent_severityMapping() {
         String reportId = "rep-1";
-        OptReportEntity report = completedReport(reportId, 7L, """
+        FlywheelRunEntity report = completedReport(reportId, 7L, """
                 { "topIssues": [
                     {
                       "id": "issue-medium", "title": "x", "severity": "medium",
@@ -440,11 +440,11 @@ class OptReportToEventBridgeTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
-    private static OptReportEntity completedReport(String id, long agentId, String summaryJson) {
-        OptReportEntity r = new OptReportEntity();
+    private static FlywheelRunEntity completedReport(String id, long agentId, String summaryJson) {
+        FlywheelRunEntity r = new FlywheelRunEntity();
         r.setId(id);
         r.setAgentId(agentId);
-        r.setStatus(OptReportEntity.STATUS_COMPLETED);
+        r.setStatus(FlywheelRunEntity.STATUS_COMPLETED);
         r.setSummaryJson(summaryJson);
         return r;
     }

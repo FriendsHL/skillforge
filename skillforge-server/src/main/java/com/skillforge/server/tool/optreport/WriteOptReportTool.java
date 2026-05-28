@@ -5,9 +5,10 @@ import com.skillforge.core.model.ToolSchema;
 import com.skillforge.core.skill.SkillContext;
 import com.skillforge.core.skill.SkillResult;
 import com.skillforge.core.skill.Tool;
-import com.skillforge.server.entity.OptReportEntity;
+import com.skillforge.server.flywheel.run.FlywheelRunEntity;
+import com.skillforge.server.flywheel.run.FlywheelRunRepository;
+import com.skillforge.server.flywheel.run.FlywheelRunService;
 import com.skillforge.server.optreport.OptReportService;
-import com.skillforge.server.repository.OptReportRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -19,33 +20,36 @@ import java.util.Optional;
 /**
  * OPT-REPORT-V1 — STEP 7 of the {@code report-generator} agent pipeline.
  *
- * <p>Persists the markdown report + structured summary JSON the agent
- * produced in STEP 6, transitioning the {@link OptReportEntity#getStatus()}
- * from {@code pending} / {@code running} → {@code completed}.
+ * <p>OPT-LOOP-FRAMEWORK Sprint 1 (V124, 2026-05-28): persists the markdown
+ * report + structured summary JSON via {@link FlywheelRunService#markCompleted}
+ * (under the hood writes to {@code t_flywheel_run} but the public REST surface
+ * still treats this row as an OPT-REPORT-V1 report). After the
+ * Service-managed write fires the generic {@code flywheel_run_status_changed}
+ * WS event, this tool also calls {@link OptReportService#onReportCompleted}
+ * to emit the OPT-REPORT-specific {@code opt_report_completed} event for
+ * backward compat (W6 dual-event design).
  *
  * <p>Validation: the report must already exist (created by
  * {@link OptReportService#startReport}) and be in {@code pending} or
  * {@code running} state. Re-calling on an already-{@code completed} /
  * {@code error} report is rejected — V1 does not support "edit a published
  * report" semantics.
- *
- * <p>After a successful write, fires
- * {@link OptReportService#onReportCompleted(String)} to broadcast a
- * {@code opt_report_completed} WS event (Sub-batch 1 happy path; failure
- * surfacing is a Phase 2 follow-up).
  */
 public class WriteOptReportTool implements Tool {
 
     private static final Logger log = LoggerFactory.getLogger(WriteOptReportTool.class);
 
-    private final OptReportRepository reportRepository;
+    private final FlywheelRunRepository reportRepository;
+    private final FlywheelRunService flywheelRunService;
     private final OptReportService reportService;
     private final ObjectMapper objectMapper;
 
-    public WriteOptReportTool(OptReportRepository reportRepository,
+    public WriteOptReportTool(FlywheelRunRepository reportRepository,
+                              FlywheelRunService flywheelRunService,
                               OptReportService reportService,
                               ObjectMapper objectMapper) {
         this.reportRepository = reportRepository;
+        this.flywheelRunService = flywheelRunService;
         this.reportService = reportService;
         this.objectMapper = objectMapper;
     }
@@ -58,7 +62,7 @@ public class WriteOptReportTool implements Tool {
     @Override
     public String getDescription() {
         return "OPT-REPORT-V1 STEP 7: persist the generated markdown report + "
-                + "structured summary JSON to t_opt_report (status pending|running → "
+                + "structured summary JSON to t_flywheel_run (status pending|running → "
                 + "completed). reportId must be a UUID returned by the controller's "
                 + "POST /api/flywheel/agents/{id}/generate-report; calling on already "
                 + "completed/error rows is rejected. Triggers an opt_report_completed "
@@ -106,29 +110,30 @@ public class WriteOptReportTool implements Tool {
             }
             String summaryJson = serializeSummary(input.get("summaryJson"));
 
-            Optional<OptReportEntity> opt = reportRepository.findById(reportId);
+            Optional<FlywheelRunEntity> opt = reportRepository.findById(reportId);
             if (opt.isEmpty()) {
                 return SkillResult.error("OptReport not found: " + reportId);
             }
-            OptReportEntity report = opt.get();
+            FlywheelRunEntity report = opt.get();
             String status = report.getStatus();
-            if (!OptReportEntity.STATUS_PENDING.equals(status)
-                    && !OptReportEntity.STATUS_RUNNING.equals(status)) {
+            if (!FlywheelRunEntity.STATUS_PENDING.equals(status)
+                    && !FlywheelRunEntity.STATUS_RUNNING.equals(status)) {
                 return SkillResult.validationError(
                         "OptReport " + reportId + " is not writable (status=" + status + ")");
             }
 
-            report.setContentMd(contentMd);
-            report.setSummaryJson(summaryJson);
-            report.setStatus(OptReportEntity.STATUS_COMPLETED);
-            reportRepository.save(report);
+            // Service-layer write — also fires the generic
+            // `flywheel_run_status_changed` WS event for the dashboard
+            // "All Flywheel Runs" page subscribers.
+            flywheelRunService.markCompleted(reportId, contentMd, summaryJson);
 
-            // Best-effort WS broadcast — never let a broadcast failure mask the
-            // successful DB write (operator can still see the row via the UI).
+            // OPT-REPORT-V1 backward-compat WS event — best-effort, never let a
+            // broadcast failure mask the successful DB write (operator can still
+            // see the row via the UI).
             try {
                 reportService.onReportCompleted(reportId);
             } catch (RuntimeException broadcastEx) {
-                log.warn("WriteOptReportTool: WS broadcast failed for reportId={}: {}",
+                log.warn("WriteOptReportTool: opt_report_completed WS broadcast failed for reportId={}: {}",
                         reportId, broadcastEx.getMessage());
             }
 
