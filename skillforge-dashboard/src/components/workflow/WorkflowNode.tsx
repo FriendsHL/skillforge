@@ -1,5 +1,6 @@
 import React from 'react';
 import { Handle, Position, type NodeProps } from 'reactflow';
+import type { WorkflowStep } from '../../api/workflow';
 
 /**
  * AUTOEVOLVING V1 Sprint 3 — node status for the workflow run DAG.
@@ -39,6 +40,12 @@ export interface WorkflowNodeData {
   isApprovalGate?: boolean;
   /** True when this node has no inbound edge (suppresses the target handle). */
   isRoot?: boolean;
+  /**
+   * The backing step for `agent`-kind nodes — threaded so the DAG's
+   * `onNodeClick` can open the step drawer without a separate index lookup.
+   * Absent on `phase` header nodes (they aggregate multiple steps).
+   */
+  step?: WorkflowStep;
 }
 
 const STATUS_LABEL: Record<WorkflowNodeStatus, string> = {

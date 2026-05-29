@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useCallback, useMemo } from 'react';
 import ReactFlow, {
   Background,
   Controls,
@@ -69,6 +69,8 @@ export interface WorkflowDagProps {
   runStatus: string;
   /** Ordered phase titles from the workflow definition (skeleton + ordering). */
   phaseOrder?: string[];
+  /** Fired when an agent / gate node is clicked (phase headers don't fire). */
+  onStepClick?: (step: WorkflowStep) => void;
 }
 
 /**
@@ -76,7 +78,12 @@ export interface WorkflowDagProps {
  * (no drag / connect / select). Phase nodes form the horizontal backbone; agent
  * nodes hang under their phase header.
  */
-const WorkflowDag: React.FC<WorkflowDagProps> = ({ steps, runStatus, phaseOrder }) => {
+const WorkflowDag: React.FC<WorkflowDagProps> = ({
+  steps,
+  runStatus,
+  phaseOrder,
+  onStepClick,
+}) => {
   const { nodes, edges, isEmpty } = useMemo(() => {
     const { groups, linear } = groupStepsByPhase(steps, phaseOrder);
     if (groups.length === 0) {
@@ -104,6 +111,7 @@ const WorkflowDag: React.FC<WorkflowDagProps> = ({ steps, runStatus, phaseOrder 
             sublabel: step.stepKind,
             isApprovalGate: step.stepKind === STEP_KIND_HUMAN_APPROVE,
             isRoot: i === 0,
+            step,
           },
           draggable: false,
           connectable: false,
@@ -174,6 +182,7 @@ const WorkflowDag: React.FC<WorkflowDagProps> = ({ steps, runStatus, phaseOrder 
             sublabel: step.stepKind,
             isApprovalGate: step.stepKind === STEP_KIND_HUMAN_APPROVE,
             isRoot: true, // fed by its phase header via a vertical edge, no left handle needed
+            step,
           },
           draggable: false,
           connectable: false,
@@ -192,6 +201,17 @@ const WorkflowDag: React.FC<WorkflowDagProps> = ({ steps, runStatus, phaseOrder 
     return { nodes: builtNodes, edges: builtEdges, isEmpty: false };
   }, [steps, runStatus, phaseOrder]);
 
+  // Open the drawer when an agent / gate node is clicked. Phase headers carry
+  // no `step` in their data, so they're inert. onNodeClick fires even with
+  // elementsSelectable=false (the read-only DAG stays non-selectable).
+  const handleNodeClick = useCallback(
+    (_: React.MouseEvent, node: Node<WorkflowNodeData>) => {
+      const s = node.data?.step;
+      if (s) onStepClick?.(s);
+    },
+    [onStepClick],
+  );
+
   if (isEmpty) {
     return (
       <div className="wf-dag-empty" data-testid="wf-dag-empty">
@@ -206,6 +226,7 @@ const WorkflowDag: React.FC<WorkflowDagProps> = ({ steps, runStatus, phaseOrder 
         nodes={nodes}
         edges={edges}
         nodeTypes={NODE_TYPES}
+        onNodeClick={handleNodeClick}
         fitView
         fitViewOptions={{ padding: 0.2, maxZoom: 1 }}
         minZoom={0.3}

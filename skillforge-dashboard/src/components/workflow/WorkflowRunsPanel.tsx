@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   getWorkflowRun,
@@ -7,9 +7,11 @@ import {
   type WorkflowDto,
   type WorkflowRunDetail,
   type WorkflowRunSummary,
+  type WorkflowStep,
 } from '../../api/workflow';
 import { useAuth } from '../../contexts/AuthContext';
 import WorkflowDag from './WorkflowDag';
+import WorkflowStepDrawer from './WorkflowStepDrawer';
 import './workflow.css';
 
 const RUNS_LIMIT = 30;
@@ -59,6 +61,17 @@ const WorkflowRunsPanel: React.FC = () => {
   const queryClient = useQueryClient();
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const selectedRunIdRef = useRef<string | null>(null);
+  // Q2 — the step whose detail drawer is open (null = closed). Tagged with the
+  // run it was selected under so switching runs auto-hides a stale selection at
+  // render time (no setState-in-effect — mirrors the effectiveSelectedRunId
+  // derive-at-render pattern below).
+  const [selectedStep, setSelectedStep] = useState<{
+    runId: string;
+    step: WorkflowStep;
+  } | null>(null);
+  // Stable identity so the drawer's Esc-listener useEffect doesn't tear down /
+  // re-add on every parent re-render.
+  const closeStepDrawer = useCallback(() => setSelectedStep(null), []);
 
   // ── Workflow definitions (for phase skeleton + ordering) ──
   const { data: workflowsResp } = useQuery({
@@ -257,6 +270,19 @@ const WorkflowRunsPanel: React.FC = () => {
               steps={detail.steps}
               runStatus={detail.status}
               phaseOrder={phaseOrder}
+              onStepClick={(s) => setSelectedStep({ runId: detail.runId, step: s })}
+            />
+
+            <WorkflowStepDrawer
+              step={
+                selectedStep && selectedStep.runId === detail.runId
+                  ? selectedStep.step
+                  : null
+              }
+              runId={detail.runId}
+              runStatus={detail.status}
+              workflowName={detail.name}
+              onClose={closeStepDrawer}
             />
           </>
         ) : null}

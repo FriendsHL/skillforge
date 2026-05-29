@@ -72,6 +72,26 @@ export function groupStepsByPhase(
   return { groups, linear: false };
 }
 
+/**
+ * Map a run/step/node status string to its `.wf-chip--X` CSS class. Shared by
+ * WorkflowRunsPanel (run + run-detail chips) and WorkflowStepDrawer (step chip)
+ * so the status→colour mapping lives in one place.
+ */
+export function statusChipClass(status: string): string {
+  switch (status) {
+    case 'completed':
+      return 'wf-chip--completed';
+    case 'error':
+      return 'wf-chip--error';
+    case 'paused':
+      return 'wf-chip--paused';
+    case 'running':
+      return 'wf-chip--running';
+    default:
+      return 'wf-chip--pending';
+  }
+}
+
 /** Map a single step to a node status (see WorkflowNodeStatus doc). */
 export function deriveAgentStatus(
   step: WorkflowStep,
