@@ -40,6 +40,14 @@ public final class WorkflowDtos {
      * belongs to (e.g. {@code "Load"} / {@code "Annotate"}), parsed from the
      * step's {@code step_input_json} — the FE DAG groups agent nodes by it. It is
      * null for legacy / non-workflow steps that never recorded a phase.
+     *
+     * <p>{@code payload} (AUTOEVOLVING V1 Sprint 4, W1) is the arbitrary JSON
+     * argument passed to {@code humanApprove(payload)}, parsed from the step's
+     * {@code step_input_json.payload} node. It is the same object the
+     * {@code workflow_human_approve_required} WS frame carries — exposing it here
+     * lets the FE approve-card page-load recovery path (list paused runs → get
+     * run detail → read the pending {@code human_approve} step's payload) render
+     * without waiting for a fresh WS push. {@code null} for every non-gate step.
      */
     public record WorkflowStepDto(
             Integer stepIndex,
@@ -47,6 +55,7 @@ public final class WorkflowDtos {
             String status,
             String agentSlug,
             String phase,
+            Object payload,
             String createdAt,
             String updatedAt) {
     }

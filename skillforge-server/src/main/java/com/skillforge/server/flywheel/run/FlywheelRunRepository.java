@@ -5,6 +5,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.time.Instant;
 import java.util.List;
 
 /**
@@ -49,4 +50,13 @@ public interface FlywheelRunRepository extends JpaRepository<FlywheelRunEntity, 
     long countByLoopKind(String loopKind);
 
     long countByLoopKindAndStatus(String loopKind, String status);
+
+    /**
+     * AUTOEVOLVING V1 Sprint 4 (W2): date-windowed status count for the
+     * {@code /api/autoevolving/overview} KPI strip — e.g.
+     * "workflow runs completed in the last 7 days". {@code createdAt > after}
+     * (strictly-after) matches the "this week" window semantics. Spring Data
+     * derives the query from the method name; no {@code @Query} needed.
+     */
+    long countByLoopKindAndStatusAndCreatedAtAfter(String loopKind, String status, Instant after);
 }

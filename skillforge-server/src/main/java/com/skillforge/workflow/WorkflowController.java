@@ -262,6 +262,7 @@ public class WorkflowController {
                 s.getStatus(),
                 agentSlugOf(s.getStepInputJson()),
                 phaseOf(s.getStepInputJson()),
+                payloadOf(s.getStepInputJson()),
                 toIso(s.getCreatedAt()),
                 toIso(s.getUpdatedAt()));
     }
@@ -292,6 +293,31 @@ public class WorkflowController {
      */
     private String phaseOf(String stepInputJson) {
         return stringFieldOf(stepInputJson, "phase");
+    }
+
+    /**
+     * AUTOEVOLVING V1 Sprint 4 (W1): the arbitrary {@code humanApprove(payload)}
+     * argument, parsed from {@code step_input_json.payload} (written by
+     * {@code HostHumanApprove.buildStepInput}). Converted back to a plain
+     * Map/List/scalar so Jackson re-serializes it as JSON in the run-detail
+     * {@code steps[]} — identical shape to the {@code workflow_human_approve_required}
+     * WS frame's {@code payload}. {@code null} when absent / unparseable (legacy
+     * rows, non-gate steps) so the FE approve card simply renders nothing.
+     */
+    private Object payloadOf(String stepInputJson) {
+        if (stepInputJson == null || stepInputJson.isBlank()) {
+            return null;
+        }
+        try {
+            JsonNode node = objectMapper.readTree(stepInputJson);
+            JsonNode v = node.get("payload");
+            if (v == null || v.isNull()) {
+                return null;
+            }
+            return objectMapper.convertValue(v, Object.class);
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     private String stringFieldOf(String stepInputJson, String field) {

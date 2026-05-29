@@ -399,3 +399,159 @@
     animation: none;
   }
 }
+
+/* ═══════════════ humanApprove review card (Sprint 4) ═══════════════
+ * Mirrors the ask_user `.ask-card` visual language (warning-amber accent,
+ * mono uppercase header strip) but owns independent class names so it stays
+ * decoupled from chat styling. See sprint4-plan-draft.md §2. */
+
+.wf-approve-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 18px;
+  border: 1px solid color-mix(in srgb, var(--color-warning) 38%, transparent);
+  border-left-width: 3px;
+  border-left-color: var(--color-warning);
+  background: color-mix(in srgb, var(--color-warning) 7%, var(--bg-card));
+  border-radius: var(--radius-md, 8px);
+  box-shadow: var(--shadow-card);
+}
+
+.wf-approve-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.wf-approve-head-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-warning);
+}
+
+.wf-approve-runid {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-4);
+}
+
+.wf-approve-payload {
+  max-height: 280px;
+  overflow: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--bg-base);
+}
+
+.wf-approve-reason {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 60px;
+  resize: vertical;
+  padding: 9px 12px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--fg-1);
+  background: var(--bg-elev);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm, 6px);
+  outline: none;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.wf-approve-reason:focus {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-primary) 16%, transparent);
+}
+
+.wf-approve-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.wf-approve-btn {
+  padding: 7px 16px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: var(--radius-sm, 6px);
+  border: 1px solid var(--border-subtle);
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, opacity 120ms ease;
+}
+
+.wf-approve-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.wf-approve-btn--approve {
+  color: var(--color-success);
+  background: color-mix(in srgb, var(--color-success) 12%, transparent);
+  border-color: color-mix(in srgb, var(--color-success) 40%, transparent);
+}
+
+.wf-approve-btn--approve:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-success) 22%, transparent);
+  border-color: var(--color-success);
+}
+
+.wf-approve-btn--reject {
+  color: var(--color-error);
+  background: color-mix(in srgb, var(--color-error) 10%, transparent);
+  border-color: color-mix(in srgb, var(--color-error) 38%, transparent);
+}
+
+.wf-approve-btn--reject:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-error) 20%, transparent);
+  border-color: var(--color-error);
+}
+
+/* ═══════════════ trigger workflow modal (Sprint 4) ═══════════════ */
+
+.wf-trigger-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.wf-trigger-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-2);
+  margin-top: 6px;
+}
+
+.wf-trigger-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--bg-elev);
+}
+
+.wf-trigger-desc {
+  margin: 0;
+  font-size: 12px;
+  color: var(--fg-2);
+  line-height: 1.4;
+}
+
+.wf-trigger-phases {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-4);
+}

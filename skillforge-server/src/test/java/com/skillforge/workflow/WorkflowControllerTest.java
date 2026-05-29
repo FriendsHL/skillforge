@@ -255,4 +255,62 @@ class WorkflowControllerTest {
                 .andExpect(jsonPath("$.steps[1].phase").value("Annotate"))
                 .andExpect(jsonPath("$.steps[1].agentSlug").value("session-batch-annotator"));
     }
+
+    @Test
+    @DisplayName("Sprint 4 W1: GET run detail surfaces the human_approve step's payload")
+    void getRunDetail_exposesHumanApprovePayload() throws Exception {
+        FlywheelRunEntity run = new FlywheelRunEntity();
+        run.setId("run-8");
+        run.setLoopKind("workflow");
+        run.setStatus("paused");
+        run.setInputJson("{\"workflow_name\":\"opt-report\"}");
+        when(flywheelRunService.findById("run-8")).thenReturn(Optional.of(run));
+
+        // step_input_json shape written by HostHumanApprove.buildStepInput:
+        //   {stepKind, stepIndex, payload:<arbitrary humanApprove(payload) arg>}
+        FlywheelRunStepEntity gate = new FlywheelRunStepEntity();
+        gate.setId("step-1");
+        gate.setRunId("run-8");
+        gate.setStepIndex(3);
+        gate.setStepKind(FlywheelRunStepEntity.STEP_KIND_HUMAN_APPROVE);
+        gate.setStatus(FlywheelRunStepEntity.STATUS_PENDING);
+        gate.setStepInputJson(
+                "{\"stepKind\":\"human_approve\",\"stepIndex\":3,"
+                        + "\"payload\":{\"topIssues\":[{\"id\":\"issue-1\",\"title\":\"ReadFile bug\"}],"
+                        + "\"summary\":\"2 issues\"}}");
+        when(flywheelRunService.listStepsByRunId("run-8")).thenReturn(List.of(gate));
+
+        mvc.perform(get("/api/workflows/runs/run-8"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.steps[0].stepKind").value("human_approve"))
+                .andExpect(jsonPath("$.steps[0].stepIndex").value(3))
+                // W1: payload re-serialized as nested JSON (same shape as the WS frame)
+                .andExpect(jsonPath("$.steps[0].payload.summary").value("2 issues"))
+                .andExpect(jsonPath("$.steps[0].payload.topIssues[0].id").value("issue-1"))
+                .andExpect(jsonPath("$.steps[0].payload.topIssues[0].title").value("ReadFile bug"));
+    }
+
+    @Test
+    @DisplayName("Sprint 4 W1: payload is null for a step whose step_input_json has none")
+    void getRunDetail_nullPayloadWhenAbsent() throws Exception {
+        FlywheelRunEntity run = new FlywheelRunEntity();
+        run.setId("run-9");
+        run.setLoopKind("workflow");
+        run.setStatus("running");
+        run.setInputJson("{\"workflow_name\":\"demo\"}");
+        when(flywheelRunService.findById("run-9")).thenReturn(Optional.of(run));
+
+        FlywheelRunStepEntity dispatch = new FlywheelRunStepEntity();
+        dispatch.setId("step-1");
+        dispatch.setRunId("run-9");
+        dispatch.setStepIndex(1);
+        dispatch.setStepKind(FlywheelRunStepEntity.STEP_KIND_SUBAGENT_DISPATCH);
+        dispatch.setStatus(FlywheelRunStepEntity.STATUS_COMPLETED);
+        dispatch.setStepInputJson("{\"phase\":\"Load\",\"agentSlug\":\"loader\"}");
+        when(flywheelRunService.listStepsByRunId("run-9")).thenReturn(List.of(dispatch));
+
+        mvc.perform(get("/api/workflows/runs/run-9"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.steps[0].payload").doesNotExist());
+    }
 }

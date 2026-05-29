@@ -33,6 +33,7 @@ const primaryNav: NavItem[] = [
   { key: 'channels', path: '/channels', label: 'Channels' },
   { key: 'tasks', path: '/tasks', label: 'Tasks' },
   { key: 'insights', path: '/insights/patterns', label: 'Optimization' },
+  { key: 'autoevolving', path: '/autoevolving', label: 'Auto-Evolving' },
 ];
 
 const paletteItems: PaletteItem[] = primaryNav.map((i) => ({

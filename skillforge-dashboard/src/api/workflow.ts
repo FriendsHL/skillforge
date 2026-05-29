@@ -12,9 +12,11 @@
  *   skillforge-server/.../workflow/WorkflowController.java  (envelopes + detail Map)
  *
  * Envelope shapes (footgun #6b — verified against WorkflowController):
- *   GET /api/workflows          → { items: WorkflowDto[], total }
- *   GET /api/workflows/runs      → { items: WorkflowRunSummary[], total, limit, offset }
- *   GET /api/workflows/runs/{id} → WorkflowRunDetail (single object, NOT enveloped)
+ *   GET  /api/workflows               → { items: WorkflowDto[], total }
+ *   GET  /api/workflows/runs           → { items: WorkflowRunSummary[], total, limit, offset }
+ *   GET  /api/workflows/runs/{id}      → WorkflowRunDetail (single object, NOT enveloped)
+ *   POST /api/workflows/{name}/run     → 202 { runId, name, status } (single object)
+ *   POST /api/workflows/runs/{id}/approve → { status, decision } (single object)
  *
  * BE → FE type mapping (java.md table):
  *   Java String                → string
@@ -103,6 +105,13 @@ export interface WorkflowStep {
   agentSlug: string | null;
   /** phase() label this step ran under; null for legacy / unphased steps. */
   phase: string | null;
+  /**
+   * AUTOEVOLVING V1 Sprint 4 (W1) — the `humanApprove(payload)` argument,
+   * parsed from `step_input_json.payload` on the BE (`WorkflowStepDto.payload`,
+   * Java `Object`). Same shape the `workflow_human_approve_required` WS frame
+   * carries. Null for every non-gate step.
+   */
+  payload: unknown;
   createdAt: string | null;
   updatedAt: string | null;
 }
@@ -136,3 +145,68 @@ export const listWorkflowRuns = (params?: ListWorkflowRunsParams) =>
 /** `GET /api/workflows/runs/{runId}` — run detail + steps. */
 export const getWorkflowRun = (runId: string) =>
   api.get<WorkflowRunDetail>(`/workflows/runs/${encodeURIComponent(runId)}`);
+
+// ───────────────────── POST /api/workflows/{name}/run ──────────────────────
+
+/** Body for `POST /api/workflows/{name}/run`. `args` is the free-form workflow
+ *  input object forwarded verbatim to the script's `args` global; null/omit for
+ *  argless workflows. */
+export interface RunWorkflowRequest {
+  args?: unknown;
+}
+
+/**
+ * `POST /api/workflows/{name}/run` 202 response — single object (NOT enveloped).
+ * Mirrors BE `WorkflowController.run` accepted-body. `status` is the initial run
+ * status (typically `pending`/`running`).
+ */
+export interface RunWorkflowResponse {
+  runId: string;
+  name: string;
+  status: string;
+}
+
+/**
+ * `POST /api/workflows/{name}/run` — trigger a registered workflow.
+ * Returns 202 on success; the BE responds 409 when the same workflow is already
+ * running (caller surfaces a "already running" warning).
+ */
+export const runWorkflow = (name: string, body?: RunWorkflowRequest) =>
+  api.post<RunWorkflowResponse>(
+    `/workflows/${encodeURIComponent(name)}/run`,
+    body ?? {},
+  );
+
+// ─────────────── POST /api/workflows/runs/{runId}/approve ───────────────────
+
+export type WorkflowApproveDecision = 'approved' | 'rejected';
+
+/** Body for `POST /api/workflows/runs/{runId}/approve`. */
+export interface ApproveRunRequest {
+  decision: WorkflowApproveDecision;
+  /** Optional reviewer note; BE persists it onto the resumed journal entry. */
+  reason?: string;
+}
+
+/**
+ * `POST /api/workflows/runs/{runId}/approve` response — single object (NOT
+ * enveloped). Mirrors BE `WorkflowController.approve` `{runId, status, decision}`.
+ * `status` is the run status after the resume kicks off; `decision` echoes the
+ * applied (lower-cased) decision.
+ */
+export interface ApproveRunResponse {
+  runId: string;
+  status: string;
+  decision: WorkflowApproveDecision;
+}
+
+/**
+ * `POST /api/workflows/runs/{runId}/approve` — resolve a paused humanApprove
+ * gate. BE responds 409 when the run is no longer paused (already resolved by a
+ * concurrent reviewer / status changed) — caller re-fetches run detail.
+ */
+export const approveRun = (runId: string, body: ApproveRunRequest) =>
+  api.post<ApproveRunResponse>(
+    `/workflows/runs/${encodeURIComponent(runId)}/approve`,
+    body,
+  );
