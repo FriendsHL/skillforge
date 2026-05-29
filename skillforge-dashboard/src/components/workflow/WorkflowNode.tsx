@@ -22,7 +22,12 @@ export type WorkflowNodeStatus =
   | 'error'
   | 'paused';
 
-export type WorkflowNodeKind = 'phase' | 'agent';
+/**
+ * Q2-redesign: nodes are now the actual orchestration steps (`agent`) or a
+ * dimmed skeleton placeholder for a not-yet-reached phase (`ghost`). The old
+ * `phase` header-node kind was removed when the DAG became a single step chain.
+ */
+export type WorkflowNodeKind = 'agent' | 'ghost';
 
 /**
  * Per-node payload threaded through React Flow `data`. Keep small + serializable;
@@ -31,15 +36,19 @@ export type WorkflowNodeKind = 'phase' | 'agent';
  */
 export interface WorkflowNodeData {
   kind: WorkflowNodeKind;
-  /** Phase title (phase node) or agent slug / label (agent node). */
+  /** Agent slug / step label (agent node) or phase title (ghost placeholder). */
   label: string;
   status: WorkflowNodeStatus;
-  /** Secondary line — step kind for agents, agent count for phases. */
+  /** Secondary line — step kind for agents. */
   sublabel?: string | null;
+  /** Small phase caption shown above the title (the step's `phase`). */
+  phaseLabel?: string | null;
   /** True for human_approve gate nodes (drives the "awaiting approval" badge). */
   isApprovalGate?: boolean;
   /** True when this node has no inbound edge (suppresses the target handle). */
   isRoot?: boolean;
+  /** True for a dimmed skeleton placeholder of a not-yet-reached phase. */
+  isGhost?: boolean;
   /**
    * The backing step for `agent`-kind nodes — threaded so a click can open the
    * step drawer without a separate index lookup. Absent on `phase` header nodes
@@ -70,37 +79,22 @@ const STATUS_LABEL: Record<WorkflowNodeStatus, string> = {
  * Purely presentational — the parent WorkflowDag owns nodes + edges.
  */
 const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({ data }) => {
-  const { kind, label, status, sublabel, isApprovalGate, isRoot, step, onStepClick } = data;
+  const { kind, label, status, sublabel, phaseLabel, isApprovalGate, isRoot, isGhost, step, onStepClick } = data;
 
-  const handleClick = (e: React.MouseEvent) => {
-    // Guard: phase headers carry no step → inert (no error).
-    if (!step) return;
-    // Stop the click from also reaching React Flow's pane → onNodeClick, which
-    // would double-invoke onStepClick. The DOM onClick is the authoritative
-    // path; RF's onNodeClick stays only as a no-op fallback.
-    e.stopPropagation();
-    onStepClick?.(step);
-  };
+  const statusText = isGhost
+    ? 'upcoming'
+    : isApprovalGate && status === 'paused'
+      ? STATUS_LABEL.paused
+      : STATUS_LABEL[status];
 
-  return (
-    <div
-      // `nodrag` (RF convention) keeps the pane from treating a click on this
-      // node as a pan/drag, so the DOM onClick fires reliably.
-      className={`wf-node wf-node--${kind} wf-node--${status} nodrag`}
-      data-status={status}
-      data-testid={`wf-node-${kind}-${label}`}
-      onClick={handleClick}
-    >
-      {!isRoot && (
-        <Handle
-          type="target"
-          position={Position.Left}
-          className="wf-handle"
-          isConnectable={false}
-        />
-      )}
-
+  // The node body + status. Rendered inside a real <button> when the node is
+  // clickable, or a plain inert <div> for ghost / step-less placeholders.
+  const inner = (
+    <>
       <div className="wf-node-body">
+        {phaseLabel != null && phaseLabel !== '' && (
+          <div className="wf-node-phase">{phaseLabel}</div>
+        )}
         <div className="wf-node-title" title={label}>
           {label}
         </div>
@@ -111,12 +105,50 @@ const WorkflowNode: React.FC<NodeProps<WorkflowNodeData>> = ({ data }) => {
 
       <div className="wf-node-status">
         <span className={`wf-dot wf-dot--${status}`} aria-hidden="true" />
-        <span className="wf-status-text">
-          {isApprovalGate && status === 'paused'
-            ? STATUS_LABEL.paused
-            : STATUS_LABEL[status]}
-        </span>
+        <span className="wf-status-text">{statusText}</span>
       </div>
+    </>
+  );
+
+  // CRITICAL (matches the working FlywheelNode/StepCard pattern): the click
+  // target MUST be a real <button>, not a <div onClick>. React Flow's pane
+  // swallows a real mouse click on a plain <div> node (gesture/pan handling),
+  // so a div onClick "intermittently won't open" — a native <button> is not
+  // swallowed. `nodrag` additionally tells RF not to treat it as a pan target.
+  const clickable = step != null && !isGhost;
+
+  return (
+    <div
+      className={`wf-node wf-node--${kind} wf-node--${status}`}
+      data-status={status}
+      data-testid={`wf-node-${kind}-${label}`}
+    >
+      {!isRoot && (
+        <Handle
+          type="target"
+          position={Position.Left}
+          className="wf-handle"
+          isConnectable={false}
+        />
+      )}
+
+      {clickable ? (
+        <button
+          type="button"
+          className="wf-node-click nodrag"
+          aria-label={`${label} — 查看详情`}
+          onClick={(e) => {
+            // Stop the click bubbling to RF's pane onNodeClick (kept as a
+            // no-op fallback) so onStepClick fires exactly once.
+            e.stopPropagation();
+            onStepClick?.(step);
+          }}
+        >
+          {inner}
+        </button>
+      ) : (
+        <div className="wf-node-click wf-node-click--inert">{inner}</div>
+      )}
 
       <Handle
         type="source"

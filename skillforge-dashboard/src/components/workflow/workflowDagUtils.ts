@@ -92,6 +92,44 @@ export function statusChipClass(status: string): string {
   }
 }
 
+/**
+ * Build directed edge pairs for the single-flow step chain: connect every
+ * consecutive pair of phase columns. `columns[i]` is the node-id list of phase
+ * column i (1 node, a parallel group of N, or a single ghost node).
+ *
+ * Fan rules (C):
+ *   - 1 → N  (fan-out):     A→B1, A→B2, … An
+ *   - N → 1  (fan-in):      A1→B, A2→B, … An→B
+ *   - 1 → 1:                A→B
+ *   - N → M  (both parallel): index-aligned Ai→Bi with the shorter side clamped
+ *     to its last node. opt-report alternates single/parallel phases so this
+ *     branch isn't normally hit; it's a best-effort fallback (documented
+ *     limitation — no true cross-product for arbitrary N×M).
+ *
+ * Empty columns are skipped (a ghost column always has exactly 1 node, so it
+ * participates as a single node).
+ */
+export function buildChainEdgePairs(columns: string[][]): Array<[string, string]> {
+  const pairs: Array<[string, string]> = [];
+  for (let i = 0; i < columns.length - 1; i++) {
+    const prev = columns[i];
+    const curr = columns[i + 1];
+    if (prev.length === 0 || curr.length === 0) continue;
+    if (prev.length === 1 || curr.length === 1) {
+      for (const a of prev) for (const b of curr) pairs.push([a, b]);
+    } else {
+      const m = Math.max(prev.length, curr.length);
+      for (let k = 0; k < m; k++) {
+        pairs.push([
+          prev[Math.min(k, prev.length - 1)],
+          curr[Math.min(k, curr.length - 1)],
+        ]);
+      }
+    }
+  }
+  return pairs;
+}
+
 /** Map a single step to a node status (see WorkflowNodeStatus doc). */
 export function deriveAgentStatus(
   step: WorkflowStep,

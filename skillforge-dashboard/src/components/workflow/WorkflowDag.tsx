@@ -2,66 +2,30 @@ import React, { useCallback, useMemo } from 'react';
 import ReactFlow, {
   Background,
   Controls,
+  MarkerType,
   type Edge,
   type Node,
   type NodeTypes,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
-import dagre from 'dagre';
-import WorkflowNode, {
-  type WorkflowNodeData,
-  type WorkflowNodeStatus,
-} from './WorkflowNode';
+import WorkflowNode, { type WorkflowNodeData } from './WorkflowNode';
 import type { WorkflowStep } from '../../api/workflow';
 import {
   groupStepsByPhase,
   deriveAgentStatus,
+  buildChainEdgePairs,
   STEP_KIND_HUMAN_APPROVE,
-  type PhaseGroup,
 } from './workflowDagUtils';
 
 const NODE_TYPES: NodeTypes = { workflowStep: WorkflowNode };
 
-const PHASE_W = 200;
-const PHASE_H = 48;
-const AGENT_H = 64;
-const COL_GAP = 90; // dagre ranksep between phase columns
-const ROW_GAP = 18; // vertical gap between stacked agents
-const HEADER_GAP = 22; // gap below a phase header before its agents
+const NODE_W = 200; // node footprint width (matches .wf-node width)
+const NODE_H = 64; // node footprint height (for vertical stacking pitch)
+const COL_GAP = 96; // horizontal gap between phase columns
+const ROW_GAP = 20; // vertical gap between stacked parallel nodes
 
-/** Aggregate a phase's child statuses into a single header status. */
-function derivePhaseStatus(children: WorkflowNodeStatus[]): WorkflowNodeStatus {
-  if (children.length === 0) return 'pending';
-  if (children.some((c) => c === 'error')) return 'error';
-  if (children.some((c) => c === 'paused')) return 'paused';
-  if (children.some((c) => c === 'running')) return 'running';
-  if (children.every((c) => c === 'completed')) return 'completed';
-  return 'pending';
-}
-
-/**
- * Lay out phase-header X positions with dagre (LR backbone) — reuses the
- * FlywheelFlowchart dagre idiom. Agent nodes are then stacked vertically under
- * their header at the header's X so each phase reads as a clean column.
- */
-function computePhaseColumns(groups: PhaseGroup[]): Map<string, number> {
-  const g = new dagre.graphlib.Graph();
-  g.setDefaultEdgeLabel(() => ({}));
-  g.setGraph({ rankdir: 'LR', nodesep: 24, ranksep: COL_GAP, marginx: 24, marginy: 24 });
-  for (const grp of groups) {
-    g.setNode(grp.title, { width: PHASE_W, height: PHASE_H });
-  }
-  for (let i = 0; i < groups.length - 1; i++) {
-    g.setEdge(groups[i].title, groups[i + 1].title);
-  }
-  dagre.layout(g);
-  const xByTitle = new Map<string, number>();
-  groups.forEach((grp, i) => {
-    const n = g.node(grp.title);
-    xByTitle.set(grp.title, n ? n.x - PHASE_W / 2 : i * (PHASE_W + COL_GAP));
-  });
-  return xByTitle;
-}
+const COL_PITCH = NODE_W + COL_GAP;
+const ROW_PITCH = NODE_H + ROW_GAP;
 
 export interface WorkflowDagProps {
   steps: WorkflowStep[];
@@ -69,14 +33,23 @@ export interface WorkflowDagProps {
   runStatus: string;
   /** Ordered phase titles from the workflow definition (skeleton + ordering). */
   phaseOrder?: string[];
-  /** Fired when an agent / gate node is clicked (phase headers don't fire). */
+  /** Fired when an agent / gate node is clicked (ghost placeholders don't fire). */
   onStepClick?: (step: WorkflowStep) => void;
 }
 
 /**
- * Renders a workflow run's steps as a phase-grouped DAG. Read-only React Flow
- * (no drag / connect / select). Phase nodes form the horizontal backbone; agent
- * nodes hang under their phase header.
+ * Renders a workflow run as a single horizontal step chain (Q2 redesign).
+ *
+ * Each phase is one column laid left → right; the column holds that phase's
+ * actual step nodes — one node for a single step, a vertical stack for a
+ * parallel batch, or one dimmed `ghost` placeholder for a skeleton phase that
+ * hasn't produced any step yet. Arrowed edges connect consecutive columns
+ * (fan-out on 1→N, fan-in on N→1). There is no separate phase-header node tier;
+ * the phase name rides on each node as a small caption.
+ *
+ * Read-only React Flow (no drag / connect / select). Clicks are handled by each
+ * node's own DOM onClick (see WorkflowNode) — RF's gesture-filtered onNodeClick
+ * stays only as a no-op fallback.
  */
 const WorkflowDag: React.FC<WorkflowDagProps> = ({
   steps,
@@ -85,127 +58,88 @@ const WorkflowDag: React.FC<WorkflowDagProps> = ({
   onStepClick,
 }) => {
   const { nodes, edges, isEmpty } = useMemo(() => {
-    const { groups, linear } = groupStepsByPhase(steps, phaseOrder);
+    // B-FE: drop ghost steps with a null stepIndex (defensive — the BE also
+    // filters these). humanApprove gates carry a real stepIndex, so they survive.
+    const realSteps = steps.filter((s) => s.stepIndex != null);
+    const { groups } = groupStepsByPhase(realSteps, phaseOrder);
     if (groups.length === 0) {
       return { nodes: [] as Node<WorkflowNodeData>[], edges: [] as Edge[], isEmpty: true };
     }
 
     const builtNodes: Node<WorkflowNodeData>[] = [];
-    const builtEdges: Edge[] = [];
+    const colNodeIds: string[][] = [];
 
-    if (linear) {
-      // One step per column; chain agent → agent. No phase headers.
-      const xByTitle = computePhaseColumns(groups);
-      groups.forEach((grp, i) => {
-        const step = grp.steps[0];
-        const x = xByTitle.get(grp.title) ?? i * (PHASE_W + COL_GAP);
-        const nodeId = `agent-${i}`;
+    groups.forEach((grp, gi) => {
+      const x = gi * COL_PITCH;
+      const ids: string[] = [];
+
+      if (grp.steps.length === 0) {
+        // Skeleton phase not reached yet → single dimmed ghost placeholder.
+        const id = `col${gi}-ghost`;
         builtNodes.push({
-          id: nodeId,
+          id,
           type: 'workflowStep',
           position: { x, y: 0 },
           data: {
-            kind: 'agent',
-            label: step.agentSlug ?? grp.title,
-            status: deriveAgentStatus(step, runStatus),
-            sublabel: step.stepKind,
-            isApprovalGate: step.stepKind === STEP_KIND_HUMAN_APPROVE,
-            isRoot: i === 0,
-            step,
-            onStepClick,
+            kind: 'ghost',
+            // Title already carries the phase name → no separate caption.
+            label: grp.title,
+            status: 'pending',
+            isRoot: gi === 0,
+            isGhost: true,
           },
           draggable: false,
           connectable: false,
           selectable: false,
         });
-        if (i > 0) {
-          builtEdges.push({
-            id: `e-${i - 1}-${i}`,
-            source: `agent-${i - 1}`,
-            target: nodeId,
-            type: 'smoothstep',
-            className: 'wf-edge',
+        ids.push(id);
+      } else {
+        // 1 step → single node; N steps → vertical parallel stack centred on y=0
+        // so a neighbouring single node lines up with the group's midpoint.
+        const n = grp.steps.length;
+        const totalH = (n - 1) * ROW_PITCH;
+        grp.steps.forEach((step, si) => {
+          const id = `col${gi}-n${si}`;
+          builtNodes.push({
+            id,
+            type: 'workflowStep',
+            position: { x, y: si * ROW_PITCH - totalH / 2 },
+            data: {
+              kind: 'agent',
+              label: step.agentSlug ?? `step ${step.stepIndex ?? si}`,
+              status: deriveAgentStatus(step, runStatus),
+              sublabel: step.stepKind,
+              phaseLabel: grp.title,
+              isApprovalGate: step.stepKind === STEP_KIND_HUMAN_APPROVE,
+              isRoot: gi === 0,
+              step,
+              onStepClick,
+            },
+            draggable: false,
+            connectable: false,
+            selectable: false,
           });
-        }
-      });
-      return { nodes: builtNodes, edges: builtEdges, isEmpty: false };
-    }
-
-    // Phase-grouped layout.
-    const xByTitle = computePhaseColumns(groups);
-    groups.forEach((grp, gi) => {
-      const phaseId = `phase-${gi}`;
-      const x = xByTitle.get(grp.title) ?? gi * (PHASE_W + COL_GAP);
-      const childStatuses = grp.steps.map((s) => deriveAgentStatus(s, runStatus));
-
-      builtNodes.push({
-        id: phaseId,
-        type: 'workflowStep',
-        position: { x, y: 0 },
-        data: {
-          kind: 'phase',
-          label: grp.title,
-          status: derivePhaseStatus(childStatuses),
-          sublabel:
-            grp.steps.length === 0
-              ? 'pending'
-              : `${grp.steps.length} ${grp.steps.length === 1 ? 'agent' : 'agents'}`,
-          isRoot: gi === 0,
-        },
-        draggable: false,
-        connectable: false,
-        selectable: false,
-      });
-
-      // Backbone edge phase[i] → phase[i+1].
-      if (gi > 0) {
-        builtEdges.push({
-          id: `e-phase-${gi - 1}-${gi}`,
-          source: `phase-${gi - 1}`,
-          target: phaseId,
-          type: 'smoothstep',
-          className: 'wf-edge wf-edge--backbone',
+          ids.push(id);
         });
       }
-
-      // Agent nodes stacked under the header.
-      grp.steps.forEach((step, si) => {
-        const agentId = `${phaseId}-agent-${si}`;
-        const y = PHASE_H + HEADER_GAP + si * (AGENT_H + ROW_GAP);
-        builtNodes.push({
-          id: agentId,
-          type: 'workflowStep',
-          position: { x, y },
-          data: {
-            kind: 'agent',
-            label: step.agentSlug ?? `step ${step.stepIndex ?? si}`,
-            status: childStatuses[si],
-            sublabel: step.stepKind,
-            isApprovalGate: step.stepKind === STEP_KIND_HUMAN_APPROVE,
-            isRoot: true, // fed by its phase header via a vertical edge, no left handle needed
-            step,
-            onStepClick,
-          },
-          draggable: false,
-          connectable: false,
-          selectable: false,
-        });
-        builtEdges.push({
-          id: `e-${phaseId}-${si}`,
-          source: phaseId,
-          target: agentId,
-          type: 'smoothstep',
-          className: 'wf-edge wf-edge--child',
-        });
-      });
+      colNodeIds.push(ids);
     });
+
+    // Arrowed edges between consecutive columns (fan-out / fan-in / 1:1).
+    const builtEdges: Edge[] = buildChainEdgePairs(colNodeIds).map(([a, b], idx) => ({
+      id: `e-${idx}-${a}-${b}`,
+      source: a,
+      target: b,
+      type: 'smoothstep',
+      className: 'wf-edge',
+      markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16 },
+    }));
 
     return { nodes: builtNodes, edges: builtEdges, isEmpty: false };
   }, [steps, runStatus, phaseOrder, onStepClick]);
 
-  // Open the drawer when an agent / gate node is clicked. Phase headers carry
-  // no `step` in their data, so they're inert. onNodeClick fires even with
-  // elementsSelectable=false (the read-only DAG stays non-selectable).
+  // RF onNodeClick is kept only as a no-op fallback — node DOM onClick is the
+  // real path (RF's onNodeClick is swallowed by pan/drag detection).
   const handleNodeClick = useCallback(
     (_: React.MouseEvent, node: Node<WorkflowNodeData>) => {
       const s = node.data?.step;

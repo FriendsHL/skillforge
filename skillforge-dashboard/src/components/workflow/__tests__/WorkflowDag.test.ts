@@ -8,7 +8,11 @@
  *    BE step.status.
  */
 import { describe, expect, it } from 'vitest';
-import { groupStepsByPhase, deriveAgentStatus } from '../workflowDagUtils';
+import {
+  groupStepsByPhase,
+  deriveAgentStatus,
+  buildChainEdgePairs,
+} from '../workflowDagUtils';
 import type { WorkflowStep } from '../../../api/workflow';
 
 function step(p: Partial<WorkflowStep>): WorkflowStep {
@@ -92,5 +96,49 @@ describe('deriveAgentStatus', () => {
     const dispatch = step({ stepKind: 'subagent_dispatch', status: 'pending' });
     expect(deriveAgentStatus(dispatch, 'running')).toBe('running');
     expect(deriveAgentStatus(dispatch, 'completed')).toBe('pending');
+  });
+});
+
+describe('buildChainEdgePairs (single-flow chain fan-out / fan-in)', () => {
+  it('connects 1 → 1 columns with a single edge', () => {
+    expect(buildChainEdgePairs([['a'], ['b']])).toEqual([['a', 'b']]);
+  });
+
+  it('fans out 1 → N', () => {
+    expect(buildChainEdgePairs([['a'], ['b1', 'b2']])).toEqual([
+      ['a', 'b1'],
+      ['a', 'b2'],
+    ]);
+  });
+
+  it('fans in N → 1', () => {
+    expect(buildChainEdgePairs([['a1', 'a2'], ['b']])).toEqual([
+      ['a1', 'b'],
+      ['a2', 'b'],
+    ]);
+  });
+
+  it('chains a full single → parallel → single flow', () => {
+    // [orchestrator] → [b1,b2] → [aggregator]
+    const cols = [['o'], ['b1', 'b2'], ['agg']];
+    expect(buildChainEdgePairs(cols)).toEqual([
+      ['o', 'b1'],
+      ['o', 'b2'],
+      ['b1', 'agg'],
+      ['b2', 'agg'],
+    ]);
+  });
+
+  it('index-aligns N → M (clamped) as a documented fallback', () => {
+    expect(buildChainEdgePairs([['a1', 'a2'], ['b1', 'b2', 'b3']])).toEqual([
+      ['a1', 'b1'],
+      ['a2', 'b2'],
+      ['a2', 'b3'],
+    ]);
+  });
+
+  it('skips empty columns and single-column inputs', () => {
+    expect(buildChainEdgePairs([['a']])).toEqual([]);
+    expect(buildChainEdgePairs([[], ['b']])).toEqual([]);
   });
 });

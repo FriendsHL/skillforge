@@ -22,7 +22,7 @@
   min-height: 0;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md, 8px);
-  background: var(--bg-card);
+  background: var(--bg-surface);
   overflow: hidden;
 }
 
@@ -171,7 +171,7 @@
   min-height: 0;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md, 8px);
-  background: var(--bg-card);
+  background: var(--bg-surface);
   overflow: hidden;
 }
 
@@ -249,10 +249,10 @@
 .wf-node {
   display: flex;
   flex-direction: column;
-  gap: 6px;
   width: 200px;
   box-sizing: border-box;
-  padding: 9px 11px;
+  /* Padding lives on .wf-node-click so the clickable <button> covers the full
+     node interior (no dead ring); the visual inset is unchanged. */
   border: 1px solid var(--border-subtle);
   border-left-width: 3px;
   border-radius: var(--radius-sm, 6px);
@@ -261,20 +261,60 @@
   font-size: 12px;
 }
 
-.wf-node--phase {
-  background: var(--bg-card);
-  border-style: solid;
-}
-
-/* Agent / gate nodes are clickable (open the step drawer); phase headers
- * aggregate multiple steps and stay inert. */
+/* Agent / gate nodes are clickable (open the step drawer). */
 .wf-node--agent {
   cursor: pointer;
 }
 
-.wf-node--phase .wf-node-title {
-  font-weight: 600;
-  letter-spacing: -0.01em;
+/* Ghost — a skeleton phase not reached yet: dimmed, dashed, inert. */
+.wf-node--ghost {
+  background: var(--bg-base);
+  border-style: dashed;
+  border-left-style: dashed;
+  opacity: 0.6;
+  cursor: default;
+  box-shadow: none;
+}
+
+/* Clickable node body — a real <button> (RF swallows <div> clicks; a native
+   button is not swallowed). Reset button chrome + carry the body/status flex
+   layout that used to live on .wf-node directly. */
+.wf-node-click {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 9px 11px;
+  border-radius: var(--radius-sm, 6px);
+  /* button reset */
+  appearance: none;
+  -webkit-appearance: none;
+  background: none;
+  border: none;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+button.wf-node-click:hover {
+  background: var(--bg-hover);
+}
+
+.wf-node-click--inert {
+  cursor: default;
+}
+
+/* Small phase caption above the node title. */
+.wf-node-phase {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-4);
+  margin-bottom: 1px;
 }
 
 .wf-node-body {
@@ -419,7 +459,7 @@
   border: 1px solid color-mix(in srgb, var(--color-warning) 38%, transparent);
   border-left-width: 3px;
   border-left-color: var(--color-warning);
-  background: color-mix(in srgb, var(--color-warning) 7%, var(--bg-card));
+  background: color-mix(in srgb, var(--color-warning) 7%, var(--bg-surface));
   border-radius: var(--radius-md, 8px);
   box-shadow: var(--shadow-card);
 }
@@ -580,7 +620,7 @@
   right: 0;
   bottom: 0;
   width: min(440px, 92vw);
-  background: var(--bg-card);
+  background: var(--bg-surface);
   border-left: 1px solid var(--border-subtle);
   box-shadow: -8px 0 28px rgba(0, 0, 0, 0.28);
   z-index: 100;
@@ -598,7 +638,7 @@
   border-bottom: 1px solid var(--border-subtle);
   position: sticky;
   top: 0;
-  background: var(--bg-card);
+  background: var(--bg-surface);
   z-index: 1;
 }
 
