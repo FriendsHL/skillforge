@@ -1,9 +1,10 @@
 # AUTOEVOLVING V1 — DSL workflow engine + autoEvolving dashboard
 
 > **创建**：2026-05-29
-> **状态**：**Sprint 1 已 ship（commit `54941c3`）** — DSL workflow engine 基础（Rhino + L1 sandbox + 6 原语 + offload 并发 + V126）。Sprint 2-4 待续。
+> **状态**：**Sprint 1 + 2 已 ship**（commit `54941c3` + `9000bd5`）— DSL engine + humanApprove journal-replay + schema + REST。Sprint 3-4 待续（做完 = user 可 dashboard 端到端测试）。
 > **父需求包**：[AUTOEVOLVING-MASTER](../2026-05-28-AUTOEVOLVING-MASTER/) (V1 子需求)
-> **估时**：~4.5 周（4 sprint）；Sprint 1 ✅ / Sprint 2（humanApprove journal-replay + schema + Controller）/ Sprint 3（OPT-REPORT 改造 demo + DAG viz）/ Sprint 4（dashboard /autoevolving + 3 信号源面板）
+> **Anthropic 对照**：[anthropic-comparison-review-2026-05-29.md](anthropic-comparison-review-2026-05-29.md) —— V1 DSL ~90% 对齐 Anthropic Dynamic Workflows，0 P0，humanApprove 是合法 divergence
+> **估时**：~4.5 周（4 sprint）；Sprint 1 ✅（engine+sandbox+6 原语+offload）/ Sprint 2 ✅（humanApprove journal-replay + schema + REST Controller + V127）/ Sprint 3（OPT-REPORT 改造 demo workflow + DAG viz panel）/ Sprint 4（dashboard /autoevolving + 3 信号源面板 + 手动触发 + humanApprove review card 复用 ask_user 卡片）
 
 ## 30 秒摘要
 
