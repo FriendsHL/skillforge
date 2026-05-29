@@ -7,6 +7,7 @@ import com.skillforge.server.repository.AgentRepository;
 import com.skillforge.server.service.AgentService;
 import com.skillforge.server.service.SessionService;
 import com.skillforge.workflow.engine.WorkflowSubAgentEngineFactory;
+import com.skillforge.workflow.schema.SchemaValidator;
 import org.springframework.stereotype.Component;
 
 /**
@@ -23,24 +24,27 @@ public class WorkflowAgentInvokerFactory {
     private final FlywheelRunService flywheelRunService;
     private final WorkflowSubAgentEngineFactory engineFactory;
     private final ObjectMapper objectMapper;
+    private final SchemaValidator schemaValidator;
 
     public WorkflowAgentInvokerFactory(AgentRepository agentRepository,
                                        AgentService agentService,
                                        SessionService sessionService,
                                        FlywheelRunService flywheelRunService,
                                        WorkflowSubAgentEngineFactory engineFactory,
-                                       ObjectMapper objectMapper) {
+                                       ObjectMapper objectMapper,
+                                       SchemaValidator schemaValidator) {
         this.agentRepository = agentRepository;
         this.agentService = agentService;
         this.sessionService = sessionService;
         this.flywheelRunService = flywheelRunService;
         this.engineFactory = engineFactory;
         this.objectMapper = objectMapper;
+        this.schemaValidator = schemaValidator;
     }
 
     public WorkflowAgentInvoker create(String runId, SessionEntity anchorSession, Long userId) {
         return new DefaultWorkflowAgentInvoker(
                 agentRepository, agentService, sessionService, flywheelRunService,
-                engineFactory, objectMapper, runId, anchorSession, userId);
+                engineFactory, objectMapper, schemaValidator, runId, anchorSession, userId);
     }
 }

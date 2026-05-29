@@ -51,6 +51,14 @@ public class FlywheelRunEntity {
     public static final String STATUS_COMPLETED = "completed";
     public static final String STATUS_ERROR = "error";
 
+    /**
+     * AUTOEVOLVING V1 Sprint 2 (V127): a workflow run parked on a
+     * {@code humanApprove()} gate. Short value ('paused', 6 chars) deliberately
+     * fits the existing {@code status VARCHAR(16)} — the human-readable
+     * 'paused_for_human_approve' label lives only in WS payloads.
+     */
+    public static final String STATUS_PAUSED = "paused";
+
     public static final String LOOP_KIND_OPT_REPORT = "opt_report";
     public static final String LOOP_KIND_MEMORY_CURATION = "memory_curation";
     public static final String LOOP_KIND_ATTRIBUTION = "attribution";

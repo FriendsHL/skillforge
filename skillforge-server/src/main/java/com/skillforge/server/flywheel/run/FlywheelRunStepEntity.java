@@ -49,6 +49,16 @@ public class FlywheelRunStepEntity {
 
     public static final String STEP_KIND_SUBAGENT_DISPATCH = "subagent_dispatch";
 
+    /**
+     * AUTOEVOLVING V1 Sprint 2 (V127): a {@code humanApprove()} gate step. The
+     * row is created {@code pending} when the run first reaches the gate; the
+     * approve REST call (chunk 2) writes the decision to {@code step_output_json}
+     * and transitions it to {@code completed}. (Pause semantics live on the
+     * run-level {@code status=paused} + this step_kind — there is no step-level
+     * paused status.)
+     */
+    public static final String STEP_KIND_HUMAN_APPROVE = "human_approve";
+
     @Id
     @Column(length = 36)
     private String id;
@@ -79,6 +89,18 @@ public class FlywheelRunStepEntity {
      */
     @Column(name = "step_kind", nullable = false, length = 32)
     private String stepKind = STEP_KIND_SUBAGENT_DISPATCH;
+
+    /**
+     * V127 new column (AUTOEVOLVING V1 Sprint 2). The deterministic invoke-order
+     * index ({@code WorkflowContext.nextStepIndex}) of the {@code agent()} /
+     * {@code humanApprove()} call that produced this row. {@code null} on every
+     * pre-existing OPT-REPORT / orchestrator step row (those don't use the
+     * workflow journal). Journal-replay (chunk 2) looks up cached steps BY THIS
+     * COLUMN — never by {@code created_at}, which is non-deterministic under
+     * {@code parallel()}.
+     */
+    @Column(name = "step_index")
+    private Integer stepIndex;
 
     /**
      * V125 new column (OPT-LOOP-FRAMEWORK Sprint 2): free-schema JSONB
@@ -130,6 +152,9 @@ public class FlywheelRunStepEntity {
 
     public String getStepKind() { return stepKind; }
     public void setStepKind(String stepKind) { this.stepKind = stepKind; }
+
+    public Integer getStepIndex() { return stepIndex; }
+    public void setStepIndex(Integer stepIndex) { this.stepIndex = stepIndex; }
 
     public String getStepOutputJson() { return stepOutputJson; }
     public void setStepOutputJson(String stepOutputJson) { this.stepOutputJson = stepOutputJson; }

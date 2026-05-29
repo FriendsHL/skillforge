@@ -33,4 +33,20 @@ public interface FlywheelRunRepository extends JpaRepository<FlywheelRunEntity, 
             @Param("agentId") Long agentId,
             @Param("loopKind") String loopKind,
             Pageable pageable);
+
+    /**
+     * AUTOEVOLVING V1 Sprint 2 (Task G): the "All Workflow Runs" listing —
+     * newest-first across every workflow run regardless of agent. {@code id DESC}
+     * is the stable tie-breaker (matches the OPT-REPORT query shape).
+     */
+    List<FlywheelRunEntity> findByLoopKindOrderByCreatedAtDescIdDesc(
+            String loopKind, Pageable pageable);
+
+    /** Status-filtered variant of {@link #findByLoopKindOrderByCreatedAtDescIdDesc}. */
+    List<FlywheelRunEntity> findByLoopKindAndStatusOrderByCreatedAtDescIdDesc(
+            String loopKind, String status, Pageable pageable);
+
+    long countByLoopKind(String loopKind);
+
+    long countByLoopKindAndStatus(String loopKind, String status);
 }

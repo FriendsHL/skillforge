@@ -43,4 +43,26 @@ public interface FlywheelRunStepRepository extends JpaRepository<FlywheelRunStep
      * findById-readOnly backlog).
      */
     List<FlywheelRunStepEntity> findByRunIdOrderByCreatedAtAsc(String runId);
+
+    /**
+     * AUTOEVOLVING V1 Sprint 2 (Task F — journal-replay): exact cache lookup by
+     * the deterministic {@code step_index} (V127). The partial unique index
+     * {@code ux_flywheel_run_step_run_idx} guarantees at most one row per
+     * {@code (run_id, step_index)}; pairing with {@code step_kind} keeps the
+     * {@code agent()} ({@code subagent_dispatch}) and {@code humanApprove()}
+     * ({@code human_approve}) lookups distinct. {@code Optional} — a miss during
+     * replay is a genuine bug (the step should have been written on the prior run).
+     */
+    Optional<FlywheelRunStepEntity> findByRunIdAndStepIndexAndStepKind(
+            String runId, Integer stepIndex, String stepKind);
+
+    /**
+     * AUTOEVOLVING V1 Sprint 2 (Task F — resume): find the parked
+     * {@code human_approve} gate step(s) for a run. A paused workflow run has
+     * exactly one {@code pending} {@code human_approve} step (the frontier the
+     * approve REST call resolves). Returned as a list so the resume path can
+     * defensively reject the (impossible) multi-gate case.
+     */
+    List<FlywheelRunStepEntity> findByRunIdAndStepKindAndStatus(
+            String runId, String stepKind, String status);
 }

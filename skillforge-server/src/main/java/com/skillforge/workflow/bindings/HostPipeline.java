@@ -94,7 +94,11 @@ public final class HostPipeline extends BaseFunction {
                     break;
                 }
             }
-            results[i] = (dropped || current == null) ? null : Context.javaToJS(current, scope);
+            // current may be an already-JS value (a NativeObject returned by a
+            // prior agent()) or a schema-parsed Map/List — JsConversions.toJs
+            // handles both; raw Context.javaToJS would trip the ClassShutter on
+            // a Map (Task B/E footgun).
+            results[i] = (dropped || current == null) ? null : JsConversions.toJs(cx, scope, current);
         }
         return cx.newArray(scope, results);
     }

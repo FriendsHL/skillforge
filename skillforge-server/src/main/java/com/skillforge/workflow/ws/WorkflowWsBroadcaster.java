@@ -40,6 +40,24 @@ public class WorkflowWsBroadcaster {
         broadcast(payload);
     }
 
+    /**
+     * AUTOEVOLVING V1 Sprint 2: a workflow run has parked on a
+     * {@code humanApprove()} gate and needs an operator decision. {@code payload}
+     * is the (already JS→Java converted) approval payload the workflow passed to
+     * {@code humanApprove(...)}. The dashboard shows it and POSTs an approve
+     * decision (chunk 2 REST) to resume the run.
+     */
+    public void humanApproveRequired(String runId, String stepRunId, int stepIndex, Object payload) {
+        Map<String, Object> msg = new LinkedHashMap<>();
+        msg.put("type", "workflow_human_approve_required");
+        msg.put("runId", runId);
+        msg.put("stepRunId", stepRunId);
+        msg.put("stepIndex", stepIndex);
+        msg.put("status", "paused_for_human_approve");
+        msg.put("payload", payload);
+        broadcast(msg);
+    }
+
     private void broadcast(Map<String, Object> payload) {
         try {
             userWebSocketHandler.broadcastAll(payload);

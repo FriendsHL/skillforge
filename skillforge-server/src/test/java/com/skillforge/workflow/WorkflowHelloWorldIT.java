@@ -117,7 +117,8 @@ class WorkflowHelloWorldIT extends AbstractPostgresIT {
         WorkflowRunnerService runner = new WorkflowRunnerService(
                 registry, flywheelRunService, sessionService, agentRepository, invokerFactory,
                 new ConsolidationLock(), mock(WorkflowWsBroadcaster.class), objectMapper,
-                inline, inline, "session-annotator");
+                new com.skillforge.workflow.journal.JournalCacheService(stepRepository, objectMapper),
+                Clock.systemUTC(), inline, inline, "session-annotator");
 
         String runId = runner.startRun("hello-world", Map.of(), 1L);
 

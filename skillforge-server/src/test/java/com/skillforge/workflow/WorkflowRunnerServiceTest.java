@@ -67,7 +67,8 @@ class WorkflowRunnerServiceTest {
         subExec = Executors.newSingleThreadExecutor();
         service = new WorkflowRunnerService(registry, flywheelRunService, sessionService,
                 agentRepository, invokerFactory, lock, wsBroadcaster, new ObjectMapper(),
-                wfExec, subExec, "anchor-agent");
+                mock(com.skillforge.workflow.journal.JournalCache.class),
+                java.time.Clock.systemUTC(), wfExec, subExec, "anchor-agent");
     }
 
     @AfterEach
@@ -148,7 +149,8 @@ class WorkflowRunnerServiceTest {
         doThrow(new RejectedExecutionException("queue full")).when(rejecting).execute(any());
         WorkflowRunnerService rejectingService = new WorkflowRunnerService(registry, flywheelRunService,
                 sessionService, agentRepository, invokerFactory, lock, wsBroadcaster, new ObjectMapper(),
-                rejecting, subExec, "anchor-agent");
+                mock(com.skillforge.workflow.journal.JournalCache.class),
+                java.time.Clock.systemUTC(), rejecting, subExec, "anchor-agent");
 
         assertThatThrownBy(() -> rejectingService.startRun("wf", Map.of(), 5L))
                 .isInstanceOf(RejectedExecutionException.class);

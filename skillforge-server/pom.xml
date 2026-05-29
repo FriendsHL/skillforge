@@ -128,6 +128,12 @@
             <artifactId>rhino</artifactId>
             <version>1.7.14</version>
         </dependency>
+        <!-- AUTOEVOLVING V1 Sprint 2: JSON Schema validation for agent() schema enforcement -->
+        <dependency>
+            <groupId>com.networknt</groupId>
+            <artifactId>json-schema-validator</artifactId>
+            <version>1.5.0</version>
+        </dependency>
     </dependencies>
 
     <build>

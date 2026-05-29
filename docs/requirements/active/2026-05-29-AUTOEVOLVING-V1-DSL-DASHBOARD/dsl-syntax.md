@@ -76,8 +76,10 @@ const validReviews = reviews.filter(r => r !== null)
 
 **特性**：
 - thunk = `() => agent(...)` 形式的箭头函数
+- ⚠️ **V1 约束（offload 模型妥协）**：thunk 必须以单个 `agent()` 调用作为 tail 表达式（`() => agent(...)`），**不能对 `agent()` 的结果做后处理**（如 `() => agent(...).then(...)` / `() => { const r = agent(...); return r.field }`）。V1 在 workflow 线程上顺序求值每个 thunk 拿到 `agent()` 的 offload 占位符后才 barrier-join；非 tail-call 形态会在求值期拿到占位符而非真实结果。后处理放到 barrier 之后对返回数组做（`reviews.map(...)`）。
 - **barrier**：必须全跑完才往下
 - 失败 item 返 `null`，调用本身不 reject，需 `.filter(Boolean)`
+- **真并发**：N 个 `agent()` 的 `engine.run` offload 到 worker 线程并发跑（与 `pipeline` 的 V1 串行不同）
 - 并发上限：单 workflow 内 `min(16, cpu cores - 2)`
 
 ### 3.3 `pipeline(items, stage1, stage2, ...)` — 流水线（每 item 独立流过所有 stage，**无 barrier**）
@@ -92,9 +94,9 @@ const verified = await pipeline(FINDINGS,
 ```
 
 **特性**：
-- **默认用 pipeline**！比 parallel 节省时间（不浪费快 item 的等待）
+- ⚠️ **V1 串行执行**：pipeline 的 stage 是读 Rhino scope 的 JS 回调，不能 offload 到 worker 线程（Rhino 单线程），所以 V1 是**串行**实现——每个 item 依次流过所有 stage，一个 item 全跑完再下一个，每个 `agent()` 内联阻塞。语义正确（每 item 独立流过所有 stage，某 stage 抛错则该 item 后续 stage 跳过 → `null`），但**没有真并发**（fully-pipelined 真并发 V2 起，§15）。runtime 会 `log()` 一行声明串行执行，避免误当并发。**要真并发用 `parallel()`**（offload 模型）。
+- 上面"墙钟时间 = 最慢单链"是 V2 真并发版的语义；V1 串行版墙钟 = 所有 item × 所有 stage 之和。
 - 某 stage 抛错 → 该 item 后续 stage 跳过 → 结果是 `null`
-- 用 parallel 只在需要 cross-item 比较（dedup / 早退 / sum-of-all）时
 
 ### 3.4 `phase(title)` — 在 dashboard 分组显示
 
@@ -363,8 +365,8 @@ opt-report [running] runId=abc-123
 | 我想 | 用 |
 |---|---|
 | 调一个 sub-agent | `await agent(prompt, { agentSlug, schema })` |
-| 同时跑 N 个、全完才走 | `await parallel([() => agent(...), () => agent(...)])` |
-| 每个 item 独立流水（不等齐）| `await pipeline(items, stage1, stage2)` |
+| 同时跑 N 个、全完才走（**真并发**） | `await parallel([() => agent(...), () => agent(...)])` |
+| 每个 item 独立流过所有 stage（**V1 串行**，真并发 V2 起）| `await pipeline(items, stage1, stage2)` |
 | 给当前操作分组（dashboard 显示） | `phase('Title')` |
 | 推一行进度文字 | `log('msg')` |
 | 暂停等用户审 | `const d = await humanApprove(payload)` |

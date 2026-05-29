@@ -1,5 +1,8 @@
 package com.skillforge.workflow;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.skillforge.server.flywheel.run.FlywheelRunService;
+import com.skillforge.workflow.journal.JournalCache;
 import com.skillforge.workflow.sandbox.BudgetTracker;
 import com.skillforge.workflow.ws.WorkflowWsBroadcaster;
 
@@ -49,6 +52,38 @@ public final class WorkflowContext {
      */
     private WorkflowWsBroadcaster broadcaster;
 
+    /**
+     * Sprint 2: host services the {@code humanApprove()} / {@code ctx} bindings
+     * reach through the context (so {@code WorkflowEvaluator.evaluate}'s 4-arg
+     * signature stays stable for the spike tests). Null in pure unit tests that
+     * never exercise those bindings; set by {@code WorkflowRunnerService} for
+     * real runs.
+     */
+    private FlywheelRunService flywheelRunService;
+    private ObjectMapper objectMapper;
+
+    /**
+     * Sprint 2 (chunk 2): the journal cache the {@code agent()} /
+     * {@code humanApprove()} resume short-circuits read first-run results from.
+     * Null in pure unit tests that never resume; set by
+     * {@code WorkflowRunnerService} for real runs.
+     */
+    private JournalCache journalCache;
+
+    // ── Chunk 2 journal-replay state ──
+    // First run: isResuming=false → replayComplete=true → phase()/log() broadcast
+    // normally; humanApprove() takes the first-pause path. Resume: isResuming=true,
+    // resumeFrontierIndex=K (the approved gate's stepIndex), replayComplete=false
+    // until humanApprove() reaches the frontier and flips it true — that boundary
+    // gates WS replay suppression (recordPhase/recordLog below).
+    private boolean resuming = false;
+    private int resumeFrontierIndex = -1;
+    // Workflow-thread-only today (Rhino is single-threaded), but marked volatile —
+    // aligned with inParallelCollect — so a future cross-thread reader (e.g. a
+    // broadcast helper invoked off the workflow thread) can never observe a stale
+    // value of the WS replay-suppression gate. (r1 code-W3.)
+    private volatile boolean replayComplete = true;
+
     public WorkflowContext(String runId, Map<String, Object> args, BudgetTracker budget) {
         this.runId = runId;
         this.args = args != null ? args : Collections.emptyMap();
@@ -57,6 +92,59 @@ public final class WorkflowContext {
 
     public void setBroadcaster(WorkflowWsBroadcaster broadcaster) {
         this.broadcaster = broadcaster;
+    }
+
+    public WorkflowWsBroadcaster getBroadcaster() {
+        return broadcaster;
+    }
+
+    public void setFlywheelRunService(FlywheelRunService flywheelRunService) {
+        this.flywheelRunService = flywheelRunService;
+    }
+
+    public FlywheelRunService getFlywheelRunService() {
+        return flywheelRunService;
+    }
+
+    public void setObjectMapper(ObjectMapper objectMapper) {
+        this.objectMapper = objectMapper;
+    }
+
+    public ObjectMapper getObjectMapper() {
+        return objectMapper;
+    }
+
+    public void setJournalCache(JournalCache journalCache) {
+        this.journalCache = journalCache;
+    }
+
+    public JournalCache getJournalCache() {
+        return journalCache;
+    }
+
+    // ── Chunk 2 seam accessors ──
+    public boolean isResuming() {
+        return resuming;
+    }
+
+    public void setResuming(boolean resuming) {
+        this.resuming = resuming;
+    }
+
+    public int getResumeFrontierIndex() {
+        return resumeFrontierIndex;
+    }
+
+    public void setResumeFrontierIndex(int resumeFrontierIndex) {
+        this.resumeFrontierIndex = resumeFrontierIndex;
+    }
+
+    public boolean isReplayComplete() {
+        return replayComplete;
+    }
+
+    public void setReplayComplete(boolean replayComplete) {
+        this.replayComplete = replayComplete;
     }
 
     public String getRunId() {
@@ -86,14 +174,18 @@ public final class WorkflowContext {
 
     public void recordPhase(String title) {
         phases.add(title);
-        if (broadcaster != null) {
+        // Replay suppression (plan §2.7): while re-running JS up to the resume
+        // frontier (replayComplete=false) we must NOT re-broadcast phase events —
+        // the dashboard already saw them on the first run. After the frontier
+        // humanApprove() flips replayComplete=true, live phases broadcast again.
+        if (broadcaster != null && replayComplete) {
             broadcaster.phaseStarted(runId, title);
         }
     }
 
     public void recordLog(String message) {
         logs.add(message);
-        if (broadcaster != null) {
+        if (broadcaster != null && replayComplete) {
             broadcaster.logged(runId, message);
         }
     }

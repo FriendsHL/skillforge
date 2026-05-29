@@ -54,6 +54,14 @@ public class FlywheelRunService {
                     FlywheelRunEntity.STATUS_ERROR),
             FlywheelRunEntity.STATUS_RUNNING, Set.of(
                     FlywheelRunEntity.STATUS_COMPLETED,
+                    FlywheelRunEntity.STATUS_ERROR,
+                    // AUTOEVOLVING V1 Sprint 2: park on a humanApprove() gate.
+                    FlywheelRunEntity.STATUS_PAUSED),
+            // paused → running is the resume path (chunk 2); paused →
+            // completed/error lets the run finish/fail directly from a gate.
+            FlywheelRunEntity.STATUS_PAUSED, Set.of(
+                    FlywheelRunEntity.STATUS_RUNNING,
+                    FlywheelRunEntity.STATUS_COMPLETED,
                     FlywheelRunEntity.STATUS_ERROR)
     );
 
@@ -216,6 +224,17 @@ public class FlywheelRunService {
      */
     @Transactional
     public FlywheelRunEntity transitionStatus(String runId, String newStatus, String errorReason) {
+        return doTransitionStatus(runId, newStatus, errorReason);
+    }
+
+    /**
+     * Core run-status transition logic, factored out so callers that already hold
+     * an open transaction (e.g. {@link #recordApproveDecisionAndResume}) can reuse
+     * it WITHOUT a {@code this.}-self-invocation through the {@code @Transactional}
+     * proxy (which would silently bypass the annotation — java.md footgun #2).
+     * Always runs in the caller's transaction; never opens its own.
+     */
+    private FlywheelRunEntity doTransitionStatus(String runId, String newStatus, String errorReason) {
         FlywheelRunEntity run = runRepository.findById(runId)
                 .orElseThrow(() -> new IllegalArgumentException("FlywheelRun not found: " + runId));
         String oldStatus = run.getStatus();
@@ -233,6 +252,53 @@ public class FlywheelRunService {
         runRepository.save(run);
         broadcastStatusChanged(run, oldStatus, newStatus, errorReason);
         return run;
+    }
+
+    /**
+     * AUTOEVOLVING V1 Sprint 2 (Task F r1 java-W2): atomically record an approve
+     * decision on the frontier {@code human_approve} gate step AND transition the
+     * run {@code paused → running}, in a single transaction.
+     *
+     * <p>Why one transaction: {@code WorkflowRunnerService.resume()} previously
+     * issued these as two independent {@code @Transactional} calls. A partial
+     * failure (gate committed {@code completed}, then the run transition throws)
+     * left the run wedged — {@code findPendingApproveStep} returns empty so a retry
+     * {@code approve} fails with {@code IllegalStateException} and the run can never
+     * resume. Co-locating both writes here makes them all-or-nothing.
+     *
+     * <p>Implementation note (java.md footgun #2): the two writes call the
+     * package-private {@code doTransitionStepStatus}/{@code doTransitionStatus}
+     * helpers directly — NOT the public {@code @Transactional} overloads via
+     * {@code this.} — so there is no self-invocation that would bypass the proxy.
+     * Both helpers join this method's transaction (the only one), so they commit
+     * or roll back together.
+     *
+     * @param gateStepId   the pending {@code human_approve} step's id
+     * @param runId        the paused run's id
+     * @param decisionJson the operator's decision payload (written to the gate's
+     *                     {@code step_output_json})
+     */
+    @Transactional
+    public void recordApproveDecisionAndResume(String gateStepId, String runId, JsonNode decisionJson) {
+        doTransitionStepStatus(
+                gateStepId, FlywheelRunStepEntity.STATUS_COMPLETED, decisionJson, null);
+        doTransitionStatus(runId, FlywheelRunEntity.STATUS_RUNNING, null);
+    }
+
+    /**
+     * AUTOEVOLVING V1 Sprint 2: park a {@code running} workflow run on a
+     * {@code humanApprove()} gate ({@code running → paused}). Delegates to
+     * {@link #transitionStatus} so the state-machine guard + the
+     * {@code flywheel_run_status_changed} WS broadcast both fire. {@code reason}
+     * is logged for operator traceability (the column itself carries no reason —
+     * {@code error_reason} is reserved for failures).
+     *
+     * @throws IllegalStateException if the run is not currently {@code running}
+     */
+    @Transactional
+    public FlywheelRunEntity pauseRun(String runId, String reason) {
+        log.info("FlywheelRunService.pauseRun: runId={} reason={}", runId, reason);
+        return transitionStatus(runId, FlywheelRunEntity.STATUS_PAUSED, null);
     }
 
     public Optional<FlywheelRunEntity> findById(String runId) {
@@ -260,6 +326,24 @@ public class FlywheelRunService {
      */
     @Transactional
     public String appendStep(String runId, String stepInputJson) {
+        return appendStep(runId, stepInputJson,
+                FlywheelRunStepEntity.STEP_KIND_SUBAGENT_DISPATCH, null);
+    }
+
+    /**
+     * AUTOEVOLVING V1 Sprint 2: insert a {@code pending} step row carrying an
+     * explicit {@code stepKind} ({@code subagent_dispatch} / {@code human_approve})
+     * and the deterministic {@code stepIndex} (V127 {@code step_index} column —
+     * the journal-replay lookup key). The legacy 2-arg overload delegates here
+     * with {@code stepKind=subagent_dispatch, stepIndex=null}, so OPT-REPORT /
+     * orchestrator callers are unaffected (their rows keep {@code step_index=null}).
+     *
+     * @param stepIndex deterministic invoke-order index, or {@code null} for
+     *                  non-workflow callers
+     * @return the new step's id (UUID)
+     */
+    @Transactional
+    public String appendStep(String runId, String stepInputJson, String stepKind, Integer stepIndex) {
         if (runId == null || runId.isBlank()) {
             throw new IllegalArgumentException("runId is required");
         }
@@ -268,7 +352,9 @@ public class FlywheelRunService {
         step.setRunId(runId);
         step.setStatus(FlywheelRunStepEntity.STATUS_PENDING);
         step.setStepInputJson(stepInputJson == null || stepInputJson.isBlank() ? "{}" : stepInputJson);
-        step.setStepKind(FlywheelRunStepEntity.STEP_KIND_SUBAGENT_DISPATCH);
+        step.setStepKind(stepKind == null || stepKind.isBlank()
+                ? FlywheelRunStepEntity.STEP_KIND_SUBAGENT_DISPATCH : stepKind);
+        step.setStepIndex(stepIndex);
         // r2 fix N-1 (java + database overlap): dropped the redundant runRepository.findById
         // pre-check. The DB FK on t_flywheel_run_step.run_id already enforces the constraint;
         // pre-checking just doubles the round-trip. We translate the
@@ -311,6 +397,19 @@ public class FlywheelRunService {
                                                       String newStatus,
                                                       JsonNode outputJson,
                                                       String errorReason) {
+        return doTransitionStepStatus(stepRunId, newStatus, outputJson, errorReason);
+    }
+
+    /**
+     * Core step-status transition logic, factored out so
+     * {@link #recordApproveDecisionAndResume} can reuse it within its own
+     * transaction without a {@code this.}-self-invocation (java.md footgun #2).
+     * Always runs in the caller's transaction; never opens its own.
+     */
+    private FlywheelRunStepEntity doTransitionStepStatus(String stepRunId,
+                                                         String newStatus,
+                                                         JsonNode outputJson,
+                                                         String errorReason) {
         if (stepRunId == null || stepRunId.isBlank()) {
             throw new IllegalArgumentException("stepRunId is required");
         }
@@ -358,6 +457,31 @@ public class FlywheelRunService {
         return stepRepository.findByRunIdOrderByCreatedAtAsc(runId);
     }
 
+    /**
+     * AUTOEVOLVING V1 Sprint 2 (Task F — resume): the parked {@code human_approve}
+     * gate step a paused workflow run is waiting on. A correctly-paused run has
+     * exactly one {@code pending} {@code human_approve} step; more than one means
+     * a state-machine bug, so the caller throws rather than picks arbitrarily.
+     *
+     * @return the unique pending gate step, or empty if none is pending
+     * @throws IllegalStateException if more than one pending gate step exists
+     */
+    @Transactional(readOnly = true)
+    public Optional<FlywheelRunStepEntity> findPendingApproveStep(String runId) {
+        if (runId == null || runId.isBlank()) {
+            throw new IllegalArgumentException("runId is required");
+        }
+        List<FlywheelRunStepEntity> gates = stepRepository.findByRunIdAndStepKindAndStatus(
+                runId, FlywheelRunStepEntity.STEP_KIND_HUMAN_APPROVE,
+                FlywheelRunStepEntity.STATUS_PENDING);
+        if (gates.size() > 1) {
+            throw new IllegalStateException(
+                    "Run " + runId + " has " + gates.size()
+                            + " pending human_approve steps; expected at most one");
+        }
+        return gates.isEmpty() ? Optional.empty() : Optional.of(gates.get(0));
+    }
+
     private FlywheelRunEntity requireWritableRun(String runId) {
         if (runId == null || runId.isBlank()) {
             throw new IllegalArgumentException("runId is required");
@@ -366,7 +490,10 @@ public class FlywheelRunService {
                 .orElseThrow(() -> new IllegalArgumentException("FlywheelRun not found: " + runId));
         String status = run.getStatus();
         if (!FlywheelRunEntity.STATUS_PENDING.equals(status)
-                && !FlywheelRunEntity.STATUS_RUNNING.equals(status)) {
+                && !FlywheelRunEntity.STATUS_RUNNING.equals(status)
+                // Sprint 2: a paused (human-approve) run may still be marked
+                // completed/error directly (e.g. a reject that aborts the run).
+                && !FlywheelRunEntity.STATUS_PAUSED.equals(status)) {
             throw new IllegalStateException(
                     "FlywheelRun " + runId + " not writable (status=" + status + ")");
         }

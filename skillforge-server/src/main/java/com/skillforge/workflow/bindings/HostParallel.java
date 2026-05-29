@@ -89,7 +89,9 @@ public final class HostParallel extends BaseFunction {
         for (int i = 0; i < pendings.size(); i++) {
             try {
                 Object value = pendings.get(i).getFuture().join();
-                results[i] = Context.javaToJS(value, scope);
+                // Result may be a schema-parsed Map/List (Task E) — JsConversions
+                // .toJs, never raw Context.javaToJS (ClassShutter footgun).
+                results[i] = JsConversions.toJs(cx, scope, value);
             } catch (RuntimeException ex) {
                 log.warn("[parallel] branch {} failed (runId={}): {}",
                         i, ctx.getRunId(), ex.getMessage());

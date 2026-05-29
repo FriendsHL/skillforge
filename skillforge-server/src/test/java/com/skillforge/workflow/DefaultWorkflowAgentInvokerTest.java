@@ -15,7 +15,9 @@ import com.skillforge.server.repository.AgentRepository;
 import com.skillforge.server.service.AgentService;
 import com.skillforge.server.service.SessionService;
 import com.skillforge.workflow.engine.WorkflowSubAgentEngineFactory;
+import com.skillforge.workflow.exception.SchemaViolationException;
 import com.skillforge.workflow.exception.WorkflowAgentNotFoundException;
+import com.skillforge.workflow.schema.SchemaValidator;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -24,6 +26,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -31,6 +34,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -58,7 +62,8 @@ class DefaultWorkflowAgentInvokerTest {
         SessionEntity anchor = new SessionEntity();
         anchor.setId("anchor-1");
         invoker = new DefaultWorkflowAgentInvoker(agentRepository, agentService, sessionService,
-                flywheelRunService, engineFactory, objectMapper, "run-1", anchor, 7L);
+                flywheelRunService, engineFactory, objectMapper, new SchemaValidator(),
+                "run-1", anchor, 7L);
     }
 
     @Test
@@ -77,7 +82,7 @@ class DefaultWorkflowAgentInvokerTest {
         sub.setId("sub-9");
         when(sessionService.createSubSession(any(), eq(42L), eq("run-1"))).thenReturn(sub);
 
-        when(flywheelRunService.appendStep(eq("run-1"), any())).thenReturn("step-3");
+        when(flywheelRunService.appendStep(eq("run-1"), any(), any(), any())).thenReturn("step-3");
         when(engineFactory.buildWorkflowEngine(any(SkillRegistry.class))).thenReturn(engine);
 
         LoopResult result = new LoopResult();
@@ -125,7 +130,7 @@ class DefaultWorkflowAgentInvokerTest {
         SessionEntity sub = new SessionEntity();
         sub.setId("sub-9");
         when(sessionService.createSubSession(any(), eq(42L), eq("run-1"))).thenReturn(sub);
-        when(flywheelRunService.appendStep(eq("run-1"), any())).thenReturn("step-3");
+        when(flywheelRunService.appendStep(eq("run-1"), any(), any(), any())).thenReturn("step-3");
         when(engineFactory.buildWorkflowEngine(any(SkillRegistry.class))).thenReturn(engine);
         when(engine.run(any(), any(), any(), any(), any(), any()))
                 .thenThrow(new RuntimeException("boom"));
@@ -136,5 +141,88 @@ class DefaultWorkflowAgentInvokerTest {
 
         verify(flywheelRunService).transitionStepStatus(
                 eq("step-3"), eq(FlywheelRunStepEntity.STATUS_ERROR), eq(null), eq("boom"));
+    }
+
+    // ── Task E: schema enforcement + retry (3 total attempts, W2) ──
+
+    /** Schema requiring an object with a required string field {@code x}. */
+    private static final Map<String, Object> SCHEMA = Map.of(
+            "type", "object",
+            "required", List.of("x"),
+            "properties", Map.of("x", Map.of("type", "string")));
+
+    private void stubWorker(AgentDefinition def) {
+        AgentEntity entity = new AgentEntity();
+        entity.setId(42L);
+        entity.setName("worker");
+        when(agentRepository.findFirstByName("worker")).thenReturn(Optional.of(entity));
+        when(agentService.toAgentDefinition(entity)).thenReturn(def);
+        SessionEntity sub = new SessionEntity();
+        sub.setId("sub-9");
+        when(sessionService.createSubSession(any(), eq(42L), eq("run-1"))).thenReturn(sub);
+        when(flywheelRunService.appendStep(eq("run-1"), any(), any(), any())).thenReturn("step-3");
+        when(engineFactory.buildWorkflowEngine(any(SkillRegistry.class))).thenReturn(engine);
+    }
+
+    private static LoopResult resp(String finalResponse) {
+        LoopResult r = new LoopResult();
+        r.setFinalResponse(finalResponse);
+        r.setLoopCount(1);
+        return r;
+    }
+
+    @Test
+    @DisplayName("schema valid on first attempt → returns parsed Map, engine.run once")
+    void schemaValidFirstAttempt() {
+        stubWorker(new AgentDefinition());
+        when(engine.run(any(), any(), any(), any(), any(), any())).thenReturn(resp("{\"x\":\"hi\"}"));
+
+        Object out = invoker.invoke("say hi", Map.of("agentSlug", "worker", "schema", SCHEMA), 0);
+
+        assertThat(out).isInstanceOf(Map.class);
+        assertThat(((Map<?, ?>) out).get("x")).isEqualTo("hi");
+        verify(engine, times(1)).run(any(), any(), any(), any(), any(), any());
+        verify(flywheelRunService).transitionStepStatus(
+                eq("step-3"), eq(FlywheelRunStepEntity.STATUS_COMPLETED), any(), eq(null));
+    }
+
+    @Test
+    @DisplayName("schema invalid then valid → retries once, returns parsed Map")
+    void schemaRetryThenPass() {
+        stubWorker(new AgentDefinition());
+        when(engine.run(any(), any(), any(), any(), any(), any()))
+                .thenReturn(resp("{\"y\":1}"), resp("{\"x\":\"ok\"}"));
+
+        Object out = invoker.invoke("say hi", Map.of("agentSlug", "worker", "schema", SCHEMA), 0);
+
+        assertThat(((Map<?, ?>) out).get("x")).isEqualTo("ok");
+        verify(engine, times(2)).run(any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("schema violated on all 3 attempts → SchemaViolationException + step error")
+    void schemaAllAttemptsFail() {
+        stubWorker(new AgentDefinition());
+        when(engine.run(any(), any(), any(), any(), any(), any())).thenReturn(resp("{\"y\":1}"));
+
+        assertThatThrownBy(() ->
+                invoker.invoke("say hi", Map.of("agentSlug", "worker", "schema", SCHEMA), 5))
+                .isInstanceOf(SchemaViolationException.class);
+
+        verify(engine, times(3)).run(any(), any(), any(), any(), any(), any());
+        verify(flywheelRunService).transitionStepStatus(
+                eq("step-3"), eq(FlywheelRunStepEntity.STATUS_ERROR), eq(null), any());
+    }
+
+    @Test
+    @DisplayName("non-JSON output counts as a schema violation")
+    void schemaParseFailureIsViolation() {
+        stubWorker(new AgentDefinition());
+        when(engine.run(any(), any(), any(), any(), any(), any())).thenReturn(resp("not json at all"));
+
+        assertThatThrownBy(() ->
+                invoker.invoke("say hi", Map.of("agentSlug", "worker", "schema", SCHEMA), 0))
+                .isInstanceOf(SchemaViolationException.class);
+        verify(engine, times(3)).run(any(), any(), any(), any(), any(), any());
     }
 }
