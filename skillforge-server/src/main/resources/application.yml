@@ -132,6 +132,16 @@ skillforge:
       # 120s gives 2× headroom while still bounding worst-case AB pipeline at
       # ~24min (12 scenarios × 2 sides). Override per env if needed.
       scenario-timeout-ms: 120000
+      # AUTOEVOLVE-AGENT-FLYWHEEL: cap scenarios per A/B run (0 = full ~49-scenario
+      # dataset). The attribution/evolve path re-evaluates baseline+candidate on
+      # every scenario each iteration, so the full set makes one A/B ~10-15 min and
+      # multiplies provider load (→ 429s) — impractical for a multi-iteration loop.
+      # A 12-scenario sample gives a directional pass-rate signal in ~1/4 the time
+      # and calls; the human reviews the trajectory before adopting.
+      max-scenarios: 12
+      # Parallel scenarios per A/B. KEEP LOW on a rate-limited provider: higher =
+      # more concurrent calls = more HTTP 429s (counterproductive).
+      scenario-concurrency: 3
 
   # AUTOEVOLVE-AGENT-FLYWHEEL Module C (FR-C7): per-evolve-run A/B budget cap.
   # The orchestrator's maxIter lives in its agent prompt (untrusted surface) and

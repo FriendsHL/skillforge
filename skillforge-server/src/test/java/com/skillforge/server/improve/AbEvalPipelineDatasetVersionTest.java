@@ -66,7 +66,7 @@ class AbEvalPipelineDatasetVersionTest {
                 scenarioLoader, sandboxFactory, evalEngineFactory,
                 evalJudgeTool, promptAbRunRepository, promptVersionRepository,
                 agentService, new ObjectMapper(), broadcaster, loopExecutor,
-                120_000L, evalDatasetService, evalDatasetVersionRepository, 3);
+                120_000L, evalDatasetService, evalDatasetVersionRepository, 3, 0);
     }
 
     @Test

@@ -72,6 +72,18 @@ public class AbEvalPipeline {
      * provider's rate limit allows (429s are retried). Default 3 (now configurable; was a hardcoded 3). Higher hurts on a rate-limited provider — more parallel calls = more 429..
      */
     private final int scenarioConcurrency;
+    /**
+     * Cap on how many eval scenarios an A/B run executes (0 = all). The full
+     * dataset (~49 scenarios × baseline+candidate × multi-turn) makes one A/B take
+     * ~10-15 min, which is impractical for an iterative evolve loop AND multiplies
+     * provider load (→ 429s). Capping to a representative sample (first N, stable
+     * order so baseline/candidate and successive iterations compare like-for-like)
+     * gives a directional pass-rate signal in a fraction of the time/calls. The
+     * human reviews the trajectory before adopting, so sampling is an acceptable
+     * speed/cost trade-off. Configurable via
+     * {@code skillforge.flywheel.ab-eval.max-scenarios}; default 0 (unchanged).
+     */
+    private final int maxScenarios;
     // EVAL-DATASET-LAYER V1: nullable so the existing unit test ctor
     // (AbEvalPipelineAttributionBaselineTest) doesn't have to wire these — the
     // new dataset-version path that uses them is exercised by a separate test.
@@ -92,7 +104,19 @@ public class AbEvalPipeline {
                            @Value("${skillforge.flywheel.ab-eval.scenario-timeout-ms:120000}") long scenarioTimeoutMs) {
         this(scenarioLoader, sandboxFactory, evalEngineFactory, evalJudgeTool,
              promptAbRunRepository, promptVersionRepository, agentService, objectMapper,
-             broadcaster, loopExecutor, scenarioTimeoutMs, null, null, 3);
+             broadcaster, loopExecutor, scenarioTimeoutMs, null, null, 3, 0);
+    }
+
+    /** Sample at most {@link #maxScenarios} scenarios (stable first-N) when the cap
+     *  is set; baseline + candidate + successive iterations then compare on the same
+     *  subset. {@code maxScenarios<=0} or a smaller list = run all. */
+    private List<EvalScenarioEntity> capScenarios(List<EvalScenarioEntity> scenarios) {
+        if (maxScenarios <= 0 || scenarios == null || scenarios.size() <= maxScenarios) {
+            return scenarios;
+        }
+        log.info("A/B scenario cap: running {} of {} scenarios (skillforge.flywheel.ab-eval.max-scenarios)",
+                maxScenarios, scenarios.size());
+        return scenarios.subList(0, maxScenarios);
     }
 
     /**
@@ -114,8 +138,10 @@ public class AbEvalPipeline {
                            @Value("${skillforge.flywheel.ab-eval.scenario-timeout-ms:120000}") long scenarioTimeoutMs,
                            EvalDatasetService evalDatasetService,
                            EvalDatasetVersionRepository evalDatasetVersionRepository,
-                           @Value("${skillforge.flywheel.ab-eval.scenario-concurrency:3}") int scenarioConcurrency) {
+                           @Value("${skillforge.flywheel.ab-eval.scenario-concurrency:3}") int scenarioConcurrency,
+                           @Value("${skillforge.flywheel.ab-eval.max-scenarios:0}") int maxScenarios) {
         this.scenarioConcurrency = Math.max(1, scenarioConcurrency);
+        this.maxScenarios = Math.max(0, maxScenarios);
         this.scenarioLoader = scenarioLoader;
         this.sandboxFactory = sandboxFactory;
         this.evalEngineFactory = evalEngineFactory;
@@ -275,7 +301,7 @@ public class AbEvalPipeline {
         log.warn("AbEvalPipeline.run(scenarios) legacy overload invoked — V2 will remove this; "
                 + "migrate to run(abRun, candidate, baseline, agent, datasetVersionId). abRunId={}",
                 abRun.getId());
-        runWithScenarios(abRun, candidate, baselineVersion, agent, scenarios, null);
+        runWithScenarios(abRun, candidate, baselineVersion, agent, capScenarios(scenarios), null);
     }
 
     /**
@@ -306,7 +332,7 @@ public class AbEvalPipeline {
         List<EvalScenarioEntity> scenarios =
                 evalDatasetService.getScenariosForVersion(datasetVersionId);
         abRun.setDatasetVersionId(datasetVersionId);
-        runWithScenarios(abRun, candidate, baselineVersion, agent, scenarios, datasetVersionId);
+        runWithScenarios(abRun, candidate, baselineVersion, agent, capScenarios(scenarios), datasetVersionId);
     }
 
     /**
