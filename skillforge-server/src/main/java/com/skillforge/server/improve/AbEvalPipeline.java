@@ -452,8 +452,11 @@ public class AbEvalPipeline {
                                 abRun.getId() + "-baseline", scenario, baselineDef);
                         EvalJudgeOutput baselineJudge = evalJudgeTool.judge(scenario, baselineRun);
                         if (baselineJudge.isPass()) baselinePassedAtomic.incrementAndGet();
+                        // Reflection: keep the judge's per-scenario reasoning so the
+                        // evolve-editor can see WHY this case scored as it did.
                         baselineResult = new AbScenarioResult.RunResult(
-                                baselineRun.getStatus(), baselineJudge.getCompositeScore());
+                                baselineRun.getStatus(), baselineJudge.getCompositeScore(),
+                                baselineJudge.getMetaJudgeRationale());
                     }
                     ScenarioRunResult candidateRun = runSingleScenario(
                             abRun.getId() + "-candidate", scenario, candidateDef);
@@ -464,7 +467,8 @@ public class AbEvalPipeline {
                             scenario.getId(), scenario.getName(),
                             baselineResult,
                             new AbScenarioResult.RunResult(candidateRun.getStatus(),
-                                    candidateJudge.getCompositeScore()));
+                                    candidateJudge.getCompositeScore(),
+                                    candidateJudge.getMetaJudgeRationale()));
                 } catch (Exception e) {
                     log.error("Attribution A/B scenario {} failed: {}", scenario.getId(), e.getMessage(), e);
                     return new AbScenarioResult(

@@ -7,6 +7,7 @@ import com.skillforge.core.skill.SkillResult;
 import com.skillforge.core.skill.Tool;
 import com.skillforge.server.entity.SkillDraftEntity;
 import com.skillforge.server.improve.BehaviorRuleImproverService;
+import com.skillforge.server.improve.EvolveEditorContext;
 import com.skillforge.server.improve.ImprovementStartResult;
 import com.skillforge.server.improve.PromptImproverService;
 import com.skillforge.server.improve.SkillDraftService;
@@ -181,6 +182,19 @@ public class GenerateCandidateTool implements Tool {
                         + "THIS prompt version (the current-best from a prior winning iteration) "
                         + "instead of the agent's active prompt. Omit on iteration 1."
         ));
+        properties.put("priorChange", Map.of(
+                "type", "string",
+                "description", "surface=prompt reflection (evolve only): what was changed LAST "
+                        + "round (the prior iteration's changeDesc). Omit on the first round; the "
+                        + "editor uses it to avoid repeating / to build on the last change."
+        ));
+        properties.put("priorEvalReport", Map.of(
+                "type", "string",
+                "description", "surface=prompt reflection (evolve only): last round's eval report "
+                        + "(per-case improved/regressed + reasons + overall delta), compact JSON or "
+                        + "prose. Omit on the first round; the editor uses it to treat regressed "
+                        + "cases as negative examples and keep improved directions."
+        ));
 
         Map<String, Object> schema = new LinkedHashMap<>();
         schema.put("type", "object");
@@ -220,16 +234,42 @@ public class GenerateCandidateTool implements Tool {
             // candidate against that agent, so the candidate is owned by it by
             // construction (TriggerAbEval / PromoteCandidate re-validate ownership).
             String basePromptVersionId = trimToNull(input.get("basePromptVersionId"));
+            // Reflection (evolve only): build an EvolveEditorContext when EITHER
+            // priorChange or priorEvalReport is present. iter-1 omits both → null
+            // context → byte-identical legacy generation. Blanks trimmed to null
+            // so a stray empty string doesn't switch on evolve-editor mode.
+            String priorChange = trimToNull(input.get("priorChange"));
+            String priorEvalReport = trimToNull(input.get("priorEvalReport"));
+            EvolveEditorContext editor = (priorChange != null || priorEvalReport != null)
+                    ? new EvolveEditorContext(priorChange, priorEvalReport)
+                    : null;
             String candidateId = switch (surface) {
                 case PROMPT -> {
                     // BUG-1 hill-climb: when basePromptVersionId is supplied (iter 2+),
                     // build the candidate on the current-best prompt; else (iter 1)
-                    // improve the agent's active prompt.
-                    ImprovementStartResult r = basePromptVersionId != null
-                            ? promptImproverService.improveFromBasePrompt(
-                                    eventId, targetAgentId, basePromptVersionId, issue, ownerIdOrDefault(input))
-                            : promptImproverService.startImprovementFromAttribution(
-                                    eventId, targetAgentId, issue, ownerIdOrDefault(input));
+                    // improve the agent's active prompt. Reflection context reaches
+                    // BOTH routes (the "best is still original" case omits
+                    // basePromptVersionId yet still wants reflection).
+                    //
+                    // When editor == null (legacy / non-evolve), call the original
+                    // (pre-reflection) overloads so behavior — and the call path the
+                    // non-evolve attribution flow exercises — stays byte-identical.
+                    ImprovementStartResult r;
+                    if (basePromptVersionId != null) {
+                        r = editor != null
+                                ? promptImproverService.improveFromBasePrompt(
+                                        eventId, targetAgentId, basePromptVersionId, issue,
+                                        ownerIdOrDefault(input), editor)
+                                : promptImproverService.improveFromBasePrompt(
+                                        eventId, targetAgentId, basePromptVersionId, issue,
+                                        ownerIdOrDefault(input));
+                    } else {
+                        r = editor != null
+                                ? promptImproverService.startImprovementFromAttribution(
+                                        eventId, targetAgentId, issue, ownerIdOrDefault(input), editor)
+                                : promptImproverService.startImprovementFromAttribution(
+                                        eventId, targetAgentId, issue, ownerIdOrDefault(input));
+                    }
                     yield r.promptVersionId();
                 }
                 case BEHAVIOR_RULE -> {

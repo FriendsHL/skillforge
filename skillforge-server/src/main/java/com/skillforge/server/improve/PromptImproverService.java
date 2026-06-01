@@ -278,6 +278,41 @@ public class PromptImproverService extends AbstractAbEvalRunner<PromptVersionEnt
                                                                   String agentId,
                                                                   String attributedDescription,
                                                                   Long ownerId) {
+        // SHARED path: AttributionApprovalService (non-evolve) calls this 4-arg
+        // form. Delegate with editor=null so the candidate generation stays
+        // BYTE-IDENTICAL to the legacy behavior (no evolve-editor system prompt,
+        // no config / reflection blocks).
+        //
+        // NOTE on @Transactional: this self-invocation bypasses the Spring AOP
+        // proxy, so the 5-arg overload's own @Transactional(REQUIRES_NEW) does NOT
+        // start a second transaction — the tx opened by THIS method's annotation is
+        // the only one and carries through. That's correct (we want exactly one
+        // REQUIRES_NEW boundary); the annotation on the 5-arg form only takes effect
+        // when an EXTERNAL caller (GenerateCandidateTool) invokes it through the proxy.
+        return startImprovementFromAttribution(eventId, agentId, attributedDescription, ownerId, null);
+    }
+
+    /**
+     * AUTOEVOLVE-AGENT-FLYWHEEL reflection overload. Identical to the 4-arg form
+     * except it threads an {@link EvolveEditorContext} into the candidate
+     * generation:
+     * <ul>
+     *   <li>{@code editor == null} → legacy behavior, byte-identical to the
+     *       4-arg form (the shared non-evolve attribution path).</li>
+     *   <li>{@code editor != null} → evolve-editor mode (seeded system prompt +
+     *       target-agent config + reflection blocks).</li>
+     * </ul>
+     *
+     * <p>The evolve hill-climb's "best is still the ORIGINAL prompt" case routes
+     * here (the orchestrator omits {@code basePromptVersionId}), so reflection
+     * must reach this method as well as {@link #improveFromBasePrompt}.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public ImprovementStartResult startImprovementFromAttribution(Long eventId,
+                                                                  String agentId,
+                                                                  String attributedDescription,
+                                                                  Long ownerId,
+                                                                  EvolveEditorContext editor) {
         if (eventId == null) throw new IllegalArgumentException("eventId is required");
         if (agentId == null || agentId.isBlank()) {
             throw new IllegalArgumentException("agentId is required");
@@ -364,7 +399,8 @@ public class PromptImproverService extends AbstractAbEvalRunner<PromptVersionEnt
         // "candidate has content + ready for A/B". On LLM failure the caller
         // (AttributionApprovalService) catches and writes stage=candidate_failed.
         try {
-            String improved = generateCandidatePromptFromAttribution(agent, attributedDescription);
+            String improved = generateCandidatePromptFromAttribution(
+                    agent, attributedDescription, null, editor);
             version.setContent(improved);
         } catch (RuntimeException llmEx) {
             // Preserve audit trail of attempt: save row with content="" + log,
@@ -412,6 +448,25 @@ public class PromptImproverService extends AbstractAbEvalRunner<PromptVersionEnt
                                                         String basePromptVersionId,
                                                         String attributedDescription,
                                                         Long ownerId) {
+        // evolve-ONLY path; the 5-arg form delegates with editor=null so existing
+        // callers / tests that don't pass reflection context keep the legacy
+        // (byte-identical) generation.
+        return improveFromBasePrompt(eventId, agentId, basePromptVersionId,
+                attributedDescription, ownerId, null);
+    }
+
+    /**
+     * AUTOEVOLVE-AGENT-FLYWHEEL reflection overload of {@link #improveFromBasePrompt}.
+     * Threads an {@link EvolveEditorContext} into the candidate generation;
+     * {@code editor == null} reproduces the legacy hill-climb behavior exactly.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public ImprovementStartResult improveFromBasePrompt(Long eventId,
+                                                        String agentId,
+                                                        String basePromptVersionId,
+                                                        String attributedDescription,
+                                                        Long ownerId,
+                                                        EvolveEditorContext editor) {
         if (eventId == null) throw new IllegalArgumentException("eventId is required");
         if (agentId == null || agentId.isBlank()) {
             throw new IllegalArgumentException("agentId is required");
@@ -446,7 +501,7 @@ public class PromptImproverService extends AbstractAbEvalRunner<PromptVersionEnt
         version.setImprovementRationale(attributedDescription.trim());
         try {
             String improved = generateCandidatePromptFromAttribution(
-                    agent, attributedDescription, base.getContent());
+                    agent, attributedDescription, base.getContent(), editor);
             version.setContent(improved);
         } catch (RuntimeException llmEx) {
             version.setContent("");
@@ -1116,7 +1171,7 @@ public class PromptImproverService extends AbstractAbEvalRunner<PromptVersionEnt
      */
     private String generateCandidatePromptFromAttribution(AgentEntity agent,
                                                           String attributedDescription) {
-        return generateCandidatePromptFromAttribution(agent, attributedDescription, null);
+        return generateCandidatePromptFromAttribution(agent, attributedDescription, null, null);
     }
 
     /**
@@ -1129,6 +1184,33 @@ public class PromptImproverService extends AbstractAbEvalRunner<PromptVersionEnt
     private String generateCandidatePromptFromAttribution(AgentEntity agent,
                                                           String attributedDescription,
                                                           String baseContentOverride) {
+        return generateCandidatePromptFromAttribution(
+                agent, attributedDescription, baseContentOverride, null);
+    }
+
+    /**
+     * AUTOEVOLVE-AGENT-FLYWHEEL reflection — editor-aware candidate generator.
+     *
+     * <p><b>{@code editor == null}</b> (the shared non-evolve attribution path,
+     * and any legacy caller): EXACT current behavior — the hardcoded
+     * "expert prompt engineer" system prompt + the
+     * "Current system prompt / Attribution analysis / memory context" user
+     * message. BYTE-IDENTICAL to before; this branch is the gate that keeps
+     * {@code AttributionApprovalService} unchanged.
+     *
+     * <p><b>{@code editor != null}</b> (evolve-editor mode): the system prompt is
+     * the seeded {@code evolve-editor} agent's {@code system_prompt} (read fresh
+     * via {@code agentRepository.findFirstByName("evolve-editor")}; defensively
+     * falls back to the hardcoded prompt if absent), and the user message is
+     * augmented with the target agent's current config + what was changed last
+     * round + last round's eval report. The existing memory-context block is
+     * KEPT — "no memory" means we don't build reflection ON the memory system
+     * (this is in-context), not that we drop the long-term memory injection.
+     */
+    private String generateCandidatePromptFromAttribution(AgentEntity agent,
+                                                          String attributedDescription,
+                                                          String baseContentOverride,
+                                                          EvolveEditorContext editor) {
         String currentPrompt = baseContentOverride != null
                 ? baseContentOverride
                 : (agent.getSystemPrompt() != null ? agent.getSystemPrompt() : "");
@@ -1137,7 +1219,9 @@ public class PromptImproverService extends AbstractAbEvalRunner<PromptVersionEnt
             memoryBlock = "(none)";
         }
 
-        String systemPrompt = """
+        // System prompt: legacy hardcoded for editor==null; seeded evolve-editor
+        // agent prompt (with defensive fallback) for editor!=null.
+        final String legacySystemPrompt = """
                 You are an expert prompt engineer. Your task is to analyze an attribution \
                 report from a curator agent and generate an improved system prompt.
 
@@ -1147,8 +1231,14 @@ public class PromptImproverService extends AbstractAbEvalRunner<PromptVersionEnt
                 - Focus on addressing the specific failure pattern described
                 - Keep the prompt concise and actionable
                 - Do not add meta-commentary or explanations""";
+        String systemPrompt = legacySystemPrompt;
+        if (editor != null) {
+            systemPrompt = resolveEvolveEditorSystemPrompt(legacySystemPrompt);
+        }
 
-        String userMessage = String.format("""
+        // User message: legacy 3-block body, plus evolve-editor reflection blocks
+        // appended ONLY when editor!=null (so editor==null stays byte-identical).
+        StringBuilder userMessage = new StringBuilder(String.format("""
                 Current system prompt:
                 ---
                 %s
@@ -1164,7 +1254,11 @@ public class PromptImproverService extends AbstractAbEvalRunner<PromptVersionEnt
                 described above.""",
                 currentPrompt,
                 attributedDescription.trim(),
-                memoryBlock);
+                memoryBlock));
+
+        if (editor != null) {
+            userMessage.append("\n\n").append(buildEvolveEditorReflectionBlocks(agent, editor));
+        }
 
         LlmProvider provider = llmProviderFactory.getProvider(defaultProviderName);
         if (provider == null) {
@@ -1174,7 +1268,7 @@ public class PromptImproverService extends AbstractAbEvalRunner<PromptVersionEnt
         LlmRequest request = new LlmRequest();
         request.setSystemPrompt(systemPrompt);
         List<Message> messages = new ArrayList<>();
-        messages.add(Message.user(userMessage));
+        messages.add(Message.user(userMessage.toString()));
         request.setMessages(messages);
         request.setMaxTokens(2000);
         request.setTemperature(0.3);
@@ -1185,6 +1279,59 @@ public class PromptImproverService extends AbstractAbEvalRunner<PromptVersionEnt
             throw new RuntimeException("LLM returned empty candidate prompt for attribution flow");
         }
         return content.trim();
+    }
+
+    /**
+     * Resolve the evolve-editor system prompt: prefer the seeded
+     * {@code evolve-editor} agent's {@code system_prompt}; fall back to the
+     * supplied legacy prompt when the agent is absent or has a blank prompt
+     * (defensive — a fresh install that hasn't run V135 yet still produces a
+     * usable candidate rather than failing).
+     */
+    private String resolveEvolveEditorSystemPrompt(String fallback) {
+        try {
+            return agentRepository.findFirstByName("evolve-editor")
+                    .map(AgentEntity::getSystemPrompt)
+                    .filter(p -> p != null && !p.isBlank())
+                    .orElse(fallback);
+        } catch (RuntimeException e) {
+            log.warn("evolve-editor agent lookup failed, falling back to legacy prompt: {}",
+                    e.getMessage());
+            return fallback;
+        }
+    }
+
+    /**
+     * Build the evolve-editor reflection sections appended to the user message:
+     * the target agent's current config (read-only, this round only changes the
+     * prompt) + what was changed last round + last round's eval report. Marked
+     * with stable Chinese labels so a reviewer / test can assert their presence.
+     */
+    private String buildEvolveEditorReflectionBlocks(AgentEntity agent, EvolveEditorContext editor) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("目标 agent 当前配置（仅供参考，本次只改 prompt）：\n")
+                .append("- behaviorRules: ").append(blankToNone(agent.getBehaviorRules())).append('\n')
+                .append("- skills: ").append(blankToNone(agent.getSkillIds())).append('\n')
+                .append("- tools: ").append(blankToNone(agent.getToolIds())).append('\n')
+                .append("- modelId: ").append(blankToNone(agent.getModelId()));
+
+        String priorChange = editor.priorChangeSummary();
+        if (priorChange != null && !priorChange.isBlank()) {
+            sb.append("\n\n上一轮改动：\n").append(priorChange.trim());
+        }
+
+        String priorReport = editor.priorEvalReportJson();
+        if (priorReport != null && !priorReport.isBlank()) {
+            sb.append("\n\n上一轮评测报告（哪些 case 提升/腐化 + 原因 + 整体涨跌）：\n")
+                    .append(priorReport.trim());
+        }
+
+        sb.append("\n\n综合上述（方向 + 当前配置 + 上轮改动 + 上轮评测）给出本次更好的改法。");
+        return sb.toString();
+    }
+
+    private static String blankToNone(String value) {
+        return (value == null || value.isBlank()) ? "(none)" : value.trim();
     }
 
     private String loadRenderedMemoryContext(Long userId, String attributedDescription) {
