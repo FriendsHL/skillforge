@@ -53,6 +53,15 @@ public class AbEvalPipeline {
 
     private static final Logger log = LoggerFactory.getLogger(AbEvalPipeline.class);
 
+    /**
+     * BUG-1 (winner-carry-forward): per-scenario baseline status when the baseline
+     * side is skipped (a cached rate was supplied). The accompanying oracleScore is a
+     * placeholder, NOT a measurement — the run-level {@code baselinePassRate} carries
+     * the real (cached) value. Any consumer reading per-scenario baseline results must
+     * treat this status as "not measured this run" and ignore the 0.0 score.
+     */
+    static final String BASELINE_CACHED_STATUS = "CACHED";
+
     private final ScenarioLoader scenarioLoader;
     private final SandboxSkillRegistryFactory sandboxFactory;
     private final EvalEngineFactory evalEngineFactory;
@@ -298,10 +307,24 @@ public class AbEvalPipeline {
                     PromptVersionEntity baselineVersion,
                     AgentEntity agent,
                     List<EvalScenarioEntity> scenarios) {
+        run(abRun, candidate, baselineVersion, agent, scenarios, (Double) null);
+    }
+
+    /**
+     * AUTOEVOLVE-AGENT-FLYWHEEL BUG-1 — legacy-scenarios overload with an optional
+     * {@code cachedBaselineRate}: when non-null the run is CANDIDATE-ONLY and reuses
+     * that rate as the baseline pass-rate (winner-carry-forward; no baseline re-eval).
+     */
+    public void run(PromptAbRunEntity abRun,
+                    PromptVersionEntity candidate,
+                    PromptVersionEntity baselineVersion,
+                    AgentEntity agent,
+                    List<EvalScenarioEntity> scenarios,
+                    Double cachedBaselineRate) {
         log.warn("AbEvalPipeline.run(scenarios) legacy overload invoked — V2 will remove this; "
                 + "migrate to run(abRun, candidate, baseline, agent, datasetVersionId). abRunId={}",
                 abRun.getId());
-        runWithScenarios(abRun, candidate, baselineVersion, agent, capScenarios(scenarios), null);
+        runWithScenarios(abRun, candidate, baselineVersion, agent, capScenarios(scenarios), null, cachedBaselineRate);
     }
 
     /**
@@ -321,6 +344,19 @@ public class AbEvalPipeline {
                     PromptVersionEntity baselineVersion,
                     AgentEntity agent,
                     String datasetVersionId) {
+        run(abRun, candidate, baselineVersion, agent, datasetVersionId, (Double) null);
+    }
+
+    /**
+     * AUTOEVOLVE-AGENT-FLYWHEEL BUG-1 — dataset-version overload with an optional
+     * {@code cachedBaselineRate} (winner-carry-forward; candidate-only + reuse rate).
+     */
+    public void run(PromptAbRunEntity abRun,
+                    PromptVersionEntity candidate,
+                    PromptVersionEntity baselineVersion,
+                    AgentEntity agent,
+                    String datasetVersionId,
+                    Double cachedBaselineRate) {
         if (datasetVersionId == null || datasetVersionId.isBlank()) {
             throw new IllegalArgumentException("datasetVersionId required for this overload");
         }
@@ -332,7 +368,8 @@ public class AbEvalPipeline {
         List<EvalScenarioEntity> scenarios =
                 evalDatasetService.getScenariosForVersion(datasetVersionId);
         abRun.setDatasetVersionId(datasetVersionId);
-        runWithScenarios(abRun, candidate, baselineVersion, agent, capScenarios(scenarios), datasetVersionId);
+        runWithScenarios(abRun, candidate, baselineVersion, agent, capScenarios(scenarios),
+                datasetVersionId, cachedBaselineRate);
     }
 
     /**
@@ -346,7 +383,15 @@ public class AbEvalPipeline {
                                    PromptVersionEntity baselineVersion,
                                    AgentEntity agent,
                                    List<EvalScenarioEntity> scenarios,
-                                   String datasetVersionId) {
+                                   String datasetVersionId,
+                                   Double cachedBaselineRate) {
+        // AUTOEVOLVE-AGENT-FLYWHEEL BUG-1 (winner-carry-forward): when the caller
+        // already knows the baseline's pass-rate (the current-best in a greedy
+        // evolve hill-climb), run CANDIDATE-ONLY and reuse that rate — never
+        // re-measure the baseline. This (a) halves the work and (b) removes the
+        // re-eval noise that made an unchanged baseline score wildly differently
+        // each iteration (the bug). null = legacy behaviour (measure both fresh).
+        final boolean skipBaseline = cachedBaselineRate != null;
         abRun.setStatus("RUNNING");
         abRun.setStartedAt(Instant.now());
         promptAbRunRepository.save(abRun);
@@ -397,22 +442,27 @@ public class AbEvalPipeline {
             }
             CompletableFuture<AbScenarioResult> fut = CompletableFuture.supplyAsync(() -> {
                 try {
-                    // Distinct sandbox ids per side prevent SandboxFactory collision
-                    // when baseline + candidate write fixture files to the same path.
-                    ScenarioRunResult baselineRun = runSingleScenario(
-                            abRun.getId() + "-baseline", scenario, baselineDef);
-                    EvalJudgeOutput baselineJudge = evalJudgeTool.judge(scenario, baselineRun);
+                    // BUG-1: skip the baseline side entirely when a cached rate is
+                    // supplied (candidate-only winner-carry-forward).
+                    AbScenarioResult.RunResult baselineResult;
+                    if (skipBaseline) {
+                        baselineResult = new AbScenarioResult.RunResult(BASELINE_CACHED_STATUS, 0.0);
+                    } else {
+                        ScenarioRunResult baselineRun = runSingleScenario(
+                                abRun.getId() + "-baseline", scenario, baselineDef);
+                        EvalJudgeOutput baselineJudge = evalJudgeTool.judge(scenario, baselineRun);
+                        if (baselineJudge.isPass()) baselinePassedAtomic.incrementAndGet();
+                        baselineResult = new AbScenarioResult.RunResult(
+                                baselineRun.getStatus(), baselineJudge.getCompositeScore());
+                    }
                     ScenarioRunResult candidateRun = runSingleScenario(
                             abRun.getId() + "-candidate", scenario, candidateDef);
                     EvalJudgeOutput candidateJudge = evalJudgeTool.judge(scenario, candidateRun);
-
-                    if (baselineJudge.isPass()) baselinePassedAtomic.incrementAndGet();
                     if (candidateJudge.isPass()) candidatePassedAtomic.incrementAndGet();
 
                     return new AbScenarioResult(
                             scenario.getId(), scenario.getName(),
-                            new AbScenarioResult.RunResult(baselineRun.getStatus(),
-                                    baselineJudge.getCompositeScore()),
+                            baselineResult,
                             new AbScenarioResult.RunResult(candidateRun.getStatus(),
                                     candidateJudge.getCompositeScore()));
                 } catch (Exception e) {
@@ -439,7 +489,11 @@ public class AbEvalPipeline {
         int baselinePassed = baselinePassedAtomic.get();
         int candidatePassed = candidatePassedAtomic.get();
 
-        double baselinePassRate = (double) baselinePassed / scenarios.size() * 100;
+        // BUG-1: when the baseline was skipped (winner-carry-forward), use the
+        // supplied cached rate instead of the (un-measured, 0) per-scenario count.
+        double baselinePassRate = skipBaseline
+                ? cachedBaselineRate
+                : (double) baselinePassed / scenarios.size() * 100;
         double candidatePassRate = (double) candidatePassed / scenarios.size() * 100;
         double delta = candidatePassRate - baselinePassRate;
 
@@ -468,7 +522,11 @@ public class AbEvalPipeline {
         // many runs this converges to the true mean. Stored as fraction
         // [0.0, 1.0] to match the composition_stats.expected_baseline_pass_rate
         // field. baselinePassRate above is in 0-100 percentage form.
-        if (datasetVersionId != null && evalDatasetVersionRepository != null) {
+        // BUG-1: never back-write when the baseline was skipped — baselinePassRate is
+        // then the carried current-best score (winner-carry-forward), not a fresh
+        // measurement of THIS dataset's baseline, so averaging it in would pollute
+        // the dataset's actualBaselinePassRate estimate.
+        if (!skipBaseline && datasetVersionId != null && evalDatasetVersionRepository != null) {
             try {
                 evalDatasetVersionRepository.findById(datasetVersionId).ifPresent(v -> {
                     double newFraction = baselinePassRate / 100.0;

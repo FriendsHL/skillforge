@@ -396,6 +396,73 @@ public class PromptImproverService extends AbstractAbEvalRunner<PromptVersionEnt
     }
 
     /**
+     * AUTOEVOLVE-AGENT-FLYWHEEL BUG-1 (winner-carry-forward) — generate a candidate
+     * by improving a SPECIFIC base prompt version (the current-best in a greedy
+     * evolve hill-climb) plus the issue, instead of the agent's active prompt. Used
+     * by GenerateCandidate from iteration 2+ so each candidate builds cumulatively
+     * on the previous winner. Mirrors {@link #startImprovementFromAttribution}'s
+     * candidate-row creation but skips the genesis-baseline path (a hill-climb
+     * always starts from an existing version). The orchestrator threads this
+     * candidate's id into TriggerAbEval with baselineVersionId = the base, so the
+     * A/B compares candidate vs the current-best.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public ImprovementStartResult improveFromBasePrompt(Long eventId,
+                                                        String agentId,
+                                                        String basePromptVersionId,
+                                                        String attributedDescription,
+                                                        Long ownerId) {
+        if (eventId == null) throw new IllegalArgumentException("eventId is required");
+        if (agentId == null || agentId.isBlank()) {
+            throw new IllegalArgumentException("agentId is required");
+        }
+        if (basePromptVersionId == null || basePromptVersionId.isBlank()) {
+            throw new IllegalArgumentException("basePromptVersionId is required");
+        }
+        if (attributedDescription == null || attributedDescription.isBlank()) {
+            throw new IllegalArgumentException("attributedDescription is required and must be non-blank");
+        }
+
+        AgentEntity agent = agentRepository.findByIdForUpdate(Long.parseLong(agentId))
+                .orElseThrow(() -> new RuntimeException("Agent not found: " + agentId));
+        PromptVersionEntity base = promptVersionRepository.findById(basePromptVersionId)
+                .orElseThrow(() -> new RuntimeException(
+                        "Base prompt version not found: " + basePromptVersionId));
+        if (!agentId.equals(base.getAgentId())) {
+            throw new IllegalArgumentException("base prompt version " + basePromptVersionId
+                    + " does not belong to agent " + agentId);
+        }
+
+        int nextVersion = promptVersionRepository
+                .findByAgentIdOrderByVersionNumberDesc(agentId).stream()
+                .findFirst().map(v -> v.getVersionNumber() + 1).orElse(2);
+
+        PromptVersionEntity version = new PromptVersionEntity();
+        version.setId(UUID.randomUUID().toString());
+        version.setAgentId(agentId);
+        version.setVersionNumber(nextVersion);
+        version.setStatus("candidate");
+        version.setSource("attribution");
+        version.setImprovementRationale(attributedDescription.trim());
+        try {
+            String improved = generateCandidatePromptFromAttribution(
+                    agent, attributedDescription, base.getContent());
+            version.setContent(improved);
+        } catch (RuntimeException llmEx) {
+            version.setContent("");
+            promptVersionRepository.save(version);
+            log.error("Hill-climb prompt-version LLM fill FAILED: versionId={} agentId={} baseVersionId={}: {}",
+                    version.getId(), agentId, basePromptVersionId, llmEx.getMessage());
+            throw llmEx;
+        }
+        promptVersionRepository.save(version);
+        log.info("Hill-climb candidate created: versionId={} agentId={} baseVersionId={} versionNumber={}",
+                version.getId(), agentId, basePromptVersionId, nextVersion);
+        return new ImprovementStartResult(
+                String.valueOf(agent.getId()), null, version.getId(), "PENDING");
+    }
+
+    /**
      * FLYWHEEL-LOOP-CLOSURE Phase 1.3 (2026-05-16) — called by
      * {@link com.skillforge.server.attribution.OptimizationEventAutoTriggerListener}
      * when an attribution event reaches {@code candidate_ready}. Runs an A/B
@@ -450,7 +517,8 @@ public class PromptImproverService extends AbstractAbEvalRunner<PromptVersionEnt
                 req.baselineVersionId(),
                 req.candidateVersionId(),
                 req.evalScenarioIds(),
-                req.datasetVersionId());
+                req.datasetVersionId(),
+                req.cachedBaselineRate());
     }
 
     /**
@@ -467,14 +535,15 @@ public class PromptImproverService extends AbstractAbEvalRunner<PromptVersionEnt
         log.warn("PromptImproverService.runAbTestAgainst(4-arg) legacy overload invoked — "
                 + "migrate to runAbTestAgainst(AbEvalRunRequest). agentId={}", agentId);
         return runAbTestAgainstInternal(agentId, baselineVersionId, candidateVersionId,
-                evalScenarioIds, null);
+                evalScenarioIds, null, null);
     }
 
     private String runAbTestAgainstInternal(String agentId,
                                              String baselineVersionId,
                                              String candidateVersionId,
                                              List<String> evalScenarioIds,
-                                             String datasetVersionId) {
+                                             String datasetVersionId,
+                                             Double cachedBaselineRate) {
         if (agentId == null || agentId.isBlank()) {
             throw new IllegalArgumentException("agentId is required");
         }
@@ -654,6 +723,7 @@ public class PromptImproverService extends AbstractAbEvalRunner<PromptVersionEnt
         final String capturedAgentId = String.valueOf(agent.getId());
         final String capturedBaselineId = baselineId;
         final String capturedCandidateId = candidateVersionId;
+        final Double capturedCachedBaselineRate = cachedBaselineRate;   // BUG-1 winner-carry-forward
         Runnable asyncTask = () -> {
             // DIAG-2026-05-23: silent-failure forensics — log entry + every step
             // + uncaught exception (Future-swallowing makes async lambdas
@@ -683,12 +753,13 @@ public class PromptImproverService extends AbstractAbEvalRunner<PromptVersionEnt
                 if (capturedDatasetVersionId != null && !capturedDatasetVersionId.isBlank()) {
                     // EVAL-DATASET-LAYER V1: new dataset-version overload also
                     // back-writes actualBaselinePassRate on the version row.
+                    // BUG-1: capturedCachedBaselineRate non-null → candidate-only.
                     abEvalPipeline.run(reloadedAbRun, reloadedCandidate, reloadedBaseline,
-                            reloadedAgent, capturedDatasetVersionId);
+                            reloadedAgent, capturedDatasetVersionId, capturedCachedBaselineRate);
                 } else {
                     // Legacy/ephemeral path — scenarios list is the source of truth.
                     abEvalPipeline.run(reloadedAbRun, reloadedCandidate, reloadedBaseline,
-                            reloadedAgent, reloadedScenarios);
+                            reloadedAgent, reloadedScenarios, capturedCachedBaselineRate);
                 }
                 log.info("Attribution A/B run {} dispatched + completed via AbEvalPipeline",
                         abRunId);
@@ -1045,7 +1116,22 @@ public class PromptImproverService extends AbstractAbEvalRunner<PromptVersionEnt
      */
     private String generateCandidatePromptFromAttribution(AgentEntity agent,
                                                           String attributedDescription) {
-        String currentPrompt = agent.getSystemPrompt() != null ? agent.getSystemPrompt() : "";
+        return generateCandidatePromptFromAttribution(agent, attributedDescription, null);
+    }
+
+    /**
+     * AUTOEVOLVE-AGENT-FLYWHEEL BUG-1 (winner-carry-forward / cumulative hill-climb):
+     * generate an improved prompt from {@code baseContentOverride} when supplied
+     * (the current-best prompt's content), instead of the agent's active
+     * system_prompt — so each evolve iteration builds cumulatively on the previous
+     * winner rather than always re-improving the original prompt.
+     */
+    private String generateCandidatePromptFromAttribution(AgentEntity agent,
+                                                          String attributedDescription,
+                                                          String baseContentOverride) {
+        String currentPrompt = baseContentOverride != null
+                ? baseContentOverride
+                : (agent.getSystemPrompt() != null ? agent.getSystemPrompt() : "");
         String memoryBlock = loadRenderedMemoryContext(agent.getOwnerId(), attributedDescription);
         if (memoryBlock.isBlank()) {
             memoryBlock = "(none)";

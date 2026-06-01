@@ -179,7 +179,15 @@ public class TriggerAbEvalTool implements Tool {
         properties.put("baselineId", Map.of(
                 "type", "string",
                 "description", "Optional baseline prompt version id (prompt surface only); "
-                        + "omit / null to compare against the agent's active prompt."
+                        + "omit / null to compare against the agent's active prompt. For a "
+                        + "hill-climb iteration 2+, set this to the current-best prompt version."
+        ));
+        properties.put("cachedBaselineScore", Map.of(
+                "type", "number",
+                "description", "Optional (prompt surface, hill-climb): the current-best's already-"
+                        + "known pass-rate (0..100). When supplied the A/B runs CANDIDATE-ONLY and "
+                        + "reuses this as the baseline score — never re-measures the baseline "
+                        + "(avoids re-eval noise + halves the work). Pair with baselineId."
         ));
         properties.put("evalScenarioIds", Map.of(
                 "type", "array",
@@ -411,13 +419,44 @@ public class TriggerAbEvalTool implements Tool {
     private String triggerPrompt(Map<String, Object> input, String candidateId, String targetAgentId) {
         // B4: baselineId=null → service resolves the agent's active prompt and reuses a
         // prior baseline eval run where one exists. We don't force a baseline re-run.
+        // BUG-1 hill-climb: cachedBaselineScore (0..100) makes the run candidate-only
+        // and reuses that score as the baseline pass-rate (winner-carry-forward) — the
+        // orchestrator supplies the current-best's score so the baseline isn't re-measured.
         AbEvalRunRequest req = new AbEvalRunRequest(
                 targetAgentId,
                 trimToNull(input.get("baselineId")),
                 candidateId,
                 evalScenarioIds(input),
-                trimToNull(input.get("datasetVersionId")));
+                trimToNull(input.get("datasetVersionId")),
+                parseRate(input.get("cachedBaselineScore")));
         return promptImproverService.runAbTestAgainst(req);
+    }
+
+    /**
+     * Parse an optional cached baseline pass-rate (0..100); null/blank → null silently
+     * (the caller simply didn't supply one → fresh-baseline mode). A <b>present-but-invalid</b>
+     * value (non-numeric or out of range) also degrades to null, but is logged at WARN:
+     * silently reverting to a re-measured baseline is the exact BUG-1 noise we're fixing,
+     * so a malformed score from the orchestrator must be visible rather than swallowed.
+     */
+    private static Double parseRate(Object value) {
+        String s = trimToNull(value);
+        if (s == null) {
+            return null;
+        }
+        try {
+            double d = Double.parseDouble(s);
+            if (d >= 0.0 && d <= 100.0) {
+                return d;
+            }
+            log.warn("[TriggerAbEval] cachedBaselineScore out of range [0,100]: '{}' — ignoring "
+                    + "(A/B will re-measure the baseline fresh, reintroducing noise)", s);
+            return null;
+        } catch (NumberFormatException e) {
+            log.warn("[TriggerAbEval] cachedBaselineScore not a number: '{}' — ignoring "
+                    + "(A/B will re-measure the baseline fresh, reintroducing noise)", s);
+            return null;
+        }
     }
 
     @SuppressWarnings("unchecked")

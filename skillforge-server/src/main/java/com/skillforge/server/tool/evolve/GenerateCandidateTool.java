@@ -175,6 +175,12 @@ public class GenerateCandidateTool implements Tool {
                 "type", "string",
                 "description", "Owner user id (defaults to the system user when omitted)."
         ));
+        properties.put("basePromptVersionId", Map.of(
+                "type", "string",
+                "description", "surface=prompt hill-climb only: build the candidate by improving "
+                        + "THIS prompt version (the current-best from a prior winning iteration) "
+                        + "instead of the agent's active prompt. Omit on iteration 1."
+        ));
 
         Map<String, Object> schema = new LinkedHashMap<>();
         schema.put("type", "object");
@@ -213,10 +219,17 @@ public class GenerateCandidateTool implements Tool {
             // which validates the agent exists. The improvers persist the
             // candidate against that agent, so the candidate is owned by it by
             // construction (TriggerAbEval / PromoteCandidate re-validate ownership).
+            String basePromptVersionId = trimToNull(input.get("basePromptVersionId"));
             String candidateId = switch (surface) {
                 case PROMPT -> {
-                    ImprovementStartResult r = promptImproverService.startImprovementFromAttribution(
-                            eventId, targetAgentId, issue, ownerIdOrDefault(input));
+                    // BUG-1 hill-climb: when basePromptVersionId is supplied (iter 2+),
+                    // build the candidate on the current-best prompt; else (iter 1)
+                    // improve the agent's active prompt.
+                    ImprovementStartResult r = basePromptVersionId != null
+                            ? promptImproverService.improveFromBasePrompt(
+                                    eventId, targetAgentId, basePromptVersionId, issue, ownerIdOrDefault(input))
+                            : promptImproverService.startImprovementFromAttribution(
+                                    eventId, targetAgentId, issue, ownerIdOrDefault(input));
                     yield r.promptVersionId();
                 }
                 case BEHAVIOR_RULE -> {
