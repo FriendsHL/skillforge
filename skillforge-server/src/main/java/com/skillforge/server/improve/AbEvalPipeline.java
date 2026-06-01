@@ -450,7 +450,8 @@ public class AbEvalPipeline {
                     } else {
                         ScenarioRunResult baselineRun = runSingleScenario(
                                 abRun.getId() + "-baseline", scenario, baselineDef);
-                        EvalJudgeOutput baselineJudge = evalJudgeTool.judge(scenario, baselineRun);
+                        // Option B: explain=true → judge also emits a per-case rationale.
+                        EvalJudgeOutput baselineJudge = evalJudgeTool.judge(scenario, baselineRun, true);
                         if (baselineJudge.isPass()) baselinePassedAtomic.incrementAndGet();
                         // Reflection: keep the judge's per-scenario reasoning so the
                         // evolve-editor can see WHY this case scored as it did.
@@ -460,7 +461,8 @@ public class AbEvalPipeline {
                     }
                     ScenarioRunResult candidateRun = runSingleScenario(
                             abRun.getId() + "-candidate", scenario, candidateDef);
-                    EvalJudgeOutput candidateJudge = evalJudgeTool.judge(scenario, candidateRun);
+                    // Option B: explain=true → judge also emits a per-case rationale.
+                    EvalJudgeOutput candidateJudge = evalJudgeTool.judge(scenario, candidateRun, true);
                     if (candidateJudge.isPass()) candidatePassedAtomic.incrementAndGet();
 
                     return new AbScenarioResult(

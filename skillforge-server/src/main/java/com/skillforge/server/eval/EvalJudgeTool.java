@@ -55,6 +55,24 @@ public class EvalJudgeTool {
     }
 
     public EvalJudgeOutput judge(EvalScenario scenario, ScenarioRunResult runResult) {
+        return judge(scenario, runResult, false);
+    }
+
+    /**
+     * AUTOEVOLVE reflection (option B): when {@code explain} is true, additionally
+     * produce a short natural-language rationale ("why this scenario scored that
+     * way") on {@link EvalJudgeOutput#setMetaJudgeRationale}.
+     *
+     * <p><b>Strictly additive.</b> The rationale is generated AFTER the composite
+     * score / pass / attribution are fully computed, and only writes the rationale
+     * field — the score is byte-identical to the 2-arg path, so deterministic
+     * oracles (exact_match/contains/regex) and the cached-baseline hill-climb
+     * comparison are unaffected. A failed/empty rationale call leaves the rationale
+     * null and NEVER touches the score. Only the A/B-with-scenarios path
+     * (AbEvalPipeline.runWithScenarios) opts in (explain=true); every other caller
+     * uses the 2-arg form so they don't pay the extra LLM call.
+     */
+    public EvalJudgeOutput judge(EvalScenario scenario, ScenarioRunResult runResult, boolean explain) {
         EvalJudgeOutput output = new EvalJudgeOutput();
 
         // Handle ERROR/TIMEOUT results
@@ -73,6 +91,11 @@ public class EvalJudgeTool {
                     .memoryResultEmpty(runResult.isMemoryResultEmpty())
                     .build();
             output.setAttribution(attributionEngine.compute(signals));
+            // ERROR/TIMEOUT has no usable agent output to explain — use a cheap
+            // templated rationale (no LLM call) so reflection still gets a "why".
+            if (explain) {
+                output.setMetaJudgeRationale(renderErrorRationale(runResult, output.getAttribution()));
+            }
             return output;
         }
 
@@ -131,7 +154,78 @@ public class EvalJudgeTool {
         }
         runResult.setOracleScore(compositeScore);
 
+        // Option B (additive): the score is fully finalized above. This only writes
+        // a natural-language rationale; on any failure it leaves it null/unchanged
+        // and the score is never affected. Overrides the mechanical meta-judge note.
+        if (explain) {
+            String reason = generateScenarioRationale(scenario, runResult, output);
+            if (reason != null && !reason.isBlank()) {
+                // In the [30,55] fuzzy zone the meta-judge already left an audit note
+                // ("Meta-judge adjusted score from X to Y"); keep it as a suffix rather
+                // than silently dropping it, leading with the useful natural-language why.
+                String metaNote = output.getMetaJudgeRationale();
+                output.setMetaJudgeRationale(metaNote != null ? reason + " (" + metaNote + ")" : reason);
+            }
+        }
+
         return output;
+    }
+
+    /**
+     * Option B: plain-text "why did this scenario score that way" for ONE single-turn
+     * run. Returns null on any failure (no provider / exception / empty) — the caller
+     * leaves the rationale untouched and the score is never affected. Plain prose, no
+     * JSON, so the provider's strict-JSON flakiness can't break it.
+     */
+    private String generateScenarioRationale(EvalScenario scenario, ScenarioRunResult runResult,
+                                             EvalJudgeOutput output) {
+        try {
+            LlmProvider provider = llmProviderFactory.getProvider(defaultProviderName);
+            if (provider == null) {
+                return null;
+            }
+            String expected = scenario.getOracle() != null ? scenario.getOracle().getExpected() : null;
+            String agentOut = runResult.getAgentFinalOutput();
+            String truncated = agentOut != null
+                    ? agentOut.substring(0, Math.min(800, agentOut.length()))
+                    : "(empty)";
+            LlmRequest request = new LlmRequest();
+            request.setSystemPrompt("You are reviewing ONE single-turn eval scenario. The agent was given a "
+                    + "task and produced a final output, which was scored against the expected criteria. In "
+                    + "1-2 short sentences, explain WHY it scored that way — what the output got right or wrong "
+                    + "versus the expected criteria. Reply with plain text only (no JSON, no markdown).");
+            List<Message> messages = new ArrayList<>();
+            messages.add(Message.user("Task: " + (scenario.getTask() != null ? scenario.getTask() : "(none)")
+                    + "\nExpected: " + (expected != null ? expected : "(none provided)")
+                    + "\nAgent final output: " + truncated
+                    + "\nScore: " + String.format("%.1f", output.getCompositeScore()) + "/100 ("
+                    + (output.isPass() ? "PASS" : "FAIL") + ")"
+                    // Surface the efficiency inputs so the rationale can attribute a sub-100
+                    // score to loop/latency drag rather than only output quality.
+                    + "\nLoops used: " + runResult.getLoopCount() + "/" + scenario.getMaxLoops()
+                    + "\nExecution time: " + runResult.getExecutionTimeMs() + "ms (threshold "
+                    + scenario.getPerformanceThresholdMs() + "ms)"
+                    + "\nWhy did it score this way (1-2 sentences):"));
+            request.setMessages(messages);
+            request.setMaxTokens(180);
+            request.setTemperature(0.0);
+
+            LlmResponse response = provider.chat(request);
+            String text = response != null ? response.getContent() : null;
+            return (text != null && !text.isBlank()) ? text.trim() : null;
+        } catch (Exception e) {
+            log.warn("Scenario rationale generation failed (score unaffected): {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /** Option B: cheap templated rationale for ERROR/TIMEOUT (no LLM — nothing to explain). */
+    private static String renderErrorRationale(ScenarioRunResult runResult, FailureAttribution attribution) {
+        String attr = attribution != null ? attribution.name() : "NONE";
+        if ("TIMEOUT".equals(runResult.getStatus())) {
+            return "Agent hit the loop/time limit before completing the task (attribution: " + attr + ").";
+        }
+        return "Agent execution errored before producing a usable output (attribution: " + attr + ").";
     }
 
     private double computeOracleScore(EvalScenario scenario, ScenarioRunResult runResult) {

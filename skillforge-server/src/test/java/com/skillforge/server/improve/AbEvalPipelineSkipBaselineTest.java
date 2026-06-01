@@ -37,6 +37,7 @@ import java.util.concurrent.Executors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
@@ -100,7 +101,7 @@ class AbEvalPipelineSkipBaselineTest {
         when(promptAbRunRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
         lenient().when(promptVersionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
         // s1, s2 pass; s3 fails → 2 of 3 → 66.67%. Applied to whichever side calls judge.
-        when(evalJudgeTool.judge(any(), any())).thenAnswer(inv -> {
+        when(evalJudgeTool.judge(any(), any(), anyBoolean())).thenAnswer(inv -> {
             EvalScenario sc = inv.getArgument(0);
             boolean pass = !"s3".equals(sc.getId());
             EvalJudgeOutput o = new EvalJudgeOutput();
@@ -153,7 +154,7 @@ class AbEvalPipelineSkipBaselineTest {
         assertThat(abRun.getStatus()).isEqualTo("COMPLETED");
 
         // Judge invoked exactly ONCE per scenario (candidate only) — NOT twice (baseline skipped).
-        verify(evalJudgeTool, times(3)).judge(any(), any());
+        verify(evalJudgeTool, times(3)).judge(any(), any(), anyBoolean());
         // Engine built once per scenario (candidate only), not 6×.
         verify(evalEngineFactory, times(3)).buildEvalEngine(any());
         // Back-write guarded off when skipBaseline: the carried winner score must not
@@ -181,7 +182,7 @@ class AbEvalPipelineSkipBaselineTest {
         // Baseline measured fresh: same 2/3 stub → 66.67%, NOT a cached constant.
         assertThat(abRun.getBaselinePassRate()).isCloseTo(66.666, org.assertj.core.data.Offset.offset(0.01));
         // Judge invoked twice per scenario (baseline + candidate) = 6.
-        verify(evalJudgeTool, times(6)).judge(any(), any());
+        verify(evalJudgeTool, times(6)).judge(any(), any(), anyBoolean());
         verify(evalEngineFactory, times(6)).buildEvalEngine(any());
         // Back-write attempted when not skipping.
         verify(evalDatasetVersionRepository).findById("dv-1");
