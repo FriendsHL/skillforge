@@ -62,6 +62,36 @@ public class AbEvalPipeline {
      */
     static final String BASELINE_CACHED_STATUS = "CACHED";
 
+    /**
+     * AUTOEVOLVE-AGENT-LEVEL-BUNDLE Phase 1 (§7 B1) — composite-score pass
+     * threshold. Mirrors {@code EvalJudgeTool}'s {@code output.setPass(compositeScore >= 40.0)}
+     * so the whole-agent A/B channel counts passes IDENTICALLY to the prompt path
+     * (which counts {@code judge.isPass()}). {@link AbScenarioResult.RunResult#oracleScore()}
+     * stores the FINAL (post-meta-judge) composite score, so
+     * {@code oracleScore >= PASS_COMPOSITE_THRESHOLD} reproduces {@code isPass()}
+     * exactly for non-error scenarios — the numeric-parity guarantee AC-1 asserts.
+     */
+    public static final double PASS_COMPOSITE_THRESHOLD = 40.0;
+
+    /**
+     * Shared pass predicate over a per-scenario {@link AbScenarioResult.RunResult}
+     * (§7 B1). A side "passes" iff it did not error/timeout/skip AND its composite
+     * score crosses {@link #PASS_COMPOSITE_THRESHOLD}. Used by
+     * {@code AgentEvolveAbEvalService} to aggregate the whole-agent pass-rate so the
+     * count matches the prompt path's {@code judge.isPass()} counting.
+     */
+    public static boolean isPass(AbScenarioResult.RunResult run) {
+        if (run == null) {
+            return false;
+        }
+        String status = run.status();
+        if (status == null || "ERROR".equals(status) || "TIMEOUT".equals(status)
+                || BASELINE_CACHED_STATUS.equals(status)) {
+            return false;
+        }
+        return run.oracleScore() >= PASS_COMPOSITE_THRESHOLD;
+    }
+
     private final ScenarioLoader scenarioLoader;
     private final SandboxSkillRegistryFactory sandboxFactory;
     private final EvalEngineFactory evalEngineFactory;
@@ -627,6 +657,108 @@ public class AbEvalPipeline {
                 } catch (Exception e) {
                     log.error("BehaviorRule A/B scenario {} failed: {}",
                             scenario.getId(), e.getMessage(), e);
+                    return new AbScenarioResult(
+                            scenario.getId(), scenario.getName(),
+                            new AbScenarioResult.RunResult("ERROR", 0.0),
+                            new AbScenarioResult.RunResult("ERROR", 0.0));
+                } finally {
+                    concurrency.release();
+                }
+            }, loopExecutor);
+            futures.add(fut);
+        }
+        CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+        List<AbScenarioResult> out = new ArrayList<>(futures.size());
+        for (CompletableFuture<AbScenarioResult> f : futures) {
+            out.add(f.join());
+        }
+        return out;
+    }
+
+    /**
+     * AUTOEVOLVE-AGENT-LEVEL-BUNDLE Phase 1 (§2.2 / §7 B1 / W2) — def-based A/B
+     * sibling of {@link #runWithExplicitDefs}, adding the candidate-only
+     * winner-carry-forward skip the prompt path has. Runs every scenario against
+     * {@code candidateDef} (and, unless a cached rate is supplied, against
+     * {@code baselineDef}), returning merged per-scenario results.
+     *
+     * <p><b>Why a NEW method, not a refactor of {@link #runWithExplicitDefs}</b>
+     * (§7 B1): the behavior_rule path that calls {@code runWithExplicitDefs} uses
+     * {@code explain=false} + an {@code oracleScore>=0.5} caller predicate; folding
+     * that into a shared method would silently change its byte behaviour. This
+     * sibling takes an explicit {@code explain} flag and judges with
+     * {@code judge(scenario, run, explain)} so the agent caller (explain=true) is
+     * byte-identical to the prompt path's {@code judge(scenario, run, true)}.
+     *
+     * <p><b>Persistence contract</b>: pure compute — does NOT touch any
+     * {@code t_*_ab_run} row (same SRP boundary as {@code runWithExplicitDefs}).
+     * The caller ({@code AgentEvolveAbEvalService}) owns ALL persistence and
+     * aggregates the pass-rate via {@link #isPass(AbScenarioResult.RunResult)}.
+     *
+     * <p>Returns {@code List<AbScenarioResult>} from day one (§7 W2) so Phase 2's
+     * target/general partition can group per-scenario without changing this
+     * signature.
+     *
+     * @param abRunId            sandbox-naming prefix (suffixed {@code ":b"} / {@code ":c"})
+     * @param scenarios          scenarios to run (both sides unless skipped)
+     * @param baselineDef        baseline-side agent definition (ignored when {@code cachedBaselineRate != null})
+     * @param candidateDef       candidate-side agent definition
+     * @param cachedBaselineRate non-null → CANDIDATE-ONLY; baseline side filled with
+     *                           the {@link #BASELINE_CACHED_STATUS} sentinel (the
+     *                           run-level rate carries the cached value, set by the caller)
+     * @param explain            judge explain flag; agent caller passes {@code true} (§7 B1)
+     * @return per-scenario results in original order; per-scenario error → status="ERROR" both sides
+     */
+    public List<AbScenarioResult> runWithDefs(
+            String abRunId,
+            List<EvalScenarioEntity> scenarios,
+            AgentDefinition baselineDef,
+            AgentDefinition candidateDef,
+            Double cachedBaselineRate,
+            boolean explain) {
+        if (scenarios == null || scenarios.isEmpty()) {
+            return List.of();
+        }
+        final boolean skipBaseline = cachedBaselineRate != null;
+        // Same eval-overrides (temperature=0.0, strip execution_mode) as the prompt
+        // / behavior_rule paths — keeps the A/B comparison deterministic.
+        AgentDefinition bEval = copyWithoutEvalOverrides(baselineDef);
+        AgentDefinition cEval = copyWithoutEvalOverrides(candidateDef);
+
+        final Semaphore concurrency = new Semaphore(scenarioConcurrency);
+        List<CompletableFuture<AbScenarioResult>> futures = new ArrayList<>(scenarios.size());
+
+        for (EvalScenarioEntity entity : scenarios) {
+            EvalScenario scenario = toEvalScenario(entity);
+            try {
+                concurrency.acquire();
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException(
+                        "Interrupted while throttling A/B scenario submit (abRunId=" + abRunId + ")", ie);
+            }
+            CompletableFuture<AbScenarioResult> fut = CompletableFuture.supplyAsync(() -> {
+                try {
+                    AbScenarioResult.RunResult baselineResult;
+                    if (skipBaseline) {
+                        // Candidate-only winner-carry-forward — never re-measure the
+                        // baseline (same sentinel as runWithScenarios BUG-1 path).
+                        baselineResult = new AbScenarioResult.RunResult(BASELINE_CACHED_STATUS, 0.0);
+                    } else {
+                        ScenarioRunResult bRun = runSingleScenario(abRunId + ":b", scenario, bEval);
+                        EvalJudgeOutput bJudge = evalJudgeTool.judge(scenario, bRun, explain);
+                        baselineResult = new AbScenarioResult.RunResult(
+                                bRun.getStatus(), bJudge.getCompositeScore(), bJudge.getMetaJudgeRationale());
+                    }
+                    ScenarioRunResult cRun = runSingleScenario(abRunId + ":c", scenario, cEval);
+                    EvalJudgeOutput cJudge = evalJudgeTool.judge(scenario, cRun, explain);
+                    return new AbScenarioResult(
+                            scenario.getId(), scenario.getName(),
+                            baselineResult,
+                            new AbScenarioResult.RunResult(cRun.getStatus(),
+                                    cJudge.getCompositeScore(), cJudge.getMetaJudgeRationale()));
+                } catch (Exception e) {
+                    log.error("Agent A/B scenario {} failed: {}", scenario.getId(), e.getMessage(), e);
                     return new AbScenarioResult(
                             scenario.getId(), scenario.getName(),
                             new AbScenarioResult.RunResult("ERROR", 0.0),

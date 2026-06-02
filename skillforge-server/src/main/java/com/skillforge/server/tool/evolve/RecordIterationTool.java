@@ -82,9 +82,8 @@ public class RecordIterationTool implements Tool {
         properties.put("iteration", Map.of("type", "integer",
                 "description", "1-based iteration index."));
         properties.put("surface", Map.of("type", "string",
-                "enum", List.of(EvolveSurface.PROMPT.wire(),
-                        EvolveSurface.SKILL.wire(),
-                        EvolveSurface.BEHAVIOR_RULE.wire()),
+                // No "agent" here (§7 B2): V1 records per-surface iterations only.
+                "enum", EvolveSurface.v1NonAgentWireValues(),
                 "description", "Optimisation surface."));
         properties.put("changeDesc", Map.of("type", "string",
                 "description", "Short description of what this candidate changed."));
@@ -140,8 +139,17 @@ public class RecordIterationTool implements Tool {
             }
             EvolveSurface surface = EvolveSurface.fromWire(trimToNull(input.get("surface")));
             if (surface == null) {
+                // §7 B2 / W-WARN-1: this tool doesn't accept agent — don't list it.
                 return SkillResult.validationError(
-                        "surface is required and must be one of: " + EvolveSurface.acceptedValues());
+                        "surface is required and must be one of: "
+                                + EvolveSurface.v1NonAgentAcceptedValues());
+            }
+            // §7 B2: V1 records per-surface iterations only — reject surface=agent
+            // cleanly (the orchestrator records the per-surface change it made).
+            if (surface == EvolveSurface.AGENT) {
+                return SkillResult.validationError(
+                        "surface=agent is not supported by RecordIteration in V1: record the "
+                                + "per-surface change (prompt / skill / behavior_rule) you made this turn");
             }
             String changeDesc = trimToNull(input.get("changeDesc"));
             if (changeDesc == null) {

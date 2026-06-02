@@ -5,10 +5,12 @@ import com.skillforge.core.model.ToolSchema;
 import com.skillforge.core.skill.SkillContext;
 import com.skillforge.core.skill.SkillResult;
 import com.skillforge.core.skill.Tool;
+import com.skillforge.server.entity.AgentEvolveAbRunEntity;
 import com.skillforge.server.entity.BehaviorRuleAbRunEntity;
 import com.skillforge.server.entity.PromptAbRunEntity;
 import com.skillforge.server.entity.SkillAbRunEntity;
 import com.skillforge.server.improve.BehaviorRulePromotionService;
+import com.skillforge.server.repository.AgentEvolveAbRunRepository;
 import com.skillforge.server.repository.BehaviorRuleAbRunRepository;
 import com.skillforge.server.repository.PromptAbRunRepository;
 import com.skillforge.server.repository.SkillAbRunRepository;
@@ -77,6 +79,7 @@ public class GetAbResultTool implements Tool {
     private final PromptAbRunRepository promptAbRunRepository;
     private final SkillAbRunRepository skillAbRunRepository;
     private final BehaviorRuleAbRunRepository behaviorRuleAbRunRepository;
+    private final AgentEvolveAbRunRepository agentEvolveAbRunRepository;
     private final ObjectMapper objectMapper;
     private final long blockTimeoutMs;
     private final long pollIntervalMs;
@@ -84,21 +87,24 @@ public class GetAbResultTool implements Tool {
     public GetAbResultTool(PromptAbRunRepository promptAbRunRepository,
                            SkillAbRunRepository skillAbRunRepository,
                            BehaviorRuleAbRunRepository behaviorRuleAbRunRepository,
+                           AgentEvolveAbRunRepository agentEvolveAbRunRepository,
                            ObjectMapper objectMapper) {
         this(promptAbRunRepository, skillAbRunRepository, behaviorRuleAbRunRepository,
-                objectMapper, DEFAULT_BLOCK_TIMEOUT_MS, DEFAULT_POLL_INTERVAL_MS);
+                agentEvolveAbRunRepository, objectMapper, DEFAULT_BLOCK_TIMEOUT_MS, DEFAULT_POLL_INTERVAL_MS);
     }
 
     /** Test constructor — small timeout/interval so blocking-wait tests run fast. */
     GetAbResultTool(PromptAbRunRepository promptAbRunRepository,
                     SkillAbRunRepository skillAbRunRepository,
                     BehaviorRuleAbRunRepository behaviorRuleAbRunRepository,
+                    AgentEvolveAbRunRepository agentEvolveAbRunRepository,
                     ObjectMapper objectMapper,
                     long blockTimeoutMs,
                     long pollIntervalMs) {
         this.promptAbRunRepository = promptAbRunRepository;
         this.skillAbRunRepository = skillAbRunRepository;
         this.behaviorRuleAbRunRepository = behaviorRuleAbRunRepository;
+        this.agentEvolveAbRunRepository = agentEvolveAbRunRepository;
         this.objectMapper = objectMapper;
         this.blockTimeoutMs = blockTimeoutMs;
         this.pollIntervalMs = pollIntervalMs;
@@ -133,10 +139,8 @@ public class GetAbResultTool implements Tool {
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put("surface", Map.of(
                 "type", "string",
-                "enum", List.of(EvolveSurface.PROMPT.wire(),
-                        EvolveSurface.SKILL.wire(),
-                        EvolveSurface.BEHAVIOR_RULE.wire()),
-                "description", "Optimisation surface: \"prompt\", \"skill\", or \"behavior_rule\"."
+                "enum", EvolveSurface.agentAbWireValues(),
+                "description", "Optimisation surface: \"prompt\", \"skill\", \"behavior_rule\", or \"agent\"."
         ));
         properties.put("abRunId", Map.of(
                 "type", "string",
@@ -188,6 +192,7 @@ public class GetAbResultTool implements Tool {
                     case PROMPT -> readPrompt(abRunId, targetAgentId);
                     case SKILL -> readSkill(abRunId, targetAgentId);
                     case BEHAVIOR_RULE -> readBehaviorRule(abRunId, targetAgentId);
+                    case AGENT -> readAgent(abRunId, targetAgentId);
                 };
                 if (result == null) {
                     return SkillResult.error("A/B run not found for surface=" + surface.wire()
@@ -284,6 +289,40 @@ public class GetAbResultTool implements Tool {
         r.put("targetDeltaPp", run.getTargetDeltaPp());
         r.put("regressionDeltaPp", run.getRegressionDeltaPp());
         r.put("perScenario", null);
+        return r;
+    }
+
+    /**
+     * AUTOEVOLVE-AGENT-LEVEL-BUNDLE — whole-agent A/B read. Maps the
+     * {@code t_agent_evolve_ab_run} row to {@code {status, baselineScore,
+     * candidateScore, delta, deltaPassRate, wouldPromote, perScenario}} with the
+     * same ownership-guard pattern as the other surfaces.
+     *
+     * <p>{@code wouldPromote} is advisory only — there is NO agent-surface promote
+     * gate in V1 (PromoteCandidate rejects surface=agent, §7 B2). It reports a
+     * positive delta so the orchestrator can reason about keeping the bundle; it
+     * does not imply a promotable candidate.
+     */
+    private Map<String, Object> readAgent(String abRunId, String targetAgentId) {
+        AgentEvolveAbRunEntity run = agentEvolveAbRunRepository.findById(abRunId).orElse(null);
+        if (run == null) {
+            return null;
+        }
+        // SECURITY: validate ownership before exposing any score data.
+        Map<String, Object> ownershipViolation = checkOwnership(
+                "agent", abRunId, run.getAgentId(), targetAgentId);
+        if (ownershipViolation != null) {
+            return ownershipViolation;
+        }
+        if (!isTerminal(run.getStatus())) {
+            return running(run.getStatus());
+        }
+        Map<String, Object> r = base(run.getStatus(),
+                run.getBaselinePassRate(), run.getCandidatePassRate(), run.getDeltaPassRate());
+        Double delta = run.getDeltaPassRate();
+        // Advisory only — no agent-surface promote gate exists in V1.
+        r.put("wouldPromote", delta != null && delta > 0.0);
+        r.put("perScenario", parsePerScenario(run.getAbScenarioResultsJson()));
         return r;
     }
 

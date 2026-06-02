@@ -140,9 +140,9 @@ public class GenerateCandidateTool implements Tool {
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put("surface", Map.of(
                 "type", "string",
-                "enum", java.util.List.of(EvolveSurface.PROMPT.wire(),
-                        EvolveSurface.SKILL.wire(),
-                        EvolveSurface.BEHAVIOR_RULE.wire()),
+                // No "agent" here (§7 B2): you don't generate a whole-agent candidate —
+                // the orchestrator generates per-surface and composes a bundle itself.
+                "enum", EvolveSurface.v1NonAgentWireValues(),
                 "description", "Optimisation surface: \"prompt\", \"skill\", or \"behavior_rule\"."
         ));
         properties.put("issue", Map.of(
@@ -224,6 +224,17 @@ public class GenerateCandidateTool implements Tool {
                 return SkillResult.validationError("targetAgentId is required");
             }
 
+            // AUTOEVOLVE-AGENT-LEVEL-BUNDLE (§2.4 / §7 B2): there is no whole-agent
+            // generation — the orchestrator generates per-surface candidates and
+            // composes a bundle itself, then passes it to TriggerAbEval(surface=agent).
+            // Reject cleanly rather than pretending to generate an "agent candidate".
+            if (surface == EvolveSurface.AGENT) {
+                return SkillResult.validationError(
+                        "surface=agent is not supported by GenerateCandidate: generate per-surface "
+                                + "candidates (prompt / skill / behavior_rule) and compose them into a "
+                                + "bundle, then call TriggerAbEval(surface=agent) with that bundle");
+            }
+
             // Resolve the audit-anchor eventId from ONE of two modes:
             //   direct mode      → explicit "eventId"
             //   report-issue mode → "reportId" + "issueId" → existing bridge mints it
@@ -278,6 +289,10 @@ public class GenerateCandidateTool implements Tool {
                     yield r.promptVersionId();
                 }
                 case SKILL -> generateSkillDraft(input, issue, eventId);
+                // AGENT is rejected by the early guard above; this arm only keeps
+                // the switch exhaustive over EvolveSurface.
+                case AGENT -> throw new IllegalStateException(
+                        "agent surface must be rejected before the generation switch");
             };
 
             log.info("[GenerateCandidate] surface={} targetAgentId={} eventId={} -> candidateId={}",

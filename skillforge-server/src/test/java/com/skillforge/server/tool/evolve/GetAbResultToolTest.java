@@ -35,6 +35,7 @@ class GetAbResultToolTest {
     @Mock private PromptAbRunRepository promptAbRunRepository;
     @Mock private SkillAbRunRepository skillAbRunRepository;
     @Mock private BehaviorRuleAbRunRepository behaviorRuleAbRunRepository;
+    @Mock private com.skillforge.server.repository.AgentEvolveAbRunRepository agentEvolveAbRunRepository;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private GetAbResultTool tool;
@@ -43,7 +44,7 @@ class GetAbResultToolTest {
     void setUp() {
         // small block timeout/interval so the RUNNING test doesn't wait 90s
         tool = new GetAbResultTool(promptAbRunRepository, skillAbRunRepository,
-                behaviorRuleAbRunRepository, objectMapper, 80L, 20L);
+                behaviorRuleAbRunRepository, agentEvolveAbRunRepository, objectMapper, 80L, 20L);
     }
 
     /** Helper: build input map with all required fields. */
@@ -240,6 +241,49 @@ class GetAbResultToolTest {
         when(behaviorRuleAbRunRepository.findById("br-x")).thenReturn(Optional.of(e));
 
         SkillResult result = run("behavior_rule", "br-x", "42"); // caller claims agent 42
+
+        assertThat(result.isSuccess()).isTrue();
+        String out = result.getOutput();
+        assertThat(out).contains("\"status\":\"rejected\"");
+        assertThat(out).contains("does not belong to targetAgentId");
+        assertThat(out).doesNotContain("baselineScore");
+        assertThat(out).doesNotContain("wouldPromote");
+    }
+
+    @Test
+    @DisplayName("agent COMPLETED → scores + advisory wouldPromote (positive delta)")
+    void agentCompleted_returnsScores() {
+        com.skillforge.server.entity.AgentEvolveAbRunEntity e =
+                new com.skillforge.server.entity.AgentEvolveAbRunEntity();
+        e.setAgentId("42");
+        e.setStatus("COMPLETED");
+        e.setBaselinePassRate(50.0);
+        e.setCandidatePassRate(66.0);
+        e.setDeltaPassRate(16.0);
+        when(agentEvolveAbRunRepository.findById("ae-1")).thenReturn(Optional.of(e));
+
+        SkillResult result = run("agent", "ae-1", "42");
+
+        String out = result.getOutput();
+        assertThat(out).contains("\"baselineScore\":50.0");
+        assertThat(out).contains("\"candidateScore\":66.0");
+        assertThat(out).contains("\"deltaPassRate\":16.0");
+        assertThat(out).contains("\"wouldPromote\":true");   // advisory: delta > 0
+    }
+
+    @Test
+    @DisplayName("SECURITY agent: run belongs to another agent → rejected, no scores returned")
+    void agentCrossAgent_rejected() {
+        com.skillforge.server.entity.AgentEvolveAbRunEntity e =
+                new com.skillforge.server.entity.AgentEvolveAbRunEntity();
+        e.setAgentId("99");          // belongs to agent 99
+        e.setStatus("COMPLETED");
+        e.setBaselinePassRate(50.0);
+        e.setCandidatePassRate(66.0);
+        e.setDeltaPassRate(16.0);
+        when(agentEvolveAbRunRepository.findById("ae-x")).thenReturn(Optional.of(e));
+
+        SkillResult result = run("agent", "ae-x", "42"); // caller claims agent 42
 
         assertThat(result.isSuccess()).isTrue();
         String out = result.getOutput();

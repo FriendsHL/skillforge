@@ -475,6 +475,7 @@ public class SkillForgeConfig {
             com.skillforge.server.improve.PromptImproverService promptImproverService,
             com.skillforge.server.improve.SkillDraftService skillDraftService,
             com.skillforge.server.improve.behavior.BehaviorRuleAbEvalService behaviorRuleAbEvalService,
+            com.skillforge.server.improve.agent.AgentEvolveAbEvalService agentEvolveAbEvalService,
             com.skillforge.server.repository.SkillDraftRepository skillDraftRepository,
             com.skillforge.server.repository.BehaviorRuleVersionRepository behaviorRuleVersionRepository,
             FlywheelRunService flywheelRunService,
@@ -484,7 +485,7 @@ public class SkillForgeConfig {
         com.skillforge.server.tool.evolve.TriggerAbEvalTool tool =
                 new com.skillforge.server.tool.evolve.TriggerAbEvalTool(
                         promptImproverService, skillDraftService, behaviorRuleAbEvalService,
-                        skillDraftRepository, behaviorRuleVersionRepository,
+                        agentEvolveAbEvalService, skillDraftRepository, behaviorRuleVersionRepository,
                         flywheelRunService, abBudgetPerRun, objectMapper);
         skillRegistry.registerTool(tool);
         log.info("Registered TriggerAbEvalTool into SkillRegistry (FR-C7 abBudgetPerRun={})",
@@ -505,12 +506,13 @@ public class SkillForgeConfig {
             com.skillforge.server.repository.PromptAbRunRepository promptAbRunRepository,
             com.skillforge.server.repository.SkillAbRunRepository skillAbRunRepository,
             com.skillforge.server.repository.BehaviorRuleAbRunRepository behaviorRuleAbRunRepository,
+            com.skillforge.server.repository.AgentEvolveAbRunRepository agentEvolveAbRunRepository,
             ObjectMapper objectMapper,
             SkillRegistry skillRegistry) {
         com.skillforge.server.tool.evolve.GetAbResultTool tool =
                 new com.skillforge.server.tool.evolve.GetAbResultTool(
                         promptAbRunRepository, skillAbRunRepository,
-                        behaviorRuleAbRunRepository, objectMapper);
+                        behaviorRuleAbRunRepository, agentEvolveAbRunRepository, objectMapper);
         skillRegistry.registerTool(tool);
         log.info("Registered GetAbResultTool into SkillRegistry");
         return tool;

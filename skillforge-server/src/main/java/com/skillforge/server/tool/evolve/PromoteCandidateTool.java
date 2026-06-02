@@ -106,9 +106,9 @@ public class PromoteCandidateTool implements Tool {
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put("surface", Map.of(
                 "type", "string",
-                "enum", List.of(EvolveSurface.PROMPT.wire(),
-                        EvolveSurface.SKILL.wire(),
-                        EvolveSurface.BEHAVIOR_RULE.wire()),
+                // No "agent" here (§7 B2): V1 has no atomic whole-bundle promote —
+                // promote each surface of the winning bundle separately.
+                "enum", EvolveSurface.v1NonAgentWireValues(),
                 "description", "Optimisation surface: \"prompt\", \"skill\", or \"behavior_rule\"."
         ));
         properties.put("candidateId", Map.of(
@@ -140,8 +140,10 @@ public class PromoteCandidateTool implements Tool {
             }
             EvolveSurface surface = EvolveSurface.fromWire(trimToNull(input.get("surface")));
             if (surface == null) {
+                // §7 B2 / W-WARN-1: this tool doesn't accept agent — don't list it.
                 return SkillResult.validationError(
-                        "surface is required and must be one of: " + EvolveSurface.acceptedValues());
+                        "surface is required and must be one of: "
+                                + EvolveSurface.v1NonAgentAcceptedValues());
             }
             String candidateId = trimToNull(input.get("candidateId"));
             if (candidateId == null) {
@@ -159,6 +161,11 @@ public class PromoteCandidateTool implements Tool {
                 case PROMPT -> promotePrompt(candidateId, targetAgentId, abRunId);
                 case SKILL -> promoteSkill(candidateId, targetAgentId, abRunId, userId);
                 case BEHAVIOR_RULE -> promoteBehaviorRule(candidateId, targetAgentId, userId);
+                // §7 B2: V1 has no atomic whole-agent/bundle promote. Reject cleanly
+                // (not a crash) and tell the orchestrator to promote per-surface.
+                case AGENT -> rejected(
+                        "agent surface not supported by PromoteCandidate in V1: promote each surface "
+                                + "(prompt / skill / behavior_rule) of the winning bundle separately");
             };
         } catch (IllegalArgumentException e) {
             return SkillResult.validationError(e.getMessage());

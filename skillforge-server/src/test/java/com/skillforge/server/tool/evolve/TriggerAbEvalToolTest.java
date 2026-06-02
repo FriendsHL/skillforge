@@ -47,6 +47,7 @@ class TriggerAbEvalToolTest {
     @Mock private PromptImproverService promptImproverService;
     @Mock private SkillDraftService skillDraftService;
     @Mock private BehaviorRuleAbEvalService behaviorRuleAbEvalService;
+    @Mock private com.skillforge.server.improve.agent.AgentEvolveAbEvalService agentEvolveAbEvalService;
     @Mock private SkillDraftRepository skillDraftRepository;
     @Mock private BehaviorRuleVersionRepository behaviorRuleVersionRepository;
     @Mock private FlywheelRunService flywheelRunService;
@@ -59,7 +60,7 @@ class TriggerAbEvalToolTest {
     @BeforeEach
     void setUp() {
         tool = new TriggerAbEvalTool(promptImproverService, skillDraftService,
-                behaviorRuleAbEvalService, skillDraftRepository,
+                behaviorRuleAbEvalService, agentEvolveAbEvalService, skillDraftRepository,
                 behaviorRuleVersionRepository, flywheelRunService, AB_BUDGET, objectMapper);
     }
 
@@ -399,6 +400,64 @@ class TriggerAbEvalToolTest {
         assertThat(result.getOutput()).contains("\"abRunId\":\"prompt-ab-ok\"");
         verify(flywheelRunService).countEvolveAbTriggersForAgent(42L);
         verify(flywheelRunService).countEvolveAbTriggers("evolve-1");
+    }
+
+    // ─────────────────── agent surface (whole-agent bundle A/B) ───────────────────
+
+    @Test
+    @DisplayName("agent surface: routes to startAgentAb with parsed bundles (full run, no cached rate)")
+    void agentSurface_routesToStartAgentAb() {
+        when(agentEvolveAbEvalService.startAgentAb(any(), any(), eq("42"), eq("ds-1"), isNull()))
+                .thenReturn("agent-ab-1");
+
+        Map<String, Object> input = new LinkedHashMap<>();
+        input.put("surface", "agent");
+        input.put("targetAgentId", "42");
+        input.put("candidateBundle", Map.of("promptVersionId", "pv-cand"));
+        input.put("baselineBundle", Map.of("promptVersionId", "pv-best"));
+        input.put("datasetVersionId", "ds-1");
+
+        SkillResult result = run(input);
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.getOutput()).contains("\"abRunId\":\"agent-ab-1\"");
+        assertThat(result.getOutput()).contains("\"surface\":\"agent\"");
+        verify(agentEvolveAbEvalService).startAgentAb(any(), any(), eq("42"), eq("ds-1"), isNull());
+        // agent surface does not use the per-surface candidate repos / services
+        verifyNoInteractions(promptImproverService, skillDraftService, behaviorRuleAbEvalService);
+    }
+
+    @Test
+    @DisplayName("W-WARN-2 agent surface: present-but-out-of-range cachedBaselineScore → validationError (no run)")
+    void agentSurface_cachedScoreOutOfRange_validationError() {
+        Map<String, Object> input = new LinkedHashMap<>();
+        input.put("surface", "agent");
+        input.put("targetAgentId", "42");
+        input.put("candidateBundle", Map.of("promptVersionId", "pv-cand"));
+        input.put("baselineBundle", Map.of("promptVersionId", "pv-best"));
+        input.put("datasetVersionId", "ds-1");
+        input.put("cachedBaselineScore", 150.0);   // present but out of [0,100]
+
+        SkillResult result = run(input);
+
+        assertThat(result.isSuccess()).isFalse();
+        assertThat(result.getError()).contains("cachedBaselineScore must be a number in [0, 100]");
+        // Must NOT silently degrade to a full A/B run.
+        verify(agentEvolveAbEvalService, never()).startAgentAb(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("agent surface: missing candidateBundle → validationError")
+    void agentSurface_missingBundle_validationError() {
+        Map<String, Object> input = new LinkedHashMap<>();
+        input.put("surface", "agent");
+        input.put("targetAgentId", "42");
+        input.put("datasetVersionId", "ds-1");
+
+        SkillResult result = run(input);
+
+        assertThat(result.isSuccess()).isFalse();
+        verify(agentEvolveAbEvalService, never()).startAgentAb(any(), any(), any(), any(), any());
     }
 
     @Test
