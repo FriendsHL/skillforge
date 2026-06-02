@@ -46,6 +46,25 @@ function formatDelta(delta: number): string {
   return '±0pp';
 }
 
+/** Colour expressing a candidate's position relative to baseline: up / down / flat. */
+function deltaColor(delta: number): string {
+  if (delta > 0) return 'var(--color-success,#5c8a4a)';
+  if (delta < 0) return 'var(--color-error,#b8412f)';
+  return 'var(--text-tertiary,#7a7770)';
+}
+
+/**
+ * Baseline is measured once per run (hill-climb), so every iteration carries the
+ * same baselineScore. Return the first non-null one as the run's baseline; null
+ * when no iteration recorded a baseline (baseline unavailable).
+ */
+function runBaseline(run: EvolveRunDetail): number | null {
+  for (const it of run.iterations) {
+    if (it.baselineScore != null) return it.baselineScore;
+  }
+  return null;
+}
+
 function buildSeries(run: EvolveRunDetail, colorIdx: number): object {
   const color = runColor(colorIdx);
   const label =
@@ -53,13 +72,26 @@ function buildSeries(run: EvolveRunDetail, colorIdx: number): object {
       ? `${run.agentName} · ${run.evolveRunId.slice(0, 6)}`
       : run.evolveRunId.slice(0, 8);
 
-  const data = run.iterations.map((iter: EvolveIteration) => ({
-    value: [iter.iteration, iter.candidateScore],
-    // Store full iteration metadata for tooltip access.
-    iterMeta: iter,
-  }));
+  const data = run.iterations.map((iter: EvolveIteration) => {
+    // Marker colour encodes rise/fall vs baseline (delta = candidate − baseline);
+    // fill encodes whether the candidate was kept (became the new carry-forward
+    // best). So a hollow green point = above baseline but not a new best.
+    const sign = deltaColor(iter.delta);
+    return {
+      value: [iter.iteration, iter.candidateScore],
+      // Store full iteration metadata for tooltip access.
+      iterMeta: iter,
+      itemStyle: {
+        color: iter.kept ? sign : 'transparent',
+        borderColor: sign,
+        borderWidth: 2,
+      },
+    };
+  });
 
-  return {
+  const baseline = runBaseline(run);
+
+  const series: Record<string, unknown> = {
     name: label,
     type: 'line',
     data,
@@ -75,9 +107,27 @@ function buildSeries(run: EvolveRunDetail, colorIdx: number): object {
       const kept = params?.data?.iterMeta?.kept;
       return kept ? 9 : 7;
     },
-    // Per-point style: kept → solid fill, not-kept → hollow (border only).
-    markPoint: undefined,
   };
+
+  // Constant horizontal reference line at the run's baseline. Every iteration's
+  // point sits above (rise) or below (fall) this line — that's the comparison
+  // the trajectory is meant to convey.
+  if (baseline != null) {
+    series.markLine = {
+      silent: true,
+      symbol: 'none',
+      lineStyle: { color, type: 'dashed', width: 1.5, opacity: 0.85 },
+      label: {
+        formatter: `baseline ${baseline.toFixed(2)}`,
+        position: 'insideStartTop',
+        color: 'var(--text-tertiary, #7a7770)',
+        fontSize: 11,
+      },
+      data: [{ yAxis: baseline }],
+    };
+  }
+
+  return series;
 }
 
 const EvolveTrajectoryChart: React.FC<EvolveTrajectoryChartProps> = ({
@@ -170,16 +220,15 @@ const EvolveTrajectoryChart: React.FC<EvolveTrajectoryChartProps> = ({
           if (!meta) return '';
 
           const kept = meta.kept
-            ? '<span style="color:var(--color-success,#5c8a4a)">✓ kept</span>'
+            ? '<span style="color:var(--color-success,#5c8a4a)">✓ kept (new best)</span>'
             : '<span style="color:var(--text-tertiary,#7a7770)">✗ not kept</span>';
           const delta = formatDelta(meta.delta);
-          const deltaColor = meta.delta > 0
-            ? 'var(--color-success,#5c8a4a)'
-            : meta.delta < 0
-              ? 'var(--color-error,#b8412f)'
-              : 'var(--text-secondary,#5d5952)';
+          const deltaCol = deltaColor(meta.delta);
           const score = meta.candidateScore != null
             ? meta.candidateScore.toFixed(3)
+            : '—';
+          const baseline = meta.baselineScore != null
+            ? meta.baselineScore.toFixed(3)
             : '—';
 
           return `
@@ -188,8 +237,9 @@ const EvolveTrajectoryChart: React.FC<EvolveTrajectoryChartProps> = ({
                 Iter ${meta.iteration} · <span style="font-family:var(--font-mono,monospace);font-size:11px">${meta.surface}</span>
               </div>
               <div style="margin-bottom:4px;word-break:break-word">${meta.changeDesc}</div>
+              <div>Baseline: <strong>${baseline}</strong></div>
               <div>Score: <strong>${score}</strong></div>
-              <div>Delta: <strong style="color:${deltaColor}">${delta}</strong></div>
+              <div>vs baseline: <strong style="color:${deltaCol}">${delta}</strong></div>
               <div>${kept}</div>
             </div>
           `.trim();

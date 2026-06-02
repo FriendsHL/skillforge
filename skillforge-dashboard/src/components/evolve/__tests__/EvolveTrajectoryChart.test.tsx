@@ -132,6 +132,60 @@ describe('EvolveTrajectoryChart', () => {
     expect(meta.kept).toBe(false);
   });
 
+  it('draws a horizontal baseline markLine at the run baselineScore', () => {
+    const detail = makeDetail({
+      iterations: [
+        makeIteration({ iteration: 1, baselineScore: 25, candidateScore: 16.67, delta: -8.33 }),
+        makeIteration({ iteration: 2, baselineScore: 25, candidateScore: 33.33, delta: 8.33 }),
+      ],
+    });
+    render(<EvolveTrajectoryChart runs={[detail]} />);
+    const option = JSON.parse(
+      screen.getByTestId('echarts-mock').getAttribute('data-option') ?? '{}',
+    ) as {
+      series: Array<{ markLine?: { data: Array<{ yAxis: number }> } }>;
+    };
+    const markLine = option.series[0].markLine;
+    expect(markLine).toBeDefined();
+    // baseline is measured once → constant; line sits at that y value.
+    expect(markLine?.data[0].yAxis).toBe(25);
+  });
+
+  it('omits the baseline markLine when no iteration has a baselineScore', () => {
+    const detail = makeDetail({
+      iterations: [makeIteration({ iteration: 1, baselineScore: null })],
+    });
+    render(<EvolveTrajectoryChart runs={[detail]} />);
+    const option = JSON.parse(
+      screen.getByTestId('echarts-mock').getAttribute('data-option') ?? '{}',
+    ) as { series: Array<{ markLine?: unknown }> };
+    expect(option.series[0].markLine).toBeUndefined();
+  });
+
+  it('colors each marker by its sign vs baseline (rise green / fall red)', () => {
+    const detail = makeDetail({
+      iterations: [
+        makeIteration({ iteration: 1, delta: -8.33, kept: false }), // fell below baseline, not kept → hollow red
+        makeIteration({ iteration: 2, delta: 8.33, kept: true }),   // rose above baseline, kept → solid green
+      ],
+    });
+    render(<EvolveTrajectoryChart runs={[detail]} />);
+    const option = JSON.parse(
+      screen.getByTestId('echarts-mock').getAttribute('data-option') ?? '{}',
+    ) as {
+      series: Array<{
+        data: Array<{ itemStyle: { color: string; borderColor: string } }>;
+      }>;
+    };
+    const [down, up] = option.series[0].data;
+    // fell: red border, hollow (transparent fill because not kept)
+    expect(down.itemStyle.borderColor).toContain('--color-error');
+    expect(down.itemStyle.color).toBe('transparent');
+    // rose: green border, solid fill because kept
+    expect(up.itemStyle.borderColor).toContain('--color-success');
+    expect(up.itemStyle.color).toContain('--color-success');
+  });
+
   it('shows legend when multiple runs are provided', () => {
     const runs = [makeDetail({ evolveRunId: 'run-001' }), makeDetail({ evolveRunId: 'run-002' })];
     render(<EvolveTrajectoryChart runs={runs} />);
