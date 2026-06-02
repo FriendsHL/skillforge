@@ -1248,6 +1248,9 @@ public class SkillForgeConfig {
                     providerConfig.getBaseUrl(),
                     providerConfig.getModel()
             );
+            if (providerConfig.getChatPath() != null && !providerConfig.getChatPath().isBlank()) {
+                modelConfig.setChatPath(providerConfig.getChatPath());
+            }
             if (providerConfig.getReadTimeoutSeconds() != null) {
                 modelConfig.setReadTimeoutSeconds(providerConfig.getReadTimeoutSeconds());
             }

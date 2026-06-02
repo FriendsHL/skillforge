@@ -273,7 +273,7 @@ skillforge:
     login-timeout-seconds: 300
   # LLM provider configs
   llm:
-    default-provider: xiaomi-mimo  # 2026-05-16: bailian (qwen-max) API key 过期; xiaomi-mimo / mimo-v2.5-pro 为现行可用 provider
+    default-provider: ark  # 2026-06-02: 切到火山方舟（mimo 429 限流严重）。default-provider 决定 eval judge 的 provider；ark 默认 model 用 doubao-seed-2.0-lite（非推理、maxTokens=16 能返数字，judge 打分需要）。原 xiaomi-mimo。
     providers:
       claude:
         type: claude
@@ -357,6 +357,29 @@ skillforge:
         # Note: TTS models (-tts / -tts-voiceclone / -tts-voicedesign) are listed for
         # catalog visibility — chat-completion code path is not the right invocation
         # surface for them; keep them out of agent.modelId until a TTS-aware path exists.
+        read-timeout-seconds: 240
+      # 火山方舟 Ark（coding 端点，OpenAI 兼容）。base-url 已自带版本段 /api/coding/v3，
+      # 所以 chat-path 设 /chat/completions（而非默认 /v1/chat/completions）。
+      # 协议族按 model 名前缀自动解析：minimax/doubao/glm/kimi → GENERIC_OPENAI；
+      # deepseek-v4-* → DEEPSEEK_V4（Ark 上是 OpenAI 兼容，触碰必让 llm-provider-compat-reviewer 核）。
+      ark:
+        type: openai
+        api-key: ${ARK_API_KEY:}
+        base-url: https://ark.cn-beijing.volces.com/api/coding/v3
+        chat-path: /chat/completions
+        # default model = 该 provider 不指定 model 时的 fallback（eval judge 走这）。
+        # 用 doubao-seed-2.0-lite：非推理、maxTokens=16 也能返数字（minimax/glm/kimi 是推理模型，16 token 全烧 reasoning→content 空→judge 解析不出分）。
+        model: doubao-seed-2.0-lite
+        models:
+          - minimax-latest          # 推荐写法，对应 minimax-m2.7
+          - doubao-seed-2.0-code
+          - doubao-seed-2.0-pro
+          - doubao-seed-2.0-lite
+          - doubao-seed-code
+          - glm-5.1
+          - deepseek-v4-flash
+          - deepseek-v4-pro
+          - kimi-k2.6
         read-timeout-seconds: 240
 
   # Memory extraction configuration

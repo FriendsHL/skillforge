@@ -66,6 +66,11 @@ public class OpenAiProvider implements LlmProvider {
 
     private final String apiKey;
     private final String baseUrl;
+    /** Path appended to {@link #baseUrl} for the chat-completions endpoint. Defaults to
+     *  {@code /v1/chat/completions} (standard OpenAI shape). Configurable per provider so
+     *  vendors whose base-url already carries a version segment (e.g. Volcengine Ark's
+     *  {@code .../api/coding/v3}) can set {@code /chat/completions} instead. */
+    private final String chatPath;
     private final String defaultModel;
     /** User-visible provider name ("bailian", "deepseek", …) for logs and error strings. */
     private final String providerDisplayName;
@@ -116,6 +121,18 @@ public class OpenAiProvider implements LlmProvider {
     public OpenAiProvider(String apiKey, String baseUrl, String defaultModel,
                           String providerDisplayName, String envVarName,
                           int readTimeoutSeconds, int maxRetries) {
+        this(apiKey, baseUrl, defaultModel, providerDisplayName, envVarName,
+             readTimeoutSeconds, maxRetries, null);
+    }
+
+    /**
+     * Full constructor. {@code chatPath} is the endpoint path appended to {@code baseUrl}
+     * (null/blank → {@code /v1/chat/completions}, the standard OpenAI shape, so every
+     * existing provider is unchanged).
+     */
+    public OpenAiProvider(String apiKey, String baseUrl, String defaultModel,
+                          String providerDisplayName, String envVarName,
+                          int readTimeoutSeconds, int maxRetries, String chatPath) {
         if (providerDisplayName == null || providerDisplayName.isBlank()) {
             throw new IllegalStateException("providerDisplayName must not be blank");
         }
@@ -129,6 +146,7 @@ public class OpenAiProvider implements LlmProvider {
         }
         this.apiKey = apiKey;
         this.baseUrl = baseUrl != null ? baseUrl : "https://api.openai.com";
+        this.chatPath = (chatPath != null && !chatPath.isBlank()) ? chatPath : "/v1/chat/completions";
         this.defaultModel = defaultModel != null ? defaultModel : "gpt-4o";
         this.providerDisplayName = providerDisplayName;
         this.maxRetries = Math.max(0, maxRetries);
@@ -143,6 +161,11 @@ public class OpenAiProvider implements LlmProvider {
                 .readTimeout(readTimeoutSeconds, TimeUnit.SECONDS)
                 .writeTimeout(30, TimeUnit.SECONDS)
                 .build();
+    }
+
+    /** The chat-completions endpoint URL ({@link #baseUrl} + {@link #chatPath}). Package-private for tests. */
+    String chatCompletionsUrl() {
+        return baseUrl + chatPath;
     }
 
     @Override
@@ -216,7 +239,7 @@ public class OpenAiProvider implements LlmProvider {
             throw new RuntimeException("Failed to build " + providerDisplayName + " request body", e);
         }
         RawHttpRequest snap = new RawHttpRequest(
-                "POST", baseUrl + "/v1/chat/completions",
+                "POST", chatCompletionsUrl(),
                 Map.of("Content-Type", "application/json"),
                 reqBody, "application/json");
         SafeObservers.notifyBefore(observerRegistry, ctx, snap);
@@ -302,7 +325,7 @@ public class OpenAiProvider implements LlmProvider {
     private LlmResponse doChatBody(byte[] requestBody, String model) throws IOException {
         log.debug("{} chat request: model={}", providerDisplayName, model);
         Request httpRequest = new Request.Builder()
-                .url(baseUrl + "/v1/chat/completions")
+                .url(chatCompletionsUrl())
                 .addHeader("Authorization", "Bearer " + apiKey)
                 .addHeader("Content-Type", "application/json")
                 .post(RequestBody.create(requestBody, JSON_MEDIA_TYPE))
@@ -366,7 +389,7 @@ public class OpenAiProvider implements LlmProvider {
         log.debug("{} chat request: model={}, messages={}", providerDisplayName, model, request.getMessages().size());
 
         Request httpRequest = new Request.Builder()
-                .url(baseUrl + "/v1/chat/completions")
+                .url(chatCompletionsUrl())
                 .addHeader("Authorization", "Bearer " + apiKey)
                 .addHeader("Content-Type", "application/json")
                 .post(RequestBody.create(requestBody, JSON_MEDIA_TYPE))
@@ -411,7 +434,7 @@ public class OpenAiProvider implements LlmProvider {
         // OBS-1 §4.2: beforeCall fires once OUTSIDE the handshake retry loop.
         byte[] requestBodyBytes = requestBody.getBytes(java.nio.charset.StandardCharsets.UTF_8);
         RawHttpRequest reqSnap = new RawHttpRequest(
-                "POST", baseUrl + "/v1/chat/completions",
+                "POST", chatCompletionsUrl(),
                 Map.of("Content-Type", "application/json"),
                 requestBodyBytes, "application/json");
         SafeObservers.notifyBefore(observerRegistry, ctx, reqSnap);
@@ -426,7 +449,7 @@ public class OpenAiProvider implements LlmProvider {
         int rateLimitAttempt = 0;
         while (true) {
             Request httpRequest = new Request.Builder()
-                    .url(baseUrl + "/v1/chat/completions")
+                    .url(chatCompletionsUrl())
                     .addHeader("Authorization", "Bearer " + apiKey)
                     .addHeader("Content-Type", "application/json")
                     .post(RequestBody.create(requestBody, JSON_MEDIA_TYPE))
