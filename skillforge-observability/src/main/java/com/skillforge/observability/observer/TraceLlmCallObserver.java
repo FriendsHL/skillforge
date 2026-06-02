@@ -128,6 +128,17 @@ public class TraceLlmCallObserver implements LlmCallObserver {
     private void doWrite(LlmCallContext ctx, CallState s,
                          RawHttpResponse response, LlmResponse parsed,
                          RawStreamCapture capture, boolean isError, Throwable err) {
+        // No-trace-context calls (eval/evolve scenario LLM calls + other system paths)
+        // carry a null traceId, which LlmSpan/blob writes legitimately require. These
+        // are untraced system calls, NOT an error — skip the span write quietly instead
+        // of letting LlmSpan's ctor throw and flooding the log with dropped-write stacks
+        // on every call. (If trace propagation is added to those paths later, the guard
+        // simply stops applying.)
+        if (ctx.traceId() == null || ctx.traceId().isBlank()) {
+            log.debug("Skipping LLM span write: no trace context (null traceId) spanId={} provider={}",
+                    ctx.spanId(), ctx.providerName());
+            return;
+        }
         Instant now = Instant.now();
         // -- 1. compose payloads + summaries
         byte[] reqBytes = s.request != null ? s.request.body() : new byte[0];
