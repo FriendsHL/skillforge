@@ -63,7 +63,9 @@ var SUMMARY_SCHEMA = {
 }
 
 var agentId = args.agentId
-var windowDays = args.windowDays
+// dogfood data 稀疏：默认窗口拉到 30 天，否则近 7 天常常 0-few session、evolve 空转
+// （callers 仍可显式传 args.windowDays 覆盖）。
+var windowDays = args.windowDays || 30
 log('opt-report agentId=' + agentId + ' windowDays=' + windowDays)
 
 // ── Load (= report-generator STEP 1) ──
