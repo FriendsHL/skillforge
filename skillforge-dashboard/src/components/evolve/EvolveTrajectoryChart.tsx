@@ -54,9 +54,12 @@ function deltaColor(delta: number): string {
 }
 
 /**
- * Baseline is measured once per run (hill-climb), so every iteration carries the
- * same baselineScore. Return the first non-null one as the run's baseline; null
- * when no iteration recorded a baseline (baseline unavailable).
+ * The original baseline = the score the *first* iteration was compared against
+ * (the unmodified agent, before any candidate was promoted). NOTE: per-iteration
+ * `baselineScore` is NOT constant — it's the hill-climb comparison reference,
+ * which moves up to the new best whenever a candidate is kept (winner carry-
+ * forward). The fixed horizontal reference the user wants is the *first*
+ * iteration's baseline, so take the first non-null one. Null when unavailable.
  */
 function runBaseline(run: EvolveRunDetail): number | null {
   for (const it of run.iterations) {
@@ -72,15 +75,24 @@ function buildSeries(run: EvolveRunDetail, colorIdx: number): object {
       ? `${run.agentName} · ${run.evolveRunId.slice(0, 6)}`
       : run.evolveRunId.slice(0, 8);
 
+  const baseline = runBaseline(run);
+
   const data = run.iterations.map((iter: EvolveIteration) => {
-    // Marker colour encodes rise/fall vs baseline (delta = candidate − baseline);
-    // fill encodes whether the candidate was kept (became the new carry-forward
-    // best). So a hollow green point = above baseline but not a new best.
-    const sign = deltaColor(iter.delta);
+    // Marker colour encodes rise/fall vs the FIXED baseline line (candidateScore
+    // − original baseline), so colour is consistent with the point's position
+    // relative to the line — NOT iter.delta, which is vs the moving carry-forward
+    // best. Fill encodes whether the candidate was kept (became the new best); so
+    // a hollow green point = above the original baseline but not a new best.
+    const vsLine =
+      iter.candidateScore != null && baseline != null
+        ? iter.candidateScore - baseline
+        : iter.delta;
+    const sign = deltaColor(vsLine);
     return {
       value: [iter.iteration, iter.candidateScore],
-      // Store full iteration metadata for tooltip access.
+      // Store full iteration metadata + the fixed line baseline for tooltip access.
       iterMeta: iter,
+      lineBaseline: baseline,
       itemStyle: {
         color: iter.kept ? sign : 'transparent',
         borderColor: sign,
@@ -88,8 +100,6 @@ function buildSeries(run: EvolveRunDetail, colorIdx: number): object {
       },
     };
   });
-
-  const baseline = runBaseline(run);
 
   const series: Record<string, unknown> = {
     name: label,
@@ -215,21 +225,32 @@ const EvolveTrajectoryChart: React.FC<EvolveTrajectoryChartProps> = ({
         textStyle: { color: 'var(--text-primary, #1a1815)', fontSize: 12 },
         formatter: (rawParams: unknown): string => {
           const params = Array.isArray(rawParams) ? rawParams[0] : (rawParams as Record<string, unknown> | undefined);
-          const pointData = (params as { data?: { iterMeta?: EvolveIteration } } | undefined)?.data;
+          const pointData = (params as { data?: { iterMeta?: EvolveIteration; lineBaseline?: number | null } } | undefined)?.data;
           const meta: EvolveIteration | undefined = pointData?.iterMeta;
           if (!meta) return '';
 
+          // The fixed baseline line (original agent score). vs-baseline reflects
+          // the point's position relative to that line — what the chart is framed
+          // around — NOT iter.delta (which is vs the moving carry-forward best).
+          const lineBase: number | null = pointData?.lineBaseline ?? null;
+          const cand = meta.candidateScore;
+          const vsLineVal = cand != null && lineBase != null ? cand - lineBase : meta.delta;
+          const vsLine = formatDelta(vsLineVal);
+          const vsLineCol = deltaColor(vsLineVal);
+          const score = cand != null ? cand.toFixed(3) : '—';
+          const baseline = lineBase != null ? lineBase.toFixed(3) : '—';
+
+          // Gate decision is vs the carry-forward best (meta.baselineScore). Only
+          // worth surfacing as a separate row once the best has actually moved
+          // above the original baseline — otherwise it equals vs-baseline.
+          const prevBest = meta.baselineScore;
+          const bestMoved = prevBest != null && lineBase != null && Math.abs(prevBest - lineBase) > 1e-9;
+          const gateRow = bestMoved
+            ? `<div>vs prev best (${prevBest.toFixed(2)}): <strong style="color:${deltaColor(meta.delta)}">${formatDelta(meta.delta)}</strong></div>`
+            : '';
           const kept = meta.kept
             ? '<span style="color:var(--color-success,#5c8a4a)">✓ kept (new best)</span>'
             : '<span style="color:var(--text-tertiary,#7a7770)">✗ not kept</span>';
-          const delta = formatDelta(meta.delta);
-          const deltaCol = deltaColor(meta.delta);
-          const score = meta.candidateScore != null
-            ? meta.candidateScore.toFixed(3)
-            : '—';
-          const baseline = meta.baselineScore != null
-            ? meta.baselineScore.toFixed(3)
-            : '—';
 
           return `
             <div style="font-size:12px;line-height:1.6;max-width:280px">
@@ -239,7 +260,8 @@ const EvolveTrajectoryChart: React.FC<EvolveTrajectoryChartProps> = ({
               <div style="margin-bottom:4px;word-break:break-word">${meta.changeDesc}</div>
               <div>Baseline: <strong>${baseline}</strong></div>
               <div>Score: <strong>${score}</strong></div>
-              <div>vs baseline: <strong style="color:${deltaCol}">${delta}</strong></div>
+              <div>vs baseline: <strong style="color:${vsLineCol}">${vsLine}</strong></div>
+              ${gateRow}
               <div>${kept}</div>
             </div>
           `.trim();
