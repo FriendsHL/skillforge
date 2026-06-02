@@ -131,7 +131,7 @@ skillforge:
       # (single LLM call up to 20s × ~3 turns + tool calls = 60-90s baseline).
       # 120s gives 2× headroom while still bounding worst-case AB pipeline at
       # ~24min (12 scenarios × 2 sides). Override per env if needed.
-      scenario-timeout-ms: 120000
+      scenario-timeout-ms: 300000   # 2026-06-02: 120000→300000（火山 deepseek-v4-flash 推理慢，120s 一半场景 CONTEXT_OVERFLOW 超时；给到 5min 让多轮 agent loop 跑完）
       # AUTOEVOLVE-AGENT-FLYWHEEL: cap scenarios per A/B run (0 = full ~49-scenario
       # dataset). The attribution/evolve path re-evaluates baseline+candidate on
       # every scenario each iteration, so the full set makes one A/B ~10-15 min and
