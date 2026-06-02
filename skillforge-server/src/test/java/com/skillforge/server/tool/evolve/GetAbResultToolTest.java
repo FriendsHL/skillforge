@@ -251,7 +251,7 @@ class GetAbResultToolTest {
     }
 
     @Test
-    @DisplayName("agent COMPLETED → scores + advisory wouldPromote (positive delta)")
+    @DisplayName("agent COMPLETED → scores + target/regression deltas + dual-criteria wouldPromote (§8 子点②)")
     void agentCompleted_returnsScores() {
         com.skillforge.server.entity.AgentEvolveAbRunEntity e =
                 new com.skillforge.server.entity.AgentEvolveAbRunEntity();
@@ -260,6 +260,8 @@ class GetAbResultToolTest {
         e.setBaselinePassRate(50.0);
         e.setCandidatePassRate(66.0);
         e.setDeltaPassRate(16.0);
+        e.setTargetDeltaPp(12.0);      // vs-best target up
+        e.setRegressionDeltaPp(0.0);   // >= REGRESSION_FLOOR_PP (-3)
         when(agentEvolveAbRunRepository.findById("ae-1")).thenReturn(Optional.of(e));
 
         SkillResult result = run("agent", "ae-1", "42");
@@ -268,7 +270,25 @@ class GetAbResultToolTest {
         assertThat(out).contains("\"baselineScore\":50.0");
         assertThat(out).contains("\"candidateScore\":66.0");
         assertThat(out).contains("\"deltaPassRate\":16.0");
-        assertThat(out).contains("\"wouldPromote\":true");   // advisory: delta > 0
+        assertThat(out).contains("\"targetDeltaPp\":12.0");
+        assertThat(out).contains("\"regressionDeltaPp\":0.0");
+        assertThat(out).contains("\"wouldPromote\":true");   // target>0 AND regression>=floor
+    }
+
+    @Test
+    @DisplayName("agent COMPLETED: regression below floor → wouldPromote false (§8 子点②)")
+    void agentCompleted_regressionBelowFloor_wouldPromoteFalse() {
+        com.skillforge.server.entity.AgentEvolveAbRunEntity e =
+                new com.skillforge.server.entity.AgentEvolveAbRunEntity();
+        e.setAgentId("42");
+        e.setStatus("COMPLETED");
+        e.setTargetDeltaPp(12.0);
+        e.setRegressionDeltaPp(-10.0);   // below -3 floor
+        when(agentEvolveAbRunRepository.findById("ae-2")).thenReturn(Optional.of(e));
+
+        SkillResult result = run("agent", "ae-2", "42");
+
+        assertThat(result.getOutput()).contains("\"wouldPromote\":false");
     }
 
     @Test

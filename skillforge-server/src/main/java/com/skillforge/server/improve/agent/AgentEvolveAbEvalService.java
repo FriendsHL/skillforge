@@ -1,6 +1,7 @@
 package com.skillforge.server.improve.agent;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillforge.core.engine.ChatEventBroadcaster;
 import com.skillforge.core.model.AgentDefinition;
@@ -9,9 +10,11 @@ import com.skillforge.server.entity.AgentEvolveAbRunEntity;
 import com.skillforge.server.entity.EvalScenarioEntity;
 import com.skillforge.server.improve.AbEvalPipeline;
 import com.skillforge.server.improve.AbScenarioResult;
+import com.skillforge.server.improve.behavior.AgentRoleConstants;
+import com.skillforge.server.improve.behavior.AgentRoleResolver;
 import com.skillforge.server.repository.AgentEvolveAbRunRepository;
 import com.skillforge.server.repository.AgentRepository;
-import com.skillforge.server.service.EvalDatasetService;
+import com.skillforge.server.repository.EvalScenarioDraftRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -21,9 +24,12 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 
@@ -51,11 +57,27 @@ public class AgentEvolveAbEvalService {
 
     private static final Logger log = LoggerFactory.getLogger(AgentEvolveAbEvalService.class);
 
+    /**
+     * §8 子点② — vs-best regression floor (advisory wouldPromote): the candidate may
+     * regress on the general/regression subset by at most this many percentage points
+     * vs the current best. Hill-climb is incremental (vs best), so this is NOT the
+     * behavior_rule +10pp absolute (vs-original) gate. Read by {@code GetAbResultTool}.
+     */
+    public static final double REGRESSION_FLOOR_PP = -3.0;
+
+    /**
+     * §8 子点② — vs-best target floor (advisory wouldPromote): the candidate must beat
+     * the current best on the target subset by more than this. Strictly-positive
+     * incremental gate (a candidate that merely ties best on its own role isn't kept).
+     */
+    public static final double TARGET_MIN_DELTA_PP = 0.0;
+
     private final AgentEvolveAbRunRepository abRunRepository;
     private final AgentRepository agentRepository;
     private final BundleApplicator bundleApplicator;
     private final AbEvalPipeline abEvalPipeline;
-    private final EvalDatasetService evalDatasetService;
+    private final EvalScenarioDraftRepository scenarioRepository;
+    private final AgentRoleResolver agentRoleResolver;
     private final ChatEventBroadcaster broadcaster;
     private final ObjectMapper objectMapper;
     private final ExecutorService coordinatorExecutor;
@@ -65,7 +87,8 @@ public class AgentEvolveAbEvalService {
             AgentRepository agentRepository,
             BundleApplicator bundleApplicator,
             AbEvalPipeline abEvalPipeline,
-            EvalDatasetService evalDatasetService,
+            EvalScenarioDraftRepository scenarioRepository,
+            AgentRoleResolver agentRoleResolver,
             ChatEventBroadcaster broadcaster,
             ObjectMapper objectMapper,
             @Qualifier("abEvalCoordinatorExecutor") ExecutorService coordinatorExecutor) {
@@ -73,7 +96,8 @@ public class AgentEvolveAbEvalService {
         this.agentRepository = agentRepository;
         this.bundleApplicator = bundleApplicator;
         this.abEvalPipeline = abEvalPipeline;
-        this.evalDatasetService = evalDatasetService;
+        this.scenarioRepository = scenarioRepository;
+        this.agentRoleResolver = agentRoleResolver;
         this.broadcaster = broadcaster;
         this.objectMapper = objectMapper;
         this.coordinatorExecutor = coordinatorExecutor;
@@ -135,6 +159,18 @@ public class AgentEvolveAbEvalService {
                                 + baselineBundle + " does not match prior winner (abRunId="
                                 + priorWinner.getId() + ") candidate bundle " + priorCandidate
                                 + " — refusing to attach cached rate to a never-measured tuple");
+            }
+            // §8 子点① guard: the cached per-subset baseline is recomputed by
+            // partitioning the prior winner's per-scenario results with THIS run's
+            // (dataset+role) id-sets. If the dataset version differs between the
+            // winner run and now, that partition is over a mismatched scenario set →
+            // biased baseline → false wouldPromote. Fail loud.
+            if (!datasetVersionId.equals(priorWinner.getDatasetVersionId())) {
+                throw new IllegalStateException(
+                        "skip_baseline cached-rate dataset mismatch (§8 子点①): this run's datasetVersionId="
+                                + datasetVersionId + " but prior winner (abRunId=" + priorWinner.getId()
+                                + ") was scored on datasetVersionId=" + priorWinner.getDatasetVersionId()
+                                + " — cannot reuse its per-subset rates across dataset versions");
             }
             priorWinnerAbRunId = priorWinner.getId();
         }
@@ -213,22 +249,49 @@ public class AgentEvolveAbEvalService {
                     ? candidateDef
                     : bundleApplicator.apply(agent, baselineBundle);
 
-            List<EvalScenarioEntity> scenarios =
-                    evalDatasetService.getScenariosForVersion(abRun.getDatasetVersionId());
-            if (scenarios == null || scenarios.isEmpty()) {
+            // §8 R2 — role-aware target/general split keyed on the EVOLVED agent
+            // (transplanted from BehaviorRuleAbEvalService.runAsync; the agent-level
+            // candidate's owner IS the evolved agent, so W8's "no single owner"
+            // concern doesn't apply). target = scenarios for this agent's role;
+            // general = the rest (regression benchmark). GENERAL / no-match →
+            // regression-only over the full dataset.
+            RoleSplit split = resolveRoleSplit(agent, abRun.getDatasetVersionId());
+            if (split.all().isEmpty()) {
                 throw new IllegalStateException(
                         "No scenarios resolved for datasetVersionId=" + abRun.getDatasetVersionId());
             }
 
             // explain=true → byte-identical to the prompt path's judge call (§7 B1).
             List<AbScenarioResult> perScenario = abEvalPipeline.runWithDefs(
-                    abRun.getId(), scenarios, baselineDef, candidateDef, cachedBaselineRate, true);
+                    abRun.getId(), split.all(), baselineDef, candidateDef, cachedBaselineRate, true);
 
+            // Global rates (Phase 1 semantics; trajectory chart uses these).
             AgentAbDeltas deltas = computeDeltas(perScenario, cachedBaselineRate);
             abRun.setBaselinePassRate(deltas.baselinePassRate());
             abRun.setCandidatePassRate(deltas.candidatePassRate());
             abRun.setDeltaPassRate(deltas.deltaPassRate());
-            // Phase 1: target/regression split is Phase 2 (§7 W8) → leave null.
+
+            // §8 子点① + ② — per-subset vs-best deltas. When skipBaseline, the best's
+            // per-subset rates are recomputed from the PRIOR WINNER ab_run's
+            // ab_scenario_results_json (candidate side = the winner's measurement),
+            // partitioned by the SAME (dataset+role) id-sets — NOT re-run. Fresh
+            // round → both arms ran, so best = this run's baseline side.
+            List<AbScenarioResult> priorWinnerPerScenario = null;
+            if (skipBaseline) {
+                priorWinnerPerScenario = loadPriorWinnerPerScenario(abRun.getPriorWinnerAbRunId());
+                // §8 子点① guard (catches a role-flip that a dataset-version check
+                // alone misses — e.g. the agent was renamed so resolveRole returns a
+                // different role, shifting the id-sets): the prior winner's measured
+                // scenario set MUST cover the current target ∪ general union, else we'd
+                // compute a partial / biased baseline rate silently.
+                assertPriorWinnerCoversSubsets(
+                        priorWinnerPerScenario, split.targetIds(), split.generalIds(),
+                        abRun.getPriorWinnerAbRunId());
+            }
+            SubsetDeltas subset = computeSubsetDeltas(
+                    perScenario, priorWinnerPerScenario, split.targetIds(), split.generalIds());
+            abRun.setTargetDeltaPp(subset.targetDeltaPp());
+            abRun.setRegressionDeltaPp(subset.regressionDeltaPp());
 
             try {
                 abRun.setAbScenarioResultsJson(objectMapper.writeValueAsString(perScenario));
@@ -240,9 +303,11 @@ public class AgentEvolveAbEvalService {
             abRunRepository.save(abRun);
             broadcastStage(abRun, "ab_completed", null);
 
-            log.info("[AgentEvolveAb] COMPLETED abRunId={} baseline={} candidate={} delta={} skipBaseline={}",
+            log.info("[AgentEvolveAb] COMPLETED abRunId={} baseline={} candidate={} delta={} "
+                            + "targetDelta={} regressionDelta={} target_n={} general_n={} skipBaseline={}",
                     abRun.getId(), deltas.baselinePassRate(), deltas.candidatePassRate(),
-                    deltas.deltaPassRate(), skipBaseline);
+                    deltas.deltaPassRate(), subset.targetDeltaPp(), subset.regressionDeltaPp(),
+                    split.targetIds().size(), split.generalIds().size(), skipBaseline);
         } catch (Exception ex) {
             log.error("[AgentEvolveAb] FAILED abRunId={}: {}", abRunId, ex.getMessage(), ex);
             abRun.setStatus(AgentEvolveAbRunEntity.STATUS_FAILED);
@@ -289,6 +354,172 @@ public class AgentEvolveAbEvalService {
 
     /** Pure result of {@link #computeDeltas}. */
     record AgentAbDeltas(double baselinePassRate, double candidatePassRate, double deltaPassRate) {}
+
+    /**
+     * §8 R2 — role-aware target/general split of a dataset version keyed on the
+     * EVOLVED agent's role. Mirrors {@code BehaviorRuleAbEvalService.runAsync}'s
+     * split logic but the owner role is the evolved agent's (not a rule_owner_agent).
+     * GENERAL role or no-target-match → regression-only (full dataset is general).
+     */
+    private RoleSplit resolveRoleSplit(AgentEntity agent, String datasetVersionId) {
+        String ownerRole = agentRoleResolver.resolveRole(agent);
+        List<EvalScenarioEntity> targetSubset;
+        List<EvalScenarioEntity> regressionSubset;
+        if (AgentRoleConstants.GENERAL.equals(ownerRole)) {
+            targetSubset = List.of();
+            regressionSubset = scenarioRepository.findAllByDatasetVersionId(datasetVersionId);
+            log.info("[AgentEvolveAb] ownerRole=general agentId={} → regression-only ({} scenarios)",
+                    agent.getId(), regressionSubset.size());
+        } else {
+            targetSubset = scenarioRepository.findByDatasetVersionAndAgentRoles(
+                    datasetVersionId, new String[]{ownerRole});
+            Set<String> targetIds = new HashSet<>();
+            for (EvalScenarioEntity e : targetSubset) targetIds.add(e.getId());
+            if (targetIds.isEmpty()) {
+                regressionSubset = scenarioRepository.findAllByDatasetVersionId(datasetVersionId);
+                log.info("[AgentEvolveAb] no scenarios match ownerRole={} agentId={} → "
+                        + "regression-only ({} scenarios)", ownerRole, agent.getId(), regressionSubset.size());
+            } else {
+                // In-Java filter over the GENERAL subset (matches behavior_rule
+                // r1-FIX: dodges Hibernate NOT IN binding footguns; ≤49 scenarios).
+                List<EvalScenarioEntity> generalAll = scenarioRepository.findByDatasetVersionAndAgentRoles(
+                        datasetVersionId, new String[]{AgentRoleConstants.GENERAL});
+                regressionSubset = generalAll.stream()
+                        .filter(s -> !targetIds.contains(s.getId()))
+                        .toList();
+                log.info("[AgentEvolveAb] role-aware split ownerRole={} target_n={} regression_n={} agentId={}",
+                        ownerRole, targetSubset.size(), regressionSubset.size(), agent.getId());
+            }
+        }
+        Set<String> targetIds = new HashSet<>();
+        for (EvalScenarioEntity e : targetSubset) targetIds.add(e.getId());
+        Set<String> generalIds = new HashSet<>();
+        for (EvalScenarioEntity e : regressionSubset) generalIds.add(e.getId());
+        List<EvalScenarioEntity> all = new ArrayList<>(targetSubset.size() + regressionSubset.size());
+        all.addAll(targetSubset);
+        all.addAll(regressionSubset);
+        return new RoleSplit(all, targetIds, generalIds);
+    }
+
+    /** target-first scenario list + the two id-sets for per-subset partitioning. */
+    private record RoleSplit(List<EvalScenarioEntity> all, Set<String> targetIds, Set<String> generalIds) {}
+
+    /** Parse a prior winner ab_run's per-scenario JSON (§8 子点① cached baseline source). */
+    private List<AbScenarioResult> loadPriorWinnerPerScenario(String priorWinnerAbRunId) {
+        if (priorWinnerAbRunId == null) {
+            throw new IllegalStateException(
+                    "skipBaseline run has no priorWinnerAbRunId — cannot recompute cached per-subset baseline");
+        }
+        AgentEvolveAbRunEntity prior = abRunRepository.findById(priorWinnerAbRunId)
+                .orElseThrow(() -> new IllegalStateException(
+                        "prior winner ab_run not found: " + priorWinnerAbRunId));
+        String json = prior.getAbScenarioResultsJson();
+        if (json == null || json.isBlank()) {
+            throw new IllegalStateException(
+                    "prior winner ab_run " + priorWinnerAbRunId + " has no ab_scenario_results_json "
+                            + "— cannot recompute cached per-subset baseline");
+        }
+        try {
+            return objectMapper.readValue(json, new TypeReference<List<AbScenarioResult>>() {});
+        } catch (JsonProcessingException ex) {
+            throw new IllegalStateException(
+                    "failed to parse prior winner ab_scenario_results_json (abRunId=" + priorWinnerAbRunId + ")", ex);
+        }
+    }
+
+    /**
+     * §8 子点① coverage guard — the prior winner's measured per-scenario set must
+     * cover (⊇) the current run's {@code target ∪ general} id-union. A dataset-version
+     * match (checked in {@code startAgentAb}) is necessary but not sufficient: an
+     * agent rename can flip its resolved role, shifting which scenarios fall in
+     * target vs general, so the winner's JSON may not contain a current id even on
+     * the same dataset version. Partitioning over a mismatched set would bias the
+     * cached baseline silently — fail loud instead.
+     */
+    static void assertPriorWinnerCoversSubsets(List<AbScenarioResult> priorWinnerPerScenario,
+                                               Set<String> targetIds, Set<String> generalIds,
+                                               String priorWinnerAbRunId) {
+        Set<String> priorIds = new HashSet<>();
+        for (AbScenarioResult r : priorWinnerPerScenario) {
+            priorIds.add(r.scenarioId());
+        }
+        List<String> missing = new ArrayList<>();
+        for (String id : targetIds) {
+            if (!priorIds.contains(id)) missing.add(id);
+        }
+        for (String id : generalIds) {
+            if (!priorIds.contains(id)) missing.add(id);
+        }
+        if (!missing.isEmpty()) {
+            throw new IllegalStateException(
+                    "skip_baseline cached-rate id-set mismatch (§8 子点①): prior winner (abRunId="
+                            + priorWinnerAbRunId + ") per-scenario results do not cover the current "
+                            + "target∪general subset — missing " + missing.size() + " scenario id(s) "
+                            + missing + " (likely a dataset/role shift between the winner run and now); "
+                            + "refusing to compute a partial per-subset baseline");
+        }
+    }
+
+    /**
+     * §8 子点② — pure per-subset vs-best delta computation. {@code currentRun} is
+     * this A/B's per-scenario results (candidate side authoritative; baseline side
+     * valid only when not skipping). {@code priorWinnerRun} is non-null ONLY on the
+     * skip path = the prior winner's per-scenario results, whose CANDIDATE side is
+     * the best's measurement (§8 子点①).
+     *
+     * <ul>
+     *   <li>{@code targetDeltaPp = candidate_target − best_target} (null when no target subset)</li>
+     *   <li>{@code regressionDeltaPp = candidate_general − best_general}</li>
+     * </ul>
+     */
+    static SubsetDeltas computeSubsetDeltas(List<AbScenarioResult> currentRun,
+                                            List<AbScenarioResult> priorWinnerRun,
+                                            Set<String> targetIds,
+                                            Set<String> generalIds) {
+        double candTarget = passRateOver(currentRun, targetIds, /*candidateSide*/ true);
+        double candGeneral = passRateOver(currentRun, generalIds, true);
+        double bestTarget;
+        double bestGeneral;
+        if (priorWinnerRun != null) {
+            // skip path: best = the prior winner's CANDIDATE side measurement.
+            bestTarget = passRateOver(priorWinnerRun, targetIds, true);
+            bestGeneral = passRateOver(priorWinnerRun, generalIds, true);
+        } else {
+            // fresh path: best = this run's BASELINE side.
+            bestTarget = passRateOver(currentRun, targetIds, false);
+            bestGeneral = passRateOver(currentRun, generalIds, false);
+        }
+        Double targetDeltaPp = targetIds.isEmpty() ? null : (candTarget - bestTarget);
+        Double regressionDeltaPp = generalIds.isEmpty() ? null : (candGeneral - bestGeneral);
+        return new SubsetDeltas(targetDeltaPp, regressionDeltaPp);
+    }
+
+    /** Pure result of {@link #computeSubsetDeltas}; null = subset absent / no signal. */
+    record SubsetDeltas(Double targetDeltaPp, Double regressionDeltaPp) {}
+
+    /**
+     * Pass-rate (%) of {@code side} over the {@code ids} subset, counting passes via
+     * the shared {@link AbEvalPipeline#isPass(AbScenarioResult.RunResult)} predicate.
+     * Returns 0.0 when {@code ids} is empty.
+     */
+    static double passRateOver(List<AbScenarioResult> results, Set<String> ids, boolean candidateSide) {
+        if (results == null || ids == null || ids.isEmpty()) {
+            return 0.0;
+        }
+        int passed = 0;
+        int total = 0;
+        for (AbScenarioResult r : results) {
+            if (!ids.contains(r.scenarioId())) {
+                continue;
+            }
+            total++;
+            AbScenarioResult.RunResult run = candidateSide ? r.candidate() : r.baseline();
+            if (AbEvalPipeline.isPass(run)) {
+                passed++;
+            }
+        }
+        return total == 0 ? 0.0 : (double) passed / total * 100.0;
+    }
 
     private String writeBundle(Bundle bundle) {
         try {

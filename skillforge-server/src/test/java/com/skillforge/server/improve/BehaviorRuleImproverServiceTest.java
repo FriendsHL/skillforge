@@ -120,6 +120,57 @@ class BehaviorRuleImproverServiceTest {
     }
 
     @Test
+    @DisplayName("startImprovementFromBaseVersion: loads the SPECIFIED base version's rules + sets baselineVersionId (§8 #1)")
+    void startFromBaseVersion_loadsSpecifiedBaseAndSetsBaselineVersionId() {
+        AgentEntity agent = new AgentEntity();
+        agent.setId(10L);
+        when(agentRepository.findById(10L)).thenReturn(Optional.of(agent));
+
+        // The carry-forward base is a SPECIFIC version (the current best), NOT the
+        // agent's active baseline — its rulesJson must reach the LLM prompt.
+        BehaviorRuleVersionEntity base = new BehaviorRuleVersionEntity();
+        base.setId("best-v");
+        base.setAgentId("10");
+        base.setRulesJson("[{\"id\":\"best-rule\"}]");
+        when(versionRepository.findById("best-v")).thenReturn(Optional.of(base));
+        when(versionRepository.findMaxVersionNumber("10")).thenReturn(Optional.of(5));
+
+        ImprovementStartResult result = service.startImprovementFromBaseVersion(
+                42L, "10", "best-v", "Tighten the refusal rule.", 7L);
+
+        assertThat(result.promptVersionId()).isNotBlank();
+        assertThat(result.status()).isEqualTo("PENDING");
+        // The SPECIFIED base's rules were fed to the LLM (not "[]").
+        assertThat(provider.lastUserMessage).contains("best-rule");
+
+        ArgumentCaptor<BehaviorRuleVersionEntity> captor =
+                ArgumentCaptor.forClass(BehaviorRuleVersionEntity.class);
+        verify(versionRepository).save(captor.capture());
+        BehaviorRuleVersionEntity saved = captor.getValue();
+        assertThat(saved.getVersionNumber()).isEqualTo(6);     // max(5)+1
+        assertThat(saved.getBaselineVersionId()).isEqualTo("best-v");
+        assertThat(saved.getSourceEventId()).isEqualTo(42L);
+    }
+
+    @Test
+    @DisplayName("startImprovementFromBaseVersion: base version owned by another agent fails loud (W7)")
+    void startFromBaseVersion_crossAgent_throws() {
+        AgentEntity agent = new AgentEntity();
+        agent.setId(10L);
+        when(agentRepository.findById(10L)).thenReturn(Optional.of(agent));
+        BehaviorRuleVersionEntity base = new BehaviorRuleVersionEntity();
+        base.setId("foreign-v");
+        base.setAgentId("99");   // belongs to a different agent
+        base.setRulesJson("[]");
+        when(versionRepository.findById("foreign-v")).thenReturn(Optional.of(base));
+
+        assertThatThrownBy(() -> service.startImprovementFromBaseVersion(
+                42L, "10", "foreign-v", "rationale", 7L))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("belongs to agent 99");
+    }
+
+    @Test
     @DisplayName("LLM failure: persists row with rulesJson=\"[]\" for audit then rethrows so outer tx records candidate_failed")
     void llmFailure_persistsAuditRowAndRethrows() {
         AgentEntity agent = new AgentEntity();

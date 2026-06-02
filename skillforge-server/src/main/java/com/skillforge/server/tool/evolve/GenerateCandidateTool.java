@@ -182,6 +182,12 @@ public class GenerateCandidateTool implements Tool {
                         + "THIS prompt version (the current-best from a prior winning iteration) "
                         + "instead of the agent's active prompt. Omit on iteration 1."
         ));
+        properties.put("baseVersionId", Map.of(
+                "type", "string",
+                "description", "surface=behavior_rule hill-climb only: build the candidate by "
+                        + "improving THIS behavior_rule version (the current-best from a prior "
+                        + "winning iteration) instead of the agent's active rules. Omit on iteration 1."
+        ));
         properties.put("priorChange", Map.of(
                 "type", "string",
                 "description", "surface=prompt reflection (evolve only): what was changed LAST "
@@ -284,8 +290,17 @@ public class GenerateCandidateTool implements Tool {
                     yield r.promptVersionId();
                 }
                 case BEHAVIOR_RULE -> {
-                    ImprovementStartResult r = behaviorRuleImproverService.startImprovementFromAttribution(
-                            eventId, targetAgentId, issue, ownerIdOrDefault(input));
+                    // Hill-climb carry-forward (§8 #5): when baseVersionId is supplied
+                    // (iter 2+), build the candidate on THAT behavior_rule version
+                    // (the current-best from a prior winning bundle); else (iter 1)
+                    // improve the agent's active baseline. Mirrors prompt's
+                    // basePromptVersionId routing. Reflection editor overload = Phase 3.
+                    String baseVersionId = trimToNull(input.get("baseVersionId"));
+                    ImprovementStartResult r = baseVersionId != null
+                            ? behaviorRuleImproverService.startImprovementFromBaseVersion(
+                                    eventId, targetAgentId, baseVersionId, issue, ownerIdOrDefault(input))
+                            : behaviorRuleImproverService.startImprovementFromAttribution(
+                                    eventId, targetAgentId, issue, ownerIdOrDefault(input));
                     yield r.promptVersionId();
                 }
                 case SKILL -> generateSkillDraft(input, issue, eventId);

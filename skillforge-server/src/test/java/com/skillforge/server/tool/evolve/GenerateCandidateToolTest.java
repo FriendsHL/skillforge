@@ -122,6 +122,31 @@ class GenerateCandidateToolTest {
     }
 
     @Test
+    @DisplayName("behavior_rule + baseVersionId: routes to carry-forward improveFromBaseVersion (§8 #5)")
+    void behaviorRuleSurface_baseVersionId_routesToCarryForward() {
+        when(behaviorRuleImproverService.startImprovementFromBaseVersion(
+                eq(55L), eq("42"), eq("best-brv"), eq("issue"), eq(0L)))
+                .thenReturn(new ImprovementStartResult("42", null, "brule-v7", "PENDING"));
+
+        Map<String, Object> input = new LinkedHashMap<>();
+        input.put("surface", "behavior_rule");
+        input.put("issue", "issue");
+        input.put("targetAgentId", "42");
+        input.put("eventId", "55");
+        input.put("baseVersionId", "best-brv");
+
+        SkillResult result = run(input);
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.getOutput()).contains("\"candidateId\":\"brule-v7\"");
+        verify(behaviorRuleImproverService)
+                .startImprovementFromBaseVersion(55L, "42", "best-brv", "issue", 0L);
+        verify(behaviorRuleImproverService, org.mockito.Mockito.never())
+                .startImprovementFromAttribution(any(), any(), any(), any());
+        verifyNoInteractions(promptImproverService, skillDraftService, optReportToEventBridge);
+    }
+
+    @Test
     @DisplayName("skill + direct eventId: routes with explicit patternId + ownerId")
     void skillSurface_directEventId() {
         SkillDraftEntity draft = new SkillDraftEntity();

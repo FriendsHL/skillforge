@@ -150,6 +150,92 @@ public class BehaviorRuleImproverService {
     }
 
     /**
+     * AUTOEVOLVE-AGENT-LEVEL-BUNDLE Phase 2 (§8 #1) — hill-climb carry-forward
+     * sibling of {@link #startImprovementFromAttribution}. Instead of improving the
+     * agent's CURRENT ACTIVE baseline, it improves the SPECIFIED {@code baseVersionId}
+     * (the current-best behavior_rule version from a prior winning bundle), so the
+     * evolve loop can build the next rule candidate on top of the running best.
+     *
+     * <p>Differences from {@link #startImprovementFromAttribution}:
+     * <ul>
+     *   <li>baseline rulesJson comes from {@code baseVersionId} (loaded by id,
+     *       ownership-checked), not from {@code findByAgentIdAndStatus(ACTIVE)}.</li>
+     *   <li>the new candidate's {@code baselineVersionId} is set to
+     *       {@code baseVersionId}.</li>
+     * </ul>
+     * The reflection (priorChange / priorEvalReport) editor overload is Phase 3.
+     *
+     * @throws IllegalArgumentException baseVersionId unknown, or it belongs to a
+     *                                  different agent than {@code agentId}.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public ImprovementStartResult startImprovementFromBaseVersion(Long eventId,
+                                                                  String agentId,
+                                                                  String baseVersionId,
+                                                                  String attributedDescription,
+                                                                  Long ownerId) {
+        if (eventId == null) throw new IllegalArgumentException("eventId is required");
+        if (agentId == null || agentId.isBlank()) {
+            throw new IllegalArgumentException("agentId is required");
+        }
+        if (baseVersionId == null || baseVersionId.isBlank()) {
+            throw new IllegalArgumentException("baseVersionId is required");
+        }
+        if (attributedDescription == null || attributedDescription.isBlank()) {
+            throw new IllegalArgumentException("attributedDescription is required and must be non-blank");
+        }
+
+        AgentEntity agent = agentRepository.findById(Long.parseLong(agentId))
+                .orElseThrow(() -> new RuntimeException("Agent not found: " + agentId));
+
+        // Load the SPECIFIED base version (content-by-id) and validate ownership —
+        // a carry-forward must build on a version that belongs to this agent.
+        BehaviorRuleVersionEntity base = versionRepository.findById(baseVersionId)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "baseVersionId not found: " + baseVersionId));
+        if (!agentId.equals(base.getAgentId())) {
+            throw new IllegalArgumentException(
+                    "baseVersionId " + baseVersionId + " belongs to agent " + base.getAgentId()
+                            + " but agentId=" + agentId + " — cannot carry forward another agent's version");
+        }
+        String baselineRulesJson = base.getRulesJson() != null ? base.getRulesJson() : "[]";
+
+        int nextVersion = versionRepository.findMaxVersionNumber(agentId).orElse(0) + 1;
+
+        BehaviorRuleVersionEntity version = new BehaviorRuleVersionEntity();
+        version.setId(UUID.randomUUID().toString());
+        version.setAgentId(agentId);
+        version.setVersionNumber(nextVersion);
+        version.setStatus(BehaviorRuleVersionEntity.STATUS_CANDIDATE);
+        version.setSource(BehaviorRuleVersionEntity.SOURCE_ATTRIBUTION);
+        version.setSourceEventId(eventId);
+        version.setBaselineVersionId(baseVersionId);
+        version.setImprovementRationale(attributedDescription.trim());
+
+        try {
+            String improvedRules = generateCandidateRulesFromAttribution(
+                    baselineRulesJson, attributedDescription);
+            version.setRulesJson(improvedRules);
+        } catch (RuntimeException llmEx) {
+            version.setRulesJson("[]");
+            versionRepository.save(version);
+            log.error("Carry-forward behavior-rule LLM fill FAILED: versionId={} agentId={} "
+                            + "baseVersionId={} eventId={}: {}",
+                    version.getId(), agentId, baseVersionId, eventId, llmEx.getMessage());
+            throw llmEx;
+        }
+
+        versionRepository.save(version);
+
+        log.info("Carry-forward behavior_rule version created: versionId={} agentId={} "
+                        + "baseVersionId={} eventId={} ownerId={} versionNumber={} contentLen={}",
+                version.getId(), agentId, baseVersionId, eventId, ownerId, nextVersion,
+                version.getRulesJson() != null ? version.getRulesJson().length() : 0);
+
+        return new ImprovementStartResult(agentId, null, version.getId(), "PENDING");
+    }
+
+    /**
      * Build the LLM prompt + invoke the default provider to derive an improved
      * rules JSON from the baseline. System prompt mirrors
      * PromptImproverService.generateCandidatePromptFromAttribution's structure

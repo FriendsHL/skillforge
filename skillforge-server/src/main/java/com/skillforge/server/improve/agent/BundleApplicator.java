@@ -1,13 +1,21 @@
 package com.skillforge.server.improve.agent;
 
 import com.skillforge.core.model.AgentDefinition;
+import com.skillforge.core.model.AgentDefinition.BehaviorRulesConfig;
+import com.skillforge.core.model.AgentDefinition.BehaviorRulesConfig.CustomRule;
 import com.skillforge.server.entity.AgentEntity;
+import com.skillforge.server.entity.BehaviorRuleVersionEntity;
 import com.skillforge.server.entity.PromptVersionEntity;
+import com.skillforge.server.improve.behavior.BehaviorRuleVersionToCustomRulesMapper;
+import com.skillforge.server.repository.BehaviorRuleVersionRepository;
 import com.skillforge.server.repository.PromptVersionRepository;
 import com.skillforge.server.service.AgentService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
+
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * AUTOEVOLVE-AGENT-LEVEL-BUNDLE Phase 1 (§2.1) — applies a {@link Bundle}
@@ -18,10 +26,8 @@ import org.springframework.stereotype.Component;
  * agent's currently-active version (no change). Only the surfaces with a
  * non-null pointer are overridden.
  *
- * <p>Phase 1 only wires the <b>prompt</b> branch. The {@code behaviorRuleVersionId}
- * branch is NOT yet implemented and <b>throws</b> rather than silently skipping
- * (§7 W4) — a Phase-1.5 caller that supplies a behavior-rule pointer must get a
- * loud error, never a wrong A/B that quietly ignored the rule side.
+ * <p>Phase 2 wires both the <b>prompt</b> and <b>behavior_rule</b> branches. A
+ * surface with a null pointer keeps the agent's active version (no change).
  */
 @Component
 public class BundleApplicator {
@@ -30,13 +36,19 @@ public class BundleApplicator {
 
     private final AgentService agentService;
     private final PromptVersionRepository promptVersionRepository;
+    private final BehaviorRuleVersionRepository behaviorRuleVersionRepository;
+    private final BehaviorRuleVersionToCustomRulesMapper rulesMapper;
     private final AgentDefinitionCloner cloner;
 
     public BundleApplicator(AgentService agentService,
                             PromptVersionRepository promptVersionRepository,
+                            BehaviorRuleVersionRepository behaviorRuleVersionRepository,
+                            BehaviorRuleVersionToCustomRulesMapper rulesMapper,
                             AgentDefinitionCloner cloner) {
         this.agentService = agentService;
         this.promptVersionRepository = promptVersionRepository;
+        this.behaviorRuleVersionRepository = behaviorRuleVersionRepository;
+        this.rulesMapper = rulesMapper;
         this.cloner = cloner;
     }
 
@@ -45,13 +57,11 @@ public class BundleApplicator {
      * applied. A {@code null} bundle (or one with all-null pointers) returns the
      * agent's current definition unchanged.
      *
-     * @throws IllegalArgumentException a prompt version pointer is unknown, or its
-     *                                  {@code agentId} doesn't match {@code base}
-     *                                  (§7 W7 — a bundle pointer must belong to the
-     *                                  target agent; a dead pointer fails loud).
-     * @throws UnsupportedOperationException the bundle carries a non-null
-     *                                  {@code behaviorRuleVersionId} (not wired
-     *                                  until Phase 2, §7 W4).
+     * @throws IllegalArgumentException a prompt / behavior_rule version pointer is
+     *                                  unknown, or its {@code agentId} doesn't match
+     *                                  {@code base} (§7 W7 — a bundle pointer must
+     *                                  belong to the target agent; a dead pointer
+     *                                  fails loud).
      */
     public AgentDefinition apply(AgentEntity base, Bundle bundle) {
         // Deep-clone so the A/B's two def instances never share nested mutable
@@ -63,14 +73,6 @@ public class BundleApplicator {
         }
 
         String baseAgentId = String.valueOf(base.getId());
-
-        // behavior_rule branch — NOT wired until Phase 2 (§7 W4): fail loud, never
-        // silently skip a supplied pointer.
-        if (bundle.behaviorRuleVersionId() != null && !bundle.behaviorRuleVersionId().isBlank()) {
-            throw new UnsupportedOperationException(
-                    "behavior_rule bundle not wired until Phase 2 (behaviorRuleVersionId="
-                            + bundle.behaviorRuleVersionId() + ", agentId=" + baseAgentId + ")");
-        }
 
         // prompt branch: load the version content by id REGARDLESS of status
         // (§7 W7 — best顺延 may reference a non-active version), but validate the
@@ -88,6 +90,39 @@ public class BundleApplicator {
             def.setSystemPrompt(version.getContent());
             log.debug("[BundleApplicator] applied prompt version {} to agent {}",
                     bundle.promptVersionId(), baseAgentId);
+        }
+
+        // behavior_rule branch (Phase 2, §8 #2): load the version content by id
+        // REGARDLESS of status (best顺延 may reference a non-active version),
+        // validate ownership (W7), map rulesJson → CustomRules, APPEND to the
+        // agent's existing customRules (the rule version is an increment on top of
+        // the agent's active rules, same as injectCandidateRule in the behavior_rule
+        // with-vs-without path).
+        if (bundle.behaviorRuleVersionId() != null && !bundle.behaviorRuleVersionId().isBlank()) {
+            BehaviorRuleVersionEntity version = behaviorRuleVersionRepository
+                    .findById(bundle.behaviorRuleVersionId())
+                    .orElseThrow(() -> new IllegalArgumentException(
+                            "behavior_rule version not found for bundle pointer: "
+                                    + bundle.behaviorRuleVersionId()));
+            if (!baseAgentId.equals(version.getAgentId())) {
+                throw new IllegalArgumentException(
+                        "behavior_rule version " + bundle.behaviorRuleVersionId() + " belongs to agent "
+                                + version.getAgentId() + " but bundle targets agent " + baseAgentId
+                                + " — a bundle pointer must belong to the target agent");
+            }
+            BehaviorRulesConfig rules = def.getBehaviorRules();
+            if (rules == null) {
+                rules = new BehaviorRulesConfig();
+                def.setBehaviorRules(rules);
+            }
+            List<CustomRule> combined = new ArrayList<>();
+            if (rules.getCustomRules() != null) {
+                combined.addAll(rules.getCustomRules());
+            }
+            combined.addAll(rulesMapper.toCustomRules(version.getRulesJson()));
+            rules.setCustomRules(combined);
+            log.debug("[BundleApplicator] applied behavior_rule version {} to agent {} ({} custom rules total)",
+                    bundle.behaviorRuleVersionId(), baseAgentId, combined.size());
         }
 
         return def;

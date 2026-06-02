@@ -10,6 +10,7 @@ import com.skillforge.server.entity.BehaviorRuleAbRunEntity;
 import com.skillforge.server.entity.PromptAbRunEntity;
 import com.skillforge.server.entity.SkillAbRunEntity;
 import com.skillforge.server.improve.BehaviorRulePromotionService;
+import com.skillforge.server.improve.agent.AgentEvolveAbEvalService;
 import com.skillforge.server.repository.AgentEvolveAbRunRepository;
 import com.skillforge.server.repository.BehaviorRuleAbRunRepository;
 import com.skillforge.server.repository.PromptAbRunRepository;
@@ -298,10 +299,13 @@ public class GetAbResultTool implements Tool {
      * candidateScore, delta, deltaPassRate, wouldPromote, perScenario}} with the
      * same ownership-guard pattern as the other surfaces.
      *
-     * <p>{@code wouldPromote} is advisory only — there is NO agent-surface promote
-     * gate in V1 (PromoteCandidate rejects surface=agent, §7 B2). It reports a
-     * positive delta so the orchestrator can reason about keeping the bundle; it
-     * does not imply a promotable candidate.
+     * <p><b>Dual-criteria {@code wouldPromote}</b> (§8 子点②, vs-best, advisory only):
+     * {@code targetDeltaPp} meaningfully positive AND {@code regressionDeltaPp ≥}
+     * {@link AgentEvolveAbEvalService#REGRESSION_FLOOR_PP}. In regression-only mode
+     * (no target subset → {@code targetDeltaPp} null) it keeps only when the general
+     * subset strictly improves. There is NO agent-surface promote gate in V1
+     * (PromoteCandidate rejects surface=agent, §7 B2) — this is reasoning signal for
+     * the orchestrator (Phase 3), not a promotable verdict.
      */
     private Map<String, Object> readAgent(String abRunId, String targetAgentId) {
         AgentEvolveAbRunEntity run = agentEvolveAbRunRepository.findById(abRunId).orElse(null);
@@ -319,11 +323,28 @@ public class GetAbResultTool implements Tool {
         }
         Map<String, Object> r = base(run.getStatus(),
                 run.getBaselinePassRate(), run.getCandidatePassRate(), run.getDeltaPassRate());
-        Double delta = run.getDeltaPassRate();
-        // Advisory only — no agent-surface promote gate exists in V1.
-        r.put("wouldPromote", delta != null && delta > 0.0);
+        Double targetDeltaPp = run.getTargetDeltaPp();
+        Double regressionDeltaPp = run.getRegressionDeltaPp();
+        r.put("targetDeltaPp", targetDeltaPp);
+        r.put("regressionDeltaPp", regressionDeltaPp);
+        r.put("wouldPromote", agentWouldPromote(targetDeltaPp, regressionDeltaPp));
         r.put("perScenario", parsePerScenario(run.getAbScenarioResultsJson()));
         return r;
+    }
+
+    /**
+     * §8 子点② vs-best dual-criteria advisory gate. Target subset present →
+     * targetDeltaPp strictly &gt; floor AND regressionDeltaPp ≥ regression floor.
+     * No target subset (regression-only) → keep only when general strictly improves.
+     */
+    private static boolean agentWouldPromote(Double targetDeltaPp, Double regressionDeltaPp) {
+        if (targetDeltaPp == null) {
+            return regressionDeltaPp != null && regressionDeltaPp > 0.0;
+        }
+        boolean targetOk = targetDeltaPp > AgentEvolveAbEvalService.TARGET_MIN_DELTA_PP;
+        boolean regressionOk = regressionDeltaPp != null
+                && regressionDeltaPp >= AgentEvolveAbEvalService.REGRESSION_FLOOR_PP;
+        return targetOk && regressionOk;
     }
 
     /**
