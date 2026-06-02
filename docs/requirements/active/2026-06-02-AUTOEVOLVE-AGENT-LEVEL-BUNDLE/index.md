@@ -34,7 +34,7 @@
 
 1. **Phase 1 — 整-agent A/B 骨架** ✅ **已交付 2026-06-02**：包应用器 + TriggerAbEval/GetAbResult(surface=agent) + skipBaseline 顺延。**先用「只含 prompt 的包」验证** = 把现在的 prompt 爬坡用新整-agent 通道重跑（回归对照，确保不退化）。
 2. **Phase 2 — rules 进包** ✅ **已交付 2026-06-02**：多面候选（prompt+rules 一起改）+ target/general 不退化保护套在整体分上。
-3. **Phase 3 — orchestrator 种子 v2** + 反思 + 收尾汇总。
+3. **Phase 3 — orchestrator 种子 v2** + 反思 + 收尾汇总。 ✅ **已交付 2026-06-02**(活体多面协同候选 + 双标准 gate 正确拒一个 target↑但 general 腻蚀的候选）。
 4. **Phase 4 — skill 进包**（skill 的「应用到 AgentDefinition」+ draft 顺延）。
 5. **(远期)** tools / hook 各自先建面再进包。
 

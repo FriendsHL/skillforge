@@ -327,6 +327,13 @@ public class GetAbResultTool implements Tool {
         Double regressionDeltaPp = run.getRegressionDeltaPp();
         r.put("targetDeltaPp", targetDeltaPp);
         r.put("regressionDeltaPp", regressionDeltaPp);
+        // item 4 — absolute per-subset rates [0,100] (null in regression-only mode);
+        // the orchestrator remembers round-1 baselineGeneralRate as the vs-original
+        // general anchor and gates each candidate's candidateGeneralRate against it.
+        r.put("candidateTargetRate", run.getCandidateTargetRate());
+        r.put("candidateGeneralRate", run.getCandidateGeneralRate());
+        r.put("baselineTargetRate", run.getBaselineTargetRate());
+        r.put("baselineGeneralRate", run.getBaselineGeneralRate());
         r.put("wouldPromote", agentWouldPromote(targetDeltaPp, regressionDeltaPp));
         r.put("perScenario", parsePerScenario(run.getAbScenarioResultsJson()));
         return r;

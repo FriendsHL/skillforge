@@ -473,10 +473,11 @@ public class TriggerAbEvalTool implements Tool {
         if (baselineBundle == null) {
             return SkillResult.validationError("baselineBundle is required for surface=agent");
         }
+        // B1 (Phase 3 review): datasetVersionId is OPTIONAL for surface=agent —
+        // startAgentAb default-resolves the agent's default dataset when omitted, and
+        // resolving from the same agent default pins it across rounds (§8 子点①), so
+        // the orchestrator never has to source a dataset version.
         String datasetVersionId = trimToNull(input.get("datasetVersionId"));
-        if (datasetVersionId == null) {
-            return SkillResult.validationError("datasetVersionId is required for surface=agent");
-        }
         // W-WARN-2 (agent path ONLY): a genuinely-absent cachedBaselineScore = full
         // run (valid). But a SUPPLIED-yet-invalid value (non-numeric / out of [0,100])
         // must hard-fail here rather than silently degrading to a non-skip A/B —

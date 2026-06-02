@@ -8,6 +8,7 @@ import com.skillforge.server.entity.SkillDraftEntity;
 import com.skillforge.server.flywheel.run.FlywheelRunEntity;
 import com.skillforge.server.flywheel.run.FlywheelRunRepository;
 import com.skillforge.server.improve.BehaviorRuleImproverService;
+import com.skillforge.server.improve.EvolveEditorContext;
 import com.skillforge.server.improve.ImprovementStartResult;
 import com.skillforge.server.improve.PromptImproverService;
 import com.skillforge.server.improve.SkillDraftService;
@@ -16,6 +17,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -144,6 +146,61 @@ class GenerateCandidateToolTest {
         verify(behaviorRuleImproverService, org.mockito.Mockito.never())
                 .startImprovementFromAttribution(any(), any(), any(), any());
         verifyNoInteractions(promptImproverService, skillDraftService, optReportToEventBridge);
+    }
+
+    @Test
+    @DisplayName("behavior_rule + priorChange/priorEvalReport: routes to editor-aware overload (§9 line A #2)")
+    void behaviorRuleSurface_reflection_routesToEditorOverload() {
+        when(behaviorRuleImproverService.startImprovementFromAttribution(
+                eq(55L), eq("42"), eq("issue"), eq(0L), any(EvolveEditorContext.class)))
+                .thenReturn(new ImprovementStartResult("42", null, "brule-v8", "PENDING"));
+
+        Map<String, Object> input = new LinkedHashMap<>();
+        input.put("surface", "behavior_rule");
+        input.put("issue", "issue");
+        input.put("targetAgentId", "42");
+        input.put("eventId", "55");
+        input.put("priorChange", "last round added a refusal rule");
+        input.put("priorEvalReport", "{\"s1\":\"improved\"}");
+
+        SkillResult result = run(input);
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.getOutput()).contains("\"candidateId\":\"brule-v8\"");
+        ArgumentCaptor<EvolveEditorContext> editorCap = ArgumentCaptor.forClass(EvolveEditorContext.class);
+        verify(behaviorRuleImproverService).startImprovementFromAttribution(
+                eq(55L), eq("42"), eq("issue"), eq(0L), editorCap.capture());
+        EvolveEditorContext editor = editorCap.getValue();
+        assertThat(editor.priorChangeSummary()).isEqualTo("last round added a refusal rule");
+        assertThat(editor.priorEvalReportJson()).isEqualTo("{\"s1\":\"improved\"}");
+        // editor-aware overload chosen, NOT the no-editor one
+        verify(behaviorRuleImproverService, org.mockito.Mockito.never())
+                .startImprovementFromAttribution(any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("behavior_rule + baseVersionId + reflection: routes to editor-aware carry-forward overload")
+    void behaviorRuleSurface_baseVersion_reflection_routesToEditorCarryForward() {
+        when(behaviorRuleImproverService.startImprovementFromBaseVersion(
+                eq(55L), eq("42"), eq("best-brv"), eq("issue"), eq(0L), any(EvolveEditorContext.class)))
+                .thenReturn(new ImprovementStartResult("42", null, "brule-v9", "PENDING"));
+
+        Map<String, Object> input = new LinkedHashMap<>();
+        input.put("surface", "behavior_rule");
+        input.put("issue", "issue");
+        input.put("targetAgentId", "42");
+        input.put("eventId", "55");
+        input.put("baseVersionId", "best-brv");
+        input.put("priorChange", "prev change");
+
+        SkillResult result = run(input);
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.getOutput()).contains("\"candidateId\":\"brule-v9\"");
+        verify(behaviorRuleImproverService).startImprovementFromBaseVersion(
+                eq(55L), eq("42"), eq("best-brv"), eq("issue"), eq(0L), any(EvolveEditorContext.class));
+        verify(behaviorRuleImproverService, org.mockito.Mockito.never())
+                .startImprovementFromBaseVersion(any(), any(), any(), any(), any());
     }
 
     @Test

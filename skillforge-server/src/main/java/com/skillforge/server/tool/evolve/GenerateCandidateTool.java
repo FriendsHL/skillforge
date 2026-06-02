@@ -293,14 +293,31 @@ public class GenerateCandidateTool implements Tool {
                     // Hill-climb carry-forward (§8 #5): when baseVersionId is supplied
                     // (iter 2+), build the candidate on THAT behavior_rule version
                     // (the current-best from a prior winning bundle); else (iter 1)
-                    // improve the agent's active baseline. Mirrors prompt's
-                    // basePromptVersionId routing. Reflection editor overload = Phase 3.
+                    // improve the agent's active baseline.
+                    //
+                    // Reflection (§9 line A #2): when editor != null (priorChange /
+                    // priorEvalReport present, evolve round 2+), call the editor-aware
+                    // overloads so the candidate-rule LLM sees last round's change +
+                    // eval report. When editor == null, call the legacy overloads so
+                    // behavior — and the non-evolve attribution path — stays
+                    // byte-identical. Mirrors the PROMPT case exactly.
                     String baseVersionId = trimToNull(input.get("baseVersionId"));
-                    ImprovementStartResult r = baseVersionId != null
-                            ? behaviorRuleImproverService.startImprovementFromBaseVersion(
-                                    eventId, targetAgentId, baseVersionId, issue, ownerIdOrDefault(input))
-                            : behaviorRuleImproverService.startImprovementFromAttribution(
-                                    eventId, targetAgentId, issue, ownerIdOrDefault(input));
+                    ImprovementStartResult r;
+                    if (baseVersionId != null) {
+                        r = editor != null
+                                ? behaviorRuleImproverService.startImprovementFromBaseVersion(
+                                        eventId, targetAgentId, baseVersionId, issue,
+                                        ownerIdOrDefault(input), editor)
+                                : behaviorRuleImproverService.startImprovementFromBaseVersion(
+                                        eventId, targetAgentId, baseVersionId, issue,
+                                        ownerIdOrDefault(input));
+                    } else {
+                        r = editor != null
+                                ? behaviorRuleImproverService.startImprovementFromAttribution(
+                                        eventId, targetAgentId, issue, ownerIdOrDefault(input), editor)
+                                : behaviorRuleImproverService.startImprovementFromAttribution(
+                                        eventId, targetAgentId, issue, ownerIdOrDefault(input));
+                    }
                     yield r.promptVersionId();
                 }
                 case SKILL -> generateSkillDraft(input, issue, eventId);

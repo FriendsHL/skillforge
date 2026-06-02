@@ -121,6 +121,42 @@ class RecordIterationToolTest {
     }
 
     @Test
+    @DisplayName("§9 line A #3: records a surface=agent iteration with candidateBundle sidecar + global scores")
+    void recordsIteration_agentSurface_withBundleSidecar() {
+        when(flywheelRunService.findById("evolve-1")).thenReturn(Optional.of(evolveRun("evolve-1")));
+        when(flywheelRunService.appendEvolveIterationStep(eq("evolve-1"), eq(4), any(JsonNode.class)))
+                .thenReturn("step-agent");
+
+        Map<String, Object> input = new LinkedHashMap<>();
+        input.put("evolveRunId", "evolve-1");
+        input.put("iteration", 4);
+        input.put("surface", "agent");                 // Phase 3 opens this
+        input.put("changeDesc", "prompt+rule combined bundle");
+        input.put("candidateId", "ab-42");             // main pointer for the bundle
+        input.put("candidateBundle", Map.of("promptVersionId", "pv-9", "behaviorRuleVersionId", "brv-3"));
+        input.put("baselineScore", 50.0);
+        input.put("candidateScore", 66.0);
+        input.put("delta", 16.0);
+        input.put("kept", true);
+
+        SkillResult result = run(input);
+
+        assertThat(result.isSuccess()).isTrue();
+        ArgumentCaptor<JsonNode> payload = ArgumentCaptor.forClass(JsonNode.class);
+        verify(flywheelRunService).appendEvolveIterationStep(eq("evolve-1"), eq(4), payload.capture());
+        JsonNode p = payload.getValue();
+        assertThat(p.get("surface").asText()).isEqualTo("agent");
+        // chart-facing fields intact
+        assertThat(p.get("candidateId").asText()).isEqualTo("ab-42");
+        assertThat(p.get("baselineScore").asDouble()).isEqualTo(50.0);
+        assertThat(p.get("candidateScore").asDouble()).isEqualTo(66.0);
+        assertThat(p.get("delta").asDouble()).isEqualTo(16.0);
+        // bundle sidecar recorded as structured json
+        assertThat(p.get("candidateBundle").get("promptVersionId").asText()).isEqualTo("pv-9");
+        assertThat(p.get("candidateBundle").get("behaviorRuleVersionId").asText()).isEqualTo("brv-3");
+    }
+
+    @Test
     @DisplayName("run not found → validation error, no step appended")
     void runNotFound_validationError() {
         when(flywheelRunService.findById("missing")).thenReturn(Optional.empty());

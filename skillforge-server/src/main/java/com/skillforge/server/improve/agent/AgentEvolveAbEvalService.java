@@ -15,6 +15,7 @@ import com.skillforge.server.improve.behavior.AgentRoleResolver;
 import com.skillforge.server.repository.AgentEvolveAbRunRepository;
 import com.skillforge.server.repository.AgentRepository;
 import com.skillforge.server.repository.EvalScenarioDraftRepository;
+import com.skillforge.server.service.EvalDatasetService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -78,6 +79,7 @@ public class AgentEvolveAbEvalService {
     private final AbEvalPipeline abEvalPipeline;
     private final EvalScenarioDraftRepository scenarioRepository;
     private final AgentRoleResolver agentRoleResolver;
+    private final EvalDatasetService evalDatasetService;
     private final ChatEventBroadcaster broadcaster;
     private final ObjectMapper objectMapper;
     private final ExecutorService coordinatorExecutor;
@@ -89,6 +91,7 @@ public class AgentEvolveAbEvalService {
             AbEvalPipeline abEvalPipeline,
             EvalScenarioDraftRepository scenarioRepository,
             AgentRoleResolver agentRoleResolver,
+            EvalDatasetService evalDatasetService,
             ChatEventBroadcaster broadcaster,
             ObjectMapper objectMapper,
             @Qualifier("abEvalCoordinatorExecutor") ExecutorService coordinatorExecutor) {
@@ -98,6 +101,7 @@ public class AgentEvolveAbEvalService {
         this.abEvalPipeline = abEvalPipeline;
         this.scenarioRepository = scenarioRepository;
         this.agentRoleResolver = agentRoleResolver;
+        this.evalDatasetService = evalDatasetService;
         this.broadcaster = broadcaster;
         this.objectMapper = objectMapper;
         this.coordinatorExecutor = coordinatorExecutor;
@@ -127,8 +131,19 @@ public class AgentEvolveAbEvalService {
         if (agentId == null || agentId.isBlank()) {
             throw new IllegalArgumentException("agentId is required");
         }
-        if (datasetVersionId == null || datasetVersionId.isBlank()) {
-            throw new IllegalArgumentException("datasetVersionId is required");
+        // B1 (Phase 3 review): the orchestrator (and the agent-surface TriggerAbEval)
+        // need not supply a dataset version — default-resolve the agent's default
+        // dataset (mirrors BehaviorRuleAbEvalService). Resolving from the SAME agent
+        // default keeps it stable across rounds, which the §8 子点① same-dataset-
+        // across-rounds invariant relies on. Fail loud only if none can be resolved.
+        final String resolvedDatasetVersionId =
+                (datasetVersionId != null && !datasetVersionId.isBlank())
+                        ? datasetVersionId
+                        : evalDatasetService.findDefaultVersionIdForAgent(agentId);
+        if (resolvedDatasetVersionId == null || resolvedDatasetVersionId.isBlank()) {
+            throw new IllegalStateException(
+                    "No dataset version available for agent " + agentId
+                            + " (none supplied and no agent default configured)");
         }
         // BUG-1 guard: an out-of-range cached rate would silently make every
         // candidate "lose" — fail fast (mirrors AbEvalRunRequest).
@@ -165,10 +180,10 @@ public class AgentEvolveAbEvalService {
             // (dataset+role) id-sets. If the dataset version differs between the
             // winner run and now, that partition is over a mismatched scenario set →
             // biased baseline → false wouldPromote. Fail loud.
-            if (!datasetVersionId.equals(priorWinner.getDatasetVersionId())) {
+            if (!resolvedDatasetVersionId.equals(priorWinner.getDatasetVersionId())) {
                 throw new IllegalStateException(
                         "skip_baseline cached-rate dataset mismatch (§8 子点①): this run's datasetVersionId="
-                                + datasetVersionId + " but prior winner (abRunId=" + priorWinner.getId()
+                                + resolvedDatasetVersionId + " but prior winner (abRunId=" + priorWinner.getId()
                                 + ") was scored on datasetVersionId=" + priorWinner.getDatasetVersionId()
                                 + " — cannot reuse its per-subset rates across dataset versions");
             }
@@ -194,7 +209,7 @@ public class AgentEvolveAbEvalService {
         abRun.setAgentId(agentId);
         abRun.setCandidateBundleJson(candidateBundleJson);
         abRun.setBaselineBundleJson(baselineBundleJson);
-        abRun.setDatasetVersionId(datasetVersionId);
+        abRun.setDatasetVersionId(resolvedDatasetVersionId);
         abRun.setSkipBaseline(skipBaseline);
         abRun.setCachedBaselineRate(cachedBaselineRate);
         abRun.setPriorWinnerAbRunId(priorWinnerAbRunId);
@@ -292,6 +307,11 @@ public class AgentEvolveAbEvalService {
                     perScenario, priorWinnerPerScenario, split.targetIds(), split.generalIds());
             abRun.setTargetDeltaPp(subset.targetDeltaPp());
             abRun.setRegressionDeltaPp(subset.regressionDeltaPp());
+            // item 4: absolute per-subset rates (orchestrator's vs-original anchor).
+            abRun.setCandidateTargetRate(subset.candidateTargetRate());
+            abRun.setCandidateGeneralRate(subset.candidateGeneralRate());
+            abRun.setBaselineTargetRate(subset.baselineTargetRate());
+            abRun.setBaselineGeneralRate(subset.baselineGeneralRate());
 
             try {
                 abRun.setAbScenarioResultsJson(objectMapper.writeValueAsString(perScenario));
@@ -489,13 +509,28 @@ public class AgentEvolveAbEvalService {
             bestTarget = passRateOver(currentRun, targetIds, false);
             bestGeneral = passRateOver(currentRun, generalIds, false);
         }
-        Double targetDeltaPp = targetIds.isEmpty() ? null : (candTarget - bestTarget);
-        Double regressionDeltaPp = generalIds.isEmpty() ? null : (candGeneral - bestGeneral);
-        return new SubsetDeltas(targetDeltaPp, regressionDeltaPp);
+        boolean hasTarget = !targetIds.isEmpty();
+        boolean hasGeneral = !generalIds.isEmpty();
+        // Absolute per-subset rates (item 4): null when the subset is empty so the
+        // orchestrator can distinguish "0% measured" from "subset absent".
+        Double candidateTargetRate = hasTarget ? candTarget : null;
+        Double candidateGeneralRate = hasGeneral ? candGeneral : null;
+        Double baselineTargetRate = hasTarget ? bestTarget : null;
+        Double baselineGeneralRate = hasGeneral ? bestGeneral : null;
+        Double targetDeltaPp = hasTarget ? (candTarget - bestTarget) : null;
+        Double regressionDeltaPp = hasGeneral ? (candGeneral - bestGeneral) : null;
+        return new SubsetDeltas(targetDeltaPp, regressionDeltaPp,
+                candidateTargetRate, candidateGeneralRate, baselineTargetRate, baselineGeneralRate);
     }
 
-    /** Pure result of {@link #computeSubsetDeltas}; null = subset absent / no signal. */
-    record SubsetDeltas(Double targetDeltaPp, Double regressionDeltaPp) {}
+    /**
+     * Pure result of {@link #computeSubsetDeltas}; null = subset absent / no signal.
+     * Carries both the vs-best deltas AND the 4 absolute subset rates (item 4) the
+     * orchestrator needs for the vs-original general anchor.
+     */
+    record SubsetDeltas(Double targetDeltaPp, Double regressionDeltaPp,
+                        Double candidateTargetRate, Double candidateGeneralRate,
+                        Double baselineTargetRate, Double baselineGeneralRate) {}
 
     /**
      * Pass-rate (%) of {@code side} over the {@code ids} subset, counting passes via

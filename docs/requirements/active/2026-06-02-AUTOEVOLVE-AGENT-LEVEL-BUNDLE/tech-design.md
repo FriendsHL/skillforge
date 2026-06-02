@@ -177,6 +177,35 @@ skipBaseline 只跑候选臂，但 target/regression delta 要两臂的 per-subs
 6. 测试：多面 bundle（prompt+rules）整-agent A/B 出 target/regression；applicator rule 分支；startImprovementFromBaseVersion；cached-per-subset 基准重算；role fallback。
 7. 验证：mvn 全绿 + 手动多面 bundle A/B 出双标准分（无 orchestrator，脚本/手动触发）。
 
+## 9. Phase 3 设计决策（2026-06-02 用户 ratify）
+
+> Phase 1+2 已交付（a75894a / 3585124）。Phase 3 = orchestrator 种子 v2 + 反思 —— 真正把多轮整-agent 爬坡跑起来 + 首次活体（Ark）。
+
+### 决策（用户 ratify）
+- **面选择 = 每轮可多面协同改**：orchestrator 让 editor 判一个 issue 要不要 prompt+rule 一起改 → 一个候选可同时动两面（candidate bundle 两个指针都换）。best 包跨轮顺延。
+- **加 vs-原始 general anchor**（§8 设计债的解）：orchestrator 记住**第 1 轮原始 general 分**（首轮 A/B 两臂真跑，baseline general = 原始）；每个候选 gate = ① vs-best（target↑ 且 general 不跌破 vs best floor）**且** ② **general vs 原始 ≥ −ANCHOR**（绝对 anchor，挡慢腻蚀）。
+
+### Phase 3 两条线
+**A — 代码胶水（be-dev）**：
+1. `BehaviorRuleImproverService.generateCandidateRulesFromAttribution` 加 **reflection editor overload**（收 `EvolveEditorContext` priorChange/priorEvalReport 透进 LLM prompt，对齐 prompt 面）；`startImprovementFromBaseVersion` 加 editor 重载。
+2. `GenerateCandidateTool` behavior_rule case 透传 priorChange/priorEvalReport（现 prompt 有,behavior_rule Phase 2 只加了 baseVersionId）。
+3. `RecordIterationTool`：candidateId 表达一个 bundle（存 bundle json / 或主指针 + bundle 旁字段）；surface=agent 这轮允许记账（Phase 1 是干净拒绝,Phase 3 放开 agent 记账）；轨迹图 candidateId 适配。
+
+**B — orchestrator 种子 v2（林亲写 + 新 Vnnn migration 改 agent 19 system_prompt）**：bundle 状态机（currentBest bundle + global + target/general + **原始 general**）；每轮:选 issue → editor 判动哪些面 → 各面 GenerateCandidate(基于 best 包对应版本 + 反思) → 组 candidate bundle → TriggerAbEval(surface=agent, candidateBundle, baselineBundle=best, cachedBaselineScore=best global) → GetAbResult 拿 target/regression → **双 gate(vs-best + vs-原始 anchor)** → 赢则 best=candidate bundle → RecordIteration(surface=agent, bundle) → 反思组 priorEvalReport 反哺下轮 → 收尾汇总赢家 bundle,不 auto-promote。
+
+### Phase 3 验证
+mvn 全绿 + **活体多轮整-agent 爬坡(Ark,真 orchestrator 跑)** —— 整个功能第一次真跑起来。
+
+### Phase 3 review 结论 + 恢复 TODO（2026-06-02 暂停点）
+**状态**：线 A 代码 + V138 + 种子 v2(V139)**已写完 + 已 review**,但**未 commit、未活体验证**(活体 = Phase Final,留恢复时做)。mvn 2576/0/0(线 A,主会话亲验)。
+- **seed-logic-trace（critical）**：**1 BLOCKER B1** + 其余全 clean(round 分支 / bundle 顺延组包 / 双 gate / originalGeneral 记一次 / 反思 anchor / 不 Promote / 所有 param+字段名都对)。
+  - **B1（恢复必修,code 非 seed）**：seed 没给 `TriggerAbEval(surface=agent)` 传 `datasetVersionId`,而 `triggerAgent`(TriggerAbEvalTool:476-479)+ `startAgentAb`(AgentEvolveAbEvalService:130-132)硬要求它、无默认解析 → 活体 round1 就 validationError;且 子点① guard 要求跨轮**同一** datasetVersionId。**修法**：`startAgentAb` 在 datasetVersionId 省略时**从 agent 默认数据集解析**(re-inject `EvalDatasetService` + 镜像 `BehaviorRuleAbEvalService:165-167`;注意 Phase 2 把 EvalDatasetService 从该 service ctor 换出去了,要加回)→ 这样 seed 不传 datasetVersionId 是对的、且同 agent 默认跨轮稳定自动满足 子点①。**修完种子无需改**。
+- **java-reviewer(线 A)PASS + 2 warning**:**W1**(恢复修)`BehaviorRuleImproverService` 内层 5/6-arg overload 上的 `@Transactional(REQUIRES_NEW)` 是 self-invocation no-op(当前 caller 走 proxy 没事,未来 intra-bean 调才炸)→ 从内层 overload 删掉(外层 entry-point 已保证 REQUIRES_NEW);**W2** `yield r.promptVersionId()` 装 rule version id(Phase 2 既有,misleading,backlog)。
+- **database-reviewer(V138+V139)PASS + 1 warning(已修:V139 加 updated_at=NOW())**。
+- **nit**:V138 无 0-100 CHECK(全表惯例如此,不新增 gap);V139 supersedes 注释漏 V132(doc-only)。
+
+**恢复步骤**:① B1 code 修(startAgentAb 默认解析 datasetVersionId)+ W1 删内层 REQUIRES_NEW + 各自测试 → mvn 全绿 ② apply V138+V139(重启 server)③ **活体多轮整-agent 爬坡(Ark)** —— 触发 evolve run、看 orchestrator 真跑 bundle 爬坡、出真实轨迹 ④ docs + commit Phase 3。
+
 ## 6. 不做（V1 边界）
 - skill / tools / hook 进包（Phase 4 / 远期）
 - 按面归因消融（2^N 臂，永不在爬坡里做）

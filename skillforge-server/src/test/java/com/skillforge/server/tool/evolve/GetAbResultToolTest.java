@@ -262,6 +262,10 @@ class GetAbResultToolTest {
         e.setDeltaPassRate(16.0);
         e.setTargetDeltaPp(12.0);      // vs-best target up
         e.setRegressionDeltaPp(0.0);   // >= REGRESSION_FLOOR_PP (-3)
+        e.setCandidateTargetRate(72.0);
+        e.setCandidateGeneralRate(60.0);
+        e.setBaselineTargetRate(60.0);
+        e.setBaselineGeneralRate(60.0);
         when(agentEvolveAbRunRepository.findById("ae-1")).thenReturn(Optional.of(e));
 
         SkillResult result = run("agent", "ae-1", "42");
@@ -272,7 +276,42 @@ class GetAbResultToolTest {
         assertThat(out).contains("\"deltaPassRate\":16.0");
         assertThat(out).contains("\"targetDeltaPp\":12.0");
         assertThat(out).contains("\"regressionDeltaPp\":0.0");
+        // item 4 — absolute per-subset rates exposed for the vs-original anchor.
+        assertThat(out).contains("\"candidateTargetRate\":72.0");
+        assertThat(out).contains("\"candidateGeneralRate\":60.0");
+        assertThat(out).contains("\"baselineTargetRate\":60.0");
+        assertThat(out).contains("\"baselineGeneralRate\":60.0");
         assertThat(out).contains("\"wouldPromote\":true");   // target>0 AND regression>=floor
+    }
+
+    @Test
+    @DisplayName("agent regression-only mode: target rates null, general rates populated (item 4)")
+    void agentCompleted_regressionOnly_targetRatesNull() {
+        com.skillforge.server.entity.AgentEvolveAbRunEntity e =
+                new com.skillforge.server.entity.AgentEvolveAbRunEntity();
+        e.setAgentId("42");
+        e.setStatus("COMPLETED");
+        e.setBaselinePassRate(55.0);
+        e.setCandidatePassRate(60.0);
+        e.setDeltaPassRate(5.0);
+        // regression-only: no target subset → target delta + target rates null.
+        e.setTargetDeltaPp(null);
+        e.setRegressionDeltaPp(5.0);
+        e.setCandidateTargetRate(null);
+        e.setBaselineTargetRate(null);
+        e.setCandidateGeneralRate(60.0);
+        e.setBaselineGeneralRate(55.0);
+        when(agentEvolveAbRunRepository.findById("ae-ro")).thenReturn(Optional.of(e));
+
+        SkillResult result = run("agent", "ae-ro", "42");
+
+        String out = result.getOutput();
+        assertThat(out).contains("\"candidateTargetRate\":null");
+        assertThat(out).contains("\"baselineTargetRate\":null");
+        assertThat(out).contains("\"candidateGeneralRate\":60.0");
+        assertThat(out).contains("\"baselineGeneralRate\":55.0");
+        // regression-only advisory: general strictly improves → wouldPromote true
+        assertThat(out).contains("\"wouldPromote\":true");
     }
 
     @Test

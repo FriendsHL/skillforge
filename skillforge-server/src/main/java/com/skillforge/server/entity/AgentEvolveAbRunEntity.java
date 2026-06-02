@@ -70,6 +70,21 @@ public class AgentEvolveAbRunEntity {
     @Column(name = "regression_delta_pp")
     private Double regressionDeltaPp;
 
+    // Phase 3 line A item 4 (V138): absolute per-subset pass-rates [0,100]. Target
+    // rates are NULL in regression-only mode. The orchestrator reads
+    // baseline_general_rate of the FIRST round as the vs-original general anchor.
+    @Column(name = "candidate_target_rate")
+    private Double candidateTargetRate;
+
+    @Column(name = "candidate_general_rate")
+    private Double candidateGeneralRate;
+
+    @Column(name = "baseline_target_rate")
+    private Double baselineTargetRate;
+
+    @Column(name = "baseline_general_rate")
+    private Double baselineGeneralRate;
+
     @Column(name = "ab_scenario_results_json", columnDefinition = "TEXT")
     private String abScenarioResultsJson;
 
@@ -140,6 +155,18 @@ public class AgentEvolveAbRunEntity {
 
     public Double getRegressionDeltaPp() { return regressionDeltaPp; }
     public void setRegressionDeltaPp(Double regressionDeltaPp) { this.regressionDeltaPp = regressionDeltaPp; }
+
+    public Double getCandidateTargetRate() { return candidateTargetRate; }
+    public void setCandidateTargetRate(Double candidateTargetRate) { this.candidateTargetRate = candidateTargetRate; }
+
+    public Double getCandidateGeneralRate() { return candidateGeneralRate; }
+    public void setCandidateGeneralRate(Double candidateGeneralRate) { this.candidateGeneralRate = candidateGeneralRate; }
+
+    public Double getBaselineTargetRate() { return baselineTargetRate; }
+    public void setBaselineTargetRate(Double baselineTargetRate) { this.baselineTargetRate = baselineTargetRate; }
+
+    public Double getBaselineGeneralRate() { return baselineGeneralRate; }
+    public void setBaselineGeneralRate(Double baselineGeneralRate) { this.baselineGeneralRate = baselineGeneralRate; }
 
     public String getAbScenarioResultsJson() { return abScenarioResultsJson; }
     public void setAbScenarioResultsJson(String abScenarioResultsJson) { this.abScenarioResultsJson = abScenarioResultsJson; }

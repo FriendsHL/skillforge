@@ -60,10 +60,15 @@ public class RecordIterationTool implements Tool {
                 + "Inputs:\n"
                 + "- \"evolveRunId\": the evolve run id.\n"
                 + "- \"iteration\": 1-based iteration index (integer).\n"
-                + "- \"surface\": \"prompt\" / \"skill\" / \"behavior_rule\".\n"
+                + "- \"surface\": \"prompt\" / \"skill\" / \"behavior_rule\" / \"agent\".\n"
                 + "- \"changeDesc\": short description of what this candidate changed.\n"
-                + "- \"candidateId\": the candidate id evaluated this turn.\n"
-                + "- \"baselineScore\" / \"candidateScore\" / \"delta\": numbers from GetAbResult.\n"
+                + "- \"candidateId\": the candidate id evaluated this turn. For surface=agent this "
+                + "represents a BUNDLE — pass the bundle's main pointer (or its json); optionally also "
+                + "pass candidateBundle for the full tuple.\n"
+                + "- \"candidateBundle\" (optional, surface=agent): the bundle pointer tuple "
+                + "{promptVersionId?, behaviorRuleVersionId?} recorded as a sidecar for traceability.\n"
+                + "- \"baselineScore\" / \"candidateScore\" / \"delta\": numbers from GetAbResult "
+                + "(the GLOBAL scores — the trajectory chart reads these).\n"
                 + "- \"kept\": boolean — whether you keep this candidate (records it; does NOT promote).\n"
                 + "- \"abRunId\" (optional): the A/B run id for traceability.\n"
                 + "Returns the recorded stepId.";
@@ -82,13 +87,17 @@ public class RecordIterationTool implements Tool {
         properties.put("iteration", Map.of("type", "integer",
                 "description", "1-based iteration index."));
         properties.put("surface", Map.of("type", "string",
-                // No "agent" here (§7 B2): V1 records per-surface iterations only.
-                "enum", EvolveSurface.v1NonAgentWireValues(),
-                "description", "Optimisation surface."));
+                // §9 line A #3: Phase 3 opens surface=agent recording (Phase 1 rejected it).
+                "enum", EvolveSurface.agentAbWireValues(),
+                "description", "Optimisation surface (prompt / skill / behavior_rule / agent)."));
         properties.put("changeDesc", Map.of("type", "string",
                 "description", "Short description of what this candidate changed."));
         properties.put("candidateId", Map.of("type", "string",
-                "description", "The candidate id evaluated this turn."));
+                "description", "The candidate id evaluated this turn (a bundle main pointer / json "
+                        + "for surface=agent)."));
+        properties.put("candidateBundle", Map.of("type", "object",
+                "description", "surface=agent only: the bundle pointer tuple "
+                        + "{promptVersionId?, behaviorRuleVersionId?}, recorded as a sidecar."));
         properties.put("baselineScore", Map.of("type", "number",
                 "description", "Baseline score from GetAbResult."));
         properties.put("candidateScore", Map.of("type", "number",
@@ -139,17 +148,9 @@ public class RecordIterationTool implements Tool {
             }
             EvolveSurface surface = EvolveSurface.fromWire(trimToNull(input.get("surface")));
             if (surface == null) {
-                // §7 B2 / W-WARN-1: this tool doesn't accept agent — don't list it.
+                // §9 line A #3: agent is now accepted, so the full list is correct here.
                 return SkillResult.validationError(
-                        "surface is required and must be one of: "
-                                + EvolveSurface.v1NonAgentAcceptedValues());
-            }
-            // §7 B2: V1 records per-surface iterations only — reject surface=agent
-            // cleanly (the orchestrator records the per-surface change it made).
-            if (surface == EvolveSurface.AGENT) {
-                return SkillResult.validationError(
-                        "surface=agent is not supported by RecordIteration in V1: record the "
-                                + "per-surface change (prompt / skill / behavior_rule) you made this turn");
+                        "surface is required and must be one of: " + EvolveSurface.acceptedValues());
             }
             String changeDesc = trimToNull(input.get("changeDesc"));
             if (changeDesc == null) {
@@ -177,6 +178,11 @@ public class RecordIterationTool implements Tool {
             if (abRunId != null) {
                 payload.put("abRunId", abRunId);
             }
+            // §9 line A #3: surface=agent records a BUNDLE. The candidateId above
+            // stays the main pointer / json (trajectory chart reads candidateId +
+            // global baselineScore/candidateScore/delta unchanged); candidateBundle
+            // is an optional structured sidecar for full traceability.
+            putBundleSidecar(payload, input.get("candidateBundle"));
 
             String stepId = flywheelRunService.appendEvolveIterationStep(evolveRunId, iteration, payload);
 
@@ -195,6 +201,31 @@ public class RecordIterationTool implements Tool {
         } catch (Exception e) {
             log.error("RecordIteration execute failed", e);
             return SkillResult.error("RecordIteration error: " + e.getMessage());
+        }
+    }
+
+    /**
+     * §9 line A #3 — record the agent bundle tuple as a structured sidecar. Accepts a
+     * JSON object (Map, the usual tool-call shape) or a JSON string; absent / blank →
+     * no-op. Best-effort: a non-object string that fails to parse is stored as text so
+     * recording never fails just because the bundle was passed oddly.
+     */
+    private void putBundleSidecar(ObjectNode node, Object raw) {
+        if (raw == null) {
+            return;
+        }
+        if (raw instanceof Map<?, ?> map) {
+            node.set("candidateBundle", objectMapper.valueToTree(map));
+            return;
+        }
+        String s = String.valueOf(raw).trim();
+        if (s.isEmpty()) {
+            return;
+        }
+        try {
+            node.set("candidateBundle", objectMapper.readTree(s));
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            node.put("candidateBundle", s);
         }
     }
 

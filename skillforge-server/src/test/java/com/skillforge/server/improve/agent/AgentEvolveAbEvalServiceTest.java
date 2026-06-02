@@ -51,6 +51,7 @@ class AgentEvolveAbEvalServiceTest {
     @Mock private AbEvalPipeline abEvalPipeline;
     @Mock private EvalScenarioDraftRepository scenarioRepository;
     @Mock private AgentRoleResolver agentRoleResolver;
+    @Mock private com.skillforge.server.service.EvalDatasetService evalDatasetService;
     @Mock private ChatEventBroadcaster broadcaster;
     @Mock private ExecutorService coordinatorExecutor;
 
@@ -61,7 +62,8 @@ class AgentEvolveAbEvalServiceTest {
     void setUp() {
         service = new AgentEvolveAbEvalService(
                 abRunRepository, agentRepository, bundleApplicator, abEvalPipeline,
-                scenarioRepository, agentRoleResolver, broadcaster, objectMapper, coordinatorExecutor);
+                scenarioRepository, agentRoleResolver, evalDatasetService, broadcaster, objectMapper,
+                coordinatorExecutor);
     }
 
     // ---- computeDeltas (pure) -------------------------------------------------
@@ -215,6 +217,36 @@ class AgentEvolveAbEvalServiceTest {
         assertThat(saved.getAgentId()).isEqualTo("7");
         // No active tx in a plain unit call → defers immediately on the (mocked) executor.
         verify(coordinatorExecutor).execute(any());
+    }
+
+    @Test
+    @DisplayName("startAgentAb (B1) null datasetVersionId → resolves the agent's default dataset")
+    void startAgentAb_nullDataset_resolvesAgentDefault() {
+        Bundle candidate = new Bundle("pv-cand", null);
+        Bundle baseline = new Bundle(null, null);
+        lenient().when(abRunRepository.findFirstByAgentIdAndCandidateBundleJsonAndStatusInOrderByStartedAtDesc(
+                anyString(), anyString(), any())).thenReturn(Optional.empty());
+        when(abRunRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(evalDatasetService.findDefaultVersionIdForAgent("7")).thenReturn("dv-default");
+
+        String abRunId = service.startAgentAb(candidate, baseline, "7", null, null);
+
+        assertThat(abRunId).isNotBlank();
+        ArgumentCaptor<AgentEvolveAbRunEntity> captor = ArgumentCaptor.forClass(AgentEvolveAbRunEntity.class);
+        verify(abRunRepository).save(captor.capture());
+        assertThat(captor.getValue().getDatasetVersionId()).isEqualTo("dv-default");
+    }
+
+    @Test
+    @DisplayName("startAgentAb (B1) null datasetVersionId + no agent default → fails loud")
+    void startAgentAb_nullDataset_noDefault_throws() {
+        Bundle candidate = new Bundle("pv-cand", null);
+        Bundle baseline = new Bundle(null, null);
+        when(evalDatasetService.findDefaultVersionIdForAgent("7")).thenReturn(null);
+
+        assertThatThrownBy(() -> service.startAgentAb(candidate, baseline, "7", null, null))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("No dataset version available");
     }
 
     @Test

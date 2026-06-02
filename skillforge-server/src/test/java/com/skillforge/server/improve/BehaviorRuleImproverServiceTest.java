@@ -171,6 +171,49 @@ class BehaviorRuleImproverServiceTest {
     }
 
     @Test
+    @DisplayName("reflection editor (§9 line A #1): non-null editor injects priorChange + priorEvalReport blocks into the LLM prompt")
+    void editorOverload_injectsReflectionBlocks() {
+        AgentEntity agent = new AgentEntity();
+        agent.setId(10L);
+        when(agentRepository.findById(10L)).thenReturn(Optional.of(agent));
+        when(versionRepository.findByAgentIdAndStatus("10", BehaviorRuleVersionEntity.STATUS_ACTIVE))
+                .thenReturn(Optional.empty());
+        when(versionRepository.findMaxVersionNumber("10")).thenReturn(Optional.of(0));
+
+        EvolveEditorContext editor = new EvolveEditorContext(
+                "last round I added a refusal rule", "{\"s1\":\"improved\",\"s2\":\"regressed\"}");
+
+        service.startImprovementFromAttribution(42L, "10", "tighten refusal", 7L, editor);
+
+        // The reflection blocks (stable Chinese labels) + the orchestrator's inputs
+        // reached the candidate-rule LLM user message.
+        assertThat(provider.lastUserMessage)
+                .contains("目标 agent 当前配置")
+                .contains("上一轮改动")
+                .contains("last round I added a refusal rule")
+                .contains("上一轮评测报告")
+                .contains("regressed");
+    }
+
+    @Test
+    @DisplayName("reflection editor: editor=null path stays byte-identical (no reflection blocks)")
+    void editorNull_noReflectionBlocks() {
+        AgentEntity agent = new AgentEntity();
+        agent.setId(10L);
+        when(agentRepository.findById(10L)).thenReturn(Optional.of(agent));
+        when(versionRepository.findByAgentIdAndStatus("10", BehaviorRuleVersionEntity.STATUS_ACTIVE))
+                .thenReturn(Optional.empty());
+        when(versionRepository.findMaxVersionNumber("10")).thenReturn(Optional.of(0));
+
+        service.startImprovementFromAttribution(42L, "10", "tighten refusal", 7L);
+
+        assertThat(provider.lastUserMessage)
+                .doesNotContain("目标 agent 当前配置")
+                .doesNotContain("上一轮改动")
+                .doesNotContain("上一轮评测报告");
+    }
+
+    @Test
     @DisplayName("LLM failure: persists row with rulesJson=\"[]\" for audit then rethrows so outer tx records candidate_failed")
     void llmFailure_persistsAuditRowAndRethrows() {
         AgentEntity agent = new AgentEntity();
