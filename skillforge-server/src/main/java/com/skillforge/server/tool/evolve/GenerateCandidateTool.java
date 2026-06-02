@@ -188,18 +188,25 @@ public class GenerateCandidateTool implements Tool {
                         + "improving THIS behavior_rule version (the current-best from a prior "
                         + "winning iteration) instead of the agent's active rules. Omit on iteration 1."
         ));
+        properties.put("baseDraftId", Map.of(
+                "type", "string",
+                "description", "surface=skill hill-climb only: build the candidate by improving "
+                        + "THIS skill draft (the current-best from a prior winning iteration) "
+                        + "instead of generating a fresh skill. Omit on iteration 1."
+        ));
         properties.put("priorChange", Map.of(
                 "type", "string",
-                "description", "surface=prompt reflection (evolve only): what was changed LAST "
-                        + "round (the prior iteration's changeDesc). Omit on the first round; the "
-                        + "editor uses it to avoid repeating / to build on the last change."
+                "description", "reflection (evolve only; applies to surface=prompt / behavior_rule / "
+                        + "skill): what was changed LAST round (the prior iteration's changeDesc). "
+                        + "Omit on the first round; the editor uses it to avoid repeating / to build "
+                        + "on the last change."
         ));
         properties.put("priorEvalReport", Map.of(
                 "type", "string",
-                "description", "surface=prompt reflection (evolve only): last round's eval report "
-                        + "(per-case improved/regressed + reasons + overall delta), compact JSON or "
-                        + "prose. Omit on the first round; the editor uses it to treat regressed "
-                        + "cases as negative examples and keep improved directions."
+                "description", "reflection (evolve only; applies to surface=prompt / behavior_rule / "
+                        + "skill): last round's eval report (per-case improved/regressed + reasons + "
+                        + "overall delta), compact JSON or prose. Omit on the first round; the editor "
+                        + "uses it to treat regressed cases as negative examples and keep improved directions."
         ));
 
         Map<String, Object> schema = new LinkedHashMap<>();
@@ -320,7 +327,7 @@ public class GenerateCandidateTool implements Tool {
                     }
                     yield r.promptVersionId();
                 }
-                case SKILL -> generateSkillDraft(input, issue, eventId);
+                case SKILL -> generateSkillDraft(input, issue, eventId, editor);
                 // AGENT is rejected by the early guard above; this arm only keeps
                 // the switch exhaustive over EvolveSurface.
                 case AGENT -> throw new IllegalStateException(
@@ -424,12 +431,28 @@ public class GenerateCandidateTool implements Tool {
      * the system user. A deterministic suggested name mirrors
      * {@code AttributionApprovalService.dispatchSkillSurface}.
      */
-    private String generateSkillDraft(Map<String, Object> input, String issue, Long eventId) {
+    private String generateSkillDraft(Map<String, Object> input, String issue, Long eventId,
+                                      EvolveEditorContext editor) {
+        Long ownerId = ownerIdOrDefault(input);
+
+        // Hill-climb carry-forward (§10 #6): when baseDraftId is supplied (iter 2+),
+        // build the candidate on THAT skill draft (the current-best from a prior
+        // winning bundle); else (iter 1) generate a fresh draft. Reflection
+        // (priorChange / priorEvalReport) reaches the carry-forward path via the
+        // editor-aware overload; iter-1 fresh generation has no base to reflect on.
+        // Mirrors the BEHAVIOR_RULE case.
+        String baseDraftId = trimToNull(input.get("baseDraftId"));
+        if (baseDraftId != null) {
+            SkillDraftEntity draft = editor != null
+                    ? skillDraftService.createDraftFromBaseDraft(eventId, baseDraftId, issue, ownerId, editor)
+                    : skillDraftService.createDraftFromBaseDraft(eventId, baseDraftId, issue, ownerId);
+            return draft.getId();
+        }
+
         Long patternId = parseLong(input.get("patternId"));
         if (patternId == null) {
             patternId = eventId;   // synth — audit/naming only, not a hard FK
         }
-        Long ownerId = ownerIdOrDefault(input);
         String suggestedSkillName = "EvolveSkill" + patternId + "_" + eventId;
         SkillDraftEntity draft = skillDraftService.createDraftFromAttribution(
                 eventId,

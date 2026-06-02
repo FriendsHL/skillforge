@@ -6,10 +6,13 @@ import com.skillforge.core.model.AgentDefinition;
 import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.BehaviorRuleVersionEntity;
 import com.skillforge.server.entity.PromptVersionEntity;
+import com.skillforge.server.entity.SkillDraftEntity;
 import com.skillforge.server.improve.behavior.BehaviorRuleVersionToCustomRulesMapper;
 import com.skillforge.server.repository.BehaviorRuleVersionRepository;
 import com.skillforge.server.repository.PromptVersionRepository;
+import com.skillforge.server.repository.SkillDraftRepository;
 import com.skillforge.server.service.AgentService;
+import com.skillforge.server.skill.SkillDefinitionFromDraft;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -35,6 +38,7 @@ class BundleApplicatorTest {
     @Mock private AgentService agentService;
     @Mock private PromptVersionRepository promptVersionRepository;
     @Mock private BehaviorRuleVersionRepository behaviorRuleVersionRepository;
+    @Mock private SkillDraftRepository skillDraftRepository;
 
     // Mirror Spring Boot's auto-configured ObjectMapper (FAIL_ON_UNKNOWN_PROPERTIES
     // disabled) so the JSON-roundtrip clone tolerates AgentDefinition's derived
@@ -48,7 +52,9 @@ class BundleApplicatorTest {
     void setUp() {
         applicator = new BundleApplicator(
                 agentService, promptVersionRepository, behaviorRuleVersionRepository,
+                skillDraftRepository,
                 new BehaviorRuleVersionToCustomRulesMapper(objectMapper),
+                new SkillDefinitionFromDraft(),
                 new AgentDefinitionCloner(objectMapper));
         base = new AgentEntity();
         base.setId(7L);
@@ -75,17 +81,31 @@ class BundleApplicatorTest {
         return v;
     }
 
+    private SkillDraftEntity skillDraft(String id, Long targetAgentId, String name) {
+        SkillDraftEntity d = new SkillDraftEntity();
+        d.setId(id);
+        d.setOwnerId(1L);
+        d.setName(name);
+        d.setDescription("desc");
+        d.setTriggers("alpha,beta");
+        d.setRequiredTools("Bash,Read");
+        d.setPromptHint("do the thing");
+        d.setTargetAgentId(targetAgentId);
+        return d;
+    }
+
     @Test
-    @DisplayName("null bundle returns the agent's current definition unchanged")
+    @DisplayName("null bundle returns the agent's current definition unchanged + no extra skills")
     void nullBundle_baseUnchanged() {
-        AgentDefinition result = applicator.apply(base, null);
-        assertThat(result.getSystemPrompt()).isEqualTo("ACTIVE PROMPT");
+        BundleApplicator.ApplyResult result = applicator.apply(base, null);
+        assertThat(result.def().getSystemPrompt()).isEqualTo("ACTIVE PROMPT");
+        assertThat(result.extraSkills()).isEmpty();
     }
 
     @Test
     @DisplayName("all-null pointers returns the agent's current definition unchanged")
     void allNullPointers_baseUnchanged() {
-        AgentDefinition result = applicator.apply(base, new Bundle(null, null));
+        AgentDefinition result = applicator.apply(base, new Bundle(null, null, null)).def();
         assertThat(result.getSystemPrompt()).isEqualTo("ACTIVE PROMPT");
     }
 
@@ -95,7 +115,7 @@ class BundleApplicatorTest {
         when(promptVersionRepository.findById("pv1"))
                 .thenReturn(Optional.of(promptVersion("pv1", "7", "NEW PROMPT")));
 
-        AgentDefinition result = applicator.apply(base, new Bundle("pv1", null));
+        AgentDefinition result = applicator.apply(base, new Bundle("pv1", null, null)).def();
 
         assertThat(result.getSystemPrompt()).isEqualTo("NEW PROMPT");
     }
@@ -106,7 +126,7 @@ class BundleApplicatorTest {
         when(promptVersionRepository.findById("pv9"))
                 .thenReturn(Optional.of(promptVersion("pv9", "9", "OTHER AGENT PROMPT")));
 
-        assertThatThrownBy(() -> applicator.apply(base, new Bundle("pv9", null)))
+        assertThatThrownBy(() -> applicator.apply(base, new Bundle("pv9", null, null)))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("belongs to agent 9");
     }
@@ -116,7 +136,7 @@ class BundleApplicatorTest {
     void promptBranch_unknownVersion_throws() {
         when(promptVersionRepository.findById("ghost")).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> applicator.apply(base, new Bundle("ghost", null)))
+        assertThatThrownBy(() -> applicator.apply(base, new Bundle("ghost", null, null)))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("prompt version not found");
     }
@@ -128,7 +148,7 @@ class BundleApplicatorTest {
         when(behaviorRuleVersionRepository.findById("brv1"))
                 .thenReturn(Optional.of(ruleVersion("brv1", "7", rulesJson)));
 
-        AgentDefinition result = applicator.apply(base, new Bundle(null, "brv1"));
+        AgentDefinition result = applicator.apply(base, new Bundle(null, "brv1", null)).def();
 
         assertThat(result.getBehaviorRules()).isNotNull();
         assertThat(result.getBehaviorRules().getCustomRules())
@@ -144,7 +164,7 @@ class BundleApplicatorTest {
         when(behaviorRuleVersionRepository.findById("brv9"))
                 .thenReturn(Optional.of(ruleVersion("brv9", "9", "[]")));
 
-        assertThatThrownBy(() -> applicator.apply(base, new Bundle(null, "brv9")))
+        assertThatThrownBy(() -> applicator.apply(base, new Bundle(null, "brv9", null)))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("belongs to agent 9");
     }
@@ -154,7 +174,7 @@ class BundleApplicatorTest {
     void ruleBranch_unknownVersion_throws() {
         when(behaviorRuleVersionRepository.findById("ghost")).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> applicator.apply(base, new Bundle(null, "ghost")))
+        assertThatThrownBy(() -> applicator.apply(base, new Bundle(null, "ghost", null)))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("behavior_rule version not found");
     }
@@ -168,11 +188,63 @@ class BundleApplicatorTest {
         when(behaviorRuleVersionRepository.findById("brv1"))
                 .thenReturn(Optional.of(ruleVersion("brv1", "7", rulesJson)));
 
-        AgentDefinition result = applicator.apply(base, new Bundle("pv1", "brv1"));
+        AgentDefinition result = applicator.apply(base, new Bundle("pv1", "brv1", null)).def();
 
         assertThat(result.getSystemPrompt()).isEqualTo("NEW PROMPT");
         assertThat(result.getBehaviorRules().getCustomRules())
                 .extracting(AgentDefinition.BehaviorRulesConfig.CustomRule::getText)
                 .anySatisfy(t -> assertThat(t).contains("be concise"));
+    }
+
+    // ---- skill branch (Phase 4 §10 #4) ---------------------------------------
+
+    @Test
+    @DisplayName("skill pointer adds the draft's name to skillIds + carries the def in extraSkills")
+    void skillBranch_addsNameAndCarriesDef() {
+        when(skillDraftRepository.findById("sd1"))
+                .thenReturn(Optional.of(skillDraft("sd1", 7L, "MySkill")));
+
+        BundleApplicator.ApplyResult result = applicator.apply(base, new Bundle(null, null, "sd1"));
+
+        assertThat(result.def().getSkillIds()).contains("MySkill");
+        assertThat(result.extraSkills()).hasSize(1);
+        assertThat(result.extraSkills().get(0).getName()).isEqualTo("MySkill");
+        // CRITICAL: allowedTools mirrors requiredTools (else the tool-gate rejects it)
+        assertThat(result.extraSkills().get(0).getAllowedTools()).containsExactly("Bash", "Read");
+        // prompt left untouched when only the skill pointer is set
+        assertThat(result.def().getSystemPrompt()).isEqualTo("ACTIVE PROMPT");
+    }
+
+    @Test
+    @DisplayName("skill draft with null targetAgentId is tolerated (system-driven evolve draft)")
+    void skillBranch_nullTargetAgent_tolerated() {
+        when(skillDraftRepository.findById("sd1"))
+                .thenReturn(Optional.of(skillDraft("sd1", null, "MySkill")));
+
+        BundleApplicator.ApplyResult result = applicator.apply(base, new Bundle(null, null, "sd1"));
+
+        assertThat(result.extraSkills()).hasSize(1);
+        assertThat(result.def().getSkillIds()).contains("MySkill");
+    }
+
+    @Test
+    @DisplayName("skill draft scoped to a DIFFERENT agent fails loud (W7 ownership)")
+    void skillBranch_crossAgent_throws() {
+        when(skillDraftRepository.findById("sd9"))
+                .thenReturn(Optional.of(skillDraft("sd9", 9L, "OtherSkill")));
+
+        assertThatThrownBy(() -> applicator.apply(base, new Bundle(null, null, "sd9")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("targets agent 9");
+    }
+
+    @Test
+    @DisplayName("unknown skill draft pointer fails loud (W7 dead pointer)")
+    void skillBranch_unknownDraft_throws() {
+        when(skillDraftRepository.findById("ghost")).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> applicator.apply(base, new Bundle(null, null, "ghost")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("skill draft not found");
     }
 }

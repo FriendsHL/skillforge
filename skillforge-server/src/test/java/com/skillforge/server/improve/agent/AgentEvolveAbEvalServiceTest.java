@@ -198,8 +198,8 @@ class AgentEvolveAbEvalServiceTest {
     @Test
     @DisplayName("startAgentAb (fresh, no cached rate) builds a PENDING row + defers run")
     void startAgentAb_freshBaseline_buildsPendingRow() {
-        Bundle candidate = new Bundle("pv-cand", null);
-        Bundle baseline = new Bundle(null, null);
+        Bundle candidate = new Bundle("pv-cand", null, null);
+        Bundle baseline = new Bundle(null, null, null);
         lenient().when(abRunRepository.findFirstByAgentIdAndCandidateBundleJsonAndStatusInOrderByStartedAtDesc(
                 anyString(), anyString(), any())).thenReturn(Optional.empty());
         when(abRunRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
@@ -222,8 +222,8 @@ class AgentEvolveAbEvalServiceTest {
     @Test
     @DisplayName("startAgentAb (B1) null datasetVersionId → resolves the agent's default dataset")
     void startAgentAb_nullDataset_resolvesAgentDefault() {
-        Bundle candidate = new Bundle("pv-cand", null);
-        Bundle baseline = new Bundle(null, null);
+        Bundle candidate = new Bundle("pv-cand", null, null);
+        Bundle baseline = new Bundle(null, null, null);
         lenient().when(abRunRepository.findFirstByAgentIdAndCandidateBundleJsonAndStatusInOrderByStartedAtDesc(
                 anyString(), anyString(), any())).thenReturn(Optional.empty());
         when(abRunRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
@@ -240,8 +240,8 @@ class AgentEvolveAbEvalServiceTest {
     @Test
     @DisplayName("startAgentAb (B1) null datasetVersionId + no agent default → fails loud")
     void startAgentAb_nullDataset_noDefault_throws() {
-        Bundle candidate = new Bundle("pv-cand", null);
-        Bundle baseline = new Bundle(null, null);
+        Bundle candidate = new Bundle("pv-cand", null, null);
+        Bundle baseline = new Bundle(null, null, null);
         when(evalDatasetService.findDefaultVersionIdForAgent("7")).thenReturn(null);
 
         assertThatThrownBy(() -> service.startAgentAb(candidate, baseline, "7", null, null))
@@ -256,7 +256,7 @@ class AgentEvolveAbEvalServiceTest {
                 eq("7"), eq(AgentEvolveAbRunEntity.STATUS_COMPLETED))).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.startAgentAb(
-                new Bundle("pv-cand", null), new Bundle("pv-best", null), "7", "dv-1", 60.0))
+                new Bundle("pv-cand", null, null), new Bundle("pv-best", null, null), "7", "dv-1", 60.0))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("no prior COMPLETED");
         verify(abRunRepository, never()).save(any());
@@ -269,13 +269,13 @@ class AgentEvolveAbEvalServiceTest {
         priorWinner.setId("ab-prior");
         // prior winner's candidate bundle was {pv-OTHER} — does NOT match the
         // incoming baseline {pv-best}.
-        priorWinner.setCandidateBundleJson(objectMapper.writeValueAsString(new Bundle("pv-OTHER", null)));
+        priorWinner.setCandidateBundleJson(objectMapper.writeValueAsString(new Bundle("pv-OTHER", null, null)));
         when(abRunRepository.findFirstByAgentIdAndStatusOrderByCompletedAtDesc(
                 eq("7"), eq(AgentEvolveAbRunEntity.STATUS_COMPLETED)))
                 .thenReturn(Optional.of(priorWinner));
 
         assertThatThrownBy(() -> service.startAgentAb(
-                new Bundle("pv-cand", null), new Bundle("pv-best", null), "7", "dv-1", 60.0))
+                new Bundle("pv-cand", null, null), new Bundle("pv-best", null, null), "7", "dv-1", 60.0))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("consistency violation");
         verify(abRunRepository, never()).save(any());
@@ -284,7 +284,7 @@ class AgentEvolveAbEvalServiceTest {
     @Test
     @DisplayName("startAgentAb (skip) with matching prior winner sets skipBaseline + priorWinnerAbRunId")
     void startAgentAb_skip_matchingWinner_setsPriorRef() throws Exception {
-        Bundle best = new Bundle("pv-best", null);
+        Bundle best = new Bundle("pv-best", null, null);
         AgentEvolveAbRunEntity priorWinner = new AgentEvolveAbRunEntity();
         priorWinner.setId("ab-prior");
         priorWinner.setCandidateBundleJson(objectMapper.writeValueAsString(best));
@@ -296,7 +296,7 @@ class AgentEvolveAbEvalServiceTest {
                 anyString(), anyString(), any())).thenReturn(Optional.empty());
         when(abRunRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
-        String abRunId = service.startAgentAb(new Bundle("pv-cand", null), best, "7", "dv-1", 60.0);
+        String abRunId = service.startAgentAb(new Bundle("pv-cand", null, null), best, "7", "dv-1", 60.0);
 
         assertThat(abRunId).isNotBlank();
         ArgumentCaptor<AgentEvolveAbRunEntity> captor = ArgumentCaptor.forClass(AgentEvolveAbRunEntity.class);
@@ -311,7 +311,7 @@ class AgentEvolveAbEvalServiceTest {
     @DisplayName("startAgentAb rejects an out-of-range cached rate")
     void startAgentAb_cachedRateOutOfRange_throws() {
         assertThatThrownBy(() -> service.startAgentAb(
-                new Bundle("pv-cand", null), new Bundle("pv-best", null), "7", "dv-1", 150.0))
+                new Bundle("pv-cand", null, null), new Bundle("pv-best", null, null), "7", "dv-1", 150.0))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("cachedBaselineRate");
     }
@@ -319,7 +319,7 @@ class AgentEvolveAbEvalServiceTest {
     @Test
     @DisplayName("startAgentAb (skip) bundle matches but prior winner scored a DIFFERENT dataset → fail loud (§8 子点① guard 1)")
     void startAgentAb_skip_datasetMismatch_throws() throws Exception {
-        Bundle best = new Bundle("pv-best", null);
+        Bundle best = new Bundle("pv-best", null, null);
         AgentEvolveAbRunEntity priorWinner = new AgentEvolveAbRunEntity();
         priorWinner.setId("ab-prior");
         priorWinner.setCandidateBundleJson(objectMapper.writeValueAsString(best));
@@ -329,7 +329,7 @@ class AgentEvolveAbEvalServiceTest {
                 .thenReturn(Optional.of(priorWinner));
 
         assertThatThrownBy(() -> service.startAgentAb(
-                new Bundle("pv-cand", null), best, "7", "dv-1", 60.0))
+                new Bundle("pv-cand", null, null), best, "7", "dv-1", 60.0))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("dataset mismatch");
         verify(abRunRepository, never()).save(any());

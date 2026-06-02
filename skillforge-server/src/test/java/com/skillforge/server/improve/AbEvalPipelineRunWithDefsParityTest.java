@@ -38,8 +38,13 @@ import java.util.concurrent.Executors;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.contains;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -180,5 +185,35 @@ class AbEvalPipelineRunWithDefsParityTest {
         // The CACHED sentinel is NOT counted as a baseline pass.
         assertThat(perScenario).noneSatisfy(r ->
                 assertThat(AbEvalPipeline.isPass(r.baseline())).isTrue());
+    }
+
+    @Test
+    @DisplayName("runWithDefs extraSkills: candidate side (:c) injects skills; baseline side (:b) plain (§10 #5)")
+    void runWithDefs_extraSkills_injectedOnCandidateSideOnly() throws Exception {
+        List<EvalScenarioEntity> scenarios = List.of(scenario("s1"));
+        lenient().when(sandboxFactory.buildSandboxRegistryWithSkills(anyString(), anyString(), anyList()))
+                .thenReturn(sandboxRegistry);
+
+        com.skillforge.core.model.SkillDefinition skill = new com.skillforge.core.model.SkillDefinition();
+        skill.setName("MySkill");
+
+        pipeline.runWithDefs("ab-skills", scenarios, new AgentDefinition(), new AgentDefinition(),
+                null, true, List.of(skill));
+
+        // Candidate side (:c) builds the WITH-skills sandbox; baseline side (:b) does NOT.
+        verify(sandboxFactory).buildSandboxRegistryWithSkills(contains(":c"), eq("s1"), anyList());
+        verify(sandboxFactory).buildSandboxRegistry(contains(":b"), eq("s1"));
+        verify(sandboxFactory, never()).buildSandboxRegistryWithSkills(contains(":b"), anyString(), anyList());
+    }
+
+    @Test
+    @DisplayName("runWithDefs empty extraSkills: never calls the WITH-skills sandbox (6-arg parity)")
+    void runWithDefs_emptyExtraSkills_plainSandboxBothSides() throws Exception {
+        List<EvalScenarioEntity> scenarios = List.of(scenario("s1"));
+
+        pipeline.runWithDefs("ab-plain", scenarios, new AgentDefinition(), new AgentDefinition(),
+                null, true, List.of());
+
+        verify(sandboxFactory, never()).buildSandboxRegistryWithSkills(anyString(), anyString(), anyList());
     }
 }

@@ -256,13 +256,22 @@ public class AgentEvolveAbEvalService {
             AgentEntity agent = agentRepository.findById(Long.valueOf(abRun.getAgentId()))
                     .orElseThrow(() -> new IllegalStateException("Agent not found: " + abRun.getAgentId()));
 
-            AgentDefinition candidateDef = bundleApplicator.apply(agent, candidateBundle);
+            BundleApplicator.ApplyResult candidate = bundleApplicator.apply(agent, candidateBundle);
+            AgentDefinition candidateDef = candidate.def();
+            // Phase 4 (§10 #5): the candidate's in-memory skill defs must be injected
+            // into the eval sandbox registry (candidate side only). The BASELINE arm
+            // gets NO extra skills: it only actually RUNS in the fresh round
+            // (cachedBaselineRate == null) where best = the original agent (all-null
+            // bundle, no skillDraftId); carry-forward rounds skip the baseline arm
+            // entirely, so the carried-forward skill (if any) lives on the candidate
+            // side via candidateBundle.skillDraftId.
+            List<com.skillforge.core.model.SkillDefinition> candidateExtraSkills = candidate.extraSkills();
             // When the baseline side is skipped its def is never executed; pass the
             // candidate def as a harmless non-null placeholder (runWithDefs ignores
             // the baseline def's run but still copies eval-overrides off it).
             AgentDefinition baselineDef = skipBaseline
                     ? candidateDef
-                    : bundleApplicator.apply(agent, baselineBundle);
+                    : bundleApplicator.apply(agent, baselineBundle).def();
 
             // §8 R2 — role-aware target/general split keyed on the EVOLVED agent
             // (transplanted from BehaviorRuleAbEvalService.runAsync; the agent-level
@@ -277,8 +286,10 @@ public class AgentEvolveAbEvalService {
             }
 
             // explain=true → byte-identical to the prompt path's judge call (§7 B1).
+            // candidateExtraSkills injected into the CANDIDATE-side sandbox only (§10 #5).
             List<AbScenarioResult> perScenario = abEvalPipeline.runWithDefs(
-                    abRun.getId(), split.all(), baselineDef, candidateDef, cachedBaselineRate, true);
+                    abRun.getId(), split.all(), baselineDef, candidateDef, cachedBaselineRate, true,
+                    candidateExtraSkills);
 
             // Global rates (Phase 1 semantics; trajectory chart uses these).
             AgentAbDeltas deltas = computeDeltas(perScenario, cachedBaselineRate);

@@ -253,6 +253,60 @@ class GenerateCandidateToolTest {
                 eq(55L), eq(55L), eq("issue"), isNull(), isNull(), eq(0L), any());
     }
 
+    @Test
+    @DisplayName("skill + baseDraftId (hill-climb): routes to createDraftFromBaseDraft, not Attribution")
+    void skillSurface_baseDraftId_routesCarryForward() {
+        SkillDraftEntity draft = new SkillDraftEntity();
+        draft.setId("draft-cf");
+        when(skillDraftService.createDraftFromBaseDraft(
+                eq(55L), eq("best-draft"), eq("issue"), eq(3L)))
+                .thenReturn(draft);
+
+        Map<String, Object> input = new LinkedHashMap<>();
+        input.put("surface", "skill");
+        input.put("issue", "issue");
+        input.put("targetAgentId", "42");
+        input.put("eventId", "55");
+        input.put("ownerId", "3");
+        input.put("baseDraftId", "best-draft");
+
+        SkillResult result = run(input);
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.getOutput()).contains("\"candidateId\":\"draft-cf\"");
+        verify(skillDraftService).createDraftFromBaseDraft(eq(55L), eq("best-draft"), eq("issue"), eq(3L));
+        // fresh path NOT taken
+        verify(skillDraftService, org.mockito.Mockito.never())
+                .createDraftFromAttribution(any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("skill + baseDraftId + reflection: routes to the editor-aware carry-forward overload")
+    void skillSurface_baseDraftId_withReflection_routesEditorOverload() {
+        SkillDraftEntity draft = new SkillDraftEntity();
+        draft.setId("draft-cf2");
+        when(skillDraftService.createDraftFromBaseDraft(
+                eq(55L), eq("best-draft"), eq("issue"), eq(0L), any(EvolveEditorContext.class)))
+                .thenReturn(draft);
+
+        Map<String, Object> input = new LinkedHashMap<>();
+        input.put("surface", "skill");
+        input.put("issue", "issue");
+        input.put("targetAgentId", "42");
+        input.put("eventId", "55");
+        input.put("baseDraftId", "best-draft");
+        input.put("priorChange", "last round refined the body");
+
+        SkillResult result = run(input);
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.getOutput()).contains("\"candidateId\":\"draft-cf2\"");
+        verify(skillDraftService).createDraftFromBaseDraft(
+                eq(55L), eq("best-draft"), eq("issue"), eq(0L), any(EvolveEditorContext.class));
+        verify(skillDraftService, org.mockito.Mockito.never())
+                .createDraftFromBaseDraft(any(), any(), any(), any());
+    }
+
     // ── report-issue bridge mode (preferred) ───────────────────────────────
 
     @Test

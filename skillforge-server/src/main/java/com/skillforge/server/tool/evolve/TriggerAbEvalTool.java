@@ -184,8 +184,9 @@ public class TriggerAbEvalTool implements Tool {
         properties.put("candidateBundle", Map.of(
                 "type", "object",
                 "description", "surface=agent only: the candidate bundle pointer tuple "
-                        + "{\"promptVersionId\":..,\"behaviorRuleVersionId\":..} (null pointer = the "
-                        + "agent's active version for that surface). REQUIRED for surface=agent."
+                        + "{\"promptVersionId\":..,\"behaviorRuleVersionId\":..,\"skillDraftId\":..} "
+                        + "(null pointer = the agent's active version / no skill for that surface). "
+                        + "REQUIRED for surface=agent."
         ));
         properties.put("baselineBundle", Map.of(
                 "type", "object",

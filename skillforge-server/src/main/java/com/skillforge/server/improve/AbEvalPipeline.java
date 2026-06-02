@@ -7,6 +7,7 @@ import com.skillforge.core.engine.ChatEventBroadcaster;
 import com.skillforge.core.engine.LoopContext;
 import com.skillforge.core.engine.LoopResult;
 import com.skillforge.core.model.AgentDefinition;
+import com.skillforge.core.model.SkillDefinition;
 import com.skillforge.core.skill.SkillRegistry;
 import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.EvalDatasetVersionEntity;
@@ -716,9 +717,37 @@ public class AbEvalPipeline {
             AgentDefinition candidateDef,
             Double cachedBaselineRate,
             boolean explain) {
+        // Backward-compatible 6-arg overload — no extra (skill) defs to inject.
+        return runWithDefs(abRunId, scenarios, baselineDef, candidateDef,
+                cachedBaselineRate, explain, List.of());
+    }
+
+    /**
+     * AUTOEVOLVE-AGENT-LEVEL-BUNDLE Phase 4 (§10 #5) — overload that injects
+     * in-memory candidate {@code extraSkills} into the eval sandbox. The skills
+     * are registered ONLY on the CANDIDATE side ({@code :c}); the baseline side
+     * ({@code :b}) runs with the plain sandbox. This matches "baseline = agent
+     * without the candidate skill" — and is correct under hill-climb because the
+     * baseline arm only actually runs in the fresh round (no cached rate) where
+     * best = the original agent (no skill); carry-forward rounds skip the baseline
+     * arm and the carried-forward skill lives on the candidate side.
+     *
+     * @param extraSkills in-memory candidate skill defs (empty → identical to the
+     *                    6-arg overload; registered on the candidate side only)
+     */
+    public List<AbScenarioResult> runWithDefs(
+            String abRunId,
+            List<EvalScenarioEntity> scenarios,
+            AgentDefinition baselineDef,
+            AgentDefinition candidateDef,
+            Double cachedBaselineRate,
+            boolean explain,
+            List<SkillDefinition> extraSkills) {
         if (scenarios == null || scenarios.isEmpty()) {
             return List.of();
         }
+        final List<SkillDefinition> candidateExtraSkills =
+                extraSkills == null ? List.of() : extraSkills;
         final boolean skipBaseline = cachedBaselineRate != null;
         // Same eval-overrides (temperature=0.0, strip execution_mode) as the prompt
         // / behavior_rule paths — keeps the A/B comparison deterministic.
@@ -750,7 +779,8 @@ public class AbEvalPipeline {
                         baselineResult = new AbScenarioResult.RunResult(
                                 bRun.getStatus(), bJudge.getCompositeScore(), bJudge.getMetaJudgeRationale());
                     }
-                    ScenarioRunResult cRun = runSingleScenario(abRunId + ":c", scenario, cEval);
+                    ScenarioRunResult cRun = runSingleScenario(
+                            abRunId + ":c", scenario, cEval, candidateExtraSkills);
                     EvalJudgeOutput cJudge = evalJudgeTool.judge(scenario, cRun, explain);
                     return new AbScenarioResult(
                             scenario.getId(), scenario.getName(),
@@ -800,8 +830,22 @@ public class AbEvalPipeline {
 
     private ScenarioRunResult runSingleScenario(String abRunId, EvalScenario scenario,
                                                  AgentDefinition candidateDef) {
+        return runSingleScenario(abRunId, scenario, candidateDef, List.of());
+    }
+
+    /**
+     * Phase 4 (§10 #5) overload — builds the sandbox registry WITH the supplied
+     * in-memory {@code extraSkills} so the agent loop can resolve the bundle's
+     * skill by name. An empty list reproduces the plain-sandbox path byte-for-byte
+     * (so the prompt/behavior_rule callers stay unchanged).
+     */
+    private ScenarioRunResult runSingleScenario(String abRunId, EvalScenario scenario,
+                                                 AgentDefinition candidateDef,
+                                                 List<SkillDefinition> extraSkills) {
         try {
-            SkillRegistry sandboxRegistry = sandboxFactory.buildSandboxRegistry(abRunId, scenario.getId());
+            SkillRegistry sandboxRegistry = (extraSkills == null || extraSkills.isEmpty())
+                    ? sandboxFactory.buildSandboxRegistry(abRunId, scenario.getId())
+                    : sandboxFactory.buildSandboxRegistryWithSkills(abRunId, scenario.getId(), extraSkills);
             AgentLoopEngine engine = evalEngineFactory.buildEvalEngine(sandboxRegistry);
 
             String evalSessionId = UUID.randomUUID().toString();

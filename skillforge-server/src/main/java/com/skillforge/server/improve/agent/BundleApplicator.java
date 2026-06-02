@@ -3,13 +3,17 @@ package com.skillforge.server.improve.agent;
 import com.skillforge.core.model.AgentDefinition;
 import com.skillforge.core.model.AgentDefinition.BehaviorRulesConfig;
 import com.skillforge.core.model.AgentDefinition.BehaviorRulesConfig.CustomRule;
+import com.skillforge.core.model.SkillDefinition;
 import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.BehaviorRuleVersionEntity;
 import com.skillforge.server.entity.PromptVersionEntity;
+import com.skillforge.server.entity.SkillDraftEntity;
 import com.skillforge.server.improve.behavior.BehaviorRuleVersionToCustomRulesMapper;
 import com.skillforge.server.repository.BehaviorRuleVersionRepository;
 import com.skillforge.server.repository.PromptVersionRepository;
+import com.skillforge.server.repository.SkillDraftRepository;
 import com.skillforge.server.service.AgentService;
+import com.skillforge.server.skill.SkillDefinitionFromDraft;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -26,8 +30,12 @@ import java.util.List;
  * agent's currently-active version (no change). Only the surfaces with a
  * non-null pointer are overridden.
  *
- * <p>Phase 2 wires both the <b>prompt</b> and <b>behavior_rule</b> branches. A
- * surface with a null pointer keeps the agent's active version (no change).
+ * <p>Phase 2 wires the <b>prompt</b> and <b>behavior_rule</b> branches. Phase 4
+ * (§10 #4) wires the <b>skill</b> branch — which CHANGES the return contract:
+ * {@link #apply} now returns an {@link ApplyResult} carrying both the
+ * {@link AgentDefinition} and any in-memory candidate {@link SkillDefinition}s
+ * the eval sandbox must register (the skill surface is evaluated purely
+ * in-memory, so the candidate def has to be carried OUT to the caller).
  */
 @Component
 public class BundleApplicator {
@@ -37,39 +45,53 @@ public class BundleApplicator {
     private final AgentService agentService;
     private final PromptVersionRepository promptVersionRepository;
     private final BehaviorRuleVersionRepository behaviorRuleVersionRepository;
+    private final SkillDraftRepository skillDraftRepository;
     private final BehaviorRuleVersionToCustomRulesMapper rulesMapper;
+    private final SkillDefinitionFromDraft skillDefinitionFromDraft;
     private final AgentDefinitionCloner cloner;
 
     public BundleApplicator(AgentService agentService,
                             PromptVersionRepository promptVersionRepository,
                             BehaviorRuleVersionRepository behaviorRuleVersionRepository,
+                            SkillDraftRepository skillDraftRepository,
                             BehaviorRuleVersionToCustomRulesMapper rulesMapper,
+                            SkillDefinitionFromDraft skillDefinitionFromDraft,
                             AgentDefinitionCloner cloner) {
         this.agentService = agentService;
         this.promptVersionRepository = promptVersionRepository;
         this.behaviorRuleVersionRepository = behaviorRuleVersionRepository;
+        this.skillDraftRepository = skillDraftRepository;
         this.rulesMapper = rulesMapper;
+        this.skillDefinitionFromDraft = skillDefinitionFromDraft;
         this.cloner = cloner;
     }
 
     /**
-     * Build the {@link AgentDefinition} for {@code base} with {@code bundle}
-     * applied. A {@code null} bundle (or one with all-null pointers) returns the
-     * agent's current definition unchanged.
+     * Result of {@link #apply}: the concrete {@link AgentDefinition} to run plus
+     * the in-memory candidate skill definitions that the eval sandbox registry
+     * must register for the agent loop to resolve the bundle's skill by name.
+     * {@code extraSkills} is empty for prompt/rule-only bundles.
+     */
+    public record ApplyResult(AgentDefinition def, List<SkillDefinition> extraSkills) {}
+
+    /**
+     * Build the {@link ApplyResult} for {@code base} with {@code bundle} applied.
+     * A {@code null} bundle (or one with all-null pointers) returns the agent's
+     * current definition unchanged with no extra skills.
      *
-     * @throws IllegalArgumentException a prompt / behavior_rule version pointer is
-     *                                  unknown, or its {@code agentId} doesn't match
+     * @throws IllegalArgumentException a prompt / behavior_rule / skill pointer is
+     *                                  unknown, or it doesn't belong to
      *                                  {@code base} (§7 W7 — a bundle pointer must
      *                                  belong to the target agent; a dead pointer
      *                                  fails loud).
      */
-    public AgentDefinition apply(AgentEntity base, Bundle bundle) {
+    public ApplyResult apply(AgentEntity base, Bundle bundle) {
         // Deep-clone so the A/B's two def instances never share nested mutable
         // state (BehaviorRulesConfig etc.). toAgentDefinition already builds a
         // fresh def, but the shared cloner keeps the isolation explicit (§7 W3).
         AgentDefinition def = cloner.clone(agentService.toAgentDefinition(base));
         if (bundle == null) {
-            return def;
+            return new ApplyResult(def, List.of());
         }
 
         String baseAgentId = String.valueOf(base.getId());
@@ -125,6 +147,46 @@ public class BundleApplicator {
                     bundle.behaviorRuleVersionId(), baseAgentId, combined.size());
         }
 
-        return def;
+        // skill branch (Phase 4, §10 #4): load the draft content by id REGARDLESS
+        // of status (best顺延 may reference a non-'draft' draft), validate ownership
+        // (W7), build an in-memory SkillDefinition (skillPath=null, zero disk),
+        // add its NAME to the def's skillIds so the agent loop resolves it, and
+        // carry the def OUT in extraSkills for the eval sandbox to register.
+        List<SkillDefinition> extraSkills = new ArrayList<>();
+        if (bundle.skillDraftId() != null && !bundle.skillDraftId().isBlank()) {
+            SkillDraftEntity draft = skillDraftRepository.findById(bundle.skillDraftId())
+                    .orElseThrow(() -> new IllegalArgumentException(
+                            "skill draft not found for bundle pointer: " + bundle.skillDraftId()));
+            // §7 W7 ownership: an AGENT-SCOPED draft (non-null targetAgentId) must
+            // belong to the target agent. Evolve drafts may carry a null
+            // targetAgentId (the shared createDraftFromAttribution path doesn't set
+            // it); the orchestrator that composed the bundle is system-trusted, so
+            // a null is tolerated (logged) rather than blocked. A NON-null mismatch
+            // is a real cross-agent pointer → fail loud.
+            if (draft.getTargetAgentId() != null
+                    && !baseAgentId.equals(String.valueOf(draft.getTargetAgentId()))) {
+                throw new IllegalArgumentException(
+                        "skill draft " + bundle.skillDraftId() + " targets agent "
+                                + draft.getTargetAgentId() + " but bundle targets agent " + baseAgentId
+                                + " — a bundle pointer must belong to the target agent");
+            }
+            if (draft.getTargetAgentId() == null) {
+                log.debug("[BundleApplicator] skill draft {} has null targetAgentId — "
+                        + "tolerated (system-driven evolve draft) for agent {}",
+                        bundle.skillDraftId(), baseAgentId);
+            }
+            SkillDefinition skillDef = skillDefinitionFromDraft.build(draft);
+            List<String> skillIds = def.getSkillIds() != null
+                    ? new ArrayList<>(def.getSkillIds()) : new ArrayList<>();
+            if (!skillIds.contains(skillDef.getName())) {
+                skillIds.add(skillDef.getName());
+            }
+            def.setSkillIds(skillIds);
+            extraSkills.add(skillDef);
+            log.debug("[BundleApplicator] applied skill draft {} (name='{}') to agent {}",
+                    bundle.skillDraftId(), skillDef.getName(), baseAgentId);
+        }
+
+        return new ApplyResult(def, extraSkills);
     }
 }
