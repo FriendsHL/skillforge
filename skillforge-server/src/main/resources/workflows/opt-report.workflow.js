@@ -4,6 +4,7 @@ export const meta = {
   phases: [
     { title: 'Load', detail: '拉取候选 production session 列表' },
     { title: 'Annotate', detail: '按批 fanout session-batch-annotator 标注' },
+    { title: 'Holistic', detail: 'G5: 跨 session error-span 前置根因分析 → preconditionIssues' },
     { title: 'Aggregate', detail: '重新拉取 + 读目标配置 + LLM 归因产出 summaryJson' },
     { title: 'Approve', detail: '人工审批 attribution summary' }
   ]
@@ -69,6 +70,35 @@ var SUMMARY_SCHEMA = {
   }
 }
 
+// G5: holistic-error-span-analyzer output schema. preconditionIssues may be empty
+// (no failures / nothing the序列 supports) — empty array still satisfies `required`,
+// so a clean agent never trips a schema retry. NOTE: like the loader/aggregator,
+// this agent IS designed to emit strict JSON, so a schema here is correct (it does
+// not force a prose agent into JSON). NOT wrapped in try/catch on purpose: a
+// pre-Aggregate agent() that throws is the same failure mode as the loader/aggregator
+// (and the human-approve resume path requires every pre-frontier agent() to have
+// succeeded — see HostAgent journal-replay), so holistic stays a normal agent() call.
+var PRECONDITION_SCHEMA = {
+  type: 'object',
+  required: ['preconditionIssues'],
+  properties: {
+    preconditionIssues: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['toolName', 'errorPattern', 'sessionCount', 'rootCause', 'evidence'],
+        properties: {
+          toolName: { type: 'string' },
+          errorPattern: { type: 'string' },
+          sessionCount: { type: 'integer' },
+          rootCause: { type: 'string' },
+          evidence: { type: 'string' }
+        }
+      }
+    }
+  }
+}
+
 var agentId = args.agentId
 // dogfood data 稀疏：默认窗口拉到 30 天，否则近 7 天常常 0-few session、evolve 空转
 // （callers 仍可显式传 args.windowDays 覆盖）。
@@ -111,8 +141,35 @@ var annotations = parallel(batches.map(function (sids, idx) {
 var okBatches = annotations.filter(function (a) { return a !== null }).length
 log('annotated ' + okBatches + '/' + batches.length + ' batches ok')
 
+// ── Holistic (G5: 跨 session error-span 前置根因分析) ──
+// 两段式: 段1 LoadErrorSpanBatch 把失败工具调用按 (工具+错误签名) 跨 session 归类,
+// 段2 对 top-N 组拉代表 session 的有序工具序列 (GetToolCallSequence) 推前置根因。
+// 产出 preconditionIssues → JS stringify 注入 Aggregate 的 user message (路径 a,
+// 不改 aggregator 工具白名单)。让 aggregator 把细粒度跨 session 前置模式单独拎成
+// issue, 不折叠进粗桶。量大时 (高频 agent) 可把段1 改成 parallel() 分批; agent 1
+// 仅 ~100 error span, 单 agent 单批足够, 留扩展位不提前优化。
+phase('Holistic')
+var holistic = agent(
+  'Holistic error-span 前置根因分析 agentId=' + agentId + ' windowDays=' + windowDays
+    + '。按你 system_prompt 的段1-段2 跑: 调 LoadErrorSpanBatch 跨 session 归类失败工具调用, '
+    + '对 top-N 症状组拉代表 session 的 GetToolCallSequence 推共同前置根因, '
+    + '输出 { preconditionIssues:[...] } 严格 JSON (无前置模式时输出空数组)。',
+  { agentSlug: 'holistic-error-span-analyzer', schema: PRECONDITION_SCHEMA, phase: 'Holistic' })
+var preconditionIssues = (holistic && holistic.preconditionIssues) ? holistic.preconditionIssues : []
+log('holistic produced ' + preconditionIssues.length + ' precondition issue(s)')
+
 // ── Aggregate (= STEP 5+5.5+6, reload + config + 归因) ──
 phase('Aggregate')
+// G5: stringify preconditionIssues into the aggregator user message (path a). The
+// aggregator (an LLM) reads them as cross-session precondition root causes — it must
+// surface relevant ones as their own fine-grained issue rather than folding them into
+// a coarse bucket. Empty → inject nothing (no behavior change vs pre-G5).
+var holisticInjection = preconditionIssues.length > 0
+  ? ' \n\nHOLISTIC 前置根因分析 (来自 holistic-error-span-analyzer, 跨 session 错误前置模式, '
+      + '已是细粒度去折叠的结果): ' + ctx.json(preconditionIssues)
+      + '。归因 topIssues 时: 若某 issue 与这些前置根因相关, 把它单独拎成独立 issue '
+      + '(不要折叠进粗桶), 其 rootCause/proposedFix 可引用这里的 rootCause/evidence。'
+  : ''
 var summary = agent(
   'Aggregate agentId=' + agentId + ' windowDays=' + windowDays
     + '。重新调 LoadSessionBatch 拿带标注的 items, 调 GetAgentConfig(targetAgentId=' + agentId + ') 拿目标配置, '
@@ -121,6 +178,7 @@ var summary = agent(
     // 不传它只能瞎猜 (通常乐观填 batchesTotal)。这里塞 JS 算好的真实值, 让它直接照填。
     + ' batchesTotal=' + batches.length + ' batchesSucceeded=' + okBatches
     + ' (这两个值已由 workflow 算好, summaryJson 的 batchesTotal/batchesSucceeded 直接用这两个数, 不要自己猜)。'
+    + holisticInjection
     + '只输出 summaryJson 严格 JSON。',
   { agentSlug: 'opt-report-aggregator', schema: SUMMARY_SCHEMA, phase: 'Aggregate' })
 

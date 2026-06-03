@@ -90,6 +90,8 @@ import com.skillforge.server.tool.scheduling.UpdateScheduledTaskTool;
 import com.skillforge.observability.repository.LlmSpanRepository;
 import com.skillforge.observability.repository.LlmTraceRepository;
 import com.skillforge.server.tool.sessionannotation.SpanBehaviorStatsTool;
+import com.skillforge.server.tool.optreport.GetToolCallSequenceTool;
+import com.skillforge.server.tool.optreport.LoadErrorSpanBatchTool;
 import com.skillforge.server.tool.optreport.LoadSessionBatchTool;
 import com.skillforge.server.tool.optreport.RecordBatchAnnotationsTool;
 import com.skillforge.server.tool.optreport.WriteOptReportTool;
@@ -1041,6 +1043,40 @@ public class SkillForgeConfig {
         skillRegistry.registerTool(tool);
         log.info("Registered LoadSessionBatchTool into SkillRegistry");
         return tool;
+    }
+
+    /**
+     * AUTOEVOLVE-CLOSE-LOOP G5 段1: load the target agent's failed tool-call spans
+     * grouped by (toolName + error signature) across its production sessions, for
+     * the holistic-error-span-analyzer workflow sub-agent.
+     *
+     * <p>Deliberately NOT registered into the global {@code SkillRegistry} — it is
+     * a workflow-only read-only tool, wired solely into
+     * {@code WorkflowSkillRegistryFactory} (least-privilege; never reachable by an
+     * arbitrary user session sub-agent).
+     */
+    @Bean
+    public LoadErrorSpanBatchTool loadErrorSpanBatchTool(
+            com.skillforge.server.repository.SessionRepository sessionRepository,
+            LlmSpanRepository spanRepository,
+            ObjectMapper objectMapper,
+            java.time.Clock clock) {
+        return new LoadErrorSpanBatchTool(sessionRepository, spanRepository, objectMapper, clock);
+    }
+
+    /**
+     * AUTOEVOLVE-CLOSE-LOOP G5 段2: return a session's ordered tool-call sequence
+     * (compact, tool-only) so the holistic analyzer can infer the missing
+     * precondition behind a failing call.
+     *
+     * <p>Same least-privilege treatment as {@code loadErrorSpanBatchTool} — NOT in
+     * the global {@code SkillRegistry}, only in {@code WorkflowSkillRegistryFactory}.
+     */
+    @Bean
+    public GetToolCallSequenceTool getToolCallSequenceTool(
+            LlmSpanRepository spanRepository,
+            ObjectMapper objectMapper) {
+        return new GetToolCallSequenceTool(spanRepository, objectMapper);
     }
 
     /**

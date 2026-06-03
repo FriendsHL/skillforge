@@ -4,6 +4,8 @@ import com.skillforge.core.skill.SkillRegistry;
 import com.skillforge.core.skill.Tool;
 import com.skillforge.server.tool.GetAgentConfigTool;
 import com.skillforge.server.tool.GetTraceTool;
+import com.skillforge.server.tool.optreport.GetToolCallSequenceTool;
+import com.skillforge.server.tool.optreport.LoadErrorSpanBatchTool;
 import com.skillforge.server.tool.optreport.LoadSessionBatchTool;
 import com.skillforge.server.tool.optreport.RecordBatchAnnotationsTool;
 import com.skillforge.server.tool.sessionannotation.AnnotateSessionTool;
@@ -41,18 +43,21 @@ class WorkflowSkillRegistryFactoryTest {
                 (GetTraceTool) toolNamed(GetTraceTool.class, "GetTrace"),
                 (SpanBehaviorStatsTool) toolNamed(SpanBehaviorStatsTool.class, "SpanBehaviorStats"),
                 (AnnotateSessionTool) toolNamed(AnnotateSessionTool.class, "AnnotateSession"),
-                (RecordBatchAnnotationsTool) toolNamed(RecordBatchAnnotationsTool.class, "RecordBatchAnnotations"));
+                (RecordBatchAnnotationsTool) toolNamed(RecordBatchAnnotationsTool.class, "RecordBatchAnnotations"),
+                (LoadErrorSpanBatchTool) toolNamed(LoadErrorSpanBatchTool.class, "LoadErrorSpanBatch"),
+                (GetToolCallSequenceTool) toolNamed(GetToolCallSequenceTool.class, "GetToolCallSequence"));
     }
 
     @Test
-    @DisplayName("registers exactly the 6 OPT-REPORT tools by name")
-    void registersAllSixOptReportTools() {
+    @DisplayName("registers exactly the 8 OPT-REPORT / G5 tools by name")
+    void registersAllOptReportTools() {
         SkillRegistry registry = factory.workflowRegistry();
 
         List<String> names = registry.getAllTools().stream().map(Tool::getName).sorted().toList();
         assertThat(names).containsExactlyInAnyOrder(
                 "LoadSessionBatch", "GetAgentConfig", "GetTrace",
-                "SpanBehaviorStats", "AnnotateSession", "RecordBatchAnnotations");
+                "SpanBehaviorStats", "AnnotateSession", "RecordBatchAnnotations",
+                "LoadErrorSpanBatch", "GetToolCallSequence");
 
         // Every agent that the opt-report workflow dispatches can resolve its tools.
         for (String n : names) {
