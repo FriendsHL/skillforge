@@ -1031,11 +1031,13 @@ public class SkillForgeConfig {
             com.skillforge.server.repository.SessionRepository sessionRepository,
             SessionAnnotationRepository annotationRepository,
             com.skillforge.server.repository.AgentRepository agentRepository,
+            com.skillforge.server.repository.SessionPatternRepository patternRepository,
             ObjectMapper objectMapper,
             java.time.Clock clock,
             SkillRegistry skillRegistry) {
         LoadSessionBatchTool tool = new LoadSessionBatchTool(
-                sessionRepository, annotationRepository, agentRepository, objectMapper, clock);
+                sessionRepository, annotationRepository, agentRepository,
+                patternRepository, objectMapper, clock);
         skillRegistry.registerTool(tool);
         log.info("Registered LoadSessionBatchTool into SkillRegistry");
         return tool;

@@ -61,7 +61,9 @@ class GetOptReportToolTest {
     private OptReportIssueDto issue(String id, String suspect, String fix) {
         return new OptReportIssueDto(id, "title-" + id, "high", 3,
                 List.of("s1", "s2"), suspect, fix, 0.8, "fix the thing",
-                "less failure", "modify", null);
+                "less failure", "modify", null,
+                // G4: friction / recurrence / rootCause / proposedFix
+                "repeated_tool_failure", 1, null, null);
     }
 
     @Test

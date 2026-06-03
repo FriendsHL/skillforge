@@ -185,7 +185,10 @@ public final class OptReportSummaryParser {
                     "topIssues[" + idx + "].confidence must be in [0.0, 1.0]; got: " + confidence);
         }
 
-        String suggestion = requireText(node, "suggestion", idx);
+        // V1.6 (G4): suggestion is now OPTIONAL — superseded by the
+        // rootCause/proposedFix split. Accept null/missing/blank → null. The
+        // joint check below enforces "at least one of suggestion / rootCause".
+        String suggestion = optionalText(node, "suggestion");
 
         // expectedImpact is optional — accept null/missing/blank → store null.
         JsonNode impactNode = node.get("expectedImpact");
@@ -233,6 +236,58 @@ public final class OptReportSummaryParser {
                             + "(quote the existing rule/skill/prompt segment verbatim)");
         }
 
+        // V1.6 (G4): friction is optional. null / missing / blank → null. If
+        // present, must be one of FRICTION_VALUES or we throw — defends against
+        // LLM drift like "tool_error" / "confused".
+        JsonNode frictionNode = node.get("friction");
+        String friction = null;
+        if (frictionNode != null && !frictionNode.isNull()) {
+            if (!frictionNode.isTextual() || frictionNode.asText().isBlank()) {
+                throw new IllegalArgumentException(
+                        "topIssues[" + idx + "].friction must be a non-blank string or omitted; "
+                                + "got: " + frictionNode.getNodeType());
+            }
+            friction = frictionNode.asText();
+            if (!OptReportIssueDto.FRICTION_VALUES.contains(friction)) {
+                throw new IllegalArgumentException(
+                        "topIssues[" + idx + "].friction must be one of "
+                                + OptReportIssueDto.FRICTION_VALUES + " or omitted; got: '"
+                                + friction + "'");
+            }
+        }
+
+        // V1.6 (G4): recurrence is optional — defaults to 1 (single occurrence /
+        // no matching production cluster / cold store). If present must be an
+        // integer ≥ 1. Carries t_session_pattern.member_count (MULTIPLE TIMES).
+        int recurrence = 1;
+        JsonNode recurrenceNode = node.get("recurrence");
+        if (recurrenceNode != null && !recurrenceNode.isNull()) {
+            if (!recurrenceNode.isIntegralNumber()) {
+                throw new IllegalArgumentException(
+                        "topIssues[" + idx + "].recurrence must be an integer or omitted; got: "
+                                + recurrenceNode.getNodeType());
+            }
+            recurrence = recurrenceNode.asInt();
+            if (recurrence < 1) {
+                throw new IllegalArgumentException(
+                        "topIssues[" + idx + "].recurrence must be ≥ 1; got: " + recurrence);
+            }
+        }
+
+        // V1.6 (G4): rootCause / proposedFix are optional null-safe text.
+        String rootCause = optionalText(node, "rootCause");
+        String proposedFix = optionalText(node, "proposedFix");
+
+        // V1.6 (G4) joint check: an issue must carry at least one actionable
+        // statement. suggestion was demoted to optional in favour of the
+        // rootCause/proposedFix split, so we reject only when BOTH suggestion
+        // and rootCause are absent — that issue has no fix direction at all.
+        if (suggestion == null && rootCause == null) {
+            throw new IllegalArgumentException(
+                    "topIssues[" + idx + "] must carry at least one of 'suggestion' or "
+                            + "'rootCause' (both missing/blank — issue has no actionable content)");
+        }
+
         return new OptReportIssueDto(
                 id,
                 title,
@@ -245,7 +300,11 @@ public final class OptReportSummaryParser {
                 suggestion,
                 expectedImpact,
                 actionType,
-                targetRuleText);
+                targetRuleText,
+                friction,
+                recurrence,
+                rootCause,
+                proposedFix);
     }
 
     private static String requireText(JsonNode node, String field, int idx) {
@@ -253,6 +312,19 @@ public final class OptReportSummaryParser {
         if (v == null || !v.isTextual() || v.asText().isBlank()) {
             throw new IllegalArgumentException(
                     "topIssues[" + idx + "]." + field + " is required and must be a non-blank string");
+        }
+        return v.asText();
+    }
+
+    /**
+     * V1.6 (G4): read an optional text field — returns null when the field is
+     * missing / null / non-textual / blank (never throws). Used for the
+     * optional facets (suggestion / rootCause / proposedFix).
+     */
+    private static String optionalText(JsonNode node, String field) {
+        JsonNode v = node.get(field);
+        if (v == null || !v.isTextual() || v.asText().isBlank()) {
+            return null;
         }
         return v.asText();
     }

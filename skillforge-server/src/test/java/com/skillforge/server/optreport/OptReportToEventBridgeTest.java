@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillforge.server.flywheel.run.FlywheelRunEntity;
 import com.skillforge.server.flywheel.run.FlywheelRunRepository;
 import com.skillforge.server.entity.OptimizationEventEntity;
+import com.skillforge.server.optreport.dto.OptReportIssueDto;
 import com.skillforge.server.optreport.dto.OptReportSummaryParser;
 import com.skillforge.server.repository.OptimizationEventRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -438,6 +439,95 @@ class OptReportToEventBridgeTest {
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> bridge.convertIssueToEvent("rep-1", ""))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // V1.6 (G4) buildDescription prefers rootCause+proposedFix + null-safe
+    // ─────────────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("G4: buildDescription prefers rootCause + proposedFix over suggestion")
+    void buildDescription_prefersRootCauseAndProposedFix() {
+        OptReportIssueDto issue = new OptReportIssueDto(
+                "issue-1", "Bash 路径循环", "high", 4, java.util.List.of("a", "b"),
+                "skill", null, 0.85, "一句话 suggestion", "降低失败率", "new", null,
+                "repeated_tool_failure", 5, "agent 没在 cd 前确认目录", "加 pwd 检查规则");
+
+        String desc = OptReportToEventBridge.buildDescription(issue);
+
+        assertThat(desc).contains("Bash 路径循环");
+        assertThat(desc).contains("Root cause: agent 没在 cd 前确认目录");
+        assertThat(desc).contains("Proposed fix: 加 pwd 检查规则");
+        assertThat(desc).contains("Expected: 降低失败率");
+        // suggestion is NOT used when rootCause/proposedFix present
+        assertThat(desc).doesNotContain("一句话 suggestion");
+    }
+
+    @Test
+    @DisplayName("G4: buildDescription null-safe when suggestion is null (rootCause-only DTO)")
+    void buildDescription_suggestionNull_noNpe_usesRootCause() {
+        // V1.6 demoted suggestion to optional → a parser-produced DTO can have
+        // suggestion=null. buildDescription must not NPE.
+        OptReportIssueDto issue = new OptReportIssueDto(
+                "issue-1", "标题", "medium", 2, java.util.List.of("a"),
+                "prompt", null, 0.6, null, null, "new", null,
+                "missing_context", 1, "没读到关键上下文", null);
+
+        String desc = OptReportToEventBridge.buildDescription(issue);
+
+        assertThat(desc).contains("标题");
+        assertThat(desc).contains("Root cause: 没读到关键上下文");
+    }
+
+    @Test
+    @DisplayName("G4: buildDescription falls back to suggestion when no rootCause/proposedFix (legacy)")
+    void buildDescription_legacyNoSplit_fallsBackToSuggestion() {
+        OptReportIssueDto issue = new OptReportIssueDto(
+                "issue-1", "标题", "low", 1, java.util.List.of("a"),
+                "skill", null, 0.5, "改这个", null, "new", null,
+                null, 1, null, null);
+
+        String desc = OptReportToEventBridge.buildDescription(issue);
+
+        assertThat(desc).contains("标题");
+        assertThat(desc).contains("改这个");
+        assertThat(desc).doesNotContain("Root cause:");
+    }
+
+    @Test
+    @DisplayName("G4: enrichTopIssues coerces null suggestion → \"\" and exposes friction/recurrence/rootCause/proposedFix")
+    void enrichTopIssues_g4FacetsAndSuggestionNullSafe() {
+        String reportId = "rep-g4";
+        // issue-1 omits suggestion (rootCause carries content) → enrich must
+        // surface suggestion as "" (FE non-null contract) + the G4 facets.
+        String summaryJson = """
+                { "topIssues": [
+                    {
+                      "id": "issue-1", "title": "高复现 Bash 失败",
+                      "severity": "high", "sessionCount": 4,
+                      "exampleSessionIds": ["a", "b"],
+                      "suspectSurface": "skill", "confidence": 0.8,
+                      "friction": "repeated_tool_failure",
+                      "recurrence": 5,
+                      "rootCause": "没确认目录",
+                      "proposedFix": "加 pwd 检查"
+                    }
+                ]}
+                """;
+        when(eventRepository.findBySourceReportId(reportId))
+                .thenReturn(java.util.Collections.emptyList());
+
+        java.util.List<java.util.Map<String, Object>> enriched =
+                bridge.enrichTopIssues(reportId, summaryJson);
+
+        assertThat(enriched).hasSize(1);
+        java.util.Map<String, Object> m = enriched.get(0);
+        // suggestion null → "" (not null, not "null")
+        assertThat(m).containsEntry("suggestion", "");
+        assertThat(m).containsEntry("friction", "repeated_tool_failure");
+        assertThat(m).containsEntry("recurrence", 5);
+        assertThat(m).containsEntry("rootCause", "没确认目录");
+        assertThat(m).containsEntry("proposedFix", "加 pwd 检查");
     }
 
     private static FlywheelRunEntity completedReport(String id, long agentId, String summaryJson) {

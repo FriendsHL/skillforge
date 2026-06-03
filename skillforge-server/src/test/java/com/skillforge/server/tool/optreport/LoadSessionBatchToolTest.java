@@ -6,8 +6,11 @@ import com.skillforge.core.skill.SkillContext;
 import com.skillforge.core.skill.SkillResult;
 import com.skillforge.server.entity.SessionAnnotationEntity;
 import com.skillforge.server.entity.SessionEntity;
+import com.skillforge.server.entity.SessionPatternEntity;
 import com.skillforge.server.repository.SessionAnnotationRepository;
+import com.skillforge.server.repository.SessionPatternRepository;
 import com.skillforge.server.repository.SessionRepository;
+import org.springframework.data.domain.Pageable;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -25,7 +28,9 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.when;
 
@@ -39,6 +44,7 @@ class LoadSessionBatchToolTest {
     @Mock private SessionRepository sessionRepository;
     @Mock private SessionAnnotationRepository annotationRepository;
     @Mock private com.skillforge.server.repository.AgentRepository agentRepository;
+    @Mock private SessionPatternRepository patternRepository;
 
     private ObjectMapper objectMapper;
     private Clock clock;
@@ -48,7 +54,8 @@ class LoadSessionBatchToolTest {
     void setUp() {
         objectMapper = new ObjectMapper();
         clock = Clock.fixed(FIXED_NOW, UTC);
-        tool = new LoadSessionBatchTool(sessionRepository, annotationRepository, agentRepository, objectMapper, clock);
+        tool = new LoadSessionBatchTool(sessionRepository, annotationRepository, agentRepository,
+                patternRepository, objectMapper, clock);
     }
 
     @Test
@@ -148,6 +155,60 @@ class LoadSessionBatchToolTest {
         JsonNode root = objectMapper.readTree(r.getOutput());
         assertThat(root.path("total").asInt()).isZero();
         assertThat(root.path("items")).isEmpty();
+    }
+
+    @Test
+    @DisplayName("G4: bundles production failure clusters (member_count DESC) in payload")
+    void g4_returnsClusters() throws Exception {
+        when(sessionRepository.findByAgentId(7L)).thenReturn(List.of());
+        SessionPatternEntity big = newPattern("sig-bash", "tool_error", "skill", "Bash", 5);
+        SessionPatternEntity small = newPattern("sig-read", "tool_error", "skill", "ReadFile", 3);
+        when(patternRepository.findWithFilters(isNull(), isNull(), eq(7L), any(Pageable.class)))
+                .thenReturn(List.of(big, small));
+
+        SkillResult r = tool.execute(Map.of("agentId", 7L), new SkillContext(null, null, 0L));
+
+        assertThat(r.isSuccess()).isTrue();
+        JsonNode root = objectMapper.readTree(r.getOutput());
+        JsonNode clusters = root.path("clusters");
+        assertThat(clusters.isArray()).isTrue();
+        assertThat(clusters).hasSize(2);
+        JsonNode c0 = clusters.get(0);
+        assertThat(c0.path("signature").asText()).isEqualTo("sig-bash");
+        assertThat(c0.path("outcome").asText()).isEqualTo("tool_error");
+        assertThat(c0.path("suspectSurface").asText()).isEqualTo("skill");
+        assertThat(c0.path("topFailingTool").asText()).isEqualTo("Bash");
+        assertThat(c0.path("memberCount").asInt()).isEqualTo(5);
+        assertThat(c0.path("lastSeenAt").asText()).isNotBlank();
+        assertThat(clusters.get(1).path("memberCount").asInt()).isEqualTo(3);
+    }
+
+    @Test
+    @DisplayName("G4: cold agent (no clusters) → clusters is [] not null")
+    void g4_coldAgent_clustersEmptyArrayNotNull() throws Exception {
+        when(sessionRepository.findByAgentId(7L)).thenReturn(List.of());
+        when(patternRepository.findWithFilters(isNull(), isNull(), eq(7L), any(Pageable.class)))
+                .thenReturn(List.of());
+
+        SkillResult r = tool.execute(Map.of("agentId", 7L), new SkillContext(null, null, 0L));
+
+        assertThat(r.isSuccess()).isTrue();
+        JsonNode root = objectMapper.readTree(r.getOutput());
+        assertThat(root.has("clusters")).isTrue();
+        assertThat(root.path("clusters").isArray()).isTrue();
+        assertThat(root.path("clusters")).isEmpty();
+    }
+
+    private static SessionPatternEntity newPattern(String signature, String outcome, String surface,
+                                                   String topFailingTool, int memberCount) {
+        SessionPatternEntity p = new SessionPatternEntity();
+        p.setSignature(signature);
+        p.setOutcome(outcome);
+        p.setSuspectSurface(surface);
+        p.setTopFailingTool(topFailingTool);
+        p.setMemberCount(memberCount);
+        p.setLastSeenAt(FIXED_NOW);
+        return p;
     }
 
     private static SessionEntity newSession(String id, long agentId, Instant createdAt, String origin, String parentId) {

@@ -44,11 +44,21 @@
 ### G3 — predicted_impact
 设计：`GenerateCandidate` 产出 + 候选元数据加 `predictedImpact: {flipToPass:[ids], riskToFail:[ids]}`；A/B 后拿真实 perScenario 翻转**对账**（反思 `priorEvalReport` 扩展成 prediction-vs-actual）；预测错 = 质量信号（喂下一轮 / 降信心）。
 
-### G4 — report 丰富 facets + MULTIPLE TIMES（Claude Code /insights）
-现状：5 surface enum + 一行 suggestion；无重复加权。
-设计：
-- annotation/issue schema 加更丰富 typed facets（D3，按我们数据量裁剪几维：outcome / friction / surface / **recurrence**）；`suggestion` 放开成 free-form `rootCause` + `proposedFix`（机器解析的 envelope 跟 insight payload 解耦）。
-- **MULTIPLE TIMES**：aggregator 跨 session/场景做语义重复识别，**反复出现的 issue 优先 + 高置信**（vs 一次性噪声）。直接治"挑错靶子"（实测挑了一次性 tool-budget、漏 9 个反复失败）。
+### G4 — report 丰富 facets + MULTIPLE TIMES（Claude Code /insights）= P2-a 首个 Full 子期
+
+**现状锚点（Explore 2026-06-03）**：
+- aggregator = `opt-report-aggregator` system agent，prompt 在 DB（`V128__seed_workflow_demo_agents.sql`），纯 LLM 在单 session 内读 raw annotation 归因，**无确定性聚合**。
+- 10 步 loop 上限在 `DefaultWorkflowAgentInvoker.java:54`（`DEFAULT_MAX_LOOPS=10`）+ schema 重试 → session 批量大触顶 `max_loops_reached`。
+- annotation = `t_session_annotation`（V74）只有 type/value/source/confidence/reasoning；issue = `OptReportIssueDto` + workflow `SUMMARY_SCHEMA` 只有一行 `suggestion`。
+- **现成但被浪费的雏形**：`SessionPatternClusterService` 已按 `(outcome, suspect_surface, top_failing_tool, agent_id)` 4-tuple bucket + `member_count` 计数（门槛 ≥3）写 `t_session_pattern`，**但 aggregator 走 `LoadSessionBatchTool` 直接读 raw annotation 行，不读这张 pattern 表**。
+- 候选侧 `GenerateCandidateTool` 只消费一个自由文本 `issue` 字段透传进 `PromptImproverService`。
+
+**设计（D3/recurrence 路线已 ratify 2026-06-03）**：
+- **recurrence = 混合路线**：复用 `SessionPatternClusterService` 的 4-tuple bucket + `member_count` 当**确定性 recurrence 骨架**接进 aggregator（aggregator 改读 pattern cluster 而非纯 raw annotation → 顺带缓解 10 步 loop：聚合不再全靠 LLM step）；LLM aggregator 在确定性骨架之上做**语义合并**（抓措辞不同但同义的 issue）。recurrence_count 来自 cluster member_count + LLM 合并后的跨 cluster 计数。
+- **facets = 加 friction + recurrence**（outcome/surface 已有）：annotation/issue schema 加 `friction`（失败模式分类，裁成 ~6 enum，不照搬 CC 12）+ `recurrence`（重复计数/加权）；issue 侧 `suggestion` 拆成 `rootCause` + `proposedFix`。
+- **MULTIPLE TIMES 效果**：反复出现的 issue 高置信 + 优先排序（vs 一次性噪声）。直接治"挑错靶子"（实测挑了一次性 tool-budget、漏 9 个反复失败）。
+
+**红灯**：触碰核心 evolve loop（opt-report aggregator / annotation schema / issue schema）+ Flyway migration（schema 边界）→ **Full 档**。
 
 ### 影响
 - 触碰核心 evolve loop（GenerateCandidate / improver / opt-report aggregator / 种子）→ 分子期，各 Full。
@@ -65,13 +75,16 @@
 
 ---
 
-## 分期 & 顺序（D5）
+## 分期 & 顺序（D5/D6 已 ratify 2026-06-03）
 
-两种顺序：
-- **A（用户原话顺序）**：P1 闭环先 → P2 对靶 → P3 benchmark。先把"能落地"做出来，哪怕提升还不够对靶。
-- **B（先让提升真）**：P2 对靶先 → P1 闭环 → P3。先让赢家是真提升，再给采纳按钮（否则一键采纳一堆平手/噪声候选意义不大）。
+**总顺序（D5）**：P2 对靶先 → P1 闭环采纳 → P3 benchmark 贯穿。理由：先让赢家是真提升，再给采纳按钮（否则一键采纳一堆平手/噪声候选意义不大）。
 
-**林倾向 B 的轻量版**：P2 的 **G1（scenario-grounding）+ G4(MULTIPLE TIMES) 先做**（让提升真且对靶），紧接 **P1 闭环**（让真提升能落地），P3 benchmark 贯穿验证。但用户原话是 P1 先 —— **留 D5 ratify**。
+**P2 内部切分（D6）**：拆两个 Full 子期——
+- **P2-a = G4（先做）**：report 对靶。aggregator 跨 session/场景做语义重复识别 → MULTIPLE TIMES 重复加权（反复出现=高置信=优先）+ annotation/issue schema 加 recurrence/outcome/friction typed facets。直接治"挑错靶子"。
+- **P2-b = G1+G2**：候选 grounding。issue 携带 benchmark baseline FAIL 场景 ids（D2 (a)）+ 候选-gen LLM 注入这些场景的输入/期望/失败 trace（re-hydrate）+ A/B target 子集 = 这些场景 → "issue→候选→A/B" 闭合到同一套可复现用例。
+- **G3 predicted_impact**：排 P2-b 之后。
+
+**D2 已 ratify**：grounding 来源先用 (a) benchmark baseline FAIL 场景；(b) session 失败转可复现场景留后续。
 
 ## 已知关联 backlog（并入本包或引用）
 - 旧 skill A/B 迁 A（统一，已 patch baseline bug `c227d2a`）

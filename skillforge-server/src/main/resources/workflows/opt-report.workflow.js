@@ -44,7 +44,10 @@ var SUMMARY_SCHEMA = {
       type: 'array',
       items: {
         type: 'object',
-        required: ['id', 'title', 'severity', 'sessionCount', 'exampleSessionIds', 'suspectSurface', 'confidence', 'suggestion', 'actionType'],
+        // G4: suggestion demoted to optional (superseded by rootCause/proposedFix
+        // split); rootCause/proposedFix/friction/recurrence now required so the LLM
+        // 对靶 (root cause + concrete fix + friction class + recurrence weighting).
+        required: ['id', 'title', 'severity', 'sessionCount', 'exampleSessionIds', 'suspectSurface', 'confidence', 'actionType', 'rootCause', 'proposedFix', 'friction', 'recurrence'],
         properties: {
           id: { type: 'string' },
           title: { type: 'string' },
@@ -55,7 +58,11 @@ var SUMMARY_SCHEMA = {
           fixSurface: { type: 'string', enum: ['skill', 'prompt', 'behavior_rule', 'other', 'unclear'] },
           confidence: { type: 'number' },
           suggestion: { type: 'string' },
-          actionType: { type: 'string', enum: ['new', 'modify', 'duplicate'] }
+          actionType: { type: 'string', enum: ['new', 'modify', 'duplicate'] },
+          rootCause: { type: 'string' },
+          proposedFix: { type: 'string' },
+          friction: { type: 'string', enum: ['repeated_tool_failure', 'missing_context', 'wrong_tool_selection', 'task_misunderstanding', 'output_formatting', 'incomplete_execution'] },
+          recurrence: { type: 'integer', minimum: 1 }
         }
       }
     }

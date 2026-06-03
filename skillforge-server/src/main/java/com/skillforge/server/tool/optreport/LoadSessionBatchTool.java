@@ -7,10 +7,13 @@ import com.skillforge.core.skill.SkillResult;
 import com.skillforge.core.skill.Tool;
 import com.skillforge.server.entity.SessionAnnotationEntity;
 import com.skillforge.server.entity.SessionEntity;
+import com.skillforge.server.entity.SessionPatternEntity;
 import com.skillforge.server.repository.SessionAnnotationRepository;
+import com.skillforge.server.repository.SessionPatternRepository;
 import com.skillforge.server.repository.SessionRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.domain.PageRequest;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -61,20 +64,26 @@ public class LoadSessionBatchTool implements Tool {
     static final int MIN_LIMIT = 1;
     static final int MAX_LIMIT = 200;
 
+    /** G4: how many production failure clusters to bundle for the aggregator. */
+    static final int CLUSTERS_LIMIT = 20;
+
     private final SessionRepository sessionRepository;
     private final SessionAnnotationRepository annotationRepository;
     private final com.skillforge.server.repository.AgentRepository agentRepository;
+    private final SessionPatternRepository patternRepository;
     private final ObjectMapper objectMapper;
     private final java.time.Clock clock;
 
     public LoadSessionBatchTool(SessionRepository sessionRepository,
                                 SessionAnnotationRepository annotationRepository,
                                 com.skillforge.server.repository.AgentRepository agentRepository,
+                                SessionPatternRepository patternRepository,
                                 ObjectMapper objectMapper,
                                 java.time.Clock clock) {
         this.sessionRepository = sessionRepository;
         this.annotationRepository = annotationRepository;
         this.agentRepository = agentRepository;
+        this.patternRepository = patternRepository;
         this.objectMapper = objectMapper;
         this.clock = clock;
     }
@@ -91,7 +100,10 @@ public class LoadSessionBatchTool implements Tool {
                 + "created_at >= now() - windowDays days) paginated by offset/limit. "
                 + "Each item bundles {sessionId, createdAt, runtimeStatus, messageCount, "
                 + "annotations:[{type,value,source,confidence,reasoning?}]}. Also returns "
-                + "total count (unpaged) so the agent can compute batches. "
+                + "total count (unpaged) so the agent can compute batches, plus "
+                + "clusters:[{signature,outcome,suspectSurface,topFailingTool,memberCount,"
+                + "lastSeenAt}] — the agent's production failure clusters (member_count DESC) "
+                + "for recurrence weighting (empty for cold agents). "
                 + "Defaults: windowDays=" + DEFAULT_WINDOW_DAYS
                 + " (clamped [" + MIN_WINDOW_DAYS + ", " + MAX_WINDOW_DAYS + "]), "
                 + "offset=" + DEFAULT_OFFSET + ", limit=" + DEFAULT_LIMIT
@@ -211,6 +223,15 @@ public class LoadSessionBatchTool implements Tool {
                     .map(com.skillforge.server.entity.AgentEntity::getName)
                     .orElse("agent#" + agentId);
 
+            // G4: bundle the agent's production failure clusters
+            // (t_session_pattern) so the aggregator can weight recurrence
+            // (MULTIPLE TIMES) without a second tool round-trip. Sorted
+            // member_count DESC, last_seen_at DESC by the repo query. Empty
+            // list (never null) for cold agents — clusters are filled
+            // independently by the hourly session-annotator, so a brand-new
+            // agent legitimately has none.
+            List<Map<String, Object>> clusters = loadClusters(agentId);
+
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("agentId", agentId);
             payload.put("agentName", agentName);
@@ -220,14 +241,41 @@ public class LoadSessionBatchTool implements Tool {
             payload.put("total", total);
             payload.put("offset", offset);
             payload.put("items", items);
+            payload.put("clusters", clusters);
 
-            log.info("LoadSessionBatchTool: agentId={} windowDays={} total={} offset={} limit={} returned={}",
-                    agentId, windowDays, total, offset, limit, items.size());
+            log.info("LoadSessionBatchTool: agentId={} windowDays={} total={} offset={} limit={} returned={} clusters={}",
+                    agentId, windowDays, total, offset, limit, items.size(), clusters.size());
             return SkillResult.success(objectMapper.writeValueAsString(payload));
         } catch (Exception e) {
             log.error("LoadSessionBatchTool execute failed", e);
             return SkillResult.error("LoadSessionBatch error: " + e.getMessage());
         }
+    }
+
+    /**
+     * G4: load the agent's production failure clusters from
+     * {@code t_session_pattern} (member_count DESC, last_seen_at DESC), capped
+     * at {@link #CLUSTERS_LIMIT}. Each entry exposes the fields the aggregator
+     * needs for cluster↔issue matching + recurrence weighting:
+     * {@code signature / outcome / suspectSurface / topFailingTool /
+     * memberCount / lastSeenAt}. Returns an empty list (never null) for a cold
+     * agent.
+     */
+    private List<Map<String, Object>> loadClusters(Long agentId) {
+        List<SessionPatternEntity> rows = patternRepository.findWithFilters(
+                null, null, agentId, PageRequest.of(0, CLUSTERS_LIMIT));
+        List<Map<String, Object>> clusters = new ArrayList<>(rows.size());
+        for (SessionPatternEntity p : rows) {
+            Map<String, Object> c = new LinkedHashMap<>();
+            c.put("signature", p.getSignature());
+            c.put("outcome", p.getOutcome());
+            c.put("suspectSurface", p.getSuspectSurface());
+            c.put("topFailingTool", p.getTopFailingTool());
+            c.put("memberCount", p.getMemberCount());
+            c.put("lastSeenAt", p.getLastSeenAt() == null ? null : p.getLastSeenAt().toString());
+            clusters.add(c);
+        }
+        return clusters;
     }
 
     /**
