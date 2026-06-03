@@ -336,6 +336,38 @@ class GenerateCandidateToolTest {
     }
 
     @Test
+    @DisplayName("concern#2: report-issue mode feeds the event's enriched description (rootCause/proposedFix) to the improver, NOT the thin orchestrator issue")
+    void reportIssueBridge_enrichedDescription_feedsImproverNotThinIssue() {
+        stubReport("rep-9", 900L);
+        OptReportToEventBridge.ConvertResult minted = mintedEvent(8800L, 900L);
+        // The minted event's description = G4/G5-enriched buildDescription output.
+        String enriched = "Edit fails repeatedly\n\nRoot cause: old_string came from a stale "
+                + "snapshot\n\nProposed fix: fresh Read of the file immediately before the Edit";
+        minted.event().setDescription(enriched);
+        when(optReportToEventBridge.convertIssueToEvent("rep-9", "issue-7")).thenReturn(minted);
+        when(promptImproverService.startImprovementFromAttribution(eq(8800L), eq("900"), any(), eq(0L)))
+                .thenReturn(new ImprovementStartResult("900", null, "prompt-v10", "PENDING"));
+
+        Map<String, Object> input = new LinkedHashMap<>();
+        input.put("surface", "prompt");
+        input.put("issue", "thin orchestrator issue");   // should be OVERRIDDEN by the enriched description
+        input.put("targetAgentId", "900");
+        input.put("reportId", "rep-9");
+        input.put("issueId", "issue-7");
+
+        SkillResult result = run(input);
+
+        assertThat(result.isSuccess()).isTrue();
+        ArgumentCaptor<String> issueCap = ArgumentCaptor.forClass(String.class);
+        verify(promptImproverService).startImprovementFromAttribution(eq(8800L), eq("900"), issueCap.capture(), eq(0L));
+        assertThat(issueCap.getValue())
+                .isEqualTo(enriched)
+                .contains("Root cause:")
+                .contains("Proposed fix:")
+                .isNotEqualTo("thin orchestrator issue");
+    }
+
+    @Test
     @DisplayName("report-issue: report belongs to another agent → rejected BEFORE minting (bridge NOT called)")
     void reportIssueBridge_crossAgentMismatch_rejectedBeforeMint() {
         stubReport("rep-1", 99L);   // report agent 99 != target 42

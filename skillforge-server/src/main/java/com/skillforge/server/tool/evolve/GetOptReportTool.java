@@ -105,7 +105,9 @@ public class GetOptReportTool implements Tool {
                 + "must belong to it (else a validation error). Always pass your targetAgentId.\n"
                 + "Returns { reportId, agentId, status, issueCount, topIssues: [{ id, title, "
                 + "severity, surface, suspectSurface, fixSurface, convertible, sessionCount, "
-                + "exampleSessionIds, suggestion, actionType }] }. Pass each issue's reportId + "
+                + "exampleSessionIds, suggestion, actionType, friction, recurrence, rootCause, "
+                + "proposedFix }] }. friction/recurrence/rootCause/proposedFix carry the "
+                + "holistic root cause (prefer them over suggestion when present). Pass each issue's reportId + "
                 + "id (issueId) + surface to GenerateCandidate. Only issues with "
                 + "convertible=true can be turned into a candidate (surface other/unclear cannot).";
     }
@@ -240,6 +242,15 @@ public class GetOptReportTool implements Tool {
                 m.put("exampleSessionIds", issue.exampleSessionIds());
                 m.put("suggestion", issue.suggestion());
                 m.put("actionType", issue.actionType());
+                // concern#2 (AUTOEVOLVE-CLOSE-LOOP): expose the G4/G5-enriched fields so
+                // the orchestrator can see the holistic root cause (for issue selection /
+                // prioritisation). null-safe for pre-G4 reports. Candidate-gen itself
+                // already receives the enriched description server-side via
+                // GenerateCandidate report-issue mode; these are for orchestrator visibility.
+                m.put("friction", issue.friction());
+                m.put("recurrence", issue.recurrence());
+                m.put("rootCause", issue.rootCause());
+                m.put("proposedFix", issue.proposedFix());
                 issues.add(m);
             }
 

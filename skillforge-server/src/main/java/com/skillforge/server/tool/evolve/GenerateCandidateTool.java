@@ -251,7 +251,18 @@ public class GenerateCandidateTool implements Tool {
             // Resolve the audit-anchor eventId from ONE of two modes:
             //   direct mode      → explicit "eventId"
             //   report-issue mode → "reportId" + "issueId" → existing bridge mints it
-            Long eventId = resolveEventId(input, targetAgentId);
+            ResolvedAnchor anchor = resolveEventId(input, targetAgentId);
+            Long eventId = anchor.eventId();
+            // concern#2 (AUTOEVOLVE-CLOSE-LOOP): in report-issue mode the minted
+            // event's description is the G4/G5-enriched rootCause + proposedFix
+            // (OptReportToEventBridge.buildDescription), which carries the holistic
+            // root cause. Prefer it over the orchestrator's thin `issue` string so
+            // candidate-gen sees the full attribution, not a one-liner. Direct-eventId
+            // mode resolves no description → `issue` unchanged (non-evolve attribution
+            // path stays byte-identical).
+            if (anchor.richDescription() != null && !anchor.richDescription().isBlank()) {
+                issue = anchor.richDescription();
+            }
 
             // SECURITY note: targetAgentId is threaded to the improver service,
             // which validates the agent exists. The improvers persist the
@@ -384,7 +395,14 @@ public class GenerateCandidateTool implements Tool {
      * @throws NoSuchElementException   reportId or issueId not found.
      * @throws IllegalStateException    report not in {@code completed} status (from the bridge).
      */
-    private Long resolveEventId(Map<String, Object> input, String targetAgentId) {
+    /**
+     * Audit-anchor resolution result. {@code richDescription} is the minted event's
+     * description (G4/G5-enriched rootCause + proposedFix) in report-issue mode, or
+     * {@code null} in direct-eventId mode (no event loaded). See concern#2.
+     */
+    private record ResolvedAnchor(Long eventId, String richDescription) {}
+
+    private ResolvedAnchor resolveEventId(Map<String, Object> input, String targetAgentId) {
         Long directEventId = parseLong(input.get("eventId"));
         String reportId = trimToNull(input.get("reportId"));
         String issueId = trimToNull(input.get("issueId"));
@@ -395,7 +413,7 @@ public class GenerateCandidateTool implements Tool {
                     "provide EITHER eventId OR (reportId + issueId), not both");
         }
         if (directEventId != null) {
-            return directEventId;
+            return new ResolvedAnchor(directEventId, null);
         }
         if (reportId == null || issueId == null) {
             throw new IllegalArgumentException(
@@ -420,7 +438,10 @@ public class GenerateCandidateTool implements Tool {
 
         OptReportToEventBridge.ConvertResult result =
                 optReportToEventBridge.convertIssueToEvent(reportId, issueId);
-        return result.event().getId();
+        // concern#2: surface the minted event's enriched description (buildDescription
+        // = rootCause + proposedFix from the report issue) so the caller can feed it
+        // to candidate-gen instead of the thin orchestrator-composed issue string.
+        return new ResolvedAnchor(result.event().getId(), result.event().getDescription());
     }
 
     /**
