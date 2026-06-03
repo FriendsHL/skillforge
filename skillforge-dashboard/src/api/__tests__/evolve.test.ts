@@ -11,19 +11,25 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('../index', () => {
   const get = vi.fn();
-  return { default: { get } };
+  const post = vi.fn();
+  return { default: { get, post } };
 });
 
 import api from '../index';
 import {
   listEvolveRuns,
   getEvolveRun,
+  adoptEvolveBundle,
+  getEvolveSkillDraft,
   type EvolveRunSummary,
   type EvolveRunDetail,
   type EvolveIteration,
+  type AdoptBundleRequest,
+  type AdoptResult,
 } from '../evolve';
 
 const mockedGet = (api as unknown as { get: ReturnType<typeof vi.fn> }).get;
+const mockedPost = (api as unknown as { post: ReturnType<typeof vi.fn> }).post;
 
 // ──────────────────────── fixture helpers ────────────────────────────────────
 
@@ -39,6 +45,7 @@ function makeIteration(overrides: Partial<EvolveIteration> = {}): EvolveIteratio
     kept: true,
     abRunId: 'ab-run-001',
     createdAt: '2026-05-31T10:00:00Z',
+    candidateBundle: null,
     ...overrides,
   };
 }
@@ -161,5 +168,88 @@ describe('evolve API — envelope contract', () => {
     const res = await getEvolveRun('run-abc');
     expect(res.data.iterations[0].candidateScore).toBeNull();
     expect(res.data.iterations[0].baselineScore).toBeNull();
+  });
+
+  it('getEvolveRun — iteration carries the candidateBundle pointers', async () => {
+    const iter = makeIteration({
+      candidateBundle: {
+        promptVersionId: 'pv-1',
+        behaviorRuleVersionId: null,
+        skillDraftId: 'sd-3',
+      },
+    });
+    mockedGet.mockResolvedValueOnce({ data: makeDetail({ iterations: [iter] }) });
+
+    const res = await getEvolveRun('run-abc');
+    const b = res.data.iterations[0].candidateBundle;
+    expect(b).not.toBeNull();
+    expect(b?.promptVersionId).toBe('pv-1');
+    expect(b?.behaviorRuleVersionId).toBeNull();
+    expect(b?.skillDraftId).toBe('sd-3');
+  });
+
+  it('getEvolveRun — candidateBundle may be null (legacy / non-kept rows)', async () => {
+    const iter = makeIteration({ candidateBundle: null });
+    mockedGet.mockResolvedValueOnce({ data: makeDetail({ iterations: [iter] }) });
+
+    const res = await getEvolveRun('run-abc');
+    expect(res.data.iterations[0].candidateBundle).toBeNull();
+  });
+});
+
+// ─────────────────────────── adopt contract ──────────────────────────────────
+
+describe('evolve API — adopt + skill-draft contract', () => {
+  beforeEach(() => {
+    mockedPost.mockReset();
+    mockedGet.mockReset();
+  });
+
+  it('adoptEvolveBundle POSTs /evolve/runs/{id}/adopt with userId param + bundle body', async () => {
+    const result: AdoptResult = {
+      prompt: { status: 'ok', reason: null },
+      rule: { status: 'noop', reason: null },
+      skill: null,
+      anyFailed: false,
+    };
+    mockedPost.mockResolvedValueOnce({ data: result });
+
+    const bundle: AdoptBundleRequest = {
+      promptVersionId: 'pv-1',
+      behaviorRuleVersionId: 'rv-9',
+      skillDraftId: null,
+    };
+    await adoptEvolveBundle('run-abc', 7, bundle);
+
+    expect(mockedPost).toHaveBeenCalledWith('/evolve/runs/run-abc/adopt', bundle, {
+      params: { userId: 7 },
+    });
+  });
+
+  it('adoptEvolveBundle — caller reads r.data directly (bare AdoptResult, NOT enveloped)', async () => {
+    const result: AdoptResult = {
+      prompt: { status: 'ok', reason: null },
+      rule: null,
+      skill: { status: 'failed', reason: 'Skill name conflict' },
+      anyFailed: true,
+    };
+    mockedPost.mockResolvedValueOnce({ data: result });
+
+    const res = await adoptEvolveBundle('run-abc', 7, { promptVersionId: 'pv-1' });
+    expect(res.data.prompt?.status).toBe('ok');
+    expect(res.data.skill?.status).toBe('failed');
+    expect(res.data.skill?.reason).toBe('Skill name conflict');
+    expect(res.data.anyFailed).toBe(true);
+  });
+
+  it('getEvolveSkillDraft GETs /evolve/skill-drafts/{draftId} (bare object)', async () => {
+    mockedGet.mockResolvedValueOnce({
+      data: { id: 'sd-3', name: 'my-skill', promptHint: 'body', triggers: null, requiredTools: null },
+    });
+
+    const res = await getEvolveSkillDraft('sd-3');
+    expect(mockedGet).toHaveBeenCalledWith('/evolve/skill-drafts/sd-3');
+    expect(res.data.id).toBe('sd-3');
+    expect(res.data.promptHint).toBe('body');
   });
 });

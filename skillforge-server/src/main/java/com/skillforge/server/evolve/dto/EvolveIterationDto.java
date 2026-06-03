@@ -20,6 +20,10 @@ import java.time.Instant;
  *   <li>{@code kept}           — whether the candidate was kept (not promoted)</li>
  *   <li>{@code abRunId}        — optional A/B run traceability id</li>
  *   <li>{@code createdAt}      — ISO-8601 instant of the step row</li>
+ *   <li>{@code candidateBundle} — AUTOEVOLVE-CLOSE-LOOP P1: the bundle pointer
+ *       tuple sidecar ({@code promptVersionId / behaviorRuleVersionId /
+ *       skillDraftId}), {@code null} when the step recorded no bundle (e.g.
+ *       single-surface iterations or pre-P1 ledger rows)</li>
  * </ul>
  */
 public record EvolveIterationDto(
@@ -32,5 +36,6 @@ public record EvolveIterationDto(
         Double delta,
         boolean kept,
         String abRunId,
-        Instant createdAt
+        Instant createdAt,
+        CandidateBundle candidateBundle
 ) {}

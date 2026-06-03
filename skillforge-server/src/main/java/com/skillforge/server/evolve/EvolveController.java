@@ -3,6 +3,9 @@ package com.skillforge.server.evolve;
 import com.skillforge.server.bootstrap.SystemAgentNames;
 import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.SessionEntity;
+import com.skillforge.server.evolve.AgentBundleAdoptionService.AdoptResult;
+import com.skillforge.server.evolve.dto.AdoptBundleRequest;
+import com.skillforge.server.evolve.dto.CandidateBundle;
 import com.skillforge.server.evolve.dto.EvolveRunDetailDto;
 import com.skillforge.server.evolve.dto.EvolveRunSummaryDto;
 import com.skillforge.server.flywheel.run.FlywheelRunEntity;
@@ -17,6 +20,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -76,17 +80,20 @@ public class EvolveController {
     private final SessionService sessionService;
     private final ChatService chatService;
     private final EvolveReadService evolveReadService;
+    private final AgentBundleAdoptionService adoptionService;
 
     public EvolveController(AgentRepository agentRepository,
                             FlywheelRunService flywheelRunService,
                             SessionService sessionService,
                             ChatService chatService,
-                            EvolveReadService evolveReadService) {
+                            EvolveReadService evolveReadService,
+                            AgentBundleAdoptionService adoptionService) {
         this.agentRepository = agentRepository;
         this.flywheelRunService = flywheelRunService;
         this.sessionService = sessionService;
         this.chatService = chatService;
         this.evolveReadService = evolveReadService;
+        this.adoptionService = adoptionService;
     }
 
     /**
@@ -293,6 +300,132 @@ public class EvolveController {
                         HttpStatus.NOT_FOUND,
                         "Evolve run not found or not an evolve run: " + evolveRunId));
         return ResponseEntity.ok(detail);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // AUTOEVOLVE-CLOSE-LOOP P1 — human adoption of a winning candidate bundle
+    // ─────────────────────────────────────────────────────────────────────
+
+    /**
+     * Adopt a winning candidate bundle from an evolve run onto the run's target
+     * agent. The three surfaces (prompt / behavior_rule / skill) are adopted in
+     * independent transactions — a failure on one does not roll back another
+     * (AC-4). Returns the bare {@link AdoptResult} (NOT enveloped).
+     *
+     * <p>Validation chain (fail-fast):
+     * <ol>
+     *   <li>{@code userId} null or the SYSTEM user (0) → 400 (the system user
+     *       must not push config through the human-adopt path).</li>
+     *   <li>{@code evolveRunId} blank → 400.</li>
+     *   <li>run not found OR not an {@code evolve} run → 404.</li>
+     *   <li>request body absent or all pointers null → 400 (nothing to adopt).</li>
+     *   <li>each non-null pointer must originate from a <em>kept</em> iteration's
+     *       candidate bundle of THIS run → else 400 (privilege-escalation guard:
+     *       a caller can't adopt an arbitrary cross-run/cross-agent version).</li>
+     *   <li>{@link AgentBundleAdoptionService#adopt} ownership mismatch → 400.</li>
+     * </ol>
+     *
+     * @param evolveRunId the evolve run the bundle belongs to
+     * @param userId      operator id (must be a non-system user)
+     * @param body        the bundle pointers to adopt
+     */
+    @PostMapping("/runs/{evolveRunId}/adopt")
+    public ResponseEntity<?> adopt(
+            @PathVariable("evolveRunId") String evolveRunId,
+            @RequestParam("userId") Long userId,
+            @RequestBody(required = false) AdoptBundleRequest body) {
+        // 1) system / missing user guard
+        if (userId == null || userId == SYSTEM_USER_ID) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "userId must be a non-system user to adopt a bundle");
+        }
+        // 2) run id
+        if (evolveRunId == null || evolveRunId.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "evolveRunId is required");
+        }
+        // 3) run lookup — getRunDetail returns empty for missing OR non-evolve
+        EvolveRunDetailDto detail = evolveReadService.getRunDetail(evolveRunId)
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND,
+                        "Evolve run not found or not an evolve run: " + evolveRunId));
+
+        // 4) at least one pointer
+        String promptVersionId = body == null ? null : nullIfBlank(body.promptVersionId());
+        String behaviorRuleVersionId = body == null ? null : nullIfBlank(body.behaviorRuleVersionId());
+        String skillDraftId = body == null ? null : nullIfBlank(body.skillDraftId());
+        if (promptVersionId == null && behaviorRuleVersionId == null && skillDraftId == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "at least one of promptVersionId / behaviorRuleVersionId / skillDraftId is required");
+        }
+
+        // 5) bundle source guard — every non-null pointer must come from a kept
+        // iteration's bundle of THIS run.
+        List<CandidateBundle> keptBundles = evolveReadService.listKeptCandidateBundles(evolveRunId);
+        if (!matchesKeptBundle(keptBundles, promptVersionId, behaviorRuleVersionId, skillDraftId)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "the requested pointers do not match any kept iteration's candidate bundle "
+                            + "for evolve run " + evolveRunId);
+        }
+
+        // 6) the target agent is the run's agent
+        String agentId = String.valueOf(detail.agentId());
+
+        // 7) adopt — ownership mismatch surfaces as 400
+        try {
+            AdoptResult result = adoptionService.adopt(
+                    new CandidateBundle(promptVersionId, behaviorRuleVersionId, skillDraftId),
+                    agentId, userId);
+            log.info("[Evolve] adopt completed: evolveRunId={} agentId={} userId={} anyFailed={}",
+                    evolveRunId, agentId, userId, result.anyFailed());
+            return ResponseEntity.ok(result);
+        } catch (IllegalArgumentException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage());
+        }
+    }
+
+    /**
+     * AUTOEVOLVE-CLOSE-LOOP P1 — lightweight skill-draft read for the adopt card
+     * diff (the FE needs the draft's promptHint / triggers / requiredTools to
+     * render the skill surface). Kept here (not in SkillDraftController) to avoid
+     * widening that controller's scope; returns a minimal projection. 404 when
+     * the draft does not exist.
+     */
+    @GetMapping("/skill-drafts/{draftId}")
+    public ResponseEntity<?> getSkillDraft(@PathVariable("draftId") String draftId) {
+        if (draftId == null || draftId.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "draftId is required");
+        }
+        // Delegates to the read service (design review W2 — controller no longer
+        // touches SkillDraftRepository directly; the read runs in a readOnly tx).
+        Map<String, Object> body = evolveReadService.getSkillDraftView(draftId)
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND, "Skill draft not found: " + draftId));
+        return ResponseEntity.ok(body);
+    }
+
+    /**
+     * True iff some kept bundle matches ALL the non-null request pointers (each
+     * non-null pointer equals that field of the SAME kept bundle). A null
+     * request pointer is a wildcard. Empty {@code keptBundles} → never matches.
+     */
+    private static boolean matchesKeptBundle(List<CandidateBundle> keptBundles,
+                                             String promptVersionId,
+                                             String behaviorRuleVersionId,
+                                             String skillDraftId) {
+        for (CandidateBundle b : keptBundles) {
+            boolean promptOk = promptVersionId == null || promptVersionId.equals(b.promptVersionId());
+            boolean ruleOk = behaviorRuleVersionId == null
+                    || behaviorRuleVersionId.equals(b.behaviorRuleVersionId());
+            boolean skillOk = skillDraftId == null || skillDraftId.equals(b.skillDraftId());
+            if (promptOk && ruleOk && skillOk) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static String nullIfBlank(String s) {
+        return (s == null || s.isBlank()) ? null : s.trim();
     }
 
     private static int clampMaxIter(Integer raw) {

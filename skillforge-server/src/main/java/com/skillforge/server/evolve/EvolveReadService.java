@@ -2,6 +2,7 @@ package com.skillforge.server.evolve;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.skillforge.server.evolve.dto.CandidateBundle;
 import com.skillforge.server.evolve.dto.EvolveIterationDto;
 import com.skillforge.server.evolve.dto.EvolveRunDetailDto;
 import com.skillforge.server.evolve.dto.EvolveRunSummaryDto;
@@ -9,7 +10,9 @@ import com.skillforge.server.flywheel.run.FlywheelRunEntity;
 import com.skillforge.server.flywheel.run.FlywheelRunRepository;
 import com.skillforge.server.flywheel.run.FlywheelRunStepEntity;
 import com.skillforge.server.flywheel.run.FlywheelRunStepRepository;
+import com.skillforge.server.entity.SkillDraftEntity;
 import com.skillforge.server.repository.AgentRepository;
+import com.skillforge.server.repository.SkillDraftRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.PageRequest;
@@ -17,7 +20,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -46,16 +51,39 @@ public class EvolveReadService {
     private final FlywheelRunRepository runRepository;
     private final FlywheelRunStepRepository stepRepository;
     private final AgentRepository agentRepository;
+    private final SkillDraftRepository skillDraftRepository;
     private final ObjectMapper objectMapper;
 
     public EvolveReadService(FlywheelRunRepository runRepository,
                              FlywheelRunStepRepository stepRepository,
                              AgentRepository agentRepository,
+                             SkillDraftRepository skillDraftRepository,
                              ObjectMapper objectMapper) {
         this.runRepository = runRepository;
         this.stepRepository = stepRepository;
         this.agentRepository = agentRepository;
+        this.skillDraftRepository = skillDraftRepository;
         this.objectMapper = objectMapper;
+    }
+
+    /**
+     * AUTOEVOLVE-CLOSE-LOOP P1 (design review W2) — lightweight read-only
+     * projection of a skill draft for the adopt card's diff view. Lives in the
+     * service (not the controller) so the controller stays free of a direct
+     * {@code SkillDraftRepository} dependency. Returns empty when the draft is
+     * missing — the controller maps that to 404.
+     */
+    @Transactional(readOnly = true)
+    public Optional<Map<String, Object>> getSkillDraftView(String draftId) {
+        return skillDraftRepository.findById(draftId).map(draft -> {
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("id", draft.getId());
+            body.put("name", draft.getName());
+            body.put("promptHint", draft.getPromptHint());
+            body.put("triggers", draft.getTriggers());
+            body.put("requiredTools", draft.getRequiredTools());
+            return body;
+        });
     }
 
     /**
@@ -195,6 +223,8 @@ public class EvolveReadService {
             abRunId = null;
         }
 
+        CandidateBundle candidateBundle = parseCandidateBundle(payload.get("candidateBundle"));
+
         return new EvolveIterationDto(
                 iteration,
                 surface,
@@ -205,7 +235,52 @@ public class EvolveReadService {
                 delta,
                 kept,
                 abRunId,
-                step.getCreatedAt());
+                step.getCreatedAt(),
+                candidateBundle);
+    }
+
+    /**
+     * AUTOEVOLVE-CLOSE-LOOP P1 — parse the {@code candidateBundle} sidecar
+     * written by {@code RecordIterationTool}. Returns {@code null} when the
+     * node is absent, is not a JSON object (the tool stores a non-parseable
+     * bundle as a text fallback — not a pointer tuple we can adopt), or when
+     * every pointer is blank.
+     */
+    private CandidateBundle parseCandidateBundle(JsonNode node) {
+        if (node == null || node.isNull() || node.isMissingNode() || !node.isObject()) {
+            return null;
+        }
+        String promptVersionId = textOrNull(node.get("promptVersionId"));
+        String behaviorRuleVersionId = textOrNull(node.get("behaviorRuleVersionId"));
+        String skillDraftId = textOrNull(node.get("skillDraftId"));
+        CandidateBundle bundle = new CandidateBundle(
+                promptVersionId, behaviorRuleVersionId, skillDraftId);
+        return bundle.isEmpty() ? null : bundle;
+    }
+
+    /**
+     * AUTOEVOLVE-CLOSE-LOOP P1 — the candidate bundles of every kept iteration
+     * of an evolve run, in step order. Used by the adopt endpoint to bound the
+     * adoptable pointer space (a request pointer must originate from a kept
+     * iteration — prevents adopting an arbitrary cross-run/cross-agent version).
+     * Empty when the run is missing, not an evolve run, or has no kept bundle.
+     */
+    @Transactional(readOnly = true)
+    public List<CandidateBundle> listKeptCandidateBundles(String evolveRunId) {
+        return getRunDetail(evolveRunId)
+                .map(detail -> detail.iterations().stream()
+                        .filter(EvolveIterationDto::kept)
+                        .map(EvolveIterationDto::candidateBundle)
+                        .filter(b -> b != null)
+                        .toList())
+                .orElseGet(List::of);
+    }
+
+    private static String textOrNull(JsonNode node) {
+        if (node == null || node.isNull() || node.isMissingNode()) return null;
+        if (!node.isValueNode()) return null;
+        String s = node.asText();
+        return (s == null || s.isBlank()) ? null : s;
     }
 
     private JsonNode parseStepOutputJson(FlywheelRunStepEntity step) {

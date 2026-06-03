@@ -65,6 +65,7 @@ class EvolveControllerTest {
     private SessionService sessionService;
     private ChatService chatService;
     private EvolveReadService evolveReadService;
+    private AgentBundleAdoptionService adoptionService;
     private EvolveController controller;
     private MockMvc mvc;
 
@@ -75,13 +76,14 @@ class EvolveControllerTest {
         sessionService = mock(SessionService.class);
         chatService = mock(ChatService.class);
         evolveReadService = mock(EvolveReadService.class);
+        adoptionService = mock(AgentBundleAdoptionService.class);
 
         ObjectMapper objectMapper = new ObjectMapper()
                 .findAndRegisterModules()
                 .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
 
         controller = new EvolveController(agentRepository, flywheelRunService,
-                sessionService, chatService, evolveReadService);
+                sessionService, chatService, evolveReadService, adoptionService);
         mvc = MockMvcBuilders.standaloneSetup(controller)
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(objectMapper))
                 .build();
@@ -292,10 +294,10 @@ class EvolveControllerTest {
         Instant now = Instant.parse("2026-05-31T10:00:00Z");
         EvolveIterationDto iter1 = new EvolveIterationDto(
                 1, "prompt", "Tightened greeting", "cand-a",
-                72.5, 74.9, 2.4, true, "ab-xyz", now);
+                72.5, 74.9, 2.4, true, "ab-xyz", now, null);
         EvolveIterationDto iter2 = new EvolveIterationDto(
                 2, "skill",  "Reduced latency",  "cand-b",
-                74.9, 73.1, -1.8, false, null, now);
+                74.9, 73.1, -1.8, false, null, now, null);
         EvolveRunDetailDto detail = new EvolveRunDetailDto(
                 "run-1", 7L, "my-agent", "completed", now, now,
                 List.of(iter1, iter2));

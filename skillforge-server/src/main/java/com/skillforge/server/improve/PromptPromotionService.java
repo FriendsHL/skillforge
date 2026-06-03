@@ -84,30 +84,11 @@ public class PromptPromotionService {
             return PromotionResult.rejected("Auto-improve paused");
         }
 
-        // Atomic promotion
+        // Atomic promotion (deprecate old → activate candidate → point agent at it).
+        // Shared with promoteByHuman via activateVersion() to avoid a divergent
+        // hand-copied state machine over user-visible agent.systemPrompt.
         Instant now = Instant.now();
-
-        // Deprecate old active version
-        if (agent.getActivePromptVersionId() != null) {
-            promptVersionRepository.findById(agent.getActivePromptVersionId())
-                    .ifPresent(oldVersion -> {
-                        oldVersion.setStatus("deprecated");
-                        oldVersion.setDeprecatedAt(now);
-                        promptVersionRepository.save(oldVersion);
-                    });
-        }
-
-        // Promote candidate
-        candidate.setStatus("active");
-        candidate.setPromotedAt(now);
-        promptVersionRepository.save(candidate);
-
-        // Update agent
-        agent.setSystemPrompt(candidate.getContent());
-        agent.setActivePromptVersionId(candidate.getId());
-        agent.setLastPromotedAt(now);
-        agent.setAbDeclineCount(0);
-        agentRepository.save(agent);
+        activateVersion(agent, candidate, now);
 
         // Update AB run
         abRun.setPromoted(true);
@@ -122,6 +103,73 @@ public class PromptPromotionService {
                 abRun.getTriggeredByUserId()));
 
         return PromotionResult.promoted(candidate.getId());
+    }
+
+    /**
+     * AUTOEVOLVE-CLOSE-LOOP P1 — human adoption of a prompt version from the
+     * evolve trajectory. Mirrors the atomic-promote section of
+     * {@link #evaluateAndPromote} (deprecate old active → activate candidate →
+     * update agent → publish event) but DELIBERATELY SKIPS all four automatic
+     * gates (delta threshold / already-promoted-today / 24h cooldown /
+     * auto-improve-paused): the operator clicking "Approve &amp; Adopt" IS the
+     * gate. There is no {@code PromptAbRunEntity} in this path, so we neither
+     * touch {@code abRun.setPromoted} nor {@code updateAbDeclineTracking}.
+     *
+     * <p>Idempotent (INV): re-adopting an already-active version is a no-op —
+     * returns {@link PromotionResult#promoted} with no DB write and no event.
+     *
+     * <p>{@code abDeclineCount} is reset to 0 on a successful adopt — adopting a
+     * better version clears the consecutive-decline streak the same way an
+     * automatic promotion does.
+     *
+     * @param promptVersionId candidate version to activate
+     * @param agentId         target agent id (the version must belong to it)
+     * @param userId          operator id (threaded into the broadcast event)
+     * @throws IllegalArgumentException version not found, or it belongs to a
+     *                                  different agent (ownership), or the agent
+     *                                  row is missing
+     */
+    @Transactional
+    public PromotionResult promoteByHuman(String promptVersionId, String agentId, Long userId) {
+        PromptVersionEntity version = promptVersionRepository.findById(promptVersionId)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Prompt version not found: " + promptVersionId));
+
+        // Ownership: a version may only be adopted onto the agent it belongs to
+        // (defense-in-depth — AgentBundleAdoptionService pre-validates, but the
+        // service is also reachable directly).
+        if (!agentId.equals(version.getAgentId())) {
+            throw new IllegalArgumentException(
+                    "prompt version " + promptVersionId + " belongs to agent " + version.getAgentId()
+                            + " but adopt targets agent " + agentId
+                            + " — a version may only be adopted onto its owning agent");
+        }
+
+        // Idempotency: already active → no-op (no DB write, no event re-publish).
+        if ("active".equals(version.getStatus())) {
+            log.info("promoteByHuman no-op: version {} already active for agent {}",
+                    promptVersionId, agentId);
+            return PromotionResult.promoted(version.getId());
+        }
+
+        // Pessimistic write lock to prevent concurrent promotions for the same agent.
+        AgentEntity agent = agentRepository.findByIdForUpdate(Long.parseLong(agentId))
+                .orElseThrow(() -> new IllegalArgumentException("Agent not found: " + agentId));
+
+        // (gates 1-4 deliberately skipped — the human operator is the gate)
+        // Same atomic activation as the automatic path, via activateVersion().
+        Instant now = Instant.now();
+        activateVersion(agent, version, now);
+
+        log.info("Prompt promoted by human: agentId={}, versionId={}, userId={}",
+                agentId, version.getId(), userId);
+
+        // Publish event (broadcast fires after commit). delta=null — no A/B run
+        // backs a human adoption.
+        eventPublisher.publishEvent(new PromptPromotedEvent(
+                agentId, version.getId(), null, version.getVersionNumber(), userId));
+
+        return PromotionResult.promoted(version.getId());
     }
 
     /**
@@ -153,6 +201,48 @@ public class PromptPromotionService {
         agentRepository.save(agent);
 
         log.info("Rolled back agent {} to prompt version {}", agent.getId(), targetVersion.getId());
+    }
+
+    /**
+     * Shared atomic version activation used by BOTH the automatic
+     * ({@link #evaluateAndPromote}) and human ({@link #promoteByHuman}) promote
+     * paths: deprecate the agent's current active prompt version, activate
+     * {@code candidate}, and point the agent's runtime config (systemPrompt /
+     * activePromptVersionId / lastPromotedAt) at it, resetting the decline streak.
+     *
+     * <p>Callers own everything that differs between the two paths — gating, the
+     * {@code abRun.setPromoted} marking (automatic only), and the
+     * {@link PromptPromotedEvent} publish (delta differs: real value vs null).
+     * Consolidated here (design review W1) so the user-visible
+     * {@code agent.systemPrompt} state transition lives in ONE place instead of a
+     * hand-copied third copy. Must run inside the caller's {@code @Transactional}.
+     *
+     * <p>Note: {@link #rollbackToVersion} is intentionally NOT routed through this
+     * helper — it has different semantics (clears {@code deprecatedAt} on the
+     * reactivated target, no {@code promotedAt}, no decline reset).
+     */
+    private void activateVersion(AgentEntity agent, PromptVersionEntity candidate, Instant now) {
+        // Deprecate old active version
+        if (agent.getActivePromptVersionId() != null) {
+            promptVersionRepository.findById(agent.getActivePromptVersionId())
+                    .ifPresent(oldVersion -> {
+                        oldVersion.setStatus("deprecated");
+                        oldVersion.setDeprecatedAt(now);
+                        promptVersionRepository.save(oldVersion);
+                    });
+        }
+
+        // Promote candidate
+        candidate.setStatus("active");
+        candidate.setPromotedAt(now);
+        promptVersionRepository.save(candidate);
+
+        // Update agent runtime config
+        agent.setSystemPrompt(candidate.getContent());
+        agent.setActivePromptVersionId(candidate.getId());
+        agent.setLastPromotedAt(now);
+        agent.setAbDeclineCount(0);
+        agentRepository.save(agent);
     }
 
     /**

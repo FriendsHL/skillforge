@@ -20,6 +20,24 @@
  */
 import api from './index';
 
+// ─────────────────────────── candidate bundle (per-surface pointers) ───────
+
+/**
+ * P1 close-loop adopt — the winning candidate's per-surface version pointers,
+ * recorded on a kept iteration. Mirrors BE {@code CandidateBundle} record
+ * (evolve/dto) field-by-field (footgun #6). Each pointer is null when that
+ * surface was not changed in this iteration; the whole bundle is null on the
+ * iteration when no pointers were recorded.
+ */
+export interface CandidateBundle {
+  /** Prompt version id to promote (null when prompt unchanged). */
+  promptVersionId: string | null;
+  /** Behavior-rule version id to promote (null when rule unchanged). */
+  behaviorRuleVersionId: string | null;
+  /** Skill draft id to approve+register (null when no skill change). */
+  skillDraftId: string | null;
+}
+
 // ─────────────────────────── iteration (one row per loop) ──────────────────
 
 export interface EvolveIteration {
@@ -43,6 +61,11 @@ export interface EvolveIteration {
   abRunId: string | null;
   /** ISO-8601 creation timestamp. */
   createdAt: string;
+  /**
+   * P1 close-loop — per-surface candidate pointers for the winning bundle.
+   * Null when this iteration recorded no bundle (legacy rows / non-kept).
+   */
+  candidateBundle: CandidateBundle | null;
 }
 
 // ─────────────────────────── run summary (list item) ───────────────────────
@@ -146,3 +169,92 @@ export const triggerEvolveRun = (
       ...(opts?.maxIter != null ? { maxIter: opts.maxIter } : {}),
     },
   });
+
+// ─────────────────────────── adopt (close-loop promotion) ──────────────────
+
+/**
+ * Body for POST /api/evolve/runs/{evolveRunId}/adopt. Mirrors BE
+ * {@code AdoptBundleRequest} (footgun #6). Each pointer is optional/null —
+ * the server promotes only the non-null surfaces. The server cross-checks
+ * these pointers against the run's kept iterations (anti-tamper).
+ */
+export interface AdoptBundleRequest {
+  promptVersionId?: string | null;
+  behaviorRuleVersionId?: string | null;
+  skillDraftId?: string | null;
+}
+
+/**
+ * Per-surface adopt outcome. Mirrors BE {@code SurfaceResult} record.
+ *   - 'ok'     → surface promoted.
+ *   - 'noop'   → already active / nothing to do (idempotent).
+ *   - 'failed' → promotion threw; {@link reason} carries the message.
+ */
+export interface SurfaceResult {
+  status: 'ok' | 'noop' | 'failed';
+  /** Failure detail when status==='failed'; null otherwise. */
+  reason: string | null;
+}
+
+/**
+ * Adopt outcome across all surfaces. Mirrors BE {@code AdoptResult} record.
+ * Each surface is null when the request did not target it. Surfaces are
+ * promoted in independent transactions, so a partial failure leaves the
+ * succeeded surfaces committed — {@link anyFailed} flags that at least one
+ * targeted surface failed.
+ *
+ * Returned BARE (not enveloped) — FE reads r.data directly.
+ */
+export interface AdoptResult {
+  prompt: SurfaceResult | null;
+  rule: SurfaceResult | null;
+  skill: SurfaceResult | null;
+  anyFailed: boolean;
+}
+
+/**
+ * Adopt a winning candidate bundle for an evolve run — promotes each non-null
+ * surface (prompt active-version swap / rule active swap / skill draft
+ * approve+register). Irreversible per surface.
+ *
+ * `POST /api/evolve/runs/{evolveRunId}/adopt?userId=` with the bundle as body.
+ * Reads r.data directly — NOT enveloped.
+ *
+ * Errors: 400 (system user / blank pointers / bundle not from a kept
+ * iteration / ownership mismatch), 404 (run missing or not an evolve run).
+ *
+ * @param evolveRunId  The evolve run whose kept iteration owns the bundle.
+ * @param userId       Acting (human) user id — must not be the system user.
+ * @param bundle       Per-surface version pointers to promote.
+ */
+export const adoptEvolveBundle = (
+  evolveRunId: string,
+  userId: number,
+  bundle: AdoptBundleRequest,
+) =>
+  api.post<AdoptResult>(`/evolve/runs/${evolveRunId}/adopt`, bundle, {
+    params: { userId },
+  });
+
+// ─────────────────────────── skill-draft content (for diff) ────────────────
+
+/**
+ * Lightweight skill-draft view for rendering the skill surface of the adopt
+ * diff. Mirrors the BE {@code GET /api/evolve/skill-drafts/{draftId}} payload
+ * (footgun #6) — bare object, NOT enveloped.
+ */
+export interface EvolveSkillDraftView {
+  id: string;
+  name: string;
+  /** The drafted SKILL.md body / prompt hint shown in the diff. */
+  promptHint: string | null;
+  triggers: string | null;
+  requiredTools: string | null;
+}
+
+/**
+ * Fetch a skill draft's content for the adopt diff.
+ * `GET /api/evolve/skill-drafts/{draftId}` — reads r.data directly.
+ */
+export const getEvolveSkillDraft = (draftId: string) =>
+  api.get<EvolveSkillDraftView>(`/evolve/skill-drafts/${draftId}`);

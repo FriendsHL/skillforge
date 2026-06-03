@@ -16,11 +16,17 @@
 import React, { useState, useCallback } from 'react';
 import { useQuery, useQueries } from '@tanstack/react-query';
 import { Select } from 'antd';
+import { useAuth } from '../../contexts/AuthContext';
 import { listEvolveRuns, getEvolveRun } from '../../api/evolve';
-import type { EvolveRunSummary, EvolveRunDetail } from '../../api/evolve';
+import type {
+  EvolveRunSummary,
+  EvolveRunDetail,
+  EvolveIteration,
+} from '../../api/evolve';
 import { getAgents } from '../../api/index';
 import EvolveRunList from './EvolveRunList';
 import EvolveTrajectoryChart from './EvolveTrajectoryChart';
+import EvolveAdoptCard from './EvolveAdoptCard';
 import './evolve.css';
 
 const MAX_OVERLAY_RUNS = 4;
@@ -30,7 +36,21 @@ interface AgentLite {
   name: string;
 }
 
+/**
+ * The last kept iteration that carries a candidate bundle — the adoptable
+ * winner for a run. Returns null when the run has no adoptable iteration
+ * (nothing kept, or kept rows predate bundle recording).
+ */
+function lastAdoptableIteration(run: EvolveRunDetail): EvolveIteration | null {
+  for (let i = run.iterations.length - 1; i >= 0; i--) {
+    const it = run.iterations[i];
+    if (it.kept && it.candidateBundle != null) return it;
+  }
+  return null;
+}
+
 const EvolveTrajectoryPanel: React.FC = () => {
+  const { userId } = useAuth();
   // The selected agent (drives the run list). Selecting from the dropdown
   // commits immediately — no separate Load step.
   const [committedAgentId, setCommittedAgentId] = useState<number | null>(null);
@@ -165,6 +185,21 @@ const EvolveTrajectoryPanel: React.FC = () => {
           />
         </div>
       </div>
+
+      {/* Adopt cards — one per selected run that has an adoptable winner */}
+      {detailRuns.map((run) => {
+        const adoptable = lastAdoptableIteration(run);
+        if (!adoptable) return null;
+        return (
+          <EvolveAdoptCard
+            key={run.evolveRunId}
+            evolveRunId={run.evolveRunId}
+            agentId={run.agentId}
+            iteration={adoptable}
+            userId={userId}
+          />
+        );
+      })}
     </section>
   );
 };

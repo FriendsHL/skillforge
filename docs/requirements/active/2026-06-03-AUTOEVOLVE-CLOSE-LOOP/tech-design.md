@@ -26,6 +26,27 @@
 - evolve 整体 gate vs 单面 promote gate 不一致 → 采纳用"人已决策"force 路径，但保留权限/cooldown/审计。
 - 各面 promote 的副作用（active 版本切换 / canary）—— 复用现成路径，不新造。
 
+### ✅ 已 ratify（2026-06-03，含 Explore 锚点）— Mid 档，整包单审批
+
+**用户拍定 UX**：**一张卡（各面 diff + 整体提升）+ 一个 Approve&Adopt 按钮 → 整包生效**，不逐面审批。结果反馈逐面显示（prompt✓/rule✓/skill✓）但不要用户操作。
+
+**各面 promote 路径（human 就是 gate，绕自动门槛）**：
+- **prompt**：`PromptPromotionService.evaluateAndPromote` **只有自动 gate（15pp+cooldown），无 force 路径** → **必须新增 `promoteByHuman(promptVersionId, agentId, userId)`**（复用现成原子写 `:89-124`：deprecate old → activate new → update agent，跳 delta/cooldown，保幂等+审计）。← P1 唯一核心新代码。
+- **behavior_rule**：直接调底层 `BehaviorRulePromotionService.promote(v)`（已 public `:147`，绕 dual-criteria，只做 atomic 状态写）。
+- **skill**：`SkillDraftService.approveDraft(draftId, userId, forceCreate=true)`（绕 high-similarity gate；handle `SkillNameConflictException` 逐面报错）。
+
+**赢家 bundle 取法**：存在 `t_flywheel_run_step.step_output_json.candidateBundle{promptVersionId?,behaviorRuleVersionId?,skillDraftId?}` + `kept` —— 取最后一条 `kept=true` iteration。**`EvolveIterationDto` 现未暴露 candidateBundle → 要扩 DTO + `EvolveReadService.parseIterationStep` 解析**（无新表）。null 面=现役原版不动。
+
+**新 `AgentBundleAdoptionService`** 编排三面，best-effort + 逐面结果 `{prompt:ok, rule:ok, skill:failed(reason)}`（D1：半成不回滚、响亮报，各面独立可重试）。
+
+**REST**：`POST /api/evolve/runs/{evolveRunId}/adopt`，body = bundle 指针，权限 guard。
+
+**FE**：新 `EvolveAdoptCard`（赢家 bundle 各面 diff + 一个按钮 + Modal.confirm），复用 `SkillMdDiff.tsx` 做文本 diff；`api/evolve.ts` 扩 `EvolveIteration` 加 candidateBundle + `adoptEvolveBundle`（footgun#6 契约 BE DTO↔FE type 同步）。
+
+**档位 Mid**：无新表/无 migration（不加 bundle 级采纳审计表——各面 promote 已各自审计；P3 north-star 真要 bundle 级追踪时再加，那时本就动 schema）。跨 BE(improve+evolve)+FE。
+
+**已知**：干净 evolve 重跑（2026-06-03）两轮候选都 kept=false（无赢家）→ **P1 采纳按钮现在会空转**（没真赢家可采）；让它有东西可采靠 **bad-case 收割**（A/B 接真失败场景，下一期）。P1 先把闭环基础设施搭好。
+
 ---
 
 ## Phase 2 — 对靶改进（on-target，依据 AHE + Claude Code /insights）
