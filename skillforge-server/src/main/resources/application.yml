@@ -151,6 +151,13 @@ skillforge:
   # cap. Default 30 (TriggerAbEvalTool.DEFAULT_AB_BUDGET_PER_RUN).
   evolve:
     ab-budget-per-run: 30
+    # AUTOEVOLVE-CLOSE-LOOP Phase BC: repo-root prefix BadCaseHarvestService strips
+    # from harvested span paths so fixtures become sandbox-relative and the task
+    # is rebased to /tmp/eval/. The @Value default is a dev-machine path; override
+    # to your checkout root in non-dev hosts (trailing slash optional). If it
+    # doesn't resolve to a real directory, the service log.warns at startup.
+    # harvest:
+    #   repo-root: <your-checkout-root>/
 
   session-message-store:
     row-read-enabled: true

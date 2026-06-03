@@ -27,6 +27,13 @@ public class EvalJudgeTool {
 
     private static final Logger log = LoggerFactory.getLogger(EvalJudgeTool.class);
 
+    /**
+     * BC-M1: deterministic behavioral oracle — scores on a tool-error signature,
+     * never calls the LLM. Single source of truth shared by the {@code switch}
+     * case and the meta-judge skip gate (see {@link #isDeterministicOracle}).
+     */
+    static final String ORACLE_TYPE_TOOL_ERROR_ABSENCE = "tool_error_absence";
+
     private final LlmProviderFactory llmProviderFactory;
     private final AttributionEngine attributionEngine;
     private final ObjectMapper objectMapper;
@@ -111,8 +118,13 @@ public class EvalJudgeTool {
         double compositeScore = 0.7 * outcomeScore + 0.3 * efficiencyScore;
         output.setCompositeScore(compositeScore);
 
-        // 4. Meta-Judge for fuzzy zone [30, 55]
-        if (compositeScore >= 30.0 && compositeScore <= 55.0) {
+        // 4. Meta-Judge for fuzzy zone [30, 55].
+        // BC-M1: a deterministic oracle's outcome is a hard 0/100 — skip the LLM
+        // meta-judge so a FAIL (outcome=0, composite=0.3*efficiency, which can
+        // land on exactly 30.0 when the run was fast) can never be flipped to
+        // PASS by a non-deterministic LLM call.
+        if (!isDeterministicOracle(scenario.getOracle())
+                && compositeScore >= 30.0 && compositeScore <= 55.0) {
             try {
                 double metaScore = callMetaJudge(scenario, runResult, compositeScore);
                 output.setMetaJudgeRationale("Meta-judge adjusted score from " + compositeScore + " to " + metaScore);
@@ -264,11 +276,99 @@ public class EvalJudgeTool {
                 }
             }
             case "llm_judge" -> callLlmJudge(oracle.getExpected(), trimmedOutput);
+            case ORACLE_TYPE_TOOL_ERROR_ABSENCE -> computeToolErrorAbsenceScore(oracle, runResult);
             default -> {
                 log.warn("Unknown oracle type: {}", oracle.getType());
                 yield 0.0;
             }
         };
+    }
+
+    /**
+     * Returns true for oracle types that score deterministically without any LLM
+     * call. Single source of truth for the meta-judge skip gate — a new
+     * deterministic oracle author only updates this predicate, not the [30,55]
+     * gate condition. Intentionally does NOT include exact_match/contains/regex:
+     * those keep their existing meta-judge behaviour (changing it would shift
+     * established scores — out of BC-M1 scope).
+     */
+    private boolean isDeterministicOracle(EvalScenario.ScenarioOracle oracle) {
+        return oracle != null && ORACLE_TYPE_TOOL_ERROR_ABSENCE.equals(oracle.getType());
+    }
+
+    /**
+     * AUTOEVOLVE-CLOSE-LOOP Phase BC-M1 — deterministic behavioral oracle.
+     *
+     * <p>Scans the run's tool calls for a failure signature and scores on its
+     * presence/absence. The criteria JSON lives in {@code oracle.expected}:
+     * <pre>{@code {"tool":"Edit","errorSignature":"old_string not found","passWhen":"no_match"}}</pre>
+     * A tool call "recurs" the signature when it failed ({@code !isSuccess()}),
+     * its tool name equals {@code tool}, and its output contains
+     * {@code errorSignature}. With the default {@code passWhen=no_match}: no
+     * recurrence → 100, recurrence → 0 (and vice-versa for {@code match}).
+     *
+     * <p>Purely mechanical — NO LLM call — so it is cheap and reproducible.
+     * Returns 0.0 on any parse problem (treated as "could not confirm absence").
+     *
+     * <p><b>Limitation — measures signature ABSENCE, not task success.</b> This
+     * oracle only asks "did the named tool fail with this error signature?" It
+     * does NOT assess whether the agent actually accomplished the task. A run
+     * that calls no tools at all — or does nothing useful — produces no matching
+     * signature and therefore scores PASS. BC-M1 uses this single-shot signature
+     * check to prove the failure reproduces; M2 converges it with a multi-round
+     * recurrence rate plus a task-completion dimension so a do-nothing run can no
+     * longer trivially pass.
+     */
+    private double computeToolErrorAbsenceScore(EvalScenario.ScenarioOracle oracle,
+                                                ScenarioRunResult runResult) {
+        String criteriaJson = oracle.getExpected();
+        if (criteriaJson == null || criteriaJson.isBlank()) {
+            log.warn("tool_error_absence oracle missing expected criteria JSON");
+            return 0.0;
+        }
+        String tool;
+        String errorSignature;
+        String passWhen;
+        try {
+            JsonNode root = objectMapper.readTree(criteriaJson);
+            tool = root.path("tool").asText(null);
+            errorSignature = root.path("errorSignature").asText(null);
+            passWhen = root.path("passWhen").asText("no_match");
+        } catch (Exception e) {
+            log.warn("tool_error_absence oracle expected was not valid JSON: {}", e.getMessage());
+            return 0.0;
+        }
+        if (errorSignature == null || errorSignature.isBlank()) {
+            log.warn("tool_error_absence oracle missing errorSignature");
+            return 0.0;
+        }
+
+        boolean recurred = signatureRecurred(runResult.getToolCalls(), tool, errorSignature);
+        boolean wantMatch = "match".equalsIgnoreCase(passWhen);
+        // pass when recurrence matches the desired condition:
+        //   passWhen=no_match → pass iff !recurred
+        //   passWhen=match    → pass iff recurred
+        boolean pass = wantMatch == recurred;
+        return pass ? 100.0 : 0.0;
+    }
+
+    /**
+     * Returns true when any failed tool call matches the (tool name +
+     * errorSignature substring) failure signature. A null {@code tool} matches
+     * any tool name (signature-only matching).
+     */
+    private static boolean signatureRecurred(List<com.skillforge.core.engine.ToolCallRecord> toolCalls,
+                                              String tool, String errorSignature) {
+        if (toolCalls == null) return false;
+        for (com.skillforge.core.engine.ToolCallRecord record : toolCalls) {
+            if (record == null || record.isSuccess()) continue;
+            if (tool != null && !tool.isBlank() && !tool.equals(record.getSkillName())) continue;
+            String output = record.getOutput();
+            if (output != null && output.contains(errorSignature)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private double computeEfficiencyScore(EvalScenario scenario, ScenarioRunResult runResult) {

@@ -138,7 +138,98 @@
 
 ---
 
-## 分期 & 顺序（D5/D6 已 ratify 2026-06-03）
+## Phase BC — bad-case 收割（实现 D2(b)，**最高优先 unlock**，Full）
+
+> 状态：tech-design 完成，spike 已 de-risk（见 `proposal-badcase-and-g3.md` Spike 结果：Edit stale 42/42 + Grep 53/53 可重建）。**用户 2026-06-04 授权直接驱动（"不用我决策了你搞吧"）**——本节即设计文档，自审后走 Full pipeline。
+> 一句话：把真失败 session 转成隔离、可复现、多轮的 eval 场景，让 A/B 量在真失败上 → evolve 出真赢家 → P1 有东西可采 + read-before-edit 盲测可验证。
+
+### 现状锚点（取证 file:line）
+- eval 沙箱 = `SandboxSkillRegistryFactory:24-29`：new 空 `SkillRegistry`，**只注册** Sandboxed 版 Read/Write/Grep/Glob，**无 Edit / 无 Bash**。每场景 temp 目录 `$tmpdir/eval/{runId}/{scenarioId}`，跑完 `cleanupSandbox` 递归删。
+- fixture 注入现成：`AbEvalPipeline.runSingleScenario:968` 把 `scenario.setup.files`（Map<path,content>）写进沙箱；task 里 `/tmp/eval/` 前缀替换成 sandboxRoot（`:965`）。**但 `EvalScenarioEntity` 无字段持久化 setup.files**——benchmark 场景的 fixture 来自磁盘 JSON，DB 场景（session_derived）无 fixture。
+- oracle：`EvalJudgeTool` 仅 exact_match/contains/regex/llm_judge；composite=0.7*outcome+0.3*efficiency，pass≥40（`AbEvalPipeline:74`）。tool 调用错误已被 `ScenarioRunResult.applyToolCallSignals:139` 抓（遍历 `LoopResult.toolCalls`，记 skillExecutionFailed）。
+- `FileEditTool`（tools 模块）：name="Edit"，required file_path/old_string/new_string，错误 "old_string not found in file"（:108）；`Path.of(filePath)` 直接用绝对路径（无沙箱）。
+- 失败数据全在 `t_llm_span`（kind=tool / name / input_summary=完整 JSON args / output_summary=Read 内容 ~40KB / error / error_type）。
+- A/B target split：`AgentEvolveAbEvalService.resolveRoleSplit` 只按 agent role，**不支持显式 scenario id 列表**（P2-b G1 延后项，本期需恢复）。
+
+### 五个组件设计
+
+**① SandboxedFileEditTool（新，eval 沙箱补 Edit）**
+镜像 `FileEditTool` 的 edit 语义（读文件 → old_string 唯一匹配替换 new_string → 同样的 "old_string not found" / "not unique" / "does not exist" 错误），加 `SandboxedFileWriteTool` 同款 `Path.of(fp).normalize().startsWith(sandboxRoot)` 越界拒。注册进 `SandboxSkillRegistryFactory.buildSandboxRegistry`。**这是复现 Edit 失败的前提**（沙箱没 Edit 工具就没法重演）。
+
+**② fixture 持久化（schema，→ Full）**
+- migration `V143__add_eval_scenario_fixture.sql`：`t_eval_scenario` 加列 `fixture_files_json JSONB`（Map<相对路径, 内容>，nullable）。
+- `EvalScenarioEntity` 加 `Map<String,String> fixtureFiles`（`@Column JSONB`，参考现有 `ruleTriggerHints`/`applicableAgentRoles` 的 JSONB List 写法）。
+- `AbEvalPipeline.runSingleScenario` 写 fixture 时：现有从 `scenario.setup.files` 读 → 扩展为"DB 场景优先用 `fixtureFiles`，无则回落 setup.files"。**对账注意**：内容实测全 <40KB，单 JSONB 列够；多文件场景就是 map 多条目。
+
+**③ 行为型 oracle（新 oracleType，无新列）**
+- 新 `oracleType='tool_error_absence'`；判据 JSON 存进现有 `oracleExpected` TEXT：
+  ```json
+  {"tool":"Edit","errorSignature":"old_string not found","passWhen":"no_match","rounds":5}
+  ```
+- `EvalJudgeTool` 加分支：扫这次 run 的 `LoopResult.toolCalls`（已有 name + isSuccess + error），命中 (name==tool && error 含 errorSignature) → 该轮"复发"。passWhen=no_match → 无复发 outcomeScore=100 / 有复发=0。**不调 LLM judge**（便宜、确定）。
+- 需把 toolCalls 透进 EvalJudgeTool 的判定上下文（现 applyToolCallSignals 已持有，接线即可）。
+
+**④ 多轮复发率（core harness，→ Full）**
+- `oracleExpected.rounds=N`（默认 5）。当场景 oracleType=tool_error_absence 且 rounds>1：`AbEvalPipeline` 把该场景跑 N 轮 → 复发率 = 命中轮数/N → outcomeScore=(1−复发率)*100；efficiency 取 N 轮均值；composite 沿用 0.7/0.3。
+- A/B：baseline 复发率 vs candidate 复发率 → composite delta。砍复发=涨分。
+- 成本意识：N×运行；默认 N=5，target 子集只挂收割场景控量。
+
+**⑤ BadCaseHarvestService（新，重建场景）**
+- 只读 span 重建，写一条 `EvalScenarioEntity`：
+  - `task` = session 首条 user prompt（同 `SkillCreatorService:750` 先例）。
+  - 失败 span（Edit stale / Grep notdir）→ 取 file_path → 同 session 该 path **前一次成功 Read/Write/Edit 的内容**（Read.output_summary / Write.content / Edit.new_string）当 fixture；Grep notdir 内容可空（建出该文件即复现）。
+  - **路径 rebase**：剥 repo-root 前缀（`/Users/youren/myspace/skillforge/` → 相对路径）写进 `fixtureFiles`；task 里该前缀改写成 `/tmp/eval/`（复用现成替换）。
+  - oracle = tool_error_absence（tool+errorSignature 来自失败 span）。
+  - `sourceType=session_derived` / `purpose=regression` / `sourceRef=session:{id}` / `status=draft`。
+- 产出 status=draft → 人审 activate 后才进 A/B（Iron-Law 人 gate；activate 走简单 endpoint/UI）。
+- **target split**：恢复 P2-b G1 的"显式 scenario id 列表作 target"（扩 `AgentEvolveAbEvalService.resolveRoleSplit` / `computeSubsetDeltas` 注入点；`TriggerAbEvalTool.evalScenarioIds` 贯通到 split）。
+
+### 实现里程碑（Full pipeline 内分两段）
+- **BC-M1（闭环打通证明，盲测安全）**：①SandboxedFileEditTool + ②fixture 列 + ③行为 oracle（单轮）+ ⑤harvest（Edit 类，手动选 1 个真 bad case）→ 生成场景 → **跑 baseline 证明失败复现 + oracle 正确判 FAIL**。oracle 的 **PASS 分支用合成无错运行测**（fixture 内容含 old_string → 普通 agent 成功 → 验 oracle 返回 PASS），**不手搓任何修复 candidate**。**真正的 FAIL→PASS 翻转留给 evolve loop 自己发现**（这就是盲测验证的 payoff，我不能代劳写出答案）。
+- **BC-M2（鲁棒 + 集成）**：④多轮复发率 + Grep 类 + ⑤target split + orchestrator 接线（evolve 自动收割/对靶）+ dashboard 展示收割场景。
+
+### 测试计划
+- `SandboxedFileEditToolTest`：越界拒 / old_string 替换 / not-found / not-unique（镜像 FileEditTool 错误）。
+- `EvalJudgeToolBehavioralOracleTest`：命中/未命中签名 → outcome 0/100；多轮复发率映射。
+- `BadCaseHarvestServiceTest`：Edit stale span → 重建出 task+fixture+oracle；路径 rebase 正确；无 prior content 时跳过/降级。
+- `AbEvalPipeline` fixture 列回落测试（DB fixtureFiles 优先于 setup.files）。
+- IT：harvest 真 span（用测试 fixture span）→ activate → A/B 单轮 → 断言 baseline FAIL / 注入修复 candidate PASS。
+- **migration**：`V143` 跑 + 回滚验证（database-reviewer）。
+
+### 验收点
+- [ ] eval 沙箱能执行 Edit 并复现 "old_string not found"（SandboxedFileEditTool）。
+- [ ] 一个真 Edit bad case 被重建成 session_derived 场景（fixture + 行为 oracle，路径 rebase 正确，真文件零触碰）。
+- [ ] BC-M1：baseline 在该场景 FAIL（错签名复发）+ oracle 正确判 FAIL；oracle PASS 分支经合成无错运行验证（**不手搓修复 candidate**）。
+- [ ] BC-M2：多轮复发率口径 + 显式 id target split 生效；evolve 能把收割场景当 target 量出 target_delta。
+- [ ] **盲测闭环**：收割逻辑/oracle/prompt **全程无 "Edit 前先 Read" 字样**，让 evolve loop 自己发现该修法能让收割场景 FAIL→PASS。
+
+### 盲测纪律（贯穿，最高约束）
+harvest service / 行为 oracle / 任何 prompt / 本设计文档 **只描述通用动作**（"复现失败签名、量复发率、修法使签名消失"）。**绝不在任何持久产物里写 "先 Read 再 Edit" 这类具体修法**。BC-M1 的手搓 candidate 仅用于本地验证整链通不通，**不入库、不进 prompt、不写文档**。
+
+### 风险
+- **Edit 失败的非确定性**：eval temp=0 较确定，但 agent 仍可能偶发先读；正是多轮复发率要捕捉的（M1 单轮先证存在性，M2 多轮给稳健率）。
+- **沙箱 Edit 与生产 Edit 行为漂移**：SandboxedFileEditTool 必须逐字镜像 FileEditTool 的匹配/错误语义，否则复现的不是同一失败 → 测试逐条对齐（**已用 `SandboxedFileEditToolErrorParityTest` 把"错误串逐字一致"变 CI 守卫**）。
+- **pool 小（~23 session）**：M1 只需 1 个；M2 验证够用；随 session 增长。
+- **多轮成本**：N=5 + target 子集限量；orchestrator 接线时注意别全量场景多轮。
+
+### BC-M1 交付状态（Full pipeline 完成，待 commit）
+4 组件全实现 + 20 测试绿（SandboxedFileEditTool 6 / Parity 3 / 行为 oracle 4 / harvest 4 / fixture 回落 3）。3 reviewer（java + database + design）全 PASS、0 blocker；warning 一轮 fix（path-traversal 防护 / 跨工具错误串等价测试 / isDeterministicOracle 谓词 / 3 limitation javadoc / repoRoot 卫生）。
+
+**诚实边界**：harvest 的"真 bad case 重建"由**代表性 span 单测**覆盖（4 case：Read 重建 / Write 重建 / 无内容跳过 / 非失败 span 跳过）；**未做活体跑真 DB session 出场景**——M1 按 scope 不含触发 endpoint（harvest=service 方法 + draft 人 gate，activate/触发留 M2）。"真文件零触碰"已结构性坐实：harvest 纯 DB 读 + 写 draft 行，无任何文件系统写；沙箱写 fixture 已加 path-traversal 防护。
+
+### BC-M2 范围 + 本期遗留 backlog
+**BC-M2（鲁棒 + 集成，下一期 Full）**：
+- **多轮复发率**：`oracleExpected.rounds=N`（默认 5），AbEvalPipeline 跑 N 轮取复发率 → outcomeScore=(1−率)*100。
+- **oracle do-nothing soundness 真修**（design-W3，**M2 必做**）：当前行为 oracle 量"错误签名缺席"非"任务成功"——啥都不干/不调 Edit 也判 PASS。M2 必须配**任务完成度**（+ 多轮）收敛，否则 evolve 把它当 target 时"回归成不编辑"会被记成进步。已在 `computeToolErrorAbsenceScore` javadoc 标注 limitation。
+- **Grep 类收割** + **显式 scenario-id target split**（恢复 P2-b G1：扩 `AgentEvolveAbEvalService.resolveRoleSplit`）+ **orchestrator 接线**（evolve 自动收割/对靶）+ **activate endpoint/UI**（draft→active 人 gate 落地）+ dashboard 展示收割场景。
+
+**本期遗留 backlog（小，非 M2 主线）**：
+- `extractFirstUserPrompt` 与 `SkillCreatorService` 重复 → 抽 `SessionMessageJson` util 共用（碰 scope-out 文件，专门 refactor 或 M2 顺带）。
+- `output_summary` 截断标记检测（db-W2）：源内容超列上限静默截断 → 残缺 fixture。当前 pool 实测无截断；M2 加截断标记检测则跳过（需先确认 `LlmSpanPersistenceService` 截断标记格式）。
+
+---
+
+## 分期 & 顺序（D5/D6 已 ratify 2026-06-03；2026-06-04 bad-case 升最高优先）
 
 **总顺序（D5）**：P2 对靶先 → P1 闭环采纳 → P3 benchmark 贯穿。理由：先让赢家是真提升，再给采纳按钮（否则一键采纳一堆平手/噪声候选意义不大）。
 

@@ -921,7 +921,27 @@ public class AbEvalPipeline {
         oracle.setType(entity.getOracleType());
         oracle.setExpected(entity.getOracleExpected());
         scenario.setOracle(oracle);
+        // BC-M1: carry DB-persisted fixtures so session_derived (harvested)
+        // scenarios — which have no disk setup.files — write their fixture into
+        // the sandbox before the run.
+        scenario.setFixtureFiles(entity.getFixtureFiles());
         return scenario;
+    }
+
+    /**
+     * BC-M1 fixture resolution: DB-persisted {@code fixtureFiles} (session_derived
+     * harvested scenarios) take priority over disk {@code setup.files} (benchmark
+     * scenarios). Returns null when neither source has files.
+     */
+    static Map<String, String> resolveFixtureFiles(EvalScenario scenario) {
+        Map<String, String> dbFixtures = scenario.getFixtureFiles();
+        if (dbFixtures != null && !dbFixtures.isEmpty()) {
+            return dbFixtures;
+        }
+        if (scenario.getSetup() != null && scenario.getSetup().getFiles() != null) {
+            return scenario.getSetup().getFiles();
+        }
+        return null;
     }
 
     private ScenarioRunResult runSingleScenario(String abRunId, EvalScenario scenario,
@@ -964,11 +984,23 @@ public class AbEvalPipeline {
             Path sandboxRoot = sandboxFactory.getSandboxRoot(abRunId, scenario.getId());
             String task = scenario.getTask().replace("/tmp/eval/", sandboxRoot.toString() + "/");
 
-            // Write fixture files
-            if (scenario.getSetup() != null && scenario.getSetup().getFiles() != null) {
+            // Write fixture files. BC-M1: DB-persisted fixtureFiles (session_derived
+            // harvested scenarios) take priority; fall back to disk setup.files
+            // (benchmark scenarios) when the DB column is null/empty.
+            Map<String, String> fixtures = resolveFixtureFiles(scenario);
+            if (fixtures != null && !fixtures.isEmpty()) {
                 java.nio.file.Files.createDirectories(sandboxRoot);
-                for (Map.Entry<String, String> entry : scenario.getSetup().getFiles().entrySet()) {
-                    Path filePath = sandboxRoot.resolve(entry.getKey());
+                Path normalizedRoot = sandboxRoot.normalize();
+                for (Map.Entry<String, String> entry : fixtures.entrySet()) {
+                    // Path-traversal guard (aligns with SandboxedFileWriteTool): a
+                    // fixture key like "../escape" or an absolute path must never
+                    // write outside the sandbox root. Guards both DB fixtureFiles
+                    // and benchmark setup.files.
+                    Path filePath = sandboxRoot.resolve(entry.getKey()).normalize();
+                    if (!filePath.startsWith(normalizedRoot)) {
+                        log.warn("fixture path escapes sandbox, skipping: {}", entry.getKey());
+                        continue;
+                    }
                     if (filePath.getParent() != null) {
                         java.nio.file.Files.createDirectories(filePath.getParent());
                     }

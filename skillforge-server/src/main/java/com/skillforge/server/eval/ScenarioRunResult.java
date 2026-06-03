@@ -48,6 +48,15 @@ public class ScenarioRunResult {
     private int toolCallCount;
     private BigDecimal costUsd;
 
+    /**
+     * AUTOEVOLVE-CLOSE-LOOP Phase BC-M1: the raw tool-call records from this
+     * run, retained so the behavioral oracle ({@code tool_error_absence}) in
+     * {@code EvalJudgeTool} can scan for a failure signature (tool name + error
+     * substring). Populated by {@link #applyToolCallSignals(List)}; null/empty
+     * when the run produced no tool calls.
+     */
+    private List<ToolCallRecord> toolCalls;
+
     public ScenarioRunResult() {
     }
 
@@ -136,8 +145,12 @@ public class ScenarioRunResult {
     public BigDecimal getCostUsd() { return costUsd; }
     public void setCostUsd(BigDecimal costUsd) { this.costUsd = costUsd; }
 
+    public List<ToolCallRecord> getToolCalls() { return toolCalls; }
+    public void setToolCalls(List<ToolCallRecord> toolCalls) { this.toolCalls = toolCalls; }
+
     public void applyToolCallSignals(List<ToolCallRecord> toolCalls) {
         if (toolCalls == null) return;
+        this.toolCalls = toolCalls;
         toolCallCount = toolCalls.size();
         for (ToolCallRecord record : toolCalls) {
             if (record == null) continue;
