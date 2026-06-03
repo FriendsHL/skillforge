@@ -39,6 +39,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -101,12 +102,16 @@ class AbEvalPipelineSkipBaselineTest {
         when(promptAbRunRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
         lenient().when(promptVersionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
         // s1, s2 pass; s3 fails → 2 of 3 → 66.67%. Applied to whichever side calls judge.
+        // EVAL-429-ROBUSTNESS: runWithScenarios now counts passes via the shared
+        // AbEvalPipeline.isPass(RunResult) predicate (composite >= 40), consistent with
+        // computeDeltas / passRateOver. Use realistic composite scores (80 pass / 10 fail)
+        // that straddle the 40 threshold — the 2/3 = 66.67% contract is unchanged.
         when(evalJudgeTool.judge(any(), any(), anyBoolean())).thenAnswer(inv -> {
             EvalScenario sc = inv.getArgument(0);
             boolean pass = !"s3".equals(sc.getId());
             EvalJudgeOutput o = new EvalJudgeOutput();
             o.setPass(pass);
-            o.setCompositeScore(pass ? 1.0 : 0.0);
+            o.setCompositeScore(pass ? 80.0 : 10.0);
             return o;
         });
     }
@@ -186,5 +191,85 @@ class AbEvalPipelineSkipBaselineTest {
         verify(evalEngineFactory, times(6)).buildEvalEngine(any());
         // Back-write attempted when not skipping.
         verify(evalDatasetVersionRepository).findById("dv-1");
+    }
+
+    // ---- EVAL-429-ROBUSTNESS: pipeline-level infra-exclude (W1) ----------------------
+    //
+    // Make scenario s2's agent run throw (simulated infra failure: network/rate-limit) →
+    // runSingleScenario returns status=ERROR → the post-process measured-filter must drop
+    // it from the denominator (D2/D3). 2 scenarios, 1 ERROR → rate computed over 1, NOT 2.
+
+    @Test
+    @DisplayName("EVAL-429 (fresh): a scenario whose agent run ERRORs is excluded from the denominator (1 PASS + 1 ERROR → 100%, not 50%)")
+    void fresh_infraScenarioExcludedFromDenominator() {
+        PromptAbRunEntity abRun = new PromptAbRunEntity();
+        abRun.setId("ab-infra-fresh");
+        abRun.setAgentId("7");
+        AgentEntity agent = new AgentEntity();
+        agent.setId(7L);
+        when(evalDatasetService.getScenariosForVersion("dv-1"))
+                .thenReturn(List.of(scenario("s1"), scenario("s2")));
+        when(evalDatasetVersionRepository.findById("dv-1")).thenReturn(Optional.empty());
+        // s2's run throws (infra) → ScenarioRunResult.error → status=ERROR for both sides.
+        // doAnswer (not when().thenAnswer) to safely OVERRIDE the setUp engine.run stub.
+        doAnswer(inv -> {
+            String task = inv.getArgument(1);
+            if (task.contains("s2")) {
+                throw new RuntimeException("simulated infra error (network/rate-limit) for s2");
+            }
+            LoopResult r = new LoopResult();
+            r.setFinalResponse("done");
+            r.setLoopCount(1);
+            return r;
+        }).when(engine).run(any(), any(), any(), any(), any(), any());
+
+        pipeline.run(abRun, version("cand", "candidate prompt"), version("base", "baseline prompt"),
+                agent, "dv-1");
+
+        // s1 measured + passes (composite 80 ≥ 40); s2 ERROR excluded → denominator=1.
+        // Correct: 1/1 = 100%. A denominator bug would yield 1/2 = 50% (ERROR row scores
+        // 0/false under isPass), so 100% proves s2 was dropped, not counted.
+        assertThat(abRun.getCandidatePassRate()).isCloseTo(100.0, org.assertj.core.data.Offset.offset(0.01));
+        assertThat(abRun.getBaselinePassRate()).isCloseTo(100.0, org.assertj.core.data.Offset.offset(0.01));
+        assertThat(abRun.getDeltaPassRate()).isCloseTo(0.0, org.assertj.core.data.Offset.offset(0.01));
+        assertThat(abRun.getStatus()).isEqualTo("COMPLETED");
+        // The ERROR scenario is still serialized (encountered) — proving it was present
+        // yet excluded from the rate.
+        assertThat(abRun.getAbScenarioResultsJson()).contains("\"status\":\"ERROR\"");
+    }
+
+    @Test
+    @DisplayName("EVAL-429 (skip): an ERROR candidate scenario is excluded; candidate rate over shrunk denominator, cached baseline kept")
+    void skip_infraScenarioExcludedFromDenominator() {
+        PromptAbRunEntity abRun = new PromptAbRunEntity();
+        abRun.setId("ab-infra-skip");
+        abRun.setAgentId("7");
+        AgentEntity agent = new AgentEntity();
+        agent.setId(7L);
+        when(evalDatasetService.getScenariosForVersion("dv-1"))
+                .thenReturn(List.of(scenario("s1"), scenario("s2")));
+        // Only the candidate side runs on the skip path; s2 errors.
+        doAnswer(inv -> {
+            String task = inv.getArgument(1);
+            if (task.contains("s2")) {
+                throw new RuntimeException("simulated infra error for s2");
+            }
+            LoopResult r = new LoopResult();
+            r.setFinalResponse("done");
+            r.setLoopCount(1);
+            return r;
+        }).when(engine).run(any(), any(), any(), any(), any(), any());
+
+        pipeline.run(abRun, version("cand", "candidate prompt"), version("base", "best prompt"),
+                agent, "dv-1", 60.0);
+
+        // candidate: s1 measured+pass, s2 ERROR excluded → 1/1 = 100% (not 1/2 = 50%).
+        assertThat(abRun.getCandidatePassRate()).isCloseTo(100.0, org.assertj.core.data.Offset.offset(0.01));
+        // Baseline still the cached constant (skip path never measures it).
+        assertThat(abRun.getBaselinePassRate()).isEqualTo(60.0);
+        assertThat(abRun.getDeltaPassRate()).isCloseTo(40.0, org.assertj.core.data.Offset.offset(0.01));
+        assertThat(abRun.getStatus()).isEqualTo("COMPLETED");
+        // Skip path must NOT back-write the dataset baseline.
+        verify(evalDatasetVersionRepository, never()).findById(any());
     }
 }

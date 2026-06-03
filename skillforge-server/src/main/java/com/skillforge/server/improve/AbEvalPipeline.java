@@ -47,7 +47,6 @@ import java.util.concurrent.Future;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-import java.util.concurrent.atomic.AtomicInteger;
 
 @Component
 public class AbEvalPipeline {
@@ -91,6 +90,41 @@ public class AbEvalPipeline {
             return false;
         }
         return run.oracleScore() >= PASS_COMPOSITE_THRESHOLD;
+    }
+
+    /**
+     * EVAL-429-ROBUSTNESS D1 — a per-scenario status counts as "measured" (a real
+     * quality signal that belongs in the A/B pass-rate denominator) iff it is NOT an
+     * infrastructure / not-measured-this-run status. Excluded:
+     * <ul>
+     *   <li>{@code ERROR} / {@code TIMEOUT} — infra/runtime failure (network, rate
+     *       limit, loop budget) → NOT a quality verdict, must be摘出分母.</li>
+     *   <li>{@link #BASELINE_CACHED_STATUS} — winner-carry-forward sentinel: the
+     *       baseline side was never run THIS round (the run-level cached rate carries
+     *       its value), so the per-scenario baseline is not measured.</li>
+     *   <li>{@code null} — no status → treated as not-measured.</li>
+     * </ul>
+     * {@code PASS} / {@code FAIL} / {@code VETO} / {@code PENDING_JUDGE} are all
+     * measured: {@code VETO} is a genuine quality failure (D1: 质量失败留), kept in the
+     * denominator.
+     */
+    public static boolean isMeasured(String status) {
+        if (status == null) {
+            return false;
+        }
+        return !("ERROR".equals(status) || "TIMEOUT".equals(status)
+                || BASELINE_CACHED_STATUS.equals(status));
+    }
+
+    /**
+     * EVAL-429-ROBUSTNESS D2 — pairwise-measured predicate: a scenario contributes to
+     * the (candidate, baseline) pass-rate comparison ONLY when BOTH sides were
+     * measured this round. If either side hit ERROR/TIMEOUT (or the baseline is the
+     * CACHED sentinel), the scenario is dropped from BOTH rates so they are always
+     * computed over the same set of scenarios and the delta is strictly comparable.
+     */
+    public static boolean pairwiseMeasured(String candidateStatus, String baselineStatus) {
+        return isMeasured(candidateStatus) && isMeasured(baselineStatus);
     }
 
     private final ScenarioLoader scenarioLoader;
@@ -214,8 +248,9 @@ public class AbEvalPipeline {
             heldOutScenarios = scenarioLoader.loadAll();
         }
 
-        // 3. Compute held-out baseline rate from baselineRun's scenarioResultsJson
-        double heldOutBaselineRate = computeHeldOutBaselineRate(baselineRun, heldOutScenarios);
+        // 3. Compute held-out baseline rate from baselineRun's scenarioResultsJson.
+        // EVAL-429-ROBUSTNESS Fix4: nullable — null when no held-out scenario was measured.
+        Double heldOutBaselineRate = computeHeldOutBaselineRate(baselineRun, heldOutScenarios);
         abRun.setBaselinePassRate(heldOutBaselineRate);
 
         // 4. Construct candidate AgentDefinition with candidate prompt
@@ -225,6 +260,11 @@ public class AbEvalPipeline {
         // 5. Run each held-out scenario with candidate prompt
         List<AbScenarioResult> scenarioResults = new ArrayList<>();
         int passed = 0;
+        // EVAL-429-ROBUSTNESS: only pairwise-measured scenarios (candidate run AND the
+        // historical baseline both non-infra) count toward the denominator; ERROR/TIMEOUT
+        // on either side is excluded and logged (D2 + D4).
+        int measuredCount = 0;
+        List<String> infraExcluded = new ArrayList<>();
 
         for (EvalScenario scenario : heldOutScenarios) {
             log.info("AB eval scenario: {} ({})", scenario.getId(), scenario.getName());
@@ -250,8 +290,17 @@ public class AbEvalPipeline {
                         new AbScenarioResult.RunResult(baselineStatus, baselineOracleScore),
                         new AbScenarioResult.RunResult(runResult.getStatus(), judgeOutput.getCompositeScore())));
 
-                if (judgeOutput.isPass()) {
-                    passed++;
+                // EVAL-429-ROBUSTNESS D2: count toward the denominator only when both
+                // the candidate run AND the historical baseline for this scenario were
+                // measured (non ERROR/TIMEOUT). Pass counting stays on judgeOutput.isPass()
+                // (unchanged) so a measured candidate scores identically to before.
+                if (pairwiseMeasured(runResult.getStatus(), baselineStatus)) {
+                    measuredCount++;
+                    if (judgeOutput.isPass()) {
+                        passed++;
+                    }
+                } else {
+                    infraExcluded.add(scenario.getId());
                 }
 
                 // Broadcast ab_scenario_finished
@@ -273,13 +322,24 @@ public class AbEvalPipeline {
                         scenario.getId(), scenario.getName(),
                         new AbScenarioResult.RunResult(baselineStatus, baselineScore),
                         new AbScenarioResult.RunResult("ERROR", 0.0)));
+                // Candidate errored (infra) → pairwise=false → excluded from denominator (D2/D4).
+                infraExcluded.add(scenario.getId());
             }
         }
 
-        // 6. Compute candidate pass rate and delta
-        double candidatePassRate = heldOutScenarios.isEmpty() ? 0
-                : (double) passed / heldOutScenarios.size() * 100;
-        double delta = candidatePassRate - heldOutBaselineRate;
+        // 6. Compute candidate pass rate and delta over the pairwise-measured set only.
+        // EVAL-429-ROBUSTNESS D3: measured=0 → not-measured sentinel (null), NOT 0% — the
+        // gate must treat it as "couldn't measure / don't promote", not a full failure.
+        if (!infraExcluded.isEmpty()) {
+            log.info("AB eval excluded {} infra/not-measured scenario(s) from denominator: {}",
+                    infraExcluded.size(), infraExcluded);
+        }
+        Double candidatePassRate = measuredCount == 0
+                ? null
+                : (double) passed / measuredCount * 100;
+        Double delta = (candidatePassRate == null || heldOutBaselineRate == null)
+                ? null
+                : candidatePassRate - heldOutBaselineRate;
 
         // 7. Serialize per-scenario results
         try {
@@ -449,9 +509,10 @@ public class AbEvalPipeline {
         // judge 顺序便于 debug；并行内嵌的 ROI 小）。Scenario 之间无依赖可安全并行。
         //
         // ScenarioRunResult / EvalJudgeOutput 都是 fresh 对象，无共享 mutation。
-        // results / passed counts 用 thread-safe collections。
-        AtomicInteger baselinePassedAtomic = new AtomicInteger(0);
-        AtomicInteger candidatePassedAtomic = new AtomicInteger(0);
+        // EVAL-429-ROBUSTNESS: pass-counting + measured-filtering moved to a single-
+        // threaded post-process over the collected results (below) so the
+        // pairwise-measured denominator is computed from the final per-scenario
+        // statuses — no thread-safe counters needed.
         List<CompletableFuture<AbScenarioResult>> futures = new ArrayList<>(scenarios.size());
 
         // ★ 2026-05-24 V1 r3.1 fix RejectedExecutionException:
@@ -483,7 +544,6 @@ public class AbEvalPipeline {
                                 abRun.getId() + "-baseline", scenario, baselineDef);
                         // Option B: explain=true → judge also emits a per-case rationale.
                         EvalJudgeOutput baselineJudge = evalJudgeTool.judge(scenario, baselineRun, true);
-                        if (baselineJudge.isPass()) baselinePassedAtomic.incrementAndGet();
                         // Reflection: keep the judge's per-scenario reasoning so the
                         // evolve-editor can see WHY this case scored as it did.
                         baselineResult = new AbScenarioResult.RunResult(
@@ -494,7 +554,6 @@ public class AbEvalPipeline {
                             abRun.getId() + "-candidate", scenario, candidateDef);
                     // Option B: explain=true → judge also emits a per-case rationale.
                     EvalJudgeOutput candidateJudge = evalJudgeTool.judge(scenario, candidateRun, true);
-                    if (candidateJudge.isPass()) candidatePassedAtomic.incrementAndGet();
 
                     return new AbScenarioResult(
                             scenario.getId(), scenario.getName(),
@@ -523,16 +582,49 @@ public class AbEvalPipeline {
         for (CompletableFuture<AbScenarioResult> f : futures) {
             results.add(f.join());
         }
-        int baselinePassed = baselinePassedAtomic.get();
-        int candidatePassed = candidatePassedAtomic.get();
 
-        // BUG-1: when the baseline was skipped (winner-carry-forward), use the
-        // supplied cached rate instead of the (un-measured, 0) per-scenario count.
-        double baselinePassRate = skipBaseline
+        // EVAL-429-ROBUSTNESS D2/D3/D4: post-process the collected per-scenario results
+        // to compute pass-rates over the MEASURED set only.
+        //  - skipBaseline (winner-carry-forward): the baseline side is the CACHED
+        //    sentinel (never run this round), so "measured" = candidate-side measured;
+        //    the run-level baseline rate stays the supplied cachedBaselineRate.
+        //  - fresh: "measured" = pairwise (BOTH candidate and baseline non-infra) so
+        //    both rates are over the SAME scenarios and the delta is strictly comparable.
+        // measured==0 → null sentinel (D3): the gate must treat it as "not measured",
+        // NOT a 0% rate. ERROR/TIMEOUT scenarios are logged (D4).
+        int measuredPairs = 0;
+        int baselinePassed = 0;
+        int candidatePassed = 0;
+        List<String> infraExcluded = new ArrayList<>();
+        for (AbScenarioResult r : results) {
+            boolean measured = skipBaseline
+                    ? isMeasured(r.candidate().status())
+                    : pairwiseMeasured(r.candidate().status(), r.baseline().status());
+            if (measured) {
+                measuredPairs++;
+                if (isPass(r.candidate())) candidatePassed++;
+                if (!skipBaseline && isPass(r.baseline())) baselinePassed++;
+            } else {
+                infraExcluded.add(r.scenarioId());
+            }
+        }
+        if (!infraExcluded.isEmpty()) {
+            log.info("Attribution A/B run {} excluded {} infra/not-measured scenario(s) from "
+                            + "denominator (skipBaseline={}): {}",
+                    abRun.getId(), infraExcluded.size(), skipBaseline, infraExcluded);
+        }
+
+        // BUG-1: when the baseline was skipped (winner-carry-forward), use the supplied
+        // cached rate instead of the (un-measured) per-scenario count.
+        Double baselinePassRate = skipBaseline
                 ? cachedBaselineRate
-                : (double) baselinePassed / scenarios.size() * 100;
-        double candidatePassRate = (double) candidatePassed / scenarios.size() * 100;
-        double delta = candidatePassRate - baselinePassRate;
+                : (measuredPairs == 0 ? null : (double) baselinePassed / measuredPairs * 100);
+        Double candidatePassRate = measuredPairs == 0
+                ? null
+                : (double) candidatePassed / measuredPairs * 100;
+        Double delta = (candidatePassRate == null || baselinePassRate == null)
+                ? null
+                : candidatePassRate - baselinePassRate;
 
         abRun.setBaselinePassRate(baselinePassRate);
         abRun.setCandidatePassRate(candidatePassRate);
@@ -563,10 +655,14 @@ public class AbEvalPipeline {
         // then the carried current-best score (winner-carry-forward), not a fresh
         // measurement of THIS dataset's baseline, so averaging it in would pollute
         // the dataset's actualBaselinePassRate estimate.
-        if (!skipBaseline && datasetVersionId != null && evalDatasetVersionRepository != null) {
+        // EVAL-429-ROBUSTNESS: skip the back-write when the baseline rate is null
+        // (no scenario was measured this round) — there's no fresh measurement to fold in.
+        if (!skipBaseline && baselinePassRate != null
+                && datasetVersionId != null && evalDatasetVersionRepository != null) {
+            final double measuredBaselineRate = baselinePassRate;
             try {
                 evalDatasetVersionRepository.findById(datasetVersionId).ifPresent(v -> {
-                    double newFraction = baselinePassRate / 100.0;
+                    double newFraction = measuredBaselineRate / 100.0;
                     Double prior = v.getActualBaselinePassRate();
                     double updated = (prior == null) ? newFraction : (prior + newFraction) / 2.0;
                     v.setActualBaselinePassRate(updated);
@@ -961,7 +1057,15 @@ public class AbEvalPipeline {
         return scenarioFallback > 0 ? scenarioFallback : 10;
     }
 
-    private double computeHeldOutBaselineRate(EvalTaskEntity baselineRun, List<EvalScenario> heldOutScenarios) {
+    /**
+     * EVAL-429-ROBUSTNESS Fix4 — held-out baseline rate over MEASURED historical
+     * scenarios only. ERROR/TIMEOUT rows in the baseline eval task are dropped from
+     * both numerator and denominator (D1/D2). Returns {@code null} when no held-out
+     * scenario was measured (D3 not-measured sentinel) so the gate doesn't read it as
+     * a 0% baseline. Legacy rows with no {@code status} field are conservatively
+     * treated as measured (so old datasets keep their historical rate).
+     */
+    private Double computeHeldOutBaselineRate(EvalTaskEntity baselineRun, List<EvalScenario> heldOutScenarios) {
         if (baselineRun.getScenarioResultsJson() == null) {
             return baselineRun.getOverallPassRate();
         }
@@ -975,18 +1079,34 @@ public class AbEvalPipeline {
 
             long heldOutPassed = results.stream()
                     .filter(r -> heldOutIds.contains(r.get("scenarioId")))
+                    .filter(AbEvalPipeline::isHistoricScenarioMeasured)
                     .filter(r -> Boolean.TRUE.equals(r.get("pass")))
                     .count();
 
             long heldOutTotal = results.stream()
                     .filter(r -> heldOutIds.contains(r.get("scenarioId")))
+                    .filter(AbEvalPipeline::isHistoricScenarioMeasured)
                     .count();
 
-            return heldOutTotal == 0 ? 0 : (double) heldOutPassed / heldOutTotal * 100;
+            return heldOutTotal == 0 ? null : (double) heldOutPassed / heldOutTotal * 100;
         } catch (Exception e) {
             log.warn("Failed to parse baseline scenario results, using overall pass rate", e);
             return baselineRun.getOverallPassRate();
         }
+    }
+
+    /**
+     * EVAL-429-ROBUSTNESS Fix4 — a historical (persisted) baseline scenario row counts
+     * as measured unless its {@code status} field is ERROR/TIMEOUT. A missing status
+     * (legacy rows) is conservatively kept as measured.
+     */
+    private static boolean isHistoricScenarioMeasured(Map<String, Object> row) {
+        Object status = row.get("status");
+        if (status == null) {
+            return true;
+        }
+        String s = String.valueOf(status);
+        return !("ERROR".equals(s) || "TIMEOUT".equals(s));
     }
 
     private String lookupBaselineStatus(EvalTaskEntity baselineRun, String scenarioId) {

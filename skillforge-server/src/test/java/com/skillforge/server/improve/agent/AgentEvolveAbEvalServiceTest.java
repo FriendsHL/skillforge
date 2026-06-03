@@ -106,13 +106,15 @@ class AgentEvolveAbEvalServiceTest {
     }
 
     @Test
-    @DisplayName("computeDeltas: empty per-scenario → zero rates")
+    @DisplayName("computeDeltas: empty per-scenario → not-measured sentinel (null, D3)")
     void computeDeltas_empty() {
+        // EVAL-429-ROBUSTNESS D3: no measured scenario → null sentinel, NOT 0% (so the
+        // gate treats it as "couldn't measure / don't promote", not a full failure).
         AgentEvolveAbEvalService.AgentAbDeltas d =
                 AgentEvolveAbEvalService.computeDeltas(List.of(), null);
-        assertThat(d.candidatePassRate()).isEqualTo(0.0);
-        assertThat(d.baselinePassRate()).isEqualTo(0.0);
-        assertThat(d.deltaPassRate()).isEqualTo(0.0);
+        assertThat(d.candidatePassRate()).isNull();
+        assertThat(d.baselinePassRate()).isNull();
+        assertThat(d.deltaPassRate()).isNull();
     }
 
     // ---- computeSubsetDeltas (pure, §8 子点② vs-best) -------------------------

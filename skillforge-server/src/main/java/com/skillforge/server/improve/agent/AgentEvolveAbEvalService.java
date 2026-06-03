@@ -26,6 +26,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -285,35 +286,42 @@ public class AgentEvolveAbEvalService {
                         "No scenarios resolved for datasetVersionId=" + abRun.getDatasetVersionId());
             }
 
+            // EVAL-429-ROBUSTNESS: load the prior winner's per-scenario results BEFORE
+            // running the A/B, so computeDeltas can do true cross-round pairwise (a
+            // scenario is measured only when BOTH this round's candidate AND the prior
+            // winner's candidate were non-infra). Loaded + coverage-checked up front so
+            // a stale/partial prior winner fails fast before the expensive eval.
+            // §8 子点① guard (catches a role-flip that a dataset-version check alone
+            // misses): the prior winner's measured scenario set MUST cover the current
+            // target ∪ general union, else we'd compute a partial / biased baseline.
+            List<AbScenarioResult> priorWinnerPerScenario = null;
+            if (skipBaseline) {
+                priorWinnerPerScenario = loadPriorWinnerPerScenario(abRun.getPriorWinnerAbRunId());
+                assertPriorWinnerCoversSubsets(
+                        priorWinnerPerScenario, split.targetIds(), split.generalIds(),
+                        abRun.getPriorWinnerAbRunId());
+            }
+
             // explain=true → byte-identical to the prompt path's judge call (§7 B1).
             // candidateExtraSkills injected into the CANDIDATE-side sandbox only (§10 #5).
             List<AbScenarioResult> perScenario = abEvalPipeline.runWithDefs(
                     abRun.getId(), split.all(), baselineDef, candidateDef, cachedBaselineRate, true,
                     candidateExtraSkills);
 
-            // Global rates (Phase 1 semantics; trajectory chart uses these).
-            AgentAbDeltas deltas = computeDeltas(perScenario, cachedBaselineRate);
+            // Global rates (Phase 1 semantics; trajectory chart uses these). The skip
+            // path passes priorWinnerPerScenario so the baseline rate is the prior
+            // winner's candidate-side measurement over the cross-round measured
+            // intersection (D2 pairwise) — null fields when nothing was measured (D3).
+            AgentAbDeltas deltas = computeDeltas(
+                    perScenario, cachedBaselineRate, skipBaseline ? priorWinnerPerScenario : null);
             abRun.setBaselinePassRate(deltas.baselinePassRate());
             abRun.setCandidatePassRate(deltas.candidatePassRate());
             abRun.setDeltaPassRate(deltas.deltaPassRate());
 
             // §8 子点① + ② — per-subset vs-best deltas. When skipBaseline, the best's
-            // per-subset rates are recomputed from the PRIOR WINNER ab_run's
-            // ab_scenario_results_json (candidate side = the winner's measurement),
-            // partitioned by the SAME (dataset+role) id-sets — NOT re-run. Fresh
-            // round → both arms ran, so best = this run's baseline side.
-            List<AbScenarioResult> priorWinnerPerScenario = null;
-            if (skipBaseline) {
-                priorWinnerPerScenario = loadPriorWinnerPerScenario(abRun.getPriorWinnerAbRunId());
-                // §8 子点① guard (catches a role-flip that a dataset-version check
-                // alone misses — e.g. the agent was renamed so resolveRole returns a
-                // different role, shifting the id-sets): the prior winner's measured
-                // scenario set MUST cover the current target ∪ general union, else we'd
-                // compute a partial / biased baseline rate silently.
-                assertPriorWinnerCoversSubsets(
-                        priorWinnerPerScenario, split.targetIds(), split.generalIds(),
-                        abRun.getPriorWinnerAbRunId());
-            }
+            // per-subset rates come from the PRIOR WINNER ab_run's candidate side,
+            // partitioned by the SAME (dataset+role) id-sets — NOT re-run. Fresh round
+            // → both arms ran, so best = this run's baseline side.
             SubsetDeltas subset = computeSubsetDeltas(
                     perScenario, priorWinnerPerScenario, split.targetIds(), split.generalIds());
             abRun.setTargetDeltaPp(subset.targetDeltaPp());
@@ -363,28 +371,109 @@ public class AgentEvolveAbEvalService {
      * cached rate is used verbatim.
      */
     static AgentAbDeltas computeDeltas(List<AbScenarioResult> perScenario, Double cachedBaselineRate) {
-        int total = perScenario == null ? 0 : perScenario.size();
-        int candidatePassed = 0;
-        int baselinePassed = 0;
-        if (perScenario != null) {
-            for (AbScenarioResult r : perScenario) {
-                if (AbEvalPipeline.isPass(r.candidate())) {
-                    candidatePassed++;
-                }
-                if (AbEvalPipeline.isPass(r.baseline())) {
-                    baselinePassed++;
-                }
-            }
-        }
-        double candidateRate = total == 0 ? 0.0 : (double) candidatePassed / total * 100.0;
-        double baselineRate = cachedBaselineRate != null
-                ? cachedBaselineRate
-                : (total == 0 ? 0.0 : (double) baselinePassed / total * 100.0);
-        return new AgentAbDeltas(baselineRate, candidateRate, candidateRate - baselineRate);
+        // 2-arg backward-compatible form: no prior-winner per-scenario (so the skip
+        // path falls back to candidate-measured-only + verbatim cachedBaselineRate).
+        return computeDeltas(perScenario, cachedBaselineRate, null);
     }
 
-    /** Pure result of {@link #computeDeltas}. */
-    record AgentAbDeltas(double baselinePassRate, double candidatePassRate, double deltaPassRate) {}
+    /**
+     * EVAL-429-ROBUSTNESS — pass-rate arithmetic over the MEASURED set only (infra
+     * ERROR/TIMEOUT scenarios excluded from the denominator, D1/D2/D3). Three modes:
+     * <ul>
+     *   <li><b>skip + prior-winner pairwise</b> ({@code priorWinnerPerScenario != null}):
+     *       a scenario is measured iff THIS run's candidate side AND the prior winner's
+     *       candidate side (the cached baseline measurement) are both non-infra. Baseline
+     *       passes are counted from the prior winner's candidate side over that
+     *       intersection (true cross-round pairwise) — overrides the global cached rate.</li>
+     *   <li><b>legacy skip</b> ({@code cachedBaselineRate != null}, no prior-winner):
+     *       candidate-measured-only; the baseline rate is the verbatim cached rate.</li>
+     *   <li><b>fresh</b> (both null): same-round pairwise — measured iff candidate AND
+     *       baseline sides are both non-infra.</li>
+     * </ul>
+     * measured==0 → {@code AgentAbDeltas(null, null, null)} (D3 not-measured sentinel);
+     * excluded scenarios are logged (D4).
+     */
+    static AgentAbDeltas computeDeltas(List<AbScenarioResult> perScenario, Double cachedBaselineRate,
+                                       List<AbScenarioResult> priorWinnerPerScenario) {
+        if (perScenario == null || perScenario.isEmpty()) {
+            return new AgentAbDeltas(null, null, null);
+        }
+        Map<String, AbScenarioResult.RunResult> priorCandidate =
+                indexCandidateSide(priorWinnerPerScenario);
+        int measuredCount = 0;
+        int candidatePassed = 0;
+        int baselinePassed = 0;
+        List<String> infraExcluded = new ArrayList<>();
+        for (AbScenarioResult r : perScenario) {
+            boolean measured;
+            boolean countBaseline;
+            boolean baselinePass;
+            if (priorWinnerPerScenario != null) {
+                // skip path, cross-round pairwise vs the prior winner's candidate side.
+                AbScenarioResult.RunResult prior = priorCandidate.get(r.scenarioId());
+                boolean priorMeasured = prior != null && AbEvalPipeline.isMeasured(prior.status());
+                measured = AbEvalPipeline.isMeasured(r.candidate().status()) && priorMeasured;
+                countBaseline = true;
+                baselinePass = prior != null && AbEvalPipeline.isPass(prior);
+            } else if (cachedBaselineRate != null) {
+                // legacy skip fallback: candidate-measured-only; baseline = cached rate.
+                measured = AbEvalPipeline.isMeasured(r.candidate().status());
+                countBaseline = false;
+                baselinePass = false;
+            } else {
+                // fresh: same-round pairwise.
+                measured = AbEvalPipeline.pairwiseMeasured(
+                        r.candidate().status(), r.baseline().status());
+                countBaseline = true;
+                baselinePass = AbEvalPipeline.isPass(r.baseline());
+            }
+            if (measured) {
+                measuredCount++;
+                if (AbEvalPipeline.isPass(r.candidate())) candidatePassed++;
+                if (countBaseline && baselinePass) baselinePassed++;
+            } else {
+                infraExcluded.add(r.scenarioId());
+            }
+        }
+        if (!infraExcluded.isEmpty()) {
+            log.info("[AgentEvolveAb] computeDeltas excluded {} infra/not-measured scenario(s) "
+                    + "from denominator: {}", infraExcluded.size(), infraExcluded);
+        }
+        if (measuredCount == 0) {
+            return new AgentAbDeltas(null, null, null);
+        }
+        double candidateRate = (double) candidatePassed / measuredCount * 100.0;
+        Double baselineRate;
+        if (priorWinnerPerScenario != null) {
+            baselineRate = (double) baselinePassed / measuredCount * 100.0;
+        } else if (cachedBaselineRate != null) {
+            baselineRate = cachedBaselineRate;
+        } else {
+            baselineRate = (double) baselinePassed / measuredCount * 100.0;
+        }
+        // baselineRate is always non-null here (all 3 branches above set it; the
+        // measuredCount==0 early-return already handled the not-measured case). The
+        // null-check is defensive — keeps the delta null-safe if a future branch leaves
+        // baselineRate unset.
+        Double deltaRate = baselineRate == null ? null : candidateRate - baselineRate;
+        return new AgentAbDeltas(baselineRate, candidateRate, deltaRate);
+    }
+
+    /** Index a per-scenario result list by scenarioId → its candidate-side RunResult. */
+    private static Map<String, AbScenarioResult.RunResult> indexCandidateSide(
+            List<AbScenarioResult> perScenario) {
+        if (perScenario == null) {
+            return Map.of();
+        }
+        Map<String, AbScenarioResult.RunResult> map = new HashMap<>();
+        for (AbScenarioResult r : perScenario) {
+            map.put(r.scenarioId(), r.candidate());
+        }
+        return map;
+    }
+
+    /** Pure result of {@link #computeDeltas}; null fields = not-measured (D3 sentinel). */
+    record AgentAbDeltas(Double baselinePassRate, Double candidatePassRate, Double deltaPassRate) {}
 
     /**
      * §8 R2 — role-aware target/general split of a dataset version keyed on the
@@ -507,18 +596,23 @@ public class AgentEvolveAbEvalService {
                                             List<AbScenarioResult> priorWinnerRun,
                                             Set<String> targetIds,
                                             Set<String> generalIds) {
-        double candTarget = passRateOver(currentRun, targetIds, /*candidateSide*/ true);
-        double candGeneral = passRateOver(currentRun, generalIds, true);
+        // EVAL-429-ROBUSTNESS: each subset rate is computed over the pairwise-measured
+        // intersection so candidate and best share the SAME scenarios per subset
+        // (D2). skip path → cross-round pairwise vs the prior winner's candidate side;
+        // fresh path → same-round pairwise (candidate vs baseline side).
+        double candTarget = passRateOver(currentRun, targetIds, /*candidateSide*/ true, priorWinnerRun);
+        double candGeneral = passRateOver(currentRun, generalIds, true, priorWinnerRun);
         double bestTarget;
         double bestGeneral;
         if (priorWinnerRun != null) {
-            // skip path: best = the prior winner's CANDIDATE side measurement.
-            bestTarget = passRateOver(priorWinnerRun, targetIds, true);
-            bestGeneral = passRateOver(priorWinnerRun, generalIds, true);
+            // skip path: best = the prior winner's CANDIDATE side measurement, gated on
+            // THIS run's candidate side also being measured for that scenario.
+            bestTarget = passRateOver(priorWinnerRun, targetIds, true, currentRun);
+            bestGeneral = passRateOver(priorWinnerRun, generalIds, true, currentRun);
         } else {
-            // fresh path: best = this run's BASELINE side.
-            bestTarget = passRateOver(currentRun, targetIds, false);
-            bestGeneral = passRateOver(currentRun, generalIds, false);
+            // fresh path: best = this run's BASELINE side (same-round pairwise).
+            bestTarget = passRateOver(currentRun, targetIds, false, null);
+            bestGeneral = passRateOver(currentRun, generalIds, false, null);
         }
         boolean hasTarget = !targetIds.isEmpty();
         boolean hasGeneral = !generalIds.isEmpty();
@@ -544,23 +638,54 @@ public class AgentEvolveAbEvalService {
                         Double baselineTargetRate, Double baselineGeneralRate) {}
 
     /**
-     * Pass-rate (%) of {@code side} over the {@code ids} subset, counting passes via
-     * the shared {@link AbEvalPipeline#isPass(AbScenarioResult.RunResult)} predicate.
-     * Returns 0.0 when {@code ids} is empty.
+     * 3-arg backward-compatible form (no cross-run counterpart) → same-round pairwise.
      */
     static double passRateOver(List<AbScenarioResult> results, Set<String> ids, boolean candidateSide) {
+        return passRateOver(results, ids, candidateSide, null);
+    }
+
+    /**
+     * EVAL-429-ROBUSTNESS — pass-rate (%) of {@code side} over the {@code ids} subset,
+     * counting passes via the shared {@link AbEvalPipeline#isPass(AbScenarioResult.RunResult)}
+     * predicate, but ONLY over scenarios that are pairwise-measured:
+     * <ul>
+     *   <li>{@code pairwiseWith == null} → same-round pairwise: the chosen {@code side}
+     *       AND the OTHER side of the SAME result must both be non-infra.</li>
+     *   <li>{@code pairwiseWith != null} → cross-round pairwise: the chosen {@code side}
+     *       AND the counterpart run's candidate side for that scenarioId must both be
+     *       non-infra (the cross-round measurement the skip path compares against).</li>
+     * </ul>
+     * A scenario whose either side is ERROR/TIMEOUT (or CACHED) is excluded from both
+     * numerator and denominator. Returns 0.0 when {@code ids} is empty or nothing was
+     * measured (callers gate the empty-subset case separately via {@code hasTarget}).
+     */
+    static double passRateOver(List<AbScenarioResult> results, Set<String> ids, boolean candidateSide,
+                               List<AbScenarioResult> pairwiseWith) {
         if (results == null || ids == null || ids.isEmpty()) {
             return 0.0;
         }
+        Map<String, AbScenarioResult.RunResult> counterpart =
+                pairwiseWith == null ? null : indexCandidateSide(pairwiseWith);
         int passed = 0;
         int total = 0;
         for (AbScenarioResult r : results) {
             if (!ids.contains(r.scenarioId())) {
                 continue;
             }
+            AbScenarioResult.RunResult own = candidateSide ? r.candidate() : r.baseline();
+            boolean otherMeasured;
+            if (counterpart == null) {
+                AbScenarioResult.RunResult otherSide = candidateSide ? r.baseline() : r.candidate();
+                otherMeasured = AbEvalPipeline.isMeasured(otherSide.status());
+            } else {
+                AbScenarioResult.RunResult cp = counterpart.get(r.scenarioId());
+                otherMeasured = cp != null && AbEvalPipeline.isMeasured(cp.status());
+            }
+            if (!(AbEvalPipeline.isMeasured(own.status()) && otherMeasured)) {
+                continue;   // not pairwise-measured → excluded from this subset rate
+            }
             total++;
-            AbScenarioResult.RunResult run = candidateSide ? r.candidate() : r.baseline();
-            if (AbEvalPipeline.isPass(run)) {
+            if (AbEvalPipeline.isPass(own)) {
                 passed++;
             }
         }
