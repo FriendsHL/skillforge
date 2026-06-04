@@ -24,6 +24,10 @@ import java.time.Instant;
  *       tuple sidecar ({@code promptVersionId / behaviorRuleVersionId /
  *       skillDraftId}), {@code null} when the step recorded no bundle (e.g.
  *       single-surface iterations or pre-P1 ledger rows)</li>
+ *   <li>{@code prediction} — BC-M2b (G3): the falsifiable prediction staked this
+ *       iteration, {@code null} for pre-G3 ledger rows</li>
+ *   <li>{@code reconciliation} — BC-M2b (G3): the deterministic prediction-vs-actual
+ *       reconciliation, {@code null} for pre-G3 ledger rows</li>
  * </ul>
  */
 public record EvolveIterationDto(
@@ -37,5 +41,7 @@ public record EvolveIterationDto(
         boolean kept,
         String abRunId,
         Instant createdAt,
-        CandidateBundle candidateBundle
+        CandidateBundle candidateBundle,
+        PredictionDto prediction,
+        ReconciliationDto reconciliation
 ) {}

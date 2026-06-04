@@ -27,6 +27,7 @@ import { getAgents } from '../../api/index';
 import EvolveRunList from './EvolveRunList';
 import EvolveTrajectoryChart from './EvolveTrajectoryChart';
 import EvolveAdoptCard from './EvolveAdoptCard';
+import EvolvePredictionPanel from './EvolvePredictionPanel';
 import './evolve.css';
 
 const MAX_OVERLAY_RUNS = 4;
@@ -185,6 +186,12 @@ const EvolveTrajectoryPanel: React.FC = () => {
           />
         </div>
       </div>
+
+      {/* Prediction reconciliation — one per selected run that recorded G3
+          predictions; renders nothing for runs predating G3. */}
+      {detailRuns.map((run) => (
+        <EvolvePredictionPanel key={`pred-${run.evolveRunId}`} run={run} />
+      ))}
 
       {/* Adopt cards — one per selected run that has an adoptable winner */}
       {detailRuns.map((run) => {

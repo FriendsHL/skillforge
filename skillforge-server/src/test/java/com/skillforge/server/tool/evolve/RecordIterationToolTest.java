@@ -95,6 +95,48 @@ class RecordIterationToolTest {
     }
 
     @Test
+    @DisplayName("G3: prediction + reconciliation are stored verbatim into step_output_json")
+    void recordsIteration_g3PredictionReconciliation() {
+        when(flywheelRunService.findById("evolve-1")).thenReturn(Optional.of(evolveRun("evolve-1")));
+        when(flywheelRunService.appendEvolveIterationStep(eq("evolve-1"), eq(2), any(JsonNode.class)))
+                .thenReturn("step-2");
+
+        Map<String, Object> prediction = new LinkedHashMap<>();
+        prediction.put("issueId", "issue-1");
+        prediction.put("targetProblem", "some scenarios keep failing");
+        prediction.put("flipToPass", java.util.List.of("s1", "s2"));
+        prediction.put("riskToFail", java.util.List.of("s3"));
+        Map<String, Object> reconciliation = new LinkedHashMap<>();
+        reconciliation.put("hits", java.util.List.of("s1"));
+        reconciliation.put("misses", java.util.List.of("s2"));
+        reconciliation.put("riskHits", java.util.List.of());
+        reconciliation.put("surprises", java.util.List.of("s9"));
+        reconciliation.put("confidence", 0.5);
+
+        Map<String, Object> input = new LinkedHashMap<>();
+        input.put("evolveRunId", "evolve-1");
+        input.put("iteration", 2);
+        input.put("surface", "agent");
+        input.put("changeDesc", "co-changed prompt+rule");
+        input.put("candidateId", "bundle-main");
+        input.put("kept", true);
+        input.put("prediction", prediction);
+        input.put("reconciliation", reconciliation);
+
+        SkillResult result = run(input);
+
+        assertThat(result.isSuccess()).isTrue();
+        ArgumentCaptor<JsonNode> payload = ArgumentCaptor.forClass(JsonNode.class);
+        verify(flywheelRunService).appendEvolveIterationStep(eq("evolve-1"), eq(2), payload.capture());
+        JsonNode p = payload.getValue();
+        assertThat(p.path("prediction").path("issueId").asText()).isEqualTo("issue-1");
+        assertThat(p.path("prediction").path("flipToPass").toString()).isEqualTo("[\"s1\",\"s2\"]");
+        assertThat(p.path("reconciliation").path("hits").toString()).isEqualTo("[\"s1\"]");
+        assertThat(p.path("reconciliation").path("confidence").asDouble()).isEqualTo(0.5);
+        assertThat(p.path("reconciliation").path("surprises").toString()).isEqualTo("[\"s9\"]");
+    }
+
+    @Test
     @DisplayName("records a not-kept iteration; optional scores omitted are fine")
     void recordsIteration_notKept_minimal() {
         when(flywheelRunService.findById("evolve-1")).thenReturn(Optional.of(evolveRun("evolve-1")));

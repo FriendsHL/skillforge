@@ -649,6 +649,27 @@ public class SkillForgeConfig {
         return tool;
     }
 
+    /**
+     * AUTOEVOLVE-CLOSE-LOOP Phase BC-M2b (G3) — {@code ReconcilePrediction}
+     * deterministic prediction-vs-actual reconciliation of a whole-agent A/B run.
+     *
+     * <p><b>Invariant:</b> registered ONLY here in the main SkillRegistry — NOT in
+     * {@code WorkflowSkillRegistryFactory}. Same recursion-isolation invariant as
+     * the other Module B/C evolve tools.
+     */
+    @Bean
+    public com.skillforge.server.tool.evolve.ReconcilePredictionTool reconcilePredictionTool(
+            com.skillforge.server.repository.AgentEvolveAbRunRepository agentEvolveAbRunRepository,
+            ObjectMapper objectMapper,
+            SkillRegistry skillRegistry) {
+        com.skillforge.server.tool.evolve.ReconcilePredictionTool tool =
+                new com.skillforge.server.tool.evolve.ReconcilePredictionTool(
+                        agentEvolveAbRunRepository, objectMapper);
+        skillRegistry.registerTool(tool);
+        log.info("Registered ReconcilePredictionTool into SkillRegistry");
+        return tool;
+    }
+
     @Bean
     public com.skillforge.server.tool.AnalyzeEvalTaskTool analyzeEvalTaskTool(
             com.skillforge.server.repository.EvalTaskRepository evalTaskRepository,

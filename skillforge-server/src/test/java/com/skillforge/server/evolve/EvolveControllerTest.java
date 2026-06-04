@@ -295,10 +295,10 @@ class EvolveControllerTest {
         Instant now = Instant.parse("2026-05-31T10:00:00Z");
         EvolveIterationDto iter1 = new EvolveIterationDto(
                 1, "prompt", "Tightened greeting", "cand-a",
-                72.5, 74.9, 2.4, true, "ab-xyz", now, null);
+                72.5, 74.9, 2.4, true, "ab-xyz", now, null, null, null);
         EvolveIterationDto iter2 = new EvolveIterationDto(
                 2, "skill",  "Reduced latency",  "cand-b",
-                74.9, 73.1, -1.8, false, null, now, null);
+                74.9, 73.1, -1.8, false, null, now, null, null, null);
         EvolveRunDetailDto detail = new EvolveRunDetailDto(
                 "run-1", 7L, "my-agent", "completed", now, now,
                 List.of(iter1, iter2));

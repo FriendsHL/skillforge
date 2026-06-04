@@ -29,10 +29,10 @@ class HarvestedTargetBlindScanTest {
             "pass a directory", "use a directory", "not a file", "is a directory",
             "directory not a file");
 
-    private static String v144() throws Exception {
+    private static String migration(String file) throws Exception {
         try (InputStream in = HarvestedTargetBlindScanTest.class.getResourceAsStream(
-                "/db/migration/V144__evolve_orchestrator_harvested_target.sql")) {
-            assertThat(in).as("V144 migration must be on the classpath").isNotNull();
+                "/db/migration/" + file)) {
+            assertThat(in).as("%s must be on the classpath", file).isNotNull();
             return new String(in.readAllBytes(), StandardCharsets.UTF_8);
         }
     }
@@ -40,7 +40,7 @@ class HarvestedTargetBlindScanTest {
     @Test
     @DisplayName("V144 orchestrator prompt contains no remedy phrasing")
     void v144_noRemedyLeak() throws Exception {
-        String sql = v144().toLowerCase();
+        String sql = migration("V144__evolve_orchestrator_harvested_target.sql").toLowerCase();
         for (String phrase : FORBIDDEN) {
             assertThat(sql)
                     .as("V144 must not contain remedy phrase '%s' (blind-test leak)", phrase)
@@ -49,6 +49,31 @@ class HarvestedTargetBlindScanTest {
         // Sanity: it DID wire the read-only discovery tool + target threading.
         assertThat(sql).contains("listactiveharvestedscenarios");
         assertThat(sql).contains("evalscenarioids");
+    }
+
+    @Test
+    @DisplayName("V145 orchestrator prompt (G3) contains no remedy phrasing")
+    void v145_noRemedyLeak() throws Exception {
+        String sql = migration("V145__evolve_orchestrator_prediction_reconcile.sql").toLowerCase();
+        for (String phrase : FORBIDDEN) {
+            assertThat(sql)
+                    .as("V145 must not contain remedy phrase '%s' (blind-test leak)", phrase)
+                    .doesNotContain(phrase.toLowerCase());
+        }
+        // Sanity: it DID wire the G3 reconciliation tool.
+        assertThat(sql).contains("reconcileprediction");
+    }
+
+    @Test
+    @DisplayName("ReconcilePrediction tool description contains no remedy phrasing")
+    void reconcileToolDescription_noRemedyLeak() {
+        String desc = new com.skillforge.server.tool.evolve.ReconcilePredictionTool(null, null)
+                .getDescription().toLowerCase();
+        for (String phrase : FORBIDDEN) {
+            assertThat(desc)
+                    .as("ReconcilePrediction description must not contain remedy phrase '%s'", phrase)
+                    .doesNotContain(phrase.toLowerCase());
+        }
     }
 
     @Test

@@ -72,6 +72,26 @@ class OrchestratorPromptDriftGuardTest {
                 .isEqualTo(v140Body);
     }
 
+    @Test
+    @DisplayName("V145 prompt body = V144 body + (G3 第二步补充 section), nothing else")
+    void v145_isV144PlusOnlyTheG3Section() throws Exception {
+        String v144Body = seedBody(migration("V144__evolve_orchestrator_harvested_target.sql"));
+        String v145Body = seedBody(migration("V145__evolve_orchestrator_prediction_reconcile.sql"));
+
+        // Remove the inserted G3 section (from its header up to the 逐轮迭代 step).
+        // NOTE: the G3 header also starts with "== 第二步" (第二步补充), so the boundary
+        // must be the more specific "== 第二步：逐轮迭代" marker.
+        int g3Start = v145Body.indexOf("== 第二步补充（G3");
+        int stepStart = v145Body.indexOf("== 第二步：逐轮迭代");
+        assertThat(g3Start).as("V145 must contain the G3 第二步补充 section").isGreaterThanOrEqualTo(0);
+        assertThat(stepStart).as("V145 must keep the 逐轮迭代 step").isGreaterThan(g3Start);
+        String stripped = v145Body.substring(0, g3Start) + v145Body.substring(stepStart);
+
+        assertThat(stripped)
+                .as("V145 prompt body drifted from V144 beyond the intended G3 addition")
+                .isEqualTo(v144Body);
+    }
+
     private static int countOccurrences(String haystack, String needle) {
         int count = 0;
         int idx = 0;

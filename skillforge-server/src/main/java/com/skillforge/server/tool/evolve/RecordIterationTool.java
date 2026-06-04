@@ -71,6 +71,10 @@ public class RecordIterationTool implements Tool {
                 + "(the GLOBAL scores — the trajectory chart reads these).\n"
                 + "- \"kept\": boolean — whether you keep this candidate (records it; does NOT promote).\n"
                 + "- \"abRunId\" (optional): the A/B run id for traceability.\n"
+                + "- \"prediction\" (optional, G3): the falsifiable prediction you staked this turn "
+                + "{issueId?, targetProblem, flipToPass:[...], riskToFail:[...]} — stored verbatim.\n"
+                + "- \"reconciliation\" (optional, G3): the ReconcilePrediction result "
+                + "{hits, misses, riskHits, surprises, confidence} — stored verbatim.\n"
                 + "Returns the recorded stepId.";
     }
 
@@ -108,6 +112,11 @@ public class RecordIterationTool implements Tool {
                 "description", "Whether the candidate is kept (recorded, not promoted)."));
         properties.put("abRunId", Map.of("type", "string",
                 "description", "Optional A/B run id for traceability."));
+        properties.put("prediction", Map.of("type", "object",
+                "description", "Optional (G3): the falsifiable prediction staked this turn, "
+                        + "stored verbatim into the iteration ledger."));
+        properties.put("reconciliation", Map.of("type", "object",
+                "description", "Optional (G3): the ReconcilePrediction result, stored verbatim."));
 
         Map<String, Object> schema = new LinkedHashMap<>();
         schema.put("type", "object");
@@ -183,6 +192,10 @@ public class RecordIterationTool implements Tool {
             // global baselineScore/candidateScore/delta unchanged); candidateBundle
             // is an optional structured sidecar for full traceability.
             putBundleSidecar(payload, input.get("candidateBundle"));
+            // G3 (BC-M2b): store the prediction + reconciliation sidecars verbatim
+            // (free-schema JSON) so the read API / FE can show predicted-vs-actual.
+            putJsonSidecar(payload, "prediction", input.get("prediction"));
+            putJsonSidecar(payload, "reconciliation", input.get("reconciliation"));
 
             String stepId = flywheelRunService.appendEvolveIterationStep(evolveRunId, iteration, payload);
 
@@ -226,6 +239,32 @@ public class RecordIterationTool implements Tool {
             node.set("candidateBundle", objectMapper.readTree(s));
         } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
             node.put("candidateBundle", s);
+        }
+    }
+
+    /**
+     * G3 — store an optional free-schema JSON sidecar (prediction / reconciliation)
+     * verbatim under {@code field}. Accepts a JSON object (Map) or JSON string;
+     * absent / blank → no-op. A non-parseable string is stored as text so recording
+     * never fails just because the sidecar was passed oddly (mirrors
+     * {@link #putBundleSidecar}).
+     */
+    private void putJsonSidecar(ObjectNode node, String field, Object raw) {
+        if (raw == null) {
+            return;
+        }
+        if (raw instanceof Map<?, ?> map) {
+            node.set(field, objectMapper.valueToTree(map));
+            return;
+        }
+        String s = String.valueOf(raw).trim();
+        if (s.isEmpty()) {
+            return;
+        }
+        try {
+            node.set(field, objectMapper.readTree(s));
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            node.put(field, s);
         }
     }
 

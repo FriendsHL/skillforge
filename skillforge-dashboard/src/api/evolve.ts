@@ -40,6 +40,47 @@ export interface CandidateBundle {
 
 // ─────────────────────────── iteration (one row per loop) ──────────────────
 
+/**
+ * G3 prediction — the falsifiable bet the orchestrator placed BEFORE running
+ * the A/B for this iteration: which scenarios this candidate should flip to
+ * pass (and which it risks breaking). Mirrors BE {@code IterationPrediction}
+ * field-for-field (footgun #6). Optional/null for legacy iterations recorded
+ * before G3 (backward compatible).
+ */
+export interface IterationPrediction {
+  /** Issue id this candidate targets (null when the issue was unidentified). */
+  issueId: string | null;
+  /** Human-readable statement of the problem this candidate targets. */
+  targetProblem: string;
+  /** Scenario ids predicted to flip from fail → pass. */
+  flipToPass: string[];
+  /** Scenario ids flagged as at-risk of regressing pass → fail. */
+  riskToFail: string[];
+  /** Free-text rationale for the bet (null when none recorded). */
+  rationale: string | null;
+}
+
+/**
+ * G3 reconciliation — the deterministic post-A/B settlement of the prediction:
+ * which predicted flips actually happened (hits), which didn't (misses), which
+ * at-risk scenarios actually regressed (riskHits), and which scenarios changed
+ * outcome WITHOUT being predicted (surprises). Mirrors BE
+ * {@code IterationReconciliation} field-for-field (footgun #6). Optional/null
+ * for legacy iterations (backward compatible).
+ */
+export interface IterationReconciliation {
+  /** Predicted flipToPass ids that actually flipped to pass. */
+  hits: string[];
+  /** Predicted flipToPass ids that did NOT flip. */
+  misses: string[];
+  /** Predicted riskToFail ids that actually regressed. */
+  riskHits: string[];
+  /** Scenarios that changed outcome but were not predicted at all. */
+  surprises: string[];
+  /** Prediction confidence/accuracy in [0,1] (null when not computed). */
+  confidence: number | null;
+}
+
 export interface EvolveIteration {
   /** 1-based iteration index within this run. */
   iteration: number;
@@ -66,6 +107,17 @@ export interface EvolveIteration {
    * Null when this iteration recorded no bundle (legacy rows / non-kept).
    */
   candidateBundle: CandidateBundle | null;
+  /**
+   * G3 — the falsifiable prediction placed before this iteration's A/B.
+   * Optional/null for legacy iterations recorded before G3.
+   */
+  prediction?: IterationPrediction | null;
+  /**
+   * G3 — the deterministic reconciliation of {@link prediction} against the
+   * actual A/B outcome. Optional/null for legacy iterations or iterations
+   * whose A/B has not completed yet.
+   */
+  reconciliation?: IterationReconciliation | null;
 }
 
 // ─────────────────────────── run summary (list item) ───────────────────────

@@ -6,6 +6,8 @@ import com.skillforge.server.evolve.dto.CandidateBundle;
 import com.skillforge.server.evolve.dto.EvolveIterationDto;
 import com.skillforge.server.evolve.dto.EvolveRunDetailDto;
 import com.skillforge.server.evolve.dto.EvolveRunSummaryDto;
+import com.skillforge.server.evolve.dto.PredictionDto;
+import com.skillforge.server.evolve.dto.ReconciliationDto;
 import com.skillforge.server.flywheel.run.FlywheelRunEntity;
 import com.skillforge.server.flywheel.run.FlywheelRunRepository;
 import com.skillforge.server.flywheel.run.FlywheelRunStepEntity;
@@ -224,6 +226,10 @@ public class EvolveReadService {
         }
 
         CandidateBundle candidateBundle = parseCandidateBundle(payload.get("candidateBundle"));
+        // BC-M2b (G3): prediction + reconciliation sidecars (null for pre-G3 rows).
+        PredictionDto prediction = parseJsonNode(payload.get("prediction"), PredictionDto.class);
+        ReconciliationDto reconciliation =
+                parseJsonNode(payload.get("reconciliation"), ReconciliationDto.class);
 
         return new EvolveIterationDto(
                 iteration,
@@ -236,7 +242,27 @@ public class EvolveReadService {
                 kept,
                 abRunId,
                 step.getCreatedAt(),
-                candidateBundle);
+                candidateBundle,
+                prediction,
+                reconciliation);
+    }
+
+    /**
+     * BC-M2b (G3) — best-effort convert a {@code step_output_json} sub-node into a
+     * typed DTO. Returns null when the node is absent / not an object / unparseable
+     * (a malformed sidecar must never fail the whole iteration read).
+     */
+    private <T> T parseJsonNode(JsonNode node, Class<T> type) {
+        if (node == null || node.isNull() || node.isMissingNode() || !node.isObject()) {
+            return null;
+        }
+        try {
+            return objectMapper.treeToValue(node, type);
+        } catch (Exception e) {
+            log.warn("EvolveReadService: failed to parse {} sidecar: {}",
+                    type.getSimpleName(), e.getMessage());
+            return null;
+        }
     }
 
     /**
