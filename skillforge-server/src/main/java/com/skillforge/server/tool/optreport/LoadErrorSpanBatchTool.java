@@ -301,7 +301,7 @@ public class LoadErrorSpanBatchTool implements Tool {
      * file paths, numbers) then truncate, so messages differing only in specifics
      * collapse into one group.
      */
-    static String errorSignature(String name, String errorType, String error) {
+    public static String errorSignature(String name, String errorType, String error) {
         StringBuilder sig = new StringBuilder();
         sig.append(name == null ? "?" : name);
         if (errorType != null && !errorType.isBlank()) {

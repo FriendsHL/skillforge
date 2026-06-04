@@ -83,7 +83,8 @@ class EvolveControllerTest {
                 .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
 
         controller = new EvolveController(agentRepository, flywheelRunService,
-                sessionService, chatService, evolveReadService, adoptionService);
+                sessionService, chatService, evolveReadService, adoptionService,
+                mock(HarvestedScenarioService.class));
         mvc = MockMvcBuilders.standaloneSetup(controller)
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(objectMapper))
                 .build();

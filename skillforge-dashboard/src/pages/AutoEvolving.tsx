@@ -13,6 +13,7 @@ import { usePendingApprovals } from '../hooks/usePendingApprovals';
 import '../components/autoevolving/autoevolving.css';
 import EvolveTrajectoryPanel from '../components/evolve/EvolveTrajectoryPanel';
 import EvolveTriggerModal from '../components/evolve/EvolveTriggerModal';
+import HarvestedScenariosPanel from '../components/evolve/HarvestedScenariosPanel';
 
 // Lazy-load the workflow runs panel so its react-flow dependency stays in a
 // split chunk (matches Insights.tsx; avoids bundling react-flow into the main
@@ -174,6 +175,7 @@ const AutoEvolving: React.FC = () => {
 
       <div ref={evolveRef}>
         <EvolveTrajectoryPanel />
+        <HarvestedScenariosPanel />
       </div>
 
       <TriggerWorkflowModal

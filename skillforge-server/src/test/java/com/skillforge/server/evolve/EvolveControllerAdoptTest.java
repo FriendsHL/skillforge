@@ -68,7 +68,8 @@ class EvolveControllerAdoptTest {
                 mock(SessionService.class),
                 mock(ChatService.class),
                 evolveReadService,
-                adoptionService);
+                adoptionService,
+                mock(HarvestedScenarioService.class));
         mvc = MockMvcBuilders.standaloneSetup(controller)
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(objectMapper))
                 .build();

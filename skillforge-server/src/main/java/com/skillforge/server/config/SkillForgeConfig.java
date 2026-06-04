@@ -521,6 +521,29 @@ public class SkillForgeConfig {
     }
 
     /**
+     * AUTOEVOLVE-CLOSE-LOOP Phase BC-M2b — {@code ListActiveHarvestedScenarios}
+     * read-only lookup of an agent's ACTIVE harvested bad-case scenario ids, used
+     * by the orchestrator to build the explicit target subset of an A/B run.
+     *
+     * <p><b>Invariant:</b> registered ONLY here in the main SkillRegistry — NOT in
+     * {@code WorkflowSkillRegistryFactory} (workflow sub-agent registry). Same
+     * recursion-isolation invariant as the other Module B/C evolve tools.
+     */
+    @Bean
+    public com.skillforge.server.tool.evolve.ListActiveHarvestedScenariosTool listActiveHarvestedScenariosTool(
+            com.skillforge.server.repository.EvalScenarioDraftRepository evalScenarioDraftRepository,
+            com.skillforge.server.service.EvalDatasetService evalDatasetService,
+            ObjectMapper objectMapper,
+            SkillRegistry skillRegistry) {
+        com.skillforge.server.tool.evolve.ListActiveHarvestedScenariosTool tool =
+                new com.skillforge.server.tool.evolve.ListActiveHarvestedScenariosTool(
+                        evalScenarioDraftRepository, evalDatasetService, objectMapper);
+        skillRegistry.registerTool(tool);
+        log.info("Registered ListActiveHarvestedScenariosTool into SkillRegistry");
+        return tool;
+    }
+
+    /**
      * AUTOEVOLVE-AGENT-FLYWHEEL Module B (FR-B3) — {@code PromoteCandidate} wraps
      * the existing guarded promote services (NO guard bypass) and additionally
      * validates the candidate belongs to {@code targetAgentId}.

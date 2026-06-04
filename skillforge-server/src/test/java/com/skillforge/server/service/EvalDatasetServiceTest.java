@@ -226,6 +226,65 @@ class EvalDatasetServiceTest {
     }
 
     // ─────────────────────────────────────────────────────────────────────
+    // findDefaultVersionIdForAgent — resolver preference (BC-M2b 子轮2 keystone)
+    // ─────────────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("BC-M2b keystone: agent-specific *mixed* dataset wins over global *mixed* even when global has a HIGHER version number")
+    void findDefaultVersionIdForAgent_agentSpecificMixedWinsOverGlobal() {
+        // The whole harvest→activate→target chain rests on this: after activate
+        // publishes a new version of the agent's <agentId>-mixed dataset, a later
+        // A/B (which calls findDefaultVersionIdForAgent when no explicit
+        // datasetVersionId is given) must resolve to THAT agent-specific version —
+        // not the global main-assistant-mixed-v1 — even though the global dataset
+        // may carry a higher version_number. This directly guards the "two
+        // MAX-version mixed datasets" ambiguity design review flagged (W1).
+        EvalDatasetEntity globalMixed = new EvalDatasetEntity();
+        globalMixed.setId("global-mixed");
+        globalMixed.setName("main-assistant-mixed-v1");
+        globalMixed.setAgentId(null); // global (agent_id NULL)
+
+        EvalDatasetEntity agentMixed = new EvalDatasetEntity();
+        agentMixed.setId("agent7-mixed");
+        agentMixed.setName("7-mixed");
+        agentMixed.setAgentId("7"); // agent-specific
+
+        when(datasetRepository.findAll()).thenReturn(List.of(globalMixed, agentMixed));
+        // Agent dataset carries a LOWER version number than the global — it must
+        // STILL win (the resolver preference is agent-specificity, not the max
+        // version across datasets). Global's version lookups are deliberately NOT
+        // stubbed: the resolver short-circuits on the agent dataset, so strict
+        // stubbing would flag them — proving global is never consulted.
+        when(versionRepository.findMaxVersionNumber("agent7-mixed")).thenReturn(Optional.of(1));
+        EvalDatasetVersionEntity agentV1 = new EvalDatasetVersionEntity();
+        agentV1.setId("agent7-mixed-v1");
+        when(versionRepository.findByDatasetIdAndVersionNumber("agent7-mixed", 1))
+                .thenReturn(Optional.of(agentV1));
+
+        assertThat(service.findDefaultVersionIdForAgent("7")).isEqualTo("agent7-mixed-v1");
+    }
+
+    @Test
+    @DisplayName("BC-M2b: with only the global *mixed* dataset (pre-activation seed state), the global version resolves")
+    void findDefaultVersionIdForAgent_onlyGlobal_resolvesGlobal() {
+        // Matches the real seed state before any agent has activated a harvest:
+        // only main-assistant-mixed-v1 (agent_id NULL) exists, so it is the
+        // fallback default for every agent.
+        EvalDatasetEntity globalMixed = new EvalDatasetEntity();
+        globalMixed.setId("global-mixed");
+        globalMixed.setName("main-assistant-mixed-v1");
+        globalMixed.setAgentId(null);
+        when(datasetRepository.findAll()).thenReturn(List.of(globalMixed));
+        when(versionRepository.findMaxVersionNumber("global-mixed")).thenReturn(Optional.of(1));
+        EvalDatasetVersionEntity gv1 = new EvalDatasetVersionEntity();
+        gv1.setId("global-mixed-v1");
+        when(versionRepository.findByDatasetIdAndVersionNumber("global-mixed", 1))
+                .thenReturn(Optional.of(gv1));
+
+        assertThat(service.findDefaultVersionIdForAgent("7")).isEqualTo("global-mixed-v1");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
     // Helpers
     // ─────────────────────────────────────────────────────────────────────
 

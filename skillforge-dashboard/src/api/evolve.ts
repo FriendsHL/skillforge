@@ -258,3 +258,119 @@ export interface EvolveSkillDraftView {
  */
 export const getEvolveSkillDraft = (draftId: string) =>
   api.get<EvolveSkillDraftView>(`/evolve/skill-drafts/${draftId}`);
+
+// ─────────────────── harvested bad-case scenarios (BC-M2b 子轮2) ────────────
+
+/**
+ * A harvested bad-case scenario — a real captured agent failure turned into an
+ * eval target. Mirrors BE {@code HarvestedScenarioDto} field-for-field
+ * (footgun #6). Status lifecycle: draft → active (human-gated activation into
+ * the agent's eval dataset) → archived.
+ *
+ * Lifecycle:
+ *   - 'draft'    → harvested but not yet activated into any eval dataset.
+ *   - 'active'   → human-activated; now a member of the agent's eval dataset.
+ *   - 'archived' → retired.
+ */
+export interface HarvestedScenario {
+  id: string;
+  name: string;
+  description: string;
+  status: 'draft' | 'active' | 'archived';
+  /** Source pointer (e.g. session/span ref) the case was harvested from. */
+  sourceRef: string | null;
+  /** ISO-8601 creation timestamp. */
+  createdAt: string;
+  /** ISO-8601 timestamp of the human activation/review (null while draft). */
+  reviewedAt: string | null;
+}
+
+/** Envelope returned by GET /api/evolve/agents/{agentId}/scenarios */
+interface HarvestedScenarioListEnvelope {
+  items: HarvestedScenario[];
+}
+
+/**
+ * Result of activating a harvested draft into the agent's eval dataset.
+ * Mirrors BE {@code ActivateScenarioResponse} record field-for-field
+ * (footgun #6). Returned BARE (not enveloped) — FE reads r.data directly,
+ * matching the adopt/getRunDetail convention.
+ */
+export interface ActivateScenarioResponse {
+  scenarioId: string;
+  status: string;
+  agentId: string;
+  datasetVersionId: string;
+  datasetVersionNumber: number;
+  datasetScenarioCount: number;
+  /** ISO-8601 timestamp of the activation. */
+  reviewedAt: string;
+}
+
+/** Envelope returned by POST /api/evolve/agents/{agentId}/harvest-bad-cases */
+export interface HarvestBadCasesEnvelope {
+  /** IDs of the freshly-created draft scenarios. */
+  items: string[];
+  /** Count of created drafts (== items.length). */
+  count: number;
+}
+
+/**
+ * List an agent's harvested bad-case scenarios by status.
+ * `GET /api/evolve/agents/{agentId}/scenarios?status=&sourceType=session_derived`
+ * Reads r.data.items (enveloped list).
+ *
+ * @param agentId  The target agent's numeric ID.
+ * @param status   'draft' (not yet activated) or 'active' (in eval dataset).
+ */
+export const listHarvestedScenarios = (
+  agentId: number,
+  status: 'draft' | 'active',
+) =>
+  api.get<HarvestedScenarioListEnvelope>(`/evolve/agents/${agentId}/scenarios`, {
+    params: { status, sourceType: 'session_derived' },
+  });
+
+/**
+ * Activate a harvested draft scenario into the agent's eval dataset — a new
+ * immutable dataset version is published with the harvested case added.
+ * Irreversible (human-gated; the system user is rejected server-side).
+ *
+ * `POST /api/evolve/scenarios/{scenarioId}/activate?userId=` (no body; params).
+ * Reads r.data directly — NOT enveloped.
+ *
+ * Errors: 400 (system/blank user, non-session_derived, agentId null),
+ * 404 (scenario missing), 409 (not in draft status).
+ *
+ * @param scenarioId  The draft scenario to activate.
+ * @param userId      Acting (human) user id — must not be the system user.
+ */
+export const activateHarvestedScenario = (scenarioId: string, userId: number) =>
+  api.post<ActivateScenarioResponse>(
+    `/evolve/scenarios/${scenarioId}/activate`,
+    null,
+    { params: { userId } },
+  );
+
+/**
+ * Harvest fresh bad-case drafts from the agent's recent captured failures.
+ * Server-side clusters real failures and creates draft scenarios — no LLM,
+ * no remedy inference, just measurement targets.
+ *
+ * `POST /api/evolve/agents/{agentId}/harvest-bad-cases?windowDays=` (no body).
+ * Reads r.data (enveloped {items, count}).
+ *
+ * @param agentId     The agent to harvest failures for.
+ * @param windowDays  Optional look-back window (server applies its default
+ *                    when omitted).
+ */
+export const harvestBadCases = (agentId: number, windowDays?: number) =>
+  api.post<HarvestBadCasesEnvelope>(
+    `/evolve/agents/${agentId}/harvest-bad-cases`,
+    null,
+    {
+      params: {
+        ...(windowDays != null ? { windowDays } : {}),
+      },
+    },
+  );

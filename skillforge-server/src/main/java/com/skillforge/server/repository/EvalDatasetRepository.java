@@ -17,4 +17,11 @@ public interface EvalDatasetRepository extends JpaRepository<EvalDatasetEntity, 
     List<EvalDatasetEntity> findByOwnerIdAndAgentIdOrderByCreatedAtDesc(Long ownerId, String agentId);
 
     Optional<EvalDatasetEntity> findByOwnerIdAndName(Long ownerId, String name);
+
+    /**
+     * AUTOEVOLVE-CLOSE-LOOP Phase BC-M2b: all datasets owned by (scoped to) a
+     * specific agent. Used by {@code HarvestedScenarioService} to locate the
+     * agent's {@code *mixed*} dataset without a full-table scan.
+     */
+    List<EvalDatasetEntity> findByAgentId(String agentId);
 }

@@ -285,6 +285,12 @@ harvest service / 行为 oracle / 任何 prompt / 本设计文档 **只描述通
 
 **Q2 — `topIssues` 与归因位置**：归因 + surface 映射在 `RunWorkflow(opt-report)` 那个 workflow **内部**就做完了；`GetOptReport` 只是只读工具，把已算完的 `summary_json` 读出来（`GetOptReportTool:229` 复用 `OptReportSummaryParser`）。`topIssues[]` 每条已带 `suspectSurface / fixSurface / effectiveSurface / convertible / rootCause / recurrence`。编排器**不重做归因**，只挑 convertible 的迭代。**已知有损**（5-enum 消化丢信号 = 4 跳 trace 断）由 P2-a(G4) 富化字段 + **本期错题本（直接喂可复现真场景当 target，绕开消化）** 双治。
 
+##### 子轮2 已定设计（2026-06-04 architect + 用户 ratify，详见 `/tmp/bc-m2b-r2-design.md`）
+- **激活落点（fork 已定 = A′ agent-scoped）**：dataset version 不可变 → 激活 = `publishVersion(agent 专属 *mixed* 数据集, 旧成员 ∪ 收割 id)`，自动成最新版被 `findDefaultVersionIdForAgent` 选中。首次激活从全局默认复制成员当底子（agent 评测集 = 完整 benchmark + 自己的错题；全局不动）。**无结构性 schema 改动**（复用 publishVersion + status/reviewedAt + 现有 bridge）。
+- **人审闸**：`POST /api/evolve/scenarios/{id}/activate?userId=` 拒绝 system user(0) → orchestrator 永远到不了激活。
+- **orchestrator 接线**：只读工具 `ListActiveHarvestedScenarios{agentId}` → active+session_derived id 列表 → V144 prompt 让 orchestrator 拿来当 `TriggerAbEval(evalScenarioIds=…)` target；收割本期=endpoint+FE 按钮（草稿），**defer** in-loop 写工具。
+- **盲测**：V144 prompt + 工具描述 + FE 文案只描述 discover/target/measure，绝不命名修法；加 grep-based blind-scan 单测守 V144 SQL + 工具描述。
+
 ##### 分段交付（本会话内 3 个 Full review 子轮，各自 commit、等用户批准）
 - **子轮 1（测量底座）**：通用多工具收割（Edit+Grep）+ Grep parity + oracle 通用化 + 显式 target split + 两套用例 deltas。Review 重点：oracle 语义变更（design-reviewer 盯 do-nothing 回归）+ 盲测扫描。
 - **子轮 2（接进 evolve）**：activate endpoint/UI + orchestrator 接线 + dashboard。Review 重点：orchestrator 盲测扫描 + 两套用例同跑保证。

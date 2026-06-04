@@ -4,10 +4,12 @@ import com.skillforge.server.bootstrap.SystemAgentNames;
 import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.SessionEntity;
 import com.skillforge.server.evolve.AgentBundleAdoptionService.AdoptResult;
+import com.skillforge.server.evolve.dto.ActivateScenarioResponse;
 import com.skillforge.server.evolve.dto.AdoptBundleRequest;
 import com.skillforge.server.evolve.dto.CandidateBundle;
 import com.skillforge.server.evolve.dto.EvolveRunDetailDto;
 import com.skillforge.server.evolve.dto.EvolveRunSummaryDto;
+import com.skillforge.server.evolve.dto.HarvestedScenarioDto;
 import com.skillforge.server.flywheel.run.FlywheelRunEntity;
 import com.skillforge.server.flywheel.run.FlywheelRunService;
 import com.skillforge.server.repository.AgentRepository;
@@ -69,11 +71,21 @@ public class EvolveController {
             java.util.regex.Pattern.compile("^[A-Za-z0-9-]{1,64}$");
 
     /**
-     * OPT-REPORT-V1 reused window (the evolve run reuses the FlywheelRun time
-     * window columns; the orchestrator itself scopes the report via the
-     * opt-report workflow, so this is a defensive default for the row).
+     * OPT-REPORT-V1 reused window for the EVOLVE RUN row (the evolve run reuses the
+     * FlywheelRun time window columns; the orchestrator itself scopes the report via
+     * the opt-report workflow, so this is a defensive default for the row). NOTE:
+     * this governs the {@code /run} evolve-run window ONLY — it is unrelated to the
+     * harvest endpoint window (see {@link #HARVEST_DEFAULT_WINDOW_DAYS}).
      */
-    static final int DEFAULT_WINDOW_DAYS = 7;
+    static final int DEFAULT_EVOLVE_RUN_WINDOW_DAYS = 7;
+
+    /**
+     * Default lookback window (days) for the bad-case harvest endpoint when the FE
+     * omits {@code windowDays}. Mirrors {@link com.skillforge.server.evolve.BadCaseClusterService}'s
+     * clamp range default — keep this in sync with the {@code @RequestParam}
+     * literal below (annotation defaults must be compile-time literals).
+     */
+    static final int HARVEST_DEFAULT_WINDOW_DAYS = 30;
 
     private final AgentRepository agentRepository;
     private final FlywheelRunService flywheelRunService;
@@ -81,19 +93,22 @@ public class EvolveController {
     private final ChatService chatService;
     private final EvolveReadService evolveReadService;
     private final AgentBundleAdoptionService adoptionService;
+    private final HarvestedScenarioService harvestedScenarioService;
 
     public EvolveController(AgentRepository agentRepository,
                             FlywheelRunService flywheelRunService,
                             SessionService sessionService,
                             ChatService chatService,
                             EvolveReadService evolveReadService,
-                            AgentBundleAdoptionService adoptionService) {
+                            AgentBundleAdoptionService adoptionService,
+                            HarvestedScenarioService harvestedScenarioService) {
         this.agentRepository = agentRepository;
         this.flywheelRunService = flywheelRunService;
         this.sessionService = sessionService;
         this.chatService = chatService;
         this.evolveReadService = evolveReadService;
         this.adoptionService = adoptionService;
+        this.harvestedScenarioService = harvestedScenarioService;
     }
 
     /**
@@ -171,7 +186,7 @@ public class EvolveController {
                 FlywheelRunEntity.TRIGGER_SOURCE_API,
                 inputJson,
                 agentId,
-                DEFAULT_WINDOW_DAYS);
+                DEFAULT_EVOLVE_RUN_WINDOW_DAYS);
 
         // STEP 2: spawn the orchestrator system session + kick the loop. The
         // kickoff prompt threads targetAgentId + evolveRunId (+ maxIter) — the
@@ -381,6 +396,109 @@ public class EvolveController {
         } catch (IllegalArgumentException e) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage());
         }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // AUTOEVOLVE-CLOSE-LOOP BC-M2b — harvested bad-case scenarios (activate flow)
+    // ─────────────────────────────────────────────────────────────────────
+
+    /**
+     * Human-gated activation of a harvested (session-derived) draft scenario into
+     * its agent's mixed eval dataset. Returns the bare {@link ActivateScenarioResponse}
+     * (NOT enveloped, mirrors adopt / run-detail).
+     *
+     * <p><b>Iron-Law human gate:</b> {@code userId} null or the SYSTEM user (0) is
+     * rejected with 400 — the orchestrator (which acts as the system user) can
+     * never activate a draft; activation is a human decision.
+     *
+     * @param scenarioId the harvested draft scenario id
+     * @param userId     operator id (must be a non-system user)
+     */
+    @PostMapping("/scenarios/{scenarioId}/activate")
+    public ResponseEntity<?> activateScenario(
+            @PathVariable("scenarioId") String scenarioId,
+            @RequestParam("userId") Long userId) {
+        if (userId == null || userId == SYSTEM_USER_ID) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "userId must be a non-system user to activate a harvested scenario");
+        }
+        if (scenarioId == null || scenarioId.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "scenarioId is required");
+        }
+        try {
+            ActivateScenarioResponse resp = harvestedScenarioService.activate(scenarioId, userId);
+            log.info("[Evolve] harvested scenario activated: scenarioId={} userId={} datasetVersionId={}",
+                    scenarioId, userId, resp.datasetVersionId());
+            return ResponseEntity.ok(resp);
+        } catch (HarvestedScenarioService.ScenarioNotFoundException e) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, e.getMessage());
+        } catch (IllegalStateException e) {
+            // wrong lifecycle status (not draft) → 409
+            throw new ResponseStatusException(HttpStatus.CONFLICT, e.getMessage());
+        } catch (IllegalArgumentException e) {
+            // wrong source_type / missing agentId / blank id → 400
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage());
+        }
+    }
+
+    /**
+     * List an agent's harvested (session-derived) scenarios in a given lifecycle
+     * status. Returns an {@code {items: [...]}} envelope (footgun #6b).
+     *
+     * @param agentId    target agent id (&gt; 0)
+     * @param status     lifecycle status filter ({@code draft} | {@code active}); default {@code draft}
+     * @param sourceType optional; when present must be {@code session_derived} (the only supported value)
+     */
+    @GetMapping("/agents/{agentId}/scenarios")
+    public ResponseEntity<?> listHarvestedScenarios(
+            @PathVariable("agentId") Long agentId,
+            @RequestParam(value = "status", required = false, defaultValue = "draft") String status,
+            @RequestParam(value = "sourceType", required = false) String sourceType) {
+        if (agentId == null || agentId <= 0L) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "agentId must be a positive long; got " + agentId);
+        }
+        if (!"draft".equals(status) && !"active".equals(status)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "status must be 'draft' or 'active'; got " + status);
+        }
+        if (sourceType != null && !sourceType.isBlank()
+                && !"session_derived".equals(sourceType)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "sourceType must be 'session_derived' (the only harvested source); got " + sourceType);
+        }
+        List<HarvestedScenarioDto> items =
+                harvestedScenarioService.listHarvestedScenarios(String.valueOf(agentId), status);
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("items", items);
+        return ResponseEntity.ok(body);
+    }
+
+    /**
+     * Cluster the agent's recent failed tool calls and rebuild one DRAFT bad-case
+     * scenario per harvestable cluster (deterministic replay — no LLM, no remedy).
+     * Returns an {@code {items: [draftIds], count}} envelope. The drafts still
+     * require human activation before they enter any A/B run.
+     *
+     * @param agentId    target agent id (&gt; 0)
+     * @param windowDays lookback window for failure clustering (default 30)
+     */
+    @PostMapping("/agents/{agentId}/harvest-bad-cases")
+    public ResponseEntity<?> harvestBadCases(
+            @PathVariable("agentId") Long agentId,
+            // defaultValue must be a literal; keep it == HARVEST_DEFAULT_WINDOW_DAYS (30).
+            @RequestParam(value = "windowDays", required = false, defaultValue = "30") int windowDays) {
+        if (agentId == null || agentId <= 0L) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "agentId must be a positive long; got " + agentId);
+        }
+        List<String> created = harvestedScenarioService.harvestBadCases(agentId, windowDays);
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("items", created);
+        body.put("count", created.size());
+        log.info("[Evolve] harvest-bad-cases agentId={} windowDays={} created={}",
+                agentId, windowDays, created.size());
+        return ResponseEntity.ok(body);
     }
 
     /**
