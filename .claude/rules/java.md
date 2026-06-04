@@ -168,30 +168,11 @@ AgentLoopEngine.run(AgentDef, String, Message userMessageBlock, List, ..., LoopC
 
 ---
 
-## 依赖注入
+## 通用 Java 规范以 vendored `java/*` 为准
 
-**始终使用构造器注入**，禁止字段注入（`@Autowired` 直接打在字段上）。
+依赖注入（构造器注入、禁 `@Autowired` 字段注入）/ 命名（PascalCase/camelCase/常量）/ 错误处理（domain `RuntimeException` 子类 + handler 层统一 catch 不暴露 stack trace）/ Optional（`orElseThrow`，禁裸 `get()`）/ 安全（secrets 不硬编码、SQL 参数化、输入校验）/ 测试（JUnit5 + Mockito + AssertJ + AAA + 80% coverage）等**通用规范见** [`java/coding-style.md`](java/coding-style.md) · [`java/security.md`](java/security.md) · [`java/testing.md`](java/testing.md) · [`java/patterns.md`](java/patterns.md)。
 
-```java
-// GOOD
-@Service
-public class SessionService {
-    private final SessionRepository sessionRepository;
-    private final AgentService agentService;
-
-    public SessionService(SessionRepository sessionRepository, AgentService agentService) {
-        this.sessionRepository = sessionRepository;
-        this.agentService = agentService;
-    }
-}
-
-// BAD
-@Service
-public class SessionService {
-    @Autowired
-    private SessionRepository sessionRepository;
-}
-```
+**本文只列 SkillForge 项目独家规范 + footgun**（下方各节 + 文末项目约定），与 vendored 冲突时**本文优先**。
 
 ---
 
@@ -302,87 +283,31 @@ public class MyTool implements Tool {
 
 ---
 
-## 命名规范
+## SkillForge 项目约定（通用规范见文首指向的 vendored `java/*`）
 
-- 类/接口：`PascalCase`（`SessionService`, `LlmProvider`）
-- 方法/字段/变量：`camelCase`（`findById`, `runtimeStatus`）
-- 常量：`SCREAMING_SNAKE_CASE`（`MAX_RETRIES`, `JSON_MEDIA_TYPE`）
-- 包：全小写，`com.skillforge.<module>.<layer>`（如 `com.skillforge.server.service`）
-- Entity 类名后缀 `Entity`（`SessionEntity`）
-- Repository 接口后缀 `Repository`（`SessionRepository`）
-- DTO 无强制后缀，但 Request/Response 类加后缀（`ChatRequest`, `ChatResponse`）
+> 这些是 SkillForge 特有约定 / 在通用规范基础上的项目收窄，**不在 vendored 里**。
 
----
+### 命名（项目特有部分）
 
-## 错误处理
+- 包：`com.skillforge.<module>.<layer>`（如 `com.skillforge.server.service`）
+- Entity 类名后缀 `Entity`（`SessionEntity`）；Repository 接口后缀 `Repository`（`SessionRepository`）
+- DTO 的 Request/Response 类加后缀（`ChatRequest` / `ChatResponse`）
+- 其余 PascalCase/camelCase/常量等通用命名见 [`java/coding-style.md`](java/coding-style.md)
 
-- 域错误抛 `RuntimeException` 子类（unchecked），不要 checked exception
-- 创建语义明确的异常类：`SessionNotFoundException`, `AgentNotFoundException` 等
-- Controller / WebSocket handler 层统一 catch，返回结构化错误响应，**不暴露** stack trace 给客户端
-- 日志记录用 SLF4J：`private static final Logger log = LoggerFactory.getLogger(Xxx.class);`
+### 错误处理（项目特有部分）
 
-```java
-// Domain exception
-public class SessionNotFoundException extends RuntimeException {
-    public SessionNotFoundException(String id) {
-        super("Session not found: " + id);
-    }
-}
+- 域错误用语义明确的异常类：`SessionNotFoundException` / `AgentNotFoundException` 等
+- **WebSocket handler 层**与 Controller 一样统一 catch、返回结构化错误、不暴露 stack trace
+- 日志用 SLF4J：`private static final Logger log = LoggerFactory.getLogger(Xxx.class);`
+- 通用 unchecked/handler 边界规范见 [`java/coding-style.md`](java/coding-style.md) + [`java/security.md`](java/security.md)
 
-// Service 层抛
-public SessionEntity getSession(String id) {
-    return sessionRepository.findById(id)
-            .orElseThrow(() -> new SessionNotFoundException(id));
-}
-```
+### 安全（项目高危点）
 
----
+- 用户输入（**Tool 参数、Chat 内容**）在执行系统命令前必须校验，防命令注入（Bash 等 Tool 高危）
+- 日志**不打印** API Key、用户 token、**会话内容**等敏感信息
+- 通用 secrets / SQL 注入 / 输入校验见 [`java/security.md`](java/security.md)
 
-## Optional 使用规则
+### 测试（项目特有部分）
 
-- Repository `findBy*` 方法返回 `Optional<T>`
-- 用 `.orElseThrow()` 而不是 `.get()`（不先 `isPresent()` 就 `get()` 是 NPE 定时炸弹）
-- 不要把 `Optional` 用作字段类型或方法参数
-
----
-
-## 安全规范
-
-- API Key / 密钥从环境变量或 `application.yml` 读取，**绝不硬编码**
-- 日志中不打印 API Key、用户 token、会话内容等敏感信息
-- 用户输入（Tool 参数、Chat 内容）在执行系统命令前必须校验，防止命令注入
-- JPQL / 原生 SQL 使用参数化查询，禁止字符串拼接
-
----
-
-## 测试规范
-
-- 测试框架：JUnit 5 + Mockito + AssertJ
-- 测试命名：`methodName_scenario_expectedBehavior()`，加 `@DisplayName` 说明
-- 单元测试用 `@ExtendWith(MockitoExtension.class)`，构造器注入依赖 Mock
-- Spring Boot 集成测试用 `@SpringBootTest`，数据库测试优先用 H2（项目默认配置）
-- 测试包结构镜像 `src/main/java`
-
-```java
-@ExtendWith(MockitoExtension.class)
-class SessionServiceTest {
-
-    @Mock
-    private SessionRepository sessionRepository;
-
-    private SessionService sessionService;
-
-    @BeforeEach
-    void setUp() {
-        sessionService = new SessionService(sessionRepository, ...);
-    }
-
-    @Test
-    @DisplayName("getSession throws when session not found")
-    void getSession_notFound_throws() {
-        when(sessionRepository.findById("x")).thenReturn(Optional.empty());
-        assertThatThrownBy(() -> sessionService.getSession("x"))
-                .isInstanceOf(SessionNotFoundException.class);
-    }
-}
-```
+- Spring Boot 集成测试用 `@SpringBootTest`，数据库测试用项目默认 **H2**（注意 H2 vs PostgreSQL 行为差异，见 [`systematic-debugging.md`](systematic-debugging.md)）
+- 通用 JUnit5 + Mockito + AssertJ + AAA + 命名 + 80% coverage 见 [`java/testing.md`](java/testing.md)

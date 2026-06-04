@@ -1,3 +1,11 @@
+---
+paths:
+  - "**/*.tsx"
+  - "**/*.ts"
+  - "**/*.jsx"
+  - "**/*.js"
+  - "**/*.css"
+---
 > This file extends [common/performance.md](../common/performance.md) with web-specific performance content.
 
 > **SkillForge override (2026-04-30)**：本文件主要面向 marketing 公网站。SkillForge 是后台 dashboard（用户登录后才用），**仅以下章节适用**：

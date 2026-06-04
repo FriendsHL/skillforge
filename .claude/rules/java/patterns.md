@@ -140,6 +140,8 @@ public record ApiResponse<T>(boolean success, T data, String error) {
 }
 ```
 
+> **⚠️ SkillForge 注意**：本项目现有 Controller **并非统一用信封**，存在裸 `List` / 裸单对象 / `Map` envelope 混用。新增端点前务必跟前端确认 outer shape —— 信封与裸返回混用是已踩过的坑（FE 把 envelope 当裸 array 用导致 `[...runs]` 崩）。详见 [`java.md`](../java.md) footgun #6 / #6b 的 4 步 grep + envelope + roundtrip + 真活 curl 验证清单。不要因为本文推荐信封就盲目把现有裸返回端点改成信封。
+
 ## References
 
 See skill: `springboot-patterns` for Spring Boot architecture patterns.
