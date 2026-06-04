@@ -280,7 +280,7 @@ skillforge:
     login-timeout-seconds: 300
   # LLM provider configs
   llm:
-    default-provider: ark  # 2026-06-02: 切到火山方舟（mimo 429 限流严重）。default-provider 决定 eval judge 的 provider；ark 默认 model 用 doubao-seed-2.0-lite（非推理、maxTokens=16 能返数字，judge 打分需要）。原 xiaomi-mimo。
+    default-provider: xiaomi-mimo  # 2026-06-05: 切回小米 mimo（ark 5h 用量配额耗尽、且新 key 已充值）。default-provider 决定 GenerateCandidate(PromptImproverService) + eval judge 等走默认 provider 的组件。注：judge 用推理模型 mimo 需 maxTokens 足够（否则 reasoning 烧空 content）；收割错题是确定性 oracle 不调 LLM。原 ark(doubao-seed-2.0-lite)，更早 xiaomi-mimo。
     providers:
       claude:
         type: claude
