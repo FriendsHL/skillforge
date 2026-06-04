@@ -218,10 +218,30 @@ harvest service / 行为 oracle / 任何 prompt / 本设计文档 **只描述通
 **诚实边界**：harvest 的"真 bad case 重建"由**代表性 span 单测**覆盖（4 case：Read 重建 / Write 重建 / 无内容跳过 / 非失败 span 跳过）；**未做活体跑真 DB session 出场景**——M1 按 scope 不含触发 endpoint（harvest=service 方法 + draft 人 gate，activate/触发留 M2）。"真文件零触碰"已结构性坐实：harvest 纯 DB 读 + 写 draft 行，无任何文件系统写；沙箱写 fixture 已加 path-traversal 防护。
 
 ### BC-M2 范围 + 本期遗留 backlog
-**BC-M2（鲁棒 + 集成，下一期 Full）**：
-- **多轮复发率**：`oracleExpected.rounds=N`（默认 5），AbEvalPipeline 跑 N 轮取复发率 → outcomeScore=(1−率)*100。
-- **oracle do-nothing soundness 真修**（design-W3，**M2 必做**）：当前行为 oracle 量"错误签名缺席"非"任务成功"——啥都不干/不调 Edit 也判 PASS。M2 必须配**任务完成度**（+ 多轮）收敛，否则 evolve 把它当 target 时"回归成不编辑"会被记成进步。已在 `computeToolErrorAbsenceScore` javadoc 标注 limitation。
-- **Grep 类收割** + **显式 scenario-id target split**（恢复 P2-b G1：扩 `AgentEvolveAbEvalService.resolveRoleSplit`）+ **orchestrator 接线**（evolve 自动收割/对靶）+ **activate endpoint/UI**（draft→active 人 gate 落地）+ dashboard 展示收割场景。
+**BC-M2 拆两子期**（M2 全做太大，按"先把测量做对、再接进 evolve"切）：
+
+#### BC-M2a — oracle 测量正确性（本期，Mid）
+1. **oracle do-nothing soundness 真修**（design-W3，**最高优先**）：当前行为 oracle 只判"错误签名缺席"——啥都不干/不调 Edit 也 PASS → evolve 把它当 target 时"回归成不编辑"被记成进步。
+   - **oracle v2（结果型，盲测安全）**：pass = **(目标工具被成功调用过 = 任务有 engagement) AND (错误签名未复发)**。
+     - 啥都不干（目标工具没调）→ 不 pass ✓ 关闭 gap
+     - 调了目标工具但出错签名 → 不 pass ✓（失败）
+     - 调了目标工具且无错签名 → pass ✓（成功完成那次编辑）
+   - **仍是结果型**：只说"在该文件上无错完成一次目标工具操作"，**不说 HOW**（修法仍留给 loop）。**盲测安全**。
+   - **考虑 path-scope**：engagement 应限定在收割失败的那个 file_path（防 agent 去改别的 trivial 文件刷过）。dev + reviewer 定要不要 path-scope。
+2. **多轮复发率**：`oracleExpected.rounds=N`（默认 5）；AbEvalPipeline 对行为 oracle 场景跑 N 轮 → 复发率 = 命中轮数/N → outcomeScore=(1−率)*100；efficiency 取 N 轮均值；composite 沿用 0.7/0.3。
+   - **⚠️ temp=0 caveat（诚实）**：eval 强制 temp=0，N 轮可能近确定性 → 复发率退化成 0/1（不平滑）。多轮的价值在于**捕捉跨轮残余非确定性**（provider 采样 / 工具顺序）；确定性时退化成 0/1 也仍正确（只是不平滑）。值得做（用户 D-2 明确要复发率口径），但别期待平滑率。
+   - 范围：AbEvalPipeline 多轮执行 + 聚合（核心 A/B 执行语义，bug 会静默污染所有 evolve 信号 → review 重点）。
+   - 档位 **Mid**（无 migration，rounds 在 oracleExpected JSON；AbEvalPipeline 非"核心文件清单"项）；reviewer 若发现多轮聚合架构硬伤 → 升 Full。java-reviewer + java-design-reviewer（oracle soundness 是设计判断）。
+
+   **✅ BC-M2a 已交付（Mid，commit 待填）**：oracle v2（engagement + path-scope + 无错签名）+ 多轮复发率（rounds 默认 5，缺省退化单轮）+ 抽 `BehavioralOracleCriteria` record 单点解析（消除判据 JSON 跨模块两处解析）。java + java-design reviewer **全 PASS 0 blocker**（含盲测结构性审查通过——oracle v2 仍结果型）。warning 一轮修（删 DEFAULT_BEHAVIORAL_ROUNDS 死常量 + BehavioralOracleCriteria record + infra 轮 efficiency 也归 0 闭合 inflation + representative 注释）。验证：全模块 **2694/0/0** BUILD SUCCESS。**temp=0 caveat 仍在**（多轮率可能退化 0/1，已 javadoc 标注，不加扰动）。
+
+#### BC-M2b — 接进 evolve 端到端（下一期，Full）
+- **Grep 类收割**（扩 BadCaseHarvestService + 确认 SandboxedGrepTool 对 path=文件复现 "Path is not a directory"）
+- **activate endpoint/UI**（draft→active 人 gate 落地）
+- **显式 scenario-id target split**（恢复 P2-b G1：扩 `AgentEvolveAbEvalService.resolveRoleSplit` 支持显式 id 列表作 target）
+- **orchestrator 接线**（evolve 自动收割/对靶收割场景）
+- dashboard 展示收割场景
+- **做完 M2b**：evolve 才可能出真赢家 → P1 采纳有东西可采 → read-before-edit 盲测 loop 内可验。
 
 **本期遗留 backlog（小，非 M2 主线）**：
 - `extractFirstUserPrompt` 与 `SkillCreatorService` 重复 → 抽 `SessionMessageJson` util 共用（碰 scope-out 文件，专门 refactor 或 M2 顺带）。

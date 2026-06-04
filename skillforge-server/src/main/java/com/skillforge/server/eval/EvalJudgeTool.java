@@ -31,8 +31,10 @@ public class EvalJudgeTool {
      * BC-M1: deterministic behavioral oracle — scores on a tool-error signature,
      * never calls the LLM. Single source of truth shared by the {@code switch}
      * case and the meta-judge skip gate (see {@link #isDeterministicOracle}).
+     * Public so the A/B pipeline can detect behavioral-oracle scenarios for the
+     * BC-M2a multi-round path without re-declaring the literal.
      */
-    static final String ORACLE_TYPE_TOOL_ERROR_ABSENCE = "tool_error_absence";
+    public static final String ORACLE_TYPE_TOOL_ERROR_ABSENCE = "tool_error_absence";
 
     private final LlmProviderFactory llmProviderFactory;
     private final AttributionEngine attributionEngine;
@@ -297,27 +299,37 @@ public class EvalJudgeTool {
     }
 
     /**
-     * AUTOEVOLVE-CLOSE-LOOP Phase BC-M1 — deterministic behavioral oracle.
+     * AUTOEVOLVE-CLOSE-LOOP Phase BC-M2a — deterministic behavioral oracle (v2).
      *
-     * <p>Scans the run's tool calls for a failure signature and scores on its
-     * presence/absence. The criteria JSON lives in {@code oracle.expected}:
-     * <pre>{@code {"tool":"Edit","errorSignature":"old_string not found","passWhen":"no_match"}}</pre>
-     * A tool call "recurs" the signature when it failed ({@code !isSuccess()}),
-     * its tool name equals {@code tool}, and its output contains
-     * {@code errorSignature}. With the default {@code passWhen=no_match}: no
-     * recurrence → 100, recurrence → 0 (and vice-versa for {@code match}).
+     * <p>Scores a run on TWO outcome facts, both read off the run's recorded tool
+     * calls. The criteria JSON lives in {@code oracle.expected}:
+     * <pre>{@code {"tool":"Edit","errorSignature":"old_string not found","passWhen":"no_match","filePath":"path/to/File.java"}}</pre>
+     * <ul>
+     *   <li><b>engagement</b> — the named {@code tool} was invoked at least once
+     *       AND that invocation succeeded ({@code isSuccess()}). Optional
+     *       {@code filePath} (sandbox-relative) further requires the successful
+     *       call to target that file (see {@link #targetToolEngaged}).</li>
+     *   <li><b>recurrence</b> — a FAILED call of {@code tool} whose output
+     *       contains {@code errorSignature} (see {@link #signatureRecurred}).</li>
+     * </ul>
+     * With the default {@code passWhen=no_match} the run PASSES (100) iff it both
+     * engaged the target tool successfully AND did not reproduce the signature;
+     * anything else — including a do-nothing run that never engaged the tool —
+     * scores 0. This closes the BC-M1 soundness gap where a run that called no
+     * tools at all scored PASS purely from signature absence.
+     *
+     * <p>{@code passWhen=match} is a diagnostic mode (assert the failure
+     * reproduces); it keeps the BC-M1 presence semantics (pass iff recurred) and
+     * does NOT require engagement, since a reproducing run necessarily exercised
+     * the tool.
      *
      * <p>Purely mechanical — NO LLM call — so it is cheap and reproducible.
-     * Returns 0.0 on any parse problem (treated as "could not confirm absence").
+     * Returns 0.0 on any parse problem (treated as "could not confirm success").
      *
-     * <p><b>Limitation — measures signature ABSENCE, not task success.</b> This
-     * oracle only asks "did the named tool fail with this error signature?" It
-     * does NOT assess whether the agent actually accomplished the task. A run
-     * that calls no tools at all — or does nothing useful — produces no matching
-     * signature and therefore scores PASS. BC-M1 uses this single-shot signature
-     * check to prove the failure reproduces; M2 converges it with a multi-round
-     * recurrence rate plus a task-completion dimension so a do-nothing run can no
-     * longer trivially pass.
+     * <p><b>Result-type only.</b> The oracle describes WHAT a successful run looks
+     * like ("complete one signature-free operation with the target tool on the
+     * target file"); it deliberately encodes nothing about HOW the agent should
+     * get there — that is left for the evolve loop to discover.
      */
     private double computeToolErrorAbsenceScore(EvalScenario.ScenarioOracle oracle,
                                                 ScenarioRunResult runResult) {
@@ -326,30 +338,73 @@ public class EvalJudgeTool {
             log.warn("tool_error_absence oracle missing expected criteria JSON");
             return 0.0;
         }
-        String tool;
-        String errorSignature;
-        String passWhen;
-        try {
-            JsonNode root = objectMapper.readTree(criteriaJson);
-            tool = root.path("tool").asText(null);
-            errorSignature = root.path("errorSignature").asText(null);
-            passWhen = root.path("passWhen").asText("no_match");
-        } catch (Exception e) {
-            log.warn("tool_error_absence oracle expected was not valid JSON: {}", e.getMessage());
-            return 0.0;
-        }
-        if (errorSignature == null || errorSignature.isBlank()) {
-            log.warn("tool_error_absence oracle missing errorSignature");
+        BehavioralOracleCriteria criteria = BehavioralOracleCriteria.parse(criteriaJson, objectMapper);
+        if (criteria.errorSignature() == null || criteria.errorSignature().isBlank()) {
+            // Missing signature (or unparseable criteria JSON, which parse() degrades
+            // to all-default with a null signature): cannot confirm success → 0.
+            log.warn("tool_error_absence oracle missing/invalid errorSignature");
             return 0.0;
         }
 
-        boolean recurred = signatureRecurred(runResult.getToolCalls(), tool, errorSignature);
-        boolean wantMatch = "match".equalsIgnoreCase(passWhen);
-        // pass when recurrence matches the desired condition:
-        //   passWhen=no_match → pass iff !recurred
-        //   passWhen=match    → pass iff recurred
-        boolean pass = wantMatch == recurred;
-        return pass ? 100.0 : 0.0;
+        boolean recurred = signatureRecurred(runResult.getToolCalls(), criteria.tool(), criteria.errorSignature());
+        if ("match".equalsIgnoreCase(criteria.passWhen())) {
+            // Diagnostic mode: pass iff the signature reproduced. No engagement
+            // gate — a reproducing run already exercised the tool.
+            return recurred ? 100.0 : 0.0;
+        }
+        // Default no_match: pass iff the agent successfully engaged the target
+        // tool AND did not reproduce the failure signature. A do-nothing run
+        // (no successful target-tool call) fails the engagement check → 0.
+        boolean engaged = targetToolEngaged(runResult.getToolCalls(), criteria.tool(), criteria.filePath());
+        return (engaged && !recurred) ? 100.0 : 0.0;
+    }
+
+    /**
+     * BC-M2a engagement check: returns true when at least one SUCCESSFUL tool call
+     * names {@code tool} and — when {@code filePath} is supplied — targets that
+     * file. A null/blank {@code tool} matches any successful call.
+     *
+     * <p><b>Path-scope (optional, more strict).</b> When the oracle carries a
+     * sandbox-relative {@code filePath}, engagement only counts when the
+     * successful call's {@code file_path} input resolves to that file. This
+     * prevents a run from "passing" by successfully editing some other trivial
+     * file it created instead of the harvested target. At run time the harvested
+     * fixture path is rebased under the per-run sandbox root, so the recorded
+     * {@code file_path} is an absolute path ending in the relative
+     * {@code filePath}; we therefore match by path suffix at a path boundary
+     * rather than by equality (see {@link #pathTargets}).
+     */
+    private static boolean targetToolEngaged(List<com.skillforge.core.engine.ToolCallRecord> toolCalls,
+                                             String tool, String filePath) {
+        if (toolCalls == null) return false;
+        for (com.skillforge.core.engine.ToolCallRecord record : toolCalls) {
+            if (record == null || !record.isSuccess()) continue;
+            if (tool != null && !tool.isBlank() && !tool.equals(record.getSkillName())) continue;
+            if (filePath != null && !filePath.isBlank() && !pathTargets(record.getInput(), filePath)) {
+                continue;
+            }
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Returns true when the tool input's {@code file_path} resolves to the
+     * oracle's sandbox-relative {@code filePath}. Separator-normalized; matches
+     * on equality or on a {@code "/" + filePath} suffix so the runtime
+     * sandbox-root prefix (added when the fixture is materialized) is ignored
+     * without matching an unrelated file whose name merely ends the same way.
+     */
+    private static boolean pathTargets(java.util.Map<String, Object> input, String filePath) {
+        if (input == null) return false;
+        Object raw = input.get("file_path");
+        if (!(raw instanceof String actual) || actual.isBlank()) return false;
+        String normActual = actual.replace('\\', '/');
+        String normExpected = filePath.replace('\\', '/');
+        while (normExpected.startsWith("/")) {
+            normExpected = normExpected.substring(1);
+        }
+        return normActual.equals(normExpected) || normActual.endsWith("/" + normExpected);
     }
 
     /**

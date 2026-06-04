@@ -111,6 +111,10 @@ class BadCaseHarvestServiceTest {
             assertThat(oracle.path("tool").asText()).isEqualTo("Edit");
             assertThat(oracle.path("errorSignature").asText()).isEqualTo("old_string not found");
             assertThat(oracle.path("passWhen").asText()).isEqualTo("no_match");
+            // BC-M2a: path-scope the engagement check to the harvested target file,
+            // and measure over multiple rounds (recurrence rate).
+            assertThat(oracle.path("filePath").asText()).isEqualTo("skillforge-core/Foo.java");
+            assertThat(oracle.path("rounds").asInt()).isEqualTo(5);
         } catch (Exception e) {
             throw new AssertionError("oracleExpected not valid JSON", e);
         }

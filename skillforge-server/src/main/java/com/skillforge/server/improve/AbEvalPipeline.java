@@ -15,6 +15,7 @@ import com.skillforge.server.entity.EvalScenarioEntity;
 import com.skillforge.server.entity.EvalTaskEntity;
 import com.skillforge.server.entity.PromptAbRunEntity;
 import com.skillforge.server.entity.PromptVersionEntity;
+import com.skillforge.server.eval.BehavioralOracleCriteria;
 import com.skillforge.server.eval.EvalEngineFactory;
 import com.skillforge.server.eval.EvalJudgeOutput;
 import com.skillforge.server.eval.EvalJudgeTool;
@@ -278,8 +279,9 @@ public class AbEvalPipeline {
                         scenario.getId());
             }
             try {
-                ScenarioRunResult runResult = runSingleScenario(abRun.getId(), scenario, candidateDef);
-                EvalJudgeOutput judgeOutput = evalJudgeTool.judge(scenario, runResult);
+                JudgedRun judged = runAndJudge(abRun.getId(), scenario, candidateDef, false);
+                ScenarioRunResult runResult = judged.runResult();
+                EvalJudgeOutput judgeOutput = judged.judgeOutput();
 
                 // Look up baseline status for this scenario
                 String baselineStatus = lookupBaselineStatus(baselineRun, scenario.getId());
@@ -540,20 +542,22 @@ public class AbEvalPipeline {
                     if (skipBaseline) {
                         baselineResult = new AbScenarioResult.RunResult(BASELINE_CACHED_STATUS, 0.0);
                     } else {
-                        ScenarioRunResult baselineRun = runSingleScenario(
-                                abRun.getId() + "-baseline", scenario, baselineDef);
+                        JudgedRun baselineJudged = runAndJudge(
+                                abRun.getId() + "-baseline", scenario, baselineDef, true);
+                        ScenarioRunResult baselineRun = baselineJudged.runResult();
                         // Option B: explain=true → judge also emits a per-case rationale.
-                        EvalJudgeOutput baselineJudge = evalJudgeTool.judge(scenario, baselineRun, true);
+                        EvalJudgeOutput baselineJudge = baselineJudged.judgeOutput();
                         // Reflection: keep the judge's per-scenario reasoning so the
                         // evolve-editor can see WHY this case scored as it did.
                         baselineResult = new AbScenarioResult.RunResult(
                                 baselineRun.getStatus(), baselineJudge.getCompositeScore(),
                                 baselineJudge.getMetaJudgeRationale());
                     }
-                    ScenarioRunResult candidateRun = runSingleScenario(
-                            abRun.getId() + "-candidate", scenario, candidateDef);
+                    JudgedRun candidateJudged = runAndJudge(
+                            abRun.getId() + "-candidate", scenario, candidateDef, true);
+                    ScenarioRunResult candidateRun = candidateJudged.runResult();
                     // Option B: explain=true → judge also emits a per-case rationale.
-                    EvalJudgeOutput candidateJudge = evalJudgeTool.judge(scenario, candidateRun, true);
+                    EvalJudgeOutput candidateJudge = candidateJudged.judgeOutput();
 
                     return new AbScenarioResult(
                             scenario.getId(), scenario.getName(),
@@ -743,10 +747,12 @@ public class AbEvalPipeline {
             }
             CompletableFuture<AbScenarioResult> fut = CompletableFuture.supplyAsync(() -> {
                 try {
-                    ScenarioRunResult bRun = runSingleScenario(abRunId + ":b", scenario, bEval);
-                    EvalJudgeOutput bJudge = evalJudgeTool.judge(scenario, bRun);
-                    ScenarioRunResult cRun = runSingleScenario(abRunId + ":c", scenario, cEval);
-                    EvalJudgeOutput cJudge = evalJudgeTool.judge(scenario, cRun);
+                    JudgedRun bJudged = runAndJudge(abRunId + ":b", scenario, bEval, false);
+                    ScenarioRunResult bRun = bJudged.runResult();
+                    EvalJudgeOutput bJudge = bJudged.judgeOutput();
+                    JudgedRun cJudged = runAndJudge(abRunId + ":c", scenario, cEval, false);
+                    ScenarioRunResult cRun = cJudged.runResult();
+                    EvalJudgeOutput cJudge = cJudged.judgeOutput();
                     return new AbScenarioResult(
                             scenario.getId(), scenario.getName(),
                             new AbScenarioResult.RunResult(bRun.getStatus(), bJudge.getCompositeScore()),
@@ -870,14 +876,16 @@ public class AbEvalPipeline {
                         // baseline (same sentinel as runWithScenarios BUG-1 path).
                         baselineResult = new AbScenarioResult.RunResult(BASELINE_CACHED_STATUS, 0.0);
                     } else {
-                        ScenarioRunResult bRun = runSingleScenario(abRunId + ":b", scenario, bEval);
-                        EvalJudgeOutput bJudge = evalJudgeTool.judge(scenario, bRun, explain);
+                        JudgedRun bJudged = runAndJudge(abRunId + ":b", scenario, bEval, explain);
+                        ScenarioRunResult bRun = bJudged.runResult();
+                        EvalJudgeOutput bJudge = bJudged.judgeOutput();
                         baselineResult = new AbScenarioResult.RunResult(
                                 bRun.getStatus(), bJudge.getCompositeScore(), bJudge.getMetaJudgeRationale());
                     }
-                    ScenarioRunResult cRun = runSingleScenario(
-                            abRunId + ":c", scenario, cEval, candidateExtraSkills);
-                    EvalJudgeOutput cJudge = evalJudgeTool.judge(scenario, cRun, explain);
+                    JudgedRun cJudged = runAndJudge(
+                            abRunId + ":c", scenario, cEval, explain, candidateExtraSkills);
+                    ScenarioRunResult cRun = cJudged.runResult();
+                    EvalJudgeOutput cJudge = cJudged.judgeOutput();
                     return new AbScenarioResult(
                             scenario.getId(), scenario.getName(),
                             baselineResult,
@@ -947,6 +955,181 @@ public class AbEvalPipeline {
     private ScenarioRunResult runSingleScenario(String abRunId, EvalScenario scenario,
                                                  AgentDefinition candidateDef) {
         return runSingleScenario(abRunId, scenario, candidateDef, List.of());
+    }
+
+    /** Pairs the aggregated run + judge so the multi-round and single-round paths return the same shape. */
+    private record JudgedRun(ScenarioRunResult runResult, EvalJudgeOutput judgeOutput) {}
+
+    private static boolean isBehavioralOracle(EvalScenario scenario) {
+        return scenario != null && scenario.getOracle() != null
+                && EvalJudgeTool.ORACLE_TYPE_TOOL_ERROR_ABSENCE.equals(scenario.getOracle().getType());
+    }
+
+    /**
+     * BC-M2a: resolve the behavioral-oracle repeat count via the shared
+     * {@link BehavioralOracleCriteria} parser. The default is <b>1</b> (single
+     * round — keeps BC-M1 behavioral scenarios byte-compatible) when {@code rounds}
+     * is absent/&le;1 or the criteria JSON is unparseable; the production default
+     * of <b>5</b> is NOT defined here — it is written into {@code oracle.expected}
+     * by {@code BadCaseHarvestService.DEFAULT_HARVEST_ROUNDS} when a scenario is
+     * harvested, so the read side simply honours whatever the JSON carries.
+     * Non-behavioral scenarios never reach here (guarded by {@link #isBehavioralOracle}).
+     */
+    static int resolveBehavioralRounds(ObjectMapper objectMapper, EvalScenario scenario) {
+        return BehavioralOracleCriteria.parse(scenario.getOracle().getExpected(), objectMapper).rounds();
+    }
+
+    /**
+     * BC-M2a: run + judge a scenario, applying the multi-round recurrence-rate
+     * aggregation for behavioral oracles whose {@code rounds >= 2}; single-round
+     * run + judge for everything else (byte-identical to the prior code path).
+     *
+     * <p>Centralizes the run+judge pair so every A/B caller (held-out, prompt,
+     * behavior_rule, agent-level bundle) gets the same multi-round semantics
+     * without duplicating the loop.
+     */
+    private JudgedRun runAndJudge(String abRunId, EvalScenario scenario, AgentDefinition def,
+                                  boolean explain, List<SkillDefinition> extraSkills) {
+        if (isBehavioralOracle(scenario)) {
+            int rounds = resolveBehavioralRounds(objectMapper, scenario);
+            if (rounds > 1) {
+                return runMultiRoundBehavioral(abRunId, scenario, def, rounds, extraSkills);
+            }
+        }
+        ScenarioRunResult run = runSingleScenario(abRunId, scenario, def, extraSkills);
+        EvalJudgeOutput judge = evalJudgeTool.judge(scenario, run, explain);
+        return new JudgedRun(run, judge);
+    }
+
+    private JudgedRun runAndJudge(String abRunId, EvalScenario scenario, AgentDefinition def, boolean explain) {
+        return runAndJudge(abRunId, scenario, def, explain, List.of());
+    }
+
+    /**
+     * BC-M2a multi-round recurrence rate. Runs the behavioral-oracle scenario
+     * {@code rounds} times in independent sandboxes (each round's
+     * {@link #runSingleScenario} builds and cleans up its own sandbox dir, keyed
+     * by a per-round {@code abRunId} suffix), judges each round with the
+     * deterministic oracle, and aggregates:
+     * <ul>
+     *   <li>outcome = mean of per-round outcome scores = (clean rounds / N) * 100,
+     *       so the recurrence/no-engagement rate is {@code (N - clean)/N}.</li>
+     *   <li>efficiency = mean of per-round efficiency scores.</li>
+     *   <li>composite = 0.7*outcome + 0.3*efficiency; pass when composite &gt;= 40
+     *       (same weights/threshold as the single-round judge).</li>
+     * </ul>
+     * A round whose run ERROR/TIMEOUT-ed contributes 0 to BOTH the outcome AND the
+     * efficiency mean (forced here, not relied upon from the judge): otherwise a
+     * fast-but-broken infra round could keep efficiency high and push a mostly-
+     * infra batch over the pass threshold. When EVERY round is infra the aggregate
+     * is surfaced as ERROR so the EVAL-429 robustness denominator excludes the
+     * scenario rather than recording a misleading behavioral FAIL.
+     *
+     * <p><b>temp=0 caveat (accepted, by design).</b> Eval forces temperature=0, so
+     * the N rounds are near-deterministic and the rate often degenerates to 0/1
+     * rather than a smooth fraction. That is correct (0/1 is the right answer when
+     * the behavior is deterministic); the multi-round pass only captures whatever
+     * residual cross-round nondeterminism exists (provider sampling / tool
+     * ordering). We deliberately add NO temperature perturbation or randomness to
+     * "smooth" the rate.
+     */
+    private JudgedRun runMultiRoundBehavioral(String abRunId, EvalScenario scenario,
+                                              AgentDefinition def, int rounds,
+                                              List<SkillDefinition> extraSkills) {
+        List<EvalJudgeOutput> perRound = new ArrayList<>(rounds);
+        int infraRounds = 0;
+        ScenarioRunResult representative = null;
+        for (int i = 0; i < rounds; i++) {
+            ScenarioRunResult run = runSingleScenario(abRunId + "-r" + i, scenario, def, extraSkills);
+            // Deterministic behavioral oracle → explain=false (no per-round LLM rationale).
+            EvalJudgeOutput judge = evalJudgeTool.judge(scenario, run, false);
+            if ("ERROR".equals(run.getStatus()) || "TIMEOUT".equals(run.getStatus())) {
+                infraRounds++;
+                // Force an infra round to contribute 0 to both means by construction,
+                // so the aggregate never depends on judge() internals zeroing efficiency.
+                perRound.add(zeroRound());
+            } else {
+                perRound.add(judge);
+            }
+            // representative = last round, used ONLY for display fields on the aggregate
+            // ScenarioRunResult (loopCount / toolCalls / executionTimeMs). The scores
+            // come from aggregateBehavioralRounds below, NOT from this single round.
+            representative = run;
+        }
+
+        if (infraRounds == rounds) {
+            EvalJudgeOutput errOut = new EvalJudgeOutput();
+            errOut.setOutcomeScore(0.0);
+            errOut.setEfficiencyScore(0.0);
+            errOut.setCompositeScore(0.0);
+            errOut.setPass(false);
+            errOut.setMetaJudgeRationale("Behavioral oracle multi-round: all " + rounds
+                    + " rounds errored/timed out (infra) — excluded from pass-rate denominator.");
+            return new JudgedRun(
+                    ScenarioRunResult.error(scenario.getId(), rounds + " behavioral rounds all infra-failed"),
+                    errOut);
+        }
+
+        EvalJudgeOutput out = aggregateBehavioralRounds(perRound);
+        ScenarioRunResult agg = new ScenarioRunResult();
+        agg.setScenarioId(scenario.getId());
+        agg.setStatus(out.isPass() ? "PASS" : "FAIL");
+        agg.setOracleScore(out.getCompositeScore());
+        if (representative != null) {
+            agg.setLoopCount(representative.getLoopCount());
+            agg.setExecutionTimeMs(representative.getExecutionTimeMs());
+            agg.setToolCalls(representative.getToolCalls());
+            agg.setToolCallCount(representative.getToolCallCount());
+        }
+        return new JudgedRun(agg, out);
+    }
+
+    /**
+     * BC-M2a pure aggregation of per-round behavioral-oracle outputs into a single
+     * judge output: outcome = mean of per-round outcomes (= clean-round fraction
+     * * 100, since each per-round outcome is a hard 0/100), efficiency = mean of
+     * per-round efficiency, composite = 0.7*outcome + 0.3*efficiency, pass when
+     * composite &gt;= 40. Package-private and side-effect free so the recurrence-
+     * rate mapping is unit-testable without spinning up the eval engine.
+     *
+     * @param perRound non-empty list of per-round judge outputs
+     */
+    /** A round output that contributes 0 to both the outcome and efficiency means (infra rounds). */
+    private static EvalJudgeOutput zeroRound() {
+        EvalJudgeOutput o = new EvalJudgeOutput();
+        o.setOutcomeScore(0.0);
+        o.setEfficiencyScore(0.0);
+        o.setCompositeScore(0.0);
+        o.setPass(false);
+        return o;
+    }
+
+    static EvalJudgeOutput aggregateBehavioralRounds(List<EvalJudgeOutput> perRound) {
+        int n = perRound.size();
+        double outcomeSum = 0.0;
+        double efficiencySum = 0.0;
+        int cleanRounds = 0;
+        for (EvalJudgeOutput o : perRound) {
+            outcomeSum += o.getOutcomeScore();
+            efficiencySum += o.getEfficiencyScore();
+            if (o.getOutcomeScore() >= 100.0) cleanRounds++;
+        }
+        double outcomeMean = outcomeSum / n;
+        double efficiencyMean = efficiencySum / n;
+        double composite = 0.7 * outcomeMean + 0.3 * efficiencyMean;
+        boolean pass = composite >= 40.0;
+
+        EvalJudgeOutput out = new EvalJudgeOutput();
+        out.setOutcomeScore(outcomeMean);
+        out.setEfficiencyScore(efficiencyMean);
+        out.setCompositeScore(composite);
+        out.setPass(pass);
+        double rate = (1.0 - (double) cleanRounds / n) * 100.0;
+        out.setMetaJudgeRationale(String.format(
+                "Behavioral oracle multi-round: %d/%d rounds completed a clean signature-free target-tool "
+                + "operation (recurrence/no-engagement rate %.0f%%); composite %.1f.",
+                cleanRounds, n, rate, composite));
+        return out;
     }
 
     /**

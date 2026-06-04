@@ -66,6 +66,12 @@ public class BadCaseHarvestService {
     /** Eval sandbox task-path prefix; runSingleScenario rewrites this to the sandbox root. */
     private static final String EVAL_TASK_PREFIX = "/tmp/eval/";
 
+    /**
+     * BC-M2a: harvested behavioral oracles are measured over this many rounds so
+     * the A/B pass-rate reflects a recurrence rate rather than a single shot.
+     */
+    private static final int DEFAULT_HARVEST_ROUNDS = 5;
+
     private final LlmSpanRepository spanRepository;
     private final SessionRepository sessionRepository;
     private final EvalScenarioDraftRepository scenarioRepository;
@@ -185,7 +191,7 @@ public class BadCaseHarvestService {
         String relativePath = rebaseToRelative(absPath);
         String rebasedTask = firstUserPrompt.replace(repoRoot, EVAL_TASK_PREFIX);
         String errorSignature = deriveSignature(failing.getError());
-        String oracleExpected = buildOracleExpected(errorSignature);
+        String oracleExpected = buildOracleExpected(errorSignature, relativePath);
         if (oracleExpected == null) {
             log.warn("harvestEditStaleCase: failed to encode oracle JSON for session {} — skipping", sessionId);
             return Optional.empty();
@@ -289,11 +295,27 @@ public class BadCaseHarvestService {
         return firstLine.length() > 80 ? firstLine.substring(0, 80) : firstLine;
     }
 
-    private String buildOracleExpected(String errorSignature) {
-        Map<String, String> oracle = new LinkedHashMap<>();
+    /**
+     * Build the behavioral oracle criteria JSON. Beyond the BC-M1 fields it adds:
+     * <ul>
+     *   <li>{@code filePath} (BC-M2a path-scope) — the sandbox-relative target
+     *       file, so the engagement check only credits a successful operation on
+     *       the harvested file (not some other file the agent created).</li>
+     *   <li>{@code rounds} (BC-M2a multi-round) — repeat the scenario this many
+     *       times and score on the recurrence rate.</li>
+     * </ul>
+     * Both fields describe WHAT a successful run looks like (the target file, how
+     * many times to measure), never HOW to achieve it.
+     */
+    private String buildOracleExpected(String errorSignature, String relativePath) {
+        Map<String, Object> oracle = new LinkedHashMap<>();
         oracle.put("tool", EDIT_TOOL);
         oracle.put("errorSignature", errorSignature);
         oracle.put("passWhen", "no_match");
+        if (relativePath != null && !relativePath.isBlank()) {
+            oracle.put("filePath", relativePath);
+        }
+        oracle.put("rounds", DEFAULT_HARVEST_ROUNDS);
         try {
             return objectMapper.writeValueAsString(oracle);
         } catch (Exception e) {
