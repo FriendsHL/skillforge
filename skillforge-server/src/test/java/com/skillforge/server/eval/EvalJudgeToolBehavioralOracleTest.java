@@ -24,12 +24,17 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
- * BC-M2a: the {@code tool_error_absence} behavioral oracle (v2) is deterministic
- * and makes NO LLM call. A run PASSES (outcome=100) iff it BOTH engaged the target
- * tool successfully AND did not reproduce the failure signature; anything else —
- * including a do-nothing run that never engaged the tool, or a run that only
- * FAILED the target tool — scores 0 (FAIL). Optional {@code filePath} path-scopes
- * the engagement check to the harvested target file.
+ * BC-M2b: the generalized {@code tool_error_absence} behavioral oracle is
+ * deterministic and makes NO LLM call. A run PASSES (outcome=100) iff it BOTH
+ * made at least one tool call (did real work, not a no-op / refusal) AND did not
+ * reproduce the failure signature on the harvested {@code filePath}; anything
+ * else scores 0 (FAIL).
+ *
+ * <p>The earlier BC-M2a engagement gate ("the target tool succeeded on filePath")
+ * is intentionally gone — it was unsatisfiable for tools whose correct behavior
+ * never touches the harvested file. {@code filePath} now only scopes the error
+ * match. The "do nothing" hole is covered by running the benchmark subset in the
+ * same A/B plus this generic ≥1-tool-call backstop.
  */
 @ExtendWith(MockitoExtension.class)
 class EvalJudgeToolBehavioralOracleTest {
@@ -85,14 +90,19 @@ class EvalJudgeToolBehavioralOracleTest {
                 "Replaced 1 occurrence", true, 5, 0);
     }
 
-    private static ToolCallRecord editFailure(String output) {
-        return new ToolCallRecord("Edit", Map.of("file_path", "/tmp/eval/x/a.txt"), output, false, 5, 0);
+    private static ToolCallRecord editFailure(String filePath, String output) {
+        return new ToolCallRecord("Edit", Map.of("file_path", filePath), output, false, 5, 0);
+    }
+
+    private static ToolCallRecord readSuccess(String filePath) {
+        return new ToolCallRecord("Read", Map.of("file_path", filePath),
+                "file contents", true, 5, 0);
     }
 
     @Test
     @DisplayName("recurrence (failed Edit with signature) → outcome 0 / FAIL, no LLM call")
     void behavioralOracle_signaturePresent_failsDeterministically() {
-        ScenarioRunResult run = runWith(List.of(editFailure("old_string not found in file")));
+        ScenarioRunResult run = runWith(List.of(editFailure("/tmp/eval/x/a.txt", "old_string not found in file")));
 
         EvalJudgeOutput out = judgeTool.judge(behavioralScenario(), run);
 
@@ -103,7 +113,7 @@ class EvalJudgeToolBehavioralOracleTest {
     }
 
     @Test
-    @DisplayName("engaged target tool successfully + no signature → outcome 100 / PASS, no LLM call")
+    @DisplayName("≥1 tool call + no signature → outcome 100 / PASS, no LLM call")
     void behavioralOracle_engagedNoSignature_passesDeterministically() {
         ScenarioRunResult run = runWith(List.of(editSuccess("/tmp/eval/x/a.txt")));
 
@@ -116,7 +126,7 @@ class EvalJudgeToolBehavioralOracleTest {
     }
 
     @Test
-    @DisplayName("BC-M2a soundness: no tool calls at all → no engagement → outcome 0 / FAIL")
+    @DisplayName("BC-M2b soundness: no tool calls at all → no engagement → outcome 0 / FAIL")
     void behavioralOracle_noToolCalls_fails() {
         ScenarioRunResult run = runWith(List.of());
 
@@ -129,27 +139,12 @@ class EvalJudgeToolBehavioralOracleTest {
     }
 
     @Test
-    @DisplayName("only a FAILED target call (no signature) → no successful engagement → outcome 0 / FAIL")
-    void behavioralOracle_failedOnlyNoSignature_fails() {
-        // Edit was attempted but failed with an UNRELATED error (not the tracked
-        // signature) — there is no successful target-tool operation, so engagement
-        // is not satisfied and the run must not pass.
-        ScenarioRunResult run = runWith(List.of(editFailure("permission denied")));
-
-        EvalJudgeOutput out = judgeTool.judge(behavioralScenario(), run);
-
-        assertThat(out.getOutcomeScore()).isEqualTo(0.0);
-        assertThat(out.isPass()).isFalse();
-    }
-
-    @Test
-    @DisplayName("a different tool failing with the same text is not recurrence (engaged target → PASS)")
-    void behavioralOracle_otherToolFailure_doesNotRecur() {
-        // A Write failure carrying the same error text must NOT count as Edit
-        // recurrence; with a successful Edit also present, engagement holds → PASS.
-        ScenarioRunResult run = runWith(List.of(
-                new ToolCallRecord("Write", null, "old_string not found in file", false, 5, 0),
-                editSuccess("/tmp/eval/x/a.txt")));
+    @DisplayName("BC-M2b: ≥1 tool call (target tool NOT invoked) + no recurrence → PASS")
+    void behavioralOracle_targetToolNotCalled_butEngaged_passes() {
+        // The correct fix for some tools never touches the harvested file — only a
+        // Read happens here, no Edit at all. The run still did real work (≥1 call)
+        // and did not reproduce the signature → PASS.
+        ScenarioRunResult run = runWith(List.of(readSuccess("/tmp/eval/x/a.txt")));
 
         EvalJudgeOutput out = judgeTool.judge(behavioralScenario(), run);
 
@@ -158,12 +153,29 @@ class EvalJudgeToolBehavioralOracleTest {
     }
 
     @Test
-    @DisplayName("path-scope: successful Edit on a DIFFERENT file → not engaged → FAIL")
-    void behavioralOracle_pathScope_wrongFile_fails() {
+    @DisplayName("a different tool failing with the same text is not recurrence → engaged → PASS")
+    void behavioralOracle_otherToolFailure_doesNotRecur() {
+        // A Write failure carrying the same error text must NOT count as Edit
+        // recurrence; the run still made a tool call → PASS.
+        ScenarioRunResult run = runWith(List.of(
+                new ToolCallRecord("Write", Map.of("file_path", "/tmp/eval/x/a.txt"),
+                        "old_string not found in file", false, 5, 0)));
+
+        EvalJudgeOutput out = judgeTool.judge(behavioralScenario(), run);
+
+        assertThat(out.getOutcomeScore()).isEqualTo(100.0);
+        assertThat(out.isPass()).isTrue();
+    }
+
+    @Test
+    @DisplayName("path-scope: signature recurs on the harvested file → FAIL")
+    void behavioralOracle_pathScope_recurOnTarget_fails() {
         EvalScenario scenario = behavioralScenario(
                 "{\"tool\":\"Edit\",\"errorSignature\":\"old_string not found\","
                 + "\"passWhen\":\"no_match\",\"filePath\":\"src/Target.java\"}");
-        ScenarioRunResult run = runWith(List.of(editSuccess("/tmp/eval/run/src/Other.java")));
+        // Runtime file_path = sandboxRoot + "/" + relative fixture path.
+        ScenarioRunResult run = runWith(List.of(
+                editFailure("/tmp/eval/run-abc/src/Target.java", "old_string not found in file")));
 
         EvalJudgeOutput out = judgeTool.judge(scenario, run);
 
@@ -172,13 +184,16 @@ class EvalJudgeToolBehavioralOracleTest {
     }
 
     @Test
-    @DisplayName("path-scope: successful Edit on the target file (sandbox-rebased) → engaged → PASS")
-    void behavioralOracle_pathScope_targetFile_passes() {
+    @DisplayName("path-scope: same signature on a DIFFERENT file → not counted as recurrence → PASS")
+    void behavioralOracle_pathScope_recurOnOtherFile_passes() {
         EvalScenario scenario = behavioralScenario(
                 "{\"tool\":\"Edit\",\"errorSignature\":\"old_string not found\","
                 + "\"passWhen\":\"no_match\",\"filePath\":\"src/Target.java\"}");
-        // Runtime file_path = sandboxRoot + "/" + relative fixture path.
-        ScenarioRunResult run = runWith(List.of(editSuccess("/tmp/eval/run-abc/src/Target.java")));
+        // The failure reproduced on a different file — not the harvested target —
+        // so it does not count as a recurrence of THIS failure. The run still made
+        // a tool call → PASS.
+        ScenarioRunResult run = runWith(List.of(
+                editFailure("/tmp/eval/run-abc/src/Other.java", "old_string not found in file")));
 
         EvalJudgeOutput out = judgeTool.judge(scenario, run);
 

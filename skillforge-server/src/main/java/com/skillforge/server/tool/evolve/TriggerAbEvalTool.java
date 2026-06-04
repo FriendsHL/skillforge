@@ -151,8 +151,10 @@ public class TriggerAbEvalTool implements Tool {
                 + "- \"targetAgentId\": the agent being evolved.\n"
                 + "- \"baselineId\" (optional, prompt only): baseline prompt version id; omit / null "
                 + "to use the agent's current active prompt.\n"
-                + "- \"evalScenarioIds\" (optional): explicit scenario ids; omit to use the agent's "
-                + "held-out set / dataset.\n"
+                + "- \"evalScenarioIds\" (optional): explicit scenario ids. For prompt/skill/"
+                + "behavior_rule, the held-out set to score on. For surface=agent, the explicit "
+                + "TARGET subset (e.g. harvested bad-case ids); the rest of the dataset stays the "
+                + "general/benchmark subset (both are measured in the same run).\n"
                 + "- \"datasetVersionId\" (optional): pin the run to an immutable dataset snapshot "
                 + "(mutually exclusive with evalScenarioIds; prompt/behavior_rule).\n"
                 + "- \"evolveRunId\" (optional): the evolve run this A/B belongs to. Optional metadata "
@@ -492,11 +494,19 @@ public class TriggerAbEvalTool implements Tool {
                             + "omit it entirely to run a full (non-carry-forward) A/B");
         }
 
-        String abRunId = agentEvolveAbEvalService.startAgentAb(
-                candidateBundle, baselineBundle, targetAgentId, datasetVersionId, cachedBaselineRate);
+        // BC-M2b: for surface=agent, evalScenarioIds (when supplied) is the explicit
+        // TARGET subset (e.g. harvested bad-case scenario ids); the rest of the
+        // dataset stays the general/benchmark subset. Unlike prompt/behavior_rule
+        // (where it selects the whole set), here it does NOT replace datasetVersionId
+        // — both are used: dataset scopes the run, these ids scope the target split.
+        List<String> explicitTargetIds = evalScenarioIds(input);
 
-        log.info("[TriggerAbEval] surface=agent targetAgentId={} datasetVersionId={} -> abRunId={}",
-                targetAgentId, datasetVersionId, abRunId);
+        String abRunId = agentEvolveAbEvalService.startAgentAb(
+                candidateBundle, baselineBundle, targetAgentId, datasetVersionId, cachedBaselineRate,
+                explicitTargetIds);
+
+        log.info("[TriggerAbEval] surface=agent targetAgentId={} datasetVersionId={} targetIds={} -> abRunId={}",
+                targetAgentId, datasetVersionId, explicitTargetIds, abRunId);
 
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("abRunId", abRunId);

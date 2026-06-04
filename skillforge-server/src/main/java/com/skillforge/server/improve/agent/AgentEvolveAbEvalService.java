@@ -123,6 +123,28 @@ public class AgentEvolveAbEvalService {
     @Transactional
     public String startAgentAb(Bundle candidateBundle, Bundle baselineBundle, String agentId,
                                String datasetVersionId, Double cachedBaselineRate) {
+        return startAgentAb(candidateBundle, baselineBundle, agentId, datasetVersionId,
+                cachedBaselineRate, null);
+    }
+
+    /**
+     * BC-M2b (§ explicit scenario-id target split, restores P2-b G1): when
+     * {@code explicitTargetScenarioIds} is non-empty those ids form the TARGET
+     * subset (the harvested bad-case scenarios) and the rest of the dataset is the
+     * GENERAL (benchmark / regression) subset; when null/empty the run falls back
+     * to the existing role-based split. Both subsets are always measured in the
+     * same A/B (the run covers target ∪ general), so a "do nothing" candidate is
+     * caught by the general subset losing benchmark score.
+     *
+     * <p>The explicit ids are NOT persisted on the run row — they are captured into
+     * the deferred {@link #runAsync} call (in-memory). A crash before the deferred
+     * run loses the whole PENDING run regardless (no resume path), so persisting
+     * them would buy nothing.
+     */
+    @Transactional
+    public String startAgentAb(Bundle candidateBundle, Bundle baselineBundle, String agentId,
+                               String datasetVersionId, Double cachedBaselineRate,
+                               List<String> explicitTargetScenarioIds) {
         if (candidateBundle == null) {
             throw new IllegalArgumentException("candidateBundle is required");
         }
@@ -218,16 +240,20 @@ public class AgentEvolveAbEvalService {
         abRunRepository.save(abRun);
 
         final String abRunId = abRun.getId();
+        // Defensive immutable copy captured by the deferred runAsync (in-memory; not
+        // persisted — see method javadoc). null → role-based split fallback.
+        final List<String> targetIds = (explicitTargetScenarioIds == null || explicitTargetScenarioIds.isEmpty())
+                ? null : List.copyOf(explicitTargetScenarioIds);
         if (TransactionSynchronizationManager.isSynchronizationActive()) {
             TransactionSynchronizationManager.registerSynchronization(
                     new TransactionSynchronization() {
                         @Override
                         public void afterCommit() {
-                            coordinatorExecutor.execute(() -> runAsync(abRunId));
+                            coordinatorExecutor.execute(() -> runAsync(abRunId, targetIds));
                         }
                     });
         } else {
-            coordinatorExecutor.execute(() -> runAsync(abRunId));
+            coordinatorExecutor.execute(() -> runAsync(abRunId, targetIds));
         }
         return abRunId;
     }
@@ -238,6 +264,15 @@ public class AgentEvolveAbEvalService {
      * invocation.
      */
     void runAsync(String abRunId) {
+        runAsync(abRunId, null);
+    }
+
+    /**
+     * Async runner with an optional explicit target scenario-id set (BC-M2b). When
+     * non-null/non-empty it drives the target/general split; null falls back to the
+     * role-based split. Package-private for direct unit-test invocation.
+     */
+    void runAsync(String abRunId, List<String> explicitTargetScenarioIds) {
         AgentEvolveAbRunEntity abRun = abRunRepository.findById(abRunId).orElse(null);
         if (abRun == null) {
             log.warn("[AgentEvolveAb] runAsync: abRun not found id={} (possible race or deleted)", abRunId);
@@ -280,7 +315,7 @@ public class AgentEvolveAbEvalService {
             // concern doesn't apply). target = scenarios for this agent's role;
             // general = the rest (regression benchmark). GENERAL / no-match →
             // regression-only over the full dataset.
-            RoleSplit split = resolveRoleSplit(agent, abRun.getDatasetVersionId());
+            RoleSplit split = resolveRoleSplit(agent, abRun.getDatasetVersionId(), explicitTargetScenarioIds);
             if (split.all().isEmpty()) {
                 throw new IllegalStateException(
                         "No scenarios resolved for datasetVersionId=" + abRun.getDatasetVersionId());
@@ -482,6 +517,54 @@ public class AgentEvolveAbEvalService {
      * GENERAL role or no-target-match → regression-only (full dataset is general).
      */
     private RoleSplit resolveRoleSplit(AgentEntity agent, String datasetVersionId) {
+        return resolveRoleSplit(agent, datasetVersionId, null);
+    }
+
+    /**
+     * BC-M2b — split that prefers an explicit target scenario-id set over the
+     * role-based split. When {@code explicitTargetScenarioIds} is non-empty:
+     * target = those ids that exist in the dataset version, general = every other
+     * dataset scenario. The dataset is still scored in full (target ∪ general =
+     * the whole dataset version), so the benchmark/general subset is always
+     * measured alongside the targeted bad-case subset (the do-nothing guard). When
+     * null/empty it delegates to the role-based split.
+     */
+    private RoleSplit resolveRoleSplit(AgentEntity agent, String datasetVersionId,
+                                       List<String> explicitTargetScenarioIds) {
+        if (explicitTargetScenarioIds != null && !explicitTargetScenarioIds.isEmpty()) {
+            Set<String> wanted = new HashSet<>(explicitTargetScenarioIds);
+            List<EvalScenarioEntity> allScenarios =
+                    scenarioRepository.findAllByDatasetVersionId(datasetVersionId);
+            List<EvalScenarioEntity> targetSubset = new ArrayList<>();
+            List<EvalScenarioEntity> regressionSubset = new ArrayList<>();
+            for (EvalScenarioEntity e : allScenarios) {
+                if (wanted.contains(e.getId())) {
+                    targetSubset.add(e);
+                } else {
+                    regressionSubset.add(e);
+                }
+            }
+            if (targetSubset.isEmpty()) {
+                // None of the requested ids are in this dataset version — the targeted
+                // bad case isn't part of the dataset, so there is nothing to target.
+                // Fall back to general-only (still measures the benchmark) but warn loud.
+                log.warn("[AgentEvolveAb] explicit target ids {} not found in datasetVersionId={} "
+                        + "(agentId={}) → regression-only over {} scenarios",
+                        wanted, datasetVersionId, agent.getId(), regressionSubset.size());
+            } else {
+                log.info("[AgentEvolveAb] explicit-id split target_n={} regression_n={} "
+                        + "agentId={} datasetVersionId={}",
+                        targetSubset.size(), regressionSubset.size(), agent.getId(), datasetVersionId);
+            }
+            Set<String> targetIds = new HashSet<>();
+            for (EvalScenarioEntity e : targetSubset) targetIds.add(e.getId());
+            Set<String> generalIds = new HashSet<>();
+            for (EvalScenarioEntity e : regressionSubset) generalIds.add(e.getId());
+            List<EvalScenarioEntity> all = new ArrayList<>(targetSubset.size() + regressionSubset.size());
+            all.addAll(targetSubset);
+            all.addAll(regressionSubset);
+            return new RoleSplit(all, targetIds, generalIds);
+        }
         String ownerRole = agentRoleResolver.resolveRole(agent);
         List<EvalScenarioEntity> targetSubset;
         List<EvalScenarioEntity> regressionSubset;

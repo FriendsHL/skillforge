@@ -50,8 +50,26 @@ public class BadCaseHarvestService {
     /** Tools whose prior successful invocation can supply fixture file content. */
     private static final Set<String> CONTENT_TOOLS = Set.of("Read", "Write", "Edit");
 
-    /** Tool name whose failure we harvest in BC-M1. */
+    /** Tool name whose post-edit content we recover from a successful span's new_string arg. */
     private static final String EDIT_TOOL = "Edit";
+
+    /**
+     * Per-tool harvest adapter — the only place that knows a tool's specifics, so
+     * adding a new harvestable tool is a single map entry, not a code branch.
+     *
+     * @param toolName        the {@code t_llm_span.name} we harvest
+     * @param pathField       the tool input field carrying the failing path
+     * @param signatures      known stable error fragments persisted (verbatim) as
+     *                        the oracle {@code errorSignature}; matching one keeps
+     *                        the replay coupled to the failure mode rather than the
+     *                        full (path-bearing) error text
+     * @param contentRequired whether reconstructing fixture content is mandatory —
+     *                        when false the failing path only needs to exist as a
+     *                        file for the failure to reproduce, so missing prior
+     *                        content degrades to an empty file rather than a skip
+     */
+    private record ToolHarvestAdapter(String toolName, String pathField,
+                                      List<String> signatures, boolean contentRequired) {}
 
     /**
      * Known stable Edit error fragments. We persist the matching fragment as the
@@ -62,6 +80,20 @@ public class BadCaseHarvestService {
             "old_string not found",
             "old_string is not unique",
             "File does not exist");
+
+    /** Known stable Grep error fragment (search path resolves to a non-directory). */
+    private static final List<String> KNOWN_GREP_SIGNATURES = List.of(
+            "Path is not a directory");
+
+    /**
+     * Tool-name → adapter. Adding a third tool is one entry here (plus a sandbox
+     * parity guard so the sandbox reproduces the same error). Edit needs prior
+     * file content to set up the edit; Grep only needs the failing path to exist
+     * as a file, so its content is optional.
+     */
+    private static final Map<String, ToolHarvestAdapter> TOOL_ADAPTERS = Map.of(
+            "Edit", new ToolHarvestAdapter("Edit", "file_path", KNOWN_EDIT_SIGNATURES, true),
+            "Grep", new ToolHarvestAdapter("Grep", "path", KNOWN_GREP_SIGNATURES, false));
 
     /** Eval sandbox task-path prefix; runSingleScenario rewrites this to the sandbox root. */
     private static final String EVAL_TASK_PREFIX = "/tmp/eval/";
@@ -109,23 +141,43 @@ public class BadCaseHarvestService {
 
     /**
      * Rebuild a session's failed {@code Edit} span into a draft eval scenario.
+     * Thin backward-compatible delegate to {@link #harvestToolFailureCase} (the
+     * generic dispatch routes an Edit failing span to the Edit adapter).
      *
      * @param sessionId     the source session id
      * @param failingSpanId the {@code t_llm_span.span_id} of the failed Edit
-     * @return the persisted draft scenario, or empty when the case cannot be
-     *         rebuilt (span not found / not an Edit failure / no recoverable
-     *         prior file content / no first user prompt)
+     * @return the persisted draft scenario, or empty when the case cannot be rebuilt
      */
     @Transactional
     public Optional<EvalScenarioEntity> harvestEditStaleCase(String sessionId, String failingSpanId) {
+        return harvestToolFailureCase(sessionId, failingSpanId);
+    }
+
+    /**
+     * Rebuild a session's failed tool span into a draft eval scenario. The failing
+     * span's {@code name} selects a {@link ToolHarvestAdapter} (Edit, Grep, …); an
+     * unsupported tool is skipped. The reconstruction is purely a deterministic
+     * replay of the recorded trace — original task prompt (only the repo prefix
+     * rebased), prior file content as a fixture, and the recorded error signature
+     * as the oracle — so it never describes how to fix anything.
+     *
+     * @param sessionId     the source session id
+     * @param failingSpanId the {@code t_llm_span.span_id} of the failed tool call
+     * @return the persisted draft scenario, or empty when the case cannot be
+     *         rebuilt (span not found / unsupported tool / not a failure / no
+     *         path / no recoverable content when the tool requires it / no first
+     *         user prompt)
+     */
+    @Transactional
+    public Optional<EvalScenarioEntity> harvestToolFailureCase(String sessionId, String failingSpanId) {
         if (sessionId == null || sessionId.isBlank() || failingSpanId == null || failingSpanId.isBlank()) {
-            log.warn("harvestEditStaleCase: blank sessionId/failingSpanId — skipping");
+            log.warn("harvestToolFailureCase: blank sessionId/failingSpanId — skipping");
             return Optional.empty();
         }
 
         List<LlmSpanEntity> spans = spanRepository.findBySessionIdOrderByStartedAtAsc(sessionId);
         if (spans == null || spans.isEmpty()) {
-            log.warn("harvestEditStaleCase: no spans for session {} — skipping", sessionId);
+            log.warn("harvestToolFailureCase: no spans for session {} — skipping", sessionId);
             return Optional.empty();
         }
 
@@ -139,20 +191,25 @@ public class BadCaseHarvestService {
             }
         }
         if (failing == null) {
-            log.warn("harvestEditStaleCase: failing span {} not in session {} — skipping",
+            log.warn("harvestToolFailureCase: failing span {} not in session {} — skipping",
                     failingSpanId, sessionId);
             return Optional.empty();
         }
-        if (!"tool".equals(failing.getKind()) || !EDIT_TOOL.equals(failing.getName())
+
+        ToolHarvestAdapter adapter = failing.getName() != null ? TOOL_ADAPTERS.get(failing.getName()) : null;
+        if (adapter == null || !"tool".equals(failing.getKind())
                 || failing.getError() == null || failing.getError().isBlank()) {
-            log.warn("harvestEditStaleCase: span {} is not a failed Edit tool span (kind={}, name={}, hasError={}) — skipping",
-                    failingSpanId, failing.getKind(), failing.getName(), failing.getError() != null);
+            log.warn("harvestToolFailureCase: span {} is not a supported failed tool span "
+                            + "(kind={}, name={}, hasError={}, supported={}) — skipping",
+                    failingSpanId, failing.getKind(), failing.getName(),
+                    failing.getError() != null, adapter != null);
             return Optional.empty();
         }
 
-        String absPath = extractInputField(failing.getInputSummary(), "file_path");
+        String absPath = extractInputField(failing.getInputSummary(), adapter.pathField());
         if (absPath == null || absPath.isBlank()) {
-            log.warn("harvestEditStaleCase: failed Edit span {} has no file_path — skipping", failingSpanId);
+            log.warn("harvestToolFailureCase: failed {} span {} has no {} — skipping",
+                    adapter.toolName(), failingSpanId, adapter.pathField());
             return Optional.empty();
         }
 
@@ -172,28 +229,33 @@ public class BadCaseHarvestService {
             }
         }
         if (priorContent == null) {
-            log.info("harvestEditStaleCase: no recoverable prior content for path {} in session {} — skipping",
-                    absPath, sessionId);
-            return Optional.empty();
+            if (adapter.contentRequired()) {
+                log.info("harvestToolFailureCase: no recoverable prior content for path {} in session {} "
+                        + "(tool {} requires content) — skipping", absPath, sessionId, adapter.toolName());
+                return Optional.empty();
+            }
+            // Content optional: the failing path only needs to exist as a file for
+            // the failure to reproduce — materialize it as an empty fixture file.
+            priorContent = "";
         }
 
         SessionEntity session = sessionRepository.findById(sessionId).orElse(null);
         if (session == null) {
-            log.warn("harvestEditStaleCase: session {} not found — skipping", sessionId);
+            log.warn("harvestToolFailureCase: session {} not found — skipping", sessionId);
             return Optional.empty();
         }
         String firstUserPrompt = extractFirstUserPrompt(session.getMessagesJson());
         if (firstUserPrompt == null || firstUserPrompt.isBlank()) {
-            log.warn("harvestEditStaleCase: session {} has no first user prompt — skipping", sessionId);
+            log.warn("harvestToolFailureCase: session {} has no first user prompt — skipping", sessionId);
             return Optional.empty();
         }
 
         String relativePath = rebaseToRelative(absPath);
         String rebasedTask = firstUserPrompt.replace(repoRoot, EVAL_TASK_PREFIX);
-        String errorSignature = deriveSignature(failing.getError());
-        String oracleExpected = buildOracleExpected(errorSignature, relativePath);
+        String errorSignature = deriveSignature(failing.getError(), adapter.signatures());
+        String oracleExpected = buildOracleExpected(adapter.toolName(), errorSignature, relativePath);
         if (oracleExpected == null) {
-            log.warn("harvestEditStaleCase: failed to encode oracle JSON for session {} — skipping", sessionId);
+            log.warn("harvestToolFailureCase: failed to encode oracle JSON for session {} — skipping", sessionId);
             return Optional.empty();
         }
 
@@ -201,8 +263,8 @@ public class BadCaseHarvestService {
         scenario.setId(UUID.randomUUID().toString());
         scenario.setAgentId(session.getAgentId() != null ? String.valueOf(session.getAgentId()) : null);
         String sidShort = sessionId.substring(0, Math.min(8, sessionId.length()));
-        scenario.setName("badcase-edit-" + sidShort);
-        scenario.setDescription("Harvested from a failed Edit in session " + sessionId
+        scenario.setName("badcase-" + adapter.toolName().toLowerCase(java.util.Locale.ROOT) + "-" + sidShort);
+        scenario.setDescription("Harvested from a failed " + adapter.toolName() + " in session " + sessionId
                 + "; replays the tool error signature in an isolated sandbox.");
         scenario.setCategory("session_derived");
         scenario.setSplit("held_out");
@@ -221,8 +283,9 @@ public class BadCaseHarvestService {
         scenario.setFixtureFiles(fixtures);
 
         EvalScenarioEntity saved = scenarioRepository.save(scenario);
-        log.info("harvestEditStaleCase: saved draft scenario {} (agent={}, path={}, signature='{}') from session {}",
-                saved.getId(), saved.getAgentId(), relativePath, errorSignature, sessionId);
+        log.info("harvestToolFailureCase: saved draft scenario {} (tool={}, agent={}, path={}, signature='{}') "
+                        + "from session {}",
+                saved.getId(), adapter.toolName(), saved.getAgentId(), relativePath, errorSignature, sessionId);
         return Optional.of(saved);
     }
 
@@ -283,9 +346,9 @@ public class BadCaseHarvestService {
         return rel;
     }
 
-    /** Map a raw Edit error to a stable signature fragment (no fix description). */
-    private String deriveSignature(String rawError) {
-        for (String fragment : KNOWN_EDIT_SIGNATURES) {
+    /** Map a raw tool error to a stable signature fragment (no fix description). */
+    private String deriveSignature(String rawError, List<String> knownSignatures) {
+        for (String fragment : knownSignatures) {
             if (rawError.contains(fragment)) {
                 return fragment;
             }
@@ -298,18 +361,19 @@ public class BadCaseHarvestService {
     /**
      * Build the behavioral oracle criteria JSON. Beyond the BC-M1 fields it adds:
      * <ul>
-     *   <li>{@code filePath} (BC-M2a path-scope) — the sandbox-relative target
-     *       file, so the engagement check only credits a successful operation on
-     *       the harvested file (not some other file the agent created).</li>
-     *   <li>{@code rounds} (BC-M2a multi-round) — repeat the scenario this many
-     *       times and score on the recurrence rate.</li>
+     *   <li>{@code filePath} — the sandbox-relative target file. It scopes the
+     *       error-signature match to that path: only a recurrence happening on the
+     *       harvested file counts (errors on other files do not), so the oracle
+     *       measures the harvested failure specifically.</li>
+     *   <li>{@code rounds} (multi-round) — repeat the scenario this many times and
+     *       score on the recurrence rate.</li>
      * </ul>
-     * Both fields describe WHAT a successful run looks like (the target file, how
-     * many times to measure), never HOW to achieve it.
+     * All fields describe WHAT a successful run looks like (the target file/error,
+     * how many times to measure), never HOW to achieve it.
      */
-    private String buildOracleExpected(String errorSignature, String relativePath) {
+    private String buildOracleExpected(String toolName, String errorSignature, String relativePath) {
         Map<String, Object> oracle = new LinkedHashMap<>();
-        oracle.put("tool", EDIT_TOOL);
+        oracle.put("tool", toolName);
         oracle.put("errorSignature", errorSignature);
         oracle.put("passWhen", "no_match");
         if (relativePath != null && !relativePath.isBlank()) {

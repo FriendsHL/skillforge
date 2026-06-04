@@ -404,6 +404,52 @@ class AgentEvolveAbEvalServiceTest {
         verify(scenarioRepository).findAllByDatasetVersionId("dv-1");
     }
 
+    @Test
+    @DisplayName("resolveRoleSplit (explicit ids): target = requested subset, general = rest — both measured (①d/①e)")
+    void resolveRoleSplit_explicitIds_targetAndGeneralBothComputed() throws Exception {
+        com.skillforge.server.entity.AgentEntity agent = new com.skillforge.server.entity.AgentEntity();
+        agent.setId(7L);
+        // dataset = harvested bad case (bad-1) + two benchmark scenarios (b1, b2).
+        when(scenarioRepository.findAllByDatasetVersionId("dv-1"))
+                .thenReturn(List.of(scenarioEntity("bad-1"), scenarioEntity("b1"), scenarioEntity("b2")));
+
+        Object split = invokeResolveRoleSplit(agent, "dv-1", List.of("bad-1"));
+
+        Set<String> targetIds = targetIdsOf(split);
+        Set<String> generalIds = generalIdsOf(split);
+        // explicit id → target; the rest of the dataset → general (benchmark stays measured)
+        assertThat(targetIds).containsExactly("bad-1");
+        assertThat(generalIds).containsExactlyInAnyOrder("b1", "b2");
+        // role resolver is NOT consulted on the explicit-id path
+        org.mockito.Mockito.verifyNoInteractions(agentRoleResolver);
+
+        // ①e core invariant: with a subset target, BOTH the target delta AND the
+        // general (benchmark) delta are produced — the targeted A/B is never
+        // target-only, so a do-nothing candidate is caught by the general subset.
+        List<AbScenarioResult> run = List.of(
+                new AbScenarioResult("bad-1", "bad-1", pass(), fail()),
+                new AbScenarioResult("b1", "b1", pass(), pass()),
+                new AbScenarioResult("b2", "b2", fail(), fail()));
+        AgentEvolveAbEvalService.SubsetDeltas d =
+                AgentEvolveAbEvalService.computeSubsetDeltas(run, null, targetIds, generalIds);
+        assertThat(d.targetDeltaPp()).isNotNull();
+        assertThat(d.regressionDeltaPp()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("resolveRoleSplit (explicit ids none in dataset): regression-only fallback, still measures general")
+    void resolveRoleSplit_explicitIds_noneInDataset_regressionOnly() throws Exception {
+        com.skillforge.server.entity.AgentEntity agent = new com.skillforge.server.entity.AgentEntity();
+        agent.setId(7L);
+        when(scenarioRepository.findAllByDatasetVersionId("dv-1"))
+                .thenReturn(List.of(scenarioEntity("b1"), scenarioEntity("b2")));
+
+        Object split = invokeResolveRoleSplit(agent, "dv-1", List.of("not-in-dataset"));
+
+        assertThat(targetIdsOf(split)).isEmpty();
+        assertThat(generalIdsOf(split)).containsExactlyInAnyOrder("b1", "b2");
+    }
+
     private com.skillforge.server.entity.EvalScenarioEntity scenarioEntity(String id) {
         com.skillforge.server.entity.EvalScenarioEntity e =
                 new com.skillforge.server.entity.EvalScenarioEntity();
@@ -419,6 +465,14 @@ class AgentEvolveAbEvalServiceTest {
                 "resolveRoleSplit", com.skillforge.server.entity.AgentEntity.class, String.class);
         m.setAccessible(true);
         return m.invoke(service, agent, datasetVersionId);
+    }
+
+    private Object invokeResolveRoleSplit(Object agent, String datasetVersionId,
+                                          List<String> explicitTargetIds) throws Exception {
+        java.lang.reflect.Method m = AgentEvolveAbEvalService.class.getDeclaredMethod(
+                "resolveRoleSplit", com.skillforge.server.entity.AgentEntity.class, String.class, List.class);
+        m.setAccessible(true);
+        return m.invoke(service, agent, datasetVersionId, explicitTargetIds);
     }
 
     @SuppressWarnings("unchecked")

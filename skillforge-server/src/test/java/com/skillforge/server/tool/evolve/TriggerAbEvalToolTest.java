@@ -407,7 +407,7 @@ class TriggerAbEvalToolTest {
     @Test
     @DisplayName("agent surface: routes to startAgentAb with parsed bundles (full run, no cached rate)")
     void agentSurface_routesToStartAgentAb() {
-        when(agentEvolveAbEvalService.startAgentAb(any(), any(), eq("42"), eq("ds-1"), isNull()))
+        when(agentEvolveAbEvalService.startAgentAb(any(), any(), eq("42"), eq("ds-1"), isNull(), isNull()))
                 .thenReturn("agent-ab-1");
 
         Map<String, Object> input = new LinkedHashMap<>();
@@ -422,9 +422,33 @@ class TriggerAbEvalToolTest {
         assertThat(result.isSuccess()).isTrue();
         assertThat(result.getOutput()).contains("\"abRunId\":\"agent-ab-1\"");
         assertThat(result.getOutput()).contains("\"surface\":\"agent\"");
-        verify(agentEvolveAbEvalService).startAgentAb(any(), any(), eq("42"), eq("ds-1"), isNull());
+        // no evalScenarioIds supplied → explicit target ids null (role-based split)
+        verify(agentEvolveAbEvalService).startAgentAb(any(), any(), eq("42"), eq("ds-1"), isNull(), isNull());
         // agent surface does not use the per-surface candidate repos / services
         verifyNoInteractions(promptImproverService, skillDraftService, behaviorRuleAbEvalService);
+    }
+
+    @Test
+    @DisplayName("agent surface: evalScenarioIds threads through as the explicit target subset (①d)")
+    void agentSurface_evalScenarioIds_threadedAsTargetSplit() {
+        when(agentEvolveAbEvalService.startAgentAb(
+                any(), any(), eq("42"), eq("ds-1"), isNull(), eq(List.of("bad-1", "bad-2"))))
+                .thenReturn("agent-ab-2");
+
+        Map<String, Object> input = new LinkedHashMap<>();
+        input.put("surface", "agent");
+        input.put("targetAgentId", "42");
+        input.put("candidateBundle", Map.of("promptVersionId", "pv-cand"));
+        input.put("baselineBundle", Map.of("promptVersionId", "pv-best"));
+        input.put("datasetVersionId", "ds-1");
+        input.put("evalScenarioIds", List.of("bad-1", "bad-2"));
+
+        SkillResult result = run(input);
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.getOutput()).contains("\"abRunId\":\"agent-ab-2\"");
+        verify(agentEvolveAbEvalService).startAgentAb(
+                any(), any(), eq("42"), eq("ds-1"), isNull(), eq(List.of("bad-1", "bad-2")));
     }
 
     @Test
@@ -443,7 +467,7 @@ class TriggerAbEvalToolTest {
         assertThat(result.isSuccess()).isFalse();
         assertThat(result.getError()).contains("cachedBaselineScore must be a number in [0, 100]");
         // Must NOT silently degrade to a full A/B run.
-        verify(agentEvolveAbEvalService, never()).startAgentAb(any(), any(), any(), any(), any());
+        verify(agentEvolveAbEvalService, never()).startAgentAb(any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -457,7 +481,7 @@ class TriggerAbEvalToolTest {
         SkillResult result = run(input);
 
         assertThat(result.isSuccess()).isFalse();
-        verify(agentEvolveAbEvalService, never()).startAgentAb(any(), any(), any(), any(), any());
+        verify(agentEvolveAbEvalService, never()).startAgentAb(any(), any(), any(), any(), any(), any());
     }
 
     @Test

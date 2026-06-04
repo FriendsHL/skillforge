@@ -236,12 +236,72 @@ harvest service / 行为 oracle / 任何 prompt / 本设计文档 **只描述通
    **✅ BC-M2a 已交付（Mid，commit 待填）**：oracle v2（engagement + path-scope + 无错签名）+ 多轮复发率（rounds 默认 5，缺省退化单轮）+ 抽 `BehavioralOracleCriteria` record 单点解析（消除判据 JSON 跨模块两处解析）。java + java-design reviewer **全 PASS 0 blocker**（含盲测结构性审查通过——oracle v2 仍结果型）。warning 一轮修（删 DEFAULT_BEHAVIORAL_ROUNDS 死常量 + BehavioralOracleCriteria record + infra 轮 efficiency 也归 0 闭合 inflation + representative 注释）。验证：全模块 **2694/0/0** BUILD SUCCESS。**temp=0 caveat 仍在**（多轮率可能退化 0/1，已 javadoc 标注，不加扰动）。
 
 #### BC-M2b — 接进 evolve 端到端（下一期，Full）
-- **Grep 类收割**（扩 BadCaseHarvestService + 确认 SandboxedGrepTool 对 path=文件复现 "Path is not a directory"）
-- **activate endpoint/UI**（draft→active 人 gate 落地）
-- **显式 scenario-id target split**（恢复 P2-b G1：扩 `AgentEvolveAbEvalService.resolveRoleSplit` 支持显式 id 列表作 target）
-- **orchestrator 接线**（evolve 自动收割/对靶收割场景）
-- dashboard 展示收割场景
-- **做完 M2b**：evolve 才可能出真赢家 → P1 采纳有东西可采 → read-before-edit 盲测 loop 内可验。
+
+> **2026-06-04 用户重定调 + 并入 G3**（待 ratify）。读代码取证后两点变更触发重定调，见下「重定调缘由」。
+
+##### 重定调缘由（读代码取证 2026-06-04）
+1. **SandboxedGrepTool 复现不了目标错**：沙箱 Grep 对 path=文件用 `Files.isRegularFile()` **直接搜文件、不报错**；生产 `GrepTool.java:86` 才对非目录抛 `"Path is not a directory"`。→ Grep 收割前提是给沙箱 Grep 做 **parity**（镜像生产），跟 BC-M1 给 Edit 做 parity 同模式。
+2. **BC-M2a 的 path-scoped engagement 对 Grep 不可满足**：oracle v2 的"engagement=目标工具在 filePath 上成功调用"对 Edit 干净，但 Grep 的对的修法**根本不再碰那个文件** → "在 filePath 上成功调 Grep"永远满足不了 → oracle 永远 PASS 不了。
+
+##### 用户重定调：错题本去工具特殊化 + 两套用例分工
+- **一条通用 pipeline**：任何工具（Edit / Grep / 以后）的报错都走同一条「报错 → 进错题本 → A/B」，不按工具分叉判分。
+- **两套用例各管一头**：**benchmark** 看分数（能力守门）；**错题本** 看"还犯不犯那个错"（靶向）。赢家 = 错题本那个错没了 **且** benchmark 分没掉。
+
+##### 设计变更（本期 BC-M2b 实做）
+1. **通用多工具收割**：`BadCaseHarvestService` 从 Edit 专用泛化为「按 (工具, 路径输入字段, 错误签名集) 适配」驱动。Edit：路径字段=`file_path` / 签名集=`KNOWN_EDIT_SIGNATURES`；Grep：路径字段=`path` / 签名=`"Path is not a directory"`，fixture 内容可空（建出该文件即复现）。加新工具=加一行适配。
+2. **SandboxedGrepTool parity**：镜像 `GrepTool.java:86` —— path 非目录 → `"Path is not a directory: <path>"`；加 `SandboxedGrepToolErrorParityTest`（逐字对齐生产错误串，CI 守卫）。⚠️ **回归核查**：现有 benchmark 场景无给 Grep 传文件路径者（dev 验证，否则改语义会破存量场景）。
+3. **oracle 通用化（动 BC-M2a 已交付语义）**：`tool_error_absence` 判分由 BC-M2a 的「engagement=目标工具在 filePath 上成功调用 AND 错误签名缺席」改为：
+   - **PASS = (本轮 agent 至少调用过 1 次任意工具，即非 no-op/拒答) AND (错误签名在 filePath 上未复发)**
+   - **去掉** path-scoped engagement（对 Grep 不可满足）；`filePath` 仍用于**限定错误签名匹配范围**（只有发生在该路径的错才算复发），不再当 PASS 闸门
+   - 防"假进步"主力交给 **benchmark 子集同跑**（do-nothing → benchmark 掉分 → 非赢家）；oracle 内只留通用 do-nothing/拒答兜底（≥1 工具调用）
+   - **盲测安全**：仍是结果型，只说"没再犯那个错 + 真干了活"，不说 HOW
+   - **design-reviewer 专项**：确认放通用化后「do-nothing 假进步」洞由 benchmark 子集兜得住（两套用例必须同跑，见 #4）；这是 BC-M2a 反例的回归点，重点审
+4. **两套用例同跑**：harvest-targeted A/B 运行**必须同时覆盖** benchmark(general) + 错题本(target) 两子集。`computeSubsetDeltas` 已分别算 `targetDeltaPp` / `regressionDeltaPp`；赢家判据 = `targetDelta>0 AND regressionDelta≥0`。orchestrator 接线确保 dataset version 含 benchmark 场景，**不可 target-only 跑**（否则 do-nothing 守门失效）。
+5. **显式 scenario-id target split**（恢复 P2-b G1）：扩 `AgentEvolveAbEvalService.resolveRoleSplit` 支持显式 id 列表作 target；`TriggerAbEvalTool.evalScenarioIds` 贯通到 split。
+6. **activate 人 gate**：草稿→active endpoint + UI 按钮（写 `reviewedAt`）。
+7. **orchestrator 接线**：evolve 自动收割（ERROR 聚类 → 代表 session → harvest draft）+ 自动拿 **active** 收割场景当 target。**盲测扫描**：接线代码/prompt 不得出现任何具体修法字样。
+8. **dashboard**：收割场景列表（draft 待启用 / active）+ 启用按钮。
+
+##### G3 — predicted_impact（用户 2026-06-04 要求并入本期）
+每轮候选带**可证伪预测**，A/B 后对账：
+- 候选 schema 加 `prediction: {targetProblem, flipToPass:[scenarioId], riskToFail:[scenarioId]}`
+  - `targetProblem` 命名**问题**（"Edit old_string not found 类复发"），**不是修法** —— 盲测安全
+  - `flipToPass` / `riskToFail` 引用真实 `scenarioId`（错题本提供，所以排错题本之后）
+- **对账纯函数** `reconcile(prediction, abResult)`：逐场景比预测翻转 vs 实际翻转 → `{hits, misses, surprises, confidence}`
+  - 预测准（flipToPass 真 fail→pass）→ 高信心
+  - 预测说翻 Y 但 Y 没翻 → 修法不对 / 归因错 → 降信心 + 下一轮换思路
+- **反思接线**：对账结果喂回 orchestrator 下一轮 reasoning + confidence
+- **UI**：迭代行展示「预测 vs 实际翻转」
+- **盲测安全**：预测只描述问题与场景 id，从不描述修法；对账是通用纯函数，不编码任何 problem→fix 映射
+
+##### 收割现场重建机制 + 归因位置（2026-06-04 澄清）
+**Q1 — 错题怎么加进错题本（确定性重放，非模型生成）**：
+- 错题的三件套全是**真实回放**，不过模型：任务=代表 session 的**原始 user prompt 原样**（仅把仓库前缀 → `/tmp/eval/`）；现场文件=失败操作前**那次成功 Read 的 `output_summary`**（全文，≤40KB）回填成 fixture；判分=失败 span 的**真实错误签名**。
+- **为何不模型生成任务**：① 忠实复现（真任务才复现真错）；② **盲测安全**（模型总结易顺嘴写出修法 → 泄 held-out；确定性重放不知修法泄不了）。模型只在上游归类/起名（命名问题非修法）。
+- **沙箱搭现场**：`AbEvalPipeline.runSingleScenario` 建临时沙箱根 → fixture map 按相对路径写成真文件 → 任务里 `/tmp/eval/` 改写成沙箱根 → agent 看到文件真实存在、内容/路径对。
+- **"运行成功" ≠ Edit 成功**：baseline 重放目标是**复现错**；重放是新跑 agent 自己生成操作，会不会再犯靠**多轮复发率**量。fixture 只负责还原现场。
+- **真文件零触碰**：纯读 span + 写 draft；重放全在临时沙箱（Sandboxed 工具越界拒 + 跑完递归删）。
+- **边界（best-effort，不造假题）**：内容截断 / 依赖未 Read 的他文件 / 只有 Edit-new_string 无全文 → **重建不全就跳过这条**（`priorContent==null` return empty）。
+
+**Q2 — `topIssues` 与归因位置**：归因 + surface 映射在 `RunWorkflow(opt-report)` 那个 workflow **内部**就做完了；`GetOptReport` 只是只读工具，把已算完的 `summary_json` 读出来（`GetOptReportTool:229` 复用 `OptReportSummaryParser`）。`topIssues[]` 每条已带 `suspectSurface / fixSurface / effectiveSurface / convertible / rootCause / recurrence`。编排器**不重做归因**，只挑 convertible 的迭代。**已知有损**（5-enum 消化丢信号 = 4 跳 trace 断）由 P2-a(G4) 富化字段 + **本期错题本（直接喂可复现真场景当 target，绕开消化）** 双治。
+
+##### 分段交付（本会话内 3 个 Full review 子轮，各自 commit、等用户批准）
+- **子轮 1（测量底座）**：通用多工具收割（Edit+Grep）+ Grep parity + oracle 通用化 + 显式 target split + 两套用例 deltas。Review 重点：oracle 语义变更（design-reviewer 盯 do-nothing 回归）+ 盲测扫描。
+- **子轮 2（接进 evolve）**：activate endpoint/UI + orchestrator 接线 + dashboard。Review 重点：orchestrator 盲测扫描 + 两套用例同跑保证。
+- **子轮 3（G3 预测对账）**：候选 prediction 字段 + reconcile 纯函数 + 反思接线 + UI。Review 重点：盲测（预测不含修法）+ 对账纯函数正确性。
+
+##### 验收点（修订）
+- [ ] 任意工具报错走同一收割路径（Edit + Grep 实证；加第三工具只需一行适配）
+- [ ] SandboxedGrepTool 复现 `"Path is not a directory"`（parity test 逐字对齐生产）
+- [ ] oracle 通用化后：no-op 候选不 PASS（≥1 工具调用兜底 + benchmark 掉分双保险）；真修好 → 错题本 fail→pass 翻转可量
+- [ ] 两套用例同跑：赢家 = `targetDelta>0 AND benchmark regressionDelta≥0`
+- [ ] 显式 scenario-id target split 生效
+- [ ] activate 人 gate（draft→active）endpoint + UI
+- [ ] orchestrator 自动收割 + 自动对靶；盲测扫描全产物无修法字样
+- [ ] G3：候选带 prediction；A/B 后对账输出 hits/misses/surprises + confidence；反思喂回下一轮；预测全程不含修法
+- [ ] **盲测闭环**：read-before-edit（及 Grep 等价修法）不在任何产物，让 loop 自己发现
+
+##### 做完 BC-M2b：evolve 自转（找真失败 → 出错题 → 考新旧 agent → 选真赢家 + 带预测对账）→ P1 采纳有东西可采 → 盲测 loop 内可验。
 
 **本期遗留 backlog（小，非 M2 主线）**：
 - `extractFirstUserPrompt` 与 `SkillCreatorService` 重复 → 抽 `SessionMessageJson` util 共用（碰 scope-out 文件，专门 refactor 或 M2 顺带）。

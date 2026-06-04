@@ -162,6 +162,55 @@ class BadCaseHarvestServiceTest {
     }
 
     @Test
+    @DisplayName("harvests a failed Grep (path is a file) → empty fixture + Grep oracle, no skip")
+    void harvest_grepNotDir_rebuildsWithEmptyFixture() throws Exception {
+        LlmSpanEntity failedGrep = toolSpan("grep-1", "Grep",
+                "{\"pattern\":\"foo\",\"path\":\"" + ABS_PATH + "\"}",
+                null, "Path is not a directory: " + ABS_PATH, 100);
+        when(spanRepository.findBySessionIdOrderByStartedAtAsc(SESSION_ID))
+                .thenReturn(List.of(failedGrep));
+
+        SessionEntity session = new SessionEntity();
+        session.setId(SESSION_ID);
+        session.setAgentId(7L);
+        session.setMessagesJson("[{\"role\":\"user\",\"content\":\"search in " + ABS_PATH + "\"}]");
+        when(sessionRepository.findById(SESSION_ID)).thenReturn(Optional.of(session));
+        when(scenarioRepository.save(any(EvalScenarioEntity.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+
+        Optional<EvalScenarioEntity> result = service.harvestToolFailureCase(SESSION_ID, "grep-1");
+
+        assertThat(result).isPresent();
+        EvalScenarioEntity sc = result.get();
+        assertThat(sc.getOracleType()).isEqualTo("tool_error_absence");
+        // Grep content is optional: the failing path only needs to exist as a file,
+        // so an empty fixture is materialized rather than skipping.
+        assertThat(sc.getFixtureFiles()).containsEntry("skillforge-core/Foo.java", "");
+        assertThat(sc.getTask()).isEqualTo("search in /tmp/eval/skillforge-core/Foo.java");
+
+        JsonNode oracle = objectMapper.readTree(sc.getOracleExpected());
+        assertThat(oracle.path("tool").asText()).isEqualTo("Grep");
+        assertThat(oracle.path("errorSignature").asText()).isEqualTo("Path is not a directory");
+        assertThat(oracle.path("filePath").asText()).isEqualTo("skillforge-core/Foo.java");
+        assertThat(oracle.path("passWhen").asText()).isEqualTo("no_match");
+        assertThat(oracle.path("rounds").asInt()).isEqualTo(5);
+    }
+
+    @Test
+    @DisplayName("skips when the referenced span is an unsupported tool")
+    void harvest_unsupportedTool_skips() {
+        LlmSpanEntity failedBash = toolSpan("bash-1", "Bash",
+                "{\"command\":\"ls\"}", null, "command failed", 100);
+        when(spanRepository.findBySessionIdOrderByStartedAtAsc(SESSION_ID))
+                .thenReturn(List.of(failedBash));
+
+        Optional<EvalScenarioEntity> result = service.harvestToolFailureCase(SESSION_ID, "bash-1");
+
+        assertThat(result).isEmpty();
+        verify(scenarioRepository, never()).save(any());
+    }
+
+    @Test
     @DisplayName("skips when the referenced span is not a failed Edit")
     void harvest_notAFailedEdit_skips() {
         LlmSpanEntity okEdit = toolSpan("ok-1", "Edit",
