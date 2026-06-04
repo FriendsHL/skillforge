@@ -92,6 +92,43 @@ class OrchestratorPromptDriftGuardTest {
                 .isEqualTo(v144Body);
     }
 
+    /** Extract the JSON array literal from a migration's {@code tool_ids = '...'} assignment. */
+    private static String toolIdsLiteral(String sql) {
+        int i = sql.indexOf("tool_ids = '");
+        assertThat(i).as("migration must set tool_ids").isGreaterThanOrEqualTo(0);
+        int start = i + "tool_ids = '".length();
+        int end = sql.indexOf("'", start);
+        return sql.substring(start, end);
+    }
+
+    @Test
+    @DisplayName("regression guard (V144 dropped GetOptReport): every tool the prompt instructs the orchestrator to CALL is present in the latest tool_ids")
+    void everyPromptInvokedToolIsInLatestToolIds() throws Exception {
+        // V144 rewrote tool_ids to add ListActiveHarvestedScenarios but silently dropped
+        // GetOptReport, so the orchestrator could never call the tool its prompt told it to
+        // use to read the opt-report — it looped RunWorkflow and every run failed at step 1.
+        // V146 restores it. This invariant would have caught the regression in CI.
+        String toolIds = toolIdsLiteral(
+                migration("V146__evolve_orchestrator_restore_getoptreport_toolid.sql"));
+        String prompt = seedBody(migration("V145__evolve_orchestrator_prediction_reconcile.sql"));
+
+        assertThat(toolIds)
+                .as("GetOptReport must be in the orchestrator tool_ids (V144 dropped it)")
+                .contains("\"GetOptReport\"");
+
+        // General invariant: any tool the prompt tells the orchestrator to CALL ("Name(")
+        // must be in its allowlist — otherwise the model physically cannot invoke it.
+        for (String tool : new String[]{
+                "RunWorkflow", "GetOptReport", "GenerateCandidate", "TriggerAbEval",
+                "GetAbResult", "RecordIteration", "ListActiveHarvestedScenarios", "ReconcilePrediction"}) {
+            if (prompt.contains(tool + "(")) {
+                assertThat(toolIds)
+                        .as("prompt instructs calling %s( but it is missing from tool_ids", tool)
+                        .contains("\"" + tool + "\"");
+            }
+        }
+    }
+
     private static int countOccurrences(String haystack, String needle) {
         int count = 0;
         int idx = 0;
