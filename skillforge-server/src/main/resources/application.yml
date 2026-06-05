@@ -141,7 +141,9 @@ skillforge:
       max-scenarios: 12
       # Parallel scenarios per A/B. KEEP LOW on a rate-limited provider: higher =
       # more concurrent calls = more HTTP 429s (counterproductive).
-      scenario-concurrency: 3
+      # 2026-06-05: 3→6 给 A/B 提速（~24 次沙箱 agent loop / 原并发 3 = 8 波串行太慢，
+      # 一轮 A/B 15-30min）。ark 配额够时可承受 6 并发；若 429 频发再降回。
+      scenario-concurrency: 6
 
   # AUTOEVOLVE-AGENT-FLYWHEEL Module C (FR-C7): per-evolve-run A/B budget cap.
   # The orchestrator's maxIter lives in its agent prompt (untrusted surface) and
@@ -280,7 +282,7 @@ skillforge:
     login-timeout-seconds: 300
   # LLM provider configs
   llm:
-    default-provider: xiaomi-mimo  # 2026-06-05: 切回小米 mimo（ark 5h 用量配额耗尽、且新 key 已充值）。default-provider 决定 GenerateCandidate(PromptImproverService) + eval judge 等走默认 provider 的组件。注：judge 用推理模型 mimo 需 maxTokens 足够（否则 reasoning 烧空 content）；收割错题是确定性 oracle 不调 LLM。原 ark(doubao-seed-2.0-lite)，更早 xiaomi-mimo。
+    default-provider: ark  # 2026-06-05: 切回 ark（5h 配额已重置；ark 的 deepseek-flash/glm-5.1/doubao-lite 是正经配置，judge 用 doubao-lite 非推理能返数字）。短暂切 xiaomi-mimo 是因当时 ark 配额耗尽，现恢复。default-provider 决定 GenerateCandidate(PromptImproverService) + eval judge 等走默认 provider 的组件。
     providers:
       claude:
         type: claude
