@@ -670,6 +670,63 @@ public class SkillForgeConfig {
         return tool;
     }
 
+    /**
+     * AUTOEVOLVE-CLOSE-LOOP P1 — {@code GetCandidateDiff} read-only tool: resolves
+     * before/after text + unified diff of a generated candidate so the evolve-loop
+     * workflow JS can emit a {@code semanticDelta} into the iteration ledger.
+     *
+     * <p><b>Workflow-only (recursion guard):</b> NOT registered into the main
+     * {@code SkillRegistry} and NOT into {@code WorkflowSkillRegistryFactory} — it
+     * is reachable ONLY via the {@code tool()} whitelist
+     * ({@code WorkflowEvolveToolRegistryFactory}). The legacy orchestrator agent
+     * has no use for it (it never assembled diffs).
+     */
+    @Bean
+    public com.skillforge.server.tool.evolve.GetCandidateDiffTool getCandidateDiffTool(
+            com.skillforge.server.repository.PromptVersionRepository promptVersionRepository,
+            com.skillforge.server.repository.BehaviorRuleVersionRepository behaviorRuleVersionRepository,
+            com.skillforge.server.repository.SkillDraftRepository skillDraftRepository,
+            com.skillforge.server.repository.AgentRepository agentRepository,
+            ObjectMapper objectMapper) {
+        com.skillforge.server.tool.evolve.GetCandidateDiffTool tool =
+                new com.skillforge.server.tool.evolve.GetCandidateDiffTool(
+                        promptVersionRepository, behaviorRuleVersionRepository,
+                        skillDraftRepository, agentRepository, objectMapper);
+        log.info("Built GetCandidateDiffTool (workflow tool() whitelist only)");
+        return tool;
+    }
+
+    /**
+     * AUTOEVOLVE-CLOSE-LOOP P1 — {@code RunOptReportSubflow}: runs opt-report as a
+     * blocking sub-flow when the evolve loop was not handed a pre-existing reportId.
+     *
+     * <p><b>Workflow-only (recursion guard):</b> NOT registered into the main
+     * {@code SkillRegistry} nor {@code WorkflowSkillRegistryFactory} — reachable
+     * ONLY via the {@code tool()} whitelist. {@code WorkflowRunnerService} is
+     * injected {@code @Lazy} to break the construction cycle
+     * (WorkflowRunnerService → WorkflowToolInvokerFactory →
+     * WorkflowEvolveToolRegistryFactory → this tool → WorkflowRunnerService).
+     *
+     * <p><b>The cycle is ONLY in the Spring construction graph, NOT at runtime.</b>
+     * At runtime this tool calls {@code workflowRunnerService.startRun("opt-report",
+     * ...)} — a DIFFERENT workflow name than the evolve-loop that invoked it, and
+     * {@code ConsolidationLock} is keyed per-name (spike-verified Q1), so the nested
+     * sub-flow never self-locks and there is no runtime recursion. The {@code @Lazy}
+     * is purely a bean-instantiation-ordering device; do NOT "simplify" it away.
+     */
+    @Bean
+    public com.skillforge.server.tool.evolve.RunOptReportSubflowTool runOptReportSubflowTool(
+            @org.springframework.context.annotation.Lazy
+            com.skillforge.workflow.WorkflowRunnerService workflowRunnerService,
+            com.skillforge.server.flywheel.run.FlywheelRunRepository flywheelRunRepository,
+            ObjectMapper objectMapper) {
+        com.skillforge.server.tool.evolve.RunOptReportSubflowTool tool =
+                new com.skillforge.server.tool.evolve.RunOptReportSubflowTool(
+                        workflowRunnerService, flywheelRunRepository, objectMapper);
+        log.info("Built RunOptReportSubflowTool (workflow tool() whitelist only)");
+        return tool;
+    }
+
     @Bean
     public com.skillforge.server.tool.AnalyzeEvalTaskTool analyzeEvalTaskTool(
             com.skillforge.server.repository.EvalTaskRepository evalTaskRepository,

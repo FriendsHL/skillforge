@@ -57,6 +57,39 @@ public class JournalCacheService implements JournalCache {
                 .map(s -> parseDecision(s.getStepOutputJson(), runId, stepIndex));
     }
 
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<JsonNode> getCachedToolResult(String runId, int stepIndex) {
+        return stepRepository
+                .findByRunIdAndStepIndexAndStepKind(
+                        runId, stepIndex, FlywheelRunStepEntity.STEP_KIND_TOOL_CALL)
+                .filter(s -> FlywheelRunStepEntity.STATUS_COMPLETED.equals(s.getStatus()))
+                .map(s -> extractToolResult(s.getStepOutputJson(), runId, stepIndex));
+    }
+
+    /**
+     * The {@code result} node {@code DefaultWorkflowToolInvoker} stored in a
+     * completed {@code tool_call} step's {@code step_output_json}. Re-converting it
+     * on replay yields the same value the live {@code tool()} returned. A missing
+     * {@code result} key (or unparseable JSON) yields a JSON {@code null} node so
+     * the replay returns a JS {@code null} rather than throwing — the tool already
+     * ran on the first pass, so a degraded cache read must not fail the resume.
+     */
+    private JsonNode extractToolResult(String stepOutputJson, String runId, int stepIndex) {
+        if (stepOutputJson == null || stepOutputJson.isBlank()) {
+            return objectMapper.nullNode();
+        }
+        try {
+            JsonNode node = objectMapper.readTree(stepOutputJson);
+            JsonNode result = node.get("result");
+            return result == null ? objectMapper.nullNode() : result;
+        } catch (Exception e) {
+            log.warn("JournalCache: malformed tool_call step_output_json for runId={} stepIndex={}: {}",
+                    runId, stepIndex, e.getMessage());
+            return objectMapper.nullNode();
+        }
+    }
+
     /**
      * The {@code finalResponse} string {@code DefaultWorkflowAgentInvoker} stored
      * in {@code step_output_json} (always present on a completed agent step). On

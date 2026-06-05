@@ -60,6 +60,7 @@ public class WorkflowRunnerService {
     private final SessionService sessionService;
     private final AgentRepository agentRepository;
     private final WorkflowAgentInvokerFactory invokerFactory;
+    private final WorkflowToolInvokerFactory toolInvokerFactory;
     private final ConsolidationLock consolidationLock;
     private final WorkflowWsBroadcaster wsBroadcaster;
     private final ObjectMapper objectMapper;
@@ -67,6 +68,14 @@ public class WorkflowRunnerService {
     private final Clock clock;
     private final ExecutorService workflowExecutor;
     private final ExecutorService workflowSubAgentExecutor;
+    /**
+     * AUTOEVOLVE-CLOSE-LOOP P1 — wall-clock budget for {@code loop_kind=evolve}
+     * runs. The generic {@link BudgetTracker#DEFAULT_TIMEOUT_NANOS} (30 min) is
+     * too tight for a multi-iteration evolve loop (~10-19 min/iteration with
+     * blocking A/B polls), so evolve runs get a much larger budget. Other workflow
+     * kinds keep the 30-min default.
+     */
+    private final long evolveTimeoutNanos;
 
     private final L1SandboxFactory sandboxFactory = new L1SandboxFactory();
     private final WorkflowEvaluator evaluator = new WorkflowEvaluator(sandboxFactory);
@@ -83,6 +92,7 @@ public class WorkflowRunnerService {
                                  SessionService sessionService,
                                  AgentRepository agentRepository,
                                  WorkflowAgentInvokerFactory invokerFactory,
+                                 WorkflowToolInvokerFactory toolInvokerFactory,
                                  ConsolidationLock consolidationLock,
                                  WorkflowWsBroadcaster wsBroadcaster,
                                  ObjectMapper objectMapper,
@@ -91,12 +101,15 @@ public class WorkflowRunnerService {
                                  @Qualifier("workflowExecutor") ExecutorService workflowExecutor,
                                  @Qualifier("workflowSubAgentExecutor") ExecutorService workflowSubAgentExecutor,
                                  @Value("${skillforge.workflow.anchor-agent-name:session-annotator}")
-                                 String anchorAgentName) {
+                                 String anchorAgentName,
+                                 @Value("${skillforge.evolve.workflow-timeout-minutes:360}")
+                                 long evolveTimeoutMinutes) {
         this.registry = registry;
         this.flywheelRunService = flywheelRunService;
         this.sessionService = sessionService;
         this.agentRepository = agentRepository;
         this.invokerFactory = invokerFactory;
+        this.toolInvokerFactory = toolInvokerFactory;
         this.consolidationLock = consolidationLock;
         this.wsBroadcaster = wsBroadcaster;
         this.objectMapper = objectMapper;
@@ -105,6 +118,8 @@ public class WorkflowRunnerService {
         this.workflowExecutor = workflowExecutor;
         this.workflowSubAgentExecutor = workflowSubAgentExecutor;
         this.anchorAgentName = anchorAgentName;
+        this.evolveTimeoutNanos = java.util.concurrent.TimeUnit.MINUTES.toNanos(
+                evolveTimeoutMinutes > 0 ? evolveTimeoutMinutes : 360L);
     }
 
     /**
@@ -115,9 +130,23 @@ public class WorkflowRunnerService {
      * @throws WorkflowAlreadyRunningException a run for this name is already in flight
      */
     public String startRun(String workflowName, Map<String, Object> args, Long userId) {
+        return startRun(workflowName, args, userId, LOOP_KIND_WORKFLOW);
+    }
+
+    /**
+     * AUTOEVOLVE-CLOSE-LOOP P1 — start a workflow run under an explicit
+     * {@code loopKind}. The default {@link #startRun(String, Map, Long)} uses
+     * {@code workflow}; the evolve-loop passes {@code evolve} so the run row is a
+     * {@code loop_kind=evolve} {@code FlywheelRun} (and thus participates in
+     * {@code RecordIteration} / {@code EvolveReadService} / {@code hasActiveEvolveRun}
+     * exactly like the legacy orchestrator run — R1, spike-verified). The workflow
+     * engine itself (resume / journal / step record) is keyed on {@code runId}, not
+     * {@code loop_kind}, so the engine works identically for either kind.
+     */
+    public String startRun(String workflowName, Map<String, Object> args, Long userId, String loopKind) {
         WorkflowDefinition def = registry.findByName(workflowName)
                 .orElseThrow(() -> new WorkflowNotFoundException(workflowName));
-        return startRun(def, args, userId);
+        return startRun(def, args, userId, loopKind);
     }
 
     /**
@@ -161,7 +190,18 @@ public class WorkflowRunnerService {
     }
 
     public String startRun(WorkflowDefinition def, Map<String, Object> args, Long userId) {
+        return startRun(def, args, userId, LOOP_KIND_WORKFLOW);
+    }
+
+    /**
+     * AUTOEVOLVE-CLOSE-LOOP P1 — {@code loopKind}-parameterised variant of
+     * {@link #startRun(WorkflowDefinition, Map, Long)}. See
+     * {@link #startRun(String, Map, Long, String)} for why the loop kind is just a
+     * row attribute the workflow engine never branches on.
+     */
+    public String startRun(WorkflowDefinition def, Map<String, Object> args, Long userId, String loopKind) {
         String workflowName = def.name();
+        String effectiveLoopKind = (loopKind == null || loopKind.isBlank()) ? LOOP_KIND_WORKFLOW : loopKind;
 
         if (!consolidationLock.tryAcquire(workflowName)) {
             throw new WorkflowAlreadyRunningException(workflowName);
@@ -190,7 +230,7 @@ public class WorkflowRunnerService {
             Long runAgentId = argAgentId != null ? argAgentId : anchorAgent.getId();
 
             FlywheelRunEntity run = flywheelRunService.startRun(
-                    LOOP_KIND_WORKFLOW,
+                    effectiveLoopKind,
                     FlywheelRunEntity.TRIGGER_SOURCE_USER_MANUAL,
                     inputJson,
                     runAgentId,
@@ -207,7 +247,9 @@ public class WorkflowRunnerService {
             final String fRunId = runId;
             final SessionEntity fAnchor = anchor;
             final Map<String, Object> fArgs = args;
-            workflowExecutor.execute(() -> runWorkflowBody(fRunId, def, fArgs, userId, fAnchor, workflowName));
+            final String fLoopKind = effectiveLoopKind;
+            workflowExecutor.execute(() ->
+                    runWorkflowBody(fRunId, def, fArgs, userId, fAnchor, workflowName, fLoopKind));
             return runId;
         } catch (RuntimeException e) {
             consolidationLock.release(workflowName);
@@ -229,7 +271,12 @@ public class WorkflowRunnerService {
      */
     void runWorkflowBody(String runId, WorkflowDefinition def, Map<String, Object> args,
                          Long userId, SessionEntity anchor, String workflowName) {
-        runWorkflowBody(runId, def, args, userId, anchor, workflowName, false, -1);
+        runWorkflowBody(runId, def, args, userId, anchor, workflowName, LOOP_KIND_WORKFLOW, false, -1);
+    }
+
+    void runWorkflowBody(String runId, WorkflowDefinition def, Map<String, Object> args,
+                         Long userId, SessionEntity anchor, String workflowName, String loopKind) {
+        runWorkflowBody(runId, def, args, userId, anchor, workflowName, loopKind, false, -1);
     }
 
     /**
@@ -240,14 +287,17 @@ public class WorkflowRunnerService {
      * right after the just-approved gate (plan §2.5/§2.6).
      */
     void runWorkflowBody(String runId, WorkflowDefinition def, Map<String, Object> args,
-                         Long userId, SessionEntity anchor, String workflowName,
+                         Long userId, SessionEntity anchor, String workflowName, String loopKind,
                          boolean isResuming, int frontier) {
         try {
+            long timeoutNanos = FlywheelRunEntity.LOOP_KIND_EVOLVE.equals(loopKind)
+                    ? evolveTimeoutNanos
+                    : BudgetTracker.DEFAULT_TIMEOUT_NANOS;
             BudgetTracker budget = new BudgetTracker(
                     BudgetTracker.DEFAULT_INSTRUCTION_CAP,
                     BudgetTracker.DEFAULT_AGENT_CALL_CAP,
                     System.nanoTime(),
-                    BudgetTracker.DEFAULT_TIMEOUT_NANOS);
+                    timeoutNanos);
             WorkflowContext ctx = new WorkflowContext(runId, args, budget);
             ctx.setBroadcaster(wsBroadcaster);
             // Sprint 2: humanApprove() / ctx bindings reach these through the context.
@@ -262,8 +312,12 @@ public class WorkflowRunnerService {
                 ctx.setReplayComplete(false);
             }
             WorkflowAgentInvoker invoker = invokerFactory.create(runId, anchor, userId);
+            // AUTOEVOLVE-CLOSE-LOOP P1: per-run tool() invoker for the deterministic
+            // tool nodes. Created here (per run) like the agent invoker.
+            WorkflowToolInvoker toolInvoker = toolInvokerFactory.create(runId, userId);
 
-            Object result = evaluator.evaluate(def.jsSource(), ctx, invoker, workflowSubAgentExecutor);
+            Object result = evaluator.evaluate(
+                    def.jsSource(), ctx, invoker, toolInvoker, workflowSubAgentExecutor);
 
             String summaryJson = serializeResult(result);
             flywheelRunService.markCompleted(runId, null, summaryJson);
@@ -360,8 +414,9 @@ public class WorkflowRunnerService {
             final SessionEntity fAnchor = anchor;
             final Map<String, Object> fArgs = args;
             final int fFrontier = frontier;
+            final String fLoopKind = run.getLoopKind();
             workflowExecutor.execute(() -> runWorkflowBody(
-                    runId, def, fArgs, fUserId, fAnchor, workflowName, true, fFrontier));
+                    runId, def, fArgs, fUserId, fAnchor, workflowName, fLoopKind, true, fFrontier));
             log.info("WorkflowRunnerService: resume dispatched for run {} ('{}') approved={} frontier={}",
                     runId, workflowName, approved, frontier);
         } catch (RuntimeException e) {

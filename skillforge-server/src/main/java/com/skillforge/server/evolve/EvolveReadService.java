@@ -155,9 +155,32 @@ public class EvolveReadService {
                 .findByRunIdAndStepKindOrderByStepIndexAsc(
                         evolveRunId, FlywheelRunStepEntity.STEP_KIND_EVOLVE_ITERATION);
 
+        // AUTOEVOLVE-CLOSE-LOOP P1 — correlate each iteration's candidate-gen agent
+        // leaf (subagent_dispatch) sub-session so the FE can "click a node → see its
+        // session". In the evolve-loop workflow the ONLY subagent_dispatch steps are
+        // the per-iteration candidate leaves (the opt-report sub-flow runs as a
+        // SEPARATE run), created in iteration order, so the i-th candidate step ↔ the
+        // i-th recorded iteration.
+        //
+        // SAFE DEGRADE (r1 F1): positional zip is only correct when there is exactly
+        // one candidate step per recorded iteration. A run that errored mid-iteration
+        // (candidate dispatched, but the iteration never reached RecordIteration) has
+        // MORE candidate steps than ledger rows → the tail would mis-align to the
+        // WRONG session. Pointing at a wrong session is worse than pointing at none,
+        // so unless the counts match exactly we degrade EVERY iteration's subSessionId
+        // to null rather than risk a wrong association. The legacy orchestrator path
+        // has zero candidate steps (≠ ledger size) → also null, as intended.
+        List<FlywheelRunStepEntity> candidateSteps = stepRepository
+                .findByRunIdAndStepKindOrderByStepIndexAsc(
+                        evolveRunId, FlywheelRunStepEntity.STEP_KIND_SUBAGENT_DISPATCH);
+        boolean subSessionAlignable = candidateSteps.size() == steps.size();
+
         List<EvolveIterationDto> iterations = new ArrayList<>(steps.size());
-        for (FlywheelRunStepEntity step : steps) {
-            EvolveIterationDto dto = parseIterationStep(step);
+        for (int i = 0; i < steps.size(); i++) {
+            FlywheelRunStepEntity step = steps.get(i);
+            String subSessionId = subSessionAlignable
+                    ? candidateSteps.get(i).getSubAgentSessionId() : null;
+            EvolveIterationDto dto = parseIterationStep(step, subSessionId);
             if (dto != null) {
                 iterations.add(dto);
             }
@@ -201,7 +224,7 @@ public class EvolveReadService {
      * Returns {@code null} (and logs a warning) if the JSON is missing or
      * cannot be parsed — defensive for partially-written ledger rows.
      */
-    private EvolveIterationDto parseIterationStep(FlywheelRunStepEntity step) {
+    private EvolveIterationDto parseIterationStep(FlywheelRunStepEntity step, String subSessionId) {
         JsonNode payload = parseStepOutputJson(step);
         if (payload == null) {
             log.warn("EvolveReadService: step {} has null/unparseable step_output_json; skipping",
@@ -230,6 +253,9 @@ public class EvolveReadService {
         PredictionDto prediction = parseJsonNode(payload.get("prediction"), PredictionDto.class);
         ReconciliationDto reconciliation =
                 parseJsonNode(payload.get("reconciliation"), ReconciliationDto.class);
+        // P1: semanticDelta sidecar (null for legacy / pre-P1 rows). Passed through
+        // as the raw JSON node — it serializes back to the FE inline.
+        JsonNode semanticDelta = objectNodeOrNull(payload.get("semanticDelta"));
 
         return new EvolveIterationDto(
                 iteration,
@@ -244,7 +270,18 @@ public class EvolveReadService {
                 step.getCreatedAt(),
                 candidateBundle,
                 prediction,
-                reconciliation);
+                reconciliation,
+                step.getId(),
+                subSessionId,
+                semanticDelta);
+    }
+
+    /** The node if it is a non-null JSON object, else {@code null}. */
+    private static JsonNode objectNodeOrNull(JsonNode node) {
+        if (node == null || node.isNull() || node.isMissingNode() || !node.isObject()) {
+            return null;
+        }
+        return node;
     }
 
     /**

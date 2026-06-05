@@ -15,6 +15,9 @@ import com.skillforge.server.flywheel.run.FlywheelRunService;
 import com.skillforge.server.repository.AgentRepository;
 import com.skillforge.server.service.ChatService;
 import com.skillforge.server.service.SessionService;
+import com.skillforge.workflow.WorkflowRunnerService;
+import com.skillforge.workflow.exception.WorkflowAlreadyRunningException;
+import com.skillforge.workflow.exception.WorkflowNotFoundException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -94,6 +97,10 @@ public class EvolveController {
     private final EvolveReadService evolveReadService;
     private final AgentBundleAdoptionService adoptionService;
     private final HarvestedScenarioService harvestedScenarioService;
+    private final WorkflowRunnerService workflowRunnerService;
+
+    /** AUTOEVOLVE-CLOSE-LOOP P1 — the deterministic evolve-loop workflow name. */
+    static final String EVOLVE_LOOP_WORKFLOW = "evolve-loop";
 
     public EvolveController(AgentRepository agentRepository,
                             FlywheelRunService flywheelRunService,
@@ -101,7 +108,8 @@ public class EvolveController {
                             ChatService chatService,
                             EvolveReadService evolveReadService,
                             AgentBundleAdoptionService adoptionService,
-                            HarvestedScenarioService harvestedScenarioService) {
+                            HarvestedScenarioService harvestedScenarioService,
+                            WorkflowRunnerService workflowRunnerService) {
         this.agentRepository = agentRepository;
         this.flywheelRunService = flywheelRunService;
         this.sessionService = sessionService;
@@ -109,6 +117,7 @@ public class EvolveController {
         this.evolveReadService = evolveReadService;
         this.adoptionService = adoptionService;
         this.harvestedScenarioService = harvestedScenarioService;
+        this.workflowRunnerService = workflowRunnerService;
     }
 
     /**
@@ -124,10 +133,22 @@ public class EvolveController {
     @PostMapping("/agents/{agentId}/run")
     public ResponseEntity<?> run(@PathVariable("agentId") Long agentId,
                                  @RequestParam(value = "maxIter", required = false) Integer maxIterRaw,
-                                 @RequestParam(value = "reportId", required = false) String reportIdRaw) {
+                                 @RequestParam(value = "reportId", required = false) String reportIdRaw,
+                                 @RequestParam(value = "engine", required = false) String engineRaw) {
         if (agentId == null || agentId <= 0L) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "agentId must be a positive long; got " + agentId);
+        }
+        // AUTOEVOLVE-CLOSE-LOOP P1 — gray-rollout switch. Default stays "orchestrator"
+        // (the legacy top-level agent loop) so existing behaviour is unchanged; pass
+        // engine=workflow to drive the new deterministic evolve-loop.workflow.js. Both
+        // produce a loop_kind=evolve FlywheelRun, so the read API / dashboards are
+        // identical regardless of engine. The orchestrator path is NOT retired in P1
+        // (instant rollback). Reject any other value.
+        String engine = (engineRaw == null || engineRaw.isBlank()) ? "orchestrator" : engineRaw.trim();
+        if (!"orchestrator".equals(engine) && !"workflow".equals(engine)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "engine must be 'orchestrator' or 'workflow'; got " + engine);
         }
         int maxIter = clampMaxIter(maxIterRaw);
         // Optional pre-existing completed opt-report to drive the loop from. When
@@ -152,6 +173,24 @@ public class EvolveController {
                 .orElseThrow(() -> new ResponseStatusException(
                         HttpStatus.NOT_FOUND, "Agent not found: id=" + agentId));
 
+        // HIGH-1 fix (note): per-agent in-flight guard — reject with 409 if this
+        // agent already has an active (running / pending) evolve run. Two concurrent
+        // evolve loops on the same agent would race on candidates / A/B runs. The
+        // guard is applied INSIDE each engine branch (not before) so the legacy
+        // orchestrator path keeps its original "orchestrator-missing 503 before the
+        // active-run guard" ordering.
+
+        // AUTOEVOLVE-CLOSE-LOOP P1 — new deterministic engine path.
+        if ("workflow".equals(engine)) {
+            if (flywheelRunService.hasActiveEvolveRun(agentId)) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        "agent " + agentId + " already has an active evolve run; "
+                                + "wait for it to complete (or fail) before triggering another");
+            }
+            return runViaWorkflow(agentId, targetAgent, maxIter, reportId);
+        }
+
+        // ── Legacy orchestrator engine (default) ──
         // The orchestrator agent is seeded by V131. A missing row indicates a
         // partially-rolled-out instance — fail fast with 503 rather than firing
         // chatAsync into a void (matches FlywheelController's system-agent guard).
@@ -160,11 +199,6 @@ public class EvolveController {
                         HttpStatus.SERVICE_UNAVAILABLE,
                         "evolve-orchestrator system agent not seeded; check V131 migration"));
 
-        // HIGH-1 fix: per-agent in-flight guard. Reject with 409 if this agent
-        // already has an active (running / pending) evolve run. Two concurrent
-        // evolve loops on the same agent would race on candidates / A/B runs
-        // (mirrors ImprovementConflictException guards in PromptImproverService:617
-        // / SkillAbEvalService:210 that prevent concurrent A/B on the same agent).
         if (flywheelRunService.hasActiveEvolveRun(agentId)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "agent " + agentId + " already has an active evolve run; "
@@ -222,6 +256,63 @@ public class EvolveController {
         // 202 ACCEPTED — the loop is async; the session is queued and the
         // orchestrator will drive it in the background (mirrors FlywheelController
         // .runLoop's accepted() pattern).
+        return ResponseEntity.accepted().body(body);
+    }
+
+    /**
+     * AUTOEVOLVE-CLOSE-LOOP P1 — drive the deterministic {@code evolve-loop}
+     * workflow. Creates a {@code loop_kind=evolve} {@link FlywheelRunEntity} via
+     * {@link WorkflowRunnerService#startRun(String, java.util.Map, Long, String)}
+     * (spike-verified R1: the engine is keyed on runId, not loop_kind, so the
+     * evolve read API / {@code hasActiveEvolveRun} / completion listener all work
+     * on this run exactly like the orchestrator one).
+     *
+     * <p>The run is attributed to the TARGET agent (args.agentId) so it shows under
+     * the agent's evolve trajectory; the workflow JS reads {@code targetAgentId}.
+     * {@code autoApprove=true} routes any inner opt-report sub-flow past its human
+     * gate (the human gate is the END-of-loop adopt step).
+     */
+    private ResponseEntity<?> runViaWorkflow(Long agentId, AgentEntity targetAgent,
+                                             int maxIter, String reportId) {
+        java.util.Map<String, Object> wfArgs = new LinkedHashMap<>();
+        // agentId → run attribution (WorkflowRunnerService.extractAgentId);
+        // targetAgentId → consumed by the workflow JS.
+        wfArgs.put("agentId", agentId);
+        wfArgs.put("targetAgentId", agentId);
+        wfArgs.put("maxIter", maxIter);
+        // P1 ALWAYS autoApprove=true (design §7 R3): the evolve-loop's humanApprove
+        // branch (pause→resume mid-polling) is untested and deferred to P2. The human
+        // gate stays the END-of-loop adopt step (POST /runs/{id}/adopt). Do NOT expose
+        // an autoApprove=false path here until resume-mid-polling is verified.
+        wfArgs.put("autoApprove", true);
+        if (reportId != null) {
+            wfArgs.put("reportId", reportId);
+        }
+
+        String runId;
+        try {
+            runId = workflowRunnerService.startRun(
+                    EVOLVE_LOOP_WORKFLOW, wfArgs, SYSTEM_USER_ID, FlywheelRunEntity.LOOP_KIND_EVOLVE);
+        } catch (WorkflowAlreadyRunningException e) {
+            // The evolve-loop workflow holds a per-NAME lock, so only one evolve-loop
+            // run can be in flight globally at a time (P1 single-tenant dogfood).
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "an evolve-loop workflow run is already in flight; wait for it to finish");
+        } catch (WorkflowNotFoundException e) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "evolve-loop workflow not registered (check classpath:workflows/evolve-loop.workflow.js)");
+        }
+
+        log.info("[Evolve] evolve-loop workflow run started: evolveRunId={} targetAgentId={} maxIter={} reportId={}",
+                runId, agentId, maxIter, reportId);
+
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("evolveRunId", runId);
+        body.put("agentId", agentId);
+        body.put("agentName", targetAgent.getName());
+        body.put("maxIter", maxIter);
+        body.put("engine", "workflow");
+        body.put("status", "running");
         return ResponseEntity.accepted().body(body);
     }
 

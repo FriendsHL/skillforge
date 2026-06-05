@@ -75,6 +75,9 @@ public class RecordIterationTool implements Tool {
                 + "{issueId?, targetProblem, flipToPass:[...], riskToFail:[...]} — stored verbatim.\n"
                 + "- \"reconciliation\" (optional, G3): the ReconcilePrediction result "
                 + "{hits, misses, riskHits, surprises, confidence} — stored verbatim.\n"
+                + "- \"semanticDelta\" (optional, P1): the before→after change tuple "
+                + "{surface, before, after, diff, changeDesc} (from GetCandidateDiff) — stored verbatim "
+                + "for traceability.\n"
                 + "Returns the recorded stepId.";
     }
 
@@ -117,6 +120,9 @@ public class RecordIterationTool implements Tool {
                         + "stored verbatim into the iteration ledger."));
         properties.put("reconciliation", Map.of("type", "object",
                 "description", "Optional (G3): the ReconcilePrediction result, stored verbatim."));
+        properties.put("semanticDelta", Map.of("type", "object",
+                "description", "Optional (P1): {surface, before, after, diff, changeDesc} from "
+                        + "GetCandidateDiff, stored verbatim for traceability."));
 
         Map<String, Object> schema = new LinkedHashMap<>();
         schema.put("type", "object");
@@ -196,6 +202,8 @@ public class RecordIterationTool implements Tool {
             // (free-schema JSON) so the read API / FE can show predicted-vs-actual.
             putJsonSidecar(payload, "prediction", input.get("prediction"));
             putJsonSidecar(payload, "reconciliation", input.get("reconciliation"));
+            // P1 (evolve-loop): semantic delta (before→after) sidecar for traceability.
+            putJsonSidecar(payload, "semanticDelta", input.get("semanticDelta"));
 
             String stepId = flywheelRunService.appendEvolveIterationStep(evolveRunId, iteration, payload);
 

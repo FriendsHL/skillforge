@@ -69,7 +69,8 @@ class EvolveControllerAdoptTest {
                 mock(ChatService.class),
                 evolveReadService,
                 adoptionService,
-                mock(HarvestedScenarioService.class));
+                mock(HarvestedScenarioService.class),
+                mock(com.skillforge.workflow.WorkflowRunnerService.class));
         mvc = MockMvcBuilders.standaloneSetup(controller)
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(objectMapper))
                 .build();

@@ -4,6 +4,7 @@ import com.skillforge.core.skill.SkillRegistry;
 import com.skillforge.core.skill.Tool;
 import com.skillforge.server.tool.GetAgentConfigTool;
 import com.skillforge.server.tool.GetTraceTool;
+import com.skillforge.server.tool.evolve.GenerateCandidateTool;
 import com.skillforge.server.tool.optreport.GetToolCallSequenceTool;
 import com.skillforge.server.tool.optreport.LoadErrorSpanBatchTool;
 import com.skillforge.server.tool.optreport.LoadSessionBatchTool;
@@ -45,11 +46,12 @@ class WorkflowSkillRegistryFactoryTest {
                 (AnnotateSessionTool) toolNamed(AnnotateSessionTool.class, "AnnotateSession"),
                 (RecordBatchAnnotationsTool) toolNamed(RecordBatchAnnotationsTool.class, "RecordBatchAnnotations"),
                 (LoadErrorSpanBatchTool) toolNamed(LoadErrorSpanBatchTool.class, "LoadErrorSpanBatch"),
-                (GetToolCallSequenceTool) toolNamed(GetToolCallSequenceTool.class, "GetToolCallSequence"));
+                (GetToolCallSequenceTool) toolNamed(GetToolCallSequenceTool.class, "GetToolCallSequence"),
+                (GenerateCandidateTool) toolNamed(GenerateCandidateTool.class, "GenerateCandidate"));
     }
 
     @Test
-    @DisplayName("registers exactly the 8 OPT-REPORT / G5 tools by name")
+    @DisplayName("registers exactly the 9 OPT-REPORT / G5 / candidate-gen tools by name")
     void registersAllOptReportTools() {
         SkillRegistry registry = factory.workflowRegistry();
 
@@ -57,7 +59,9 @@ class WorkflowSkillRegistryFactoryTest {
         assertThat(names).containsExactlyInAnyOrder(
                 "LoadSessionBatch", "GetAgentConfig", "GetTrace",
                 "SpanBehaviorStats", "AnnotateSession", "RecordBatchAnnotations",
-                "LoadErrorSpanBatch", "GetToolCallSequence");
+                "LoadErrorSpanBatch", "GetToolCallSequence",
+                // AUTOEVOLVE-CLOSE-LOOP P1: opened to the evolve-candidate-gen leaf.
+                "GenerateCandidate");
 
         // Every agent that the opt-report workflow dispatches can resolve its tools.
         for (String n : names) {
@@ -95,9 +99,14 @@ class WorkflowSkillRegistryFactoryTest {
     @DisplayName("does NOT register orchestration / A-B / evolve tools (recursion isolation)")
     void excludesOrchestrationAndAbTools() {
         SkillRegistry registry = factory.workflowRegistry();
+        // NOTE (AUTOEVOLVE-CLOSE-LOOP P1): GenerateCandidate is NO LONGER forbidden —
+        // it is intentionally opened to the evolve-candidate-gen leaf (Q2: it only
+        // calls the improver services, never A/B / RunWorkflow, so it opens no
+        // fan-out path; least-privilege is preserved because only that agent's
+        // tool_ids list it). The fan-out tools below stay excluded.
         for (String forbidden : List.of(
                 "RunWorkflow", "TriggerAbEval", "GetAbResult", "PromoteCandidate",
-                "GenerateCandidate", "RecordIteration")) {
+                "RecordIteration")) {
             assertThat(registry.getTool(forbidden))
                     .as(forbidden + " must not be reachable by a workflow sub-agent")
                     .isEmpty();

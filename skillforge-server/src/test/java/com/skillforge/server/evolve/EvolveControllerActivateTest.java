@@ -59,7 +59,8 @@ class EvolveControllerActivateTest {
                 mock(ChatService.class),
                 mock(EvolveReadService.class),
                 mock(AgentBundleAdoptionService.class),
-                harvestedScenarioService);
+                harvestedScenarioService,
+                mock(com.skillforge.workflow.WorkflowRunnerService.class));
         mvc = MockMvcBuilders.standaloneSetup(controller)
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(objectMapper))
                 .build();

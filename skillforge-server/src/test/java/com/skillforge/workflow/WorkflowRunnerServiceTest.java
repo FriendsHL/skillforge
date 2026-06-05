@@ -66,9 +66,10 @@ class WorkflowRunnerServiceTest {
         wfExec = Executors.newSingleThreadExecutor();
         subExec = Executors.newSingleThreadExecutor();
         service = new WorkflowRunnerService(registry, flywheelRunService, sessionService,
-                agentRepository, invokerFactory, lock, wsBroadcaster, new ObjectMapper(),
+                agentRepository, invokerFactory, mock(WorkflowToolInvokerFactory.class),
+                lock, wsBroadcaster, new ObjectMapper(),
                 mock(com.skillforge.workflow.journal.JournalCache.class),
-                java.time.Clock.systemUTC(), wfExec, subExec, "anchor-agent");
+                java.time.Clock.systemUTC(), wfExec, subExec, "anchor-agent", 360L);
     }
 
     @AfterEach
@@ -142,15 +143,43 @@ class WorkflowRunnerServiceTest {
     }
 
     @Test
+    @DisplayName("startRun(...,loopKind=evolve) creates the run row with loop_kind=evolve")
+    void startRunPassesEvolveLoopKind() throws InterruptedException {
+        WorkflowDefinition def = new WorkflowDefinition("wf", "d", List.of(), "return 1;", "h");
+        when(registry.findByName("wf")).thenReturn(Optional.of(def));
+        AgentEntity agent = new AgentEntity();
+        agent.setId(3L);
+        agent.setName("anchor-agent");
+        when(agentRepository.findFirstByName("anchor-agent")).thenReturn(Optional.of(agent));
+        FlywheelRunEntity run = new FlywheelRunEntity();
+        run.setId("run-evolve");
+        // Run is attributed to args.agentId (7) and created with loop_kind=evolve.
+        when(flywheelRunService.startRun(eq("evolve"), eq("user_manual"), any(), eq(7L), eq(1)))
+                .thenReturn(run);
+        SessionEntity anchor = new SessionEntity();
+        anchor.setId("anchor-sess");
+        when(sessionService.createSession(eq(0L), eq(3L))).thenReturn(anchor);
+        lenient().when(invokerFactory.create(anyString(), any(), any()))
+                .thenReturn((p, o, i) -> "unused");
+
+        String runId = service.startRun("wf", Map.of("agentId", 7L), 0L, "evolve");
+        assertThat(runId).isEqualTo("run-evolve");
+        awaitBody();
+
+        verify(flywheelRunService).startRun(eq("evolve"), eq("user_manual"), any(), eq(7L), eq(1));
+    }
+
+    @Test
     @DisplayName("executor rejects body dispatch → lock released + run markError (no leak)")
     void executorRejectReleasesLockAndMarksError() {
         stubStartRunInfra("return 1;");
         ExecutorService rejecting = mock(ExecutorService.class);
         doThrow(new RejectedExecutionException("queue full")).when(rejecting).execute(any());
         WorkflowRunnerService rejectingService = new WorkflowRunnerService(registry, flywheelRunService,
-                sessionService, agentRepository, invokerFactory, lock, wsBroadcaster, new ObjectMapper(),
+                sessionService, agentRepository, invokerFactory, mock(WorkflowToolInvokerFactory.class),
+                lock, wsBroadcaster, new ObjectMapper(),
                 mock(com.skillforge.workflow.journal.JournalCache.class),
-                java.time.Clock.systemUTC(), rejecting, subExec, "anchor-agent");
+                java.time.Clock.systemUTC(), rejecting, subExec, "anchor-agent", 360L);
 
         assertThatThrownBy(() -> rejectingService.startRun("wf", Map.of(), 5L))
                 .isInstanceOf(RejectedExecutionException.class);

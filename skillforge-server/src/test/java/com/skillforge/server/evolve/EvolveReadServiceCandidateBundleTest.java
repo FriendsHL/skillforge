@@ -168,4 +168,51 @@ class EvolveReadServiceCandidateBundleTest {
         when(runRepository.findById("nope")).thenReturn(Optional.empty());
         assertThat(service.listKeptCandidateBundles("nope")).isEmpty();
     }
+
+    // ── r1 F1: subSessionId correlation safe-degrade ──
+
+    @Test
+    @DisplayName("F1: subSessionId correlated by iteration order when candidate-step count matches ledger count")
+    void subSessionId_correlated_whenCountsMatch() {
+        stubEvolveRun();
+        stubSteps(
+                step(1, "{\"iteration\":1,\"surface\":\"prompt\",\"changeDesc\":\"a\",\"candidateId\":\"c1\",\"kept\":true}"),
+                step(2, "{\"iteration\":2,\"surface\":\"prompt\",\"changeDesc\":\"b\",\"candidateId\":\"c2\",\"kept\":false}"));
+        stubCandidateSteps(candidateStep(0, "sub-1"), candidateStep(6, "sub-2"));
+
+        List<EvolveIterationDto> iters = service.getRunDetail(RUN_ID).get().iterations();
+        assertThat(iters.get(0).subSessionId()).isEqualTo("sub-1");
+        assertThat(iters.get(1).subSessionId()).isEqualTo("sub-2");
+    }
+
+    @Test
+    @DisplayName("F1: subSessionId degrades to null (never WRONG) when candidate-step count != ledger count")
+    void subSessionId_safeNull_whenCountsMismatch() {
+        stubEvolveRun();
+        // 1 ledger row but 2 candidate dispatch steps (e.g. run errored mid-iteration):
+        // positional zip would mis-point — must degrade to null, not the wrong session.
+        stubSteps(
+                step(1, "{\"iteration\":1,\"surface\":\"prompt\",\"changeDesc\":\"a\",\"candidateId\":\"c1\",\"kept\":true}"));
+        stubCandidateSteps(candidateStep(0, "sub-1"), candidateStep(6, "sub-2"));
+
+        EvolveIterationDto iter = service.getRunDetail(RUN_ID).get().iterations().get(0);
+        assertThat(iter.subSessionId()).isNull();
+    }
+
+    private FlywheelRunStepEntity candidateStep(int index, String subSessionId) {
+        FlywheelRunStepEntity s = new FlywheelRunStepEntity();
+        s.setId("disp-" + index);
+        s.setRunId(RUN_ID);
+        s.setStepKind(FlywheelRunStepEntity.STEP_KIND_SUBAGENT_DISPATCH);
+        s.setStepIndex(index);
+        s.setSubAgentSessionId(subSessionId);
+        s.setCreatedAt(NOW);
+        return s;
+    }
+
+    private void stubCandidateSteps(FlywheelRunStepEntity... steps) {
+        when(stepRepository.findByRunIdAndStepKindOrderByStepIndexAsc(
+                eq(RUN_ID), eq(FlywheelRunStepEntity.STEP_KIND_SUBAGENT_DISPATCH)))
+                .thenReturn(List.of(steps));
+    }
 }
