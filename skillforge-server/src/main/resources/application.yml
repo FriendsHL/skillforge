@@ -143,7 +143,10 @@ skillforge:
       # more concurrent calls = more HTTP 429s (counterproductive).
       # 2026-06-05: 3→6 给 A/B 提速（~24 次沙箱 agent loop / 原并发 3 = 8 波串行太慢，
       # 一轮 A/B 15-30min）。ark 配额够时可承受 6 并发；若 429 频发再降回。
-      scenario-concurrency: 6
+      # 2026-06-05 二次提速: 6→10。实测 run 5eb9c71e A/B 段(50场景×2臂=100 loop @ 并发6)
+      # = 11.4min、整窗口 0 个 429（ark 充足余量）→ 安全翻倍。预期 A/B ~11.4→~7min。
+      # 若后续 429 频发再降回 6。
+      scenario-concurrency: 10
 
   # AUTOEVOLVE-AGENT-FLYWHEEL Module C (FR-C7): per-evolve-run A/B budget cap.
   # The orchestrator's maxIter lives in its agent prompt (untrusted surface) and
