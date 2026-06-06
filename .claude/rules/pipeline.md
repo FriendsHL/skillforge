@@ -405,7 +405,24 @@ chain regression test / Code nit task→todo 术语统一）→ dev fix 后 comm
 - [ ] 测试与 build：dev 自己跑过，Claude 再 `npm run build` / `mvn test` 校一次
 - [ ] **PRD 决策回写**：Plan 阶段 ratify 的"草拟"决策更新为"已定"；实现中超出原方案的决策补回 `prd.md` / `tech-design.md`，避免下次读 PRD 仍是 stale 草拟
 - [ ] **完成事实归档**：`docs/delivery-index.md` 增加交付行（ID / 日期 / commit / migration / 关键验证）；需求包从 `requirements/active/` 移到 `requirements/archive/<yyyy-MM-dd>-<ID>-<slug>/`；`docs/todo.md` 队列行移到"最近完成"
+- [ ] **QA 冒烟门禁**（Mid/Full 且有功能性 / 可见行为变更时强制）：部署后由 qa-reviewer 执行预写冒烟用例，全 PASS 才 commit —— 详见下方
 - [ ] commit 前等用户批准（用户 durable 授权过的不需要）
+
+### QA 冒烟门禁（Mid/Full 且有功能性 / 可见行为变更时强制）
+
+> 来源：用户 2026-06-05 要求 institutionalize。动机：单测 + 对抗 reviewer 都过的**功能回归**（AUTOEVOLVE Phase 1 的 reconciliation gap）**真起服务跑一轮才暴露** —— 需要"部署后由独立 QA 执行预写冒烟用例"的硬门禁，而不是 Claude ad-hoc 测、更不是用户自己测。
+
+**两段：**
+
+1. **设计时写冒烟用例**（tech-design 交付物）：`prd.md` / `tech-design.md`（或 Plan 文件）必须含一节「冒烟用例」—— 功能性、**可执行、带期望 raw 证据**（触发命令 + 期望 JSON/SQL 行），不是"检查能用"这种含糊话。每条 = 触发步骤 + 期望证据 + **早失败检测**（把环境问题跟功能 bug 区分开，别把缺 key / 没部署误判成功能挂）。
+
+2. **部署后 qa-reviewer 执行冒烟**（commit 前硬门禁）：
+   - Claude 主会话先**部署**（重启 / 发布加载新代码）+ 确认部署成功（迁移应用、上下文起来）。
+   - 起一个 **qa-reviewer 临时 subagent**（general-purpose + QA system prompt）执行预写冒烟用例：逐条触发 + 取证 + 判 PASS/FAIL，**每条必须贴真跑的命令 + raw 输出**（[`verification-before-completion.md`](verification-before-completion.md) Iron Law），没证据的 PASS 当 FAIL；一条失败不停，跑完全部出汇总表。
+   - **全 PASS 才 commit**；任一 FAIL → 回 dev 修（warning-only 一轮 / blocker 升 Full）；**BLOCKED（环境问题，非功能）→ Claude 修环境重跑**，不算 dev 的锅。
+   - qa-reviewer 是**独立 fresh-eyes 执行者**跑预写套件，跟 dev / code-reviewer 分离 —— 对应 Phase 1 "单测+review 全绿但 live 有回归" 的教训。
+
+**不触发**：Solo / 纯内部重构无可见行为 / 纯 docs。
 
 ---
 
