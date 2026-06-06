@@ -139,13 +139,13 @@ public class EvolveController {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "agentId must be a positive long; got " + agentId);
         }
-        // AUTOEVOLVE-CLOSE-LOOP P1 — gray-rollout switch. Default stays "orchestrator"
-        // (the legacy top-level agent loop) so existing behaviour is unchanged; pass
-        // engine=workflow to drive the new deterministic evolve-loop.workflow.js. Both
-        // produce a loop_kind=evolve FlywheelRun, so the read API / dashboards are
-        // identical regardless of engine. The orchestrator path is NOT retired in P1
-        // (instant rollback). Reject any other value.
-        String engine = (engineRaw == null || engineRaw.isBlank()) ? "orchestrator" : engineRaw.trim();
+        // AUTOEVOLVE-CLOSE-LOOP P2b — gray-rollout switch, DEFAULT now "workflow"
+        // (the deterministic evolve-loop.workflow.js, Phase 1 + 2a live-verified incl
+        // qa-smoke). The legacy orchestrator agent loop is NOT retired — pass
+        // engine=orchestrator to opt back into it (instant rollback). Both produce a
+        // loop_kind=evolve FlywheelRun, so the read API / dashboards are identical
+        // regardless of engine. Reject any other value.
+        String engine = (engineRaw == null || engineRaw.isBlank()) ? "workflow" : engineRaw.trim();
         if (!"orchestrator".equals(engine) && !"workflow".equals(engine)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "engine must be 'orchestrator' or 'workflow'; got " + engine);
