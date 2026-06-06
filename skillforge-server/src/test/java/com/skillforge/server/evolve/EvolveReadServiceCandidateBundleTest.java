@@ -169,6 +169,52 @@ class EvolveReadServiceCandidateBundleTest {
         assertThat(service.listKeptCandidateBundles("nope")).isEmpty();
     }
 
+    // ── Phase 2a: semanticDelta passthrough (object single-surface / array multi-surface) ──
+
+    @Test
+    @DisplayName("semanticDelta object (single-surface) passes through verbatim")
+    void semanticDelta_object_passthrough() {
+        stubEvolveRun();
+        stubSteps(step(1, "{\"iteration\":1,\"surface\":\"agent\",\"changeDesc\":\"x\","
+                + "\"candidateId\":\"cand-1\",\"kept\":true,"
+                + "\"semanticDelta\":{\"surface\":\"prompt\",\"before\":\"b\",\"after\":\"a\","
+                + "\"diff\":\"d\",\"changeDesc\":\"x\"}}"));
+
+        EvolveIterationDto iter = service.getRunDetail(RUN_ID).get().iterations().get(0);
+        assertThat(iter.semanticDelta()).isNotNull();
+        assertThat(iter.semanticDelta().isObject()).isTrue();
+        assertThat(iter.semanticDelta().get("surface").asText()).isEqualTo("prompt");
+    }
+
+    @Test
+    @DisplayName("semanticDelta array (multi-surface) passes through verbatim (Phase 2a)")
+    void semanticDelta_array_passthrough() {
+        stubEvolveRun();
+        stubSteps(step(1, "{\"iteration\":1,\"surface\":\"agent\",\"changeDesc\":\"x\","
+                + "\"candidateId\":\"cand-1\",\"kept\":true,"
+                + "\"semanticDelta\":[{\"surface\":\"prompt\",\"before\":\"b1\",\"after\":\"a1\"},"
+                + "{\"surface\":\"behavior_rule\",\"before\":\"b2\",\"after\":\"a2\"}]}"));
+
+        EvolveIterationDto iter = service.getRunDetail(RUN_ID).get().iterations().get(0);
+        assertThat(iter.semanticDelta()).isNotNull();
+        assertThat(iter.semanticDelta().isArray()).isTrue();
+        assertThat(iter.semanticDelta()).hasSize(2);
+        assertThat(iter.semanticDelta().get(0).get("surface").asText()).isEqualTo("prompt");
+        assertThat(iter.semanticDelta().get(1).get("surface").asText()).isEqualTo("behavior_rule");
+    }
+
+    @Test
+    @DisplayName("semanticDelta null when sidecar is a non-object/array text fallback")
+    void semanticDelta_textFallback_null() {
+        stubEvolveRun();
+        stubSteps(step(1, "{\"iteration\":1,\"surface\":\"agent\",\"changeDesc\":\"x\","
+                + "\"candidateId\":\"cand-1\",\"kept\":true,"
+                + "\"semanticDelta\":\"not-structured\"}"));
+
+        EvolveIterationDto iter = service.getRunDetail(RUN_ID).get().iterations().get(0);
+        assertThat(iter.semanticDelta()).isNull();
+    }
+
     // ── r1 F1: subSessionId correlation safe-degrade ──
 
     @Test

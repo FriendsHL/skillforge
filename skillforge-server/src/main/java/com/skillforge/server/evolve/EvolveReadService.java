@@ -255,7 +255,11 @@ public class EvolveReadService {
                 parseJsonNode(payload.get("reconciliation"), ReconciliationDto.class);
         // P1: semanticDelta sidecar (null for legacy / pre-P1 rows). Passed through
         // as the raw JSON node — it serializes back to the FE inline.
-        JsonNode semanticDelta = objectNodeOrNull(payload.get("semanticDelta"));
+        // Phase 2a: a single-surface iteration records an OBJECT
+        // {surface, before, after, diff, changeDesc}; a multi-surface bundle
+        // iteration records an ARRAY of those (one per changed surface). Accept
+        // both shapes — the FE distinguishes via Array.isArray (设计 §5 / R1).
+        JsonNode semanticDelta = objectOrArrayNodeOrNull(payload.get("semanticDelta"));
 
         return new EvolveIterationDto(
                 iteration,
@@ -276,9 +280,15 @@ public class EvolveReadService {
                 semanticDelta);
     }
 
-    /** The node if it is a non-null JSON object, else {@code null}. */
-    private static JsonNode objectNodeOrNull(JsonNode node) {
-        if (node == null || node.isNull() || node.isMissingNode() || !node.isObject()) {
+    /**
+     * The node if it is a non-null JSON object OR array, else {@code null}.
+     * Phase 2a: semanticDelta is an object for single-surface iterations and an
+     * array (one entry per changed surface) for multi-surface bundles; both must
+     * pass through to the FE verbatim.
+     */
+    private static JsonNode objectOrArrayNodeOrNull(JsonNode node) {
+        if (node == null || node.isNull() || node.isMissingNode()
+                || !(node.isObject() || node.isArray())) {
             return null;
         }
         return node;

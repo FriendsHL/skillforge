@@ -1,5 +1,6 @@
 package com.skillforge.workflow;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillforge.workflow.sandbox.BudgetTracker;
 import com.skillforge.workflow.sandbox.L1SandboxFactory;
@@ -20,12 +21,17 @@ import java.util.concurrent.Executors;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * AUTOEVOLVE-CLOSE-LOOP P1 — drives the real {@code evolve-loop.workflow.js} through
- * the {@link WorkflowEvaluator} with STUB agent/tool invokers (no LLM, no DB). This
- * is the deterministic-orchestration integration test (design §6 structure): it
- * proves the JS owns the loop — issue ranking, the candidate→diff→A/B→poll→record
- * sequence, deterministic GetAbResult polling, the wouldPromote keep decision, and
- * winner carry-forward — without any non-determinism.
+ * AUTOEVOLVE-CLOSE-LOOP P1 + Phase 2a — drives the real {@code evolve-loop.workflow.js}
+ * through the {@link WorkflowEvaluator} with STUB agent/tool invokers (no LLM, no DB).
+ * This is the deterministic-orchestration integration test: it proves the JS owns the
+ * loop — issue ranking, the candidate→multi-surface-diff→A/B→poll→record sequence,
+ * deterministic GetAbResult polling, the wouldPromote keep decision, and per-surface
+ * winner carry-forward (the whole bundle) — without any non-determinism.
+ *
+ * <p>Phase 2a coverage: the candidate leaf now returns a cross-surface
+ * {@code candidateBundle}; the JS composes a whole-agent A/B over the bundle,
+ * computes one semantic delta per changed surface, and carries forward the merged
+ * best bundle.
  */
 class EvolveLoopWorkflowTest {
 
@@ -41,24 +47,17 @@ class EvolveLoopWorkflowTest {
     }
 
     @Test
-    @DisplayName("evolve-loop: deterministic candidate→diff→A/B→poll→record per issue, with carry-forward")
+    @DisplayName("evolve-loop: single-surface (prompt) loop degrades cleanly, carries the prompt pointer forward")
     void deterministicLoop() throws Exception {
         ExecutorService exec = Executors.newSingleThreadExecutor();
         try {
-            // ── stub candidate-gen leaf: a fresh candidate id per call ──
+            // ── stub candidate-gen leaf: a fresh prompt-only bundle per call ──
             int[] candSeq = {0};
             WorkflowAgentInvoker agent = (prompt, opts, stepIndex) -> {
                 candSeq[0]++;
-                Map<String, Object> cand = new LinkedHashMap<>();
-                cand.put("candidateId", "cand-" + candSeq[0]);
-                cand.put("surface", "prompt");
-                cand.put("changeDesc", "change-" + candSeq[0]);
-                Map<String, Object> pred = new LinkedHashMap<>();
-                pred.put("targetProblem", "p" + candSeq[0]);
-                pred.put("flipToPass", List.of());
-                pred.put("riskToFail", List.of());
-                cand.put("prediction", pred);
-                return cand;
+                Map<String, Object> bundle = new LinkedHashMap<>();
+                bundle.put("promptVersionId", "cand-" + candSeq[0]);
+                return cand(bundle, List.of("prompt"), "change-" + candSeq[0], candSeq[0]);
             };
 
             // ── stub tool() invoker: canned mechanical results, recording all calls ──
@@ -72,55 +71,22 @@ class EvolveLoopWorkflowTest {
                         r.put("reportId", input.get("reportId"));
                         r.put("agentId", 7);
                         r.put("status", "completed");
+                        // No fixSurface → allowedSurfaces degrades to ['prompt'] (Phase 1 equiv).
                         r.put("topIssues", List.of(
-                                issue("i1", "high", 3, 0.9, "prompt"),
-                                issue("i2", "low", 1, 0.5, "prompt")));
+                                issue("i1", "high", 3, 0.9, "prompt", null),
+                                issue("i2", "low", 1, 0.5, "prompt", null)));
                         return r;
                     }
-                    case "GetCandidateDiff": {
-                        Map<String, Object> r = new LinkedHashMap<>();
-                        r.put("surface", "prompt");
-                        r.put("before", "old prompt");
-                        r.put("after", "new prompt for " + input.get("candidateId"));
-                        r.put("diff", "- old prompt\n+ new prompt");
-                        return r;
-                    }
-                    case "TriggerAbEval": {
-                        // agent-surface A/B over a single-pointer prompt bundle.
-                        @SuppressWarnings("unchecked")
-                        Map<String, Object> cb = (Map<String, Object>) input.get("candidateBundle");
-                        Map<String, Object> r = new LinkedHashMap<>();
-                        r.put("abRunId", "ab-" + (cb == null ? "?" : cb.get("promptVersionId")));
-                        return r;
-                    }
-                    case "GetAbResult": {
-                        String abRunId = String.valueOf(input.get("abRunId"));
-                        if (abSeen.add(abRunId)) {
-                            // First poll for this run → still running (forces a re-poll).
-                            return Map.of("status", "running");
-                        }
-                        Map<String, Object> r = new LinkedHashMap<>();
-                        r.put("status", "COMPLETED");
-                        r.put("baselineScore", 70.0);
-                        r.put("candidateScore", 90.0);
-                        r.put("delta", 20.0);
-                        r.put("wouldPromote", true);   // → kept
-                        return r;
-                    }
-                    case "ReconcilePrediction": {
-                        Map<String, Object> r = new LinkedHashMap<>();
-                        r.put("issueId", "i1");
-                        r.put("targetProblem", "tp");
-                        r.put("hits", List.of("s1"));
-                        r.put("misses", List.of());
-                        r.put("riskHits", List.of());
-                        r.put("surprises", List.of());
-                        r.put("confidence", 1.0);
-                        return r;
-                    }
-                    case "RecordIteration": {
+                    case "GetCandidateDiff":
+                        return diffEcho(input);
+                    case "TriggerAbEval":
+                        return Map.of("abRunId", "ab-" + bundlePrimary(input.get("candidateBundle")));
+                    case "GetAbResult":
+                        return abResult(input, abSeen);
+                    case "ReconcilePrediction":
+                        return reconcile();
+                    case "RecordIteration":
                         return Map.of("stepId", "step-" + input.get("iteration"));
-                    }
                     default:
                         return Map.of();
                 }
@@ -147,12 +113,10 @@ class EvolveLoopWorkflowTest {
             assertThat(toolNames(calls)).doesNotContain("RunOptReportSubflow");
             assertThat(toolNames(calls)).contains("GetOptReport");
 
-            // ── per-iteration mechanical sequence (×2 iterations) ──
-            assertThat(count(calls, "GetCandidateDiff")).isEqualTo(2);
+            // ── per-iteration mechanical sequence (×2 iterations, single surface each) ──
+            assertThat(count(calls, "GetCandidateDiff")).isEqualTo(2);   // 1 changed surface × 2 iters
             assertThat(count(calls, "TriggerAbEval")).isEqualTo(2);
             assertThat(count(calls, "RecordIteration")).isEqualTo(2);
-            // G3: ReconcilePrediction runs once per iteration (regression guard — was
-            // missing in the first P1 cut, dropping reconciliation vs the orchestrator).
             assertThat(count(calls, "ReconcilePrediction")).isEqualTo(2);
             // Deterministic polling: each A/B run is polled twice (running → COMPLETED).
             assertThat(count(calls, "GetAbResult")).isEqualTo(4);
@@ -160,34 +124,265 @@ class EvolveLoopWorkflowTest {
             // ── A/B is agent-surface; reconcile gets the same abRunId ──
             Map<String, Object> ab1 = nthInput(calls, "TriggerAbEval", 1);
             assertThat(ab1.get("surface")).isEqualTo("agent");
-            @SuppressWarnings("unchecked")
-            Map<String, Object> cb1 = (Map<String, Object>) ab1.get("candidateBundle");
-            assertThat(cb1.get("promptVersionId")).isEqualTo("cand-1");
-            Map<String, Object> recon1Call = nthInput(calls, "ReconcilePrediction", 1);
-            assertThat(recon1Call.get("abRunId")).isEqualTo("ab-cand-1");
+            assertThat(asMap(ab1.get("candidateBundle")).get("promptVersionId")).isEqualTo("cand-1");
+            assertThat(nthInput(calls, "ReconcilePrediction", 1).get("abRunId")).isEqualTo("ab-cand-1");
 
-            // ── winner carry-forward: iter-2's A/B baselines on iter-1's kept candidate bundle ──
+            // ── winner carry-forward: iter-2's A/B baselines on iter-1's kept bundle ──
             Map<String, Object> ab2 = nthInput(calls, "TriggerAbEval", 2);
-            @SuppressWarnings("unchecked")
-            Map<String, Object> bb2 = (Map<String, Object>) ab2.get("baselineBundle");
-            assertThat(bb2.get("promptVersionId")).isEqualTo("cand-1");
+            assertThat(asMap(ab2.get("baselineBundle")).get("promptVersionId")).isEqualTo("cand-1");
+            // candidate = merged best bundle with the changed prompt face overridden.
+            assertThat(asMap(ab2.get("candidateBundle")).get("promptVersionId")).isEqualTo("cand-2");
 
-            // ── RecordIteration carries semanticDelta + reconciliation + kept + bundle ──
+            // ── RecordIteration carries semanticDelta(array) + reconciliation + kept + bundle ──
             Map<String, Object> rec1 = nthInput(calls, "RecordIteration", 1);
+            assertThat(rec1.get("surface")).isEqualTo("agent");
             assertThat(rec1.get("kept")).isEqualTo(Boolean.TRUE);
             assertThat(((Number) rec1.get("delta")).doubleValue()).isEqualTo(20.0);
-            @SuppressWarnings("unchecked")
-            Map<String, Object> sd = (Map<String, Object>) rec1.get("semanticDelta");
-            assertThat(sd).containsKeys("surface", "before", "after", "diff", "changeDesc");
-            assertThat(String.valueOf(sd.get("before"))).isEqualTo("old prompt");
-            // G3 reconciliation block must be present + structured (the regression this fix closes).
-            @SuppressWarnings("unchecked")
-            Map<String, Object> recon = (Map<String, Object>) rec1.get("reconciliation");
+            assertThat(rec1.get("candidateId")).isEqualTo("cand-1");   // primary pointer (prompt)
+            // semanticDelta is passed via ctx.json → a JSON STRING holding an array.
+            JsonNode sd = parseSemanticDelta(rec1.get("semanticDelta"));
+            assertThat(sd.isArray()).isTrue();
+            assertThat(sd).hasSize(1);
+            assertThat(sd.get(0).get("surface").asText()).isEqualTo("prompt");
+            assertThat(sd.get(0).get("before").asText()).isEqualTo("before-prompt");
+            // G3 reconciliation block present + structured.
+            Map<String, Object> recon = asMap(rec1.get("reconciliation"));
             assertThat(recon).isNotNull().containsKeys("hits", "misses", "confidence");
             assertThat(((Number) recon.get("confidence")).doubleValue()).isEqualTo(1.0);
-            @SuppressWarnings("unchecked")
-            Map<String, Object> bundle = (Map<String, Object>) rec1.get("candidateBundle");
-            assertThat(bundle.get("promptVersionId")).isEqualTo("cand-1");
+            assertThat(asMap(rec1.get("candidateBundle")).get("promptVersionId")).isEqualTo("cand-1");
+        } finally {
+            exec.shutdownNow();
+        }
+    }
+
+    @Test
+    @DisplayName("evolve-loop: multi-surface fixSurface → bundle with ≥2 pointers, one semanticDelta per changed surface")
+    void multiSurfaceBundle() throws Exception {
+        ExecutorService exec = Executors.newSingleThreadExecutor();
+        try {
+            WorkflowAgentInvoker agent = (prompt, opts, stepIndex) -> {
+                Map<String, Object> bundle = new LinkedHashMap<>();
+                bundle.put("promptVersionId", "p-1");
+                bundle.put("behaviorRuleVersionId", "b-1");
+                return cand(bundle, List.of("prompt", "behavior_rule"), "cross-surface fix", 1);
+            };
+
+            List<Object[]> calls = new ArrayList<>();
+            Set<String> abSeen = new HashSet<>();
+            WorkflowToolInvoker tools = (toolName, input, stepIndex) -> {
+                calls.add(new Object[]{toolName, input});
+                switch (toolName) {
+                    case "GetOptReport": {
+                        Map<String, Object> r = new LinkedHashMap<>();
+                        r.put("topIssues", List.of(
+                                issue("i1", "high", 3, 0.9, "prompt",
+                                        List.of("prompt", "behavior_rule"))));
+                        return r;
+                    }
+                    case "GetCandidateDiff":
+                        return diffEcho(input);
+                    case "TriggerAbEval":
+                        return Map.of("abRunId", "ab-" + bundlePrimary(input.get("candidateBundle")));
+                    case "GetAbResult":
+                        return abResult(input, abSeen);
+                    case "ReconcilePrediction":
+                        return reconcile();
+                    case "RecordIteration":
+                        return Map.of("stepId", "step-" + input.get("iteration"));
+                    default:
+                        return Map.of();
+                }
+            };
+
+            Map<String, Object> args = new LinkedHashMap<>();
+            args.put("targetAgentId", 7);
+            args.put("maxIter", 1);
+            args.put("reportId", "rep-1");
+            args.put("autoApprove", true);
+            WorkflowContext ctx = new WorkflowContext("evolve-multi", args, new BudgetTracker(0L));
+            ctx.setObjectMapper(om);
+
+            evaluator.evaluate(evolveLoopBody(), ctx, agent, tools, exec);
+
+            // one GetCandidateDiff per changed surface (2) in a single iteration
+            assertThat(count(calls, "GetCandidateDiff")).isEqualTo(2);
+            assertThat(count(calls, "TriggerAbEval")).isEqualTo(1);
+
+            // A/B candidateBundle has BOTH pointers; baseline is empty (iter 1, active).
+            Map<String, Object> ab = nthInput(calls, "TriggerAbEval", 1);
+            assertThat(ab.get("surface")).isEqualTo("agent");
+            Map<String, Object> cb = asMap(ab.get("candidateBundle"));
+            assertThat(cb.get("promptVersionId")).isEqualTo("p-1");
+            assertThat(cb.get("behaviorRuleVersionId")).isEqualTo("b-1");
+
+            // semanticDelta is an array with one entry per changed surface.
+            Map<String, Object> rec = nthInput(calls, "RecordIteration", 1);
+            JsonNode sd = parseSemanticDelta(rec.get("semanticDelta"));
+            assertThat(sd.isArray()).isTrue();
+            assertThat(sd).hasSize(2);
+            assertThat(List.of(sd.get(0).get("surface").asText(), sd.get(1).get("surface").asText()))
+                    .containsExactlyInAnyOrder("prompt", "behavior_rule");
+            // RecordIteration bundle sidecar holds the full tuple; candidateId = prompt primary.
+            Map<String, Object> recBundle = asMap(rec.get("candidateBundle"));
+            assertThat(recBundle.get("promptVersionId")).isEqualTo("p-1");
+            assertThat(recBundle.get("behaviorRuleVersionId")).isEqualTo("b-1");
+            assertThat(rec.get("candidateId")).isEqualTo("p-1");
+        } finally {
+            exec.shutdownNow();
+        }
+    }
+
+    @Test
+    @DisplayName("evolve-loop: single non-prompt fixSurface degrades to a single pointer (no regression)")
+    void singleSurfaceFixSurfaceDegrades() throws Exception {
+        ExecutorService exec = Executors.newSingleThreadExecutor();
+        try {
+            WorkflowAgentInvoker agent = (prompt, opts, stepIndex) -> {
+                Map<String, Object> bundle = new LinkedHashMap<>();
+                bundle.put("behaviorRuleVersionId", "br-1");
+                // Leaf also (wrongly) tries to change prompt — JS must drop it (越界).
+                bundle.put("promptVersionId", "should-be-dropped");
+                return cand(bundle, List.of("behavior_rule"), "rule fix", 1);
+            };
+
+            List<Object[]> calls = new ArrayList<>();
+            Set<String> abSeen = new HashSet<>();
+            WorkflowToolInvoker tools = (toolName, input, stepIndex) -> {
+                calls.add(new Object[]{toolName, input});
+                switch (toolName) {
+                    case "GetOptReport": {
+                        Map<String, Object> r = new LinkedHashMap<>();
+                        // fixSurface is a single (non-prompt) value → whitelist ['behavior_rule'].
+                        r.put("topIssues", List.of(
+                                issue("i1", "high", 3, 0.9, "behavior_rule", "behavior_rule")));
+                        return r;
+                    }
+                    case "GetCandidateDiff":
+                        return diffEcho(input);
+                    case "TriggerAbEval":
+                        return Map.of("abRunId", "ab-" + bundlePrimary(input.get("candidateBundle")));
+                    case "GetAbResult":
+                        return abResult(input, abSeen);
+                    case "ReconcilePrediction":
+                        return reconcile();
+                    case "RecordIteration":
+                        return Map.of("stepId", "step-" + input.get("iteration"));
+                    default:
+                        return Map.of();
+                }
+            };
+
+            Map<String, Object> args = new LinkedHashMap<>();
+            args.put("targetAgentId", 7);
+            args.put("maxIter", 1);
+            args.put("reportId", "rep-1");
+            args.put("autoApprove", true);
+            WorkflowContext ctx = new WorkflowContext("evolve-single-br", args, new BudgetTracker(0L));
+            ctx.setObjectMapper(om);
+
+            evaluator.evaluate(evolveLoopBody(), ctx, agent, tools, exec);
+
+            // Only the in-whitelist surface survives → 1 diff, 1 A/B.
+            assertThat(count(calls, "GetCandidateDiff")).isEqualTo(1);
+            Map<String, Object> diffCall = nthInput(calls, "GetCandidateDiff", 1);
+            assertThat(diffCall.get("surface")).isEqualTo("behavior_rule");
+            assertThat(diffCall.get("candidateId")).isEqualTo("br-1");
+
+            Map<String, Object> ab = nthInput(calls, "TriggerAbEval", 1);
+            Map<String, Object> cb = asMap(ab.get("candidateBundle"));
+            assertThat(cb.get("behaviorRuleVersionId")).isEqualTo("br-1");
+            // Out-of-whitelist prompt pointer was dropped.
+            assertThat(cb.get("promptVersionId")).isNull();
+
+            Map<String, Object> rec = nthInput(calls, "RecordIteration", 1);
+            assertThat(rec.get("surface")).isEqualTo("agent");
+            // candidateId primary falls back to behavior_rule when prompt is absent.
+            assertThat(rec.get("candidateId")).isEqualTo("br-1");
+            JsonNode sd = parseSemanticDelta(rec.get("semanticDelta"));
+            assertThat(sd).hasSize(1);
+            assertThat(sd.get(0).get("surface").asText()).isEqualTo("behavior_rule");
+        } finally {
+            exec.shutdownNow();
+        }
+    }
+
+    @Test
+    @DisplayName("evolve-loop: best is the merged bundle — a later surface keeps the earlier kept face")
+    void carryForwardMergedBundle() throws Exception {
+        ExecutorService exec = Executors.newSingleThreadExecutor();
+        try {
+            // iter1 changes prompt; iter2 changes behavior_rule. After both keep, iter2's
+            // candidate bundle must still carry iter1's prompt pointer (merged best).
+            int[] candSeq = {0};
+            WorkflowAgentInvoker agent = (prompt, opts, stepIndex) -> {
+                candSeq[0]++;
+                Map<String, Object> bundle = new LinkedHashMap<>();
+                if (candSeq[0] == 1) {
+                    bundle.put("promptVersionId", "p-1");
+                    return cand(bundle, List.of("prompt"), "prompt fix", 1);
+                }
+                bundle.put("behaviorRuleVersionId", "b-2");
+                return cand(bundle, List.of("behavior_rule"), "rule fix", 2);
+            };
+
+            List<Object[]> calls = new ArrayList<>();
+            Set<String> abSeen = new HashSet<>();
+            WorkflowToolInvoker tools = (toolName, input, stepIndex) -> {
+                calls.add(new Object[]{toolName, input});
+                switch (toolName) {
+                    case "GetOptReport": {
+                        Map<String, Object> r = new LinkedHashMap<>();
+                        r.put("topIssues", List.of(
+                                // i1 (prompt) ranks above i2 (behavior_rule) via confidence.
+                                issue("i1", "high", 3, 0.9, "prompt", "prompt"),
+                                issue("i2", "high", 3, 0.8, "behavior_rule", "behavior_rule")));
+                        return r;
+                    }
+                    case "GetCandidateDiff":
+                        return diffEcho(input);
+                    case "TriggerAbEval":
+                        return Map.of("abRunId", "ab-" + bundlePrimary(input.get("candidateBundle")));
+                    case "GetAbResult":
+                        return abResult(input, abSeen);
+                    case "ReconcilePrediction":
+                        return reconcile();
+                    case "RecordIteration":
+                        return Map.of("stepId", "step-" + input.get("iteration"));
+                    default:
+                        return Map.of();
+                }
+            };
+
+            Map<String, Object> args = new LinkedHashMap<>();
+            args.put("targetAgentId", 7);
+            args.put("maxIter", 2);
+            args.put("reportId", "rep-1");
+            args.put("autoApprove", true);
+            WorkflowContext ctx = new WorkflowContext("evolve-cf", args, new BudgetTracker(0L));
+            ctx.setObjectMapper(om);
+
+            Object result = evaluator.evaluate(evolveLoopBody(), ctx, agent, tools, exec);
+            Scriptable summary = (Scriptable) result;
+            assertThat(((Number) summary.get("kept", summary)).intValue()).isEqualTo(2);
+
+            // iter1: candidate = {prompt p-1}; baseline empty.
+            Map<String, Object> ab1 = nthInput(calls, "TriggerAbEval", 1);
+            assertThat(asMap(ab1.get("candidateBundle")).get("promptVersionId")).isEqualTo("p-1");
+
+            // iter2: baseline = iter1's kept bundle {prompt p-1}; candidate = merged
+            // {prompt p-1 (carried), behavior_rule b-2 (new)}.
+            Map<String, Object> ab2 = nthInput(calls, "TriggerAbEval", 2);
+            Map<String, Object> base2 = asMap(ab2.get("baselineBundle"));
+            assertThat(base2.get("promptVersionId")).isEqualTo("p-1");
+            assertThat(base2.get("behaviorRuleVersionId")).isNull();
+            Map<String, Object> cand2 = asMap(ab2.get("candidateBundle"));
+            assertThat(cand2.get("promptVersionId")).isEqualTo("p-1");
+            assertThat(cand2.get("behaviorRuleVersionId")).isEqualTo("b-2");
+
+            // iter2 GetCandidateDiff is on behavior_rule with no base (iter1 didn't touch it).
+            Map<String, Object> diff2 = nthInput(calls, "GetCandidateDiff", 2);
+            assertThat(diff2.get("surface")).isEqualTo("behavior_rule");
+            assertThat(diff2.get("baseVersionId")).isNull();
         } finally {
             exec.shutdownNow();
         }
@@ -201,7 +396,7 @@ class EvolveLoopWorkflowTest {
             boolean[] agentCalled = {false};
             WorkflowAgentInvoker agent = (prompt, opts, stepIndex) -> {
                 agentCalled[0] = true;
-                return Map.of("candidateId", "x", "surface", "prompt", "changeDesc", "y");
+                return cand(Map.of("promptVersionId", "x"), List.of("prompt"), "y", 1);
             };
             WorkflowToolInvoker tools = (toolName, input, stepIndex) -> {
                 if ("GetOptReport".equals(toolName)) {
@@ -227,15 +422,74 @@ class EvolveLoopWorkflowTest {
         }
     }
 
+    // ── stub builders ──
+
+    /** A candidate-gen leaf result in the Phase 2a shape. */
+    private static Map<String, Object> cand(Map<String, Object> bundle, List<String> surfaces,
+                                            String changeDesc, int seq) {
+        Map<String, Object> c = new LinkedHashMap<>();
+        c.put("candidateBundle", bundle);
+        c.put("surfaces", surfaces);
+        c.put("changeDesc", changeDesc);
+        Map<String, Object> pred = new LinkedHashMap<>();
+        pred.put("targetProblem", "p" + seq);
+        pred.put("flipToPass", List.of());
+        pred.put("riskToFail", List.of());
+        c.put("prediction", pred);
+        return c;
+    }
+
+    /** GetCandidateDiff stub: echoes the requested surface so semanticDelta carries it. */
+    private static Map<String, Object> diffEcho(Map<String, Object> input) {
+        String surface = String.valueOf(input.get("surface"));
+        Map<String, Object> r = new LinkedHashMap<>();
+        r.put("surface", surface);
+        r.put("before", "before-" + surface);
+        r.put("after", "after-" + surface + "-" + input.get("candidateId"));
+        r.put("diff", "- before-" + surface + "\n+ after-" + surface);
+        return r;
+    }
+
+    /** GetAbResult stub: first poll running, second poll COMPLETED + wouldPromote. */
+    private static Object abResult(Map<String, Object> input, Set<String> abSeen) {
+        String abRunId = String.valueOf(input.get("abRunId"));
+        if (abSeen.add(abRunId)) {
+            return Map.of("status", "running");
+        }
+        Map<String, Object> r = new LinkedHashMap<>();
+        r.put("status", "COMPLETED");
+        r.put("baselineScore", 70.0);
+        r.put("candidateScore", 90.0);
+        r.put("delta", 20.0);
+        r.put("wouldPromote", true);
+        return r;
+    }
+
+    private static Map<String, Object> reconcile() {
+        Map<String, Object> r = new LinkedHashMap<>();
+        r.put("issueId", "i1");
+        r.put("targetProblem", "tp");
+        r.put("hits", List.of("s1"));
+        r.put("misses", List.of());
+        r.put("riskHits", List.of());
+        r.put("surprises", List.of());
+        r.put("confidence", 1.0);
+        return r;
+    }
+
     // ── helpers ──
 
-    private static Map<String, Object> issue(String id, String sev, int rec, double conf, String surface) {
+    private static Map<String, Object> issue(String id, String sev, int rec, double conf,
+                                             String surface, Object fixSurface) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("id", id);
         m.put("severity", sev);
         m.put("recurrence", rec);
         m.put("confidence", conf);
         m.put("surface", surface);
+        if (fixSurface != null) {
+            m.put("fixSurface", fixSurface);
+        }
         m.put("convertible", true);
         m.put("title", "t-" + id);
         m.put("rootCause", "rc-" + id);
@@ -249,6 +503,27 @@ class EvolveLoopWorkflowTest {
         m.put("convertible", false);
         m.put("surface", "other");
         return m;
+    }
+
+    /** Primary pointer of a candidateBundle (prompt > behavior_rule > skill), for abRunId. */
+    @SuppressWarnings("unchecked")
+    private static String bundlePrimary(Object bundle) {
+        if (!(bundle instanceof Map)) return "?";
+        Map<String, Object> b = (Map<String, Object>) bundle;
+        Object p = b.get("promptVersionId");
+        if (p == null) p = b.get("behaviorRuleVersionId");
+        if (p == null) p = b.get("skillDraftId");
+        return p == null ? "?" : String.valueOf(p);
+    }
+
+    /** Parse a semanticDelta arg (ctx.json → JSON string) into a JsonNode. */
+    private JsonNode parseSemanticDelta(Object raw) throws Exception {
+        return om.readTree(String.valueOf(raw));
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> asMap(Object o) {
+        return (Map<String, Object>) o;
     }
 
     private static List<String> toolNames(List<Object[]> calls) {

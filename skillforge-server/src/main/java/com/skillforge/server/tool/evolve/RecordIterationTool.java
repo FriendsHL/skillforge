@@ -120,9 +120,22 @@ public class RecordIterationTool implements Tool {
                         + "stored verbatim into the iteration ledger."));
         properties.put("reconciliation", Map.of("type", "object",
                 "description", "Optional (G3): the ReconcilePrediction result, stored verbatim."));
+        // Phase 2a contract note: the schema type stays "object" for the legacy
+        // single-surface shape, but as of the multi-surface bundle work the
+        // evolve-loop workflow passes a per-surface ARRAY here — and it does so
+        // PRE-SERIALIZED as a JSON string (via ctx.json) precisely so that
+        // putJsonSidecar's String→readTree branch stores it verbatim as an array.
+        // (A raw JS array would arrive as a Java List, which putJsonSidecar does
+        // NOT handle — hence the ctx.json string. RecordIterationTool stays
+        // zero-change.) Kept as "object" rather than oneOf[object,array,string]
+        // to avoid over-engineering the advertised schema for a deterministically
+        // JS-driven (non-LLM) caller; this comment is the contract.
         properties.put("semanticDelta", Map.of("type", "object",
-                "description", "Optional (P1): {surface, before, after, diff, changeDesc} from "
-                        + "GetCandidateDiff, stored verbatim for traceability."));
+                "description", "Optional (P1): the before→after semantic delta from "
+                        + "GetCandidateDiff, stored verbatim for traceability. Single-surface: an "
+                        + "object {surface, before, after, diff, changeDesc}. Phase 2a multi-surface: "
+                        + "a JSON-string-encoded ARRAY of those (one entry per changed surface), "
+                        + "stored as an array via the String→readTree path."));
 
         Map<String, Object> schema = new LinkedHashMap<>();
         schema.put("type", "object");
