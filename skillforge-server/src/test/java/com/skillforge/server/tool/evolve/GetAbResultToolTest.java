@@ -42,9 +42,12 @@ class GetAbResultToolTest {
 
     @BeforeEach
     void setUp() {
-        // small block timeout/interval so the RUNNING test doesn't wait 90s
+        // small block timeout/interval so the RUNNING test doesn't wait 90s.
+        // F5: thresholds from the properties defaults (prompt/skill delta 5,
+        // agent 0/−3, minMeasuredN 10, anchor 5).
         tool = new GetAbResultTool(promptAbRunRepository, skillAbRunRepository,
-                behaviorRuleAbRunRepository, agentEvolveAbRunRepository, objectMapper, 80L, 20L);
+                behaviorRuleAbRunRepository, agentEvolveAbRunRepository, objectMapper,
+                new com.skillforge.server.config.EvolveThresholdProperties(), 80L, 20L);
     }
 
     /** Helper: build input map with all required fields. */
@@ -94,7 +97,7 @@ class GetAbResultToolTest {
         assertThat(out).contains("\"candidateScore\":60.0");
         assertThat(out).contains("\"delta\":20.0");
         assertThat(out).contains("\"deltaPassRate\":20.0");
-        assertThat(out).contains("\"wouldPromote\":true");   // 20 >= 15
+        assertThat(out).contains("\"wouldPromote\":true");   // 20 >= 5 (prompt-delta-pp)
         assertThat(out).contains("\"scenarioId\":\"s1\"");   // perScenario passthrough
     }
 
@@ -104,12 +107,26 @@ class GetAbResultToolTest {
         PromptAbRunEntity e = new PromptAbRunEntity();
         e.setAgentId("42");
         e.setStatus("COMPLETED");
-        e.setDeltaPassRate(5.0);
+        e.setDeltaPassRate(2.0);   // below the F5 prompt-delta-pp default (5)
         when(promptAbRunRepository.findById("ab-2")).thenReturn(Optional.of(e));
 
         SkillResult result = run("prompt", "ab-2", "42");
 
         assertThat(result.getOutput()).contains("\"wouldPromote\":false");
+    }
+
+    @Test
+    @DisplayName("F5: prompt delta at the new 5pp threshold → wouldPromote true (was false at the old 15pp)")
+    void promptCompleted_newThreshold_fivePpPromotes() {
+        PromptAbRunEntity e = new PromptAbRunEntity();
+        e.setAgentId("42");
+        e.setStatus("COMPLETED");
+        e.setDeltaPassRate(5.0);
+        when(promptAbRunRepository.findById("ab-3")).thenReturn(Optional.of(e));
+
+        SkillResult result = run("prompt", "ab-3", "42");
+
+        assertThat(result.getOutput()).contains("\"wouldPromote\":true");
     }
 
     @Test
@@ -151,7 +168,7 @@ class GetAbResultToolTest {
         SkillResult result = run("skill", "sk-1", "42");
 
         String out = result.getOutput();
-        assertThat(out).contains("\"wouldPromote\":true");   // 20>=15 && 50>=40
+        assertThat(out).contains("\"wouldPromote\":true");   // 20>=5 && 50>=40
         assertThat(out).contains("perScenarioNote");
         assertThat(out).contains("aggregate-only");
     }
@@ -261,7 +278,7 @@ class GetAbResultToolTest {
         e.setCandidatePassRate(66.0);
         e.setDeltaPassRate(16.0);
         e.setTargetDeltaPp(12.0);      // vs-best target up
-        e.setRegressionDeltaPp(0.0);   // >= REGRESSION_FLOOR_PP (-3)
+        e.setRegressionDeltaPp(0.0);   // >= agent-regression-floor-pp (-3)
         e.setCandidateTargetRate(72.0);
         e.setCandidateGeneralRate(60.0);
         e.setBaselineTargetRate(60.0);
@@ -350,6 +367,115 @@ class GetAbResultToolTest {
         assertThat(out).contains("does not belong to targetAgentId");
         assertThat(out).doesNotContain("baselineScore");
         assertThat(out).doesNotContain("wouldPromote");
+    }
+
+    // ───────────────── agent F3 measurement fields + F5 thresholds echo ─────────────────
+
+    private static com.skillforge.server.improve.AbScenarioResult sc(
+            String id, String subset, String baselineStatus, String candidateStatus) {
+        return new com.skillforge.server.improve.AbScenarioResult(id, id,
+                new com.skillforge.server.improve.AbScenarioResult.RunResult(baselineStatus, 80.0),
+                new com.skillforge.server.improve.AbScenarioResult.RunResult(candidateStatus, 80.0),
+                subset);
+    }
+
+    @Test
+    @DisplayName("F3 agent fresh run: totalN/measuredN pairwise + per-subset counts from tags + thresholds echo")
+    void agentCompleted_measurementFields_freshRun() throws Exception {
+        com.skillforge.server.entity.AgentEvolveAbRunEntity e =
+                new com.skillforge.server.entity.AgentEvolveAbRunEntity();
+        e.setAgentId("42");
+        e.setStatus("COMPLETED");
+        e.setSkipBaseline(false);
+        // 4 scenarios: t1 measured, t2 candidate ERROR (drop), g1 measured,
+        // g2 baseline TIMEOUT (drop) → totalN=4 measuredN=2 target=1 general=1.
+        e.setAbScenarioResultsJson(objectMapper.writeValueAsString(java.util.List.of(
+                sc("t1", "target", "PASS", "PASS"),
+                sc("t2", "target", "PASS", "ERROR"),
+                sc("g1", "general", "FAIL", "PASS"),
+                sc("g2", "general", "TIMEOUT", "PASS"))));
+        when(agentEvolveAbRunRepository.findById("ae-m1")).thenReturn(Optional.of(e));
+
+        String out = run("agent", "ae-m1", "42").getOutput();
+
+        assertThat(out).contains("\"totalN\":4");
+        assertThat(out).contains("\"measuredN\":2");
+        assertThat(out).contains("\"targetMeasuredN\":1");
+        assertThat(out).contains("\"generalMeasuredN\":1");
+        // F5 thresholds echo: the workflow reads minMeasuredN/anchorErosionFloorPp here.
+        assertThat(out).contains("\"thresholds\":{");
+        assertThat(out).contains("\"minMeasuredN\":10");
+        assertThat(out).contains("\"anchorErosionFloorPp\":5.0");
+        assertThat(out).contains("\"agentRegressionFloorPp\":-3.0");
+        assertThat(out).contains("\"promptDeltaPp\":5.0");
+    }
+
+    @Test
+    @DisplayName("F3 agent skip run: measuredN is cross-round pairwise vs the prior winner's candidate side")
+    void agentCompleted_measurementFields_skipRun_crossRound() throws Exception {
+        com.skillforge.server.entity.AgentEvolveAbRunEntity prior =
+                new com.skillforge.server.entity.AgentEvolveAbRunEntity();
+        prior.setAgentId("42");
+        prior.setStatus("COMPLETED");
+        prior.setAbScenarioResultsJson(objectMapper.writeValueAsString(java.util.List.of(
+                sc("s1", "general", "FAIL", "PASS"),     // prior candidate measured
+                sc("s2", "general", "FAIL", "ERROR")))); // prior candidate infra → s2 drops
+        when(agentEvolveAbRunRepository.findById("ae-prior")).thenReturn(Optional.of(prior));
+
+        com.skillforge.server.entity.AgentEvolveAbRunEntity e =
+                new com.skillforge.server.entity.AgentEvolveAbRunEntity();
+        e.setAgentId("42");
+        e.setStatus("COMPLETED");
+        e.setSkipBaseline(true);
+        e.setPriorWinnerAbRunId("ae-prior");
+        e.setAbScenarioResultsJson(objectMapper.writeValueAsString(java.util.List.of(
+                sc("s1", "general", "CACHED", "PASS"),
+                sc("s2", "general", "CACHED", "PASS"))));
+        when(agentEvolveAbRunRepository.findById("ae-m2")).thenReturn(Optional.of(e));
+
+        String out = run("agent", "ae-m2", "42").getOutput();
+
+        assertThat(out).contains("\"totalN\":2");
+        assertThat(out).contains("\"measuredN\":1");        // s2 dropped (prior infra)
+        assertThat(out).contains("\"generalMeasuredN\":1");
+    }
+
+    @Test
+    @DisplayName("F3 agent legacy row (no subset tags): per-subset counts null, overall still computed")
+    void agentCompleted_measurementFields_legacyUntagged() throws Exception {
+        com.skillforge.server.entity.AgentEvolveAbRunEntity e =
+                new com.skillforge.server.entity.AgentEvolveAbRunEntity();
+        e.setAgentId("42");
+        e.setStatus("COMPLETED");
+        e.setSkipBaseline(false);
+        // Legacy JSON without subset tags (pre-F3 rows).
+        e.setAbScenarioResultsJson(
+                "[{\"scenarioId\":\"s1\",\"scenarioName\":\"s1\","
+                        + "\"baseline\":{\"status\":\"PASS\",\"oracleScore\":80.0},"
+                        + "\"candidate\":{\"status\":\"PASS\",\"oracleScore\":80.0}}]");
+        when(agentEvolveAbRunRepository.findById("ae-m3")).thenReturn(Optional.of(e));
+
+        String out = run("agent", "ae-m3", "42").getOutput();
+
+        assertThat(out).contains("\"totalN\":1");
+        assertThat(out).contains("\"measuredN\":1");
+        assertThat(out).contains("\"targetMeasuredN\":null");
+        assertThat(out).contains("\"generalMeasuredN\":null");
+    }
+
+    @Test
+    @DisplayName("F3 agent row without per-scenario JSON: all measurement fields null (no crash)")
+    void agentCompleted_measurementFields_noJson() {
+        com.skillforge.server.entity.AgentEvolveAbRunEntity e =
+                new com.skillforge.server.entity.AgentEvolveAbRunEntity();
+        e.setAgentId("42");
+        e.setStatus("COMPLETED");
+        when(agentEvolveAbRunRepository.findById("ae-m4")).thenReturn(Optional.of(e));
+
+        String out = run("agent", "ae-m4", "42").getOutput();
+
+        assertThat(out).contains("\"totalN\":null");
+        assertThat(out).contains("\"measuredN\":null");
     }
 
     // ───────────────────────────── validation ─────────────────────────────

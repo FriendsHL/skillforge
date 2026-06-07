@@ -45,7 +45,8 @@ class PromptPromotionServicePromoteByHumanTest {
     @BeforeEach
     void setUp() {
         service = new PromptPromotionService(
-                promptAbRunRepository, promptVersionRepository, agentRepository, eventPublisher);
+                promptAbRunRepository, promptVersionRepository, agentRepository, eventPublisher,
+                new com.skillforge.server.config.EvolveThresholdProperties());
     }
 
     private PromptVersionEntity version(String id, String agentId, String status, int versionNumber) {

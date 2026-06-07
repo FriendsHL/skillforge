@@ -5,6 +5,7 @@ import com.skillforge.core.skill.Tool;
 import com.skillforge.server.tool.evolve.GetAbResultTool;
 import com.skillforge.server.tool.evolve.GetCandidateDiffTool;
 import com.skillforge.server.tool.evolve.GetOptReportTool;
+import com.skillforge.server.tool.evolve.ListActiveHarvestedScenariosTool;
 import com.skillforge.server.tool.evolve.ReconcilePredictionTool;
 import com.skillforge.server.tool.evolve.RecordIterationTool;
 import com.skillforge.server.tool.evolve.RunOptReportSubflowTool;
@@ -47,7 +48,8 @@ public class WorkflowEvolveToolRegistryFactory {
                                              ReconcilePredictionTool reconcilePredictionTool,
                                              RecordIterationTool recordIterationTool,
                                              GetCandidateDiffTool getCandidateDiffTool,
-                                             RunOptReportSubflowTool runOptReportSubflowTool) {
+                                             RunOptReportSubflowTool runOptReportSubflowTool,
+                                             ListActiveHarvestedScenariosTool listActiveHarvestedScenariosTool) {
         SkillRegistry r = new SkillRegistry();
         for (Tool tool : new Tool[]{
                 getOptReportTool,
@@ -56,7 +58,12 @@ public class WorkflowEvolveToolRegistryFactory {
                 reconcilePredictionTool,
                 recordIterationTool,
                 getCandidateDiffTool,
-                runOptReportSubflowTool}) {
+                runOptReportSubflowTool,
+                // Workflow-fix F1 (2026-06-07): the deterministic evolve-loop fetches
+                // the active harvested bad-case ids itself (read-only lookup) so each
+                // TriggerAbEval can carry evalScenarioIds (BC-M2b targeting, which the
+                // Phase 1/2a workflow rewrite had dropped vs the V144 orchestrator).
+                listActiveHarvestedScenariosTool}) {
             r.registerTool(tool);
         }
         this.registry = r;

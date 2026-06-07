@@ -87,8 +87,6 @@ import java.util.stream.Collectors;
 public class SkillAbEvalService extends AbstractAbEvalRunner<SkillEntity> {
 
     private static final Logger log = LoggerFactory.getLogger(SkillAbEvalService.class);
-    private static final double PROMOTION_DELTA_THRESHOLD_PP = 15.0;
-    private static final double PROMOTION_MIN_CANDIDATE_RATE_PP = 40.0;
 
     private final SkillRepository skillRepository;
     private final SkillAbRunRepository skillAbRunRepository;
@@ -107,6 +105,11 @@ public class SkillAbEvalService extends AbstractAbEvalRunner<SkillEntity> {
     private final SkillRegistry skillRegistry;
     private final SkillAbCompletedEventPublisher abCompletedEventPublisher;
     private final long scenarioTimeoutMs;
+    // F5 (2026-06-07): promote thresholds moved from hardcoded 15.0/40.0 constants
+    // into EvolveThresholdProperties (skillforge.evolve.thresholds.skill-delta-pp,
+    // default 5 / skill-min-candidate-rate-pp, default 40) — shared with
+    // GetAbResultTool's advisory wouldPromote so the two can't drift.
+    private final com.skillforge.server.config.EvolveThresholdProperties thresholds;
 
     /**
      * Phase 1.2 — per-run ephemeral state shared between {@link #runAbTestAsync}
@@ -136,7 +139,8 @@ public class SkillAbEvalService extends AbstractAbEvalRunner<SkillEntity> {
                               SkillAbCompletedEventPublisher abCompletedEventPublisher,
                               @Lazy SkillSurface skillSurface,
                               SkillEvalService skillEvalService,
-                              @Value("${skillforge.flywheel.ab-eval.scenario-timeout-ms:120000}") long scenarioTimeoutMs) {
+                              @Value("${skillforge.flywheel.ab-eval.scenario-timeout-ms:120000}") long scenarioTimeoutMs,
+                              com.skillforge.server.config.EvolveThresholdProperties thresholds) {
         // @Lazy on skillSurface breaks the DI cycle: SkillSurface's @Lazy
         // injection of SkillAbEvalService bootstrap order. super() only stores
         // the reference (no method call), so the @Lazy proxy is fine.
@@ -165,6 +169,7 @@ public class SkillAbEvalService extends AbstractAbEvalRunner<SkillEntity> {
         this.skillRegistry = skillRegistry;
         this.abCompletedEventPublisher = abCompletedEventPublisher;
         this.scenarioTimeoutMs = scenarioTimeoutMs;
+        this.thresholds = thresholds;
     }
 
     /**
@@ -548,7 +553,8 @@ public class SkillAbEvalService extends AbstractAbEvalRunner<SkillEntity> {
                 } else {
                     abRun.setSkipReason(String.format(
                             "delta=%.2f candidateRate=%.2f (thresholds: delta>=%.1f, rate>=%.1f)",
-                            delta, candidatePassRate, PROMOTION_DELTA_THRESHOLD_PP, PROMOTION_MIN_CANDIDATE_RATE_PP));
+                            delta, candidatePassRate,
+                            thresholds.getSkillDeltaPp(), thresholds.getSkillMinCandidateRatePp()));
                 }
 
                 skillAbRunRepository.save(abRun);
@@ -773,9 +779,10 @@ public class SkillAbEvalService extends AbstractAbEvalRunner<SkillEntity> {
 
     @Override
     protected boolean shouldPromote(Comparison comparison) {
-        // V2 thresholds preserved bit-for-bit.
-        return comparison.delta() >= PROMOTION_DELTA_THRESHOLD_PP
-                && comparison.candidatePassRate() >= PROMOTION_MIN_CANDIDATE_RATE_PP;
+        // F5 (2026-06-07): thresholds config-driven (skill-delta-pp default 5,
+        // was a hardcoded 15.0; skill-min-candidate-rate-pp 40 unchanged).
+        return comparison.delta() >= thresholds.getSkillDeltaPp()
+                && comparison.candidatePassRate() >= thresholds.getSkillMinCandidateRatePp();
     }
 
     @Override
@@ -837,8 +844,8 @@ public class SkillAbEvalService extends AbstractAbEvalRunner<SkillEntity> {
 
     /**
      * SKILL-DASHBOARD-POLISH D — manual promote override. When the auto-promote
-     * thresholds (delta ≥ {@value #PROMOTION_DELTA_THRESHOLD_PP}pp AND candidate
-     * rate ≥ {@value #PROMOTION_MIN_CANDIDATE_RATE_PP}pp) reject a candidate but
+     * thresholds ({@code skillforge.evolve.thresholds}: delta ≥ skill-delta-pp AND
+     * candidate rate ≥ skill-min-candidate-rate-pp) reject a candidate but
      * the operator wants to promote anyway, this endpoint reuses the same
      * V64-safe {@link #promoteCandidate} path and stamps the abRun with
      * {@code promoted=true}.

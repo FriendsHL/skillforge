@@ -82,7 +82,8 @@ class SkillAbEvalServiceCreateAndTriggerR4Test {
                 skillRegistry, abCompletedEventPublisher,
                 org.mockito.Mockito.mock(SkillSurface.class),
                 org.mockito.Mockito.mock(SkillEvalService.class),
-                120_000L);
+                120_000L,
+                new com.skillforge.server.config.EvolveThresholdProperties());
     }
 
     @AfterEach

@@ -1,6 +1,6 @@
 export const meta = {
   name: 'evolve-loop',
-  description: 'AUTOEVOLVE 确定性进化循环 DSL 版: (report) → 写死排序 issue → 逐 issue { 候选叶子(跨面 bundle) → 多面 GetCandidateDiff → TriggerAbEval(agent) → 确定性轮询 GetAbResult → 写死阈值 keep → RecordIteration } → carry-forward bundle → adopt(人定夺/autoApprove)。编排全在 JS(无 maxLoops/无漂移)，LLM 只做候选生成叶子。',
+  description: 'AUTOEVOLVE 确定性进化循环 DSL 版: (report) → 写死排序 issue → 错题本靶向(ListActiveHarvestedScenarios) → 逐 issue { 候选叶子(跨面 bundle) → 多面 GetCandidateDiff → TriggerAbEval(agent, evalScenarioIds + win-streak 基线缓存) → 确定性轮询 GetAbResult → 服务端阈值 keep(最小测量数守卫 + vs-original 锚点) → RecordIteration } → carry-forward bundle → adopt(人定夺/autoApprove)。编排全在 JS(无 maxLoops/无漂移)，LLM 只做候选生成叶子。',
   phases: [
     { title: 'Report', detail: '取/跑 opt-report，拿 topIssues' },
     { title: 'Evolve', detail: '逐 issue 生成跨面候选 bundle + A/B + 确定性判断 + 落账' },
@@ -33,10 +33,42 @@ var SURFACES = ['prompt', 'behavior_rule', 'skill']
 // 这与 orchestrator 路一致(它也用 agent-surface A/B 才能产 reconciliation)。
 var AB_SURFACE = 'agent'
 
-// ── 确定性阈值 (复用 GetAbResult.wouldPromote 作种子) ──
-// wouldPromote = deltaPassRate >= 15pp。keep 直接采用它，避免另立一套阈值。
-function decideKeep(res) {
-  return !!(res && res.wouldPromote === true)
+// ── 确定性 keep 判断 (复用 GetAbResult.wouldPromote 作种子 + 两道闸) ──
+// wouldPromote 是服务端 agent 面双标准 advisory (F7 修正旧 "15pp" 注释——那是 prompt/
+// skill 面的旧阈值, agent 面从来不是): 有 target 子集时 targetDeltaPp > agent-target-
+// min-delta-pp(默认0) AND regressionDeltaPp >= agent-regression-floor-pp(默认-3);
+// 无 target 子集(regression-only, 含 F2 "target 在场但 0 measured" null 哨兵)时
+// general 严格改善才 true。所有阈值由服务端配置 (skillforge.evolve.thresholds) 并经
+// res.thresholds 回显, JS 不写死第二份。
+// 另加两道闸:
+//   ① F3 最小测量数守卫: overall measuredN < minMeasuredN → inconclusive 不 keep
+//      (防 n≈7 噪声 keep)。只看 overall, 不卡 target 子集 (target 合法可只有 1 个
+//      确定性 oracle 场景)。measuredN 缺失 (legacy 行) 时跳过守卫 —— F2 的 null 哨兵
+//      保证 "0 measured" 时 measuredN=0 是数字, 不会从这里漏掉。
+//   ② F6 vs-original 锚点: candidateGeneralRate >= originalGeneral - anchorErosion
+//      FloorPp。originalGeneral = iter1 的 baselineGeneralRate (记死不更新), 防多轮
+//      vs-best 爬坡把 general 一点点磨掉。originalGeneral / candidateGeneralRate
+//      为 null 时跳过锚点 (不 block)。
+// 返回 {keep, reason} 便于轨迹日志说明为什么没 keep。
+function decideKeep(res, originalGeneral) {
+  if (!res || res.wouldPromote !== true) {
+    return { keep: false, reason: 'wouldPromote=false' }
+  }
+  var th = res.thresholds || {}
+  if (typeof th.minMeasuredN === 'number' && typeof res.measuredN === 'number'
+      && res.measuredN < th.minMeasuredN) {
+    return { keep: false, reason: 'inconclusive: measuredN=' + res.measuredN
+      + ' < minMeasuredN=' + th.minMeasuredN }
+  }
+  if (typeof th.anchorErosionFloorPp === 'number'
+      && typeof originalGeneral === 'number'
+      && typeof res.candidateGeneralRate === 'number'
+      && res.candidateGeneralRate < originalGeneral - th.anchorErosionFloorPp) {
+    return { keep: false, reason: 'anchor erosion: candidateGeneralRate='
+      + res.candidateGeneralRate + ' < originalGeneral(' + originalGeneral
+      + ') - anchorErosionFloorPp(' + th.anchorErosionFloorPp + ')' }
+  }
+  return { keep: true, reason: 'kept' }
 }
 
 function nonBlank(s) {
@@ -169,13 +201,27 @@ if (issues.length === 0) {
 
 // ── Evolve (确定性循环, 无 maxLoops/无漂移) ──
 phase('Evolve')
-// carry-forward 状态: best 是「各面当前最优组合」bundle + 它的分数。
+
+// 🟦 F1 靶向恢复 (BC-M2b, 迁移遗漏修复): Report 后一次性取 active 错题本场景 ids。
+// 非空时每轮 TriggerAbEval 带 evalScenarioIds (镜像 V144 orchestrator 语义: 这些作
+// target 子集, 其余 dataset 照常作 general/benchmark, 同一 run 双子集都测);
+// 空 → 不传, 保持 role-split 现行为。一次性取(不每轮取): run 内 target 集稳定,
+// 与 dataset version 跨轮稳定的 §8 子点① 不变量一致。
+var harvested = tool('ListActiveHarvestedScenarios', { agentId: agentIdStr })
+var targetScenarioIds = (harvested && harvested.scenarioIds && harvested.scenarioIds.length > 0)
+  ? harvested.scenarioIds : null
+log('evolve-loop harvested-target-scenarios=' + (targetScenarioIds ? targetScenarioIds.length : 0))
+
+// carry-forward 状态: best 是「各面当前最优组合」bundle + 它的分数 + 测出它的 abRunId
+// (F4: win-streak 时作 priorWinnerAbRunId 传给下一轮)。
 // bundle = {promptVersionId?, behaviorRuleVersionId?, skillDraftId?}; iter1 为空(各面用 active)。
-var best = { bundle: {}, score: null }
+var best = { bundle: {}, score: null, abRunId: null }
 var keptList = []
 var trajectory = []
 var priorChange = null
 var priorEvalReport = null
+var prevKept = false        // F4: 上一轮(真测过的)是否被 keep —— win-streak 标记
+var originalGeneral = null  // F6: iter1 的 baselineGeneralRate, 记死不更新
 var iter = 0
 
 for (var k = 0; k < issues.length && iter < maxIter; k++) {
@@ -248,17 +294,27 @@ for (var k = 0; k < issues.length && iter < maxIter; k++) {
 
   // 🟩 A/B(agent-surface, 整三件套 bundle)。candidate = 本轮 mergedBundle; baseline =
   // best.bundle(iter1 为空 = active), 每轮 candidate vs current-best 爬坡。
-  // 注: 不传 cachedBaselineScore —— 保持 Phase 1 的全量基线复测行为(基线侧实测 best.bundle)。
-  // (引擎 §7 W1 guard 要求 baseline == 最近一次 COMPLETED run 的 candidate bundle, 但本
-  // keep/reject 爬坡里 best=上一个赢家, 中间夹一个未 keep 迭代就会与"最近 COMPLETED"分叉
-  // → guard 抛错。基线缓存优化需先对齐 W1 语义, 留作后续, 不在 Phase 2a 多面范围内。)
-  var ab = tool('TriggerAbEval', {
+  // F1: targetScenarioIds 非空时带 evalScenarioIds → 错题本场景作显式 target 子集。
+  // F4 基线缓存 (win-streak 限定, 替代旧 js:249-254 的"整体推迟"): 仅当上一轮被 keep
+  // 时传 cachedBaselineScore(best 的实测分) + priorWinnerAbRunId(测出 best 的那次
+  // abRunId) → 引擎按显式 run id 解析 prior winner (W1 guard 重设计: 不再依赖
+  // "最近一次 COMPLETED", 被拒 run 夹在中间也不会让 guard 抛错), candidate-only 跑,
+  // 省一半 eval 且基线无重测噪声。上一轮被拒 → 不传, 下一轮照常真测两臂。
+  var abInput = {
     surface: AB_SURFACE,
     candidateBundle: candidateBundle,
     baselineBundle: baseBundle,
     targetAgentId: agentIdStr,
     evolveRunId: ctx.runId()
-  })
+  }
+  if (targetScenarioIds) {
+    abInput.evalScenarioIds = targetScenarioIds
+  }
+  if (prevKept && best.score != null && best.abRunId != null) {
+    abInput.cachedBaselineScore = best.score
+    abInput.priorWinnerAbRunId = best.abRunId
+  }
+  var ab = tool('TriggerAbEval', abInput)
   var abRunId = ab ? ab.abRunId : null
 
   // 🟦 确定性轮询(非 agent 轮询): GetAbResult 内部阻塞 ~90s, 仍 running 就再调。
@@ -287,8 +343,14 @@ for (var k = 0; k < issues.length && iter < maxIter; k++) {
     }
   }
 
-  // 🟦 确定性 keep 判断(写死阈值, 复用 wouldPromote 种子)。
-  var keptThis = decideKeep(res)
+  // 🟦 F6: iter1 记 vs-original general 锚点 (第一轮记死, 后续不更新)。
+  if (originalGeneral == null && res && typeof res.baselineGeneralRate === 'number') {
+    originalGeneral = res.baselineGeneralRate
+  }
+
+  // 🟦 确定性 keep 判断(服务端阈值回显 + wouldPromote 种子 + F3/F6 两道闸)。
+  var decision = decideKeep(res, originalGeneral)
+  var keptThis = decision.keep
   var delta = res ? res.delta : null
   var baselineScore = res ? res.baselineScore : null
   var candidateScore = res ? res.candidateScore : null
@@ -314,16 +376,18 @@ for (var k = 0; k < issues.length && iter < maxIter; k++) {
     candidateBundle: candidateBundle
   })
 
-  trajectory.push({ iteration: iter, candidateId: primaryPointer(candidateBundle), surfaces: changedSurfaces, delta: delta, kept: keptThis })
+  trajectory.push({ iteration: iter, candidateId: primaryPointer(candidateBundle), surfaces: changedSurfaces, delta: delta, kept: keptThis, keepReason: decision.reason })
   log('iter ' + iter + ' issue=' + issue.id + ' surfaces=' + ctx.json(changedSurfaces)
-    + ' candidate=' + primaryPointer(candidateBundle) + ' delta=' + delta + ' kept=' + keptThis)
+    + ' candidate=' + primaryPointer(candidateBundle) + ' delta=' + delta + ' kept=' + keptThis
+    + (keptThis ? '' : ' (' + decision.reason + ')'))
 
-  // 🟦 carry-forward: 赢家整 bundle 推进 best; 否则守住 best。
+  // 🟦 carry-forward: 赢家整 bundle 推进 best (带 abRunId 供 F4 下一轮缓存); 否则守住 best。
   priorChange = cand.changeDesc
-  priorEvalReport = ctx.json({ delta: delta, baselineScore: baselineScore, candidateScore: candidateScore, kept: keptThis })
+  priorEvalReport = ctx.json({ delta: delta, baselineScore: baselineScore, candidateScore: candidateScore, kept: keptThis, keepReason: decision.reason })
+  prevKept = keptThis
   if (keptThis) {
     keptList.push({ iteration: iter, candidateId: primaryPointer(candidateBundle), candidateBundle: candidateBundle, surfaces: changedSurfaces, delta: delta })
-    best = { bundle: candidateBundle, score: candidateScore }
+    best = { bundle: candidateBundle, score: candidateScore, abRunId: abRunId }
   }
 }
 

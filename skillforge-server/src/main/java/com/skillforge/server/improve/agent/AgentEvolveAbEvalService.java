@@ -59,20 +59,10 @@ public class AgentEvolveAbEvalService {
 
     private static final Logger log = LoggerFactory.getLogger(AgentEvolveAbEvalService.class);
 
-    /**
-     * §8 子点② — vs-best regression floor (advisory wouldPromote): the candidate may
-     * regress on the general/regression subset by at most this many percentage points
-     * vs the current best. Hill-climb is incremental (vs best), so this is NOT the
-     * behavior_rule +10pp absolute (vs-original) gate. Read by {@code GetAbResultTool}.
-     */
-    public static final double REGRESSION_FLOOR_PP = -3.0;
-
-    /**
-     * §8 子点② — vs-best target floor (advisory wouldPromote): the candidate must beat
-     * the current best on the target subset by more than this. Strictly-positive
-     * incremental gate (a candidate that merely ties best on its own role isn't kept).
-     */
-    public static final double TARGET_MIN_DELTA_PP = 0.0;
+    // §8 子点② advisory gate values (vs-best target floor 0.0 / regression floor
+    // −3.0) moved to EvolveThresholdProperties (skillforge.evolve.thresholds.
+    // agent-target-min-delta-pp / agent-regression-floor-pp) — F5 2026-06-07.
+    // GetAbResultTool (the only reader) now injects that properties bean.
 
     private final AgentEvolveAbRunRepository abRunRepository;
     private final AgentRepository agentRepository;
@@ -145,6 +135,26 @@ public class AgentEvolveAbEvalService {
     public String startAgentAb(Bundle candidateBundle, Bundle baselineBundle, String agentId,
                                String datasetVersionId, Double cachedBaselineRate,
                                List<String> explicitTargetScenarioIds) {
+        return startAgentAb(candidateBundle, baselineBundle, agentId, datasetVersionId,
+                cachedBaselineRate, explicitTargetScenarioIds, null);
+    }
+
+    /**
+     * Workflow-fix F4 (2026-06-07) — full form with an optional EXPLICIT prior
+     * winner run id. When {@code explicitPriorWinnerAbRunId} is supplied (requires
+     * {@code cachedBaselineRate}), the §7 W1 winner-carry-forward guard resolves
+     * the prior winner BY THAT ID instead of "most recent COMPLETED run" — fixing
+     * the original W1 design flaw where any rejected run in between made the
+     * "most recent COMPLETED" diverge from the actual best and the guard threw
+     * spuriously. The bundle-equality + dataset-version checks still apply against
+     * the explicitly-named run (fail loud, no silent fallback). When null, the
+     * legacy "most recent COMPLETED" resolution is kept (backward compatible).
+     */
+    @Transactional
+    public String startAgentAb(Bundle candidateBundle, Bundle baselineBundle, String agentId,
+                               String datasetVersionId, Double cachedBaselineRate,
+                               List<String> explicitTargetScenarioIds,
+                               String explicitPriorWinnerAbRunId) {
         if (candidateBundle == null) {
             throw new IllegalArgumentException("candidateBundle is required");
         }
@@ -174,6 +184,14 @@ public class AgentEvolveAbEvalService {
             throw new IllegalArgumentException(
                     "cachedBaselineRate must be in [0, 100] when non-null, got: " + cachedBaselineRate);
         }
+        // F4: an explicit prior-winner id only makes sense on the skip path — a
+        // fresh (both-arms) run has no cached rate to attach it to. Fail fast so a
+        // caller bug doesn't silently degrade to an unrelated semantics.
+        if (explicitPriorWinnerAbRunId != null && cachedBaselineRate == null) {
+            throw new IllegalArgumentException(
+                    "priorWinnerAbRunId requires cachedBaselineRate (it pins the run the cached "
+                            + "rate was measured on); omit both to run a full two-arm A/B");
+        }
 
         String candidateBundleJson = writeBundle(candidateBundle);
         String baselineBundleJson = writeBundle(baselineBundle);
@@ -181,15 +199,19 @@ public class AgentEvolveAbEvalService {
 
         // §7 W1: trust the cached rate ONLY if the incoming baseline bundle is the
         // prior winner's candidate bundle. No prior winner / mismatch → fail loud.
+        // F4: with an explicit id the prior winner is resolved BY ID (exact); the
+        // legacy "most recent COMPLETED" lookup remains the default.
         String priorWinnerAbRunId = null;
         if (skipBaseline) {
-            AgentEvolveAbRunEntity priorWinner = abRunRepository
-                    .findFirstByAgentIdAndStatusOrderByCompletedAtDesc(
-                            agentId, AgentEvolveAbRunEntity.STATUS_COMPLETED)
-                    .orElseThrow(() -> new IllegalStateException(
-                            "skip_baseline requested (cachedBaselineRate=" + cachedBaselineRate
-                                    + ") but no prior COMPLETED agent A/B run exists for agent " + agentId
-                                    + " to source the cached rate from"));
+            AgentEvolveAbRunEntity priorWinner = (explicitPriorWinnerAbRunId != null)
+                    ? resolveExplicitPriorWinner(explicitPriorWinnerAbRunId, agentId, cachedBaselineRate)
+                    : abRunRepository
+                            .findFirstByAgentIdAndStatusOrderByCompletedAtDesc(
+                                    agentId, AgentEvolveAbRunEntity.STATUS_COMPLETED)
+                            .orElseThrow(() -> new IllegalStateException(
+                                    "skip_baseline requested (cachedBaselineRate=" + cachedBaselineRate
+                                            + ") but no prior COMPLETED agent A/B run exists for agent " + agentId
+                                            + " to source the cached rate from"));
             Bundle priorCandidate = readBundle(priorWinner.getCandidateBundleJson());
             if (!baselineBundle.equals(priorCandidate)) {
                 throw new IllegalStateException(
@@ -256,6 +278,36 @@ public class AgentEvolveAbEvalService {
             coordinatorExecutor.execute(() -> runAsync(abRunId, targetIds));
         }
         return abRunId;
+    }
+
+    /**
+     * F4 — resolve the prior winner run by the caller-supplied EXPLICIT id. The
+     * run must exist, be COMPLETED, and belong to the same agent (ownership —
+     * a cross-agent id would otherwise let a caller attach another agent's cached
+     * rate). Bundle-equality and dataset-version checks are shared with the legacy
+     * path and run after this returns.
+     */
+    private AgentEvolveAbRunEntity resolveExplicitPriorWinner(String explicitPriorWinnerAbRunId,
+                                                              String agentId,
+                                                              Double cachedBaselineRate) {
+        AgentEvolveAbRunEntity prior = abRunRepository.findById(explicitPriorWinnerAbRunId)
+                .orElseThrow(() -> new IllegalStateException(
+                        "skip_baseline requested (cachedBaselineRate=" + cachedBaselineRate
+                                + ") but priorWinnerAbRunId=" + explicitPriorWinnerAbRunId
+                                + " does not exist"));
+        if (!AgentEvolveAbRunEntity.STATUS_COMPLETED.equals(prior.getStatus())) {
+            throw new IllegalStateException(
+                    "priorWinnerAbRunId=" + explicitPriorWinnerAbRunId + " has status "
+                            + prior.getStatus() + " (must be COMPLETED) — refusing to attach a "
+                            + "cached rate to a non-terminal/failed run");
+        }
+        if (!agentId.equals(prior.getAgentId())) {
+            throw new IllegalStateException(
+                    "priorWinnerAbRunId=" + explicitPriorWinnerAbRunId + " belongs to agent "
+                            + prior.getAgentId() + " but this run targets agent " + agentId
+                            + " — cross-agent prior winner rejected");
+        }
+        return prior;
     }
 
     /**
@@ -342,6 +394,11 @@ public class AgentEvolveAbEvalService {
             List<AbScenarioResult> perScenario = abEvalPipeline.runWithDefs(
                     abRun.getId(), split.all(), baselineDef, candidateDef, cachedBaselineRate, true,
                     candidateExtraSkills);
+            // F3 — tag each persisted scenario with its subset (target/general) so
+            // read paths (GetAbResultTool targetMeasuredN/generalMeasuredN) can count
+            // per subset without re-deriving the split (explicit target ids are
+            // in-memory only, never persisted on the run row).
+            perScenario = tagSubsets(perScenario, split.targetIds(), split.generalIds());
 
             // Global rates (Phase 1 semantics; trajectory chart uses these). The skip
             // path passes priorWinnerPerScenario so the baseline rate is the prior
@@ -492,6 +549,28 @@ public class AgentEvolveAbEvalService {
         // baselineRate unset.
         Double deltaRate = baselineRate == null ? null : candidateRate - baselineRate;
         return new AgentAbDeltas(baselineRate, candidateRate, deltaRate);
+    }
+
+    /**
+     * F3 — return a copy of {@code perScenario} where each result carries its
+     * subset tag ({@link AbScenarioResult#SUBSET_TARGET} / {@link AbScenarioResult#SUBSET_GENERAL},
+     * null when the scenario is in neither id-set — shouldn't happen since
+     * target ∪ general = the whole dataset, but defensive). Pure / non-mutating.
+     */
+    static List<AbScenarioResult> tagSubsets(List<AbScenarioResult> perScenario,
+                                             Set<String> targetIds, Set<String> generalIds) {
+        if (perScenario == null) {
+            return null;
+        }
+        List<AbScenarioResult> tagged = new ArrayList<>(perScenario.size());
+        for (AbScenarioResult r : perScenario) {
+            String subset = targetIds.contains(r.scenarioId()) ? AbScenarioResult.SUBSET_TARGET
+                    : generalIds.contains(r.scenarioId()) ? AbScenarioResult.SUBSET_GENERAL
+                    : null;
+            tagged.add(new AbScenarioResult(r.scenarioId(), r.scenarioName(),
+                    r.baseline(), r.candidate(), subset));
+        }
+        return tagged;
     }
 
     /** Index a per-scenario result list by scenarioId → its candidate-side RunResult. */
@@ -683,10 +762,16 @@ public class AgentEvolveAbEvalService {
         // intersection so candidate and best share the SAME scenarios per subset
         // (D2). skip path → cross-round pairwise vs the prior winner's candidate side;
         // fresh path → same-round pairwise (candidate vs baseline side).
-        double candTarget = passRateOver(currentRun, targetIds, /*candidateSide*/ true, priorWinnerRun);
-        double candGeneral = passRateOver(currentRun, generalIds, true, priorWinnerRun);
-        double bestTarget;
-        double bestGeneral;
+        // Workflow-fix F2 (2026-06-07): passRateOver returns NULL when the subset is
+        // non-empty but ZERO scenarios were pairwise-measured (e.g. both arms infra-
+        // ERROR on the whole target subset) — mirroring computeDeltas' D3 sentinel.
+        // Previously this collapsed to 0.0, so target_delta_pp came out 0.0 (not
+        // null) and agentWouldPromote's targetOk=(0>0)=false hard-rejected a round
+        // whose target was simply never measured (live regression, run 6251439f).
+        Double candTarget = passRateOver(currentRun, targetIds, /*candidateSide*/ true, priorWinnerRun);
+        Double candGeneral = passRateOver(currentRun, generalIds, true, priorWinnerRun);
+        Double bestTarget;
+        Double bestGeneral;
         if (priorWinnerRun != null) {
             // skip path: best = the prior winner's CANDIDATE side measurement, gated on
             // THIS run's candidate side also being measured for that scenario.
@@ -700,19 +785,25 @@ public class AgentEvolveAbEvalService {
         boolean hasTarget = !targetIds.isEmpty();
         boolean hasGeneral = !generalIds.isEmpty();
         // Absolute per-subset rates (item 4): null when the subset is empty so the
-        // orchestrator can distinguish "0% measured" from "subset absent".
+        // orchestrator can distinguish "0% measured" from "subset absent"; ALSO null
+        // (F2) when the subset exists but nothing in it was pairwise-measured.
         Double candidateTargetRate = hasTarget ? candTarget : null;
         Double candidateGeneralRate = hasGeneral ? candGeneral : null;
         Double baselineTargetRate = hasTarget ? bestTarget : null;
         Double baselineGeneralRate = hasGeneral ? bestGeneral : null;
-        Double targetDeltaPp = hasTarget ? (candTarget - bestTarget) : null;
-        Double regressionDeltaPp = hasGeneral ? (candGeneral - bestGeneral) : null;
+        // Deltas need BOTH sides measured. The pairwise intersection is symmetric, so
+        // cand/best are null together in practice; the dual check is defensive.
+        Double targetDeltaPp = (hasTarget && candTarget != null && bestTarget != null)
+                ? (candTarget - bestTarget) : null;
+        Double regressionDeltaPp = (hasGeneral && candGeneral != null && bestGeneral != null)
+                ? (candGeneral - bestGeneral) : null;
         return new SubsetDeltas(targetDeltaPp, regressionDeltaPp,
                 candidateTargetRate, candidateGeneralRate, baselineTargetRate, baselineGeneralRate);
     }
 
     /**
-     * Pure result of {@link #computeSubsetDeltas}; null = subset absent / no signal.
+     * Pure result of {@link #computeSubsetDeltas}; null = subset absent / no signal
+     * (incl. F2: subset present but 0 pairwise-measured).
      * Carries both the vs-best deltas AND the 4 absolute subset rates (item 4) the
      * orchestrator needs for the vs-original general anchor.
      */
@@ -723,7 +814,7 @@ public class AgentEvolveAbEvalService {
     /**
      * 3-arg backward-compatible form (no cross-run counterpart) → same-round pairwise.
      */
-    static double passRateOver(List<AbScenarioResult> results, Set<String> ids, boolean candidateSide) {
+    static Double passRateOver(List<AbScenarioResult> results, Set<String> ids, boolean candidateSide) {
         return passRateOver(results, ids, candidateSide, null);
     }
 
@@ -739,13 +830,20 @@ public class AgentEvolveAbEvalService {
      *       non-infra (the cross-round measurement the skip path compares against).</li>
      * </ul>
      * A scenario whose either side is ERROR/TIMEOUT (or CACHED) is excluded from both
-     * numerator and denominator. Returns 0.0 when {@code ids} is empty or nothing was
-     * measured (callers gate the empty-subset case separately via {@code hasTarget}).
+     * numerator and denominator.
+     *
+     * <p>Workflow-fix F2 (2026-06-07): returns {@code null} when {@code ids} is empty
+     * OR nothing in the subset was pairwise-measured — the D3 not-measured sentinel,
+     * mirroring {@link #computeDeltas}. "0% pass" and "never measured" must not be
+     * conflated (the old 0.0 return made {@code agentWouldPromote} hard-reject rounds
+     * whose target subset was simply all-infra; run {@code 6251439f} iter1).
+     * {@link #computeSubsetDeltas} gates the empty-subset case separately via
+     * {@code hasTarget}/{@code hasGeneral}.
      */
-    static double passRateOver(List<AbScenarioResult> results, Set<String> ids, boolean candidateSide,
+    static Double passRateOver(List<AbScenarioResult> results, Set<String> ids, boolean candidateSide,
                                List<AbScenarioResult> pairwiseWith) {
         if (results == null || ids == null || ids.isEmpty()) {
-            return 0.0;
+            return null;
         }
         Map<String, AbScenarioResult.RunResult> counterpart =
                 pairwiseWith == null ? null : indexCandidateSide(pairwiseWith);
@@ -772,7 +870,8 @@ public class AgentEvolveAbEvalService {
                 passed++;
             }
         }
-        return total == 0 ? 0.0 : (double) passed / total * 100.0;
+        // F2: total==0 → null sentinel (subset never pairwise-measured), not 0.0.
+        return total == 0 ? null : (double) passed / total * 100.0;
     }
 
     private String writeBundle(Bundle bundle) {

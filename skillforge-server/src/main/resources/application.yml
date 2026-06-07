@@ -156,6 +156,20 @@ skillforge:
   # cap. Default 30 (TriggerAbEvalTool.DEFAULT_AB_BUDGET_PER_RUN).
   evolve:
     ab-budget-per-run: 30
+    # AUTOEVOLVE-CLOSE-LOOP workflow-fix F5 (2026-06-07): promote/keep 阈值单一来源
+    # (EvolveThresholdProperties)。prompt/skill delta 15→5（n=36 时 15pp≈5-6 个净翻转,
+    # 结构性不可达）; agent 双标准 0/−3 值不变挪配置; min-measured-n=10 (F3 最小测量数
+    # 守卫); anchor-erosion-floor-pp=5 (F6 vs-original 锚点)。behavior_rule 面 (+10/−3)
+    # 本期不动。GetAbResult 将生效值随 agent 面响应回显 (thresholds 子对象), workflow JS
+    # 不写死第二份。
+    thresholds:
+      prompt-delta-pp: 5
+      skill-delta-pp: 5
+      skill-min-candidate-rate-pp: 40
+      agent-target-min-delta-pp: 0
+      agent-regression-floor-pp: -3
+      min-measured-n: 10
+      anchor-erosion-floor-pp: 5
     # AUTOEVOLVE-CLOSE-LOOP Phase BC: repo-root prefix BadCaseHarvestService strips
     # from harvested span paths so fixtures become sandbox-relative and the task
     # is rebased to /tmp/eval/. The @Value default is a dev-machine path; override

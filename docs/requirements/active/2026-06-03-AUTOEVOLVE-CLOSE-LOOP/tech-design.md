@@ -256,7 +256,7 @@ harvest service / 行为 oracle / 任何 prompt / 本设计文档 **只描述通
    - 防"假进步"主力交给 **benchmark 子集同跑**（do-nothing → benchmark 掉分 → 非赢家）；oracle 内只留通用 do-nothing/拒答兜底（≥1 工具调用）
    - **盲测安全**：仍是结果型，只说"没再犯那个错 + 真干了活"，不说 HOW
    - **design-reviewer 专项**：确认放通用化后「do-nothing 假进步」洞由 benchmark 子集兜得住（两套用例必须同跑，见 #4）；这是 BC-M2a 反例的回归点，重点审
-4. **两套用例同跑**：harvest-targeted A/B 运行**必须同时覆盖** benchmark(general) + 错题本(target) 两子集。`computeSubsetDeltas` 已分别算 `targetDeltaPp` / `regressionDeltaPp`；赢家判据 = `targetDelta>0 AND regressionDelta≥0`。orchestrator 接线确保 dataset version 含 benchmark 场景，**不可 target-only 跑**（否则 do-nothing 守门失效）。
+4. **两套用例同跑**：harvest-targeted A/B 运行**必须同时覆盖** benchmark(general) + 错题本(target) 两子集。`computeSubsetDeltas` 已分别算 `targetDeltaPp` / `regressionDeltaPp`；赢家判据 = `targetDelta>0 AND regressionDelta≥−3 floor`（实现是 `agentWouldPromote` 的 regression floor 而非 ≥0；2026-06-07 起 floor 配置化为 `skillforge.evolve.thresholds.agent-regression-floor-pp`，默认 −3）。orchestrator 接线确保 dataset version 含 benchmark 场景，**不可 target-only 跑**（否则 do-nothing 守门失效）。
 5. **显式 scenario-id target split**（恢复 P2-b G1）：扩 `AgentEvolveAbEvalService.resolveRoleSplit` 支持显式 id 列表作 target；`TriggerAbEvalTool.evalScenarioIds` 贯通到 split。
 6. **activate 人 gate**：草稿→active endpoint + UI 按钮（写 `reviewedAt`）。
 7. **orchestrator 接线**：evolve 自动收割（ERROR 聚类 → 代表 session → harvest draft）+ 自动拿 **active** 收割场景当 target。**盲测扫描**：接线代码/prompt 不得出现任何具体修法字样。
@@ -300,7 +300,7 @@ harvest service / 行为 oracle / 任何 prompt / 本设计文档 **只描述通
 - [ ] 任意工具报错走同一收割路径（Edit + Grep 实证；加第三工具只需一行适配）
 - [ ] SandboxedGrepTool 复现 `"Path is not a directory"`（parity test 逐字对齐生产）
 - [ ] oracle 通用化后：no-op 候选不 PASS（≥1 工具调用兜底 + benchmark 掉分双保险）；真修好 → 错题本 fail→pass 翻转可量
-- [ ] 两套用例同跑：赢家 = `targetDelta>0 AND benchmark regressionDelta≥0`
+- [ ] 两套用例同跑：赢家 = `targetDelta>0 AND benchmark regressionDelta≥−3 floor`（floor 配置化，见上 #4）
 - [ ] 显式 scenario-id target split 生效
 - [ ] activate 人 gate（draft→active）endpoint + UI
 - [ ] orchestrator 自动收割 + 自动对靶；盲测扫描全产物无修法字样

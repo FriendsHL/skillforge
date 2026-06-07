@@ -130,7 +130,8 @@ import java.util.concurrent.TimeUnit;
         SkillSecurityScanProperties.class,
         EvalUserSimulatorProperties.class,
         WebToolsProperties.class,
-        MemoryTranscriptProperties.class
+        MemoryTranscriptProperties.class,
+        EvolveThresholdProperties.class
 })
 public class SkillForgeConfig {
 
@@ -510,11 +511,13 @@ public class SkillForgeConfig {
             com.skillforge.server.repository.BehaviorRuleAbRunRepository behaviorRuleAbRunRepository,
             com.skillforge.server.repository.AgentEvolveAbRunRepository agentEvolveAbRunRepository,
             ObjectMapper objectMapper,
+            EvolveThresholdProperties evolveThresholdProperties,
             SkillRegistry skillRegistry) {
         com.skillforge.server.tool.evolve.GetAbResultTool tool =
                 new com.skillforge.server.tool.evolve.GetAbResultTool(
                         promptAbRunRepository, skillAbRunRepository,
-                        behaviorRuleAbRunRepository, agentEvolveAbRunRepository, objectMapper);
+                        behaviorRuleAbRunRepository, agentEvolveAbRunRepository, objectMapper,
+                        evolveThresholdProperties);
         skillRegistry.registerTool(tool);
         log.info("Registered GetAbResultTool into SkillRegistry");
         return tool;

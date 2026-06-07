@@ -1,5 +1,6 @@
 package com.skillforge.server.improve;
 
+import com.skillforge.server.config.EvolveThresholdProperties;
 import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.PromptAbRunEntity;
 import com.skillforge.server.entity.PromptVersionEntity;
@@ -22,21 +23,27 @@ import java.time.ZoneOffset;
 public class PromptPromotionService {
 
     private static final Logger log = LoggerFactory.getLogger(PromptPromotionService.class);
-    private static final double PROMOTION_DELTA_THRESHOLD_PP = 15.0;
 
     private final PromptAbRunRepository promptAbRunRepository;
     private final PromptVersionRepository promptVersionRepository;
     private final AgentRepository agentRepository;
     private final ApplicationEventPublisher eventPublisher;
+    // F5 (2026-06-07): promote threshold moved from a hardcoded 15.0 constant into
+    // EvolveThresholdProperties (skillforge.evolve.thresholds.prompt-delta-pp,
+    // default 5) — shared with GetAbResultTool's advisory wouldPromote so the
+    // advisory signal can't drift from this real gate.
+    private final EvolveThresholdProperties thresholds;
 
     public PromptPromotionService(PromptAbRunRepository promptAbRunRepository,
                                    PromptVersionRepository promptVersionRepository,
                                    AgentRepository agentRepository,
-                                   ApplicationEventPublisher eventPublisher) {
+                                   ApplicationEventPublisher eventPublisher,
+                                   EvolveThresholdProperties thresholds) {
         this.promptAbRunRepository = promptAbRunRepository;
         this.promptVersionRepository = promptVersionRepository;
         this.agentRepository = agentRepository;
         this.eventPublisher = eventPublisher;
+        this.thresholds = thresholds;
     }
 
     @Transactional
@@ -54,13 +61,14 @@ public class PromptPromotionService {
         Long triggeredByUserId = abRun.getTriggeredByUserId();
 
         // Guard 1: delta < threshold — any sub-threshold result counts as a decline
+        double deltaThresholdPp = thresholds.getPromptDeltaPp();
         Double delta = abRun.getDeltaPassRate();
-        if (delta == null || delta < PROMOTION_DELTA_THRESHOLD_PP) {
+        if (delta == null || delta < deltaThresholdPp) {
             log.info("Promotion rejected: delta {} < threshold {} for agent {}",
-                    delta, PROMOTION_DELTA_THRESHOLD_PP, agentId);
+                    delta, deltaThresholdPp, agentId);
             updateAbDeclineTracking(agent, triggeredByUserId);
             agentRepository.save(agent);
-            return PromotionResult.rejected("Delta " + delta + " below threshold " + PROMOTION_DELTA_THRESHOLD_PP);
+            return PromotionResult.rejected("Delta " + delta + " below threshold " + deltaThresholdPp);
         }
 
         // Guard 2: already promoted today

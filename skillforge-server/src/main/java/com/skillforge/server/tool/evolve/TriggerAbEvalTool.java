@@ -151,6 +151,9 @@ public class TriggerAbEvalTool implements Tool {
                 + "- \"targetAgentId\": the agent being evolved.\n"
                 + "- \"baselineId\" (optional, prompt only): baseline prompt version id; omit / null "
                 + "to use the agent's current active prompt.\n"
+                + "- \"priorWinnerAbRunId\" (optional, agent only): COMPLETED agent A/B run id whose "
+                + "candidate bundle equals this run's baselineBundle; requires cachedBaselineScore "
+                + "(win-streak candidate-only carry-forward).\n"
                 + "- \"evalScenarioIds\" (optional): explicit scenario ids. For prompt/skill/"
                 + "behavior_rule, the held-out set to score on. For surface=agent, the explicit "
                 + "TARGET subset (e.g. harvested bad-case ids); the rest of the dataset stays the "
@@ -211,7 +214,17 @@ public class TriggerAbEvalTool implements Tool {
                 "description", "Optional (prompt surface, hill-climb): the current-best's already-"
                         + "known pass-rate (0..100). When supplied the A/B runs CANDIDATE-ONLY and "
                         + "reuses this as the baseline score — never re-measures the baseline "
-                        + "(avoids re-eval noise + halves the work). Pair with baselineId."
+                        + "(avoids re-eval noise + halves the work). Pair with baselineId. For "
+                        + "surface=agent, pair with priorWinnerAbRunId."
+        ));
+        properties.put("priorWinnerAbRunId", Map.of(
+                "type", "string",
+                "description", "Optional (surface=agent only, win-streak carry-forward): the "
+                        + "COMPLETED agent A/B run id whose CANDIDATE bundle is this run's "
+                        + "baselineBundle (i.e. the run where the current best was measured). "
+                        + "Requires cachedBaselineScore. When supplied, the winner-carry-forward "
+                        + "guard resolves the prior winner by THIS id (exact) instead of 'most "
+                        + "recent COMPLETED run'. Omit to measure both arms fresh."
         ));
         properties.put("evalScenarioIds", Map.of(
                 "type", "array",
@@ -494,6 +507,18 @@ public class TriggerAbEvalTool implements Tool {
                             + "omit it entirely to run a full (non-carry-forward) A/B");
         }
 
+        // F4 (2026-06-07): optional explicit prior-winner run id for the win-streak
+        // carry-forward path. Only meaningful alongside cachedBaselineScore — a
+        // supplied-but-unpaired value is a caller bug, fail loud (mirrors the
+        // W-WARN-2 stance: never silently degrade the carry-forward semantics).
+        String priorWinnerAbRunId = trimToNull(input.get("priorWinnerAbRunId"));
+        if (priorWinnerAbRunId != null && cachedBaselineRate == null) {
+            return SkillResult.validationError(
+                    "priorWinnerAbRunId requires cachedBaselineScore (surface=agent): the id pins "
+                            + "the run the cached rate was measured on; omit both to run a full "
+                            + "two-arm A/B");
+        }
+
         // BC-M2b: for surface=agent, evalScenarioIds (when supplied) is the explicit
         // TARGET subset (e.g. harvested bad-case scenario ids); the rest of the
         // dataset stays the general/benchmark subset. Unlike prompt/behavior_rule
@@ -503,10 +528,11 @@ public class TriggerAbEvalTool implements Tool {
 
         String abRunId = agentEvolveAbEvalService.startAgentAb(
                 candidateBundle, baselineBundle, targetAgentId, datasetVersionId, cachedBaselineRate,
-                explicitTargetIds);
+                explicitTargetIds, priorWinnerAbRunId);
 
-        log.info("[TriggerAbEval] surface=agent targetAgentId={} datasetVersionId={} targetIds={} -> abRunId={}",
-                targetAgentId, datasetVersionId, explicitTargetIds, abRunId);
+        log.info("[TriggerAbEval] surface=agent targetAgentId={} datasetVersionId={} targetIds={} "
+                        + "priorWinnerAbRunId={} -> abRunId={}",
+                targetAgentId, datasetVersionId, explicitTargetIds, priorWinnerAbRunId, abRunId);
 
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("abRunId", abRunId);

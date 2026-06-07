@@ -182,7 +182,7 @@ class AgentEvolveAbEvalServiceTest {
     }
 
     @Test
-    @DisplayName("passRateOver: counts only the subset, by side")
+    @DisplayName("passRateOver: counts only the subset, by side; empty subset → null (F2)")
     void passRateOver_subsetAndSide() {
         List<AbScenarioResult> run = List.of(
                 new AbScenarioResult("a", "a", pass(), fail()),
@@ -192,7 +192,87 @@ class AgentEvolveAbEvalServiceTest {
         // baseline side: a pass, b fail → 50 ; candidate side: a fail, b pass → 50
         assertThat(AgentEvolveAbEvalService.passRateOver(run, ids, false)).isEqualTo(50.0);
         assertThat(AgentEvolveAbEvalService.passRateOver(run, ids, true)).isEqualTo(50.0);
-        assertThat(AgentEvolveAbEvalService.passRateOver(run, Set.of(), true)).isEqualTo(0.0);
+        // F2: empty subset / nothing measured → null sentinel, not 0.0.
+        assertThat(AgentEvolveAbEvalService.passRateOver(run, Set.of(), true)).isNull();
+    }
+
+    // ---- F2 — subset 0-measured → null sentinel (workflow-fix 2026-06-07) -----
+
+    private RunResult infraError() { return new RunResult("ERROR", 0.0); }
+
+    @Test
+    @DisplayName("F2 case 1: target subset present but BOTH arms all-infra → target delta/rates null (not 0.0)")
+    void computeSubsetDeltas_targetAllInfra_nullSentinel() {
+        // Mirrors live run 6251439f iter1: 6 role-target scenarios with both arms
+        // infra-ERROR used to produce target_delta_pp=0.0 → hard reject. Must be null.
+        List<AbScenarioResult> run = List.of(
+                new AbScenarioResult("t1", "t1", infraError(), infraError()),
+                new AbScenarioResult("t2", "t2", infraError(), infraError()),
+                new AbScenarioResult("g1", "g1", fail(), pass()),
+                new AbScenarioResult("g2", "g2", pass(), pass()));
+        AgentEvolveAbEvalService.SubsetDeltas d = AgentEvolveAbEvalService.computeSubsetDeltas(
+                run, null, Set.of("t1", "t2"), Set.of("g1", "g2"));
+
+        assertThat(d.targetDeltaPp()).isNull();
+        assertThat(d.candidateTargetRate()).isNull();
+        assertThat(d.baselineTargetRate()).isNull();
+        // general unaffected: candidate 100 − baseline 50 = +50
+        assertThat(d.regressionDeltaPp()).isCloseTo(50.0, org.assertj.core.data.Offset.offset(0.01));
+    }
+
+    @Test
+    @DisplayName("F2 case 2: target subset partially measured → rate over the measured part only (real value)")
+    void computeSubsetDeltas_targetPartiallyMeasured_realValue() {
+        // t1 measured (cand pass / base fail), t2 both-infra → dropped. target over {t1}:
+        // candidate 100, baseline 0, delta +100.
+        List<AbScenarioResult> run = List.of(
+                new AbScenarioResult("t1", "t1", fail(), pass()),
+                new AbScenarioResult("t2", "t2", infraError(), infraError()),
+                new AbScenarioResult("g1", "g1", pass(), pass()));
+        AgentEvolveAbEvalService.SubsetDeltas d = AgentEvolveAbEvalService.computeSubsetDeltas(
+                run, null, Set.of("t1", "t2"), Set.of("g1"));
+
+        assertThat(d.candidateTargetRate()).isCloseTo(100.0, org.assertj.core.data.Offset.offset(0.01));
+        assertThat(d.baselineTargetRate()).isCloseTo(0.0, org.assertj.core.data.Offset.offset(0.01));
+        assertThat(d.targetDeltaPp()).isCloseTo(100.0, org.assertj.core.data.Offset.offset(0.01));
+    }
+
+    @Test
+    @DisplayName("F2 chain: target-null + general improving → agentWouldPromote falls back to regression>0 semantics")
+    void computeSubsetDeltas_targetNull_keepsGeneralSignal() {
+        // The F2 sentinel must leave the general/regression signal intact so the
+        // advisory gate's regression-only fallback can still reason about the round.
+        List<AbScenarioResult> run = List.of(
+                new AbScenarioResult("t1", "t1", infraError(), infraError()),
+                new AbScenarioResult("g1", "g1", fail(), pass()),
+                new AbScenarioResult("g2", "g2", fail(), fail()));
+        AgentEvolveAbEvalService.SubsetDeltas d = AgentEvolveAbEvalService.computeSubsetDeltas(
+                run, null, Set.of("t1"), Set.of("g1", "g2"));
+
+        assertThat(d.targetDeltaPp()).isNull();
+        assertThat(d.regressionDeltaPp()).isCloseTo(50.0, org.assertj.core.data.Offset.offset(0.01));
+        assertThat(d.candidateGeneralRate()).isCloseTo(50.0, org.assertj.core.data.Offset.offset(0.01));
+    }
+
+    // ---- F3 — subset tagging (persisted for GetAbResult measured counts) -------
+
+    @Test
+    @DisplayName("tagSubsets: stamps target/general per id-set, leaves payload untouched")
+    void tagSubsets_stampsSubsetByIdSet() {
+        List<AbScenarioResult> run = List.of(
+                new AbScenarioResult("t1", "t1", pass(), fail()),
+                new AbScenarioResult("g1", "g1", fail(), pass()),
+                new AbScenarioResult("x1", "x1", pass(), pass()));   // in neither set
+        List<AbScenarioResult> tagged = AgentEvolveAbEvalService.tagSubsets(
+                run, Set.of("t1"), Set.of("g1"));
+
+        assertThat(tagged).hasSize(3);
+        assertThat(tagged.get(0).subset()).isEqualTo(AbScenarioResult.SUBSET_TARGET);
+        assertThat(tagged.get(1).subset()).isEqualTo(AbScenarioResult.SUBSET_GENERAL);
+        assertThat(tagged.get(2).subset()).isNull();
+        // payload untouched
+        assertThat(tagged.get(0).scenarioId()).isEqualTo("t1");
+        assertThat(tagged.get(0).baseline().oracleScore()).isEqualTo(80.0);
     }
 
     // ---- startAgentAb W1 guard ------------------------------------------------
@@ -307,6 +387,134 @@ class AgentEvolveAbEvalServiceTest {
         assertThat(saved.isSkipBaseline()).isTrue();
         assertThat(saved.getCachedBaselineRate()).isEqualTo(60.0);
         assertThat(saved.getPriorWinnerAbRunId()).isEqualTo("ab-prior");
+    }
+
+    // ---- F4 — explicit priorWinnerAbRunId (workflow-fix 2026-06-07) ------------
+
+    @Test
+    @DisplayName("F4: explicit priorWinnerAbRunId resolves by id (not 'most recent COMPLETED') and persists it")
+    void startAgentAb_explicitPriorWinner_matching_resolvesById() throws Exception {
+        Bundle best = new Bundle("pv-best", null, null);
+        AgentEvolveAbRunEntity priorWinner = new AgentEvolveAbRunEntity();
+        priorWinner.setId("ab-explicit");
+        priorWinner.setAgentId("7");
+        priorWinner.setStatus(AgentEvolveAbRunEntity.STATUS_COMPLETED);
+        priorWinner.setCandidateBundleJson(objectMapper.writeValueAsString(best));
+        priorWinner.setDatasetVersionId("dv-1");
+        when(abRunRepository.findById("ab-explicit")).thenReturn(Optional.of(priorWinner));
+        lenient().when(abRunRepository.findFirstByAgentIdAndCandidateBundleJsonAndStatusInOrderByStartedAtDesc(
+                anyString(), anyString(), any())).thenReturn(Optional.empty());
+        when(abRunRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        String abRunId = service.startAgentAb(new Bundle("pv-cand", null, null), best,
+                "7", "dv-1", 60.0, null, "ab-explicit");
+
+        assertThat(abRunId).isNotBlank();
+        // The legacy "most recent COMPLETED" lookup is NOT consulted on the explicit path.
+        verify(abRunRepository, never()).findFirstByAgentIdAndStatusOrderByCompletedAtDesc(
+                anyString(), anyString());
+        ArgumentCaptor<AgentEvolveAbRunEntity> captor = ArgumentCaptor.forClass(AgentEvolveAbRunEntity.class);
+        verify(abRunRepository).save(captor.capture());
+        AgentEvolveAbRunEntity saved = captor.getValue();
+        assertThat(saved.isSkipBaseline()).isTrue();
+        assertThat(saved.getPriorWinnerAbRunId()).isEqualTo("ab-explicit");
+    }
+
+    @Test
+    @DisplayName("F4: explicit priorWinnerAbRunId whose candidate bundle ≠ baseline → fail loud (W1)")
+    void startAgentAb_explicitPriorWinner_bundleMismatch_throws() throws Exception {
+        AgentEvolveAbRunEntity priorWinner = new AgentEvolveAbRunEntity();
+        priorWinner.setId("ab-explicit");
+        priorWinner.setAgentId("7");
+        priorWinner.setStatus(AgentEvolveAbRunEntity.STATUS_COMPLETED);
+        priorWinner.setCandidateBundleJson(objectMapper.writeValueAsString(new Bundle("pv-OTHER", null, null)));
+        priorWinner.setDatasetVersionId("dv-1");
+        when(abRunRepository.findById("ab-explicit")).thenReturn(Optional.of(priorWinner));
+
+        assertThatThrownBy(() -> service.startAgentAb(
+                new Bundle("pv-cand", null, null), new Bundle("pv-best", null, null),
+                "7", "dv-1", 60.0, null, "ab-explicit"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("consistency violation");
+        verify(abRunRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("F4: explicit priorWinnerAbRunId not found → fail loud")
+    void startAgentAb_explicitPriorWinner_notFound_throws() {
+        when(abRunRepository.findById("ab-missing")).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.startAgentAb(
+                new Bundle("pv-cand", null, null), new Bundle("pv-best", null, null),
+                "7", "dv-1", 60.0, null, "ab-missing"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("does not exist");
+    }
+
+    @Test
+    @DisplayName("F4: explicit priorWinnerAbRunId belonging to ANOTHER agent → fail loud (ownership)")
+    void startAgentAb_explicitPriorWinner_crossAgent_throws() throws Exception {
+        AgentEvolveAbRunEntity priorWinner = new AgentEvolveAbRunEntity();
+        priorWinner.setId("ab-explicit");
+        priorWinner.setAgentId("99");   // other agent's run
+        priorWinner.setStatus(AgentEvolveAbRunEntity.STATUS_COMPLETED);
+        priorWinner.setCandidateBundleJson(objectMapper.writeValueAsString(new Bundle("pv-best", null, null)));
+        when(abRunRepository.findById("ab-explicit")).thenReturn(Optional.of(priorWinner));
+
+        assertThatThrownBy(() -> service.startAgentAb(
+                new Bundle("pv-cand", null, null), new Bundle("pv-best", null, null),
+                "7", "dv-1", 60.0, null, "ab-explicit"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("cross-agent");
+    }
+
+    @Test
+    @DisplayName("F4: explicit priorWinnerAbRunId on a non-COMPLETED run → fail loud")
+    void startAgentAb_explicitPriorWinner_notCompleted_throws() {
+        AgentEvolveAbRunEntity priorWinner = new AgentEvolveAbRunEntity();
+        priorWinner.setId("ab-explicit");
+        priorWinner.setAgentId("7");
+        priorWinner.setStatus(AgentEvolveAbRunEntity.STATUS_FAILED);
+        when(abRunRepository.findById("ab-explicit")).thenReturn(Optional.of(priorWinner));
+
+        assertThatThrownBy(() -> service.startAgentAb(
+                new Bundle("pv-cand", null, null), new Bundle("pv-best", null, null),
+                "7", "dv-1", 60.0, null, "ab-explicit"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("must be COMPLETED");
+    }
+
+    @Test
+    @DisplayName("F4: priorWinnerAbRunId WITHOUT cachedBaselineRate → IllegalArgumentException (caller bug)")
+    void startAgentAb_explicitPriorWinner_withoutCachedRate_throws() {
+        assertThatThrownBy(() -> service.startAgentAb(
+                new Bundle("pv-cand", null, null), new Bundle("pv-best", null, null),
+                "7", "dv-1", null, null, "ab-explicit"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("requires cachedBaselineRate");
+    }
+
+    @Test
+    @DisplayName("F4: 6-arg overload (no explicit id) keeps the legacy 'most recent COMPLETED' resolution")
+    void startAgentAb_noExplicitId_fallsBackToMostRecentCompleted() throws Exception {
+        Bundle best = new Bundle("pv-best", null, null);
+        AgentEvolveAbRunEntity priorWinner = new AgentEvolveAbRunEntity();
+        priorWinner.setId("ab-prior");
+        priorWinner.setCandidateBundleJson(objectMapper.writeValueAsString(best));
+        priorWinner.setDatasetVersionId("dv-1");
+        when(abRunRepository.findFirstByAgentIdAndStatusOrderByCompletedAtDesc(
+                eq("7"), eq(AgentEvolveAbRunEntity.STATUS_COMPLETED)))
+                .thenReturn(Optional.of(priorWinner));
+        lenient().when(abRunRepository.findFirstByAgentIdAndCandidateBundleJsonAndStatusInOrderByStartedAtDesc(
+                anyString(), anyString(), any())).thenReturn(Optional.empty());
+        when(abRunRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        String abRunId = service.startAgentAb(new Bundle("pv-cand", null, null), best,
+                "7", "dv-1", 60.0, null);
+
+        assertThat(abRunId).isNotBlank();
+        verify(abRunRepository).findFirstByAgentIdAndStatusOrderByCompletedAtDesc(
+                eq("7"), eq(AgentEvolveAbRunEntity.STATUS_COMPLETED));
     }
 
     @Test
