@@ -66,6 +66,7 @@ class EvolveControllerTest {
     private ChatService chatService;
     private EvolveReadService evolveReadService;
     private AgentBundleAdoptionService adoptionService;
+    private com.skillforge.workflow.WorkflowRunnerService workflowRunnerService;
     private EvolveController controller;
     private MockMvc mvc;
 
@@ -77,6 +78,7 @@ class EvolveControllerTest {
         chatService = mock(ChatService.class);
         evolveReadService = mock(EvolveReadService.class);
         adoptionService = mock(AgentBundleAdoptionService.class);
+        workflowRunnerService = mock(com.skillforge.workflow.WorkflowRunnerService.class);
 
         ObjectMapper objectMapper = new ObjectMapper()
                 .findAndRegisterModules()
@@ -85,14 +87,14 @@ class EvolveControllerTest {
         controller = new EvolveController(agentRepository, flywheelRunService,
                 sessionService, chatService, evolveReadService, adoptionService,
                 mock(HarvestedScenarioService.class),
-                mock(com.skillforge.workflow.WorkflowRunnerService.class));
+                workflowRunnerService);
         mvc = MockMvcBuilders.standaloneSetup(controller)
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(objectMapper))
                 .build();
     }
 
     @Test
-    @DisplayName("POST /agents/{id}/run → 202 ACCEPTED, creates evolve run + session + kicks chatAsync")
+    @DisplayName("POST /agents/{id}/run?engine=orchestrator → 202, creates evolve run + session + kicks chatAsync (legacy opt-in since P2b)")
     void run_happyPath_creates202AndKicks() throws Exception {
         AgentEntity target = agentEntity(7L, "my-agent");
         AgentEntity orchestrator = agentEntity(200L, SystemAgentNames.EVOLVE_ORCHESTRATOR);
@@ -113,7 +115,9 @@ class EvolveControllerTest {
         when(sessionService.createSession(eq(0L), eq(200L)))
                 .thenReturn(sessionEntity("sess-orch"));
 
-        mvc.perform(post("/api/evolve/agents/7/run"))
+        // P2b switched the DEFAULT engine to "workflow"; the orchestrator kickoff
+        // sequence under test is now the explicit opt-in path.
+        mvc.perform(post("/api/evolve/agents/7/run").param("engine", "orchestrator"))
                 .andExpect(status().isAccepted())   // 202, not 200
                 .andExpect(jsonPath("$.evolveRunId").value("evolve-run-1"))
                 .andExpect(jsonPath("$.sessionId").value("sess-orch"))
@@ -134,7 +138,7 @@ class EvolveControllerTest {
     }
 
     @Test
-    @DisplayName("POST /agents/{id}/run?reportId=rep-1 → kickoff tells orchestrator to GetOptReport that id + skip RunWorkflow")
+    @DisplayName("POST /agents/{id}/run?engine=orchestrator&reportId=rep-1 → kickoff tells orchestrator to GetOptReport that id + skip RunWorkflow")
     void run_withReportId_threadsIntoKickoff() throws Exception {
         AgentEntity target = agentEntity(7L, "my-agent");
         AgentEntity orchestrator = agentEntity(200L, SystemAgentNames.EVOLVE_ORCHESTRATOR);
@@ -149,7 +153,9 @@ class EvolveControllerTest {
         when(sessionService.createSession(eq(0L), eq(200L)))
                 .thenReturn(sessionEntity("sess-orch"));
 
-        mvc.perform(post("/api/evolve/agents/7/run").param("reportId", "rep-1"))
+        mvc.perform(post("/api/evolve/agents/7/run")
+                        .param("engine", "orchestrator")
+                        .param("reportId", "rep-1"))
                 .andExpect(status().isAccepted());
 
         ArgumentCaptor<String> prompt = ArgumentCaptor.forClass(String.class);
@@ -234,19 +240,56 @@ class EvolveControllerTest {
     }
 
     @Test
-    @DisplayName("POST /agents/{id}/run → 503 when evolve-orchestrator agent not seeded")
+    @DisplayName("POST /agents/{id}/run?engine=orchestrator → 503 when evolve-orchestrator agent not seeded")
     void run_orchestratorMissing_returns503() throws Exception {
         AgentEntity target = agentEntity(7L, "my-agent");
         when(agentRepository.findById(7L)).thenReturn(Optional.of(target));
         when(agentRepository.findFirstByName(SystemAgentNames.EVOLVE_ORCHESTRATOR))
                 .thenReturn(Optional.empty());
 
-        mvc.perform(post("/api/evolve/agents/7/run"))
+        // 503 fail-fast applies only to the legacy orchestrator branch (explicit
+        // opt-in since P2b); the default workflow branch has its own 503 guard
+        // (workflow-not-registered) tested via run_default_isWorkflowEngine.
+        mvc.perform(post("/api/evolve/agents/7/run").param("engine", "orchestrator"))
                 .andExpect(status().isServiceUnavailable());
 
         // Must fail-fast BEFORE the in-flight guard check / run / session creation.
         verify(flywheelRunService, never()).hasActiveEvolveRun(anyLong());
         verify(flywheelRunService, never()).startRun(any(), any(), any(), anyLong(), anyInt());
+        verify(sessionService, never()).createSession(anyLong(), anyLong());
+        verify(chatService, never()).chatAsync(anyString(), anyString(), anyLong());
+    }
+
+    @Test
+    @DisplayName("POST /agents/{id}/run（不传 engine）→ 默认走 workflow 引擎：202 + engine=workflow + 不 spawn orchestrator session（P2b 默认切换钉死）")
+    void run_default_isWorkflowEngine() throws Exception {
+        AgentEntity target = agentEntity(7L, "my-agent");
+        when(agentRepository.findById(7L)).thenReturn(Optional.of(target));
+        when(flywheelRunService.hasActiveEvolveRun(7L)).thenReturn(false);
+        when(workflowRunnerService.startRun(
+                eq("evolve-loop"), any(), eq(0L), eq(FlywheelRunEntity.LOOP_KIND_EVOLVE)))
+                .thenReturn("wf-run-1");
+
+        mvc.perform(post("/api/evolve/agents/7/run"))
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.evolveRunId").value("wf-run-1"))
+                .andExpect(jsonPath("$.engine").value("workflow"))
+                .andExpect(jsonPath("$.agentId").value(7))
+                .andExpect(jsonPath("$.maxIter").value(10))
+                .andExpect(jsonPath("$.status").value("running"));
+
+        // Workflow args carry the JS-consumed scope keys.
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<java.util.Map<String, Object>> wfArgs =
+                ArgumentCaptor.forClass((Class) java.util.Map.class);
+        verify(workflowRunnerService).startRun(
+                eq("evolve-loop"), wfArgs.capture(), eq(0L), eq(FlywheelRunEntity.LOOP_KIND_EVOLVE));
+        assertThat(wfArgs.getValue())
+                .containsEntry("targetAgentId", 7L)
+                .containsEntry("maxIter", 10)
+                .containsEntry("autoApprove", true);
+
+        // The legacy orchestrator kickoff must NOT fire on the default path.
         verify(sessionService, never()).createSession(anyLong(), anyLong());
         verify(chatService, never()).chatAsync(anyString(), anyString(), anyLong());
     }
