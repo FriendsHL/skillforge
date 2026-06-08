@@ -199,6 +199,33 @@ class RecordIterationToolTest {
     }
 
     @Test
+    @DisplayName("HILLCLIMB: weightedScore + baselineWeightedScore land in step_output_json")
+    void recordsIteration_weightedScore() {
+        when(flywheelRunService.findById("evolve-1")).thenReturn(Optional.of(evolveRun("evolve-1")));
+        when(flywheelRunService.appendEvolveIterationStep(eq("evolve-1"), eq(5), any(JsonNode.class)))
+                .thenReturn("step-5");
+
+        Map<String, Object> input = new LinkedHashMap<>();
+        input.put("evolveRunId", "evolve-1");
+        input.put("iteration", 5);
+        input.put("surface", "agent");
+        input.put("changeDesc", "hill-climb round");
+        input.put("candidateId", "ab-5");
+        input.put("weightedScore", 68.4);
+        input.put("baselineWeightedScore", 60.0);
+        input.put("kept", true);
+
+        SkillResult result = run(input);
+
+        assertThat(result.isSuccess()).isTrue();
+        ArgumentCaptor<JsonNode> payload = ArgumentCaptor.forClass(JsonNode.class);
+        verify(flywheelRunService).appendEvolveIterationStep(eq("evolve-1"), eq(5), payload.capture());
+        JsonNode p = payload.getValue();
+        assertThat(p.get("weightedScore").asDouble()).isEqualTo(68.4);
+        assertThat(p.get("baselineWeightedScore").asDouble()).isEqualTo(60.0);
+    }
+
+    @Test
     @DisplayName("run not found → validation error, no step appended")
     void runNotFound_validationError() {
         when(flywheelRunService.findById("missing")).thenReturn(Optional.empty());

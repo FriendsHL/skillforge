@@ -21,6 +21,7 @@ import com.skillforge.server.repository.SkillAbRunRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -86,6 +87,9 @@ public class GetAbResultTool implements Tool {
     static final long DEFAULT_BLOCK_TIMEOUT_MS = 90_000L;
     static final long DEFAULT_POLL_INTERVAL_MS = 3_000L;
 
+    /** EVOLVE-LOOP-HILLCLIMB — cap per-direction perScenarioFlips entries to bound prompt size. */
+    static final int MAX_FLIPS = 20;
+
     private final PromptAbRunRepository promptAbRunRepository;
     private final SkillAbRunRepository skillAbRunRepository;
     private final BehaviorRuleAbRunRepository behaviorRuleAbRunRepository;
@@ -143,9 +147,15 @@ public class GetAbResultTool implements Tool {
                 + "wouldPromote, perScenario?}. perScenario is available for the prompt and agent "
                 + "surfaces (skill baseline is aggregate-only). surface=agent additionally returns "
                 + "{totalN, measuredN, targetMeasuredN, generalMeasuredN} (pairwise-measured "
-                + "scenario counts; infra ERROR/TIMEOUT excluded) and a {thresholds} object echoing "
-                + "the effective promote/keep gate values (incl. minMeasuredN and "
-                + "anchorErosionFloorPp) — read thresholds from here instead of hardcoding. "
+                + "scenario counts; infra ERROR/TIMEOUT excluded), the hill-climb "
+                + "{weightedScore, baselineWeightedScore} (wG*generalRate + wH*harvestRate, "
+                + "re-normalised over present subsets; null when no subset measured), "
+                + "{perScenarioFlips:{regressed,improved,regressedTotal,improvedTotal}} "
+                + "(per-case pass→fail / fail→pass reversals for history grounding, each list "
+                + "capped at 20), and a {thresholds} object echoing the effective promote/keep "
+                + "gate values (incl. minMeasuredN, anchorErosionFloorPp, weightGeneral, "
+                + "weightHarvest, minImprovePp, noImproveStreakLimit, targetWeightedScore) — "
+                + "read thresholds from here instead of hardcoding. "
                 + "wouldPromote is advisory — call PromoteCandidate to actually promote (guards "
                 + "still apply).";
     }
@@ -364,10 +374,130 @@ public class GetAbResultTool implements Tool {
         r.put("baselineTargetRate", run.getBaselineTargetRate());
         r.put("baselineGeneralRate", run.getBaselineGeneralRate());
         r.put("wouldPromote", agentWouldPromote(targetDeltaPp, regressionDeltaPp));
+        // EVOLVE-LOOP-HILLCLIMB §2: weightedScore = wG*generalRate + wH*harvestRate
+        // (harvest subset = target subset; null sentinel = subset 0-measured → drops out,
+        // re-normalised over present subsets). Computed here at read time from the already-
+        // persisted per-subset rates using the thresholds bean — no entity / column change.
+        r.put("weightedScore", computeWeightedScore(
+                run.getCandidateGeneralRate(), run.getCandidateTargetRate(),
+                thresholds.getWeightGeneral(), thresholds.getWeightHarvest()));
+        r.put("baselineWeightedScore", computeWeightedScore(
+                run.getBaselineGeneralRate(), run.getBaselineTargetRate(),
+                thresholds.getWeightGeneral(), thresholds.getWeightHarvest()));
+        // EVOLVE-LOOP-HILLCLIMB: per-scenario flips (regressed / improved) so the
+        // candidate-gen leaf can ground next-round decisions on concrete reversals.
+        r.put("perScenarioFlips", computePerScenarioFlips(run));
         putAgentMeasurement(r, run);
         r.put("thresholds", thresholdsEcho());
         r.put("perScenario", parsePerScenario(run.getAbScenarioResultsJson()));
         return r;
+    }
+
+    /**
+     * EVOLVE-LOOP-HILLCLIMB §2 — the convex hill-climb score, re-normalised over the
+     * subsets actually present. Each subset rate that is non-null contributes its weight
+     * to both the numerator and the denominator; a null rate (the F2 "subset present but
+     * 0 measured" sentinel, or no subset at all) drops out entirely rather than being
+     * counted as 0 (which would unfairly drag the score down). Both rates null → null
+     * (no signal). When only the general subset is present (empty harvest) the result is
+     * exactly the general pass rate.
+     */
+    static Double computeWeightedScore(Double generalRate, Double harvestRate,
+                                       double wGeneral, double wHarvest) {
+        double wSum = 0.0;
+        double acc = 0.0;
+        if (generalRate != null) {
+            wSum += wGeneral;
+            acc += wGeneral * generalRate;
+        }
+        if (harvestRate != null) {
+            wSum += wHarvest;
+            acc += wHarvest * harvestRate;
+        }
+        return wSum <= 0.0 ? null : acc / wSum;
+    }
+
+    /**
+     * EVOLVE-LOOP-HILLCLIMB — classify each pairwise-measured scenario as regressed
+     * (baseline passed, candidate failed) or improved (baseline failed, candidate
+     * passed), so the candidate-gen leaf gets concrete per-case reversals as history
+     * grounding (the workflow threads {@code perScenarioFlips.regressed} into the next
+     * round's prompt). "Measured" mirrors {@link #putAgentMeasurement} exactly: fresh run
+     * → pairwise (both arms non-infra); skip run → this candidate AND the prior winner's
+     * candidate side both non-infra, degrading to candidate-side-only when the prior row
+     * is unavailable. The baseline pass side is {@code s.baseline()} for a fresh run, the
+     * prior winner's candidate side for a skip run.
+     *
+     * <p>Each entry is {@code {scenarioId, scenarioName, rationale}} (candidate-side
+     * rationale). Each list is capped at {@link #MAX_FLIPS} to bound prompt size; when
+     * truncated, {@code regressedTotal} / {@code improvedTotal} report the full counts.
+     * Read-path only: any parse failure / absent JSON → null (never throws).
+     */
+    private Map<String, Object> computePerScenarioFlips(AgentEvolveAbRunEntity run) {
+        List<AbScenarioResult> perScenario = readPerScenarioTyped(run.getAbScenarioResultsJson());
+        if (perScenario == null) {
+            return null;
+        }
+        Map<String, AbScenarioResult.RunResult> priorCandidate = null;
+        if (run.isSkipBaseline()) {
+            priorCandidate = loadPriorWinnerCandidateSide(run.getPriorWinnerAbRunId());
+        }
+        List<Map<String, Object>> regressed = new ArrayList<>();
+        List<Map<String, Object>> improved = new ArrayList<>();
+        int regressedTotal = 0;
+        int improvedTotal = 0;
+        for (AbScenarioResult s : perScenario) {
+            String candidateStatus = s.candidate() != null ? s.candidate().status() : null;
+            // Determine measured + the baseline-side RunResult to test for pass.
+            AbScenarioResult.RunResult baselineSide;
+            boolean measured;
+            if (run.isSkipBaseline()) {
+                AbScenarioResult.RunResult prior = priorCandidate != null
+                        ? priorCandidate.get(s.scenarioId()) : null;
+                if (priorCandidate != null) {
+                    measured = AbEvalPipeline.isMeasured(candidateStatus)
+                            && prior != null && AbEvalPipeline.isMeasured(prior.status());
+                } else {
+                    // prior winner unavailable → candidate-side-only (legacy degrade).
+                    measured = AbEvalPipeline.isMeasured(candidateStatus);
+                }
+                baselineSide = prior;
+            } else {
+                String baselineStatus = s.baseline() != null ? s.baseline().status() : null;
+                measured = AbEvalPipeline.pairwiseMeasured(candidateStatus, baselineStatus);
+                baselineSide = s.baseline();
+            }
+            if (!measured) {
+                continue;
+            }
+            boolean candidatePass = AbEvalPipeline.isPass(s.candidate());
+            boolean baselinePass = AbEvalPipeline.isPass(baselineSide);
+            if (baselinePass && !candidatePass) {
+                regressedTotal++;
+                if (regressed.size() < MAX_FLIPS) {
+                    regressed.add(flipEntry(s));
+                }
+            } else if (!baselinePass && candidatePass) {
+                improvedTotal++;
+                if (improved.size() < MAX_FLIPS) {
+                    improved.add(flipEntry(s));
+                }
+            }
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("regressed", regressed);
+        out.put("improved", improved);
+        out.put("regressedTotal", regressedTotal);
+        out.put("improvedTotal", improvedTotal);
+        return out;
+    }
+
+    private static Map<String, Object> flipEntry(AbScenarioResult s) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("scenarioId", s.scenarioId());
+        m.put("scenarioName", s.scenarioName());
+        m.put("rationale", s.candidate() != null ? s.candidate().rationale() : null);
+        return m;
     }
 
     /**
@@ -462,6 +592,13 @@ public class GetAbResultTool implements Tool {
         th.put("agentRegressionFloorPp", thresholds.getAgentRegressionFloorPp());
         th.put("minMeasuredN", thresholds.getMinMeasuredN());
         th.put("anchorErosionFloorPp", thresholds.getAnchorErosionFloorPp());
+        // EVOLVE-LOOP-HILLCLIMB 阶段 A: the workflow reads these from here (never hardcodes).
+        // targetWeightedScore is nullable — null is emitted verbatim, meaning "no target-stop".
+        th.put("weightGeneral", thresholds.getWeightGeneral());
+        th.put("weightHarvest", thresholds.getWeightHarvest());
+        th.put("minImprovePp", thresholds.getMinImprovePp());
+        th.put("noImproveStreakLimit", thresholds.getNoImproveStreakLimit());
+        th.put("targetWeightedScore", thresholds.getTargetWeightedScore());
         return th;
     }
 

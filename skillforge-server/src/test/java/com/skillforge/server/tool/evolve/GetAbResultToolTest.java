@@ -463,6 +463,191 @@ class GetAbResultToolTest {
         assertThat(out).contains("\"generalMeasuredN\":null");
     }
 
+    // ───────── EVOLVE-LOOP-HILLCLIMB: weightedScore + thresholds echo + perScenarioFlips ─────────
+
+    @Test
+    @DisplayName("HILLCLIMB computeWeightedScore: convex over present subsets; empty harvest degrades; both null → null")
+    void computeWeightedScore_formula() {
+        // both subsets present: (0.6*60 + 0.4*80) / 1.0 = 68.0
+        assertThat(GetAbResultTool.computeWeightedScore(60.0, 80.0, 0.6, 0.4))
+                .isEqualTo(68.0);
+        // empty harvest (target null) → re-normalised to the pure general rate.
+        assertThat(GetAbResultTool.computeWeightedScore(60.0, null, 0.6, 0.4))
+                .isEqualTo(60.0);
+        // empty general → pure harvest rate.
+        assertThat(GetAbResultTool.computeWeightedScore(null, 80.0, 0.6, 0.4))
+                .isEqualTo(80.0);
+        // no subset measured → null (no signal).
+        assertThat(GetAbResultTool.computeWeightedScore(null, null, 0.6, 0.4))
+                .isNull();
+    }
+
+    @Test
+    @DisplayName("HILLCLIMB agent: weightedScore + baselineWeightedScore in the response (both subsets present)")
+    void agentCompleted_weightedScore() {
+        com.skillforge.server.entity.AgentEvolveAbRunEntity e =
+                new com.skillforge.server.entity.AgentEvolveAbRunEntity();
+        e.setAgentId("42");
+        e.setStatus("COMPLETED");
+        e.setCandidateTargetRate(72.0);
+        e.setCandidateGeneralRate(60.0);
+        e.setBaselineTargetRate(60.0);
+        e.setBaselineGeneralRate(60.0);
+        when(agentEvolveAbRunRepository.findById("ae-w1")).thenReturn(Optional.of(e));
+
+        String out = run("agent", "ae-w1", "42").getOutput();
+        // candidate: 0.6*60 + 0.4*72 = 64.8 ; baseline: 0.6*60 + 0.4*60 = 60.0
+        assertThat(out).contains("\"weightedScore\":64.8");
+        assertThat(out).contains("\"baselineWeightedScore\":60.0");
+    }
+
+    @Test
+    @DisplayName("HILLCLIMB agent: empty harvest subset → weightedScore == generalRate (degenerate)")
+    void agentCompleted_weightedScore_emptyHarvestDegrades() {
+        com.skillforge.server.entity.AgentEvolveAbRunEntity e =
+                new com.skillforge.server.entity.AgentEvolveAbRunEntity();
+        e.setAgentId("42");
+        e.setStatus("COMPLETED");
+        e.setCandidateTargetRate(null);   // empty harvest
+        e.setCandidateGeneralRate(82.0);
+        e.setBaselineTargetRate(null);
+        e.setBaselineGeneralRate(70.0);
+        when(agentEvolveAbRunRepository.findById("ae-w2")).thenReturn(Optional.of(e));
+
+        String out = run("agent", "ae-w2", "42").getOutput();
+        assertThat(out).contains("\"weightedScore\":82.0");
+        assertThat(out).contains("\"baselineWeightedScore\":70.0");
+    }
+
+    @Test
+    @DisplayName("HILLCLIMB agent: thresholds echo carries the hill-climb knobs (incl. null targetWeightedScore)")
+    void agentCompleted_thresholdsEcho_hillclimb() {
+        com.skillforge.server.entity.AgentEvolveAbRunEntity e =
+                new com.skillforge.server.entity.AgentEvolveAbRunEntity();
+        e.setAgentId("42");
+        e.setStatus("COMPLETED");
+        when(agentEvolveAbRunRepository.findById("ae-th")).thenReturn(Optional.of(e));
+
+        String out = run("agent", "ae-th", "42").getOutput();
+        assertThat(out).contains("\"weightGeneral\":0.6");
+        assertThat(out).contains("\"weightHarvest\":0.4");
+        assertThat(out).contains("\"minImprovePp\":0.0");
+        assertThat(out).contains("\"noImproveStreakLimit\":3");
+        // null target = no target-stop; emitted verbatim as null.
+        assertThat(out).contains("\"targetWeightedScore\":null");
+    }
+
+    @Test
+    @DisplayName("HILLCLIMB agent: perScenarioFlips classifies regressed (pass→fail) / improved (fail→pass)")
+    void agentCompleted_perScenarioFlips() throws Exception {
+        com.skillforge.server.entity.AgentEvolveAbRunEntity e =
+                new com.skillforge.server.entity.AgentEvolveAbRunEntity();
+        e.setAgentId("42");
+        e.setStatus("COMPLETED");
+        e.setSkipBaseline(false);
+        e.setAbScenarioResultsJson(objectMapper.writeValueAsString(java.util.List.of(
+                flipSc("regr", "PASS", 80.0, "FAIL", 10.0),   // pass→fail = regressed
+                flipSc("impr", "FAIL", 10.0, "PASS", 80.0),   // fail→pass = improved
+                flipSc("same", "PASS", 80.0, "PASS", 80.0),   // no flip
+                flipSc("drop", "PASS", 80.0, "ERROR", 0.0))));  // infra → not measured
+        when(agentEvolveAbRunRepository.findById("ae-flip")).thenReturn(Optional.of(e));
+
+        String out = run("agent", "ae-flip", "42").getOutput();
+        com.fasterxml.jackson.databind.JsonNode flips = objectMapper.readTree(out).get("perScenarioFlips");
+        assertThat(flips.get("regressedTotal").asInt()).isEqualTo(1);
+        assertThat(flips.get("improvedTotal").asInt()).isEqualTo(1);
+        assertThat(flips.get("regressed").get(0).get("scenarioId").asText()).isEqualTo("regr");
+        assertThat(flips.get("improved").get(0).get("scenarioId").asText()).isEqualTo("impr");
+    }
+
+    @Test
+    @DisplayName("HILLCLIMB agent: perScenarioFlips caps each list at 20 but reports the full total")
+    void agentCompleted_perScenarioFlips_truncates() throws Exception {
+        java.util.List<com.skillforge.server.improve.AbScenarioResult> scenarios = new java.util.ArrayList<>();
+        for (int i = 0; i < 25; i++) {
+            scenarios.add(flipSc("r" + i, "PASS", 80.0, "FAIL", 10.0));   // 25 regressions
+        }
+        com.skillforge.server.entity.AgentEvolveAbRunEntity e =
+                new com.skillforge.server.entity.AgentEvolveAbRunEntity();
+        e.setAgentId("42");
+        e.setStatus("COMPLETED");
+        e.setSkipBaseline(false);
+        e.setAbScenarioResultsJson(objectMapper.writeValueAsString(scenarios));
+        when(agentEvolveAbRunRepository.findById("ae-trunc")).thenReturn(Optional.of(e));
+
+        String out = run("agent", "ae-trunc", "42").getOutput();
+        com.fasterxml.jackson.databind.JsonNode flips = objectMapper.readTree(out).get("perScenarioFlips");
+        assertThat(flips.get("regressed").size()).isEqualTo(20);   // capped
+        assertThat(flips.get("regressedTotal").asInt()).isEqualTo(25);   // full count
+    }
+
+    @Test
+    @DisplayName("HILLCLIMB agent skip run (prior winner available): flips judged vs the prior winner's candidate side")
+    void agentCompleted_perScenarioFlips_skipRun_priorAvailable() throws Exception {
+        // Prior winner run: its CANDIDATE side is the cross-round baseline for the skip run.
+        com.skillforge.server.entity.AgentEvolveAbRunEntity prior =
+                new com.skillforge.server.entity.AgentEvolveAbRunEntity();
+        prior.setAgentId("42");
+        prior.setStatus("COMPLETED");
+        prior.setAbScenarioResultsJson(objectMapper.writeValueAsString(java.util.List.of(
+                // prior candidate PASS (baseline-pass for "regr"); FAIL (baseline-fail for "impr").
+                flipSc("regr", "FAIL", 0.0, "PASS", 80.0),
+                flipSc("impr", "FAIL", 0.0, "FAIL", 10.0))));
+        when(agentEvolveAbRunRepository.findById("ae-prior")).thenReturn(Optional.of(prior));
+
+        com.skillforge.server.entity.AgentEvolveAbRunEntity e =
+                new com.skillforge.server.entity.AgentEvolveAbRunEntity();
+        e.setAgentId("42");
+        e.setStatus("COMPLETED");
+        e.setSkipBaseline(true);
+        e.setPriorWinnerAbRunId("ae-prior");
+        e.setAbScenarioResultsJson(objectMapper.writeValueAsString(java.util.List.of(
+                // baseline side is the CACHED sentinel on a skip run — the prior candidate is the real baseline.
+                flipSc("regr", "CACHED", 0.0, "FAIL", 10.0),    // prior PASS → cur FAIL = regressed
+                flipSc("impr", "CACHED", 0.0, "PASS", 80.0))));  // prior FAIL → cur PASS = improved
+        when(agentEvolveAbRunRepository.findById("ae-skip")).thenReturn(Optional.of(e));
+
+        String out = run("agent", "ae-skip", "42").getOutput();
+        com.fasterxml.jackson.databind.JsonNode flips = objectMapper.readTree(out).get("perScenarioFlips");
+        assertThat(flips.get("regressedTotal").asInt()).isEqualTo(1);
+        assertThat(flips.get("improvedTotal").asInt()).isEqualTo(1);
+        assertThat(flips.get("regressed").get(0).get("scenarioId").asText()).isEqualTo("regr");
+        assertThat(flips.get("improved").get(0).get("scenarioId").asText()).isEqualTo("impr");
+    }
+
+    @Test
+    @DisplayName("HILLCLIMB agent skip run (prior winner unavailable): legacy degrade — every measured candidate-pass = improved")
+    void agentCompleted_perScenarioFlips_skipRun_priorUnavailable() throws Exception {
+        // No priorWinnerAbRunId → loadPriorWinnerCandidateSide returns null → candidate-side-only
+        // degrade: baselineSide is null, isPass(null)=false, so every measured candidate-pass is
+        // "improved" and a candidate-fail is neither (pins the documented degrade semantics).
+        com.skillforge.server.entity.AgentEvolveAbRunEntity e =
+                new com.skillforge.server.entity.AgentEvolveAbRunEntity();
+        e.setAgentId("42");
+        e.setStatus("COMPLETED");
+        e.setSkipBaseline(true);
+        e.setPriorWinnerAbRunId(null);
+        e.setAbScenarioResultsJson(objectMapper.writeValueAsString(java.util.List.of(
+                flipSc("a", "CACHED", 0.0, "PASS", 80.0),   // measured pass → improved
+                flipSc("c", "CACHED", 0.0, "PASS", 80.0),   // measured pass → improved
+                flipSc("b", "CACHED", 0.0, "FAIL", 10.0))));  // measured fail → neither
+        when(agentEvolveAbRunRepository.findById("ae-skip-degrade")).thenReturn(Optional.of(e));
+
+        String out = run("agent", "ae-skip-degrade", "42").getOutput();
+        com.fasterxml.jackson.databind.JsonNode flips = objectMapper.readTree(out).get("perScenarioFlips");
+        assertThat(flips.get("improvedTotal").asInt()).isEqualTo(2);
+        assertThat(flips.get("regressedTotal").asInt()).isEqualTo(0);
+    }
+
+    private static com.skillforge.server.improve.AbScenarioResult flipSc(
+            String id, String baselineStatus, double baselineScore,
+            String candidateStatus, double candidateScore) {
+        return new com.skillforge.server.improve.AbScenarioResult(id, id,
+                new com.skillforge.server.improve.AbScenarioResult.RunResult(baselineStatus, baselineScore),
+                new com.skillforge.server.improve.AbScenarioResult.RunResult(candidateStatus, candidateScore),
+                "general");
+    }
+
     @Test
     @DisplayName("F3 agent row without per-scenario JSON: all measurement fields null (no crash)")
     void agentCompleted_measurementFields_noJson() {
@@ -476,6 +661,8 @@ class GetAbResultToolTest {
 
         assertThat(out).contains("\"totalN\":null");
         assertThat(out).contains("\"measuredN\":null");
+        // perScenarioFlips also degrades to null (no per-scenario JSON to classify).
+        assertThat(out).contains("\"perScenarioFlips\":null");
     }
 
     // ───────────────────────────── validation ─────────────────────────────

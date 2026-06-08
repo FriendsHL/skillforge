@@ -35,6 +35,15 @@ import org.springframework.validation.annotation.Validated;
  * <p>The behavior_rule surface gate (+10pp/−3pp dual criteria in
  * {@code BehaviorRulePromotionService}) is deliberately NOT covered — it is already
  * a sane dual-criteria gate and stays out of this batch's blast radius.
+ *
+ * <p><b>EVOLVE-LOOP-HILLCLIMB 阶段 A (2026-06-08)</b> adds five hill-climb knobs:
+ * {@code weight-general} / {@code weight-harvest} (the weightedScore =
+ * wG*generalPassRate + wH*harvestPassRate convex combination, re-normalised over the
+ * subsets actually present), {@code min-improve-pp} (a candidate must beat the
+ * current best's weightedScore by this many pp to be kept — temp=0 noise guard),
+ * {@code no-improve-streak-limit} (converge-stop after this many consecutive
+ * no-new-best rounds), and {@code target-weighted-score} (nullable — when set,
+ * stop as soon as best ≥ this; null = pure hill-climb, never stop on a target).
  */
 @Validated
 @ConfigurationProperties(prefix = "skillforge.evolve.thresholds")
@@ -91,6 +100,54 @@ public class EvolveThresholdProperties {
     @PositiveOrZero
     private double anchorErosionFloorPp = 5.0;
 
+    // ── EVOLVE-LOOP-HILLCLIMB 阶段 A (2026-06-08) ──
+
+    /**
+     * Hill-climb weightedScore: weight on the general (benchmark/regression) subset's
+     * pass rate. The score is wGeneral*generalRate + wHarvest*harvestRate, re-normalised
+     * over the subsets actually present (a missing subset drops out of both numerator and
+     * denominator). Out of [0,1] would make the weight meaningless — fail-fast at startup.
+     */
+    @DecimalMin("0.0")
+    @DecimalMax("1.0")
+    private double weightGeneral = 0.6;
+
+    /**
+     * Hill-climb weightedScore: weight on the harvest (= target / harvested bad-case)
+     * subset's pass rate. Empty harvest subset → this weight drops out and the score
+     * degenerates to the pure general pass rate.
+     */
+    @DecimalMin("0.0")
+    @DecimalMax("1.0")
+    private double weightHarvest = 0.4;
+
+    /**
+     * Hill-climb keep gate: a candidate's weightedScore must beat the current best by
+     * strictly more than this many pp to be kept (guards against keeping on temp=0
+     * noise). Negative would keep on a DECLINE — fail-fast at startup; 0 = keep any
+     * strict improvement.
+     */
+    @PositiveOrZero
+    private double minImprovePp = 0.0;
+
+    /**
+     * Hill-climb converge-stop: stop after this many consecutive rounds that produce no
+     * new best. 0 would converge-stop immediately (before any round can improve) — must
+     * be ≥ 1.
+     */
+    @Min(1)
+    private int noImproveStreakLimit = 3;
+
+    /**
+     * Hill-climb target-stop (nullable): when set, stop as soon as best.weightedScore ≥
+     * this value (a rate in [0,100]). Null = pure hill-climb — never stop on a target,
+     * rely on converge-stop / maxIter. jakarta validation skips null, so leaving the yml
+     * key absent is the intended "no target" mode.
+     */
+    @DecimalMin("0.0")
+    @DecimalMax("100.0")
+    private Double targetWeightedScore;
+
     public double getPromptDeltaPp() {
         return promptDeltaPp;
     }
@@ -145,5 +202,45 @@ public class EvolveThresholdProperties {
 
     public void setAnchorErosionFloorPp(double anchorErosionFloorPp) {
         this.anchorErosionFloorPp = anchorErosionFloorPp;
+    }
+
+    public double getWeightGeneral() {
+        return weightGeneral;
+    }
+
+    public void setWeightGeneral(double weightGeneral) {
+        this.weightGeneral = weightGeneral;
+    }
+
+    public double getWeightHarvest() {
+        return weightHarvest;
+    }
+
+    public void setWeightHarvest(double weightHarvest) {
+        this.weightHarvest = weightHarvest;
+    }
+
+    public double getMinImprovePp() {
+        return minImprovePp;
+    }
+
+    public void setMinImprovePp(double minImprovePp) {
+        this.minImprovePp = minImprovePp;
+    }
+
+    public int getNoImproveStreakLimit() {
+        return noImproveStreakLimit;
+    }
+
+    public void setNoImproveStreakLimit(int noImproveStreakLimit) {
+        this.noImproveStreakLimit = noImproveStreakLimit;
+    }
+
+    public Double getTargetWeightedScore() {
+        return targetWeightedScore;
+    }
+
+    public void setTargetWeightedScore(Double targetWeightedScore) {
+        this.targetWeightedScore = targetWeightedScore;
     }
 }

@@ -33,19 +33,31 @@ class EvolveThresholdPropertiesTest {
         assertThat(p.getAgentRegressionFloorPp()).isEqualTo(-3.0);
         assertThat(p.getMinMeasuredN()).isEqualTo(10);
         assertThat(p.getAnchorErosionFloorPp()).isEqualTo(5.0);
+        // EVOLVE-LOOP-HILLCLIMB 阶段 A defaults.
+        assertThat(p.getWeightGeneral()).isEqualTo(0.6);
+        assertThat(p.getWeightHarvest()).isEqualTo(0.4);
+        assertThat(p.getMinImprovePp()).isEqualTo(0.0);
+        assertThat(p.getNoImproveStreakLimit()).isEqualTo(3);
+        assertThat(p.getTargetWeightedScore()).isNull();   // null = no target-stop
     }
 
     @Test
     @DisplayName("kebab-case yml keys bind via relaxed binding (skillforge.evolve.thresholds.*)")
     void kebabCaseBinding() {
-        MapConfigurationPropertySource source = new MapConfigurationPropertySource(Map.of(
-                "skillforge.evolve.thresholds.prompt-delta-pp", "7",
-                "skillforge.evolve.thresholds.skill-delta-pp", "6",
-                "skillforge.evolve.thresholds.skill-min-candidate-rate-pp", "45",
-                "skillforge.evolve.thresholds.agent-target-min-delta-pp", "1",
-                "skillforge.evolve.thresholds.agent-regression-floor-pp", "-2",
-                "skillforge.evolve.thresholds.min-measured-n", "12",
-                "skillforge.evolve.thresholds.anchor-erosion-floor-pp", "4"));
+        Map<String, Object> props = new java.util.LinkedHashMap<>();
+        props.put("skillforge.evolve.thresholds.prompt-delta-pp", "7");
+        props.put("skillforge.evolve.thresholds.skill-delta-pp", "6");
+        props.put("skillforge.evolve.thresholds.skill-min-candidate-rate-pp", "45");
+        props.put("skillforge.evolve.thresholds.agent-target-min-delta-pp", "1");
+        props.put("skillforge.evolve.thresholds.agent-regression-floor-pp", "-2");
+        props.put("skillforge.evolve.thresholds.min-measured-n", "12");
+        props.put("skillforge.evolve.thresholds.anchor-erosion-floor-pp", "4");
+        props.put("skillforge.evolve.thresholds.weight-general", "0.7");
+        props.put("skillforge.evolve.thresholds.weight-harvest", "0.3");
+        props.put("skillforge.evolve.thresholds.min-improve-pp", "1");
+        props.put("skillforge.evolve.thresholds.no-improve-streak-limit", "4");
+        props.put("skillforge.evolve.thresholds.target-weighted-score", "88");
+        MapConfigurationPropertySource source = new MapConfigurationPropertySource(props);
 
         EvolveThresholdProperties p = new Binder(source)
                 .bind("skillforge.evolve.thresholds", EvolveThresholdProperties.class)
@@ -58,6 +70,11 @@ class EvolveThresholdPropertiesTest {
         assertThat(p.getAgentRegressionFloorPp()).isEqualTo(-2.0);
         assertThat(p.getMinMeasuredN()).isEqualTo(12);
         assertThat(p.getAnchorErosionFloorPp()).isEqualTo(4.0);
+        assertThat(p.getWeightGeneral()).isEqualTo(0.7);
+        assertThat(p.getWeightHarvest()).isEqualTo(0.3);
+        assertThat(p.getMinImprovePp()).isEqualTo(1.0);
+        assertThat(p.getNoImproveStreakLimit()).isEqualTo(4);
+        assertThat(p.getTargetWeightedScore()).isEqualTo(88.0);
     }
 
     // ── LOW-2 (review r1): @Validated fail-fast on illegal values ──
@@ -104,5 +121,49 @@ class EvolveThresholdPropertiesTest {
                     assertThat(ctx.getBean(EvolveThresholdProperties.class).getMinMeasuredN())
                             .isEqualTo(10);
                 });
+    }
+
+    // ── EVOLVE-LOOP-HILLCLIMB 阶段 A: @Validated fail-fast on illegal hill-climb values ──
+
+    @Test
+    @DisplayName("HILLCLIMB: weight-general above 1.0 (not a [0,1] weight) → startup fails fast")
+    void weightGeneralOutOfRange_failsStartup() {
+        runner.withPropertyValues("skillforge.evolve.thresholds.weight-general=1.5")
+                .run(ctx -> {
+                    assertThat(ctx).hasFailed();
+                    assertThat(ctx.getStartupFailure())
+                            .hasMessageContaining("skillforge.evolve.thresholds");
+                });
+    }
+
+    @Test
+    @DisplayName("HILLCLIMB: no-improve-streak-limit=0 (would converge-stop instantly) → startup fails fast")
+    void zeroStreakLimit_failsStartup() {
+        runner.withPropertyValues("skillforge.evolve.thresholds.no-improve-streak-limit=0")
+                .run(ctx -> assertThat(ctx).hasFailed());
+    }
+
+    @Test
+    @DisplayName("HILLCLIMB: min-improve-pp negative (would keep on a decline) → startup fails fast")
+    void negativeMinImprovePp_failsStartup() {
+        runner.withPropertyValues("skillforge.evolve.thresholds.min-improve-pp=-1")
+                .run(ctx -> assertThat(ctx).hasFailed());
+    }
+
+    @Test
+    @DisplayName("HILLCLIMB: target-weighted-score above 100 (not a rate) → startup fails fast")
+    void targetWeightedScoreOutOfRange_failsStartup() {
+        runner.withPropertyValues("skillforge.evolve.thresholds.target-weighted-score=150")
+                .run(ctx -> assertThat(ctx).hasFailed());
+    }
+
+    @Test
+    @DisplayName("HILLCLIMB control: target-weighted-score absent → null (no target-stop), startup ok")
+    void targetWeightedScoreAbsent_isNull() {
+        runner.run(ctx -> {
+            assertThat(ctx).hasNotFailed();
+            assertThat(ctx.getBean(EvolveThresholdProperties.class).getTargetWeightedScore())
+                    .isNull();
+        });
     }
 }

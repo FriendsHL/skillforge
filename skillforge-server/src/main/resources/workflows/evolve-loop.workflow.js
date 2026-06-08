@@ -1,17 +1,17 @@
 export const meta = {
   name: 'evolve-loop',
-  description: 'AUTOEVOLVE 确定性进化循环 DSL 版: (report) → 写死排序 issue → 错题本靶向(ListActiveHarvestedScenarios) → 逐 issue { 候选叶子(跨面 bundle) → 多面 GetCandidateDiff → TriggerAbEval(agent, evalScenarioIds + win-streak 基线缓存) → 确定性轮询 GetAbResult → 服务端阈值 keep(最小测量数守卫 + vs-original 锚点) → RecordIteration } → carry-forward bundle → adopt(人定夺/autoApprove)。编排全在 JS(无 maxLoops/无漂移)，LLM 只做候选生成叶子。',
+  description: 'AUTOEVOLVE 确定性爬坡循环 DSL 版 (EVOLVE-LOOP-HILLCLIMB 阶段 A): (report) → 全部 issue 当静态线索库 → 错题本靶向(ListActiveHarvestedScenarios) → for-iter { 候选叶子(看全部线索+currentBest+history 自主决策改哪面，跨面 bundle) → 多面 GetCandidateDiff → TriggerAbEval(agent, vs best, evalScenarioIds + win-streak 基线缓存) → 确定性轮询 GetAbResult → weightedScore 主判据 keep(最小测量数守卫 + vs-original 锚点) → RecordIteration → carry-forward best } → 停止(达标 OR 收敛 OR 跑满 maxIter) → 返回全程最优 best + 轨迹 → adopt(人定夺/autoApprove)。编排全在 JS(无 maxLoops/无漂移)，LLM 只做候选生成叶子。',
   phases: [
-    { title: 'Report', detail: '取/跑 opt-report，拿 topIssues' },
-    { title: 'Evolve', detail: '逐 issue 生成跨面候选 bundle + A/B + 确定性判断 + 落账' },
+    { title: 'Report', detail: '取/跑 opt-report，全部 issue 进静态线索库' },
+    { title: 'Evolve', detail: 'for-iter 爬坡: 候选(看全局自主决策) + A/B(vs best) + weightedScore keep + 落账' },
     { title: 'Adopt', detail: 'autoApprove 直通 / 否则人工 gate' }
   ]
 }
 
-// 候选叶子的严格输出 schema (Phase 2a 多面)。candidateBundle 是真 id 三件套(各面
-// candidateId 来自 GenerateCandidate service 持久化后的真实返回，叶子只转发，伪造不了)；
-// surfaces 是叶子声明实际改的面(JS 侧以 candidateBundle 非空指针为权威重算，见
-// normalizeSurfaces)；prediction 可选(无 scenario id 时留空数组)。
+// 候选叶子的严格输出 schema (跨面 bundle)。candidateBundle 是真 id 三件套(各面 candidateId
+// 来自 GenerateCandidate service 持久化后的真实返回，叶子只转发，伪造不了)；surfaces 是叶子
+// 声明实际改的面(JS 侧以 candidateBundle 非空指针为权威重算，见 normalizeSurfaces)；prediction
+// 可选(无 scenario id 时留空数组)。
 var CAND_SCHEMA = {
   type: 'object',
   required: ['candidateBundle', 'surfaces', 'changeDesc'],
@@ -23,8 +23,10 @@ var CAND_SCHEMA = {
   }
 }
 
-// 三个可生成的优化面 (agent 是 A/B 路由元面，不是可生成面)。canonical 顺序固定，
-// 用于 bundle 指针归一、whitelist 过滤、semanticDelta 顺序。
+// 三个可生成的优化面 (agent 是 A/B 路由元面，不是可生成面)。canonical 顺序固定，用于 bundle
+// 指针归一、whitelist 过滤、semanticDelta 顺序。EVOLVE-LOOP-HILLCLIMB: allowedSurfaces 恒为
+// 全三面(放开白名单，agent 自选本轮改哪面)，filterToAllowed 仍以 SURFACES 作 allowed 兜底防
+// agent 吐非法 key。
 var SURFACES = ['prompt', 'behavior_rule', 'skill']
 
 // A/B 评测走 agent-surface 引擎 (整三件套 bundle)。**为什么不是各面单独 A/B**：
@@ -33,66 +35,59 @@ var SURFACES = ['prompt', 'behavior_rule', 'skill']
 // 这与 orchestrator 路一致(它也用 agent-surface A/B 才能产 reconciliation)。
 var AB_SURFACE = 'agent'
 
-// ── 确定性 keep 判断 (复用 GetAbResult.wouldPromote 作种子 + 两道闸) ──
-// wouldPromote 是服务端 agent 面双标准 advisory (F7 修正旧 "15pp" 注释——那是 prompt/
-// skill 面的旧阈值, agent 面从来不是): 有 target 子集时 targetDeltaPp > agent-target-
-// min-delta-pp(默认0) AND regressionDeltaPp >= agent-regression-floor-pp(默认-3);
-// 无 target 子集(regression-only, 含 F2 "target 在场但 0 measured" null 哨兵)时
-// general 严格改善才 true。所有阈值由服务端配置 (skillforge.evolve.thresholds) 并经
-// res.thresholds 回显, JS 不写死第二份。
-// 另加两道闸:
-//   ① F3 最小测量数守卫: overall measuredN < minMeasuredN → inconclusive 不 keep
-//      (防 n≈7 噪声 keep)。只看 overall, 不卡 target 子集 (target 合法可只有 1 个
-//      确定性 oracle 场景)。measuredN 缺失 (legacy 行) 时跳过守卫 —— F2 的 null 哨兵
-//      保证 "0 measured" 时 measuredN=0 是数字, 不会从这里漏掉。
-//   ② F6 vs-original 锚点: candidateGeneralRate >= originalGeneral - anchorErosion
-//      FloorPp。originalGeneral = iter1 的 baselineGeneralRate (记死不更新), 防多轮
-//      vs-best 爬坡把 general 一点点磨掉。originalGeneral / candidateGeneralRate
-//      为 null 时跳过锚点 (不 block)。
-// 返回 {keep, reason} 便于轨迹日志说明为什么没 keep。
-function decideKeep(res, originalGeneral) {
-  if (!res || res.wouldPromote !== true) {
-    return { keep: false, reason: 'wouldPromote=false' }
-  }
-  var th = res.thresholds || {}
-  if (typeof th.minMeasuredN === 'number' && typeof res.measuredN === 'number'
-      && res.measuredN < th.minMeasuredN) {
-    return { keep: false, reason: 'inconclusive: measuredN=' + res.measuredN
-      + ' < minMeasuredN=' + th.minMeasuredN }
-  }
-  if (typeof th.anchorErosionFloorPp === 'number'
-      && typeof originalGeneral === 'number'
-      && typeof res.candidateGeneralRate === 'number'
-      && res.candidateGeneralRate < originalGeneral - th.anchorErosionFloorPp) {
-    return { keep: false, reason: 'anchor erosion: candidateGeneralRate='
-      + res.candidateGeneralRate + ' < originalGeneral(' + originalGeneral
-      + ') - anchorErosionFloorPp(' + th.anchorErosionFloorPp + ')' }
-  }
-  return { keep: true, reason: 'kept' }
+function isNum(x) {
+  return typeof x === 'number'
 }
 
 function nonBlank(s) {
   return s != null && ('' + s).length > 0
 }
 
-// ── 面选择 = Hybrid (设计 §1) ──
-// JS 从 issue 的 fixSurface(单值或数组) 算确定性白名单 allowedSurfaces；候选叶子只能在
-// 这个子集内决定实际改哪几面(可减面，不能越界 —— 越界由 filterToAllowed 兜)。无 fixSurface
-// 退回 ['prompt'](等价 Phase 1)。回退: fixSurface 归因差就放宽算法(改这一个函数)。
-function resolveAllowedSurfaces(issue) {
-  var raw = issue ? issue.fixSurface : null
-  var list = []
-  if (Array.isArray(raw)) {
-    list = raw
-  } else if (typeof raw === 'string' && raw) {
-    list = [raw]
+function truncate(s, n) {
+  if (s == null) return s
+  var str = '' + s
+  return str.length > n ? str.slice(0, n) : str
+}
+
+// ── EVOLVE-LOOP-HILLCLIMB §2 确定性 keep 判断 (weightedScore 主判据 + 两道闸) ──
+// 主判据: 候选 weightedScore 须 > 比较基准 + minImprovePp。比较基准 = best.weightedScore
+// (iter1 可能 null → 退回本轮 res.baselineWeightedScore，即 best=active 配置的加权分);
+// 二者都拿不到 → 首个有信号的候选先立为 best (keep)。minImprovePp 防 temp=0 噪声。
+// 另两道闸(沿用):
+//   ① F3 最小测量数守卫: overall measuredN < minMeasuredN → inconclusive 不 keep
+//      (防 n≈7 噪声 keep)。measuredN/minMeasuredN 缺失时跳过守卫。
+//   ② F6 vs-original 锚点: candidateGeneralRate >= originalGeneral - anchorErosionFloorPp。
+//      originalGeneral = iter1 的 baselineGeneralRate (记死不更新)，防多轮爬坡把 general
+//      磨掉。originalGeneral / candidateGeneralRate 为 null 时跳过锚点 (不 block)。
+// wouldPromote(服务端 agent 面 advisory 双标准) 降级为 advisory: RecordIteration 仍记，但
+// 爬坡 keep 改看 weightedScore。返回 {keep, reason} 便于轨迹日志说明。
+function decideKeep(res, best, originalGeneral) {
+  if (!res || !isNum(res.weightedScore)) {
+    return { keep: false, reason: 'no weightedScore signal' }
   }
-  var allowed = []
-  for (var i = 0; i < SURFACES.length; i++) {
-    if (list.indexOf(SURFACES[i]) !== -1) allowed.push(SURFACES[i])
+  var th = res.thresholds || {}
+  if (isNum(th.minMeasuredN) && isNum(res.measuredN) && res.measuredN < th.minMeasuredN) {
+    return { keep: false, reason: 'inconclusive: measuredN=' + res.measuredN
+      + ' < minMeasuredN=' + th.minMeasuredN }
   }
-  if (allowed.length === 0) allowed = ['prompt']   // 退化 Phase 1 等价
-  return allowed
+  if (isNum(th.anchorErosionFloorPp) && isNum(originalGeneral) && isNum(res.candidateGeneralRate)
+      && res.candidateGeneralRate < originalGeneral - th.anchorErosionFloorPp) {
+    return { keep: false, reason: 'anchor erosion: candidateGeneralRate='
+      + res.candidateGeneralRate + ' < originalGeneral(' + originalGeneral
+      + ') - anchorErosionFloorPp(' + th.anchorErosionFloorPp + ')' }
+  }
+  var minImprove = isNum(th.minImprovePp) ? th.minImprovePp : 0
+  var compareBase = isNum(best.weightedScore) ? best.weightedScore
+    : (isNum(res.baselineWeightedScore) ? res.baselineWeightedScore : null)
+  if (compareBase == null) {
+    return { keep: true, reason: 'first measured candidate (no weightedScore baseline)' }
+  }
+  if (res.weightedScore > compareBase + minImprove) {
+    return { keep: true, reason: 'weightedScore ' + res.weightedScore + ' > base('
+      + compareBase + ') + minImprovePp(' + minImprove + ')' }
+  }
+  return { keep: false, reason: 'no improvement: weightedScore ' + res.weightedScore
+    + ' <= base(' + compareBase + ') + minImprovePp(' + minImprove + ')' }
 }
 
 // 取某个面在 bundle 里的指针 id (null = 该面用 active / 未改)。
@@ -122,7 +117,7 @@ function primaryPointer(bundle) {
     || null
 }
 
-// whitelist 兜底: 丢掉 allowedSurfaces 之外的任何面指针 (叶子越界保护，确定性，不信 LLM)。
+// whitelist 兜底: 丢掉 allowed 之外的任何面指针 (叶子越界保护，确定性，不信 LLM)。
 // 被丢的面/指针累加到 dropped 数组里，由调用方记日志(便于生产诊断"叶子越界改了哪个面")。
 function filterToAllowed(bundle, allowed, dropped) {
   var out = {}
@@ -158,9 +153,9 @@ function mergeBundle(base, changed) {
   return out
 }
 
-// ── 写死的 issue 选择 + 排序 (设计 §6 不用 agent 叶子；§4 去 prompt 独宠) ──
-// 只取 convertible 的 issue；按 severity×recurrence×confidence 降序 (不再 prompt 独宠 ——
-// 面选择交给 per-issue 的 hybrid 白名单)。
+// ── 写死的 issue 选择 + 排序 (设计 §6 不用 agent 叶子) ──
+// 只取 convertible 的 issue；按 severity×recurrence×confidence 降序。爬坡形态下这是给候选叶子
+// 的"全部线索库"(叶子综观全部自主决策本轮改哪面)，不再是逐条 pop 的循环变量。
 function selectAndRank(topIssues) {
   var sevWeight = { high: 3, medium: 2, low: 1 }
   var convertible = []
@@ -175,6 +170,23 @@ function selectAndRank(topIssues) {
   }
   convertible.sort(function (a, b) { return b.score - a.score })
   return convertible.map(function (e) { return e.issue })
+}
+
+// 把排序后的 issue 压成给候选叶子的精简线索(截断 rootCause/proposedFix/suggestion 防 prompt 膨胀)。
+function briefIssues(issues) {
+  return issues.map(function (it) {
+    return {
+      id: it.id,
+      title: it.title,
+      severity: it.severity,
+      recurrence: it.recurrence,
+      confidence: it.confidence,
+      rootCause: truncate(it.rootCause, 500),
+      proposedFix: truncate(it.proposedFix, 500),
+      suggestion: truncate(it.suggestion, 500),
+      fixSurface: it.fixSurface
+    }
+  })
 }
 
 var targetAgentId = args.targetAgentId
@@ -196,93 +208,89 @@ var issues = selectAndRank(topIssues)
 log('evolve-loop reportId=' + reportId + ' topIssues=' + topIssues.length + ' rankedConvertible=' + issues.length)
 
 if (issues.length === 0) {
-  return { status: 'empty', reportId: reportId, evaluated: 0, kept: 0, trajectory: [] }
+  return { status: 'empty', reportId: reportId, evaluated: 0, kept: 0, trajectory: [], stopReason: 'empty' }
 }
 
-// ── Evolve (确定性循环, 无 maxLoops/无漂移) ──
+// 全部线索 once (issue 静态，每轮喂候选叶子作"全局线索库")。
+var allIssuesBrief = briefIssues(issues)
+
+// ── Evolve (确定性爬坡循环, 无 maxLoops/无漂移) ──
 phase('Evolve')
 
-// 🟦 F1 靶向恢复 (BC-M2b, 迁移遗漏修复): Report 后一次性取 active 错题本场景 ids。
-// 非空时每轮 TriggerAbEval 带 evalScenarioIds (镜像 V144 orchestrator 语义: 这些作
-// target 子集, 其余 dataset 照常作 general/benchmark, 同一 run 双子集都测);
-// 空 → 不传, 保持 role-split 现行为。一次性取(不每轮取): run 内 target 集稳定,
-// 与 dataset version 跨轮稳定的 §8 子点① 不变量一致。
+// 🟦 F1 靶向恢复: Report 后一次性取 active 错题本场景 ids。非空时每轮 TriggerAbEval 带
+// evalScenarioIds (作 target/harvest 子集, 其余 dataset 作 general 子集, 同 run 双子集都测);
+// 空 → 不传, 保持 role-split 现行为。一次性取(不每轮取): run 内 target 集稳定。
 var harvested = tool('ListActiveHarvestedScenarios', { agentId: agentIdStr })
 var targetScenarioIds = (harvested && harvested.scenarioIds && harvested.scenarioIds.length > 0)
   ? harvested.scenarioIds : null
 log('evolve-loop harvested-target-scenarios=' + (targetScenarioIds ? targetScenarioIds.length : 0))
 
-// carry-forward 状态: best 是「各面当前最优组合」bundle + 它的分数 + 测出它的 abRunId
-// (F4: win-streak 时作 priorWinnerAbRunId 传给下一轮)。
-// bundle = {promptVersionId?, behaviorRuleVersionId?, skillDraftId?}; iter1 为空(各面用 active)。
-var best = { bundle: {}, score: null, abRunId: null }
+// carry-forward 状态: best 是「各面当前最优组合」bundle + 它的分数 (score=composite, weightedScore=
+// 加权主判据, generalRate/harvestRate=两子集分) + 测出它的 abRunId (F4: win-streak 时作
+// priorWinnerAbRunId 传给下一轮)。bundle = {promptVersionId?, behaviorRuleVersionId?,
+// skillDraftId?}; iter1 为空(各面用 active)。
+var best = { bundle: {}, score: null, weightedScore: null, generalRate: null, harvestRate: null, abRunId: null }
 var keptList = []
 var trajectory = []
-var priorChange = null
-var priorEvalReport = null
-var prevKept = false        // F4: 上一轮(真测过的)是否被 keep —— win-streak 标记
-var originalGeneral = null  // F6: iter1 的 baselineGeneralRate, 记死不更新
-var iter = 0
+var history = []           // 喂候选叶子的历轮记录(改了啥/整体&per-case 涨跌/留弃)
+var prevKept = false       // F4: 上一轮(真测过的)是否被 keep —— win-streak 标记
+var originalGeneral = null // F6: iter1 的 baselineGeneralRate, 记死不更新
+var noImprove = 0          // 收敛停: 连续无新 best 轮数
+var streakLimit = 3        // 收敛停阈值(默认, 每轮 A/B 后从 res.thresholds 刷新)
+var abRounds = 0           // 真正进入 A/B 的轮数(summary.evaluated)
+var stopReason = 'maxIter'
 
-for (var k = 0; k < issues.length && iter < maxIter; k++) {
-  var issue = issues[k]
-  iter++
-
-  var allowedSurfaces = resolveAllowedSurfaces(issue)
+for (var iter = 1; iter <= maxIter; iter++) {
   var baseBundle = best.bundle   // 各面 hill-climb base 指针 (iter1 为空)
 
-  // 🟨 候选生成叶子(LLM, 唯一非确定性节点)。issue + allowedSurfaces + baseBundle + 反思
-  // 上下文 → 跨面候选 bundle。
-  var issueDesc = ctx.json({
-    title: issue.title,
-    severity: issue.severity,
-    friction: issue.friction,
-    rootCause: issue.rootCause,
-    proposedFix: issue.proposedFix,
-    suggestion: issue.suggestion
-  })
-  var candPrompt = 'targetAgentId=' + targetAgentId
-    + ' reportId=' + reportId + ' issueId=' + issue.id
-    + '\nallowedSurfaces=' + ctx.json(allowedSurfaces)
-    + '\nbaseBundle=' + ctx.json(baseBundle)
-    + '\nissue=' + issueDesc
-    + (priorChange ? '\npriorChange=' + priorChange : '')
-    + (priorEvalReport ? '\npriorEvalReport=' + priorEvalReport : '')
-    + '\n按你的 system_prompt: 在 allowedSurfaces 白名单子集内决定改哪几面, 每面调一次'
-    + ' GenerateCandidate(传该面 base 指针), 组装 candidateBundle, 只输出'
+  // 🟨 候选生成叶子(LLM, 唯一非确定性节点)。allIssues + currentBest + history → 自主决策本轮
+  // 改哪面、跨面候选 bundle。allowedSurfaces 恒为全三面(放开, agent 自选)。
+  var candPrompt = 'targetAgentId=' + targetAgentId + ' reportId=' + reportId
+    + '\nallowedSurfaces=' + ctx.json(SURFACES)
+    + '\ncurrentBest=' + ctx.json({
+        weightedScore: best.weightedScore,
+        generalPassRate: best.generalRate,
+        harvestPassRate: best.harvestRate,
+        bundle: best.bundle
+      })
+    + '\nallIssues=' + ctx.json(allIssuesBrief)
+    + '\nhistory=' + ctx.json(history)
+    + '\n按你的 system_prompt: 综观 allIssues + currentBest + history, 自主判断本轮整体最该调'
+    + '哪个/哪几个面、怎么改, 把 weightedScore 往上推。对每个选中面调一次 GenerateCandidate'
+    + '(传 currentBest.bundle 里该面的基线指针), 组装 candidateBundle, 只输出'
     + ' {candidateBundle, surfaces, changeDesc, prediction} 严格 JSON。'
   var cand = agent(candPrompt, { agentSlug: 'evolve-candidate-gen', schema: CAND_SCHEMA, phase: 'Evolve' })
 
-  // whitelist 兜底 + 以 bundle 为权威重算实际改的面 (设计 §1/§3/R5)。
+  // whitelist 兜底 + 以 bundle 为权威重算实际改的面 (设计 §1/§3/R5)。allowed = SURFACES (全集)。
   var dropped = []
-  var changedBundle = cand ? filterToAllowed(cand.candidateBundle || {}, allowedSurfaces, dropped) : {}
+  var changedBundle = cand ? filterToAllowed(cand.candidateBundle || {}, SURFACES, dropped) : {}
   var changedSurfaces = normalizeSurfaces(changedBundle)
   if (dropped.length > 0) {
-    log('iter ' + iter + ' issue=' + issue.id + ' dropped out-of-whitelist surfaces='
-      + ctx.json(dropped) + ' (allowedSurfaces=' + ctx.json(allowedSurfaces) + ')')
+    log('iter ' + iter + ' dropped out-of-whitelist surfaces=' + ctx.json(dropped))
   }
   if (changedSurfaces.length === 0) {
-    log('iter ' + iter + ' issue=' + issue.id + ' produced no in-whitelist candidate; skipping')
+    log('iter ' + iter + ' produced no in-whitelist candidate; counting as no-improve')
+    noImprove++
+    trajectory.push({ iteration: iter, kept: false, keepReason: 'no candidate' })
+    if (noImprove >= streakLimit) { stopReason = 'converged'; break }
     continue
   }
   if (cand && Array.isArray(cand.surfaces) && cand.surfaces.length !== changedSurfaces.length) {
-    log('iter ' + iter + ' issue=' + issue.id + ' surfaces declared=' + ctx.json(cand.surfaces)
+    log('iter ' + iter + ' surfaces declared=' + ctx.json(cand.surfaces)
       + ' but bundle-authoritative=' + ctx.json(changedSurfaces) + ' (using bundle)')
   }
 
   // 候选 bundle (送 A/B) = best 叠加本轮改的面; baseline = best.bundle。
   var candidateBundle = mergeBundle(baseBundle, changedBundle)
 
-  // 🟩 多面语义 delta(确定性, JS 侧组装): 对每个 changedSurface 各调一次 GetCandidateDiff
-  // → semanticDeltas 数组。每面 baseVersionId 取该面在 best.bundle 的旧指针(iter1 为 null)。
+  // 🟩 多面语义 delta(确定性): 对每个 changedSurface 各调一次 GetCandidateDiff → 数组。
+  // 每面 baseVersionId 取该面在 best.bundle 的旧指针(iter1 为 null)。
   var semanticDeltas = []
   for (var d = 0; d < changedSurfaces.length; d++) {
     var cs = changedSurfaces[d]
     var csCandidateId = bundlePointer(changedBundle, cs)
     var csBaseId = bundlePointer(baseBundle, cs)
-    var diff = tool('GetCandidateDiff', {
-      candidateId: csCandidateId, surface: cs, baseVersionId: csBaseId
-    })
+    var diff = tool('GetCandidateDiff', { candidateId: csCandidateId, surface: cs, baseVersionId: csBaseId })
     semanticDeltas.push({
       surface: cs,
       before: diff ? diff.before : null,
@@ -292,14 +300,12 @@ for (var k = 0; k < issues.length && iter < maxIter; k++) {
     })
   }
 
-  // 🟩 A/B(agent-surface, 整三件套 bundle)。candidate = 本轮 mergedBundle; baseline =
-  // best.bundle(iter1 为空 = active), 每轮 candidate vs current-best 爬坡。
-  // F1: targetScenarioIds 非空时带 evalScenarioIds → 错题本场景作显式 target 子集。
-  // F4 基线缓存 (win-streak 限定, 替代旧 js:249-254 的"整体推迟"): 仅当上一轮被 keep
-  // 时传 cachedBaselineScore(best 的实测分) + priorWinnerAbRunId(测出 best 的那次
-  // abRunId) → 引擎按显式 run id 解析 prior winner (W1 guard 重设计: 不再依赖
-  // "最近一次 COMPLETED", 被拒 run 夹在中间也不会让 guard 抛错), candidate-only 跑,
-  // 省一半 eval 且基线无重测噪声。上一轮被拒 → 不传, 下一轮照常真测两臂。
+  // 🟩 A/B(agent-surface, 整三件套 bundle)。candidate = 本轮 mergedBundle; baseline = best.bundle
+  // (iter1 为空 = active), 每轮 candidate vs current-best 爬坡。F1: targetScenarioIds 非空时带
+  // evalScenarioIds。F4 基线缓存(win-streak 限定): 仅当上一轮被 keep 时传 cachedBaselineScore
+  // (best 的实测分) + priorWinnerAbRunId(测出 best 的那次 abRunId) → 引擎按显式 run id 解析
+  // prior winner, candidate-only 跑, 省一半 eval。上一轮被拒 → 不传, 下一轮照常真测两臂。
+  abRounds++
   var abInput = {
     surface: AB_SURFACE,
     candidateBundle: candidateBundle,
@@ -326,39 +332,45 @@ for (var k = 0; k < issues.length && iter < maxIter; k++) {
     }
   }
 
-  // 🟩 G3 对账: 把候选叶子 staked 的 prediction 跟 A/B 实际 per-scenario flip 对账 →
-  // reconciliation{hits,misses,riskHits,surprises,confidence}。orchestrator 路核心特性,
-  // workflow 路必须等价。
+  // 🟩 G3 对账: 候选叶子 staked 的 prediction 跟 A/B 实际 per-scenario flip 对账。
   var reconciliation = null
   if (abRunId && cand && cand.prediction) {
     var recon = tool('ReconcilePrediction', {
-      prediction: cand.prediction,
-      abRunId: abRunId,
-      targetAgentId: agentIdStr
+      prediction: cand.prediction, abRunId: abRunId, targetAgentId: agentIdStr
     })
-    // 正常返回是 {issueId,targetProblem,hits,...,confidence}; 仅 ownership 不符时为
-    // {status:'rejected'} —— 那种不当 reconciliation 记。
     if (recon && recon.status !== 'rejected') {
       reconciliation = recon
     }
   }
 
+  // 服务端回显的停止阈值 (收敛阈值 / 达标阈值)。每轮刷新 streakLimit (no-candidate 分支沿用)。
+  if (res && res.thresholds && isNum(res.thresholds.noImproveStreakLimit)) {
+    streakLimit = res.thresholds.noImproveStreakLimit
+  }
+  var targetWS = (res && res.thresholds && isNum(res.thresholds.targetWeightedScore))
+    ? res.thresholds.targetWeightedScore : null   // null = 不靠达标停
+
   // 🟦 F6: iter1 记 vs-original general 锚点 (第一轮记死, 后续不更新)。
-  if (originalGeneral == null && res && typeof res.baselineGeneralRate === 'number') {
+  if (originalGeneral == null && res && isNum(res.baselineGeneralRate)) {
     originalGeneral = res.baselineGeneralRate
   }
+  // iter1: 用 baseline 侧给 best 一个起点 (active 配置的加权分/分数), 让 hill-climb 有底。
+  if (best.weightedScore == null && res && isNum(res.baselineWeightedScore)) {
+    best.weightedScore = res.baselineWeightedScore
+    best.generalRate = isNum(res.baselineGeneralRate) ? res.baselineGeneralRate : null
+    best.harvestRate = isNum(res.baselineTargetRate) ? res.baselineTargetRate : null
+    best.score = isNum(res.baselineScore) ? res.baselineScore : null
+  }
 
-  // 🟦 确定性 keep 判断(服务端阈值回显 + wouldPromote 种子 + F3/F6 两道闸)。
-  var decision = decideKeep(res, originalGeneral)
+  // 🟦 确定性 keep 判断 (weightedScore 主判据 + F3/F6 两道闸)。
+  var decision = decideKeep(res, best, originalGeneral)
   var keptThis = decision.keep
   var delta = res ? res.delta : null
   var baselineScore = res ? res.baselineScore : null
   var candidateScore = res ? res.candidateScore : null
+  var candWeighted = (res && isNum(res.weightedScore)) ? res.weightedScore : null
 
-  // 🟩 落账(surface='agent'; candidateId=mergedBundle 主指针; candidateBundle=整三件套;
-  // semanticDelta=数组, 经 ctx.json 序列化成 JSON 字符串透传 —— RecordIteration 的
-  // putJsonSidecar 只认 Map/字符串, 原生 JS 数组会变 Java List 走 toString 损坏; 用
-  // ctx.json 走它的"字符串→readTree"分支可原样存数组, 零改 Java)。
+  // 🟩 落账(surface='agent'; weightedScore 主判据落账; semanticDelta=数组经 ctx.json 透传)。
   tool('RecordIteration', {
     evolveRunId: ctx.runId(),
     iteration: iter,
@@ -368,6 +380,8 @@ for (var k = 0; k < issues.length && iter < maxIter; k++) {
     baselineScore: baselineScore,
     candidateScore: candidateScore,
     delta: delta,
+    weightedScore: candWeighted,
+    baselineWeightedScore: (res && isNum(res.baselineWeightedScore)) ? res.baselineWeightedScore : null,
     kept: keptThis,
     abRunId: abRunId,
     prediction: cand.prediction,
@@ -376,18 +390,61 @@ for (var k = 0; k < issues.length && iter < maxIter; k++) {
     candidateBundle: candidateBundle
   })
 
-  trajectory.push({ iteration: iter, candidateId: primaryPointer(candidateBundle), surfaces: changedSurfaces, delta: delta, kept: keptThis, keepReason: decision.reason })
-  log('iter ' + iter + ' issue=' + issue.id + ' surfaces=' + ctx.json(changedSurfaces)
-    + ' candidate=' + primaryPointer(candidateBundle) + ' delta=' + delta + ' kept=' + keptThis
-    + (keptThis ? '' : ' (' + decision.reason + ')'))
+  // per-case 回归名 (history grounding 给候选叶子当反例)。
+  var perCaseRegressed = (res && res.perScenarioFlips && res.perScenarioFlips.regressed)
+    ? res.perScenarioFlips.regressed.map(function (f) { return f.scenarioName || f.scenarioId })
+    : []
+  history.push({
+    iter: iter,
+    changeDesc: cand.changeDesc,
+    weightedScore: candWeighted,
+    delta: delta,
+    perCaseRegressed: perCaseRegressed,
+    kept: keptThis,
+    keepReason: decision.reason
+  })
+  trajectory.push({
+    iteration: iter,
+    candidateId: primaryPointer(candidateBundle),
+    surfaces: changedSurfaces,
+    delta: delta,
+    weightedScore: candWeighted,
+    kept: keptThis,
+    keepReason: decision.reason
+  })
+  log('iter ' + iter + ' surfaces=' + ctx.json(changedSurfaces) + ' candidate='
+    + primaryPointer(candidateBundle) + ' weightedScore=' + candWeighted + ' delta=' + delta
+    + ' kept=' + keptThis + (keptThis ? '' : ' (' + decision.reason + ')'))
 
   // 🟦 carry-forward: 赢家整 bundle 推进 best (带 abRunId 供 F4 下一轮缓存); 否则守住 best。
-  priorChange = cand.changeDesc
-  priorEvalReport = ctx.json({ delta: delta, baselineScore: baselineScore, candidateScore: candidateScore, kept: keptThis, keepReason: decision.reason })
   prevKept = keptThis
   if (keptThis) {
-    keptList.push({ iteration: iter, candidateId: primaryPointer(candidateBundle), candidateBundle: candidateBundle, surfaces: changedSurfaces, delta: delta })
-    best = { bundle: candidateBundle, score: candidateScore, abRunId: abRunId }
+    keptList.push({
+      iteration: iter, candidateId: primaryPointer(candidateBundle),
+      candidateBundle: candidateBundle, surfaces: changedSurfaces,
+      delta: delta, weightedScore: candWeighted
+    })
+    best = {
+      bundle: candidateBundle,
+      score: candidateScore,
+      weightedScore: candWeighted,
+      generalRate: (res && isNum(res.candidateGeneralRate)) ? res.candidateGeneralRate : null,
+      harvestRate: (res && isNum(res.candidateTargetRate)) ? res.candidateTargetRate : null,
+      abRunId: abRunId
+    }
+    noImprove = 0
+  } else {
+    noImprove++
+  }
+
+  // 🟦 停止条件 (先达标后收敛; 跑满 maxIter 由 for 边界兜底)。
+  if (targetWS != null && isNum(best.weightedScore) && best.weightedScore >= targetWS) {
+    stopReason = 'target'
+    break
+  }
+  if (noImprove >= streakLimit) {
+    stopReason = 'converged'
+    break
   }
 }
 
@@ -396,11 +453,12 @@ phase('Adopt')
 var summary = {
   status: 'completed',
   reportId: reportId,
-  evaluated: iter,
+  evaluated: abRounds,
   kept: keptList.length,
   keptCandidates: keptList,
   best: best,
-  trajectory: trajectory
+  trajectory: trajectory,
+  stopReason: stopReason
 }
 if (autoApprove) {
   return summary

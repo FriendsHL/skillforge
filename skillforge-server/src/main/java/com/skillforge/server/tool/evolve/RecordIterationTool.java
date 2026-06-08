@@ -69,6 +69,10 @@ public class RecordIterationTool implements Tool {
                 + "{promptVersionId?, behaviorRuleVersionId?} recorded as a sidecar for traceability.\n"
                 + "- \"baselineScore\" / \"candidateScore\" / \"delta\": numbers from GetAbResult "
                 + "(the GLOBAL scores — the trajectory chart reads these).\n"
+                + "- \"weightedScore\" / \"baselineWeightedScore\" (optional, hill-climb): the "
+                + "weightedScore (wG*generalRate + wH*harvestRate) of the candidate / baseline "
+                + "from GetAbResult — the EVOLVE-LOOP-HILLCLIMB main keep judge (recorded "
+                + "alongside delta; wouldPromote stays advisory).\n"
                 + "- \"kept\": boolean — whether you keep this candidate (records it; does NOT promote).\n"
                 + "- \"abRunId\" (optional): the A/B run id for traceability.\n"
                 + "- \"prediction\" (optional, G3): the falsifiable prediction you staked this turn "
@@ -111,6 +115,10 @@ public class RecordIterationTool implements Tool {
                 "description", "Candidate score from GetAbResult."));
         properties.put("delta", Map.of("type", "number",
                 "description", "candidateScore - baselineScore."));
+        properties.put("weightedScore", Map.of("type", "number",
+                "description", "Hill-climb candidate weightedScore from GetAbResult (optional)."));
+        properties.put("baselineWeightedScore", Map.of("type", "number",
+                "description", "Hill-climb baseline weightedScore from GetAbResult (optional)."));
         properties.put("kept", Map.of("type", "boolean",
                 "description", "Whether the candidate is kept (recorded, not promoted)."));
         properties.put("abRunId", Map.of("type", "string",
@@ -201,6 +209,10 @@ public class RecordIterationTool implements Tool {
             putNumber(payload, "baselineScore", input.get("baselineScore"));
             putNumber(payload, "candidateScore", input.get("candidateScore"));
             putNumber(payload, "delta", input.get("delta"));
+            // EVOLVE-LOOP-HILLCLIMB 阶段 A: weightedScore is the hill-climb main keep judge
+            // (free-schema step_output_json — no DB change); wouldPromote stays advisory.
+            putNumber(payload, "weightedScore", input.get("weightedScore"));
+            putNumber(payload, "baselineWeightedScore", input.get("baselineWeightedScore"));
             payload.put("kept", kept);
             String abRunId = trimToNull(input.get("abRunId"));
             if (abRunId != null) {

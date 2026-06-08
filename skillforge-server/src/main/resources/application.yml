@@ -170,6 +170,13 @@ skillforge:
       agent-regression-floor-pp: -3
       min-measured-n: 10
       anchor-erosion-floor-pp: 5
+      # EVOLVE-LOOP-HILLCLIMB 阶段 A: weightedScore = wG*generalPassRate + wH*harvestPassRate
+      # (按在场子集重归一; harvest 子集空 → 退化为纯大盘 generalPassRate)。
+      weight-general: 0.6
+      weight-harvest: 0.4
+      min-improve-pp: 0          # keep 防 temp=0 噪声: 候选 weightedScore 须 > best + 此值
+      no-improve-streak-limit: 3 # 收敛停: 连续 N 轮无新 best 即停
+      # target-weighted-score:   # 留空=不靠达标停(纯爬坡); 设 [0,100] 则达标即停
     # AUTOEVOLVE-CLOSE-LOOP Phase BC: repo-root prefix BadCaseHarvestService strips
     # from harvested span paths so fixtures become sandbox-relative and the task
     # is rebased to /tmp/eval/. The @Value default is a dev-machine path; override
