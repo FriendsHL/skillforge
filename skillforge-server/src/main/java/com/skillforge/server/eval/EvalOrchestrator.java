@@ -12,6 +12,7 @@ import com.skillforge.server.eval.attribution.FailureAttribution;
 import com.skillforge.server.eval.scenario.EvalScenario;
 import com.skillforge.server.eval.scenario.ScenarioLoader;
 import com.skillforge.server.repository.CollabRunRepository;
+import com.skillforge.server.repository.EvalSessionRepository;
 import com.skillforge.server.repository.EvalTaskItemRepository;
 import com.skillforge.server.repository.EvalTaskRepository;
 import com.skillforge.server.service.AgentService;
@@ -19,6 +20,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -39,6 +41,7 @@ public class EvalOrchestrator {
     private final ScenarioRunnerTool scenarioRunner;
     private final EvalJudgeTool evalJudge;
     private final EvalTaskRepository evalRunRepository;
+    private final EvalSessionRepository evalSessionRepository;
     private final EvalTaskItemRepository evalTaskItemRepository;
     private final CollabRunRepository collabRunRepository;
     private final AgentService agentService;
@@ -51,6 +54,7 @@ public class EvalOrchestrator {
                             ScenarioRunnerTool scenarioRunner,
                             EvalJudgeTool evalJudge,
                             EvalTaskRepository evalRunRepository,
+                            EvalSessionRepository evalSessionRepository,
                             EvalTaskItemRepository evalTaskItemRepository,
                             CollabRunRepository collabRunRepository,
                             AgentService agentService,
@@ -63,6 +67,7 @@ public class EvalOrchestrator {
         this.scenarioRunner = scenarioRunner;
         this.evalJudge = evalJudge;
         this.evalRunRepository = evalRunRepository;
+        this.evalSessionRepository = evalSessionRepository;
         this.evalTaskItemRepository = evalTaskItemRepository;
         this.collabRunRepository = collabRunRepository;
         this.agentService = agentService;
@@ -70,6 +75,24 @@ public class EvalOrchestrator {
         this.broadcaster = broadcaster;
         this.llmTraceRepository = llmTraceRepository;
         this.globalCostThresholdUsd = new BigDecimal(globalCostThresholdUsd);
+    }
+
+    /**
+     * Delete an eval run and its eval sessions atomically. Returns {@code false} when
+     * no run with the given id exists (the caller maps that to 404); {@code true} after
+     * a successful two-step delete. The {@code @Transactional} boundary lives here on
+     * the service so both deletes commit or roll back together — it previously sat on
+     * the controller method, where the AOP advice is fragile.
+     */
+    @Transactional
+    public boolean deleteEvalRun(String evalRunId) {
+        if (!evalRunRepository.existsById(evalRunId)) {
+            return false;
+        }
+        evalSessionRepository.deleteByEvalRunId(evalRunId);
+        evalRunRepository.deleteById(evalRunId);
+        log.info("Deleted eval run: {}", evalRunId);
+        return true;
     }
 
     public void runEval(String agentDefinitionId, Long userId, String evalRunId) {

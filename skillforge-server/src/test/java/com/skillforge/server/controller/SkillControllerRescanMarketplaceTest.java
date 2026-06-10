@@ -50,7 +50,6 @@ class SkillControllerRescanMarketplaceTest {
     @Mock private SkillCatalogReconciler reconciler;
     @Mock private UserSkillLoader userSkillLoader;
     @Mock private SkillBatchImporter skillBatchImporter;
-    @Mock private com.skillforge.server.repository.SkillRepository skillRepository;
 
     private SkillController controller;
 
@@ -58,7 +57,7 @@ class SkillControllerRescanMarketplaceTest {
     void setUp() {
         controller = new SkillController(skillService, skillRegistry,
                 skillAbEvalService, skillEvolutionService, reconciler, userSkillLoader,
-                skillBatchImporter, skillRepository);
+                skillBatchImporter);
     }
 
     @Test

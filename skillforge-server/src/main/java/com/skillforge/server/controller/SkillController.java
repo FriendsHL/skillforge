@@ -7,7 +7,6 @@ import com.skillforge.server.entity.SkillEntity;
 import com.skillforge.server.entity.SkillEvolutionRunEntity;
 import com.skillforge.server.improve.SkillAbEvalService;
 import com.skillforge.server.improve.SkillEvolutionService;
-import com.skillforge.server.repository.SkillRepository;
 import com.skillforge.server.service.SkillService;
 import com.skillforge.server.skill.BatchImportResult;
 import com.skillforge.server.skill.RescanReport;
@@ -64,15 +63,13 @@ public class SkillController {
     private final SkillCatalogReconciler reconciler;
     private final UserSkillLoader userSkillLoader;
     private final SkillBatchImporter skillBatchImporter;
-    private final SkillRepository skillRepository;
 
     public SkillController(SkillService skillService, SkillRegistry skillRegistry,
                            SkillAbEvalService skillAbEvalService,
                            SkillEvolutionService skillEvolutionService,
                            SkillCatalogReconciler reconciler,
                            UserSkillLoader userSkillLoader,
-                           SkillBatchImporter skillBatchImporter,
-                           SkillRepository skillRepository) {
+                           SkillBatchImporter skillBatchImporter) {
         this.skillService = skillService;
         this.skillRegistry = skillRegistry;
         this.skillAbEvalService = skillAbEvalService;
@@ -80,7 +77,6 @@ public class SkillController {
         this.reconciler = reconciler;
         this.userSkillLoader = userSkillLoader;
         this.skillBatchImporter = skillBatchImporter;
-        this.skillRepository = skillRepository;
     }
 
     /**
@@ -720,7 +716,7 @@ public class SkillController {
     @GetMapping("/{id}/files")
     public ResponseEntity<?> listSkillFiles(@PathVariable String id,
                                             @RequestParam(value = "userId", required = false) Long userId) {
-        Path skillDir = resolveSkillDir(id, userId);
+        Path skillDir = skillService.resolveSkillDir(id, userId);
         if (skillDir == null) {
             return ResponseEntity.notFound().build();
         }
@@ -777,7 +773,7 @@ public class SkillController {
     public ResponseEntity<?> readSkillFile(@PathVariable String id,
                                            @RequestParam("path") String relPath,
                                            @RequestParam(value = "userId", required = false) Long userId) {
-        Path skillDir = resolveSkillDir(id, userId);
+        Path skillDir = skillService.resolveSkillDir(id, userId);
         if (skillDir == null) {
             return ResponseEntity.notFound().build();
         }
@@ -812,75 +808,39 @@ public class SkillController {
         }
     }
 
-    /**
-     * Resolve skillDir for both numeric (user skill) and "system-X" (system skill) ids.
-     * Returns null when the id is invalid or the user lacks ownership.
-     */
-    private Path resolveSkillDir(String id, Long userId) {
-        if (id == null) return null;
-        if (id.startsWith("system-")) {
-            String name = id.substring("system-".length());
-            return skillRegistry.getSkillDefinition(name)
-                    .map(def -> def.getSkillPath() == null ? null : Path.of(def.getSkillPath()))
-                    .orElse(null);
-        }
-        try {
-            Long numericId = Long.parseLong(id);
-            SkillEntity entity = skillRepository.findById(numericId).orElse(null);
-            if (entity == null) return null;
-            if (entity.getOwnerId() != null && userId != null
-                    && !entity.getOwnerId().equals(userId) && !entity.isPublic()) {
-                return null;
-            }
-            return entity.getSkillPath() == null ? null : Path.of(entity.getSkillPath());
-        } catch (NumberFormatException e) {
-            return null;
-        }
-    }
-
     @GetMapping("/{id}/skill-md")
     public ResponseEntity<?> getSkillMd(@PathVariable Long id,
                                         @RequestParam(value = "userId", required = false) Long userId) {
-        SkillEntity entity = skillRepository.findById(id)
-                .orElseThrow(() -> new RuntimeException("Skill not found: " + id));
-        // Owner-or-public visibility check. ownerId==null on system skills, in which case
-        // anyone can read; system skill SKILL.md is loaded via SystemSkillLoader and the
-        // path is part of the artifact bundle.
-        if (entity.getOwnerId() != null && userId != null
-                && !entity.getOwnerId().equals(userId) && !entity.isPublic()) {
+        SkillService.SkillMdReadResult result = skillService.readSkillMd(id, userId);
+        if (result instanceof SkillService.SkillMdReadResult.Forbidden) {
             return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("error", "forbidden"));
         }
-        String skillPath = entity.getSkillPath();
-        if (skillPath == null || skillPath.isBlank()) {
+        if (result instanceof SkillService.SkillMdReadResult.NoPath) {
             Map<String, Object> body = new HashMap<>();
             body.put("content", "");
             body.put("path", null);
             return ResponseEntity.ok(body);
         }
-        Path md = Path.of(skillPath, "SKILL.md");
-        if (!Files.exists(md)) {
+        if (result instanceof SkillService.SkillMdReadResult.NotOnDisk notOnDisk) {
             Map<String, Object> body = new HashMap<>();
             body.put("content", "");
-            body.put("path", md.toString());
+            body.put("path", notOnDisk.path());
             body.put("error", "SKILL.md not found");
             return ResponseEntity.ok(body);
         }
-        try {
-            String content = Files.readString(md);
+        if (result instanceof SkillService.SkillMdReadResult.Loaded loaded) {
             Map<String, Object> body = new HashMap<>();
-            body.put("content", content);
-            body.put("path", md.toString());
-            // SKILL-DASHBOARD-POLISH-V2.5 — file mtime as updatedAt for FE diff freshness check.
-            try {
-                body.put("updatedAt", Files.getLastModifiedTime(md).toInstant().toString());
-            } catch (IOException ignored) {
-                // mtime is best-effort; don't fail the read just because we can't stat.
+            body.put("content", loaded.content());
+            body.put("path", loaded.path());
+            if (loaded.updatedAt() != null) {
+                body.put("updatedAt", loaded.updatedAt());
             }
             return ResponseEntity.ok(body);
-        } catch (IOException e) {
-            return ResponseEntity.internalServerError()
-                    .body(Map.of("error", "Failed to read SKILL.md: " + e.getMessage()));
         }
+        if (result instanceof SkillService.SkillMdReadResult.ReadFailed readFailed) {
+            return ResponseEntity.internalServerError().body(Map.of("error", readFailed.message()));
+        }
+        throw new IllegalStateException("unhandled SkillMdReadResult variant: " + result);
     }
 
     /**
@@ -896,62 +856,43 @@ public class SkillController {
     @PutMapping("/{id}/skill-md")
     public ResponseEntity<?> updateSkillMd(@PathVariable Long id,
                                            @RequestBody Map<String, Object> body) {
-        SkillEntity entity = skillRepository.findById(id)
-                .orElse(null);
-        if (entity == null) {
+        Long userId = body.get("userId") instanceof Number n ? n.longValue() : null;
+        String content = body.get("content") instanceof String s ? s : null;
+        SkillService.SkillMdWriteResult result = skillService.writeSkillMd(id, content, userId);
+        if (result instanceof SkillService.SkillMdWriteResult.NotFound) {
             return ResponseEntity.notFound().build();
         }
-        if (entity.isSystem()) {
+        if (result instanceof SkillService.SkillMdWriteResult.SystemForbidden) {
             return ResponseEntity.status(HttpStatus.FORBIDDEN)
                     .body(Map.of("error", "Cannot edit system skill SKILL.md"));
         }
-        if (entity.getParentSkillId() == null || entity.isEnabled()) {
-            // Only editable on disabled candidates. Active rows must go through Fork &
-            // A/B Test → edit candidate → promote to avoid in-place changes that bypass
-            // evaluation. System and root rows are similarly off-limits.
+        if (result instanceof SkillService.SkillMdWriteResult.NotEditableCandidate) {
             return ResponseEntity.status(HttpStatus.CONFLICT)
                     .body(Map.of("error",
                             "SKILL.md edit only allowed on disabled candidate (parentSkillId != null && enabled=false). "
                             + "Use Fork & A/B Test to create an editable candidate first."));
         }
-        Long userId = body.get("userId") instanceof Number n ? n.longValue() : null;
-        if (entity.getOwnerId() != null && userId != null
-                && !entity.getOwnerId().equals(userId)) {
-            return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                    .body(Map.of("error", "forbidden"));
+        if (result instanceof SkillService.SkillMdWriteResult.OwnerForbidden) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("error", "forbidden"));
         }
-        String content = body.get("content") instanceof String s ? s : null;
-        if (content == null) {
+        if (result instanceof SkillService.SkillMdWriteResult.ContentRequired) {
             return ResponseEntity.badRequest().body(Map.of("error", "content (string) required"));
         }
-        String skillPath = entity.getSkillPath();
-        if (skillPath == null || skillPath.isBlank()) {
+        if (result instanceof SkillService.SkillMdWriteResult.NoPath) {
             return ResponseEntity.status(HttpStatus.CONFLICT)
                     .body(Map.of("error", "Candidate has no skillPath. Re-fork from parent first."));
         }
-        try {
-            Path dir = Path.of(skillPath);
-            Files.createDirectories(dir);
-            Path md = dir.resolve("SKILL.md");
-            Files.writeString(md, content);
-            // Re-register candidate's definition so SkillAbEvalService sees latest content.
-            try {
-                SkillDefinition def = skillService.buildSkillDefinitionFor(entity);
-                skillRegistry.registerSkillDefinition(def);
-            } catch (Exception e) {
-                // Registry refresh is best-effort; the file write is the canonical source.
-                // Caller will hit the new content next time SkillEvalService loads it.
-                // Log only.
-            }
+        if (result instanceof SkillService.SkillMdWriteResult.Written written) {
             return ResponseEntity.ok(Map.of(
                     "ok", true,
-                    "id", entity.getId(),
-                    "path", md.toString(),
-                    "bytes", content.length()));
-        } catch (IOException e) {
-            return ResponseEntity.internalServerError()
-                    .body(Map.of("error", "Failed to write SKILL.md: " + e.getMessage()));
+                    "id", written.id(),
+                    "path", written.path(),
+                    "bytes", written.bytes()));
         }
+        if (result instanceof SkillService.SkillMdWriteResult.WriteFailed writeFailed) {
+            return ResponseEntity.internalServerError().body(Map.of("error", writeFailed.message()));
+        }
+        throw new IllegalStateException("unhandled SkillMdWriteResult variant: " + result);
     }
 
     /**

@@ -86,6 +86,16 @@ public class ChannelConversationResolver {
         return new SessionRouteResult(newSessionId, true, effectiveUserId);
     }
 
+    /**
+     * Look up all channel conversations bound to the given session ids. Thin pass-through
+     * over the repository so callers (e.g. the chat session list's channel-platform
+     * enrichment) don't reach into {@link ChannelConversationRepository} directly.
+     */
+    @Transactional(readOnly = true)
+    public java.util.List<ChannelConversationEntity> findConversationsBySessionIds(java.util.List<String> sessionIds) {
+        return conversationRepo.findBySessionIdIn(sessionIds);
+    }
+
     /** Map platform user → SkillForge user; unknown = first-contact, null means anonymous. */
     @Transactional(readOnly = true)
     public Long resolveUser(ChannelMessage msg) {

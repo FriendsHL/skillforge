@@ -378,6 +378,37 @@ public class SkillService {
     }
 
     /**
+     * Resolve the on-disk package directory for both numeric (user skill) and
+     * "system-X" (system skill) ids. Returns {@code null} when the id is invalid,
+     * the skill has no path, or the caller lacks ownership of a private skill.
+     *
+     * <p>Used by the dashboard's skill file browser endpoints; the controller does
+     * the directory walking / file reads, this only owns id → path resolution
+     * (registry for system skills, repository + ownership for user skills).
+     */
+    public Path resolveSkillDir(String id, Long userId) {
+        if (id == null) return null;
+        if (id.startsWith("system-")) {
+            String name = id.substring("system-".length());
+            return skillRegistry.getSkillDefinition(name)
+                    .map(def -> def.getSkillPath() == null ? null : Path.of(def.getSkillPath()))
+                    .orElse(null);
+        }
+        try {
+            Long numericId = Long.parseLong(id);
+            SkillEntity entity = skillRepository.findById(numericId).orElse(null);
+            if (entity == null) return null;
+            if (entity.getOwnerId() != null && userId != null
+                    && !entity.getOwnerId().equals(userId) && !entity.isPublic()) {
+                return null;
+            }
+            return entity.getSkillPath() == null ? null : Path.of(entity.getSkillPath());
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    /**
      * 获取 Skill 的 SKILL.md 内容。
      */
     public String getSkillPromptContent(Long id) {
@@ -393,6 +424,147 @@ public class SkillService {
             return Files.readString(skillMdPath, StandardCharsets.UTF_8);
         } catch (IOException e) {
             throw new RuntimeException("Failed to read SKILL.md for skill " + id + ": " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Outcome of {@link #readSkillMd(Long, Long)}. The controller maps each variant
+     * to an HTTP response; this keeps repository access + file I/O out of the web
+     * layer while preserving the existing per-branch status/shape semantics.
+     */
+    public sealed interface SkillMdReadResult {
+        /** Owner-or-public visibility check failed → 403. */
+        record Forbidden() implements SkillMdReadResult {}
+        /** Skill has no skillPath → 200 with empty content and null path. */
+        record NoPath() implements SkillMdReadResult {}
+        /** skillPath set but SKILL.md absent → 200 with empty content + "SKILL.md not found". */
+        record NotOnDisk(String path) implements SkillMdReadResult {}
+        /** SKILL.md read OK → 200 with content + path + best-effort mtime. */
+        record Loaded(String content, String path, String updatedAt) implements SkillMdReadResult {}
+        /** Read failed → 500. */
+        record ReadFailed(String message) implements SkillMdReadResult {}
+    }
+
+    /**
+     * Read a skill's SKILL.md for the dashboard editor. Resolves the entity, applies
+     * the owner-or-public visibility check, and reads the file off disk. Throws
+     * {@code RuntimeException("Skill not found: ...")} (handled globally) when the id
+     * does not exist — matching the prior controller behavior.
+     */
+    public SkillMdReadResult readSkillMd(Long id, Long userId) {
+        SkillEntity entity = skillRepository.findById(id)
+                .orElseThrow(() -> new RuntimeException("Skill not found: " + id));
+        // Owner-or-public visibility check. ownerId==null on system skills, in which case
+        // anyone can read; system skill SKILL.md is loaded via SystemSkillLoader and the
+        // path is part of the artifact bundle.
+        if (entity.getOwnerId() != null && userId != null
+                && !entity.getOwnerId().equals(userId) && !entity.isPublic()) {
+            return new SkillMdReadResult.Forbidden();
+        }
+        String skillPath = entity.getSkillPath();
+        if (skillPath == null || skillPath.isBlank()) {
+            return new SkillMdReadResult.NoPath();
+        }
+        Path md = Path.of(skillPath, "SKILL.md");
+        if (!Files.exists(md)) {
+            return new SkillMdReadResult.NotOnDisk(md.toString());
+        }
+        try {
+            String content = Files.readString(md);
+            // SKILL-DASHBOARD-POLISH-V2.5 — file mtime as updatedAt for FE diff freshness check.
+            String updatedAt = null;
+            try {
+                updatedAt = Files.getLastModifiedTime(md).toInstant().toString();
+            } catch (IOException ignored) {
+                // mtime is best-effort; don't fail the read just because we can't stat.
+            }
+            return new SkillMdReadResult.Loaded(content, md.toString(), updatedAt);
+        } catch (IOException e) {
+            return new SkillMdReadResult.ReadFailed("Failed to read SKILL.md: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Outcome of {@link #writeSkillMd(Long, String, Long)}. The controller maps each
+     * variant to an HTTP response, keeping repository access + file I/O out of the web
+     * layer while preserving the existing per-branch status/shape semantics.
+     */
+    public sealed interface SkillMdWriteResult {
+        /** No row for the id → 404. */
+        record NotFound() implements SkillMdWriteResult {}
+        /** Editing a system skill's SKILL.md is forbidden → 403. */
+        record SystemForbidden() implements SkillMdWriteResult {}
+        /** Not a disabled candidate (active / root / system row) → 409. */
+        record NotEditableCandidate() implements SkillMdWriteResult {}
+        /** Caller userId mismatches the owner → 403. */
+        record OwnerForbidden() implements SkillMdWriteResult {}
+        /** No content in the request body → 400. */
+        record ContentRequired() implements SkillMdWriteResult {}
+        /** Candidate has no skillPath → 409. */
+        record NoPath() implements SkillMdWriteResult {}
+        /** Write OK → 200 with id + path + byte count. */
+        record Written(Long id, String path, int bytes) implements SkillMdWriteResult {}
+        /** Write failed → 500. */
+        record WriteFailed(String message) implements SkillMdWriteResult {}
+    }
+
+    /**
+     * V2.5 manual edit — write SKILL.md content to a candidate skill's isolated
+     * skillPath. Gated to disabled candidates (parentSkillId != null && !enabled)
+     * so users can't bypass the A/B path by editing the active version directly.
+     *
+     * <p>After write, re-registers the candidate's SkillDefinition in SkillRegistry
+     * so subsequent A/B runs see the updated content.
+     *
+     * @param content the SKILL.md content to write. {@code null} means "not provided"
+     *                and yields {@link SkillMdWriteResult.ContentRequired} (an empty
+     *                string is a valid content value and is written through). The
+     *                content-required (400) check fires AFTER the candidate/owner
+     *                gates but BEFORE the skillPath gate, matching the original
+     *                controller ordering.
+     */
+    public SkillMdWriteResult writeSkillMd(Long id, String content, Long userId) {
+        SkillEntity entity = skillRepository.findById(id).orElse(null);
+        if (entity == null) {
+            return new SkillMdWriteResult.NotFound();
+        }
+        if (entity.isSystem()) {
+            return new SkillMdWriteResult.SystemForbidden();
+        }
+        if (entity.getParentSkillId() == null || entity.isEnabled()) {
+            // Only editable on disabled candidates. Active rows must go through Fork &
+            // A/B Test → edit candidate → promote to avoid in-place changes that bypass
+            // evaluation. System and root rows are similarly off-limits.
+            return new SkillMdWriteResult.NotEditableCandidate();
+        }
+        if (entity.getOwnerId() != null && userId != null
+                && !entity.getOwnerId().equals(userId)) {
+            return new SkillMdWriteResult.OwnerForbidden();
+        }
+        if (content == null) {
+            return new SkillMdWriteResult.ContentRequired();
+        }
+        String skillPath = entity.getSkillPath();
+        if (skillPath == null || skillPath.isBlank()) {
+            return new SkillMdWriteResult.NoPath();
+        }
+        try {
+            Path dir = Path.of(skillPath);
+            Files.createDirectories(dir);
+            Path md = dir.resolve("SKILL.md");
+            Files.writeString(md, content);
+            // Re-register candidate's definition so SkillAbEvalService sees latest content.
+            try {
+                SkillDefinition def = buildSkillDefinitionFor(entity);
+                skillRegistry.registerSkillDefinition(def);
+            } catch (Exception e) {
+                // Registry refresh is best-effort; the file write is the canonical source.
+                // Caller will hit the new content next time SkillEvalService loads it.
+                log.warn("writeSkillMd: registry re-register failed for skill id={}: {}", id, e.getMessage());
+            }
+            return new SkillMdWriteResult.Written(entity.getId(), md.toString(), content.length());
+        } catch (IOException e) {
+            return new SkillMdWriteResult.WriteFailed("Failed to write SKILL.md: " + e.getMessage());
         }
     }
 

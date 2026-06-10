@@ -13,7 +13,7 @@ import com.skillforge.server.entity.ChannelConversationEntity;
 import com.skillforge.server.entity.CompactionEventEntity;
 import com.skillforge.server.entity.SessionEntity;
 import com.skillforge.server.dto.SessionReplayDto;
-import com.skillforge.server.repository.ChannelConversationRepository;
+import com.skillforge.server.channel.router.ChannelConversationResolver;
 import com.skillforge.server.config.LlmProperties;
 import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.ChatAttachmentEntity;
@@ -27,8 +27,6 @@ import com.skillforge.server.service.ReplayService;
 import com.skillforge.server.service.SessionService;
 import com.skillforge.server.subagent.SubAgentRegistry;
 import com.skillforge.server.subagent.SubAgentRegistry.SubAgentRun;
-import com.skillforge.server.repository.ChatAttachmentRepository;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -58,12 +56,8 @@ public class ChatController {
     /** 默认渠道：没有 channel conversation 绑定的 session 视为 web。 */
     private static final String DEFAULT_CHANNEL_PLATFORM = "web";
 
-    /** V73 / OBS-COLUMNS: max page size for the admin chat-attachments query (hard cap). */
-    private static final int ADMIN_ATTACHMENTS_MAX_LIMIT = 500;
-
     private final ChatService chatService;
     private final ChatAttachmentService chatAttachmentService;
-    private final ChatAttachmentRepository chatAttachmentRepository;
     private final SessionService sessionService;
     private final AgentService agentService;
     private final LlmProperties llmProperties;
@@ -73,12 +67,11 @@ public class ChatController {
     private final CancellationRegistry cancellationRegistry;
     private final CompactionService compactionService;
     private final ReplayService replayService;
-    private final ChannelConversationRepository channelConversationRepository;
+    private final ChannelConversationResolver channelConversationResolver;
     private final ContextBreakdownService contextBreakdownService;
 
     public ChatController(ChatService chatService,
                           ChatAttachmentService chatAttachmentService,
-                          ChatAttachmentRepository chatAttachmentRepository,
                           SessionService sessionService,
                           AgentService agentService,
                           LlmProperties llmProperties,
@@ -88,11 +81,10 @@ public class ChatController {
                           CancellationRegistry cancellationRegistry,
                           CompactionService compactionService,
                           ReplayService replayService,
-                          ChannelConversationRepository channelConversationRepository,
+                          ChannelConversationResolver channelConversationResolver,
                           ContextBreakdownService contextBreakdownService) {
         this.chatService = chatService;
         this.chatAttachmentService = chatAttachmentService;
-        this.chatAttachmentRepository = chatAttachmentRepository;
         this.sessionService = sessionService;
         this.agentService = agentService;
         this.llmProperties = llmProperties;
@@ -102,7 +94,7 @@ public class ChatController {
         this.cancellationRegistry = cancellationRegistry;
         this.compactionService = compactionService;
         this.replayService = replayService;
-        this.channelConversationRepository = channelConversationRepository;
+        this.channelConversationResolver = channelConversationResolver;
         this.contextBreakdownService = contextBreakdownService;
     }
 
@@ -121,7 +113,7 @@ public class ChatController {
             return;
         }
         List<ChannelConversationEntity> convs =
-                channelConversationRepository.findBySessionIdIn(sessionIds);
+                channelConversationResolver.findConversationsBySessionIds(sessionIds);
         Map<String, String> platformBySessionId = new HashMap<>();
         Map<String, Boolean> activeBySessionId = new HashMap<>();
         for (ChannelConversationEntity c : convs) {
@@ -400,16 +392,10 @@ public class ChatController {
         if (limit <= 0) {
             return ResponseEntity.badRequest().build();
         }
-        // Clamp to hard cap rather than 400 — admin tool convenience.
-        int effectiveLimit = Math.min(limit, ADMIN_ATTACHMENTS_MAX_LIMIT);
-        // Normalize empty strings to null so the JPQL "IS NULL OR equals"
-        // pattern treats "filter not provided" and "filter is blank" the same.
-        String ec = (errorCode != null && !errorCode.isBlank()) ? errorCode : null;
-        String pm = (processingMode != null && !processingMode.isBlank()) ? processingMode : null;
-        String sid = (sessionId != null && !sessionId.isBlank()) ? sessionId : null;
-
-        List<ChatAttachmentEntity> rows = chatAttachmentRepository.findByFilters(
-                ec, pm, sid, PageRequest.of(0, effectiveLimit));
+        // Filter normalization + hard-cap clamp + query live in the service; the
+        // controller keeps request validation and response shaping.
+        List<ChatAttachmentEntity> rows = chatAttachmentService.listAttachmentsByFilters(
+                errorCode, processingMode, sessionId, limit);
 
         List<Map<String, Object>> out = new ArrayList<>(rows.size());
         for (ChatAttachmentEntity row : rows) {
