@@ -54,6 +54,12 @@ flywheel:
 
 # SkillForge configuration
 skillforge:
+  # DESKTOP-MACOS-PACKAGE D2: when set, SpaStaticConfig serves the built dashboard
+  # SPA from this filesystem dir (same-origin → FE needs zero changes). UNSET by
+  # default → bean inactive → dev behaviour unchanged (server serves no static SPA).
+  # The desktop launcher passes --skillforge.spa.root=<App>/Contents/Resources/web.
+  # spa:
+  #   root: /absolute/path/to/dashboard/dist
   websearch:
     # WEB-TOOLS-HARDENING V1: provider priority chain.
     # Ordered fallback list: try Tavily first, then Exa, then DuckDuckGo HTML.

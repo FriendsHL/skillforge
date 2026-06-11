@@ -27,11 +27,11 @@ public class PostgresBackupService {
     private final Path dataDir;
     private final Path backupsDir;
 
-    public PostgresBackupService(EmbeddedPostgres pg) throws IOException {
+    public PostgresBackupService(EmbeddedPostgres pg, Path baseDir) throws IOException {
         this.pg = pg;
-        Path home = Path.of(System.getProperty("user.home"));
-        this.dataDir = home.resolve(".skillforge/pgdata");
-        this.backupsDir = home.resolve(".skillforge/backups");
+        // baseDir defaults to ~/.skillforge (dev); desktop overrides to ~/.skillforge-desktop.
+        this.dataDir = baseDir.resolve("pgdata");
+        this.backupsDir = baseDir.resolve("backups");
         Files.createDirectories(this.backupsDir);
         log.info("PostgresBackupService initialized (dataDir={}, backupsDir={}, retain={})",
                 dataDir, backupsDir, RETAIN_COUNT);
@@ -89,7 +89,11 @@ public class PostgresBackupService {
             @Override
             public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
                 String name = file.getFileName().toString();
-                if (name.equals("postmaster.pid") || name.equals("postmaster.opts")) {
+                // Skip runtime/lock files: a copied postmaster.pid would block startup,
+                // and a copied epg-lock (zonky's data-dir lock) would make a seeded /
+                // restored dir look "in use". The DB itself is WAL crash-safe.
+                if (name.equals("postmaster.pid") || name.equals("postmaster.opts")
+                        || name.equals("epg-lock")) {
                     return FileVisitResult.CONTINUE;
                 }
                 Files.copy(file, dst.resolve(src.relativize(file)),
