@@ -98,7 +98,7 @@ V2-DSL-RESET.md 里 obsolete 部分：
 [AUTOEVOLVING-MASTER](../../active/2026-05-28-AUTOEVOLVING-MASTER/) 整体接管。具体：
 
 - **V0（现状）** = Sprint 1 V124/V125 schema + OPT-REPORT-V1 + DREAMING V1 + memory-curator + 14-stage flywheel + canary + Iron Law
-- **V1**（待启动，[AUTOEVOLVING-V1-DSL-DASHBOARD](../../active/2026-05-29-AUTOEVOLVING-V1-DSL-DASHBOARD/)）= DSL Phase 1 + autoEvolving dashboard，~4.5 周
+- **V1**（待启动，[AUTOEVOLVING-V1-DSL-DASHBOARD](../../archive/2026-05-29-AUTOEVOLVING-V1-DSL-DASHBOARD/)）= DSL Phase 1 + autoEvolving dashboard，~4.5 周
 - **V2** = AUTORESEARCH V1 + K-1 optimizer_program.md + DSL Phase 2
 - **V3** = K-4 outer loop + 3 信号源融合
 - **V4** = SkillsBench 公开打榜

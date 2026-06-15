@@ -1,8 +1,8 @@
 # AUTOEVOLVE-CLOSE-LOOP — 闭环采纳 + 对靶改进 + benchmark 验证
 
 > **创建**：2026-06-03
-> **状态**：prd/tech-design draft（待用户 ratify 后分期 Full pipeline）
-> **父需求包**：[AUTOEVOLVE-AGENT-LEVEL-BUNDLE](../2026-06-02-AUTOEVOLVE-AGENT-LEVEL-BUNDLE/)（agent 整体爬坡 V1，Phase 1-4 已交付）
+> **状态**：**部分交付**（P1/P2/G5/BC-M1/BC-M2a/engine-fix/阶段A 已交付，见 [delivery-index](../../../delivery-index.md)）；阶段B(EVOLVE-BADCASE-SENSITIVITY)/G3/P3 未做
+> **父需求包**：[AUTOEVOLVE-AGENT-LEVEL-BUNDLE](../../archive/2026-06-02-AUTOEVOLVE-AGENT-LEVEL-BUNDLE/)（agent 整体爬坡 V1，Phase 1-4 已交付）
 > **参考依据**：`/Users/youren/myspace/research-docs/research/agent-harness-wiki/`（AHE `papers/agentic-harness-engineering.md` + `deep/claude-code-insights.md` + `concept/attribution.md`）
 
 ## 30 秒摘要（用户原话拆解）

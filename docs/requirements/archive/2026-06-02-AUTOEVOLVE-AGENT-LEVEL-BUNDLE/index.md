@@ -1,7 +1,7 @@
 # AUTOEVOLVE-AGENT-LEVEL-BUNDLE — agent 整体爬坡(跨面改动包 / 一个整体分)
 
 > **创建**：2026-06-02
-> **状态**：**Phase 1 已交付**（2026-06-02，Full pipeline，双 reviewer PASS，mvn 2554/0/0 + AC-1 parity + V137 真活）。Phase 2-4 待排。详见 [delivery-index](../../../delivery-index.md) 首行。
+> **状态**：done — **Phase 1-4 全部已交付**（2026-06-02，Full pipeline，双 reviewer PASS）。已交付，见 [delivery-index](../../../delivery-index.md)。
 > **父需求包**：[AUTOEVOLVE-AGENT-FLYWHEEL](../2026-05-31-AUTOEVOLVE-AGENT-FLYWHEEL/)（本包是其 evolve loop 的架构升级）
 > **前置已交付**（见 [delivery-index](../../../delivery-index.md)）：BUG-1 winner-carry-forward(prompt 单面) + reflection + judge rationale(方案 B) + Volcengine Ark provider
 

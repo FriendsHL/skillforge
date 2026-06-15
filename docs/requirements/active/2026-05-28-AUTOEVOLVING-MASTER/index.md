@@ -2,7 +2,7 @@
 
 > **创建**：2026-05-28（mental model 对齐）
 > **最近更新**：2026-05-29（V1 DSL 选型 ratify Rhino + L1 sandbox + 工程量 ~4.5 周）
-> **状态**：master overview ratified，V1 子需求 [AUTOEVOLVING-V1-DSL-DASHBOARD](../2026-05-29-AUTOEVOLVING-V1-DSL-DASHBOARD/) 待启动
+> **状态**：master overview ratified；**V1 已交付**（见 [archive/2026-05-29-AUTOEVOLVING-V1-DSL-DASHBOARD](../../archive/2026-05-29-AUTOEVOLVING-V1-DSL-DASHBOARD/)）；V2-V5 待启动
 > **思想根**：[Karpathy autoresearch](https://github.com/karpathy/autoresearch)（630 行 Python + MIT 53.5k stars）—— 7 抽象 + 5 哲学，详见 [`research-docs/research/agent-harness-wiki/concept/karpathy-autoresearch-thinking.md`](../../../../research-docs/research/agent-harness-wiki/concept/karpathy-autoresearch-thinking.md)
 > **目标**：让 SkillForge 的 skill / prompt / tools / rules / agent / 框架本身按 Karpathy 哲学**自动持续进化**，整合现有 14-stage flywheel + memory + autoResearch + A/B + canary + Iron Law 等能力到一个**可观测的整体面板**
 
