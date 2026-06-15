@@ -225,6 +225,16 @@ operator 视角的完整 skill / prompt / behavior_rule 飞轮工作流 DAG（In
 - **只读** —— panel 内无任何操作按钮（observability ≠ ops console），所有操作走现有 drill-down 页（1B URL routing 确保 Insights / SkillList / SessionList / SkillDrafts 真消费 drill-down query param 不 silent drop）
 - **懒加载** —— reactflow + dagre（~72KB gzip）独立 chunk，仅在 operator 点 Flywheel tab 时加载
 
+### AutoEvolving V1（DSL Workflow 引擎 + Dashboard）
+
+把自进化飞轮以代码形式编排的确定性 DSL workflow 引擎，外加 `/autoevolving` 操作员仪表盘（2026-05，灵感来自 Karpathy 的 autoresearch）：
+
+- **DSL workflow 引擎** —— 跑在 **Rhino** 解释器上的 JavaScript workflow，置于 **L1 capability 沙箱**（无文件系统 / 无网络 / 仅白名单 host 调用）内，提供 6 个原语（`agent` / `tool` / `parallel` / `pipeline` / `humanApprove` / journaling）。`WorkflowDefinitionRegistry` 注册定义，`WorkflowRunnerService` 执行并 journal 每一步。
+- **journal-replay 的人审环节** —— `humanApprove()` 抛 `WorkflowPausedException` → 操作员审批 → workflow JS 从头重跑，缓存的 journal entry short-circuit 已完成步骤（不重花 token），frontier gate 续跑。可跨服务器重启存活，操作员几小时后再审也行。
+- **OPT-REPORT 改造为 workflow** —— 优化报告生成器重建为 DSL workflow（load → annotate fan-out → aggregate → human-approve），agent 驱动的老路径保留在 feature flag 之后。
+- **evolve loop 爬坡** —— agent 级 evolve loop 每轮跑一次 A/B 并把 winner carry-forward，沿 `weightedScore`（target-subset 通过率 + 回流的 bad-case oracle）爬坡，带确定性 keep / stop 阀门（min-measured-N guard、win-streak baseline 缓存、vs-original 锚点；infra failure 排除出分母）。
+- **`/autoevolving` dashboard** —— KPI header + 3 个信号源 panel + workflow DAG 可视化（复用 Flywheel 的 React Flow + dagre 布局）+ 异常诊断，带实时 WebSocket 更新。
+
 ### System Agent 区分
 
 `t_agent.agent_type` 字段（V89）区分**系统 agent**（`session-annotator` / `attribution-curator` / `metrics-collector` / `memory-curator` / `user-simulator` —— Bootstrap 类管理，下次重启时 dashboard 编辑会被覆盖）跟**用户 agent**：
@@ -288,6 +298,20 @@ AGENT_LOOP（根节点）
 **聊天消息时间戳（2026-05）** — 用户 / agent 气泡 hover 时右上角显示 `HH:MM:SS`（服务端持久化的 `t_session_message.created_at`，默认 opacity 0 + `:focus-within` 键盘 a11y fallback）。REST `/api/chat/sessions/{id}/messages` 返回 `createdAt` 字段；WS `message_appended` + `messages_snapshot` payload 带 envelope-level `createdAt` 满足实时消息。
 
 **模型用量仪表盘** — 按日/按模型/按 Agent 统计 token 消耗和成本。
+
+### MCP Client（Model Context Protocol）
+
+SkillForge 作为 Model Context Protocol *host* —— 连接外部 **stdio 和远程 HTTP** MCP server 并把它们的工具暴露给 Agent：
+
+- **stdio transport** — NDJSON line-framed JSON-RPC 2.0；`ProcessBuilder` 数组形式（无 shell 注入）；严格 `${VAR}` env 正则 + `Matcher.quoteReplacement` 防 `$/\` 引用攻击
+- **HTTP transport（Streamable HTTP，V152）** — 连接远程托管的 MCP server。每请求 `POST` 带 `Accept: application/json, text/event-stream`；按 `Content-Type` 分流响应（直接 JSON 或按 request id 匹配的 SSE `data:` 单帧）；捕获并回带 `Mcp-Session-Id`；16 MiB 响应体上限；线程安全（OkHttp + volatile session id）。`McpTransport` 接口是干净的扩展点 —— session / adapter / registry 层 transport-agnostic 不动
+- **传输安全** — 非 loopback http 端点强制 `https`（resolved `Authorization` 头绝不明文传输）；URL host 解析后**拒绝内网 / 私网 / link-local（含 `169.254.169.254` 云元数据端点）/ IPv6 ULA / CGNAT**（SSRF guard）。header secret 复用与 env 相同的 `${VAR}` 替换 + `"***"` 脱敏
+- **按 Agent 启用 server** — `t_agent.mcp_server_ids` 逗号列表（V61）；Agent 只看到已启用 server 的工具 —— `collectTools`（surface）和 dispatch 都按 `allowedMcpServerNames` gate MCP 工具，而不是 built-in `toolIds` 白名单，所以有工具白名单的 Agent 也能看到绑定的 MCP 工具
+- **工具前缀** — 每个 MCP 工具注册为 `mcp_<server>_<tool>` 避免与 built-in 工具命名冲突；per-server name 正则 `[a-z0-9_]+ ≤ 32`
+- **生命周期 reload** — `@TransactionalEventListener(AFTER_COMMIT) + @Transactional(propagation=REQUIRES_NEW)` 在 `t_mcp_server` upsert 时热加载 registry，无需重启
+- **Secret masking** — server 配置编辑返回 `"***"` 脱敏 env **和 header** 敏感值；后端在 `***` round-trip 时保留原值
+- **默认 dogfood server** — `time`（stdio，Anthropic 官方 `uvx mcp-server-time`）+ **AnySearch**（HTTP，结构化垂直数据 —— 实时股 / 汇 / 币行情、财报、Crossref 学术引文、CVE、专利，覆盖 17 域），绑定 Research Agent + Main Assistant，配 `tools_prompt` 路由引导（结构化查询 → AnySearch，通用网页 → WebSearch）
+- **仪表盘 `/mcp-servers`** — 全量 CRUD（stdio: command / args；http: url / headers 键值编辑器带 `***` 脱敏）+ 连接状态 + test-connection dry-run + 删除引用检查（仍被 Agent 引用时返回 409）
 
 ### 安全 & 防失控
 
@@ -719,6 +743,8 @@ my-skill.zip
 - **自进化流水线** — 评测执行器、LLM 评委（2×Haiku + Sonnet 元评委）、7×5 归因矩阵、Prompt A/B 自动晋升（Δ≥15pp + 4 层 Goodhart 防护）、Session→场景提取
 - **会话消息行存储** — `t_session_message` append-only，checkpoint / branch / restore
 - **Skill 自进化** — Session → Skill 提取、版本管理、A/B 验证、自动晋升/回滚
+- **MCP Client（P11 + HTTP transport）** — stdio 和 Streamable HTTP transport + per-agent gating + 前缀 + lifecycle reload（V61/V152）+ https/SSRF URL guard；dogfood time（stdio）+ AnySearch（HTTP 结构化垂直搜索）+ `/mcp-servers` CRUD
+- **AutoEvolving V1** — DSL workflow 引擎（Rhino + L1 沙箱 + 6 原语 + human-approve journal replay）+ OPT-REPORT 改造为 workflow + agent 级 evolve loop 爬坡（weightedScore + winner carry-forward）+ `/autoevolving` dashboard
 - **多渠道网关** — `ChannelAdapter` SPI、飞书（WebSocket + Webhook）、Telegram、三阶段投递事务、重试/去重、`/channels` 仪表盘
 - **Lifecycle Hooks** — SessionStart / UserPromptSubmit / PreToolUse / PostToolUse / SessionEnd，支持 Skill / Script / BuiltInMethod / CompiledMethod 四种 Handler，多 entry 链式执行，discriminated-union 编辑器
 - **行为规范层** — 15 条内置规范 + 预设模板 + 按 Agent 自定义规则（XML 沙箱）

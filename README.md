@@ -240,6 +240,16 @@ Operator-facing workflow DAG of the entire skill / prompt / behavior-rule flywhe
 - **Read-only by design** — no action buttons inside the panel (observability ≠ ops console); all operations live on the existing drill-down pages (1B URL-driven routing in Insights / SkillList / SessionList / SkillDrafts ensures drill-down query params are actually consumed)
 - **Lazy-loaded** — reactflow + dagre (~72KB gzipped) ships as a separate chunk and only loads when operator clicks the Flywheel tab
 
+### AutoEvolving V1 (DSL Workflow Engine + Dashboard)
+
+A deterministic DSL workflow engine that orchestrates the self-improvement flywheel as code, plus an `/autoevolving` operator dashboard (2026-05, inspired by Karpathy's autoresearch):
+
+- **DSL workflow engine** — JavaScript workflows on a **Rhino** interpreter inside an **L1 capability sandbox** (no filesystem / no network / whitelisted host calls only), with 6 primitives (`agent` / `tool` / `parallel` / `pipeline` / `humanApprove` / journaling). `WorkflowDefinitionRegistry` registers definitions; `WorkflowRunnerService` executes and journals each step.
+- **Human-in-the-loop via journal replay** — `humanApprove()` throws `WorkflowPausedException` → operator approves → the workflow JS re-runs from the top, cached journal entries short-circuit already-completed steps (no token re-spend), the frontier gate resumes. Survives server restart; the operator can approve hours later.
+- **OPT-REPORT as a workflow** — the optimization-report generator is rebuilt as a DSL workflow (load → annotate fan-out → aggregate → human-approve), with the agent-driven path retained behind a feature flag.
+- **Evolve loop hill-climbing** — the agent-level evolve loop runs an A/B per iteration and carries the winner forward, climbing a `weightedScore` (target-subset pass-rate + harvested bad-case oracle) with deterministic keep / stop gates (min-measured-N guard, win-streak baseline caching, vs-original anchor; infra failures excluded from the denominator).
+- **`/autoevolving` dashboard** — KPI header + 3 signal-source panels + workflow DAG visualization (reuses the Flywheel React Flow + dagre layout) + anomaly diagnosis, with live WebSocket updates.
+
 ### System Agent Typing
 
 `t_agent.agent_type` column (V89) distinguishes **system agents** (`session-annotator` / `attribution-curator` / `metrics-collector` / `memory-curator` / `user-simulator` — managed by Bootstrap classes, edits overwritten on next restart) from **user agents**:
@@ -312,15 +322,17 @@ AGENT_LOOP (root)
 
 ### MCP Client (Model Context Protocol)
 
-SkillForge as a Model Context Protocol *host* — connect external stdio MCP servers and expose their tools to agents:
+SkillForge as a Model Context Protocol *host* — connect external **stdio and remote HTTP** MCP servers and expose their tools to agents:
 
 - **stdio transport** — NDJSON line-framed JSON-RPC 2.0; `ProcessBuilder` array form (no shell injection); strict `${VAR}` env regex with `Matcher.quoteReplacement` against `$/\` reference attacks
-- **Per-agent server enable** — `t_agent.mcp_server_ids` comma-list (V61); agents only see tools from enabled servers (`LoopContext.allowedMcpServerNames` double guard at `collectTools` + dispatch)
+- **HTTP transport (Streamable HTTP, V152)** — connect remote hosted MCP servers. Per-request `POST` with `Accept: application/json, text/event-stream`; response demux by `Content-Type` (direct JSON or SSE `data:` frame matched by request id); captures + echoes `Mcp-Session-Id`; 16 MiB response-body cap; thread-safe (OkHttp + volatile session id). The `McpTransport` interface is a clean extension point — session / adapter / registry layers are transport-agnostic and untouched
+- **Transport security** — non-loopback http endpoints must use `https` (a resolved `Authorization` header never travels in clear text); URL hosts are resolved and **rejected if internal / private / link-local (incl. the `169.254.169.254` cloud-metadata endpoint) / IPv6 ULA / CGNAT** (SSRF guard). Header secrets reuse the same `${VAR}` substitution + `"***"` masking as env
+- **Per-agent server enable** — `t_agent.mcp_server_ids` comma-list (V61); agents only see tools from enabled servers — both `collectTools` (surface) and dispatch gate MCP tools by `allowedMcpServerNames` rather than the built-in `toolIds` whitelist, so a tool-restricted agent still sees its bound MCP tools
 - **Tool prefixing** — every MCP tool is registered as `mcp_<server>_<tool>` to avoid name collisions with built-in tools; per-server name regex `[a-z0-9_]+ ≤ 32`
 - **Lifecycle reload** — `@TransactionalEventListener(AFTER_COMMIT) + @Transactional(propagation=REQUIRES_NEW)` reloads the registry on `t_mcp_server` upsert without restart
-- **Env masking** — server config edits return `"***"` for sensitive env values; backend preserves originals on `***` round-trip
-- **Default dogfood server** — `time` (Anthropic official `uvx mcp-server-time`) ships pre-installed, providing `mcp_time_get_current_time` + `mcp_time_convert_time`
-- **Dashboard `/mcp-servers`** — full CRUD + connection status + test-connection dry-run + delete reference check (409 when agents still reference)
+- **Secret masking** — server config edits return `"***"` for sensitive env **and header** values; backend preserves originals on `***` round-trip
+- **Default dogfood servers** — `time` (stdio, Anthropic official `uvx mcp-server-time`) + **AnySearch** (HTTP, structured vertical data — real-time stock / forex / crypto quotes, financial statements, academic citations via Crossref, CVE, patents across 17 domains), bound to the Research Agent + Main Assistant with `tools_prompt` routing guidance (structured queries → AnySearch, general web → WebSearch)
+- **Dashboard `/mcp-servers`** — full CRUD (stdio: command / args; http: url / headers key-value editor with `***` masking) + connection status + test-connection dry-run + delete reference check (409 when agents still reference)
 
 ### Slash Commands
 
@@ -815,7 +827,8 @@ my-skill.zip
 - **Session message storage** — row-based (`t_session_message`), append-only, checkpoint / branch / restore
 - **Skill self-evolve closed loop** (5-phase, SKILL-EVOLVE-LOOP) — daily extract cron, single-skill EVAL endpoint + history table, weekly scheduled evaluator, evolve-with-failures, weekly self-improve cron with A/B + auto-promote, WS push, dashboard sparkline + history curve + auto-evolve runs panel
 - **Skill dashboard polish** (V1+V2+V2.5) — aggregate by name, evolution detail tab (Reasoning / Diff / per-scenario A/B), A/B threshold tooltip, manual promote / rollback, Drafts top-level entry + sidebar badge, exact-name draft skip, dashboard 5-stat summary card, real merge UX (Update existing / Rename / Reject), version tree (default + `?format=tree`), sibling-aware delete, isolated fork path, manual SKILL.md edit, generic file browser (references / scripts / assets / hooks)
-- **MCP Client (P11)** — stdio transport + per-agent tool gating + tool name prefixing + lifecycle reload (V61); default dogfood `time` server + dashboard `/mcp-servers` CRUD
+- **MCP Client (P11 + HTTP transport)** — stdio **and Streamable HTTP** transport + per-agent tool gating + tool name prefixing + lifecycle reload (V61 / V152); https + SSRF URL guard; dogfood `time` (stdio) + **AnySearch** (HTTP, structured vertical search) servers + dashboard `/mcp-servers` CRUD
+- **AutoEvolving V1** — DSL workflow engine (Rhino + L1 capability sandbox + 6 primitives + human-approve journal replay), OPT-REPORT rebuilt as a workflow, agent-level evolve loop hill-climbing (`weightedScore` + winner carry-forward), `/autoevolving` dashboard
 - **Slash Commands (P10)** — 8 commands (`/new` `/compact` `/model` `/models` `/skill` `/tool` `/context` `/help`) with FE popup + channel intercept (V60)
 - **Scheduled Tasks (P12)** — user-defined cron / one-shot, agent tools (Create/Update/Delete/List/Get), dashboard `/schedules` + run history (V59)
 - **Prompt Cache (P13)** — 5-provider auto-cache, stable-prompt SHA stability, `cache_break` detection, dashboard hit-rate badge (V62)
