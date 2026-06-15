@@ -19,7 +19,9 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.net.InetAddress;
 import java.net.URI;
+import java.net.UnknownHostException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
@@ -255,11 +257,24 @@ public class McpServerService {
     }
 
     /**
-     * Require https for http-transport endpoints so a resolved {@code Authorization}
-     * header (e.g. a bearer token) is never sent in clear text. Exception: loopback
-     * hosts (localhost / 127.0.0.1 / ::1) may use plain http for local self-hosted MCP
-     * dev. Error messages carry only the scheme/host — never the url's token-bearing
-     * userinfo or any header.
+     * Validate an http-transport endpoint url at create/update time:
+     * <ol>
+     *   <li>scheme must be http or https;</li>
+     *   <li>explicit loopback host (localhost / 127.0.0.1 / ::1) may use plain http for a local
+     *       self-hosted MCP dev server;</li>
+     *   <li>any other host must use https so a resolved {@code Authorization} header (e.g. a bearer
+     *       token) is never sent in clear text;</li>
+     *   <li>BUG-33 SSRF guard: the host must not resolve into internal / private / link-local
+     *       (incl. {@code 169.254.169.254} cloud-metadata) / unique-local ranges, so an operator
+     *       cannot point the server at the metadata endpoint or an internal-only service.</li>
+     * </ol>
+     * Error messages carry only the scheme / host — never the url's token-bearing userinfo or any
+     * header.
+     *
+     * <p><b>Limitation:</b> this is a config-time check and does NOT defend against DNS rebinding
+     * (a host that resolves to a public IP now but rebinds to a private IP at connect time). A
+     * connect-time guard in {@code McpHttpTransport} would be the complete fix — tracked as
+     * follow-up.
      */
     private void validateHttpUrl(String rawUrl) {
         URI uri;
@@ -274,16 +289,85 @@ public class McpServerService {
             throw new IllegalArgumentException("url must be an absolute http(s) URL with a host");
         }
         String s = scheme.toLowerCase(Locale.ROOT);
-        if ("https".equals(s)) return;
-        if ("http".equals(s) && isLoopbackHost(host)) return;
-        throw new IllegalArgumentException(
-                "url must use https for non-local hosts (got scheme '" + s + "' host '" + host + "')");
+        if (!"http".equals(s) && !"https".equals(s)) {
+            throw new IllegalArgumentException("url must use http or https (got scheme '" + s + "')");
+        }
+        // Dev exception: explicit loopback host may use plain http for a local self-hosted MCP.
+        if (isLoopbackHost(host)) {
+            return;
+        }
+        // Non-local: require https so a resolved Authorization header is never sent in clear text.
+        if (!"https".equals(s)) {
+            throw new IllegalArgumentException(
+                    "url must use https for non-local hosts (got scheme '" + s + "' host '" + host + "')");
+        }
+        // BUG-33 SSRF guard — reject hosts resolving into internal / private / metadata ranges.
+        InetAddress[] addrs;
+        try {
+            addrs = InetAddress.getAllByName(unbracket(host));
+        } catch (UnknownHostException e) {
+            throw new IllegalArgumentException("url host cannot be resolved: " + host);
+        }
+        for (InetAddress addr : addrs) {
+            if (isDisallowedAddress(addr)) {
+                throw new IllegalArgumentException(
+                        "url host '" + host + "' resolves to a disallowed internal/private address");
+            }
+        }
     }
 
     private static boolean isLoopbackHost(String host) {
         String h = host.toLowerCase(Locale.ROOT);
         // URI.getHost() returns IPv6 literals wrapped in brackets, e.g. "[::1]".
         return h.equals("localhost") || h.equals("127.0.0.1") || h.equals("::1") || h.equals("[::1]");
+    }
+
+    /** IPv6 literals come bracketed from {@link URI#getHost()} (e.g. "[::1]"); strip for resolution. */
+    private static String unbracket(String host) {
+        if (host.length() >= 2 && host.charAt(0) == '[' && host.charAt(host.length() - 1) == ']') {
+            return host.substring(1, host.length() - 1);
+        }
+        return host;
+    }
+
+    /**
+     * BUG-33 SSRF guard: addresses an http-transport MCP server url must not resolve to.
+     * Covers loopback, any-local (0.0.0.0/::), link-local (169.254.x / fe80:: — includes the
+     * 169.254.169.254 cloud-metadata endpoint), site-local (10/172.16-31/192.168), multicast,
+     * IPv6 unique-local (fc00::/7) and IPv4 carrier-grade NAT (100.64.0.0/10).
+     */
+    private static boolean isDisallowedAddress(InetAddress addr) {
+        if (addr.isLoopbackAddress() || addr.isAnyLocalAddress() || addr.isLinkLocalAddress()
+                || addr.isSiteLocalAddress() || addr.isMulticastAddress()) {
+            return true;
+        }
+        byte[] b = addr.getAddress();
+        if (b.length == 16) {
+            // IPv4-mapped (::ffff:a.b.c.d) / IPv4-compatible (::a.b.c.d): the IPv6 predicates above
+            // don't inspect the embedded v4 range, so re-evaluate the embedded IPv4 explicitly
+            // (closes the ::ffff:169.254.169.254 metadata bypass).
+            boolean firstTenZero = true;
+            for (int i = 0; i < 10; i++) {
+                if (b[i] != 0) { firstTenZero = false; break; }
+            }
+            boolean v4Mapped = firstTenZero && (b[10] & 0xFF) == 0xFF && (b[11] & 0xFF) == 0xFF;
+            boolean v4Compat = firstTenZero && b[10] == 0 && b[11] == 0;
+            if (v4Mapped || v4Compat) {
+                try {
+                    return isDisallowedAddress(
+                            InetAddress.getByAddress(new byte[]{b[12], b[13], b[14], b[15]}));
+                } catch (UnknownHostException e) {
+                    return true; // cannot evaluate the embedded address → block defensively
+                }
+            }
+            // IPv6 unique-local fc00::/7 (isSiteLocalAddress only covers the deprecated fec0::/10).
+            return (b[0] & 0xFE) == 0xFC;
+        }
+        // IPv4 carrier-grade NAT 100.64.0.0/10.
+        if (b.length == 4) {
+            return (b[0] & 0xFF) == 100 && (b[1] & 0xC0) == 0x40;
+        }
+        return false;
     }
 
     private static String blankToNull(String s) {

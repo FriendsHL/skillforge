@@ -520,4 +520,41 @@ class McpServerServiceTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("https");
     }
+
+    @Test
+    @DisplayName("create http (BUG-33 SSRF) rejects https urls resolving to internal/private/metadata IPs")
+    void create_httpRejectsInternalPrivateHosts() {
+        // Literal IPs — InetAddress parses these without a DNS lookup, so the test is deterministic.
+        for (String badUrl : List.of(
+                "https://169.254.169.254/mcp",   // link-local: AWS/GCP metadata endpoint
+                "https://10.0.0.5/mcp",          // site-local 10/8
+                "https://192.168.1.1/mcp",       // site-local 192.168/16
+                "https://172.16.0.1/mcp",        // site-local 172.16/12
+                "https://[fd00::1]/mcp",         // IPv6 unique-local fc00::/7
+                "https://[::ffff:169.254.169.254]/mcp", // IPv4-mapped IPv6 → embedded metadata IP
+                "https://100.64.0.1/mcp")) {     // carrier-grade NAT 100.64/10
+            McpServerRequest req = new McpServerRequest();
+            req.setName("ssrf");
+            req.setTransport("http");
+            req.setUrl(badUrl);
+            assertThatThrownBy(() -> service.create(1L, req))
+                    .as("url should be rejected: %s", badUrl)
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("disallowed internal/private");
+        }
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("create http (BUG-33 SSRF) allows https to a public host")
+    void create_httpAllowsPublicHost() {
+        McpServerRequest req = new McpServerRequest();
+        req.setName("publicmcp");
+        req.setTransport("http");
+        req.setUrl("https://8.8.8.8/mcp"); // public literal IP — parsed, not blocked
+        when(repository.existsByName("publicmcp")).thenReturn(false);
+        when(repository.save(any(McpServerEntity.class))).thenAnswer(inv -> inv.getArgument(0));
+        McpServerEntity created = service.create(1L, req);
+        assertThat(created.getUrl()).isEqualTo("https://8.8.8.8/mcp");
+    }
 }
