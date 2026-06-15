@@ -55,9 +55,12 @@ public class McpServerResponse {
 
     private Long id;
     private String name;
+    private String transport;
     private String command;
     private List<String> args;
     private Map<String, String> env;
+    private String url;
+    private Map<String, String> headers;
     private String description;
     private boolean enabled;
     private String status;
@@ -79,7 +82,9 @@ public class McpServerResponse {
         McpServerResponse r = new McpServerResponse();
         r.id = entity.getId();
         r.name = entity.getName();
+        r.transport = entity.getTransport();
         r.command = entity.getCommand();
+        r.url = entity.getUrl();
         try {
             r.args = objectMapper.readValue(entity.getArgs(), new TypeReference<List<String>>() {});
         } catch (Exception e) {
@@ -95,6 +100,15 @@ public class McpServerResponse {
             log.warn("Failed to parse env JSON for server {} ({}): {}",
                     entity.getId(), entity.getName(), e.getMessage());
             r.env = Collections.emptyMap();
+        }
+        try {
+            Map<String, String> parsedHeaders = objectMapper.readValue(entity.getHeaders(),
+                    new TypeReference<Map<String, String>>() {});
+            r.headers = maskEnv(parsedHeaders);
+        } catch (Exception e) {
+            log.warn("Failed to parse headers JSON for server {} ({}): {}",
+                    entity.getId(), entity.getName(), e.getMessage());
+            r.headers = Collections.emptyMap();
         }
         r.description = entity.getDescription();
         r.enabled = entity.isEnabled();
@@ -131,9 +145,12 @@ public class McpServerResponse {
 
     public Long getId() { return id; }
     public String getName() { return name; }
+    public String getTransport() { return transport; }
     public String getCommand() { return command; }
     public List<String> getArgs() { return args; }
     public Map<String, String> getEnv() { return env; }
+    public String getUrl() { return url; }
+    public Map<String, String> getHeaders() { return headers; }
     public String getDescription() { return description; }
     public boolean isEnabled() { return enabled; }
     public String getStatus() { return status; }

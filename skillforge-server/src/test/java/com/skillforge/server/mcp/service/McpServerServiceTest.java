@@ -348,4 +348,176 @@ class McpServerServiceTest {
         assertThat(McpServerService.mergeEnvPreservingMasked(null, Map.of("X", "***")))
                 .containsEntry("X", "***"); // no existing → literal
     }
+
+    // -----------------------------------------------------------------------
+    // http transport (V152)
+    // -----------------------------------------------------------------------
+
+    @Test
+    @DisplayName("create stdio (default transport) still requires command")
+    void create_stdioRequiresCommand() {
+        McpServerRequest req = new McpServerRequest();
+        req.setName("nocommand");
+        // transport omitted → defaults to stdio; command missing → reject
+        assertThatThrownBy(() -> service.create(1L, req))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("command is required");
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("create http: url required, command optional, transport + headers persisted")
+    void create_httpPersistsUrlAndHeaders() {
+        McpServerRequest req = new McpServerRequest();
+        req.setName("anysearch");
+        req.setTransport("http");
+        req.setUrl("https://api.anysearch.com/mcp");
+        req.setHeaders(Map.of("Authorization", "Bearer ${ANY_SEARCH_API_KEY}"));
+        when(repository.existsByName("anysearch")).thenReturn(false);
+        when(repository.save(any(McpServerEntity.class))).thenAnswer(inv -> {
+            McpServerEntity e = inv.getArgument(0);
+            e.setId(11L);
+            return e;
+        });
+
+        McpServerEntity created = service.create(1L, req);
+        assertThat(created.getTransport()).isEqualTo("http");
+        assertThat(created.getUrl()).isEqualTo("https://api.anysearch.com/mcp");
+        assertThat(created.getCommand()).isNull(); // optional for http
+        assertThat(created.getHeaders()).contains("Authorization").contains("${ANY_SEARCH_API_KEY}");
+        verify(eventPublisher).publishEvent(any(McpServerUpsertedEvent.class));
+    }
+
+    @Test
+    @DisplayName("create http without url is rejected")
+    void create_httpRequiresUrl() {
+        McpServerRequest req = new McpServerRequest();
+        req.setName("nourl");
+        req.setTransport("http");
+        // url missing
+        assertThatThrownBy(() -> service.create(1L, req))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("url is required");
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("create rejects an unknown transport value")
+    void create_rejectsUnknownTransport() {
+        McpServerRequest req = new McpServerRequest();
+        req.setName("weird");
+        req.setTransport("ftp");
+        req.setUrl("ftp://x");
+        assertThatThrownBy(() -> service.create(1L, req))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("transport must be one of");
+    }
+
+    @Test
+    @DisplayName("update rejects a transport change (immutable post-create)")
+    void update_transportImmutable() {
+        McpServerEntity existing = row(7L, "time"); // stdio
+        when(repository.findById(7L)).thenReturn(Optional.of(existing));
+        McpServerRequest req = new McpServerRequest();
+        req.setTransport("http");
+        assertThatThrownBy(() -> service.update(7L, 1L, req))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("transport is immutable");
+    }
+
+    @Test
+    @DisplayName("update http: url editable; '***' header preserves persisted secret")
+    void update_httpUrlAndHeaderMaskPreserve() {
+        McpServerEntity existing = new McpServerEntity();
+        existing.setId(11L);
+        existing.setName("anysearch");
+        existing.setTransport("http");
+        existing.setUrl("https://old.example.com/mcp");
+        existing.setHeaders("{\"Authorization\":\"Bearer real_secret\"}");
+        when(repository.findById(11L)).thenReturn(Optional.of(existing));
+        when(repository.save(any(McpServerEntity.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        McpServerRequest req = new McpServerRequest();
+        req.setUrl("https://new.example.com/mcp");
+        req.setHeaders(Map.of("Authorization", "***")); // round-tripped masked value
+        McpServerEntity updated = service.update(11L, 1L, req);
+
+        assertThat(updated.getUrl()).isEqualTo("https://new.example.com/mcp");
+        assertThat(updated.getHeaders()).contains("real_secret"); // preserved!
+        assertThat(updated.getHeaders()).doesNotContain("\"Authorization\":\"***\"");
+    }
+
+    @Test
+    @DisplayName("update http: blank url for http transport is rejected")
+    void update_httpBlankUrlRejected() {
+        McpServerEntity existing = new McpServerEntity();
+        existing.setId(11L);
+        existing.setName("anysearch");
+        existing.setTransport("http");
+        existing.setUrl("https://x/mcp");
+        when(repository.findById(11L)).thenReturn(Optional.of(existing));
+        McpServerRequest req = new McpServerRequest();
+        req.setUrl("   ");
+        assertThatThrownBy(() -> service.update(11L, 1L, req))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("url must not be blank");
+    }
+
+    @Test
+    @DisplayName("parseHeaders round-trips the persisted headers JSON")
+    void parseHeaders_roundTrip() {
+        McpServerEntity e = new McpServerEntity();
+        e.setName("anysearch");
+        e.setHeaders("{\"Authorization\":\"Bearer ${K}\",\"X\":\"y\"}");
+        assertThat(service.parseHeaders(e))
+                .containsEntry("Authorization", "Bearer ${K}")
+                .containsEntry("X", "y");
+    }
+
+    @Test
+    @DisplayName("create http rejects plain http:// for a remote host (would leak bearer token)")
+    void create_httpRejectsPlainHttpRemote() {
+        McpServerRequest req = new McpServerRequest();
+        req.setName("insecure");
+        req.setTransport("http");
+        req.setUrl("http://api.anysearch.com/mcp");
+        assertThatThrownBy(() -> service.create(1L, req))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("https");
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("create http allows plain http:// for loopback hosts (local self-hosted MCP)")
+    void create_httpAllowsLoopbackPlainHttp() {
+        for (String localUrl : List.of(
+                "http://localhost:8080/mcp",
+                "http://127.0.0.1:3000/mcp",
+                "http://[::1]:9000/mcp")) {
+            McpServerRequest req = new McpServerRequest();
+            req.setName("localmcp");
+            req.setTransport("http");
+            req.setUrl(localUrl);
+            when(repository.existsByName("localmcp")).thenReturn(false);
+            when(repository.save(any(McpServerEntity.class))).thenAnswer(inv -> inv.getArgument(0));
+            McpServerEntity created = service.create(1L, req);
+            assertThat(created.getUrl()).isEqualTo(localUrl);
+        }
+    }
+
+    @Test
+    @DisplayName("update http rejects switching url to plain http:// remote host")
+    void update_httpRejectsPlainHttpRemote() {
+        McpServerEntity existing = new McpServerEntity();
+        existing.setId(11L);
+        existing.setName("anysearch");
+        existing.setTransport("http");
+        existing.setUrl("https://api.anysearch.com/mcp");
+        when(repository.findById(11L)).thenReturn(Optional.of(existing));
+        McpServerRequest req = new McpServerRequest();
+        req.setUrl("http://evil.example.com/mcp");
+        assertThatThrownBy(() -> service.update(11L, 1L, req))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("https");
+    }
 }

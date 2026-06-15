@@ -3,6 +3,7 @@ import {
   Drawer,
   Form,
   Input,
+  Select,
   Switch,
   Button,
   Space,
@@ -20,6 +21,7 @@ import type {
   McpServer,
   McpServerCreate,
   McpServerUpdate,
+  McpTransport,
 } from '../../types/mcpServer';
 
 const { TextArea } = Input;
@@ -65,25 +67,31 @@ const MINUS_ICON = (
 );
 
 /**
- * One env-var KV row. Form.List stores objects under `envEntries`; the
- * submit handler converts them to `Record<string, string>` while filtering
- * empty keys (so a half-typed row doesn't poison the wire payload).
+ * One key-value row (env var or HTTP header). Form.List stores objects
+ * under `envEntries` / `headerEntries`; the submit handler converts them to
+ * `Record<string, string>` while filtering empty keys (so a half-typed row
+ * doesn't poison the wire payload).
  */
-interface EnvEntry {
+interface KvEntry {
   key: string;
   value: string;
 }
 
 /**
- * Internal form shape. The drawer stores `args` and `envEntries` as arrays
- * under `Form.List` for direct rendering; on submit the values are
- * normalised to the wire shape (`string[]` and `Record<string, string>`).
+ * Internal form shape. The drawer stores `args`, `envEntries` and
+ * `headerEntries` as arrays under `Form.List` for direct rendering; on
+ * submit the values are normalised to the wire shape (`string[]` and
+ * `Record<string, string>`). Only the fields relevant to the selected
+ * `transport` are sent (command/args/env for stdio; url/headers for http).
  */
 interface FormValues {
   name: string;
-  command: string;
+  transport: McpTransport;
+  command?: string;
   args: string[];
-  envEntries: EnvEntry[];
+  envEntries: KvEntry[];
+  url?: string;
+  headerEntries: KvEntry[];
   description?: string;
   enabled: boolean;
 }
@@ -96,33 +104,34 @@ export interface McpServerEditDrawerProps {
 }
 
 /**
- * Convert a `Record<string, string>` env map into the `EnvEntry[]` shape
- * Form.List wants. Stable iteration order matters — without it the form
- * shifts around between renders if the user partially edits a row.
+ * Convert a `Record<string, string>` map (env or headers) into the
+ * `KvEntry[]` shape Form.List wants. Stable iteration order matters —
+ * without it the form shifts around between renders if the user partially
+ * edits a row.
  */
-function envMapToEntries(env: Record<string, string> | undefined): EnvEntry[] {
-  if (!env) return [];
-  return Object.entries(env).map(([key, value]) => ({ key, value }));
+function recordToEntries(record: Record<string, string> | undefined): KvEntry[] {
+  if (!record) return [];
+  return Object.entries(record).map(([key, value]) => ({ key, value }));
 }
 
 /**
- * Inverse of {@link envMapToEntries}. Empty keys are dropped (a partially-
- * filled new row should not produce a `"" → ""` env var) and duplicate
- * keys keep the last value (matches `Object.fromEntries` semantics).
+ * Inverse of {@link recordToEntries}. Empty keys are dropped (a partially-
+ * filled new row should not produce a `"" → ""` entry) and duplicate keys
+ * keep the last value (matches `Object.fromEntries` semantics).
  *
- * P11 r3: do NOT filter out *** entries here. BE r2.5 preserve-on-***
- * logic requires seeing the {@link MASKED_VALUE} sentinel in the request
- * body to trigger the secret-preservation path. If FE filters them, BE
- * PUT-replaces semantics will drop the key from DB → real secret loss.
- * The two defences must compound (FE sends ***, BE substitutes back to
- * the stored secret), not run sequentially.
+ * P11 r3: do NOT filter out *** entries here. The BE preserve-on-***
+ * logic (for both env and headers) requires seeing the {@link MASKED_VALUE}
+ * sentinel in the request body to trigger the secret-preservation path. If
+ * FE filters them, BE PUT-replaces semantics will drop the key from DB →
+ * real secret loss. The two defences must compound (FE sends ***, BE
+ * substitutes back to the stored secret), not run sequentially.
  *
- * User-facing semantics from the form hint stay the same: "leave a row
- * at *** to keep the existing secret; re-type to overwrite". The wire
- * mechanism that makes that promise true changed (was: FE drops; now:
- * BE preserves), but the user contract is identical.
+ * User-facing semantics from the form hint stay the same: "leave a row at
+ * *** to keep the existing secret; re-type to overwrite". The wire
+ * mechanism that makes that promise true changed (was: FE drops; now: BE
+ * preserves), but the user contract is identical.
  */
-function entriesToEnvMap(entries: EnvEntry[] | undefined): Record<string, string> {
+function entriesToRecord(entries: KvEntry[] | undefined): Record<string, string> {
   if (!entries) return {};
   const out: Record<string, string> = {};
   for (const e of entries) {
@@ -132,6 +141,95 @@ function entriesToEnvMap(entries: EnvEntry[] | undefined): Record<string, string
     out[k] = typeof e.value === 'string' ? e.value : '';
   }
   return out;
+}
+
+/**
+ * Shared key-value Form.List editor used for both env vars (stdio) and HTTP
+ * headers (http). Keeping a single implementation means the masking
+ * round-trip contract (rows left at `***` survive verbatim) behaves
+ * identically for both — see {@link entriesToRecord}.
+ */
+interface KvListEditorProps {
+  /** Form.List name — `'envEntries'` or `'headerEntries'`. */
+  name: 'envEntries' | 'headerEntries';
+  keyPlaceholder: string;
+  valuePlaceholder: string;
+  addLabel: string;
+  removeAriaLabel: string;
+  /** Validator for the key field; rejected message surfaces inline. */
+  validateKey: (value: string) => Promise<void>;
+}
+
+const KvListEditor: React.FC<KvListEditorProps> = ({
+  name,
+  keyPlaceholder,
+  valuePlaceholder,
+  addLabel,
+  removeAriaLabel,
+  validateKey,
+}) => (
+  <Form.List name={name}>
+    {(fields, { add, remove }) => (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {fields.map((field) => (
+          <Space key={field.key} style={{ display: 'flex' }} align="baseline">
+            <Form.Item
+              name={[field.name, 'key']}
+              style={{ marginBottom: 0, width: 200 }}
+              rules={[{ validator: (_, value: string) => validateKey(value) }]}
+            >
+              <Input placeholder={keyPlaceholder} />
+            </Form.Item>
+            <Form.Item
+              name={[field.name, 'value']}
+              style={{ marginBottom: 0, width: 200 }}
+            >
+              <Input placeholder={valuePlaceholder} />
+            </Form.Item>
+            <Button
+              type="text"
+              size="small"
+              icon={MINUS_ICON}
+              aria-label={removeAriaLabel}
+              onClick={() => remove(field.name)}
+            />
+          </Space>
+        ))}
+        <Button
+          type="dashed"
+          onClick={() => add({ key: '', value: '' })}
+          icon={PLUS_ICON}
+          style={{ width: 200 }}
+        >
+          {addLabel}
+        </Button>
+      </div>
+    )}
+  </Form.List>
+);
+
+/**
+ * Env var names: BE accepts any name but we forbid `=` and whitespace
+ * because `Map.Entry<String,String>` can't carry them through
+ * ProcessBuilder cleanly.
+ */
+function validateEnvKey(value: string): Promise<void> {
+  if (!value) return Promise.resolve();
+  return /[\s=]/.test(value)
+    ? Promise.reject(new Error('Env name cannot contain whitespace or `=`'))
+    : Promise.resolve();
+}
+
+/**
+ * HTTP header names are RFC 7230 tokens — no whitespace and no `:` (the
+ * name/value delimiter). We keep the check lenient (any other token char is
+ * fine) and let the BE / server reject anything truly malformed.
+ */
+function validateHeaderKey(value: string): Promise<void> {
+  if (!value) return Promise.resolve();
+  return /[\s:]/.test(value)
+    ? Promise.reject(new Error('Header name cannot contain whitespace or `:`'))
+    : Promise.resolve();
 }
 
 const McpServerEditDrawer: React.FC<McpServerEditDrawerProps> = ({
@@ -144,18 +242,38 @@ const McpServerEditDrawer: React.FC<McpServerEditDrawerProps> = ({
   const { userId } = useAuth();
   const isEdit = server !== null;
 
+  // The stdio↔http conditional is *derived*, never stored in state — mirroring
+  // it into state + syncing via useEffect trips `react-hooks/set-state-in-effect`.
+  //   - Edit mode: transport is immutable post-create (BE chk_mcp_transport; the
+  //     Select is disabled), so we read it straight off the `server` prop. This
+  //     is also why we don't depend on Form.useWatch here: its store update lands
+  //     a tick after the init `setFieldsValue`, which previously rendered the
+  //     wrong branch on edit-open and mis-fired required-field validation.
+  //   - Create mode: the user can change the Select, so we track the live form
+  //     value via Form.useWatch. The watch lag is harmless here because the
+  //     create default is 'stdio' (matched by the `?? 'stdio'` fallback) and
+  //     subsequent changes are user-driven, not programmatic.
+  const watchedTransport = Form.useWatch('transport', form);
+  const transport: McpTransport = server
+    ? server.transport ?? 'stdio'
+    : watchedTransport ?? 'stdio';
+  const isHttp = transport === 'http';
+
   // ─── Initialize / reset form on open ─────────────────────────────────────
   useEffect(() => {
     if (!open) return;
     if (server) {
       form.setFieldsValue({
         name: server.name,
-        command: server.command,
+        transport: server.transport ?? 'stdio',
+        command: server.command ?? '',
         // antd's Form.List wants a defensive copy; sharing the reference
         // can let an in-place mutation in the form leak back to React Query
         // cache.
         args: [...(server.args ?? [])],
-        envEntries: envMapToEntries(server.env),
+        envEntries: recordToEntries(server.env),
+        url: server.url ?? '',
+        headerEntries: recordToEntries(server.headers),
         description: server.description ?? '',
         enabled: server.enabled,
       });
@@ -163,9 +281,12 @@ const McpServerEditDrawer: React.FC<McpServerEditDrawerProps> = ({
       form.resetFields();
       form.setFieldsValue({
         name: '',
+        transport: 'stdio',
         command: '',
         args: [],
         envEntries: [],
+        url: '',
+        headerEntries: [],
         description: '',
         enabled: true,
       });
@@ -175,12 +296,16 @@ const McpServerEditDrawer: React.FC<McpServerEditDrawerProps> = ({
   // ─── Save mutation ───────────────────────────────────────────────────────
   const { mutate: save, isPending } = useMutation({
     mutationFn: async (values: FormValues) => {
+      const transportValue: McpTransport = values.transport ?? 'stdio';
+      const http = transportValue === 'http';
       // Filter empty args so a stale "Add" row doesn't ship as `""`
       // and break ProcessBuilder's argv handling on the BE.
       const args = (values.args ?? [])
         .map((a) => (typeof a === 'string' ? a : ''))
         .filter((a) => a.length > 0);
-      const env = entriesToEnvMap(values.envEntries);
+      const env = entriesToRecord(values.envEntries);
+      const headers = entriesToRecord(values.headerEntries);
+      const url = values.url?.trim() ?? '';
       const description = values.description?.trim() || null;
 
       if (isEdit && server) {
@@ -192,23 +317,24 @@ const McpServerEditDrawer: React.FC<McpServerEditDrawerProps> = ({
         // surrogate, not the numeric id). Omitting the field here is also
         // closer to PATCH semantics — the PUT body is "fields you want to
         // change", and name is explicitly not changeable.
-        const body: McpServerUpdate = {
-          command: values.command,
-          args,
-          env,
-          description,
-          enabled: values.enabled,
-        };
+        //
+        // transport is immutable post-create (BE), so it's never sent. We
+        // only send the columns that belong to the row's transport so a
+        // stale value in the other branch's form fields can't leak through.
+        const body: McpServerUpdate = http
+          ? { url, headers, description, enabled: values.enabled }
+          : { command: values.command, args, env, description, enabled: values.enabled };
         return updateMcpServer(server.id, body, userId);
       }
-      const body: McpServerCreate = {
+      const base = {
         name: values.name,
-        command: values.command,
-        args,
-        env,
+        transport: transportValue,
         description,
         enabled: values.enabled,
       };
+      const body: McpServerCreate = http
+        ? { ...base, url, headers }
+        : { ...base, command: values.command, args, env };
       return createMcpServer(body, userId);
     },
     onSuccess: () => {
@@ -284,131 +410,165 @@ const McpServerEditDrawer: React.FC<McpServerEditDrawerProps> = ({
         </Form.Item>
 
         <Form.Item
-          label="Command"
-          name="command"
-          rules={[
-            { required: true, message: 'Command is required' },
-            { max: 256, message: 'Command must be 256 characters or fewer' },
-          ]}
+          label="Transport"
+          name="transport"
+          rules={[{ required: true, message: 'Transport is required' }]}
           extra={
             <Text type="secondary" style={{ fontSize: 11 }}>
-              First arg of <code>ProcessBuilder</code>, e.g. <code>npx</code> or{' '}
-              <code>java</code>. Run directly — no shell expansion.
+              <code>stdio</code> spawns a local child process;{' '}
+              <code>http</code> calls a remote JSON-RPC endpoint. Immutable
+              after creation — delete &amp; recreate to switch.
             </Text>
           }
         >
-          <Input placeholder="npx" />
+          <Select
+            disabled={isEdit /* transport is immutable post-create (BE chk_mcp_transport) */}
+            options={[
+              { value: 'stdio', label: 'stdio (local child process)' },
+              { value: 'http', label: 'http (remote JSON-RPC)' },
+            ]}
+          />
         </Form.Item>
+
+        {isHttp ? (
+          <Form.Item
+            label="URL"
+            name="url"
+            rules={[
+              { required: true, message: 'URL is required for http transport' },
+              {
+                validator: (_, value: string) => {
+                  if (!value) return Promise.resolve();
+                  return /^https?:\/\//i.test(value.trim())
+                    ? Promise.resolve()
+                    : Promise.reject(new Error('URL must start with http:// or https://'));
+                },
+              },
+            ]}
+            extra={
+              <Text type="secondary" style={{ fontSize: 11 }}>
+                Remote MCP endpoint, e.g.{' '}
+                <code>https://api.example.com/mcp</code>. JSON-RPC is POSTed
+                here.
+              </Text>
+            }
+          >
+            <Input placeholder="https://api.example.com/mcp" />
+          </Form.Item>
+        ) : (
+          <Form.Item
+            label="Command"
+            name="command"
+            rules={[
+              { required: true, message: 'Command is required' },
+              { max: 256, message: 'Command must be 256 characters or fewer' },
+            ]}
+            extra={
+              <Text type="secondary" style={{ fontSize: 11 }}>
+                First arg of <code>ProcessBuilder</code>, e.g. <code>npx</code> or{' '}
+                <code>java</code>. Run directly — no shell expansion.
+              </Text>
+            }
+          >
+            <Input placeholder="npx" />
+          </Form.Item>
+        )}
 
         <Divider style={{ margin: '8px 0 16px' }} />
 
-        <Form.Item
-          label="Arguments"
-          extra={
-            <Text type="secondary" style={{ fontSize: 11 }}>
-              Each row is one argv entry. Empty rows are dropped on save.
-            </Text>
-          }
-        >
-          <Form.List name="args">
-            {(fields, { add, remove }) => (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {fields.map((field) => (
-                  <Space key={field.key} style={{ display: 'flex' }} align="baseline">
-                    <Form.Item
-                      name={field.name}
-                      style={{ marginBottom: 0, width: 380 }}
-                    >
-                      <Input placeholder="-y" />
-                    </Form.Item>
-                    <Button
-                      type="text"
-                      size="small"
-                      icon={MINUS_ICON}
-                      aria-label="Remove argument"
-                      onClick={() => remove(field.name)}
-                    />
-                  </Space>
-                ))}
-                <Button
-                  type="dashed"
-                  onClick={() => add('')}
-                  icon={PLUS_ICON}
-                  style={{ width: 200 }}
-                >
-                  Add argument
-                </Button>
-              </div>
-            )}
-          </Form.List>
-        </Form.Item>
+        {!isHttp && (
+          <Form.Item
+            label="Arguments"
+            extra={
+              <Text type="secondary" style={{ fontSize: 11 }}>
+                Each row is one argv entry. Empty rows are dropped on save.
+              </Text>
+            }
+          >
+            <Form.List name="args">
+              {(fields, { add, remove }) => (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {fields.map((field) => (
+                    <Space key={field.key} style={{ display: 'flex' }} align="baseline">
+                      <Form.Item
+                        name={field.name}
+                        style={{ marginBottom: 0, width: 380 }}
+                      >
+                        <Input placeholder="-y" />
+                      </Form.Item>
+                      <Button
+                        type="text"
+                        size="small"
+                        icon={MINUS_ICON}
+                        aria-label="Remove argument"
+                        onClick={() => remove(field.name)}
+                      />
+                    </Space>
+                  ))}
+                  <Button
+                    type="dashed"
+                    onClick={() => add('')}
+                    icon={PLUS_ICON}
+                    style={{ width: 200 }}
+                  >
+                    Add argument
+                  </Button>
+                </div>
+              )}
+            </Form.List>
+          </Form.Item>
+        )}
 
-        <Form.Item
-          label="Environment variables"
-          extra={
-            <Text type="secondary" style={{ fontSize: 11 }}>
-              Values may use <code>${'${VAR}'}</code> placeholders resolved from the host
-              env at spawn time. Empty keys are dropped. <strong>Existing secret values
-              are shown as <code>{MASKED_VALUE}</code></strong> — re-type to overwrite.
-              Rows left at <code>{MASKED_VALUE}</code> preserve the existing stored secret
-              (the backend recognises the mask sentinel and substitutes back the real
-              value before persisting).
-            </Text>
-          }
-        >
-          <Form.List name="envEntries">
-            {(fields, { add, remove }) => (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {fields.map((field) => (
-                  <Space key={field.key} style={{ display: 'flex' }} align="baseline">
-                    <Form.Item
-                      name={[field.name, 'key']}
-                      style={{ marginBottom: 0, width: 200 }}
-                      rules={[
-                        {
-                          validator: (_, value: string) => {
-                            if (!value) return Promise.resolve();
-                            // BE accepts any env var name; we forbid `=` and
-                            // whitespace because `Map.Entry<String,String>`
-                            // can't carry them through ProcessBuilder cleanly.
-                            return /[\s=]/.test(value)
-                              ? Promise.reject(
-                                  new Error('Env name cannot contain whitespace or `=`'),
-                                )
-                              : Promise.resolve();
-                          },
-                        },
-                      ]}
-                    >
-                      <Input placeholder="GITHUB_TOKEN" />
-                    </Form.Item>
-                    <Form.Item
-                      name={[field.name, 'value']}
-                      style={{ marginBottom: 0, width: 200 }}
-                    >
-                      <Input placeholder="${GITHUB_PAT}" />
-                    </Form.Item>
-                    <Button
-                      type="text"
-                      size="small"
-                      icon={MINUS_ICON}
-                      aria-label="Remove env var"
-                      onClick={() => remove(field.name)}
-                    />
-                  </Space>
-                ))}
-                <Button
-                  type="dashed"
-                  onClick={() => add({ key: '', value: '' })}
-                  icon={PLUS_ICON}
-                  style={{ width: 200 }}
-                >
-                  Add env var
-                </Button>
-              </div>
-            )}
-          </Form.List>
-        </Form.Item>
+        {!isHttp && (
+          <Form.Item
+            label="Environment variables"
+            extra={
+              <Text type="secondary" style={{ fontSize: 11 }}>
+                Values may use <code>${'${VAR}'}</code> placeholders resolved from the host
+                env at spawn time. Empty keys are dropped. <strong>Existing secret values
+                are shown as <code>{MASKED_VALUE}</code></strong> — re-type to overwrite.
+                Rows left at <code>{MASKED_VALUE}</code> preserve the existing stored secret
+                (the backend recognises the mask sentinel and substitutes back the real
+                value before persisting).
+              </Text>
+            }
+          >
+            <KvListEditor
+              name="envEntries"
+              keyPlaceholder="GITHUB_TOKEN"
+              valuePlaceholder="${GITHUB_PAT}"
+              addLabel="Add env var"
+              removeAriaLabel="Remove env var"
+              validateKey={validateEnvKey}
+            />
+          </Form.Item>
+        )}
+
+        {isHttp && (
+          <Form.Item
+            label="Headers"
+            extra={
+              <Text type="secondary" style={{ fontSize: 11 }}>
+                HTTP request headers (e.g. <code>Authorization</code>). Values may use{' '}
+                <code>${'${VAR}'}</code> placeholders resolved from the host env at request
+                time. Empty keys are dropped. <strong>Existing secret values are shown as{' '}
+                <code>{MASKED_VALUE}</code></strong> — re-type to overwrite. Rows left at{' '}
+                <code>{MASKED_VALUE}</code> preserve the existing stored secret (the backend
+                recognises the mask sentinel and substitutes back the real value before
+                persisting).
+              </Text>
+            }
+          >
+            <KvListEditor
+              name="headerEntries"
+              keyPlaceholder="Authorization"
+              valuePlaceholder="Bearer ${API_KEY}"
+              addLabel="Add header"
+              removeAriaLabel="Remove header"
+              validateKey={validateHeaderKey}
+            />
+          </Form.Item>
+        )}
 
         <Divider style={{ margin: '8px 0 16px' }} />
 

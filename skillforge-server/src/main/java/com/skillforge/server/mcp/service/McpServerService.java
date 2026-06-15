@@ -19,11 +19,14 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.net.URI;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -54,6 +57,11 @@ public class McpServerService {
     /** Mirror of the DB CHECK constraint (chk_mcp_server_name_shape, INV-3). */
     private static final Pattern NAME_PATTERN = Pattern.compile("^[a-z0-9_]+$");
     private static final int NAME_MAX_LEN = 32;
+
+    /** Allowed transport kinds (mirrors V152 chk_mcp_transport). */
+    static final String TRANSPORT_STDIO = "stdio";
+    static final String TRANSPORT_HTTP = "http";
+    private static final Set<String> ALLOWED_TRANSPORTS = Set.of(TRANSPORT_STDIO, TRANSPORT_HTTP);
 
     private final McpServerRepository repository;
     private final AgentRepository agentRepository;
@@ -97,16 +105,24 @@ public class McpServerService {
         if (req == null) throw new IllegalArgumentException("request body is required");
 
         validateName(req.getName());
-        if (req.getCommand() == null || req.getCommand().isBlank()) {
-            throw new IllegalArgumentException("command is required");
-        }
+        String transport = normalizeTransport(req.getTransport());
+        validateTransportFields(transport, req);
         if (repository.existsByName(req.getName())) {
             throw new IllegalArgumentException("MCP server name already exists: " + req.getName());
         }
 
         McpServerEntity entity = new McpServerEntity();
         entity.setName(req.getName().trim());
-        entity.setCommand(req.getCommand().trim());
+        entity.setTransport(transport);
+        if (TRANSPORT_STDIO.equals(transport)) {
+            entity.setCommand(req.getCommand().trim());
+            // url stays null; headers stay '{}' (defaults) — irrelevant for stdio.
+        } else { // http
+            entity.setUrl(req.getUrl().trim());
+            // command optional for http; persist trimmed value or leave null.
+            entity.setCommand(blankToNull(req.getCommand()));
+            entity.setHeaders(serializeEnv(req.getHeaders()));
+        }
         entity.setArgs(serializeArgs(req.getArgs()));
         entity.setEnv(serializeEnv(req.getEnv()));
         entity.setDescription(req.getDescription());
@@ -132,9 +148,38 @@ public class McpServerService {
                     "MCP server name is immutable after creation; current=" + entity.getName()
                             + ", requested=" + req.getName());
         }
+        // Transport is immutable post-create (same rationale as name): an stdio↔http jump
+        // would leave the row violating chk_mcp_transport (command vs url presence) and
+        // strand the wrong runtime config. Reject any change attempt; accept a no-op echo.
+        if (req.getTransport() != null
+                && !normalizeTransport(req.getTransport()).equals(entity.getTransport())) {
+            throw new IllegalArgumentException(
+                    "MCP server transport is immutable after creation; current=" + entity.getTransport()
+                            + ", requested=" + req.getTransport());
+        }
+        boolean isStdio = TRANSPORT_STDIO.equals(entity.getTransport());
         if (req.getCommand() != null) {
-            if (req.getCommand().isBlank()) throw new IllegalArgumentException("command must not be blank");
-            entity.setCommand(req.getCommand().trim());
+            if (isStdio) {
+                if (req.getCommand().isBlank()) {
+                    throw new IllegalArgumentException("command must not be blank");
+                }
+                entity.setCommand(req.getCommand().trim());
+            } else {
+                // http: command is optional; blank clears it (CHECK only needs url).
+                entity.setCommand(blankToNull(req.getCommand()));
+            }
+        }
+        if (req.getUrl() != null && !isStdio) {
+            if (req.getUrl().isBlank()) {
+                throw new IllegalArgumentException("url must not be blank for http transport");
+            }
+            validateHttpUrl(req.getUrl());
+            entity.setUrl(req.getUrl().trim());
+        }
+        if (req.getHeaders() != null && !isStdio) {
+            // Same mask-preserve merge as env so round-tripped "***" sentinels don't clobber
+            // real header secrets (e.g. Authorization bearer tokens).
+            entity.setHeaders(serializeEnv(mergeEnvPreservingMasked(parseHeaders(entity), req.getHeaders())));
         }
         if (req.getArgs() != null) entity.setArgs(serializeArgs(req.getArgs()));
         if (req.getEnv() != null) {
@@ -182,6 +227,67 @@ public class McpServerService {
 
     private void validateRequired(Long currentUserId) {
         if (currentUserId == null) throw new IllegalArgumentException("currentUserId is required");
+    }
+
+    /** Normalize + validate transport; null/blank defaults to stdio. */
+    private String normalizeTransport(String raw) {
+        if (raw == null || raw.isBlank()) return TRANSPORT_STDIO;
+        String t = raw.trim().toLowerCase(Locale.ROOT);
+        if (!ALLOWED_TRANSPORTS.contains(t)) {
+            throw new IllegalArgumentException(
+                    "transport must be one of " + ALLOWED_TRANSPORTS + " (got: '" + raw + "')");
+        }
+        return t;
+    }
+
+    /** Enforce the per-transport required field (mirrors V152 chk_mcp_transport). */
+    private void validateTransportFields(String transport, McpServerRequest req) {
+        if (TRANSPORT_STDIO.equals(transport)) {
+            if (req.getCommand() == null || req.getCommand().isBlank()) {
+                throw new IllegalArgumentException("command is required for stdio transport");
+            }
+        } else { // http
+            if (req.getUrl() == null || req.getUrl().isBlank()) {
+                throw new IllegalArgumentException("url is required for http transport");
+            }
+            validateHttpUrl(req.getUrl());
+        }
+    }
+
+    /**
+     * Require https for http-transport endpoints so a resolved {@code Authorization}
+     * header (e.g. a bearer token) is never sent in clear text. Exception: loopback
+     * hosts (localhost / 127.0.0.1 / ::1) may use plain http for local self-hosted MCP
+     * dev. Error messages carry only the scheme/host — never the url's token-bearing
+     * userinfo or any header.
+     */
+    private void validateHttpUrl(String rawUrl) {
+        URI uri;
+        try {
+            uri = URI.create(rawUrl.trim());
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("url is not a valid URI");
+        }
+        String scheme = uri.getScheme();
+        String host = uri.getHost();
+        if (scheme == null || host == null || host.isBlank()) {
+            throw new IllegalArgumentException("url must be an absolute http(s) URL with a host");
+        }
+        String s = scheme.toLowerCase(Locale.ROOT);
+        if ("https".equals(s)) return;
+        if ("http".equals(s) && isLoopbackHost(host)) return;
+        throw new IllegalArgumentException(
+                "url must use https for non-local hosts (got scheme '" + s + "' host '" + host + "')");
+    }
+
+    private static boolean isLoopbackHost(String host) {
+        String h = host.toLowerCase(Locale.ROOT);
+        // URI.getHost() returns IPv6 literals wrapped in brackets, e.g. "[::1]".
+        return h.equals("localhost") || h.equals("127.0.0.1") || h.equals("::1") || h.equals("[::1]");
+    }
+
+    private static String blankToNull(String s) {
+        return (s == null || s.isBlank()) ? null : s.trim();
     }
 
     private void validateName(String name) {
@@ -301,6 +407,16 @@ public class McpServerService {
             return objectMapper.readValue(entity.getEnv(), new TypeReference<Map<String, String>>() {});
         } catch (Exception e) {
             log.warn("Failed to parse env for server {}: {}", entity.getName(), e.getMessage());
+            return Map.of();
+        }
+    }
+
+    /** Parse headers TEXT JSON back to Map for runtime use (http transport). */
+    public Map<String, String> parseHeaders(McpServerEntity entity) {
+        try {
+            return objectMapper.readValue(entity.getHeaders(), new TypeReference<Map<String, String>>() {});
+        } catch (Exception e) {
+            log.warn("Failed to parse headers for server {}: {}", entity.getName(), e.getMessage());
             return Map.of();
         }
     }

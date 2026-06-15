@@ -47,6 +47,7 @@ const mocked = api as unknown as {
 const SAMPLE: McpServer = {
   id: 1,
   name: 'time',
+  transport: 'stdio',
   command: 'npx',
   args: ['-y', '@modelcontextprotocol/server-time'],
   env: {},
@@ -54,6 +55,23 @@ const SAMPLE: McpServer = {
   enabled: true,
   status: 'connected',
   toolCount: 2,
+  createdAt: '2026-05-07T00:00:00Z',
+  updatedAt: '2026-05-07T00:00:00Z',
+};
+
+const SAMPLE_HTTP: McpServer = {
+  id: 2,
+  name: 'anysearch',
+  transport: 'http',
+  command: null,
+  args: [],
+  env: {},
+  url: 'https://api.anysearch.com/mcp',
+  headers: { Authorization: '***' },
+  description: 'Remote HTTP MCP server',
+  enabled: true,
+  status: 'connected',
+  toolCount: 4,
   createdAt: '2026-05-07T00:00:00Z',
   updatedAt: '2026-05-07T00:00:00Z',
 };
@@ -86,9 +104,25 @@ describe('mcpServers API client — request shapes', () => {
     mocked.post.mockResolvedValueOnce({ data: SAMPLE });
     const body: McpServerCreate = {
       name: 'time',
+      transport: 'stdio',
       command: 'npx',
       args: ['-y'],
       env: {},
+      description: null,
+    };
+    await createMcpServer(body, 7);
+    expect(mocked.post).toHaveBeenCalledWith('/mcp-servers', body, {
+      params: { userId: 7 },
+    });
+  });
+
+  it('createMcpServer forwards an http-transport payload verbatim', async () => {
+    mocked.post.mockResolvedValueOnce({ data: SAMPLE_HTTP });
+    const body: McpServerCreate = {
+      name: 'anysearch',
+      transport: 'http',
+      url: 'https://api.anysearch.com/mcp',
+      headers: { Authorization: 'Bearer ${ANYSEARCH_KEY}' },
       description: null,
     };
     await createMcpServer(body, 7);

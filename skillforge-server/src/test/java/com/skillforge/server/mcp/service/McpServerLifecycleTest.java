@@ -8,6 +8,9 @@ import com.skillforge.server.mcp.event.McpServerUpsertedEvent;
 import com.skillforge.server.mcp.repository.McpServerRepository;
 import com.skillforge.server.repository.AgentRepository;
 import com.skillforge.tools.mcp.session.McpServerSessionRegistry;
+import com.skillforge.tools.mcp.transport.McpHttpTransport;
+import com.skillforge.tools.mcp.transport.McpStdioTransport;
+import com.skillforge.tools.mcp.transport.McpTransport;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -15,6 +18,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.ApplicationEventPublisher;
 
+import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -53,6 +57,68 @@ class McpServerLifecycleTest {
     void resolveEnv_nullSafe() {
         assertThat(McpServerLifecycle.resolveEnv(null)).isEmpty();
         assertThat(McpServerLifecycle.resolveEnv(Map.of())).isEmpty();
+    }
+
+    @Test
+    @DisplayName("resolveHeaders substitutes ${VAR} placeholders (same semantics as env)")
+    void resolveHeaders_substitutes() {
+        String pathVal = System.getenv("PATH");
+        assertThat(pathVal).isNotNull();
+        Map<String, String> resolved = McpServerLifecycle.resolveHeaders(Map.of(
+                "Authorization", "Bearer ${PATH}",
+                "X-Plain", "literal"));
+        assertThat(resolved.get("Authorization")).isEqualTo("Bearer " + pathVal);
+        assertThat(resolved.get("X-Plain")).isEqualTo("literal");
+    }
+
+    @Test
+    @DisplayName("buildTransport: stdio entity → McpStdioTransport (no regression for 'time')")
+    void buildTransport_stdio() throws Exception {
+        McpServerRepository repository = mock(McpServerRepository.class);
+        McpServerService service = mock(McpServerService.class);
+        McpServerSessionRegistry sessionRegistry = new McpServerSessionRegistry();
+        SkillRegistry skillRegistry = new SkillRegistry();
+        McpToolRegistrar registrar = new McpToolRegistrar(skillRegistry, mapper);
+        McpServerLifecycle lifecycle = new McpServerLifecycle(
+                repository, service, sessionRegistry, registrar, mapper, true);
+
+        McpServerEntity time = new McpServerEntity();
+        time.setName("time");
+        time.setTransport("stdio");
+        time.setCommand("uvx");
+        when(service.parseArgs(time)).thenReturn(List.of("mcp-server-time"));
+        when(service.parseEnv(time)).thenReturn(Map.of());
+
+        McpTransport t = invokeBuildTransport(lifecycle, time);
+        assertThat(t).isInstanceOf(McpStdioTransport.class);
+    }
+
+    @Test
+    @DisplayName("buildTransport: http entity → McpHttpTransport with resolved headers")
+    void buildTransport_http() throws Exception {
+        McpServerRepository repository = mock(McpServerRepository.class);
+        McpServerService service = mock(McpServerService.class);
+        McpServerSessionRegistry sessionRegistry = new McpServerSessionRegistry();
+        SkillRegistry skillRegistry = new SkillRegistry();
+        McpToolRegistrar registrar = new McpToolRegistrar(skillRegistry, mapper);
+        McpServerLifecycle lifecycle = new McpServerLifecycle(
+                repository, service, sessionRegistry, registrar, mapper, true);
+
+        McpServerEntity http = new McpServerEntity();
+        http.setName("anysearch");
+        http.setTransport("http");
+        http.setUrl("https://api.anysearch.com/mcp");
+        when(service.parseHeaders(http)).thenReturn(Map.of("Authorization", "Bearer literal"));
+
+        McpTransport t = invokeBuildTransport(lifecycle, http);
+        assertThat(t).isInstanceOf(McpHttpTransport.class);
+    }
+
+    private static McpTransport invokeBuildTransport(McpServerLifecycle lifecycle, McpServerEntity entity)
+            throws Exception {
+        Method m = McpServerLifecycle.class.getDeclaredMethod("buildTransport", McpServerEntity.class);
+        m.setAccessible(true);
+        return (McpTransport) m.invoke(lifecycle, entity);
     }
 
     @Test

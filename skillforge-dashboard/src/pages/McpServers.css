@@ -289,6 +289,34 @@
   white-space: nowrap;
 }
 
+/* Transport tag — stdio (neutral) vs http (accent) */
+.mcp-transport-tag {
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  color: var(--fg-3);
+  border: 1px solid var(--border-1);
+}
+
+.mcp-transport-tag.http {
+  background: rgba(99, 102, 241, 0.08);
+  color: #5a5aaa;
+  border-color: rgba(99, 102, 241, 0.18);
+}
+
+[data-theme="dark"] .mcp-transport-tag.http {
+  background: rgba(99, 102, 241, 0.14);
+  color: #a8a8e8;
+  border-color: rgba(99, 102, 241, 0.22);
+}
+
 /* Tool count badge */
 .mcp-tool-badge {
   display: inline-flex;

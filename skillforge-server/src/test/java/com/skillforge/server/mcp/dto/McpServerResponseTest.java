@@ -105,6 +105,40 @@ class McpServerResponseTest {
     }
 
     @Test
+    @DisplayName("from(http entity): transport/url surfaced, headers masked like env")
+    void from_httpTransportFields() {
+        McpServerEntity entity = new McpServerEntity();
+        entity.setId(11L);
+        entity.setName("anysearch");
+        entity.setTransport("http");
+        entity.setUrl("https://api.anysearch.com/mcp");
+        entity.setHeaders("{\"Authorization\":\"Bearer real_secret\",\"X-Ref\":\"${REF}\"}");
+        entity.setEnabled(true);
+        McpServerResponse r = McpServerResponse.from(entity, mapper);
+        assertThat(r.getTransport()).isEqualTo("http");
+        assertThat(r.getUrl()).isEqualTo("https://api.anysearch.com/mcp");
+        assertThat(r.getHeaders()).containsEntry("Authorization", "***"); // masked secret
+        assertThat(r.getHeaders()).containsEntry("X-Ref", "${REF}");        // placeholder intact
+    }
+
+    @Test
+    @DisplayName("FE contract: serialized response carries camelCase transport/url/headers fields")
+    void from_jsonContractFieldNames() throws Exception {
+        // footgun #6 — BE Jackson field names must match FE TS interface (transport/url/headers).
+        McpServerEntity entity = new McpServerEntity();
+        entity.setId(11L);
+        entity.setName("anysearch");
+        entity.setTransport("http");
+        entity.setUrl("https://api.anysearch.com/mcp");
+        entity.setHeaders("{\"Authorization\":\"Bearer ${K}\"}");
+        entity.setEnabled(true);
+        String json = mapper.writeValueAsString(McpServerResponse.from(entity, mapper));
+        assertThat(json).contains("\"transport\":\"http\"");
+        assertThat(json).contains("\"url\":\"https://api.anysearch.com/mcp\"");
+        assertThat(json).contains("\"headers\":");
+    }
+
+    @Test
     @DisplayName("Round-trip safety: response env never contains the original literal value")
     void roundTripNeverLeaksLiteral() {
         // Belt-and-suspenders shield — test fixture for the W3 invariant. If a future
