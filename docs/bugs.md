@@ -25,6 +25,11 @@
 | --- | --- | --- | --- | --- | --- | --- |
 | BUG-27 | P2 | Agent 配置 / 确认流 | open | 同一 session 内连续更新 agent prompt 时需要重复用户确认 | 用户已在当前 session 确认过一次 agent prompt 更新，再次调整仍会触发确认，影响迭代效率 | 将确认授权按 session + agent + update 类型设置短期有效期，或支持一次确认覆盖同一轮 prompt-only 后续修改 |
 | BUG-28 | P2 | 审核卡片 / UX | open | 审核卡片需要优化 | 当前审核卡片难以快速判断来源、变更内容、风险点和影响范围；确认 / 拒绝动作不够突出 | 增加来源信息、变更摘要 / diff、风险提示和更清晰的 Approve / Edit / Discard 操作；长内容默认折叠并支持展开 |
+| BUG-33 | P1 | MCP / 安全 | open | MCP 写接口无 admin-role gate（HTTP transport 放大 SSRF 面） | `/api/mcp-servers` POST/PUT/DELETE 无 admin-role gate（controller 自己注释承认是 no-op TODO）。pre-existing；MCP-HTTP-ANYSEARCH 的 HTTP transport 放大影响：任何持 token 者可建指向任意 URL 的 http MCP server，致服务端对任意 host 发起出站连接（SSRF 风险面）| 补 admin gate（参考现有 admin 校验模式）；见 [MCP-HTTP-ANYSEARCH](requirements/archive/2026-06-15-MCP-HTTP-ANYSEARCH/index.md) |
+| BUG-34 | P1 | MCP / 前端契约 | open | MCP "测试连接" 按钮 success 字段不匹配致永远 falsy | FE `TestConnectionResponse.success: boolean` vs BE 返回 `{"status":"ok",...}` 字段不匹配 → dashboard "测试连接" 按钮的 `if(body.success)` 永远 falsy。pre-existing，非 MCP-HTTP-ANYSEARCH 引入 | 对齐 FE/BE 契约（FE 改判 `status==='ok'` 或 BE 补 `success` 字段）|
+| BUG-35 | P2 | MCP / 重构 | open | `McpServerLifecycle` 里 `new OkHttpClient()` 宜抽 @Bean | 当前在 `McpServerLifecycle` 直接 `new OkHttpClient()`，每处各建一个，未共享连接池 / dispatcher | 抽成 `@Bean` 共享连接池 / dispatcher |
+| BUG-36 | P2 | MCP / 重构 | open | `McpServerRequest` 宜改 record | `McpServerRequest` 是可变 getter/setter 类，项目惯例 DTO 用 record（pre-existing）| 改为 record（注意 Jackson 反序列化兼容）|
+| BUG-37 | P2 | MCP / DB | open | V152 CHECK 未分阶段 + url 无索引 + transport 隐式枚举（db nit）| V152 的 CHECK 约束未用 NOT VALID 分阶段（本项目数据量小可忽略）；`url` 无索引；`transport` 是隐式枚举（靠 CHECK + 应用层 allow-list，无 DB enum 类型）| 数据量增大或需要 transport 维度查询时再评估；当前可忽略 |
 ## 待分流
 
 当前无。新记录如果缺少复现、影响范围或修复方向，先放这里；补齐后再移入“开放中”。
