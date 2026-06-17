@@ -81,6 +81,25 @@ export interface IterationReconciliation {
   confidence: number | null;
 }
 
+/**
+ * P2a — per-surface "what the candidate changed": before/after text + a unified
+ * diff, one entry per changed surface (prompt / behavior_rule / skill). Mirrors
+ * the BE sidecar written by evolve-loop.workflow.js (footgun #6). On a brand-new
+ * rule/skill the `before` is empty; the `diff` is a unified diff (+/- lines).
+ */
+export interface SemanticDelta {
+  /** Which surface this delta describes: 'prompt' | 'behavior_rule' | 'skill'. */
+  surface: string;
+  /** Text before the change (empty/null when the surface was newly created). */
+  before: string | null;
+  /** Text after the change (the candidate version). */
+  after: string | null;
+  /** Unified diff (+/- prefixed lines) of before → after. */
+  diff: string | null;
+  /** One-line description carried alongside this surface's change. */
+  changeDesc: string | null;
+}
+
 export interface EvolveIteration {
   /** 1-based iteration index within this run. */
   iteration: number;
@@ -118,6 +137,13 @@ export interface EvolveIteration {
    * whose A/B has not completed yet.
    */
   reconciliation?: IterationReconciliation | null;
+  /**
+   * P2a — per-surface before/after/diff of what this iteration's candidate
+   * changed. An ARRAY (Phase 2a multi-surface) or a single object (legacy
+   * Phase 1 prompt-only). Null/absent for iterations recorded before semantic
+   * delta capture. Consumers must normalize via {@code Array.isArray}.
+   */
+  semanticDelta?: SemanticDelta | SemanticDelta[] | null;
 }
 
 // ─────────────────────────── run summary (list item) ───────────────────────

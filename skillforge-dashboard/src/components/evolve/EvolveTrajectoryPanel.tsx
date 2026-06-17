@@ -28,6 +28,7 @@ import EvolveRunList from './EvolveRunList';
 import EvolveTrajectoryChart from './EvolveTrajectoryChart';
 import EvolveAdoptCard from './EvolveAdoptCard';
 import EvolvePredictionPanel from './EvolvePredictionPanel';
+import SemanticDeltaPanel from './SemanticDeltaPanel';
 import './evolve.css';
 
 const MAX_OVERLAY_RUNS = 4;
@@ -191,6 +192,12 @@ const EvolveTrajectoryPanel: React.FC = () => {
           predictions; renders nothing for runs predating G3. */}
       {detailRuns.map((run) => (
         <EvolvePredictionPanel key={`pred-${run.evolveRunId}`} run={run} />
+      ))}
+
+      {/* Candidate changes (P2a) — per-surface before/after/diff for each
+          selected run's iterations; renders nothing when no semantic delta. */}
+      {detailRuns.map((run) => (
+        <SemanticDeltaPanel key={`sd-${run.evolveRunId}`} run={run} />
       ))}
 
       {/* Adopt cards — one per selected run that has an adoptable winner */}

@@ -965,3 +965,77 @@
   border-color: color-mix(in srgb, var(--color-error, #b8412f) 35%, transparent);
   background: color-mix(in srgb, var(--color-error, #b8412f) 8%, transparent);
 }
+
+/* ── Phase 2a — SemanticDeltaPanel（候选改动 per-surface diff）── */
+.esd-section {
+  margin-top: 16px;
+  border: 1px solid var(--border-subtle);
+  border-left: 3px solid var(--accent-secondary, #6366f1);
+  border-radius: var(--radius-md, 10px);
+  background: var(--bg-surface, #ffffff);
+  overflow: hidden;
+  padding: 14px 16px;
+}
+.esd-title {
+  margin: 0 0 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.esd-iter {
+  margin-bottom: 14px;
+}
+.esd-iter:last-child {
+  margin-bottom: 0;
+}
+.esd-iter-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.esd-iter-no {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.esd-surface {
+  margin-bottom: 8px;
+}
+.esd-change-desc {
+  margin: 0 0 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.esd-diff {
+  margin: 0;
+  max-height: 280px;
+  overflow: auto;
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--bg-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre;
+}
+.esd-line {
+  display: block;
+}
+.esd-line--add {
+  color: var(--color-success, #5c8a4a);
+  background: color-mix(in srgb, var(--color-success, #5c8a4a) 12%, transparent);
+}
+.esd-line--del {
+  color: var(--color-error, #b8412f);
+  background: color-mix(in srgb, var(--color-error, #b8412f) 12%, transparent);
+}
+.esd-line--ctx {
+  color: var(--text-tertiary);
+}
+.esd-empty {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
