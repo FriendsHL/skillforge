@@ -1,6 +1,6 @@
 # SkillForge 文档
 
-> 更新于：2026-06-16（docs reconcile：归档已交付 AUTOEVOLVING V1 / AGENT-FLYWHEEL / AGENT-LEVEL-BUNDLE 三包；修 OPT-LOOP-FRAMEWORK 死链；todo 瘦身存 references/legacy-todo-2026-06-16.md）
+> 更新于：2026-06-17（新增 2 个 blog 复盘 backlog：WF-CONCURRENT-PIPELINE + EVOLVE-JUDGE-GROUNDING；新增 references/autoevolving-capability-stage-2026-06-17.md 自进化现状快照）
 > Agent 规则：先读这里，再只打开当前任务链接到的文档。
 
 编辑 docs 前，先读 [DOCS-GOVERNANCE.md](DOCS-GOVERNANCE.md)。
@@ -31,6 +31,8 @@
 | ID | 标题 | 状态 | 文档 |
 | --- | --- | --- | --- |
 | **OUTCOMES-RUBRIC-FOUNDATION** | 借鉴 Managed Agents Outcomes (`t_rubric` entity + grader 隔离 audit + V2 `AgentLoopEngine` 第 5 轴 exit) — 跟 active DREAMING-MEMORY-EXTENSION 同次研究产出，用户拆开独立 ship | backlog | [需求包](requirements/backlog/OUTCOMES-RUBRIC-FOUNDATION/index.md) |
+| **WF-CONCURRENT-PIPELINE** | 学 CC Dynamic Workflows 的并发 pipeline（stage 间重叠、无 barrier）补强 workflow 引擎（现 `pipeline()` V1 串行）。归属 AUTOEVOLVING V2(d) DSL Phase 2。来源 2026-06-17 blog 复盘 | backlog | [需求包](requirements/backlog/WF-CONCURRENT-PIPELINE/index.md) |
+| **EVOLVE-JUDGE-GROUNDING** | 参考 CC 对抗证伪 + pairwise/锦标赛判定经验，治自进化「绝对打分 + 候选不对靶 + 0 赢家」瓶颈（pairwise judge / per-badcase grounding / refuter / held-out gate）。跟 CLOSE-LOOP 阶段B + V3 falsification 合流 | backlog | [需求包](requirements/backlog/EVOLVE-JUDGE-GROUNDING/index.md) |
 | **WEBSEARCH-SEARXNG-BACKEND** | WebSearch SearXNG 自部署 backend。重要不紧急；当每周搜索调用量/费用明显升高，或隐私/内网搜索诉求出现时再启动 | backlog | 见 [todo.md](todo.md) |
 | **AUTORESEARCH-OPTIMIZATION** | **重定位为 AUTOEVOLVING V2 (a) 子需求**：autoResearch 自动调研外部（arxiv + GitHub trending）→ LLM 2-stage 抽取 → Iron Law 人审 → backlog。V1 dashboard 留 placeholder「AUTORESEARCH V1 to ship」，本包 ship 后接入数据。原 PRD 5 D + FR + AC + 4 sprint 划分仍有效 | prd-draft (V2 排期) | [需求包](requirements/active/2026-05-28-AUTORESEARCH-OPTIMIZATION/index.md) / [MRD](requirements/active/2026-05-28-AUTORESEARCH-OPTIMIZATION/mrd.md) / [PRD](requirements/active/2026-05-28-AUTORESEARCH-OPTIMIZATION/prd.md) / [tech-design](requirements/active/2026-05-28-AUTORESEARCH-OPTIMIZATION/tech-design.md) |
 | SEC-1 | Channel 配置加密 | deferred | [需求包](requirements/backlog/SEC-1-channel-config-encryption/index.md) |

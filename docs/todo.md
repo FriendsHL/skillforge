@@ -1,6 +1,6 @@
 # SkillForge ToDo
 
-> 更新于：2026-06-16（docs reconcile：归档已交付 AUTOEVOLVING V1 / AGENT-FLYWHEEL / AGENT-LEVEL-BUNDLE；修 OPT-LOOP-FRAMEWORK 死链；todo 瘦身，旧版存 references/legacy-todo-2026-06-16.md）
+> 更新于：2026-06-17（新增 2 backlog：WF-CONCURRENT-PIPELINE + EVOLVE-JUDGE-GROUNDING，来源 blog 复盘；自进化现状见 references/autoevolving-capability-stage-2026-06-17.md）
 
 > 规则：这里只放当前执行状态；需求和方案细节放在链接的需求包 / archive 中。
 > 旧版：重整前长版 ToDo 已保留在 [references/legacy-todo-2026-06-16.md](references/legacy-todo-2026-06-16.md)。
@@ -40,6 +40,8 @@
 | ID | 标题 | 模式 | 触发 |
 | --- | --- | --- | --- |
 | **OUTCOMES-RUBRIC-FOUNDATION** | `t_rubric` entity + grader 隔离 audit（V1）/ AgentLoopEngine 第 5 轴 exit（V2）。DREAMING 姊妹包独立 ship | Full 候选 | 用户拍是否升 active |
+| **WF-CONCURRENT-PIPELINE** | 学 CC 并发 pipeline（stage 重叠/无 barrier）补 workflow 引擎（现 pipeline() 串行）。AUTOEVOLVING V2(d) | Full 候选 | V2 启动 / 多阶段 fan-out 链路成瓶颈时 |
+| **EVOLVE-JUDGE-GROUNDING** | pairwise judge + per-badcase 候选对靶 + refuter + held-out gate，治 0 赢家。合 CLOSE-LOOP 阶段B / V3 falsification | Full 候选 | 跟 CLOSE-LOOP 阶段B 一起升 active |
 | **WEBSEARCH-SEARXNG-BACKEND** | WebSearch SearXNG 自部署 backend。重要不紧急 | Mid 候选 | 每周搜索量/费用升高或隐私/内网诉求 |
 | **SANDBOX-EPHEMERAL-WORKDIR-DRY** | 抽 `EphemeralWorkdir` 小工具 DRY 掉 eval/sandbox 与 CodeSandboxTool 的临时 workdir 重复（~15 行）。ROI 低纯清理 | Solo/Light | 顺手或专门 refactor 时 |
 | **EVAL-DYNAMIC-USER-SIM** | 动态用户模拟多轮评测（Phase 2/3） | — | 见需求包 |
