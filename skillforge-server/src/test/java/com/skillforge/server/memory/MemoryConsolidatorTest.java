@@ -11,6 +11,10 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import javax.sql.DataSource;
+import java.sql.Connection;
+import java.sql.DatabaseMetaData;
+import java.sql.ResultSet;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
@@ -21,7 +25,9 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -210,6 +216,68 @@ class MemoryConsolidatorTest {
         ArgumentCaptor<MemoryEntity> saved = ArgumentCaptor.forClass(MemoryEntity.class);
         verify(memoryRepository, times(3)).save(saved.capture());
         assertThat(saved.getAllValues()).contains(demote);
+    }
+
+    @Test
+    @DisplayName("dedup probe: embedding column absent → dedup query never issued (no 42703 noise)")
+    void consolidate_embeddingColumnAbsent_skipsQuery() throws Exception {
+        consolidator.setDataSource(dataSourceWithEmbeddingColumn(false));
+        MemoryEntity m = memory(701L, "ACTIVE", "high", 10, 1, null);
+        when(memoryRepository.findByUserIdOrderByUpdatedAtDesc(7L))
+                .thenReturn(new ArrayList<>(List.of(m)));
+
+        consolidator.consolidate(7L); // must not throw
+
+        // The doomed native query is never issued when the column is absent.
+        verify(memoryRepository, never()).findEmbeddingsForActiveByUser(anyLong());
+        // Normal lifecycle path still runs.
+        verify(memoryRepository, atLeastOnce()).save(m);
+    }
+
+    @Test
+    @DisplayName("dedup probe: embedding column present → dedup query is issued")
+    void consolidate_embeddingColumnPresent_issuesQuery() throws Exception {
+        consolidator.setDataSource(dataSourceWithEmbeddingColumn(true));
+        when(memoryRepository.findEmbeddingsForActiveByUser(7L)).thenReturn(List.of());
+        when(memoryRepository.findByUserIdOrderByUpdatedAtDesc(7L))
+                .thenReturn(new ArrayList<>());
+
+        consolidator.consolidate(7L);
+
+        verify(memoryRepository).findEmbeddingsForActiveByUser(7L);
+    }
+
+    @Test
+    @DisplayName("dedup probe: result is cached — column check runs only once across calls")
+    void consolidate_probeResultCached() throws Exception {
+        DataSource ds = dataSourceWithEmbeddingColumn(false);
+        consolidator.setDataSource(ds);
+        when(memoryRepository.findByUserIdOrderByUpdatedAtDesc(7L))
+                .thenReturn(new ArrayList<>());
+
+        consolidator.consolidate(7L);
+        consolidator.consolidate(7L);
+
+        verify(ds, times(1)).getConnection();
+    }
+
+    /** Mock DataSource whose JDBC metadata reports t_memory.embedding present/absent. */
+    private static DataSource dataSourceWithEmbeddingColumn(boolean present) throws Exception {
+        ResultSet rs = mock(ResultSet.class);
+        if (present) {
+            when(rs.next()).thenReturn(true, false);
+            when(rs.getString("TABLE_NAME")).thenReturn("t_memory");
+            when(rs.getString("COLUMN_NAME")).thenReturn("embedding");
+        } else {
+            when(rs.next()).thenReturn(false);
+        }
+        DatabaseMetaData meta = mock(DatabaseMetaData.class);
+        when(meta.getColumns(any(), any(), eq("t_memory"), eq("embedding"))).thenReturn(rs);
+        Connection conn = mock(Connection.class);
+        when(conn.getMetaData()).thenReturn(meta);
+        DataSource ds = mock(DataSource.class);
+        when(ds.getConnection()).thenReturn(conn);
+        return ds;
     }
 
     private static MemoryEntity memory(Long id,

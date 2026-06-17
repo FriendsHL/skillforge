@@ -9,6 +9,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
+import javax.sql.DataSource;
+import java.sql.Connection;
+import java.sql.ResultSet;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Comparator;
@@ -59,6 +62,19 @@ public class MemoryConsolidator {
     private final MemoryRepository memoryRepository;
     private MemoryProperties memoryProperties = new MemoryProperties();
 
+    /**
+     * Optional — used only to probe whether the {@code t_memory.embedding} column exists
+     * before issuing the embedding-dedup query. When pgvector is not installed in the
+     * cluster, V7's {@code CREATE EXTENSION} fails and the {@code embedding} column is never
+     * added (FTS-only degraded mode); issuing the native dedup query then throws SQLState
+     * 42703, which Hibernate logs at ERROR on every consolidation run. Probing once (cached)
+     * lets us skip the doomed query entirely. Null in unit tests → falls back to the legacy
+     * "issue query, catch failure" path.
+     */
+    private DataSource dataSource;
+    /** Cached result of the embedding-column probe; null = not yet probed. */
+    private volatile Boolean embeddingColumnAvailable;
+
     public MemoryConsolidator(MemoryRepository memoryRepository) {
         this.memoryRepository = memoryRepository;
     }
@@ -66,6 +82,61 @@ public class MemoryConsolidator {
     @Autowired(required = false)
     public void setMemoryProperties(MemoryProperties memoryProperties) {
         this.memoryProperties = memoryProperties != null ? memoryProperties : new MemoryProperties();
+    }
+
+    @Autowired(required = false)
+    public void setDataSource(DataSource dataSource) {
+        this.dataSource = dataSource;
+    }
+
+    /**
+     * Lazily detect (and cache) whether {@code t_memory.embedding} exists, using JDBC
+     * {@link java.sql.DatabaseMetaData} — a metadata lookup, not a query against the column,
+     * so it never trips SQLState 42703 nor Hibernate's ERROR-level SqlExceptionHelper.
+     *
+     * <p>When no {@link DataSource} is wired (unit tests), returns {@code true} so callers
+     * keep their existing behaviour (issue the query, catch any failure).
+     *
+     * <p>Caching semantics: only a <em>definitive</em> probe result (the metadata query
+     * succeeded) is cached in {@link #embeddingColumnAvailable} — write-once thereafter.
+     * A probe <em>failure</em> (e.g. transient pool exhaustion) returns {@code true}
+     * <em>without</em> caching, so a one-off blip can't permanently pin us to the noisy
+     * issue-and-catch path; the next run re-probes. The probe is idempotent, so a benign
+     * race between two first-callers just recomputes the same value.
+     */
+    private boolean isEmbeddingColumnAvailable() {
+        Boolean cached = embeddingColumnAvailable;
+        if (cached != null) {
+            return cached;
+        }
+        if (dataSource == null) {
+            return true; // can't probe → let the query run and be caught (legacy/unit-test path)
+        }
+        try (Connection c = dataSource.getConnection();
+             // catalog=null (not getCatalog()): pgjdbc honours the catalog filter and
+             // getCatalog() returns the db name, which can yield a false-negative; null = any.
+             ResultSet rs = c.getMetaData().getColumns(null, null, "t_memory", "embedding")) {
+            // getColumns treats '_' as a single-char wildcard → confirm exact table + column.
+            boolean found = false;
+            while (rs.next()) {
+                if ("t_memory".equalsIgnoreCase(rs.getString("TABLE_NAME"))
+                        && "embedding".equalsIgnoreCase(rs.getString("COLUMN_NAME"))) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                log.info("Memory dedup: t_memory.embedding column not present "
+                        + "(pgvector disabled, FTS-only mode); embedding dedup disabled for this runtime.");
+            }
+            embeddingColumnAvailable = found; // cache only the definitive result
+            return found;
+        } catch (Exception e) {
+            // Probe failure → fail open (don't disable dedup) and DON'T cache → retry next run.
+            log.debug("Memory dedup: embedding-column probe failed, will retry next run: {}",
+                    e.getMessage());
+            return true;
+        }
     }
 
     /**
@@ -148,6 +219,12 @@ public class MemoryConsolidator {
         double threshold = memoryProperties.getDedup().getCosineMergeThreshold();
         if (threshold <= 0.0 || threshold >= 1.0) {
             return 0; // disabled / nonsensical config
+        }
+
+        // Skip the doomed native query when the embedding column doesn't exist (pgvector
+        // unavailable). Avoids a recurring SQLState 42703 ERROR in the logs every run.
+        if (!isEmbeddingColumnAvailable()) {
+            return 0;
         }
 
         List<Object[]> rows;
