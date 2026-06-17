@@ -28,8 +28,8 @@ class WorkflowRunnerSerializeResultTest {
 
     /** serializeResult only touches the injected ObjectMapper — other deps are nulled. */
     private final WorkflowRunnerService service = new WorkflowRunnerService(
-            null, null, null, null, null, null, null,
-            objectMapper, null, null, null, null, "session-annotator");
+            null, null, null, null, null, null, null, null,
+            objectMapper, null, null, null, null, "session-annotator", 360L);
 
     @Test
     @DisplayName("Map result is serialized as structured JSON (nested topIssues preserved, not stringified)")

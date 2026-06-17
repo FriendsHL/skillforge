@@ -73,7 +73,8 @@ class SkillAbEvalServiceDatasetVersionTest {
                 skillRegistry, abCompletedEventPublisher,
                 org.mockito.Mockito.mock(com.skillforge.server.improve.surface.SkillSurface.class),
                 org.mockito.Mockito.mock(SkillEvalService.class),
-                120_000L);
+                120_000L,
+                new com.skillforge.server.config.EvolveThresholdProperties());
     }
 
     @Test

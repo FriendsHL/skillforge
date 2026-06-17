@@ -60,12 +60,28 @@ public class RecordIterationTool implements Tool {
                 + "Inputs:\n"
                 + "- \"evolveRunId\": the evolve run id.\n"
                 + "- \"iteration\": 1-based iteration index (integer).\n"
-                + "- \"surface\": \"prompt\" / \"skill\" / \"behavior_rule\".\n"
+                + "- \"surface\": \"prompt\" / \"skill\" / \"behavior_rule\" / \"agent\".\n"
                 + "- \"changeDesc\": short description of what this candidate changed.\n"
-                + "- \"candidateId\": the candidate id evaluated this turn.\n"
-                + "- \"baselineScore\" / \"candidateScore\" / \"delta\": numbers from GetAbResult.\n"
+                + "- \"candidateId\": the candidate id evaluated this turn. For surface=agent this "
+                + "represents a BUNDLE — pass the bundle's main pointer (or its json); optionally also "
+                + "pass candidateBundle for the full tuple.\n"
+                + "- \"candidateBundle\" (optional, surface=agent): the bundle pointer tuple "
+                + "{promptVersionId?, behaviorRuleVersionId?} recorded as a sidecar for traceability.\n"
+                + "- \"baselineScore\" / \"candidateScore\" / \"delta\": numbers from GetAbResult "
+                + "(the GLOBAL scores — the trajectory chart reads these).\n"
+                + "- \"weightedScore\" / \"baselineWeightedScore\" (optional, hill-climb): the "
+                + "weightedScore (wG*generalRate + wH*harvestRate) of the candidate / baseline "
+                + "from GetAbResult — the EVOLVE-LOOP-HILLCLIMB main keep judge (recorded "
+                + "alongside delta; wouldPromote stays advisory).\n"
                 + "- \"kept\": boolean — whether you keep this candidate (records it; does NOT promote).\n"
                 + "- \"abRunId\" (optional): the A/B run id for traceability.\n"
+                + "- \"prediction\" (optional, G3): the falsifiable prediction you staked this turn "
+                + "{issueId?, targetProblem, flipToPass:[...], riskToFail:[...]} — stored verbatim.\n"
+                + "- \"reconciliation\" (optional, G3): the ReconcilePrediction result "
+                + "{hits, misses, riskHits, surprises, confidence} — stored verbatim.\n"
+                + "- \"semanticDelta\" (optional, P1): the before→after change tuple "
+                + "{surface, before, after, diff, changeDesc} (from GetCandidateDiff) — stored verbatim "
+                + "for traceability.\n"
                 + "Returns the recorded stepId.";
     }
 
@@ -82,24 +98,52 @@ public class RecordIterationTool implements Tool {
         properties.put("iteration", Map.of("type", "integer",
                 "description", "1-based iteration index."));
         properties.put("surface", Map.of("type", "string",
-                "enum", List.of(EvolveSurface.PROMPT.wire(),
-                        EvolveSurface.SKILL.wire(),
-                        EvolveSurface.BEHAVIOR_RULE.wire()),
-                "description", "Optimisation surface."));
+                // §9 line A #3: Phase 3 opens surface=agent recording (Phase 1 rejected it).
+                "enum", EvolveSurface.agentAbWireValues(),
+                "description", "Optimisation surface (prompt / skill / behavior_rule / agent)."));
         properties.put("changeDesc", Map.of("type", "string",
                 "description", "Short description of what this candidate changed."));
         properties.put("candidateId", Map.of("type", "string",
-                "description", "The candidate id evaluated this turn."));
+                "description", "The candidate id evaluated this turn (a bundle main pointer / json "
+                        + "for surface=agent)."));
+        properties.put("candidateBundle", Map.of("type", "object",
+                "description", "surface=agent only: the bundle pointer tuple "
+                        + "{promptVersionId?, behaviorRuleVersionId?}, recorded as a sidecar."));
         properties.put("baselineScore", Map.of("type", "number",
                 "description", "Baseline score from GetAbResult."));
         properties.put("candidateScore", Map.of("type", "number",
                 "description", "Candidate score from GetAbResult."));
         properties.put("delta", Map.of("type", "number",
                 "description", "candidateScore - baselineScore."));
+        properties.put("weightedScore", Map.of("type", "number",
+                "description", "Hill-climb candidate weightedScore from GetAbResult (optional)."));
+        properties.put("baselineWeightedScore", Map.of("type", "number",
+                "description", "Hill-climb baseline weightedScore from GetAbResult (optional)."));
         properties.put("kept", Map.of("type", "boolean",
                 "description", "Whether the candidate is kept (recorded, not promoted)."));
         properties.put("abRunId", Map.of("type", "string",
                 "description", "Optional A/B run id for traceability."));
+        properties.put("prediction", Map.of("type", "object",
+                "description", "Optional (G3): the falsifiable prediction staked this turn, "
+                        + "stored verbatim into the iteration ledger."));
+        properties.put("reconciliation", Map.of("type", "object",
+                "description", "Optional (G3): the ReconcilePrediction result, stored verbatim."));
+        // Phase 2a contract note: the schema type stays "object" for the legacy
+        // single-surface shape, but as of the multi-surface bundle work the
+        // evolve-loop workflow passes a per-surface ARRAY here — and it does so
+        // PRE-SERIALIZED as a JSON string (via ctx.json) precisely so that
+        // putJsonSidecar's String→readTree branch stores it verbatim as an array.
+        // (A raw JS array would arrive as a Java List, which putJsonSidecar does
+        // NOT handle — hence the ctx.json string. RecordIterationTool stays
+        // zero-change.) Kept as "object" rather than oneOf[object,array,string]
+        // to avoid over-engineering the advertised schema for a deterministically
+        // JS-driven (non-LLM) caller; this comment is the contract.
+        properties.put("semanticDelta", Map.of("type", "object",
+                "description", "Optional (P1): the before→after semantic delta from "
+                        + "GetCandidateDiff, stored verbatim for traceability. Single-surface: an "
+                        + "object {surface, before, after, diff, changeDesc}. Phase 2a multi-surface: "
+                        + "a JSON-string-encoded ARRAY of those (one entry per changed surface), "
+                        + "stored as an array via the String→readTree path."));
 
         Map<String, Object> schema = new LinkedHashMap<>();
         schema.put("type", "object");
@@ -140,6 +184,7 @@ public class RecordIterationTool implements Tool {
             }
             EvolveSurface surface = EvolveSurface.fromWire(trimToNull(input.get("surface")));
             if (surface == null) {
+                // §9 line A #3: agent is now accepted, so the full list is correct here.
                 return SkillResult.validationError(
                         "surface is required and must be one of: " + EvolveSurface.acceptedValues());
             }
@@ -164,11 +209,26 @@ public class RecordIterationTool implements Tool {
             putNumber(payload, "baselineScore", input.get("baselineScore"));
             putNumber(payload, "candidateScore", input.get("candidateScore"));
             putNumber(payload, "delta", input.get("delta"));
+            // EVOLVE-LOOP-HILLCLIMB 阶段 A: weightedScore is the hill-climb main keep judge
+            // (free-schema step_output_json — no DB change); wouldPromote stays advisory.
+            putNumber(payload, "weightedScore", input.get("weightedScore"));
+            putNumber(payload, "baselineWeightedScore", input.get("baselineWeightedScore"));
             payload.put("kept", kept);
             String abRunId = trimToNull(input.get("abRunId"));
             if (abRunId != null) {
                 payload.put("abRunId", abRunId);
             }
+            // §9 line A #3: surface=agent records a BUNDLE. The candidateId above
+            // stays the main pointer / json (trajectory chart reads candidateId +
+            // global baselineScore/candidateScore/delta unchanged); candidateBundle
+            // is an optional structured sidecar for full traceability.
+            putBundleSidecar(payload, input.get("candidateBundle"));
+            // G3 (BC-M2b): store the prediction + reconciliation sidecars verbatim
+            // (free-schema JSON) so the read API / FE can show predicted-vs-actual.
+            putJsonSidecar(payload, "prediction", input.get("prediction"));
+            putJsonSidecar(payload, "reconciliation", input.get("reconciliation"));
+            // P1 (evolve-loop): semantic delta (before→after) sidecar for traceability.
+            putJsonSidecar(payload, "semanticDelta", input.get("semanticDelta"));
 
             String stepId = flywheelRunService.appendEvolveIterationStep(evolveRunId, iteration, payload);
 
@@ -187,6 +247,57 @@ public class RecordIterationTool implements Tool {
         } catch (Exception e) {
             log.error("RecordIteration execute failed", e);
             return SkillResult.error("RecordIteration error: " + e.getMessage());
+        }
+    }
+
+    /**
+     * §9 line A #3 — record the agent bundle tuple as a structured sidecar. Accepts a
+     * JSON object (Map, the usual tool-call shape) or a JSON string; absent / blank →
+     * no-op. Best-effort: a non-object string that fails to parse is stored as text so
+     * recording never fails just because the bundle was passed oddly.
+     */
+    private void putBundleSidecar(ObjectNode node, Object raw) {
+        if (raw == null) {
+            return;
+        }
+        if (raw instanceof Map<?, ?> map) {
+            node.set("candidateBundle", objectMapper.valueToTree(map));
+            return;
+        }
+        String s = String.valueOf(raw).trim();
+        if (s.isEmpty()) {
+            return;
+        }
+        try {
+            node.set("candidateBundle", objectMapper.readTree(s));
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            node.put("candidateBundle", s);
+        }
+    }
+
+    /**
+     * G3 — store an optional free-schema JSON sidecar (prediction / reconciliation)
+     * verbatim under {@code field}. Accepts a JSON object (Map) or JSON string;
+     * absent / blank → no-op. A non-parseable string is stored as text so recording
+     * never fails just because the sidecar was passed oddly (mirrors
+     * {@link #putBundleSidecar}).
+     */
+    private void putJsonSidecar(ObjectNode node, String field, Object raw) {
+        if (raw == null) {
+            return;
+        }
+        if (raw instanceof Map<?, ?> map) {
+            node.set(field, objectMapper.valueToTree(map));
+            return;
+        }
+        String s = String.valueOf(raw).trim();
+        if (s.isEmpty()) {
+            return;
+        }
+        try {
+            node.set(field, objectMapper.readTree(s));
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            node.put(field, s);
         }
     }
 

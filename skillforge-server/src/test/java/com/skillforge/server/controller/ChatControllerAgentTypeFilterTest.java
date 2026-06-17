@@ -4,9 +4,8 @@ import com.skillforge.core.engine.CancellationRegistry;
 import com.skillforge.core.engine.PendingAskRegistry;
 import com.skillforge.core.engine.confirm.PendingConfirmationRegistry;
 import com.skillforge.server.config.LlmProperties;
+import com.skillforge.server.channel.router.ChannelConversationResolver;
 import com.skillforge.server.entity.SessionEntity;
-import com.skillforge.server.repository.ChannelConversationRepository;
-import com.skillforge.server.repository.ChatAttachmentRepository;
 import com.skillforge.server.service.AgentService;
 import com.skillforge.server.service.ChatAttachmentService;
 import com.skillforge.server.service.ChatService;
@@ -52,7 +51,6 @@ class ChatControllerAgentTypeFilterTest {
 
     @Mock private ChatService chatService;
     @Mock private ChatAttachmentService chatAttachmentService;
-    @Mock private ChatAttachmentRepository chatAttachmentRepository;
     @Mock private SessionService sessionService;
     @Mock private AgentService agentService;
     @Mock private LlmProperties llmProperties;
@@ -62,7 +60,7 @@ class ChatControllerAgentTypeFilterTest {
     @Mock private CancellationRegistry cancellationRegistry;
     @Mock private CompactionService compactionService;
     @Mock private ReplayService replayService;
-    @Mock private ChannelConversationRepository channelConversationRepository;
+    @Mock private ChannelConversationResolver channelConversationResolver;
     @Mock private ContextBreakdownService contextBreakdownService;
 
     private ChatController controller;
@@ -70,11 +68,11 @@ class ChatControllerAgentTypeFilterTest {
     @BeforeEach
     void setUp() {
         controller = new ChatController(
-                chatService, chatAttachmentService, chatAttachmentRepository,
+                chatService, chatAttachmentService,
                 sessionService, agentService, llmProperties,
                 pendingAskRegistry, pendingConfirmationRegistry, subAgentRegistry,
                 cancellationRegistry, compactionService, replayService,
-                channelConversationRepository, contextBreakdownService);
+                channelConversationResolver, contextBreakdownService);
     }
 
     private SessionEntity stubSession(Long userId, Long agentId) {
@@ -94,7 +92,7 @@ class ChatControllerAgentTypeFilterTest {
         when(sessionService.listSessionsByAgentType("system"))
                 .thenReturn(List.of(sys1, sys2));
         // No channels for these sessions — enrichChannelPlatform fallback path.
-        when(channelConversationRepository.findBySessionIdIn(anyList()))
+        when(channelConversationResolver.findConversationsBySessionIds(anyList()))
                 .thenReturn(Collections.emptyList());
 
         ResponseEntity<List<SessionEntity>> resp = controller.listSessions(USER_ID, "system");
@@ -110,7 +108,7 @@ class ChatControllerAgentTypeFilterTest {
     void listSessions_user_routesToLegacyPath() {
         SessionEntity u1 = stubSession(USER_ID, 10L);
         when(sessionService.listUserSessions(USER_ID)).thenReturn(List.of(u1));
-        when(channelConversationRepository.findBySessionIdIn(anyList()))
+        when(channelConversationResolver.findConversationsBySessionIds(anyList()))
                 .thenReturn(Collections.emptyList());
 
         ResponseEntity<List<SessionEntity>> resp = controller.listSessions(USER_ID, "user");
@@ -126,7 +124,7 @@ class ChatControllerAgentTypeFilterTest {
     void listSessions_nullAgentType_routesToLegacyPath() {
         SessionEntity u1 = stubSession(USER_ID, 10L);
         when(sessionService.listUserSessions(USER_ID)).thenReturn(List.of(u1));
-        when(channelConversationRepository.findBySessionIdIn(anyList()))
+        when(channelConversationResolver.findConversationsBySessionIds(anyList()))
                 .thenReturn(Collections.emptyList());
 
         ResponseEntity<List<SessionEntity>> resp = controller.listSessions(USER_ID, null);
@@ -142,7 +140,7 @@ class ChatControllerAgentTypeFilterTest {
     void listSessions_unknownAgentType_fallsBackToLegacy() {
         SessionEntity u1 = stubSession(USER_ID, 10L);
         when(sessionService.listUserSessions(USER_ID)).thenReturn(List.of(u1));
-        when(channelConversationRepository.findBySessionIdIn(anyList()))
+        when(channelConversationResolver.findConversationsBySessionIds(anyList()))
                 .thenReturn(Collections.emptyList());
 
         ResponseEntity<List<SessionEntity>> resp = controller.listSessions(USER_ID, "weird");

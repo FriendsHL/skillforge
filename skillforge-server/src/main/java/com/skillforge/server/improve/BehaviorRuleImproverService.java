@@ -88,6 +88,31 @@ public class BehaviorRuleImproverService {
                                                                   String agentId,
                                                                   String attributedDescription,
                                                                   Long ownerId) {
+        // Non-evolve / legacy callers: delegate with editor=null → byte-identical.
+        return startImprovementFromAttribution(eventId, agentId, attributedDescription, ownerId, null);
+    }
+
+    /**
+     * AUTOEVOLVE-AGENT-LEVEL-BUNDLE Phase 3 (§9 line A #1) — reflection-aware overload
+     * of {@link #startImprovementFromAttribution}. {@code editor == null} reproduces
+     * the legacy behavior exactly (byte-identical candidate generation); a non-null
+     * {@code editor} switches the candidate-rule LLM call to evolve-editor mode.
+     *
+     * <p><b>Why this overload ALSO carries {@code @Transactional(REQUIRES_NEW)}</b>
+     * (Phase 3 review W1): it is itself an EXTERNAL entry point — {@code
+     * GenerateCandidateTool} calls THIS editor overload directly on the reflection
+     * path. So it must be proxied to get its own REQUIRES_NEW tx. The no-editor
+     * entry point's {@code this.}-delegation into here is a self-invocation whose
+     * REQUIRES_NEW is harmlessly a no-op (it simply runs inside the outer entry
+     * point's already-new tx). Do NOT remove {@code @Transactional} from this
+     * overload, or external editor-path calls would lose tx isolation.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public ImprovementStartResult startImprovementFromAttribution(Long eventId,
+                                                                  String agentId,
+                                                                  String attributedDescription,
+                                                                  Long ownerId,
+                                                                  EvolveEditorContext editor) {
         if (eventId == null) throw new IllegalArgumentException("eventId is required");
         if (agentId == null || agentId.isBlank()) {
             throw new IllegalArgumentException("agentId is required");
@@ -127,7 +152,7 @@ public class BehaviorRuleImproverService {
         // first we'd lose the audit-trail eventId link.
         try {
             String improvedRules = generateCandidateRulesFromAttribution(
-                    baselineRulesJson, attributedDescription);
+                    baselineRulesJson, attributedDescription, agent, editor);
             version.setRulesJson(improvedRules);
         } catch (RuntimeException llmEx) {
             version.setRulesJson("[]");
@@ -140,12 +165,116 @@ public class BehaviorRuleImproverService {
         versionRepository.save(version);
 
         log.info("Attribution-derived behavior_rule version created: versionId={} agentId={} "
-                        + "eventId={} ownerId={} versionNumber={} contentLen={} "
+                        + "eventId={} ownerId={} versionNumber={} contentLen={} evolveEditor={} "
                         + "(BYPASSING checkEligibility per V3 ratify)",
                 version.getId(), agentId, eventId, ownerId, nextVersion,
-                version.getRulesJson() != null ? version.getRulesJson().length() : 0);
+                version.getRulesJson() != null ? version.getRulesJson().length() : 0, editor != null);
 
         // abRunId left null — Phase 1.2 wires the A/B trigger.
+        return new ImprovementStartResult(agentId, null, version.getId(), "PENDING");
+    }
+
+    /**
+     * AUTOEVOLVE-AGENT-LEVEL-BUNDLE Phase 2 (§8 #1) — hill-climb carry-forward
+     * sibling of {@link #startImprovementFromAttribution}. Instead of improving the
+     * agent's CURRENT ACTIVE baseline, it improves the SPECIFIED {@code baseVersionId}
+     * (the current-best behavior_rule version from a prior winning bundle), so the
+     * evolve loop can build the next rule candidate on top of the running best.
+     *
+     * <p>Differences from {@link #startImprovementFromAttribution}:
+     * <ul>
+     *   <li>baseline rulesJson comes from {@code baseVersionId} (loaded by id,
+     *       ownership-checked), not from {@code findByAgentIdAndStatus(ACTIVE)}.</li>
+     *   <li>the new candidate's {@code baselineVersionId} is set to
+     *       {@code baseVersionId}.</li>
+     * </ul>
+     * The reflection (priorChange / priorEvalReport) editor overload is Phase 3.
+     *
+     * @throws IllegalArgumentException baseVersionId unknown, or it belongs to a
+     *                                  different agent than {@code agentId}.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public ImprovementStartResult startImprovementFromBaseVersion(Long eventId,
+                                                                  String agentId,
+                                                                  String baseVersionId,
+                                                                  String attributedDescription,
+                                                                  Long ownerId) {
+        // Delegate with editor=null → byte-identical to the Phase 2 behavior.
+        return startImprovementFromBaseVersion(
+                eventId, agentId, baseVersionId, attributedDescription, ownerId, null);
+    }
+
+    /**
+     * AUTOEVOLVE-AGENT-LEVEL-BUNDLE Phase 3 (§9 line A #1) — reflection-aware overload
+     * of {@link #startImprovementFromBaseVersion}. {@code editor == null} reproduces
+     * the Phase 2 carry-forward behavior exactly; a non-null {@code editor} switches
+     * the candidate-rule LLM call to evolve-editor mode (priorChange / priorEvalReport).
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public ImprovementStartResult startImprovementFromBaseVersion(Long eventId,
+                                                                  String agentId,
+                                                                  String baseVersionId,
+                                                                  String attributedDescription,
+                                                                  Long ownerId,
+                                                                  EvolveEditorContext editor) {
+        if (eventId == null) throw new IllegalArgumentException("eventId is required");
+        if (agentId == null || agentId.isBlank()) {
+            throw new IllegalArgumentException("agentId is required");
+        }
+        if (baseVersionId == null || baseVersionId.isBlank()) {
+            throw new IllegalArgumentException("baseVersionId is required");
+        }
+        if (attributedDescription == null || attributedDescription.isBlank()) {
+            throw new IllegalArgumentException("attributedDescription is required and must be non-blank");
+        }
+
+        AgentEntity agent = agentRepository.findById(Long.parseLong(agentId))
+                .orElseThrow(() -> new RuntimeException("Agent not found: " + agentId));
+
+        // Load the SPECIFIED base version (content-by-id) and validate ownership —
+        // a carry-forward must build on a version that belongs to this agent.
+        BehaviorRuleVersionEntity base = versionRepository.findById(baseVersionId)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "baseVersionId not found: " + baseVersionId));
+        if (!agentId.equals(base.getAgentId())) {
+            throw new IllegalArgumentException(
+                    "baseVersionId " + baseVersionId + " belongs to agent " + base.getAgentId()
+                            + " but agentId=" + agentId + " — cannot carry forward another agent's version");
+        }
+        String baselineRulesJson = base.getRulesJson() != null ? base.getRulesJson() : "[]";
+
+        int nextVersion = versionRepository.findMaxVersionNumber(agentId).orElse(0) + 1;
+
+        BehaviorRuleVersionEntity version = new BehaviorRuleVersionEntity();
+        version.setId(UUID.randomUUID().toString());
+        version.setAgentId(agentId);
+        version.setVersionNumber(nextVersion);
+        version.setStatus(BehaviorRuleVersionEntity.STATUS_CANDIDATE);
+        version.setSource(BehaviorRuleVersionEntity.SOURCE_ATTRIBUTION);
+        version.setSourceEventId(eventId);
+        version.setBaselineVersionId(baseVersionId);
+        version.setImprovementRationale(attributedDescription.trim());
+
+        try {
+            String improvedRules = generateCandidateRulesFromAttribution(
+                    baselineRulesJson, attributedDescription, agent, editor);
+            version.setRulesJson(improvedRules);
+        } catch (RuntimeException llmEx) {
+            version.setRulesJson("[]");
+            versionRepository.save(version);
+            log.error("Carry-forward behavior-rule LLM fill FAILED: versionId={} agentId={} "
+                            + "baseVersionId={} eventId={}: {}",
+                    version.getId(), agentId, baseVersionId, eventId, llmEx.getMessage());
+            throw llmEx;
+        }
+
+        versionRepository.save(version);
+
+        log.info("Carry-forward behavior_rule version created: versionId={} agentId={} "
+                        + "baseVersionId={} eventId={} ownerId={} versionNumber={} contentLen={} evolveEditor={}",
+                version.getId(), agentId, baseVersionId, eventId, ownerId, nextVersion,
+                version.getRulesJson() != null ? version.getRulesJson().length() : 0, editor != null);
+
         return new ImprovementStartResult(agentId, null, version.getId(), "PENDING");
     }
 
@@ -168,7 +297,33 @@ public class BehaviorRuleImproverService {
      */
     public String generateCandidateRulesFromAttribution(String baselineRulesJson,
                                                          String attributedDescription) {
-        String systemPrompt = """
+        // Non-evolve / legacy callers (AttributionApprovalService, BehaviorRuleSurface):
+        // delegate with agent=null + editor=null → BYTE-IDENTICAL to the original body.
+        return generateCandidateRulesFromAttribution(baselineRulesJson, attributedDescription, null, null);
+    }
+
+    /**
+     * AUTOEVOLVE-AGENT-LEVEL-BUNDLE Phase 3 (§9 line A #1) — reflection-aware
+     * candidate-rule generator. Mirrors {@code PromptImproverService}'s
+     * editor-threading shape for the behavior_rule surface.
+     *
+     * <p><b>{@code editor == null}</b> (the shared non-evolve attribution path):
+     * the system prompt is the legacy hardcoded behavior-engineer prompt and the
+     * user message is the legacy 2-block body — BYTE-IDENTICAL to the original
+     * 2-arg method, so {@code AttributionApprovalService} / {@code BehaviorRuleSurface}
+     * are unaffected. {@code agent} is unused in this branch.
+     *
+     * <p><b>{@code editor != null}</b> (evolve-editor mode): the system prompt is the
+     * seeded {@code evolve-editor} agent's prompt (defensive fallback to legacy), and
+     * reflection blocks (target-agent config + last round's change + last round's eval
+     * report) are appended to the user message — "build on the last change / avoid
+     * repeating regressions".
+     */
+    public String generateCandidateRulesFromAttribution(String baselineRulesJson,
+                                                         String attributedDescription,
+                                                         AgentEntity agent,
+                                                         EvolveEditorContext editor) {
+        final String legacySystemPrompt = """
                 You are an expert agent-behavior engineer. Your task is to analyze an \
                 attribution report from a curator agent and produce an improved \
                 behavior_rule list.
@@ -186,8 +341,12 @@ public class BehaviorRuleImproverService {
                 - Add / refine rules to specifically address the attribution rationale.
                 - Keep rule count reasonable (≤ 10 unless current count justifies more).
                 """;
+        String systemPrompt = legacySystemPrompt;
+        if (editor != null) {
+            systemPrompt = resolveEvolveEditorSystemPrompt(legacySystemPrompt);
+        }
 
-        String userMessage = String.format("""
+        StringBuilder userMessage = new StringBuilder(String.format("""
                 Current rules JSON:
                 ---
                 %s
@@ -198,7 +357,11 @@ public class BehaviorRuleImproverService {
 
                 Produce the improved rules JSON.""",
                 baselineRulesJson,
-                attributedDescription.trim());
+                attributedDescription.trim()));
+
+        if (editor != null) {
+            userMessage.append("\n\n").append(buildEvolveEditorReflectionBlocks(agent, editor));
+        }
 
         LlmProvider provider = llmProviderFactory.getProvider(defaultProviderName);
         if (provider == null) {
@@ -208,7 +371,7 @@ public class BehaviorRuleImproverService {
         LlmRequest request = new LlmRequest();
         request.setSystemPrompt(systemPrompt);
         List<Message> messages = new ArrayList<>();
-        messages.add(Message.user(userMessage));
+        messages.add(Message.user(userMessage.toString()));
         request.setMessages(messages);
         request.setMaxTokens(2000);
         request.setTemperature(0.3);
@@ -219,5 +382,58 @@ public class BehaviorRuleImproverService {
             throw new RuntimeException("LLM returned empty candidate rules JSON for attribution flow");
         }
         return content.trim();
+    }
+
+    /**
+     * Resolve the evolve-editor system prompt: prefer the seeded {@code evolve-editor}
+     * agent's {@code system_prompt}; fall back to {@code fallback} when absent/blank
+     * (defensive — a fresh install that hasn't seeded the editor still produces a
+     * usable candidate). Mirrors {@code PromptImproverService.resolveEvolveEditorSystemPrompt}.
+     */
+    private String resolveEvolveEditorSystemPrompt(String fallback) {
+        try {
+            return agentRepository.findFirstByName("evolve-editor")
+                    .map(AgentEntity::getSystemPrompt)
+                    .filter(p -> p != null && !p.isBlank())
+                    .orElse(fallback);
+        } catch (RuntimeException e) {
+            log.warn("evolve-editor agent lookup failed, falling back to legacy prompt: {}", e.getMessage());
+            return fallback;
+        }
+    }
+
+    /**
+     * Build the evolve-editor reflection sections appended to the user message: the
+     * target agent's current config (read-only; this surface only changes the rules)
+     * + what was changed last round + last round's eval report. Stable Chinese labels
+     * so a reviewer / test can assert their presence. Mirrors
+     * {@code PromptImproverService.buildEvolveEditorReflectionBlocks} (label says
+     * "本次只改 rules").
+     */
+    private String buildEvolveEditorReflectionBlocks(AgentEntity agent, EvolveEditorContext editor) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("目标 agent 当前配置（仅供参考，本次只改 rules）：\n")
+                .append("- systemPrompt: ").append(blankToNone(agent == null ? null : agent.getSystemPrompt())).append('\n')
+                .append("- skills: ").append(blankToNone(agent == null ? null : agent.getSkillIds())).append('\n')
+                .append("- tools: ").append(blankToNone(agent == null ? null : agent.getToolIds())).append('\n')
+                .append("- modelId: ").append(blankToNone(agent == null ? null : agent.getModelId()));
+
+        String priorChange = editor.priorChangeSummary();
+        if (priorChange != null && !priorChange.isBlank()) {
+            sb.append("\n\n上一轮改动：\n").append(priorChange.trim());
+        }
+
+        String priorReport = editor.priorEvalReportJson();
+        if (priorReport != null && !priorReport.isBlank()) {
+            sb.append("\n\n上一轮评测报告（哪些 case 提升/腐化 + 原因 + 整体涨跌）：\n")
+                    .append(priorReport.trim());
+        }
+
+        sb.append("\n\n综合上述（方向 + 当前配置 + 上轮改动 + 上轮评测）给出本次更好的 rules。");
+        return sb.toString();
+    }
+
+    private static String blankToNone(String value) {
+        return (value == null || value.isBlank()) ? "(none)" : value.trim();
     }
 }

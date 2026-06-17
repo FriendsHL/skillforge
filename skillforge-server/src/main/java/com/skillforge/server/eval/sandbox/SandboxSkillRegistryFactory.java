@@ -24,6 +24,7 @@ public class SandboxSkillRegistryFactory {
         SkillRegistry sandbox = new SkillRegistry();
         sandbox.registerTool(new SandboxedFileReadTool(sandboxRoot));
         sandbox.registerTool(new SandboxedFileWriteTool(sandboxRoot));
+        sandbox.registerTool(new SandboxedFileEditTool(sandboxRoot));
         sandbox.registerTool(new SandboxedGrepTool(sandboxRoot));
         sandbox.registerTool(new SandboxedGlobTool(sandboxRoot));
         return sandbox;

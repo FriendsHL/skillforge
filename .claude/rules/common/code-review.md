@@ -1,5 +1,7 @@
 # Code Review Standards
 
+> **SkillForge override (2026-06-04)**：本文件是 ECC 通用模板。SkillForge 的 review 流程（何时 review / 几轮对抗 / Judge 仲裁）以 [`pipeline.md`](../pipeline.md) 为准。**severity 词汇统一用 pipeline.md 对抗约束 B 的 `blocker / warning / nit`**，不用本文下方的 CRITICAL/HIGH/MEDIUM/LOW（两套并存会让 reviewer 混淆）。本文 severity 表仅作通用概念参考。
+
 ## Purpose
 
 Code review ensures quality, security, and maintainability before code is merged. This rule defines when and how to conduct code reviews.
@@ -66,9 +68,9 @@ Use these agents for code review:
 | **code-reviewer** | General code quality, patterns, best practices |
 | **security-reviewer** | Security vulnerabilities, OWASP Top 10 |
 | **typescript-reviewer** | TypeScript/JavaScript specific issues |
-| **python-reviewer** | Python specific issues |
-| **go-reviewer** | Go specific issues |
-| **rust-reviewer** | Rust specific issues |
+| **java-reviewer** | Java / Spring Boot specific issues（SkillForge 后端主审）|
+
+> SkillForge 仅有 Java + TypeScript 栈，不存在 python/go/rust-reviewer。完整 reviewer / specialty reviewer 触发条件以 [`pipeline.md`](../pipeline.md) 第三节为准。
 
 ## Review Workflow
 

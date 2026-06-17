@@ -146,6 +146,7 @@ describe('McpServerEditDrawer — submit normalisation', () => {
     const server: McpServer = {
       id: 1,
       name: 'time',
+      transport: 'stdio',
       command: 'npx',
       args: ['-y', '@modelcontextprotocol/server-time'],
       env: { TZ: 'UTC' },
@@ -183,6 +184,7 @@ describe('McpServerEditDrawer — submit normalisation', () => {
     const server: McpServer = {
       id: 1,
       name: 'srv',
+      transport: 'stdio',
       command: 'npx',
       args: [],
       env: { GITHUB_TOKEN: '***', URL: '${MY_URL}' },
@@ -214,6 +216,7 @@ describe('McpServerEditDrawer — submit normalisation', () => {
     const server: McpServer = {
       id: 1,
       name: 'srv',
+      transport: 'stdio',
       command: 'npx',
       args: [],
       env: { GITHUB_TOKEN: '***' },
@@ -244,6 +247,7 @@ describe('McpServerEditDrawer — submit normalisation', () => {
     const server: McpServer = {
       id: 1,
       name: 'srv',
+      transport: 'stdio',
       command: 'npx',
       args: [],
       env: {},
@@ -268,6 +272,131 @@ describe('McpServerEditDrawer — submit normalisation', () => {
     await waitFor(() => {
       expect(
         screen.getByText(/Env name cannot contain whitespace or `=`/i),
+      ).toBeInTheDocument();
+    });
+    expect(updateSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('McpServerEditDrawer — http transport', () => {
+  beforeEach(() => {
+    createSpy.mockClear();
+    updateSpy.mockClear();
+  });
+
+  const httpServer: McpServer = {
+    id: 9,
+    name: 'anysearch',
+    transport: 'http',
+    command: null,
+    args: [],
+    env: {},
+    url: 'https://api.anysearch.com/mcp',
+    headers: { Authorization: '***', 'X-Api-Version': '2024-01' },
+    enabled: true,
+    createdAt: '2026-05-07T00:00:00Z',
+    updatedAt: '2026-05-07T00:00:00Z',
+  };
+
+  it('create mode defaults to stdio (command shown, url/headers hidden)', () => {
+    renderDrawer({ open: true, server: null, onClose: () => {} });
+    // stdio default → command field present, url field absent.
+    expect(screen.getByPlaceholderText('npx')).toBeInTheDocument();
+    expect(
+      screen.queryByPlaceholderText('https://api.example.com/mcp'),
+    ).toBeNull();
+  });
+
+  it('edit mode renders url + headers and hides command/args for http', () => {
+    renderDrawer({ open: true, server: httpServer, onClose: () => {} });
+
+    const urlInput = screen.getByPlaceholderText(
+      'https://api.example.com/mcp',
+    ) as HTMLInputElement;
+    expect(urlInput.value).toBe('https://api.anysearch.com/mcp');
+
+    // Command field must NOT be rendered for an http server.
+    expect(screen.queryByPlaceholderText('npx')).toBeNull();
+
+    // Header rows pre-filled (key inputs share the 'Authorization' placeholder).
+    const headerKeys = screen.getAllByPlaceholderText(
+      'Authorization',
+    ) as HTMLInputElement[];
+    expect(headerKeys.map((i) => i.value)).toEqual(['Authorization', 'X-Api-Version']);
+  });
+
+  it('on http edit, sends url + headers (*** preserved), omits command/args/name/transport', async () => {
+    renderDrawer({ open: true, server: httpServer, onClose: () => {} });
+
+    // Save untouched — masked header must round-trip verbatim so BE
+    // preserve-on-*** fires (same contract as env secrets).
+    fireEvent.click(screen.getByTestId('mcp-edit-submit'));
+
+    await waitFor(() => {
+      expect(updateSpy).toHaveBeenCalledTimes(1);
+    });
+    const body = updateSpy.mock.calls[0][1] as Record<string, unknown>;
+    expect(body.url).toBe('https://api.anysearch.com/mcp');
+    expect(body.headers).toEqual({
+      Authorization: '***',
+      'X-Api-Version': '2024-01',
+    });
+    // http body must not carry stdio fields, nor the immutable name/transport.
+    expect(body.command).toBeUndefined();
+    expect(body.args).toBeUndefined();
+    expect(body.env).toBeUndefined();
+    expect(body.name).toBeUndefined();
+    expect(body.transport).toBeUndefined();
+  });
+
+  it('keeps http header entry when user re-types over the mask', async () => {
+    renderDrawer({
+      open: true,
+      server: { ...httpServer, headers: { Authorization: '***' } },
+      onClose: () => {},
+    });
+
+    const valueInputs = screen.getAllByPlaceholderText(
+      'Bearer ${API_KEY}',
+    ) as HTMLInputElement[];
+    fireEvent.change(valueInputs[0], { target: { value: 'Bearer real-key' } });
+
+    fireEvent.click(screen.getByTestId('mcp-edit-submit'));
+
+    await waitFor(() => {
+      expect(updateSpy).toHaveBeenCalledTimes(1);
+    });
+    const body = updateSpy.mock.calls[0][1] as Record<string, unknown>;
+    expect(body.headers).toEqual({ Authorization: 'Bearer real-key' });
+  });
+
+  it('blocks submit when http url is cleared (required)', async () => {
+    renderDrawer({ open: true, server: httpServer, onClose: () => {} });
+
+    const urlInput = screen.getByPlaceholderText('https://api.example.com/mcp');
+    fireEvent.change(urlInput, { target: { value: '' } });
+
+    fireEvent.click(screen.getByTestId('mcp-edit-submit'));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/URL is required for http transport/i),
+      ).toBeInTheDocument();
+    });
+    expect(updateSpy).not.toHaveBeenCalled();
+  });
+
+  it('rejects an http url without an http(s) scheme', async () => {
+    renderDrawer({ open: true, server: httpServer, onClose: () => {} });
+
+    const urlInput = screen.getByPlaceholderText('https://api.example.com/mcp');
+    fireEvent.change(urlInput, { target: { value: 'ftp://nope' } });
+
+    fireEvent.click(screen.getByTestId('mcp-edit-submit'));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/URL must start with http:\/\/ or https:\/\//i),
       ).toBeInTheDocument();
     });
     expect(updateSpy).not.toHaveBeenCalled();

@@ -18,6 +18,15 @@ public interface EvalScenarioDraftRepository extends JpaRepository<EvalScenarioE
     List<EvalScenarioEntity> findByAgentIdAndStatus(String agentId, String status);
 
     /**
+     * AUTOEVOLVE-CLOSE-LOOP Phase BC-M2b: list a single agent's harvested
+     * scenarios in a given lifecycle status, restricted to a source_type (always
+     * {@code session_derived} for the harvested-scenarios surface). Used by the
+     * activate-flow read endpoints and {@code ListActiveHarvestedScenariosTool}.
+     */
+    List<EvalScenarioEntity> findByAgentIdAndStatusAndSourceType(
+            String agentId, String status, String sourceType);
+
+    /**
      * FLYWHEEL-LOOP-CLOSURE Phase 1.4 (2026-05-16): used by
      * {@code PromptImproverService.runAbTestAgainst} to resolve the agent's
      * canonical scenario split (default {@code "held_out"}) when the /run-ab

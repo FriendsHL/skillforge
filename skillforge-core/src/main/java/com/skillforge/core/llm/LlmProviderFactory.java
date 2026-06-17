@@ -84,14 +84,17 @@ public class LlmProviderFactory {
                     config.getReadTimeoutSeconds(),
                     config.getMaxRetries()
             );
-            case "openai", "deepseek" -> new OpenAiProvider(
+            // "ark" is an alias for the OpenAI-compatible path (Volcengine Ark); behaves
+            // exactly like "openai" — accepted so a `type: ark` config doesn't throw.
+            case "openai", "deepseek", "ark" -> new OpenAiProvider(
                     config.getApiKey(),
                     config.getBaseUrl(),
                     config.getModel(),
                     displayName,
                     envHint,
                     config.getReadTimeoutSeconds(),
-                    config.getMaxRetries()
+                    config.getMaxRetries(),
+                    config.getChatPath()
             );
             default -> throw new IllegalArgumentException(
                     "Unsupported LLM provider type: " + type

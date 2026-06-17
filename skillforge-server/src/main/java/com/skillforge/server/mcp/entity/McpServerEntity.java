@@ -37,8 +37,32 @@ public class McpServerEntity {
     @Column(nullable = false, unique = true, length = 64)
     private String name;
 
-    @Column(nullable = false, length = 256)
+    /**
+     * Transport kind: {@code "stdio"} (subprocess NDJSON) or {@code "http"}
+     * (Streamable HTTP POST). Immutable post-create (service layer enforces).
+     * DB CHECK pairs it with command/url presence (V152).
+     */
+    @Column(nullable = false, length = 16)
+    private String transport = "stdio";
+
+    /**
+     * Process command for stdio transport. Nullable since V152 — an http server has
+     * no command (the DB CHECK requires command for stdio, url for http).
+     */
+    @Column(length = 256)
     private String command;
+
+    /** Endpoint URL for http transport (null for stdio). */
+    @Column(columnDefinition = "TEXT")
+    private String url;
+
+    /**
+     * JSON object of HTTP headers for http transport; values may use
+     * {@code ${ENV_VAR_NAME}} placeholders resolved by the lifecycle layer at
+     * connect time (same semantics as {@link #env}). Defaults to {@code "{}"}.
+     */
+    @Column(nullable = false, columnDefinition = "TEXT")
+    private String headers = "{}";
 
     /** JSON array of process args, e.g. {@code ["-y", "@modelcontextprotocol/server-time"]}. */
     @Column(nullable = false, columnDefinition = "TEXT")
@@ -73,8 +97,17 @@ public class McpServerEntity {
     public String getName() { return name; }
     public void setName(String name) { this.name = name; }
 
+    public String getTransport() { return transport; }
+    public void setTransport(String transport) { this.transport = transport != null ? transport : "stdio"; }
+
     public String getCommand() { return command; }
     public void setCommand(String command) { this.command = command; }
+
+    public String getUrl() { return url; }
+    public void setUrl(String url) { this.url = url; }
+
+    public String getHeaders() { return headers; }
+    public void setHeaders(String headers) { this.headers = headers != null ? headers : "{}"; }
 
     public String getArgs() { return args; }
     public void setArgs(String args) { this.args = args != null ? args : "[]"; }

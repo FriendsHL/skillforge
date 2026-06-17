@@ -2,6 +2,8 @@
 
 > This file extends [common/git-workflow.md](./git-workflow.md) with the full feature development process that happens before git operations.
 
+> **SkillForge override (2026-06-04)**：本文件是 ECC 通用流程模板。**SkillForge 的开发流程以 [`pipeline.md`](../pipeline.md) 为准**（Solo / Mid / Full 分档 + TeamCreate + 对抗 review + Judge + Phase Final），冲突时让位。本文中提到的 `planner` 是流程中的**角色**（由 Agent 工具的 Plan / general 子 agent 扮演），不是 `.claude/agents/` 下的注册 agent；研究流程（GitHub search / Context7 等）作为可选参考保留。
+
 The Feature Implementation Workflow describes the development pipeline: research, planning, TDD, code review, and then committing to git.
 
 ## Feature Implementation Workflow

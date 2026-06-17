@@ -2,14 +2,19 @@ package com.skillforge.server.evolve;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.skillforge.server.evolve.dto.CandidateBundle;
 import com.skillforge.server.evolve.dto.EvolveIterationDto;
 import com.skillforge.server.evolve.dto.EvolveRunDetailDto;
 import com.skillforge.server.evolve.dto.EvolveRunSummaryDto;
+import com.skillforge.server.evolve.dto.PredictionDto;
+import com.skillforge.server.evolve.dto.ReconciliationDto;
 import com.skillforge.server.flywheel.run.FlywheelRunEntity;
 import com.skillforge.server.flywheel.run.FlywheelRunRepository;
 import com.skillforge.server.flywheel.run.FlywheelRunStepEntity;
 import com.skillforge.server.flywheel.run.FlywheelRunStepRepository;
+import com.skillforge.server.entity.SkillDraftEntity;
 import com.skillforge.server.repository.AgentRepository;
+import com.skillforge.server.repository.SkillDraftRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.PageRequest;
@@ -17,7 +22,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -46,16 +53,39 @@ public class EvolveReadService {
     private final FlywheelRunRepository runRepository;
     private final FlywheelRunStepRepository stepRepository;
     private final AgentRepository agentRepository;
+    private final SkillDraftRepository skillDraftRepository;
     private final ObjectMapper objectMapper;
 
     public EvolveReadService(FlywheelRunRepository runRepository,
                              FlywheelRunStepRepository stepRepository,
                              AgentRepository agentRepository,
+                             SkillDraftRepository skillDraftRepository,
                              ObjectMapper objectMapper) {
         this.runRepository = runRepository;
         this.stepRepository = stepRepository;
         this.agentRepository = agentRepository;
+        this.skillDraftRepository = skillDraftRepository;
         this.objectMapper = objectMapper;
+    }
+
+    /**
+     * AUTOEVOLVE-CLOSE-LOOP P1 (design review W2) — lightweight read-only
+     * projection of a skill draft for the adopt card's diff view. Lives in the
+     * service (not the controller) so the controller stays free of a direct
+     * {@code SkillDraftRepository} dependency. Returns empty when the draft is
+     * missing — the controller maps that to 404.
+     */
+    @Transactional(readOnly = true)
+    public Optional<Map<String, Object>> getSkillDraftView(String draftId) {
+        return skillDraftRepository.findById(draftId).map(draft -> {
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("id", draft.getId());
+            body.put("name", draft.getName());
+            body.put("promptHint", draft.getPromptHint());
+            body.put("triggers", draft.getTriggers());
+            body.put("requiredTools", draft.getRequiredTools());
+            return body;
+        });
     }
 
     /**
@@ -125,9 +155,32 @@ public class EvolveReadService {
                 .findByRunIdAndStepKindOrderByStepIndexAsc(
                         evolveRunId, FlywheelRunStepEntity.STEP_KIND_EVOLVE_ITERATION);
 
+        // AUTOEVOLVE-CLOSE-LOOP P1 — correlate each iteration's candidate-gen agent
+        // leaf (subagent_dispatch) sub-session so the FE can "click a node → see its
+        // session". In the evolve-loop workflow the ONLY subagent_dispatch steps are
+        // the per-iteration candidate leaves (the opt-report sub-flow runs as a
+        // SEPARATE run), created in iteration order, so the i-th candidate step ↔ the
+        // i-th recorded iteration.
+        //
+        // SAFE DEGRADE (r1 F1): positional zip is only correct when there is exactly
+        // one candidate step per recorded iteration. A run that errored mid-iteration
+        // (candidate dispatched, but the iteration never reached RecordIteration) has
+        // MORE candidate steps than ledger rows → the tail would mis-align to the
+        // WRONG session. Pointing at a wrong session is worse than pointing at none,
+        // so unless the counts match exactly we degrade EVERY iteration's subSessionId
+        // to null rather than risk a wrong association. The legacy orchestrator path
+        // has zero candidate steps (≠ ledger size) → also null, as intended.
+        List<FlywheelRunStepEntity> candidateSteps = stepRepository
+                .findByRunIdAndStepKindOrderByStepIndexAsc(
+                        evolveRunId, FlywheelRunStepEntity.STEP_KIND_SUBAGENT_DISPATCH);
+        boolean subSessionAlignable = candidateSteps.size() == steps.size();
+
         List<EvolveIterationDto> iterations = new ArrayList<>(steps.size());
-        for (FlywheelRunStepEntity step : steps) {
-            EvolveIterationDto dto = parseIterationStep(step);
+        for (int i = 0; i < steps.size(); i++) {
+            FlywheelRunStepEntity step = steps.get(i);
+            String subSessionId = subSessionAlignable
+                    ? candidateSteps.get(i).getSubAgentSessionId() : null;
+            EvolveIterationDto dto = parseIterationStep(step, subSessionId);
             if (dto != null) {
                 iterations.add(dto);
             }
@@ -171,7 +224,7 @@ public class EvolveReadService {
      * Returns {@code null} (and logs a warning) if the JSON is missing or
      * cannot be parsed — defensive for partially-written ledger rows.
      */
-    private EvolveIterationDto parseIterationStep(FlywheelRunStepEntity step) {
+    private EvolveIterationDto parseIterationStep(FlywheelRunStepEntity step, String subSessionId) {
         JsonNode payload = parseStepOutputJson(step);
         if (payload == null) {
             log.warn("EvolveReadService: step {} has null/unparseable step_output_json; skipping",
@@ -195,6 +248,19 @@ public class EvolveReadService {
             abRunId = null;
         }
 
+        CandidateBundle candidateBundle = parseCandidateBundle(payload.get("candidateBundle"));
+        // BC-M2b (G3): prediction + reconciliation sidecars (null for pre-G3 rows).
+        PredictionDto prediction = parseJsonNode(payload.get("prediction"), PredictionDto.class);
+        ReconciliationDto reconciliation =
+                parseJsonNode(payload.get("reconciliation"), ReconciliationDto.class);
+        // P1: semanticDelta sidecar (null for legacy / pre-P1 rows). Passed through
+        // as the raw JSON node — it serializes back to the FE inline.
+        // Phase 2a: a single-surface iteration records an OBJECT
+        // {surface, before, after, diff, changeDesc}; a multi-surface bundle
+        // iteration records an ARRAY of those (one per changed surface). Accept
+        // both shapes — the FE distinguishes via Array.isArray (设计 §5 / R1).
+        JsonNode semanticDelta = objectOrArrayNodeOrNull(payload.get("semanticDelta"));
+
         return new EvolveIterationDto(
                 iteration,
                 surface,
@@ -205,7 +271,89 @@ public class EvolveReadService {
                 delta,
                 kept,
                 abRunId,
-                step.getCreatedAt());
+                step.getCreatedAt(),
+                candidateBundle,
+                prediction,
+                reconciliation,
+                step.getId(),
+                subSessionId,
+                semanticDelta);
+    }
+
+    /**
+     * The node if it is a non-null JSON object OR array, else {@code null}.
+     * Phase 2a: semanticDelta is an object for single-surface iterations and an
+     * array (one entry per changed surface) for multi-surface bundles; both must
+     * pass through to the FE verbatim.
+     */
+    private static JsonNode objectOrArrayNodeOrNull(JsonNode node) {
+        if (node == null || node.isNull() || node.isMissingNode()
+                || !(node.isObject() || node.isArray())) {
+            return null;
+        }
+        return node;
+    }
+
+    /**
+     * BC-M2b (G3) — best-effort convert a {@code step_output_json} sub-node into a
+     * typed DTO. Returns null when the node is absent / not an object / unparseable
+     * (a malformed sidecar must never fail the whole iteration read).
+     */
+    private <T> T parseJsonNode(JsonNode node, Class<T> type) {
+        if (node == null || node.isNull() || node.isMissingNode() || !node.isObject()) {
+            return null;
+        }
+        try {
+            return objectMapper.treeToValue(node, type);
+        } catch (Exception e) {
+            log.warn("EvolveReadService: failed to parse {} sidecar: {}",
+                    type.getSimpleName(), e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * AUTOEVOLVE-CLOSE-LOOP P1 — parse the {@code candidateBundle} sidecar
+     * written by {@code RecordIterationTool}. Returns {@code null} when the
+     * node is absent, is not a JSON object (the tool stores a non-parseable
+     * bundle as a text fallback — not a pointer tuple we can adopt), or when
+     * every pointer is blank.
+     */
+    private CandidateBundle parseCandidateBundle(JsonNode node) {
+        if (node == null || node.isNull() || node.isMissingNode() || !node.isObject()) {
+            return null;
+        }
+        String promptVersionId = textOrNull(node.get("promptVersionId"));
+        String behaviorRuleVersionId = textOrNull(node.get("behaviorRuleVersionId"));
+        String skillDraftId = textOrNull(node.get("skillDraftId"));
+        CandidateBundle bundle = new CandidateBundle(
+                promptVersionId, behaviorRuleVersionId, skillDraftId);
+        return bundle.isEmpty() ? null : bundle;
+    }
+
+    /**
+     * AUTOEVOLVE-CLOSE-LOOP P1 — the candidate bundles of every kept iteration
+     * of an evolve run, in step order. Used by the adopt endpoint to bound the
+     * adoptable pointer space (a request pointer must originate from a kept
+     * iteration — prevents adopting an arbitrary cross-run/cross-agent version).
+     * Empty when the run is missing, not an evolve run, or has no kept bundle.
+     */
+    @Transactional(readOnly = true)
+    public List<CandidateBundle> listKeptCandidateBundles(String evolveRunId) {
+        return getRunDetail(evolveRunId)
+                .map(detail -> detail.iterations().stream()
+                        .filter(EvolveIterationDto::kept)
+                        .map(EvolveIterationDto::candidateBundle)
+                        .filter(b -> b != null)
+                        .toList())
+                .orElseGet(List::of);
+    }
+
+    private static String textOrNull(JsonNode node) {
+        if (node == null || node.isNull() || node.isMissingNode()) return null;
+        if (!node.isValueNode()) return null;
+        String s = node.asText();
+        return (s == null || s.isBlank()) ? null : s;
     }
 
     private JsonNode parseStepOutputJson(FlywheelRunStepEntity step) {

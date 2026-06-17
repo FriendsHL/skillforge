@@ -2,6 +2,7 @@ package com.skillforge.workflow.bindings;
 
 import com.skillforge.workflow.WorkflowAgentInvoker;
 import com.skillforge.workflow.WorkflowContext;
+import com.skillforge.workflow.WorkflowToolInvoker;
 import org.mozilla.javascript.Context;
 import org.mozilla.javascript.Scriptable;
 import org.mozilla.javascript.ScriptableObject;
@@ -11,9 +12,10 @@ import java.util.concurrent.ExecutorService;
 
 /**
  * Registers the workflow host primitives + {@code args} onto a sandbox scope.
- * Registers {@code agent} / {@code parallel} / {@code pipeline} / {@code phase} /
- * {@code log} / {@code humanApprove} / {@code ctx} + {@code args} (Sprint 2 added
- * {@code humanApprove} + {@code ctx}).
+ * Registers {@code agent} / {@code tool} / {@code parallel} / {@code pipeline} /
+ * {@code phase} / {@code log} / {@code humanApprove} / {@code ctx} + {@code args}
+ * (Sprint 2 added {@code humanApprove} + {@code ctx}; AUTOEVOLVE-CLOSE-LOOP P1
+ * added the deterministic {@code tool} binding).
  */
 public final class HostBindings {
 
@@ -22,7 +24,14 @@ public final class HostBindings {
 
     public static void register(Context cx, Scriptable scope, WorkflowContext ctx,
                                 WorkflowAgentInvoker invoker, ExecutorService subAgentExecutor) {
+        register(cx, scope, ctx, invoker, null, subAgentExecutor);
+    }
+
+    public static void register(Context cx, Scriptable scope, WorkflowContext ctx,
+                                WorkflowAgentInvoker invoker, WorkflowToolInvoker toolInvoker,
+                                ExecutorService subAgentExecutor) {
         define(scope, "agent", new HostAgent(ctx, invoker, subAgentExecutor));
+        define(scope, "tool", new HostToolCall(ctx, toolInvoker));
         define(scope, "parallel", new HostParallel(ctx));
         define(scope, "pipeline", new HostPipeline(ctx));
         define(scope, "phase", new HostPhase(ctx));

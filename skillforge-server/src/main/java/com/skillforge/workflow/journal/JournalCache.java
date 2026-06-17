@@ -32,4 +32,16 @@ public interface JournalCache {
      * REST call), or empty if the gate has not been decided yet.
      */
     Optional<JsonNode> getApproveDecision(String runId, int stepIndex);
+
+    /**
+     * AUTOEVOLVE-CLOSE-LOOP P1 — the first-run {@code result} JSON node of the
+     * completed {@code tool_call} step at {@code stepIndex}, or empty if there is
+     * no such completed step. A {@code tool()} call has side effects (it triggers
+     * A/B evals, records iterations) so on resume it MUST short-circuit to this
+     * cached result rather than re-executing (mirrors {@code agent()} replay).
+     * The node is the {@code result} sub-field {@code DefaultWorkflowToolInvoker}
+     * stored — re-converting it to a Java value yields the same shape the live
+     * {@code tool()} returned on the first run.
+     */
+    Optional<JsonNode> getCachedToolResult(String runId, int stepIndex);
 }

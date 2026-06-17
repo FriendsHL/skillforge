@@ -108,16 +108,32 @@ class OptReportWorkflowEquivalenceTest {
         return s;
     }
 
+    /** G5 holistic-error-span-analyzer output: preconditionIssues[]. */
+    private static Map<String, Object> holisticResult() {
+        Map<String, Object> issue = new LinkedHashMap<>();
+        issue.put("toolName", "Edit");
+        issue.put("errorPattern", "old_string not found in file");
+        issue.put("sessionCount", 7);
+        issue.put("rootCause", "edit attempted before reading the target file");
+        issue.put("evidence", "sess-1 step 3 Edit with no prior Read");
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("preconditionIssues", List.of(issue));
+        return m;
+    }
+
     @Test
-    @DisplayName("12 sessions → 3 annotate batches, aggregator summary reaches humanApprove gate intact (W1/W2)")
+    @DisplayName("12 sessions → 3 annotate batches, holistic preconditionIssues injected into aggregator, summary reaches gate (W1/W2/G5)")
     void runsThroughToApproveGateWithEquivalentSummary() {
         Map<String, Integer> callsBySlug = new ConcurrentHashMap<>();
+        Map<String, String> promptBySlug = new ConcurrentHashMap<>();
         WorkflowAgentInvoker stub = (prompt, opts, stepIndex) -> {
             String slug = String.valueOf(opts.get("agentSlug"));
             callsBySlug.merge(slug, 1, Integer::sum);
+            promptBySlug.put(slug, prompt);
             return switch (slug) {
                 case "opt-report-orchestrator" -> loaderResult(12);
                 case "session-batch-annotator" -> "annotated batch ok";
+                case "holistic-error-span-analyzer" -> holisticResult();
                 case "opt-report-aggregator" -> aggregatorSummary();
                 default -> null;
             };
@@ -139,7 +155,16 @@ class OptReportWorkflowEquivalenceTest {
         // Deterministic fanout: ceil(12/5) = 3 annotate batches.
         assertThat(callsBySlug.get("opt-report-orchestrator")).isEqualTo(1);
         assertThat(callsBySlug.get("session-batch-annotator")).isEqualTo(3);
+        // G5: holistic phase runs once between Annotate and Aggregate.
+        assertThat(callsBySlug.get("holistic-error-span-analyzer")).isEqualTo(1);
         assertThat(callsBySlug.get("opt-report-aggregator")).isEqualTo(1);
+
+        // G5: the aggregator's user message carries the injected preconditionIssues
+        // (path a — JS stringify into the prompt), so the aggregator can surface them
+        // as their own fine-grained issue instead of folding into a coarse bucket.
+        String aggregatorPrompt = promptBySlug.get("opt-report-aggregator");
+        assertThat(aggregatorPrompt).contains("HOLISTIC");
+        assertThat(aggregatorPrompt).contains("edit attempted before reading the target file");
 
         // The gate step carries the aggregator summary as its payload.
         ArgumentCaptor<String> stepInput = ArgumentCaptor.forClass(String.class);

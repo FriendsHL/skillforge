@@ -94,6 +94,9 @@ public class ModelConfig {
     private String type;
     private String apiKey;
     private String baseUrl;
+    /** Optional chat-completions path appended to {@link #baseUrl}; null → OpenAiProvider
+     *  defaults to {@code /v1/chat/completions}. openai-type providers only. */
+    private String chatPath;
     private String model;
     private int readTimeoutSeconds = DEFAULT_READ_TIMEOUT_SECONDS;
     private int maxRetries = DEFAULT_MAX_RETRIES;
@@ -140,6 +143,14 @@ public class ModelConfig {
 
     public void setApiKey(String apiKey) {
         this.apiKey = apiKey;
+    }
+
+    public String getChatPath() {
+        return chatPath;
+    }
+
+    public void setChatPath(String chatPath) {
+        this.chatPath = chatPath;
     }
 
     public String getBaseUrl() {

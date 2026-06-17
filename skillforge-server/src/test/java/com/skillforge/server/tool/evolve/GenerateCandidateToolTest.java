@@ -8,6 +8,7 @@ import com.skillforge.server.entity.SkillDraftEntity;
 import com.skillforge.server.flywheel.run.FlywheelRunEntity;
 import com.skillforge.server.flywheel.run.FlywheelRunRepository;
 import com.skillforge.server.improve.BehaviorRuleImproverService;
+import com.skillforge.server.improve.EvolveEditorContext;
 import com.skillforge.server.improve.ImprovementStartResult;
 import com.skillforge.server.improve.PromptImproverService;
 import com.skillforge.server.improve.SkillDraftService;
@@ -16,6 +17,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -122,6 +124,86 @@ class GenerateCandidateToolTest {
     }
 
     @Test
+    @DisplayName("behavior_rule + baseVersionId: routes to carry-forward improveFromBaseVersion (§8 #5)")
+    void behaviorRuleSurface_baseVersionId_routesToCarryForward() {
+        when(behaviorRuleImproverService.startImprovementFromBaseVersion(
+                eq(55L), eq("42"), eq("best-brv"), eq("issue"), eq(0L)))
+                .thenReturn(new ImprovementStartResult("42", null, "brule-v7", "PENDING"));
+
+        Map<String, Object> input = new LinkedHashMap<>();
+        input.put("surface", "behavior_rule");
+        input.put("issue", "issue");
+        input.put("targetAgentId", "42");
+        input.put("eventId", "55");
+        input.put("baseVersionId", "best-brv");
+
+        SkillResult result = run(input);
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.getOutput()).contains("\"candidateId\":\"brule-v7\"");
+        verify(behaviorRuleImproverService)
+                .startImprovementFromBaseVersion(55L, "42", "best-brv", "issue", 0L);
+        verify(behaviorRuleImproverService, org.mockito.Mockito.never())
+                .startImprovementFromAttribution(any(), any(), any(), any());
+        verifyNoInteractions(promptImproverService, skillDraftService, optReportToEventBridge);
+    }
+
+    @Test
+    @DisplayName("behavior_rule + priorChange/priorEvalReport: routes to editor-aware overload (§9 line A #2)")
+    void behaviorRuleSurface_reflection_routesToEditorOverload() {
+        when(behaviorRuleImproverService.startImprovementFromAttribution(
+                eq(55L), eq("42"), eq("issue"), eq(0L), any(EvolveEditorContext.class)))
+                .thenReturn(new ImprovementStartResult("42", null, "brule-v8", "PENDING"));
+
+        Map<String, Object> input = new LinkedHashMap<>();
+        input.put("surface", "behavior_rule");
+        input.put("issue", "issue");
+        input.put("targetAgentId", "42");
+        input.put("eventId", "55");
+        input.put("priorChange", "last round added a refusal rule");
+        input.put("priorEvalReport", "{\"s1\":\"improved\"}");
+
+        SkillResult result = run(input);
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.getOutput()).contains("\"candidateId\":\"brule-v8\"");
+        ArgumentCaptor<EvolveEditorContext> editorCap = ArgumentCaptor.forClass(EvolveEditorContext.class);
+        verify(behaviorRuleImproverService).startImprovementFromAttribution(
+                eq(55L), eq("42"), eq("issue"), eq(0L), editorCap.capture());
+        EvolveEditorContext editor = editorCap.getValue();
+        assertThat(editor.priorChangeSummary()).isEqualTo("last round added a refusal rule");
+        assertThat(editor.priorEvalReportJson()).isEqualTo("{\"s1\":\"improved\"}");
+        // editor-aware overload chosen, NOT the no-editor one
+        verify(behaviorRuleImproverService, org.mockito.Mockito.never())
+                .startImprovementFromAttribution(any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("behavior_rule + baseVersionId + reflection: routes to editor-aware carry-forward overload")
+    void behaviorRuleSurface_baseVersion_reflection_routesToEditorCarryForward() {
+        when(behaviorRuleImproverService.startImprovementFromBaseVersion(
+                eq(55L), eq("42"), eq("best-brv"), eq("issue"), eq(0L), any(EvolveEditorContext.class)))
+                .thenReturn(new ImprovementStartResult("42", null, "brule-v9", "PENDING"));
+
+        Map<String, Object> input = new LinkedHashMap<>();
+        input.put("surface", "behavior_rule");
+        input.put("issue", "issue");
+        input.put("targetAgentId", "42");
+        input.put("eventId", "55");
+        input.put("baseVersionId", "best-brv");
+        input.put("priorChange", "prev change");
+
+        SkillResult result = run(input);
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.getOutput()).contains("\"candidateId\":\"brule-v9\"");
+        verify(behaviorRuleImproverService).startImprovementFromBaseVersion(
+                eq(55L), eq("42"), eq("best-brv"), eq("issue"), eq(0L), any(EvolveEditorContext.class));
+        verify(behaviorRuleImproverService, org.mockito.Mockito.never())
+                .startImprovementFromBaseVersion(any(), any(), any(), any(), any());
+    }
+
+    @Test
     @DisplayName("skill + direct eventId: routes with explicit patternId + ownerId")
     void skillSurface_directEventId() {
         SkillDraftEntity draft = new SkillDraftEntity();
@@ -171,6 +253,60 @@ class GenerateCandidateToolTest {
                 eq(55L), eq(55L), eq("issue"), isNull(), isNull(), eq(0L), any());
     }
 
+    @Test
+    @DisplayName("skill + baseDraftId (hill-climb): routes to createDraftFromBaseDraft, not Attribution")
+    void skillSurface_baseDraftId_routesCarryForward() {
+        SkillDraftEntity draft = new SkillDraftEntity();
+        draft.setId("draft-cf");
+        when(skillDraftService.createDraftFromBaseDraft(
+                eq(55L), eq("best-draft"), eq("issue"), eq(3L)))
+                .thenReturn(draft);
+
+        Map<String, Object> input = new LinkedHashMap<>();
+        input.put("surface", "skill");
+        input.put("issue", "issue");
+        input.put("targetAgentId", "42");
+        input.put("eventId", "55");
+        input.put("ownerId", "3");
+        input.put("baseDraftId", "best-draft");
+
+        SkillResult result = run(input);
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.getOutput()).contains("\"candidateId\":\"draft-cf\"");
+        verify(skillDraftService).createDraftFromBaseDraft(eq(55L), eq("best-draft"), eq("issue"), eq(3L));
+        // fresh path NOT taken
+        verify(skillDraftService, org.mockito.Mockito.never())
+                .createDraftFromAttribution(any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("skill + baseDraftId + reflection: routes to the editor-aware carry-forward overload")
+    void skillSurface_baseDraftId_withReflection_routesEditorOverload() {
+        SkillDraftEntity draft = new SkillDraftEntity();
+        draft.setId("draft-cf2");
+        when(skillDraftService.createDraftFromBaseDraft(
+                eq(55L), eq("best-draft"), eq("issue"), eq(0L), any(EvolveEditorContext.class)))
+                .thenReturn(draft);
+
+        Map<String, Object> input = new LinkedHashMap<>();
+        input.put("surface", "skill");
+        input.put("issue", "issue");
+        input.put("targetAgentId", "42");
+        input.put("eventId", "55");
+        input.put("baseDraftId", "best-draft");
+        input.put("priorChange", "last round refined the body");
+
+        SkillResult result = run(input);
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.getOutput()).contains("\"candidateId\":\"draft-cf2\"");
+        verify(skillDraftService).createDraftFromBaseDraft(
+                eq(55L), eq("best-draft"), eq("issue"), eq(0L), any(EvolveEditorContext.class));
+        verify(skillDraftService, org.mockito.Mockito.never())
+                .createDraftFromBaseDraft(any(), any(), any(), any());
+    }
+
     // ── report-issue bridge mode (preferred) ───────────────────────────────
 
     @Test
@@ -197,6 +333,38 @@ class GenerateCandidateToolTest {
         assertThat(result.getOutput()).contains("\"candidateId\":\"prompt-v9\"");
         verify(optReportToEventBridge).convertIssueToEvent("rep-1", "issue-3");
         verify(promptImproverService).startImprovementFromAttribution(7700L, "900", "fix it", 0L);
+    }
+
+    @Test
+    @DisplayName("concern#2: report-issue mode feeds the event's enriched description (rootCause/proposedFix) to the improver, NOT the thin orchestrator issue")
+    void reportIssueBridge_enrichedDescription_feedsImproverNotThinIssue() {
+        stubReport("rep-9", 900L);
+        OptReportToEventBridge.ConvertResult minted = mintedEvent(8800L, 900L);
+        // The minted event's description = G4/G5-enriched buildDescription output.
+        String enriched = "Edit fails repeatedly\n\nRoot cause: old_string came from a stale "
+                + "snapshot\n\nProposed fix: fresh Read of the file immediately before the Edit";
+        minted.event().setDescription(enriched);
+        when(optReportToEventBridge.convertIssueToEvent("rep-9", "issue-7")).thenReturn(minted);
+        when(promptImproverService.startImprovementFromAttribution(eq(8800L), eq("900"), any(), eq(0L)))
+                .thenReturn(new ImprovementStartResult("900", null, "prompt-v10", "PENDING"));
+
+        Map<String, Object> input = new LinkedHashMap<>();
+        input.put("surface", "prompt");
+        input.put("issue", "thin orchestrator issue");   // should be OVERRIDDEN by the enriched description
+        input.put("targetAgentId", "900");
+        input.put("reportId", "rep-9");
+        input.put("issueId", "issue-7");
+
+        SkillResult result = run(input);
+
+        assertThat(result.isSuccess()).isTrue();
+        ArgumentCaptor<String> issueCap = ArgumentCaptor.forClass(String.class);
+        verify(promptImproverService).startImprovementFromAttribution(eq(8800L), eq("900"), issueCap.capture(), eq(0L));
+        assertThat(issueCap.getValue())
+                .isEqualTo(enriched)
+                .contains("Root cause:")
+                .contains("Proposed fix:")
+                .isNotEqualTo("thin orchestrator issue");
     }
 
     @Test

@@ -10,9 +10,11 @@ import com.skillforge.tools.mcp.exception.McpClientException;
 import com.skillforge.tools.mcp.protocol.McpToolDescriptor;
 import com.skillforge.tools.mcp.session.McpServerSession;
 import com.skillforge.tools.mcp.session.McpServerSessionRegistry;
+import com.skillforge.tools.mcp.transport.McpHttpTransport;
 import com.skillforge.tools.mcp.transport.McpStdioTransport;
 import com.skillforge.tools.mcp.transport.McpTransport;
 import jakarta.annotation.PreDestroy;
+import okhttp3.OkHttpClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -24,6 +26,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -71,6 +74,14 @@ public class McpServerLifecycle {
     private final ObjectMapper objectMapper;
     private final boolean mcpEnabled;
 
+    /**
+     * Shared HTTP client for all http-transport MCP servers. Thread-safe; reused
+     * across sessions (connection pooling). Per-request call timeouts are applied by
+     * {@link McpHttpTransport} via {@code newBuilder().callTimeout(...)}, so the base
+     * read/connect timeouts here are just generous outer bounds.
+     */
+    private final OkHttpClient httpClient;
+
     public McpServerLifecycle(McpServerRepository repository,
                               McpServerService service,
                               McpServerSessionRegistry sessionRegistry,
@@ -83,6 +94,11 @@ public class McpServerLifecycle {
         this.toolRegistrar = toolRegistrar;
         this.objectMapper = objectMapper;
         this.mcpEnabled = mcpEnabled;
+        this.httpClient = new OkHttpClient.Builder()
+                .connectTimeout(Duration.ofSeconds(10))
+                .readTimeout(Duration.ofSeconds(60))
+                .writeTimeout(Duration.ofSeconds(30))
+                .build();
     }
 
     public boolean isMcpEnabled() {
@@ -175,7 +191,7 @@ public class McpServerLifecycle {
     public List<Map<String, Object>> testConnection(Long id) {
         McpServerEntity entity = repository.findById(id)
                 .orElseThrow(() -> new McpServerNotFoundException(id));
-        McpStdioTransport transport = buildTransport(entity);
+        McpTransport transport = buildTransport(entity);
         McpServerSession session = new McpServerSession(entity.getName(), transport, objectMapper);
         try {
             session.connect();
@@ -225,7 +241,7 @@ public class McpServerLifecycle {
     // -----------------------------------------------------------------------
 
     private void connectAndRegister(McpServerEntity entity) {
-        McpStdioTransport transport = buildTransport(entity);
+        McpTransport transport = buildTransport(entity);
         McpServerSession session = new McpServerSession(entity.getName(), transport, objectMapper);
         // connect() will throw on failure; sessionRegistry stays clean
         session.connect();
@@ -244,7 +260,13 @@ public class McpServerLifecycle {
         }
     }
 
-    private McpStdioTransport buildTransport(McpServerEntity entity) {
+    private McpTransport buildTransport(McpServerEntity entity) {
+        if (McpServerService.TRANSPORT_HTTP.equals(entity.getTransport())) {
+            Map<String, String> resolvedHeaders = resolveHeaders(service.parseHeaders(entity));
+            return new McpHttpTransport(entity.getName(), entity.getUrl(),
+                    resolvedHeaders, objectMapper, httpClient);
+        }
+        // stdio (default)
         List<String> command = new ArrayList<>();
         command.add(entity.getCommand());
         command.addAll(service.parseArgs(entity));
@@ -265,6 +287,15 @@ public class McpServerLifecycle {
             out.put(e.getKey(), substitute(e.getValue()));
         }
         return out;
+    }
+
+    /**
+     * INV-5 for http transport headers: substitute {@code ${VAR_NAME}} placeholders in
+     * header values from {@link System#getenv} (e.g. {@code Authorization: Bearer ${KEY}}).
+     * Same semantics as {@link #resolveEnv} — kept as a named helper for call-site clarity.
+     */
+    static Map<String, String> resolveHeaders(Map<String, String> raw) {
+        return resolveEnv(raw);
     }
 
     private static String substitute(String value) {

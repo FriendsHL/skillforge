@@ -87,8 +87,6 @@ import java.util.stream.Collectors;
 public class SkillAbEvalService extends AbstractAbEvalRunner<SkillEntity> {
 
     private static final Logger log = LoggerFactory.getLogger(SkillAbEvalService.class);
-    private static final double PROMOTION_DELTA_THRESHOLD_PP = 15.0;
-    private static final double PROMOTION_MIN_CANDIDATE_RATE_PP = 40.0;
 
     private final SkillRepository skillRepository;
     private final SkillAbRunRepository skillAbRunRepository;
@@ -107,6 +105,11 @@ public class SkillAbEvalService extends AbstractAbEvalRunner<SkillEntity> {
     private final SkillRegistry skillRegistry;
     private final SkillAbCompletedEventPublisher abCompletedEventPublisher;
     private final long scenarioTimeoutMs;
+    // F5 (2026-06-07): promote thresholds moved from hardcoded 15.0/40.0 constants
+    // into EvolveThresholdProperties (skillforge.evolve.thresholds.skill-delta-pp,
+    // default 5 / skill-min-candidate-rate-pp, default 40) — shared with
+    // GetAbResultTool's advisory wouldPromote so the two can't drift.
+    private final com.skillforge.server.config.EvolveThresholdProperties thresholds;
 
     /**
      * Phase 1.2 — per-run ephemeral state shared between {@link #runAbTestAsync}
@@ -136,7 +139,8 @@ public class SkillAbEvalService extends AbstractAbEvalRunner<SkillEntity> {
                               SkillAbCompletedEventPublisher abCompletedEventPublisher,
                               @Lazy SkillSurface skillSurface,
                               SkillEvalService skillEvalService,
-                              @Value("${skillforge.flywheel.ab-eval.scenario-timeout-ms:120000}") long scenarioTimeoutMs) {
+                              @Value("${skillforge.flywheel.ab-eval.scenario-timeout-ms:120000}") long scenarioTimeoutMs,
+                              com.skillforge.server.config.EvolveThresholdProperties thresholds) {
         // @Lazy on skillSurface breaks the DI cycle: SkillSurface's @Lazy
         // injection of SkillAbEvalService bootstrap order. super() only stores
         // the reference (no method call), so the @Lazy proxy is fine.
@@ -165,6 +169,7 @@ public class SkillAbEvalService extends AbstractAbEvalRunner<SkillEntity> {
         this.skillRegistry = skillRegistry;
         this.abCompletedEventPublisher = abCompletedEventPublisher;
         this.scenarioTimeoutMs = scenarioTimeoutMs;
+        this.thresholds = thresholds;
     }
 
     /**
@@ -345,7 +350,7 @@ public class SkillAbEvalService extends AbstractAbEvalRunner<SkillEntity> {
         for (EvalScenario scenario : scenarios) {
             log.info("runBaselineOnly skill={} scenario={} ({})", skillId, scenario.getId(), scenario.getName());
             try {
-                ScenarioRunResult runResult = runSingleScenario(runId, scenario, agentDef, skillDef);
+                ScenarioRunResult runResult = runSingleScenario(runId, scenario, agentDef, List.of(skillDef));
                 EvalJudgeOutput judgeOutput = evalJudgeTool.judge(scenario, runResult);
 
                 EvalScoreFormula.Result scoreResult = EvalScoreFormula.calculate(
@@ -548,7 +553,8 @@ public class SkillAbEvalService extends AbstractAbEvalRunner<SkillEntity> {
                 } else {
                     abRun.setSkipReason(String.format(
                             "delta=%.2f candidateRate=%.2f (thresholds: delta>=%.1f, rate>=%.1f)",
-                            delta, candidatePassRate, PROMOTION_DELTA_THRESHOLD_PP, PROMOTION_MIN_CANDIDATE_RATE_PP));
+                            delta, candidatePassRate,
+                            thresholds.getSkillDeltaPp(), thresholds.getSkillMinCandidateRatePp()));
                 }
 
                 skillAbRunRepository.save(abRun);
@@ -626,83 +632,143 @@ public class SkillAbEvalService extends AbstractAbEvalRunner<SkillEntity> {
                             + "(currentRun ThreadLocal is empty)");
         }
         if (version == state.baseline) {
-            // Baseline side — look up precomputed baseline rate from the
-            // historical baselineEvalRunId. V2 behavior: no re-running of
-            // scenarios for the baseline side, just stat lookup.
-            double baselineRate = 0.0;
+            // Baseline arm.
             if (state.abRun.getBaselineEvalRunId() != null) {
+                // Backward-compat path: a caller supplied a real historical
+                // baseline eval run (e.g. the prompt-style flow / attribution
+                // path). Use the cached held-out stat lookup — do NOT re-run
+                // scenarios. Callers that pin a real baselineEvalRunId expect
+                // the baseline arm to reflect that recorded run, not a fresh one.
+                double baselineRate = 0.0;
                 Optional<EvalTaskEntity> baselineRun = evalRunRepository.findById(
                         state.abRun.getBaselineEvalRunId());
                 if (baselineRun.isPresent()) {
                     baselineRate = computeHeldOutBaselineRate(
                             baselineRun.get(), state.heldOutScenarios);
                 }
+                return new EvalRun(state.abRun.getBaselineEvalRunId(),
+                        baselineRate, state.heldOutScenarios.size());
             }
-            return new EvalRun(state.abRun.getBaselineEvalRunId(),
-                    baselineRate, state.heldOutScenarios.size());
+            // BUGFIX (SKILL-AB-BASELINE-FIX): no cached baselineEvalRunId — this
+            // is the draft path (SkillDraftService.startAbTestFromDraft passes
+            // null). Previously this returned an unconditional 0.0 seed WITHOUT
+            // running anything, so delta = candidate − 0 = candidate and any
+            // candidate ≥ 40pp auto-promoted against a phantom floor. Now we run
+            // the held-out scenarios LIVE with NO candidate skill injected (the
+            // agent's normal config) → a REAL baseline = "agent without the
+            // candidate skill", mirroring the Phase 4 agent-level path. delta
+            // then reflects the candidate skill's true lift.
+            return runArmEvalSet(state, List.of(), false);
         }
-        // Candidate side — actually run the scenarios.
-        return runCandidateEvalSet(state, version);
+        // Candidate arm — run the held-out scenarios WITH the candidate skill.
+        return runArmEvalSet(state, List.of(buildSkillDefinition(version)), true);
     }
 
-    private EvalRun runCandidateEvalSet(SkillRunState state, SkillEntity candidateSkill) {
-        SkillDefinition candidateSkillDef = buildSkillDefinition(candidateSkill);
+    /**
+     * Shared per-scenario eval loop used by BOTH arms. Runs every held-out
+     * scenario with the given {@code injectedSkillDefs} (the candidate skill for
+     * the candidate arm; an empty list for the live baseline arm = "agent
+     * without the candidate skill") and returns the arm's pass-rate.
+     *
+     * <p>Per-scenario results are merged into {@code state.scenarioResults} via
+     * {@link #mergeScenarioResult} so each scenario ends with exactly ONE
+     * {@link AbScenarioResult} carrying BOTH the baseline and candidate side —
+     * never two entries per scenario. The baseline arm runs first
+     * ({@link AbstractAbEvalRunner#run} step 1) and creates each entry with the
+     * candidate side as an UNKNOWN placeholder; the candidate arm runs second
+     * (step 2) and fills the candidate side in-place.
+     */
+    private EvalRun runArmEvalSet(SkillRunState state, List<SkillDefinition> injectedSkillDefs,
+                                  boolean candidateArm) {
         SkillAbRunEntity abRun = state.abRun;
         AgentDefinition agentDef = state.agentDef;
+        String armLabel = candidateArm ? "candidate" : "baseline";
         int passed = 0;
         for (EvalScenario scenario : state.heldOutScenarios) {
-            log.info("Skill AB eval scenario: {} ({})", scenario.getId(), scenario.getName());
-            String candidateStatus;
-            double candidateScore;
+            log.info("Skill AB eval scenario ({} arm): {} ({})",
+                    armLabel, scenario.getId(), scenario.getName());
+            String status;
+            double score;
             try {
                 if (scenario.isMultiTurn()) {
                     MultiTurnTranscript transcript = new MultiTurnTranscript();
                     ScenarioRunResult runResult = runMultiTurnScenario(
-                            abRun.getId(), scenario, agentDef, candidateSkillDef, transcript);
+                            abRun.getId(), scenario, agentDef, injectedSkillDefs, transcript);
                     EvalJudgeMultiTurnOutput judgeOutput = evalJudgeTool.judgeMultiTurnConversation(
                             scenario, runResult, transcript);
                     if ("PENDING_JUDGE".equals(runResult.getStatus())) {
                         runResult.setStatus(judgeOutput.isPass() ? "PASS" : "FAIL");
                     }
-                    candidateStatus = runResult.getStatus();
-                    candidateScore = judgeOutput.getCompositeScore();
+                    status = runResult.getStatus();
+                    score = judgeOutput.getCompositeScore();
                     if (judgeOutput.isPass()) {
                         passed++;
                     }
                 } else {
                     ScenarioRunResult runResult = runSingleScenario(
-                            abRun.getId(), scenario, agentDef, candidateSkillDef);
+                            abRun.getId(), scenario, agentDef, injectedSkillDefs);
                     EvalJudgeOutput judgeOutput = evalJudgeTool.judge(scenario, runResult);
-                    candidateStatus = runResult.getStatus();
-                    candidateScore = judgeOutput.getCompositeScore();
+                    status = runResult.getStatus();
+                    score = judgeOutput.getCompositeScore();
                     if (judgeOutput.isPass()) {
                         passed++;
                     }
                 }
             } catch (Exception e) {
-                log.error("Skill AB eval scenario {} failed: {}", scenario.getId(), e.getMessage());
-                candidateStatus = "ERROR";
-                candidateScore = 0.0;
+                log.error("Skill AB eval scenario {} ({} arm) failed: {}",
+                        scenario.getId(), armLabel, e.getMessage());
+                status = "ERROR";
+                score = 0.0;
             }
 
-            state.scenarioResults.add(new AbScenarioResult(
-                    scenario.getId(), scenario.getName(),
-                    new AbScenarioResult.RunResult("UNKNOWN", 0.0),
-                    new AbScenarioResult.RunResult(candidateStatus, candidateScore)));
+            mergeScenarioResult(state, scenario.getId(), scenario.getName(),
+                    candidateArm, new AbScenarioResult.RunResult(status, score));
 
-            if (broadcaster != null && abRun.getTriggeredByUserId() != null) {
+            // Broadcast per-scenario progress for the candidate arm only —
+            // preserves the existing FE "ab_skill_scenario_finished" event
+            // shape byte-for-byte (the baseline arm runs silently; FE shows the
+            // final baselinePassRate from the completion event).
+            if (candidateArm && broadcaster != null && abRun.getTriggeredByUserId() != null) {
                 Map<String, Object> event = new LinkedHashMap<>();
                 event.put("type", "ab_skill_scenario_finished");
                 event.put("abRunId", abRun.getId());
                 event.put("scenarioId", scenario.getId());
-                event.put("candidateStatus", candidateStatus);
-                event.put("candidateScore", candidateScore);
+                event.put("candidateStatus", status);
+                event.put("candidateScore", score);
                 broadcaster.userEvent(abRun.getTriggeredByUserId(), event);
             }
         }
-        double candidatePassRate = state.heldOutScenarios.isEmpty() ? 0
+        double passRate = state.heldOutScenarios.isEmpty() ? 0
                 : (double) passed / state.heldOutScenarios.size() * 100;
-        return new EvalRun(abRun.getId(), candidatePassRate, state.heldOutScenarios.size());
+        return new EvalRun(abRun.getId(), passRate, state.heldOutScenarios.size());
+    }
+
+    /**
+     * Find-or-create the per-scenario {@link AbScenarioResult} for
+     * {@code scenarioId} in {@code state.scenarioResults} and fill ONE side
+     * (baseline or candidate) in-place. Guarantees one entry per scenario
+     * carrying both sides. The arm that runs first creates the entry with the
+     * other side as an {@code UNKNOWN/0.0} placeholder; the arm that runs second
+     * replaces (records are immutable) the matching entry by index, preserving
+     * the side the first arm already wrote.
+     */
+    private static void mergeScenarioResult(SkillRunState state, String scenarioId,
+                                            String scenarioName, boolean candidateArm,
+                                            AbScenarioResult.RunResult side) {
+        AbScenarioResult.RunResult placeholder = new AbScenarioResult.RunResult("UNKNOWN", 0.0);
+        List<AbScenarioResult> list = state.scenarioResults;
+        for (int i = 0; i < list.size(); i++) {
+            AbScenarioResult existing = list.get(i);
+            if (existing.scenarioId().equals(scenarioId)) {
+                AbScenarioResult.RunResult baseline = candidateArm ? existing.baseline() : side;
+                AbScenarioResult.RunResult candidate = candidateArm ? side : existing.candidate();
+                list.set(i, new AbScenarioResult(scenarioId, scenarioName, baseline, candidate));
+                return;
+            }
+        }
+        AbScenarioResult.RunResult baseline = candidateArm ? placeholder : side;
+        AbScenarioResult.RunResult candidate = candidateArm ? side : placeholder;
+        list.add(new AbScenarioResult(scenarioId, scenarioName, baseline, candidate));
     }
 
     @Override
@@ -713,9 +779,10 @@ public class SkillAbEvalService extends AbstractAbEvalRunner<SkillEntity> {
 
     @Override
     protected boolean shouldPromote(Comparison comparison) {
-        // V2 thresholds preserved bit-for-bit.
-        return comparison.delta() >= PROMOTION_DELTA_THRESHOLD_PP
-                && comparison.candidatePassRate() >= PROMOTION_MIN_CANDIDATE_RATE_PP;
+        // F5 (2026-06-07): thresholds config-driven (skill-delta-pp default 5,
+        // was a hardcoded 15.0; skill-min-candidate-rate-pp 40 unchanged).
+        return comparison.delta() >= thresholds.getSkillDeltaPp()
+                && comparison.candidatePassRate() >= thresholds.getSkillMinCandidateRatePp();
     }
 
     @Override
@@ -777,8 +844,8 @@ public class SkillAbEvalService extends AbstractAbEvalRunner<SkillEntity> {
 
     /**
      * SKILL-DASHBOARD-POLISH D — manual promote override. When the auto-promote
-     * thresholds (delta ≥ {@value #PROMOTION_DELTA_THRESHOLD_PP}pp AND candidate
-     * rate ≥ {@value #PROMOTION_MIN_CANDIDATE_RATE_PP}pp) reject a candidate but
+     * thresholds ({@code skillforge.evolve.thresholds}: delta ≥ skill-delta-pp AND
+     * candidate rate ≥ skill-min-candidate-rate-pp) reject a candidate but
      * the operator wants to promote anyway, this endpoint reuses the same
      * V64-safe {@link #promoteCandidate} path and stamps the abRun with
      * {@code promoted=true}.
@@ -896,10 +963,10 @@ public class SkillAbEvalService extends AbstractAbEvalRunner<SkillEntity> {
 
     private ScenarioRunResult runSingleScenario(String abRunId, EvalScenario scenario,
                                                  AgentDefinition agentDef,
-                                                 SkillDefinition candidateSkillDef) {
+                                                 List<SkillDefinition> injectedSkillDefs) {
         try {
             SkillRegistry sandboxRegistry = sandboxFactory.buildSandboxRegistryWithSkills(
-                    abRunId, scenario.getId(), List.of(candidateSkillDef));
+                    abRunId, scenario.getId(), injectedSkillDefs);
             AgentLoopEngine engine = evalEngineFactory.buildEvalEngine(sandboxRegistry);
 
             String evalSessionId = UUID.randomUUID().toString();
@@ -961,13 +1028,13 @@ public class SkillAbEvalService extends AbstractAbEvalRunner<SkillEntity> {
 
     private ScenarioRunResult runMultiTurnScenario(String abRunId, EvalScenario scenario,
                                                    AgentDefinition agentDef,
-                                                   SkillDefinition candidateSkillDef,
+                                                   List<SkillDefinition> injectedSkillDefs,
                                                    MultiTurnTranscript transcriptOut) {
         long startMs = System.currentTimeMillis();
         long budgetMs = 90_000L;
         try {
             SkillRegistry sandboxRegistry = sandboxFactory.buildSandboxRegistryWithSkills(
-                    abRunId, scenario.getId(), List.of(candidateSkillDef));
+                    abRunId, scenario.getId(), injectedSkillDefs);
             AgentLoopEngine engine = evalEngineFactory.buildEvalEngine(sandboxRegistry);
 
             String evalSessionId = UUID.randomUUID().toString();

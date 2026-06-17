@@ -1,0 +1,46 @@
+{
+  "name": "skillforge-desktop",
+  "version": "1.0.0",
+  "description": "SkillForge macOS desktop app — bundles the Spring server, embedded PostgreSQL and a trimmed JRE into a self-contained .app",
+  "private": true,
+  "main": "main.js",
+  "author": "SkillForge",
+  "license": "UNLICENSED",
+  "scripts": {
+    "start": "electron .",
+    "dist": "bash scripts/build-dist.sh"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.skillforge.desktop",
+    "productName": "SkillForge",
+    "asar": true,
+    "files": [
+      "main.js",
+      "loading.html",
+      "package.json"
+    ],
+    "extraResources": [
+      { "from": "staging/server", "to": "server" },
+      { "from": "staging/web", "to": "web" },
+      { "from": "staging/jre", "to": "jre" },
+      { "from": "staging/system-skills", "to": "system-skills" }
+    ],
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "mac": {
+      "target": [
+        { "target": "dmg", "arch": "arm64" }
+      ],
+      "category": "public.app-category.developer-tools"
+    },
+    "dmg": {
+      "title": "SkillForge ${version}"
+    }
+  }
+}

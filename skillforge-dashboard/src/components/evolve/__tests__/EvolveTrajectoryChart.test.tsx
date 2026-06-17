@@ -132,6 +132,89 @@ describe('EvolveTrajectoryChart', () => {
     expect(meta.kept).toBe(false);
   });
 
+  it('draws a horizontal baseline markLine at the run baselineScore', () => {
+    const detail = makeDetail({
+      iterations: [
+        makeIteration({ iteration: 1, baselineScore: 25, candidateScore: 16.67, delta: -8.33 }),
+        makeIteration({ iteration: 2, baselineScore: 25, candidateScore: 33.33, delta: 8.33 }),
+      ],
+    });
+    render(<EvolveTrajectoryChart runs={[detail]} />);
+    const option = JSON.parse(
+      screen.getByTestId('echarts-mock').getAttribute('data-option') ?? '{}',
+    ) as {
+      series: Array<{ markLine?: { data: Array<{ yAxis: number }> } }>;
+    };
+    const markLine = option.series[0].markLine;
+    expect(markLine).toBeDefined();
+    // baseline is measured once → constant; line sits at that y value.
+    expect(markLine?.data[0].yAxis).toBe(25);
+  });
+
+  it('omits the baseline markLine when no iteration has a baselineScore', () => {
+    const detail = makeDetail({
+      iterations: [makeIteration({ iteration: 1, baselineScore: null })],
+    });
+    render(<EvolveTrajectoryChart runs={[detail]} />);
+    const option = JSON.parse(
+      screen.getByTestId('echarts-mock').getAttribute('data-option') ?? '{}',
+    ) as { series: Array<{ markLine?: unknown }> };
+    expect(option.series[0].markLine).toBeUndefined();
+  });
+
+  it('colors each marker by its position vs the baseline line (rise green / fall red)', () => {
+    const detail = makeDetail({
+      iterations: [
+        // below the 25 baseline line, not kept → hollow red
+        makeIteration({ iteration: 1, baselineScore: 25, candidateScore: 16.67, delta: -8.33, kept: false }),
+        // above the 25 baseline line, kept → solid green
+        makeIteration({ iteration: 2, baselineScore: 25, candidateScore: 33.33, delta: 8.33, kept: true }),
+      ],
+    });
+    render(<EvolveTrajectoryChart runs={[detail]} />);
+    const option = JSON.parse(
+      screen.getByTestId('echarts-mock').getAttribute('data-option') ?? '{}',
+    ) as {
+      series: Array<{
+        data: Array<{ itemStyle: { color: string; borderColor: string } }>;
+      }>;
+    };
+    const [down, up] = option.series[0].data;
+    expect(down.itemStyle.borderColor).toContain('--color-error');
+    expect(down.itemStyle.color).toBe('transparent'); // hollow (not kept)
+    expect(up.itemStyle.borderColor).toContain('--color-success');
+    expect(up.itemStyle.color).toContain('--color-success'); // solid (kept)
+  });
+
+  it('keeps the baseline line fixed at the original after a win, and colors vs that line — not the moved best', () => {
+    // Winner carry-forward: iter1 wins (best 41.67→58.33). iter2's per-iteration
+    // baselineScore is the MOVED best (58.33), but the chart line must stay at the
+    // ORIGINAL baseline (41.67), and iter2 (candidate 41.67) sits ON that line —
+    // so it must be neutral, NOT red (red is what iter.delta=-16.66 vs best implies).
+    const detail = makeDetail({
+      iterations: [
+        makeIteration({ iteration: 1, baselineScore: 41.67, candidateScore: 58.33, delta: 16.66, kept: true }),
+        makeIteration({ iteration: 2, baselineScore: 58.33, candidateScore: 41.67, delta: -16.66, kept: false }),
+      ],
+    });
+    render(<EvolveTrajectoryChart runs={[detail]} />);
+    const option = JSON.parse(
+      screen.getByTestId('echarts-mock').getAttribute('data-option') ?? '{}',
+    ) as {
+      series: Array<{
+        markLine?: { data: Array<{ yAxis: number }> };
+        data: Array<{ itemStyle: { borderColor: string } }>;
+      }>;
+    };
+    // Line fixed at the original baseline, not the moved best.
+    expect(option.series[0].markLine?.data[0].yAxis).toBe(41.67);
+    const [first, second] = option.series[0].data;
+    expect(first.itemStyle.borderColor).toContain('--color-success'); // above line → green
+    // On the line (41.67 − 41.67 = 0) → neutral/tertiary, NOT red.
+    expect(second.itemStyle.borderColor).toContain('--text-tertiary');
+    expect(second.itemStyle.borderColor).not.toContain('--color-error');
+  });
+
   it('shows legend when multiple runs are provided', () => {
     const runs = [makeDetail({ evolveRunId: 'run-001' }), makeDetail({ evolveRunId: 'run-002' })];
     render(<EvolveTrajectoryChart runs={runs} />);

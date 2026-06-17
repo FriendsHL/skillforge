@@ -54,7 +54,7 @@ class WorkflowDefinitionRegistryTest {
     }
 
     @Test
-    @DisplayName("parses the real opt-report.workflow.js: 4 phases Load/Annotate/Aggregate/Approve")
+    @DisplayName("parses the real opt-report.workflow.js: 5 phases Load/Annotate/Holistic/Aggregate/Approve")
     void parsesRealOptReportWorkflow() throws Exception {
         String source;
         try (InputStream in = getClass().getResourceAsStream("/workflows/opt-report.workflow.js")) {
@@ -65,11 +65,12 @@ class WorkflowDefinitionRegistryTest {
 
         assertThat(def.name()).isEqualTo("opt-report");
         assertThat(def.phases().stream().map(WorkflowDefinition.WorkflowPhase::title).toList())
-                .containsExactly("Load", "Annotate", "Aggregate", "Approve");
+                .containsExactly("Load", "Annotate", "Holistic", "Aggregate", "Approve");
         // jsSource is meta-free + export-free so WorkflowEvaluator can run it.
         assertThat(def.jsSource()).doesNotContain("export");
         assertThat(def.jsSource()).contains("agentSlug: 'opt-report-orchestrator'");
         assertThat(def.jsSource()).contains("agentSlug: 'opt-report-aggregator'");
+        assertThat(def.jsSource()).contains("agentSlug: 'holistic-error-span-analyzer'");
         assertThat(def.jsSource()).contains("humanApprove(summary)");
     }
 

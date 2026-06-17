@@ -182,6 +182,35 @@ class FlywheelRunServiceStepCrudIT extends AbstractPostgresIT {
         assertThat(count).isEqualTo(42);
     }
 
+    @Test
+    @DisplayName("V148: same step_index across DIFFERENT step_kind co-exists (evolve-loop tool_call + evolve_iteration); same kind collides")
+    void v148_stepIndexUniquePerKind() {
+        String runId = insertRun(7L, "evolve");
+
+        // The evolve-loop workflow writes, on the SAME run:
+        //   - a candidate subagent_dispatch step at step_index=1 (workflow counter),
+        //   - mechanical tool_call steps (also workflow counter, e.g. step_index=1),
+        //   - an evolve_iteration LEDGER step at step_index=1 (iteration number).
+        // Before V148 (unique on (run_id, step_index)) the iteration ledger would
+        // collide with the tool_call at the same index. After V148
+        // (unique on (run_id, step_kind, step_index)) all three co-exist.
+        String dispatch = service.appendStep(runId, "{}",
+                FlywheelRunStepEntity.STEP_KIND_SUBAGENT_DISPATCH, 1);
+        String toolCall = service.appendStep(runId, "{}",
+                FlywheelRunStepEntity.STEP_KIND_TOOL_CALL, 1);
+        String ledger = service.appendEvolveIterationStep(runId, 1,
+                objectMapper.valueToTree(Map.of("iteration", 1, "kept", true)));
+
+        assertThat(List.of(dispatch, toolCall, ledger)).doesNotHaveDuplicates();
+        List<FlywheelRunStepEntity> all = service.listStepsByRunId(runId);
+        assertThat(all).hasSize(3);
+
+        // Intra-kind uniqueness is STILL enforced: a 2nd tool_call at step_index=1 collides.
+        assertThatThrownBy(() -> service.appendStep(runId, "{}",
+                FlywheelRunStepEntity.STEP_KIND_TOOL_CALL, 1))
+                .isInstanceOf(RuntimeException.class);
+    }
+
     private String insertRun(long agentId, String loopKind) {
         String id = UUID.randomUUID().toString();
         jdbcTemplate.update(

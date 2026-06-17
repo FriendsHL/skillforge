@@ -47,6 +47,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -84,7 +85,8 @@ class SkillAbEvalServiceMultiTurnTest {
                 skillRegistry, abCompletedEventPublisher,
                 org.mockito.Mockito.mock(com.skillforge.server.improve.surface.SkillSurface.class),
                 mockEvalService,
-                120_000L);
+                120_000L,
+                new com.skillforge.server.config.EvolveThresholdProperties());
         // Phase 1.2 reviewer-r1 fix: SkillEvalService is the EvalService<SkillEntity>
         // adapter. In production it @Lazy-delegates back to runEvalSetInternal;
         // here in tests we mock the adapter and rewire its run() to delegate
@@ -127,21 +129,25 @@ class SkillAbEvalServiceMultiTurnTest {
         when(evalJudgeTool.judgeMultiTurnConversation(eq(scenario), any(), any(MultiTurnTranscript.class)))
                 .thenReturn(judgeOutput);
 
-        // RED for SKILL-AB-MULTITURN-FIX Phase 1.0:
-        // Current code at SkillAbEvalService.java:387-393 warns and falls through to
-        // runSingleScenario at :398; after the fix this must use the multi-turn judge.
         ReflectionTestUtils.invokeMethod(service, "runAbTestAsync", "ab-1");
 
+        // SKILL-AB-BASELINE-FIX: both arms now run live (no cached baselineEvalRunId).
+        // The baseline arm runs FIRST with NO injected skill ("agent without the
+        // candidate skill"); the candidate arm runs SECOND with the candidate skill.
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<SkillDefinition>> overrideCaptor = ArgumentCaptor.forClass(List.class);
-        verify(sandboxFactory).buildSandboxRegistryWithSkills(eq("ab-1"), eq("multi-1"), overrideCaptor.capture());
-        assertThat(overrideCaptor.getValue())
+        verify(sandboxFactory, times(2))
+                .buildSandboxRegistryWithSkills(eq("ab-1"), eq("multi-1"), overrideCaptor.capture());
+        List<List<SkillDefinition>> arms = overrideCaptor.getAllValues();
+        assertThat(arms.get(0)).as("baseline arm injects NO candidate skill").isEmpty();
+        assertThat(arms.get(1)).as("candidate arm injects the candidate skill")
                 .extracting(SkillDefinition::getName)
                 .containsExactly("candidate-skill");
-        verify(evalJudgeTool).judgeMultiTurnConversation(eq(scenario), any(), any(MultiTurnTranscript.class));
+        // Both arms judged (baseline + candidate).
+        verify(evalJudgeTool, times(2)).judgeMultiTurnConversation(eq(scenario), any(), any(MultiTurnTranscript.class));
         verify(evalJudgeTool, never()).judge(eq(scenario), any());
-        verify(engine).run(any(), eq("first user turn"), any(), anyString(), any(), any());
-        verify(engine).run(any(), eq("second user turn"), any(), anyString(), any(), any());
+        verify(engine, times(2)).run(any(), eq("first user turn"), any(), anyString(), any(), any());
+        verify(engine, times(2)).run(any(), eq("second user turn"), any(), anyString(), any(), any());
         verify(engine, never()).run(any(), eq("single-turn fallback task"), any(), anyString(), any(), any());
 
         ArgumentCaptor<SkillAbRunEntity> savedCaptor = ArgumentCaptor.forClass(SkillAbRunEntity.class);
@@ -149,20 +155,28 @@ class SkillAbEvalServiceMultiTurnTest {
         SkillAbRunEntity finalSave = savedCaptor.getAllValues().get(savedCaptor.getAllValues().size() - 1);
         assertThat(finalSave.getStatus()).isEqualTo("COMPLETED");
         assertThat(finalSave.getCandidatePassRate()).isEqualTo(100.0);
+        // Baseline arm ran live → its pass rate is REAL (the same judge stub passes
+        // both arms here, so baseline == candidate == 100 and delta == 0), proving
+        // the baseline is no longer the phantom hard-coded 0.
+        assertThat(finalSave.getBaselinePassRate()).isEqualTo(100.0);
+        assertThat(finalSave.getDeltaPassRate()).isEqualTo(0.0);
         assertThat(finalSave.getAbScenarioResultsJson()).contains("\"oracleScore\":87.0");
     }
 
     @Test
-    @DisplayName("multi-turn judge failure isolates to per-scenario ERROR result; AB run still COMPLETED")
+    @DisplayName("multi-turn judge failure on BOTH arms isolates to per-scenario ERROR; AB run still COMPLETED")
     void runAbTestAsync_multiTurnScenario_perScenarioErrorIsolated() throws Exception {
         // SKILL-AB-MULTITURN-FIX 验收 #6 explicit coverage:
-        // 让 multi-turn judge 抛 RuntimeException 时，SkillAbEvalService.runCandidateEvalSet
-        // 的 try/catch (SkillAbEvalService.java:603-607) 必须把 candidateStatus 钉成 "ERROR"
-        // / candidateScore = 0.0 / 不抛上层，让外层 runAbTestAsync 仍能完成
-        // (abRun.setStatus("COMPLETED") at :464，而非 catch 块的 :504 setStatus("FAILED"))。
+        // 让 multi-turn judge 抛 RuntimeException 时，SkillAbEvalService.runArmEvalSet
+        // 的 per-scenario try/catch 必须把该 side status 钉成 "ERROR" / score = 0.0 /
+        // 不抛上层，让外层 runAbTestAsync 仍能 setStatus("COMPLETED")（而非 catch 块
+        // setStatus("FAILED")）。
         // 选 judge 抛而非 engine.run 抛：因为 runMultiTurnScenario 内部有自己的 try/catch
-        // (:1013-1017) 会 swallow engine 异常转 ScenarioRunResult.error；只有 judge 异常会
-        // 逃到 :603-607 外层 catch — 测 :603-607 这块代码最直接的方式。
+        // 会 swallow engine 异常转 ScenarioRunResult.error；只有 judge 异常会逃到
+        // runArmEvalSet 的外层 catch — 测这块代码最直接的方式。
+        // 注：此用例 judge 对 BOTH arms (baseline + candidate) 都抛（unconditional thenThrow）
+        // → 两侧都 ERROR。candidate-arm-only 隔离不变量由下一个用例
+        // runAbTestAsync_multiTurnScenario_candidateArmErrorIsolated_baselineSucceeds 守。
         // PRD 验收点："A/B run 失败场景有明确 per-scenario error result，run 状态和事件不回退"。
         SkillAbRunEntity abRun = abRun();
         SkillEntity candidate = candidateSkill();
@@ -181,8 +195,8 @@ class SkillAbEvalServiceMultiTurnTest {
         when(evalEngineFactory.buildEvalEngine(skillRegistry)).thenReturn(engine);
         when(engine.run(any(), anyString(), any(), anyString(), any(), any()))
                 .thenAnswer(inv -> loopResult(inv.getArgument(1)));
-        // Force per-scenario failure by making the multi-turn judge throw.
-        // The outer per-scenario catch in runCandidateEvalSet (:603-607) must absorb it.
+        // Force per-scenario failure by making the multi-turn judge throw on every
+        // call. The outer per-scenario catch in runArmEvalSet must absorb it.
         when(evalJudgeTool.judgeMultiTurnConversation(eq(scenario), any(), any(MultiTurnTranscript.class)))
                 .thenThrow(new RuntimeException("simulated multi-turn judge failure"));
 
@@ -203,6 +217,60 @@ class SkillAbEvalServiceMultiTurnTest {
         assertThat(finalSave.getCandidatePassRate()).isEqualTo(0.0);
         // Single-turn judge MUST NOT be called as a fallback.
         verify(evalJudgeTool, never()).judge(eq(scenario), any());
+    }
+
+    @Test
+    @DisplayName("candidate-arm judge failure isolates while baseline arm succeeds; run still COMPLETED")
+    void runAbTestAsync_multiTurnScenario_candidateArmErrorIsolated_baselineSucceeds() throws Exception {
+        // SKILL-AB-BASELINE-FIX re-guard: now that BOTH arms run, the per-scenario
+        // error-isolation invariant must hold when ONLY the candidate arm's judge
+        // throws (a future regression that propagates a candidate-arm exception
+        // would otherwise slip through — the both-throw case above trips the catch
+        // on the baseline arm first and never exercises the candidate arm).
+        // Arms run in order: baseline(multi-1) → candidate(multi-1). Stub the judge
+        // to PASS on the 1st call (baseline) and THROW on the 2nd (candidate).
+        SkillAbRunEntity abRun = abRun();
+        SkillEntity candidate = candidateSkill();
+        EvalScenario scenario = multiTurnScenario();
+        AgentDefinition agentDef = agentDefinition();
+
+        when(skillAbRunRepository.findById("ab-1")).thenReturn(Optional.of(abRun));
+        when(skillAbRunRepository.save(any(SkillAbRunEntity.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(scenarioLoader.loadAll()).thenReturn(List.of(scenario));
+        when(skillRepository.findById(2L)).thenReturn(Optional.of(candidate));
+        when(agentService.getAgent(10L)).thenReturn(new AgentEntity());
+        when(agentService.toAgentDefinition(any(AgentEntity.class))).thenReturn(agentDef);
+        when(sandboxFactory.buildSandboxRegistryWithSkills(eq("ab-1"), eq("multi-1"), any()))
+                .thenReturn(skillRegistry);
+        when(sandboxFactory.getSandboxRoot("ab-1", "multi-1")).thenReturn(Path.of("/tmp/eval-ab"));
+        when(evalEngineFactory.buildEvalEngine(skillRegistry)).thenReturn(engine);
+        when(engine.run(any(), anyString(), any(), anyString(), any(), any()))
+                .thenAnswer(inv -> loopResult(inv.getArgument(1)));
+
+        EvalJudgeMultiTurnOutput baselinePass = new EvalJudgeMultiTurnOutput();
+        baselinePass.setCompositeScore(90.0);
+        baselinePass.setPass(true);
+        when(evalJudgeTool.judgeMultiTurnConversation(eq(scenario), any(), any(MultiTurnTranscript.class)))
+                .thenReturn(baselinePass)  // baseline arm (1st call) succeeds
+                .thenThrow(new RuntimeException("simulated candidate-arm judge failure")); // candidate arm (2nd call)
+
+        // Must not throw — candidate-arm per-scenario error isolation.
+        ReflectionTestUtils.invokeMethod(service, "runAbTestAsync", "ab-1");
+
+        ArgumentCaptor<SkillAbRunEntity> savedCaptor = ArgumentCaptor.forClass(SkillAbRunEntity.class);
+        verify(skillAbRunRepository, org.mockito.Mockito.atLeastOnce()).save(savedCaptor.capture());
+        SkillAbRunEntity finalSave = savedCaptor.getAllValues().get(savedCaptor.getAllValues().size() - 1);
+        assertThat(finalSave.getStatus()).isEqualTo("COMPLETED");
+        assertThat(finalSave.getFailureReason()).isNull();
+        // Baseline arm ran live and PASSED → real non-zero baseline.
+        assertThat(finalSave.getBaselinePassRate()).isEqualTo(100.0);
+        // Candidate arm judge threw → that side is ERROR/0.0 → candidate rate 0.
+        assertThat(finalSave.getCandidatePassRate()).isEqualTo(0.0);
+        assertThat(finalSave.getDeltaPassRate()).isEqualTo(-100.0);
+        // Per-scenario row carries baseline PASS + candidate ERROR (one entry, both sides).
+        String json = finalSave.getAbScenarioResultsJson();
+        assertThat(json).contains("\"status\":\"ERROR\"");
+        assertThat(json).contains("\"oracleScore\":90.0");  // baseline side preserved
     }
 
     @Test
@@ -233,14 +301,96 @@ class SkillAbEvalServiceMultiTurnTest {
 
         ReflectionTestUtils.invokeMethod(service, "runAbTestAsync", "ab-1");
 
-        verify(evalJudgeTool).judge(eq(scenario), any());
+        // SKILL-AB-BASELINE-FIX: both arms (baseline + candidate) run the single-turn
+        // judge path now, so judge + engine.run are each invoked twice.
+        verify(evalJudgeTool, times(2)).judge(eq(scenario), any());
         verify(evalJudgeTool, never()).judgeMultiTurnConversation(eq(scenario), any(), any());
-        verify(engine).run(any(), eq("single-turn task"), any(), anyString(), any(), any());
+        verify(engine, times(2)).run(any(), eq("single-turn task"), any(), anyString(), any(), any());
+    }
+
+    @Test
+    @DisplayName("SKILL-AB-BASELINE-FIX: baseline runs live (no skill) → non-zero baseline, delta = candidate − baseline")
+    void runAbTestAsync_noCachedBaseline_runsLiveBaselineAndComputesRealDelta() throws Exception {
+        // Two single-turn held-out scenarios, no baselineEvalRunId (draft path).
+        // Baseline arm (agent WITHOUT the candidate skill) passes 1/2 = 50pp.
+        // Candidate arm (agent WITH the candidate skill) passes 2/2 = 100pp.
+        // → baseline MUST be 50 (not the old phantom 0) and delta MUST be 50.
+        SkillAbRunEntity abRun = abRun();
+        SkillEntity candidate = candidateSkill();
+        EvalScenario scenarioX = singleTurnScenario("x", "X");
+        EvalScenario scenarioY = singleTurnScenario("y", "Y");
+        AgentDefinition agentDef = agentDefinition();
+
+        when(skillAbRunRepository.findById("ab-1")).thenReturn(Optional.of(abRun));
+        when(skillAbRunRepository.save(any(SkillAbRunEntity.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(scenarioLoader.loadAll()).thenReturn(List.of(scenarioX, scenarioY));
+        when(skillRepository.findById(2L)).thenReturn(Optional.of(candidate));
+        when(agentService.getAgent(10L)).thenReturn(new AgentEntity());
+        when(agentService.toAgentDefinition(any(AgentEntity.class))).thenReturn(agentDef);
+        when(sandboxFactory.buildSandboxRegistryWithSkills(eq("ab-1"), anyString(), any()))
+                .thenReturn(skillRegistry);
+        when(sandboxFactory.getSandboxRoot(eq("ab-1"), anyString())).thenReturn(Path.of("/tmp/eval-ab"));
+        when(evalEngineFactory.buildEvalEngine(skillRegistry)).thenReturn(engine);
+        when(engine.run(any(), anyString(), any(), anyString(), any(), any()))
+                .thenAnswer(inv -> loopResult(inv.getArgument(1)));
+
+        // Arms run in order: baseline(X), baseline(Y), candidate(X), candidate(Y).
+        // Scenario X: baseline PASS, candidate PASS. Scenario Y: baseline FAIL, candidate PASS.
+        when(evalJudgeTool.judge(eq(scenarioX), any()))
+                .thenReturn(judgeOutput(70.0, true))   // baseline X
+                .thenReturn(judgeOutput(85.0, true));  // candidate X
+        when(evalJudgeTool.judge(eq(scenarioY), any()))
+                .thenReturn(judgeOutput(20.0, false))  // baseline Y
+                .thenReturn(judgeOutput(80.0, true));  // candidate Y
+
+        ReflectionTestUtils.invokeMethod(service, "runAbTestAsync", "ab-1");
+
+        ArgumentCaptor<SkillAbRunEntity> savedCaptor = ArgumentCaptor.forClass(SkillAbRunEntity.class);
+        verify(skillAbRunRepository, org.mockito.Mockito.atLeastOnce()).save(savedCaptor.capture());
+        SkillAbRunEntity finalSave = savedCaptor.getAllValues().get(savedCaptor.getAllValues().size() - 1);
+        assertThat(finalSave.getStatus()).isEqualTo("COMPLETED");
+        assertThat(finalSave.getBaselinePassRate()).isEqualTo(50.0);
+        assertThat(finalSave.getCandidatePassRate()).isEqualTo(100.0);
+        assertThat(finalSave.getDeltaPassRate()).isEqualTo(50.0);
+        // delta 50 ≥ 15 AND candidate 100 ≥ 40 → promotes against a REAL baseline.
+        assertThat(finalSave.isPromoted()).isTrue();
+
+        // Per-scenario merge: ONE entry per scenario carrying BOTH sides (not duplicates).
+        String json = finalSave.getAbScenarioResultsJson();
+        assertThat(json).isNotNull();
+        @SuppressWarnings("unchecked")
+        List<java.util.Map<String, Object>> rows = new ObjectMapper().readValue(
+                json, java.util.List.class);
+        assertThat(rows).hasSize(2);
+        assertThat(rows).allSatisfy(row -> {
+            assertThat(row.get("baseline")).isNotNull();
+            assertThat(row.get("candidate")).isNotNull();
+            // Neither side is the UNKNOWN placeholder — both arms filled their side.
+            assertThat(((java.util.Map<?, ?>) row.get("baseline")).get("status")).isNotEqualTo("UNKNOWN");
+            assertThat(((java.util.Map<?, ?>) row.get("candidate")).get("status")).isNotEqualTo("UNKNOWN");
+        });
     }
 
     @SuppressWarnings("unchecked")
     private static Callable<LoopResult> anyCallable() {
         return any(Callable.class);
+    }
+
+    private static EvalJudgeOutput judgeOutput(double score, boolean pass) {
+        EvalJudgeOutput out = new EvalJudgeOutput();
+        out.setCompositeScore(score);
+        out.setPass(pass);
+        return out;
+    }
+
+    private static EvalScenario singleTurnScenario(String id, String name) {
+        EvalScenario scenario = new EvalScenario();
+        scenario.setId(id);
+        scenario.setName(name);
+        scenario.setSplit("held_out");
+        scenario.setTask("task for " + id);
+        scenario.setMaxLoops(3);
+        return scenario;
     }
 
     private static SkillAbRunEntity abRun() {

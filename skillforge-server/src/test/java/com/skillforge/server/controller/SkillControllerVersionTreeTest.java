@@ -3,7 +3,6 @@ package com.skillforge.server.controller;
 import com.skillforge.core.skill.SkillRegistry;
 import com.skillforge.server.improve.SkillAbEvalService;
 import com.skillforge.server.improve.SkillEvolutionService;
-import com.skillforge.server.repository.SkillRepository;
 import com.skillforge.server.service.SkillService;
 import com.skillforge.server.skill.SkillBatchImporter;
 import com.skillforge.server.skill.SkillCatalogReconciler;
@@ -41,7 +40,6 @@ class SkillControllerVersionTreeTest {
     @Mock private SkillCatalogReconciler reconciler;
     @Mock private UserSkillLoader userSkillLoader;
     @Mock private SkillBatchImporter skillBatchImporter;
-    @Mock private SkillRepository skillRepository;
 
     private SkillController controller;
 
@@ -49,7 +47,7 @@ class SkillControllerVersionTreeTest {
     void setUp() {
         controller = new SkillController(skillService, skillRegistry,
                 skillAbEvalService, skillEvolutionService, reconciler, userSkillLoader,
-                skillBatchImporter, skillRepository);
+                skillBatchImporter);
     }
 
     private Map<String, Object> mockTree() {

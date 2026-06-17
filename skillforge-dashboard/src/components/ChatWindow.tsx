@@ -800,6 +800,11 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
     };
   }, [slashCommandConfig, handleShowCommandModal]);
 
+  const [summaryExpandedMap, setSummaryExpandedMap] = useState<Record<number, boolean>>({});
+  const toggleSummary = useCallback((idx: number) => {
+    setSummaryExpandedMap((prev) => ({ ...prev, [idx]: !prev[idx] }));
+  }, []);
+
   const [, setTick] = useState(0);
   useEffect(() => {
     if (!inflightTools || Object.keys(inflightTools).length === 0) return;
@@ -845,13 +850,31 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
           )}
           {messages.map((msg, idx) => {
             if (msg.role === 'summary') {
+              const summaryExpanded = summaryExpandedMap[idx] ?? false;
+              const summaryBodyId = `summary-body-${idx}`;
               return (
                 <div key={`summary-${idx}`} className="msg-compaction-summary">
-                  <div className="mcs-header">
+                  <button
+                    type="button"
+                    className="mcs-header"
+                    onClick={() => toggleSummary(idx)}
+                    aria-expanded={summaryExpanded}
+                    aria-controls={summaryBodyId}
+                  >
                     <IconCompact s={11} />
+                    <span className="mcs-header__chevron" aria-hidden="true">
+                      {summaryExpanded ? '▴' : '▾'}
+                    </span>
                     Context compacted · earlier messages replaced by summary below
-                  </div>
-                  <div className="mcs-body">
+                  </button>
+                  <div
+                    id={summaryBodyId}
+                    className={
+                      'mcs-body' +
+                      (summaryExpanded ? ' mcs-body--expanded' : '')
+                    }
+                    aria-hidden={!summaryExpanded}
+                  >
                     <MarkdownRenderer content={msg.content} />
                   </div>
                 </div>

@@ -513,6 +513,230 @@ public class SkillDraftService {
     }
 
     /**
+     * AUTOEVOLVE-AGENT-LEVEL-BUNDLE Phase 4 (§10 #3) — skill-surface hill-climb
+     * carry-forward. Unlike {@link #createDraftFromAttribution} (which improves
+     * from scratch), this builds the next skill candidate ON TOP of an existing
+     * draft ({@code baseDraftId} = the current-best skill draft from a prior
+     * winning bundle), so the evolve loop can refine the running-best skill.
+     *
+     * <p>Mirrors {@code BehaviorRuleImproverService.startImprovementFromBaseVersion}:
+     * load the base draft's content (by id, ownership-checked), feed it to the LLM
+     * as the baseline, persist a NEW draft. The new draft inherits the base's
+     * {@code name} + {@code targetAgentId} so the skill identity is stable across
+     * rounds and {@code BundleApplicator}'s W7 ownership check stays meaningful.
+     *
+     * <p>The no-editor form is byte-identical to the {@code editor == null}
+     * overload (legacy carry-forward); a non-null {@code editor} appends reflection
+     * blocks (priorChange / priorEvalReport) to the LLM user message.
+     *
+     * @throws IllegalArgumentException baseDraftId unknown, or the base draft
+     *                                  belongs to a different owner than {@code ownerId}
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public SkillDraftEntity createDraftFromBaseDraft(Long eventId,
+                                                     String baseDraftId,
+                                                     String attributedDescription,
+                                                     Long ownerId) {
+        return createDraftFromBaseDraft(eventId, baseDraftId, attributedDescription, ownerId, null);
+    }
+
+    /**
+     * Phase 4 (§10 #3) reflection-aware overload of {@link #createDraftFromBaseDraft}.
+     * {@code editor == null} reproduces the plain carry-forward; a non-null editor
+     * switches the candidate-skill LLM call to evolve-editor mode.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public SkillDraftEntity createDraftFromBaseDraft(Long eventId,
+                                                     String baseDraftId,
+                                                     String attributedDescription,
+                                                     Long ownerId,
+                                                     EvolveEditorContext editor) {
+        if (eventId == null) throw new IllegalArgumentException("eventId is required");
+        if (baseDraftId == null || baseDraftId.isBlank()) {
+            throw new IllegalArgumentException("baseDraftId is required");
+        }
+        if (ownerId == null) throw new IllegalArgumentException("ownerId is required");
+        if (attributedDescription == null || attributedDescription.isBlank()) {
+            throw new IllegalArgumentException("attributedDescription is required and must be non-blank");
+        }
+
+        // Load the SPECIFIED base draft (content-by-id) and validate ownership (W7) —
+        // a carry-forward must build on a draft that belongs to this owner.
+        SkillDraftEntity base = skillDraftRepository.findById(baseDraftId)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "baseDraftId not found: " + baseDraftId));
+        if (!ownerId.equals(base.getOwnerId())) {
+            throw new IllegalArgumentException(
+                    "baseDraftId " + baseDraftId + " belongs to owner " + base.getOwnerId()
+                            + " but ownerId=" + ownerId + " — cannot carry forward another owner's draft");
+        }
+
+        SkillDraftEntity draft = new SkillDraftEntity();
+        draft.setId(UUID.randomUUID().toString());
+        draft.setOwnerId(ownerId);
+        // Inherit the base's stable identity so the skill name + target agent
+        // don't drift across hill-climb rounds (the applicator registers + checks
+        // ownership by these).
+        draft.setName(base.getName());
+        draft.setTargetAgentId(base.getTargetAgentId());
+        draft.setDescription(attributedDescription.trim());
+        draft.setStatus("draft");
+        draft.setSource("evolve-skill-carryforward");
+        StringBuilder rationale = new StringBuilder();
+        rationale.append("[carry-forward:eventId=").append(eventId)
+                .append("|baseDraftId=").append(baseDraftId).append("] ")
+                .append(attributedDescription.trim());
+        draft.setExtractionRationale(rationale.toString());
+
+        try {
+            SkillContentResult result = generateCandidateSkillMdFromBaseDraft(
+                    ownerId, base, attributedDescription, editor);
+            draft.setTriggers(safeCsv(result.triggers()));
+            draft.setRequiredTools(safeCsv(result.requiredTools()));
+            draft.setPromptHint(result.skillMdBody());
+        } catch (RuntimeException llmEx) {
+            // Audit-trail rethrow — mirrors createDraftFromAttribution: persist a
+            // content-blank draft so the pivot info (eventId/baseDraftId/draft id)
+            // survives, then rethrow.
+            draft.setTriggers("");
+            draft.setRequiredTools("");
+            draft.setPromptHint("");
+            skillDraftRepository.save(draft);
+            log.error("Carry-forward skill-draft LLM fill FAILED: draftId={} eventId={} "
+                            + "baseDraftId={}: {}",
+                    draft.getId(), eventId, baseDraftId, llmEx.getMessage());
+            throw llmEx;
+        }
+
+        SkillDraftEntity saved = skillDraftRepository.save(draft);
+        log.info("Carry-forward skill draft created: draftId={} eventId={} baseDraftId={} ownerId={} "
+                        + "triggersLen={} toolsLen={} hintLen={} evolveEditor={}",
+                saved.getId(), eventId, baseDraftId, ownerId,
+                saved.getTriggers() == null ? 0 : saved.getTriggers().length(),
+                saved.getRequiredTools() == null ? 0 : saved.getRequiredTools().length(),
+                saved.getPromptHint() == null ? 0 : saved.getPromptHint().length(),
+                editor != null);
+        return saved;
+    }
+
+    /**
+     * Phase 4 (§10 #3) helper — synchronous LLM call that improves an EXISTING
+     * SKILL.md (the base draft's frontmatter + body) into a refined candidate.
+     * Mirrors {@link #generateCandidateSkillMdFromAttribution} but threads the
+     * base content as the starting point and (when {@code editor != null}) appends
+     * the reflection blocks.
+     */
+    private SkillContentResult generateCandidateSkillMdFromBaseDraft(Long ownerUserId,
+                                                                     SkillDraftEntity base,
+                                                                     String attributedDescription,
+                                                                     EvolveEditorContext editor) {
+        String baseSkillMd = renderBaseSkillMd(base);
+        SkillMdPrompt prompt = buildSkillMdCarryForwardPrompt(
+                baseSkillMd, attributedDescription,
+                loadRenderedMemoryContext(ownerUserId, attributedDescription, null),
+                editor);
+
+        LlmProvider provider = llmProviderFactory.getProvider(EXTRACT_PROVIDER_NAME);
+        boolean preferredAvailable = provider != null;
+        if (!preferredAvailable) {
+            log.warn("Preferred carry-forward skill-draft provider '{}' not available, "
+                    + "falling back to default '{}'", EXTRACT_PROVIDER_NAME, defaultProviderName);
+            provider = llmProviderFactory.getProvider(defaultProviderName);
+        }
+        if (provider == null) {
+            throw new RuntimeException("No LLM provider available for carry-forward skill-draft fill");
+        }
+
+        LlmRequest request = new LlmRequest();
+        request.setSystemPrompt(prompt.systemPrompt());
+        List<Message> messages = new ArrayList<>();
+        messages.add(Message.user(prompt.userMessage()));
+        request.setMessages(messages);
+        request.setMaxTokens(4000);
+        request.setTemperature(0.3);
+        if (preferredAvailable) {
+            request.setModel(EXTRACT_MODEL);
+        }
+
+        LlmResponse response = provider.chat(request);
+        String content = response == null ? null : response.getContent();
+        if (content == null || content.isBlank()) {
+            throw new RuntimeException("LLM returned empty content for carry-forward skill-draft fill");
+        }
+        return parseSkillMdOutput(content.trim());
+    }
+
+    /** Render the base draft as an approximate SKILL.md (frontmatter + body) to feed the LLM. */
+    private static String renderBaseSkillMd(SkillDraftEntity base) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("---\n");
+        sb.append("triggers: [").append(base.getTriggers() == null ? "" : base.getTriggers()).append("]\n");
+        sb.append("required_tools: [")
+                .append(base.getRequiredTools() == null ? "" : base.getRequiredTools()).append("]\n");
+        sb.append("---\n");
+        if (base.getPromptHint() != null && !base.getPromptHint().isBlank()) {
+            sb.append(base.getPromptHint().trim());
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Phase 4 (§10 #3) prompt builder for the carry-forward path. {@code editor != null}
+     * appends the reflection blocks (priorChange / priorEvalReport) so the LLM can
+     * build on / avoid repeating the last round's change. Stable Chinese labels so a
+     * test can assert their presence.
+     */
+    private static SkillMdPrompt buildSkillMdCarryForwardPrompt(String baseSkillMd,
+                                                                String attributedDescription,
+                                                                String memoryContext,
+                                                                EvolveEditorContext editor) {
+        String systemPrompt = """
+                You are an expert SkillForge skill author. You are given an EXISTING \
+                SKILL.md (current best) and an improvement direction. Produce an \
+                IMPROVED SKILL.md that builds on the existing one.
+
+                Output STRICT format — nothing before, nothing after:
+                ---
+                triggers: [<phrase1>, <phrase2>, ...]
+                required_tools: [<ToolName1>, <ToolName2>, ...]
+                ---
+                <SKILL.md body: 3-8 sentences instructing the agent how to execute
+                the skill. No headings, no code fences, no meta-commentary.>
+
+                Rules:
+                - Preserve what works in the current SKILL.md; refine to address the
+                  improvement direction.
+                - triggers: 2-5 short trigger phrases (lowercase, no surrounding quotes)
+                - required_tools: only canonical tool names (Bash, Read, Write, Edit,
+                  Grep, Glob, WebFetch, WebSearch). Empty list [] if none needed.
+                - Body must be self-contained instructions.""";
+
+        StringBuilder userPrompt = new StringBuilder();
+        userPrompt.append("Current SKILL.md (best so far):\n---\n")
+                .append(baseSkillMd)
+                .append("\n---\n\nImprovement direction:\n")
+                .append(attributedDescription.trim());
+        if (memoryContext != null && !memoryContext.isBlank()) {
+            userPrompt.append("\n\nRelevant long-term memory context:\n")
+                    .append(memoryContext.trim());
+        }
+        if (editor != null) {
+            String priorChange = editor.priorChangeSummary();
+            if (priorChange != null && !priorChange.isBlank()) {
+                userPrompt.append("\n\n上一轮改动：\n").append(priorChange.trim());
+            }
+            String priorReport = editor.priorEvalReportJson();
+            if (priorReport != null && !priorReport.isBlank()) {
+                userPrompt.append("\n\n上一轮评测报告（哪些 case 提升/腐化 + 原因 + 整体涨跌）：\n")
+                        .append(priorReport.trim());
+            }
+            userPrompt.append("\n\n综合上述（方向 + 上轮改动 + 上轮评测）给出本次更好的 SKILL.md。");
+        }
+        userPrompt.append("\n\nGenerate the improved SKILL.md per the strict format above.");
+        return new SkillMdPrompt(systemPrompt, userPrompt.toString());
+    }
+
+    /**
      * Phase 1.1 helper — synchronous LLM call generating a candidate SKILL.md
      * (frontmatter triggers/required_tools + body) from an attribution proposal.
      * Mirrors {@code PromptImproverService.generateCandidatePromptFromAttribution}

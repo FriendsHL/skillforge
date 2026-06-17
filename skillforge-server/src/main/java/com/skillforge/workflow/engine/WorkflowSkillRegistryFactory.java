@@ -4,6 +4,9 @@ import com.skillforge.core.skill.SkillRegistry;
 import com.skillforge.core.skill.Tool;
 import com.skillforge.server.tool.GetAgentConfigTool;
 import com.skillforge.server.tool.GetTraceTool;
+import com.skillforge.server.tool.evolve.GenerateCandidateTool;
+import com.skillforge.server.tool.optreport.GetToolCallSequenceTool;
+import com.skillforge.server.tool.optreport.LoadErrorSpanBatchTool;
 import com.skillforge.server.tool.optreport.LoadSessionBatchTool;
 import com.skillforge.server.tool.optreport.RecordBatchAnnotationsTool;
 import com.skillforge.server.tool.sessionannotation.AnnotateSessionTool;
@@ -26,8 +29,9 @@ import org.springframework.stereotype.Component;
  * <p><b>Least-privilege.</b> Mirrors {@link com.skillforge.server.eval.sandbox.SandboxSkillRegistryFactory}'s
  * "own registry, not the global bean" pattern, but registers the <em>real</em>
  * production tool beans (workflow OPT-REPORT is privileged system work — it reads
- * real sessions and writes real annotations). Only the 6 OPT-REPORT tools are
- * registered; {@code Bash} / {@code FileWrite} / {@code SubAgent} /
+ * real sessions and writes real annotations). Only the OPT-REPORT / evolve read +
+ * annotate tools are registered (incl. G5's read-only {@code LoadErrorSpanBatch} /
+ * {@code GetToolCallSequence}); {@code Bash} / {@code FileWrite} / {@code SubAgent} /
  * {@code WriteOptReport} are deliberately absent. An agent still only sees the
  * subset declared in its own {@code tool_ids}, so the registry being a superset of
  * any single agent's needs is safe.
@@ -48,7 +52,10 @@ public class WorkflowSkillRegistryFactory {
                                         GetTraceTool getTraceTool,
                                         SpanBehaviorStatsTool spanBehaviorStatsTool,
                                         AnnotateSessionTool annotateSessionTool,
-                                        RecordBatchAnnotationsTool recordBatchAnnotationsTool) {
+                                        RecordBatchAnnotationsTool recordBatchAnnotationsTool,
+                                        LoadErrorSpanBatchTool loadErrorSpanBatchTool,
+                                        GetToolCallSequenceTool getToolCallSequenceTool,
+                                        GenerateCandidateTool generateCandidateTool) {
         SkillRegistry registry = new SkillRegistry();
         for (Tool tool : new Tool[]{
                 loadSessionBatchTool,
@@ -56,7 +63,19 @@ public class WorkflowSkillRegistryFactory {
                 getTraceTool,
                 spanBehaviorStatsTool,
                 annotateSessionTool,
-                recordBatchAnnotationsTool}) {
+                recordBatchAnnotationsTool,
+                loadErrorSpanBatchTool,
+                getToolCallSequenceTool,
+                // AUTOEVOLVE-CLOSE-LOOP P1 (Q2 — recursion guard verified): the
+                // candidate-gen agent leaf (evolve-candidate-gen) calls
+                // GenerateCandidate. It delegates to the improver services (one-shot
+                // LLM fill + persist) and NEVER calls TriggerAbEval / RunWorkflow /
+                // any agent-spawning tool — so it opens NO fan-out / recursion path.
+                // The registry is a SUPERSET; only an agent whose tool_ids list
+                // "GenerateCandidate" can actually call it, and ONLY
+                // evolve-candidate-gen does (the opt-report sub-agents don't), so
+                // least-privilege holds.
+                generateCandidateTool}) {
             registry.registerTool(tool);
         }
         this.workflowRegistry = registry;

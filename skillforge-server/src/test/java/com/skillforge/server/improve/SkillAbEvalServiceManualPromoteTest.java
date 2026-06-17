@@ -79,7 +79,8 @@ class SkillAbEvalServiceManualPromoteTest {
                 skillRegistry, abCompletedEventPublisher,
                 org.mockito.Mockito.mock(com.skillforge.server.improve.surface.SkillSurface.class),
                 org.mockito.Mockito.mock(SkillEvalService.class),
-                120_000L);
+                120_000L,
+                new com.skillforge.server.config.EvolveThresholdProperties());
         // manualPromote does NOT invoke AbstractAbEvalRunner.run() (direct
         // V64-safe promote path), so no SkillEvalService.run setup needed.
     }

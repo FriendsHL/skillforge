@@ -1,8 +1,8 @@
 # AUTOEVOLVE-AGENT-FLYWHEEL — agent 驱动的自动评测/归因/迭代飞轮 + workflow 操作能力
 
 > **创建**：2026-05-31
-> **状态**：prd-draft（设计稿待 architect review + 用户过目）
-> **父需求包**：[AUTOEVOLVING-MASTER](../2026-05-28-AUTOEVOLVING-MASTER/)（痛点 2 + 痛点 3 的 agent-driven 落地）
+> **状态**：done — 已交付（2026-06-01/06-02：BUG-1 winner-carry-forward + 进化 loop 反思 + judge per-case rationale 方案 B）。已交付，见 [delivery-index](../../../delivery-index.md)。
+> **父需求包**：[AUTOEVOLVING-MASTER](../../active/2026-05-28-AUTOEVOLVING-MASTER/)（痛点 2 + 痛点 3 的 agent-driven 落地）
 > **关联**：[AUTOEVOLVING-V1-DSL-DASHBOARD](../2026-05-29-AUTOEVOLVING-V1-DSL-DASHBOARD/)（已 ship workflow engine + opt-report workflow + /autoevolving，本包**复用**）
 > **思想来源**：清华 AHE（Agentic Harness Engineering）`predicted_impact` + 错峰世代（见 [`papers/agentic-harness-engineering.md`](../../../../research-docs/research/agent-harness-wiki/papers/agentic-harness-engineering.md)）
 

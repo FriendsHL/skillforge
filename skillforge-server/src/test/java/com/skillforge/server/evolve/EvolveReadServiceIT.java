@@ -12,6 +12,7 @@ import com.skillforge.server.flywheel.run.FlywheelRunRepository;
 import com.skillforge.server.flywheel.run.FlywheelRunService;
 import com.skillforge.server.flywheel.run.FlywheelRunStepRepository;
 import com.skillforge.server.repository.AgentRepository;
+import com.skillforge.server.repository.SkillDraftRepository;
 import com.skillforge.server.websocket.UserWebSocketHandler;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -51,6 +52,7 @@ class EvolveReadServiceIT extends AbstractPostgresIT {
     @Autowired private FlywheelRunRepository runRepository;
     @Autowired private FlywheelRunStepRepository stepRepository;
     @Autowired private AgentRepository agentRepository;
+    @Autowired private SkillDraftRepository skillDraftRepository;
     @Autowired private JdbcTemplate jdbcTemplate;
 
     private FlywheelRunService flywheelRunService;
@@ -73,7 +75,7 @@ class EvolveReadServiceIT extends AbstractPostgresIT {
                 Clock.fixed(FIXED_NOW, ZoneId.of("UTC")));
 
         evolveReadService = new EvolveReadService(
-                runRepository, stepRepository, agentRepository, objectMapper);
+                runRepository, stepRepository, agentRepository, skillDraftRepository, objectMapper);
     }
 
     // ─── case 1 + 2: list endpoint ─────────────────────────────────────────

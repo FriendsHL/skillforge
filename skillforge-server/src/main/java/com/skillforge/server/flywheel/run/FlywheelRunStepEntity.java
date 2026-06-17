@@ -69,6 +69,19 @@ public class FlywheelRunStepEntity {
      */
     public static final String STEP_KIND_EVOLVE_ITERATION = "evolve_iteration";
 
+    /**
+     * AUTOEVOLVE-CLOSE-LOOP P1 (evolve-loop workflow re-architecture): a
+     * deterministic {@code tool()} host-binding node — a Java tool invoked
+     * synchronously on the workflow thread (NOT an LLM sub-agent dispatch). The
+     * {@code DefaultWorkflowToolInvoker} appends this row {@code pending} carrying
+     * {@code toolName / stepIndex / input} and transitions it
+     * {@code completed}{@code (result, durationMs)} / {@code error}. Shares the
+     * deterministic {@code step_index} counter ({@code WorkflowContext.nextStepIndex})
+     * with {@code subagent_dispatch} / {@code human_approve} for journal-replay
+     * alignment.
+     */
+    public static final String STEP_KIND_TOOL_CALL = "tool_call";
+
     @Id
     @Column(length = 36)
     private String id;

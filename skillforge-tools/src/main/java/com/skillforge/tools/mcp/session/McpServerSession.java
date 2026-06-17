@@ -6,7 +6,6 @@ import com.skillforge.tools.mcp.exception.McpClientException;
 import com.skillforge.tools.mcp.protocol.McpRequest;
 import com.skillforge.tools.mcp.protocol.McpResponse;
 import com.skillforge.tools.mcp.protocol.McpToolDescriptor;
-import com.skillforge.tools.mcp.transport.McpStdioTransport;
 import com.skillforge.tools.mcp.transport.McpTransport;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

@@ -144,6 +144,40 @@ class RecordBatchAnnotationsToolTest {
         assertThat(saved.getSubAgentSessionId()).isEqualTo("subagent-session-99");
     }
 
+    @Test
+    @DisplayName("robustness: an over-length (non-UUID) batchId is normalized to a ≤36-char id so it can't overflow varchar(36) and abort the opt-report")
+    void overlengthBatchId_normalizedToFitColumn() {
+        // A weaker driving model emitted a descriptive id instead of a 36-char UUID;
+        // t_flywheel_run_step.id is varchar(36), so the raw value used to crash the
+        // whole opt-report with "value too long for varchar(36)".
+        String longBatchId = "batch-session-annotator-run-001-for-agent-3-overlength";
+        assertThat(longBatchId.length()).isGreaterThan(36);
+        String derivedId = java.util.UUID.nameUUIDFromBytes(
+                longBatchId.getBytes(java.nio.charset.StandardCharsets.UTF_8)).toString();
+
+        when(batchRepository.findById(derivedId)).thenReturn(Optional.empty());
+        when(batchRepository.save(any(FlywheelRunStepEntity.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+
+        SkillResult r = tool.execute(
+                Map.of(
+                        "batchId", longBatchId,
+                        "reportId", "rep-x",
+                        "sessionIds", java.util.List.of("s1"),
+                        "annotationsWrittenCount", 3),
+                new SkillContext(null, "subagent-session-1", 0L));
+
+        assertThat(r.isSuccess()).isTrue();
+        ArgumentCaptor<FlywheelRunStepEntity> captor =
+                ArgumentCaptor.forClass(FlywheelRunStepEntity.class);
+        verify(batchRepository).save(captor.capture());
+        String savedId = captor.getValue().getId();
+        // Persisted under a stable derived id that FITS varchar(36) — never the raw value.
+        assertThat(savedId).isEqualTo(derivedId);
+        assertThat(savedId).isNotEqualTo(longBatchId);
+        assertThat(savedId.length()).isLessThanOrEqualTo(36);
+    }
+
     private static FlywheelRunStepEntity newBatch(String id) {
         FlywheelRunStepEntity b = new FlywheelRunStepEntity();
         b.setId(id);

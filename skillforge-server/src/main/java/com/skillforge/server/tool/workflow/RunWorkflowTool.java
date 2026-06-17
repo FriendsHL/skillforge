@@ -246,8 +246,17 @@ public class RunWorkflowTool implements Tool {
         response.put("runId", runId);
         response.put("mode", mode);
         response.put("status", "started");
-        response.put("message", "Workflow run started asynchronously. Subscribe to "
-                + "workflow WebSocket events for runId=" + runId);
+        // Self-documenting next-step guidance: the previous message ("subscribe to
+        // WebSocket events") is not actionable for an LLM caller and led the evolve
+        // orchestrator to re-call RunWorkflow repeatedly (each rejected as "already
+        // running"), burning its loop budget. Tell the caller exactly what to do next.
+        response.put("message", "Workflow run started asynchronously (runId=" + runId
+                + "). It is now RUNNING — do NOT call RunWorkflow again for the same "
+                + "workflow (a duplicate is rejected as 'already running' and wastes turns). "
+                + "To obtain the result, poll the run by this runId with the matching read "
+                + "tool (e.g. GetOptReport(reportId=" + runId + ") when this is an opt-report), "
+                + "retrying that read tool until the run is completed.");
+        response.put("nextAction", "poll_run_by_runId");
         return SkillResult.success(objectMapper.writeValueAsString(response));
     }
 

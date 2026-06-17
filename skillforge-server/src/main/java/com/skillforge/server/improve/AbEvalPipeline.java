@@ -7,6 +7,7 @@ import com.skillforge.core.engine.ChatEventBroadcaster;
 import com.skillforge.core.engine.LoopContext;
 import com.skillforge.core.engine.LoopResult;
 import com.skillforge.core.model.AgentDefinition;
+import com.skillforge.core.model.SkillDefinition;
 import com.skillforge.core.skill.SkillRegistry;
 import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.EvalDatasetVersionEntity;
@@ -14,6 +15,7 @@ import com.skillforge.server.entity.EvalScenarioEntity;
 import com.skillforge.server.entity.EvalTaskEntity;
 import com.skillforge.server.entity.PromptAbRunEntity;
 import com.skillforge.server.entity.PromptVersionEntity;
+import com.skillforge.server.eval.BehavioralOracleCriteria;
 import com.skillforge.server.eval.EvalEngineFactory;
 import com.skillforge.server.eval.EvalJudgeOutput;
 import com.skillforge.server.eval.EvalJudgeTool;
@@ -46,12 +48,85 @@ import java.util.concurrent.Future;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-import java.util.concurrent.atomic.AtomicInteger;
 
 @Component
 public class AbEvalPipeline {
 
     private static final Logger log = LoggerFactory.getLogger(AbEvalPipeline.class);
+
+    /**
+     * BUG-1 (winner-carry-forward): per-scenario baseline status when the baseline
+     * side is skipped (a cached rate was supplied). The accompanying oracleScore is a
+     * placeholder, NOT a measurement — the run-level {@code baselinePassRate} carries
+     * the real (cached) value. Any consumer reading per-scenario baseline results must
+     * treat this status as "not measured this run" and ignore the 0.0 score.
+     */
+    static final String BASELINE_CACHED_STATUS = "CACHED";
+
+    /**
+     * AUTOEVOLVE-AGENT-LEVEL-BUNDLE Phase 1 (§7 B1) — composite-score pass
+     * threshold. Mirrors {@code EvalJudgeTool}'s {@code output.setPass(compositeScore >= 40.0)}
+     * so the whole-agent A/B channel counts passes IDENTICALLY to the prompt path
+     * (which counts {@code judge.isPass()}). {@link AbScenarioResult.RunResult#oracleScore()}
+     * stores the FINAL (post-meta-judge) composite score, so
+     * {@code oracleScore >= PASS_COMPOSITE_THRESHOLD} reproduces {@code isPass()}
+     * exactly for non-error scenarios — the numeric-parity guarantee AC-1 asserts.
+     */
+    public static final double PASS_COMPOSITE_THRESHOLD = 40.0;
+
+    /**
+     * Shared pass predicate over a per-scenario {@link AbScenarioResult.RunResult}
+     * (§7 B1). A side "passes" iff it did not error/timeout/skip AND its composite
+     * score crosses {@link #PASS_COMPOSITE_THRESHOLD}. Used by
+     * {@code AgentEvolveAbEvalService} to aggregate the whole-agent pass-rate so the
+     * count matches the prompt path's {@code judge.isPass()} counting.
+     */
+    public static boolean isPass(AbScenarioResult.RunResult run) {
+        if (run == null) {
+            return false;
+        }
+        String status = run.status();
+        if (status == null || "ERROR".equals(status) || "TIMEOUT".equals(status)
+                || BASELINE_CACHED_STATUS.equals(status)) {
+            return false;
+        }
+        return run.oracleScore() >= PASS_COMPOSITE_THRESHOLD;
+    }
+
+    /**
+     * EVAL-429-ROBUSTNESS D1 — a per-scenario status counts as "measured" (a real
+     * quality signal that belongs in the A/B pass-rate denominator) iff it is NOT an
+     * infrastructure / not-measured-this-run status. Excluded:
+     * <ul>
+     *   <li>{@code ERROR} / {@code TIMEOUT} — infra/runtime failure (network, rate
+     *       limit, loop budget) → NOT a quality verdict, must be摘出分母.</li>
+     *   <li>{@link #BASELINE_CACHED_STATUS} — winner-carry-forward sentinel: the
+     *       baseline side was never run THIS round (the run-level cached rate carries
+     *       its value), so the per-scenario baseline is not measured.</li>
+     *   <li>{@code null} — no status → treated as not-measured.</li>
+     * </ul>
+     * {@code PASS} / {@code FAIL} / {@code VETO} / {@code PENDING_JUDGE} are all
+     * measured: {@code VETO} is a genuine quality failure (D1: 质量失败留), kept in the
+     * denominator.
+     */
+    public static boolean isMeasured(String status) {
+        if (status == null) {
+            return false;
+        }
+        return !("ERROR".equals(status) || "TIMEOUT".equals(status)
+                || BASELINE_CACHED_STATUS.equals(status));
+    }
+
+    /**
+     * EVAL-429-ROBUSTNESS D2 — pairwise-measured predicate: a scenario contributes to
+     * the (candidate, baseline) pass-rate comparison ONLY when BOTH sides were
+     * measured this round. If either side hit ERROR/TIMEOUT (or the baseline is the
+     * CACHED sentinel), the scenario is dropped from BOTH rates so they are always
+     * computed over the same set of scenarios and the delta is strictly comparable.
+     */
+    public static boolean pairwiseMeasured(String candidateStatus, String baselineStatus) {
+        return isMeasured(candidateStatus) && isMeasured(baselineStatus);
+    }
 
     private final ScenarioLoader scenarioLoader;
     private final SandboxSkillRegistryFactory sandboxFactory;
@@ -174,8 +249,9 @@ public class AbEvalPipeline {
             heldOutScenarios = scenarioLoader.loadAll();
         }
 
-        // 3. Compute held-out baseline rate from baselineRun's scenarioResultsJson
-        double heldOutBaselineRate = computeHeldOutBaselineRate(baselineRun, heldOutScenarios);
+        // 3. Compute held-out baseline rate from baselineRun's scenarioResultsJson.
+        // EVAL-429-ROBUSTNESS Fix4: nullable — null when no held-out scenario was measured.
+        Double heldOutBaselineRate = computeHeldOutBaselineRate(baselineRun, heldOutScenarios);
         abRun.setBaselinePassRate(heldOutBaselineRate);
 
         // 4. Construct candidate AgentDefinition with candidate prompt
@@ -185,6 +261,11 @@ public class AbEvalPipeline {
         // 5. Run each held-out scenario with candidate prompt
         List<AbScenarioResult> scenarioResults = new ArrayList<>();
         int passed = 0;
+        // EVAL-429-ROBUSTNESS: only pairwise-measured scenarios (candidate run AND the
+        // historical baseline both non-infra) count toward the denominator; ERROR/TIMEOUT
+        // on either side is excluded and logged (D2 + D4).
+        int measuredCount = 0;
+        List<String> infraExcluded = new ArrayList<>();
 
         for (EvalScenario scenario : heldOutScenarios) {
             log.info("AB eval scenario: {} ({})", scenario.getId(), scenario.getName());
@@ -198,8 +279,9 @@ public class AbEvalPipeline {
                         scenario.getId());
             }
             try {
-                ScenarioRunResult runResult = runSingleScenario(abRun.getId(), scenario, candidateDef);
-                EvalJudgeOutput judgeOutput = evalJudgeTool.judge(scenario, runResult);
+                JudgedRun judged = runAndJudge(abRun.getId(), scenario, candidateDef, false);
+                ScenarioRunResult runResult = judged.runResult();
+                EvalJudgeOutput judgeOutput = judged.judgeOutput();
 
                 // Look up baseline status for this scenario
                 String baselineStatus = lookupBaselineStatus(baselineRun, scenario.getId());
@@ -210,8 +292,17 @@ public class AbEvalPipeline {
                         new AbScenarioResult.RunResult(baselineStatus, baselineOracleScore),
                         new AbScenarioResult.RunResult(runResult.getStatus(), judgeOutput.getCompositeScore())));
 
-                if (judgeOutput.isPass()) {
-                    passed++;
+                // EVAL-429-ROBUSTNESS D2: count toward the denominator only when both
+                // the candidate run AND the historical baseline for this scenario were
+                // measured (non ERROR/TIMEOUT). Pass counting stays on judgeOutput.isPass()
+                // (unchanged) so a measured candidate scores identically to before.
+                if (pairwiseMeasured(runResult.getStatus(), baselineStatus)) {
+                    measuredCount++;
+                    if (judgeOutput.isPass()) {
+                        passed++;
+                    }
+                } else {
+                    infraExcluded.add(scenario.getId());
                 }
 
                 // Broadcast ab_scenario_finished
@@ -233,13 +324,24 @@ public class AbEvalPipeline {
                         scenario.getId(), scenario.getName(),
                         new AbScenarioResult.RunResult(baselineStatus, baselineScore),
                         new AbScenarioResult.RunResult("ERROR", 0.0)));
+                // Candidate errored (infra) → pairwise=false → excluded from denominator (D2/D4).
+                infraExcluded.add(scenario.getId());
             }
         }
 
-        // 6. Compute candidate pass rate and delta
-        double candidatePassRate = heldOutScenarios.isEmpty() ? 0
-                : (double) passed / heldOutScenarios.size() * 100;
-        double delta = candidatePassRate - heldOutBaselineRate;
+        // 6. Compute candidate pass rate and delta over the pairwise-measured set only.
+        // EVAL-429-ROBUSTNESS D3: measured=0 → not-measured sentinel (null), NOT 0% — the
+        // gate must treat it as "couldn't measure / don't promote", not a full failure.
+        if (!infraExcluded.isEmpty()) {
+            log.info("AB eval excluded {} infra/not-measured scenario(s) from denominator: {}",
+                    infraExcluded.size(), infraExcluded);
+        }
+        Double candidatePassRate = measuredCount == 0
+                ? null
+                : (double) passed / measuredCount * 100;
+        Double delta = (candidatePassRate == null || heldOutBaselineRate == null)
+                ? null
+                : candidatePassRate - heldOutBaselineRate;
 
         // 7. Serialize per-scenario results
         try {
@@ -298,10 +400,24 @@ public class AbEvalPipeline {
                     PromptVersionEntity baselineVersion,
                     AgentEntity agent,
                     List<EvalScenarioEntity> scenarios) {
+        run(abRun, candidate, baselineVersion, agent, scenarios, (Double) null);
+    }
+
+    /**
+     * AUTOEVOLVE-AGENT-FLYWHEEL BUG-1 — legacy-scenarios overload with an optional
+     * {@code cachedBaselineRate}: when non-null the run is CANDIDATE-ONLY and reuses
+     * that rate as the baseline pass-rate (winner-carry-forward; no baseline re-eval).
+     */
+    public void run(PromptAbRunEntity abRun,
+                    PromptVersionEntity candidate,
+                    PromptVersionEntity baselineVersion,
+                    AgentEntity agent,
+                    List<EvalScenarioEntity> scenarios,
+                    Double cachedBaselineRate) {
         log.warn("AbEvalPipeline.run(scenarios) legacy overload invoked — V2 will remove this; "
                 + "migrate to run(abRun, candidate, baseline, agent, datasetVersionId). abRunId={}",
                 abRun.getId());
-        runWithScenarios(abRun, candidate, baselineVersion, agent, capScenarios(scenarios), null);
+        runWithScenarios(abRun, candidate, baselineVersion, agent, capScenarios(scenarios), null, cachedBaselineRate);
     }
 
     /**
@@ -321,6 +437,19 @@ public class AbEvalPipeline {
                     PromptVersionEntity baselineVersion,
                     AgentEntity agent,
                     String datasetVersionId) {
+        run(abRun, candidate, baselineVersion, agent, datasetVersionId, (Double) null);
+    }
+
+    /**
+     * AUTOEVOLVE-AGENT-FLYWHEEL BUG-1 — dataset-version overload with an optional
+     * {@code cachedBaselineRate} (winner-carry-forward; candidate-only + reuse rate).
+     */
+    public void run(PromptAbRunEntity abRun,
+                    PromptVersionEntity candidate,
+                    PromptVersionEntity baselineVersion,
+                    AgentEntity agent,
+                    String datasetVersionId,
+                    Double cachedBaselineRate) {
         if (datasetVersionId == null || datasetVersionId.isBlank()) {
             throw new IllegalArgumentException("datasetVersionId required for this overload");
         }
@@ -332,7 +461,8 @@ public class AbEvalPipeline {
         List<EvalScenarioEntity> scenarios =
                 evalDatasetService.getScenariosForVersion(datasetVersionId);
         abRun.setDatasetVersionId(datasetVersionId);
-        runWithScenarios(abRun, candidate, baselineVersion, agent, capScenarios(scenarios), datasetVersionId);
+        runWithScenarios(abRun, candidate, baselineVersion, agent, capScenarios(scenarios),
+                datasetVersionId, cachedBaselineRate);
     }
 
     /**
@@ -346,7 +476,15 @@ public class AbEvalPipeline {
                                    PromptVersionEntity baselineVersion,
                                    AgentEntity agent,
                                    List<EvalScenarioEntity> scenarios,
-                                   String datasetVersionId) {
+                                   String datasetVersionId,
+                                   Double cachedBaselineRate) {
+        // AUTOEVOLVE-AGENT-FLYWHEEL BUG-1 (winner-carry-forward): when the caller
+        // already knows the baseline's pass-rate (the current-best in a greedy
+        // evolve hill-climb), run CANDIDATE-ONLY and reuse that rate — never
+        // re-measure the baseline. This (a) halves the work and (b) removes the
+        // re-eval noise that made an unchanged baseline score wildly differently
+        // each iteration (the bug). null = legacy behaviour (measure both fresh).
+        final boolean skipBaseline = cachedBaselineRate != null;
         abRun.setStatus("RUNNING");
         abRun.setStartedAt(Instant.now());
         promptAbRunRepository.save(abRun);
@@ -373,9 +511,10 @@ public class AbEvalPipeline {
         // judge 顺序便于 debug；并行内嵌的 ROI 小）。Scenario 之间无依赖可安全并行。
         //
         // ScenarioRunResult / EvalJudgeOutput 都是 fresh 对象，无共享 mutation。
-        // results / passed counts 用 thread-safe collections。
-        AtomicInteger baselinePassedAtomic = new AtomicInteger(0);
-        AtomicInteger candidatePassedAtomic = new AtomicInteger(0);
+        // EVAL-429-ROBUSTNESS: pass-counting + measured-filtering moved to a single-
+        // threaded post-process over the collected results (below) so the
+        // pairwise-measured denominator is computed from the final per-scenario
+        // statuses — no thread-safe counters needed.
         List<CompletableFuture<AbScenarioResult>> futures = new ArrayList<>(scenarios.size());
 
         // ★ 2026-05-24 V1 r3.1 fix RejectedExecutionException:
@@ -397,24 +536,35 @@ public class AbEvalPipeline {
             }
             CompletableFuture<AbScenarioResult> fut = CompletableFuture.supplyAsync(() -> {
                 try {
-                    // Distinct sandbox ids per side prevent SandboxFactory collision
-                    // when baseline + candidate write fixture files to the same path.
-                    ScenarioRunResult baselineRun = runSingleScenario(
-                            abRun.getId() + "-baseline", scenario, baselineDef);
-                    EvalJudgeOutput baselineJudge = evalJudgeTool.judge(scenario, baselineRun);
-                    ScenarioRunResult candidateRun = runSingleScenario(
-                            abRun.getId() + "-candidate", scenario, candidateDef);
-                    EvalJudgeOutput candidateJudge = evalJudgeTool.judge(scenario, candidateRun);
-
-                    if (baselineJudge.isPass()) baselinePassedAtomic.incrementAndGet();
-                    if (candidateJudge.isPass()) candidatePassedAtomic.incrementAndGet();
+                    // BUG-1: skip the baseline side entirely when a cached rate is
+                    // supplied (candidate-only winner-carry-forward).
+                    AbScenarioResult.RunResult baselineResult;
+                    if (skipBaseline) {
+                        baselineResult = new AbScenarioResult.RunResult(BASELINE_CACHED_STATUS, 0.0);
+                    } else {
+                        JudgedRun baselineJudged = runAndJudge(
+                                abRun.getId() + "-baseline", scenario, baselineDef, true);
+                        ScenarioRunResult baselineRun = baselineJudged.runResult();
+                        // Option B: explain=true → judge also emits a per-case rationale.
+                        EvalJudgeOutput baselineJudge = baselineJudged.judgeOutput();
+                        // Reflection: keep the judge's per-scenario reasoning so the
+                        // evolve-editor can see WHY this case scored as it did.
+                        baselineResult = new AbScenarioResult.RunResult(
+                                baselineRun.getStatus(), baselineJudge.getCompositeScore(),
+                                baselineJudge.getMetaJudgeRationale());
+                    }
+                    JudgedRun candidateJudged = runAndJudge(
+                            abRun.getId() + "-candidate", scenario, candidateDef, true);
+                    ScenarioRunResult candidateRun = candidateJudged.runResult();
+                    // Option B: explain=true → judge also emits a per-case rationale.
+                    EvalJudgeOutput candidateJudge = candidateJudged.judgeOutput();
 
                     return new AbScenarioResult(
                             scenario.getId(), scenario.getName(),
-                            new AbScenarioResult.RunResult(baselineRun.getStatus(),
-                                    baselineJudge.getCompositeScore()),
+                            baselineResult,
                             new AbScenarioResult.RunResult(candidateRun.getStatus(),
-                                    candidateJudge.getCompositeScore()));
+                                    candidateJudge.getCompositeScore(),
+                                    candidateJudge.getMetaJudgeRationale()));
                 } catch (Exception e) {
                     log.error("Attribution A/B scenario {} failed: {}", scenario.getId(), e.getMessage(), e);
                     return new AbScenarioResult(
@@ -436,12 +586,49 @@ public class AbEvalPipeline {
         for (CompletableFuture<AbScenarioResult> f : futures) {
             results.add(f.join());
         }
-        int baselinePassed = baselinePassedAtomic.get();
-        int candidatePassed = candidatePassedAtomic.get();
 
-        double baselinePassRate = (double) baselinePassed / scenarios.size() * 100;
-        double candidatePassRate = (double) candidatePassed / scenarios.size() * 100;
-        double delta = candidatePassRate - baselinePassRate;
+        // EVAL-429-ROBUSTNESS D2/D3/D4: post-process the collected per-scenario results
+        // to compute pass-rates over the MEASURED set only.
+        //  - skipBaseline (winner-carry-forward): the baseline side is the CACHED
+        //    sentinel (never run this round), so "measured" = candidate-side measured;
+        //    the run-level baseline rate stays the supplied cachedBaselineRate.
+        //  - fresh: "measured" = pairwise (BOTH candidate and baseline non-infra) so
+        //    both rates are over the SAME scenarios and the delta is strictly comparable.
+        // measured==0 → null sentinel (D3): the gate must treat it as "not measured",
+        // NOT a 0% rate. ERROR/TIMEOUT scenarios are logged (D4).
+        int measuredPairs = 0;
+        int baselinePassed = 0;
+        int candidatePassed = 0;
+        List<String> infraExcluded = new ArrayList<>();
+        for (AbScenarioResult r : results) {
+            boolean measured = skipBaseline
+                    ? isMeasured(r.candidate().status())
+                    : pairwiseMeasured(r.candidate().status(), r.baseline().status());
+            if (measured) {
+                measuredPairs++;
+                if (isPass(r.candidate())) candidatePassed++;
+                if (!skipBaseline && isPass(r.baseline())) baselinePassed++;
+            } else {
+                infraExcluded.add(r.scenarioId());
+            }
+        }
+        if (!infraExcluded.isEmpty()) {
+            log.info("Attribution A/B run {} excluded {} infra/not-measured scenario(s) from "
+                            + "denominator (skipBaseline={}): {}",
+                    abRun.getId(), infraExcluded.size(), skipBaseline, infraExcluded);
+        }
+
+        // BUG-1: when the baseline was skipped (winner-carry-forward), use the supplied
+        // cached rate instead of the (un-measured) per-scenario count.
+        Double baselinePassRate = skipBaseline
+                ? cachedBaselineRate
+                : (measuredPairs == 0 ? null : (double) baselinePassed / measuredPairs * 100);
+        Double candidatePassRate = measuredPairs == 0
+                ? null
+                : (double) candidatePassed / measuredPairs * 100;
+        Double delta = (candidatePassRate == null || baselinePassRate == null)
+                ? null
+                : candidatePassRate - baselinePassRate;
 
         abRun.setBaselinePassRate(baselinePassRate);
         abRun.setCandidatePassRate(candidatePassRate);
@@ -468,10 +655,18 @@ public class AbEvalPipeline {
         // many runs this converges to the true mean. Stored as fraction
         // [0.0, 1.0] to match the composition_stats.expected_baseline_pass_rate
         // field. baselinePassRate above is in 0-100 percentage form.
-        if (datasetVersionId != null && evalDatasetVersionRepository != null) {
+        // BUG-1: never back-write when the baseline was skipped — baselinePassRate is
+        // then the carried current-best score (winner-carry-forward), not a fresh
+        // measurement of THIS dataset's baseline, so averaging it in would pollute
+        // the dataset's actualBaselinePassRate estimate.
+        // EVAL-429-ROBUSTNESS: skip the back-write when the baseline rate is null
+        // (no scenario was measured this round) — there's no fresh measurement to fold in.
+        if (!skipBaseline && baselinePassRate != null
+                && datasetVersionId != null && evalDatasetVersionRepository != null) {
+            final double measuredBaselineRate = baselinePassRate;
             try {
                 evalDatasetVersionRepository.findById(datasetVersionId).ifPresent(v -> {
-                    double newFraction = baselinePassRate / 100.0;
+                    double newFraction = measuredBaselineRate / 100.0;
                     Double prior = v.getActualBaselinePassRate();
                     double updated = (prior == null) ? newFraction : (prior + newFraction) / 2.0;
                     v.setActualBaselinePassRate(updated);
@@ -552,10 +747,12 @@ public class AbEvalPipeline {
             }
             CompletableFuture<AbScenarioResult> fut = CompletableFuture.supplyAsync(() -> {
                 try {
-                    ScenarioRunResult bRun = runSingleScenario(abRunId + ":b", scenario, bEval);
-                    EvalJudgeOutput bJudge = evalJudgeTool.judge(scenario, bRun);
-                    ScenarioRunResult cRun = runSingleScenario(abRunId + ":c", scenario, cEval);
-                    EvalJudgeOutput cJudge = evalJudgeTool.judge(scenario, cRun);
+                    JudgedRun bJudged = runAndJudge(abRunId + ":b", scenario, bEval, false);
+                    ScenarioRunResult bRun = bJudged.runResult();
+                    EvalJudgeOutput bJudge = bJudged.judgeOutput();
+                    JudgedRun cJudged = runAndJudge(abRunId + ":c", scenario, cEval, false);
+                    ScenarioRunResult cRun = cJudged.runResult();
+                    EvalJudgeOutput cJudge = cJudged.judgeOutput();
                     return new AbScenarioResult(
                             scenario.getId(), scenario.getName(),
                             new AbScenarioResult.RunResult(bRun.getStatus(), bJudge.getCompositeScore()),
@@ -563,6 +760,139 @@ public class AbEvalPipeline {
                 } catch (Exception e) {
                     log.error("BehaviorRule A/B scenario {} failed: {}",
                             scenario.getId(), e.getMessage(), e);
+                    return new AbScenarioResult(
+                            scenario.getId(), scenario.getName(),
+                            new AbScenarioResult.RunResult("ERROR", 0.0),
+                            new AbScenarioResult.RunResult("ERROR", 0.0));
+                } finally {
+                    concurrency.release();
+                }
+            }, loopExecutor);
+            futures.add(fut);
+        }
+        CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+        List<AbScenarioResult> out = new ArrayList<>(futures.size());
+        for (CompletableFuture<AbScenarioResult> f : futures) {
+            out.add(f.join());
+        }
+        return out;
+    }
+
+    /**
+     * AUTOEVOLVE-AGENT-LEVEL-BUNDLE Phase 1 (§2.2 / §7 B1 / W2) — def-based A/B
+     * sibling of {@link #runWithExplicitDefs}, adding the candidate-only
+     * winner-carry-forward skip the prompt path has. Runs every scenario against
+     * {@code candidateDef} (and, unless a cached rate is supplied, against
+     * {@code baselineDef}), returning merged per-scenario results.
+     *
+     * <p><b>Why a NEW method, not a refactor of {@link #runWithExplicitDefs}</b>
+     * (§7 B1): the behavior_rule path that calls {@code runWithExplicitDefs} uses
+     * {@code explain=false} + an {@code oracleScore>=0.5} caller predicate; folding
+     * that into a shared method would silently change its byte behaviour. This
+     * sibling takes an explicit {@code explain} flag and judges with
+     * {@code judge(scenario, run, explain)} so the agent caller (explain=true) is
+     * byte-identical to the prompt path's {@code judge(scenario, run, true)}.
+     *
+     * <p><b>Persistence contract</b>: pure compute — does NOT touch any
+     * {@code t_*_ab_run} row (same SRP boundary as {@code runWithExplicitDefs}).
+     * The caller ({@code AgentEvolveAbEvalService}) owns ALL persistence and
+     * aggregates the pass-rate via {@link #isPass(AbScenarioResult.RunResult)}.
+     *
+     * <p>Returns {@code List<AbScenarioResult>} from day one (§7 W2) so Phase 2's
+     * target/general partition can group per-scenario without changing this
+     * signature.
+     *
+     * @param abRunId            sandbox-naming prefix (suffixed {@code ":b"} / {@code ":c"})
+     * @param scenarios          scenarios to run (both sides unless skipped)
+     * @param baselineDef        baseline-side agent definition (ignored when {@code cachedBaselineRate != null})
+     * @param candidateDef       candidate-side agent definition
+     * @param cachedBaselineRate non-null → CANDIDATE-ONLY; baseline side filled with
+     *                           the {@link #BASELINE_CACHED_STATUS} sentinel (the
+     *                           run-level rate carries the cached value, set by the caller)
+     * @param explain            judge explain flag; agent caller passes {@code true} (§7 B1)
+     * @return per-scenario results in original order; per-scenario error → status="ERROR" both sides
+     */
+    public List<AbScenarioResult> runWithDefs(
+            String abRunId,
+            List<EvalScenarioEntity> scenarios,
+            AgentDefinition baselineDef,
+            AgentDefinition candidateDef,
+            Double cachedBaselineRate,
+            boolean explain) {
+        // Backward-compatible 6-arg overload — no extra (skill) defs to inject.
+        return runWithDefs(abRunId, scenarios, baselineDef, candidateDef,
+                cachedBaselineRate, explain, List.of());
+    }
+
+    /**
+     * AUTOEVOLVE-AGENT-LEVEL-BUNDLE Phase 4 (§10 #5) — overload that injects
+     * in-memory candidate {@code extraSkills} into the eval sandbox. The skills
+     * are registered ONLY on the CANDIDATE side ({@code :c}); the baseline side
+     * ({@code :b}) runs with the plain sandbox. This matches "baseline = agent
+     * without the candidate skill" — and is correct under hill-climb because the
+     * baseline arm only actually runs in the fresh round (no cached rate) where
+     * best = the original agent (no skill); carry-forward rounds skip the baseline
+     * arm and the carried-forward skill lives on the candidate side.
+     *
+     * @param extraSkills in-memory candidate skill defs (empty → identical to the
+     *                    6-arg overload; registered on the candidate side only)
+     */
+    public List<AbScenarioResult> runWithDefs(
+            String abRunId,
+            List<EvalScenarioEntity> scenarios,
+            AgentDefinition baselineDef,
+            AgentDefinition candidateDef,
+            Double cachedBaselineRate,
+            boolean explain,
+            List<SkillDefinition> extraSkills) {
+        if (scenarios == null || scenarios.isEmpty()) {
+            return List.of();
+        }
+        final List<SkillDefinition> candidateExtraSkills =
+                extraSkills == null ? List.of() : extraSkills;
+        final boolean skipBaseline = cachedBaselineRate != null;
+        // Same eval-overrides (temperature=0.0, strip execution_mode) as the prompt
+        // / behavior_rule paths — keeps the A/B comparison deterministic.
+        AgentDefinition bEval = copyWithoutEvalOverrides(baselineDef);
+        AgentDefinition cEval = copyWithoutEvalOverrides(candidateDef);
+
+        final Semaphore concurrency = new Semaphore(scenarioConcurrency);
+        List<CompletableFuture<AbScenarioResult>> futures = new ArrayList<>(scenarios.size());
+
+        for (EvalScenarioEntity entity : scenarios) {
+            EvalScenario scenario = toEvalScenario(entity);
+            try {
+                concurrency.acquire();
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException(
+                        "Interrupted while throttling A/B scenario submit (abRunId=" + abRunId + ")", ie);
+            }
+            CompletableFuture<AbScenarioResult> fut = CompletableFuture.supplyAsync(() -> {
+                try {
+                    AbScenarioResult.RunResult baselineResult;
+                    if (skipBaseline) {
+                        // Candidate-only winner-carry-forward — never re-measure the
+                        // baseline (same sentinel as runWithScenarios BUG-1 path).
+                        baselineResult = new AbScenarioResult.RunResult(BASELINE_CACHED_STATUS, 0.0);
+                    } else {
+                        JudgedRun bJudged = runAndJudge(abRunId + ":b", scenario, bEval, explain);
+                        ScenarioRunResult bRun = bJudged.runResult();
+                        EvalJudgeOutput bJudge = bJudged.judgeOutput();
+                        baselineResult = new AbScenarioResult.RunResult(
+                                bRun.getStatus(), bJudge.getCompositeScore(), bJudge.getMetaJudgeRationale());
+                    }
+                    JudgedRun cJudged = runAndJudge(
+                            abRunId + ":c", scenario, cEval, explain, candidateExtraSkills);
+                    ScenarioRunResult cRun = cJudged.runResult();
+                    EvalJudgeOutput cJudge = cJudged.judgeOutput();
+                    return new AbScenarioResult(
+                            scenario.getId(), scenario.getName(),
+                            baselineResult,
+                            new AbScenarioResult.RunResult(cRun.getStatus(),
+                                    cJudge.getCompositeScore(), cJudge.getMetaJudgeRationale()));
+                } catch (Exception e) {
+                    log.error("Agent A/B scenario {} failed: {}", scenario.getId(), e.getMessage(), e);
                     return new AbScenarioResult(
                             scenario.getId(), scenario.getName(),
                             new AbScenarioResult.RunResult("ERROR", 0.0),
@@ -599,13 +929,222 @@ public class AbEvalPipeline {
         oracle.setType(entity.getOracleType());
         oracle.setExpected(entity.getOracleExpected());
         scenario.setOracle(oracle);
+        // BC-M1: carry DB-persisted fixtures so session_derived (harvested)
+        // scenarios — which have no disk setup.files — write their fixture into
+        // the sandbox before the run.
+        scenario.setFixtureFiles(entity.getFixtureFiles());
         return scenario;
+    }
+
+    /**
+     * BC-M1 fixture resolution: DB-persisted {@code fixtureFiles} (session_derived
+     * harvested scenarios) take priority over disk {@code setup.files} (benchmark
+     * scenarios). Returns null when neither source has files.
+     */
+    static Map<String, String> resolveFixtureFiles(EvalScenario scenario) {
+        Map<String, String> dbFixtures = scenario.getFixtureFiles();
+        if (dbFixtures != null && !dbFixtures.isEmpty()) {
+            return dbFixtures;
+        }
+        if (scenario.getSetup() != null && scenario.getSetup().getFiles() != null) {
+            return scenario.getSetup().getFiles();
+        }
+        return null;
     }
 
     private ScenarioRunResult runSingleScenario(String abRunId, EvalScenario scenario,
                                                  AgentDefinition candidateDef) {
+        return runSingleScenario(abRunId, scenario, candidateDef, List.of());
+    }
+
+    /** Pairs the aggregated run + judge so the multi-round and single-round paths return the same shape. */
+    private record JudgedRun(ScenarioRunResult runResult, EvalJudgeOutput judgeOutput) {}
+
+    private static boolean isBehavioralOracle(EvalScenario scenario) {
+        return scenario != null && scenario.getOracle() != null
+                && EvalJudgeTool.ORACLE_TYPE_TOOL_ERROR_ABSENCE.equals(scenario.getOracle().getType());
+    }
+
+    /**
+     * BC-M2a: resolve the behavioral-oracle repeat count via the shared
+     * {@link BehavioralOracleCriteria} parser. The default is <b>1</b> (single
+     * round — keeps BC-M1 behavioral scenarios byte-compatible) when {@code rounds}
+     * is absent/&le;1 or the criteria JSON is unparseable; the production default
+     * of <b>5</b> is NOT defined here — it is written into {@code oracle.expected}
+     * by {@code BadCaseHarvestService.DEFAULT_HARVEST_ROUNDS} when a scenario is
+     * harvested, so the read side simply honours whatever the JSON carries.
+     * Non-behavioral scenarios never reach here (guarded by {@link #isBehavioralOracle}).
+     */
+    static int resolveBehavioralRounds(ObjectMapper objectMapper, EvalScenario scenario) {
+        return BehavioralOracleCriteria.parse(scenario.getOracle().getExpected(), objectMapper).rounds();
+    }
+
+    /**
+     * BC-M2a: run + judge a scenario, applying the multi-round recurrence-rate
+     * aggregation for behavioral oracles whose {@code rounds >= 2}; single-round
+     * run + judge for everything else (byte-identical to the prior code path).
+     *
+     * <p>Centralizes the run+judge pair so every A/B caller (held-out, prompt,
+     * behavior_rule, agent-level bundle) gets the same multi-round semantics
+     * without duplicating the loop.
+     */
+    private JudgedRun runAndJudge(String abRunId, EvalScenario scenario, AgentDefinition def,
+                                  boolean explain, List<SkillDefinition> extraSkills) {
+        if (isBehavioralOracle(scenario)) {
+            int rounds = resolveBehavioralRounds(objectMapper, scenario);
+            if (rounds > 1) {
+                return runMultiRoundBehavioral(abRunId, scenario, def, rounds, extraSkills);
+            }
+        }
+        ScenarioRunResult run = runSingleScenario(abRunId, scenario, def, extraSkills);
+        EvalJudgeOutput judge = evalJudgeTool.judge(scenario, run, explain);
+        return new JudgedRun(run, judge);
+    }
+
+    private JudgedRun runAndJudge(String abRunId, EvalScenario scenario, AgentDefinition def, boolean explain) {
+        return runAndJudge(abRunId, scenario, def, explain, List.of());
+    }
+
+    /**
+     * BC-M2a multi-round recurrence rate. Runs the behavioral-oracle scenario
+     * {@code rounds} times in independent sandboxes (each round's
+     * {@link #runSingleScenario} builds and cleans up its own sandbox dir, keyed
+     * by a per-round {@code abRunId} suffix), judges each round with the
+     * deterministic oracle, and aggregates:
+     * <ul>
+     *   <li>outcome = mean of per-round outcome scores = (clean rounds / N) * 100,
+     *       so the recurrence/no-engagement rate is {@code (N - clean)/N}.</li>
+     *   <li>efficiency = mean of per-round efficiency scores.</li>
+     *   <li>composite = 0.7*outcome + 0.3*efficiency; pass when composite &gt;= 40
+     *       (same weights/threshold as the single-round judge).</li>
+     * </ul>
+     * A round whose run ERROR/TIMEOUT-ed contributes 0 to BOTH the outcome AND the
+     * efficiency mean (forced here, not relied upon from the judge): otherwise a
+     * fast-but-broken infra round could keep efficiency high and push a mostly-
+     * infra batch over the pass threshold. When EVERY round is infra the aggregate
+     * is surfaced as ERROR so the EVAL-429 robustness denominator excludes the
+     * scenario rather than recording a misleading behavioral FAIL.
+     *
+     * <p><b>temp=0 caveat (accepted, by design).</b> Eval forces temperature=0, so
+     * the N rounds are near-deterministic and the rate often degenerates to 0/1
+     * rather than a smooth fraction. That is correct (0/1 is the right answer when
+     * the behavior is deterministic); the multi-round pass only captures whatever
+     * residual cross-round nondeterminism exists (provider sampling / tool
+     * ordering). We deliberately add NO temperature perturbation or randomness to
+     * "smooth" the rate.
+     */
+    private JudgedRun runMultiRoundBehavioral(String abRunId, EvalScenario scenario,
+                                              AgentDefinition def, int rounds,
+                                              List<SkillDefinition> extraSkills) {
+        List<EvalJudgeOutput> perRound = new ArrayList<>(rounds);
+        int infraRounds = 0;
+        ScenarioRunResult representative = null;
+        for (int i = 0; i < rounds; i++) {
+            ScenarioRunResult run = runSingleScenario(abRunId + "-r" + i, scenario, def, extraSkills);
+            // Deterministic behavioral oracle → explain=false (no per-round LLM rationale).
+            EvalJudgeOutput judge = evalJudgeTool.judge(scenario, run, false);
+            if ("ERROR".equals(run.getStatus()) || "TIMEOUT".equals(run.getStatus())) {
+                infraRounds++;
+                // Force an infra round to contribute 0 to both means by construction,
+                // so the aggregate never depends on judge() internals zeroing efficiency.
+                perRound.add(zeroRound());
+            } else {
+                perRound.add(judge);
+            }
+            // representative = last round, used ONLY for display fields on the aggregate
+            // ScenarioRunResult (loopCount / toolCalls / executionTimeMs). The scores
+            // come from aggregateBehavioralRounds below, NOT from this single round.
+            representative = run;
+        }
+
+        if (infraRounds == rounds) {
+            EvalJudgeOutput errOut = new EvalJudgeOutput();
+            errOut.setOutcomeScore(0.0);
+            errOut.setEfficiencyScore(0.0);
+            errOut.setCompositeScore(0.0);
+            errOut.setPass(false);
+            errOut.setMetaJudgeRationale("Behavioral oracle multi-round: all " + rounds
+                    + " rounds errored/timed out (infra) — excluded from pass-rate denominator.");
+            return new JudgedRun(
+                    ScenarioRunResult.error(scenario.getId(), rounds + " behavioral rounds all infra-failed"),
+                    errOut);
+        }
+
+        EvalJudgeOutput out = aggregateBehavioralRounds(perRound);
+        ScenarioRunResult agg = new ScenarioRunResult();
+        agg.setScenarioId(scenario.getId());
+        agg.setStatus(out.isPass() ? "PASS" : "FAIL");
+        agg.setOracleScore(out.getCompositeScore());
+        if (representative != null) {
+            agg.setLoopCount(representative.getLoopCount());
+            agg.setExecutionTimeMs(representative.getExecutionTimeMs());
+            agg.setToolCalls(representative.getToolCalls());
+            agg.setToolCallCount(representative.getToolCallCount());
+        }
+        return new JudgedRun(agg, out);
+    }
+
+    /**
+     * BC-M2a pure aggregation of per-round behavioral-oracle outputs into a single
+     * judge output: outcome = mean of per-round outcomes (= clean-round fraction
+     * * 100, since each per-round outcome is a hard 0/100), efficiency = mean of
+     * per-round efficiency, composite = 0.7*outcome + 0.3*efficiency, pass when
+     * composite &gt;= 40. Package-private and side-effect free so the recurrence-
+     * rate mapping is unit-testable without spinning up the eval engine.
+     *
+     * @param perRound non-empty list of per-round judge outputs
+     */
+    /** A round output that contributes 0 to both the outcome and efficiency means (infra rounds). */
+    private static EvalJudgeOutput zeroRound() {
+        EvalJudgeOutput o = new EvalJudgeOutput();
+        o.setOutcomeScore(0.0);
+        o.setEfficiencyScore(0.0);
+        o.setCompositeScore(0.0);
+        o.setPass(false);
+        return o;
+    }
+
+    static EvalJudgeOutput aggregateBehavioralRounds(List<EvalJudgeOutput> perRound) {
+        int n = perRound.size();
+        double outcomeSum = 0.0;
+        double efficiencySum = 0.0;
+        int cleanRounds = 0;
+        for (EvalJudgeOutput o : perRound) {
+            outcomeSum += o.getOutcomeScore();
+            efficiencySum += o.getEfficiencyScore();
+            if (o.getOutcomeScore() >= 100.0) cleanRounds++;
+        }
+        double outcomeMean = outcomeSum / n;
+        double efficiencyMean = efficiencySum / n;
+        double composite = 0.7 * outcomeMean + 0.3 * efficiencyMean;
+        boolean pass = composite >= 40.0;
+
+        EvalJudgeOutput out = new EvalJudgeOutput();
+        out.setOutcomeScore(outcomeMean);
+        out.setEfficiencyScore(efficiencyMean);
+        out.setCompositeScore(composite);
+        out.setPass(pass);
+        double rate = (1.0 - (double) cleanRounds / n) * 100.0;
+        out.setMetaJudgeRationale(String.format(
+                "Behavioral oracle multi-round: %d/%d rounds completed a clean signature-free target-tool "
+                + "operation (recurrence/no-engagement rate %.0f%%); composite %.1f.",
+                cleanRounds, n, rate, composite));
+        return out;
+    }
+
+    /**
+     * Phase 4 (§10 #5) overload — builds the sandbox registry WITH the supplied
+     * in-memory {@code extraSkills} so the agent loop can resolve the bundle's
+     * skill by name. An empty list reproduces the plain-sandbox path byte-for-byte
+     * (so the prompt/behavior_rule callers stay unchanged).
+     */
+    private ScenarioRunResult runSingleScenario(String abRunId, EvalScenario scenario,
+                                                 AgentDefinition candidateDef,
+                                                 List<SkillDefinition> extraSkills) {
         try {
-            SkillRegistry sandboxRegistry = sandboxFactory.buildSandboxRegistry(abRunId, scenario.getId());
+            SkillRegistry sandboxRegistry = (extraSkills == null || extraSkills.isEmpty())
+                    ? sandboxFactory.buildSandboxRegistry(abRunId, scenario.getId())
+                    : sandboxFactory.buildSandboxRegistryWithSkills(abRunId, scenario.getId(), extraSkills);
             AgentLoopEngine engine = evalEngineFactory.buildEvalEngine(sandboxRegistry);
 
             String evalSessionId = UUID.randomUUID().toString();
@@ -628,11 +1167,23 @@ public class AbEvalPipeline {
             Path sandboxRoot = sandboxFactory.getSandboxRoot(abRunId, scenario.getId());
             String task = scenario.getTask().replace("/tmp/eval/", sandboxRoot.toString() + "/");
 
-            // Write fixture files
-            if (scenario.getSetup() != null && scenario.getSetup().getFiles() != null) {
+            // Write fixture files. BC-M1: DB-persisted fixtureFiles (session_derived
+            // harvested scenarios) take priority; fall back to disk setup.files
+            // (benchmark scenarios) when the DB column is null/empty.
+            Map<String, String> fixtures = resolveFixtureFiles(scenario);
+            if (fixtures != null && !fixtures.isEmpty()) {
                 java.nio.file.Files.createDirectories(sandboxRoot);
-                for (Map.Entry<String, String> entry : scenario.getSetup().getFiles().entrySet()) {
-                    Path filePath = sandboxRoot.resolve(entry.getKey());
+                Path normalizedRoot = sandboxRoot.normalize();
+                for (Map.Entry<String, String> entry : fixtures.entrySet()) {
+                    // Path-traversal guard (aligns with SandboxedFileWriteTool): a
+                    // fixture key like "../escape" or an absolute path must never
+                    // write outside the sandbox root. Guards both DB fixtureFiles
+                    // and benchmark setup.files.
+                    Path filePath = sandboxRoot.resolve(entry.getKey()).normalize();
+                    if (!filePath.startsWith(normalizedRoot)) {
+                        log.warn("fixture path escapes sandbox, skipping: {}", entry.getKey());
+                        continue;
+                    }
                     if (filePath.getParent() != null) {
                         java.nio.file.Files.createDirectories(filePath.getParent());
                     }
@@ -721,7 +1272,15 @@ public class AbEvalPipeline {
         return scenarioFallback > 0 ? scenarioFallback : 10;
     }
 
-    private double computeHeldOutBaselineRate(EvalTaskEntity baselineRun, List<EvalScenario> heldOutScenarios) {
+    /**
+     * EVAL-429-ROBUSTNESS Fix4 — held-out baseline rate over MEASURED historical
+     * scenarios only. ERROR/TIMEOUT rows in the baseline eval task are dropped from
+     * both numerator and denominator (D1/D2). Returns {@code null} when no held-out
+     * scenario was measured (D3 not-measured sentinel) so the gate doesn't read it as
+     * a 0% baseline. Legacy rows with no {@code status} field are conservatively
+     * treated as measured (so old datasets keep their historical rate).
+     */
+    private Double computeHeldOutBaselineRate(EvalTaskEntity baselineRun, List<EvalScenario> heldOutScenarios) {
         if (baselineRun.getScenarioResultsJson() == null) {
             return baselineRun.getOverallPassRate();
         }
@@ -735,18 +1294,34 @@ public class AbEvalPipeline {
 
             long heldOutPassed = results.stream()
                     .filter(r -> heldOutIds.contains(r.get("scenarioId")))
+                    .filter(AbEvalPipeline::isHistoricScenarioMeasured)
                     .filter(r -> Boolean.TRUE.equals(r.get("pass")))
                     .count();
 
             long heldOutTotal = results.stream()
                     .filter(r -> heldOutIds.contains(r.get("scenarioId")))
+                    .filter(AbEvalPipeline::isHistoricScenarioMeasured)
                     .count();
 
-            return heldOutTotal == 0 ? 0 : (double) heldOutPassed / heldOutTotal * 100;
+            return heldOutTotal == 0 ? null : (double) heldOutPassed / heldOutTotal * 100;
         } catch (Exception e) {
             log.warn("Failed to parse baseline scenario results, using overall pass rate", e);
             return baselineRun.getOverallPassRate();
         }
+    }
+
+    /**
+     * EVAL-429-ROBUSTNESS Fix4 — a historical (persisted) baseline scenario row counts
+     * as measured unless its {@code status} field is ERROR/TIMEOUT. A missing status
+     * (legacy rows) is conservatively kept as measured.
+     */
+    private static boolean isHistoricScenarioMeasured(Map<String, Object> row) {
+        Object status = row.get("status");
+        if (status == null) {
+            return true;
+        }
+        String s = String.valueOf(status);
+        return !("ERROR".equals(s) || "TIMEOUT".equals(s));
     }
 
     private String lookupBaselineStatus(EvalTaskEntity baselineRun, String scenarioId) {

@@ -5,9 +5,8 @@ import com.skillforge.core.engine.PendingAskRegistry;
 import com.skillforge.core.engine.confirm.PendingConfirmationRegistry;
 import com.skillforge.server.config.LlmProperties;
 import com.skillforge.server.entity.ChatAttachmentEntity;
+import com.skillforge.server.channel.router.ChannelConversationResolver;
 import com.skillforge.server.entity.SessionEntity;
-import com.skillforge.server.repository.ChannelConversationRepository;
-import com.skillforge.server.repository.ChatAttachmentRepository;
 import com.skillforge.server.service.AgentService;
 import com.skillforge.server.service.ChatAttachmentService;
 import com.skillforge.server.service.ChatService;
@@ -48,7 +47,6 @@ class ChatControllerAttachmentDataTest {
 
     @Mock private ChatService chatService;
     @Mock private ChatAttachmentService chatAttachmentService;
-    @Mock private ChatAttachmentRepository chatAttachmentRepository;
     @Mock private SessionService sessionService;
     @Mock private AgentService agentService;
     @Mock private LlmProperties llmProperties;
@@ -58,7 +56,7 @@ class ChatControllerAttachmentDataTest {
     @Mock private CancellationRegistry cancellationRegistry;
     @Mock private CompactionService compactionService;
     @Mock private ReplayService replayService;
-    @Mock private ChannelConversationRepository channelConversationRepository;
+    @Mock private ChannelConversationResolver channelConversationResolver;
     @Mock private ContextBreakdownService contextBreakdownService;
 
     private ChatController controller;
@@ -66,11 +64,11 @@ class ChatControllerAttachmentDataTest {
     @BeforeEach
     void setUp() {
         controller = new ChatController(
-                chatService, chatAttachmentService, chatAttachmentRepository,
+                chatService, chatAttachmentService,
                 sessionService, agentService, llmProperties,
                 pendingAskRegistry, pendingConfirmationRegistry, subAgentRegistry,
                 cancellationRegistry, compactionService, replayService,
-                channelConversationRepository, contextBreakdownService);
+                channelConversationResolver, contextBreakdownService);
     }
 
     private ChatAttachmentEntity sampleAttachment() {

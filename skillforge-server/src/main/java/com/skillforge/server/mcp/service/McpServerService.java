@@ -19,11 +19,16 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.net.InetAddress;
+import java.net.URI;
+import java.net.UnknownHostException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -54,6 +59,11 @@ public class McpServerService {
     /** Mirror of the DB CHECK constraint (chk_mcp_server_name_shape, INV-3). */
     private static final Pattern NAME_PATTERN = Pattern.compile("^[a-z0-9_]+$");
     private static final int NAME_MAX_LEN = 32;
+
+    /** Allowed transport kinds (mirrors V152 chk_mcp_transport). */
+    static final String TRANSPORT_STDIO = "stdio";
+    static final String TRANSPORT_HTTP = "http";
+    private static final Set<String> ALLOWED_TRANSPORTS = Set.of(TRANSPORT_STDIO, TRANSPORT_HTTP);
 
     private final McpServerRepository repository;
     private final AgentRepository agentRepository;
@@ -97,16 +107,24 @@ public class McpServerService {
         if (req == null) throw new IllegalArgumentException("request body is required");
 
         validateName(req.getName());
-        if (req.getCommand() == null || req.getCommand().isBlank()) {
-            throw new IllegalArgumentException("command is required");
-        }
+        String transport = normalizeTransport(req.getTransport());
+        validateTransportFields(transport, req);
         if (repository.existsByName(req.getName())) {
             throw new IllegalArgumentException("MCP server name already exists: " + req.getName());
         }
 
         McpServerEntity entity = new McpServerEntity();
         entity.setName(req.getName().trim());
-        entity.setCommand(req.getCommand().trim());
+        entity.setTransport(transport);
+        if (TRANSPORT_STDIO.equals(transport)) {
+            entity.setCommand(req.getCommand().trim());
+            // url stays null; headers stay '{}' (defaults) — irrelevant for stdio.
+        } else { // http
+            entity.setUrl(req.getUrl().trim());
+            // command optional for http; persist trimmed value or leave null.
+            entity.setCommand(blankToNull(req.getCommand()));
+            entity.setHeaders(serializeEnv(req.getHeaders()));
+        }
         entity.setArgs(serializeArgs(req.getArgs()));
         entity.setEnv(serializeEnv(req.getEnv()));
         entity.setDescription(req.getDescription());
@@ -132,9 +150,38 @@ public class McpServerService {
                     "MCP server name is immutable after creation; current=" + entity.getName()
                             + ", requested=" + req.getName());
         }
+        // Transport is immutable post-create (same rationale as name): an stdio↔http jump
+        // would leave the row violating chk_mcp_transport (command vs url presence) and
+        // strand the wrong runtime config. Reject any change attempt; accept a no-op echo.
+        if (req.getTransport() != null
+                && !normalizeTransport(req.getTransport()).equals(entity.getTransport())) {
+            throw new IllegalArgumentException(
+                    "MCP server transport is immutable after creation; current=" + entity.getTransport()
+                            + ", requested=" + req.getTransport());
+        }
+        boolean isStdio = TRANSPORT_STDIO.equals(entity.getTransport());
         if (req.getCommand() != null) {
-            if (req.getCommand().isBlank()) throw new IllegalArgumentException("command must not be blank");
-            entity.setCommand(req.getCommand().trim());
+            if (isStdio) {
+                if (req.getCommand().isBlank()) {
+                    throw new IllegalArgumentException("command must not be blank");
+                }
+                entity.setCommand(req.getCommand().trim());
+            } else {
+                // http: command is optional; blank clears it (CHECK only needs url).
+                entity.setCommand(blankToNull(req.getCommand()));
+            }
+        }
+        if (req.getUrl() != null && !isStdio) {
+            if (req.getUrl().isBlank()) {
+                throw new IllegalArgumentException("url must not be blank for http transport");
+            }
+            validateHttpUrl(req.getUrl());
+            entity.setUrl(req.getUrl().trim());
+        }
+        if (req.getHeaders() != null && !isStdio) {
+            // Same mask-preserve merge as env so round-tripped "***" sentinels don't clobber
+            // real header secrets (e.g. Authorization bearer tokens).
+            entity.setHeaders(serializeEnv(mergeEnvPreservingMasked(parseHeaders(entity), req.getHeaders())));
         }
         if (req.getArgs() != null) entity.setArgs(serializeArgs(req.getArgs()));
         if (req.getEnv() != null) {
@@ -182,6 +229,149 @@ public class McpServerService {
 
     private void validateRequired(Long currentUserId) {
         if (currentUserId == null) throw new IllegalArgumentException("currentUserId is required");
+    }
+
+    /** Normalize + validate transport; null/blank defaults to stdio. */
+    private String normalizeTransport(String raw) {
+        if (raw == null || raw.isBlank()) return TRANSPORT_STDIO;
+        String t = raw.trim().toLowerCase(Locale.ROOT);
+        if (!ALLOWED_TRANSPORTS.contains(t)) {
+            throw new IllegalArgumentException(
+                    "transport must be one of " + ALLOWED_TRANSPORTS + " (got: '" + raw + "')");
+        }
+        return t;
+    }
+
+    /** Enforce the per-transport required field (mirrors V152 chk_mcp_transport). */
+    private void validateTransportFields(String transport, McpServerRequest req) {
+        if (TRANSPORT_STDIO.equals(transport)) {
+            if (req.getCommand() == null || req.getCommand().isBlank()) {
+                throw new IllegalArgumentException("command is required for stdio transport");
+            }
+        } else { // http
+            if (req.getUrl() == null || req.getUrl().isBlank()) {
+                throw new IllegalArgumentException("url is required for http transport");
+            }
+            validateHttpUrl(req.getUrl());
+        }
+    }
+
+    /**
+     * Validate an http-transport endpoint url at create/update time:
+     * <ol>
+     *   <li>scheme must be http or https;</li>
+     *   <li>explicit loopback host (localhost / 127.0.0.1 / ::1) may use plain http for a local
+     *       self-hosted MCP dev server;</li>
+     *   <li>any other host must use https so a resolved {@code Authorization} header (e.g. a bearer
+     *       token) is never sent in clear text;</li>
+     *   <li>BUG-33 SSRF guard: the host must not resolve into internal / private / link-local
+     *       (incl. {@code 169.254.169.254} cloud-metadata) / unique-local ranges, so an operator
+     *       cannot point the server at the metadata endpoint or an internal-only service.</li>
+     * </ol>
+     * Error messages carry only the scheme / host — never the url's token-bearing userinfo or any
+     * header.
+     *
+     * <p><b>Limitation:</b> this is a config-time check and does NOT defend against DNS rebinding
+     * (a host that resolves to a public IP now but rebinds to a private IP at connect time). A
+     * connect-time guard in {@code McpHttpTransport} would be the complete fix — tracked as
+     * follow-up.
+     */
+    private void validateHttpUrl(String rawUrl) {
+        URI uri;
+        try {
+            uri = URI.create(rawUrl.trim());
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("url is not a valid URI");
+        }
+        String scheme = uri.getScheme();
+        String host = uri.getHost();
+        if (scheme == null || host == null || host.isBlank()) {
+            throw new IllegalArgumentException("url must be an absolute http(s) URL with a host");
+        }
+        String s = scheme.toLowerCase(Locale.ROOT);
+        if (!"http".equals(s) && !"https".equals(s)) {
+            throw new IllegalArgumentException("url must use http or https (got scheme '" + s + "')");
+        }
+        // Dev exception: explicit loopback host may use plain http for a local self-hosted MCP.
+        if (isLoopbackHost(host)) {
+            return;
+        }
+        // Non-local: require https so a resolved Authorization header is never sent in clear text.
+        if (!"https".equals(s)) {
+            throw new IllegalArgumentException(
+                    "url must use https for non-local hosts (got scheme '" + s + "' host '" + host + "')");
+        }
+        // BUG-33 SSRF guard — reject hosts resolving into internal / private / metadata ranges.
+        InetAddress[] addrs;
+        try {
+            addrs = InetAddress.getAllByName(unbracket(host));
+        } catch (UnknownHostException e) {
+            throw new IllegalArgumentException("url host cannot be resolved: " + host);
+        }
+        for (InetAddress addr : addrs) {
+            if (isDisallowedAddress(addr)) {
+                throw new IllegalArgumentException(
+                        "url host '" + host + "' resolves to a disallowed internal/private address");
+            }
+        }
+    }
+
+    private static boolean isLoopbackHost(String host) {
+        String h = host.toLowerCase(Locale.ROOT);
+        // URI.getHost() returns IPv6 literals wrapped in brackets, e.g. "[::1]".
+        return h.equals("localhost") || h.equals("127.0.0.1") || h.equals("::1") || h.equals("[::1]");
+    }
+
+    /** IPv6 literals come bracketed from {@link URI#getHost()} (e.g. "[::1]"); strip for resolution. */
+    private static String unbracket(String host) {
+        if (host.length() >= 2 && host.charAt(0) == '[' && host.charAt(host.length() - 1) == ']') {
+            return host.substring(1, host.length() - 1);
+        }
+        return host;
+    }
+
+    /**
+     * BUG-33 SSRF guard: addresses an http-transport MCP server url must not resolve to.
+     * Covers loopback, any-local (0.0.0.0/::), link-local (169.254.x / fe80:: — includes the
+     * 169.254.169.254 cloud-metadata endpoint), site-local (10/172.16-31/192.168), multicast,
+     * IPv6 unique-local (fc00::/7) and IPv4 carrier-grade NAT (100.64.0.0/10).
+     */
+    private static boolean isDisallowedAddress(InetAddress addr) {
+        if (addr.isLoopbackAddress() || addr.isAnyLocalAddress() || addr.isLinkLocalAddress()
+                || addr.isSiteLocalAddress() || addr.isMulticastAddress()) {
+            return true;
+        }
+        byte[] b = addr.getAddress();
+        if (b.length == 16) {
+            // IPv4-mapped (::ffff:a.b.c.d) / IPv4-compatible (::a.b.c.d): the IPv6 predicates above
+            // don't inspect the embedded v4 range, so re-evaluate the embedded IPv4 explicitly
+            // (closes the ::ffff:169.254.169.254 metadata bypass).
+            boolean firstTenZero = true;
+            for (int i = 0; i < 10; i++) {
+                if (b[i] != 0) { firstTenZero = false; break; }
+            }
+            boolean v4Mapped = firstTenZero && (b[10] & 0xFF) == 0xFF && (b[11] & 0xFF) == 0xFF;
+            boolean v4Compat = firstTenZero && b[10] == 0 && b[11] == 0;
+            if (v4Mapped || v4Compat) {
+                try {
+                    return isDisallowedAddress(
+                            InetAddress.getByAddress(new byte[]{b[12], b[13], b[14], b[15]}));
+                } catch (UnknownHostException e) {
+                    return true; // cannot evaluate the embedded address → block defensively
+                }
+            }
+            // IPv6 unique-local fc00::/7 (isSiteLocalAddress only covers the deprecated fec0::/10).
+            return (b[0] & 0xFE) == 0xFC;
+        }
+        // IPv4 carrier-grade NAT 100.64.0.0/10.
+        if (b.length == 4) {
+            return (b[0] & 0xFF) == 100 && (b[1] & 0xC0) == 0x40;
+        }
+        return false;
+    }
+
+    private static String blankToNull(String s) {
+        return (s == null || s.isBlank()) ? null : s.trim();
     }
 
     private void validateName(String name) {
@@ -301,6 +491,16 @@ public class McpServerService {
             return objectMapper.readValue(entity.getEnv(), new TypeReference<Map<String, String>>() {});
         } catch (Exception e) {
             log.warn("Failed to parse env for server {}: {}", entity.getName(), e.getMessage());
+            return Map.of();
+        }
+    }
+
+    /** Parse headers TEXT JSON back to Map for runtime use (http transport). */
+    public Map<String, String> parseHeaders(McpServerEntity entity) {
+        try {
+            return objectMapper.readValue(entity.getHeaders(), new TypeReference<Map<String, String>>() {});
+        } catch (Exception e) {
+            log.warn("Failed to parse headers for server {}: {}", entity.getName(), e.getMessage());
             return Map.of();
         }
     }

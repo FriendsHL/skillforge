@@ -116,8 +116,9 @@ class WorkflowResumeIT extends AbstractPostgresIT {
         ExecutorService inline = new InlineExecutorService();
         WorkflowRunnerService runner = new WorkflowRunnerService(
                 registry, flywheelRunService, sessionService, agentRepository, invokerFactory,
+                mock(WorkflowToolInvokerFactory.class),
                 new ConsolidationLock(), mock(WorkflowWsBroadcaster.class), objectMapper,
-                journalCache, Clock.systemUTC(), inline, inline, "session-annotator");
+                journalCache, Clock.systemUTC(), inline, inline, "session-annotator", 360L);
 
         // ── First run → parks at the gate ──
         String runId = runner.startRun("approve-single", Map.of(), 1L);

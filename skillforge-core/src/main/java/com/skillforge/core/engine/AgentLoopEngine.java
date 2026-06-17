@@ -1685,6 +1685,11 @@ public class AgentLoopEngine {
                 continue;
             }
             if (allowedToolNames != null && !allowedToolNames.isEmpty()
+                    && !tool.getName().startsWith("mcp_")   // mcp tools bypass the built-in toolIds
+                                                            // whitelist; governed solely by the
+                                                            // mcp-server gate below (mirrors the
+                                                            // executeToolCall() dispatch gate so
+                                                            // surface and dispatch never diverge)
                     && !allowedToolNames.contains(tool.getName())) {
                 continue;
             }

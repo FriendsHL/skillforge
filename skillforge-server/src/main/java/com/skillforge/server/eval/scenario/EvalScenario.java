@@ -35,6 +35,17 @@ public class EvalScenario {
     private String task;
     private ScenarioSetup setup;
     private ScenarioOracle oracle;
+
+    /**
+     * AUTOEVOLVE-CLOSE-LOOP Phase BC-M1: fixture files persisted on the DB
+     * scenario entity ({@code EvalScenarioEntity.fixtureFiles}, V143). When
+     * non-empty this takes priority over {@link #setup} files at run time
+     * (see {@code AbEvalPipeline.runSingleScenario}); session-derived
+     * (harvested) scenarios carry their fixtures here since they have no disk
+     * JSON. Not part of the on-disk scenario wire format.
+     */
+    @JsonIgnore
+    private Map<String, String> fixtureFiles;
     private long performanceThresholdMs = 30000;
     private List<String> toolsHint;
     private int maxLoops = 10;
@@ -125,6 +136,9 @@ public class EvalScenario {
 
     public ScenarioOracle getOracle() { return oracle; }
     public void setOracle(ScenarioOracle oracle) { this.oracle = oracle; }
+
+    public Map<String, String> getFixtureFiles() { return fixtureFiles; }
+    public void setFixtureFiles(Map<String, String> fixtureFiles) { this.fixtureFiles = fixtureFiles; }
 
     public long getPerformanceThresholdMs() { return performanceThresholdMs; }
     public void setPerformanceThresholdMs(long performanceThresholdMs) { this.performanceThresholdMs = performanceThresholdMs; }

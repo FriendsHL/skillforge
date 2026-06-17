@@ -2,6 +2,7 @@ package com.skillforge.workflow;
 
 import com.skillforge.workflow.bindings.HostBindings;
 import com.skillforge.workflow.sandbox.L1SandboxFactory;
+// WorkflowToolInvoker is in the same package (com.skillforge.workflow).
 import org.mozilla.javascript.Context;
 import org.mozilla.javascript.Scriptable;
 
@@ -29,17 +30,31 @@ public final class WorkflowEvaluator {
 
     /**
      * Evaluates a (meta-free) workflow body and returns the raw Rhino result.
-     * Caller-supplied {@code ctx} carries the run id, args, and budget.
+     * Caller-supplied {@code ctx} carries the run id, args, and budget. The
+     * {@code tool()} binding is unavailable on this overload (back-compat for the
+     * Sprint-1 spike tests that predate {@code tool()}).
      */
     public Object evaluate(String body, WorkflowContext ctx,
                            WorkflowAgentInvoker invoker, ExecutorService subAgentExecutor) {
+        return evaluate(body, ctx, invoker, null, subAgentExecutor);
+    }
+
+    /**
+     * AUTOEVOLVE-CLOSE-LOOP P1 overload — additionally binds the deterministic
+     * {@code tool()} host function via {@code toolInvoker}. A {@code null}
+     * {@code toolInvoker} leaves {@code tool()} present but unusable (it throws),
+     * matching the behaviour of a workflow that never calls it.
+     */
+    public Object evaluate(String body, WorkflowContext ctx,
+                           WorkflowAgentInvoker invoker, WorkflowToolInvoker toolInvoker,
+                           ExecutorService subAgentExecutor) {
         String stripped = AwaitPreprocessor.stripAwait(body);
         String wrapped = "(function(){\n" + stripped + "\n})();";
 
         Context cx = sandboxFactory.enter(ctx.getBudget());
         try {
             Scriptable scope = sandboxFactory.createSafeScope(cx);
-            HostBindings.register(cx, scope, ctx, invoker, subAgentExecutor);
+            HostBindings.register(cx, scope, ctx, invoker, toolInvoker, subAgentExecutor);
             return cx.evaluateString(scope, wrapped, ctx.getRunId(), 1, null);
         } finally {
             Context.exit();

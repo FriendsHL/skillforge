@@ -1,5 +1,7 @@
 package com.skillforge.server.evolve.dto;
 
+import com.fasterxml.jackson.databind.JsonNode;
+
 import java.time.Instant;
 
 /**
@@ -20,6 +22,22 @@ import java.time.Instant;
  *   <li>{@code kept}           — whether the candidate was kept (not promoted)</li>
  *   <li>{@code abRunId}        — optional A/B run traceability id</li>
  *   <li>{@code createdAt}      — ISO-8601 instant of the step row</li>
+ *   <li>{@code candidateBundle} — AUTOEVOLVE-CLOSE-LOOP P1: the bundle pointer
+ *       tuple sidecar ({@code promptVersionId / behaviorRuleVersionId /
+ *       skillDraftId}), {@code null} when the step recorded no bundle (e.g.
+ *       single-surface iterations or pre-P1 ledger rows)</li>
+ *   <li>{@code prediction} — BC-M2b (G3): the falsifiable prediction staked this
+ *       iteration, {@code null} for pre-G3 ledger rows</li>
+ *   <li>{@code reconciliation} — BC-M2b (G3): the deterministic prediction-vs-actual
+ *       reconciliation, {@code null} for pre-G3 ledger rows</li>
+ *   <li>{@code stepId} — AUTOEVOLVE-CLOSE-LOOP P1: the {@code evolve_iteration}
+ *       ledger step's id (the DAG node for this iteration)</li>
+ *   <li>{@code subSessionId} — P1: the candidate-gen agent leaf's sub-session id
+ *       (workflow path only; correlated by iteration order — {@code null} for the
+ *       legacy orchestrator path, which has no per-iteration workflow sub-session)</li>
+ *   <li>{@code semanticDelta} — P1: the {@code {surface, before, after, diff,
+ *       changeDesc}} change tuple emitted by the workflow ({@code null} for legacy /
+ *       pre-P1 rows)</li>
  * </ul>
  */
 public record EvolveIterationDto(
@@ -32,5 +50,11 @@ public record EvolveIterationDto(
         Double delta,
         boolean kept,
         String abRunId,
-        Instant createdAt
+        Instant createdAt,
+        CandidateBundle candidateBundle,
+        PredictionDto prediction,
+        ReconciliationDto reconciliation,
+        String stepId,
+        String subSessionId,
+        JsonNode semanticDelta
 ) {}

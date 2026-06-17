@@ -20,7 +20,85 @@
  */
 import api from './index';
 
+// ─────────────────────────── candidate bundle (per-surface pointers) ───────
+
+/**
+ * P1 close-loop adopt — the winning candidate's per-surface version pointers,
+ * recorded on a kept iteration. Mirrors BE {@code CandidateBundle} record
+ * (evolve/dto) field-by-field (footgun #6). Each pointer is null when that
+ * surface was not changed in this iteration; the whole bundle is null on the
+ * iteration when no pointers were recorded.
+ */
+export interface CandidateBundle {
+  /** Prompt version id to promote (null when prompt unchanged). */
+  promptVersionId: string | null;
+  /** Behavior-rule version id to promote (null when rule unchanged). */
+  behaviorRuleVersionId: string | null;
+  /** Skill draft id to approve+register (null when no skill change). */
+  skillDraftId: string | null;
+}
+
 // ─────────────────────────── iteration (one row per loop) ──────────────────
+
+/**
+ * G3 prediction — the falsifiable bet the orchestrator placed BEFORE running
+ * the A/B for this iteration: which scenarios this candidate should flip to
+ * pass (and which it risks breaking). Mirrors BE {@code IterationPrediction}
+ * field-for-field (footgun #6). Optional/null for legacy iterations recorded
+ * before G3 (backward compatible).
+ */
+export interface IterationPrediction {
+  /** Issue id this candidate targets (null when the issue was unidentified). */
+  issueId: string | null;
+  /** Human-readable statement of the problem this candidate targets. */
+  targetProblem: string;
+  /** Scenario ids predicted to flip from fail → pass. */
+  flipToPass: string[];
+  /** Scenario ids flagged as at-risk of regressing pass → fail. */
+  riskToFail: string[];
+  /** Free-text rationale for the bet (null when none recorded). */
+  rationale: string | null;
+}
+
+/**
+ * G3 reconciliation — the deterministic post-A/B settlement of the prediction:
+ * which predicted flips actually happened (hits), which didn't (misses), which
+ * at-risk scenarios actually regressed (riskHits), and which scenarios changed
+ * outcome WITHOUT being predicted (surprises). Mirrors BE
+ * {@code IterationReconciliation} field-for-field (footgun #6). Optional/null
+ * for legacy iterations (backward compatible).
+ */
+export interface IterationReconciliation {
+  /** Predicted flipToPass ids that actually flipped to pass. */
+  hits: string[];
+  /** Predicted flipToPass ids that did NOT flip. */
+  misses: string[];
+  /** Predicted riskToFail ids that actually regressed. */
+  riskHits: string[];
+  /** Scenarios that changed outcome but were not predicted at all. */
+  surprises: string[];
+  /** Prediction confidence/accuracy in [0,1] (null when not computed). */
+  confidence: number | null;
+}
+
+/**
+ * P2a — per-surface "what the candidate changed": before/after text + a unified
+ * diff, one entry per changed surface (prompt / behavior_rule / skill). Mirrors
+ * the BE sidecar written by evolve-loop.workflow.js (footgun #6). On a brand-new
+ * rule/skill the `before` is empty; the `diff` is a unified diff (+/- lines).
+ */
+export interface SemanticDelta {
+  /** Which surface this delta describes: 'prompt' | 'behavior_rule' | 'skill'. */
+  surface: string;
+  /** Text before the change (empty/null when the surface was newly created). */
+  before: string | null;
+  /** Text after the change (the candidate version). */
+  after: string | null;
+  /** Unified diff (+/- prefixed lines) of before → after. */
+  diff: string | null;
+  /** One-line description carried alongside this surface's change. */
+  changeDesc: string | null;
+}
 
 export interface EvolveIteration {
   /** 1-based iteration index within this run. */
@@ -43,6 +121,29 @@ export interface EvolveIteration {
   abRunId: string | null;
   /** ISO-8601 creation timestamp. */
   createdAt: string;
+  /**
+   * P1 close-loop — per-surface candidate pointers for the winning bundle.
+   * Null when this iteration recorded no bundle (legacy rows / non-kept).
+   */
+  candidateBundle: CandidateBundle | null;
+  /**
+   * G3 — the falsifiable prediction placed before this iteration's A/B.
+   * Optional/null for legacy iterations recorded before G3.
+   */
+  prediction?: IterationPrediction | null;
+  /**
+   * G3 — the deterministic reconciliation of {@link prediction} against the
+   * actual A/B outcome. Optional/null for legacy iterations or iterations
+   * whose A/B has not completed yet.
+   */
+  reconciliation?: IterationReconciliation | null;
+  /**
+   * P2a — per-surface before/after/diff of what this iteration's candidate
+   * changed. An ARRAY (Phase 2a multi-surface) or a single object (legacy
+   * Phase 1 prompt-only). Null/absent for iterations recorded before semantic
+   * delta capture. Consumers must normalize via {@code Array.isArray}.
+   */
+  semanticDelta?: SemanticDelta | SemanticDelta[] | null;
 }
 
 // ─────────────────────────── run summary (list item) ───────────────────────
@@ -146,3 +247,208 @@ export const triggerEvolveRun = (
       ...(opts?.maxIter != null ? { maxIter: opts.maxIter } : {}),
     },
   });
+
+// ─────────────────────────── adopt (close-loop promotion) ──────────────────
+
+/**
+ * Body for POST /api/evolve/runs/{evolveRunId}/adopt. Mirrors BE
+ * {@code AdoptBundleRequest} (footgun #6). Each pointer is optional/null —
+ * the server promotes only the non-null surfaces. The server cross-checks
+ * these pointers against the run's kept iterations (anti-tamper).
+ */
+export interface AdoptBundleRequest {
+  promptVersionId?: string | null;
+  behaviorRuleVersionId?: string | null;
+  skillDraftId?: string | null;
+}
+
+/**
+ * Per-surface adopt outcome. Mirrors BE {@code SurfaceResult} record.
+ *   - 'ok'     → surface promoted.
+ *   - 'noop'   → already active / nothing to do (idempotent).
+ *   - 'failed' → promotion threw; {@link reason} carries the message.
+ */
+export interface SurfaceResult {
+  status: 'ok' | 'noop' | 'failed';
+  /** Failure detail when status==='failed'; null otherwise. */
+  reason: string | null;
+}
+
+/**
+ * Adopt outcome across all surfaces. Mirrors BE {@code AdoptResult} record.
+ * Each surface is null when the request did not target it. Surfaces are
+ * promoted in independent transactions, so a partial failure leaves the
+ * succeeded surfaces committed — {@link anyFailed} flags that at least one
+ * targeted surface failed.
+ *
+ * Returned BARE (not enveloped) — FE reads r.data directly.
+ */
+export interface AdoptResult {
+  prompt: SurfaceResult | null;
+  rule: SurfaceResult | null;
+  skill: SurfaceResult | null;
+  anyFailed: boolean;
+}
+
+/**
+ * Adopt a winning candidate bundle for an evolve run — promotes each non-null
+ * surface (prompt active-version swap / rule active swap / skill draft
+ * approve+register). Irreversible per surface.
+ *
+ * `POST /api/evolve/runs/{evolveRunId}/adopt?userId=` with the bundle as body.
+ * Reads r.data directly — NOT enveloped.
+ *
+ * Errors: 400 (system user / blank pointers / bundle not from a kept
+ * iteration / ownership mismatch), 404 (run missing or not an evolve run).
+ *
+ * @param evolveRunId  The evolve run whose kept iteration owns the bundle.
+ * @param userId       Acting (human) user id — must not be the system user.
+ * @param bundle       Per-surface version pointers to promote.
+ */
+export const adoptEvolveBundle = (
+  evolveRunId: string,
+  userId: number,
+  bundle: AdoptBundleRequest,
+) =>
+  api.post<AdoptResult>(`/evolve/runs/${evolveRunId}/adopt`, bundle, {
+    params: { userId },
+  });
+
+// ─────────────────────────── skill-draft content (for diff) ────────────────
+
+/**
+ * Lightweight skill-draft view for rendering the skill surface of the adopt
+ * diff. Mirrors the BE {@code GET /api/evolve/skill-drafts/{draftId}} payload
+ * (footgun #6) — bare object, NOT enveloped.
+ */
+export interface EvolveSkillDraftView {
+  id: string;
+  name: string;
+  /** The drafted SKILL.md body / prompt hint shown in the diff. */
+  promptHint: string | null;
+  triggers: string | null;
+  requiredTools: string | null;
+}
+
+/**
+ * Fetch a skill draft's content for the adopt diff.
+ * `GET /api/evolve/skill-drafts/{draftId}` — reads r.data directly.
+ */
+export const getEvolveSkillDraft = (draftId: string) =>
+  api.get<EvolveSkillDraftView>(`/evolve/skill-drafts/${draftId}`);
+
+// ─────────────────── harvested bad-case scenarios (BC-M2b 子轮2) ────────────
+
+/**
+ * A harvested bad-case scenario — a real captured agent failure turned into an
+ * eval target. Mirrors BE {@code HarvestedScenarioDto} field-for-field
+ * (footgun #6). Status lifecycle: draft → active (human-gated activation into
+ * the agent's eval dataset) → archived.
+ *
+ * Lifecycle:
+ *   - 'draft'    → harvested but not yet activated into any eval dataset.
+ *   - 'active'   → human-activated; now a member of the agent's eval dataset.
+ *   - 'archived' → retired.
+ */
+export interface HarvestedScenario {
+  id: string;
+  name: string;
+  description: string;
+  status: 'draft' | 'active' | 'archived';
+  /** Source pointer (e.g. session/span ref) the case was harvested from. */
+  sourceRef: string | null;
+  /** ISO-8601 creation timestamp. */
+  createdAt: string;
+  /** ISO-8601 timestamp of the human activation/review (null while draft). */
+  reviewedAt: string | null;
+}
+
+/** Envelope returned by GET /api/evolve/agents/{agentId}/scenarios */
+interface HarvestedScenarioListEnvelope {
+  items: HarvestedScenario[];
+}
+
+/**
+ * Result of activating a harvested draft into the agent's eval dataset.
+ * Mirrors BE {@code ActivateScenarioResponse} record field-for-field
+ * (footgun #6). Returned BARE (not enveloped) — FE reads r.data directly,
+ * matching the adopt/getRunDetail convention.
+ */
+export interface ActivateScenarioResponse {
+  scenarioId: string;
+  status: string;
+  agentId: string;
+  datasetVersionId: string;
+  datasetVersionNumber: number;
+  datasetScenarioCount: number;
+  /** ISO-8601 timestamp of the activation. */
+  reviewedAt: string;
+}
+
+/** Envelope returned by POST /api/evolve/agents/{agentId}/harvest-bad-cases */
+export interface HarvestBadCasesEnvelope {
+  /** IDs of the freshly-created draft scenarios. */
+  items: string[];
+  /** Count of created drafts (== items.length). */
+  count: number;
+}
+
+/**
+ * List an agent's harvested bad-case scenarios by status.
+ * `GET /api/evolve/agents/{agentId}/scenarios?status=&sourceType=session_derived`
+ * Reads r.data.items (enveloped list).
+ *
+ * @param agentId  The target agent's numeric ID.
+ * @param status   'draft' (not yet activated) or 'active' (in eval dataset).
+ */
+export const listHarvestedScenarios = (
+  agentId: number,
+  status: 'draft' | 'active',
+) =>
+  api.get<HarvestedScenarioListEnvelope>(`/evolve/agents/${agentId}/scenarios`, {
+    params: { status, sourceType: 'session_derived' },
+  });
+
+/**
+ * Activate a harvested draft scenario into the agent's eval dataset — a new
+ * immutable dataset version is published with the harvested case added.
+ * Irreversible (human-gated; the system user is rejected server-side).
+ *
+ * `POST /api/evolve/scenarios/{scenarioId}/activate?userId=` (no body; params).
+ * Reads r.data directly — NOT enveloped.
+ *
+ * Errors: 400 (system/blank user, non-session_derived, agentId null),
+ * 404 (scenario missing), 409 (not in draft status).
+ *
+ * @param scenarioId  The draft scenario to activate.
+ * @param userId      Acting (human) user id — must not be the system user.
+ */
+export const activateHarvestedScenario = (scenarioId: string, userId: number) =>
+  api.post<ActivateScenarioResponse>(
+    `/evolve/scenarios/${scenarioId}/activate`,
+    null,
+    { params: { userId } },
+  );
+
+/**
+ * Harvest fresh bad-case drafts from the agent's recent captured failures.
+ * Server-side clusters real failures and creates draft scenarios — no LLM,
+ * no remedy inference, just measurement targets.
+ *
+ * `POST /api/evolve/agents/{agentId}/harvest-bad-cases?windowDays=` (no body).
+ * Reads r.data (enveloped {items, count}).
+ *
+ * @param agentId     The agent to harvest failures for.
+ * @param windowDays  Optional look-back window (server applies its default
+ *                    when omitted).
+ */
+export const harvestBadCases = (agentId: number, windowDays?: number) =>
+  api.post<HarvestBadCasesEnvelope>(
+    `/evolve/agents/${agentId}/harvest-bad-cases`,
+    null,
+    {
+      params: {
+        ...(windowDays != null ? { windowDays } : {}),
+      },
+    },
+  );

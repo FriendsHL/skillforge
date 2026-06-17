@@ -12,8 +12,8 @@
  * round-trip IT MUST verify ObjectMapper-written keys against these field
  * names. Renaming any field below requires a synchronised BE change.
  */
-import api from './index';
-import type { SkillDraft } from './index';
+import api from './client';
+import type { SkillDraft } from './drafts';
 
 /**
  * Per-baseline metric vector. The `compositeScore` / `overallScore` fields come

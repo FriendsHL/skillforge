@@ -10,11 +10,13 @@ import com.skillforge.server.flywheel.run.FlywheelRunStepRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 
 /**
  * OPT-REPORT-V1 — STEP B of the {@code session-batch-annotator} SubAgent.
@@ -130,7 +132,16 @@ public class RecordBatchAnnotationsTool implements Tool {
             String reportId = asString(input.get("reportId"));
             Object sessionIdsRaw = input.get("sessionIds");
 
-            Optional<FlywheelRunStepEntity> opt = batchRepository.findById(batchId);
+            // Robustness (provider-agnostic): the batchId is supposed to be a UUID the
+            // driving model generated, but a weaker model can emit a longer / non-UUID
+            // string. t_flywheel_run_step.id is varchar(36), so persisting it verbatim
+            // raises a DataIntegrityViolation ("value too long") that aborts the entire
+            // opt-report. Normalize to a stable 36-char id (UUID passthrough, else a
+            // deterministic derived UUID) so the upsert dedup still works and a bad
+            // model-supplied id can never crash report generation.
+            String stepId = normalizeStepId(batchId);
+
+            Optional<FlywheelRunStepEntity> opt = batchRepository.findById(stepId);
             FlywheelRunStepEntity batch;
             if (opt.isEmpty()) {
                 // First-call path: parent only generates the UUID, this is where
@@ -150,7 +161,7 @@ public class RecordBatchAnnotationsTool implements Tool {
                     return SkillResult.validationError("sessionIds could not be serialized: " + je.getMessage());
                 }
                 batch = new FlywheelRunStepEntity();
-                batch.setId(batchId);
+                batch.setId(stepId);
                 batch.setRunId(reportId);
                 batch.setStepInputJson(sessionIdsJson);
                 batch.setSubAgentSessionId(context.getSessionId());
@@ -179,6 +190,23 @@ public class RecordBatchAnnotationsTool implements Tool {
             log.error("RecordBatchAnnotationsTool execute failed", e);
             return SkillResult.error("RecordBatchAnnotations error: " + e.getMessage());
         }
+    }
+
+    /**
+     * Map a model-supplied {@code batchId} to an id that fits the
+     * {@code t_flywheel_run_step.id} varchar(36) column. Ids of length &le; 36 pass
+     * through unchanged (preserves all existing behavior + data, since they already
+     * fit); only an over-length id — which a weaker driving model can emit instead
+     * of a UUID — is replaced with a deterministic name-based UUID derived from it.
+     * Being deterministic, the same {@code batchId} always maps to the same id, so
+     * the worker's first/subsequent-call upsert dedup still holds, and an
+     * over-length id can never overflow the column and abort the whole opt-report.
+     */
+    private static String normalizeStepId(String batchId) {
+        if (batchId.length() <= 36) {
+            return batchId;
+        }
+        return UUID.nameUUIDFromBytes(batchId.getBytes(StandardCharsets.UTF_8)).toString();
     }
 
     private static String asString(Object o) {

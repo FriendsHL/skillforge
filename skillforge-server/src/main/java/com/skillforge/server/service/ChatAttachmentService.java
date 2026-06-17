@@ -835,6 +835,27 @@ public class ChatAttachmentService implements MessageMaterializer {
         return attachment;
     }
 
+    /** Hard cap on the admin attachment listing — the JPQL query is bounded by this. */
+    public static final int ADMIN_ATTACHMENTS_MAX_LIMIT = 500;
+
+    /**
+     * Admin listing — fetch attachments matching the optional error-code /
+     * processing-mode / session-id filters, newest first. Blank filter strings are
+     * normalized to {@code null} so "filter not provided" and "filter is blank" are
+     * treated the same by the {@code IS NULL OR equals} JPQL. The requested limit is
+     * clamped to {@link #ADMIN_ATTACHMENTS_MAX_LIMIT}; callers validate {@code limit > 0}
+     * before calling.
+     */
+    public List<ChatAttachmentEntity> listAttachmentsByFilters(String errorCode, String processingMode,
+                                                               String sessionId, int limit) {
+        int effectiveLimit = Math.min(limit, ADMIN_ATTACHMENTS_MAX_LIMIT);
+        String ec = (errorCode != null && !errorCode.isBlank()) ? errorCode : null;
+        String pm = (processingMode != null && !processingMode.isBlank()) ? processingMode : null;
+        String sid = (sessionId != null && !sessionId.isBlank()) ? sessionId : null;
+        return attachmentRepository.findByFilters(ec, pm, sid,
+                org.springframework.data.domain.PageRequest.of(0, effectiveLimit));
+    }
+
     /**
      * Phase 2 read endpoint — read the bytes for an attachment that has
      * already passed {@link #findReadable}. Wraps {@link Files#readAllBytes}

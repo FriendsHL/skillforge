@@ -47,7 +47,15 @@ import java.util.List;
  *                           的规则）。Optional — 旧报告或 LLM 没区分时为 null，
  *                           下游 (bridge + FE) 自动 fallback 到 suspectSurface。
  * @param confidence         Self-rated probability ∈ [0.0, 1.0].
- * @param suggestion         One-line improvement direction. Required, non-blank.
+ * @param suggestion         One-line improvement direction. <strong>V1.6 (G4):
+ *                           now optional</strong> — superseded by the
+ *                           {@link #rootCause} / {@link #proposedFix} split.
+ *                           The parser enforces "at least one of
+ *                           {@code suggestion} / {@code rootCause} present"
+ *                           (see {@link OptReportSummaryParser}); downstream
+ *                           {@code buildDescription} prefers rootCause+proposedFix
+ *                           and falls back to suggestion. May be null on V1.6+
+ *                           reports that only emit rootCause/proposedFix.
  * @param expectedImpact     Optional, may be null.
  * @param actionType         V1.5+: 建议落点是"新加"还是"改现有"。让 operator 一眼看出来。
  *                           <ul>
@@ -63,6 +71,33 @@ import java.util.List;
  *                           引用现有配置的 snippet（rule.text 全文 / skill.description / prompt 段原文），
  *                           让 operator 知道 "改的是哪一条" 而不是 "凭空加新的"。LLM 应该 verbatim 引用，
  *                           不要改写。Optional：{@code actionType=new} 时为 null。
+ * @param friction           V1.6 (G4): friction 分类 — agent 在这个 issue 上*怎么*卡住的，
+ *                           一个稳定的 6-枚举（{@link #FRICTION_VALUES}）：
+ *                           {@code repeated_tool_failure} / {@code missing_context} /
+ *                           {@code wrong_tool_selection} / {@code task_misunderstanding} /
+ *                           {@code output_formatting} / {@code incomplete_execution}。
+ *                           让 operator / 下游 evolve 按 friction 维度聚合。Optional：
+ *                           旧报告 / LLM 没分类时为 null；若提供则必须是枚举之一（parser
+ *                           非法值抛）。
+ * @param recurrence         V1.6 (G4): 这个 issue 对应的 production failure cluster
+ *                           ({@code t_session_pattern}) 的 member_count —— 即"这类问题
+ *                           跨多少个 session 复现过 (MULTIPLE TIMES)"。aggregator 用 STEP 6
+ *                           的 cluster↔issue 匹配填：高复现 (≥3) 的 issue 加权 confidence +
+ *                           优先排序。Optional 缺省 {@code 1}（单次出现 / 无匹配 cluster /
+ *                           冷库）。
+ * @param rootCause          V1.6 (G4): 根因分析 —— *为什么*会出这个 issue（区别于
+ *                           {@link #suggestion} 的"怎么改"）。Optional，但 parser 强制
+ *                           {@code suggestion} 与 {@code rootCause} 至少有一个非空
+ *                           （两者都缺 = issue 没有可执行内容，判 schema 错）。
+ * @param proposedFix        V1.6 (G4): 具体修复动作 —— 跟 {@link #rootCause} 配对，
+ *                           {@code buildDescription} 优先用 rootCause+proposedFix 拼
+ *                           description（比单行 suggestion 信息量大）。Optional，may be null。
+ *
+ * <p><strong>G1 future extension</strong>: a {@code targetScenarioIds: List<String>}
+ * field is reserved for the G1 on-target work (linking an issue back to the eval
+ * scenarios it should be measured against). When added it goes at the END of the
+ * record (java.md footgun: new record fields are append-only) and the parser
+ * treats it optional like the V1.6 facets here.
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record OptReportIssueDto(
@@ -77,7 +112,11 @@ public record OptReportIssueDto(
         String suggestion,
         String expectedImpact,
         String actionType,
-        String targetRuleText
+        String targetRuleText,
+        String friction,
+        int recurrence,
+        String rootCause,
+        String proposedFix
 ) {
     /**
      * V1.3+ accessor: returns {@link #fixSurface} when set, else falls back
@@ -110,4 +149,20 @@ public record OptReportIssueDto(
      */
     public static final java.util.Set<String> ACTION_TYPES =
             java.util.Set.of("new", "modify", "duplicate");
+
+    /**
+     * V1.6 (G4): allowed values for {@link #friction}. A stable closed
+     * vocabulary so operator / downstream evolve can aggregate issues by the
+     * *kind* of friction the agent hit. {@code null} (legacy reports / LLM
+     * didn't classify) is allowed; any non-null value MUST be one of these or
+     * the parser throws (defends against drift like "tool_error" / "confused").
+     */
+    public static final java.util.Set<String> FRICTION_VALUES =
+            java.util.Set.of(
+                    "repeated_tool_failure",
+                    "missing_context",
+                    "wrong_tool_selection",
+                    "task_misunderstanding",
+                    "output_formatting",
+                    "incomplete_execution");
 }

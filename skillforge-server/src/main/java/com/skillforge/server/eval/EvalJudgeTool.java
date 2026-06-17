@@ -27,6 +27,15 @@ public class EvalJudgeTool {
 
     private static final Logger log = LoggerFactory.getLogger(EvalJudgeTool.class);
 
+    /**
+     * BC-M1: deterministic behavioral oracle — scores on a tool-error signature,
+     * never calls the LLM. Single source of truth shared by the {@code switch}
+     * case and the meta-judge skip gate (see {@link #isDeterministicOracle}).
+     * Public so the A/B pipeline can detect behavioral-oracle scenarios for the
+     * BC-M2a multi-round path without re-declaring the literal.
+     */
+    public static final String ORACLE_TYPE_TOOL_ERROR_ABSENCE = "tool_error_absence";
+
     private final LlmProviderFactory llmProviderFactory;
     private final AttributionEngine attributionEngine;
     private final ObjectMapper objectMapper;
@@ -55,6 +64,24 @@ public class EvalJudgeTool {
     }
 
     public EvalJudgeOutput judge(EvalScenario scenario, ScenarioRunResult runResult) {
+        return judge(scenario, runResult, false);
+    }
+
+    /**
+     * AUTOEVOLVE reflection (option B): when {@code explain} is true, additionally
+     * produce a short natural-language rationale ("why this scenario scored that
+     * way") on {@link EvalJudgeOutput#setMetaJudgeRationale}.
+     *
+     * <p><b>Strictly additive.</b> The rationale is generated AFTER the composite
+     * score / pass / attribution are fully computed, and only writes the rationale
+     * field — the score is byte-identical to the 2-arg path, so deterministic
+     * oracles (exact_match/contains/regex) and the cached-baseline hill-climb
+     * comparison are unaffected. A failed/empty rationale call leaves the rationale
+     * null and NEVER touches the score. Only the A/B-with-scenarios path
+     * (AbEvalPipeline.runWithScenarios) opts in (explain=true); every other caller
+     * uses the 2-arg form so they don't pay the extra LLM call.
+     */
+    public EvalJudgeOutput judge(EvalScenario scenario, ScenarioRunResult runResult, boolean explain) {
         EvalJudgeOutput output = new EvalJudgeOutput();
 
         // Handle ERROR/TIMEOUT results
@@ -73,6 +100,11 @@ public class EvalJudgeTool {
                     .memoryResultEmpty(runResult.isMemoryResultEmpty())
                     .build();
             output.setAttribution(attributionEngine.compute(signals));
+            // ERROR/TIMEOUT has no usable agent output to explain — use a cheap
+            // templated rationale (no LLM call) so reflection still gets a "why".
+            if (explain) {
+                output.setMetaJudgeRationale(renderErrorRationale(runResult, output.getAttribution()));
+            }
             return output;
         }
 
@@ -88,8 +120,13 @@ public class EvalJudgeTool {
         double compositeScore = 0.7 * outcomeScore + 0.3 * efficiencyScore;
         output.setCompositeScore(compositeScore);
 
-        // 4. Meta-Judge for fuzzy zone [30, 55]
-        if (compositeScore >= 30.0 && compositeScore <= 55.0) {
+        // 4. Meta-Judge for fuzzy zone [30, 55].
+        // BC-M1: a deterministic oracle's outcome is a hard 0/100 — skip the LLM
+        // meta-judge so a FAIL (outcome=0, composite=0.3*efficiency, which can
+        // land on exactly 30.0 when the run was fast) can never be flipped to
+        // PASS by a non-deterministic LLM call.
+        if (!isDeterministicOracle(scenario.getOracle())
+                && compositeScore >= 30.0 && compositeScore <= 55.0) {
             try {
                 double metaScore = callMetaJudge(scenario, runResult, compositeScore);
                 output.setMetaJudgeRationale("Meta-judge adjusted score from " + compositeScore + " to " + metaScore);
@@ -131,7 +168,78 @@ public class EvalJudgeTool {
         }
         runResult.setOracleScore(compositeScore);
 
+        // Option B (additive): the score is fully finalized above. This only writes
+        // a natural-language rationale; on any failure it leaves it null/unchanged
+        // and the score is never affected. Overrides the mechanical meta-judge note.
+        if (explain) {
+            String reason = generateScenarioRationale(scenario, runResult, output);
+            if (reason != null && !reason.isBlank()) {
+                // In the [30,55] fuzzy zone the meta-judge already left an audit note
+                // ("Meta-judge adjusted score from X to Y"); keep it as a suffix rather
+                // than silently dropping it, leading with the useful natural-language why.
+                String metaNote = output.getMetaJudgeRationale();
+                output.setMetaJudgeRationale(metaNote != null ? reason + " (" + metaNote + ")" : reason);
+            }
+        }
+
         return output;
+    }
+
+    /**
+     * Option B: plain-text "why did this scenario score that way" for ONE single-turn
+     * run. Returns null on any failure (no provider / exception / empty) — the caller
+     * leaves the rationale untouched and the score is never affected. Plain prose, no
+     * JSON, so the provider's strict-JSON flakiness can't break it.
+     */
+    private String generateScenarioRationale(EvalScenario scenario, ScenarioRunResult runResult,
+                                             EvalJudgeOutput output) {
+        try {
+            LlmProvider provider = llmProviderFactory.getProvider(defaultProviderName);
+            if (provider == null) {
+                return null;
+            }
+            String expected = scenario.getOracle() != null ? scenario.getOracle().getExpected() : null;
+            String agentOut = runResult.getAgentFinalOutput();
+            String truncated = agentOut != null
+                    ? agentOut.substring(0, Math.min(800, agentOut.length()))
+                    : "(empty)";
+            LlmRequest request = new LlmRequest();
+            request.setSystemPrompt("You are reviewing ONE single-turn eval scenario. The agent was given a "
+                    + "task and produced a final output, which was scored against the expected criteria. In "
+                    + "1-2 short sentences, explain WHY it scored that way — what the output got right or wrong "
+                    + "versus the expected criteria. Reply with plain text only (no JSON, no markdown).");
+            List<Message> messages = new ArrayList<>();
+            messages.add(Message.user("Task: " + (scenario.getTask() != null ? scenario.getTask() : "(none)")
+                    + "\nExpected: " + (expected != null ? expected : "(none provided)")
+                    + "\nAgent final output: " + truncated
+                    + "\nScore: " + String.format("%.1f", output.getCompositeScore()) + "/100 ("
+                    + (output.isPass() ? "PASS" : "FAIL") + ")"
+                    // Surface the efficiency inputs so the rationale can attribute a sub-100
+                    // score to loop/latency drag rather than only output quality.
+                    + "\nLoops used: " + runResult.getLoopCount() + "/" + scenario.getMaxLoops()
+                    + "\nExecution time: " + runResult.getExecutionTimeMs() + "ms (threshold "
+                    + scenario.getPerformanceThresholdMs() + "ms)"
+                    + "\nWhy did it score this way (1-2 sentences):"));
+            request.setMessages(messages);
+            request.setMaxTokens(180);
+            request.setTemperature(0.0);
+
+            LlmResponse response = provider.chat(request);
+            String text = response != null ? response.getContent() : null;
+            return (text != null && !text.isBlank()) ? text.trim() : null;
+        } catch (Exception e) {
+            log.warn("Scenario rationale generation failed (score unaffected): {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /** Option B: cheap templated rationale for ERROR/TIMEOUT (no LLM — nothing to explain). */
+    private static String renderErrorRationale(ScenarioRunResult runResult, FailureAttribution attribution) {
+        String attr = attribution != null ? attribution.name() : "NONE";
+        if ("TIMEOUT".equals(runResult.getStatus())) {
+            return "Agent hit the loop/time limit before completing the task (attribution: " + attr + ").";
+        }
+        return "Agent execution errored before producing a usable output (attribution: " + attr + ").";
     }
 
     private double computeOracleScore(EvalScenario scenario, ScenarioRunResult runResult) {
@@ -170,11 +278,183 @@ public class EvalJudgeTool {
                 }
             }
             case "llm_judge" -> callLlmJudge(oracle.getExpected(), trimmedOutput);
+            case ORACLE_TYPE_TOOL_ERROR_ABSENCE -> computeToolErrorAbsenceScore(oracle, runResult);
             default -> {
                 log.warn("Unknown oracle type: {}", oracle.getType());
                 yield 0.0;
             }
         };
+    }
+
+    /**
+     * Returns true for oracle types that score deterministically without any LLM
+     * call. Single source of truth for the meta-judge skip gate — a new
+     * deterministic oracle author only updates this predicate, not the [30,55]
+     * gate condition. Intentionally does NOT include exact_match/contains/regex:
+     * those keep their existing meta-judge behaviour (changing it would shift
+     * established scores — out of BC-M1 scope).
+     */
+    private boolean isDeterministicOracle(EvalScenario.ScenarioOracle oracle) {
+        return oracle != null && ORACLE_TYPE_TOOL_ERROR_ABSENCE.equals(oracle.getType());
+    }
+
+    /**
+     * AUTOEVOLVE-CLOSE-LOOP Phase BC-M2b — deterministic behavioral oracle
+     * (generalized across tools). The criteria JSON lives in {@code oracle.expected}:
+     * <pre>{@code {"tool":"Grep","errorSignature":"Path is not a directory","passWhen":"no_match","filePath":"path/to/file"}}</pre>
+     *
+     * <p>With the default {@code passWhen=no_match} a run PASSES (100) iff BOTH:
+     * <ul>
+     *   <li><b>engagement (generic)</b> — the agent made at least one tool call of
+     *       any kind, i.e. it did not no-op / refuse (see
+     *       {@link #anyToolInvocation}); and</li>
+     *   <li><b>no recurrence</b> — the failure signature did not reproduce on the
+     *       harvested path: no FAILED call of {@code tool} whose output contains
+     *       {@code errorSignature} targeting {@code filePath} (see
+     *       {@link #signatureRecurred}).</li>
+     * </ul>
+     * anything else — including a do-nothing run that made no tool calls — scores 0.
+     *
+     * <p><b>Why the generic engagement check (BC-M2b change).</b> The earlier v2
+     * required a SUCCESSFUL call of the named tool on {@code filePath}. That is
+     * unsatisfiable for tools whose correct behavior does not touch the harvested
+     * file at all, so such a scenario could never pass. The engagement gate is
+     * therefore relaxed to "the agent actually did something (≥1 tool call)". The
+     * "agent regresses to doing nothing useful" concern is covered upstream by
+     * running the benchmark (general) subset in the same A/B — a do-nothing change
+     * loses benchmark score and is not a winner — with this ≥1-tool-call check as a
+     * generic backstop. {@code filePath} no longer gates passing; it only scopes
+     * the error match (only a recurrence on that path counts).
+     *
+     * <p>{@code passWhen=match} is a diagnostic mode (assert the failure reproduces);
+     * it does NOT require engagement, since a reproducing run necessarily ran the tool.
+     *
+     * <p>Purely mechanical — NO LLM call — so it is cheap and reproducible.
+     * Returns 0.0 on any parse problem (treated as "could not confirm success").
+     *
+     * <p><b>Result-type only.</b> The oracle describes WHAT a successful run looks
+     * like ("did real work without reproducing that failure on that path"); it
+     * deliberately encodes nothing about HOW the agent should get there — that is
+     * left for the evolve loop to discover.
+     *
+     * <p><b>Accepted residual / trade-off.</b>
+     * <ol>
+     *   <li>The generic engagement check (≥1 tool call of any kind) has a narrow
+     *       gap: a candidate could make a single tool call unrelated to the
+     *       harvested case and then stop, and still have the target subset score
+     *       PASS — which the benchmark subset does not directly catch "passing only
+     *       in that one cell". This is an INTENTIONAL trade-off: the oracle is kept
+     *       deliberately tool-agnostic, because a correct resolution need not touch
+     *       the harvested tool or path at all, so pinning engagement to "the target
+     *       tool must have been invoked" would make any case solvable without that
+     *       tool impossible to ever PASS. The do-nothing protection is therefore
+     *       delegated to the benchmark (general) subset run in the same A/B plus
+     *       multi-round dilution, NOT to a target-tool engagement gate.</li>
+     *   <li>This oracle only asserts that THIS harvested error signature no longer
+     *       reproduces on that path. It does NOT guarantee the run introduced no
+     *       other / new failures; that is covered by the general (benchmark) subset
+     *       plus human review.</li>
+     * </ol>
+     */
+    private double computeToolErrorAbsenceScore(EvalScenario.ScenarioOracle oracle,
+                                                ScenarioRunResult runResult) {
+        String criteriaJson = oracle.getExpected();
+        if (criteriaJson == null || criteriaJson.isBlank()) {
+            log.warn("tool_error_absence oracle missing expected criteria JSON");
+            return 0.0;
+        }
+        BehavioralOracleCriteria criteria = BehavioralOracleCriteria.parse(criteriaJson, objectMapper);
+        if (criteria.errorSignature() == null || criteria.errorSignature().isBlank()) {
+            // Missing signature (or unparseable criteria JSON, which parse() degrades
+            // to all-default with a null signature): cannot confirm success → 0.
+            log.warn("tool_error_absence oracle missing/invalid errorSignature");
+            return 0.0;
+        }
+
+        boolean recurred = signatureRecurred(runResult.getToolCalls(), criteria.tool(),
+                criteria.errorSignature(), criteria.filePath());
+        if ("match".equalsIgnoreCase(criteria.passWhen())) {
+            // Diagnostic mode: pass iff the signature reproduced (on the scoped path).
+            // No engagement gate — a reproducing run already exercised the tool.
+            return recurred ? 100.0 : 0.0;
+        }
+        // Default no_match: pass iff the agent did real work (≥1 tool call) AND did
+        // not reproduce the failure signature on the harvested path. A do-nothing /
+        // refusal run (no tool calls) fails the engagement check → 0.
+        boolean engaged = anyToolInvocation(runResult.getToolCalls());
+        return (engaged && !recurred) ? 100.0 : 0.0;
+    }
+
+    /**
+     * BC-M2b generic engagement check: returns true when the agent made at least
+     * one tool call of any kind. This <b>includes FAILED calls</b> — its only job
+     * is to distinguish a run that did something (≥1 tool call) from a do-nothing /
+     * refusal run that produced no tool calls at all. It deliberately does NOT
+     * require the call to have succeeded.
+     */
+    private static boolean anyToolInvocation(List<com.skillforge.core.engine.ToolCallRecord> toolCalls) {
+        if (toolCalls == null) return false;
+        for (com.skillforge.core.engine.ToolCallRecord record : toolCalls) {
+            if (record != null) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Returns true when the tool input's path resolves to the oracle's
+     * sandbox-relative {@code filePath}. Reads the path from whichever input field
+     * the tool uses ({@code file_path} for Edit, {@code path} for Grep).
+     * Separator-normalized; matches on equality or on a {@code "/" + filePath}
+     * suffix so the runtime sandbox-root prefix (added when the fixture is
+     * materialized) is ignored without matching an unrelated file whose name
+     * merely ends the same way.
+     */
+    private static boolean pathTargets(java.util.Map<String, Object> input, String filePath) {
+        if (input == null) return false;
+        String actual = stringInput(input, "file_path");
+        if (actual == null) {
+            actual = stringInput(input, "path");
+        }
+        if (actual == null) return false;
+        String normActual = actual.replace('\\', '/');
+        String normExpected = filePath.replace('\\', '/');
+        while (normExpected.startsWith("/")) {
+            normExpected = normExpected.substring(1);
+        }
+        return normActual.equals(normExpected) || normActual.endsWith("/" + normExpected);
+    }
+
+    /** Read a non-blank String input field, or null. */
+    private static String stringInput(java.util.Map<String, Object> input, String field) {
+        Object raw = input.get(field);
+        return (raw instanceof String s && !s.isBlank()) ? s : null;
+    }
+
+    /**
+     * Returns true when any failed tool call matches the failure signature: a
+     * FAILED call of {@code tool} (null matches any tool) whose output contains
+     * {@code errorSignature}, AND — when {@code filePath} is supplied — that
+     * targets {@code filePath}. The path scope means an identical error on some
+     * OTHER file is not counted as a recurrence of this harvested failure.
+     *
+     * <p>When {@code filePath} is supplied but a failed call lacks a parseable path
+     * field, it is conservatively NOT counted as a recurrence of this failure (a
+     * lenient backstop — the benchmark subset still guards overall quality).
+     */
+    private static boolean signatureRecurred(List<com.skillforge.core.engine.ToolCallRecord> toolCalls,
+                                              String tool, String errorSignature, String filePath) {
+        if (toolCalls == null) return false;
+        for (com.skillforge.core.engine.ToolCallRecord record : toolCalls) {
+            if (record == null || record.isSuccess()) continue;
+            if (tool != null && !tool.isBlank() && !tool.equals(record.getSkillName())) continue;
+            String output = record.getOutput();
+            if (output == null || !output.contains(errorSignature)) continue;
+            if (filePath != null && !filePath.isBlank() && !pathTargets(record.getInput(), filePath)) {
+                continue;
+            }
+            return true;
+        }
+        return false;
     }
 
     private double computeEfficiencyScore(EvalScenario scenario, ScenarioRunResult runResult) {

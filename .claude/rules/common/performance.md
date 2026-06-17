@@ -1,18 +1,21 @@
 # Performance Optimization
 
-## Model Selection Strategy
+> **SkillForge override (2026-06-04)**：本文件是 ECC 通用模板。**「Model Selection Strategy」一节在 SkillForge 不生效**，子 agent 模型选型以 [`pipeline.md`](../pipeline.md) 第四节为准（Reviewer/Planner Sonnet、Dev/Judge Opus）。下方模型选型表仅作通用参考，型号名按当前可用模型理解（Opus 4.8 / Sonnet 4.6 / Haiku 4.5）。
 
-**Haiku 4.5** (90% of Sonnet capability, 3x cost savings):
+## Model Selection Strategy（通用参考，SkillForge 走 pipeline.md §4）
+
+**Haiku（轻量、高频调用）**：
 - Lightweight agents with frequent invocation
 - Pair programming and code generation
 - Worker agents in multi-agent systems
 
-**Sonnet 4.6** (Best coding model):
-- Main development work
+**Sonnet（编码辅助 / 审查 / 信息整理）**：
+- Reviewer / Planner / Explorer 等辅助角色
 - Orchestrating multi-agent workflows
-- Complex coding tasks
 
-**Opus 4.5** (Deepest reasoning):
+**Opus（主力编码 + 最深推理）**：
+- 主力开发 / 写代码（main development work）
+- Complex coding tasks
 - Complex architectural decisions
 - Maximum reasoning requirements
 - Research and analysis tasks
@@ -49,7 +52,7 @@ For complex tasks requiring deep reasoning:
 ## Build Troubleshooting
 
 If build fails:
-1. Use **build-error-resolver** agent
+1. Use **java-build-resolver** agent（SkillForge 的 Maven/Java 构建排查 agent）
 2. Analyze error messages
 3. Fix incrementally
 4. Verify after each fix

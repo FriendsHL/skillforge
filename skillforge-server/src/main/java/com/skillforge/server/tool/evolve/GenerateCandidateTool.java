@@ -7,6 +7,7 @@ import com.skillforge.core.skill.SkillResult;
 import com.skillforge.core.skill.Tool;
 import com.skillforge.server.entity.SkillDraftEntity;
 import com.skillforge.server.improve.BehaviorRuleImproverService;
+import com.skillforge.server.improve.EvolveEditorContext;
 import com.skillforge.server.improve.ImprovementStartResult;
 import com.skillforge.server.improve.PromptImproverService;
 import com.skillforge.server.improve.SkillDraftService;
@@ -139,9 +140,9 @@ public class GenerateCandidateTool implements Tool {
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put("surface", Map.of(
                 "type", "string",
-                "enum", java.util.List.of(EvolveSurface.PROMPT.wire(),
-                        EvolveSurface.SKILL.wire(),
-                        EvolveSurface.BEHAVIOR_RULE.wire()),
+                // No "agent" here (§7 B2): you don't generate a whole-agent candidate —
+                // the orchestrator generates per-surface and composes a bundle itself.
+                "enum", EvolveSurface.v1NonAgentWireValues(),
                 "description", "Optimisation surface: \"prompt\", \"skill\", or \"behavior_rule\"."
         ));
         properties.put("issue", Map.of(
@@ -175,6 +176,38 @@ public class GenerateCandidateTool implements Tool {
                 "type", "string",
                 "description", "Owner user id (defaults to the system user when omitted)."
         ));
+        properties.put("basePromptVersionId", Map.of(
+                "type", "string",
+                "description", "surface=prompt hill-climb only: build the candidate by improving "
+                        + "THIS prompt version (the current-best from a prior winning iteration) "
+                        + "instead of the agent's active prompt. Omit on iteration 1."
+        ));
+        properties.put("baseVersionId", Map.of(
+                "type", "string",
+                "description", "surface=behavior_rule hill-climb only: build the candidate by "
+                        + "improving THIS behavior_rule version (the current-best from a prior "
+                        + "winning iteration) instead of the agent's active rules. Omit on iteration 1."
+        ));
+        properties.put("baseDraftId", Map.of(
+                "type", "string",
+                "description", "surface=skill hill-climb only: build the candidate by improving "
+                        + "THIS skill draft (the current-best from a prior winning iteration) "
+                        + "instead of generating a fresh skill. Omit on iteration 1."
+        ));
+        properties.put("priorChange", Map.of(
+                "type", "string",
+                "description", "reflection (evolve only; applies to surface=prompt / behavior_rule / "
+                        + "skill): what was changed LAST round (the prior iteration's changeDesc). "
+                        + "Omit on the first round; the editor uses it to avoid repeating / to build "
+                        + "on the last change."
+        ));
+        properties.put("priorEvalReport", Map.of(
+                "type", "string",
+                "description", "reflection (evolve only; applies to surface=prompt / behavior_rule / "
+                        + "skill): last round's eval report (per-case improved/regressed + reasons + "
+                        + "overall delta), compact JSON or prose. Omit on the first round; the editor "
+                        + "uses it to treat regressed cases as negative examples and keep improved directions."
+        ));
 
         Map<String, Object> schema = new LinkedHashMap<>();
         schema.put("type", "object");
@@ -204,27 +237,112 @@ public class GenerateCandidateTool implements Tool {
                 return SkillResult.validationError("targetAgentId is required");
             }
 
+            // AUTOEVOLVE-AGENT-LEVEL-BUNDLE (§2.4 / §7 B2): there is no whole-agent
+            // generation — the orchestrator generates per-surface candidates and
+            // composes a bundle itself, then passes it to TriggerAbEval(surface=agent).
+            // Reject cleanly rather than pretending to generate an "agent candidate".
+            if (surface == EvolveSurface.AGENT) {
+                return SkillResult.validationError(
+                        "surface=agent is not supported by GenerateCandidate: generate per-surface "
+                                + "candidates (prompt / skill / behavior_rule) and compose them into a "
+                                + "bundle, then call TriggerAbEval(surface=agent) with that bundle");
+            }
+
             // Resolve the audit-anchor eventId from ONE of two modes:
             //   direct mode      → explicit "eventId"
             //   report-issue mode → "reportId" + "issueId" → existing bridge mints it
-            Long eventId = resolveEventId(input, targetAgentId);
+            ResolvedAnchor anchor = resolveEventId(input, targetAgentId);
+            Long eventId = anchor.eventId();
+            // concern#2 (AUTOEVOLVE-CLOSE-LOOP): in report-issue mode the minted
+            // event's description is the G4/G5-enriched rootCause + proposedFix
+            // (OptReportToEventBridge.buildDescription), which carries the holistic
+            // root cause. Prefer it over the orchestrator's thin `issue` string so
+            // candidate-gen sees the full attribution, not a one-liner. Direct-eventId
+            // mode resolves no description → `issue` unchanged (non-evolve attribution
+            // path stays byte-identical).
+            if (anchor.richDescription() != null && !anchor.richDescription().isBlank()) {
+                issue = anchor.richDescription();
+            }
 
             // SECURITY note: targetAgentId is threaded to the improver service,
             // which validates the agent exists. The improvers persist the
             // candidate against that agent, so the candidate is owned by it by
             // construction (TriggerAbEval / PromoteCandidate re-validate ownership).
+            String basePromptVersionId = trimToNull(input.get("basePromptVersionId"));
+            // Reflection (evolve only): build an EvolveEditorContext when EITHER
+            // priorChange or priorEvalReport is present. iter-1 omits both → null
+            // context → byte-identical legacy generation. Blanks trimmed to null
+            // so a stray empty string doesn't switch on evolve-editor mode.
+            String priorChange = trimToNull(input.get("priorChange"));
+            String priorEvalReport = trimToNull(input.get("priorEvalReport"));
+            EvolveEditorContext editor = (priorChange != null || priorEvalReport != null)
+                    ? new EvolveEditorContext(priorChange, priorEvalReport)
+                    : null;
             String candidateId = switch (surface) {
                 case PROMPT -> {
-                    ImprovementStartResult r = promptImproverService.startImprovementFromAttribution(
-                            eventId, targetAgentId, issue, ownerIdOrDefault(input));
+                    // BUG-1 hill-climb: when basePromptVersionId is supplied (iter 2+),
+                    // build the candidate on the current-best prompt; else (iter 1)
+                    // improve the agent's active prompt. Reflection context reaches
+                    // BOTH routes (the "best is still original" case omits
+                    // basePromptVersionId yet still wants reflection).
+                    //
+                    // When editor == null (legacy / non-evolve), call the original
+                    // (pre-reflection) overloads so behavior — and the call path the
+                    // non-evolve attribution flow exercises — stays byte-identical.
+                    ImprovementStartResult r;
+                    if (basePromptVersionId != null) {
+                        r = editor != null
+                                ? promptImproverService.improveFromBasePrompt(
+                                        eventId, targetAgentId, basePromptVersionId, issue,
+                                        ownerIdOrDefault(input), editor)
+                                : promptImproverService.improveFromBasePrompt(
+                                        eventId, targetAgentId, basePromptVersionId, issue,
+                                        ownerIdOrDefault(input));
+                    } else {
+                        r = editor != null
+                                ? promptImproverService.startImprovementFromAttribution(
+                                        eventId, targetAgentId, issue, ownerIdOrDefault(input), editor)
+                                : promptImproverService.startImprovementFromAttribution(
+                                        eventId, targetAgentId, issue, ownerIdOrDefault(input));
+                    }
                     yield r.promptVersionId();
                 }
                 case BEHAVIOR_RULE -> {
-                    ImprovementStartResult r = behaviorRuleImproverService.startImprovementFromAttribution(
-                            eventId, targetAgentId, issue, ownerIdOrDefault(input));
+                    // Hill-climb carry-forward (§8 #5): when baseVersionId is supplied
+                    // (iter 2+), build the candidate on THAT behavior_rule version
+                    // (the current-best from a prior winning bundle); else (iter 1)
+                    // improve the agent's active baseline.
+                    //
+                    // Reflection (§9 line A #2): when editor != null (priorChange /
+                    // priorEvalReport present, evolve round 2+), call the editor-aware
+                    // overloads so the candidate-rule LLM sees last round's change +
+                    // eval report. When editor == null, call the legacy overloads so
+                    // behavior — and the non-evolve attribution path — stays
+                    // byte-identical. Mirrors the PROMPT case exactly.
+                    String baseVersionId = trimToNull(input.get("baseVersionId"));
+                    ImprovementStartResult r;
+                    if (baseVersionId != null) {
+                        r = editor != null
+                                ? behaviorRuleImproverService.startImprovementFromBaseVersion(
+                                        eventId, targetAgentId, baseVersionId, issue,
+                                        ownerIdOrDefault(input), editor)
+                                : behaviorRuleImproverService.startImprovementFromBaseVersion(
+                                        eventId, targetAgentId, baseVersionId, issue,
+                                        ownerIdOrDefault(input));
+                    } else {
+                        r = editor != null
+                                ? behaviorRuleImproverService.startImprovementFromAttribution(
+                                        eventId, targetAgentId, issue, ownerIdOrDefault(input), editor)
+                                : behaviorRuleImproverService.startImprovementFromAttribution(
+                                        eventId, targetAgentId, issue, ownerIdOrDefault(input));
+                    }
                     yield r.promptVersionId();
                 }
-                case SKILL -> generateSkillDraft(input, issue, eventId);
+                case SKILL -> generateSkillDraft(input, issue, eventId, editor);
+                // AGENT is rejected by the early guard above; this arm only keeps
+                // the switch exhaustive over EvolveSurface.
+                case AGENT -> throw new IllegalStateException(
+                        "agent surface must be rejected before the generation switch");
             };
 
             log.info("[GenerateCandidate] surface={} targetAgentId={} eventId={} -> candidateId={}",
@@ -277,7 +395,14 @@ public class GenerateCandidateTool implements Tool {
      * @throws NoSuchElementException   reportId or issueId not found.
      * @throws IllegalStateException    report not in {@code completed} status (from the bridge).
      */
-    private Long resolveEventId(Map<String, Object> input, String targetAgentId) {
+    /**
+     * Audit-anchor resolution result. {@code richDescription} is the minted event's
+     * description (G4/G5-enriched rootCause + proposedFix) in report-issue mode, or
+     * {@code null} in direct-eventId mode (no event loaded). See concern#2.
+     */
+    private record ResolvedAnchor(Long eventId, String richDescription) {}
+
+    private ResolvedAnchor resolveEventId(Map<String, Object> input, String targetAgentId) {
         Long directEventId = parseLong(input.get("eventId"));
         String reportId = trimToNull(input.get("reportId"));
         String issueId = trimToNull(input.get("issueId"));
@@ -288,7 +413,7 @@ public class GenerateCandidateTool implements Tool {
                     "provide EITHER eventId OR (reportId + issueId), not both");
         }
         if (directEventId != null) {
-            return directEventId;
+            return new ResolvedAnchor(directEventId, null);
         }
         if (reportId == null || issueId == null) {
             throw new IllegalArgumentException(
@@ -313,7 +438,10 @@ public class GenerateCandidateTool implements Tool {
 
         OptReportToEventBridge.ConvertResult result =
                 optReportToEventBridge.convertIssueToEvent(reportId, issueId);
-        return result.event().getId();
+        // concern#2: surface the minted event's enriched description (buildDescription
+        // = rootCause + proposedFix from the report issue) so the caller can feed it
+        // to candidate-gen instead of the thin orchestrator-composed issue string.
+        return new ResolvedAnchor(result.event().getId(), result.event().getDescription());
     }
 
     /**
@@ -324,12 +452,28 @@ public class GenerateCandidateTool implements Tool {
      * the system user. A deterministic suggested name mirrors
      * {@code AttributionApprovalService.dispatchSkillSurface}.
      */
-    private String generateSkillDraft(Map<String, Object> input, String issue, Long eventId) {
+    private String generateSkillDraft(Map<String, Object> input, String issue, Long eventId,
+                                      EvolveEditorContext editor) {
+        Long ownerId = ownerIdOrDefault(input);
+
+        // Hill-climb carry-forward (§10 #6): when baseDraftId is supplied (iter 2+),
+        // build the candidate on THAT skill draft (the current-best from a prior
+        // winning bundle); else (iter 1) generate a fresh draft. Reflection
+        // (priorChange / priorEvalReport) reaches the carry-forward path via the
+        // editor-aware overload; iter-1 fresh generation has no base to reflect on.
+        // Mirrors the BEHAVIOR_RULE case.
+        String baseDraftId = trimToNull(input.get("baseDraftId"));
+        if (baseDraftId != null) {
+            SkillDraftEntity draft = editor != null
+                    ? skillDraftService.createDraftFromBaseDraft(eventId, baseDraftId, issue, ownerId, editor)
+                    : skillDraftService.createDraftFromBaseDraft(eventId, baseDraftId, issue, ownerId);
+            return draft.getId();
+        }
+
         Long patternId = parseLong(input.get("patternId"));
         if (patternId == null) {
             patternId = eventId;   // synth — audit/naming only, not a hard FK
         }
-        Long ownerId = ownerIdOrDefault(input);
         String suggestedSkillName = "EvolveSkill" + patternId + "_" + eventId;
         SkillDraftEntity draft = skillDraftService.createDraftFromAttribution(
                 eventId,

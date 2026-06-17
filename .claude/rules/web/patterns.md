@@ -1,3 +1,11 @@
+---
+paths:
+  - "**/*.tsx"
+  - "**/*.ts"
+  - "**/*.jsx"
+  - "**/*.js"
+  - "**/*.css"
+---
 > This file extends [common/patterns.md](../common/patterns.md) with web-specific patterns.
 
 # Web Patterns

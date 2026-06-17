@@ -13,6 +13,7 @@ import org.springframework.data.jpa.domain.support.AuditingEntityListener;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 @Entity
@@ -168,6 +169,18 @@ public class EvalScenarioEntity {
     @Column(name = "applicable_agent_roles", columnDefinition = "jsonb")
     @JdbcTypeCode(SqlTypes.JSON)
     private List<String> applicableAgentRoles = new ArrayList<>();
+
+    /**
+     * AUTOEVOLVE-CLOSE-LOOP Phase BC-M1 (V143): JSONB {@code Map<relativePath,
+     * fileContent>} of fixture files for session-derived (harvested) bad-case
+     * scenarios. NULL for benchmark scenarios, which load fixtures from disk
+     * JSON ({@code EvalScenario.setup.files}); when present this takes priority
+     * at run time (see {@code AbEvalPipeline.runSingleScenario}). Nullable —
+     * historical rows keep NULL and fall back to setup.files.
+     */
+    @Column(name = "fixture_files_json", columnDefinition = "jsonb")
+    @JdbcTypeCode(SqlTypes.JSON)
+    private Map<String, String> fixtureFiles;
 
     @CreatedDate
     private Instant createdAt;
@@ -407,5 +420,15 @@ public class EvalScenarioEntity {
 
     public void setApplicableAgentRoles(List<String> applicableAgentRoles) {
         this.applicableAgentRoles = applicableAgentRoles == null ? new ArrayList<>() : applicableAgentRoles;
+    }
+
+    // AUTOEVOLVE-CLOSE-LOOP Phase BC-M1 (V143) getter/setter for fixture_files_json.
+
+    public Map<String, String> getFixtureFiles() {
+        return fixtureFiles;
+    }
+
+    public void setFixtureFiles(Map<String, String> fixtureFiles) {
+        this.fixtureFiles = fixtureFiles;
     }
 }

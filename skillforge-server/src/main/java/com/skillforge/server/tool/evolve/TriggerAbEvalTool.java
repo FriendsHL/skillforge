@@ -12,6 +12,8 @@ import com.skillforge.server.improve.PromptImproverService;
 import com.skillforge.server.improve.SkillDraftService;
 import com.skillforge.server.flywheel.run.FlywheelRunEntity;
 import com.skillforge.server.flywheel.run.FlywheelRunService;
+import com.skillforge.server.improve.agent.AgentEvolveAbEvalService;
+import com.skillforge.server.improve.agent.Bundle;
 import com.skillforge.server.improve.behavior.BehaviorRuleAbEvalService;
 import com.skillforge.server.repository.BehaviorRuleVersionRepository;
 import com.skillforge.server.repository.SkillDraftRepository;
@@ -103,6 +105,7 @@ public class TriggerAbEvalTool implements Tool {
     private final PromptImproverService promptImproverService;
     private final SkillDraftService skillDraftService;
     private final BehaviorRuleAbEvalService behaviorRuleAbEvalService;
+    private final AgentEvolveAbEvalService agentEvolveAbEvalService;
     private final SkillDraftRepository skillDraftRepository;
     private final BehaviorRuleVersionRepository behaviorRuleVersionRepository;
     private final FlywheelRunService flywheelRunService;
@@ -112,6 +115,7 @@ public class TriggerAbEvalTool implements Tool {
     public TriggerAbEvalTool(PromptImproverService promptImproverService,
                              SkillDraftService skillDraftService,
                              BehaviorRuleAbEvalService behaviorRuleAbEvalService,
+                             AgentEvolveAbEvalService agentEvolveAbEvalService,
                              SkillDraftRepository skillDraftRepository,
                              BehaviorRuleVersionRepository behaviorRuleVersionRepository,
                              FlywheelRunService flywheelRunService,
@@ -120,6 +124,7 @@ public class TriggerAbEvalTool implements Tool {
         this.promptImproverService = promptImproverService;
         this.skillDraftService = skillDraftService;
         this.behaviorRuleAbEvalService = behaviorRuleAbEvalService;
+        this.agentEvolveAbEvalService = agentEvolveAbEvalService;
         this.skillDraftRepository = skillDraftRepository;
         this.behaviorRuleVersionRepository = behaviorRuleVersionRepository;
         this.flywheelRunService = flywheelRunService;
@@ -136,14 +141,23 @@ public class TriggerAbEvalTool implements Tool {
     public String getDescription() {
         return "Trigger an asynchronous A/B evaluation of a candidate change against a baseline "
                 + "for the target agent, reusing the existing eval engine. Inputs:\n"
-                + "- \"surface\": one of \"prompt\", \"skill\", \"behavior_rule\".\n"
+                + "- \"surface\": one of \"prompt\", \"skill\", \"behavior_rule\", \"agent\".\n"
                 + "- \"candidateId\": the candidate id for that surface — a prompt version id "
-                + "(prompt), a skill draft id (skill), or a behavior-rule version id (behavior_rule).\n"
+                + "(prompt), a skill draft id (skill), or a behavior-rule version id (behavior_rule). "
+                + "Omit for surface=agent.\n"
+                + "- \"candidateBundle\" / \"baselineBundle\" (surface=agent only): pointer tuples "
+                + "{promptVersionId?, behaviorRuleVersionId?} for the whole-agent A/B; requires "
+                + "\"datasetVersionId\". Pair with cachedBaselineScore for candidate-only carry-forward.\n"
                 + "- \"targetAgentId\": the agent being evolved.\n"
                 + "- \"baselineId\" (optional, prompt only): baseline prompt version id; omit / null "
                 + "to use the agent's current active prompt.\n"
-                + "- \"evalScenarioIds\" (optional): explicit scenario ids; omit to use the agent's "
-                + "held-out set / dataset.\n"
+                + "- \"priorWinnerAbRunId\" (optional, agent only): COMPLETED agent A/B run id whose "
+                + "candidate bundle equals this run's baselineBundle; requires cachedBaselineScore "
+                + "(win-streak candidate-only carry-forward).\n"
+                + "- \"evalScenarioIds\" (optional): explicit scenario ids. For prompt/skill/"
+                + "behavior_rule, the held-out set to score on. For surface=agent, the explicit "
+                + "TARGET subset (e.g. harvested bad-case ids); the rest of the dataset stays the "
+                + "general/benchmark subset (both are measured in the same run).\n"
                 + "- \"datasetVersionId\" (optional): pin the run to an immutable dataset snapshot "
                 + "(mutually exclusive with evalScenarioIds; prompt/behavior_rule).\n"
                 + "- \"evolveRunId\" (optional): the evolve run this A/B belongs to. Optional metadata "
@@ -162,15 +176,28 @@ public class TriggerAbEvalTool implements Tool {
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put("surface", Map.of(
                 "type", "string",
-                "enum", List.of(EvolveSurface.PROMPT.wire(),
-                        EvolveSurface.SKILL.wire(),
-                        EvolveSurface.BEHAVIOR_RULE.wire()),
-                "description", "Optimisation surface: \"prompt\", \"skill\", or \"behavior_rule\"."
+                "enum", EvolveSurface.agentAbWireValues(),
+                "description", "Optimisation surface: \"prompt\", \"skill\", \"behavior_rule\", or "
+                        + "\"agent\" (whole-agent A/B over a bundle of per-surface version pointers)."
         ));
         properties.put("candidateId", Map.of(
                 "type", "string",
                 "description", "Candidate id for the surface (prompt version id / skill draft id / "
-                        + "behavior-rule version id)."
+                        + "behavior-rule version id). REQUIRED for prompt/skill/behavior_rule; omit for "
+                        + "surface=agent (use candidateBundle/baselineBundle instead)."
+        ));
+        properties.put("candidateBundle", Map.of(
+                "type", "object",
+                "description", "surface=agent only: the candidate bundle pointer tuple "
+                        + "{\"promptVersionId\":..,\"behaviorRuleVersionId\":..,\"skillDraftId\":..} "
+                        + "(null pointer = the agent's active version / no skill for that surface). "
+                        + "REQUIRED for surface=agent."
+        ));
+        properties.put("baselineBundle", Map.of(
+                "type", "object",
+                "description", "surface=agent only: the baseline / current-best bundle pointer tuple. "
+                        + "REQUIRED for surface=agent. When cachedBaselineScore is supplied this must "
+                        + "equal the prior winner run's candidate bundle (winner-carry-forward guard)."
         ));
         properties.put("targetAgentId", Map.of(
                 "type", "string",
@@ -179,7 +206,25 @@ public class TriggerAbEvalTool implements Tool {
         properties.put("baselineId", Map.of(
                 "type", "string",
                 "description", "Optional baseline prompt version id (prompt surface only); "
-                        + "omit / null to compare against the agent's active prompt."
+                        + "omit / null to compare against the agent's active prompt. For a "
+                        + "hill-climb iteration 2+, set this to the current-best prompt version."
+        ));
+        properties.put("cachedBaselineScore", Map.of(
+                "type", "number",
+                "description", "Optional (prompt surface, hill-climb): the current-best's already-"
+                        + "known pass-rate (0..100). When supplied the A/B runs CANDIDATE-ONLY and "
+                        + "reuses this as the baseline score — never re-measures the baseline "
+                        + "(avoids re-eval noise + halves the work). Pair with baselineId. For "
+                        + "surface=agent, pair with priorWinnerAbRunId."
+        ));
+        properties.put("priorWinnerAbRunId", Map.of(
+                "type", "string",
+                "description", "Optional (surface=agent only, win-streak carry-forward): the "
+                        + "COMPLETED agent A/B run id whose CANDIDATE bundle is this run's "
+                        + "baselineBundle (i.e. the run where the current best was measured). "
+                        + "Requires cachedBaselineScore. When supplied, the winner-carry-forward "
+                        + "guard resolves the prior winner by THIS id (exact) instead of 'most "
+                        + "recent COMPLETED run'. Omit to measure both arms fresh."
         ));
         properties.put("evalScenarioIds", Map.of(
                 "type", "array",
@@ -202,7 +247,10 @@ public class TriggerAbEvalTool implements Tool {
         Map<String, Object> schema = new LinkedHashMap<>();
         schema.put("type", "object");
         schema.put("properties", properties);
-        schema.put("required", List.of("surface", "candidateId", "targetAgentId"));
+        // candidateId is required for prompt/skill/behavior_rule and candidateBundle/
+        // baselineBundle for agent — enforced per-surface in execute() (a single
+        // schema `required` list can't express the either/or).
+        schema.put("required", List.of("surface", "targetAgentId"));
         return new ToolSchema(getName(), getDescription(), schema);
     }
 
@@ -211,16 +259,12 @@ public class TriggerAbEvalTool implements Tool {
         try {
             if (input == null || input.isEmpty()) {
                 return SkillResult.validationError(
-                        "input is required (surface, candidateId, targetAgentId)");
+                        "input is required (surface, candidateId|candidateBundle, targetAgentId)");
             }
             EvolveSurface surface = EvolveSurface.fromWire(trimToNull(input.get("surface")));
             if (surface == null) {
                 return SkillResult.validationError(
                         "surface is required and must be one of: " + EvolveSurface.acceptedValues());
-            }
-            String candidateId = trimToNull(input.get("candidateId"));
-            if (candidateId == null) {
-                return SkillResult.validationError("candidateId is required");
             }
             String targetAgentId = trimToNull(input.get("targetAgentId"));
             if (targetAgentId == null) {
@@ -232,10 +276,26 @@ public class TriggerAbEvalTool implements Tool {
             // omits evolveRunId cannot bypass the cap. evolveRunId is retained as
             // optional metadata for per-run precision (we use the higher of the
             // per-agent count vs the per-run count as the budget consumed).
+            // Applies to the agent surface too (a whole-agent A/B consumes budget).
             String evolveRunId = trimToNull(input.get("evolveRunId"));
             SkillResult capReject = enforceAbBudget(targetAgentId, evolveRunId);
             if (capReject != null) {
                 return capReject;
+            }
+
+            // AUTOEVOLVE-AGENT-LEVEL-BUNDLE: whole-agent A/B over a bundle tuple.
+            // Branches before the candidateId-centric logic (agent has no single
+            // candidateId — the candidate is a bundle). Pointer ownership is
+            // validated by BundleApplicator when the async run applies the bundle
+            // (§7 W7), so no pre-trigger candidateId ownership check here.
+            if (surface == EvolveSurface.AGENT) {
+                return triggerAgent(input, targetAgentId);
+            }
+
+            String candidateId = trimToNull(input.get("candidateId"));
+            if (candidateId == null) {
+                return SkillResult.validationError(
+                        "candidateId is required for surface=" + surface.wire());
             }
 
             // SECURITY: validate candidate belongs to targetAgentId before firing
@@ -260,6 +320,10 @@ public class TriggerAbEvalTool implements Tool {
                         candidateId, evalScenarioIds(input));
                 case BEHAVIOR_RULE -> behaviorRuleAbEvalService.startAbForVersion(
                         candidateId, trimToNull(input.get("datasetVersionId")));
+                // AGENT is handled by the early triggerAgent() branch above; this
+                // arm only exists so the switch stays exhaustive over EvolveSurface.
+                case AGENT -> throw new IllegalStateException(
+                        "agent surface must be handled before the candidateId switch");
             };
 
             log.info("[TriggerAbEval] surface={} candidateId={} targetAgentId={} -> abRunId={}",
@@ -408,16 +472,143 @@ public class TriggerAbEvalTool implements Tool {
         }
     }
 
+    /**
+     * AUTOEVOLVE-AGENT-LEVEL-BUNDLE — whole-agent A/B branch. Parses the
+     * candidate/baseline bundle tuples + optional cached baseline score and
+     * defers to {@link AgentEvolveAbEvalService#startAgentAb}. Returns the same
+     * {@code {abRunId, surface, status, message}} response shape as the other
+     * surfaces so the orchestrator polls GetAbResult(surface=agent) identically.
+     */
+    private SkillResult triggerAgent(Map<String, Object> input, String targetAgentId)
+            throws com.fasterxml.jackson.core.JsonProcessingException {
+        Bundle candidateBundle = parseBundle(input.get("candidateBundle"), "candidateBundle");
+        if (candidateBundle == null) {
+            return SkillResult.validationError("candidateBundle is required for surface=agent");
+        }
+        Bundle baselineBundle = parseBundle(input.get("baselineBundle"), "baselineBundle");
+        if (baselineBundle == null) {
+            return SkillResult.validationError("baselineBundle is required for surface=agent");
+        }
+        // B1 (Phase 3 review): datasetVersionId is OPTIONAL for surface=agent —
+        // startAgentAb default-resolves the agent's default dataset when omitted, and
+        // resolving from the same agent default pins it across rounds (§8 子点①), so
+        // the orchestrator never has to source a dataset version.
+        String datasetVersionId = trimToNull(input.get("datasetVersionId"));
+        // W-WARN-2 (agent path ONLY): a genuinely-absent cachedBaselineScore = full
+        // run (valid). But a SUPPLIED-yet-invalid value (non-numeric / out of [0,100])
+        // must hard-fail here rather than silently degrading to a non-skip A/B —
+        // silently re-measuring the baseline is the exact BUG-1 noise we avoid. The
+        // shared parseRate (and the prompt path) are deliberately left unchanged.
+        Object rawCached = input.get("cachedBaselineScore");
+        Double cachedBaselineRate = parseRate(rawCached);
+        if (cachedBaselineRate == null && trimToNull(rawCached) != null) {
+            return SkillResult.validationError(
+                    "cachedBaselineScore must be a number in [0, 100] when supplied (surface=agent); "
+                            + "omit it entirely to run a full (non-carry-forward) A/B");
+        }
+
+        // F4 (2026-06-07): optional explicit prior-winner run id for the win-streak
+        // carry-forward path. Only meaningful alongside cachedBaselineScore — a
+        // supplied-but-unpaired value is a caller bug, fail loud (mirrors the
+        // W-WARN-2 stance: never silently degrade the carry-forward semantics).
+        String priorWinnerAbRunId = trimToNull(input.get("priorWinnerAbRunId"));
+        if (priorWinnerAbRunId != null && cachedBaselineRate == null) {
+            return SkillResult.validationError(
+                    "priorWinnerAbRunId requires cachedBaselineScore (surface=agent): the id pins "
+                            + "the run the cached rate was measured on; omit both to run a full "
+                            + "two-arm A/B");
+        }
+
+        // BC-M2b: for surface=agent, evalScenarioIds (when supplied) is the explicit
+        // TARGET subset (e.g. harvested bad-case scenario ids); the rest of the
+        // dataset stays the general/benchmark subset. Unlike prompt/behavior_rule
+        // (where it selects the whole set), here it does NOT replace datasetVersionId
+        // — both are used: dataset scopes the run, these ids scope the target split.
+        List<String> explicitTargetIds = evalScenarioIds(input);
+
+        String abRunId = agentEvolveAbEvalService.startAgentAb(
+                candidateBundle, baselineBundle, targetAgentId, datasetVersionId, cachedBaselineRate,
+                explicitTargetIds, priorWinnerAbRunId);
+
+        log.info("[TriggerAbEval] surface=agent targetAgentId={} datasetVersionId={} targetIds={} "
+                        + "priorWinnerAbRunId={} -> abRunId={}",
+                targetAgentId, datasetVersionId, explicitTargetIds, priorWinnerAbRunId, abRunId);
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("abRunId", abRunId);
+        response.put("surface", EvolveSurface.AGENT.wire());
+        response.put("status", "started");
+        response.put("message", "Whole-agent A/B eval started asynchronously. Poll GetAbResult with "
+                + "surface=agent and abRunId=" + abRunId + " until terminal.");
+        return SkillResult.success(objectMapper.writeValueAsString(response));
+    }
+
+    /**
+     * Parse a bundle from either a JSON object (Map, the usual LLM tool-call shape)
+     * or a JSON string. Returns null when absent. Throws
+     * {@link IllegalArgumentException} on an unparsable / wrong-typed value so the
+     * LLM gets a clean validation error.
+     */
+    private Bundle parseBundle(Object raw, String field) {
+        if (raw == null) {
+            return null;
+        }
+        try {
+            if (raw instanceof Map<?, ?> map) {
+                return objectMapper.convertValue(map, Bundle.class);
+            }
+            String s = String.valueOf(raw).trim();
+            if (s.isEmpty()) {
+                return null;
+            }
+            return objectMapper.readValue(s, Bundle.class);
+        } catch (IllegalArgumentException | com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw new IllegalArgumentException(field + " must be a bundle object "
+                    + "{promptVersionId?, behaviorRuleVersionId?} (got: " + raw + ")");
+        }
+    }
+
     private String triggerPrompt(Map<String, Object> input, String candidateId, String targetAgentId) {
         // B4: baselineId=null → service resolves the agent's active prompt and reuses a
         // prior baseline eval run where one exists. We don't force a baseline re-run.
+        // BUG-1 hill-climb: cachedBaselineScore (0..100) makes the run candidate-only
+        // and reuses that score as the baseline pass-rate (winner-carry-forward) — the
+        // orchestrator supplies the current-best's score so the baseline isn't re-measured.
         AbEvalRunRequest req = new AbEvalRunRequest(
                 targetAgentId,
                 trimToNull(input.get("baselineId")),
                 candidateId,
                 evalScenarioIds(input),
-                trimToNull(input.get("datasetVersionId")));
+                trimToNull(input.get("datasetVersionId")),
+                parseRate(input.get("cachedBaselineScore")));
         return promptImproverService.runAbTestAgainst(req);
+    }
+
+    /**
+     * Parse an optional cached baseline pass-rate (0..100); null/blank → null silently
+     * (the caller simply didn't supply one → fresh-baseline mode). A <b>present-but-invalid</b>
+     * value (non-numeric or out of range) also degrades to null, but is logged at WARN:
+     * silently reverting to a re-measured baseline is the exact BUG-1 noise we're fixing,
+     * so a malformed score from the orchestrator must be visible rather than swallowed.
+     */
+    private static Double parseRate(Object value) {
+        String s = trimToNull(value);
+        if (s == null) {
+            return null;
+        }
+        try {
+            double d = Double.parseDouble(s);
+            if (d >= 0.0 && d <= 100.0) {
+                return d;
+            }
+            log.warn("[TriggerAbEval] cachedBaselineScore out of range [0,100]: '{}' — ignoring "
+                    + "(A/B will re-measure the baseline fresh, reintroducing noise)", s);
+            return null;
+        } catch (NumberFormatException e) {
+            log.warn("[TriggerAbEval] cachedBaselineScore not a number: '{}' — ignoring "
+                    + "(A/B will re-measure the baseline fresh, reintroducing noise)", s);
+            return null;
+        }
     }
 
     @SuppressWarnings("unchecked")

@@ -3376,19 +3376,46 @@ html[data-density="spacious"] { --density: 1; }
   display: flex;
   align-items: center;
   gap: 6px;
+  width: 100%;
   padding: 8px 14px;
   font-size: 11px;
   font-weight: 500;
   color: var(--fg-3);
   background: color-mix(in oklab, var(--bg-surface) 80%, var(--accent) 20%);
+  border: 0;
   border-bottom: 1px solid var(--border-1);
   text-transform: uppercase;
   letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.mcs-header:hover {
+  background: color-mix(in oklab, var(--bg-surface) 65%, var(--accent) 35%);
+}
+.mcs-header:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.mcs-header__chevron {
+  font-size: 9px;
+  width: 12px;
+  flex-shrink: 0;
+  color: var(--fg-4);
 }
 .mcs-body {
   padding: 12px 14px;
   font-size: 13px;
   color: var(--fg-2);
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.25s ease, padding 0.25s ease;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+.mcs-body--expanded {
+  max-height: 2000px;
+  padding-top: 12px;
+  padding-bottom: 12px;
 }
 .mcs-body p { margin: 0 0 6px; }
 .mcs-body p:last-child { margin: 0; }

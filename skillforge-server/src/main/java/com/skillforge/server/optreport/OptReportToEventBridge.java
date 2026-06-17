@@ -191,17 +191,39 @@ public class OptReportToEventBridge {
 
     /**
      * Build a single {@code description} TEXT blob from the structured
-     * issue. {@code title} as headline, {@code suggestion} as the body,
-     * and {@code expectedImpact} appended only if present (the dedicated
-     * {@code expected_impact} column also holds it — duplicating here
-     * keeps the dashboard's existing "description-only" tooltips
-     * meaningful without joining a second column).
+     * issue. {@code title} as headline; the body prefers the V1.6 (G4)
+     * {@code rootCause} + {@code proposedFix} split (richer than a single
+     * line) and falls back to {@code suggestion} for legacy / V1.5 reports
+     * that didn't emit the split. {@code expectedImpact} appended only if
+     * present (the dedicated {@code expected_impact} column also holds it —
+     * duplicating here keeps the dashboard's existing "description-only"
+     * tooltips meaningful without joining a second column).
+     *
+     * <p>All field reads are null-safe: V1.6 demoted {@code suggestion} to
+     * optional, so {@code issue.suggestion()} may be null. The parser
+     * guarantees at least one of suggestion / rootCause is present, but this
+     * method stays defensive in case a DTO is built outside the parser.
      */
     static String buildDescription(OptReportIssueDto issue) {
         StringBuilder sb = new StringBuilder();
         sb.append(issue.title().trim());
-        sb.append("\n\n");
-        sb.append(issue.suggestion().trim());
+
+        boolean hasRootCause = issue.rootCause() != null && !issue.rootCause().isBlank();
+        boolean hasProposedFix = issue.proposedFix() != null && !issue.proposedFix().isBlank();
+
+        if (hasRootCause || hasProposedFix) {
+            // V1.6 (G4): prefer rootCause + proposedFix.
+            if (hasRootCause) {
+                sb.append("\n\nRoot cause: ").append(issue.rootCause().trim());
+            }
+            if (hasProposedFix) {
+                sb.append("\n\nProposed fix: ").append(issue.proposedFix().trim());
+            }
+        } else if (issue.suggestion() != null && !issue.suggestion().isBlank()) {
+            // Legacy / V1.5 reports: single-line suggestion fallback.
+            sb.append("\n\n").append(issue.suggestion().trim());
+        }
+
         if (issue.expectedImpact() != null && !issue.expectedImpact().isBlank()) {
             sb.append("\n\nExpected: ").append(issue.expectedImpact().trim());
         }
@@ -298,8 +320,20 @@ public class OptReportToEventBridge {
             m.put("fixSurface", issue.fixSurface());
             m.put("effectiveSurface", issue.effectiveSurface());
             m.put("confidence", issue.confidence());
-            m.put("suggestion", issue.suggestion());
+            // V1.6 (G4): suggestion was demoted to optional. Coerce null → ""
+            // so the FE (which types suggestion as a non-null string) never
+            // NPEs / renders "null". rootCause/proposedFix carry the richer
+            // content when present.
+            m.put("suggestion", issue.suggestion() == null ? "" : issue.suggestion());
             m.put("expectedImpact", issue.expectedImpact());
+            // V1.6 (G4) facets: friction classification (6-enum or null),
+            // recurrence (t_session_pattern.member_count weighting, ≥1), and
+            // the rootCause/proposedFix split. Keys always present (null OK for
+            // legacy reports) so the FE can render them uniformly.
+            m.put("friction", issue.friction());
+            m.put("recurrence", issue.recurrence());
+            m.put("rootCause", issue.rootCause());
+            m.put("proposedFix", issue.proposedFix());
             // V1.5+: 强制对照现有 customRules / skills / prompt 段，区分
             // "new" / "modify" / "duplicate"。null OK (legacy reports / LLM
             // 没区分 → FE 按 "new" 处理保持向后兼容)。targetRuleText 仅在

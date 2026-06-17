@@ -225,6 +225,16 @@ operator 视角的完整 skill / prompt / behavior_rule 飞轮工作流 DAG（In
 - **只读** —— panel 内无任何操作按钮（observability ≠ ops console），所有操作走现有 drill-down 页（1B URL routing 确保 Insights / SkillList / SessionList / SkillDrafts 真消费 drill-down query param 不 silent drop）
 - **懒加载** —— reactflow + dagre（~72KB gzip）独立 chunk，仅在 operator 点 Flywheel tab 时加载
 
+### AutoEvolving V1（DSL Workflow 引擎 + Dashboard）
+
+把自进化飞轮以代码形式编排的确定性 DSL workflow 引擎，外加 `/autoevolving` 操作员仪表盘（2026-05，灵感来自 Karpathy 的 autoresearch）：
+
+- **DSL workflow 引擎** —— 跑在 **Rhino** 解释器上的 JavaScript workflow，置于 **L1 capability 沙箱**（无文件系统 / 无网络 / 仅白名单 host 调用）内，提供 6 个原语（`agent` / `tool` / `parallel` / `pipeline` / `humanApprove` / journaling）。`WorkflowDefinitionRegistry` 注册定义，`WorkflowRunnerService` 执行并 journal 每一步。
+- **journal-replay 的人审环节** —— `humanApprove()` 抛 `WorkflowPausedException` → 操作员审批 → workflow JS 从头重跑，缓存的 journal entry short-circuit 已完成步骤（不重花 token），frontier gate 续跑。可跨服务器重启存活，操作员几小时后再审也行。
+- **OPT-REPORT 改造为 workflow** —— 优化报告生成器重建为 DSL workflow（load → annotate fan-out → aggregate → human-approve），agent 驱动的老路径保留在 feature flag 之后。
+- **evolve loop 爬坡** —— agent 级 evolve loop 每轮跑一次 A/B 并把 winner carry-forward，沿 `weightedScore`（target-subset 通过率 + 回流的 bad-case oracle）爬坡，带确定性 keep / stop 阀门（min-measured-N guard、win-streak baseline 缓存、vs-original 锚点；infra failure 排除出分母）。
+- **`/autoevolving` dashboard** —— KPI header + 3 个信号源 panel + workflow DAG 可视化（复用 Flywheel 的 React Flow + dagre 布局）+ 异常诊断，带实时 WebSocket 更新。
+
 ### System Agent 区分
 
 `t_agent.agent_type` 字段（V89）区分**系统 agent**（`session-annotator` / `attribution-curator` / `metrics-collector` / `memory-curator` / `user-simulator` —— Bootstrap 类管理，下次重启时 dashboard 编辑会被覆盖）跟**用户 agent**：
@@ -288,6 +298,61 @@ AGENT_LOOP（根节点）
 **聊天消息时间戳（2026-05）** — 用户 / agent 气泡 hover 时右上角显示 `HH:MM:SS`（服务端持久化的 `t_session_message.created_at`，默认 opacity 0 + `:focus-within` 键盘 a11y fallback）。REST `/api/chat/sessions/{id}/messages` 返回 `createdAt` 字段；WS `message_appended` + `messages_snapshot` payload 带 envelope-level `createdAt` 满足实时消息。
 
 **模型用量仪表盘** — 按日/按模型/按 Agent 统计 token 消耗和成本。
+
+### MCP Client（Model Context Protocol）
+
+SkillForge 作为 Model Context Protocol *host* —— 连接外部 **stdio 和远程 HTTP** MCP server 并把它们的工具暴露给 Agent：
+
+- **stdio transport** — NDJSON line-framed JSON-RPC 2.0；`ProcessBuilder` 数组形式（无 shell 注入）；严格 `${VAR}` env 正则 + `Matcher.quoteReplacement` 防 `$/\` 引用攻击
+- **HTTP transport（Streamable HTTP，V152）** — 连接远程托管的 MCP server。每请求 `POST` 带 `Accept: application/json, text/event-stream`；按 `Content-Type` 分流响应（直接 JSON 或按 request id 匹配的 SSE `data:` 单帧）；捕获并回带 `Mcp-Session-Id`；16 MiB 响应体上限；线程安全（OkHttp + volatile session id）。`McpTransport` 接口是干净的扩展点 —— session / adapter / registry 层 transport-agnostic 不动
+- **传输安全** — 非 loopback http 端点强制 `https`（resolved `Authorization` 头绝不明文传输）；URL host 解析后**拒绝内网 / 私网 / link-local（含 `169.254.169.254` 云元数据端点）/ IPv6 ULA / CGNAT**（SSRF guard）。header secret 复用与 env 相同的 `${VAR}` 替换 + `"***"` 脱敏
+- **按 Agent 启用 server** — `t_agent.mcp_server_ids` 逗号列表（V61）；Agent 只看到已启用 server 的工具 —— `collectTools`（surface）和 dispatch 都按 `allowedMcpServerNames` gate MCP 工具，而不是 built-in `toolIds` 白名单，所以有工具白名单的 Agent 也能看到绑定的 MCP 工具
+- **工具前缀** — 每个 MCP 工具注册为 `mcp_<server>_<tool>` 避免与 built-in 工具命名冲突；per-server name 正则 `[a-z0-9_]+ ≤ 32`
+- **生命周期 reload** — `@TransactionalEventListener(AFTER_COMMIT) + @Transactional(propagation=REQUIRES_NEW)` 在 `t_mcp_server` upsert 时热加载 registry，无需重启
+- **Secret masking** — server 配置编辑返回 `"***"` 脱敏 env **和 header** 敏感值；后端在 `***` round-trip 时保留原值
+- **默认 dogfood server** — `time`（stdio，Anthropic 官方 `uvx mcp-server-time`）+ **AnySearch**（HTTP，结构化垂直数据 —— 实时股 / 汇 / 币行情、财报、Crossref 学术引文、CVE、专利，覆盖 17 域），绑定 Research Agent + Main Assistant，配 `tools_prompt` 路由引导（结构化查询 → AnySearch，通用网页 → WebSearch）
+- **仪表盘 `/mcp-servers`** — 全量 CRUD（stdio: command / args；http: url / headers 键值编辑器带 `***` 脱敏）+ 连接状态 + test-connection dry-run + 删除引用检查（仍被 Agent 引用时返回 409）
+
+### Slash Commands
+
+8 个聊天斜杠命令，FE 弹窗补全 + 渠道 BE 拦截：
+
+| 命令 | 行为 |
+|---------|--------|
+| `/new` | 新建会话（原子重绑渠道会话） |
+| `/compact` | 触发异步 fullCompact（0.008s 内返回 toast，在 `chatLoopExecutor` 里跑） |
+| `/model <id>` | 设置 `t_session.runtime_model_override`（V60），下一次迭代生效 |
+| `/models` | 弹窗列出 `LlmProperties` 里所有可用模型 |
+| `/skill` | 弹窗列出本 Agent 的 `skill_ids` |
+| `/tool` | 弹窗列出 built-in + Agent 绑定的工具 |
+| `/context` | 按 segment 拆分 token（`TokenEstimator` + `ContextBreakdownService`） |
+| `/help` | 自动列出所有命令的注册表 |
+
+- **三种 displayMode** — `redirect`（FE 跳转）、`toast`（行内消息）、`modal`（完整 markdown 渲染）
+- **输入正则** — 仅首字符 `/` 触发弹窗（`^/[A-Za-z]*$`）；模糊匹配 + 方向键 + Enter / Tab / Esc
+- **渠道路由** — `ChannelSessionRouter` 在 `chatService.chatAsync` 之前拦截 `/` 前缀，所以飞书 / Telegram 用户也能用同样的命令
+
+### Scheduled Tasks（用户 Cron + 一次性）
+
+用户自定义 cron / 一次性触发，按计划对某个 Agent 跑一段已存的 prompt：
+
+- **`t_scheduled_task` + `t_scheduled_task_run`**（V59）— 任务定义 + 执行历史
+- **cron / 一次性互斥**，支持互转
+- **`UserTaskScheduler`** — `ThreadPoolTaskScheduler` + per-task `ReentrantLock` + skip-if-running guard
+- **`ScheduledTaskExecutor`** — 复用或新起一个 session，监听 `SessionLoopFinishedEvent` 推送渠道回复（`waiting_user` ⇒ 绝对的仪表盘 URL）
+- **5 个 Agent 工具** — `Create / Update / Delete / List / GetScheduledTask`（静默结果，owner 隔离）
+- **仪表盘 `/schedules`** — 列表 + 编辑抽屉 + cron↔一次性单选切换 + 逐行触发按钮 + 执行历史抽屉
+
+### Prompt Cache（多 Provider）
+
+自动缓存 system prompt，每次 LLM 调用省 5-90% 输入 token：
+
+- **5 个 LLM provider family** — Anthropic Claude（手动 `cache_control` 3 断点标记）、DeepSeek（自动缓存）、DashScope/Qwen（自动）、xiaomi-mimo（自动）、OpenAI gpt-4o（自动）
+- **稳定 system prompt** — `SystemPromptBuilder.buildWithBoundary(claudeMd)` 拆成确定性的 `stable`（agent.systemPrompt + soulPrompt + toolsPrompt + behaviorRules；**无 `Instant.now`**）+ `dynamic`（Memory / sessionContext / promptSuffix），并有 SHA-256 字节稳定性测试
+- **工具列表归一化** — 按 name 排序 + `ORDER_MAP_ENTRIES_BY_KEYS` + per-tool SHA hash；缓存的 canonical mapper 避免每次调用重复拷贝
+- **`UsageNormalizer`** — 单点翻译各 provider 各异的缓存字段（`cache_read_input_tokens` / `prompt_cache_hit_tokens` / `prompt_tokens_details.cached_tokens`）成统一的 `cacheReadInputTokens` + `cacheCreationInputTokens`；OpenAI-family 的 `inputTokens` 跨 provider 归一到"非缓存"语义
+- **缓存击穿检测** — `CacheBreakDetector`（5% 容差 + 2K 最小降幅）在 LLM_CALL trace 上发 `cache_break` 属性，仪表盘里显示为红色 badge
+- **V62 migration** — `t_llm_span.cache_creation_tokens`（nullable 向后兼容）；仪表盘按 LLM 调用展示 read / write / 命中率
 
 ### 安全 & 防失控
 
@@ -719,6 +784,11 @@ my-skill.zip
 - **自进化流水线** — 评测执行器、LLM 评委（2×Haiku + Sonnet 元评委）、7×5 归因矩阵、Prompt A/B 自动晋升（Δ≥15pp + 4 层 Goodhart 防护）、Session→场景提取
 - **会话消息行存储** — `t_session_message` append-only，checkpoint / branch / restore
 - **Skill 自进化** — Session → Skill 提取、版本管理、A/B 验证、自动晋升/回滚
+- **MCP Client（P11 + HTTP transport）** — stdio 和 Streamable HTTP transport + per-agent gating + 前缀 + lifecycle reload（V61/V152）+ https/SSRF URL guard；dogfood time（stdio）+ AnySearch（HTTP 结构化垂直搜索）+ `/mcp-servers` CRUD
+- **AutoEvolving V1** — DSL workflow 引擎（Rhino + L1 沙箱 + 6 原语 + human-approve journal replay）+ OPT-REPORT 改造为 workflow + agent 级 evolve loop 爬坡（weightedScore + winner carry-forward）+ `/autoevolving` dashboard
+- **Slash Commands（P10）** — 8 个命令（`/new` `/compact` `/model` `/models` `/skill` `/tool` `/context` `/help`），FE 弹窗 + 渠道拦截（V60）
+- **定时任务（P12）** — 用户自定义 cron / 一次性，Agent 工具（Create/Update/Delete/List/Get），仪表盘 `/schedules` + 执行历史（V59）
+- **Prompt Cache（P13）** — 5 provider 自动缓存、stable-prompt SHA 稳定性、`cache_break` 检测、仪表盘命中率 badge（V62）
 - **多渠道网关** — `ChannelAdapter` SPI、飞书（WebSocket + Webhook）、Telegram、三阶段投递事务、重试/去重、`/channels` 仪表盘
 - **Lifecycle Hooks** — SessionStart / UserPromptSubmit / PreToolUse / PostToolUse / SessionEnd，支持 Skill / Script / BuiltInMethod / CompiledMethod 四种 Handler，多 entry 链式执行，discriminated-union 编辑器
 - **行为规范层** — 15 条内置规范 + 预设模板 + 按 Agent 自定义规则（XML 沙箱）
@@ -730,11 +800,14 @@ my-skill.zip
 
 ### 规划中
 
+- **Embedding 余弦激活** — 打开 `embedding.enabled: true` + 安装 pgvector → 激活 L2（写入时 `≥0.95 update / ≥0.85 merge`）+ L4（cron 0.85 去重）记忆去重。**代码已发**；仅等外部 embedding API key + DB 扩展。
+- **流式工具派发** — 一旦 `content_block_stop` 触发（Claude）或 `tool_calls.index` 跃迁（OpenAI）就提前派发 tool_use，每轮省 ~1-3s。**调研已完成**（`/tmp/stream-tool-research.md`）；待 SkillForge 拿到 Claude API access 再做（当前默认 provider 是百炼/qwen）。
+- **Pre-tool-use 权限 hook** — `PRE_TOOL_USE` 事件 + `Tool.checkPermissions` + 三档规则（allow / ask / deny），用于陌生用户渠道部署的安全性
+- **多模态 MVP** — 图片 / PDF / Word / Excel 上传 + vision-provider fallback（当前聊天上传入口缺失）
 - **记忆质量评估（P3）** — 更完整的质量评分与负向 Δ 自动回滚策略
 - **Tool 输出精细裁剪（P9-2/4/5/7）** — 单条消息聚合预算 + 归档持久化、partial 压缩（保头/保尾）、压缩后上下文恢复、`jtokkit` 本地 token 精确计数
-- **斜杠命令（P10）** — 聊天框 `/new`、`/compact`、`/clear`、`/model`、`/help`
-- **Agent 发现 + 跨 Agent 调用（P11）** — `AgentDiscoverySkill`、按 name 调用、可见性、循环调用检测
-- **定时任务（P12）** — 用户自定义 cron / 一次性触发、系统作业注册表、统一的 `/schedules` UI、执行历史
+- **MCP Server（反向）** — 把 SkillForge 暴露为 MCP server 给 Claude Desktop / Cursor / VS Code
+- **Skill 主-从重构** — 当多租户审计压力到来时，把 `t_skill` 拆成 `t_skill_main`（业务身份）+ `t_skill_version`（版本快照）
 - **JWT 认证** + Redis 多实例部署
 
 ## 许可证

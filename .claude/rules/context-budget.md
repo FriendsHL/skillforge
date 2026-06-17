@@ -13,10 +13,10 @@
 
 > 加 / 删组件时同步更新这一节，且**作为 audit 基线**。
 
-- **项目专属 rules**（`.claude/rules/*.md`）：`pipeline.md` / `pipeline-meta.md`（不自动加载）/ `docs-reading.md` / `think-before-coding.md` / `verification-before-completion.md` / `systematic-debugging.md` / `context-budget.md` / `java.md` / `frontend.md` / `design.md` —— **9 个自动加载** + 1 meta
+- **项目专属 rules**（`.claude/rules/*.md`）：`pipeline.md` / `pipeline-meta.md`（不自动加载）/ `docs-reading.md` / `think-before-coding.md` / `verification-before-completion.md` / `systematic-debugging.md` / `context-budget.md` / `persistence-shape-invariant.md` / `identity-column-on-rewrite.md` / `java.md` / `frontend.md` / `design.md` —— **11 个自动加载** + 1 meta（注：`persistence-shape-invariant.md` 和 `identity-column-on-rewrite.md` 无 frontmatter `paths:`，属常驻加载，各 ~110 行，是当前最重的两条项目 rule）
 - **vendored ECC rules**：`common/*` (7) + `web/*` (7，其中 design-quality / performance 已加 SkillForge override) + `java/*` + `typescript/*` —— 至少 **14+ 个**
-- **agents**（10 个）：java-reviewer / typescript-reviewer / code-reviewer / security-reviewer / database-reviewer / architect / java-build-resolver / tdd-guide / performance-optimizer / refactor-cleaner
-- **commands**（5 个）：feature-dev / code-review / tdd / refactor-clean / evolve
+- **agents**（13 个）：java-reviewer / typescript-reviewer / code-reviewer / security-reviewer / database-reviewer / architect / java-build-resolver / tdd-guide / performance-optimizer / refactor-cleaner / **compact-reviewer / java-design-reviewer / llm-provider-compat-reviewer**（后 3 个是 specialty reviewer，description 较长，见下方 Phase 3 issue #1）
+- **commands**（6 个）：feature-dev / code-review / tdd / refactor-clean / evolve / review-verdict
 - **CLAUDE.md**：~95 行
 - **MCP servers**：检查 `.mcp.json`（如有）
 
@@ -63,11 +63,11 @@ wc -l CLAUDE.md
 SkillForge Context Budget Audit (yyyy-MM-dd)
 ═══════════════════════════════════════
 当前估算 overhead：~XX,XXX tokens
-- 项目 rules（9 个自动加载）: ~Y tokens
+- 项目 rules（11 个自动加载）: ~Y tokens
 - vendored ECC rules（14+ 个）: ~Y tokens
-- agents description（10 × ~30 词）: ~Y tokens
+- agents description（13 个；其中 3 个 specialty reviewer >55 词，超 30 词基线）: ~Y tokens
 - agents body（按需加载）: ~Y tokens
-- commands（5 个）: ~Y tokens
+- commands（6 个）: ~Y tokens
 - CLAUDE.md: ~Y tokens
 
 Top 3 优化（按节省排序）：
@@ -86,6 +86,19 @@ Top 3 优化（按节省排序）：
   - ✅ 拆 `pipeline-meta.md`（流水线演进 / ROI / 迁移到新项目）不自动加载，节省 ~3k token
   - ✅ `web/design-quality.md` + `web/performance.md` 加 SkillForge dashboard override disclaimer（让 LLM 知道 Scrollytelling/3D/landing-page 章节忽略），节省 LLM "思考"成本
   - ⏳ 候选未做：`common/performance.md` 模型选型表与 `pipeline.md` 矛盾 → 已在 CLAUDE.md 标注但未删；`common/development-workflow.md` 研究流程与 `pipeline.md` 重叠 → 已标注未删
+
+- **2026-06-04**（rules 全量审计 + 优化）：
+  - 🔴 **修正前条认知错误**：2026-04-30 说"拆 pipeline-meta.md 不自动加载"其实没生效 —— 它无 frontmatter，一直在常驻加载。本次真正补上 `paths: [pipeline.md, pipeline-meta.md]`，现在才名副其实。
+  - ✅ **最大优化**：`web/*` 7 个文件全无 frontmatter（一直常驻），补上 `paths: [tsx/ts/jsx/js/css]` → 非前端编辑每次省 ~550 行（~7k tokens）。web 规则本就是 frontend-only。
+  - ✅ `java.md` 精简掉 6 节复述 vendored `java/*` 的通用内容（388→313 行），保留全部独家 footgun + 项目 nugget。
+  - ✅ 断链修复：新建缺失的 `common/patterns.md` + `common/hooks.md`（7 处 `> extends` 断链）。
+  - ✅ 冲突 override：`common/performance.md`（模型选型）/ `common/development-workflow.md`（流程）/ `common/code-review.md`（severity 词汇）加 SkillForge override 头指向 pipeline.md；删 stale 模型型号名。
+  - ✅ inventory 漂移修正：rules 9→11 / agents 10→13 / commands 5→6（含 CLAUDE.md 命令表补 `/review-verdict`）；CLAUDE.md 技术栈 React 18→19。
+  - ✅ phantom agent 修正：e2e-runner / python·go·rust-reviewer / build-error-resolver。
+  - 📉 优化后常驻基线 ≈ 1613 行（~20k tokens），非前端编辑较优化前省 ~609 行 / ~7k tokens。
+  - ⏳ **候选未做（需用户决策）**：
+    - `persistence-shape-invariant.md`（115 行）+ `identity-column-on-rewrite.md`（111 行）目前常驻，但只在触碰 SessionService/CompactionService 等核心文件时才相关 → 可改 frontmatter `paths` 限定，省 ~226 行常驻。**取舍**：这俩是"必须看到"的安全 invariant，改 path-trigger 会牺牲"无论编辑什么都提醒"的安全边际。
+    - 3 个 specialty reviewer（compact / java-design / llm-provider-compat）的 description 55–70 词，超 30 词基线。**取舍**：长 description 编码了 MUST-BE-USED 路由触发条件，砍了可能漏路由。
 
 ## Best Practices
 

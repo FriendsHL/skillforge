@@ -95,6 +95,48 @@ class RecordIterationToolTest {
     }
 
     @Test
+    @DisplayName("G3: prediction + reconciliation are stored verbatim into step_output_json")
+    void recordsIteration_g3PredictionReconciliation() {
+        when(flywheelRunService.findById("evolve-1")).thenReturn(Optional.of(evolveRun("evolve-1")));
+        when(flywheelRunService.appendEvolveIterationStep(eq("evolve-1"), eq(2), any(JsonNode.class)))
+                .thenReturn("step-2");
+
+        Map<String, Object> prediction = new LinkedHashMap<>();
+        prediction.put("issueId", "issue-1");
+        prediction.put("targetProblem", "some scenarios keep failing");
+        prediction.put("flipToPass", java.util.List.of("s1", "s2"));
+        prediction.put("riskToFail", java.util.List.of("s3"));
+        Map<String, Object> reconciliation = new LinkedHashMap<>();
+        reconciliation.put("hits", java.util.List.of("s1"));
+        reconciliation.put("misses", java.util.List.of("s2"));
+        reconciliation.put("riskHits", java.util.List.of());
+        reconciliation.put("surprises", java.util.List.of("s9"));
+        reconciliation.put("confidence", 0.5);
+
+        Map<String, Object> input = new LinkedHashMap<>();
+        input.put("evolveRunId", "evolve-1");
+        input.put("iteration", 2);
+        input.put("surface", "agent");
+        input.put("changeDesc", "co-changed prompt+rule");
+        input.put("candidateId", "bundle-main");
+        input.put("kept", true);
+        input.put("prediction", prediction);
+        input.put("reconciliation", reconciliation);
+
+        SkillResult result = run(input);
+
+        assertThat(result.isSuccess()).isTrue();
+        ArgumentCaptor<JsonNode> payload = ArgumentCaptor.forClass(JsonNode.class);
+        verify(flywheelRunService).appendEvolveIterationStep(eq("evolve-1"), eq(2), payload.capture());
+        JsonNode p = payload.getValue();
+        assertThat(p.path("prediction").path("issueId").asText()).isEqualTo("issue-1");
+        assertThat(p.path("prediction").path("flipToPass").toString()).isEqualTo("[\"s1\",\"s2\"]");
+        assertThat(p.path("reconciliation").path("hits").toString()).isEqualTo("[\"s1\"]");
+        assertThat(p.path("reconciliation").path("confidence").asDouble()).isEqualTo(0.5);
+        assertThat(p.path("reconciliation").path("surprises").toString()).isEqualTo("[\"s9\"]");
+    }
+
+    @Test
     @DisplayName("records a not-kept iteration; optional scores omitted are fine")
     void recordsIteration_notKept_minimal() {
         when(flywheelRunService.findById("evolve-1")).thenReturn(Optional.of(evolveRun("evolve-1")));
@@ -118,6 +160,69 @@ class RecordIterationToolTest {
         assertThat(p.get("kept").asBoolean()).isFalse();
         assertThat(p.has("baselineScore")).isFalse();
         assertThat(p.has("abRunId")).isFalse();
+    }
+
+    @Test
+    @DisplayName("§9 line A #3: records a surface=agent iteration with candidateBundle sidecar + global scores")
+    void recordsIteration_agentSurface_withBundleSidecar() {
+        when(flywheelRunService.findById("evolve-1")).thenReturn(Optional.of(evolveRun("evolve-1")));
+        when(flywheelRunService.appendEvolveIterationStep(eq("evolve-1"), eq(4), any(JsonNode.class)))
+                .thenReturn("step-agent");
+
+        Map<String, Object> input = new LinkedHashMap<>();
+        input.put("evolveRunId", "evolve-1");
+        input.put("iteration", 4);
+        input.put("surface", "agent");                 // Phase 3 opens this
+        input.put("changeDesc", "prompt+rule combined bundle");
+        input.put("candidateId", "ab-42");             // main pointer for the bundle
+        input.put("candidateBundle", Map.of("promptVersionId", "pv-9", "behaviorRuleVersionId", "brv-3"));
+        input.put("baselineScore", 50.0);
+        input.put("candidateScore", 66.0);
+        input.put("delta", 16.0);
+        input.put("kept", true);
+
+        SkillResult result = run(input);
+
+        assertThat(result.isSuccess()).isTrue();
+        ArgumentCaptor<JsonNode> payload = ArgumentCaptor.forClass(JsonNode.class);
+        verify(flywheelRunService).appendEvolveIterationStep(eq("evolve-1"), eq(4), payload.capture());
+        JsonNode p = payload.getValue();
+        assertThat(p.get("surface").asText()).isEqualTo("agent");
+        // chart-facing fields intact
+        assertThat(p.get("candidateId").asText()).isEqualTo("ab-42");
+        assertThat(p.get("baselineScore").asDouble()).isEqualTo(50.0);
+        assertThat(p.get("candidateScore").asDouble()).isEqualTo(66.0);
+        assertThat(p.get("delta").asDouble()).isEqualTo(16.0);
+        // bundle sidecar recorded as structured json
+        assertThat(p.get("candidateBundle").get("promptVersionId").asText()).isEqualTo("pv-9");
+        assertThat(p.get("candidateBundle").get("behaviorRuleVersionId").asText()).isEqualTo("brv-3");
+    }
+
+    @Test
+    @DisplayName("HILLCLIMB: weightedScore + baselineWeightedScore land in step_output_json")
+    void recordsIteration_weightedScore() {
+        when(flywheelRunService.findById("evolve-1")).thenReturn(Optional.of(evolveRun("evolve-1")));
+        when(flywheelRunService.appendEvolveIterationStep(eq("evolve-1"), eq(5), any(JsonNode.class)))
+                .thenReturn("step-5");
+
+        Map<String, Object> input = new LinkedHashMap<>();
+        input.put("evolveRunId", "evolve-1");
+        input.put("iteration", 5);
+        input.put("surface", "agent");
+        input.put("changeDesc", "hill-climb round");
+        input.put("candidateId", "ab-5");
+        input.put("weightedScore", 68.4);
+        input.put("baselineWeightedScore", 60.0);
+        input.put("kept", true);
+
+        SkillResult result = run(input);
+
+        assertThat(result.isSuccess()).isTrue();
+        ArgumentCaptor<JsonNode> payload = ArgumentCaptor.forClass(JsonNode.class);
+        verify(flywheelRunService).appendEvolveIterationStep(eq("evolve-1"), eq(5), payload.capture());
+        JsonNode p = payload.getValue();
+        assertThat(p.get("weightedScore").asDouble()).isEqualTo(68.4);
+        assertThat(p.get("baselineWeightedScore").asDouble()).isEqualTo(60.0);
     }
 
     @Test

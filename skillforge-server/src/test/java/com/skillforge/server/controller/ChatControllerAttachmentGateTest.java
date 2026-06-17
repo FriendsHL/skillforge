@@ -7,9 +7,8 @@ import com.skillforge.server.config.LlmProperties;
 import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.ChatAttachmentEntity;
 import com.skillforge.server.entity.SessionEntity;
+import com.skillforge.server.channel.router.ChannelConversationResolver;
 import com.skillforge.server.exception.AgentNotFoundException;
-import com.skillforge.server.repository.ChannelConversationRepository;
-import com.skillforge.server.repository.ChatAttachmentRepository;
 import com.skillforge.server.service.AgentService;
 import com.skillforge.server.service.ChatAttachmentService;
 import com.skillforge.server.service.ChatService;
@@ -60,7 +59,6 @@ class ChatControllerAttachmentGateTest {
 
     @Mock private ChatService chatService;
     @Mock private ChatAttachmentService chatAttachmentService;
-    @Mock private ChatAttachmentRepository chatAttachmentRepository;
     @Mock private SessionService sessionService;
     @Mock private AgentService agentService;
     @Mock private PendingAskRegistry pendingAskRegistry;
@@ -69,7 +67,7 @@ class ChatControllerAttachmentGateTest {
     @Mock private CancellationRegistry cancellationRegistry;
     @Mock private CompactionService compactionService;
     @Mock private ReplayService replayService;
-    @Mock private ChannelConversationRepository channelConversationRepository;
+    @Mock private ChannelConversationResolver channelConversationResolver;
     @Mock private ContextBreakdownService contextBreakdownService;
 
     private LlmProperties llmProperties;
@@ -94,7 +92,6 @@ class ChatControllerAttachmentGateTest {
         controller = new ChatController(
                 chatService,
                 chatAttachmentService,
-                chatAttachmentRepository,
                 sessionService,
                 agentService,
                 llmProperties,
@@ -104,7 +101,7 @@ class ChatControllerAttachmentGateTest {
                 cancellationRegistry,
                 compactionService,
                 replayService,
-                channelConversationRepository,
+                channelConversationResolver,
                 contextBreakdownService);
     }
 

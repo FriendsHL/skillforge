@@ -19,7 +19,7 @@ import {
   isDeleteConflict,
 } from '../api/mcpServers';
 import { useAuth } from '../contexts/AuthContext';
-import type { McpServer, McpToolDescriptor, McpServerStatus } from '../types/mcpServer';
+import type { McpServer, McpToolDescriptor, McpServerStatus, McpTransport } from '../types/mcpServer';
 import McpServerEditDrawer from '../components/mcp/McpServerEditDrawer';
 import './McpServers.css';
 
@@ -65,11 +65,26 @@ const SPINNER_ICON = (
 );
 
 /**
- * Render command cell with mono styling
+ * Render the command/endpoint cell. For `http` servers there is no command —
+ * show the remote URL instead; for `stdio` show `command + args`.
  */
 function renderCommand(server: McpServer): string {
+  if (server.transport === 'http') {
+    return server.url ?? '—';
+  }
+  const command = server.command ?? '';
   const args = (server.args ?? []).join(' ');
-  return args ? `${server.command} ${args}` : server.command;
+  return args ? `${command} ${args}`.trim() : command || '—';
+}
+
+/**
+ * Small transport indicator. `http` rows get an accent so they stand out
+ * from the stdio default in a mostly-stdio list.
+ */
+function TransportTag({ transport }: { transport: McpTransport }) {
+  return (
+    <span className={`mcp-transport-tag ${transport}`}>{transport}</span>
+  );
 }
 
 /**
@@ -350,7 +365,8 @@ const McpServers: React.FC = () => {
             <thead>
               <tr>
                 <th style={{ paddingLeft: 20 }}>Server</th>
-                <th>Command</th>
+                <th>Transport</th>
+                <th>Command / URL</th>
                 <th>Status</th>
                 <th>Tools</th>
                 <th>Enabled</th>
@@ -370,6 +386,9 @@ const McpServers: React.FC = () => {
                         )}
                       </div>
                     </div>
+                  </td>
+                  <td>
+                    <TransportTag transport={server.transport ?? 'stdio'} />
                   </td>
                   <td>
                     <span className="mcp-cmd-cell">{renderCommand(server)}</span>

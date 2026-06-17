@@ -303,6 +303,7 @@ class WorkflowReplayResumeTest {
     private static final class FakeJournal implements JournalCache {
         final Map<Integer, String> agent = new HashMap<>();
         final Map<Integer, JsonNode> decisions = new HashMap<>();
+        final Map<Integer, JsonNode> toolResults = new HashMap<>();
 
         @Override
         public Optional<String> getCachedAgentFinalResponse(String runId, int stepIndex) {
@@ -312,6 +313,11 @@ class WorkflowReplayResumeTest {
         @Override
         public Optional<JsonNode> getApproveDecision(String runId, int stepIndex) {
             return Optional.ofNullable(decisions.get(stepIndex));
+        }
+
+        @Override
+        public Optional<JsonNode> getCachedToolResult(String runId, int stepIndex) {
+            return Optional.ofNullable(toolResults.get(stepIndex));
         }
     }
 }

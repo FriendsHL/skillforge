@@ -1,8 +1,13 @@
+---
+paths:
+  - "**/pipeline.md"
+  - "**/pipeline-meta.md"
+---
 # Pipeline Meta
 
 > 元工作内容：流水线演进观察、ROI 判断、迁移到新项目。
 >
-> **本文件不自动加载**，只在维护 [`pipeline.md`](pipeline.md) 本身（调约束、加红灯触发器、迁移给新项目）时再读。日常开发任务不需要看。
+> **本文件不自动加载**（已用 frontmatter `paths` 限定：仅在编辑 `pipeline.md` / `pipeline-meta.md` 时触发），只在维护 [`pipeline.md`](pipeline.md) 本身（调约束、加红灯触发器、迁移给新项目）时再读。日常开发任务不需要看。
 
 ---
 

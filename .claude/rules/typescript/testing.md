@@ -11,8 +11,4 @@ paths:
 
 ## E2E Testing
 
-Use **Playwright** as the E2E testing framework for critical user flows.
-
-## Agent Support
-
-- **e2e-runner** - Playwright E2E testing specialist
+SkillForge dashboard 的 e2e 验证用 `agent-browser`（见 [`pipeline.md`](../pipeline.md) Phase Final 清单：`npx agent-browser goto <url>` + `eval` 断言 DOM），不引入独立 e2e-runner agent。Playwright 可作为编写 e2e 脚本的框架参考。

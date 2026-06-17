@@ -96,6 +96,13 @@ public class LlmProperties {
         private String type;
         private String apiKey;
         private String baseUrl;
+        /**
+         * Path appended to {@link #baseUrl} for the chat-completions endpoint. Null/blank
+         * → {@code /v1/chat/completions} (standard OpenAI). Set to {@code /chat/completions}
+         * for vendors whose base-url already carries the version segment (e.g. Volcengine
+         * Ark's {@code https://ark.cn-beijing.volces.com/api/coding/v3}). openai-type only.
+         */
+        private String chatPath;
         private String model;
         /**
          * Optional selectable models for UI/model picker.
@@ -175,6 +182,14 @@ public class LlmProperties {
 
         public void setBaseUrl(String baseUrl) {
             this.baseUrl = baseUrl;
+        }
+
+        public String getChatPath() {
+            return chatPath;
+        }
+
+        public void setChatPath(String chatPath) {
+            this.chatPath = chatPath;
         }
 
         public String getModel() {

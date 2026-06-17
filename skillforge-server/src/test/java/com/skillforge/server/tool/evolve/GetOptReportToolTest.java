@@ -61,7 +61,9 @@ class GetOptReportToolTest {
     private OptReportIssueDto issue(String id, String suspect, String fix) {
         return new OptReportIssueDto(id, "title-" + id, "high", 3,
                 List.of("s1", "s2"), suspect, fix, 0.8, "fix the thing",
-                "less failure", "modify", null);
+                "less failure", "modify", null,
+                // G4: friction / recurrence / rootCause / proposedFix
+                "repeated_tool_failure", 1, null, null);
     }
 
     @Test
@@ -89,6 +91,52 @@ class GetOptReportToolTest {
         // issue-2 effective surface = other → not convertible
         assertThat(result.getOutput()).contains("\"surface\":\"other\"");
         assertThat(result.getOutput()).contains("\"convertible\":false");
+    }
+
+    @Test
+    @DisplayName("concern#2: G4/G5 fields (friction/recurrence/rootCause/proposedFix) surfaced for orchestrator visibility")
+    void completedReport_exposesEnrichedFields() {
+        OptReportIssueDto enriched = new OptReportIssueDto("issue-9", "title-9", "high", 4,
+                List.of("s1", "s2"), "prompt", null, 0.9, null,
+                "less failure", "new", null,
+                // G4/G5 enriched: friction / recurrence / rootCause / proposedFix
+                "missing_context", 5, "Edit used a stale old_string", "Read the file fresh before Edit");
+        when(runRepository.findById("rep-1"))
+                .thenReturn(Optional.of(report("rep-1", 42L, "completed", "{...}")));
+        when(summaryParser.parse("{...}")).thenReturn(new OptReportSummaryJson(List.of(enriched)));
+
+        Map<String, Object> input = new LinkedHashMap<>();
+        input.put("reportId", "rep-1");
+        input.put("expectedAgentId", "42");
+
+        SkillResult result = run(input);
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.getOutput())
+                .contains("\"friction\":\"missing_context\"")
+                .contains("\"recurrence\":5")
+                .contains("\"rootCause\":\"Edit used a stale old_string\"")
+                .contains("\"proposedFix\":\"Read the file fresh before Edit\"");
+    }
+
+    @Test
+    @DisplayName("concern#2: pre-G4 report (null enriched fields) stays null-safe, does not crash")
+    void completedReport_legacyNullEnrichedFields_nullSafe() {
+        when(runRepository.findById("rep-1"))
+                .thenReturn(Optional.of(report("rep-1", 42L, "completed", "{...}")));
+        // issue() helper builds rootCause=null/proposedFix=null (pre-G4 shape)
+        when(summaryParser.parse("{...}")).thenReturn(new OptReportSummaryJson(List.of(
+                issue("issue-1", "prompt", null))));
+
+        Map<String, Object> input = new LinkedHashMap<>();
+        input.put("reportId", "rep-1");
+        input.put("expectedAgentId", "42");
+
+        SkillResult result = run(input);
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.getOutput()).contains("\"rootCause\":null");
+        assertThat(result.getOutput()).contains("\"proposedFix\":null");
     }
 
     @Test

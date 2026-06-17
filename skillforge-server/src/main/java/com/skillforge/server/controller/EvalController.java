@@ -19,7 +19,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.ResponseEntity;
-import jakarta.transaction.Transactional;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -143,15 +142,11 @@ public class EvalController {
                 .orElse(ResponseEntity.notFound().build());
     }
 
-    @Transactional
     @DeleteMapping("/runs/{id}")
     public ResponseEntity<Void> deleteEvalRun(@PathVariable String id) {
-        if (!evalRunRepository.existsById(id)) {
+        if (!evalOrchestrator.deleteEvalRun(id)) {
             return ResponseEntity.notFound().build();
         }
-        evalSessionRepository.deleteByEvalRunId(id);
-        evalRunRepository.deleteById(id);
-        log.info("Deleted eval run: {}", id);
         return ResponseEntity.noContent().build();
     }
 

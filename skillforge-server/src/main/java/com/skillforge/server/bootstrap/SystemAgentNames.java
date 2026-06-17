@@ -46,5 +46,21 @@ public final class SystemAgentNames {
     /** OPT-REPORT-V1 (V97 seed): worker dispatched by report-generator for per-batch session annotation. */
     public static final String SESSION_BATCH_ANNOTATOR = "session-batch-annotator";
 
+    /**
+     * AUTOEVOLVE-CLOSE-LOOP G5 (V142 seed): opt-report DSL workflow sub-agent that
+     * does cross-session error-span precondition root-cause analysis (段1 group via
+     * LoadErrorSpanBatch, 段2 diagnose via GetToolCallSequence) → preconditionIssues
+     * injected into the aggregator's attribution step.
+     */
+    public static final String HOLISTIC_ERROR_SPAN_ANALYZER = "holistic-error-span-analyzer";
+
+    /**
+     * AUTOEVOLVE-CLOSE-LOOP P1 (V149 seed): candidate-generation leaf the
+     * deterministic {@code evolve-loop.workflow.js} calls via {@code agent()} once
+     * per iteration. Owns NO loop logic — it produces one candidate per call and
+     * returns {@code {candidateId, surface, changeDesc, prediction}}.
+     */
+    public static final String EVOLVE_CANDIDATE_GEN = "evolve-candidate-gen";
+
     private SystemAgentNames() { }
 }

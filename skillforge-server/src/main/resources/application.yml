@@ -54,6 +54,12 @@ flywheel:
 
 # SkillForge configuration
 skillforge:
+  # DESKTOP-MACOS-PACKAGE D2: when set, SpaStaticConfig serves the built dashboard
+  # SPA from this filesystem dir (same-origin → FE needs zero changes). UNSET by
+  # default → bean inactive → dev behaviour unchanged (server serves no static SPA).
+  # The desktop launcher passes --skillforge.spa.root=<App>/Contents/Resources/web.
+  # spa:
+  #   root: /absolute/path/to/dashboard/dist
   websearch:
     # WEB-TOOLS-HARDENING V1: provider priority chain.
     # Ordered fallback list: try Tavily first, then Exa, then DuckDuckGo HTML.
@@ -131,7 +137,7 @@ skillforge:
       # (single LLM call up to 20s × ~3 turns + tool calls = 60-90s baseline).
       # 120s gives 2× headroom while still bounding worst-case AB pipeline at
       # ~24min (12 scenarios × 2 sides). Override per env if needed.
-      scenario-timeout-ms: 120000
+      scenario-timeout-ms: 300000   # 2026-06-02: 120000→300000（火山 deepseek-v4-flash 推理慢，120s 一半场景 CONTEXT_OVERFLOW 超时；给到 5min 让多轮 agent loop 跑完）
       # AUTOEVOLVE-AGENT-FLYWHEEL: cap scenarios per A/B run (0 = full ~49-scenario
       # dataset). The attribution/evolve path re-evaluates baseline+candidate on
       # every scenario each iteration, so the full set makes one A/B ~10-15 min and
@@ -141,7 +147,12 @@ skillforge:
       max-scenarios: 12
       # Parallel scenarios per A/B. KEEP LOW on a rate-limited provider: higher =
       # more concurrent calls = more HTTP 429s (counterproductive).
-      scenario-concurrency: 3
+      # 2026-06-05: 3→6 给 A/B 提速（~24 次沙箱 agent loop / 原并发 3 = 8 波串行太慢，
+      # 一轮 A/B 15-30min）。ark 配额够时可承受 6 并发；若 429 频发再降回。
+      # 2026-06-05 二次提速: 6→10。实测 run 5eb9c71e A/B 段(50场景×2臂=100 loop @ 并发6)
+      # = 11.4min、整窗口 0 个 429（ark 充足余量）→ 安全翻倍。预期 A/B ~11.4→~7min。
+      # 若后续 429 频发再降回 6。
+      scenario-concurrency: 10
 
   # AUTOEVOLVE-AGENT-FLYWHEEL Module C (FR-C7): per-evolve-run A/B budget cap.
   # The orchestrator's maxIter lives in its agent prompt (untrusted surface) and
@@ -151,6 +162,34 @@ skillforge:
   # cap. Default 30 (TriggerAbEvalTool.DEFAULT_AB_BUDGET_PER_RUN).
   evolve:
     ab-budget-per-run: 30
+    # AUTOEVOLVE-CLOSE-LOOP workflow-fix F5 (2026-06-07): promote/keep 阈值单一来源
+    # (EvolveThresholdProperties)。prompt/skill delta 15→5（n=36 时 15pp≈5-6 个净翻转,
+    # 结构性不可达）; agent 双标准 0/−3 值不变挪配置; min-measured-n=10 (F3 最小测量数
+    # 守卫); anchor-erosion-floor-pp=5 (F6 vs-original 锚点)。behavior_rule 面 (+10/−3)
+    # 本期不动。GetAbResult 将生效值随 agent 面响应回显 (thresholds 子对象), workflow JS
+    # 不写死第二份。
+    thresholds:
+      prompt-delta-pp: 5
+      skill-delta-pp: 5
+      skill-min-candidate-rate-pp: 40
+      agent-target-min-delta-pp: 0
+      agent-regression-floor-pp: -3
+      min-measured-n: 10
+      anchor-erosion-floor-pp: 5
+      # EVOLVE-LOOP-HILLCLIMB 阶段 A: weightedScore = wG*generalPassRate + wH*harvestPassRate
+      # (按在场子集重归一; harvest 子集空 → 退化为纯大盘 generalPassRate)。
+      weight-general: 0.6
+      weight-harvest: 0.4
+      min-improve-pp: 0          # keep 防 temp=0 噪声: 候选 weightedScore 须 > best + 此值
+      no-improve-streak-limit: 3 # 收敛停: 连续 N 轮无新 best 即停
+      # target-weighted-score:   # 留空=不靠达标停(纯爬坡); 设 [0,100] 则达标即停
+    # AUTOEVOLVE-CLOSE-LOOP Phase BC: repo-root prefix BadCaseHarvestService strips
+    # from harvested span paths so fixtures become sandbox-relative and the task
+    # is rebased to /tmp/eval/. The @Value default is a dev-machine path; override
+    # to your checkout root in non-dev hosts (trailing slash optional). If it
+    # doesn't resolve to a real directory, the service log.warns at startup.
+    # harvest:
+    #   repo-root: <your-checkout-root>/
 
   session-message-store:
     row-read-enabled: true
@@ -273,7 +312,7 @@ skillforge:
     login-timeout-seconds: 300
   # LLM provider configs
   llm:
-    default-provider: xiaomi-mimo  # 2026-05-16: bailian (qwen-max) API key 过期; xiaomi-mimo / mimo-v2.5-pro 为现行可用 provider
+    default-provider: ark  # 2026-06-05: 切回 ark（5h 配额已重置；ark 的 deepseek-flash/glm-5.1/doubao-lite 是正经配置，judge 用 doubao-lite 非推理能返数字）。短暂切 xiaomi-mimo 是因当时 ark 配额耗尽，现恢复。default-provider 决定 GenerateCandidate(PromptImproverService) + eval judge 等走默认 provider 的组件。
     providers:
       claude:
         type: claude
@@ -357,6 +396,30 @@ skillforge:
         # Note: TTS models (-tts / -tts-voiceclone / -tts-voicedesign) are listed for
         # catalog visibility — chat-completion code path is not the right invocation
         # surface for them; keep them out of agent.modelId until a TTS-aware path exists.
+        read-timeout-seconds: 240
+      # 火山方舟 Ark（coding 端点，OpenAI 兼容）。base-url 已自带版本段 /api/coding/v3，
+      # 所以 chat-path 设 /chat/completions（而非默认 /v1/chat/completions）。
+      # 协议族按 model 名前缀自动解析：minimax/doubao/glm/kimi → GENERIC_OPENAI；
+      # deepseek-v4-* → DEEPSEEK_V4（Ark 上是 OpenAI 兼容，触碰必让 llm-provider-compat-reviewer 核）。
+      ark:
+        type: openai
+        api-key: ${ARK_API_KEY:}
+        base-url: https://ark.cn-beijing.volces.com/api/coding/v3
+        chat-path: /chat/completions
+        # default model = 该 provider 不指定 model 时的 fallback（eval judge 走这）。
+        # 用 doubao-seed-2.0-lite：非推理、maxTokens=16 也能返数字（minimax/glm/kimi 是推理模型，16 token 全烧 reasoning→content 空→judge 解析不出分）。
+        model: doubao-seed-2.0-lite
+        models:
+          - minimax-latest          # 推荐写法，对应 minimax-m2.7
+          - doubao-seed-2.0-code
+          - doubao-seed-2.0-pro
+          - doubao-seed-2.0-lite
+          - doubao-seed-code
+          - glm-5.1
+          - glm-5.2
+          - deepseek-v4-flash
+          - deepseek-v4-pro
+          - kimi-k2.6
         read-timeout-seconds: 240
 
   # Memory extraction configuration

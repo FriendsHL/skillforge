@@ -90,6 +90,8 @@ import com.skillforge.server.tool.scheduling.UpdateScheduledTaskTool;
 import com.skillforge.observability.repository.LlmSpanRepository;
 import com.skillforge.observability.repository.LlmTraceRepository;
 import com.skillforge.server.tool.sessionannotation.SpanBehaviorStatsTool;
+import com.skillforge.server.tool.optreport.GetToolCallSequenceTool;
+import com.skillforge.server.tool.optreport.LoadErrorSpanBatchTool;
 import com.skillforge.server.tool.optreport.LoadSessionBatchTool;
 import com.skillforge.server.tool.optreport.RecordBatchAnnotationsTool;
 import com.skillforge.server.tool.optreport.WriteOptReportTool;
@@ -128,7 +130,8 @@ import java.util.concurrent.TimeUnit;
         SkillSecurityScanProperties.class,
         EvalUserSimulatorProperties.class,
         WebToolsProperties.class,
-        MemoryTranscriptProperties.class
+        MemoryTranscriptProperties.class,
+        EvolveThresholdProperties.class
 })
 public class SkillForgeConfig {
 
@@ -475,6 +478,7 @@ public class SkillForgeConfig {
             com.skillforge.server.improve.PromptImproverService promptImproverService,
             com.skillforge.server.improve.SkillDraftService skillDraftService,
             com.skillforge.server.improve.behavior.BehaviorRuleAbEvalService behaviorRuleAbEvalService,
+            com.skillforge.server.improve.agent.AgentEvolveAbEvalService agentEvolveAbEvalService,
             com.skillforge.server.repository.SkillDraftRepository skillDraftRepository,
             com.skillforge.server.repository.BehaviorRuleVersionRepository behaviorRuleVersionRepository,
             FlywheelRunService flywheelRunService,
@@ -484,7 +488,7 @@ public class SkillForgeConfig {
         com.skillforge.server.tool.evolve.TriggerAbEvalTool tool =
                 new com.skillforge.server.tool.evolve.TriggerAbEvalTool(
                         promptImproverService, skillDraftService, behaviorRuleAbEvalService,
-                        skillDraftRepository, behaviorRuleVersionRepository,
+                        agentEvolveAbEvalService, skillDraftRepository, behaviorRuleVersionRepository,
                         flywheelRunService, abBudgetPerRun, objectMapper);
         skillRegistry.registerTool(tool);
         log.info("Registered TriggerAbEvalTool into SkillRegistry (FR-C7 abBudgetPerRun={})",
@@ -505,14 +509,40 @@ public class SkillForgeConfig {
             com.skillforge.server.repository.PromptAbRunRepository promptAbRunRepository,
             com.skillforge.server.repository.SkillAbRunRepository skillAbRunRepository,
             com.skillforge.server.repository.BehaviorRuleAbRunRepository behaviorRuleAbRunRepository,
+            com.skillforge.server.repository.AgentEvolveAbRunRepository agentEvolveAbRunRepository,
             ObjectMapper objectMapper,
+            EvolveThresholdProperties evolveThresholdProperties,
             SkillRegistry skillRegistry) {
         com.skillforge.server.tool.evolve.GetAbResultTool tool =
                 new com.skillforge.server.tool.evolve.GetAbResultTool(
                         promptAbRunRepository, skillAbRunRepository,
-                        behaviorRuleAbRunRepository, objectMapper);
+                        behaviorRuleAbRunRepository, agentEvolveAbRunRepository, objectMapper,
+                        evolveThresholdProperties);
         skillRegistry.registerTool(tool);
         log.info("Registered GetAbResultTool into SkillRegistry");
+        return tool;
+    }
+
+    /**
+     * AUTOEVOLVE-CLOSE-LOOP Phase BC-M2b — {@code ListActiveHarvestedScenarios}
+     * read-only lookup of an agent's ACTIVE harvested bad-case scenario ids, used
+     * by the orchestrator to build the explicit target subset of an A/B run.
+     *
+     * <p><b>Invariant:</b> registered ONLY here in the main SkillRegistry — NOT in
+     * {@code WorkflowSkillRegistryFactory} (workflow sub-agent registry). Same
+     * recursion-isolation invariant as the other Module B/C evolve tools.
+     */
+    @Bean
+    public com.skillforge.server.tool.evolve.ListActiveHarvestedScenariosTool listActiveHarvestedScenariosTool(
+            com.skillforge.server.repository.EvalScenarioDraftRepository evalScenarioDraftRepository,
+            com.skillforge.server.service.EvalDatasetService evalDatasetService,
+            ObjectMapper objectMapper,
+            SkillRegistry skillRegistry) {
+        com.skillforge.server.tool.evolve.ListActiveHarvestedScenariosTool tool =
+                new com.skillforge.server.tool.evolve.ListActiveHarvestedScenariosTool(
+                        evalScenarioDraftRepository, evalDatasetService, objectMapper);
+        skillRegistry.registerTool(tool);
+        log.info("Registered ListActiveHarvestedScenariosTool into SkillRegistry");
         return tool;
     }
 
@@ -619,6 +649,84 @@ public class SkillForgeConfig {
                         flywheelRunService, objectMapper);
         skillRegistry.registerTool(tool);
         log.info("Registered RecordIterationTool into SkillRegistry");
+        return tool;
+    }
+
+    /**
+     * AUTOEVOLVE-CLOSE-LOOP Phase BC-M2b (G3) — {@code ReconcilePrediction}
+     * deterministic prediction-vs-actual reconciliation of a whole-agent A/B run.
+     *
+     * <p><b>Invariant:</b> registered ONLY here in the main SkillRegistry — NOT in
+     * {@code WorkflowSkillRegistryFactory}. Same recursion-isolation invariant as
+     * the other Module B/C evolve tools.
+     */
+    @Bean
+    public com.skillforge.server.tool.evolve.ReconcilePredictionTool reconcilePredictionTool(
+            com.skillforge.server.repository.AgentEvolveAbRunRepository agentEvolveAbRunRepository,
+            ObjectMapper objectMapper,
+            SkillRegistry skillRegistry) {
+        com.skillforge.server.tool.evolve.ReconcilePredictionTool tool =
+                new com.skillforge.server.tool.evolve.ReconcilePredictionTool(
+                        agentEvolveAbRunRepository, objectMapper);
+        skillRegistry.registerTool(tool);
+        log.info("Registered ReconcilePredictionTool into SkillRegistry");
+        return tool;
+    }
+
+    /**
+     * AUTOEVOLVE-CLOSE-LOOP P1 — {@code GetCandidateDiff} read-only tool: resolves
+     * before/after text + unified diff of a generated candidate so the evolve-loop
+     * workflow JS can emit a {@code semanticDelta} into the iteration ledger.
+     *
+     * <p><b>Workflow-only (recursion guard):</b> NOT registered into the main
+     * {@code SkillRegistry} and NOT into {@code WorkflowSkillRegistryFactory} — it
+     * is reachable ONLY via the {@code tool()} whitelist
+     * ({@code WorkflowEvolveToolRegistryFactory}). The legacy orchestrator agent
+     * has no use for it (it never assembled diffs).
+     */
+    @Bean
+    public com.skillforge.server.tool.evolve.GetCandidateDiffTool getCandidateDiffTool(
+            com.skillforge.server.repository.PromptVersionRepository promptVersionRepository,
+            com.skillforge.server.repository.BehaviorRuleVersionRepository behaviorRuleVersionRepository,
+            com.skillforge.server.repository.SkillDraftRepository skillDraftRepository,
+            com.skillforge.server.repository.AgentRepository agentRepository,
+            ObjectMapper objectMapper) {
+        com.skillforge.server.tool.evolve.GetCandidateDiffTool tool =
+                new com.skillforge.server.tool.evolve.GetCandidateDiffTool(
+                        promptVersionRepository, behaviorRuleVersionRepository,
+                        skillDraftRepository, agentRepository, objectMapper);
+        log.info("Built GetCandidateDiffTool (workflow tool() whitelist only)");
+        return tool;
+    }
+
+    /**
+     * AUTOEVOLVE-CLOSE-LOOP P1 — {@code RunOptReportSubflow}: runs opt-report as a
+     * blocking sub-flow when the evolve loop was not handed a pre-existing reportId.
+     *
+     * <p><b>Workflow-only (recursion guard):</b> NOT registered into the main
+     * {@code SkillRegistry} nor {@code WorkflowSkillRegistryFactory} — reachable
+     * ONLY via the {@code tool()} whitelist. {@code WorkflowRunnerService} is
+     * injected {@code @Lazy} to break the construction cycle
+     * (WorkflowRunnerService → WorkflowToolInvokerFactory →
+     * WorkflowEvolveToolRegistryFactory → this tool → WorkflowRunnerService).
+     *
+     * <p><b>The cycle is ONLY in the Spring construction graph, NOT at runtime.</b>
+     * At runtime this tool calls {@code workflowRunnerService.startRun("opt-report",
+     * ...)} — a DIFFERENT workflow name than the evolve-loop that invoked it, and
+     * {@code ConsolidationLock} is keyed per-name (spike-verified Q1), so the nested
+     * sub-flow never self-locks and there is no runtime recursion. The {@code @Lazy}
+     * is purely a bean-instantiation-ordering device; do NOT "simplify" it away.
+     */
+    @Bean
+    public com.skillforge.server.tool.evolve.RunOptReportSubflowTool runOptReportSubflowTool(
+            @org.springframework.context.annotation.Lazy
+            com.skillforge.workflow.WorkflowRunnerService workflowRunnerService,
+            com.skillforge.server.flywheel.run.FlywheelRunRepository flywheelRunRepository,
+            ObjectMapper objectMapper) {
+        com.skillforge.server.tool.evolve.RunOptReportSubflowTool tool =
+                new com.skillforge.server.tool.evolve.RunOptReportSubflowTool(
+                        workflowRunnerService, flywheelRunRepository, objectMapper);
+        log.info("Built RunOptReportSubflowTool (workflow tool() whitelist only)");
         return tool;
     }
 
@@ -1029,14 +1137,50 @@ public class SkillForgeConfig {
             com.skillforge.server.repository.SessionRepository sessionRepository,
             SessionAnnotationRepository annotationRepository,
             com.skillforge.server.repository.AgentRepository agentRepository,
+            com.skillforge.server.repository.SessionPatternRepository patternRepository,
             ObjectMapper objectMapper,
             java.time.Clock clock,
             SkillRegistry skillRegistry) {
         LoadSessionBatchTool tool = new LoadSessionBatchTool(
-                sessionRepository, annotationRepository, agentRepository, objectMapper, clock);
+                sessionRepository, annotationRepository, agentRepository,
+                patternRepository, objectMapper, clock);
         skillRegistry.registerTool(tool);
         log.info("Registered LoadSessionBatchTool into SkillRegistry");
         return tool;
+    }
+
+    /**
+     * AUTOEVOLVE-CLOSE-LOOP G5 段1: load the target agent's failed tool-call spans
+     * grouped by (toolName + error signature) across its production sessions, for
+     * the holistic-error-span-analyzer workflow sub-agent.
+     *
+     * <p>Deliberately NOT registered into the global {@code SkillRegistry} — it is
+     * a workflow-only read-only tool, wired solely into
+     * {@code WorkflowSkillRegistryFactory} (least-privilege; never reachable by an
+     * arbitrary user session sub-agent).
+     */
+    @Bean
+    public LoadErrorSpanBatchTool loadErrorSpanBatchTool(
+            com.skillforge.server.repository.SessionRepository sessionRepository,
+            LlmSpanRepository spanRepository,
+            ObjectMapper objectMapper,
+            java.time.Clock clock) {
+        return new LoadErrorSpanBatchTool(sessionRepository, spanRepository, objectMapper, clock);
+    }
+
+    /**
+     * AUTOEVOLVE-CLOSE-LOOP G5 段2: return a session's ordered tool-call sequence
+     * (compact, tool-only) so the holistic analyzer can infer the missing
+     * precondition behind a failing call.
+     *
+     * <p>Same least-privilege treatment as {@code loadErrorSpanBatchTool} — NOT in
+     * the global {@code SkillRegistry}, only in {@code WorkflowSkillRegistryFactory}.
+     */
+    @Bean
+    public GetToolCallSequenceTool getToolCallSequenceTool(
+            LlmSpanRepository spanRepository,
+            ObjectMapper objectMapper) {
+        return new GetToolCallSequenceTool(spanRepository, objectMapper);
     }
 
     /**
@@ -1248,6 +1392,9 @@ public class SkillForgeConfig {
                     providerConfig.getBaseUrl(),
                     providerConfig.getModel()
             );
+            if (providerConfig.getChatPath() != null && !providerConfig.getChatPath().isBlank()) {
+                modelConfig.setChatPath(providerConfig.getChatPath());
+            }
             if (providerConfig.getReadTimeoutSeconds() != null) {
                 modelConfig.setReadTimeoutSeconds(providerConfig.getReadTimeoutSeconds());
             }

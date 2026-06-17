@@ -1,3 +1,11 @@
+---
+paths:
+  - "**/*.tsx"
+  - "**/*.ts"
+  - "**/*.jsx"
+  - "**/*.js"
+  - "**/*.css"
+---
 > This file extends [common/patterns.md](../common/patterns.md) with web-specific design-quality guidance.
 
 > **SkillForge override (2026-04-30)**：本文件主要面向 marketing 公网站。SkillForge 是 Ant Design 后台 dashboard，**仅以下章节适用**：

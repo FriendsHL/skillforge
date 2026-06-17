@@ -1,8 +1,8 @@
 # AUTOEVOLVING V1 — DSL workflow engine + autoEvolving dashboard
 
 > **创建**：2026-05-29
-> **状态**：**Sprint 1+2+3 已 ship**（commit `54941c3` + `9000bd5` + `b675ee7`）— DSL engine + humanApprove journal-replay + schema + REST + OPT-REPORT DSL demo workflow + DAG viz。**Sprint 4 待续**（= user 可 dashboard 端到端测试 milestone）。
-> **父需求包**：[AUTOEVOLVING-MASTER](../2026-05-28-AUTOEVOLVING-MASTER/) (V1 子需求)
+> **状态**：done — **Sprint 1-4 全部已交付**（2026-05-29，commit Sprint1 `9000bd5` / Sprint3 `b675ee7` / Sprint4 `85ff279` + LLM fail-fast `9049ef8`）= dashboard `/autoevolving` 端到端可测。已交付，见 [delivery-index](../../../delivery-index.md)。
+> **父需求包**：[AUTOEVOLVING-MASTER](../../active/2026-05-28-AUTOEVOLVING-MASTER/) (V1 子需求)
 > **Anthropic 对照**：[anthropic-comparison-review-2026-05-29.md](anthropic-comparison-review-2026-05-29.md) —— V1 DSL ~90% 对齐 Anthropic Dynamic Workflows，0 P0，humanApprove 是合法 divergence
 > **估时**：~4.5 周（4 sprint）；Sprint 1 ✅（engine+sandbox+6 原语+offload）/ Sprint 2 ✅（humanApprove journal-replay + schema + REST Controller + V127）/ Sprint 3 ✅（OPT-REPORT DSL demo workflow + WorkflowSkillRegistryFactory + V128 seed agents + DAG viz panel + Insights Workflows tab）/ **Sprint 4 待续**（dashboard /autoevolving + 3 信号源面板 + 手动触发 + humanApprove review card 复用 ask_user 卡片 = user 端到端测试 milestone）
 

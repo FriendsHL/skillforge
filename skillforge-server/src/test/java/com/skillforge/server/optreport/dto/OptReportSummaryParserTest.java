@@ -425,6 +425,111 @@ class OptReportSummaryParserTest {
         assertThat(issue.targetRuleText()).isEqualTo("git 操作前确认目录");
     }
 
+    // ─────────────────────────────────────────────────────────────────────
+    // V1.6 (G4) friction / recurrence / rootCause / proposedFix + suggestion demotion
+    // ─────────────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("G4: friction/recurrence/rootCause/proposedFix parse; suggestion optional")
+    void parse_g4Facets_parseAndSuggestionOptional() {
+        String json = """
+            { "topIssues": [
+                {
+                  "id": "issue-1", "title": "Bash 路径循环", "severity": "high",
+                  "sessionCount": 4, "exampleSessionIds": ["a", "b"],
+                  "suspectSurface": "skill", "confidence": 0.7,
+                  "friction": "repeated_tool_failure",
+                  "recurrence": 5,
+                  "rootCause": "agent 没在 cd 前确认目录",
+                  "proposedFix": "加 pwd 检查的 behavior_rule"
+                }
+            ]}
+            """;
+        OptReportIssueDto issue = parser.parse(json).topIssues().get(0);
+        assertThat(issue.friction()).isEqualTo("repeated_tool_failure");
+        assertThat(issue.recurrence()).isEqualTo(5);
+        assertThat(issue.rootCause()).isEqualTo("agent 没在 cd 前确认目录");
+        assertThat(issue.proposedFix()).isEqualTo("加 pwd 检查的 behavior_rule");
+        assertThat(issue.suggestion()).isNull();  // omitted, allowed because rootCause present
+    }
+
+    @Test
+    @DisplayName("G4: invalid friction value → IllegalArgumentException")
+    void parse_invalidFriction_throws() {
+        String json = """
+            { "topIssues": [
+                {
+                  "id": "issue-1", "title": "x", "severity": "high",
+                  "sessionCount": 1, "exampleSessionIds": ["a"],
+                  "suspectSurface": "skill", "confidence": 0.5,
+                  "suggestion": "y",
+                  "friction": "tool_error"
+                }
+            ]}
+            """;
+        assertThatThrownBy(() -> parser.parse(json))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("friction")
+                .hasMessageContaining("tool_error");
+    }
+
+    @Test
+    @DisplayName("G4: recurrence omitted → defaults to 1")
+    void parse_recurrenceMissing_defaultsToOne() {
+        String json = """
+            { "topIssues": [
+                {
+                  "id": "issue-1", "title": "x", "severity": "high",
+                  "sessionCount": 1, "exampleSessionIds": ["a"],
+                  "suspectSurface": "skill", "confidence": 0.5,
+                  "suggestion": "y"
+                }
+            ]}
+            """;
+        OptReportIssueDto issue = parser.parse(json).topIssues().get(0);
+        assertThat(issue.recurrence()).isEqualTo(1);
+        assertThat(issue.friction()).isNull();        // optional
+        assertThat(issue.rootCause()).isNull();       // optional (suggestion carries it)
+    }
+
+    @Test
+    @DisplayName("G4: recurrence < 1 → IllegalArgumentException")
+    void parse_recurrenceBelowOne_throws() {
+        String json = """
+            { "topIssues": [
+                {
+                  "id": "issue-1", "title": "x", "severity": "high",
+                  "sessionCount": 1, "exampleSessionIds": ["a"],
+                  "suspectSurface": "skill", "confidence": 0.5,
+                  "suggestion": "y",
+                  "recurrence": 0
+                }
+            ]}
+            """;
+        assertThatThrownBy(() -> parser.parse(json))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("recurrence");
+    }
+
+    @Test
+    @DisplayName("G4: both suggestion AND rootCause missing → IllegalArgumentException")
+    void parse_noSuggestionNoRootCause_throws() {
+        String json = """
+            { "topIssues": [
+                {
+                  "id": "issue-1", "title": "x", "severity": "high",
+                  "sessionCount": 1, "exampleSessionIds": ["a"],
+                  "suspectSurface": "skill", "confidence": 0.5,
+                  "proposedFix": "改点东西"
+                }
+            ]}
+            """;
+        assertThatThrownBy(() -> parser.parse(json))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("suggestion")
+                .hasMessageContaining("rootCause");
+    }
+
     @Test
     @DisplayName("optional expectedImpact blank → coerced to null")
     void parse_blankExpectedImpact_coercedToNull() {
