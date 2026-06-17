@@ -46,4 +46,4 @@ CC Dynamic Workflows 的并行模型（blog + 我方对照确认）：
 
 - 现状：[autoevolving 能力现状快照](../../../references/autoevolving-capability-stage-2026-06-17.md) L1/L4
 - 归属：[AUTOEVOLVING-MASTER](../../active/2026-05-28-AUTOEVOLVING-MASTER/index.md) V2(d) DSL Phase 2 原语
-- 姊妹方向：[EVOLVE-JUDGE-GROUNDING](../EVOLVE-JUDGE-GROUNDING/index.md)（它引入的多阶段链路是本需求的主要受益者）
+- 姊妹方向：[EVOLVE-JUDGE-GROUNDING](../../active/2026-06-17-EVOLVE-JUDGE-GROUNDING/index.md)（它引入的多阶段链路是本需求的主要受益者）
