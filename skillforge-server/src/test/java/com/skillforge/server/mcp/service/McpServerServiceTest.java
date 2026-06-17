@@ -438,11 +438,15 @@ class McpServerServiceTest {
         when(repository.save(any(McpServerEntity.class))).thenAnswer(inv -> inv.getArgument(0));
 
         McpServerRequest req = new McpServerRequest();
-        req.setUrl("https://new.example.com/mcp");
+        // Literal public IP: passes the BUG-33 SSRF guard without a DNS lookup, so this
+        // unit test (which exercises header-mask preservation, not SSRF) never depends on
+        // name resolution. A real hostname would hit InetAddress.getAllByName and fail in
+        // any environment where it doesn't resolve (mirrors the public-IP test below).
+        req.setUrl("https://8.8.8.8/mcp");
         req.setHeaders(Map.of("Authorization", "***")); // round-tripped masked value
         McpServerEntity updated = service.update(11L, 1L, req);
 
-        assertThat(updated.getUrl()).isEqualTo("https://new.example.com/mcp");
+        assertThat(updated.getUrl()).isEqualTo("https://8.8.8.8/mcp");
         assertThat(updated.getHeaders()).contains("real_secret"); // preserved!
         assertThat(updated.getHeaders()).doesNotContain("\"Authorization\":\"***\"");
     }
