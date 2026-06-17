@@ -11,7 +11,7 @@
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | **AUTOEVOLVING-MASTER** ⭐ | autoEvolving 总包（V2-V5）。V1 已交付，V2-V5 ~5-6 个月（V2 AUTORESEARCH+K-1 / V3 K-4 outer loop+3 信号源 / V4 SkillsBench / V5 框架自进化） | Full 总包 | prd 待 ratify | P2 | Full | [需求包](requirements/active/2026-05-28-AUTOEVOLVING-MASTER/index.md) | 起 V2 子包后启动 Plan |
 | 2 | **AUTOEVOLVE-CLOSE-LOOP** | 闭环采纳 + 对靶改进 + benchmark 验证。P1/P2/G5/BC-M1/BC-M2a/engine-fix/阶段A 已交付，阶段B/G3/P3 未做 | Full | 部分交付 | P2 | Full | [需求包](requirements/active/2026-06-03-AUTOEVOLVE-CLOSE-LOOP/index.md) | 阶段B（EVOLVE-BADCASE-SENSITIVITY）等用户拍是否升 active |
-| 3 | **EVOLVE-JUDGE-GROUNDING** | 自进化判定优化（blog 复盘）。Phase 1 配对/comparative 判定（复用 perScenarioFlips net-wins，治绝对打分噪声→0 赢家，无 schema 改） | Full | prd-ready（待 ratify） | P2 | Full | [需求包](requirements/active/2026-06-17-EVOLVE-JUDGE-GROUNDING/index.md) | 用户 ratify PRD（含 Q1/Q2）→ 定稿 tech-design → 实现 |
+| 3 | **EVOLVE-JUDGE-GROUNDING** | 自进化判定优化（blog 复盘）。Phase 1 配对/comparative 判定（复用 perScenarioFlips net-wins，治绝对打分噪声→0 赢家，无 schema 改） | Full | design-approved | P2 | Full | [需求包](requirements/active/2026-06-17-EVOLVE-JUDGE-GROUNDING/index.md) | 按 Full pipeline 实现 Phase 1（配对判定） |
 | 4 | **AUTORESEARCH-OPTIMIZATION** | AUTOEVOLVING V2 (a) 子需求：autoResearch 外部调研（arxiv + GitHub trending）→ LLM 2-stage 抽取 → Iron Law 人审 → 自动建 backlog | Full | prd-draft (V2 排期) | P3 | Full | [需求包](requirements/active/2026-05-28-AUTORESEARCH-OPTIMIZATION/index.md) | PRD 已草拟，等 V1 后续 V2 启动 |
 
 ## 阻塞 / 待决策
