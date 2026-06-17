@@ -648,6 +648,174 @@ class GetAbResultToolTest {
                 "general");
     }
 
+    // ───────── EVOLVE-JUDGE-GROUNDING Phase 1: comparativeVerdict {netWins, significant} ─────────
+
+    @Test
+    @DisplayName("comparativeVerdict: improved>regressed and net>=minNetWins → significant true")
+    void comparativeVerdict_improvedOverRegressed_significant() throws Exception {
+        // 5 improved (fail→pass) + 1 regressed (pass→fail) → net +4 >= minNetWins 2 → significant.
+        java.util.List<com.skillforge.server.improve.AbScenarioResult> scenarios = new java.util.ArrayList<>();
+        for (int i = 0; i < 5; i++) scenarios.add(flipSc("i" + i, "FAIL", 10.0, "PASS", 80.0));
+        scenarios.add(flipSc("r0", "PASS", 80.0, "FAIL", 10.0));
+        com.skillforge.server.entity.AgentEvolveAbRunEntity e =
+                new com.skillforge.server.entity.AgentEvolveAbRunEntity();
+        e.setAgentId("42");
+        e.setStatus("COMPLETED");
+        e.setSkipBaseline(false);
+        e.setAbScenarioResultsJson(objectMapper.writeValueAsString(scenarios));
+        when(agentEvolveAbRunRepository.findById("ae-cv1")).thenReturn(Optional.of(e));
+
+        String out = run("agent", "ae-cv1", "42").getOutput();
+        com.fasterxml.jackson.databind.JsonNode cv = objectMapper.readTree(out).get("comparativeVerdict");
+        assertThat(cv.get("netWins").asInt()).isEqualTo(4);
+        assertThat(cv.get("improvedTotal").asInt()).isEqualTo(5);
+        assertThat(cv.get("regressedTotal").asInt()).isEqualTo(1);
+        assertThat(cv.get("significant").asBoolean()).isTrue();
+    }
+
+    @Test
+    @DisplayName("comparativeVerdict: tie (improved==regressed, net=0) → not significant")
+    void comparativeVerdict_tie_notSignificant() throws Exception {
+        com.skillforge.server.entity.AgentEvolveAbRunEntity e =
+                new com.skillforge.server.entity.AgentEvolveAbRunEntity();
+        e.setAgentId("42");
+        e.setStatus("COMPLETED");
+        e.setSkipBaseline(false);
+        e.setAbScenarioResultsJson(objectMapper.writeValueAsString(java.util.List.of(
+                flipSc("i0", "FAIL", 10.0, "PASS", 80.0),
+                flipSc("i1", "FAIL", 10.0, "PASS", 80.0),
+                flipSc("r0", "PASS", 80.0, "FAIL", 10.0),
+                flipSc("r1", "PASS", 80.0, "FAIL", 10.0))));
+        when(agentEvolveAbRunRepository.findById("ae-cv2")).thenReturn(Optional.of(e));
+
+        String out = run("agent", "ae-cv2", "42").getOutput();
+        com.fasterxml.jackson.databind.JsonNode cv = objectMapper.readTree(out).get("comparativeVerdict");
+        assertThat(cv.get("netWins").asInt()).isEqualTo(0);
+        assertThat(cv.get("significant").asBoolean()).isFalse();
+    }
+
+    @Test
+    @DisplayName("comparativeVerdict: regressed>improved (net<0) → not significant")
+    void comparativeVerdict_regressedOverImproved_notSignificant() throws Exception {
+        com.skillforge.server.entity.AgentEvolveAbRunEntity e =
+                new com.skillforge.server.entity.AgentEvolveAbRunEntity();
+        e.setAgentId("42");
+        e.setStatus("COMPLETED");
+        e.setSkipBaseline(false);
+        e.setAbScenarioResultsJson(objectMapper.writeValueAsString(java.util.List.of(
+                flipSc("i0", "FAIL", 10.0, "PASS", 80.0),
+                flipSc("r0", "PASS", 80.0, "FAIL", 10.0),
+                flipSc("r1", "PASS", 80.0, "FAIL", 10.0),
+                flipSc("r2", "PASS", 80.0, "FAIL", 10.0))));
+        when(agentEvolveAbRunRepository.findById("ae-cv3")).thenReturn(Optional.of(e));
+
+        String out = run("agent", "ae-cv3", "42").getOutput();
+        com.fasterxml.jackson.databind.JsonNode cv = objectMapper.readTree(out).get("comparativeVerdict");
+        assertThat(cv.get("netWins").asInt()).isEqualTo(-2);
+        assertThat(cv.get("significant").asBoolean()).isFalse();
+    }
+
+    @Test
+    @DisplayName("comparativeVerdict: uses the *Total fields (full counts) even when per-scenario lists are truncated at 20")
+    void comparativeVerdict_usesTotalsWhenListsTruncated() throws Exception {
+        // 25 improved (lists cap at 20) + 0 regressed → net must be +25 from improvedTotal, not 20.
+        java.util.List<com.skillforge.server.improve.AbScenarioResult> scenarios = new java.util.ArrayList<>();
+        for (int i = 0; i < 25; i++) scenarios.add(flipSc("i" + i, "FAIL", 10.0, "PASS", 80.0));
+        com.skillforge.server.entity.AgentEvolveAbRunEntity e =
+                new com.skillforge.server.entity.AgentEvolveAbRunEntity();
+        e.setAgentId("42");
+        e.setStatus("COMPLETED");
+        e.setSkipBaseline(false);
+        e.setAbScenarioResultsJson(objectMapper.writeValueAsString(scenarios));
+        when(agentEvolveAbRunRepository.findById("ae-cv4")).thenReturn(Optional.of(e));
+
+        String out = run("agent", "ae-cv4", "42").getOutput();
+        com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(out);
+        // perScenarioFlips list capped at 20 but improvedTotal reports 25.
+        assertThat(root.get("perScenarioFlips").get("improved").size()).isEqualTo(20);
+        assertThat(root.get("perScenarioFlips").get("improvedTotal").asInt()).isEqualTo(25);
+        // the verdict's netWins is derived from the FULL total (25), not the truncated list (20).
+        com.fasterxml.jackson.databind.JsonNode cv = root.get("comparativeVerdict");
+        assertThat(cv.get("netWins").asInt()).isEqualTo(25);
+        assertThat(cv.get("significant").asBoolean()).isTrue();
+    }
+
+    @Test
+    @DisplayName("comparativeVerdict: null when no per-scenario JSON (flips absent) — degrades, no crash")
+    void comparativeVerdict_nullWhenNoPerScenario() throws Exception {
+        com.skillforge.server.entity.AgentEvolveAbRunEntity e =
+                new com.skillforge.server.entity.AgentEvolveAbRunEntity();
+        e.setAgentId("42");
+        e.setStatus("COMPLETED");
+        when(agentEvolveAbRunRepository.findById("ae-cv5")).thenReturn(Optional.of(e));
+
+        String out = run("agent", "ae-cv5", "42").getOutput();
+        assertThat(out).contains("\"comparativeVerdict\":null");
+    }
+
+    @Test
+    @DisplayName("comparativeVerdict: thresholds echo carries minNetWins / pairwiseSignTest / pairwiseAlpha")
+    void comparativeVerdict_thresholdsEcho() {
+        com.skillforge.server.entity.AgentEvolveAbRunEntity e =
+                new com.skillforge.server.entity.AgentEvolveAbRunEntity();
+        e.setAgentId("42");
+        e.setStatus("COMPLETED");
+        when(agentEvolveAbRunRepository.findById("ae-cv6")).thenReturn(Optional.of(e));
+
+        String out = run("agent", "ae-cv6", "42").getOutput();
+        assertThat(out).contains("\"minNetWins\":2");
+        assertThat(out).contains("\"pairwiseSignTest\":false");
+        assertThat(out).contains("\"pairwiseAlpha\":0.05");
+    }
+
+    @Test
+    @DisplayName("comparativeVerdict: sign test OFF keeps a small positive net significant; ON demands a stronger margin")
+    void comparativeVerdict_signTest_gatesSmallSamples() throws Exception {
+        // net = +2 from (improved 2, regressed 0). minNetWins 2 satisfied.
+        // sign test off → significant. sign test on @0.05: n=2, p = 2*P(X>=2)=2*(1/4)=0.5 > 0.05
+        // → NOT significant (small-sample guard, the documented Q2 rationale).
+        com.skillforge.server.config.EvolveThresholdProperties withSignTest =
+                new com.skillforge.server.config.EvolveThresholdProperties();
+        withSignTest.setPairwiseSignTest(true);
+        GetAbResultTool toolSign = new GetAbResultTool(promptAbRunRepository, skillAbRunRepository,
+                behaviorRuleAbRunRepository, agentEvolveAbRunRepository, objectMapper,
+                withSignTest, 80L, 20L);
+
+        com.skillforge.server.entity.AgentEvolveAbRunEntity e =
+                new com.skillforge.server.entity.AgentEvolveAbRunEntity();
+        e.setAgentId("42");
+        e.setStatus("COMPLETED");
+        e.setSkipBaseline(false);
+        e.setAbScenarioResultsJson(objectMapper.writeValueAsString(java.util.List.of(
+                flipSc("i0", "FAIL", 10.0, "PASS", 80.0),
+                flipSc("i1", "FAIL", 10.0, "PASS", 80.0))));
+        when(agentEvolveAbRunRepository.findById("ae-cv7")).thenReturn(Optional.of(e));
+
+        Map<String, Object> input = new LinkedHashMap<>();
+        input.put("surface", "agent");
+        input.put("abRunId", "ae-cv7");
+        input.put("targetAgentId", "42");
+        String out = toolSign.execute(input, new SkillContext("/tmp", "sess", 7L)).getOutput();
+
+        com.fasterxml.jackson.databind.JsonNode cv = objectMapper.readTree(out).get("comparativeVerdict");
+        assertThat(cv.get("netWins").asInt()).isEqualTo(2);
+        // sign test ON: n=2 too small to reach p<=0.05 → not significant despite net>=minNetWins.
+        assertThat(cv.get("significant").asBoolean()).isFalse();
+    }
+
+    @Test
+    @DisplayName("twoSidedSignTest: 5 vs 0 reaches p<=0.05 (p=0.0625? no) — 6 vs 0 does; n=0 never significant")
+    void twoSidedSignTest_math() {
+        // n=0 discordant pairs → never significant.
+        assertThat(GetAbResultTool.twoSidedSignTestSignificant(0, 0, 0.05)).isFalse();
+        // 5 vs 0: n=5, p = 2 * (1/32) = 0.0625 > 0.05 → not significant.
+        assertThat(GetAbResultTool.twoSidedSignTestSignificant(5, 0, 0.05)).isFalse();
+        // 6 vs 0: n=6, p = 2 * (1/64) = 0.03125 <= 0.05 → significant.
+        assertThat(GetAbResultTool.twoSidedSignTestSignificant(6, 0, 0.05)).isTrue();
+        // 7 vs 1: n=8, k=7, P(X>=7)=(C(8,7)+C(8,8))/256=9/256, p=2*9/256=0.0703 > 0.05 → not significant.
+        assertThat(GetAbResultTool.twoSidedSignTestSignificant(7, 1, 0.05)).isFalse();
+    }
+
     @Test
     @DisplayName("F3 agent row without per-scenario JSON: all measurement fields null (no crash)")
     void agentCompleted_measurementFields_noJson() {

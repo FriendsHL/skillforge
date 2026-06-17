@@ -1,9 +1,9 @@
 export const meta = {
   name: 'evolve-loop',
-  description: 'AUTOEVOLVE 确定性爬坡循环 DSL 版 (EVOLVE-LOOP-HILLCLIMB 阶段 A): (report) → 全部 issue 当静态线索库 → 错题本靶向(ListActiveHarvestedScenarios) → for-iter { 候选叶子(看全部线索+currentBest+history 自主决策改哪面，跨面 bundle) → 多面 GetCandidateDiff → TriggerAbEval(agent, vs best, evalScenarioIds + win-streak 基线缓存) → 确定性轮询 GetAbResult → weightedScore 主判据 keep(最小测量数守卫 + vs-original 锚点) → RecordIteration → carry-forward best } → 停止(达标 OR 收敛 OR 跑满 maxIter) → 返回全程最优 best + 轨迹 → adopt(人定夺/autoApprove)。编排全在 JS(无 maxLoops/无漂移)，LLM 只做候选生成叶子。',
+  description: 'AUTOEVOLVE 确定性爬坡循环 DSL 版 (EVOLVE-LOOP-HILLCLIMB 阶段 A): (report) → 全部 issue 当静态线索库 → 错题本靶向(ListActiveHarvestedScenarios) → for-iter { 候选叶子(看全部线索+currentBest+history 自主决策改哪面，跨面 bundle) → 多面 GetCandidateDiff → TriggerAbEval(agent, vs best, evalScenarioIds + win-streak 基线缓存) → 确定性轮询 GetAbResult → 配对 net-wins 主判据 keep(F3 最小测量数守卫 + F6 vs-original 锚点, weightedScore 降 advisory) → RecordIteration → carry-forward best } → 停止(达标 OR 收敛 OR 跑满 maxIter) → 返回全程最优 best + 轨迹 → adopt(人定夺/autoApprove)。编排全在 JS(无 maxLoops/无漂移)，LLM 只做候选生成叶子。',
   phases: [
     { title: 'Report', detail: '取/跑 opt-report，全部 issue 进静态线索库' },
-    { title: 'Evolve', detail: 'for-iter 爬坡: 候选(看全局自主决策) + A/B(vs best) + weightedScore keep + 落账' },
+    { title: 'Evolve', detail: 'for-iter 爬坡: 候选(看全局自主决策) + A/B(vs best) + 配对 net-wins keep(weightedScore advisory) + 落账' },
     { title: 'Adopt', detail: 'autoApprove 直通 / 否则人工 gate' }
   ]
 }
@@ -49,45 +49,57 @@ function truncate(s, n) {
   return str.length > n ? str.slice(0, n) : str
 }
 
-// ── EVOLVE-LOOP-HILLCLIMB §2 确定性 keep 判断 (weightedScore 主判据 + 两道闸) ──
-// 主判据: 候选 weightedScore 须 > 比较基准 + minImprovePp。比较基准 = best.weightedScore
-// (iter1 可能 null → 退回本轮 res.baselineWeightedScore，即 best=active 配置的加权分);
-// 二者都拿不到 → 首个有信号的候选先立为 best (keep)。minImprovePp 防 temp=0 噪声。
-// 另两道闸(沿用):
+// ── EVOLVE-JUDGE-GROUNDING Phase 1 确定性 keep 判断 (配对 net-wins 主判据 + 两道闸) ──
+// 主判据(Q1): 服务端预算的 comparativeVerdict.significant —— 候选 vs best 同场景配对的
+// netWins(=improvedTotal-regressedTotal) >= minNetWins [+ 可选符号检验]。weightedScore 降为
+// advisory(仍写 RecordIteration/轨迹, 但不再是 keep 判据)。
+// 两道闸(沿用, 前置在配对判据之前 —— INV-1):
 //   ① F3 最小测量数守卫: overall measuredN < minMeasuredN → inconclusive 不 keep
-//      (防 n≈7 噪声 keep)。measuredN/minMeasuredN 缺失时跳过守卫。
+//      (防 n≈7 噪声: 样本太小时配对净胜无意义)。measuredN/minMeasuredN 缺失时跳过守卫。
 //   ② F6 vs-original 锚点: candidateGeneralRate >= originalGeneral - anchorErosionFloorPp。
 //      originalGeneral = iter1 的 baselineGeneralRate (记死不更新)，防多轮爬坡把 general
 //      磨掉。originalGeneral / candidateGeneralRate 为 null 时跳过锚点 (不 block)。
-// wouldPromote(服务端 agent 面 advisory 双标准) 降级为 advisory: RecordIteration 仍记，但
-// 爬坡 keep 改看 weightedScore。返回 {keep, reason} 便于轨迹日志说明。
+// first-candidate(INV-2): comparativeVerdict 缺失(无 per-scenario 配对数据, 如 iter1 无对照)
+//   → 退回 weightedScore 有信号即立为首个 best (keep)，保留原"首个有信号候选立 best"语义。
+// 返回 {keep, reason}，reason 打印 improved/regressed/net + 判据 (INV-3 轨迹可解释)。
 function decideKeep(res, best, originalGeneral) {
   if (!res || !isNum(res.weightedScore)) {
     return { keep: false, reason: 'no weightedScore signal' }
   }
   var th = res.thresholds || {}
+  // ① F3 最小测量数守卫 (前置, INV-1)。
   if (isNum(th.minMeasuredN) && isNum(res.measuredN) && res.measuredN < th.minMeasuredN) {
     return { keep: false, reason: 'inconclusive: measuredN=' + res.measuredN
       + ' < minMeasuredN=' + th.minMeasuredN }
   }
+  // ② F6 vs-original 锚点 (前置, INV-1)。
   if (isNum(th.anchorErosionFloorPp) && isNum(originalGeneral) && isNum(res.candidateGeneralRate)
       && res.candidateGeneralRate < originalGeneral - th.anchorErosionFloorPp) {
     return { keep: false, reason: 'anchor erosion: candidateGeneralRate='
       + res.candidateGeneralRate + ' < originalGeneral(' + originalGeneral
       + ') - anchorErosionFloorPp(' + th.anchorErosionFloorPp + ')' }
   }
-  var minImprove = isNum(th.minImprovePp) ? th.minImprovePp : 0
-  var compareBase = isNum(best.weightedScore) ? best.weightedScore
-    : (isNum(res.baselineWeightedScore) ? res.baselineWeightedScore : null)
-  if (compareBase == null) {
-    return { keep: true, reason: 'first measured candidate (no weightedScore baseline)' }
+  // 配对主判据 (Q1): comparativeVerdict 由服务端从 per-scenario flip totals 预算。
+  // 注意: 这个分支只在 cv 真缺失 (null / netWins 非数) 时进 —— netWins===0 (平手) 是
+  // 有效配对结论, 走下方 significant 判定 (按 minNetWins 拒), 不当"无 cv"处理。
+  var cv = res.comparativeVerdict
+  if (!cv || !isNum(cv.netWins)) {
+    // first-candidate / 无配对对照 (INV-2): 退回首个有信号候选立为 best。
+    if (!isNum(best.weightedScore)) {
+      return { keep: true, reason: 'first measured candidate (no comparative baseline)' }
+    }
+    return { keep: false, reason: 'no comparativeVerdict (paired data absent); '
+      + 'weightedScore=' + res.weightedScore + ' advisory-only, not kept' }
   }
-  if (res.weightedScore > compareBase + minImprove) {
-    return { keep: true, reason: 'weightedScore ' + res.weightedScore + ' > base('
-      + compareBase + ') + minImprovePp(' + minImprove + ')' }
+  var minNet = isNum(th.minNetWins) ? th.minNetWins : 2
+  var evidence = 'improved=' + cv.improvedTotal + ' regressed=' + cv.regressedTotal
+    + ' net=' + (cv.netWins >= 0 ? '+' : '') + cv.netWins
+    + ' (minNetWins=' + minNet + (th.pairwiseSignTest ? ', signTest@' + th.pairwiseAlpha : '') + ')'
+    + ' weightedScore=' + res.weightedScore + ' (advisory)'
+  if (cv.significant === true) {
+    return { keep: true, reason: 'comparative keep: ' + evidence }
   }
-  return { keep: false, reason: 'no improvement: weightedScore ' + res.weightedScore
-    + ' <= base(' + compareBase + ') + minImprovePp(' + minImprove + ')' }
+  return { keep: false, reason: 'comparative reject: ' + evidence }
 }
 
 // 取某个面在 bundle 里的指针 id (null = 该面用 active / 未改)。
@@ -362,7 +374,7 @@ for (var iter = 1; iter <= maxIter; iter++) {
     best.score = isNum(res.baselineScore) ? res.baselineScore : null
   }
 
-  // 🟦 确定性 keep 判断 (weightedScore 主判据 + F3/F6 两道闸)。
+  // 🟦 确定性 keep 判断 (配对 net-wins 主判据 + F3/F6 两道闸, INV-1 前置)。
   var decision = decideKeep(res, best, originalGeneral)
   var keptThis = decision.keep
   var delta = res ? res.delta : null
@@ -370,7 +382,7 @@ for (var iter = 1; iter <= maxIter; iter++) {
   var candidateScore = res ? res.candidateScore : null
   var candWeighted = (res && isNum(res.weightedScore)) ? res.weightedScore : null
 
-  // 🟩 落账(surface='agent'; weightedScore 主判据落账; semanticDelta=数组经 ctx.json 透传)。
+  // 🟩 落账(surface='agent'; weightedScore advisory-only 落账; semanticDelta=数组经 ctx.json 透传)。
   tool('RecordIteration', {
     evolveRunId: ctx.runId(),
     iteration: iter,

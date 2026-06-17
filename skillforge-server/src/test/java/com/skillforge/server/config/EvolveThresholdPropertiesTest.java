@@ -39,6 +39,10 @@ class EvolveThresholdPropertiesTest {
         assertThat(p.getMinImprovePp()).isEqualTo(0.0);
         assertThat(p.getNoImproveStreakLimit()).isEqualTo(3);
         assertThat(p.getTargetWeightedScore()).isNull();   // null = no target-stop
+        // EVOLVE-JUDGE-GROUNDING Phase 1 comparative keep gate defaults.
+        assertThat(p.getMinNetWins()).isEqualTo(2);
+        assertThat(p.isPairwiseSignTest()).isFalse();
+        assertThat(p.getPairwiseAlpha()).isEqualTo(0.05);
     }
 
     @Test
@@ -57,6 +61,9 @@ class EvolveThresholdPropertiesTest {
         props.put("skillforge.evolve.thresholds.min-improve-pp", "1");
         props.put("skillforge.evolve.thresholds.no-improve-streak-limit", "4");
         props.put("skillforge.evolve.thresholds.target-weighted-score", "88");
+        props.put("skillforge.evolve.thresholds.min-net-wins", "3");
+        props.put("skillforge.evolve.thresholds.pairwise-sign-test", "true");
+        props.put("skillforge.evolve.thresholds.pairwise-alpha", "0.1");
         MapConfigurationPropertySource source = new MapConfigurationPropertySource(props);
 
         EvolveThresholdProperties p = new Binder(source)
@@ -75,6 +82,9 @@ class EvolveThresholdPropertiesTest {
         assertThat(p.getMinImprovePp()).isEqualTo(1.0);
         assertThat(p.getNoImproveStreakLimit()).isEqualTo(4);
         assertThat(p.getTargetWeightedScore()).isEqualTo(88.0);
+        assertThat(p.getMinNetWins()).isEqualTo(3);
+        assertThat(p.isPairwiseSignTest()).isTrue();
+        assertThat(p.getPairwiseAlpha()).isEqualTo(0.1);
     }
 
     // ── LOW-2 (review r1): @Validated fail-fast on illegal values ──
@@ -165,5 +175,48 @@ class EvolveThresholdPropertiesTest {
             assertThat(ctx.getBean(EvolveThresholdProperties.class).getTargetWeightedScore())
                     .isNull();
         });
+    }
+
+    // ── EVOLVE-JUDGE-GROUNDING Phase 1: @Validated fail-fast on illegal comparative-gate values ──
+
+    @Test
+    @DisplayName("JUDGE-GROUNDING: negative min-net-wins (would keep on a net loss) → startup fails fast")
+    void negativeMinNetWins_failsStartup() {
+        runner.withPropertyValues("skillforge.evolve.thresholds.min-net-wins=-1")
+                .run(ctx -> {
+                    assertThat(ctx).hasFailed();
+                    assertThat(ctx.getStartupFailure())
+                            .hasMessageContaining("skillforge.evolve.thresholds");
+                });
+    }
+
+    @Test
+    @DisplayName("JUDGE-GROUNDING: pairwise-alpha=0 (degenerate sign test) → startup fails fast")
+    void zeroPairwiseAlpha_failsStartup() {
+        runner.withPropertyValues("skillforge.evolve.thresholds.pairwise-alpha=0")
+                .run(ctx -> assertThat(ctx).hasFailed());
+    }
+
+    @Test
+    @DisplayName("JUDGE-GROUNDING: pairwise-alpha=1 (always-significant degenerate) → startup fails fast")
+    void onePairwiseAlpha_failsStartup() {
+        runner.withPropertyValues("skillforge.evolve.thresholds.pairwise-alpha=1")
+                .run(ctx -> assertThat(ctx).hasFailed());
+    }
+
+    @Test
+    @DisplayName("JUDGE-GROUNDING control: min-net-wins=0 + sign test on + valid alpha bind fine")
+    void validComparativeGate_startupSucceeds() {
+        runner.withPropertyValues(
+                        "skillforge.evolve.thresholds.min-net-wins=0",
+                        "skillforge.evolve.thresholds.pairwise-sign-test=true",
+                        "skillforge.evolve.thresholds.pairwise-alpha=0.01")
+                .run(ctx -> {
+                    assertThat(ctx).hasNotFailed();
+                    EvolveThresholdProperties p = ctx.getBean(EvolveThresholdProperties.class);
+                    assertThat(p.getMinNetWins()).isEqualTo(0);
+                    assertThat(p.isPairwiseSignTest()).isTrue();
+                    assertThat(p.getPairwiseAlpha()).isEqualTo(0.01);
+                });
     }
 }

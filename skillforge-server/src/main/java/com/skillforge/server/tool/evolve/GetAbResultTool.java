@@ -386,7 +386,13 @@ public class GetAbResultTool implements Tool {
                 thresholds.getWeightGeneral(), thresholds.getWeightHarvest()));
         // EVOLVE-LOOP-HILLCLIMB: per-scenario flips (regressed / improved) so the
         // candidate-gen leaf can ground next-round decisions on concrete reversals.
-        r.put("perScenarioFlips", computePerScenarioFlips(run));
+        Map<String, Object> flips = computePerScenarioFlips(run);
+        r.put("perScenarioFlips", flips);
+        // EVOLVE-JUDGE-GROUNDING Phase 1: the comparative verdict {netWins, significant}
+        // derived from the SAME paired totals computePerScenarioFlips uses — this is the
+        // new PRIMARY keep criterion (weightedScore above stays advisory). Null when the
+        // run has no per-scenario JSON to pair (flips==null) → the workflow degrades.
+        r.put("comparativeVerdict", computeComparativeVerdict(flips));
         putAgentMeasurement(r, run);
         r.put("thresholds", thresholdsEcho());
         r.put("perScenario", parsePerScenario(run.getAbScenarioResultsJson()));
@@ -501,6 +507,86 @@ public class GetAbResultTool implements Tool {
     }
 
     /**
+     * EVOLVE-JUDGE-GROUNDING Phase 1 (Q1/Q2) — the paired/comparative keep verdict
+     * {@code {netWins, significant}}. {@code netWins = improvedTotal − regressedTotal}
+     * over the discordant pairs (the same {@code improvedTotal}/{@code regressedTotal}
+     * totals {@link #computePerScenarioFlips} reports — passed straight through, never
+     * recomputed). {@code significant} = {@code netWins ≥ minNetWins} AND (when
+     * {@code pairwiseSignTest} is enabled) the two-sided sign test on (improvedTotal,
+     * regressedTotal) passes at {@code pairwiseAlpha}; when disabled the sign test is
+     * ignored. Null in → null out (no per-scenario JSON → no verdict; the workflow
+     * degrades gracefully rather than gating on a fabricated tie).
+     */
+    private Map<String, Object> computeComparativeVerdict(Map<String, Object> flips) {
+        if (flips == null) {
+            return null;
+        }
+        // computePerScenarioFlips ALWAYS puts improvedTotal/regressedTotal (Number). A missing
+        // key here means a future refactor silently dropped them — fail loud rather than read a
+        // fabricated net=0 (which would mask a real keep/reject), so the contract stays explicit.
+        if (!(flips.get("improvedTotal") instanceof Number)
+                || !(flips.get("regressedTotal") instanceof Number)) {
+            throw new IllegalStateException(
+                    "perScenarioFlips missing improvedTotal/regressedTotal — comparative verdict "
+                    + "cannot be computed; flips=" + flips.keySet());
+        }
+        int improvedTotal = asInt(flips.get("improvedTotal"));
+        int regressedTotal = asInt(flips.get("regressedTotal"));
+        int netWins = improvedTotal - regressedTotal;
+        boolean meetsMargin = netWins >= thresholds.getMinNetWins();
+        boolean significant = meetsMargin
+                && (!thresholds.isPairwiseSignTest()
+                        || twoSidedSignTestSignificant(improvedTotal, regressedTotal,
+                                thresholds.getPairwiseAlpha()));
+        Map<String, Object> v = new LinkedHashMap<>();
+        v.put("netWins", netWins);
+        v.put("improvedTotal", improvedTotal);
+        v.put("regressedTotal", regressedTotal);
+        v.put("significant", significant);
+        return v;
+    }
+
+    /**
+     * Two-sided sign test (exact, binomial) on the discordant pairs: under H0 the candidate
+     * and baseline are equally likely to win a discordant pair (p=0.5). With {@code b}
+     * improvements and {@code c} regressions, n = b+c discordant trials and k = max(b,c)
+     * successes; the two-sided p-value is {@code 2 * P(X ≥ k)} for X~Binomial(n, 0.5),
+     * clamped at 1. Significant when {@code p ≤ alpha}. n==0 (no discordant pairs) → never
+     * significant. (This is McNemar's exact test on b/c — see tech-design 勘察.)
+     */
+    static boolean twoSidedSignTestSignificant(int improvedTotal, int regressedTotal, double alpha) {
+        int n = improvedTotal + regressedTotal;
+        if (n <= 0) {
+            return false;
+        }
+        int k = Math.max(improvedTotal, regressedTotal);
+        // P(X >= k) for X ~ Binomial(n, 0.5) = sum_{i=k}^{n} C(n,i) / 2^n.
+        double tailMass = 0.0;
+        for (int i = k; i <= n; i++) {
+            tailMass += binomialCoefficient(n, i);
+        }
+        double pValue = Math.min(1.0, 2.0 * tailMass / Math.pow(2.0, n));
+        return pValue <= alpha;
+    }
+
+    /** C(n, k) as a double — n is the discordant-pair count (small, single/low-double digits). */
+    private static double binomialCoefficient(int n, int k) {
+        if (k < 0 || k > n) {
+            return 0.0;
+        }
+        int kk = Math.min(k, n - k);
+        double result = 1.0;
+        for (int i = 0; i < kk; i++) {
+            result = result * (n - i) / (i + 1);
+        }
+        return result;
+    }
+
+    private static int asInt(Object o) {
+        return o instanceof Number num ? num.intValue() : 0;
+    }
+
+    /**
      * §8 子点② vs-best dual-criteria advisory gate (F5: config-driven floors).
      * Target subset present → targetDeltaPp strictly &gt; agent-target-min-delta-pp
      * AND regressionDeltaPp ≥ agent-regression-floor-pp. No target subset
@@ -599,6 +685,11 @@ public class GetAbResultTool implements Tool {
         th.put("minImprovePp", thresholds.getMinImprovePp());
         th.put("noImproveStreakLimit", thresholds.getNoImproveStreakLimit());
         th.put("targetWeightedScore", thresholds.getTargetWeightedScore());
+        // EVOLVE-JUDGE-GROUNDING Phase 1: the comparative keep gate (the workflow reads
+        // these from here; minNetWins is the primary keep margin, sign test optional).
+        th.put("minNetWins", thresholds.getMinNetWins());
+        th.put("pairwiseSignTest", thresholds.isPairwiseSignTest());
+        th.put("pairwiseAlpha", thresholds.getPairwiseAlpha());
         return th;
     }
 
