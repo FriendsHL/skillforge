@@ -1,6 +1,6 @@
 # PRD — EVOLVE-JUDGE-GROUNDING（Phase 1：配对 / comparative 判定）
 
-> 状态：prd-ready（待用户 ratify）
+> 状态：prd-ratified（2026-06-18 用户拍 Q1/Q2，见文末「已定决策」）
 > 范围：本 PRD 只定义 **Phase 1**（配对判定）。Phase 2+（grounding / refuter / held-out）见 index roadmap，单独 PRD。
 
 ## 目标
@@ -48,7 +48,7 @@
 3. **绝对分涨但配对回归**：weightedScore 微涨但 regressed>improved → 期望不 keep（这正是旧判据会误 keep 的反例）。
 4. **早失败检测**：A/B 未完成 / measuredN 不足 → inconclusive，跟功能 bug 区分开。
 
-## 开放问题（PRD 阶段请用户拍）
+## 已定决策（2026-06-18 用户 ratify）
 
-- **Q1**：Phase 1 是**完全替换**绝对分判据，还是**双判据**（绝对分 + 配对，取严 = 两者都过才 keep / 取宽 = 任一过）？（推荐：配对为主判据，绝对分降 advisory —— 见 tech-design 推荐方案）
-- **Q2**：显著性闸用**符号检验 p<0.05**，还是更简单的**最小 net-wins 数**（如 net≥3）？小样本下 p 值可能过严导致继续 0 赢家。（推荐：min net-wins + 可选 p 值，阈值配置化先松后紧）
+- **Q1 → 配对为主，绝对分降 advisory**：keep 主判据 = 配对 net-wins；`weightedScore` 仍记轨迹/RecordIteration 但不再是判据。（理由：绝对分噪声正是 0 赢家"测不出提升"病因，留它当闸只会继续 0 赢家。）
+- **Q2 → 最小 net-wins 数（先松后紧）**：显著性闸用可配置 `minNetWins`（先取松，如 2，按历史回放校准），符号检验 p 值作**可选**更严闸、默认关。（理由：n=18~36、不一致对常个位数，纯 p<0.05 极难达，会继续 0 赢家。）

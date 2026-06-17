@@ -1,7 +1,7 @@
 # EVOLVE-JUDGE-GROUNDING — 自进化判定与候选对靶优化
 
 > 创建：2026-06-17（从 backlog 升 active）
-> 状态：prd-ready（待用户 ratify）/ tech-design：design-draft
+> 状态：design-approved（2026-06-18 PRD ratify Q1/Q2 已定，可实现）
 > 模式：Full（触碰 judge "赢家判定"正确性 + evolve-loop workflow；属核心测量层）
 > 来源：对照 Anthropic《A Harness for Every Task》《Introducing Dynamic Workflows》自治多 agent 经验（对抗证伪 / pairwise 判定 / self-preferential bias）+ 自进化现状快照瓶颈（0 赢家）。
 
@@ -24,7 +24,7 @@
 
 ## 下一步
 
-用户 ratify PRD → 定稿 tech-design → 按 Full pipeline 实现（触碰核心测量层，对抗 review 含 java-reviewer + 关注 evolve-loop workflow 不变量）。
+PRD/tech-design 已 ratify（Q1 配对为主+绝对分降 advisory / Q2 minNetWins 先松后紧）→ **按 Full pipeline 实现 Phase 1**（触碰核心测量层，对抗 review 含 java-reviewer + 显式审 evolve-loop workflow INV-1~3 不变量）。
 
 ## 关联
 

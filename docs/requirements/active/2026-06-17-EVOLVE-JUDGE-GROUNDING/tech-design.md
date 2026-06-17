@@ -1,7 +1,9 @@
 # Tech Design — EVOLVE-JUDGE-GROUNDING（Phase 1：配对判定）
 
-> 状态：design-draft（待 PRD ratify 后定稿；含一次代码勘察结论）
+> 状态：design-approved（2026-06-18 PRD ratify，Q1/Q2 已定，可实现）
 > 触碰：`evolve-loop.workflow.js`（核心 workflow）+ `GetAbResultTool.java` + `EvolveThresholdProperties.java`。属核心测量层 → Full pipeline。
+>
+> **已定（来自 PRD Q1/Q2）**：方案 A（配对为主判据 + 绝对分降 advisory）；显著性闸 = 可配 `minNetWins`（先松后紧，默认暂定 2）+ 符号检验可选默认关。下文方案 B/C 仅留作记录。
 
 ## 勘察结论（现状代码）
 
