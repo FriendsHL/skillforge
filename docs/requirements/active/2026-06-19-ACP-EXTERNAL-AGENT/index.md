@@ -21,7 +21,7 @@ SkillForge 做 **ACP client**，cc（`@zed-industries/claude-code-acp`）/ codex
 ### Track B — OTEL-NATIVE-TRACING（观测基座，深度 + 互通）
 **现状**：`skillforge-observability` 是「仿 OTel」—— 有 trace_id/span_id/parent_span_id 形状，但 LLM 专用、自定义、**无 OTLP wire、无通用 span、pom 无 OpenTelemetry 依赖**。
 **问题**：ACP 顶层流**看不到子 agent 内部**（子 agent 是 fresh context，扁平 session 不含其内部步骤）。要看进内部 → 需 cc 的**真 OTel trace**（gen_ai span + `gen_ai.turn.is_subagent` / `subagent_type` / `parent_tool_use_id`，W3C context 嵌套）。
-**方向（用户拍）**：SkillForge 观测层**转真 OTel 协议**：
+**方向已拍（2026-06-19）：B3 转真 OTel 协议**（独立成 `OTEL-NATIVE-TRACING` 包，自身分 5 阶段，注意迁 evolve/eval trace 消费方——见 tech-design）。SkillForge 观测层转真 OTel：
 - 起 **OTLP receiver**（gRPC 4317 / HTTP 4318）接 cc/codex 的原生 OTel；
 - SkillForge 经 ACP 启动 cc 时**注入 TRACEPARENT/TRACESTATE** → cc 整棵 span 树（含子 agent）自动嵌进 SkillForge 这次 session 的 trace → **一棵统一树**；
 - SkillForge 自身 instrumentation 也产 OTel（迁移 / 双写 / 适配现有 LlmSpan）。
