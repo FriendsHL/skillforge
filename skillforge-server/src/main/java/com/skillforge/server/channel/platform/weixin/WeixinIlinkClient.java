@@ -14,8 +14,12 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
+import javax.crypto.Cipher;
+import javax.crypto.spec.SecretKeySpec;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.SecureRandom;
 import java.time.Duration;
 import java.util.Base64;
 import java.util.LinkedHashMap;
@@ -32,9 +36,10 @@ import java.util.concurrent.ThreadLocalRandom;
  * be verified against a live WeChat ClawBot scan (cannot be exercised in CI). All parsing is
  * defensive: missing fields / {@code ret != 0} surface as typed errors rather than NPEs.
  *
- * <p>Covers (slice 1): QR login (get_bot_qrcode + get_qrcode_status), long-poll inbound
- * (getupdates), and outbound text (sendmessage). File/media send (getuploadurl + AES-128-ECB
- * + CDN, item type 4) is DEFERRED — see {@link #sendFileDeferred}.
+ * <p>Covers: QR login (get_bot_qrcode + get_qrcode_status), long-poll inbound (getupdates),
+ * outbound text (sendmessage), and (slice 2) outbound file/image media — see
+ * {@link #sendFile} / {@link #sendImage}: getuploadurl → AES-128-ECB encrypt → CDN upload →
+ * sendmessage (item type 4 file / type 2 image).
  */
 @Component
 public class WeixinIlinkClient {
@@ -47,11 +52,42 @@ public class WeixinIlinkClient {
     static final String CHANNEL_VERSION = "1.0.2";
     static final int BOT_TYPE_CUSTOM = 3;
 
+    /**
+     * iLink-App-Id header. Mirrors {@code package.json#ilink_appid} of the reference
+     * openclaw-weixin@2.4.3 client ({@code "bot"}). Sent on every JSON CGI call (getuploadurl /
+     * sendmessage / getupdates / login). NOT sent on the CDN upload POST.
+     */
+    static final String ILINK_APP_ID = "bot";
+    /**
+     * iLink-App-ClientVersion header. Encoded as uint32 {@code (major<<16)|(minor<<8)|patch} from
+     * the reference client version 2.4.3 → {@code (2<<16)|(4<<8)|3 = 0x020403 = 132099}. Sent on
+     * every JSON CGI call.
+     */
+    static final String ILINK_APP_CLIENT_VERSION = "132099";
+
+    /** CDN base for c2c media upload/download (reference: accounts.ts CDN_BASE_URL). */
+    static final String CDN_BASE_URL = "https://novac2c.cdn.weixin.qq.com/c2c";
+
+    /** UPLOAD media_type enum (getuploadurl) — NOTE: differs from the send item_list type below. */
+    static final int UPLOAD_MEDIA_TYPE_IMAGE = 1;
+    static final int UPLOAD_MEDIA_TYPE_FILE = 3;
+
     /** iLink item_list element type for plain text. */
     static final int ITEM_TYPE_TEXT = 1;
+    /** item_list element type for an image (send side); ≠ UPLOAD_MEDIA_TYPE_IMAGE. */
+    static final int ITEM_TYPE_IMAGE = 2;
+    /** item_list element type for a generic file attachment (send side); ≠ UPLOAD_MEDIA_TYPE_FILE. */
+    static final int ITEM_TYPE_FILE = 4;
+    /** CDNMedia.encrypt_type=1 = packed thumbnail/mid info (matches reference for outbound media). */
+    static final int ENCRYPT_TYPE_PACKED = 1;
     /** message_type=2 / message_state=2 are the documented constants for an outbound bot text reply. */
     static final int OUT_MESSAGE_TYPE = 2;
     static final int OUT_MESSAGE_STATE = 2;
+
+    /** Max CDN upload retries on 5xx; 4xx aborts immediately (reference: cdn-upload.ts). */
+    static final int CDN_UPLOAD_MAX_RETRIES = 3;
+    private static final MediaType OCTET_STREAM = MediaType.parse("application/octet-stream");
+    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
     private final OkHttpClient http;
     private final ObjectMapper objectMapper;
@@ -167,6 +203,13 @@ public class WeixinIlinkClient {
      * Send a plain-text reply. {@code contextToken} MUST be the echo of the inbound message's
      * context_token — without it the reply is not associated with the originating conversation
      * window (INV-2).
+     *
+     * <p><b>{@code client_id} is REQUIRED and MUST be unique per message.</b> The iLink server
+     * deduplicates outbound bot messages by {@code client_id}; if it is omitted (treated as the
+     * empty-string key), only the FIRST reply in a conversation is delivered and every subsequent
+     * reply is silently dropped (sendmessage still returns {@code ret=0}). Matches the reference
+     * openclaw-weixin {@code send.ts}, which sets {@code from_user_id:""} + {@code client_id} on
+     * every message — same shape as {@link #sendMedia}.
      */
     public void sendText(String toUserId, String contextToken, String text,
                          String botToken, String baseurl) {
@@ -176,7 +219,9 @@ public class WeixinIlinkClient {
         item.put("text_item", textItem);
 
         Map<String, Object> msg = new LinkedHashMap<>();
+        msg.put("from_user_id", "");
         msg.put("to_user_id", toUserId);
+        msg.put("client_id", newClientId());
         msg.put("message_type", OUT_MESSAGE_TYPE);
         msg.put("message_state", OUT_MESSAGE_STATE);
         msg.put("context_token", contextToken == null ? "" : contextToken);
@@ -195,17 +240,281 @@ public class WeixinIlinkClient {
         }
     }
 
+    // ---------------------------------------------------------------------
+    // Outbound media (file / image) — slice 2
+    // ---------------------------------------------------------------------
+
     /**
-     * DEFERRED (slice 1): file/image send via getuploadurl + AES-128-ECB encrypt + CDN PUT +
-     * sendmessage item type 4. Implemented in a later slice once the media crypto/CDN flow is
-     * validated against a live endpoint.
+     * Upload {@code fileBytes} to the CDN and send it as a generic file attachment (item type 4).
+     *
+     * @param fileName user-visible attachment name (FileItem.file_name).
+     * @see #sendMedia(boolean, String, String, byte[], String, String, String) for the full flow.
      */
-    public void sendFileDeferred(String toUserId, String contextToken, byte[] fileBytes,
-                                 String fileName, String botToken, String baseurl) {
-        // TODO(WECHAT-CHANNEL slice 2): getuploadurl → AES-128-ECB(fileBytes) → PUT CDN →
-        // sendmessage item_list[{type:4, file_item:{aes_key, cdn_url, ...}}]. Requires live
-        // testing of the AES/CDN handshake (cannot be verified in CI).
-        throw new UnsupportedOperationException("weixin file send not implemented (slice 1)");
+    public void sendFile(String toUserId, String contextToken, byte[] fileBytes,
+                         String fileName, String botToken, String baseurl) {
+        sendMedia(false, toUserId, contextToken, fileBytes, fileName, botToken, baseurl);
+    }
+
+    /**
+     * Upload {@code fileBytes} to the CDN and send it as an image (item type 2). Use for
+     * screenshots / generated charts so the recipient sees an inline image rather than a file.
+     */
+    public void sendImage(String toUserId, String contextToken, byte[] fileBytes,
+                          String fileName, String botToken, String baseurl) {
+        sendMedia(true, toUserId, contextToken, fileBytes, fileName, botToken, baseurl);
+    }
+
+    /**
+     * Full media send: getuploadurl → AES-128-ECB encrypt → CDN upload → sendmessage.
+     *
+     * <p>Steps (reference: openclaw-weixin@2.4.3 cdn/upload.ts + messaging/send.ts):
+     * <ol>
+     *   <li>{@code rawsize}=plaintext length, {@code rawfilemd5}=md5(plaintext) hex; generate
+     *       random 16-byte {@code aeskey} + 16-byte {@code filekey}(hex); {@code filesize}=ECB
+     *       PKCS5-padded ciphertext length.</li>
+     *   <li>POST {@code getuploadurl} → resolve upload URL (prefer {@code upload_full_url}, else
+     *       build from {@code upload_param}+{@code filekey}).</li>
+     *   <li>AES-128-ECB encrypt the whole file; POST ciphertext to the CDN URL with ONLY a
+     *       {@code Content-Type: application/octet-stream} header (no bearer/app-id); read the
+     *       {@code x-encrypted-param} response header.</li>
+     *   <li>POST {@code sendmessage} with the file/image item.</li>
+     * </ol>
+     */
+    private void sendMedia(boolean asImage, String toUserId, String contextToken, byte[] fileBytes,
+                           String fileName, String botToken, String baseurl) {
+        if (fileBytes == null) {
+            throw new WeixinIlinkException("weixin media send: file bytes are null");
+        }
+        int rawsize = fileBytes.length;
+        String rawfilemd5 = md5Hex(fileBytes);
+        byte[] aesKeyBytes = randomBytes(16);
+        String aesKeyHex = toHex(aesKeyBytes);
+        String filekey = toHex(randomBytes(16));
+        byte[] ciphertext = aesEcbEncrypt(fileBytes, aesKeyBytes);
+        int filesize = ciphertext.length;
+
+        // (1) getuploadurl
+        String uploadUrl = getUploadUrl(
+                asImage ? UPLOAD_MEDIA_TYPE_IMAGE : UPLOAD_MEDIA_TYPE_FILE,
+                toUserId, filekey, aesKeyHex, rawsize, rawfilemd5, filesize, botToken, baseurl);
+
+        // (2) CDN upload (no auth headers); read x-encrypted-param.
+        String encryptQueryParam = uploadCiphertextToCdn(uploadUrl, ciphertext);
+
+        // (3) sendmessage with the media item.
+        // CRITICAL: aes_key MUST be Base64(UTF8 bytes of the 32-char hex string), NOT
+        // Base64(raw 16 key bytes). Reference send.ts: Buffer.from(uploaded.aeskey).toString(
+        // "base64") where uploaded.aeskey == aeskey.toString("hex"). Getting this wrong (e.g.
+        // base64-encoding the raw key) makes the recipient unable to decrypt the media.
+        String aesKeyForSend = Base64.getEncoder()
+                .encodeToString(aesKeyHex.getBytes(StandardCharsets.UTF_8));
+
+        Map<String, Object> media = new LinkedHashMap<>();
+        media.put("encrypt_query_param", encryptQueryParam);
+        media.put("aes_key", aesKeyForSend);
+        media.put("encrypt_type", ENCRYPT_TYPE_PACKED);
+
+        Map<String, Object> item = new LinkedHashMap<>();
+        if (asImage) {
+            item.put("type", ITEM_TYPE_IMAGE);
+            Map<String, Object> imageItem = new LinkedHashMap<>();
+            imageItem.put("media", media);
+            // image mid_size = ciphertext length (NUMBER), per reference (fileSizeCiphertext).
+            imageItem.put("mid_size", filesize);
+            item.put("image_item", imageItem);
+        } else {
+            item.put("type", ITEM_TYPE_FILE);
+            Map<String, Object> fileItem = new LinkedHashMap<>();
+            fileItem.put("media", media);
+            fileItem.put("file_name", fileName == null ? "" : fileName);
+            // file len = plaintext size as STRING, per reference (String(uploaded.fileSize)).
+            fileItem.put("len", String.valueOf(rawsize));
+            item.put("file_item", fileItem);
+        }
+
+        Map<String, Object> msg = new LinkedHashMap<>();
+        msg.put("from_user_id", "");
+        msg.put("to_user_id", toUserId);
+        msg.put("client_id", newClientId());
+        msg.put("message_type", OUT_MESSAGE_TYPE);
+        msg.put("message_state", OUT_MESSAGE_STATE);
+        msg.put("context_token", contextToken == null ? "" : contextToken);
+        msg.put("item_list", List.of(item));
+
+        Map<String, Object> body = Map.of("msg", msg);
+        Request req = authedRequest(host(baseurl) + "/ilink/bot/sendmessage", botToken)
+                .post(jsonBody(body))
+                .build();
+        JsonNode root = executeJson(req, "sendmessage(media)");
+        int ret = root.path("ret").asInt(0);
+        if (ret != 0) {
+            throw new WeixinIlinkException("sendmessage(media) ret=" + ret
+                    + " msg=" + root.path("errmsg").asText(""));
+        }
+    }
+
+    /**
+     * POST getuploadurl and resolve the CDN upload URL. Prefers {@code upload_full_url}; falls back
+     * to building {@code {CDN_BASE}/upload?encrypted_query_param=<upload_param>&filekey=<filekey>}.
+     */
+    private String getUploadUrl(int mediaType, String toUserId, String filekey, String aesKeyHex,
+                               int rawsize, String rawfilemd5, int filesize,
+                               String botToken, String baseurl) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("filekey", filekey);
+        body.put("media_type", mediaType);
+        body.put("to_user_id", toUserId);
+        body.put("rawsize", rawsize);
+        body.put("rawfilemd5", rawfilemd5);
+        body.put("filesize", filesize);
+        body.put("no_need_thumb", true);
+        body.put("aeskey", aesKeyHex);
+        body.put("base_info", Map.of("channel_version", CHANNEL_VERSION));
+
+        Request req = authedRequest(host(baseurl) + "/ilink/bot/getuploadurl", botToken)
+                .post(jsonBody(body))
+                .build();
+        JsonNode root = executeJson(req, "getuploadurl");
+        int ret = root.path("ret").asInt(0);
+        if (ret != 0) {
+            throw new WeixinIlinkException("getuploadurl ret=" + ret
+                    + " msg=" + root.path("errmsg").asText(""));
+        }
+        String fullUrl = root.path("upload_full_url").asText("").trim();
+        if (!fullUrl.isBlank()) {
+            return fullUrl;
+        }
+        String uploadParam = root.path("upload_param").asText("");
+        if (uploadParam.isBlank()) {
+            throw new WeixinIlinkException(
+                    "getuploadurl returned neither upload_full_url nor upload_param");
+        }
+        return CDN_BASE_URL + "/upload?encrypted_query_param="
+                + java.net.URLEncoder.encode(uploadParam, StandardCharsets.UTF_8)
+                + "&filekey=" + java.net.URLEncoder.encode(filekey, StandardCharsets.UTF_8);
+    }
+
+    /**
+     * POST the ciphertext to the CDN and return the {@code x-encrypted-param} response header
+     * (= the download encrypt_query_param to put in the send item). The request carries ONLY
+     * {@code Content-Type: application/octet-stream} — no bearer / app-id headers (the CDN is a
+     * different host than the iLink CGI). Retries up to {@link #CDN_UPLOAD_MAX_RETRIES} on 5xx;
+     * any 4xx aborts immediately.
+     *
+     * <p>CRITICAL: {@code x-encrypted-param} is the download param the recipient client needs; if
+     * the header is missing we MUST fail loudly rather than send an item that can't be downloaded.
+     */
+    private String uploadCiphertextToCdn(String uploadUrl, byte[] ciphertext) {
+        String validationError = UrlValidator.validate(uploadUrl);
+        if (validationError != null) {
+            throw new WeixinIlinkException("CDN upload URL rejected by SSRF guard: " + validationError);
+        }
+        WeixinIlinkException lastError = null;
+        for (int attempt = 1; attempt <= CDN_UPLOAD_MAX_RETRIES; attempt++) {
+            Request req = new Request.Builder()
+                    .url(uploadUrl)
+                    .post(RequestBody.create(ciphertext, OCTET_STREAM))
+                    .build();
+            try (Response resp = http.newCall(req).execute()) {
+                int code = resp.code();
+                if (code >= 400 && code < 500) {
+                    // 4xx → non-retryable (signalled by type, not by message substring).
+                    throw new NonRetryableUploadException(
+                            "CDN upload client error " + code + ": " + headerOrBody(resp));
+                }
+                if (code != 200) {
+                    // 5xx (or any non-200, non-4xx) → retryable.
+                    lastError = new WeixinIlinkException(
+                            "CDN upload server error " + code + ": " + headerOrBody(resp));
+                    log.warn("CDN upload attempt {}/{} failed (http {})",
+                            attempt, CDN_UPLOAD_MAX_RETRIES, code);
+                    continue;
+                }
+                String encryptedParam = resp.header("x-encrypted-param");
+                if (encryptedParam == null || encryptedParam.isBlank()) {
+                    // Missing download param → non-retryable: the item can't be downloaded.
+                    throw new NonRetryableUploadException(
+                            "CDN upload response missing x-encrypted-param header");
+                }
+                return encryptedParam;
+            } catch (NonRetryableUploadException e) {
+                // 4xx / missing-header → abort immediately (typed, no string matching).
+                throw e;
+            } catch (IOException e) {
+                lastError = new WeixinIlinkException("CDN upload IO error: " + e.getMessage(), e);
+                log.warn("CDN upload attempt {}/{} IO error: {}",
+                        attempt, CDN_UPLOAD_MAX_RETRIES, e.getMessage());
+            }
+        }
+        throw lastError != null ? lastError
+                : new WeixinIlinkException("CDN upload failed after " + CDN_UPLOAD_MAX_RETRIES + " attempts");
+    }
+
+    private static String headerOrBody(Response resp) {
+        String h = resp.header("x-error-message");
+        if (h != null && !h.isBlank()) {
+            return h;
+        }
+        try {
+            ResponseBody rb = resp.body();
+            return rb != null ? rb.string() : "status " + resp.code();
+        } catch (IOException e) {
+            return "status " + resp.code();
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // Media crypto helpers (package-private for unit testing)
+    // ---------------------------------------------------------------------
+
+    /** AES-128-ECB / PKCS5Padding encrypt with the raw 16-byte key. */
+    static byte[] aesEcbEncrypt(byte[] plaintext, byte[] key) {
+        try {
+            Cipher cipher = Cipher.getInstance("AES/ECB/PKCS5Padding");
+            cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(key, "AES"));
+            return cipher.doFinal(plaintext);
+        } catch (Exception e) {
+            throw new WeixinIlinkException("AES-128-ECB encrypt failed: " + e.getMessage(), e);
+        }
+    }
+
+    /** AES-128-ECB / PKCS5Padding decrypt — test seam for round-trip assertions. */
+    static byte[] aesEcbDecrypt(byte[] ciphertext, byte[] key) {
+        try {
+            Cipher cipher = Cipher.getInstance("AES/ECB/PKCS5Padding");
+            cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(key, "AES"));
+            return cipher.doFinal(ciphertext);
+        } catch (Exception e) {
+            throw new WeixinIlinkException("AES-128-ECB decrypt failed: " + e.getMessage(), e);
+        }
+    }
+
+    private static byte[] randomBytes(int n) {
+        byte[] b = new byte[n];
+        SECURE_RANDOM.nextBytes(b);
+        return b;
+    }
+
+    private static String md5Hex(byte[] data) {
+        try {
+            return toHex(MessageDigest.getInstance("MD5").digest(data));
+        } catch (Exception e) {
+            throw new WeixinIlinkException("md5 failed: " + e.getMessage(), e);
+        }
+    }
+
+    private static String toHex(byte[] bytes) {
+        StringBuilder sb = new StringBuilder(bytes.length * 2);
+        for (byte b : bytes) {
+            sb.append(Character.forDigit((b >> 4) & 0xF, 16));
+            sb.append(Character.forDigit(b & 0xF, 16));
+        }
+        return sb.toString();
+    }
+
+    /** Per-message client id (reference: generateId("openclaw-weixin")). */
+    private static String newClientId() {
+        return "skillforge-weixin-" + java.util.UUID.randomUUID();
     }
 
     // ---------------------------------------------------------------------
@@ -233,8 +542,12 @@ public class WeixinIlinkClient {
     }
 
     /**
-     * Build a request with the 4 iLink auth headers. {@code X-WECHAT-UIN} is regenerated per
-     * request = base64(String(randomUint32())). The bot token is never logged.
+     * Build a JSON CGI request with the iLink auth + app-identity headers. {@code X-WECHAT-UIN} is
+     * regenerated per request = base64(String(randomUint32())). {@code iLink-App-Id} +
+     * {@code iLink-App-ClientVersion} mirror the reference client and are sent on every JSON call
+     * (slice 1 + slice 2) for consistency — the CDN upload POST in {@link #uploadCiphertextToCdn}
+     * deliberately carries NONE of these (only Content-Type: application/octet-stream). The bot
+     * token is never logged.
      */
     private Request.Builder authedRequest(String url, String botToken) {
         return new Request.Builder()
@@ -242,6 +555,8 @@ public class WeixinIlinkClient {
                 .header("Content-Type", "application/json")
                 .header("AuthorizationType", "ilink_bot_token")
                 .header("X-WECHAT-UIN", newWechatUin())
+                .header("iLink-App-Id", ILINK_APP_ID)
+                .header("iLink-App-ClientVersion", ILINK_APP_CLIENT_VERSION)
                 .header("Authorization", "Bearer " + (botToken == null ? "" : botToken));
     }
 
@@ -331,6 +646,17 @@ public class WeixinIlinkClient {
 
         public WeixinIlinkException(String message, Throwable cause) {
             super(message, cause);
+        }
+    }
+
+    /**
+     * CDN upload failure that must NOT be retried (4xx client error / missing x-encrypted-param).
+     * Carried by type so {@link #uploadCiphertextToCdn} aborts immediately without fragile
+     * message-substring matching.
+     */
+    static final class NonRetryableUploadException extends WeixinIlinkException {
+        NonRetryableUploadException(String message) {
+            super(message);
         }
     }
 }

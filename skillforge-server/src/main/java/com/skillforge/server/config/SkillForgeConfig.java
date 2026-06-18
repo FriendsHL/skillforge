@@ -102,7 +102,11 @@ import com.skillforge.server.flywheel.run.FlywheelRunStepRepository;
 import com.skillforge.server.repository.SessionAnnotationRepository;
 import com.skillforge.server.subagent.AgentRoster;
 import com.skillforge.server.subagent.CollabRunService;
+import com.skillforge.server.channel.ChannelConfigService;
+import com.skillforge.server.channel.platform.weixin.WeixinChannelAdapter;
+import com.skillforge.server.repository.ChannelConversationRepository;
 import com.skillforge.server.subagent.SubAgentRegistry;
+import com.skillforge.server.tool.channel.SendChannelFileTool;
 import org.springframework.context.annotation.Lazy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -409,6 +413,28 @@ public class SkillForgeConfig {
                 new com.skillforge.server.tool.AddEvalScenarioTool(baseScenarioService, objectMapper);
         skillRegistry.registerTool(tool);
         log.info("Registered AddEvalScenarioTool into SkillRegistry");
+        return tool;
+    }
+
+    /**
+     * WECHAT-CHANNEL slice 2 (Option b): SendChannelFile lets an agent push a local file/image to
+     * the user over the channel bound to the current session (currently WeChat). Reads are confined
+     * to the chat-attachments root + system temp dir (path-containment guard) since {@code file_path}
+     * comes from the LLM.
+     */
+    @Bean
+    public SendChannelFileTool sendChannelFileTool(
+            ChannelConversationRepository conversationRepository,
+            ChannelConfigService channelConfigService,
+            WeixinChannelAdapter weixinChannelAdapter,
+            ObjectMapper objectMapper,
+            SkillRegistry skillRegistry,
+            @Value("${skillforge.chat.attachments.root:./data/chat-attachments}") String attachmentsRoot) {
+        SendChannelFileTool tool = new SendChannelFileTool(
+                conversationRepository, channelConfigService, weixinChannelAdapter,
+                objectMapper, attachmentsRoot);
+        skillRegistry.registerTool(tool);
+        log.info("Registered SendChannelFileTool into SkillRegistry");
         return tool;
     }
 

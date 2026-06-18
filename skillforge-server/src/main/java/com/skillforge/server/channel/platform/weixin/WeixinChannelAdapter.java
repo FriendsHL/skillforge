@@ -136,6 +136,42 @@ public class WeixinChannelAdapter implements ChannelAdapter, ChannelPushConnecto
         }
     }
 
+    /**
+     * Agent-tool entry point (slice 2): upload {@code fileBytes} to the WeChat CDN and send it to
+     * {@code toUserId} as an image (screenshots) or generic file attachment, routing by
+     * {@code mimeType}. Reuses the same bot_token / baseurl decode as {@link #deliver}.
+     *
+     * <p>{@code contextToken} is best-effort: the agent-tool path has no specific inbound message in
+     * scope (unlike {@code deliver}, which decodes it from the encoded platformMessageId), so it is
+     * usually empty here. The protocol tolerates an empty context_token (the media still sends; it is
+     * just not associated with a specific inbound conversation window).
+     *
+     * @param caption optional text caption; when non-blank it is sent as a SEPARATE prior text
+     *                message (mirrors the reference, which sends caption as its own item).
+     * @throws WeixinIlinkClient.WeixinIlinkException on missing token / upload / send failure.
+     */
+    public void sendMediaToConversation(String toUserId, String contextToken, byte[] fileBytes,
+                                        String fileName, String mimeType, String caption,
+                                        ChannelConfigDecrypted config) {
+        String botToken = resolveBotToken(config);
+        if (botToken == null || botToken.isBlank()) {
+            throw new WeixinIlinkClient.WeixinIlinkException(
+                    "weixin send: missing bot_token (re-scan required)");
+        }
+        String baseurl = resolveBaseurl(config);
+
+        if (caption != null && !caption.isBlank()) {
+            client.sendText(toUserId, contextToken, caption, botToken, baseurl);
+        }
+
+        boolean asImage = mimeType != null && mimeType.toLowerCase().startsWith("image/");
+        if (asImage) {
+            client.sendImage(toUserId, contextToken, fileBytes, fileName, botToken, baseurl);
+        } else {
+            client.sendFile(toUserId, contextToken, fileBytes, fileName, botToken, baseurl);
+        }
+    }
+
     @Override
     public void start(ChannelConfigDecrypted config) {
         connector.start(config);
