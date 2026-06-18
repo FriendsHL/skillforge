@@ -455,6 +455,137 @@ class EvolveLoopWorkflowTest {
         assertThat(nthInput(calls, "TriggerAbEval", 1).get("evalScenarioIds")).isNull();
     }
 
+    // ───────────────────────── EVOLVE-CANDIDATE-GROUNDING (Phase 2) ─────────────────────────
+
+    @Test
+    @DisplayName("FR2/FR3: candPrompt carries failureDetails + knownFailingScenarioIds from harvest")
+    void candPromptCarriesFailureDetailAndKnownFailingIds() throws Exception {
+        List<String> prompts = new ArrayList<>();
+        WorkflowAgentInvoker agent = (prompt, opts, stepIndex) -> {
+            prompts.add(prompt);
+            return cand(Map.of("promptVersionId", "cand-1"), List.of("prompt"), "fix", 1);
+        };
+        List<Object[]> calls = new ArrayList<>();
+        Map<String, Object> harvested = new LinkedHashMap<>();
+        harvested.put("agentId", "7");
+        harvested.put("scenarioIds", List.of("bad-1", "bad-2"));
+        harvested.put("count", 2);
+        Map<String, Object> d1 = new LinkedHashMap<>();
+        d1.put("id", "bad-1");
+        d1.put("name", "case-1");
+        d1.put("errorSignature", "ENOENT-write");
+        d1.put("taskSummary", "fix the file write");
+        d1.put("extractionRationale", "FileWrite kept failing");
+        harvested.put("failureDetails", List.of(d1));
+        WorkflowToolInvoker tools = standardTools(calls,
+                List.of(issue("i1", "high", 3, 0.9, "prompt", null)),
+                input -> abWin(70.0, 85.0), harvested);
+
+        run("evolve-grounding", args(1), agent, tools);
+
+        assertThat(prompts).hasSize(1);
+        assertThat(prompts.get(0)).contains("failureDetails");
+        assertThat(prompts.get(0)).contains("ENOENT-write");
+        assertThat(prompts.get(0)).contains("knownFailingScenarioIds");
+        assertThat(prompts.get(0)).contains("bad-1").contains("bad-2");
+    }
+
+    @Test
+    @DisplayName("INV-4: empty harvest → candPrompt has NO failureDetails / knownFailingScenarioIds keys (graceful degrade)")
+    void candPromptOmitsGroundingWhenHarvestEmpty() throws Exception {
+        List<String> prompts = new ArrayList<>();
+        WorkflowAgentInvoker agent = (prompt, opts, stepIndex) -> {
+            prompts.add(prompt);
+            return cand(Map.of("promptVersionId", "cand-1"), List.of("prompt"), "fix", 1);
+        };
+        List<Object[]> calls = new ArrayList<>();
+        WorkflowToolInvoker tools = standardTools(calls,
+                List.of(issue("i1", "high", 3, 0.9, "prompt", null)),
+                input -> abWin(70.0, 85.0), null);   // standardTools → empty harvested
+
+        run("evolve-grounding-empty", args(1), agent, tools);
+
+        assertThat(prompts.get(0)).doesNotContain("failureDetails=");
+        assertThat(prompts.get(0)).doesNotContain("knownFailingScenarioIds=");
+    }
+
+    @Test
+    @DisplayName("FR1: iter≥2 history carries prior reconciliation + per-case regression rationale (not just name)")
+    void historyCarriesReconciliationAndRationale() throws Exception {
+        List<String> prompts = new ArrayList<>();
+        int[] seq = {0};
+        WorkflowAgentInvoker agent = (prompt, opts, stepIndex) -> {
+            prompts.add(prompt);
+            seq[0]++;
+            return cand(Map.of("promptVersionId", "cand-" + seq[0]), List.of("prompt"),
+                    "change-" + seq[0], seq[0]);
+        };
+        List<Object[]> calls = new ArrayList<>();
+        WorkflowToolInvoker tools = standardTools(calls,
+                List.of(issue("i1", "high", 3, 0.9, "prompt", null)),
+                input -> {
+                    Map<String, Object> r = abWin(70.0, 70.0 + 10.0 * candN(input));
+                    Map<String, Object> flips = new LinkedHashMap<>();
+                    flips.put("regressed", List.of(Map.of(
+                            "scenarioId", "s9", "scenarioName", "case-9",
+                            "rationale", "broke because the new rule over-matched")));
+                    flips.put("improved", List.of());
+                    flips.put("regressedTotal", 1);
+                    flips.put("improvedTotal", 0);
+                    r.put("perScenarioFlips", flips);
+                    return r;
+                }, null);
+
+        run("evolve-fr1", args(2), agent, tools);
+
+        // iter2 prompt: history carries the prior reconciliation (from ReconcilePrediction stub)
+        // + the per-case regression rationale + scenarioId (not just the bare name).
+        String p2 = prompts.get(1);
+        assertThat(p2).contains("perCaseRegressedDetail");
+        assertThat(p2).contains("broke because the new rule over-matched");
+        assertThat(p2).contains("\"scenarioId\":\"s9\"");
+        assertThat(p2).contains("reconciliation");
+        // ReconcilePrediction stub returns hits=[s1], confidence 1.0.
+        assertThat(p2).contains("\"hits\":[\"s1\"]");
+    }
+
+    @Test
+    @DisplayName("FR3: candidate targetScenarioIds threads through to the RecordIteration sidecar")
+    void targetScenarioIdsRecorded() throws Exception {
+        WorkflowAgentInvoker agent = (prompt, opts, stepIndex) -> {
+            Map<String, Object> c = cand(Map.of("promptVersionId", "cand-1"), List.of("prompt"), "fix", 1);
+            c.put("targetScenarioIds", List.of("bad-1", "bad-2"));
+            return c;
+        };
+        List<Object[]> calls = new ArrayList<>();
+        WorkflowToolInvoker tools = standardTools(calls,
+                List.of(issue("i1", "high", 3, 0.9, "prompt", null)),
+                input -> abWin(70.0, 85.0), null);
+
+        run("evolve-target-sidecar", args(1), agent, tools);
+
+        Map<String, Object> rec = nthInput(calls, "RecordIteration", 1);
+        @SuppressWarnings("unchecked")
+        List<Object> tids = (List<Object>) rec.get("targetScenarioIds");
+        assertThat(tids).containsExactly("bad-1", "bad-2");
+    }
+
+    @Test
+    @DisplayName("FR3: candidate WITHOUT targetScenarioIds → RecordIteration records [] (no crash)")
+    void targetScenarioIdsDefaultsEmpty() throws Exception {
+        List<Object[]> calls = new ArrayList<>();
+        WorkflowToolInvoker tools = standardTools(calls,
+                List.of(issue("i1", "high", 3, 0.9, "prompt", null)),
+                input -> abWin(70.0, 85.0), null);
+
+        run("evolve-target-default", args(1), candSeqAgent(), tools);   // candSeqAgent emits no targetScenarioIds
+
+        Map<String, Object> rec = nthInput(calls, "RecordIteration", 1);
+        @SuppressWarnings("unchecked")
+        List<Object> tids = (List<Object>) rec.get("targetScenarioIds");
+        assertThat(tids).isEmpty();
+    }
+
     @Test
     @DisplayName("F4: win-streak only — cachedBaselineScore+priorWinnerAbRunId after a keep; fresh two-arm after a reject")
     void winStreakBaselineCache() throws Exception {

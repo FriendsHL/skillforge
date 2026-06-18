@@ -226,6 +226,58 @@ class RecordIterationToolTest {
     }
 
     @Test
+    @DisplayName("FR3: targetScenarioIds (a JS array → Java List) is stored verbatim as a JSON array sidecar")
+    void recordsIteration_targetScenarioIdsSidecar() {
+        when(flywheelRunService.findById("evolve-1")).thenReturn(Optional.of(evolveRun("evolve-1")));
+        when(flywheelRunService.appendEvolveIterationStep(eq("evolve-1"), eq(6), any(JsonNode.class)))
+                .thenReturn("step-6");
+
+        Map<String, Object> input = new LinkedHashMap<>();
+        input.put("evolveRunId", "evolve-1");
+        input.put("iteration", 6);
+        input.put("surface", "agent");
+        input.put("changeDesc", "targeted additive rule");
+        input.put("candidateId", "ab-6");
+        input.put("kept", true);
+        input.put("targetScenarioIds", java.util.List.of("bad-1", "bad-2"));
+
+        SkillResult result = run(input);
+
+        assertThat(result.isSuccess()).isTrue();
+        ArgumentCaptor<JsonNode> payload = ArgumentCaptor.forClass(JsonNode.class);
+        verify(flywheelRunService).appendEvolveIterationStep(eq("evolve-1"), eq(6), payload.capture());
+        JsonNode p = payload.getValue();
+        assertThat(p.path("targetScenarioIds").isArray()).isTrue();
+        assertThat(p.path("targetScenarioIds").toString()).isEqualTo("[\"bad-1\",\"bad-2\"]");
+    }
+
+    @Test
+    @DisplayName("FR3: empty targetScenarioIds list → recorded as empty array, no crash")
+    void recordsIteration_targetScenarioIdsEmpty() {
+        when(flywheelRunService.findById("evolve-1")).thenReturn(Optional.of(evolveRun("evolve-1")));
+        when(flywheelRunService.appendEvolveIterationStep(eq("evolve-1"), eq(7), any(JsonNode.class)))
+                .thenReturn("step-7");
+
+        Map<String, Object> input = new LinkedHashMap<>();
+        input.put("evolveRunId", "evolve-1");
+        input.put("iteration", 7);
+        input.put("surface", "agent");
+        input.put("changeDesc", "no specific target");
+        input.put("candidateId", "ab-7");
+        input.put("kept", false);
+        input.put("targetScenarioIds", java.util.List.of());
+
+        SkillResult result = run(input);
+
+        assertThat(result.isSuccess()).isTrue();
+        ArgumentCaptor<JsonNode> payload = ArgumentCaptor.forClass(JsonNode.class);
+        verify(flywheelRunService).appendEvolveIterationStep(eq("evolve-1"), eq(7), payload.capture());
+        JsonNode p = payload.getValue();
+        assertThat(p.path("targetScenarioIds").isArray()).isTrue();
+        assertThat(p.path("targetScenarioIds").size()).isZero();
+    }
+
+    @Test
     @DisplayName("run not found → validation error, no step appended")
     void runNotFound_validationError() {
         when(flywheelRunService.findById("missing")).thenReturn(Optional.empty());

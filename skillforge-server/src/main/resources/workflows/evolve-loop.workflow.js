@@ -19,7 +19,12 @@ var CAND_SCHEMA = {
     candidateBundle: { type: 'object' },
     surfaces: { type: 'array', items: { type: 'string' } },
     changeDesc: { type: 'string' },
-    prediction: { type: 'object' }
+    prediction: { type: 'object' },
+    // EVOLVE-CANDIDATE-GROUNDING (FR3): the scenario id(s) this candidate targets
+    // (subset of knownFailingScenarioIds). Stamped onto the RecordIteration sidecar
+    // (free-schema, no migration). Optional — empty/absent when the leaf does not target
+    // a specific scenario.
+    targetScenarioIds: { type: 'array', items: { type: 'string' } }
   }
 }
 
@@ -235,7 +240,14 @@ phase('Evolve')
 var harvested = tool('ListActiveHarvestedScenarios', { agentId: agentIdStr })
 var targetScenarioIds = (harvested && harvested.scenarioIds && harvested.scenarioIds.length > 0)
   ? harvested.scenarioIds : null
-log('evolve-loop harvested-target-scenarios=' + (targetScenarioIds ? targetScenarioIds.length : 0))
+// EVOLVE-CANDIDATE-GROUNDING (FR2): capped per-badcase failure detail fed into the
+// candidate-gen leaf so it diagnoses the real failures before proposing edits.
+// (INV-2 cap is enforced server-side in ListActiveHarvestedScenariosTool; INV-4: stays
+// null/empty when harvest is empty so we never feed empty detail.)
+var failureDetails = (harvested && harvested.failureDetails && harvested.failureDetails.length > 0)
+  ? harvested.failureDetails : null
+log('evolve-loop harvested-target-scenarios=' + (targetScenarioIds ? targetScenarioIds.length : 0)
+  + ' failure-details=' + (failureDetails ? failureDetails.length : 0))
 
 // carry-forward 状态: best 是「各面当前最优组合」bundle + 它的分数 (score=composite, weightedScore=
 // 加权主判据, generalRate/harvestRate=两子集分) + 测出它的 abRunId (F4: win-streak 时作
@@ -266,11 +278,21 @@ for (var iter = 1; iter <= maxIter; iter++) {
         bundle: best.bundle
       })
     + '\nallIssues=' + ctx.json(allIssuesBrief)
+    // EVOLVE-CANDIDATE-GROUNDING (FR2): capped per-badcase failure detail (errorSignature
+    // + 一行 task 摘要 + extractionRationale). 先逐条诊断这些真实失败, 再提编辑。INV-4: 仅在
+    // 非空时喂入 (空 harvest 时省略 key, 不喂空详情)。
+    + (failureDetails ? '\nfailureDetails=' + ctx.json(failureDetails) : '')
+    // EVOLVE-CANDIDATE-GROUNDING (FR3 / INV-3): 已知失败场景 id 集 —— prediction.flipToPass /
+    // riskToFail 必须从这个集合里挑真实 id, 不许瞎猜。
+    + (targetScenarioIds ? '\nknownFailingScenarioIds=' + ctx.json(targetScenarioIds) : '')
     + '\nhistory=' + ctx.json(history)
-    + '\n按你的 system_prompt: 综观 allIssues + currentBest + history, 自主判断本轮整体最该调'
-    + '哪个/哪几个面、怎么改, 把 weightedScore 往上推。对每个选中面调一次 GenerateCandidate'
-    + '(传 currentBest.bundle 里该面的基线指针), 组装 candidateBundle, 只输出'
-    + ' {candidateBundle, surfaces, changeDesc, prediction} 严格 JSON。'
+    + '\n按你的 system_prompt: 综观 allIssues + failureDetails + currentBest + history, 先逐条'
+    + '诊断 failureDetails 里的真实失败, 再自主判断本轮整体最该调哪个/哪几个面、怎么改, 把'
+    + ' weightedScore 往上推。对每个选中面调一次 GenerateCandidate(传 currentBest.bundle 里该面'
+    + '的基线指针), 组装 candidateBundle。编辑要最小/加性 (behavior_rule 优先追加靶向规则而非'
+    + '整体重写, prompt 限定 diff 规模)。prediction.flipToPass/riskToFail 从 knownFailingScenarioIds'
+    + '里挑真实 id。只输出 {candidateBundle, surfaces, changeDesc, prediction, targetScenarioIds}'
+    + ' 严格 JSON。'
   var cand = agent(candPrompt, { agentSlug: 'evolve-candidate-gen', schema: CAND_SCHEMA, phase: 'Evolve' })
 
   // whitelist 兜底 + 以 bundle 为权威重算实际改的面 (设计 §1/§3/R5)。allowed = SURFACES (全集)。
@@ -399,12 +421,22 @@ for (var iter = 1; iter <= maxIter; iter++) {
     prediction: cand.prediction,
     reconciliation: reconciliation,
     semanticDelta: ctx.json(semanticDeltas),
-    candidateBundle: candidateBundle
+    candidateBundle: candidateBundle,
+    // EVOLVE-CANDIDATE-GROUNDING (FR3): the scenario id(s) this candidate targets, stamped
+    // as a free-schema sidecar (no migration). Defaults to [] when the leaf didn't target.
+    targetScenarioIds: (cand && Array.isArray(cand.targetScenarioIds)) ? cand.targetScenarioIds : []
   })
 
   // per-case 回归名 (history grounding 给候选叶子当反例)。
   var perCaseRegressed = (res && res.perScenarioFlips && res.perScenarioFlips.regressed)
     ? res.perScenarioFlips.regressed.map(function (f) { return f.scenarioName || f.scenarioId })
+    : []
+  // EVOLVE-CANDIDATE-GROUNDING (FR1): 带上回归的 scenarioId + rationale (不只 name), 让下一轮
+  // 叶子看到"上轮为什么回归"; 以及上一轮 prediction 对账结果 (hits/misses/riskHits/surprises)。
+  var perCaseRegressedDetail = (res && res.perScenarioFlips && res.perScenarioFlips.regressed)
+    ? res.perScenarioFlips.regressed.map(function (f) {
+        return { scenarioId: f.scenarioId, scenarioName: f.scenarioName, rationale: f.rationale }
+      })
     : []
   history.push({
     iter: iter,
@@ -412,6 +444,8 @@ for (var iter = 1; iter <= maxIter; iter++) {
     weightedScore: candWeighted,
     delta: delta,
     perCaseRegressed: perCaseRegressed,
+    perCaseRegressedDetail: perCaseRegressedDetail,
+    reconciliation: reconciliation,
     kept: keptThis,
     keepReason: decision.reason
   })

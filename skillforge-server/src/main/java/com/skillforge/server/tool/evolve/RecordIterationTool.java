@@ -82,6 +82,8 @@ public class RecordIterationTool implements Tool {
                 + "- \"semanticDelta\" (optional, P1): the before→after change tuple "
                 + "{surface, before, after, diff, changeDesc} (from GetCandidateDiff) — stored verbatim "
                 + "for traceability.\n"
+                + "- \"targetScenarioIds\" (optional, EVOLVE-CANDIDATE-GROUNDING FR3): the harvested "
+                + "scenario id(s) this candidate targets — stored verbatim as a free-schema sidecar.\n"
                 + "Returns the recorded stepId.";
     }
 
@@ -144,6 +146,10 @@ public class RecordIterationTool implements Tool {
                         + "object {surface, before, after, diff, changeDesc}. Phase 2a multi-surface: "
                         + "a JSON-string-encoded ARRAY of those (one entry per changed surface), "
                         + "stored as an array via the String→readTree path."));
+        properties.put("targetScenarioIds", Map.of("type", "array",
+                "items", Map.of("type", "string"),
+                "description", "Optional (EVOLVE-CANDIDATE-GROUNDING FR3): the harvested scenario "
+                        + "id(s) this candidate targets, stored verbatim as a free-schema sidecar."));
 
         Map<String, Object> schema = new LinkedHashMap<>();
         schema.put("type", "object");
@@ -229,6 +235,9 @@ public class RecordIterationTool implements Tool {
             putJsonSidecar(payload, "reconciliation", input.get("reconciliation"));
             // P1 (evolve-loop): semantic delta (before→after) sidecar for traceability.
             putJsonSidecar(payload, "semanticDelta", input.get("semanticDelta"));
+            // EVOLVE-CANDIDATE-GROUNDING (FR3): targetScenarioIds sidecar (a JS array →
+            // Java List). Free-schema, no migration.
+            putJsonSidecar(payload, "targetScenarioIds", input.get("targetScenarioIds"));
 
             String stepId = flywheelRunService.appendEvolveIterationStep(evolveRunId, iteration, payload);
 
@@ -288,6 +297,12 @@ public class RecordIterationTool implements Tool {
         }
         if (raw instanceof Map<?, ?> map) {
             node.set(field, objectMapper.valueToTree(map));
+            return;
+        }
+        // A JS array arrives as a Java List/Collection (e.g. targetScenarioIds). valueToTree
+        // serialises it to a JSON array node verbatim.
+        if (raw instanceof Iterable<?> iterable) {
+            node.set(field, objectMapper.valueToTree(iterable));
             return;
         }
         String s = String.valueOf(raw).trim();
