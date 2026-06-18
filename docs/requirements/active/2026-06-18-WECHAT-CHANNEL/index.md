@@ -1,7 +1,7 @@
 # WECHAT-CHANNEL — 增加微信 channel
 
 > 创建：2026-06-18
-> 状态：prd-draft（**待用户拍路线**：路线 A 企业微信自建 / 路线 B openclaw-wechat bridge）
+> 状态：**路线已拍 = B-native**（SkillForge 原生实现 iLink 协议，2026-06-18）；prd-ready / tech-design design-draft（协议逆向，实现期实跑验证）。**待 go 实现**。
 > 模式：Full（新 channel 平台适配器 + 外部输入 + 验签/AES 解密 + 密钥；安全敏感）
 > 来源：用户「当前 channel 只支持飞书，要加微信」+ 三轮调研（SkillForge channel 架构 / 微信各形态 API / openclaw 怎么做）。
 
@@ -27,19 +27,22 @@
 
 **路线 A(企业微信自建应用)**——官方、稳、契合现有架构、无借壳。除非你明确要"用个人/公网微信 + 扫码绑定"的体验,才走 B。多数"团队内部 AI bot"场景 A 足够;要触达外部公网用户,A 还能叠"微信客服"(窗口受限)而不必上 B。
 
-## 待用户拍(gating 决策)
+## 路线已拍：B-native（2026-06-18）
 
-**bot 的用户是谁?** → 决定路线:
-- 企业成员 / 内部团队 → **路线 A**
-- 必须是你的个人微信 / 公网微信用户 + 扫码体验 → 路线 B
+用户用例：「用个人微信跟 SkillForge 沟通 + 后续发报告文件 + 本机部署」。→ A（企业微信）不满足（是另一个 App）;B-bridge 借壳 + 额外进程。
 
-拍完我再写该路线的 prd/tech-design(路线特定,现在写两条会浪费)。
+**选 B-native**：SkillForge 原生实现腾讯 ClawBot 的 **iLink HTTP JSON 协议**(社区逆向但可独立实现),落进现有 ChannelAdapter 架构,无 openclaw、无额外进程、本机可部署(出站 long-poll 无需公网回调)、支持发文件(item type4)。
+
+**eyes-open 取舍**:iLink-for-custom-backend 是社区逆向(非腾讯官方文档),腾讯可改/限流/停 → 写成独立 adapter 隔离影响。个人账号建议小号。详见 prd「风险」。
+
+prd/tech-design 见下，**待 go 实现**(Full pipeline)。
 
 ## 阅读顺序
 
-1. 本 index(方案 + 决策点)
-2. [mrd.md](mrd.md) — 用户诉求 + 三轮调研出处（含 SkillForge 扩展点 / 微信 API / openclaw 机制）
-3. prd.md / tech-design.md — **待路线拍定后补**
+1. 本 index(方案 + 路线决策)
+2. [prd.md](prd.md) — 目标/验收/风险/冒烟(B-native)
+3. [tech-design.md](tech-design.md) — iLink adapter 设计(扫码 + long-poll + send + 文件 CDN)+ 不变量 + 风险
+4. [mrd.md](mrd.md) — 用户诉求 + 三轮调研出处（SkillForge 扩展点 / 微信 API / openclaw 机制 / iLink 协议）
 
 ## 关联
 
