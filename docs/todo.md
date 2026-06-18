@@ -13,7 +13,7 @@
 | 2 | **AUTOEVOLVE-CLOSE-LOOP** | 闭环采纳 + 对靶改进 + benchmark 验证。P1/P2/G5/BC-M1/BC-M2a/engine-fix/阶段A 已交付，阶段B/G3/P3 未做 | Full | 部分交付 | P2 | Full | [需求包](requirements/active/2026-06-03-AUTOEVOLVE-CLOSE-LOOP/index.md) | 阶段B（EVOLVE-BADCASE-SENSITIVITY）等用户拍是否升 active |
 | 3 | **EVOLVE-JUDGE-GROUNDING** | 自进化判定优化（blog 复盘）。Phase 1 配对/comparative 判定**已交付**（复用 perScenarioFlips net-wins，治绝对打分噪声→0 赢家，无 schema 改） | Full | Phase 1 已交付 / Phase 2 见 #3b | P2 | Full | [需求包](requirements/active/2026-06-17-EVOLVE-JUDGE-GROUNDING/index.md) | — |
 | 3b | **EVOLVE-CANDIDATE-GROUNDING** | Phase 2：候选 per-badcase grounding + 最小 delta 编辑（治 live net -7 候选制造回归）。决策经 architect review，A+C-seam | Full | **Phase 2 已交付**（`775fe4df`，LIVE 冒烟 PASS）| P2 | Full | [需求包](requirements/active/2026-06-18-EVOLVE-CANDIDATE-GROUNDING/index.md) | 按退出标准跨 ≥3 轮干净 run 观察净回归/赢家；不达则升级（重开 bundle 设计，用户拍） |
-| 4 | **WECHAT-CHANNEL** | 加微信 channel。B-native iLink 原生 adapter。**Slice 1 已交付**（文本双向+扫码，commit `f19cb70d`，LIVE QR 冒烟过）| Full | Slice 1 已交付 / Slice 2-3 待做 | P2 | Full | [需求包](requirements/active/2026-06-18-WECHAT-CHANNEL/index.md) | ① 用户手机扫码验真端到端 ② Slice 2 文件发送(CDN/AES) ③ Slice 3 FE 扫码 UX |
+| 4 | **WECHAT-CHANNEL** | 加微信 channel。B-native iLink 原生 adapter。**Slice 1+2 已交付 + client_id 去重修复 + 异步续跑投递修复，全 LIVE 验证**（文本双向/扫码/文件图片发送/子Agent结果回投）| Full | Slice 1+2 交付 / Slice 3 待做 | P2 | Full | [需求包](requirements/active/2026-06-18-WECHAT-CHANNEL/index.md) | ① Slice 3 FE 扫码 UX + qr-login/start 自动建 config ② 微信原生视频(video_item) / 卡片中性模型 / ChannelPushService 见 backlog |
 | 5 | **AUTORESEARCH-OPTIMIZATION** | AUTOEVOLVING V2 (a) 子需求：autoResearch 外部调研（arxiv + GitHub trending）→ LLM 2-stage 抽取 → Iron Law 人审 → 自动建 backlog | Full | prd-draft (V2 排期) | P3 | Full | [需求包](requirements/active/2026-05-28-AUTORESEARCH-OPTIMIZATION/index.md) | PRD 已草拟，等 V1 后续 V2 启动 |
 
 ## 阻塞 / 待决策
@@ -27,6 +27,8 @@
 
 | ID | 完成日期 | Commit | 交付索引 |
 | --- | --- | --- | --- |
+| CHANNEL-ASYNC-DELIVERY（异步续跑结果投递回渠道 bug） | 2026-06-19 | `96d4de6e` | [delivery-index](delivery-index.md) |
+| WECHAT-CHANNEL Slice 2 文件发送 + client_id 去重修复 + 渠道标签 | 2026-06-19 | `850384de` / `9a6a03db` | [delivery-index](delivery-index.md) |
 | WECHAT-CHANNEL B-native Slice 1（iLink adapter 文本双向+扫码） | 2026-06-18 | `f19cb70d` | [delivery-index](delivery-index.md) |
 | EVOLVE-CANDIDATE-GROUNDING Phase 2（候选 grounding + 最小编辑） | 2026-06-18 | `775fe4df` | [delivery-index](delivery-index.md) |
 | EVOLVE-JUDGE-GROUNDING Phase 1（配对 net-wins 判据） | 2026-06-18 | `5be19db9` | [delivery-index](delivery-index.md) |
@@ -47,6 +49,8 @@
 | --- | --- | --- | --- |
 | **OUTCOMES-RUBRIC-FOUNDATION** | `t_rubric` entity + grader 隔离 audit（V1）/ AgentLoopEngine 第 5 轴 exit（V2）。DREAMING 姊妹包独立 ship | Full 候选 | 用户拍是否升 active |
 | **WF-CONCURRENT-PIPELINE** | 学 CC 并发 pipeline（stage 重叠/无 barrier）补 workflow 引擎（现 pipeline() 串行）。AUTOEVOLVING V2(d) | Full 候选 | V2 启动 / 多阶段 fan-out 链路成瓶颈时 |
+| **CHANNEL-RICH-MESSAGE** | 微信原生视频(iLink video_item，当前视频走 file type4) + 卡片中性模型(飞书原生交互卡片 + 微信降级 text/image，iLink 无 card/button) | Mid/Full 候选 | 有富消息/卡片诉求时 |
+| **CHANNEL-PUSH-SERVICE** | 通用「按 sessionId 主动推送」服务(外部事件/异步工具/agent out-of-band)。CHANNEL-ASYNC-DELIVERY 的 listener 是第一个客户，复用 ReplyDeliveryService；出现第二个客户再抽 | Mid 候选 | 第二个主动推送需求出现时 |
 | **WEBSEARCH-SEARXNG-BACKEND** | WebSearch SearXNG 自部署 backend。重要不紧急 | Mid 候选 | 每周搜索量/费用升高或隐私/内网诉求 |
 | **SANDBOX-EPHEMERAL-WORKDIR-DRY** | 抽 `EphemeralWorkdir` 小工具 DRY 掉 eval/sandbox 与 CodeSandboxTool 的临时 workdir 重复（~15 行）。ROI 低纯清理 | Solo/Light | 顺手或专门 refactor 时 |
 | **EVAL-DYNAMIC-USER-SIM** | 动态用户模拟多轮评测（Phase 2/3） | — | 见需求包 |
