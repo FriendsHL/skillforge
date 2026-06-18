@@ -15,6 +15,7 @@
 | 3b | **EVOLVE-CANDIDATE-GROUNDING** | Phase 2：候选 per-badcase grounding + 最小 delta 编辑（治 live net -7 候选制造回归）。决策经 architect review，A+C-seam | Full | **Phase 2 已交付**（`775fe4df`，LIVE 冒烟 PASS）| P2 | Full | [需求包](requirements/active/2026-06-18-EVOLVE-CANDIDATE-GROUNDING/index.md) | 按退出标准跨 ≥3 轮干净 run 观察净回归/赢家；不达则升级（重开 bundle 设计，用户拍） |
 | 4 | **WECHAT-CHANNEL** | 加微信 channel。B-native iLink 原生 adapter。**Slice 1+2 已交付 + client_id 去重修复 + 异步续跑投递修复，全 LIVE 验证**（文本双向/扫码/文件图片发送/子Agent结果回投）| Full | Slice 1+2 交付 / Slice 3 待做 | P2 | Full | [需求包](requirements/active/2026-06-18-WECHAT-CHANNEL/index.md) | ① Slice 3 FE 扫码 UX + qr-login/start 自动建 config ② 微信原生视频(video_item) / 卡片中性模型 / ChannelPushService 见 backlog |
 | 5 | **AUTORESEARCH-OPTIMIZATION** | AUTOEVOLVING V2 (a) 子需求：autoResearch 外部调研（arxiv + GitHub trending）→ LLM 2-stage 抽取 → Iron Law 人审 → 自动建 backlog | Full | prd-draft (V2 排期) | P3 | Full | [需求包](requirements/active/2026-05-28-AUTORESEARCH-OPTIMIZATION/index.md) | PRD 已草拟，等 V1 后续 V2 启动 |
+| 6 | **ACP-EXTERNAL-AGENT** | SkillForge 经 ACP 编排外部 coding agent（cc/codex）+ 全程可视。Track A=ACP client runner（控制+顶层执行流入 session+子agent计数）/ Track B=OTEL-NATIVE-TRACING（仿OTel→真OTLP，接 cc OTel 看子agent内部，TRACEPARENT 统一树） | Full | **立项/草案 未排期** | P3 | Full | [需求包](requirements/active/2026-06-19-ACP-EXTERNAL-AGENT/index.md) | 等排期 → Plan 对抗（先定 Track B 走 B1/B2/B3 + 权限策略 + adapter 部署形态）|
 
 ## 阻塞 / 待决策
 
