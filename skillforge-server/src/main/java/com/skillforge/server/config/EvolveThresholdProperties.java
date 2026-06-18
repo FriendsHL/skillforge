@@ -148,6 +148,38 @@ public class EvolveThresholdProperties {
     @DecimalMax("100.0")
     private Double targetWeightedScore;
 
+    // ── EVOLVE-JUDGE-GROUNDING Phase 1 (2026-06-18) — paired/comparative keep gate ──
+
+    /**
+     * Comparative keep gate (Q1/Q2): the candidate's paired net-wins
+     * ({@code improvedTotal − regressedTotal} over the same-scenario A/B) must be ≥ this
+     * many to be kept. The paired net-wins replaces the absolute weightedScore margin as
+     * the PRIMARY keep criterion ({@code weightedScore} stays advisory). Default 2 (loose,
+     * tightened later via historical replay calibration) — at n=18~36 with discordant pairs
+     * usually in single digits, a stricter gate would keep producing 0 winners. Negative
+     * would keep on a net loss — fail-fast at startup; 0 = keep any non-negative net.
+     */
+    @PositiveOrZero
+    private int minNetWins = 2;
+
+    /**
+     * Comparative keep gate (Q2): when {@code true}, the comparative verdict additionally
+     * requires a two-sided sign test on the discordant pair counts (improvedTotal vs
+     * regressedTotal) to pass at {@link #pairwiseAlpha}. Default {@code false} — at small n
+     * a strict p&lt;0.05 is rarely reachable and would continue the 0-winner problem, so the
+     * sign test is an OPTIONAL stricter gate layered on top of {@link #minNetWins}.
+     */
+    private boolean pairwiseSignTest = false;
+
+    /**
+     * Comparative keep gate (Q2): the two-sided sign-test significance level, used ONLY when
+     * {@link #pairwiseSignTest} is enabled. Must be in (0,1) — 0 / 1 make the test
+     * degenerate (never / always significant); fail-fast at startup on an out-of-range value.
+     */
+    @DecimalMin(value = "0.0", inclusive = false)
+    @DecimalMax(value = "1.0", inclusive = false)
+    private double pairwiseAlpha = 0.05;
+
     public double getPromptDeltaPp() {
         return promptDeltaPp;
     }
@@ -242,5 +274,29 @@ public class EvolveThresholdProperties {
 
     public void setTargetWeightedScore(Double targetWeightedScore) {
         this.targetWeightedScore = targetWeightedScore;
+    }
+
+    public int getMinNetWins() {
+        return minNetWins;
+    }
+
+    public void setMinNetWins(int minNetWins) {
+        this.minNetWins = minNetWins;
+    }
+
+    public boolean isPairwiseSignTest() {
+        return pairwiseSignTest;
+    }
+
+    public void setPairwiseSignTest(boolean pairwiseSignTest) {
+        this.pairwiseSignTest = pairwiseSignTest;
+    }
+
+    public double getPairwiseAlpha() {
+        return pairwiseAlpha;
+    }
+
+    public void setPairwiseAlpha(double pairwiseAlpha) {
+        this.pairwiseAlpha = pairwiseAlpha;
     }
 }

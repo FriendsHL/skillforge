@@ -183,6 +183,11 @@ skillforge:
       min-improve-pp: 0          # keep 防 temp=0 噪声: 候选 weightedScore 须 > best + 此值
       no-improve-streak-limit: 3 # 收敛停: 连续 N 轮无新 best 即停
       # target-weighted-score:   # 留空=不靠达标停(纯爬坡); 设 [0,100] 则达标即停
+      # EVOLVE-JUDGE-GROUNDING Phase 1: 配对 net-wins 主判据 (weightedScore 降 advisory)。
+      # keep ⟺ netWins(=improvedTotal-regressedTotal) >= min-net-wins [+ 可选符号检验]。
+      min-net-wins: 2            # 先松后紧: 默认 2, 按历史回放校准 (n=18~36 不一致对常个位数)
+      pairwise-sign-test: false  # 可选更严闸: 开则额外要两侧符号检验过 pairwise-alpha (默认关)
+      pairwise-alpha: 0.05       # 仅当 pairwise-sign-test=true 时生效, (0,1)
     # AUTOEVOLVE-CLOSE-LOOP Phase BC: repo-root prefix BadCaseHarvestService strips
     # from harvested span paths so fixtures become sandbox-relative and the task
     # is rebased to /tmp/eval/. The @Value default is a dev-machine path; override

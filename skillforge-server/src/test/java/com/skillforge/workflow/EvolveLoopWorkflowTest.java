@@ -75,7 +75,7 @@ class EvolveLoopWorkflowTest {
         // single convertible issue, weightedScore strictly increases each round → keep all.
         WorkflowToolInvoker tools = standardTools(calls,
                 List.of(issue("i1", "high", 3, 0.9, "prompt", null)),
-                input -> abBase(70.0, 70.0 + 10.0 * candN(input)), null);
+                input -> abWin(70.0, 70.0 + 10.0 * candN(input)), null);
 
         Object result = run("evolve-hc", args(3), agent, tools);
 
@@ -105,8 +105,9 @@ class EvolveLoopWorkflowTest {
                 List.of(issue("i1", "high", 3, 0.9, "prompt", null),
                         issue("i2", "medium", 2, 0.7, "behavior_rule", null)),
                 input -> {
-                    Map<String, Object> r = abBase(70.0, 70.0 + 10.0 * candN(input));
-                    // per-case regression so history.perCaseRegressed is non-empty.
+                    Map<String, Object> r = abWin(70.0, 70.0 + 10.0 * candN(input));
+                    // per-case regression so history.perCaseRegressed is non-empty (independent
+                    // of the keep verdict, which abWin sets explicitly).
                     Map<String, Object> flips = new LinkedHashMap<>();
                     flips.put("regressed", List.of(Map.of("scenarioId", "s9", "scenarioName", "case-9")));
                     flips.put("improved", List.of());
@@ -129,34 +130,90 @@ class EvolveLoopWorkflowTest {
     }
 
     @Test
-    @DisplayName("hill-climb: weightedScore improvement → kept=true")
-    void weightedScoreDrivesKeep_improve() throws Exception {
+    @DisplayName("comparative gate: net-wins significant (verdict 3:0) → kept=true; weightedScore still recorded (advisory)")
+    void comparativeVerdictDrivesKeep_significant() throws Exception {
         List<Object[]> calls = new ArrayList<>();
         WorkflowToolInvoker tools = standardTools(calls,
                 List.of(issue("i1", "high", 3, 0.9, "prompt", null)),
-                input -> abBase(70.0, 85.0), null);   // candidate 85 > baseline 70
+                input -> abWin(70.0, 85.0), null);   // EXPLICIT verdict 3:0 (net +3 ≥ minNetWins)
 
         Object result = run("evolve-keep", args(1), candSeqAgent(), tools);
         Scriptable summary = (Scriptable) result;
         assertThat(((Number) summary.get("kept", summary)).intValue()).isEqualTo(1);
         assertThat(nthInput(calls, "RecordIteration", 1).get("kept")).isEqualTo(Boolean.TRUE);
-        // weightedScore is recorded as the hill-climb keep judge.
+        // weightedScore is recorded as advisory (INV-3) — still in the trajectory, not the gate.
         assertThat(((Number) nthInput(calls, "RecordIteration", 1).get("weightedScore")).doubleValue())
                 .isEqualTo(85.0);
     }
 
     @Test
-    @DisplayName("hill-climb: weightedScore NOT above best+minImprove → kept=false")
-    void weightedScoreDrivesKeep_noImprove() throws Exception {
+    @DisplayName("comparative gate: tie verdict (net 0) → kept=false EVEN with weightedScore up (85 > 70)")
+    void comparativeVerdictDrivesKeep_tieRejectsDespiteScoreUp() throws Exception {
         List<Object[]> calls = new ArrayList<>();
         WorkflowToolInvoker tools = standardTools(calls,
                 List.of(issue("i1", "high", 3, 0.9, "prompt", null)),
-                input -> abBase(80.0, 80.0), null);   // candidate == baseline → no improvement
+                // weightedScore CLIMBS (70→85) but the paired verdict is a tie → must reject.
+                // This is the pivotal decoupling: the OLD weightedScore gate would have KEPT this.
+                input -> abTie(70.0, 85.0), null);
 
         Object result = run("evolve-nokeep", args(1), candSeqAgent(), tools);
         Scriptable summary = (Scriptable) result;
         assertThat(((Number) summary.get("kept", summary)).intValue()).isEqualTo(0);
         assertThat(nthInput(calls, "RecordIteration", 1).get("kept")).isEqualTo(Boolean.FALSE);
+    }
+
+    @Test
+    @DisplayName("comparative gate (load-bearing): weightedScore FLAT/BELOW best but verdict 3:0 → KEPT — net-wins is the gate, not score")
+    void comparativeVerdictDrivesKeep_keptDespiteWeightedScoreNotUp() throws Exception {
+        List<Object[]> calls = new ArrayList<>();
+        WorkflowToolInvoker tools = standardTools(calls,
+                List.of(issue("i1", "high", 3, 0.9, "prompt", null),
+                        issue("i2", "high", 3, 0.8, "prompt", null)),
+                input -> {
+                    int n = candN(input);
+                    // iter1: weighted 70→80, verdict 3:0 → keep, best.weightedScore becomes 80.
+                    // iter2: weighted 79 (BELOW best 80) but verdict 3:0 → MUST keep on net-wins
+                    //        alone. The old weightedScore gate (79 ≤ 80) would have REJECTED this.
+                    double w = n == 1 ? 80.0 : 79.0;
+                    Map<String, Object> r = abBase(70.0, w);
+                    r.put("comparativeVerdict", verdict(3, 0));
+                    return r;
+                }, null);
+
+        Object result = run("evolve-net-gate", args(2), candSeqAgent(), tools);
+        Scriptable summary = (Scriptable) result;
+        assertThat(((Number) summary.get("kept", summary)).intValue()).isEqualTo(2);
+        assertThat(nthInput(calls, "RecordIteration", 2).get("kept")).isEqualTo(Boolean.TRUE);
+        // iter2 recorded weightedScore is the below-best 79 (advisory) yet it was kept.
+        assertThat(((Number) nthInput(calls, "RecordIteration", 2).get("weightedScore")).doubleValue())
+                .isEqualTo(79.0);
+    }
+
+    @Test
+    @DisplayName("comparative gate (degrade): valid weightedScore but comparativeVerdict ABSENT → rejected, no crash")
+    void comparativeVerdictAbsent_degradesToReject() throws Exception {
+        List<Object[]> calls = new ArrayList<>();
+        WorkflowToolInvoker tools = standardTools(calls,
+                List.of(issue("i1", "high", 3, 0.9, "prompt", null),
+                        issue("i2", "high", 3, 0.8, "prompt", null)),
+                input -> {
+                    int n = candN(input);
+                    // iter1 keeps (explicit verdict) so best.weightedScore is seeded non-null;
+                    // iter2 has a valid climbing weightedScore but NO comparativeVerdict → the
+                    // graceful-degrade path must REJECT (not keep, not crash). Locks the silent
+                    // 0-winner failure mode: absent paired data never keeps on score alone.
+                    if (n == 1) {
+                        return abWin(70.0, 80.0);
+                    }
+                    Map<String, Object> r = abBase(80.0, 95.0);   // weightedScore climbs to 95
+                    r.remove("comparativeVerdict");               // explicitly ABSENT
+                    return r;
+                }, null);
+
+        Object result = run("evolve-degrade-reject", args(2), candSeqAgent(), tools);
+        Scriptable summary = (Scriptable) result;
+        assertThat(((Number) summary.get("kept", summary)).intValue()).isEqualTo(1);   // only iter1
+        assertThat(nthInput(calls, "RecordIteration", 2).get("kept")).isEqualTo(Boolean.FALSE);
     }
 
     @Test
@@ -167,8 +224,11 @@ class EvolveLoopWorkflowTest {
         WorkflowToolInvoker tools = standardTools(calls,
                 List.of(issue("i1", "high", 3, 0.9, "prompt", null)),
                 input -> {
-                    Map<String, Object> r = abBase(70.0, candN(input) == 1 ? 80.0 : 80.0);
+                    int n = candN(input);
+                    Map<String, Object> r = abBase(70.0, 80.0);
                     r.put("thresholds", hillThresholds(2, null));   // streak limit 2
+                    // iter1 wins its pairing; iter2+ tie vs the carried best → no improve.
+                    r.put("comparativeVerdict", n == 1 ? verdict(3, 0) : verdict(0, 0));
                     return r;
                 }, null);
 
@@ -191,7 +251,7 @@ class EvolveLoopWorkflowTest {
         WorkflowToolInvoker tools = standardTools(calls,
                 List.of(issue("i1", "high", 3, 0.9, "prompt", null)),
                 input -> {
-                    Map<String, Object> r = abBase(70.0, 90.0);   // 90 >= target 85
+                    Map<String, Object> r = abWin(70.0, 90.0);   // 90 >= target 85; verdict keeps
                     r.put("thresholds", hillThresholds(3, 85.0));  // target 85
                     return r;
                 }, null);
@@ -210,7 +270,7 @@ class EvolveLoopWorkflowTest {
         WorkflowToolInvoker tools = standardTools(calls,
                 List.of(issue("i1", "high", 3, 0.9, "prompt", null)),
                 input -> {
-                    Map<String, Object> r = abBase(70.0, 82.0);
+                    Map<String, Object> r = abWin(70.0, 82.0);
                     // empty harvest: target rates null; weightedScore degenerates to general.
                     r.put("candidateTargetRate", null);
                     r.put("baselineTargetRate", null);
@@ -229,13 +289,17 @@ class EvolveLoopWorkflowTest {
     @DisplayName("S7: summary.best is the global maximum weightedScore (not the last round)")
     void bestIsGlobalMax() throws Exception {
         List<Object[]> calls = new ArrayList<>();
-        // iter1→85 keep, iter2→92 keep (new best), iter3→88 (< 92 → not kept).
+        // iter1→85 keep, iter2→92 keep (new best), iter3→88 (vs best 92 → net loss, not kept).
+        // The verdict models candidate-vs-current-best pairing: iter1/iter2 win their pairing,
+        // iter3 loses vs the carried best → comparative reject (the real A/B pairs vs best.bundle).
         WorkflowToolInvoker tools = standardTools(calls,
                 List.of(issue("i1", "high", 3, 0.9, "prompt", null)),
                 input -> {
                     int n = candN(input);
                     double w = n == 1 ? 85.0 : (n == 2 ? 92.0 : 88.0);
-                    return abBase(70.0, w);
+                    Map<String, Object> r = abBase(70.0, w);
+                    r.put("comparativeVerdict", n == 3 ? verdict(0, 2) : verdict(3, 0));
+                    return r;
                 }, null);
 
         Object result = run("evolve-best", args(3), candSeqAgent(), tools);
@@ -257,7 +321,9 @@ class EvolveLoopWorkflowTest {
         WorkflowToolInvoker tools = standardTools(calls,
                 List.of(issue("i1", "high", 3, 0.9, "prompt", null)),
                 input -> {
-                    Map<String, Object> r = abBase(70.0, 90.0);
+                    // verdict WINS (3:0) but measuredN 5 < minMeasuredN 10 → F3 (pred before the
+                    // comparative check, INV-1) rejects regardless of net-wins.
+                    Map<String, Object> r = abWin(70.0, 90.0);
                     r.put("measuredN", 5);   // < minMeasuredN 10
                     return r;
                 }, null);
@@ -280,13 +346,14 @@ class EvolveLoopWorkflowTest {
                     Map<String, Object> r;
                     if (n == 1) {
                         // iter1: anchor originalGeneral=80; candidate general 85 (above) → keep.
-                        r = abBase(70.0, 90.0);
+                        r = abWin(70.0, 90.0);
                         r.put("baselineGeneralRate", 80.0);
                         r.put("candidateGeneralRate", 85.0);
                     } else {
-                        // iter2: weightedScore improves vs best but general eroded to 70
-                        // (< 80 − 5 = 75) → anchor blocks keep.
-                        r = abBase(90.0, 99.0);
+                        // iter2: comparative verdict WINS (3:0) but general eroded to 70
+                        // (< 80 − 5 = 75) → the F6 anchor (pred before the comparative check,
+                        // INV-1) blocks keep regardless of net-wins.
+                        r = abWin(90.0, 99.0);
                         r.put("baselineGeneralRate", 85.0);
                         r.put("candidateGeneralRate", 70.0);
                     }
@@ -307,7 +374,7 @@ class EvolveLoopWorkflowTest {
         WorkflowToolInvoker tools = standardTools(calls,
                 List.of(issue("i1", "high", 3, 0.9, "prompt", null)),
                 input -> {
-                    Map<String, Object> r = abBase(70.0, 90.0);
+                    Map<String, Object> r = abWin(70.0, 90.0);
                     r.put("measuredN", 10);   // EXACTLY minMeasuredN 10 — guard is strictly `<` → keep
                     return r;
                 }, null);
@@ -330,13 +397,14 @@ class EvolveLoopWorkflowTest {
                     Map<String, Object> r;
                     if (n == 1) {
                         // iter1: anchor originalGeneral = baselineGeneralRate 80; candidate 85 → keep.
-                        r = abBase(70.0, 90.0);
+                        r = abWin(70.0, 90.0);
                         r.put("baselineGeneralRate", 80.0);
                         r.put("candidateGeneralRate", 85.0);
                     } else {
                         // iter2: general sits EXACTLY on the floor (80 − 5 = 75); anchor is strictly
-                        // `<`, so 75 is NOT below the floor → keep allowed.
-                        r = abBase(90.0, 99.0);
+                        // `<`, so 75 is NOT below the floor → falls through to the comparative
+                        // verdict (3:0 wins) → keep allowed.
+                        r = abWin(90.0, 99.0);
                         r.put("baselineGeneralRate", 85.0);
                         r.put("candidateGeneralRate", 75.0);
                     }
@@ -361,7 +429,7 @@ class EvolveLoopWorkflowTest {
         harvested.put("count", 1);
         WorkflowToolInvoker tools = standardTools(calls,
                 List.of(issue("i1", "high", 3, 0.9, "prompt", null)),
-                input -> abBase(70.0, 70.0 + 10.0 * candN(input)), harvested);
+                input -> abWin(70.0, 70.0 + 10.0 * candN(input)), harvested);
 
         run("evolve-f1", args(2), candSeqAgent(), tools);
 
@@ -381,10 +449,141 @@ class EvolveLoopWorkflowTest {
         List<Object[]> calls = new ArrayList<>();
         WorkflowToolInvoker tools = standardTools(calls,
                 List.of(issue("i1", "high", 3, 0.9, "prompt", null)),
-                input -> abBase(70.0, 85.0), null);   // standardTools → empty harvested
+                input -> abWin(70.0, 85.0), null);   // standardTools → empty harvested
 
         run("evolve-f1-empty", args(1), candSeqAgent(), tools);
         assertThat(nthInput(calls, "TriggerAbEval", 1).get("evalScenarioIds")).isNull();
+    }
+
+    // ───────────────────────── EVOLVE-CANDIDATE-GROUNDING (Phase 2) ─────────────────────────
+
+    @Test
+    @DisplayName("FR2/FR3: candPrompt carries failureDetails + knownFailingScenarioIds from harvest")
+    void candPromptCarriesFailureDetailAndKnownFailingIds() throws Exception {
+        List<String> prompts = new ArrayList<>();
+        WorkflowAgentInvoker agent = (prompt, opts, stepIndex) -> {
+            prompts.add(prompt);
+            return cand(Map.of("promptVersionId", "cand-1"), List.of("prompt"), "fix", 1);
+        };
+        List<Object[]> calls = new ArrayList<>();
+        Map<String, Object> harvested = new LinkedHashMap<>();
+        harvested.put("agentId", "7");
+        harvested.put("scenarioIds", List.of("bad-1", "bad-2"));
+        harvested.put("count", 2);
+        Map<String, Object> d1 = new LinkedHashMap<>();
+        d1.put("id", "bad-1");
+        d1.put("name", "case-1");
+        d1.put("errorSignature", "ENOENT-write");
+        d1.put("taskSummary", "fix the file write");
+        d1.put("extractionRationale", "FileWrite kept failing");
+        harvested.put("failureDetails", List.of(d1));
+        WorkflowToolInvoker tools = standardTools(calls,
+                List.of(issue("i1", "high", 3, 0.9, "prompt", null)),
+                input -> abWin(70.0, 85.0), harvested);
+
+        run("evolve-grounding", args(1), agent, tools);
+
+        assertThat(prompts).hasSize(1);
+        assertThat(prompts.get(0)).contains("failureDetails");
+        assertThat(prompts.get(0)).contains("ENOENT-write");
+        assertThat(prompts.get(0)).contains("knownFailingScenarioIds");
+        assertThat(prompts.get(0)).contains("bad-1").contains("bad-2");
+    }
+
+    @Test
+    @DisplayName("INV-4: empty harvest → candPrompt has NO failureDetails / knownFailingScenarioIds keys (graceful degrade)")
+    void candPromptOmitsGroundingWhenHarvestEmpty() throws Exception {
+        List<String> prompts = new ArrayList<>();
+        WorkflowAgentInvoker agent = (prompt, opts, stepIndex) -> {
+            prompts.add(prompt);
+            return cand(Map.of("promptVersionId", "cand-1"), List.of("prompt"), "fix", 1);
+        };
+        List<Object[]> calls = new ArrayList<>();
+        WorkflowToolInvoker tools = standardTools(calls,
+                List.of(issue("i1", "high", 3, 0.9, "prompt", null)),
+                input -> abWin(70.0, 85.0), null);   // standardTools → empty harvested
+
+        run("evolve-grounding-empty", args(1), agent, tools);
+
+        assertThat(prompts.get(0)).doesNotContain("failureDetails=");
+        assertThat(prompts.get(0)).doesNotContain("knownFailingScenarioIds=");
+    }
+
+    @Test
+    @DisplayName("FR1: iter≥2 history carries prior reconciliation + per-case regression rationale (not just name)")
+    void historyCarriesReconciliationAndRationale() throws Exception {
+        List<String> prompts = new ArrayList<>();
+        int[] seq = {0};
+        WorkflowAgentInvoker agent = (prompt, opts, stepIndex) -> {
+            prompts.add(prompt);
+            seq[0]++;
+            return cand(Map.of("promptVersionId", "cand-" + seq[0]), List.of("prompt"),
+                    "change-" + seq[0], seq[0]);
+        };
+        List<Object[]> calls = new ArrayList<>();
+        WorkflowToolInvoker tools = standardTools(calls,
+                List.of(issue("i1", "high", 3, 0.9, "prompt", null)),
+                input -> {
+                    Map<String, Object> r = abWin(70.0, 70.0 + 10.0 * candN(input));
+                    Map<String, Object> flips = new LinkedHashMap<>();
+                    flips.put("regressed", List.of(Map.of(
+                            "scenarioId", "s9", "scenarioName", "case-9",
+                            "rationale", "broke because the new rule over-matched")));
+                    flips.put("improved", List.of());
+                    flips.put("regressedTotal", 1);
+                    flips.put("improvedTotal", 0);
+                    r.put("perScenarioFlips", flips);
+                    return r;
+                }, null);
+
+        run("evolve-fr1", args(2), agent, tools);
+
+        // iter2 prompt: history carries the prior reconciliation (from ReconcilePrediction stub)
+        // + the per-case regression rationale + scenarioId (not just the bare name).
+        String p2 = prompts.get(1);
+        assertThat(p2).contains("perCaseRegressedDetail");
+        assertThat(p2).contains("broke because the new rule over-matched");
+        assertThat(p2).contains("\"scenarioId\":\"s9\"");
+        assertThat(p2).contains("reconciliation");
+        // ReconcilePrediction stub returns hits=[s1], confidence 1.0.
+        assertThat(p2).contains("\"hits\":[\"s1\"]");
+    }
+
+    @Test
+    @DisplayName("FR3: candidate targetScenarioIds threads through to the RecordIteration sidecar")
+    void targetScenarioIdsRecorded() throws Exception {
+        WorkflowAgentInvoker agent = (prompt, opts, stepIndex) -> {
+            Map<String, Object> c = cand(Map.of("promptVersionId", "cand-1"), List.of("prompt"), "fix", 1);
+            c.put("targetScenarioIds", List.of("bad-1", "bad-2"));
+            return c;
+        };
+        List<Object[]> calls = new ArrayList<>();
+        WorkflowToolInvoker tools = standardTools(calls,
+                List.of(issue("i1", "high", 3, 0.9, "prompt", null)),
+                input -> abWin(70.0, 85.0), null);
+
+        run("evolve-target-sidecar", args(1), agent, tools);
+
+        Map<String, Object> rec = nthInput(calls, "RecordIteration", 1);
+        @SuppressWarnings("unchecked")
+        List<Object> tids = (List<Object>) rec.get("targetScenarioIds");
+        assertThat(tids).containsExactly("bad-1", "bad-2");
+    }
+
+    @Test
+    @DisplayName("FR3: candidate WITHOUT targetScenarioIds → RecordIteration records [] (no crash)")
+    void targetScenarioIdsDefaultsEmpty() throws Exception {
+        List<Object[]> calls = new ArrayList<>();
+        WorkflowToolInvoker tools = standardTools(calls,
+                List.of(issue("i1", "high", 3, 0.9, "prompt", null)),
+                input -> abWin(70.0, 85.0), null);
+
+        run("evolve-target-default", args(1), candSeqAgent(), tools);   // candSeqAgent emits no targetScenarioIds
+
+        Map<String, Object> rec = nthInput(calls, "RecordIteration", 1);
+        @SuppressWarnings("unchecked")
+        List<Object> tids = (List<Object>) rec.get("targetScenarioIds");
+        assertThat(tids).isEmpty();
     }
 
     @Test
@@ -395,8 +594,10 @@ class EvolveLoopWorkflowTest {
                 List.of(issue("i1", "high", 3, 0.9, "prompt", null)),
                 input -> {
                     int n = candN(input);
-                    // iter1 keeps (80>70); iter2 rejected (75<80); iter3 fresh again.
-                    return abBase(70.0, n == 1 ? 80.0 : (n == 2 ? 75.0 : 90.0));
+                    // iter1 keeps; iter2 rejected (loses vs best); iter3 keeps again.
+                    Map<String, Object> r = abBase(70.0, n == 1 ? 80.0 : (n == 2 ? 75.0 : 90.0));
+                    r.put("comparativeVerdict", n == 2 ? verdict(0, 2) : verdict(3, 0));
+                    return r;
                 }, null);
 
         run("evolve-f4", args(3), candSeqAgent(), tools);
@@ -439,6 +640,7 @@ class EvolveLoopWorkflowTest {
                     r.put("baselineTargetRate", 60.0);
                     r.put("measuredN", 20);
                     r.put("thresholds", hillThresholds(3, null));
+                    r.put("comparativeVerdict", verdict(3, 0));   // net +3 → keep
                     return r;
                 }, null);
 
@@ -464,7 +666,7 @@ class EvolveLoopWorkflowTest {
         List<Object[]> calls = new ArrayList<>();
         WorkflowToolInvoker tools = standardTools(calls,
                 List.of(issue("i1", "high", 3, 0.9, "prompt", null)),
-                input -> abBase(70.0, 85.0), null);
+                input -> abWin(70.0, 85.0), null);
 
         run("evolve-multi", args(1), agent, tools);
 
@@ -505,7 +707,7 @@ class EvolveLoopWorkflowTest {
         int[] abCount = {0};
         WorkflowToolInvoker tools = standardTools(calls,
                 List.of(issue("i1", "high", 3, 0.9, "prompt", null)),
-                input -> { abCount[0]++; return abBase(70.0, 70.0 + 10.0 * abCount[0]); }, null);
+                input -> { abCount[0]++; return abWin(70.0, 70.0 + 10.0 * abCount[0]); }, null);
 
         Object result = run("evolve-cf", args(2), agent, tools);
         Scriptable summary = (Scriptable) result;
@@ -543,7 +745,7 @@ class EvolveLoopWorkflowTest {
                     if (abSeen.add(abRunId)) {
                         return Map.of("status", "running");   // first poll
                     }
-                    return abBase(70.0, 85.0);                 // second poll terminal
+                    return abWin(70.0, 85.0);                 // second poll terminal
                 }, null);
 
         run("evolve-poll", args(1), candSeqAgent(), tools);
@@ -628,7 +830,14 @@ class EvolveLoopWorkflowTest {
         };
     }
 
-    /** Terminal GetAbResult with the hill-climb fields (weightedScore = candidate side). */
+    /**
+     * Terminal GetAbResult with the hill-climb fields (weightedScore = candidate side).
+     * EVOLVE-JUDGE-GROUNDING Phase 1: keep is gated on the comparative verdict, NOT on the
+     * weightedScore. This base helper DELIBERATELY does NOT inject a comparativeVerdict — the
+     * comparative-win dimension is decoupled from the score dimension so each test sets the
+     * verdict EXPLICITLY (via {@link #abWin}/{@link #abTie}/{@code r.put("comparativeVerdict",
+     * verdict(...))}). A result without a verdict exercises the graceful-degrade reject path.
+     */
     private static Map<String, Object> abBase(double baselineWeighted, double candidateWeighted) {
         Map<String, Object> r = new LinkedHashMap<>();
         r.put("status", "COMPLETED");
@@ -647,6 +856,31 @@ class EvolveLoopWorkflowTest {
         return r;
     }
 
+    /** abBase + an EXPLICIT winning comparative verdict (net +3, significant) — the common case. */
+    private static Map<String, Object> abWin(double baselineWeighted, double candidateWeighted) {
+        Map<String, Object> r = abBase(baselineWeighted, candidateWeighted);
+        r.put("comparativeVerdict", verdict(3, 0));
+        return r;
+    }
+
+    /** abBase + an EXPLICIT tie verdict (net 0, not significant) — the no-keep case. */
+    private static Map<String, Object> abTie(double baselineWeighted, double candidateWeighted) {
+        Map<String, Object> r = abBase(baselineWeighted, candidateWeighted);
+        r.put("comparativeVerdict", verdict(0, 0));
+        return r;
+    }
+
+    /** A paired comparative verdict {netWins, improved/regressed, significant} (minNetWins=2). */
+    private static Map<String, Object> verdict(int improvedTotal, int regressedTotal) {
+        Map<String, Object> v = new LinkedHashMap<>();
+        int net = improvedTotal - regressedTotal;
+        v.put("netWins", net);
+        v.put("improvedTotal", improvedTotal);
+        v.put("regressedTotal", regressedTotal);
+        v.put("significant", net >= 2);   // minNetWins default 2, sign test off
+        return v;
+    }
+
     private static Map<String, Object> hillThresholds(int streakLimit, Double targetWeightedScore) {
         Map<String, Object> th = new LinkedHashMap<>();
         th.put("minMeasuredN", 10);
@@ -656,6 +890,10 @@ class EvolveLoopWorkflowTest {
         th.put("minImprovePp", 0.0);
         th.put("noImproveStreakLimit", streakLimit);
         th.put("targetWeightedScore", targetWeightedScore);   // null = no target-stop
+        // EVOLVE-JUDGE-GROUNDING Phase 1 comparative keep gate.
+        th.put("minNetWins", 2);
+        th.put("pairwiseSignTest", false);
+        th.put("pairwiseAlpha", 0.05);
         return th;
     }
 
