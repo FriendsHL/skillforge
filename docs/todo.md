@@ -15,7 +15,7 @@
 | 3b | **EVOLVE-CANDIDATE-GROUNDING** | Phase 2：候选 per-badcase grounding + 最小 delta 编辑（治 live net -7 候选制造回归）。决策经 architect review，A+C-seam | Full | **Phase 2 已交付**（`775fe4df`，LIVE 冒烟 PASS）| P2 | Full | [需求包](requirements/active/2026-06-18-EVOLVE-CANDIDATE-GROUNDING/index.md) | 按退出标准跨 ≥3 轮干净 run 观察净回归/赢家；不达则升级（重开 bundle 设计，用户拍） |
 | 4 | **WECHAT-CHANNEL** | 加微信 channel。B-native iLink 原生 adapter。**Slice 1+2 已交付 + client_id 去重修复 + 异步续跑投递修复，全 LIVE 验证**（文本双向/扫码/文件图片发送/子Agent结果回投）| Full | Slice 1+2 交付 / Slice 3 待做 | P2 | Full | [需求包](requirements/active/2026-06-18-WECHAT-CHANNEL/index.md) | ① Slice 3 FE 扫码 UX + qr-login/start 自动建 config ② 微信原生视频(video_item) / 卡片中性模型 / ChannelPushService 见 backlog |
 | 5 | **AUTORESEARCH-OPTIMIZATION** | AUTOEVOLVING V2 (a) 子需求：autoResearch 外部调研（arxiv + GitHub trending）→ LLM 2-stage 抽取 → Iron Law 人审 → 自动建 backlog | Full | prd-draft (V2 排期) | P3 | Full | [需求包](requirements/active/2026-05-28-AUTORESEARCH-OPTIMIZATION/index.md) | PRD 已草拟，等 V1 后续 V2 启动 |
-| 6 | **ACP-EXTERNAL-AGENT** | SkillForge 经 ACP 编排外部 coding agent（cc/codex）+ 全程可视。Track A=ACP client runner（控制+顶层执行流入 session+子agent计数）/ Track B=OTEL-NATIVE-TRACING（仿OTel→真OTLP，接 cc OTel 看子agent内部，TRACEPARENT 统一树） | Full | **立项/草案 未排期** | P3 | Full | [需求包](requirements/active/2026-06-19-ACP-EXTERNAL-AGENT/index.md) | 等排期 → Plan 对抗（先定 Track B 走 B1/B2/B3 + 权限策略 + adapter 部署形态）|
+| 6 | **ACP-EXTERNAL-AGENT** | SkillForge 经 ACP 编排外部 coding agent（cc/codex）+ 全程可视。**方案已固化**：Track A=ACP runner（控制+实时顶层流+用户确认感应+子agent计数）/ Track B=**B1 OTel 适配器**（cc OTel→翻译进现有 LlmSpan，~5–7d 零 blast radius，看 subagent 内部嵌套树）。B3 大爆破已否决(~70–100d 且非纯 OTel) | Full | **方案固化 / 未排期** | P3 | Full | [需求包](requirements/active/2026-06-19-ACP-EXTERNAL-AGENT/index.md) | 等排期 → Plan（权限策略 ask 模式 + adapter 部署形态 + 4 条诉求作验收 AC-1~6）|
 
 ## 阻塞 / 待决策
 
@@ -51,7 +51,7 @@
 | **OUTCOMES-RUBRIC-FOUNDATION** | `t_rubric` entity + grader 隔离 audit（V1）/ AgentLoopEngine 第 5 轴 exit（V2）。DREAMING 姊妹包独立 ship | Full 候选 | 用户拍是否升 active |
 | **WF-CONCURRENT-PIPELINE** | 学 CC 并发 pipeline（stage 重叠/无 barrier）补 workflow 引擎（现 pipeline() 串行）。AUTOEVOLVING V2(d) | Full 候选 | V2 启动 / 多阶段 fan-out 链路成瓶颈时 |
 | **CHANNEL-RICH-MESSAGE** | 微信原生视频(iLink video_item，当前视频走 file type4) + 卡片中性模型(飞书原生交互卡片 + 微信降级 text/image，iLink 无 card/button) | Mid/Full 候选 | 有富消息/卡片诉求时 |
-| **OTEL-NATIVE-TRACING** | 观测层「仿 OTel」→ 真 OTLP（B3 已拍）。加 OTel Java SDK + 双写 → 迁读路径 → **迁 evolve/eval trace 消费方**（TraceScenarioImportService 等，最易低估）→ OTLP receiver + TRACEPARENT 接 cc/codex 外部 OTel → 下线自定义 LlmSpan。ACP-EXTERNAL-AGENT Track B 的基座，平台级独立有价值 | Full 候选 | 排期或 ACP Track B 启动时 |
+| **OTEL-NATIVE-TRACING** | 观测层「仿 OTel」→ 真标准 OTLP（**长期/可选**，非 ACP 必需）。逐文件实测 **~70–100 dev-day** 且付全额成本仍非纯 OTel（kind/event/聚合/cache·cost/blob/origin 无 OTel 语义约定）→ **big-bang 否决**；要做只能渐进（双写→按簇迁读 + 自进化簇并行验证→ETL→下线 LlmSpan）。ACP 可观测已由 B1 适配器满足，此包仅为"标准互通/通用 OTLP 平台"战略目标 | Full 候选 | 仅当明确要标准 OTel 平台时 |
 | **CHANNEL-PUSH-SERVICE** | 通用「按 sessionId 主动推送」服务(外部事件/异步工具/agent out-of-band)。CHANNEL-ASYNC-DELIVERY 的 listener 是第一个客户，复用 ReplyDeliveryService；出现第二个客户再抽 | Mid 候选 | 第二个主动推送需求出现时 |
 | **WEBSEARCH-SEARXNG-BACKEND** | WebSearch SearXNG 自部署 backend。重要不紧急 | Mid 候选 | 每周搜索量/费用升高或隐私/内网诉求 |
 | **SANDBOX-EPHEMERAL-WORKDIR-DRY** | 抽 `EphemeralWorkdir` 小工具 DRY 掉 eval/sandbox 与 CodeSandboxTool 的临时 workdir 重复（~15 行）。ROI 低纯清理 | Solo/Light | 顺手或专门 refactor 时 |
