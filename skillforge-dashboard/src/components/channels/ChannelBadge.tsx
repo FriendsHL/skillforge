@@ -3,11 +3,12 @@ import './channels.css';
 const PLATFORM_LABEL: Record<string, string> = {
   web: 'web',
   feishu: '飞书',
+  weixin: '微信',
   telegram: 'Telegram',
   mock: 'mock',
 };
 
-const KNOWN_DOT_VARIANTS = new Set(['feishu', 'telegram', 'mock']);
+const KNOWN_DOT_VARIANTS = new Set(['feishu', 'weixin', 'telegram', 'mock']);
 
 function normalize(platform: string | null | undefined): string {
   if (!platform) return 'web';

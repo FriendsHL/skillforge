@@ -281,6 +281,7 @@
 }
 
 .platform-dot--feishu { background: #2a82e4; }
+.platform-dot--weixin { background: #07c160; }
 .platform-dot--telegram { background: #29abe2; }
 .platform-dot--mock { background: #6366f1; }
 .platform-dot--unknown { background: rgba(255, 255, 255, 0.25); }
