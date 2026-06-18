@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillforge.server.channel.ChannelConfigService;
 import com.skillforge.server.channel.platform.feishu.FeishuClient;
 import com.skillforge.server.channel.platform.telegram.TelegramBotClient;
+import com.skillforge.server.channel.platform.weixin.WeixinIlinkClient;
 import com.skillforge.server.channel.registry.ChannelAdapterRegistry;
 import com.skillforge.server.channel.spi.ChannelConfigDecrypted;
 import com.skillforge.server.entity.ChannelConfigEntity;
@@ -33,17 +34,20 @@ public class ChannelConfigController {
     private final ObjectMapper objectMapper;
     private final FeishuClient feishuClient;
     private final TelegramBotClient telegramBotClient;
+    private final WeixinIlinkClient weixinIlinkClient;
 
     public ChannelConfigController(ChannelConfigService configService,
                                    ChannelAdapterRegistry registry,
                                    ObjectMapper objectMapper,
                                    FeishuClient feishuClient,
-                                   TelegramBotClient telegramBotClient) {
+                                   TelegramBotClient telegramBotClient,
+                                   WeixinIlinkClient weixinIlinkClient) {
         this.configService = configService;
         this.registry = registry;
         this.objectMapper = objectMapper;
         this.feishuClient = feishuClient;
         this.telegramBotClient = telegramBotClient;
+        this.weixinIlinkClient = weixinIlinkClient;
     }
 
     @GetMapping
@@ -85,6 +89,7 @@ public class ChannelConfigController {
                 String detail = switch (e.getPlatform()) {
                     case "feishu" -> feishuClient.testConnection(config);
                     case "telegram" -> telegramBotClient.testConnection(config);
+                    case "weixin" -> weixinConnectionTest(config);
                     default -> throw new IllegalArgumentException("unsupported platform: " + e.getPlatform());
                 };
                 return ResponseEntity.ok(new ChannelTestResult(true, "Connection test passed: " + detail));
@@ -196,6 +201,31 @@ public class ChannelConfigController {
 
     public record ChannelTestResult(boolean ok, String message) {}
 
+    /**
+     * Weixin connection test. Runs on the Tomcat request thread, so it MUST NOT call the
+     * getupdates long-poll (server holds it ~35s → thread-pool exhaustion). Instead it checks
+     * bot_token presence and does a short, non-blocking reachability probe (get_bot_qrcode, which
+     * needs no token and returns immediately).
+     */
+    private String weixinConnectionTest(ChannelConfigDecrypted config) {
+        String botToken;
+        String baseurl;
+        try {
+            JsonNode creds = objectMapper.readTree(
+                    config.credentialsJson() == null ? "{}" : config.credentialsJson());
+            botToken = creds.path("bot_token").asText("");
+            baseurl = creds.path("baseurl").asText(null);
+        } catch (Exception e) {
+            throw new IllegalStateException("invalid weixin credentials json");
+        }
+        if (botToken.isBlank()) {
+            throw new IllegalStateException("no bot_token bound — scan QR to bind first");
+        }
+        // Short, non-blocking probe (no long-poll): confirms the endpoint is reachable.
+        weixinIlinkClient.getBotQrcode(baseurl);
+        return "weixin endpoint reachable (token bound)";
+    }
+
     private String resolveMode(String configJson) {
         String raw = configJson == null ? "{}" : configJson;
         try {
@@ -239,6 +269,7 @@ public class ChannelConfigController {
             Object value = req.credentials.get("encrypt_key");
             return value != null ? String.valueOf(value) : "";
         }
+        // weixin: no webhook (outbound long-poll only) → no signature secret.
         return "";
     }
 }

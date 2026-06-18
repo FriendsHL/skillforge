@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillforge.server.channel.ChannelConfigService;
 import com.skillforge.server.channel.platform.feishu.FeishuClient;
 import com.skillforge.server.channel.platform.telegram.TelegramBotClient;
+import com.skillforge.server.channel.platform.weixin.WeixinIlinkClient;
 import com.skillforge.server.channel.registry.ChannelAdapterRegistry;
 import com.skillforge.server.entity.ChannelConfigEntity;
 import org.junit.jupiter.api.DisplayName;
@@ -26,8 +27,9 @@ class ChannelConfigControllerTest {
         ChannelAdapterRegistry registry = mock(ChannelAdapterRegistry.class);
         FeishuClient feishuClient = mock(FeishuClient.class);
         TelegramBotClient telegramBotClient = mock(TelegramBotClient.class);
+        WeixinIlinkClient weixinIlinkClient = mock(WeixinIlinkClient.class);
         ChannelConfigController controller = new ChannelConfigController(
-                configService, registry, new ObjectMapper(), feishuClient, telegramBotClient);
+                configService, registry, new ObjectMapper(), feishuClient, telegramBotClient, weixinIlinkClient);
 
         ChannelConfigEntity existing = new ChannelConfigEntity();
         existing.setId(1L);
@@ -70,8 +72,9 @@ class ChannelConfigControllerTest {
         ChannelAdapterRegistry registry = mock(ChannelAdapterRegistry.class);
         FeishuClient feishuClient = mock(FeishuClient.class);
         TelegramBotClient telegramBotClient = mock(TelegramBotClient.class);
+        WeixinIlinkClient weixinIlinkClient = mock(WeixinIlinkClient.class);
         ChannelConfigController controller = new ChannelConfigController(
-                configService, registry, new ObjectMapper(), feishuClient, telegramBotClient);
+                configService, registry, new ObjectMapper(), feishuClient, telegramBotClient, weixinIlinkClient);
 
         ChannelConfigEntity existing = new ChannelConfigEntity();
         existing.setId(2L);
