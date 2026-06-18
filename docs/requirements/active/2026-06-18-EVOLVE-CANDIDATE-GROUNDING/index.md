@@ -1,7 +1,7 @@
 # EVOLVE-CANDIDATE-GROUNDING — 候选 per-badcase grounding（EVOLVE-JUDGE-GROUNDING Phase 2）
 
 > 创建：2026-06-18
-> 状态：design-approved（决策已定 + architect 对抗 review ENDORSE-WITH-CHANGES + 退出标准 ratify，可实现）
+> 状态：**Phase 2 已交付**（2026-06-18，commit `775fe4df`，LIVE 冒烟 PASS）。后续按退出标准跨 ≥3 轮观察净回归/赢家
 > 模式：Full（触碰核心 evolve-loop.workflow.js + 候选生成工具 + V-migration prompt；属核心测量/进化层）
 > 前身：[EVOLVE-JUDGE-GROUNDING](../2026-06-17-EVOLVE-JUDGE-GROUNDING/index.md) Phase 1（配对判据，已交付）的 Phase 2。
 
