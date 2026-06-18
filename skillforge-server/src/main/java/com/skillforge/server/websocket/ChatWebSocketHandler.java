@@ -41,6 +41,39 @@ public class ChatWebSocketHandler extends TextWebSocketHandler implements ChatEv
     private final Map<String, ChannelTurnContext> channelContexts = new ConcurrentHashMap<>();
 
     /**
+     * 3-state ownership marker for channel-turn delivery dedup (CHANNEL-ASYNC-DELIVERY).
+     * Read-and-removed atomically by {@code ChannelAsyncDeliveryListener} on
+     * {@code SessionLoopFinishedEvent} to decide whether the inbound path already owns
+     * (delivered, or decided not to deliver) this turn:
+     * <ul>
+     *   <li><b>absent</b> (no entry) — no inbound turn registered for this loop:
+     *       async-resumed loop (SubAgent / Team / scheduled / startup recovery) or a
+     *       non-channel session. The async listener takes ownership and delivers.</li>
+     *   <li><b>false</b> — inbound turn registered but the inbound path did NOT publish a
+     *       delivery (loop still running, or finished blank / error / waiting_user).
+     *       {@code sessionStatus} leaves it {@code false} on blank/error — it does NOT
+     *       remove the marker — so the async listener sees a non-null marker → skips. This
+     *       deliberately does NOT depend on {@code event.finalMessage} ≡ {@code ctx.finalText}
+     *       (two independent accumulators: ChatService loop result vs WS delta buffer). An
+     *       inbound turn is owned by the inbound path regardless of which accumulator ends
+     *       up blank — e.g. a stream interrupted mid-flight could leave {@code ctx.finalText}
+     *       blank while {@code event.finalMessage} is non-blank; leaving the marker
+     *       {@code false} guarantees the async path still skips it.</li>
+     *   <li><b>true</b> — inbound turn registered AND the inbound path published
+     *       {@link ChannelSessionOutputEvent} (delivery already in flight). The async
+     *       listener sees a non-null marker → skips (no double delivery).</li>
+     * </ul>
+     * The invariant: the async listener delivers iff {@code removeChannelTurnHandled}
+     * returns {@code null}. Any inbound {@code registerChannelTurn} leaves the key present
+     * (false or true); {@code sessionStatus} never removes it. The ONLY remover is the
+     * async listener itself, which fires every loop via {@code SessionLoopFinishedEvent} —
+     * so the entry is always cleaned exactly once per loop (no leak). ConcurrentHashMap
+     * provides the happens-before edge; same-session loop serialization (compaction stripe
+     * lock) means no two loops for one session race here.
+     */
+    private final Map<String, Boolean> channelTurnHandled = new ConcurrentHashMap<>();
+
+    /**
      * Tracks a channel turn across potentially multiple LLM streams.
      * {@code currentText} accumulates deltas for the in-progress stream.
      * {@code finalText} snapshots the last completed stream so that
@@ -101,6 +134,23 @@ public class ChatWebSocketHandler extends TextWebSocketHandler implements ChatEv
     public void registerChannelTurn(String sessionId, String platformMessageId, String ackReactionId,
                                     String triggererOpenId) {
         channelContexts.put(sessionId, new ChannelTurnContext(platformMessageId, ackReactionId, triggererOpenId));
+        // Mark this turn as inbound-owned (not yet delivered). Transitions to true ONLY
+        // when sessionStatus("idle") actually publishes the output event; on blank/error
+        // it stays false. Either way the entry stays present (never removed by
+        // sessionStatus) so the async delivery listener knows the inbound path owns this
+        // turn (dedup). The async listener removes it. See channelTurnHandled javadoc.
+        channelTurnHandled.put(sessionId, false);
+    }
+
+    /**
+     * Atomically read-and-remove the channel-turn ownership marker (CHANNEL-ASYNC-DELIVERY).
+     * Called by {@code ChannelAsyncDeliveryListener} on loop finish: {@code null} return
+     * means no inbound turn was registered (async-resumed / non-channel session) → the
+     * async listener should deliver; non-null means the inbound path already owns the turn
+     * (delivered when {@code true}, or chose not to when {@code false}) → skip.
+     */
+    public Boolean removeChannelTurnHandled(String sessionId) {
+        return channelTurnHandled.remove(sessionId);
     }
 
     /**
@@ -188,12 +238,28 @@ public class ChatWebSocketHandler extends TextWebSocketHandler implements ChatEv
 
         if ("idle".equals(status) || "error".equals(status)) {
             ChannelTurnContext ctx = channelContexts.remove(sessionId);
-            if (ctx != null && "idle".equals(status)) {
-                String replyText = ctx.finalText;
+            if (ctx != null) {
+                String replyText = "idle".equals(status) ? ctx.finalText : null;
                 if (replyText != null && !replyText.isBlank()) {
                     eventPublisher.publishEvent(new ChannelSessionOutputEvent(
                             sessionId, ctx.platformMessageId, ctx.ackReactionId, replyText));
+                    // CHANNEL-ASYNC-DELIVERY: inbound path published delivery for this turn.
+                    // Mark true so the async delivery listener (fired later from the loop
+                    // teardown finally block, after this sessionStatus call) sees a non-null
+                    // marker → skips → no double send. See channelTurnHandled javadoc.
+                    channelTurnHandled.put(sessionId, true);
                 }
+                // CHANNEL-ASYNC-DELIVERY: idle+blank or error with an inbound ctx present →
+                // inbound path delivers nothing, but we MUST NOT remove the channelTurnHandled
+                // marker here. It was set false by registerChannelTurn and stays false so the
+                // async listener (which gets null only for genuinely never-registered turns)
+                // sees a non-null marker → skips. Removing it would make the async path
+                // unable to distinguish "inbound registered but didn't deliver" from "async
+                // never registered" and could wrongly deliver an inbound turn via the async
+                // path when ctx.finalText is blank but event.finalMessage is not (two
+                // independent accumulators). The async listener removes the marker every
+                // loop, so leaving it here does not leak. (channelContexts above IS removed —
+                // that's the separate per-turn WS context, unrelated to dedup ownership.)
             }
         }
     }
