@@ -44,15 +44,30 @@ public class FullCompactStrategy {
     private static final Logger log = LoggerFactory.getLogger(FullCompactStrategy.class);
 
     public static final int YOUNG_GEN_KEEP = 20;
-    public static final int MAX_SUMMARY_TOKENS = 800;
+    /**
+     * Output token cap for the summary LLM call. The structured CC-aligned template (10 sections,
+     * incl. verbatim "All User Messages" + "Pending Tool Calls") needs more room than the old
+     * free-form prose summary. The rolling-merge keeps only ONE active summary message in the
+     * compacted history, so the extra output tokens are bounded (not accumulated per compaction).
+     * <p>Two bounds at play: the prompt asks for a SOFT target (~1800 tokens), while the HARD bound
+     * is the API {@code maxTokens} ({@link #MAX_SUMMARY_TOKENS} + 200 = 2200; see callLlm). Section
+     * 10 (Pending Tool Calls / INV-1, the verbatim pending-tool-use args) sits LAST, so the prompt's
+     * "if space is tight prioritize recent context and sections 6–10" instruction is the guard
+     * against a truncated output losing the pending-tool payload the agent needs to retry.
+     */
+    public static final int MAX_SUMMARY_TOKENS = 2000;
 
     /**
      * COMPACT-IDEMPOTENCY-FIX ③: reserve this many tokens for the system prompt + output budget +
      * safety margin when deciding the per-call input budget for the summary LLM call. Subtracted
      * from the model's context window to get the max window text size a single summary call may
      * receive before map-reduce chunking kicks in.
+     * <p>Breakdown: structured CC-aligned system prompt (~950 tokens) + output cap
+     * ({@link #MAX_SUMMARY_TOKENS} + 200 = 2200) + ~1500-token safety buffer ≈ 5500. Raised from
+     * 4000 because the structured template grew the system prompt; at 4000 the headroom had dropped
+     * to ~850, too tight.
      */
-    static final int SUMMARY_INPUT_RESERVE_TOKENS = 4_000;
+    static final int SUMMARY_INPUT_RESERVE_TOKENS = 5_500;
 
     /**
      * Fallback per-call input budget (tokens) used when the model context window is unknown / not
@@ -62,31 +77,43 @@ public class FullCompactStrategy {
     static final int SUMMARY_INPUT_FALLBACK_BUDGET_TOKENS = 24_000;
 
     private static final String SUMMARY_SYSTEM_PROMPT =
-            "You are a conversation compressor. Your job is to summarize the provided conversation " +
-            "history while strictly preserving: " +
-            "(a) the user's original intent and requirements, " +
-            "(b) completed milestones and work products, " +
-            "(c) key facts learned from tool executions, " +
-            "(d) any open questions or unresolved items, " +
-            "(e) agreed-upon next steps. " +
-            "Do NOT invent information. Keep the summary under 800 tokens. " +
-            "Output only the summary text, without preface or quotation marks.\n\n" +
-            "IMPORTANT identity preservation rules:\n" +
-            "- Preserve all opaque identifiers exactly as written (no shortening or reconstruction), " +
-            "including UUIDs, hashes, IDs, tokens, API keys, hostnames, IPs, ports, URLs, and file paths.\n\n" +
-            "MUST preserve in summary:\n" +
-            "- Active tasks and their current status (in-progress, blocked, pending)\n" +
-            "- Batch operation progress (e.g., '5/17 items completed')\n" +
-            "- The last thing the user requested and what was being done about it\n" +
-            "- Decisions made and their rationale\n" +
-            "- TODOs, open questions, and constraints\n" +
-            "- Any commitments or follow-ups promised\n" +
-            "- For any tool_use that was emitted but did NOT yet return a tool_result " +
-            "(pending execution), preserve the tool name AND the complete input arguments " +
-            "VERBATIM. Do NOT summarize file contents, scripts, paths, or string literals " +
-            "inside Write / Edit / Bash inputs — keep them byte-for-byte. The agent " +
-            "needs the full payload to retry the call after compaction.\n" +
-            "Prioritize recent context over older history.";
+            "You are a conversation compressor. Produce a STRUCTURED summary of the conversation so " +
+            "the agent can seamlessly continue after the older turns are dropped. Write the summary " +
+            "in the conversation's primary language. Do NOT invent information.\n\n" +
+            "Output EXACTLY these numbered sections, each with its header, in order. If a section " +
+            "genuinely has no content, keep the header followed by \"—\".\n\n" +
+            "## 1. Primary Request and Intent\n" +
+            "All of the user's explicit requests and the underlying intent, in chronological detail.\n\n" +
+            "## 2. Key Concepts and Facts\n" +
+            "Important technical concepts, tools, systems, and facts learned from tool executions.\n\n" +
+            "## 3. Files and Resources\n" +
+            "Files / resources / data examined, created, or modified, with WHY each matters and key " +
+            "snippets. Preserve paths verbatim.\n\n" +
+            "## 4. Errors and Fixes\n" +
+            "Errors encountered, how each was fixed, and any user feedback or correction on the fix.\n\n" +
+            "## 5. Problem Solving\n" +
+            "Problems solved and ongoing troubleshooting or analysis.\n\n" +
+            "## 6. All User Messages\n" +
+            "EVERY non-tool-result user message, verbatim (condense only if a single message is very " +
+            "long). This is the primary safeguard against intent drift — do not drop any.\n\n" +
+            "## 7. Pending Tasks\n" +
+            "Explicitly requested work not yet completed.\n\n" +
+            "## 8. Current Work\n" +
+            "Precisely what was being worked on immediately before this summary (file names, commands, " +
+            "state).\n\n" +
+            "## 9. Next Step\n" +
+            "The next step, tightly tied to the most recent work, with a short quote of the relevant " +
+            "user or assistant line.\n\n" +
+            "## 10. Pending Tool Calls\n" +
+            "For any tool_use that was emitted but did NOT yet return a tool_result: preserve the tool " +
+            "name AND the COMPLETE input arguments VERBATIM. Do NOT summarize file contents, scripts, " +
+            "paths, or string literals inside Write / Edit / Bash inputs — keep them byte-for-byte. The " +
+            "agent needs the full payload to retry the call after compaction.\n\n" +
+            "Identity preservation: keep ALL opaque identifiers exactly as written (no shortening or " +
+            "reconstruction) — UUIDs, hashes, IDs, tokens, API keys, hostnames, IPs, ports, URLs, file " +
+            "paths.\n\n" +
+            "Output only the structured summary, without preface or quotation marks. Target under " +
+            "~1800 tokens; if space is tight prioritize recent context and sections 6–10.";
 
     public CompactResult apply(List<Message> messages, int contextWindowTokens,
                                LlmProvider provider, String modelId) {
