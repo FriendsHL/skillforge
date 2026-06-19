@@ -13,7 +13,18 @@ AgentLoopEngine: Preemptive compaction triggered: ratio=1.72, estTokens=109821, 
 ```
 引擎每 loop 判定上下文 110K vs 窗口 64K（1.7×）、明确触发抢占压缩，**却被负 gap idempotency 跳过**。`/compact`（手动绕守卫）能跑但 `reclaimed=0/22 tokens`。另一 session `c9129461` 直接 `fullCompact no-op (no safe boundary)` 刷屏 + `updateSessionMessages prefix mismatch` 兜底。
 
-## 根因（3 条线）
+## ⚠️ 深挖修正（2026-06-19,DB 亲验）
+
+初判"压缩问题/负 gap"后深挖发现 session 562 行仅 156 distinct(406 重复)。一度误判为 **persistence-shape 字节发散 dup-append + LLM 吃重复(高危活损坏)** —— **此判断已收回(夸大了)**。亲验结论:
+
+- **live 上下文干净**:最后 boundary(seq 418)+ summary(419)之后 **143 行全 distinct,零重复,tool 配对完整** → **LLM 没吃重复**。
+- **重复 = 行存膨胀,非 live 污染**:`CompactionService.persistCompactResult` 每次压缩把 retained young-gen **当新行 append**(带各自保留的原 trace_id,证实是它而非 updateSessionMessages delta），而 `getContextMessages` 只读最后 boundary 之后 → 旧 young-gen 副本永久留存但永不被读。每次压缩 +~142 行(boundary 元数据 `compacted_message_count=0`、`tokens_after≈before` 甚至变大）。
+- **b2c7039 guard 不触发**正常:dup 走 `persistCompactResult.appendMessages`(纯 append 无对账),updateSessionMessages 的 post-boundary 视图与 engine 内存一致 → 无 mismatch。
+- **真正功能问题**:compaction 对 tool-heavy session **无效**(boundary 退化→reclaim≈0)→ 真实 110K live 上下文压不下去(已由 400K 窗口缓解)。
+
+→ **严重度从"高危活损坏"下修为"中:存储/成本浪费 + 压缩无效"**。修复重点调整为下方,其中行存膨胀(persistCompactResult 双存)为新增主线。
+
+## 根因（修正后 3 条线 + 行存膨胀）
 
 ### ① 负 gap：idempotency 计数空间错配（主因，活的危害）
 `lastCompactedAtMessageCount` 在**持久化全量计数空间**记录（`CompactionService` L259/L657 = `getMessageCount()`=持久化行数高水位 560），但 gap 在 **engine 内存工作集空间**比较：

@@ -3,7 +3,19 @@
 > 状态：修复方向已判断（2026-06-19，待开工细化）。核心文件 + compact 8 不变量 → Full + `compact-reviewer`。
 > 已做缓解：agent 3 `context_window_tokens=400000`（glm-5.2 实测稳定区，临时脱离 1.7× 裸跑；非修复）。
 
-## 修复判断
+## ⚠️ 深挖修正后的优先级（2026-06-19,DB 亲验）
+
+investigation + 亲验推翻"persistence-shape 字节发散/LLM 吃重复"误判。真实主线两条 + 次要:
+
+- **【新主线 R】行存膨胀:`persistCompactResult` 双存 retained young-gen**
+  `CompactionService.persistCompactResult`(:535-624,retained 块 :566-589)每次压缩把 youngGen **当新行 append**(`extractRetainedMessages`→`appendMessages` :610),而 boundary 之前的旧副本不删 → `getContextMessages` 只读最后 boundary 之后(:465-483),旧副本永久留存不被读 → 562 行/156 distinct。
+  **修向**:压缩后**不再重 append 已存在的 retained 行**,或**压缩后 prune 被 boundary 取代的旧 young-gen 物理行**(确认是否本有 pruner 漏跑——agent 提到 `prunedAt`/`sanitizePrunedContent` 机制存在)。需 deliberate 设计(boundary-slice 语义 vs 物理 retained 双存),Full + compact-reviewer。**这是行存膨胀根因。**
+- **【主线 ②=原②】tool-heavy boundary 退化** —— compaction reclaim≈0 的功能根因(见下②)。两者叠加:退化压缩频繁触发 + 每次双存 → 雪球。
+- 负 gap(原①)、总结窗口(原③)降为次要。
+
+**de-dup 脚本**(562→~156):止血(R)后再做;只 prune 最后 boundary(seq 418)之前的冗余 NORMAL 行,保留 seq≥418 的 live 区(143 distinct,配对完整);注意 checkpoint 的 seq_no range 引用,先确认无 restore 依赖。
+
+## 修复判断（原始,②③ 仍有效;①见上降级,新增 R 主线）
 
 ### ① 负 gap —— 必修，高置信
 
