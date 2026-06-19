@@ -19,13 +19,17 @@ import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.CompactionEventEntity;
 import com.skillforge.server.entity.SessionCompactionCheckpointEntity;
 import com.skillforge.server.entity.SessionEntity;
+import com.skillforge.server.entity.SessionSummaryEntity;
 import com.skillforge.server.repository.AgentRepository;
 import com.skillforge.server.repository.CompactionEventRepository;
 import com.skillforge.server.repository.SessionCompactionCheckpointRepository;
+import com.skillforge.server.repository.SessionMessageRepository;
 import com.skillforge.server.repository.SessionRepository;
+import com.skillforge.server.repository.SessionSummaryRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -116,6 +120,24 @@ public class CompactionService implements ContextCompactorCallback {
     /** P9-5: optional — when set, full-compact emits a recovery payload row after retained messages. */
     private RecoveryPayloadBuilder recoveryPayloadBuilder;
 
+    /**
+     * COMPACT-IDEMPOTENCY-BOUNDARY-FIX (storage redesign P1): range-summary store + targeted
+     * row marker. Optional (setter-injected, null in legacy unit tests) — when the range-model
+     * flag is on, full/sessionMemory compact writes a {@code t_session_summary} row instead of
+     * re-appending the young-gen, and stamps {@code compacted_by_summary_id} on the covered rows.
+     */
+    private SessionSummaryRepository sessionSummaryRepository;
+    private SessionMessageRepository sessionMessageRepository;
+
+    /**
+     * Feature flag for the range-based compaction model (storage-redesign.md §10, P1). Default
+     * FALSE → existing behavior is byte-identical (the legacy boundary + summary + re-append
+     * young-gen path). When TRUE the new flagged write path runs. Flag ON is not yet a valid live
+     * runtime state (P2 wires the derived read); P1 only exercises it under tests.
+     */
+    @Value("${skillforge.compact.range-model.enabled:false}")
+    private boolean rangeModelEnabled;
+
     private final Object[] sessionLocks;
 
     /** Sessions currently executing Phase 2 (LLM call) of full compact. */
@@ -178,6 +200,23 @@ public class CompactionService implements ContextCompactorCallback {
     @Autowired(required = false)
     public void setRecoveryPayloadBuilder(RecoveryPayloadBuilder recoveryPayloadBuilder) {
         this.recoveryPayloadBuilder = recoveryPayloadBuilder;
+    }
+
+    /** Optional: range-summary store for the range-model write path (storage redesign P1). */
+    @Autowired(required = false)
+    public void setSessionSummaryRepository(SessionSummaryRepository sessionSummaryRepository) {
+        this.sessionSummaryRepository = sessionSummaryRepository;
+    }
+
+    /** Optional: message store for the targeted {@code compacted_by_summary_id} marker UPDATE (P1). */
+    @Autowired(required = false)
+    public void setSessionMessageRepository(SessionMessageRepository sessionMessageRepository) {
+        this.sessionMessageRepository = sessionMessageRepository;
+    }
+
+    /** Test seam: toggle the range-model write path without a Spring context. */
+    public void setRangeModelEnabled(boolean rangeModelEnabled) {
+        this.rangeModelEnabled = rangeModelEnabled;
     }
 
     /**
@@ -589,7 +628,13 @@ public class CompactionService implements ContextCompactorCallback {
                                                         String source, String reason,
                                                         CompactResult result) {
         SessionEntity fresh = sessionRepository.findById(sessionId).orElseThrow();
-        if ("full".equalsIgnoreCase(level)) {
+        if ("full".equalsIgnoreCase(level) && rangeModelEnabled) {
+            // === Range-model write path (storage redesign P1, flag ON) ===
+            // Writes a t_session_summary range row + marks covered rows, instead of appending a
+            // boundary + summary + re-appended young-gen. No message rows are appended/deleted.
+            // Falls through to the shared counter/event/broadcast tail below.
+            persistFullRangeModel(sessionId, source, result);
+        } else if ("full".equalsIgnoreCase(level)) {
             String summaryText = extractSummaryText(result.getMessages());
             Message boundary = new Message();
             boundary.setRole(Message.Role.SYSTEM);
@@ -720,6 +765,181 @@ public class CompactionService implements ContextCompactorCallback {
         CompactionEventEntity saved = eventRepository.save(evt);
         broadcastUpdated(fresh);
         return saved;
+    }
+
+    /**
+     * COMPACT-IDEMPOTENCY-BOUNDARY-FIX (storage redesign P1, §2 write + §2.6 Q3 merge + §8.7 Q4):
+     * range-model full-compact persistence. Writes ONE {@code t_session_summary} row covering the
+     * real seq range, marks the covered rows' {@code compacted_by_summary_id}, supersedes the prior
+     * active summary (Q3 rolling merge), and writes a checkpoint pointing at the summary id — without
+     * appending / deleting / re-appending any message rows.
+     *
+     * <p><b>Range seq mapping (P1/P2 coupling)</b>: the strategy reports {@code rightEdge} as an index
+     * into the <i>model view</i> ({@link SessionService#getContextMessages}: post-last-boundary
+     * physical rows, SYSTEM_EVENT skipped). P2 will thread true provenance; at P1 we derive the
+     * covered range from the loaded {@link SessionService.StoredMessage} records:
+     * <ul>
+     *   <li>{@code windowSize} = the number of real window rows folded into the summary. The
+     *       compacted layout is {@code [1 summary] + youngGen}, so
+     *       {@code afterMessageCount = 1 + youngGen.size()} and the window row count is
+     *       {@code beforeMessageCount - youngGen.size() = (beforeMessageCount - afterMessageCount) + 1}.
+     *       Deriving from message counts (not {@code rightEdge}, which {@code CompactResult} does not
+     *       carry) is the P1 approximation; P2 threads true provenance.</li>
+     *   <li>{@code endSeq} = the real seq_no of the last covered model-view row
+     *       (index {@code windowSize - 1}).</li>
+     *   <li>Per §2.6 Q3 the new summary covers {@code [0, endSeq]} (rolling merge subsumes everything
+     *       up to endSeq); {@code startSeq} is therefore 0.</li>
+     * </ul>
+     */
+    private void persistFullRangeModel(String sessionId, String source, CompactResult result) {
+        if (sessionSummaryRepository == null) {
+            throw new IllegalStateException(
+                    "range-model compaction enabled but SessionSummaryRepository not wired");
+        }
+
+        // Window row count folded into the summary: the compacted shape is [summary] + youngGen,
+        // so the delta (before - after) undercounts the window by 1 (the summary row replaces the
+        // whole window). The true window size adds that 1 back.
+        int compactedCount = (result.getBeforeMessageCount() - result.getAfterMessageCount()) + 1;
+
+        // Load the full real history ONCE; both the model-view mapping and the post-range end
+        // (highest real seq) are derived from this single read (perf: avoid a second DB round-trip).
+        List<SessionService.StoredMessage> allRecords = sessionService.getFullHistoryRecords(sessionId);
+
+        // Map the model-view window onto real seq_nos. The model view is the slice of the full
+        // history after the last COMPACT_BOUNDARY (legacy rows) with SYSTEM_EVENT rows skipped —
+        // the same construction as SessionService.getContextMessages. The first `compactedCount`
+        // of those model-view rows are the window; endSeq is the real seq_no of the last one.
+        List<SessionService.StoredMessage> modelViewRows = sliceModelViewRows(allRecords);
+        if (compactedCount <= 0 || modelViewRows.isEmpty()) {
+            log.info("range-model fullCompact no-op mapping (compactedCount={} modelViewRows={}): sessionId={}",
+                    compactedCount, modelViewRows.size(), sessionId);
+            return;
+        }
+        int lastWindowIdx = Math.min(compactedCount, modelViewRows.size()) - 1;
+        long endSeq = modelViewRows.get(lastWindowIdx).seqNo();
+        long startSeq = 0L; // §2.6 Q3: rolling merge — new summary covers [0, endSeq].
+
+        String summaryText = extractSummaryText(result.getMessages());
+        String recoveryText = buildRecoveryPayloadText(sessionId);
+
+        SessionSummaryEntity summary = new SessionSummaryEntity();
+        summary.setSessionId(sessionId);
+        summary.setStartSeq(startSeq);
+        summary.setEndSeq(endSeq);
+        summary.setSummaryText(summaryText);
+        summary.setLevel("full");
+        summary.setSource(source);
+        summary.setTokensBefore(result.getBeforeTokens());
+        summary.setTokensAfter(result.getAfterTokens());
+        summary.setCompactedMessageCount(compactedCount);
+        summary.setRecoveryPayload(recoveryText);
+        SessionSummaryEntity savedSummary = sessionSummaryRepository.save(summary);
+
+        // §2.6 Q3 merge: any prior active summary is subsumed by this one → mark superseded.
+        // NOTE: this active-list query runs AFTER save(), so the just-saved new summary (which is
+        // itself active — superseded_by IS NULL) is included in the result; the id guard below
+        // explicitly skips it so we never supersede the summary by itself.
+        List<SessionSummaryEntity> priorActive =
+                sessionSummaryRepository.findBySessionIdAndSupersededByIsNullOrderByStartSeqAsc(sessionId);
+        for (SessionSummaryEntity prior : priorActive) {
+            if (!prior.getId().equals(savedSummary.getId())) {
+                sessionSummaryRepository.markSuperseded(prior.getId(), savedSummary.getId());
+            }
+        }
+
+        // Mark the covered real rows [startSeq, endSeq] (only the still-unmarked ones).
+        if (sessionMessageRepository != null) {
+            int marked = sessionMessageRepository.markCompactedBySummary(
+                    sessionId, startSeq, endSeq, savedSummary.getId());
+            log.debug("range-model fullCompact marked {} rows [{},{}] → summaryId={}: sessionId={}",
+                    marked, startSeq, endSeq, savedSummary.getId(), sessionId);
+        }
+
+        // Checkpoint points at the summary id + range (same transaction). No message rows written,
+        // so boundary_seq_no is the next-real-seq sentinel (endSeq+1) per the design note.
+        SessionCompactionCheckpointEntity checkpoint = new SessionCompactionCheckpointEntity();
+        checkpoint.setId(UUID.randomUUID().toString());
+        checkpoint.setSessionId(sessionId);
+        checkpoint.setBoundarySeqNo(endSeq + 1);
+        checkpoint.setSummarySeqNo(savedSummary.getId());
+        checkpoint.setReason(trimReason(source));
+        checkpoint.setPreRangeStartSeqNo(startSeq);
+        checkpoint.setPreRangeEndSeqNo(endSeq);
+        checkpoint.setPostRangeStartSeqNo(endSeq + 1);
+        // Highest real seq from the already-loaded list (no extra DB read).
+        long lastRealSeq = allRecords.isEmpty()
+                ? endSeq
+                : allRecords.get(allRecords.size() - 1).seqNo();
+        checkpoint.setPostRangeEndSeqNo(lastRealSeq);
+        checkpointRepository.save(checkpoint);
+    }
+
+    /**
+     * Slice the model view (post-last-boundary, SYSTEM_EVENT skipped) out of an already-loaded full
+     * history, keeping {@link SessionService.StoredMessage} seq_no provenance so window indices map
+     * back to real seq_nos. Mirrors {@link SessionService#getContextMessages} slicing.
+     *
+     * <p>INTENTIONALLY does NOT apply {@code applyArchiveSafely}: this mapping is count-only (it
+     * needs index→seq_no, not message content). Archive substitution swaps tool_result content for
+     * a preview but never changes the list size, so the index→seq mapping is exact without it;
+     * loading archive content here would be wasted work.
+     */
+    private List<SessionService.StoredMessage> sliceModelViewRows(List<SessionService.StoredMessage> all) {
+        int lastBoundary = -1;
+        for (int i = all.size() - 1; i >= 0; i--) {
+            if (SessionService.MSG_TYPE_COMPACT_BOUNDARY.equals(all.get(i).msgType())) {
+                lastBoundary = i;
+                break;
+            }
+        }
+        int start = (lastBoundary >= 0) ? lastBoundary + 1 : 0;
+        List<SessionService.StoredMessage> out = new ArrayList<>();
+        for (int i = start; i < all.size(); i++) {
+            SessionService.StoredMessage rec = all.get(i);
+            if (SessionService.MSG_TYPE_SYSTEM_EVENT.equals(rec.msgType())) {
+                continue;
+            }
+            out.add(rec);
+        }
+        return out;
+    }
+
+    /**
+     * §8.7 Q4: build the recovery payload text to persist on the summary row (no message row).
+     * Best-effort — returns null when no builder is wired or it yields nothing.
+     *
+     * <p>RecoveryPayloadBuilder currently returns String content, but to avoid silently dropping
+     * the recovery payload if it ever returns array / ContentBlock-list content, non-String content
+     * is JSON-serialized (with a toString fallback) rather than discarded.
+     */
+    private String buildRecoveryPayloadText(String sessionId) {
+        if (recoveryPayloadBuilder == null) {
+            return null;
+        }
+        try {
+            Message recovery = recoveryPayloadBuilder.build(sessionId);
+            if (recovery == null) {
+                return null;
+            }
+            Object content = recovery.getContent();
+            if (content instanceof String s) {
+                return s.isBlank() ? null : s;
+            }
+            if (content != null) {
+                // Non-String (e.g. ContentBlock list) — serialize rather than silently drop.
+                try {
+                    return new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(content);
+                } catch (Exception serEx) {
+                    log.warn("range-model recovery payload non-String content; falling back to toString: sessionId={}",
+                            sessionId, serEx);
+                    return content.toString();
+                }
+            }
+        } catch (Exception ex) {
+            log.warn("range-model recovery payload build failed; continuing: sessionId={}", sessionId, ex);
+        }
+        return null;
     }
 
     private String extractSummaryText(List<Message> compactedMessages) {

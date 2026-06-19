@@ -100,4 +100,21 @@ public interface SessionMessageRepository extends JpaRepository<SessionMessageEn
            "ORDER BY m.seqNo DESC")
     List<TraceIdView> findTailTraceIdProjections(
             @Param("sessionId") String sessionId, Pageable pageable);
+
+    /**
+     * COMPACT-IDEMPOTENCY-BOUNDARY-FIX (storage redesign P1): stamp the covering range
+     * summary id onto the real rows in {@code [start, end]} that are not yet marked. Only
+     * unmarked rows are updated ({@code compactedBySummaryId IS NULL}) so a re-run / merge
+     * never clobbers an existing marker (the prior summary's marker stays until P2's range
+     * recompute decides otherwise). Returns the number of rows updated.
+     */
+    @Modifying
+    @Transactional
+    @Query("UPDATE SessionMessageEntity m SET m.compactedBySummaryId = :summaryId " +
+           "WHERE m.sessionId = :sessionId AND m.seqNo BETWEEN :start AND :end " +
+           "AND m.compactedBySummaryId IS NULL")
+    int markCompactedBySummary(@Param("sessionId") String sessionId,
+                               @Param("start") long start,
+                               @Param("end") long end,
+                               @Param("summaryId") Long summaryId);
 }
