@@ -1,6 +1,6 @@
 # SkillForge ToDo
 
-> 更新于：2026-06-17（新增 2 backlog：WF-CONCURRENT-PIPELINE + EVOLVE-JUDGE-GROUNDING，来源 blog 复盘；自进化现状见 references/autoevolving-capability-stage-2026-06-17.md）
+> 更新于：2026-06-19（COMPACT range-model 存储重构 go-live（默认 on，V157）；CHANNEL-MIDTURN-PROGRESS 交付归档；同期 3 项 bug 修复）
 
 > 规则：这里只放当前执行状态；需求和方案细节放在链接的需求包 / archive 中。
 > 旧版：重整前长版 ToDo 已保留在 [references/legacy-todo-2026-06-16.md](references/legacy-todo-2026-06-16.md)。
@@ -9,7 +9,7 @@
 
 | 顺序 | ID | 标题 | 模式 | 状态 | 优先级 | 风险 | 文档 | 下一步 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 0 | **COMPACT-IDEMPOTENCY-BOUNDARY-FIX** 🔴 | 压缩失效：①负 gap idempotency 计数空间错配→曾压过的 session 自动压缩永久跳过(线上微信 agent 1.7×窗口裸跑) ②tool-heavy(SubAgent/Team)找不到 safe boundary→压不动 ③总结输入无窗口保护(潜在)。+缓解:agent 窗口配置/resolveContextWindow 走 per-model map | Full | **立项/待修(高优先)** | P1 | Full | [需求包](requirements/active/2026-06-19-COMPACT-IDEMPOTENCY-BOUNDARY-FIX/index.md) | 明天先修(compact-reviewer)→ 再 ACP；开工补 tech-design |
+| 0 | **COMPACT-IDEMPOTENCY-BOUNDARY-FIX** 🔴 | 压缩失效：①负 gap idempotency 计数空间错配→曾压过的 session 自动压缩永久跳过(线上微信 agent 1.7×窗口裸跑) ②tool-heavy(SubAgent/Team)找不到 safe boundary→压不动 ③总结输入无窗口保护(潜在)。+缓解:agent 窗口配置/resolveContextWindow 走 per-model map | Full | **range-model 存储重构已 go-live（默认 on，V157 + GO-LIVE `068a4a5d`，零膨胀验证过）；剩 ② tool-heavy 压不动 + 结构化摘要 live 确认 + W3 watchdog 未做** | P1 | Full | [需求包](requirements/active/2026-06-19-COMPACT-IDEMPOTENCY-BOUNDARY-FIX/index.md) | 修 ② tool-heavy(SubAgent/Team) boundary 退化（原始功能根因）+ 确认结构化摘要 live + W3 hung-running watchdog |
 | 1 | **AUTOEVOLVING-MASTER** ⭐ | autoEvolving 总包（V2-V5）。V1 已交付，V2-V5 ~5-6 个月（V2 AUTORESEARCH+K-1 / V3 K-4 outer loop+3 信号源 / V4 SkillsBench / V5 框架自进化） | Full 总包 | prd 待 ratify | P2 | Full | [需求包](requirements/active/2026-05-28-AUTOEVOLVING-MASTER/index.md) | 起 V2 子包后启动 Plan |
 | 2 | **AUTOEVOLVE-CLOSE-LOOP** | 闭环采纳 + 对靶改进 + benchmark 验证。P1/P2/G5/BC-M1/BC-M2a/engine-fix/阶段A 已交付，阶段B/G3/P3 未做 | Full | 部分交付 | P2 | Full | [需求包](requirements/active/2026-06-03-AUTOEVOLVE-CLOSE-LOOP/index.md) | 阶段B（EVOLVE-BADCASE-SENSITIVITY）等用户拍是否升 active |
 | 3 | **EVOLVE-JUDGE-GROUNDING** | 自进化判定优化（blog 复盘）。Phase 1 配对/comparative 判定**已交付**（复用 perScenarioFlips net-wins，治绝对打分噪声→0 赢家，无 schema 改） | Full | Phase 1 已交付 / Phase 2 见 #3b | P2 | Full | [需求包](requirements/active/2026-06-17-EVOLVE-JUDGE-GROUNDING/index.md) | — |
@@ -29,6 +29,9 @@
 
 | ID | 完成日期 | Commit | 交付索引 |
 | --- | --- | --- | --- |
+| COMPACT range-model 存储重构 go-live（默认 on，V157，零膨胀验证；需求包仍 active 有开放项） | 2026-06-19 | P1 `2dac6f8b` … GO-LIVE `068a4a5d` | [delivery-index](delivery-index.md) |
+| CHANNEL-MIDTURN-PROGRESS（渠道中途进度推送，飞书默认开/微信默认关） | 2026-06-19 | `43869ded` | [delivery-index](delivery-index.md) |
+| 压缩/渠道 go-live 同期 bug 修复（agent 窗口 override / channel 路由 running / reminder 占用%分母） | 2026-06-19 | `99b50868` / `defae3e8` / `40c726f3` | [delivery-index](delivery-index.md) |
 | CHANNEL-ASYNC-DELIVERY（异步续跑结果投递回渠道 bug） | 2026-06-19 | `96d4de6e` | [delivery-index](delivery-index.md) |
 | WECHAT-CHANNEL Slice 2 文件发送 + client_id 去重修复 + 渠道标签 | 2026-06-19 | `850384de` / `9a6a03db` | [delivery-index](delivery-index.md) |
 | WECHAT-CHANNEL B-native Slice 1（iLink adapter 文本双向+扫码） | 2026-06-18 | `f19cb70d` | [delivery-index](delivery-index.md) |

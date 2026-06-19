@@ -1,6 +1,6 @@
 # SkillForge 文档
 
-> 更新于：2026-06-17（新增 2 个 blog 复盘 backlog：WF-CONCURRENT-PIPELINE + EVOLVE-JUDGE-GROUNDING；新增 references/autoevolving-capability-stage-2026-06-17.md 自进化现状快照）
+> 更新于：2026-06-19（COMPACT range-model 存储重构 go-live（默认 on，V157）/ CHANNEL-MIDTURN-PROGRESS 交付归档 / 同期 3 项 bug 修复）
 > Agent 规则：先读这里，再只打开当前任务链接到的文档。
 
 编辑 docs 前，先读 [DOCS-GOVERNANCE.md](DOCS-GOVERNANCE.md)。
@@ -49,6 +49,7 @@
 
 | ID | 标题 | 需求包 | 技术方案 |
 | --- | --- | --- | --- |
+| CHANNEL-MIDTURN-PROGRESS | 渠道中途进度推送（任务执行中把 assistant 中途文本同步给飞书/微信；飞书默认开 / 微信默认关。Spring 事件 `AssistantTurnAppendedEvent` + `@Async ChannelProgressDeliveryListener`；只推含 tool_use 的轮天然去重 + 节流 + 复用 `ReplyDeliveryService`；best-effort 不打断 loop / commit `43869ded`） | [需求包](requirements/archive/2026-06-19-CHANNEL-MIDTURN-PROGRESS/index.md) | — (Lite, decisions in index.md) |
 | MCP-HTTP-ANYSEARCH | MCP HTTP transport + 远程 server AnySearch 接入（MCP-CLIENT-MVP 延期到 V2 的 HTTP transport 续作；`McpHttpTransport` 务实版 Streamable HTTP + V152 transport/url/headers schema + core collectTools 工具可见性 bug 修复 + V153/V154 seed&绑定&路由 + dashboard transport UI / Full pipeline 5 reviewer 对抗 2 blocker 修复 / commit `9c57a9fc`）| [需求包](requirements/archive/2026-06-15-MCP-HTTP-ANYSEARCH/index.md) | [tech-design](requirements/archive/2026-06-15-MCP-HTTP-ANYSEARCH/tech-design.md) |
 | AUTOEVOLVING-V1-DSL-DASHBOARD | autoEvolving V1：DSL workflow 编排引擎 + `/autoevolving` dashboard 端到端测试 milestone（Sprint 1-4 全交付，2026-05-29，commit Sprint1 `9000bd5` / Sprint3 `b675ee7` / Sprint4 `85ff279` + LLM fail-fast `9049ef8`）| [需求包](requirements/archive/2026-05-29-AUTOEVOLVING-V1-DSL-DASHBOARD/index.md) | [tech-design](requirements/archive/2026-05-29-AUTOEVOLVING-V1-DSL-DASHBOARD/tech-design.md) |
 | AUTOEVOLVE-AGENT-FLYWHEEL | autoEvolve 进化 loop：BUG-1 winner-carry-forward + 每轮 A/B 反思回流下一轮候选 + judge per-case rationale（方案 B）（2026-06-01/06-02 交付）| [需求包](requirements/archive/2026-05-31-AUTOEVOLVE-AGENT-FLYWHEEL/index.md) | [tech-design](requirements/archive/2026-05-31-AUTOEVOLVE-AGENT-FLYWHEEL/tech-design.md) |
