@@ -70,7 +70,8 @@ engine 每次 run 从**压缩后子集**（远小于 560）起步 → gap 恒负
 
 ## 阅读顺序
 1. 本 index（诊断 3 线 + 窗口缓解 + 验收）
-2. tech-design（修复方案，开工前补）
+2. tech-design（即时 bug 修复判断：① 负 gap / ② boundary / ③ 总结窗口 / R 双存）
+3. **storage-redesign（根治方案：三视图分离 + 范围摘要表 + 派生模型视图 + 合并滚动摘要；Q1–Q5 决策已锁）** ← 真正的重构主文档
 
 ## 关联
 - 核心文件：`CompactionService` / `skillforge-core/compact/*` / `AgentLoopEngine` resolveContextWindow
