@@ -287,6 +287,17 @@ public class ChatWebSocketHandler extends TextWebSocketHandler implements ChatEv
             payload.put("reasoningContent", message.getReasoningContent());
         }
         broadcast(sessionId, payload);
+
+        // CHANNEL-MIDTURN-PROGRESS: additively publish an assistant-turn event so a
+        // channel-bound session can push mid-turn narration to its channel. WS behavior
+        // above is UNCHANGED; this is a pure side-channel. Cheap role guard keeps the
+        // event bus quiet for user/tool_result turns (those also flow through
+        // messageAppended for the WS). Non-channel sessions have no listener effect.
+        if (message != null && message.getRole() == Message.Role.ASSISTANT) {
+            eventPublisher.publishEvent(
+                    new com.skillforge.server.service.event.AssistantTurnAppendedEvent(
+                            sessionId, traceId, message));
+        }
     }
 
     @Override
