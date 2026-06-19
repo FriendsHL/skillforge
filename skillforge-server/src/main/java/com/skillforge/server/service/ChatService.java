@@ -1294,7 +1294,16 @@ public class ChatService {
         String reminderText;
         try {
             AgentDefinition agentDef = agentService.toAgentDefinition(agentEntity);
-            int contextWindowTokens = agentDef.getMaxContextTokens();
+            // The context-window denominator MUST match the window the engine gates compaction on,
+            // otherwise ContextUsageSource reports a wrong "Context X% used" and the model wraps up
+            // early thinking it is tight. Route through the canonical resolver (per-agent
+            // context_window_tokens → known-model map → default) — the SAME one
+            // CompactionService/AgentLoopEngine use. The legacy agentDef.getMaxContextTokens() read a
+            // different key (max_context_tokens) and defaulted to 100K, so the reminder divided by
+            // 100K instead of the real window (e.g. 400K) and systematically over-reported usage.
+            // getSession throws if absent; the enclosing try/catch then skips the reminder this turn.
+            int contextWindowTokens = compactionService.resolveContextWindowForSession(
+                    sessionService.getSession(sessionId));
             int requestMaxTokens = agentDef.getMaxTokens();
             String systemPrompt = agentDef.getSystemPrompt() != null ? agentDef.getSystemPrompt() : "";
             // Q2 approximation: ChatService cannot easily reconstruct the full engine-built

@@ -79,6 +79,12 @@ public class CompactionService implements ContextCompactorCallback, SessionServi
 
     private static final Logger log = LoggerFactory.getLogger(CompactionService.class);
 
+    /** Shared mapper for parsing the small agent config JSON (read-only → thread-safe; avoids
+     *  allocating a new ObjectMapper per call now that resolveContextWindowForSession runs per turn
+     *  via the reminder path). */
+    private static final com.fasterxml.jackson.databind.ObjectMapper CONFIG_MAPPER =
+            new com.fasterxml.jackson.databind.ObjectMapper();
+
     private static final int LOCK_STRIPES = 64;
     private static final int IDEMPOTENCY_MIN_GAP_MESSAGES = 5;
 
@@ -1208,7 +1214,7 @@ public class CompactionService implements ContextCompactorCallback, SessionServi
                     if (agent.getConfig() != null && !agent.getConfig().isBlank()) {
                         try {
                             @SuppressWarnings("unchecked")
-                            Map<String, Object> cfg = new com.fasterxml.jackson.databind.ObjectMapper()
+                            Map<String, Object> cfg = CONFIG_MAPPER
                                     .readValue(agent.getConfig(), Map.class);
                             Object override = cfg.get("context_window_tokens");
                             if (override instanceof Number n && n.intValue() > 0) {
@@ -1264,7 +1270,7 @@ public class CompactionService implements ContextCompactorCallback, SessionServi
                 AgentEntity agent = agentRepository.findById(session.getAgentId()).orElse(null);
                 if (agent != null && agent.getConfig() != null && !agent.getConfig().isBlank()) {
                     @SuppressWarnings("unchecked")
-                    Map<String, Object> configMap = new com.fasterxml.jackson.databind.ObjectMapper()
+                    Map<String, Object> configMap = CONFIG_MAPPER
                             .readValue(agent.getConfig(), Map.class);
                     return CompactableToolRegistry.fromAgentConfig(configMap);
                 }
