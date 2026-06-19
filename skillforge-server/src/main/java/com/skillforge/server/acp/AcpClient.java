@@ -12,7 +12,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
 /**
@@ -69,14 +71,18 @@ public class AcpClient {
     private volatile Consumer<AcpSessionUpdate> updateListener = u -> { };
 
     /**
-     * Handler for server→client requests (permission). Default DENIES so a stray
-     * request can never block the agent. TODO(P1b): the permission bridge replaces
-     * this with one that maps to SkillForge ask/confirmation.
+     * Handler for server→client requests (permission). Receives the request plus an
+     * {@link AcpResponder} it completes — synchronously OR (P1b) asynchronously from
+     * another thread — to send the JSON-RPC response. Default DENIES so a stray
+     * request can never block the agent.
      *
      * <p><b>MUST NOT BLOCK (J-W3):</b> invoked on the transport reader thread —
-     * see {@link #setServerRequestHandler}.
+     * see {@link #setServerRequestHandler(BiConsumer)}. P1b's permission bridge
+     * hands the request off to a worker and returns immediately, then later
+     * completes the {@link AcpResponder} with the human's decision.
      */
-    private volatile Consumer<AcpServerRequest> serverRequestHandler = this::defaultDenyServerRequest;
+    private volatile BiConsumer<AcpServerRequest, AcpResponder> serverRequestHandler =
+            (req, responder) -> defaultDenyServerRequest(req, responder);
 
     private volatile boolean started;
 
@@ -117,9 +123,10 @@ public class AcpClient {
     }
 
     /**
-     * Register the server→client request handler. The handler is responsible for
-     * eventually answering via {@link #respondToServerRequest} (P1b). If left
-     * unset (or set to {@code null}) the default DENY handler is used.
+     * Register an ASYNC server→client request handler. The handler receives the
+     * request plus an {@link AcpResponder} it completes — possibly later, from
+     * another thread — to send the JSON-RPC response. If left unset (or set to
+     * {@code null}) the default DENY handler is used.
      *
      * <p><b>WARNING — the handler is invoked ON THE TRANSPORT READER THREAD and
      * MUST NOT BLOCK (J-W3):</b> no blocking waits, no synchronous user-confirmation
@@ -127,11 +134,32 @@ public class AcpClient {
      * ALL inbound messages (notifications AND request/response correlations), so a
      * blocking handler stalls every subsequent message — including the responses
      * the caller is awaiting — and can deadlock the session. P1b's permission
-     * bridge MUST hand off asynchronously (e.g. enqueue the request, return
-     * immediately) and answer later via {@link #respondToServerRequest}.
+     * bridge MUST hand off asynchronously (e.g. submit to an executor, return
+     * immediately) and complete the {@link AcpResponder} later.
+     *
+     * <p>The {@link AcpResponder} is idempotent: the first completion wins, later
+     * ones are no-ops, so a race between a human answer and a timeout never sends
+     * two responses for one id.
+     */
+    public void setServerRequestHandler(BiConsumer<AcpServerRequest, AcpResponder> handler) {
+        this.serverRequestHandler = handler != null ? handler
+                : (req, responder) -> defaultDenyServerRequest(req, responder);
+    }
+
+    /**
+     * Register a SYNCHRONOUS server→client request handler that is itself fully
+     * responsible for answering (via {@link #respondToServerRequest} /
+     * {@link #respondToServerRequestError}). Retained for the pure-protocol P1a-1
+     * style and tests; the {@link BiConsumer} overload is preferred for the
+     * permission bridge because the {@link AcpResponder} guards against double
+     * responses and abstracts the outcome shape.
      */
     public void setServerRequestHandler(Consumer<AcpServerRequest> handler) {
-        this.serverRequestHandler = handler != null ? handler : this::defaultDenyServerRequest;
+        if (handler == null) {
+            this.serverRequestHandler = (req, responder) -> defaultDenyServerRequest(req, responder);
+        } else {
+            this.serverRequestHandler = (req, responder) -> handler.accept(req);
+        }
     }
 
     // ──────────────────────────── ACP methods ────────────────────────────
@@ -209,6 +237,21 @@ public class AcpClient {
         params.put("sessionId", sessionId);
         params.put("modelId", modelId);
         return request("session/set_model", params);
+    }
+
+    /**
+     * {@code session/set_mode} — switch the session's permission mode (from
+     * session/new {@code modes.availableModes}). Spike-verified: the default
+     * session mode is {@code auto} (a classifier auto-approves, no prompt); setting
+     * {@code modeId="default"} makes cc prompt for dangerous operations, which is
+     * what surfaces {@code session/request_permission} for the AC-3 confirmation
+     * bridge. Returns {@code {}}.
+     */
+    public CompletableFuture<JsonNode> setMode(String sessionId, String modeId) {
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("sessionId", sessionId);
+        params.put("modeId", modeId);
+        return request("session/set_mode", params);
     }
 
     // ─────────────────────── server-request response ─────────────────────
@@ -336,14 +379,78 @@ public class AcpClient {
     private void handleServerRequest(JsonNode idNode, JsonNode msg) {
         AcpServerRequest req = new AcpServerRequest(
                 idNode, msg.get("method").asText(), msg.get("params"));
+        // NB: idNode may be a JSON 0 — handled correctly because dispatch in onLine()
+        // gates on `idNode != null && !idNode.isNull()`, never a truthy check, so the
+        // valid JSON-RPC id 0 (the permission request) reaches here.
         log.debug("ACP server→client request method={} id={}", req.method(), idNode);
+        AcpResponder responder = newResponder(req);
         try {
-            serverRequestHandler.accept(req);
+            serverRequestHandler.accept(req, responder);
         } catch (RuntimeException e) {
-            // Handler blew up — deny so the agent is not left hanging.
+            // Handler blew up — deny so the agent is not left hanging. Idempotent
+            // responder: if the handler already responded, this is a no-op.
             log.warn("ACP server-request handler threw; denying request id={}", idNode, e);
-            defaultDenyServerRequest(req);
+            responder.deny();
         }
+    }
+
+    /**
+     * Build an idempotent {@link AcpResponder} bound to one server request. The
+     * first terminal call (allow/deny/cancel/select/error) sends exactly one
+     * JSON-RPC response; subsequent calls are no-ops (a human-answer vs timeout
+     * race cannot emit two responses for the same id).
+     */
+    private AcpResponder newResponder(AcpServerRequest req) {
+        AtomicBoolean answered = new AtomicBoolean(false);
+        return new AcpResponder() {
+            @Override
+            public void respondResult(JsonNode result) {
+                if (answered.compareAndSet(false, true)) {
+                    respondToServerRequest(req.id(), result);
+                }
+            }
+
+            @Override
+            public void respondError(int code, String message) {
+                if (answered.compareAndSet(false, true)) {
+                    respondToServerRequestError(req.id(), code, message);
+                }
+            }
+
+            @Override
+            public void selectPermissionOption(String optionId) {
+                ObjectNode outcome = objectMapper.createObjectNode();
+                outcome.put("outcome", "selected");
+                outcome.put("optionId", optionId);
+                ObjectNode result = objectMapper.createObjectNode();
+                result.set("outcome", outcome);
+                respondResult(result);
+            }
+
+            @Override
+            public void cancelPermission() {
+                ObjectNode outcome = objectMapper.createObjectNode();
+                outcome.put("outcome", "cancelled");
+                ObjectNode result = objectMapper.createObjectNode();
+                result.set("outcome", outcome);
+                respondResult(result);
+            }
+
+            @Override
+            public void deny() {
+                if (PERMISSION_REQUEST_METHOD.equals(req.method())) {
+                    cancelPermission();
+                } else {
+                    respondError(RPC_METHOD_NOT_FOUND,
+                            "Unsupported server request: " + req.method());
+                }
+            }
+
+            @Override
+            public boolean isPermissionRequest() {
+                return PERMISSION_REQUEST_METHOD.equals(req.method());
+            }
+        };
     }
 
     private void handleNotification(JsonNode msg) {
@@ -367,28 +474,15 @@ public class AcpClient {
     /**
      * Default server-request response so the agent never hangs (D-W2).
      *
-     * <p>The permission-shaped deny ({@code {outcome:{outcome:"cancelled"}}}) is
-     * applied ONLY to the actual permission request method. Any other / unknown
-     * server→client request gets a generic JSON-RPC "method not found" error
-     * instead of a faked permission outcome — applying a permission outcome to a
-     * non-permission method would confuse P1b debugging.
+     * <p>A permission request is denied with the cancelled outcome
+     * ({@code {outcome:{outcome:"cancelled"}}}); any other / unknown server→client
+     * request gets a generic JSON-RPC "method not found" error instead of a faked
+     * permission outcome (the responder routes by method).
      */
-    private void defaultDenyServerRequest(AcpServerRequest req) {
+    private void defaultDenyServerRequest(AcpServerRequest req, AcpResponder responder) {
         try {
-            if (PERMISSION_REQUEST_METHOD.equals(req.method())) {
-                // ACP permission outcome shape (spike auto-deny): {outcome:{outcome:"cancelled"}}.
-                ObjectNode inner = objectMapper.createObjectNode();
-                inner.put("outcome", "cancelled");
-                ObjectNode result = objectMapper.createObjectNode();
-                result.set("outcome", inner);
-                respondToServerRequest(req.id(), result);
-                log.debug("ACP default-denied permission request id={}", req.id());
-            } else {
-                respondToServerRequestError(req.id(), RPC_METHOD_NOT_FOUND,
-                        "Unsupported server request (P1a-1): " + req.method());
-                log.debug("ACP rejected unsupported server request method={} id={}",
-                        req.method(), req.id());
-            }
+            responder.deny();
+            log.debug("ACP default-denied server request method={} id={}", req.method(), req.id());
         } catch (RuntimeException e) {
             log.warn("ACP failed to send default response for request id={}", req.id(), e);
         }

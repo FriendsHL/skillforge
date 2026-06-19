@@ -159,6 +159,65 @@ class AcpClientTest {
     }
 
     @Test
+    @DisplayName("P1b regression: a server request with JSON-RPC id 0 is routed to the handler (not dropped)")
+    void serverRequest_idZero_routedToHandler() {
+        // The valid JSON-RPC id 0 must reach the handler. A truthy `if (id)` check would
+        // drop it (0 is falsy) → the permission bridge silently breaks + cc hangs.
+        AtomicReference<AcpServerRequest> captured = new AtomicReference<>();
+        client.setServerRequestHandler((req, responder) -> captured.set(req));
+
+        transport.emit("{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"session/request_permission\","
+                + "\"params\":{\"sessionId\":\"sess-1\",\"options\":[{\"kind\":\"allow_once\","
+                + "\"name\":\"Allow\",\"optionId\":\"allow\"}],\"toolCall\":{\"toolCallId\":\"tc-1\"}}}");
+
+        assertThat(captured.get()).isNotNull();
+        assertThat(captured.get().id().asInt()).isEqualTo(0);
+        assertThat(captured.get().method()).isEqualTo("session/request_permission");
+    }
+
+    @Test
+    @DisplayName("P1b: async responder completed later writes the JSON-RPC response with the same id (incl. id 0)")
+    void serverRequest_asyncResponder_writesResponse() throws Exception {
+        AtomicReference<AcpResponder> capturedResponder = new AtomicReference<>();
+        // Handler does NOT respond synchronously on the reader thread — it stashes the
+        // responder and returns immediately (the bridge pattern, J-W3).
+        client.setServerRequestHandler((req, responder) -> capturedResponder.set(responder));
+
+        transport.emit("{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"session/request_permission\","
+                + "\"params\":{\"sessionId\":\"sess-1\"}}");
+
+        // No response yet — the handler deferred.
+        int sentBefore = transport.sent.size();
+        assertThat(sentBefore).isZero();
+
+        // Complete the responder from "another thread" (here: the test thread) later.
+        capturedResponder.get().selectPermissionOption("allow");
+
+        JsonNode reply = lastSentNode();
+        assertThat(reply.get("id").asInt()).isEqualTo(0);
+        assertThat(reply.get("result").get("outcome").get("outcome").asText()).isEqualTo("selected");
+        assertThat(reply.get("result").get("outcome").get("optionId").asText()).isEqualTo("allow");
+    }
+
+    @Test
+    @DisplayName("P1b: responder is idempotent — a second completion (e.g. timeout after answer) is a no-op")
+    void serverRequest_responder_idempotent() {
+        AtomicReference<AcpResponder> capturedResponder = new AtomicReference<>();
+        client.setServerRequestHandler((req, responder) -> capturedResponder.set(responder));
+
+        transport.emit("{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"session/request_permission\","
+                + "\"params\":{\"sessionId\":\"sess-1\"}}");
+
+        capturedResponder.get().selectPermissionOption("allow"); // human answer
+        capturedResponder.get().cancelPermission();              // racing timeout — no-op
+
+        // Exactly one response was written.
+        assertThat(transport.sent).hasSize(1);
+        JsonNode reply = lastSentNode();
+        assertThat(reply.get("result").get("outcome").get("outcome").asText()).isEqualTo("selected");
+    }
+
+    @Test
     @DisplayName("default handler DENIES an incoming permission request (sends cancelled outcome)")
     void serverRequest_defaultDenies() {
         // No custom handler set → default deny.

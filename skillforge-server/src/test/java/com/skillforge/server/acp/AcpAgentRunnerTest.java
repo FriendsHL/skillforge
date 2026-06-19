@@ -3,6 +3,7 @@ package com.skillforge.server.acp;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillforge.core.engine.ChatEventBroadcaster;
+import com.skillforge.core.model.ContentBlock;
 import com.skillforge.core.model.Message;
 import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.SessionEntity;
@@ -45,6 +46,7 @@ class AcpAgentRunnerTest {
 
     private static final String SUB_SESSION_ID = "sub-session-1";
     private static final long AGENT_ID = 7L;
+    private static final long CALLER_USER_ID = 1L;
 
     private ObjectMapper mapper;
     private SessionService sessionService;
@@ -89,8 +91,11 @@ class AcpAgentRunnerTest {
     private AcpAgentRunner runnerWith(FakeAcpTransport transport) {
         AcpClientFactory factory = (cwd, env) ->
                 new AcpClient(transport, mapper, new CcAcpUpdateTranslator());
+        AcpPermissionBridge bridge = new AcpPermissionBridge(
+                new com.skillforge.core.engine.confirm.PendingConfirmationRegistry(),
+                broadcaster, driverPool, 30);
         return new AcpAgentRunner(factory, sessionService, agentRepository,
-                broadcaster, mapper, properties);
+                broadcaster, mapper, properties, bridge);
     }
 
     /**
@@ -117,6 +122,8 @@ class AcpAgentRunnerTest {
                 } else if ("session/new".equals(method)) {
                     emit("{\"jsonrpc\":\"2.0\",\"id\":" + id
                             + ",\"result\":{\"sessionId\":\"cc-sess-1\"}}");
+                } else if ("session/set_mode".equals(method)) {
+                    emit("{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":{}}");
                 } else if ("session/prompt".equals(method)) {
                     // Drive the update stream + final result on a background thread so
                     // the calling thread (blocked on the prompt future) can complete.
@@ -144,12 +151,12 @@ class AcpAgentRunnerTest {
         FakeAcpTransport transport = scriptedTransport(List.of("Hello", ", ", "world"));
         AcpAgentRunner runner = runnerWith(transport);
 
-        String subSessionId = runner.run("say hi", null);
+        String subSessionId = runner.run("say hi", null, CALLER_USER_ID);
 
         assertThat(subSessionId).isEqualTo(SUB_SESSION_ID);
 
         // sub-session created.
-        verify(sessionService).createSession(eq(1L), eq(AGENT_ID));
+        verify(sessionService).createSession(eq(CALLER_USER_ID), eq(AGENT_ID));
 
         // each chunk broadcast live, in order.
         ArgumentCaptor<String> delta = ArgumentCaptor.forClass(String.class);
@@ -194,6 +201,8 @@ class AcpAgentRunnerTest {
                     emit("{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":{\"protocolVersion\":1}}");
                 } else if ("session/new".equals(method)) {
                     emit("{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":{\"sessionId\":\"cc-s\"}}");
+                } else if ("session/set_mode".equals(method)) {
+                    emit("{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":{}}");
                 } else if ("session/prompt".equals(method)) {
                     final long pid = id;
                     driverPool.execute(() -> {
@@ -209,7 +218,7 @@ class AcpAgentRunnerTest {
         };
         AcpAgentRunner runner = runnerWith(transport);
 
-        runner.run("ponder", null);
+        runner.run("ponder", null, CALLER_USER_ID);
 
         verify(broadcaster).reasoningDelta(SUB_SESSION_ID, "thinking");
         verify(broadcaster, never()).assistantDelta(eq(SUB_SESSION_ID), anyString());
@@ -242,7 +251,7 @@ class AcpAgentRunnerTest {
         };
         AcpAgentRunner runner = runnerWith(transport);
 
-        assertThatThrownBy(() -> runner.run("hi", null))
+        assertThatThrownBy(() -> runner.run("hi", null, CALLER_USER_ID))
                 .isInstanceOf(AcpException.class);
 
         // sub-session marked error + client closed.
@@ -275,13 +284,15 @@ class AcpAgentRunnerTest {
                     emit("{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":{\"protocolVersion\":1}}");
                 } else if ("session/new".equals(method)) {
                     emit("{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":{\"sessionId\":\"cc-s\"}}");
+                } else if ("session/set_mode".equals(method)) {
+                    emit("{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":{}}");
                 }
                 // session/prompt: deliberately silent → triggers the timeout branch.
             }
         };
         AcpAgentRunner runner = runnerWith(transport);
 
-        assertThatThrownBy(() -> runner.run("hang forever", null))
+        assertThatThrownBy(() -> runner.run("hang forever", null, CALLER_USER_ID))
                 .isInstanceOf(AcpException.class)
                 .hasMessageContaining("timed out");
 
@@ -316,6 +327,8 @@ class AcpAgentRunnerTest {
                             emit("{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":{\"protocolVersion\":1}}");
                     case "session/new" ->
                             emit("{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":{\"sessionId\":\"cc-s\"}}");
+                    case "session/set_mode" ->
+                            emit("{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":{}}");
                     case "session/set_model" -> {
                         sawSetModel.set(true);
                         emit("{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":{\"ok\":true}}");
@@ -331,7 +344,7 @@ class AcpAgentRunnerTest {
         };
         AcpAgentRunner runner = runnerWith(transport);
 
-        runner.run("hi", "sonnet");
+        runner.run("hi", "sonnet", CALLER_USER_ID);
 
         assertThat(sawSetModel.get()).isTrue();
         // verify a set_model line carried the modelId.
@@ -345,13 +358,203 @@ class AcpAgentRunnerTest {
         FakeAcpTransport transport = scriptedTransport(List.of("x"));
         AcpAgentRunner runner = runnerWith(transport);
 
-        assertThatThrownBy(() -> runner.run("  ", null))
+        assertThatThrownBy(() -> runner.run("  ", null, CALLER_USER_ID))
                 .isInstanceOf(IllegalArgumentException.class);
         verify(sessionService, never()).createSession(any(), any());
         assertThat(transport.started).isFalse();
     }
 
+    @Test
+    @DisplayName("tool_call → update(filled) → update(completed) persists a paired tool_use + tool_result (INV-1)")
+    void run_toolCall_paired() {
+        // Drive the captured cc tool_call lifecycle for one Bash tool.
+        FakeAcpTransport transport = toolCallTransport(List.of(
+                // pending tool_call
+                "{\"sessionUpdate\":\"tool_call\",\"toolCallId\":\"tc-1\",\"title\":\"Run ls\","
+                        + "\"kind\":\"execute\",\"status\":\"pending\",\"rawInput\":{},\"content\":[],"
+                        + "\"_meta\":{\"claudeCode\":{\"toolName\":\"Bash\"}}}",
+                // intermediate update: rawInput filled, not completed
+                "{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"tc-1\","
+                        + "\"rawInput\":{\"command\":\"ls\"},"
+                        + "\"content\":[{\"type\":\"content\",\"content\":{\"type\":\"text\",\"text\":\"...\"}}]}",
+                // completion
+                "{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"tc-1\",\"status\":\"completed\","
+                        + "\"rawOutput\":\"file1\\nfile2\","
+                        + "\"content\":[{\"type\":\"content\",\"content\":{\"type\":\"text\",\"text\":\"file1\"}}]}"
+        ));
+        AcpAgentRunner runner = runnerWith(transport);
+
+        AcpAgentRunner.RunResult result = runner.runResult("list files", null, CALLER_USER_ID);
+
+        assertThat(result.subagentCount()).isZero(); // Bash, not Task
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<Message>> persisted = ArgumentCaptor.forClass(List.class);
+        verify(sessionService).appendNormalMessages(eq(SUB_SESSION_ID), persisted.capture());
+        List<Message> turn = persisted.getValue();
+        // Canonical shape: ASSISTANT (tool_use) then USER (tool_result).
+        assertThat(turn).hasSize(2);
+        Message assistant = turn.get(0);
+        Message userToolResult = turn.get(1);
+        assertThat(assistant.getRole()).isEqualTo(Message.Role.ASSISTANT);
+        assertThat(userToolResult.getRole()).isEqualTo(Message.Role.USER);
+
+        List<ContentBlock> useBlocks = blocksOf(assistant);
+        List<ContentBlock> resultBlocks = blocksOf(userToolResult);
+        long toolUseCount = useBlocks.stream().filter(b -> "tool_use".equals(b.getType())).count();
+        long toolResultCount = resultBlocks.stream().filter(b -> "tool_result".equals(b.getType())).count();
+        assertThat(toolUseCount).isEqualTo(1);
+        assertThat(toolResultCount).isEqualTo(1);
+
+        ContentBlock toolUse = useBlocks.stream().filter(b -> "tool_use".equals(b.getType())).findFirst().orElseThrow();
+        ContentBlock toolResult = resultBlocks.stream().filter(b -> "tool_result".equals(b.getType())).findFirst().orElseThrow();
+        assertThat(toolUse.getId()).isEqualTo("tc-1");
+        assertThat(toolUse.getName()).isEqualTo("Bash"); // from _meta.claudeCode.toolName
+        assertThat(toolUse.getInput()).containsEntry("command", "ls"); // filled input
+        assertThat(toolResult.getToolUseId()).isEqualTo("tc-1"); // matching id (INV-1)
+        assertThat(toolResult.getContent()).isEqualTo("file1\nfile2");
+        assertThat(toolResult.getIsError()).isFalse();
+
+        // INV-1 (strong): the set of tool_use ids == the set of tool_result ids.
+        assertThat(useBlocks.stream().filter(b -> "tool_use".equals(b.getType())).map(ContentBlock::getId).toList())
+                .containsExactlyInAnyOrderElementsOf(
+                        resultBlocks.stream().filter(b -> "tool_result".equals(b.getType()))
+                                .map(ContentBlock::getToolUseId).toList());
+    }
+
+    @Test
+    @DisplayName("INV-1: a tool_use that never completes gets a synthesized error tool_result (no orphan)")
+    void run_incompleteToolCall_synthesizesResult() {
+        FakeAcpTransport transport = toolCallTransport(List.of(
+                "{\"sessionUpdate\":\"tool_call\",\"toolCallId\":\"tc-x\",\"title\":\"Write\","
+                        + "\"kind\":\"edit\",\"status\":\"pending\",\"rawInput\":{\"path\":\"a.txt\"},"
+                        + "\"_meta\":{\"claudeCode\":{\"toolName\":\"Write\"}}}"
+                // NO completion update → must be synthesized at run end.
+        ));
+        AcpAgentRunner runner = runnerWith(transport);
+
+        runner.runResult("write a file", null, CALLER_USER_ID);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<Message>> persisted = ArgumentCaptor.forClass(List.class);
+        verify(sessionService).appendNormalMessages(eq(SUB_SESSION_ID), persisted.capture());
+        List<Message> turn = persisted.getValue();
+        assertThat(turn).hasSize(2);
+        ContentBlock toolUse = blocksOf(turn.get(0)).stream()
+                .filter(b -> "tool_use".equals(b.getType())).findFirst().orElseThrow();
+        ContentBlock toolResult = blocksOf(turn.get(1)).stream()
+                .filter(b -> "tool_result".equals(b.getType())).findFirst().orElseThrow();
+        assertThat(toolUse.getId()).isEqualTo("tc-x");
+        assertThat(toolResult.getToolUseId()).isEqualTo("tc-x"); // matching id (INV-1)
+        assertThat(toolResult.getIsError()).isTrue();
+        assertThat(toolResult.getContent()).isEqualTo(AcpToolCallAccumulator.INCOMPLETE_RESULT);
+    }
+
+    @Test
+    @DisplayName("AC-2a: a Task tool_call increments the subagent count")
+    void run_taskToolCall_countsSubagent() {
+        FakeAcpTransport transport = toolCallTransport(List.of(
+                "{\"sessionUpdate\":\"tool_call\",\"toolCallId\":\"task-1\",\"title\":\"Dispatch\","
+                        + "\"kind\":\"execute\",\"status\":\"pending\",\"rawInput\":{},"
+                        + "\"_meta\":{\"claudeCode\":{\"toolName\":\"Task\"}}}",
+                "{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"task-1\",\"status\":\"completed\","
+                        + "\"rawOutput\":\"done\"}",
+                "{\"sessionUpdate\":\"tool_call\",\"toolCallId\":\"task-2\",\"title\":\"Dispatch2\","
+                        + "\"kind\":\"execute\",\"status\":\"pending\",\"rawInput\":{},"
+                        + "\"_meta\":{\"claudeCode\":{\"toolName\":\"Task\"}}}",
+                "{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"task-2\",\"status\":\"completed\","
+                        + "\"rawOutput\":\"done2\"}"
+        ));
+        AcpAgentRunner runner = runnerWith(transport);
+
+        AcpAgentRunner.RunResult result = runner.runResult("do two things", null, CALLER_USER_ID);
+
+        assertThat(result.subagentCount()).isEqualTo(2);
+        // count surfaced on the (viewable, persisted) sub-session title.
+        verify(broadcaster).sessionTitleUpdated(eq(SUB_SESSION_ID), eq("ACP cc run (2 subagents)"));
+    }
+
+    @Test
+    @DisplayName("compact-W3: a tool_call_update arriving BEFORE the initial tool_call → INV-1 still holds")
+    void run_updateBeforeToolCall_invariantHolds() {
+        // The completion update arrives FIRST (defensive computeIfAbsent path), the
+        // pending tool_call SECOND. The persisted turn must still pair use+result by id.
+        FakeAcpTransport transport = toolCallTransport(List.of(
+                "{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"tc-7\",\"status\":\"completed\","
+                        + "\"rawOutput\":\"early\",\"rawInput\":{\"command\":\"echo hi\"},"
+                        + "\"_meta\":{\"claudeCode\":{\"toolName\":\"Bash\"}}}",
+                "{\"sessionUpdate\":\"tool_call\",\"toolCallId\":\"tc-7\",\"title\":\"Run echo\","
+                        + "\"kind\":\"execute\",\"status\":\"pending\",\"rawInput\":{},"
+                        + "\"_meta\":{\"claudeCode\":{\"toolName\":\"Bash\"}}}"
+        ));
+        AcpAgentRunner runner = runnerWith(transport);
+
+        runner.runResult("echo", null, CALLER_USER_ID);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<Message>> persisted = ArgumentCaptor.forClass(List.class);
+        verify(sessionService).appendNormalMessages(eq(SUB_SESSION_ID), persisted.capture());
+        List<Message> turn = persisted.getValue();
+        assertThat(turn).hasSize(2); // ASSISTANT(tool_use) + USER(tool_result)
+        ContentBlock toolUse = blocksOf(turn.get(0)).stream()
+                .filter(b -> "tool_use".equals(b.getType())).findFirst().orElseThrow();
+        ContentBlock toolResult = blocksOf(turn.get(1)).stream()
+                .filter(b -> "tool_result".equals(b.getType())).findFirst().orElseThrow();
+        assertThat(toolUse.getId()).isEqualTo("tc-7");
+        assertThat(toolUse.getName()).isEqualTo("Bash");
+        assertThat(toolResult.getToolUseId()).isEqualTo("tc-7"); // matching id (INV-1)
+        assertThat(toolResult.getIsError()).isFalse();
+        assertThat(toolResult.getContent()).isEqualTo("early");
+    }
+
+    /**
+     * Transport that acks the handshake (initialize/session/new/set_mode) and, on
+     * session/prompt, streams the given canned {@code update} objects (each wrapped
+     * in a session/update notification) then the final end_turn result.
+     */
+    private FakeAcpTransport toolCallTransport(List<String> updateObjects) {
+        return new FakeAcpTransport() {
+            @Override
+            public void send(String jsonLine) {
+                super.send(jsonLine);
+                JsonNode msg;
+                try {
+                    msg = mapper.readTree(jsonLine);
+                } catch (Exception e) {
+                    return;
+                }
+                String method = msg.path("method").asText("");
+                long id = msg.path("id").asLong(-1);
+                switch (method) {
+                    case "initialize" ->
+                            emit("{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":{\"protocolVersion\":1}}");
+                    case "session/new" ->
+                            emit("{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":{\"sessionId\":\"cc-s\"}}");
+                    case "session/set_mode" ->
+                            emit("{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":{}}");
+                    case "session/prompt" -> {
+                        final long pid = id;
+                        driverPool.execute(() -> {
+                            for (String upd : updateObjects) {
+                                emit("{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{"
+                                        + "\"sessionId\":\"cc-s\",\"update\":" + upd + "}}");
+                            }
+                            emit("{\"jsonrpc\":\"2.0\",\"id\":" + pid
+                                    + ",\"result\":{\"stopReason\":\"end_turn\"}}");
+                        });
+                    }
+                    default -> { /* no-op */ }
+                }
+            }
+        };
+    }
+
     // ── helpers ──
+
+    @SuppressWarnings("unchecked")
+    private List<ContentBlock> blocksOf(Message m) {
+        return (List<ContentBlock>) m.getContent();
+    }
 
     private String textOf(Message m) {
         Object content = m.getContent();

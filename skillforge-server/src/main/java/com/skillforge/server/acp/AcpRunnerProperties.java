@@ -41,6 +41,21 @@ public class AcpRunnerProperties {
     /** Per-prompt deadline in seconds. cc's futures never time out by contract. */
     private long promptTimeoutSeconds = 300;
 
+    /**
+     * Deadline in seconds for a human to answer a bridged cc permission request
+     * (AC-3). If the user never answers, the bridge responds {@code cancelled} so
+     * the cc session does not hang.
+     */
+    private long permissionTimeoutSeconds = 300;
+
+    /**
+     * security-W3: max threads for the bounded permission-wait pool. Each in-flight
+     * permission request holds one thread for up to {@code permissionTimeoutSeconds}.
+     * Bounded to prevent thread-exhaustion DoS; on overflow the bridge responds
+     * {@code cancelled} inline.
+     */
+    private int permissionWaitMaxThreads = 16;
+
     public String getAdapterPackage() {
         return adapterPackage;
     }
@@ -80,5 +95,21 @@ public class AcpRunnerProperties {
 
     public void setPromptTimeoutSeconds(long promptTimeoutSeconds) {
         this.promptTimeoutSeconds = promptTimeoutSeconds > 0 ? promptTimeoutSeconds : 300;
+    }
+
+    public long getPermissionTimeoutSeconds() {
+        return permissionTimeoutSeconds;
+    }
+
+    public void setPermissionTimeoutSeconds(long permissionTimeoutSeconds) {
+        this.permissionTimeoutSeconds = permissionTimeoutSeconds > 0 ? permissionTimeoutSeconds : 300;
+    }
+
+    public int getPermissionWaitMaxThreads() {
+        return permissionWaitMaxThreads;
+    }
+
+    public void setPermissionWaitMaxThreads(int permissionWaitMaxThreads) {
+        this.permissionWaitMaxThreads = permissionWaitMaxThreads > 0 ? permissionWaitMaxThreads : 16;
     }
 }

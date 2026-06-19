@@ -3,6 +3,7 @@ package com.skillforge.server.acp;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillforge.core.engine.ChatEventBroadcaster;
+import com.skillforge.core.model.ContentBlock;
 import com.skillforge.core.model.Message;
 import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.SessionEntity;
@@ -14,6 +15,7 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -60,25 +62,38 @@ public class AcpAgentRunner {
 
     private static final Logger log = LoggerFactory.getLogger(AcpAgentRunner.class);
 
+    /** cc permission mode that prompts for dangerous operations (AC-3). */
+    private static final String PROMPT_MODE_ID = "default";
+
     private final AcpClientFactory clientFactory;
     private final SessionService sessionService;
     private final AgentRepository agentRepository;
     private final ChatEventBroadcaster broadcaster;
     private final ObjectMapper objectMapper;
     private final AcpRunnerProperties properties;
+    private final AcpPermissionBridge permissionBridge;
 
     public AcpAgentRunner(AcpClientFactory clientFactory,
                           SessionService sessionService,
                           AgentRepository agentRepository,
                           ChatEventBroadcaster broadcaster,
                           ObjectMapper objectMapper,
-                          AcpRunnerProperties properties) {
+                          AcpRunnerProperties properties,
+                          AcpPermissionBridge permissionBridge) {
         this.clientFactory = clientFactory;
         this.sessionService = sessionService;
         this.agentRepository = agentRepository;
         this.broadcaster = broadcaster;
         this.objectMapper = objectMapper;
         this.properties = properties;
+        this.permissionBridge = permissionBridge;
+    }
+
+    /**
+     * Result of one ACP run: the created sub-session id plus the number of cc
+     * subagent dispatches observed (AC-2a; a {@code Task} tool_call = one subagent).
+     */
+    public record RunResult(String subSessionId, int subagentCount) {
     }
 
     /**
@@ -89,25 +104,42 @@ public class AcpAgentRunner {
      *
      * @param prompt the user prompt to send to cc (required, non-blank)
      * @param model  optional cc model id (from {@code session/new} models); null ⇒ cc default
+     * @param userId the authenticated caller's id — OWNS the created sub-session
+     *               (BLOCKER-1a: must not default to the config user, or any caller
+     *               could later answer another user's permission prompt)
      * @return the created SkillForge sub-session id
      */
-    public String run(String prompt, String model) {
+    public String run(String prompt, String model, Long userId) {
+        return runResult(prompt, model, userId).subSessionId();
+    }
+
+    /**
+     * Run a cc prompt as a sub-session and stream it live, returning the created
+     * sub-session id AND the cc subagent count (AC-2a).
+     *
+     * @param userId the authenticated caller's id; OWNS the sub-session (BLOCKER-1a)
+     */
+    public RunResult runResult(String prompt, String model, Long userId) {
         if (prompt == null || prompt.isBlank()) {
             throw new IllegalArgumentException("prompt must not be blank");
         }
+        if (userId == null) {
+            throw new IllegalArgumentException("userId must not be null");
+        }
 
-        SessionEntity session = createRunSession();
+        SessionEntity session = createRunSession(userId);
         String subSessionId = session.getId();
 
         Path cwd = null;
         AcpClient client = null;
-        // W-5: assistantText is WRITTEN on the cc transport reader thread (via the
-        // update listener) and READ on this caller thread only AFTER promptFuture.get()
-        // returns. CompletableFuture.get() establishes a happens-before edge between the
-        // reader thread's last write (which precedes the future completion) and this
-        // thread's read, so no extra synchronization is needed. (Reads in the error/
-        // timeout path don't touch assistantText.)
+        // W-5: assistantText + toolCalls are WRITTEN on the cc transport reader thread
+        // (via the update listener) and READ on this caller thread only AFTER
+        // promptFuture.get() returns. CompletableFuture.get() establishes a happens-before
+        // edge between the reader thread's last write (which precedes the future completion)
+        // and this thread's read, so no extra synchronization is needed. (Reads in the
+        // error/timeout path don't touch them.)
         StringBuilder assistantText = new StringBuilder();
+        AcpToolCallAccumulator toolCalls = new AcpToolCallAccumulator(objectMapper);
         // W-2: ensure assistantStreamEnd fires at most once per run, even if finishOk
         // partially succeeds (stream-end emitted) then throws → outer catch → finishError.
         AtomicBoolean streamEnded = new AtomicBoolean(false);
@@ -120,7 +152,12 @@ public class AcpAgentRunner {
             client = clientFactory.create(cwd.toString(), Map.of());
 
             // Accumulate + live-stream. Runs on the cc reader thread — keep it non-blocking.
-            client.setUpdateListener(u -> onUpdate(subSessionId, u, assistantText));
+            client.setUpdateListener(u -> onUpdate(subSessionId, u, assistantText, toolCalls));
+            // Permission bridge: async (J-W3) — handler returns immediately, the latch
+            // wait runs on the bridge's executor and answers via the responder later.
+            final String sid = subSessionId;
+            client.setServerRequestHandler((req, responder) ->
+                    permissionBridge.handlePermissionRequest(sid, req, responder));
             client.start();
 
             client.initialize().get(handshakeTimeout(), TimeUnit.SECONDS);
@@ -128,6 +165,11 @@ public class AcpAgentRunner {
             JsonNode newSessionResult = client.newSession(cwd.toString(), List.of())
                     .get(handshakeTimeout(), TimeUnit.SECONDS);
             String ccSessionId = requireCcSessionId(newSessionResult);
+
+            // AC-3: switch to the prompting mode so cc emits session/request_permission
+            // for dangerous operations (default session mode is auto = no prompt).
+            // Best-effort: if the adapter rejects set_mode, the run still proceeds.
+            trySetPromptMode(client, ccSessionId, subSessionId);
 
             if (model != null && !model.isBlank()) {
                 client.setModel(ccSessionId, model).get(handshakeTimeout(), TimeUnit.SECONDS);
@@ -154,8 +196,9 @@ public class AcpAgentRunner {
 
             String stopReason = (promptResult != null && promptResult.hasNonNull("stopReason"))
                     ? promptResult.get("stopReason").asText() : "unknown";
-            finishOk(subSessionId, assistantText.toString(), stopReason, streamEnded);
-            return subSessionId;
+            int subagents = toolCalls.subagentCount();
+            finishOk(subSessionId, assistantText.toString(), toolCalls, stopReason, subagents, streamEnded);
+            return new RunResult(subSessionId, subagents);
         } catch (Exception e) {
             log.error("ACP run failed for sub-session {}: {}", subSessionId, e.toString(), e);
             finishError(subSessionId, e, streamEnded);
@@ -172,11 +215,26 @@ public class AcpAgentRunner {
         }
     }
 
+    /** Best-effort {@code session/set_mode default} so cc prompts for permission (AC-3). */
+    private void trySetPromptMode(AcpClient client, String ccSessionId, String subSessionId) {
+        try {
+            client.setMode(ccSessionId, PROMPT_MODE_ID).get(handshakeTimeout(), TimeUnit.SECONDS);
+        } catch (Exception e) {
+            // Non-fatal: an adapter without set_mode just stays in its default mode
+            // (no per-request prompts). Log and continue rather than failing the run.
+            log.warn("ACP set_mode '{}' failed (sub-session {}): {}",
+                    PROMPT_MODE_ID, subSessionId, e.toString());
+        }
+    }
+
     // ───────────────────────────── session lifecycle ─────────────────────────────
 
-    private SessionEntity createRunSession() {
+    private SessionEntity createRunSession(Long ownerUserId) {
         Long agentId = resolveAgentId();
-        SessionEntity session = sessionService.createSession(properties.getUserId(), agentId);
+        // BLOCKER-1a: the sub-session is owned by the authenticated caller, NOT the
+        // config default user — so requireOwnedSession on the confirmation endpoint
+        // binds permission approval to the run's owner.
+        SessionEntity session = sessionService.createSession(ownerUserId, agentId);
         session.setTitle("ACP cc run");
         return sessionService.saveSession(session);
     }
@@ -206,27 +264,72 @@ public class AcpAgentRunner {
         broadcaster.sessionStatus(session.getId(), "running", "ACP cc", null);
     }
 
-    private void finishOk(String subSessionId, String fullText, String stopReason, AtomicBoolean streamEnded) {
-        Message assistantMsg = Message.assistant(fullText);
+    private void finishOk(String subSessionId, String fullText, AcpToolCallAccumulator toolCalls,
+                          String stopReason, int subagentCount, AtomicBoolean streamEnded) {
+        // Build the turn in the canonical SkillForge/Anthropic shape so it renders and
+        // can be loaded/compacted later (the compact pairing logic expects tool_result
+        // in a FOLLOWING user message, not inside the assistant message):
+        //   - ASSISTANT: leading text (if any) + tool_use blocks;
+        //   - USER:      the matching tool_result blocks (INV-1, paired by id; an
+        //                incomplete tool_use gets a synthesized error tool_result).
+        // When there are no tool calls, persist plain text (string content) so
+        // text-only runs stay byte-identical to P1a-2.
+        List<Message> turn = new ArrayList<>(2);
+        Message assistantMsg;
+        if (toolCalls.hasAnyToolCalls()) {
+            List<ContentBlock> assistantBlocks = new ArrayList<>();
+            if (!fullText.isEmpty()) {
+                assistantBlocks.add(ContentBlock.text(fullText));
+            }
+            assistantBlocks.addAll(toolCalls.buildToolUseBlocks());
+            assistantMsg = new Message();
+            assistantMsg.setRole(Message.Role.ASSISTANT);
+            assistantMsg.setContent(assistantBlocks);
+            turn.add(assistantMsg);
+
+            Message toolResultMsg = new Message();
+            toolResultMsg.setRole(Message.Role.USER);
+            toolResultMsg.setContent(toolCalls.buildToolResultBlocks());
+            turn.add(toolResultMsg);
+        } else {
+            assistantMsg = Message.assistant(fullText);
+            turn.add(assistantMsg);
+        }
+
         // Option A: persist via the normal append path (no hand-written rows).
         // W-2: emit assistantStreamEnd only AFTER persistence succeeds — if append throws,
         // the outer catch → finishError handles stream-end (guarded), so it fires once.
-        sessionService.appendNormalMessages(subSessionId, List.of(assistantMsg));
+        sessionService.appendNormalMessages(subSessionId, turn);
 
         emitStreamEndOnce(subSessionId, streamEnded);
-        broadcaster.messageAppended(subSessionId, null, assistantMsg);
+        for (Message m : turn) {
+            broadcaster.messageAppended(subSessionId, null, m);
+        }
 
         SessionEntity session = sessionService.getSession(subSessionId);
         session.setRuntimeStatus("idle");
         session.setRuntimeStep(null);
         session.setRuntimeError(null);
+        // AC-2a: surface the subagent count on the (viewable, persisted) sub-session title.
+        if (subagentCount > 0) {
+            session.setTitle("ACP cc run (" + subagentCount
+                    + (subagentCount == 1 ? " subagent)" : " subagents)"));
+            if (broadcaster != null) {
+                broadcaster.sessionTitleUpdated(subSessionId, session.getTitle());
+            }
+        }
         sessionService.saveSession(session);
         broadcaster.sessionStatus(subSessionId, "idle", null, null);
-        log.info("ACP run completed (sub-session {}, stopReason={}, chars={})",
-                subSessionId, stopReason, fullText.length());
+        log.info("ACP run completed (sub-session {}, stopReason={}, chars={}, subagents={})",
+                subSessionId, stopReason, fullText.length(), subagentCount);
     }
 
     private void finishError(String subSessionId, Exception e, AtomicBoolean streamEnded) {
+        // compact-W4: the run's accumulated tool calls are INTENTIONALLY discarded on
+        // the error path — we do NOT partially persist tool_use/tool_result here. A
+        // partial persist could leave an orphan tool_use (its completion may never have
+        // arrived) violating INV-1; finishOk is the only place that persists the turn,
+        // and only it pairs every tool_use with a (real or synthesized) tool_result.
         try {
             emitStreamEndOnce(subSessionId, streamEnded);
             SessionEntity session = sessionService.getSession(subSessionId);
@@ -250,17 +353,38 @@ public class AcpAgentRunner {
     // ───────────────────────────── update streaming ─────────────────────────────
 
     /** Live-stream a translated update. Runs on the cc reader thread — non-blocking. */
-    private void onUpdate(String subSessionId, AcpSessionUpdate u, StringBuilder assistantText) {
+    private void onUpdate(String subSessionId, AcpSessionUpdate u, StringBuilder assistantText,
+                          AcpToolCallAccumulator toolCalls) {
         AcpUpdate update = u.update();
         if (update instanceof AcpUpdate.TextChunk text) {
             assistantText.append(text.text());
             broadcaster.assistantDelta(subSessionId, text.text());
         } else if (update instanceof AcpUpdate.ThoughtChunk thought) {
             broadcaster.reasoningDelta(subSessionId, thought.text());
+        } else if (update instanceof AcpUpdate.ToolCall tc) {
+            // tool_call (pending) → start a tool_use; stream it to the UI.
+            toolCalls.onToolCall(tc);
+            if (tc.toolCallId() != null) {
+                broadcaster.toolStarted(subSessionId, tc.toolCallId(),
+                        toolCalls.nameOf(tc.toolCallId()), toolCalls.inputOf(tc.toolCallId()));
+            }
+        } else if (update instanceof AcpUpdate.ToolCallUpdate tcu) {
+            // tool_call_update: refine input (UI) and, on completion, record tool_result.
+            // No double-persist — buildToolUseBlocks()/buildToolResultBlocks() at run
+            // end emit one pair per id.
+            toolCalls.onToolCallUpdate(tcu);
+            if (tcu.toolCallId() != null) {
+                if ("completed".equals(tcu.status()) || "failed".equals(tcu.status())) {
+                    broadcaster.toolFinished(subSessionId, tcu.toolCallId(),
+                            tcu.status(), 0L, null);
+                } else {
+                    broadcaster.toolUseComplete(subSessionId, tcu.toolCallId(),
+                            toolCalls.inputOf(tcu.toolCallId()));
+                }
+            }
         } else {
-            // tool_call / tool_call_update / plan / available_commands / mode / unknown:
-            // P1b handles tool rendering; for P1a-2 just log so we never crash on them.
-            log.debug("ACP update ignored in P1a-2 (sub-session {}): kind={}", subSessionId, update.rawKind());
+            // plan / available_commands / mode / unknown: log so we never crash on them.
+            log.debug("ACP update ignored (sub-session {}): kind={}", subSessionId, update.rawKind());
         }
     }
 

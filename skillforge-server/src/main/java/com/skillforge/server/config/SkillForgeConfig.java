@@ -1706,14 +1706,53 @@ public class SkillForgeConfig {
                 acpRunnerProperties.getAdapterPackage());
     }
 
+    /**
+     * Worker pool for the ACP permission bridge: it runs the blocking confirmation
+     * latch wait OFF the cc reader thread (J-W3).
+     *
+     * <p>security-W3: BOUNDED (max {@code permissionWaitMaxThreads}, default 16) with
+     * an {@code AbortPolicy} so a flood of permission requests can NOT exhaust
+     * threads (DoS). On rejection the bridge catches {@link
+     * java.util.concurrent.RejectedExecutionException} and responds {@code cancelled}
+     * inline so the cc session never hangs. Broader rate-limiting is deferred to P1c.
+     */
+    @Bean(destroyMethod = "shutdownNow")
+    public java.util.concurrent.ExecutorService acpPermissionWaitExecutor(
+            AcpRunnerProperties acpRunnerProperties) {
+        java.util.concurrent.atomic.AtomicInteger n = new java.util.concurrent.atomic.AtomicInteger();
+        int max = acpRunnerProperties.getPermissionWaitMaxThreads();
+        return new java.util.concurrent.ThreadPoolExecutor(
+                0, max,
+                60L, java.util.concurrent.TimeUnit.SECONDS,
+                new java.util.concurrent.SynchronousQueue<>(),
+                r -> {
+                    Thread t = new Thread(r, "acp-perm-wait-" + n.incrementAndGet());
+                    t.setDaemon(true);
+                    return t;
+                },
+                new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
+    }
+
+    @Bean
+    public com.skillforge.server.acp.AcpPermissionBridge acpPermissionBridge(
+            com.skillforge.core.engine.confirm.PendingConfirmationRegistry pendingConfirmationRegistry,
+            ChatEventBroadcaster broadcaster,
+            java.util.concurrent.ExecutorService acpPermissionWaitExecutor,
+            AcpRunnerProperties acpRunnerProperties) {
+        return new com.skillforge.server.acp.AcpPermissionBridge(
+                pendingConfirmationRegistry, broadcaster, acpPermissionWaitExecutor,
+                acpRunnerProperties.getPermissionTimeoutSeconds());
+    }
+
     @Bean
     public AcpAgentRunner acpAgentRunner(AcpClientFactory acpClientFactory,
                                          SessionService sessionService,
                                          AgentRepository agentRepository,
                                          ChatEventBroadcaster broadcaster,
                                          ObjectMapper objectMapper,
-                                         AcpRunnerProperties acpRunnerProperties) {
+                                         AcpRunnerProperties acpRunnerProperties,
+                                         com.skillforge.server.acp.AcpPermissionBridge acpPermissionBridge) {
         return new AcpAgentRunner(acpClientFactory, sessionService, agentRepository,
-                broadcaster, objectMapper, acpRunnerProperties);
+                broadcaster, objectMapper, acpRunnerProperties, acpPermissionBridge);
     }
 }
