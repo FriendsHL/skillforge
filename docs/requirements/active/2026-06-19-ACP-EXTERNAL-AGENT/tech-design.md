@@ -46,6 +46,15 @@ SkillForge 观测层说**真 OTLP**，以便：① 原生接 cc/codex OTel；②
 ## tool_use ↔ tool_result 不变量（必守）
 cc 的 tool_call 翻译进 SkillForge 持久化路径，必须满足 tool_use↔tool_result 配对 + 持久化-engine 字节一致不变量（见 persistence-shape-invariant / 核心文件清单）。若不入 engine messages、仅展示 → 用展示专用变体，不碰持久化对账。**Plan 阶段必须显式定这条边界。**
 
+## P1a 进度（实现中）
+- **P1a-1 ✅（commit `acbd9db6`）**：纯 ACP 协议层（AcpClient + AcpTransport seam + AcpUpdate sealed + AcpUpdateTranslator 接口 + CcAcpUpdateTranslator）。28 单测 + gated live IT。
+- **P1a-2 ✅（AC-1）**：AcpAgentRunner — cc 文本/reasoning 流进可查看的子 session + 持久化(Option A) + 最小触发 endpoint `POST /api/acp/runs`(demo-only,AuthInterceptor token 鉴权)。java + security reviewer PASS 0 blocker。
+  - **P1c 前必修硬化项（P1a-2 review 延期,真 RunExternalAgent 工具 / 生产暴露时落地）**：
+    - 并发上限 / `/api/acp/**` 限流（security WARN-1：防 loop-call spawn 大量 cc 进程 DoS+成本）
+    - `model` 字符串校验（security WARN-2）
+    - `workspaceRoot` 启动存在性 guard（security WARN-3）
+    - 300s 阻塞请求线程改 async 包装（java W-4）
+
 ## 分期建议
 - **P1（Track A 最小闭环）**：AcpClient + cc 单 agent + Translator(text/tool_call/reasoning) + 权限桥 + 子 session 渲染 + 结果回投。AC-1/2a/3/5。先不接 OTel 深度。
 - **P2（Track B = B1 适配器,观测深度)**：OTLP receiver + 翻译器(OTel SpanData→LlmTraceStore) + TRACEPARENT/RESOURCE_ATTRIBUTES 绑定。AC-2b/4。~5–7d。

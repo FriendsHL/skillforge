@@ -11,6 +11,13 @@ import com.skillforge.core.compact.recovery.RecoveryPayloadBuilder;
 import com.skillforge.core.engine.AgentLoopEngine;
 import com.skillforge.core.engine.CancellationRegistry;
 import com.skillforge.core.engine.ChatEventBroadcaster;
+import com.skillforge.server.acp.AcpAgentRunner;
+import com.skillforge.server.acp.AcpClientFactory;
+import com.skillforge.server.acp.AcpRunnerProperties;
+import com.skillforge.server.acp.AcpUpdateTranslator;
+import com.skillforge.server.acp.CcAcpUpdateTranslator;
+import com.skillforge.server.acp.ProcessAcpClientFactory;
+import com.skillforge.server.repository.AgentRepository;
 import com.skillforge.core.engine.LoopContext;
 import com.skillforge.core.engine.PendingAskRegistry;
 import com.skillforge.core.engine.SafetySkillHook;
@@ -135,7 +142,8 @@ import java.util.concurrent.TimeUnit;
         EvalUserSimulatorProperties.class,
         WebToolsProperties.class,
         MemoryTranscriptProperties.class,
-        EvolveThresholdProperties.class
+        EvolveThresholdProperties.class,
+        AcpRunnerProperties.class
 })
 public class SkillForgeConfig {
 
@@ -1679,5 +1687,33 @@ public class SkillForgeConfig {
         log.info("workflowSubAgentExecutor concurrency cap = {} (configured={}, "
                 + "skillforge.workflow.subagent-concurrency)", max, configured);
         return executor;
+    }
+
+    // ───────────────────────── ACP-EXTERNAL-AGENT (P1a-2) ─────────────────────────
+
+    /** cc-dialect {@code session/update} translator. P3 adds a codex translator. */
+    @Bean
+    public AcpUpdateTranslator acpUpdateTranslator() {
+        return new CcAcpUpdateTranslator();
+    }
+
+    /** Per-run AcpClient factory — spawns a fresh cc adapter process per run. */
+    @Bean
+    public AcpClientFactory acpClientFactory(ObjectMapper objectMapper,
+                                             AcpUpdateTranslator acpUpdateTranslator,
+                                             AcpRunnerProperties acpRunnerProperties) {
+        return new ProcessAcpClientFactory(objectMapper, acpUpdateTranslator,
+                acpRunnerProperties.getAdapterPackage());
+    }
+
+    @Bean
+    public AcpAgentRunner acpAgentRunner(AcpClientFactory acpClientFactory,
+                                         SessionService sessionService,
+                                         AgentRepository agentRepository,
+                                         ChatEventBroadcaster broadcaster,
+                                         ObjectMapper objectMapper,
+                                         AcpRunnerProperties acpRunnerProperties) {
+        return new AcpAgentRunner(acpClientFactory, sessionService, agentRepository,
+                broadcaster, objectMapper, acpRunnerProperties);
     }
 }
