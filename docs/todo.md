@@ -9,6 +9,7 @@
 
 | 顺序 | ID | 标题 | 模式 | 状态 | 优先级 | 风险 | 文档 | 下一步 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 0 | **COMPACT-IDEMPOTENCY-BOUNDARY-FIX** 🔴 | 压缩失效：①负 gap idempotency 计数空间错配→曾压过的 session 自动压缩永久跳过(线上微信 agent 1.7×窗口裸跑) ②tool-heavy(SubAgent/Team)找不到 safe boundary→压不动 ③总结输入无窗口保护(潜在)。+缓解:agent 窗口配置/resolveContextWindow 走 per-model map | Full | **立项/待修(高优先)** | P1 | Full | [需求包](requirements/active/2026-06-19-COMPACT-IDEMPOTENCY-BOUNDARY-FIX/index.md) | 明天先修(compact-reviewer)→ 再 ACP；开工补 tech-design |
 | 1 | **AUTOEVOLVING-MASTER** ⭐ | autoEvolving 总包（V2-V5）。V1 已交付，V2-V5 ~5-6 个月（V2 AUTORESEARCH+K-1 / V3 K-4 outer loop+3 信号源 / V4 SkillsBench / V5 框架自进化） | Full 总包 | prd 待 ratify | P2 | Full | [需求包](requirements/active/2026-05-28-AUTOEVOLVING-MASTER/index.md) | 起 V2 子包后启动 Plan |
 | 2 | **AUTOEVOLVE-CLOSE-LOOP** | 闭环采纳 + 对靶改进 + benchmark 验证。P1/P2/G5/BC-M1/BC-M2a/engine-fix/阶段A 已交付，阶段B/G3/P3 未做 | Full | 部分交付 | P2 | Full | [需求包](requirements/active/2026-06-03-AUTOEVOLVE-CLOSE-LOOP/index.md) | 阶段B（EVOLVE-BADCASE-SENSITIVITY）等用户拍是否升 active |
 | 3 | **EVOLVE-JUDGE-GROUNDING** | 自进化判定优化（blog 复盘）。Phase 1 配对/comparative 判定**已交付**（复用 perScenarioFlips net-wins，治绝对打分噪声→0 赢家，无 schema 改） | Full | Phase 1 已交付 / Phase 2 见 #3b | P2 | Full | [需求包](requirements/active/2026-06-17-EVOLVE-JUDGE-GROUNDING/index.md) | — |
