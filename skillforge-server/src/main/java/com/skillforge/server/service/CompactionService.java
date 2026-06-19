@@ -75,7 +75,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * <p>事务: light 路径通过 {@link TransactionTemplate} 包裹 DB 操作; full 路径 Phase 3 同样.
  */
 @Service
-public class CompactionService implements ContextCompactorCallback {
+public class CompactionService implements ContextCompactorCallback, SessionService.CompactionLockProvider {
 
     private static final Logger log = LoggerFactory.getLogger(CompactionService.class);
 
@@ -167,6 +167,11 @@ public class CompactionService implements ContextCompactorCallback {
         this.eventRepository = eventRepository;
         this.checkpointRepository = checkpointRepository;
         this.sessionService = sessionService;
+        // P2b B1: hand SessionService this service as its compaction lock provider so
+        // updateSessionMessages can serialize reconciliation against compaction Phase 3 using the
+        // SAME per-session stripe lock. Registering from the constructor (not @Autowired setter)
+        // keeps the wiring deterministic and avoids a Spring circular-dependency setter cycle.
+        sessionService.setCompactionLockProvider(this);
         this.lightStrategy = lightStrategy;
         this.fullStrategy = fullStrategy;
         this.llmProviderFactory = llmProviderFactory;
@@ -294,6 +299,13 @@ public class CompactionService implements ContextCompactorCallback {
                 branch.setRuntimeStatus("idle");
                 branch = sessionService.saveSession(branch);
                 sessionService.rewriteMessages(branch.getId(), checkpointMessages);
+                // P2b B2 (§4): range-model branch — copy the source summaries that fall fully within
+                // the branch's seq range to the branch session (new ids, remapped superseded_by),
+                // then re-derive the branch markers. Branch rows keep the source seq_nos (rewrite
+                // reassigns 0..endSeq contiguously, matching source), so summary ranges transfer 1:1.
+                long branchEndSeq = resolveCheckpointEndSeq(checkpoint);
+                copyRangeSummariesToBranch(sessionId, branch.getId(), branchEndSeq);
+                sessionService.recomputeCompactedMarkers(branch.getId());
                 branchRef[0] = branch;
             });
             String branchId = branchRef[0] != null ? branchRef[0].getId() : null;
@@ -314,6 +326,15 @@ public class CompactionService implements ContextCompactorCallback {
                 sessionService.rewriteMessages(sessionId, checkpointMessages);
                 // restore 后旧 seq 空间失效，清理“位于恢复点之后”的 checkpoint，避免后续回放歧义。
                 checkpointRepository.deleteBySessionIdAfterSeqNo(sessionId, restoreEndSeq);
+                // P2b B2 (§4): range-model restore — drop summaries whose covered range extends past
+                // the restore point (their rows no longer exist), then re-derive markers from the
+                // surviving active summaries. rewriteMessages already ran one recompute, but it used
+                // the pre-prune summary set; this post-prune recompute is the authoritative pass.
+                // No-op when the flag is OFF / no summaries. Runs in the SAME restore transaction.
+                if (rangeModelEnabled && sessionSummaryRepository != null) {
+                    sessionSummaryRepository.deleteBySessionIdAndEndSeqGreaterThan(sessionId, restoreEndSeq);
+                    sessionService.recomputeCompactedMarkers(sessionId);
+                }
                 SessionEntity updated = sessionService.getSession(sessionId);
                 updated.setRuntimeStatus("idle");
                 updated.setRuntimeStep("restored_checkpoint");
@@ -903,6 +924,61 @@ public class CompactionService implements ContextCompactorCallback {
             out.add(rec);
         }
         return out;
+    }
+
+    /**
+     * COMPACT-IDEMPOTENCY-BOUNDARY-FIX storage redesign P2b (§4, B2): copy the source session's
+     * summaries that lie fully within {@code [0, branchEndSeq]} onto {@code branchId} as fresh rows
+     * (new auto-generated ids), preserving the {@code superseded_by} chain by remapping old→new ids.
+     *
+     * <p>Branch rows carry the same seq_nos as the source rows up to {@code branchEndSeq} (the rewrite
+     * reassigns 0..N contiguously), so a summary's {@code [start_seq,end_seq]} transfers verbatim.
+     * Summaries whose {@code end_seq > branchEndSeq} are skipped (their rows are not in the branch).
+     * No-op when the flag is OFF / store unwired. Runs inside the branch-creation transaction.
+     */
+    private void copyRangeSummariesToBranch(String sourceSessionId, String branchId, long branchEndSeq) {
+        if (!rangeModelEnabled || sessionSummaryRepository == null) {
+            return;
+        }
+        List<SessionSummaryEntity> sourceSummaries =
+                sessionSummaryRepository.findBySessionIdOrderByStartSeqAsc(sourceSessionId);
+        if (sourceSummaries.isEmpty()) {
+            return;
+        }
+        // Pass 1: copy each in-range summary, recording old-id → new-entity for superseded_by remap.
+        Map<Long, SessionSummaryEntity> oldIdToNew = new HashMap<>();
+        for (SessionSummaryEntity src : sourceSummaries) {
+            if (src.getEndSeq() > branchEndSeq) {
+                continue; // covered rows not present in the branch
+            }
+            SessionSummaryEntity copy = new SessionSummaryEntity();
+            copy.setSessionId(branchId);
+            copy.setStartSeq(src.getStartSeq());
+            copy.setEndSeq(src.getEndSeq());
+            copy.setSummaryText(src.getSummaryText());
+            copy.setLevel(src.getLevel());
+            copy.setSource(src.getSource());
+            copy.setTokensBefore(src.getTokensBefore());
+            copy.setTokensAfter(src.getTokensAfter());
+            copy.setCompactedMessageCount(src.getCompactedMessageCount());
+            copy.setRecoveryPayload(src.getRecoveryPayload());
+            // superseded_by remapped in pass 2 (target may not be saved yet).
+            SessionSummaryEntity saved = sessionSummaryRepository.save(copy);
+            oldIdToNew.put(src.getId(), saved);
+        }
+        // Pass 2: remap superseded_by to the copied targets. A superseded summary whose superseding
+        // target was out of range (skipped) is left active in the branch — harmless: the derived read
+        // collapses by active marker, and recompute restamps from active ranges.
+        for (SessionSummaryEntity src : sourceSummaries) {
+            if (src.getSupersededBy() == null) {
+                continue;
+            }
+            SessionSummaryEntity copy = oldIdToNew.get(src.getId());
+            SessionSummaryEntity newTarget = oldIdToNew.get(src.getSupersededBy());
+            if (copy != null && newTarget != null) {
+                sessionSummaryRepository.markSuperseded(copy.getId(), newTarget.getId());
+            }
+        }
     }
 
     /**
