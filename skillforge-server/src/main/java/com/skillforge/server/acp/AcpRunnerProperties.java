@@ -86,6 +86,18 @@ public class AcpRunnerProperties {
      */
     private int permissionWaitMaxThreads = 16;
 
+    /**
+     * P2-3a: grace delay (seconds) before the cc sub-session trace is finalized after
+     * the cc prompt returns its {@code stopReason}. cc exports OTLP log events on a
+     * ~1s schedule, so the last {@code api_request} / {@code subagent_completed} can
+     * arrive AFTER the prompt completes. Finalizing instantly would miss those late
+     * spans in the recomputed tool/event counts. The finalize is scheduled (NOT run on
+     * the runner thread) {@code traceFinalizeGraceSeconds} after completion so late
+     * events land first. Default 3s (> the 1s flush interval, with headroom). Set to 0
+     * to finalize immediately (tests).
+     */
+    private long traceFinalizeGraceSeconds = 3;
+
     public String getAdapterPackage() {
         return adapterPackage;
     }
@@ -141,6 +153,15 @@ public class AcpRunnerProperties {
 
     public void setPermissionWaitMaxThreads(int permissionWaitMaxThreads) {
         this.permissionWaitMaxThreads = permissionWaitMaxThreads > 0 ? permissionWaitMaxThreads : 16;
+    }
+
+    public long getTraceFinalizeGraceSeconds() {
+        return traceFinalizeGraceSeconds;
+    }
+
+    public void setTraceFinalizeGraceSeconds(long traceFinalizeGraceSeconds) {
+        // 0 allowed (finalize immediately); negative coerced to the 3s default.
+        this.traceFinalizeGraceSeconds = traceFinalizeGraceSeconds >= 0 ? traceFinalizeGraceSeconds : 3;
     }
 
     public String getPermissionMode() {

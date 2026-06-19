@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillforge.core.engine.ChatEventBroadcaster;
 import com.skillforge.core.model.ContentBlock;
 import com.skillforge.core.model.Message;
+import com.skillforge.observability.api.LlmTraceStore;
+import com.skillforge.server.acp.otlp.CcEventSpanTranslator;
 import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.SessionEntity;
 import com.skillforge.server.repository.AgentRepository;
@@ -21,8 +23,10 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.time.Instant;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -82,14 +86,29 @@ public class AcpAgentRunner {
     private final Executor subAgentExecutor;
     private final SubAgentRegistry subAgentRegistry;
     private final ApplicationEventPublisher eventPublisher;
+    /**
+     * P2-3a: trace finalize deps. Both nullable so the standalone P1a-2 demo path and
+     * the existing unit-test constructors keep working without observability wiring.
+     * When EITHER is null the runner skips trace finalization (no-op); the spans the cc
+     * event translator wrote remain, only the trace-row terminal status/duration/counts
+     * are not stamped. The Spring bean always wires both.
+     *
+     * <p>{@code traceStore} reads back the cc trace's spans (count by kind) and stamps
+     * the terminal trace row; {@code traceFinalizeScheduler} defers that finalize by a
+     * short grace delay so late cc OTLP events (≈1s flush) land before the counts are
+     * recomputed — WITHOUT blocking the runner thread.
+     */
+    private final LlmTraceStore traceStore;
+    private final ScheduledExecutorService traceFinalizeScheduler;
 
     /**
      * Standalone (P1a-2) constructor — leaves the SubAgent-mode deps
      * ({@code subAgentExecutor} / {@code subAgentRegistry} / {@code eventPublisher})
-     * null. This is the demo-endpoint-only wiring used by {@code POST /api/acp/runs}
-     * and the existing unit tests. {@link #runAsSubAgent} is unavailable here: it
-     * guards on these null deps and throws {@link IllegalStateException} (not an NPE)
-     * rather than running. The Spring bean always uses the full constructor below.
+     * AND the P2-3a trace-finalize deps null. This is the demo-endpoint-only wiring
+     * used by {@code POST /api/acp/runs} and the existing unit tests.
+     * {@link #runAsSubAgent} is unavailable here: it guards on the null SubAgent deps
+     * and throws {@link IllegalStateException} (not an NPE) rather than running. Trace
+     * finalization is simply skipped. The Spring bean always uses the full constructor.
      */
     public AcpAgentRunner(AcpClientFactory clientFactory,
                           SessionService sessionService,
@@ -99,7 +118,7 @@ public class AcpAgentRunner {
                           AcpRunnerProperties properties,
                           AcpPermissionBridge permissionBridge) {
         this(clientFactory, sessionService, agentRepository, broadcaster, objectMapper,
-                properties, permissionBridge, null, null, null);
+                properties, permissionBridge, null, null, null, null, null);
     }
 
     /**
@@ -127,6 +146,34 @@ public class AcpAgentRunner {
                           Executor subAgentExecutor,
                           SubAgentRegistry subAgentRegistry,
                           ApplicationEventPublisher eventPublisher) {
+        this(clientFactory, sessionService, agentRepository, broadcaster, objectMapper,
+                properties, permissionBridge, subAgentExecutor, subAgentRegistry,
+                eventPublisher, null, null);
+    }
+
+    /**
+     * Full (P2-3a) constructor — adds the trace-finalize deps so a completed/errored cc
+     * run stamps its sub-session trace terminal status/duration/counts (the bug this
+     * milestone fixes: without it a finished cc trace shows running/0/0 forever).
+     *
+     * @param traceStore            reads the cc trace's spans (count by kind) and
+     *                              finalizes the trace row; null ⇒ finalize skipped
+     * @param traceFinalizeScheduler defers the finalize by a grace delay so late cc
+     *                              OTLP events land first, WITHOUT blocking the runner
+     *                              thread; null ⇒ finalize skipped
+     */
+    public AcpAgentRunner(AcpClientFactory clientFactory,
+                          SessionService sessionService,
+                          AgentRepository agentRepository,
+                          ChatEventBroadcaster broadcaster,
+                          ObjectMapper objectMapper,
+                          AcpRunnerProperties properties,
+                          AcpPermissionBridge permissionBridge,
+                          Executor subAgentExecutor,
+                          SubAgentRegistry subAgentRegistry,
+                          ApplicationEventPublisher eventPublisher,
+                          LlmTraceStore traceStore,
+                          ScheduledExecutorService traceFinalizeScheduler) {
         this.clientFactory = clientFactory;
         this.sessionService = sessionService;
         this.agentRepository = agentRepository;
@@ -137,6 +184,8 @@ public class AcpAgentRunner {
         this.subAgentExecutor = subAgentExecutor;
         this.subAgentRegistry = subAgentRegistry;
         this.eventPublisher = eventPublisher;
+        this.traceStore = traceStore;
+        this.traceFinalizeScheduler = traceFinalizeScheduler;
     }
 
     /**
@@ -329,6 +378,8 @@ public class AcpAgentRunner {
      */
     private CcOutcome executeOnSession(SessionEntity session, String prompt, String model) {
         String subSessionId = session.getId();
+        // P2-3a: authoritative run start for the trace's total duration (run start → end).
+        final long runStartMs = System.currentTimeMillis();
 
         Path cwd = null;
         AcpClient client = null;
@@ -406,10 +457,15 @@ public class AcpAgentRunner {
             int toolCallCount = toolCalls.toolCallCount();
             // Shared: build + persist the canonical (INV-1 paired) turn, then mark idle.
             finishOk(subSessionId, assistantText.toString(), toolCalls, stopReason, subagents, streamEnded);
+            // P2-3a: finalize the cc trace (status=ok, run start→end duration, counts
+            // recomputed from spans) after a grace delay so late cc OTLP events land.
+            scheduleTraceFinalize(subSessionId, "ok", null, runStartMs);
             return CcOutcome.ok(assistantText.toString(), subagents, toolCallCount);
         } catch (Exception e) {
             log.error("ACP run failed for sub-session {}: {}", subSessionId, e.toString(), e);
             finishError(subSessionId, e, streamEnded);
+            // P2-3a: finalize the cc trace as error (covers cc failure + prompt timeout).
+            scheduleTraceFinalize(subSessionId, "error", safeErr(e), runStartMs);
             return CcOutcome.error(safeErr(e), toolCalls.toolCallCount());
         } finally {
             if (client != null) {
@@ -554,6 +610,76 @@ public class AcpAgentRunner {
             broadcaster.sessionStatus(subSessionId, "error", null, safeErr(e));
         } catch (RuntimeException re) {
             log.warn("ACP failed to set error status on sub-session {} (ignored)", subSessionId, re);
+        }
+    }
+
+    // ───────────────────────────── trace finalize (P2-3a) ─────────────────────────────
+
+    /**
+     * P2-3a: finalize the cc sub-session's trace once the run reaches a terminal state.
+     *
+     * <p>The cc event translator ({@link CcEventSpanTranslator}) builds the trace
+     * on-ingest (one trace per cc sub-session, keyed by a deterministic id) and writes
+     * llm/tool/event spans, but it NEVER finalizes the trace and does NOT bump the
+     * trace-row tool/event counters — so a finished cc trace would otherwise show
+     * {@code status=running}, {@code durationMs=0}, {@code toolCallCount=0},
+     * {@code eventCount=0} forever. This stamps the terminal status, the authoritative
+     * run start→end duration, and counts RECOMPUTED from the actual spans.
+     *
+     * <p><b>Late-event safety:</b> cc flushes OTLP events on a ~1s schedule, so the last
+     * {@code api_request} / {@code subagent_completed} can arrive AFTER the prompt's
+     * {@code stopReason}. The finalize is therefore SCHEDULED after a short grace delay
+     * (so those late spans land before counts are recomputed) and runs on the scheduler
+     * thread — NEVER blocking the runner thread.
+     *
+     * <p><b>Idempotency:</b> {@code finalizeTrace}'s SQL is {@code WHERE status='running'},
+     * so a re-finalize or a finalize racing a late span never flips a terminal trace back
+     * to running nor double-counts. A late span landing AFTER finalize only inserts a span
+     * row (the translator's {@code upsertTraceStub} is {@code ON CONFLICT DO NOTHING}); it
+     * does not touch the trace status. The grace delay minimizes how often that happens.
+     *
+     * <p>Best-effort: if the finalize deps are not wired (standalone/test paths) this is a
+     * no-op; any scheduling/finalize failure is logged + swallowed (observability is never
+     * allowed to break a run).
+     */
+    private void scheduleTraceFinalize(String subSessionId, String status, String error, long runStartMs) {
+        if (traceStore == null || traceFinalizeScheduler == null) {
+            return; // observability not wired (standalone/test) — skip.
+        }
+        long graceSec = properties.getTraceFinalizeGraceSeconds();
+        try {
+            if (graceSec <= 0) {
+                doFinalizeTrace(subSessionId, status, error, runStartMs);
+            } else {
+                traceFinalizeScheduler.schedule(
+                        () -> doFinalizeTrace(subSessionId, status, error, runStartMs),
+                        graceSec, TimeUnit.SECONDS);
+            }
+        } catch (RuntimeException e) {
+            log.warn("ACP trace finalize schedule failed (sub-session {}): {}",
+                    subSessionId, e.toString());
+        }
+    }
+
+    /**
+     * Recompute tool/event counts from the actual spans the translator wrote, then
+     * finalize the cc trace. Runs on the scheduler thread. Never throws.
+     */
+    private void doFinalizeTrace(String subSessionId, String status, String error, long runStartMs) {
+        try {
+            String traceId = CcEventSpanTranslator.traceIdFor(subSessionId);
+            java.util.Map<String, Long> byKind = traceStore.countSpansByKind(traceId);
+            int toolCount = byKind.getOrDefault("tool", 0L).intValue();
+            int eventCount = byKind.getOrDefault("event", 0L).intValue();
+            long now = System.currentTimeMillis();
+            long durationMs = Math.max(0, now - runStartMs);
+            traceStore.finalizeTrace(new LlmTraceStore.TraceFinalizeRequest(
+                    traceId, status, error, durationMs, toolCount, eventCount,
+                    Instant.ofEpochMilli(now)));
+            log.info("ACP trace finalized (sub-session {}, status={}, durationMs={}, tools={}, events={})",
+                    subSessionId, status, durationMs, toolCount, eventCount);
+        } catch (RuntimeException e) {
+            log.warn("ACP trace finalize failed (sub-session {}): {}", subSessionId, e.toString());
         }
     }
 

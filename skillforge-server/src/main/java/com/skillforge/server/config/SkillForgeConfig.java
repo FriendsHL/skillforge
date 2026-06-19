@@ -1801,6 +1801,20 @@ public class SkillForgeConfig {
                 acpRunnerProperties.getPermissionTimeoutSeconds());
     }
 
+    /**
+     * P2-3a: dedicated single-thread scheduler that defers cc-trace finalization by a
+     * short grace delay (so late cc OTLP events land first) without blocking the runner
+     * thread. Daemon thread so it never holds up JVM shutdown.
+     */
+    @Bean(destroyMethod = "shutdownNow")
+    public java.util.concurrent.ScheduledExecutorService acpTraceFinalizeScheduler() {
+        return java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "acp-trace-finalize");
+            t.setDaemon(true);
+            return t;
+        });
+    }
+
     @Bean
     public AcpAgentRunner acpAgentRunner(AcpClientFactory acpClientFactory,
                                          SessionService sessionService,
@@ -1812,12 +1826,18 @@ public class SkillForgeConfig {
                                          @org.springframework.beans.factory.annotation.Qualifier("chatLoopExecutor")
                                          ThreadPoolExecutor chatLoopExecutor,
                                          SubAgentRegistry subAgentRegistry,
-                                         org.springframework.context.ApplicationEventPublisher eventPublisher) {
-        // P1c-1: full constructor wires the SubAgent-mode deps (executor + registry +
-        // event publisher) so runAsSubAgent runs cc async on a given child session and
-        // delivers its result back to the parent/channel by reusing the existing pump.
+                                         org.springframework.context.ApplicationEventPublisher eventPublisher,
+                                         com.skillforge.observability.api.LlmTraceStore llmTraceStore,
+                                         java.util.concurrent.ScheduledExecutorService acpTraceFinalizeScheduler) {
+        // P1c-1: SubAgent-mode deps (executor + registry + event publisher) so
+        // runAsSubAgent runs cc async on a given child session and delivers its result
+        // back to the parent/channel by reusing the existing pump.
+        // P2-3a: trace-finalize deps (store + scheduler) so a finished cc run stamps its
+        // sub-session trace terminal status/duration/counts instead of showing
+        // running/0/0 forever.
         return new AcpAgentRunner(acpClientFactory, sessionService, agentRepository,
                 broadcaster, objectMapper, acpRunnerProperties, acpPermissionBridge,
-                chatLoopExecutor, subAgentRegistry, eventPublisher);
+                chatLoopExecutor, subAgentRegistry, eventPublisher,
+                llmTraceStore, acpTraceFinalizeScheduler);
     }
 }

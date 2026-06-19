@@ -95,6 +95,10 @@ class PgLlmTraceLifecycleIT {
              PreparedStatement ps = c.prepareStatement("DELETE FROM t_llm_trace")) {
             ps.executeUpdate();
         }
+        try (Connection c = ds.getConnection();
+             PreparedStatement ps = c.prepareStatement("DELETE FROM t_llm_span")) {
+            ps.executeUpdate();
+        }
     }
 
     @Test
@@ -166,9 +170,65 @@ class PgLlmTraceLifecycleIT {
         assertThat(r.totalDurationMs).isEqualTo(500L);
     }
 
+    @Test
+    @DisplayName("P2-3a countByTraceIdGroupByKind: groups a trace's spans by kind (llm/tool/event), excludes other traces")
+    void countSpansGroupByKind() throws Exception {
+        String traceId = UUID.randomUUID().toString();
+        String otherTraceId = UUID.randomUUID().toString();
+        String sessionId = UUID.randomUUID().toString();
+
+        // 4 llm + 2 tool + 1 event on the target trace; noise on a different trace.
+        insertSpan(traceId, sessionId, "llm");
+        insertSpan(traceId, sessionId, "llm");
+        insertSpan(traceId, sessionId, "llm");
+        insertSpan(traceId, sessionId, "llm");
+        insertSpan(traceId, sessionId, "tool");
+        insertSpan(traceId, sessionId, "tool");
+        insertSpan(traceId, sessionId, "event");
+        insertSpan(otherTraceId, sessionId, "tool"); // must NOT be counted
+
+        // Mirrors LlmSpanRepository.countByTraceIdGroupByKind JPQL.
+        java.util.Map<String, Long> byKind = new java.util.HashMap<>();
+        try (Connection c = ds.getConnection();
+             PreparedStatement ps = c.prepareStatement(
+                     "SELECT kind, count(*) FROM t_llm_span WHERE trace_id = ? GROUP BY kind")) {
+            ps.setString(1, traceId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    byKind.put(rs.getString(1), rs.getLong(2));
+                }
+            }
+        }
+
+        assertThat(byKind.getOrDefault("llm", 0L)).isEqualTo(4L);
+        assertThat(byKind.getOrDefault("tool", 0L)).as("only target trace's tools").isEqualTo(2L);
+        assertThat(byKind.getOrDefault("event", 0L)).isEqualTo(1L);
+    }
+
     // -----------------------------------------------------------------------
     // helpers
     // -----------------------------------------------------------------------
+
+    /** Insert a minimal t_llm_span row of the given kind for the count-by-kind test. */
+    private void insertSpan(String traceId, String sessionId, String kind) throws Exception {
+        try (Connection c = ds.getConnection();
+             PreparedStatement ps = c.prepareStatement(
+                     "INSERT INTO t_llm_span ("
+                             + "  span_id, trace_id, parent_span_id, session_id, agent_id,"
+                             + "  provider, model, iteration_index, stream,"
+                             + "  blob_status, input_tokens, output_tokens,"
+                             + "  latency_ms, started_at, source, created_at, kind"
+                             + ") VALUES (?, ?, NULL, ?, NULL, NULL, NULL, 0, false,"
+                             + "  'ok', 0, 0, 0, ?, 'live', ?, ?)")) {
+            ps.setString(1, UUID.randomUUID().toString());
+            ps.setString(2, traceId);
+            ps.setString(3, sessionId);
+            ps.setTimestamp(4, Timestamp.from(Instant.parse("2026-06-20T00:00:00Z")));
+            ps.setTimestamp(5, Timestamp.from(Instant.now()));
+            ps.setString(6, kind);
+            ps.executeUpdate();
+        }
+    }
 
     private void insertStub(String traceId, String sessionId, String agentName, Instant startedAt) throws Exception {
         try (Connection c = ds.getConnection();

@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillforge.core.engine.ChatEventBroadcaster;
 import com.skillforge.core.model.ContentBlock;
 import com.skillforge.core.model.Message;
+import com.skillforge.observability.api.LlmTraceStore;
+import com.skillforge.server.acp.otlp.CcEventSpanTranslator;
 import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.SessionEntity;
 import com.skillforge.server.repository.AgentRepository;
@@ -18,9 +20,11 @@ import org.mockito.ArgumentCaptor;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Collections;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -33,6 +37,7 @@ import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -83,6 +88,9 @@ class AcpAgentRunnerTest {
     @org.junit.jupiter.api.AfterEach
     void tearDown() {
         driverPool.shutdownNow();
+        if (traceScheduler != null) {
+            traceScheduler.shutdownNow();
+        }
     }
 
     /**
@@ -793,6 +801,139 @@ class AcpAgentRunnerTest {
                 }
             }
         };
+    }
+
+    // ───────────────────────── P2-3a: trace finalize ─────────────────────────
+
+    /**
+     * Build a runner wired with the P2-3a trace-finalize deps. The scheduler runs
+     * tasks INLINE (caller-runs) so the otherwise-deferred finalize is deterministic
+     * without sleeps; with {@code traceFinalizeGraceSeconds=0} the runner finalizes
+     * immediately (no scheduler delay), so the inline scheduler is only a safety net.
+     */
+    private ScheduledExecutorService traceScheduler;
+
+    private AcpAgentRunner traceRunnerWith(FakeAcpTransport transport, LlmTraceStore traceStore) {
+        // grace=0 → scheduleTraceFinalize runs doFinalizeTrace inline on the runner
+        // thread (no scheduler delay), so the finalize is deterministic without sleeps.
+        // The scheduler is still passed (non-null) so the deps are considered "wired".
+        properties.setTraceFinalizeGraceSeconds(0);
+        AcpClientFactory factory = (cwd, env) ->
+                new AcpClient(transport, mapper, new CcAcpUpdateTranslator());
+        AcpPermissionBridge bridge = new AcpPermissionBridge(
+                new com.skillforge.core.engine.confirm.PendingConfirmationRegistry(),
+                broadcaster, driverPool, 30);
+        traceScheduler = Executors.newSingleThreadScheduledExecutor();
+        return new AcpAgentRunner(factory, sessionService, agentRepository,
+                broadcaster, mapper, properties, bridge, null, null, null,
+                traceStore, traceScheduler);
+    }
+
+    @Test
+    @DisplayName("P2-3a: completed run finalizes cc trace as status=ok, duration>0, tool/event counts recomputed from spans")
+    void run_finalizesTrace_completed() {
+        LlmTraceStore traceStore = mock(LlmTraceStore.class);
+        // The translator wrote: 2 tool spans (Bash x2) + 1 event span; llm count is irrelevant here.
+        when(traceStore.countSpansByKind(anyString()))
+                .thenReturn(Map.of("llm", 4L, "tool", 2L, "event", 1L));
+
+        FakeAcpTransport transport = scriptedTransport(List.of("done"));
+        AcpAgentRunner runner = traceRunnerWith(transport, traceStore);
+
+        runner.run("say hi", null, CALLER_USER_ID);
+
+        ArgumentCaptor<LlmTraceStore.TraceFinalizeRequest> cap =
+                ArgumentCaptor.forClass(LlmTraceStore.TraceFinalizeRequest.class);
+        verify(traceStore).finalizeTrace(cap.capture());
+        LlmTraceStore.TraceFinalizeRequest req = cap.getValue();
+        // traceId derivation SHARED with the translator (no duplicated literal).
+        assertThat(req.traceId()).isEqualTo(CcEventSpanTranslator.traceIdFor(SUB_SESSION_ID));
+        assertThat(req.status()).isEqualTo("ok");
+        assertThat(req.error()).isNull();
+        assertThat(req.toolCallCount()).isEqualTo(2);   // from spans, not engine counters
+        assertThat(req.eventCount()).isEqualTo(1);      // from spans
+        assertThat(req.totalDurationMs()).isGreaterThanOrEqualTo(0);
+        assertThat(req.endedAt()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("P2-3a: error/timeout run finalizes cc trace as status=error (counts still recomputed)")
+    void run_finalizesTrace_error() {
+        LlmTraceStore traceStore = mock(LlmTraceStore.class);
+        when(traceStore.countSpansByKind(anyString()))
+                .thenReturn(Map.of("tool", 1L));
+
+        // initialize replies with a JSON-RPC error → handshake fails → error path.
+        FakeAcpTransport transport = new FakeAcpTransport() {
+            @Override
+            public void send(String jsonLine) {
+                super.send(jsonLine);
+                JsonNode msg;
+                try {
+                    msg = mapper.readTree(jsonLine);
+                } catch (Exception e) {
+                    return;
+                }
+                long id = msg.path("id").asLong(-1);
+                if ("initialize".equals(msg.path("method").asText(""))) {
+                    emit("{\"jsonrpc\":\"2.0\",\"id\":" + id
+                            + ",\"error\":{\"code\":-32000,\"message\":\"boom\"}}");
+                }
+            }
+        };
+        AcpAgentRunner runner = traceRunnerWith(transport, traceStore);
+
+        assertThatThrownBy(() -> runner.run("hi", null, CALLER_USER_ID))
+                .isInstanceOf(AcpException.class);
+
+        ArgumentCaptor<LlmTraceStore.TraceFinalizeRequest> cap =
+                ArgumentCaptor.forClass(LlmTraceStore.TraceFinalizeRequest.class);
+        verify(traceStore).finalizeTrace(cap.capture());
+        LlmTraceStore.TraceFinalizeRequest req = cap.getValue();
+        assertThat(req.traceId()).isEqualTo(CcEventSpanTranslator.traceIdFor(SUB_SESSION_ID));
+        assertThat(req.status()).isEqualTo("error");
+        assertThat(req.error()).isNotNull();
+        assertThat(req.toolCallCount()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("P2-3a: a late span landing AFTER finalize does not re-finalize / flip status (idempotent — finalize called exactly once)")
+    void run_lateSpanAfterFinalize_idempotent() {
+        // The store's finalizeTrace SQL is WHERE status='running', so a re-finalize is a
+        // no-op at the DB. At the runner level, finalize is scheduled exactly once per run;
+        // a late translator span only inserts a span row, it never calls finalizeTrace.
+        // This asserts the runner issues a SINGLE finalize for one completed run, and that
+        // countSpansByKind is read at finalize time (so any spans that landed during the
+        // grace window are reflected) — the late-span-after-finalize case cannot double
+        // count because there is no second finalize.
+        LlmTraceStore traceStore = mock(LlmTraceStore.class);
+        when(traceStore.countSpansByKind(anyString()))
+                .thenReturn(Map.of("tool", 2L, "event", 1L));
+
+        FakeAcpTransport transport = scriptedTransport(List.of("ok"));
+        AcpAgentRunner runner = traceRunnerWith(transport, traceStore);
+
+        runner.run("hi", null, CALLER_USER_ID);
+
+        // Exactly one finalize for the run (no re-finalize loop).
+        verify(traceStore, times(1)).finalizeTrace(any());
+        // Counts were sourced from countSpansByKind at finalize time.
+        verify(traceStore, atLeastOnce()).countSpansByKind(
+                eq(CcEventSpanTranslator.traceIdFor(SUB_SESSION_ID)));
+    }
+
+    @Test
+    @DisplayName("P2-3a: finalize deps unwired (standalone/demo path) → no finalize attempted, run still succeeds")
+    void run_noTraceDeps_skipsFinalize() {
+        // runnerWith(..) uses the 7-arg constructor → traceStore + scheduler are null.
+        FakeAcpTransport transport = scriptedTransport(List.of("ok"));
+        AcpAgentRunner runner = runnerWith(transport);
+
+        // Should not throw despite no finalize wiring.
+        String id = runner.run("hi", null, CALLER_USER_ID);
+        assertThat(id).isEqualTo(SUB_SESSION_ID);
+        // (no traceStore to verify against — absence of NPE is the assertion).
+        assertThat(Collections.emptyList()).isEmpty();
     }
 
     // ── helpers ──

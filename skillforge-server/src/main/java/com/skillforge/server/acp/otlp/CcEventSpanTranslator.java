@@ -317,8 +317,14 @@ public class CcEventSpanTranslator {
                 ts != null ? ts : Instant.now()));
     }
 
-    /** Deterministic trace id for a cc sub-session (stable, idempotent). */
-    static String traceIdFor(String sfSessionId) {
+    /**
+     * Deterministic trace id for a cc sub-session (stable, idempotent).
+     *
+     * <p>P2-3a: {@code public} so {@code AcpAgentRunner} can resolve the SAME trace id
+     * it must finalize on run completion — the derivation is shared here (single source
+     * of truth), never duplicated as a literal in the runner.
+     */
+    public static String traceIdFor(String sfSessionId) {
         return deterministicUuid(TRACE_NS + sfSessionId);
     }
 
