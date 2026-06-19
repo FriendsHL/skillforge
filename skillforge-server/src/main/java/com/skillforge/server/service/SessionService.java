@@ -187,7 +187,14 @@ public class SessionService {
      */
     private CompactionLockProvider compactionLockProvider;
 
-    @Autowired(required = false)
+    /**
+     * Wired manually by {@code CompactionService}'s constructor ({@code setCompactionLockProvider(this)})
+     * rather than via {@code @Autowired}: SessionService is constructor-injected INTO CompactionService,
+     * so an autowired setter back-edge here makes Spring see a sessionService ↔ compactionService bean
+     * cycle and refuse to start. The manual call keeps the optional semantics (null when no
+     * CompactionService bean exists — {@code updateSessionMessages} null-checks before use) without the
+     * cycle. Do NOT re-add {@code @Autowired} here.
+     */
     public void setCompactionLockProvider(CompactionLockProvider compactionLockProvider) {
         this.compactionLockProvider = compactionLockProvider;
     }
