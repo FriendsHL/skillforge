@@ -89,7 +89,16 @@ unit(派生组装 / rightEdge→end_seq / provenance 只落新轮次 / 合并 su
 
 ## 10. 分期 / 风险
 
-**分期**:P0 已发(保留,② 注释小修)→ P1 schema+写路径(flag,读不变)→ **P2 派生读+对账+合并(核心最高危,红灯 Full+compact-reviewer)** → P3 light 语义(Q2)+recovery(Q4)→ P4 仅双读(不做去重 job)。
+**分期进度**:
+- P0 ✅(`3756ca43`)即时止血;P1 ✅(`2dac6f8b`)schema+flagged 写路径(flag off);
+- **P2a ✅(本次)派生读 `getContextMessagesWithProvenance` + flag 路由(默认 off)**。compact+java reviewer PASS flag-off 关。
+  **P2a 去险发现(修正)**:范围模型写下"现有对账自足"对**无并发压缩常态成立**(IT 真 PG 验证:只 append 新轮次、摘要不落库、无 dup、无重写),但**两个 latent blocker(仅 flag-on 触发)→ P2b 必须解决**:
+  - **B1 并发压缩 race**:用户 REST `/compact` 撞引擎 updateSessionMessages → 摘要中途变 → prefix 断 → 兜底 guard 把注入摘要当 NORMAL 行写(INV-4)。
+  - **B2 兜底 guard 重写清 marker**:`rewriteMessages` 清 `compacted_by_summary_id` → 派生失效 → double-show。
+  → §3 的 provenance/guarding **确实需要**(P2a 证明常态不需要,但 flag-on 安全需要)。
+- **P2b(下一步,核心最高危)**:解决 B1+B2(provenance 标识摘要不靠 re-derive / rewrite 后从 range 重算 marker / 并发压缩与对账边界加锁)+ 切 flag 默认 on。红灯 Full + compact-reviewer。**flag 打开前 B1+B2 必须 green。**
+- P3 light 语义(Q2)+recovery(Q4);P4 仅双读(不做去重 job)。
+- P2a 顺带小 nit 入 P2b:applyArchive size-invariant 防御断言、clearAutomatically 副作用注释、reconciliation-suffices 条件性注释。
 
 **风险**:① P2 provenance 对账 bug → 兜底断言+安全重建+重 IT ② light 语义改动 token 回收回归 → benchmark+缓存派生视图 ③ 分期期双码路(老 boundary-slice vs 派生)收窄到"有 boundary 行且无 summary 行"。
 

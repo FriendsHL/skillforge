@@ -108,7 +108,7 @@ public interface SessionMessageRepository extends JpaRepository<SessionMessageEn
      * never clobbers an existing marker (the prior summary's marker stays until P2's range
      * recompute decides otherwise). Returns the number of rows updated.
      */
-    @Modifying
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Transactional
     @Query("UPDATE SessionMessageEntity m SET m.compactedBySummaryId = :summaryId " +
            "WHERE m.sessionId = :sessionId AND m.seqNo BETWEEN :start AND :end " +

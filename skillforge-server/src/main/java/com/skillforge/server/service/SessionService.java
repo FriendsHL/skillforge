@@ -12,13 +12,16 @@ import com.skillforge.server.dto.SessionMessageDto;
 import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.SessionMessageEntity;
 import com.skillforge.server.entity.SessionEntity;
+import com.skillforge.server.entity.SessionSummaryEntity;
 import com.skillforge.server.exception.SessionNotFoundException;
 import com.skillforge.server.repository.AgentRepository;
 import com.skillforge.server.repository.SessionMessageRepository;
 import com.skillforge.server.repository.SessionRepository;
+import com.skillforge.server.repository.SessionSummaryRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -57,6 +60,14 @@ public class SessionService {
     public static final String MESSAGE_TYPE_ASK_USER = "ask_user";
     public static final String MESSAGE_TYPE_CONFIRMATION = "confirmation";
 
+    /**
+     * COMPACT-IDEMPOTENCY-BOUNDARY-FIX storage redesign P2a (§3 provenance): provenance value for
+     * an injected range summary in the derived model view. The summary is NOT a real message row,
+     * so it has no seq_no; {@code -1} marks it so P2b's reconciliation never tries to persist it.
+     * Real rows carry their actual (non-negative) {@code seq_no} as provenance.
+     */
+    public static final long PROVENANCE_SUMMARY = -1L;
+
     private final SessionRepository sessionRepository;
     private final SessionMessageRepository sessionMessageRepository;
     private final AgentRepository agentRepository;
@@ -87,6 +98,23 @@ public class SessionService {
      * Null at unit-test time → no-op.
      */
     private ReminderBuilder reminderBuilder;
+
+    /**
+     * COMPACT-IDEMPOTENCY-BOUNDARY-FIX storage redesign P2a: range-summary store for the derived
+     * model view. Optional (setter-injected, null in legacy unit tests). When the range-model flag
+     * is OFF this is never consulted; when ON, {@link #getContextMessages(String)} derives the model
+     * view from active summaries + uncovered rows instead of the boundary slice.
+     */
+    private SessionSummaryRepository sessionSummaryRepository;
+
+    /**
+     * COMPACT-IDEMPOTENCY-BOUNDARY-FIX storage redesign P2a: routes {@link #getContextMessages}
+     * between the legacy boundary-slice read (flag OFF) and the derived range-model read (flag ON).
+     * Mirrors {@code CompactionService}'s {@code skillforge.compact.range-model.enabled} so the read
+     * and write paths flip together. Default false → no behavior change until explicitly enabled.
+     */
+    @Value("${skillforge.compact.range-model.enabled:false}")
+    private boolean rangeModelEnabled;
 
     public SessionService(SessionRepository sessionRepository,
                           SessionMessageRepository sessionMessageRepository,
@@ -127,6 +155,17 @@ public class SessionService {
     @Autowired(required = false)
     public void setReminderBuilder(ReminderBuilder reminderBuilder) {
         this.reminderBuilder = reminderBuilder;
+    }
+
+    /** P2a: optional setter for the range-summary store backing the derived model view. */
+    @Autowired(required = false)
+    public void setSessionSummaryRepository(SessionSummaryRepository sessionSummaryRepository) {
+        this.sessionSummaryRepository = sessionSummaryRepository;
+    }
+
+    /** Test seam: toggle the range-model derived read without a Spring context. */
+    public void setRangeModelEnabled(boolean rangeModelEnabled) {
+        this.rangeModelEnabled = rangeModelEnabled;
     }
 
     private Map<String, Object> toListProjection(SessionEntity s) {
@@ -302,22 +341,29 @@ public class SessionService {
      */
     public record StoredMessage(long seqNo, String msgType, String messageType, String controlId,
                                 Instant answeredAt, Map<String, Object> metadata, Message message,
-                                String traceId, Instant createdAt) {
-        /** Backward-compat — defaults createdAt to null. */
+                                String traceId, Instant createdAt, Long compactedBySummaryId) {
+        /** Backward-compat — defaults compactedBySummaryId to null. */
+        public StoredMessage(long seqNo, String msgType, String messageType, String controlId,
+                             Instant answeredAt, Map<String, Object> metadata, Message message,
+                             String traceId, Instant createdAt) {
+            this(seqNo, msgType, messageType, controlId, answeredAt, metadata, message, traceId, createdAt, null);
+        }
+
+        /** Backward-compat — defaults createdAt + compactedBySummaryId to null. */
         public StoredMessage(long seqNo, String msgType, String messageType, String controlId,
                              Instant answeredAt, Map<String, Object> metadata, Message message,
                              String traceId) {
-            this(seqNo, msgType, messageType, controlId, answeredAt, metadata, message, traceId, null);
+            this(seqNo, msgType, messageType, controlId, answeredAt, metadata, message, traceId, null, null);
         }
 
-        /** Backward-compat — defaults traceId + createdAt to null. */
+        /** Backward-compat — defaults traceId + createdAt + compactedBySummaryId to null. */
         public StoredMessage(long seqNo, String msgType, String messageType, String controlId,
                              Instant answeredAt, Map<String, Object> metadata, Message message) {
-            this(seqNo, msgType, messageType, controlId, answeredAt, metadata, message, null, null);
+            this(seqNo, msgType, messageType, controlId, answeredAt, metadata, message, null, null, null);
         }
 
         public StoredMessage(long seqNo, String msgType, Map<String, Object> metadata, Message message) {
-            this(seqNo, msgType, MESSAGE_TYPE_NORMAL, null, null, metadata, message, null, null);
+            this(seqNo, msgType, MESSAGE_TYPE_NORMAL, null, null, metadata, message, null, null, null);
         }
     }
 
@@ -463,6 +509,12 @@ public class SessionService {
      */
     @Transactional(readOnly = true)
     public List<Message> getContextMessages(String id) {
+        // P2a: range-model flag ON → derive the model view from active range summaries + uncovered
+        // rows. Flag OFF → unchanged legacy boundary-slice path (every existing caller keeps the
+        // same shape; only the internal source of the slice changes when the flag flips).
+        if (rangeModelEnabled && sessionSummaryRepository != null) {
+            return getContextMessagesWithProvenance(id).messages();
+        }
         List<StoredMessage> records = getFullHistoryRecords(id);
         int lastBoundary = -1;
         for (int i = records.size() - 1; i >= 0; i--) {
@@ -482,6 +534,117 @@ public class SessionService {
         }
         return applyArchiveSafely(id, out);
     }
+
+    /**
+     * COMPACT-IDEMPOTENCY-BOUNDARY-FIX storage redesign P2a (§2.4 derive + §3 provenance): the
+     * derived model view that feeds the LLM, paired with a provenance array so P2b's reconciliation
+     * can tell injected summaries (never persisted) from real rows (already persisted) and only
+     * write back genuinely new turns.
+     *
+     * <p>Construction (single linear pass over the full real history ASC by seq):
+     * <ul>
+     *   <li>A maximal run of consecutive rows whose {@code compacted_by_summary_id} == the same
+     *       <b>active</b> summary S is collapsed into ONE {@code Message.user(S.summaryText)} with
+     *       provenance {@link #PROVENANCE_SUMMARY} ({@code -1}). The whole run is skipped.</li>
+     *   <li>An uncovered row (no marker, or marker pointing at a non-active / superseded summary)
+     *       is emitted as-is with provenance = its real {@code seq_no}. SYSTEM_EVENT rows are
+     *       skipped (mirrors the legacy slice).</li>
+     * </ul>
+     *
+     * <p>Per §2.6 Q3 (rolling merge) there is normally exactly ONE active summary covering
+     * {@code [0, endSeq]}, so the typical result is {@code [summary] + uncovered tail}. The general
+     * multiple-adjacent-active-summary case is handled by run-detection keyed on the marker id.
+     *
+     * <p><b>Superseded-marker defense</b>: if a row's {@code compacted_by_summary_id} points at a
+     * summary that is NOT in the active set (it was superseded but the marker was not re-pointed —
+     * the P1 {@code markCompactedBySummary} only stamps unmarked rows, so after a Q3 merge the
+     * earliest rows still carry the OLD, now-superseded summary id), the row is treated as
+     * UNCOVERED and emitted as a real row. This is the safe choice: emitting the real row can never
+     * drop information (the rolling active summary already re-summarizes that span, so the LLM sees
+     * the content twice at worst — verbose, not lossy), whereas mapping it to the superseding
+     * summary would risk collapsing a row that the active summary's range might not actually cover.
+     * INV-1 still holds: P1 ranges end pair-complete (findSafeBoundary), and emitting extra real
+     * rows verbatim cannot split a tool_use↔tool_result pair.
+     *
+     * <p>INV-4: the injected summary is a transient {@code Message.user(...)} built here, never a
+     * persisted message row; real rows are emitted by object identity from {@code StoredMessage}.
+     */
+    @Transactional(readOnly = true)
+    public ContextWithProvenance getContextMessagesWithProvenance(String id) {
+        List<StoredMessage> records = getFullHistoryRecords(id);
+
+        // Active summary ids (superseded_by IS NULL) → summaryText, for run collapsing. Empty when
+        // the session never compacted under the range model (all rows uncovered).
+        Map<Long, String> activeSummaryText = new HashMap<>();
+        if (sessionSummaryRepository != null) {
+            List<SessionSummaryEntity> active = sessionSummaryRepository
+                    .findBySessionIdAndSupersededByIsNullOrderByStartSeqAsc(id);
+            for (SessionSummaryEntity s : active) {
+                activeSummaryText.put(s.getId(), s.getSummaryText());
+            }
+        }
+
+        List<Message> out = new ArrayList<>();
+        List<Long> provenance = new ArrayList<>();
+        int i = 0;
+        while (i < records.size()) {
+            StoredMessage record = records.get(i);
+            if (MSG_TYPE_SYSTEM_EVENT.equals(record.msgType())) {
+                i++;
+                continue;
+            }
+            Long marker = record.compactedBySummaryId();
+            String summaryText = (marker != null) ? activeSummaryText.get(marker) : null;
+            if (summaryText != null) {
+                // Start of a covered run for active summary `marker`. Consume the maximal run of
+                // consecutive rows carrying the SAME active marker (SYSTEM_EVENT rows inside the run
+                // are skipped without breaking it — they are invisible to the model view anyway).
+                emitSummary(out, provenance, summaryText);
+                while (i < records.size()) {
+                    StoredMessage r = records.get(i);
+                    if (MSG_TYPE_SYSTEM_EVENT.equals(r.msgType())) {
+                        i++;
+                        continue;
+                    }
+                    if (marker.equals(r.compactedBySummaryId())) {
+                        i++;
+                    } else {
+                        break;
+                    }
+                }
+                continue;
+            }
+            // Uncovered row (no marker, or marker pointing at a superseded / unknown summary).
+            out.add(record.message());
+            provenance.add(record.seqNo());
+            i++;
+        }
+        List<Message> archived = applyArchiveSafely(id, out);
+        // applyArchiveSafely never changes list size (it substitutes tool_result content in place),
+        // so provenance stays index-aligned with the returned messages.
+        return new ContextWithProvenance(archived, toLongArray(provenance));
+    }
+
+    private void emitSummary(List<Message> out, List<Long> provenance, String summaryText) {
+        out.add(Message.user(summaryText));
+        provenance.add(PROVENANCE_SUMMARY);
+    }
+
+    private long[] toLongArray(List<Long> values) {
+        long[] arr = new long[values.size()];
+        for (int i = 0; i < values.size(); i++) {
+            arr[i] = values.get(i);
+        }
+        return arr;
+    }
+
+    /**
+     * P2a (§3): derived model-view messages paired with a per-message provenance array.
+     * {@code provenance[i]} is {@link #PROVENANCE_SUMMARY} for an injected summary, otherwise the
+     * real {@code seq_no} of the row that produced {@code messages.get(i)}. Always index-aligned
+     * with {@code messages}.
+     */
+    public record ContextWithProvenance(List<Message> messages, long[] provenance) {}
 
     public long appendInteractiveControlMessage(String id, String messageType, String controlId,
                                                 Message message, Map<String, Object> metadata) {
@@ -1263,7 +1426,8 @@ public class SessionService {
                     metadata,
                     message,
                     e.getTraceId(),
-                    e.getCreatedAt()));
+                    e.getCreatedAt(),
+                    e.getCompactedBySummaryId()));
         }
         return out;
     }
