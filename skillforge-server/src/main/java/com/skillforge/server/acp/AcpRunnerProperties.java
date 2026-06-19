@@ -38,8 +38,14 @@ public class AcpRunnerProperties {
      */
     private String workspaceRoot;
 
-    /** Per-prompt deadline in seconds. cc's futures never time out by contract. */
-    private long promptTimeoutSeconds = 300;
+    /**
+     * Per-prompt deadline in seconds — how long a single cc run may take before the runner
+     * cancels it. Default 1800 (30 min): real cc coding tasks (repo-wide ripgrep, many steps)
+     * routinely exceed 5 min; 300s was too tight (observed: a run hit 304s mid-work). Matches the
+     * SkillForge engine maxDurationMs (30 min). Override via skillforge.acp.prompt-timeout-seconds.
+     * cc's own futures never time out by contract, so this deadline is the sole bound.
+     */
+    private long promptTimeoutSeconds = 1800;
 
     /**
      * Deadline in seconds for a human to answer a bridged cc permission request
@@ -94,7 +100,7 @@ public class AcpRunnerProperties {
     }
 
     public void setPromptTimeoutSeconds(long promptTimeoutSeconds) {
-        this.promptTimeoutSeconds = promptTimeoutSeconds > 0 ? promptTimeoutSeconds : 300;
+        this.promptTimeoutSeconds = promptTimeoutSeconds > 0 ? promptTimeoutSeconds : 1800;
     }
 
     public long getPermissionTimeoutSeconds() {
