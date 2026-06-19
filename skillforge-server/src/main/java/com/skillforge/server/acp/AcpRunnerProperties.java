@@ -55,6 +55,30 @@ public class AcpRunnerProperties {
     private long permissionTimeoutSeconds = 300;
 
     /**
+     * ACP session permission mode for cc runs. Default {@code "auto"} = cc's model
+     * classifier approves/denies tool permissions autonomously (no user prompt), so
+     * cc completes without the user having to answer per-tool confirmation cards.
+     *
+     * <p>Set {@code "default"} to make cc prompt the user for dangerous operations
+     * (AC-3) — only useful once the confirmation card reliably reaches the user
+     * (today the card is bound to the cc sub-session the user cannot open, so every
+     * prompt auto-cancels after the permission timeout and cc loops forever). Other
+     * valid values: {@code acceptEdits} / {@code plan} / {@code dontAsk} /
+     * {@code bypassPermissions}. Override via {@code skillforge.acp.permission-mode}.
+     */
+    private String permissionMode = "auto";
+
+    /**
+     * P2-1: OTLP/HTTP base URL the spawned cc telemetry exporter points at — the
+     * SkillForge server's own base (the {@code OtlpReceiverController} listens at
+     * {@code <endpoint>/v1/logs} + {@code /v1/metrics}). cc appends the
+     * {@code /v1/<signal>} path itself, so this is the BASE only. Default
+     * {@code http://localhost:8080} (the dev server). Set blank to DISABLE telemetry
+     * env injection (no OTLP env reaches cc).
+     */
+    private String otlpEndpoint = "http://localhost:8080";
+
+    /**
      * security-W3: max threads for the bounded permission-wait pool. Each in-flight
      * permission request holds one thread for up to {@code permissionTimeoutSeconds}.
      * Bounded to prevent thread-exhaustion DoS; on overflow the bridge responds
@@ -117,5 +141,22 @@ public class AcpRunnerProperties {
 
     public void setPermissionWaitMaxThreads(int permissionWaitMaxThreads) {
         this.permissionWaitMaxThreads = permissionWaitMaxThreads > 0 ? permissionWaitMaxThreads : 16;
+    }
+
+    public String getPermissionMode() {
+        return permissionMode;
+    }
+
+    public void setPermissionMode(String permissionMode) {
+        this.permissionMode = (permissionMode == null || permissionMode.isBlank())
+                ? "auto" : permissionMode;
+    }
+
+    public String getOtlpEndpoint() {
+        return otlpEndpoint;
+    }
+
+    public void setOtlpEndpoint(String otlpEndpoint) {
+        this.otlpEndpoint = otlpEndpoint;
     }
 }

@@ -1700,6 +1700,46 @@ public class SkillForgeConfig {
         return new CcAcpUpdateTranslator();
     }
 
+    /** P2-1: pure OTLP-JSON logs parser (no Spring deps). */
+    @Bean
+    public com.skillforge.server.acp.otlp.OtlpLogsParser otlpLogsParser() {
+        return new com.skillforge.server.acp.otlp.OtlpLogsParser();
+    }
+
+    /**
+     * P2-1: bounded executor that runs OTLP ingest (parse → bind → PII-filter →
+     * persist) OFF the receiver/cc-export hot path. AbortPolicy + small queue so a
+     * flood sheds telemetry (warn-logged) rather than blocking cc or piling memory.
+     */
+    @Bean(name = "otlpIngestExecutor", destroyMethod = "shutdown")
+    public ThreadPoolExecutor otlpIngestExecutor() {
+        ThreadPoolExecutor executor = new ThreadPoolExecutor(
+                2, 8,
+                60L, TimeUnit.SECONDS,
+                new LinkedBlockingQueue<>(256),
+                r -> {
+                    Thread t = new Thread(r, "otlp-ingest-" + System.nanoTime());
+                    t.setDaemon(true);
+                    return t;
+                },
+                new ThreadPoolExecutor.AbortPolicy());
+        executor.allowCoreThreadTimeOut(true);
+        return executor;
+    }
+
+    /** P2-1: binds + persists cc OTLP events to the cc sub-session (PII-filtered). */
+    @Bean
+    public com.skillforge.server.acp.otlp.OtlpIngestService otlpIngestService(
+            com.skillforge.server.acp.otlp.OtlpLogsParser otlpLogsParser,
+            com.skillforge.server.repository.AcpCcEventRepository acpCcEventRepository,
+            com.skillforge.server.repository.SessionRepository sessionRepository,
+            ObjectMapper objectMapper,
+            @org.springframework.beans.factory.annotation.Qualifier("otlpIngestExecutor")
+            ThreadPoolExecutor otlpIngestExecutor) {
+        return new com.skillforge.server.acp.otlp.OtlpIngestService(
+                otlpLogsParser, acpCcEventRepository, sessionRepository, objectMapper, otlpIngestExecutor);
+    }
+
     /** Per-run AcpClient factory — spawns a fresh cc adapter process per run. */
     @Bean
     public AcpClientFactory acpClientFactory(ObjectMapper objectMapper,

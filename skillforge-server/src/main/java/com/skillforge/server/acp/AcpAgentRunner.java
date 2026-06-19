@@ -66,9 +66,6 @@ public class AcpAgentRunner {
 
     private static final Logger log = LoggerFactory.getLogger(AcpAgentRunner.class);
 
-    /** cc permission mode that prompts for dangerous operations (AC-3). */
-    private static final String PROMPT_MODE_ID = "default";
-
     private final AcpClientFactory clientFactory;
     private final SessionService sessionService;
     private final AgentRepository agentRepository;
@@ -352,7 +349,10 @@ public class AcpAgentRunner {
             markRunning(session);
 
             cwd = createWorkingDir();
-            client = clientFactory.create(cwd.toString(), Map.of());
+            // P2-1: inject OTLP telemetry env so cc exports its log/events (api_request /
+            // tool_result / subagent_completed / ...) to the SkillForge OtlpReceiverController,
+            // tagged with sf.session_id=<this sub-session> so the ingest layer binds them back.
+            client = clientFactory.create(cwd.toString(), buildTelemetryEnv(session));
 
             // Accumulate + live-stream. Runs on the cc reader thread — keep it non-blocking.
             client.setUpdateListener(u -> onUpdate(subSessionId, u, assistantText, toolCalls));
@@ -369,10 +369,13 @@ public class AcpAgentRunner {
                     .get(handshakeTimeout(), TimeUnit.SECONDS);
             String ccSessionId = requireCcSessionId(newSessionResult);
 
-            // AC-3: switch to the prompting mode so cc emits session/request_permission
-            // for dangerous operations (default session mode is auto = no prompt).
-            // Best-effort: if the adapter rejects set_mode, the run still proceeds.
-            trySetPromptMode(client, ccSessionId, subSessionId);
+            // Set the configured permission mode. Default "auto" → cc runs
+            // autonomously (its classifier approves/denies tools, no user prompt) so
+            // cc completes without the user answering per-tool cards. "default" →
+            // cc prompts (AC-3) for dangerous ops — only usable once the confirmation
+            // card reliably reaches the user. Best-effort: an adapter without set_mode
+            // just stays in its default (also "auto").
+            trySetPermissionMode(client, ccSessionId, subSessionId);
 
             if (model != null && !model.isBlank()) {
                 client.setModel(ccSessionId, model).get(handshakeTimeout(), TimeUnit.SECONDS);
@@ -420,15 +423,21 @@ public class AcpAgentRunner {
         }
     }
 
-    /** Best-effort {@code session/set_mode default} so cc prompts for permission (AC-3). */
-    private void trySetPromptMode(AcpClient client, String ccSessionId, String subSessionId) {
+    /**
+     * Best-effort {@code session/set_mode <configured mode>}. Default {@code "auto"}
+     * → cc runs autonomously (no per-tool prompt); {@code "default"} → cc prompts,
+     * which requires the confirmation card to reach the user (AC-3). Non-fatal: an
+     * adapter without set_mode just stays in its own default (also {@code "auto"}).
+     */
+    private void trySetPermissionMode(AcpClient client, String ccSessionId, String subSessionId) {
+        String mode = properties.getPermissionMode();
         try {
-            client.setMode(ccSessionId, PROMPT_MODE_ID).get(handshakeTimeout(), TimeUnit.SECONDS);
+            client.setMode(ccSessionId, mode).get(handshakeTimeout(), TimeUnit.SECONDS);
         } catch (Exception e) {
-            // Non-fatal: an adapter without set_mode just stays in its default mode
-            // (no per-request prompts). Log and continue rather than failing the run.
+            // Non-fatal: an adapter without set_mode just stays in its default mode.
+            // Log and continue rather than failing the run.
             log.warn("ACP set_mode '{}' failed (sub-session {}): {}",
-                    PROMPT_MODE_ID, subSessionId, e.toString());
+                    mode, subSessionId, e.toString());
         }
     }
 
@@ -600,6 +609,43 @@ public class AcpAgentRunner {
             throw new AcpException("session/new did not return a sessionId");
         }
         return newSessionResult.get("sessionId").asText();
+    }
+
+    /**
+     * P2-1 — build the OTLP telemetry env injected into the spawned cc child so it
+     * exports its log/events to the SkillForge {@code OtlpReceiverController}, bound
+     * to this run via {@code OTEL_RESOURCE_ATTRIBUTES=sf.session_id=<sub-session>}.
+     *
+     * <p>Matches the spike's working env block (/tmp/acp-spike/otel-spike.mjs):
+     * telemetry on, OTLP http/json exporter, base endpoint = SkillForge, prompt
+     * flush via short schedule delays. Returns an EMPTY map (no telemetry) when
+     * {@code skillforge.acp.otlp-endpoint} is blank, so telemetry can be disabled.
+     *
+     * <p>Note: cc appends {@code /v1/<signal>} to {@code OTEL_EXPORTER_OTLP_ENDPOINT}
+     * itself, so we pass the BASE url only. The values are merged on top of the
+     * sanitized parent env by {@code ProcessAcpTransport.sanitizeEnv}.
+     */
+    private Map<String, String> buildTelemetryEnv(SessionEntity session) {
+        String endpoint = properties.getOtlpEndpoint();
+        if (endpoint == null || endpoint.isBlank()) {
+            return Map.of();
+        }
+        Map<String, String> env = new java.util.LinkedHashMap<>();
+        env.put("CLAUDE_CODE_ENABLE_TELEMETRY", "1");
+        env.put("OTEL_LOGS_EXPORTER", "otlp");
+        env.put("OTEL_METRICS_EXPORTER", "otlp");
+        env.put("OTEL_EXPORTER_OTLP_PROTOCOL", "http/json");
+        env.put("OTEL_EXPORTER_OTLP_ENDPOINT", endpoint);
+        // Flush promptly so events land while the run is still observable.
+        env.put("OTEL_BSP_SCHEDULE_DELAY", "1000");
+        env.put("OTEL_BLRP_SCHEDULE_DELAY", "1000");
+        // Bind every emitted event back to this SkillForge sub-session + owning agent.
+        StringBuilder resourceAttrs = new StringBuilder("sf.session_id=").append(session.getId());
+        if (session.getAgentId() != null) {
+            resourceAttrs.append(",sf.agent_id=").append(session.getAgentId());
+        }
+        env.put("OTEL_RESOURCE_ATTRIBUTES", resourceAttrs.toString());
+        return env;
     }
 
     /** A safe per-run cwd — NEVER the SkillForge repo root (cc would touch our own source). */

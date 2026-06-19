@@ -372,6 +372,94 @@ class AcpAgentRunnerTest {
     }
 
     @Test
+    @DisplayName("P2-1: telemetry env (CLAUDE_CODE_ENABLE_TELEMETRY + sf.session_id resource attr) reaches the spawned cc")
+    void run_injectsTelemetryEnvIntoSpawnedCc() {
+        properties.setOtlpEndpoint("http://localhost:8080");
+        FakeAcpTransport transport = scriptedTransport(List.of("ok"));
+        AtomicReference<Map<String, String>> capturedEnv = new AtomicReference<>();
+        AcpClientFactory factory = (cwd, env) -> {
+            capturedEnv.set(env);
+            return new AcpClient(transport, mapper, new CcAcpUpdateTranslator());
+        };
+        AcpPermissionBridge bridge = new AcpPermissionBridge(
+                new com.skillforge.core.engine.confirm.PendingConfirmationRegistry(),
+                broadcaster, driverPool, 30);
+        AcpAgentRunner runner = new AcpAgentRunner(factory, sessionService, agentRepository,
+                broadcaster, mapper, properties, bridge);
+
+        runner.run("hi", null, CALLER_USER_ID);
+
+        Map<String, String> env = capturedEnv.get();
+        assertThat(env).isNotNull();
+        assertThat(env).containsEntry("CLAUDE_CODE_ENABLE_TELEMETRY", "1");
+        assertThat(env).containsEntry("OTEL_LOGS_EXPORTER", "otlp");
+        assertThat(env).containsEntry("OTEL_EXPORTER_OTLP_PROTOCOL", "http/json");
+        assertThat(env).containsEntry("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:8080");
+        assertThat(env).containsEntry("OTEL_BSP_SCHEDULE_DELAY", "1000");
+        assertThat(env).containsEntry("OTEL_BLRP_SCHEDULE_DELAY", "1000");
+        // sf.session_id binds events back to THIS sub-session; sf.agent_id present too.
+        assertThat(env.get("OTEL_RESOURCE_ATTRIBUTES"))
+                .contains("sf.session_id=" + SUB_SESSION_ID);
+    }
+
+    @Test
+    @DisplayName("P2-1: blank otlp-endpoint disables telemetry env injection (empty env to cc)")
+    void run_blankOtlpEndpoint_noTelemetryEnv() {
+        properties.setOtlpEndpoint("");
+        FakeAcpTransport transport = scriptedTransport(List.of("ok"));
+        AtomicReference<Map<String, String>> capturedEnv = new AtomicReference<>();
+        AcpClientFactory factory = (cwd, env) -> {
+            capturedEnv.set(env);
+            return new AcpClient(transport, mapper, new CcAcpUpdateTranslator());
+        };
+        AcpPermissionBridge bridge = new AcpPermissionBridge(
+                new com.skillforge.core.engine.confirm.PendingConfirmationRegistry(),
+                broadcaster, driverPool, 30);
+        AcpAgentRunner runner = new AcpAgentRunner(factory, sessionService, agentRepository,
+                broadcaster, mapper, properties, bridge);
+
+        runner.run("hi", null, CALLER_USER_ID);
+
+        assertThat(capturedEnv.get()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("permission mode defaults to 'auto' (cc runs autonomously, no per-tool prompt)")
+    void run_setMode_defaultsToAuto() {
+        // properties is fresh in setUp() → default permissionMode = "auto".
+        assertThat(properties.getPermissionMode()).isEqualTo("auto");
+
+        FakeAcpTransport transport = scriptedTransport(List.of("ok"));
+        AcpAgentRunner runner = runnerWith(transport);
+
+        runner.run("hi", null, CALLER_USER_ID);
+
+        // set_mode carried modeId=auto.
+        boolean sentAutoMode = transport.sent.stream()
+                .anyMatch(l -> l.contains("\"method\":\"session/set_mode\"")
+                        && l.contains("\"modeId\":\"auto\""));
+        assertThat(sentAutoMode).isTrue();
+        boolean sentDefaultMode = transport.sent.stream()
+                .anyMatch(l -> l.contains("\"modeId\":\"default\""));
+        assertThat(sentDefaultMode).isFalse();
+    }
+
+    @Test
+    @DisplayName("permission mode 'default' (override) is sent so cc prompts (AC-3)")
+    void run_setMode_overrideToDefault() {
+        properties.setPermissionMode("default");
+        FakeAcpTransport transport = scriptedTransport(List.of("ok"));
+        AcpAgentRunner runner = runnerWith(transport);
+
+        runner.run("hi", null, CALLER_USER_ID);
+
+        boolean sentDefaultMode = transport.sent.stream()
+                .anyMatch(l -> l.contains("\"method\":\"session/set_mode\"")
+                        && l.contains("\"modeId\":\"default\""));
+        assertThat(sentDefaultMode).isTrue();
+    }
+
+    @Test
     @DisplayName("blank prompt is rejected before any cc spawn")
     void run_blankPrompt_rejected() {
         FakeAcpTransport transport = scriptedTransport(List.of("x"));
