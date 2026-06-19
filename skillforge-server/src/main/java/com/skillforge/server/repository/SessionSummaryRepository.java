@@ -18,6 +18,16 @@ public interface SessionSummaryRepository extends JpaRepository<SessionSummaryEn
     /** All active (non-superseded) summaries for a session, ordered by covered start_seq. */
     List<SessionSummaryEntity> findBySessionIdAndSupersededByIsNullOrderByStartSeqAsc(String sessionId);
 
+    /**
+     * COMPACT-IDEMPOTENCY-BOUNDARY-FIX storage redesign P2b-2a (§5(A) dual-read): cheap indexed
+     * existence check for "this session has at least one ACTIVE range summary", i.e. it was
+     * compacted under the range model. Backed by the partial index {@code idx_ss_session_active}
+     * ({@code WHERE superseded_by IS NULL}). Used by {@link SessionService#getContextMessages} to
+     * gate the derived read so flipping the flag ON does not derive (= dump the entire history) for
+     * old-model / never-compacted sessions that have no summary rows.
+     */
+    boolean existsBySessionIdAndSupersededByIsNull(String sessionId);
+
     /** All summaries for a session (active + superseded), ordered by covered start_seq. */
     List<SessionSummaryEntity> findBySessionIdOrderByStartSeqAsc(String sessionId);
 

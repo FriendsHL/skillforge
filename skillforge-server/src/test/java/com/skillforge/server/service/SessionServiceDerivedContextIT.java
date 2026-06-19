@@ -93,6 +93,12 @@ class SessionServiceDerivedContextIT extends AbstractPostgresIT {
                         java.util.Collections.emptyMap())));
     }
 
+    private void appendBoundary(String sid, Message m) {
+        sessionService.appendMessages(sid, List.of(
+                new SessionService.AppendMessage(m, SessionService.MSG_TYPE_COMPACT_BOUNDARY,
+                        java.util.Collections.emptyMap())));
+    }
+
     private SessionSummaryEntity newSummary(String sid, long startSeq, long endSeq, String text,
                                             Long supersededBy) {
         SessionSummaryEntity e = new SessionSummaryEntity();
@@ -245,6 +251,117 @@ class SessionServiceDerivedContextIT extends AbstractPostgresIT {
         // No COMPACT_BOUNDARY row present → legacy slice returns ALL rows verbatim (no summary).
         assertThat(legacy).hasSize(4);
         assertThat(legacy.get(0).getTextContent()).isEqualTo("turn 0");
-        assertThat(legacy).noneMatch(m -> "SHOULD BE IGNORED".equals(m.getContent()));
+        assertThat(legacy).noneMatch(m -> "SHOULD BE IGNORED".equals(m.getTextContent()));
+    }
+
+    // ===== P2b-2a per-session dual-read gate (migration safety) =====
+    // getContextMessages must derive ONLY when the session has an ACTIVE t_session_summary row.
+    // Otherwise (old-model boundary sessions / fresh sessions) it must fall through to the legacy
+    // boundary slice even when the global flag is ON.
+
+    @Test
+    @DisplayName("(a) REGRESSION GUARD: old-model session (boundary row, NO summary), flag ON → "
+            + "legacy post-boundary slice, NOT full history")
+    void oldModelSession_flagOn_returnsBoundarySliceNotFullHistory() {
+        // sessionService has rangeModelEnabled=true + summaryRepository wired (set up in @BeforeEach).
+        String sid = newSession();
+        appendRow(sid, Message.user("PRE-BOUNDARY old gen 0"));   // seq 0
+        appendRow(sid, Message.user("PRE-BOUNDARY old gen 1"));   // seq 1
+        appendBoundary(sid, Message.user("=== boundary summary ==="));   // seq 2 (COMPACT_BOUNDARY)
+        appendRow(sid, Message.user("post-boundary young 0"));   // seq 3
+        appendRow(sid, Message.user("post-boundary young 1"));   // seq 4
+        // NO t_session_summary row exists for this session → it is an old-model session.
+
+        List<Message> ctx = sessionService.getContextMessages(sid);
+
+        // Must be the legacy post-boundary slice (seq 3,4 only) — the boundary row itself is excluded.
+        assertThat(ctx).hasSize(2);
+        assertThat(ctx.get(0).getTextContent()).isEqualTo("post-boundary young 0");
+        assertThat(ctx.get(1).getTextContent()).isEqualTo("post-boundary young 1");
+        // THE BUG GUARD: pre-boundary rows must NOT leak into the LLM context.
+        assertThat(ctx).noneMatch(m -> "PRE-BOUNDARY old gen 0".equals(m.getTextContent()));
+        assertThat(ctx).noneMatch(m -> "PRE-BOUNDARY old gen 1".equals(m.getTextContent()));
+        assertThat(ctx).noneMatch(m -> "=== boundary summary ===".equals(m.getTextContent()));
+    }
+
+    @Test
+    @DisplayName("(b) new-model session (active summary), flag ON → derive [summary] + tail")
+    void newModelSession_flagOn_derives() {
+        String sid = newSession();
+        for (int i = 0; i < 5; i++) {
+            appendRow(sid, Message.user("turn " + i)); // seq 0..4
+        }
+        SessionSummaryEntity s = newSummary(sid, 0, 2, "ACTIVE SUMMARY", null);
+        mark(sid, 0, 2, s.getId());
+
+        List<Message> ctx = sessionService.getContextMessages(sid);
+
+        // Derived view: [summary, turn3, turn4].
+        assertThat(ctx).hasSize(3);
+        assertThat(ctx.get(0).getContent()).isEqualTo("ACTIVE SUMMARY");
+        assertThat(ctx.get(1).getTextContent()).isEqualTo("turn 3");
+        assertThat(ctx.get(2).getTextContent()).isEqualTo("turn 4");
+    }
+
+    @Test
+    @DisplayName("(b2) only-superseded summary (no ACTIVE), flag ON → NOT new-model → legacy slice")
+    void onlySupersededSummary_flagOn_fallsThroughToLegacy() {
+        String sid = newSession();
+        for (int i = 0; i < 4; i++) {
+            appendRow(sid, Message.user("turn " + i)); // seq 0..3
+        }
+        // Two summaries exist but BOTH are superseded (point at the other) → zero active →
+        // existsBySessionIdAndSupersededByIsNull = false → must NOT derive.
+        SessionSummaryEntity a = newSummary(sid, 0, 1, "SUPERSEDED A", null);
+        SessionSummaryEntity b = newSummary(sid, 0, 1, "SUPERSEDED B", null);
+        sessionSummaryRepository.markSuperseded(a.getId(), b.getId());
+        sessionSummaryRepository.markSuperseded(b.getId(), a.getId());
+
+        // Sanity: no active summary remains for this session.
+        assertThat(sessionSummaryRepository.existsBySessionIdAndSupersededByIsNull(sid)).isFalse();
+
+        // No boundary row → legacy slice returns all rows verbatim (NOT derived).
+        List<Message> ctx = sessionService.getContextMessages(sid);
+        assertThat(ctx).hasSize(4);
+        assertThat(ctx.get(0).getTextContent()).isEqualTo("turn 0");
+        assertThat(ctx).noneMatch(m -> "SUPERSEDED A".equals(m.getTextContent()));
+        assertThat(ctx).noneMatch(m -> "SUPERSEDED B".equals(m.getTextContent()));
+    }
+
+    @Test
+    @DisplayName("(c) fresh session (no boundary, no summary), flag ON → all rows (legacy path)")
+    void freshSession_flagOn_returnsAllRows() {
+        String sid = newSession();
+        for (int i = 0; i < 3; i++) {
+            appendRow(sid, Message.user("turn " + i)); // seq 0..2
+        }
+        // No summary, no boundary → not new-model → legacy slice → all rows.
+        List<Message> ctx = sessionService.getContextMessages(sid);
+        assertThat(ctx).hasSize(3);
+        assertThat(ctx.get(0).getTextContent()).isEqualTo("turn 0");
+        assertThat(ctx.get(2).getTextContent()).isEqualTo("turn 2");
+    }
+
+    @Test
+    @DisplayName("(d) flag OFF → legacy boundary slice regardless of an active summary present")
+    void flagOff_withActiveSummary_stillLegacy() {
+        SessionService legacySvc = new SessionService(
+                sessionRepository, sessionMessageRepository, agentRepository,
+                new SessionMessageStoreProperties(), new ObjectMapper(), transactionManager);
+        legacySvc.setSessionSummaryRepository(sessionSummaryRepository);
+        legacySvc.setRangeModelEnabled(false);
+
+        String sid = newSession();
+        for (int i = 0; i < 4; i++) {
+            appendRow(sid, Message.user("turn " + i)); // seq 0..3
+        }
+        // Active summary present, but flag OFF → must NOT derive.
+        SessionSummaryEntity s = newSummary(sid, 0, 1, "ACTIVE BUT IGNORED", null);
+        mark(sid, 0, 1, s.getId());
+
+        List<Message> ctx = legacySvc.getContextMessages(sid);
+        assertThat(ctx).hasSize(4);
+        assertThat(ctx.get(0).getTextContent()).isEqualTo("turn 0");
+        assertThat(ctx).noneMatch(m -> "ACTIVE BUT IGNORED".equals(m.getTextContent()));
     }
 }

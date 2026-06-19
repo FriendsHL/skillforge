@@ -533,10 +533,29 @@ public class SessionService {
      */
     @Transactional(readOnly = true)
     public List<Message> getContextMessages(String id) {
-        // P2a: range-model flag ON → derive the model view from active range summaries + uncovered
-        // rows. Flag OFF → unchanged legacy boundary-slice path (every existing caller keeps the
-        // same shape; only the internal source of the slice changes when the flag flips).
-        if (rangeModelEnabled && sessionSummaryRepository != null) {
+        // P2b-2a (§5(A) dual-read, §10 risk ③): derive the model view ONLY for sessions that were
+        // actually compacted under the range model — i.e. that have at least one ACTIVE range
+        // summary row. This is the migration-safety gate: flipping the flag ON globally must NOT
+        // re-derive EXISTING old-model sessions (whose compacted view is physical
+        // COMPACT_BOUNDARY + SUMMARY rows, with NO t_session_summary rows). For those,
+        // getContextMessagesWithProvenance would find no active summaries and emit the ENTIRE
+        // history (incl. old boundary/summary rows + re-appended young-gen) → context blow-up.
+        // Old-model boundary sessions AND fresh/never-compacted sessions fall through to the
+        // legacy boundary-slice path below (which correctly post-boundary-slices the former and
+        // returns all rows for the latter). The existence check is ONE indexed boolean query on
+        // the partial index idx_ss_session_active — acceptable on this per-turn hot path.
+        //
+        // WHY a genuine new-model session can never be wrongly routed to the legacy slice:
+        //   - Q3 rolling merge (CompactionService.persistCompactResult) saves the NEW summary
+        //     FIRST then supersedes priors in the SAME transaction, so a committed full-compact
+        //     leaves the session with exactly one active summary — no production path lands a
+        //     compacted new-model session at zero active summaries.
+        //   - The restore/checkpoint prune (deleteBySessionIdAndEndSeqGreaterThan) can drop
+        //     summaries, but it REWRITES the message rows back to the checkpoint state in the
+        //     same operation, so afterwards the legacy slice returns the restored row set
+        //     (correct) rather than a blown-up full history.
+        if (rangeModelEnabled && sessionSummaryRepository != null
+                && sessionSummaryRepository.existsBySessionIdAndSupersededByIsNull(id)) {
             return getContextMessagesWithProvenance(id).messages();
         }
         List<StoredMessage> records = getFullHistoryRecords(id);
