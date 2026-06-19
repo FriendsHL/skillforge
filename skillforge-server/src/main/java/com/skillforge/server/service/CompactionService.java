@@ -78,6 +78,29 @@ public class CompactionService implements ContextCompactorCallback {
     private static final int LOCK_STRIPES = 64;
     private static final int IDEMPOTENCY_MIN_GAP_MESSAGES = 5;
 
+    /**
+     * COMPACT-IDEMPOTENCY-FIX ①: engine-triggered "the context is genuinely over the window"
+     * sources. When the engine fires one of these it has already measured ratio &gt; threshold
+     * (or hit a context_length_exceeded overflow), so the compaction is REQUIRED and must never
+     * be skipped by the idempotency guard — otherwise a session that was previously compacted to
+     * a high persisted high-water mark gets its in-loop compaction permanently suppressed while
+     * the live context keeps growing past the window (observed: ratio=1.72 but "skipped gap=-97").
+     */
+    private static final Set<String> PREEMPTIVE_SOURCES = Set.of(
+            ContextCompactorCallback.SOURCE_ENGINE_SOFT,
+            ContextCompactorCallback.SOURCE_ENGINE_HARD,
+            ContextCompactorCallback.SOURCE_ENGINE_PREEMPTIVE,
+            ContextCompactorCallback.SOURCE_POST_OVERFLOW);
+
+    /**
+     * COMPACT-IDEMPOTENCY-FIX ②: minimum compactable-window size (number of messages BEFORE the
+     * young-gen) for a full compact to be worth doing. Below this the boundary has degenerated to
+     * a tiny prefix (common on tool-heavy sessions where the safe boundary cannot cut inside
+     * tool_use↔tool_result pairs), so the compaction reclaims ≈0 tokens for ~0 value and is
+     * treated as a true no-op (a cost/value filter — skip a zero-value compaction).
+     */
+    static final int MIN_COMPACT_WINDOW_MESSAGES = 4;
+
     private final SessionRepository sessionRepository;
     private final CompactionEventRepository eventRepository;
     private final SessionCompactionCheckpointRepository checkpointRepository;
@@ -345,7 +368,13 @@ public class CompactionService implements ContextCompactorCallback {
                     return;
                 }
                 if (!isBypassGuard(source, "light")) {
-                    int gap = current.size() - session.getLastCompactedAtMessageCount();
+                    // COMPACT-IDEMPOTENCY-FIX ①: gap must compare two values in the SAME counting
+                    // space. lastCompactedAtMessageCount is recorded in the persisted row-count
+                    // space (see persistCompactResult), so the gap must also use the persisted
+                    // count — NOT the engine's in-memory working-set size (current.size()), which
+                    // starts each run from the compacted subset and would yield a permanently
+                    // negative gap on any session that was previously compacted.
+                    int gap = session.getMessageCount() - session.getLastCompactedAtMessageCount();
                     if (gap < IDEMPOTENCY_MIN_GAP_MESSAGES) {
                         log.debug("callback light compact skipped (idempotency): sessionId={} gap={}", sessionId, gap);
                         out[0] = CompactCallbackResult.noOp(current, "idempotency guard");
@@ -411,11 +440,17 @@ public class CompactionService implements ContextCompactorCallback {
                 }
 
                 if (!isBypassGuard(source, "full")) {
-                    // For REST path: use the session's stored messageCount (consistent with old behavior).
-                    // For callback path: use current.size() (the engine has an accurate live count).
-                    int effectiveCount = (inMemoryMessages != null)
-                            ? inMemoryMessages.size() : session.getMessageCount();
-                    int gap = effectiveCount - session.getLastCompactedAtMessageCount();
+                    // COMPACT-IDEMPOTENCY-FIX ①: gap must compare two values in the SAME counting
+                    // space. Always use the persisted row count (session.getMessageCount()) on both
+                    // sides — same space as lastCompactedAtMessageCount (recorded in
+                    // persistCompactResult). The previous callback branch used inMemoryMessages.size()
+                    // (the engine working set, which restarts from the compacted subset each run) and
+                    // produced a permanently negative gap on any previously-compacted session,
+                    // silently suppressing in-loop compaction. Engine over-window sources
+                    // (PREEMPTIVE_SOURCES) already bypass this guard via isBypassGuard, so this branch
+                    // now only gates non-preemptive callers (e.g. agent-tool full) consistently with
+                    // the REST path.
+                    int gap = session.getMessageCount() - session.getLastCompactedAtMessageCount();
                     if (gap < IDEMPOTENCY_MIN_GAP_MESSAGES) {
                         log.info("fullCompact skipped (idempotency): sessionId={} gap={}", sessionId, gap);
                         return null;
@@ -430,6 +465,16 @@ public class CompactionService implements ContextCompactorCallback {
                 prep = fullStrategy.prepareCompact(messages, contextWindow);
                 if (prep == null) {
                     log.info("fullCompact no-op (no safe boundary): sessionId={}", sessionId);
+                    return null;
+                }
+                // COMPACT-IDEMPOTENCY-FIX ②: degenerate-split guard. On tool-heavy
+                // (SubAgent/Team) sessions the safe boundary often lands only a few messages in
+                // — summarising such a tiny window reclaims ≈0 tokens for ~0 value. If the
+                // compactable window is below MIN_COMPACT_WINDOW_MESSAGES, return a TRUE no-op now
+                // (before the LLM call) as a cost/value filter — skip the zero-value compaction.
+                if (prep.window().size() < MIN_COMPACT_WINDOW_MESSAGES) {
+                    log.info("fullCompact no-op (degenerate window): sessionId={} windowSize={} < {}",
+                            sessionId, prep.window().size(), MIN_COMPACT_WINDOW_MESSAGES);
                     return null;
                 }
 
@@ -461,7 +506,12 @@ public class CompactionService implements ContextCompactorCallback {
                             prep, memorySummary,
                             SessionMemoryCompactStrategy.DEFAULT_MAX_TOKENS,
                             SessionMemoryCompactStrategy.DEFAULT_MIN_MESSAGES);
-                    if (memoryResult != null && !isTrulyNoOp(memoryResult)) {
+                    // ②: if the memory summary did not net-reclaim tokens (isIneffective), do NOT
+                    // persist it here — fall through to Phase 2 (LLM) which may still produce an
+                    // effective summary. (Intentional: a token-ineffective memory result is a reason
+                    // to try the LLM, not to no-op the whole compaction.)
+                    if (memoryResult != null && !isTrulyNoOp(memoryResult)
+                            && !isIneffective(memoryResult)) {
                         // Memory compact succeeded — skip Phase 2 (LLM), go to Phase 3
                         final CompactResult finalMemResult = memoryResult;
                         final CompactionEventEntity[] savedEvt = {null};
@@ -498,9 +548,12 @@ public class CompactionService implements ContextCompactorCallback {
             throw new RuntimeException("fullCompact Phase 2 failed for sessionId=" + sessionId, e);
         }
 
-        if (result == null || isTrulyNoOp(result)) {
+        if (result == null || isTrulyNoOp(result) || isIneffective(result)) {
             fullCompactInFlight.remove(sessionId);
-            log.info("fullCompact no-op (LLM returned empty): sessionId={}", sessionId);
+            log.info("fullCompact no-op (LLM empty or no net reclaim): sessionId={} beforeTokens={} afterTokens={}",
+                    sessionId,
+                    result == null ? -1 : result.getBeforeTokens(),
+                    result == null ? -1 : result.getAfterTokens());
             return null;
         }
 
@@ -796,10 +849,30 @@ public class CompactionService implements ContextCompactorCallback {
         }
     }
 
-    /** 判断 source + level 组合是否绕过 idempotency guard. */
+    /**
+     * 判断 source + level 组合是否绕过 idempotency guard.
+     *
+     * <p>(source × level → bypass?) matrix:
+     * <pre>
+     *   source              | light  | full
+     *   --------------------+--------+--------
+     *   user-manual         | bypass | bypass   (explicit user action — always honored)
+     *   agent-tool          | bypass | GATED    (light is cheap/idempotent; full is gated)
+     *   engine-soft         | bypass | bypass   ┐ PREEMPTIVE_SOURCES: engine measured ratio
+     *   engine-hard         | bypass | bypass   │ &gt; threshold (or overflow) → the compaction is
+     *   engine-preemptive   | bypass | bypass   │ REQUIRED; never suppress it. When ② finds a
+     *   post-overflow       | bypass | bypass   ┘ degenerate window it just cheap-no-ops (no thrash).
+     *   other (e.g. engine-gap) | GATED | GATED
+     * </pre>
+     * engine-soft stays in PREEMPTIVE_SOURCES intentionally: engine-triggered ⇒ should compact;
+     * combined with ②'s degenerate guard it merely cheap-no-ops when the boundary is degenerate.
+     */
     private boolean isBypassGuard(String source, String level) {
         return "user-manual".equals(source)
-                || ("agent-tool".equals(source) && "light".equalsIgnoreCase(level));
+                || ("agent-tool".equals(source) && "light".equalsIgnoreCase(level))
+                // COMPACT-IDEMPOTENCY-FIX ①: engine-measured over-window compactions are
+                // required; never let the idempotency guard suppress them.
+                || PREEMPTIVE_SOURCES.contains(source);
     }
 
     /** 判断一次压缩是否真的没产出 —— 用于 #12 跳过 junk event. */
@@ -807,6 +880,16 @@ public class CompactionService implements ContextCompactorCallback {
         return result.getTokensReclaimed() == 0
                 && (result.getStrategiesApplied() == null || result.getStrategiesApplied().isEmpty())
                 && result.getBeforeMessageCount() == result.getAfterMessageCount();
+    }
+
+    /**
+     * COMPACT-IDEMPOTENCY-FIX ②: a compaction that did not actually shrink the token footprint
+     * (afterTokens &gt;= beforeTokens) is a no-net-reclaim result — zero (or negative) value — so it
+     * is treated as a true no-op (no boundary, no event) as a cost/value filter. Complements
+     * {@link #isTrulyNoOp}, which only catches strategy-level emptiness.
+     */
+    private boolean isIneffective(CompactResult result) {
+        return result.getAfterTokens() >= result.getBeforeTokens();
     }
 
     /**

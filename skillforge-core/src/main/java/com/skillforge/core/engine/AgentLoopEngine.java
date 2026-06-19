@@ -25,6 +25,7 @@ import com.skillforge.core.llm.LlmProvider;
 import com.skillforge.core.llm.LlmProviderFactory;
 import com.skillforge.core.llm.LlmRequest;
 import com.skillforge.core.llm.LlmResponse;
+import com.skillforge.core.llm.ModelConfig;
 import com.skillforge.core.llm.observer.LlmCallContext;
 import com.skillforge.core.model.AgentDefinition;
 import com.skillforge.core.model.ContentBlock;
@@ -295,10 +296,25 @@ public class AgentLoopEngine {
 
     // package-private for AgentLoopEngineCompactTest to verify per-agent override is honored
     int resolveContextWindow(AgentDefinition agentDef) {
+        // 1. explicit per-agent override (highest priority)
         Object val = agentDef.getConfig().get("context_window_tokens");
         if (val instanceof Number n && n.intValue() > 0) {
             return n.intValue();
         }
+        // 2. COMPACT-IDEMPOTENCY-FIX (附带): resolve the real per-model window from the
+        // known-model map instead of falling straight to the flat default. Without this an agent
+        // that did not explicitly set context_window_tokens (e.g. a 200K Claude / large-window
+        // model) was treated as the conservative flat default, triggering needless compaction.
+        String modelId = agentDef.getModelId();
+        if (modelId != null) {
+            String modelName = modelId.contains(":")
+                    ? modelId.substring(modelId.indexOf(':') + 1) : modelId;
+            java.util.Optional<Integer> known = ModelConfig.lookupKnownContextWindow(modelName);
+            if (known.isPresent()) {
+                return known.get();
+            }
+        }
+        // 3. flat default fallback
         return defaultContextWindowTokens;
     }
 
@@ -686,7 +702,8 @@ public class AgentLoopEngine {
                                     estTokens, contextWindowTokens, ratio, thresholds.getSoftRatio());
                     try {
                         CompactCallbackResult cr = compactorCallback.compactLight(
-                                loopCtx.getSessionId(), messages, "engine-soft", reason);
+                                loopCtx.getSessionId(), messages,
+                                ContextCompactorCallback.SOURCE_ENGINE_SOFT, reason);
                         b1RanInThisIteration = true;
                         if (cr != null && cr.performed) {
                             loopCtx.resetCompactFailures();
@@ -714,7 +731,8 @@ public class AgentLoopEngine {
                             ratio, estTokens, contextWindowTokens, thresholds.getHardRatio());
                     try {
                         CompactCallbackResult cr = compactorCallback.compactFull(
-                                loopCtx.getSessionId(), messages, "engine-hard", reason);
+                                loopCtx.getSessionId(), messages,
+                                ContextCompactorCallback.SOURCE_ENGINE_HARD, reason);
                         if (cr != null && cr.performed) {
                             loopCtx.resetCompactFailures();
                             messages = cr.messages;
@@ -849,7 +867,8 @@ public class AgentLoopEngine {
                             String.format("%.2f", thresholds.getPreemptiveRatio()));
                     try {
                         CompactCallbackResult cr = compactorCallback.compactFull(
-                                loopCtx.getSessionId(), messages, "engine-preemptive",
+                                loopCtx.getSessionId(), messages,
+                                ContextCompactorCallback.SOURCE_ENGINE_PREEMPTIVE,
                                 String.format("ratio %.2f > %.2f before LLM call",
                                         ratio, thresholds.getPreemptiveRatio()));
                         if (cr != null && cr.performed) {
@@ -1017,7 +1036,8 @@ public class AgentLoopEngine {
                     CompactCallbackResult cr;
                     try {
                         cr = compactorCallback.compactFull(
-                                loopCtx.getSessionId(), messages, "post-overflow",
+                                loopCtx.getSessionId(), messages,
+                                ContextCompactorCallback.SOURCE_POST_OVERFLOW,
                                 "context_length_exceeded:" + overflow.getMessage());
                     } catch (Exception compactEx) {
                         recordCompactFailure(loopCtx);

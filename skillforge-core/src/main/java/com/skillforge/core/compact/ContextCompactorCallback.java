@@ -17,6 +17,20 @@ import java.util.List;
  */
 public interface ContextCompactorCallback {
 
+    // ── Shared source-label constants (N1 fix) ──────────────────────────────────────────────
+    // These MUST be referenced by BOTH the engine callers (AgentLoopEngine) and the
+    // CompactionService idempotency-bypass set. Holding them as raw string literals on each side
+    // risks a silent drift that disables the over-window bypass. Single source of truth here.
+
+    /** Engine soft trigger: ratio &gt; softRatio or waste detected → light compact. */
+    String SOURCE_ENGINE_SOFT = "engine-soft";
+    /** Engine hard trigger: light ran but ratio still &gt; hardRatio → full compact. */
+    String SOURCE_ENGINE_HARD = "engine-hard";
+    /** Engine preemptive trigger: ratio &gt; preemptiveRatio just before the LLM call → full compact. */
+    String SOURCE_ENGINE_PREEMPTIVE = "engine-preemptive";
+    /** Post-overflow trigger: provider raised context_length_exceeded → one-shot full compact. */
+    String SOURCE_POST_OVERFLOW = "post-overflow";
+
     /**
      * 触发一次 light 压缩 (纯规则, 无 LLM)。
      *

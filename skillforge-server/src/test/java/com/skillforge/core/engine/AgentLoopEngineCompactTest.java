@@ -207,4 +207,43 @@ class AgentLoopEngineCompactTest {
         int resolved = engine.resolveContextWindow(agentDef);
         assertThat(resolved).isEqualTo(64000);
     }
+
+    @Test
+    void resolveContextWindow_uses_known_model_map_when_no_override() {
+        // COMPACT-IDEMPOTENCY-FIX (附带): no per-agent override, but the modelId resolves to a
+        // known-window model → use the real window instead of the flat default.
+        AgentLoopEngine engine = newEngine(new RecordingCallback());
+        engine.setDefaultContextWindowTokens(64000);
+
+        com.skillforge.core.model.AgentDefinition agentDef = new com.skillforge.core.model.AgentDefinition();
+        agentDef.setModelId("claude:claude-sonnet-4-20250514");
+
+        int resolved = engine.resolveContextWindow(agentDef);
+        assertThat(resolved).isEqualTo(200000);  // from KNOWN_MODEL_WINDOWS, not flat 64000
+    }
+
+    @Test
+    void resolveContextWindow_per_agent_override_wins_over_known_model_map() {
+        AgentLoopEngine engine = newEngine(new RecordingCallback());
+        engine.setDefaultContextWindowTokens(64000);
+
+        com.skillforge.core.model.AgentDefinition agentDef = new com.skillforge.core.model.AgentDefinition();
+        agentDef.setModelId("claude:claude-sonnet-4-20250514");      // map would say 200000
+        agentDef.getConfig().put("context_window_tokens", 150000);   // explicit override wins
+
+        int resolved = engine.resolveContextWindow(agentDef);
+        assertThat(resolved).isEqualTo(150000);
+    }
+
+    @Test
+    void resolveContextWindow_unknown_model_falls_back_to_engine_default() {
+        AgentLoopEngine engine = newEngine(new RecordingCallback());
+        engine.setDefaultContextWindowTokens(64000);
+
+        com.skillforge.core.model.AgentDefinition agentDef = new com.skillforge.core.model.AgentDefinition();
+        agentDef.setModelId("custom:some-unknown-model-v1");
+
+        int resolved = engine.resolveContextWindow(agentDef);
+        assertThat(resolved).isEqualTo(64000);
+    }
 }

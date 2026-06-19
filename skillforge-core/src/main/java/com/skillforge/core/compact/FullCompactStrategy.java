@@ -37,13 +37,29 @@ public class FullCompactStrategy {
             List<Message> window,
             List<Message> youngGen,
             int beforeTokens,
-            int beforeCount
+            int beforeCount,
+            int contextWindowTokens
     ) {}
 
     private static final Logger log = LoggerFactory.getLogger(FullCompactStrategy.class);
 
     public static final int YOUNG_GEN_KEEP = 20;
     public static final int MAX_SUMMARY_TOKENS = 800;
+
+    /**
+     * COMPACT-IDEMPOTENCY-FIX ③: reserve this many tokens for the system prompt + output budget +
+     * safety margin when deciding the per-call input budget for the summary LLM call. Subtracted
+     * from the model's context window to get the max window text size a single summary call may
+     * receive before map-reduce chunking kicks in.
+     */
+    static final int SUMMARY_INPUT_RESERVE_TOKENS = 4_000;
+
+    /**
+     * Fallback per-call input budget (tokens) used when the model context window is unknown / not
+     * positive. Conservative so an over-large window never blows the model context once ②
+     * lets the compactable window grow on tool-heavy sessions.
+     */
+    static final int SUMMARY_INPUT_FALLBACK_BUDGET_TOKENS = 24_000;
 
     private static final String SUMMARY_SYSTEM_PROMPT =
             "You are a conversation compressor. Your job is to summarize the provided conversation " +
@@ -108,7 +124,8 @@ public class FullCompactStrategy {
         List<Message> youngGen = messages.subList(rightEdge, messages.size());
 
         String windowSerialized = serializeWindow(window);
-        String summary = callLlm(provider, modelId, windowSerialized);
+        String summary = summarizeWithWindowGuard(provider, modelId, windowSerialized,
+                contextWindowTokens);
         if (summary == null || summary.isBlank()) {
             log.warn("FullCompactStrategy: LLM returned empty summary, returning original");
             return new CompactResult(messages, beforeTokens, beforeTokens, beforeCount, beforeCount,
@@ -161,7 +178,8 @@ public class FullCompactStrategy {
         }
         List<Message> window = new ArrayList<>(messages.subList(0, rightEdge));
         List<Message> youngGen = new ArrayList<>(messages.subList(rightEdge, messages.size()));
-        return new PreparedCompact(rightEdge, window, youngGen, beforeTokens, beforeCount);
+        return new PreparedCompact(rightEdge, window, youngGen, beforeTokens, beforeCount,
+                contextWindowTokens);
     }
 
     /**
@@ -171,7 +189,8 @@ public class FullCompactStrategy {
      */
     public CompactResult applyPrepared(PreparedCompact prep, LlmProvider provider, String modelId) {
         String windowSerialized = serializeWindow(prep.window());
-        String summary = callLlm(provider, modelId, windowSerialized);
+        String summary = summarizeWithWindowGuard(provider, modelId, windowSerialized,
+                prep.contextWindowTokens());
         if (summary == null || summary.isBlank()) {
             log.warn("FullCompactStrategy.applyPrepared: LLM returned empty summary, no-op");
             return null;
@@ -281,6 +300,163 @@ public class FullCompactStrategy {
             sb.append("\n");
         }
         return sb.toString();
+    }
+
+    /** Max map-reduce reduce-recursion depth before accepting an over-budget single call (#2 guard). */
+    static final int MAX_SUMMARY_REDUCE_DEPTH = 3;
+
+    /**
+     * COMPACT-IDEMPOTENCY-FIX ③: window-aware summarization. Estimates the input token size of
+     * {@code windowText}; if it fits the per-call budget (model context window − reserve), summarize
+     * in one call. Otherwise map-reduce: split the window text into budget-sized chunks, summarize
+     * each, then summarize the concatenation of the chunk summaries. This prevents a
+     * context-length-exceeded failure once ② lets the compactable window grow on tool-heavy
+     * sessions. The single-call path is byte-for-byte the prior behavior for normal-sized windows.
+     */
+    public String summarizeWithWindowGuard(LlmProvider provider, String modelId, String windowText,
+                                           int contextWindowTokens) {
+        return summarizeWithWindowGuard(provider, modelId, windowText, contextWindowTokens, 0);
+    }
+
+    /**
+     * {@code depth} bounds the reduce recursion (#2): each time the concatenated chunk summaries are
+     * themselves over budget we recurse once more, but never beyond {@link #MAX_SUMMARY_REDUCE_DEPTH}.
+     * On exhaustion we make a single best-effort call with the over-budget text (let the provider
+     * truncate) rather than recursing forever — guards against an LLM that returns near-verbatim
+     * partials so {@code combined} never shrinks.
+     */
+    private String summarizeWithWindowGuard(LlmProvider provider, String modelId, String windowText,
+                                            int contextWindowTokens, int depth) {
+        if (windowText == null || windowText.isBlank()) {
+            return null;
+        }
+        int perCallBudget = (contextWindowTokens > 0)
+                ? contextWindowTokens - SUMMARY_INPUT_RESERVE_TOKENS
+                : SUMMARY_INPUT_FALLBACK_BUDGET_TOKENS;
+        if (perCallBudget < 1_000) {
+            // window − reserve underflowed (pathologically small / unknown window): use the
+            // conservative fallback budget so we still chunk sensibly. (#5a: the prior
+            // Math.max(1_000, FALLBACK) was dead — FALLBACK is always the larger value.)
+            perCallBudget = SUMMARY_INPUT_FALLBACK_BUDGET_TOKENS;
+        }
+        int estTokens = TokenEstimator.estimateString(windowText);
+        if (estTokens <= perCallBudget) {
+            return callLlm(provider, modelId, windowText);
+        }
+
+        // Map phase: chunk and summarize each chunk.
+        List<String> chunks = chunkByBudget(windowText, perCallBudget);
+        log.info("FullCompactStrategy: window {} tokens exceeds per-call budget {} — map-reduce over {} chunks (depth={})",
+                estTokens, perCallBudget, chunks.size(), depth);
+        List<String> partials = new ArrayList<>(chunks.size());
+        for (int i = 0; i < chunks.size(); i++) {
+            String partial = callLlm(provider, modelId, chunks.get(i));
+            if (partial != null && !partial.isBlank()) {
+                partials.add("[Part " + (i + 1) + "/" + chunks.size() + "]\n" + partial.trim());
+            }
+        }
+        if (partials.isEmpty()) {
+            return null;
+        }
+        if (partials.size() == 1) {
+            return partials.get(0);
+        }
+
+        // Reduce phase: summarize the concatenation of chunk summaries. If even the concatenation
+        // exceeds the budget (very large histories), recurse — but bounded by MAX_SUMMARY_REDUCE_DEPTH.
+        String combined = String.join("\n\n", partials);
+        if (TokenEstimator.estimateString(combined) > perCallBudget) {
+            if (depth + 1 < MAX_SUMMARY_REDUCE_DEPTH) {
+                return summarizeWithWindowGuard(provider, modelId, combined, contextWindowTokens, depth + 1);
+            }
+            // Depth exhausted (e.g. provider returns near-verbatim partials so combined never
+            // shrinks): make one best-effort over-budget call and let the provider truncate,
+            // falling back to the concatenated partials if it yields nothing.
+            log.warn("FullCompactStrategy: reduce depth {} exhausted; single best-effort over-budget call",
+                    MAX_SUMMARY_REDUCE_DEPTH);
+            String best = callLlm(provider, modelId, combined);
+            return (best != null && !best.isBlank()) ? best : combined;
+        }
+        String reduced = callLlm(provider, modelId, combined);
+        // If the reduce call yields nothing, fall back to the concatenated partials rather than
+        // losing the whole summary.
+        return (reduced != null && !reduced.isBlank()) ? reduced : combined;
+    }
+
+    /**
+     * Split {@code text} into chunks each estimated at &lt;= {@code budgetTokens}, preferring line
+     * boundaries (serializeWindow emits one line per message). A single line larger than the budget
+     * is hard-split by characters so no chunk ever exceeds the budget.
+     *
+     * <p>java-W1: keeps a running token counter for the accumulator instead of re-concatenating and
+     * re-estimating the whole buffer each line — O(N) over the (large) window text rather than O(N²).
+     */
+    private List<String> chunkByBudget(String text, int budgetTokens) {
+        List<String> chunks = new ArrayList<>();
+        String[] lines = text.split("\n", -1);
+        StringBuilder current = new StringBuilder();
+        int currentTokens = 0;                 // running estimate of `current` content
+        for (String line : lines) {
+            int lineTokens = TokenEstimator.estimateString(line);
+            // +1 approximates the '\n' joiner token between accumulated lines.
+            int joinerTokens = current.length() == 0 ? 0 : 1;
+            if (currentTokens + joinerTokens + lineTokens <= budgetTokens) {
+                if (current.length() > 0) current.append('\n');
+                current.append(line);
+                currentTokens += joinerTokens + lineTokens;
+                continue;
+            }
+            // Candidate would overflow. Flush current first.
+            if (current.length() > 0) {
+                chunks.add(current.toString());
+                current.setLength(0);
+                currentTokens = 0;
+            }
+            if (lineTokens <= budgetTokens) {
+                current.append(line);
+                currentTokens = lineTokens;
+            } else {
+                // Single oversized line: hard-split by characters proportional to the budget.
+                chunks.addAll(hardSplit(line, budgetTokens));
+            }
+        }
+        if (current.length() > 0) {
+            chunks.add(current.toString());
+        }
+        return chunks;
+    }
+
+    /**
+     * Hard-split an oversized single line by character count approximating the token budget.
+     *
+     * <p>INV-8 (UTF-16 surrogate safety): the cut point is rolled back by one if it would land
+     * between a high surrogate and its trailing low surrogate (supplementary code points such as
+     * emoji / non-BMP CJK occupy two chars). A mid-surrogate cut would later make Jackson throw
+     * {@code MismatchedSurrogateException} when {@code callLlm} serializes the request. Same logic
+     * as {@code FileStateCache.safeCutLen}.
+     */
+    private List<String> hardSplit(String line, int budgetTokens) {
+        List<String> out = new ArrayList<>();
+        // ~4 chars per token is a conservative average for cl100k_base on mixed content.
+        int approxCharsPerChunk = Math.max(1_000, budgetTokens * 4);
+        int i = 0;
+        int len = line.length();
+        while (i < len) {
+            int end = Math.min(len, i + approxCharsPerChunk);
+            // Surrogate-safe: if `end` would split a pair (char at end-1 is a high surrogate and
+            // its low surrogate sits at index `end`), step back one so the pair is not cut.
+            if (end < len && Character.isHighSurrogate(line.charAt(end - 1))) {
+                end--;
+            }
+            // Defensive: if stepping back collapsed the window to nothing (chunk would be empty),
+            // include the full pair so we always make forward progress.
+            if (end <= i) {
+                end = Math.min(len, i + approxCharsPerChunk + 1);
+            }
+            out.add(line.substring(i, end));
+            i = end;
+        }
+        return out;
     }
 
     private String callLlm(LlmProvider provider, String modelId, String windowText) {
