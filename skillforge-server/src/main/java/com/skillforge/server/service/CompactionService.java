@@ -1198,6 +1198,28 @@ public class CompactionService implements ContextCompactorCallback, SessionServi
         try {
             if (agentRepository != null && session.getAgentId() != null) {
                 AgentEntity agent = agentRepository.findById(session.getAgentId()).orElse(null);
+                if (agent != null) {
+                    // Step 0: explicit per-agent override (highest priority) —
+                    // agent.config.context_window_tokens. ChatService injects THIS method's result
+                    // into agentDef.config (overwriting whatever toAgentDefinition put there), so
+                    // unless the override is honored here it is silently dead and every
+                    // unknown-window model (e.g. glm-5.2) falls to the flat 64K default — that is why
+                    // session 9d3eff0f sat at 64K despite a configured 400000.
+                    if (agent.getConfig() != null && !agent.getConfig().isBlank()) {
+                        try {
+                            @SuppressWarnings("unchecked")
+                            Map<String, Object> cfg = new com.fasterxml.jackson.databind.ObjectMapper()
+                                    .readValue(agent.getConfig(), Map.class);
+                            Object override = cfg.get("context_window_tokens");
+                            if (override instanceof Number n && n.intValue() > 0) {
+                                return n.intValue();
+                            }
+                        } catch (Exception e) {
+                            log.warn("Failed to parse agent config context_window_tokens for session "
+                                    + "{}, falling through to model resolution", session.getId(), e);
+                        }
+                    }
+                }
                 if (agent != null && agent.getModelId() != null) {
                     String modelId = agent.getModelId();
                     String providerName;

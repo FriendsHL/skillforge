@@ -670,6 +670,39 @@ class CompactionServiceTest {
     }
 
     /**
+     * Step 0: an explicit per-agent {@code context_window_tokens} in the agent config JSON wins
+     * over BOTH the YAML provider config and the known-model map. Regression guard for the live bug
+     * where an agent's configured 400000 was silently ignored (method never read agent config) so
+     * glm-5.2 sessions ran at the flat 64K default. The only thing that should beat the override is
+     * nothing — it is the highest priority.
+     */
+    @Test
+    void resolveContextWindow_agent_config_override_wins() throws Exception {
+        LlmProperties.ProviderConfig pc = new LlmProperties.ProviderConfig();
+        pc.setModel("claude-sonnet-4-20250514");
+        pc.setContextWindowTokens(50_000);  // YAML present — must still be beaten by the agent override
+        when(llmProperties.getProviders()).thenReturn(Map.of("claude", pc));
+        when(llmProperties.getDefaultProvider()).thenReturn("claude");
+
+        SessionEntity session = new SessionEntity();
+        session.setId("s-override");
+        session.setAgentId(96L);
+
+        AgentEntity agent = new AgentEntity();
+        agent.setId(96L);
+        agent.setModelId("claude:claude-sonnet-4-20250514");
+        agent.setConfig("{\"temperature\":0.7,\"context_window_tokens\":400000}");
+        when(agentRepository.findById(96L)).thenReturn(Optional.of(agent));
+
+        java.lang.reflect.Method m = CompactionService.class.getDeclaredMethod(
+                "resolveContextWindowForSession", SessionEntity.class);
+        m.setAccessible(true);
+        int result = (int) m.invoke(service, session);
+
+        assertThat(result).isEqualTo(400_000);  // agent override wins over YAML 50000 + model map 200000
+    }
+
+    /**
      * When YAML contextWindowTokens is unset, the known-model map should resolve
      * claude-sonnet-4-20250514 to 200_000.
      */
