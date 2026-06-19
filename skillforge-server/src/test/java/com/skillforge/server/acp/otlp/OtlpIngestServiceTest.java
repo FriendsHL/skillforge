@@ -178,4 +178,45 @@ class OtlpIngestServiceTest {
         assertThat(n).isZero();
         verify(eventRepository, never()).save(any());
     }
+
+    @Test
+    @DisplayName("P2-2: each persisted event is also projected to a span via the translator (additive)")
+    void ingest_projectsSpans() throws Exception {
+        com.skillforge.observability.api.LlmTraceStore traceStore =
+                mock(com.skillforge.observability.api.LlmTraceStore.class);
+        when(traceStore.readSpan(any())).thenReturn(java.util.Optional.empty());
+        CcEventSpanTranslator translator = new CcEventSpanTranslator(traceStore);
+        OtlpIngestService withTranslator = new OtlpIngestService(
+                new OtlpLogsParser(), eventRepository, sessionRepository, mapper, Runnable::run, translator);
+        when(sessionRepository.existsById("sub-1")).thenReturn(true);
+
+        int n = withTranslator.ingest(tree(payloadForSession("sub-1")));
+
+        assertThat(n).isEqualTo(3);
+        // api_request → write (llm) + a subagent anchor (its agent.name=code-reviewer);
+        // tool_result → writeToolSpan; user_prompt → writeEventSpan.
+        verify(traceStore, org.mockito.Mockito.atLeastOnce()).upsertTraceStub(any());
+        verify(traceStore).write(any());
+        verify(traceStore, org.mockito.Mockito.atLeastOnce()).writeToolSpan(any());
+        verify(traceStore).writeEventSpan(any());
+    }
+
+    @Test
+    @DisplayName("P2-2: a translator failure does NOT break ingest (raw rows still persisted)")
+    void ingest_translatorFailureDoesNotBreakIngest() throws Exception {
+        com.skillforge.observability.api.LlmTraceStore traceStore =
+                mock(com.skillforge.observability.api.LlmTraceStore.class);
+        when(traceStore.readSpan(any())).thenThrow(new RuntimeException("db down"));
+        org.mockito.Mockito.doThrow(new RuntimeException("db down")).when(traceStore).upsertTraceStub(any());
+        CcEventSpanTranslator translator = new CcEventSpanTranslator(traceStore);
+        OtlpIngestService withTranslator = new OtlpIngestService(
+                new OtlpLogsParser(), eventRepository, sessionRepository, mapper, Runnable::run, translator);
+        when(sessionRepository.existsById("sub-1")).thenReturn(true);
+
+        int n = withTranslator.ingest(tree(payloadForSession("sub-1")));
+
+        // Raw persistence still succeeded for all 3 events despite the span store being down.
+        assertThat(n).isEqualTo(3);
+        verify(eventRepository, org.mockito.Mockito.times(3)).save(any());
+    }
 }

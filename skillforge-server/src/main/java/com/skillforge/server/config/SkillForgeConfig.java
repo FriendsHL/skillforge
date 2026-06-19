@@ -1727,6 +1727,18 @@ public class SkillForgeConfig {
         return executor;
     }
 
+    /**
+     * P2-2: translates each persisted, PII-filtered cc event into a span on the cc
+     * sub-session's trace, reusing the existing {@link com.skillforge.observability.api.LlmTraceStore}
+     * (no new trace store/table). Idempotent (deterministic span ids) and resilient
+     * (never throws — a span-write failure can not break P2-1 ingest).
+     */
+    @Bean
+    public com.skillforge.server.acp.otlp.CcEventSpanTranslator ccEventSpanTranslator(
+            com.skillforge.observability.api.LlmTraceStore llmTraceStore) {
+        return new com.skillforge.server.acp.otlp.CcEventSpanTranslator(llmTraceStore);
+    }
+
     /** P2-1: binds + persists cc OTLP events to the cc sub-session (PII-filtered). */
     @Bean
     public com.skillforge.server.acp.otlp.OtlpIngestService otlpIngestService(
@@ -1735,9 +1747,11 @@ public class SkillForgeConfig {
             com.skillforge.server.repository.SessionRepository sessionRepository,
             ObjectMapper objectMapper,
             @org.springframework.beans.factory.annotation.Qualifier("otlpIngestExecutor")
-            ThreadPoolExecutor otlpIngestExecutor) {
+            ThreadPoolExecutor otlpIngestExecutor,
+            com.skillforge.server.acp.otlp.CcEventSpanTranslator ccEventSpanTranslator) {
         return new com.skillforge.server.acp.otlp.OtlpIngestService(
-                otlpLogsParser, acpCcEventRepository, sessionRepository, objectMapper, otlpIngestExecutor);
+                otlpLogsParser, acpCcEventRepository, sessionRepository, objectMapper,
+                otlpIngestExecutor, ccEventSpanTranslator);
     }
 
     /** Per-run AcpClient factory — spawns a fresh cc adapter process per run. */

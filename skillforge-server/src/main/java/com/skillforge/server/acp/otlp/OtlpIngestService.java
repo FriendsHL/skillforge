@@ -59,22 +59,42 @@ public class OtlpIngestService {
      */
     private static final long MAX_EVENTS_PER_SESSION = 10_000;
 
+    /** Resource attr key carrying the owning SkillForge agent id (injected by AcpAgentRunner). */
+    private static final String SF_AGENT_ID = "sf.agent_id";
+
     private final OtlpLogsParser parser;
     private final AcpCcEventRepository eventRepository;
     private final SessionRepository sessionRepository;
     private final ObjectMapper objectMapper;
     private final Executor ingestExecutor;
+    /**
+     * P2-2: projects each persisted, PII-filtered event into a span on the cc
+     * sub-session's trace. Nullable so the P2-1 unit tests (which assert ONLY the raw
+     * row persistence + PII filtering) can construct the service without a trace store;
+     * the Spring bean always wires it. A null translator simply skips projection.
+     */
+    private final CcEventSpanTranslator spanTranslator;
 
     public OtlpIngestService(OtlpLogsParser parser,
                              AcpCcEventRepository eventRepository,
                              SessionRepository sessionRepository,
                              ObjectMapper objectMapper,
                              Executor ingestExecutor) {
+        this(parser, eventRepository, sessionRepository, objectMapper, ingestExecutor, null);
+    }
+
+    public OtlpIngestService(OtlpLogsParser parser,
+                             AcpCcEventRepository eventRepository,
+                             SessionRepository sessionRepository,
+                             ObjectMapper objectMapper,
+                             Executor ingestExecutor,
+                             CcEventSpanTranslator spanTranslator) {
         this.parser = parser;
         this.eventRepository = eventRepository;
         this.sessionRepository = sessionRepository;
         this.objectMapper = objectMapper;
         this.ingestExecutor = ingestExecutor;
+        this.spanTranslator = spanTranslator;
     }
 
     /**
@@ -149,6 +169,47 @@ public class OtlpIngestService {
         row.setToolUseId(truncate(asString(structural.get("tool_use_id")), 128));
         row.setAttrsJson(toJson(structural));
         eventRepository.save(row);
+
+        // P2-2: project the persisted, PII-filtered event onto the cc sub-session's
+        // trace. Translation reads ONLY the already-filtered `structural` attrs (never
+        // the raw PII-bearing set) and never throws — a span-write failure must not
+        // break ingest (the raw row above is the source of truth).
+        projectSpan(sfSessionId, structural, ev);
+    }
+
+    /**
+     * P2-2: best-effort span projection. Builds a PII-filtered {@link ParsedCcEvent}
+     * view (so the translator can not re-derive PII) and hands it to the translator,
+     * which itself swallows errors; this extra guard catches anything unexpected.
+     */
+    private void projectSpan(String sfSessionId, Map<String, Object> structural, ParsedCcEvent ev) {
+        if (spanTranslator == null) {
+            return;
+        }
+        try {
+            Long agentId = asLong(structural.get(SF_AGENT_ID));
+            ParsedCcEvent filtered = new ParsedCcEvent(
+                    ev.eventName(), ev.sfSessionId(), ev.ccSessionId(),
+                    ev.eventSeq(), ev.ts(), structural);
+            spanTranslator.translate(sfSessionId, agentId, filtered);
+        } catch (RuntimeException e) {
+            log.warn("OTLP span projection failed (raw row kept): session={} event={}: {}",
+                    sfSessionId, ev.eventName(), e.toString());
+        }
+    }
+
+    private static Long asLong(Object v) {
+        if (v == null) {
+            return null;
+        }
+        if (v instanceof Number n) {
+            return n.longValue();
+        }
+        try {
+            return Long.parseLong(v.toString().trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     /**
