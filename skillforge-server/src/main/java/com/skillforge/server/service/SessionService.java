@@ -790,6 +790,18 @@ public class SessionService {
                 .orElseThrow(() -> new IllegalArgumentException("control not found"));
     }
 
+    /**
+     * Non-throwing variant of {@link #getControlMessage}: returns empty instead of
+     * raising when no control row matches. Used by the unified confirmation
+     * endpoint (ACP-EXTERNAL-AGENT P1c-2) to discriminate the ENGINE path (control
+     * row present) from the ACP/cc path (no control row, only a registry latch).
+     */
+    @Transactional(readOnly = true)
+    public java.util.Optional<SessionMessageEntity> findControlMessage(String sessionId, String messageType, String controlId) {
+        return sessionMessageRepository
+                .findBySessionIdAndMessageTypeAndControlId(sessionId, messageType, controlId);
+    }
+
     @Transactional(readOnly = true)
     public java.util.Optional<SessionMessageEntity> findPendingAsk(String sessionId) {
         return sessionMessageRepository
