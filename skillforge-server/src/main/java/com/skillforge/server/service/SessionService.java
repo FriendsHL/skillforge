@@ -1598,15 +1598,27 @@ public class SessionService {
     }
 
     /**
-     * True when a session is active and idle/waiting — i.e. safe to enqueue a new
-     * channel turn. Returns false for archived sessions, running sessions, or
-     * unknown ids.
+     * True when a session is the live channel session for its conversation — i.e. an inbound
+     * channel message should be reused into it rather than forking a new session. Active means
+     * status=active AND runtime is null/idle/running/waiting_user. {@code running} counts: a busy
+     * session enqueues the message (ChatService.chatAsync) instead of forking. Returns false for
+     * archived/closed sessions, {@code error} runtime (fork a fresh session), or unknown ids.
      */
     public boolean isChannelSessionActive(String sessionId) {
         return sessionRepository.findById(sessionId)
                 .map(s -> "active".equals(s.getStatus())
                         && (s.getRuntimeStatus() == null
                             || "idle".equals(s.getRuntimeStatus())
+                            // A running session is STILL the live channel session for its
+                            // conversation: an inbound message must be reused into it (ChatService
+                            // .chatAsync enqueues it via enqueueUserMessage, or — if the loop just
+                            // finished and the in-memory LoopContext is gone — falls through to a
+                            // fresh loop on the SAME session). Excluding "running" here made the
+                            // resolver close the conversation + spawn a NEW session whenever a
+                            // message arrived mid-run, which ALSO orphaned the original session's
+                            // async channel delivery ("频道断了，发送失败"). The only caller is
+                            // ChannelConversationResolver.resolveSession.
+                            || "running".equals(s.getRuntimeStatus())
                             || "waiting_user".equals(s.getRuntimeStatus())))
                 .orElse(false);
     }
