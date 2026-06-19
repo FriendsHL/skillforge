@@ -54,8 +54,17 @@ cc 的 tool_call 翻译进 SkillForge 持久化路径，必须满足 tool_use↔
 - **长期可选**：B3 真 OTel 渐进迁移（`OTEL-NATIVE-TRACING` 包）。
 
 ## 开放问题（Plan / 用户决策）
-- ~~OQ-1：Track B 走 B1/B2/B3 哪条？~~ **已固化 B1 适配器先行（2026-06-19）**：cc OTel→翻译进现有 LlmSpan,~5–7d 零 blast radius;B3 大爆破否决(~70–100d 且非纯 OTel),作长期渐进。
-- OQ-2：cc/codex adapter 子进程在 SkillForge 部署形态（本机 / 云端）怎么打包管理？
-- OQ-3：权限默认策略（逐个弹 vs 自动批+高危弹）？
-- OQ-4：cc 跑成独立子 session（可单独查看）还是内联父 session 流？
-- OQ-5：内容捕获默认关，按需开——谁有权开 + 存哪？
+- ~~OQ-1：Track B 走 B1/B2/B3 哪条？~~ **已固化 B1 适配器先行（2026-06-19）**。
+- ~~OQ-2：adapter 部署形态？~~ **本机子进程（2026-06-19 用户）**：SkillForge 本地跑 + cc 本地，AcpClient 用 npx/预装拉起子进程。云端打包作后续。
+- ~~OQ-3：权限默认策略？~~ **逐个弹确认（2026-06-19 用户）**：ACP 启 cc 置"要批准"模式，每个确认 → SkillForge confirmation，批/拒经 ACP 回传（AC-3 成立）。自动批+高危弹作可配项后续。
+- ~~OQ-4：独立子 session vs 内联？~~ **独立子 session（2026-06-19 用户）**：复用 SubAgent 子 session 模型，可单独查看，结果经 CHANNEL-ASYNC-DELIVERY 回投。
+- OQ-5：内容捕获默认关，按需开——谁有权开 + 存哪？（P4 再定）
+
+## Spike 验证（2026-06-19，/tmp/acp-spike，真实协议流量）
+握手端到端跑通（cc adapter `@zed-industries/claude-code-acp@0.16.2`，已**改名 `@agentclientprotocol/claude-agent-acp`** → P1 用新名）：
+- **帧格式**：newline-delimited JSON-RPC 2.0 over stdio（非 LSP Content-Length）。
+- **握手**：`initialize{protocolVersion:1, clientCapabilities}` → agentCapabilities(promptCapabilities image/embeddedContext、mcpCapabilities http/sse、loadSession、sessionCapabilities fork/list/resume) + authMethods(claude-login)。
+- **`session/new{cwd, mcpServers}`** → `{sessionId, models{availableModels[default=Opus4.6/sonnet/haiku], currentModelId}, modes{currentModeId, availableModes[]}}`。→ **models 接 session/setModel；modes 接 OQ-3 权限模式**。
+- **`session/prompt{sessionId, prompt:[{type:text,text}]}`** → 流式 `session/update` notification，`update.sessionUpdate` 判别器实测见：`available_commands_update`（cc 斜杠命令）、`agent_message_chunk{content:{type:"text",text}}`（**文本增量**）；prompt 完成回 result `{stopReason:"end_turn"}`。
+- **嵌套守卫**：cc adapter 继承 `CLAUDECODE` 会拒绝"nested session"→ **AcpClient spawn 必须 strip `CLAUDECODE`/`CLAUDE_CODE_ENTRYPOINT`/`CLAUDE_CODE_SSE_PORT`**（生产 JVM 无此变量，但防御性清理）。
+- **Translator 已确认映射**：agent_message_chunk→text block。**待 P1 捕获**：`tool_call`/`tool_call_update`（→tool_use/tool_result 配对）、`reasoning`/thought、`plan`、permission request 形状（需带工具的 prompt 触发）。
