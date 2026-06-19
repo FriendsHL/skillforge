@@ -37,8 +37,25 @@ SkillForge 观测层说**真 OTLP**，以便：① 原生接 cc/codex OTel；②
 **B3 真 OTel 大爆破（已否决）**：逐文件实测 **~70–100 dev-day**；且 SkillForge 模型一大块无 OTel 语义约定（kind 索引列+判别器 / event span / t_llm_trace 聚合+生命周期 saga / cache·cost·reasoning / blob / origin / iterationIndex / subagentSessionId）→ 付全额成本只能得「OTel + 大量 sf.* 扩展 + 自写 exporter」非纯标准 OTel；OTel SDK 活体 start/end vs SkillForge 事后构造 span 相冲；自进化读点静默退化 + big-bang 无并行验证期。
 **B3 改作长期可选渐进**（双写→按簇迁读 + 自进化簇单独并行验证→ETL→下线 LlmSpan），独立 `OTEL-NATIVE-TRACING` 包，**不阻塞本需求**。
 
-### 关键机制
-- **OTLP receiver**：gRPC 4317 / HTTP 4318（或内嵌 OTel Collector）。
+### ⚠️ P2 spike 修正（2026-06-19,/tmp/acp-spike/otel-spike.mjs 实测）—— 推翻"翻译 span"假设
+本地起 OTLP receiver + cc 开 telemetry(`CLAUDE_CODE_ENABLE_TELEMETRY=1` + OTLP http/json 指过来)实测:
+- **cc 只发 metrics + logs/events,ZERO traces(span)**(`got: traces=0, metrics=5, logs=4`)。→ **B1"翻译 gen_ai span→LlmSpan"前提不成立**,改为"**摄取 cc 的 OTLP log events**"。
+- cc 事件(OTLP logs,body=`claude_code.<event>`)及关键属性:
+  - `api_request`: model / input·output·cache tokens / **cost_usd** / duration_ms / request_id / **agent.name**(哪个 subagent 发的) / effort
+  - `tool_decision` / `tool_result`: tool_name / **tool_use_id** / success / **duration_ms** / input·result size(**仅大小,无内容**)
+  - **`subagent_completed`**: **agent_type / total_tokens / total_tool_uses / duration_ms / model**(子 agent 汇总)
+  - `user_prompt`(含 **prompt 全文**)/ hook_* / plugin_loaded / mcp_server_connection
+- **绑定可行**:启动 cc 时注入的 `OTEL_RESOURCE_ATTRIBUTES=sf.session_id/sf.agent_id` **出现在每条事件属性上** → 能把 cc 事件绑回 SkillForge session(AcpAgentRunner spawn 时注入)。**TRACEPARENT 嵌套无意义(无 span)**,改用 sf.session_id 关联。
+- **AC-4「完整嵌套树」打折**:无原生 span 父子链 → nesting 从 `agent.name` + `subagent_completed` **重建**(一层 main→subagent→tools 清晰,多层靠 agent.name 区分可能糊)。信息齐(子 agent 内部 tokens/tool 数/耗时 + 每 api_request/tool 耗时),但树是拼的。
+- **隐私**:事件带 `user.email`/`account_uuid`/`prompt 全文` → 落库**过滤 PII + prompt 内容默认不存**(P4 治理)。
+
+### 修正后 P2 机制(event-based B1)
+- **OTLP logs receiver**：Spring `@RestController POST /v1/logs`（cc 配 `OTEL_LOGS_EXPORTER=otlp` + `OTEL_EXPORTER_OTLP_PROTOCOL=http/json` + endpoint 指 SkillForge）。metrics 可选另收或忽略。
+- **事件翻译器**：`claude_code.api_request`→LlmSpan kind=llm（model/tokens/cost/duration,agent.name 区分主/子）；`tool_result`→kind=tool（tool_use_id/duration/success/size）；`subagent_completed`→kind=SubAgent（agent_type/total_*/duration）。按 `sf.session_id` 资源属性绑回会话；nesting 用 agent.name/subagent_completed 重建。复用现有 LlmTraceStore + trace 树渲染。
+- **AcpAgentRunner**：spawn cc 时注入 telemetry env（CLAUDE_CODE_ENABLE_TELEMETRY=1 / OTLP endpoint=SkillForge receiver / OTEL_RESOURCE_ATTRIBUTES=sf.session_id=<child>,sf.agent_id=<cc>）。
+
+### 关键机制（原始,部分作废见上）
+- **OTLP receiver**：gRPC 4317 / HTTP 4318（或内嵌 OTel Collector）。~~改用 http/json /v1/logs（见上修正）。~~
 - **TRACEPARENT 注入**：AcpAgentRunner 启动 cc 时设 `CLAUDE_CODE_ENABLE_TELEMETRY=1` + OTLP endpoint 指向 SkillForge + 注入本次 session 的 TRACEPARENT → cc（含子 agent）span 自动嵌入。
 - **trace 树视图**：现有 TraceTreeService 扩展读通用 OTel span；子 agent span 按 `is_subagent`/`parent_tool_use_id` 归位。
 - **内容治理**：默认结构-only；内容（prompt/输出）opt-in + 受限存储/保留。
@@ -70,6 +87,15 @@ cc 的 tool_call 翻译进 SkillForge 持久化路径，必须满足 tool_use↔
 
 ### 硬化（P1b 延期项，P1c 落）
 并发上限(同时 spawn 的 cc 进程数,配置) + `/api/acp/**` 限流 + model 字符串校验 + workspaceRoot 启动 guard + 触发线程 async 包装。
+
+### P2-1 硬化项（LAN/生产暴露前必做，本地单用户不阻塞 — 来自 P2-1 review）
+- **OTLP `/v1/logs` 限流**(无鉴权端点,防高频 8MiB body 灌)
+- **OTLP receiver 绑 localhost**(`server.address=127.0.0.1` 或独立 listener;现绑全网卡靠 sf.session_id gate)
+- **P2-3 渲染 attrs_json 防 stored-XSS**(用 textContent/`<pre>`,绝不 innerHTML)— P2-3 实现者必看
+- 小 nit:10k/session cap 非原子(软上限,命名暗示硬)→ 改名/注释;telemetry env 测试补断言 OTEL_METRICS_EXPORTER;补 SkillForgeConfig bean wiring IT。
+
+### confirmation 可达性（B,FE — live AC-3 真正可用的前提）
+cc 子 agent 的 `confirmationRequired` 现广播在**子 session**上,用户视图在父会话就看不到 → cc "default" 模式下每个权限够不着 → 300s 自动取消 → cc 死循环。**修向**:把 cc 子 agent 的确认**浮到用户所在处**(父会话/全局 userEvent 通道),或让子 session 可导航 + 卡片在那渲染。**未修前 cc 默认走 "auto" 模式(A,已落)绕开**。
 
 ### P1c 子分期
 - **P1c-1**：cc=SubAgent runtime（seed cc agent + SubAgentTool 分支 + AcpAgentRunner SubAgent 模式 + SessionLoopFinishedEvent 回投复用）= AC-5 + cc 真成子 agent。
