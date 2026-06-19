@@ -244,6 +244,12 @@ skillforge:
   # file heads) so the LLM does not "lose" file context.  enabled=false skips emission while
   # keeping the FileStateCache hot (cheap; per-session mem only).
   compact:
+    # COMPACT-IDEMPOTENCY-BOUNDARY-FIX 存储重构 go-live (2026-06-19)：范围摘要表派生模型视图
+    # （append-only 真相 / 压缩不写消息行不复制 / 读时派生 [滚动摘要]+尾巴）。验证：c16d2963
+    # 手动 /compact → summary [0,148] 零膨胀 61374→10471 token、对账无破坏。
+    # 回滚：设 false → 回退旧 boundary-slice 行为（存量数据不丢，per-session 双读兼容老会话）。
+    range-model:
+      enabled: true
     recovery:
       enabled: true
       max-files: 5
