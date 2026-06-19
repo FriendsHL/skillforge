@@ -638,7 +638,7 @@ public class AgentLoopEngine {
             }
 
             // Duration check
-            long maxDurationMs = 600000; // 10 minutes default
+            long maxDurationMs = 1800000; // 30 minutes default (per-agent override: config.max_duration_seconds)
             Object maxDurVal = agentDef.getConfig().get("max_duration_seconds");
             if (maxDurVal instanceof Number) maxDurationMs = ((Number) maxDurVal).longValue() * 1000;
             if (loopCtx.getElapsedMs() > maxDurationMs) {
