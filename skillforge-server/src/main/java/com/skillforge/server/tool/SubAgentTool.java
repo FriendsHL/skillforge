@@ -7,6 +7,7 @@ import com.skillforge.core.model.ToolSchema;
 import com.skillforge.core.skill.Tool;
 import com.skillforge.core.skill.SkillContext;
 import com.skillforge.core.skill.SkillResult;
+import com.skillforge.server.acp.AcpAgentRunner;
 import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.SessionEntity;
 import com.skillforge.server.service.AgentService;
@@ -39,12 +40,28 @@ public class SubAgentTool implements Tool {
 
     private static final Logger log = LoggerFactory.getLogger(SubAgentTool.class);
 
+    /**
+     * ACP-EXTERNAL-AGENT P1c-1: prefix on an agent's {@code modelId} marking it as
+     * an external ACP runtime (e.g. {@code acp:claude-code}). When the dispatch
+     * target carries this prefix, the loop runs cc via {@link AcpAgentRunner}
+     * instead of the SkillForge engine ({@link ChatService#chatAsync}). Mirrors the
+     * existing provider-prefix convention (e.g. {@code ark:glm-5.2}).
+     */
+    private static final String ACP_RUNTIME_PREFIX = "acp:";
+
     private final AgentTargetResolver targetResolver;
     private final SessionService sessionService;
     private final ChatService chatService;
     private final SubAgentRegistry registry;
     private final CancellationRegistry cancellationRegistry;
     private final AgentService agentService;
+    /**
+     * P1c-1: SubAgent-mode runner for {@code acp:}-prefixed agents. Nullable so
+     * deployments / tests without the ACP subsystem still construct the tool — a
+     * dispatch to an {@code acp:} agent without it returns a clear error rather
+     * than NPE.
+     */
+    private final AcpAgentRunner acpAgentRunner;
     /**
      * SKILL-CREATOR-WITH-EVAL Phase 1.1 (2026-05-18): used to JSON-serialise
      * the {@code skillIdsOverride} input list into the child session's
@@ -60,6 +77,23 @@ public class SubAgentTool implements Tool {
                          CancellationRegistry cancellationRegistry,
                          AgentService agentService,
                          ObjectMapper objectMapper) {
+        this(targetResolver, sessionService, chatService, registry, cancellationRegistry,
+                agentService, objectMapper, null);
+    }
+
+    /**
+     * P1c-1 constructor — adds the ACP SubAgent-mode runner so a dispatch to an
+     * {@code acp:}-prefixed agent (e.g. {@code claude-code}) routes to cc instead
+     * of the SkillForge engine.
+     */
+    public SubAgentTool(AgentTargetResolver targetResolver,
+                         SessionService sessionService,
+                         ChatService chatService,
+                         SubAgentRegistry registry,
+                         CancellationRegistry cancellationRegistry,
+                         AgentService agentService,
+                         ObjectMapper objectMapper,
+                         AcpAgentRunner acpAgentRunner) {
         this.targetResolver = targetResolver;
         this.sessionService = sessionService;
         this.chatService = chatService;
@@ -67,6 +101,7 @@ public class SubAgentTool implements Tool {
         this.cancellationRegistry = cancellationRegistry;
         this.agentService = agentService;
         this.objectMapper = objectMapper;
+        this.acpAgentRunner = acpAgentRunner;
     }
 
     @Override
@@ -239,12 +274,32 @@ public class SubAgentTool implements Tool {
         sessionService.saveSession(child);
         registry.attachChildSession(run.runId, child.getId());
 
-        // 3. 异步启动子 agent loop
+        // 3. 异步启动子 agent loop。
+        // P1c-1: branch on the target agent's runtime. An `acp:`-prefixed modelId
+        // (e.g. claude-code) is an external ACP runtime → run cc via AcpAgentRunner
+        // on the SAME child session (parent linkage + sub-agent run id already set
+        // above). The runner publishes SessionLoopFinishedEvent + calls the registry
+        // pump on completion, so the result is delivered back to the parent + origin
+        // channel exactly like an engine child (AC-5) — no new delivery code.
+        // Everything BEFORE this branch (registry guard, createSubSession, recursion
+        // guard, active_root copy, attachChildSession) is shared/reused.
         // OBS-4 §2.1: preserveActiveRoot=true — child 已被设好 active_root，不要清空（INV-4）。
-        chatService.chatAsync(child.getId(), task, parent.getUserId(), true);
+        String modelId = targetAgent.getModelId();
+        boolean acpRuntime = modelId != null && modelId.startsWith(ACP_RUNTIME_PREFIX);
+        if (acpRuntime) {
+            if (acpAgentRunner == null) {
+                return SkillResult.error("Agent '" + targetAgent.getName()
+                        + "' is an ACP runtime (modelId=" + modelId
+                        + ") but the ACP subsystem is not available");
+            }
+            acpAgentRunner.runAsSubAgent(child, task, parent.getUserId());
+        } else {
+            chatService.chatAsync(child.getId(), task, parent.getUserId(), true);
+        }
 
-        log.info("SubAgent dispatched: runId={}, parent={}, child={}, agent={}",
-                run.runId, parentSessionId, child.getId(), targetAgent.getName());
+        log.info("SubAgent dispatched: runId={}, parent={}, child={}, agent={}, runtime={}",
+                run.runId, parentSessionId, child.getId(), targetAgent.getName(),
+                acpRuntime ? "acp" : "engine");
 
         String msg = "Dispatched to agent '" + targetAgent.getName() + "' (id=" + agentId + ").\n"
                 + "  runId: " + run.runId + "\n"

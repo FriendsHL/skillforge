@@ -113,6 +113,16 @@ public class AcpToolCallAccumulator {
         return subagentCount;
     }
 
+    /**
+     * Total number of distinct cc tool calls seen this run (every tool, not just
+     * {@code Task}). Used as the {@code toolCalls} count in the
+     * {@link com.skillforge.server.service.event.SessionLoopFinishedEvent} /
+     * SubAgent registry callback when cc runs as a SubAgent (P1c-1).
+     */
+    public int toolCallCount() {
+        return calls.size();
+    }
+
     /** Current input snapshot for a tool call (for live UI updates); may be null. */
     public Map<String, Object> inputOf(String toolCallId) {
         ToolCallState s = calls.get(toolCallId);

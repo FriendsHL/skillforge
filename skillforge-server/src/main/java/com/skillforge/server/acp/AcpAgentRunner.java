@@ -9,8 +9,11 @@ import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.SessionEntity;
 import com.skillforge.server.repository.AgentRepository;
 import com.skillforge.server.service.SessionService;
+import com.skillforge.server.service.event.SessionLoopFinishedEvent;
+import com.skillforge.server.subagent.SubAgentRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationEventPublisher;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -19,6 +22,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -72,7 +76,24 @@ public class AcpAgentRunner {
     private final ObjectMapper objectMapper;
     private final AcpRunnerProperties properties;
     private final AcpPermissionBridge permissionBridge;
+    /**
+     * P1c-1: dependencies for the SubAgent-mode entry ({@link #runAsSubAgent}).
+     * Nullable so the standalone P1a-2 demo path ({@link #run}) and the existing
+     * 7-arg unit-test constructor keep working without them. {@code runAsSubAgent}
+     * requires all three to be non-null (the Spring bean wires them).
+     */
+    private final Executor subAgentExecutor;
+    private final SubAgentRegistry subAgentRegistry;
+    private final ApplicationEventPublisher eventPublisher;
 
+    /**
+     * Standalone (P1a-2) constructor — leaves the SubAgent-mode deps
+     * ({@code subAgentExecutor} / {@code subAgentRegistry} / {@code eventPublisher})
+     * null. This is the demo-endpoint-only wiring used by {@code POST /api/acp/runs}
+     * and the existing unit tests. {@link #runAsSubAgent} is unavailable here: it
+     * guards on these null deps and throws {@link IllegalStateException} (not an NPE)
+     * rather than running. The Spring bean always uses the full constructor below.
+     */
     public AcpAgentRunner(AcpClientFactory clientFactory,
                           SessionService sessionService,
                           AgentRepository agentRepository,
@@ -80,6 +101,35 @@ public class AcpAgentRunner {
                           ObjectMapper objectMapper,
                           AcpRunnerProperties properties,
                           AcpPermissionBridge permissionBridge) {
+        this(clientFactory, sessionService, agentRepository, broadcaster, objectMapper,
+                properties, permissionBridge, null, null, null);
+    }
+
+    /**
+     * Full (P1c-1) constructor — adds the SubAgent-mode wiring so a parent agent
+     * can dispatch cc via {@link com.skillforge.server.tool.SubAgentTool}.
+     *
+     * @param subAgentExecutor executor that runs the (long-blocking) cc prompt off
+     *                         the dispatch thread, so {@code runAsSubAgent} returns
+     *                         immediately (matches {@code ChatService.chatAsync})
+     * @param subAgentRegistry reused to deliver cc's result back to the parent
+     *                         session (its {@code onSessionLoopFinished} pumps the
+     *                         result into the parent's pending mailbox — AC-5)
+     * @param eventPublisher   publishes {@link SessionLoopFinishedEvent} for the
+     *                         child cc session, mirroring {@code ChatService}'s
+     *                         teardown so generic listeners (channel async delivery,
+     *                         scheduled-task tracking) fire for cc runs too
+     */
+    public AcpAgentRunner(AcpClientFactory clientFactory,
+                          SessionService sessionService,
+                          AgentRepository agentRepository,
+                          ChatEventBroadcaster broadcaster,
+                          ObjectMapper objectMapper,
+                          AcpRunnerProperties properties,
+                          AcpPermissionBridge permissionBridge,
+                          Executor subAgentExecutor,
+                          SubAgentRegistry subAgentRegistry,
+                          ApplicationEventPublisher eventPublisher) {
         this.clientFactory = clientFactory;
         this.sessionService = sessionService;
         this.agentRepository = agentRepository;
@@ -87,6 +137,9 @@ public class AcpAgentRunner {
         this.objectMapper = objectMapper;
         this.properties = properties;
         this.permissionBridge = permissionBridge;
+        this.subAgentExecutor = subAgentExecutor;
+        this.subAgentRegistry = subAgentRegistry;
+        this.eventPublisher = eventPublisher;
     }
 
     /**
@@ -127,7 +180,157 @@ public class AcpAgentRunner {
             throw new IllegalArgumentException("userId must not be null");
         }
 
+        // Standalone (P1a-2) path: this runner creates and owns its own viewable
+        // session. executeOnSession (shared core) persists + marks idle + sets the
+        // title (incl. AC-2a subagent count) on success, or marks error on failure.
         SessionEntity session = createRunSession(userId);
+        CcOutcome outcome = executeOnSession(session, prompt, model);
+        if (outcome.status() == Status.ERROR) {
+            // executeOnSession already marked the session error + closed the client;
+            // preserve the standalone contract of throwing AcpException to the caller.
+            throw new AcpException("ACP run failed: " + outcome.errorMessage());
+        }
+        return new RunResult(session.getId(), outcome.subagentCount());
+    }
+
+    /**
+     * P1c-1 — SubAgent mode. Run a cc prompt on the GIVEN child session (created
+     * by {@code SubAgentTool.createSubSession}) ASYNCHRONOUSLY, then deliver cc's
+     * result back to the parent session + origin channel by reusing the SubAgent
+     * registry pump + the generic {@link SessionLoopFinishedEvent} (AC-5).
+     *
+     * <p>Returns immediately (the cc prompt is long-blocking, so the actual run is
+     * submitted to {@link #subAgentExecutor}) — exactly like
+     * {@code ChatService.chatAsync}, so {@code SubAgentTool.handleDispatch} can hand
+     * the runId back without blocking the dispatching agent's loop.
+     *
+     * <p>Differences from {@link #runResult}: (1) does NOT create a session — runs
+     * on {@code child}; (2) does NOT throw on cc failure — the error is surfaced as
+     * a finished event with {@code status=error} so the parent still gets a result;
+     * (3) on completion (success OR error) emits the same finished signals
+     * {@code ChatService} emits in its loop teardown.
+     *
+     * @param child  the child session this cc run executes in (parent linkage +
+     *               sub-agent run id already set by SubAgentTool); must be non-null
+     * @param task   the prompt to send to cc (required, non-blank)
+     * @param userId owning user id (carried into {@link SessionLoopFinishedEvent})
+     */
+    public void runAsSubAgent(SessionEntity child, String task, Long userId) {
+        if (child == null) {
+            throw new IllegalArgumentException("child session must not be null");
+        }
+        if (task == null || task.isBlank()) {
+            throw new IllegalArgumentException("task must not be blank");
+        }
+        if (subAgentExecutor == null || subAgentRegistry == null || eventPublisher == null) {
+            throw new IllegalStateException(
+                    "runAsSubAgent requires the full AcpAgentRunner constructor (executor + registry + eventPublisher)");
+        }
+        final String childSessionId = child.getId();
+        // ASYNC: submit so the dispatching agent's tool call returns immediately
+        // (mirrors ChatService.chatAsync). The cc prompt blocks up to promptTimeout.
+        subAgentExecutor.execute(() -> {
+            long startedAt = System.currentTimeMillis();
+            CcOutcome outcome;
+            try {
+                outcome = executeOnSession(child, task, null);
+            } catch (RuntimeException e) {
+                // executeOnSession is designed to capture cc errors into a CcOutcome
+                // (status=ERROR) rather than throw; this catch is a last-resort guard so
+                // an unexpected throw still delivers a result to the parent (no hang).
+                log.error("ACP runAsSubAgent unexpected failure (child {}): {}",
+                        childSessionId, e.toString(), e);
+                outcome = CcOutcome.error(safeErr(e), 0);
+            }
+            finishSubAgent(childSessionId, userId, outcome, System.currentTimeMillis() - startedAt);
+        });
+    }
+
+    /**
+     * SubAgent-mode completion: persistence + idle/error were already handled by
+     * {@code executeOnSession}; here we ONLY emit the finished signals that
+     * {@code ChatService.runLoop}'s teardown emits, so the existing delivery wiring
+     * fires for the cc child with zero new delivery code:
+     * <ul>
+     *   <li>{@code subAgentRegistry.onSessionLoopFinished} — pushes cc's final text
+     *       into the parent session's pending mailbox and resumes the parent loop
+     *       (which, when it finishes, triggers channel async delivery — AC-5);</li>
+     *   <li>{@code SessionLoopFinishedEvent} — the generic event consumed by
+     *       channel async delivery / scheduled-task tracking.</li>
+     * </ul>
+     * Both calls use the same argument shapes {@code ChatService} uses (registry:
+     * 5-arg with toolCalls + durationMs; event: 4-arg
+     * sessionId/finalMessage/status/userId).
+     *
+     * <p><b>java-W1 — why no {@code waiting_user} guard:</b> {@code ChatService}'s
+     * teardown skips emitting these signals when {@code finalStatus == "waiting_user"}
+     * (an engine loop paused on a confirmation/ask is not yet terminal). That status
+     * is <b>impossible on the ACP path</b>: cc permission requests are awaited
+     * <i>inline within this run</i> by {@link AcpPermissionBridge} (the wait runs on a
+     * worker thread; the cc prompt future stays pending until the user answers via the
+     * ACP transport) — the SkillForge child session is NEVER set to
+     * {@code waiting_user} (that status is only written by the engine confirmation
+     * flow, which this path bypasses). {@code executeOnSession} therefore only ever
+     * returns a terminal outcome (cc {@code stopReason} → completed, or an error), so
+     * {@code finalStatus} here is always {@code completed} or {@code error} and the
+     * guard would be dead code.
+     */
+    private void finishSubAgent(String childSessionId, Long userId, CcOutcome outcome, long durationMs) {
+        String finalStatus = outcome.status() == Status.ERROR ? "error" : "completed";
+        String finalMessage = outcome.status() == Status.ERROR
+                ? "ACP cc run failed: " + outcome.errorMessage()
+                : outcome.finalText();
+        try {
+            subAgentRegistry.onSessionLoopFinished(
+                    childSessionId, finalMessage, finalStatus, outcome.toolCallCount(), durationMs);
+        } catch (Exception e) {
+            log.error("ACP runAsSubAgent: SubAgentRegistry hook failed for child {}", childSessionId, e);
+        }
+        try {
+            eventPublisher.publishEvent(new SessionLoopFinishedEvent(
+                    childSessionId, finalMessage, finalStatus, userId));
+        } catch (Exception e) {
+            log.error("ACP runAsSubAgent: SessionLoopFinishedEvent publish failed for child {}",
+                    childSessionId, e);
+        }
+        log.info("ACP runAsSubAgent finished (child {}, status={}, toolCalls={}, durationMs={})",
+                childSessionId, finalStatus, outcome.toolCallCount(), durationMs);
+    }
+
+    /** Terminal state of one cc run. */
+    private enum Status { COMPLETED, ERROR }
+
+    /**
+     * Outcome of one cc run on a session: the accumulated final text, the subagent
+     * count (AC-2a), the total tool_call count (for the finished-event count), and
+     * — on the error path — the error message. {@code executeOnSession} already did
+     * the persistence + runtime-status side effects; this record only carries what
+     * the callers need to finalize (title / delivery).
+     */
+    private record CcOutcome(Status status, String finalText, int subagentCount,
+                             int toolCallCount, String errorMessage) {
+        static CcOutcome ok(String finalText, int subagentCount, int toolCallCount) {
+            return new CcOutcome(Status.COMPLETED, finalText, subagentCount, toolCallCount, null);
+        }
+        static CcOutcome error(String errorMessage, int toolCallCount) {
+            return new CcOutcome(Status.ERROR, "", 0, toolCallCount, errorMessage);
+        }
+    }
+
+    /**
+     * Shared cc-run core (used by both {@link #runResult} standalone and
+     * {@link #runAsSubAgent}). Runs on the GIVEN session: marks it running, spawns
+     * cc, drives the handshake + prompt, live-streams + accumulates updates, then on
+     * success builds + PERSISTS the canonical turn (INV-1 paired) and marks the
+     * session idle; on any failure marks the session error. Closes the cc client +
+     * cleans the working dir in a finally.
+     *
+     * <p>Never throws for cc/transport failures — returns a {@link CcOutcome} with
+     * {@code status=ERROR} so the async SubAgent caller can still deliver a result.
+     * (The standalone caller re-derives an {@link AcpException} from the outcome to
+     * preserve its throwing contract.)
+     */
+    private CcOutcome executeOnSession(SessionEntity session, String prompt, String model) {
         String subSessionId = session.getId();
 
         Path cwd = null;
@@ -197,12 +400,14 @@ public class AcpAgentRunner {
             String stopReason = (promptResult != null && promptResult.hasNonNull("stopReason"))
                     ? promptResult.get("stopReason").asText() : "unknown";
             int subagents = toolCalls.subagentCount();
+            int toolCallCount = toolCalls.toolCallCount();
+            // Shared: build + persist the canonical (INV-1 paired) turn, then mark idle.
             finishOk(subSessionId, assistantText.toString(), toolCalls, stopReason, subagents, streamEnded);
-            return new RunResult(subSessionId, subagents);
+            return CcOutcome.ok(assistantText.toString(), subagents, toolCallCount);
         } catch (Exception e) {
             log.error("ACP run failed for sub-session {}: {}", subSessionId, e.toString(), e);
             finishError(subSessionId, e, streamEnded);
-            throw new AcpException("ACP run failed: " + e.getMessage(), e);
+            return CcOutcome.error(safeErr(e), toolCalls.toolCallCount());
         } finally {
             if (client != null) {
                 try {

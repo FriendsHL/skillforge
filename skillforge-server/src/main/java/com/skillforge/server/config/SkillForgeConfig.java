@@ -924,12 +924,15 @@ public class SkillForgeConfig {
                                        CancellationRegistry cancellationRegistry,
                                        SkillRegistry skillRegistry,
                                        AgentService agentService,
-                                       com.fasterxml.jackson.databind.ObjectMapper objectMapper) {
+                                       com.fasterxml.jackson.databind.ObjectMapper objectMapper,
+                                       AcpAgentRunner acpAgentRunner) {
         // SKILL-CREATOR-WITH-EVAL Phase 1.1 (2026-05-18): objectMapper added
         // so handleDispatch can JSON-serialise the new skillIdsOverride input
         // list into the child session's skill_overrides_json column.
+        // ACP-EXTERNAL-AGENT P1c-1: acpAgentRunner added so a dispatch to an
+        // acp:-prefixed agent (claude-code) routes to cc instead of the engine.
         SubAgentTool tool = new SubAgentTool(targetResolver, sessionService, chatService,
-                subAgentRegistry, cancellationRegistry, agentService, objectMapper);
+                subAgentRegistry, cancellationRegistry, agentService, objectMapper, acpAgentRunner);
         skillRegistry.registerTool(tool);
         log.info("Registered SubAgentTool into SkillRegistry");
         return tool;
@@ -1751,8 +1754,16 @@ public class SkillForgeConfig {
                                          ChatEventBroadcaster broadcaster,
                                          ObjectMapper objectMapper,
                                          AcpRunnerProperties acpRunnerProperties,
-                                         com.skillforge.server.acp.AcpPermissionBridge acpPermissionBridge) {
+                                         com.skillforge.server.acp.AcpPermissionBridge acpPermissionBridge,
+                                         @org.springframework.beans.factory.annotation.Qualifier("chatLoopExecutor")
+                                         ThreadPoolExecutor chatLoopExecutor,
+                                         SubAgentRegistry subAgentRegistry,
+                                         org.springframework.context.ApplicationEventPublisher eventPublisher) {
+        // P1c-1: full constructor wires the SubAgent-mode deps (executor + registry +
+        // event publisher) so runAsSubAgent runs cc async on a given child session and
+        // delivers its result back to the parent/channel by reusing the existing pump.
         return new AcpAgentRunner(acpClientFactory, sessionService, agentRepository,
-                broadcaster, objectMapper, acpRunnerProperties, acpPermissionBridge);
+                broadcaster, objectMapper, acpRunnerProperties, acpPermissionBridge,
+                chatLoopExecutor, subAgentRegistry, eventPublisher);
     }
 }

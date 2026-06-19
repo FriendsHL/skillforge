@@ -55,6 +55,39 @@ cc 的 tool_call 翻译进 SkillForge 持久化路径，必须满足 tool_use↔
     - `workspaceRoot` 启动存在性 guard（security WARN-3）
     - 300s 阻塞请求线程改 async 包装（java W-4）
 
+## P1c 重塑设计（2026-06-19，用户拍方向：cc=SubAgent 类型 + 审批统一；两 seam 已验可行）
+
+### Seam 1 — cc 做成 SubAgent 的一个 "ACP runtime" agent 类型（不是新工具）
+- **标记**：cc 是一条 AgentEntity，`modelId = "acp:claude-code"`（复用现有 provider 前缀惯例，如 `ark:glm-5.2`）。`acp:` 前缀 = 外部 ACP runtime。可加 seed migration 建这条 agent。
+- **派发分支**：`SubAgentTool.handleDispatch`（执行点 L244 `chatService.chatAsync(child, task, userId, true)`）改为：解析目标 agent 后，若 `modelId` 以 `acp:` 开头 → `acpAgentRunner.runAsSubAgent(child, task, ...)`；否则原 `chatAsync`（引擎）。其余（registry.registerRun 深度/并发guard、createSubSession、recursion guard）**全复用**。
+- **AcpAgentRunner SubAgent 模式**：① 跑在传入的 child session（不自建 session）② 完成时 `applicationEventPublisher.publishEvent(new SessionLoopFinishedEvent(childSessionId, finalText, status, toolCallCount, durationMs))`（同 ChatService:1043）→ **SubAgentRegistry.onSessionLoopFinished 自动把结果回投父 session + ChannelAsyncDeliveryListener 回投原渠道（AC-5）全复用，零重写**。
+- **效果**：主 agent 在循环里 `SubAgent dispatch agentName=claude-code task=...` → cc 跑成子 session（实时流 AC-1 + tool 可见 AC-2a + 确认 AC-3）+ 结果回投渠道（AC-5）。cc 派的 subagent 计数已由 P1b Task tool_call 给出。
+
+### Seam 2 — 审批统一成一条 endpoint（registry 本就共用，只是兑现不同）
+- **现状**：引擎确认 = 持久化 control 行 + `agentLoopEngine.completeConfirmedTool`（SkillForge 执行工具 + 续循环）；ACP 确认 = 纯 latch + ACP 线程回话 cc。两者都已调同一个 `PendingConfirmationRegistry.complete`。
+- **统一**：**一个确认 endpoint**，鉴权(requireOwnedSession)后按**判别式分流** —— `getControlMessage(sessionId, CONFIRMATION, confirmationId)` 非空 → 引擎路径(现 ChatService.answerConfirmation)；为空但 registry 有该 pending → ACP 路径(registry.complete + ACP 线程回 cc)。前端**只调一个接口、去掉 session 类型分支**。后端保留两条兑现逻辑藏在一扇门后，**不拆 completeConfirmedTool**（中等改动）。
+- 把 P1b 的 `POST /api/acp/runs/{sessionId}/confirmation` 合进统一 endpoint(或让 ChatController 的确认 endpoint 兼容 ACP 判别);前端 confirmation 卡片回到单一 POST。
+
+### 硬化（P1b 延期项，P1c 落）
+并发上限(同时 spawn 的 cc 进程数,配置) + `/api/acp/**` 限流 + model 字符串校验 + workspaceRoot 启动 guard + 触发线程 async 包装。
+
+### P1c 子分期
+- **P1c-1**：cc=SubAgent runtime（seed cc agent + SubAgentTool 分支 + AcpAgentRunner SubAgent 模式 + SessionLoopFinishedEvent 回投复用）= AC-5 + cc 真成子 agent。
+- **P1c-2**：审批统一 endpoint + 前端单接口（补 live AC-3 最后一公里）。
+- **P1c-3**：硬化项。
+
+### P1c 验收
+- AC-5：主 agent SubAgent dispatch cc → cc 跑完结果自动回投原渠道(微信/飞书)。
+- cc 作为子 session 可单独查看(AC-1)+ tool 可见(AC-2a)+ 危险操作弹统一确认卡片、点一个按钮即可批/拒(AC-3 live 打通)。
+- 引擎确认 + cc 确认走同一前端卡片 + 同一 endpoint，用户无感差异。
+- 硬化:并发超限拒绝不挂、model 非法拒绝、workspaceRoot 缺失启动报错。
+
+### P1c 冒烟（部署后 qa）
+1. 主 agent（网页/微信）`SubAgent dispatch claude-code "在临时目录创建 hello.txt"` → 子 session 实时见 cc 文本+tool_call;cc 写文件 → 弹确认卡片 → 批准 → cc 完成 → **结果回投原渠道**;DB 子 session INV-1 配对合法。
+2. 引擎确认(如装技能)+ cc 确认两种都用同一卡片同一 endpoint,各自正确兑现(引擎执行工具续跑 / cc 收到 optionId)。
+3. 跨用户:A 不能批 B 的 cc 确认(沿用 P1b ownership gate)。
+4. 硬化:并发 spawn 超 cap → 拒绝 + 友好报错,不挂。
+
 ## 分期建议
 - **P1（Track A 最小闭环）**：AcpClient + cc 单 agent + Translator(text/tool_call/reasoning) + 权限桥 + 子 session 渲染 + 结果回投。AC-1/2a/3/5。先不接 OTel 深度。
 - **P2（Track B = B1 适配器,观测深度)**：OTLP receiver + 翻译器(OTel SpanData→LlmTraceStore) + TRACEPARENT/RESOURCE_ATTRIBUTES 绑定。AC-2b/4。~5–7d。

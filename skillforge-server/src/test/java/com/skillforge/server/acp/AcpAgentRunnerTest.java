@@ -9,6 +9,7 @@ import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.SessionEntity;
 import com.skillforge.server.repository.AgentRepository;
 import com.skillforge.server.service.SessionService;
+import com.skillforge.server.service.event.SessionLoopFinishedEvent;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -96,6 +97,24 @@ class AcpAgentRunnerTest {
                 broadcaster, driverPool, 30);
         return new AcpAgentRunner(factory, sessionService, agentRepository,
                 broadcaster, mapper, properties, bridge);
+    }
+
+    /**
+     * Build a P1c-1 SubAgent-mode runner. Uses a DIRECT (caller-runs) executor so
+     * the otherwise-async {@code runAsSubAgent} completes inline, making the
+     * finished-signal assertions deterministic without sleeps/latches.
+     */
+    private AcpAgentRunner subAgentRunnerWith(FakeAcpTransport transport,
+                                              com.skillforge.server.subagent.SubAgentRegistry registry,
+                                              org.springframework.context.ApplicationEventPublisher publisher) {
+        AcpClientFactory factory = (cwd, env) ->
+                new AcpClient(transport, mapper, new CcAcpUpdateTranslator());
+        AcpPermissionBridge bridge = new AcpPermissionBridge(
+                new com.skillforge.core.engine.confirm.PendingConfirmationRegistry(),
+                broadcaster, driverPool, 30);
+        java.util.concurrent.Executor directExecutor = Runnable::run;
+        return new AcpAgentRunner(factory, sessionService, agentRepository,
+                broadcaster, mapper, properties, bridge, directExecutor, registry, publisher);
     }
 
     /**
@@ -505,6 +524,145 @@ class AcpAgentRunnerTest {
         assertThat(toolResult.getToolUseId()).isEqualTo("tc-7"); // matching id (INV-1)
         assertThat(toolResult.getIsError()).isFalse();
         assertThat(toolResult.getContent()).isEqualTo("early");
+    }
+
+    // ───────────────────────── P1c-1: runAsSubAgent ─────────────────────────
+
+    private static final String CHILD_SESSION_ID = "child-sess-1";
+
+    /** A child session as SubAgentTool.createSubSession would hand it to runAsSubAgent. */
+    private SessionEntity childSession() {
+        SessionEntity child = new SessionEntity();
+        child.setId(CHILD_SESSION_ID);
+        child.setUserId(CALLER_USER_ID);
+        child.setParentSessionId("parent-sess-1");
+        child.setSubAgentRunId("run-abc");
+        return child;
+    }
+
+    @Test
+    @DisplayName("runAsSubAgent: runs on the GIVEN child (no new session), persists, emits finished signals, idle")
+    void runAsSubAgent_happyPath() {
+        SessionEntity child = childSession();
+        when(sessionService.getSession(CHILD_SESSION_ID)).thenReturn(child);
+
+        var registry = mock(com.skillforge.server.subagent.SubAgentRegistry.class);
+        var publisher = mock(org.springframework.context.ApplicationEventPublisher.class);
+
+        FakeAcpTransport transport = scriptedTransport(List.of("Done", "!"));
+        AcpAgentRunner runner = subAgentRunnerWith(transport, registry, publisher);
+
+        runner.runAsSubAgent(child, "do the task", CALLER_USER_ID);
+
+        // 1. NO new session created — runs on the given child.
+        verify(sessionService, never()).createSession(any(), any());
+
+        // 2. final assistant message persisted on the CHILD session.
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<Message>> persisted = ArgumentCaptor.forClass(List.class);
+        verify(sessionService).appendNormalMessages(eq(CHILD_SESSION_ID), persisted.capture());
+        assertThat(textOf(persisted.getValue().get(0))).isEqualTo("Done!");
+
+        // 3. SubAgent registry pump invoked with the child id + completed status (AC-5 delivery reuse).
+        verify(registry).onSessionLoopFinished(
+                eq(CHILD_SESSION_ID), eq("Done!"), eq("completed"), eq(0), org.mockito.ArgumentMatchers.anyLong());
+
+        // 4. generic SessionLoopFinishedEvent published with the right child id / status / user.
+        ArgumentCaptor<SessionLoopFinishedEvent> evt = ArgumentCaptor.forClass(SessionLoopFinishedEvent.class);
+        verify(publisher).publishEvent(evt.capture());
+        assertThat(evt.getValue().sessionId()).isEqualTo(CHILD_SESSION_ID);
+        assertThat(evt.getValue().finalStatus()).isEqualTo("completed");
+        assertThat(evt.getValue().finalMessage()).isEqualTo("Done!");
+        assertThat(evt.getValue().userId()).isEqualTo(CALLER_USER_ID);
+
+        // 5. child marked idle (running → idle).
+        verify(broadcaster).sessionStatus(CHILD_SESSION_ID, "running", "ACP cc", null);
+        verify(broadcaster).sessionStatus(CHILD_SESSION_ID, "idle", null, null);
+    }
+
+    @Test
+    @DisplayName("runAsSubAgent error path: emits finished event status=error + child error, still delivers to parent")
+    void runAsSubAgent_errorPath() {
+        SessionEntity child = childSession();
+        when(sessionService.getSession(CHILD_SESSION_ID)).thenReturn(child);
+
+        var registry = mock(com.skillforge.server.subagent.SubAgentRegistry.class);
+        var publisher = mock(org.springframework.context.ApplicationEventPublisher.class);
+
+        // initialize replies with a JSON-RPC error → handshake fails → error path.
+        FakeAcpTransport transport = new FakeAcpTransport() {
+            @Override
+            public void send(String jsonLine) {
+                super.send(jsonLine);
+                JsonNode msg;
+                try {
+                    msg = mapper.readTree(jsonLine);
+                } catch (Exception e) {
+                    return;
+                }
+                long id = msg.path("id").asLong(-1);
+                if ("initialize".equals(msg.path("method").asText(""))) {
+                    emit("{\"jsonrpc\":\"2.0\",\"id\":" + id
+                            + ",\"error\":{\"code\":-32000,\"message\":\"boom\"}}");
+                }
+            }
+        };
+        AcpAgentRunner runner = subAgentRunnerWith(transport, registry, publisher);
+
+        // does NOT throw (unlike standalone run) — the error is delivered to the parent.
+        runner.runAsSubAgent(child, "do the task", CALLER_USER_ID);
+
+        // child marked error.
+        verify(broadcaster).sessionStatus(eq(CHILD_SESSION_ID), eq("error"), isNull(), anyString());
+        // no turn persisted on the error path (INV-1: no orphan tool_use).
+        verify(sessionService, never()).appendNormalMessages(anyString(), any());
+
+        // registry pump + event still fire with status=error so the parent gets a result.
+        verify(registry).onSessionLoopFinished(
+                eq(CHILD_SESSION_ID), anyString(), eq("error"), org.mockito.ArgumentMatchers.anyInt(),
+                org.mockito.ArgumentMatchers.anyLong());
+        ArgumentCaptor<SessionLoopFinishedEvent> evt = ArgumentCaptor.forClass(SessionLoopFinishedEvent.class);
+        verify(publisher).publishEvent(evt.capture());
+        assertThat(evt.getValue().sessionId()).isEqualTo(CHILD_SESSION_ID);
+        assertThat(evt.getValue().finalStatus()).isEqualTo("error");
+    }
+
+    @Test
+    @DisplayName("runAsSubAgent: a tool_call lifecycle persists an INV-1 paired turn on the child + counts toolCalls")
+    void runAsSubAgent_toolCall_pairedAndCounted() {
+        SessionEntity child = childSession();
+        when(sessionService.getSession(CHILD_SESSION_ID)).thenReturn(child);
+
+        var registry = mock(com.skillforge.server.subagent.SubAgentRegistry.class);
+        var publisher = mock(org.springframework.context.ApplicationEventPublisher.class);
+
+        FakeAcpTransport transport = toolCallTransport(List.of(
+                "{\"sessionUpdate\":\"tool_call\",\"toolCallId\":\"tc-1\",\"title\":\"Run ls\","
+                        + "\"kind\":\"execute\",\"status\":\"pending\",\"rawInput\":{},"
+                        + "\"_meta\":{\"claudeCode\":{\"toolName\":\"Bash\"}}}",
+                "{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"tc-1\",\"status\":\"completed\","
+                        + "\"rawOutput\":\"ok\",\"rawInput\":{\"command\":\"ls\"}}"
+        ));
+        AcpAgentRunner runner = subAgentRunnerWith(transport, registry, publisher);
+
+        runner.runAsSubAgent(child, "list files", CALLER_USER_ID);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<Message>> persisted = ArgumentCaptor.forClass(List.class);
+        verify(sessionService).appendNormalMessages(eq(CHILD_SESSION_ID), persisted.capture());
+        List<Message> turn = persisted.getValue();
+        assertThat(turn).hasSize(2); // ASSISTANT(tool_use) + USER(tool_result)
+        ContentBlock toolUse = blocksOf(turn.get(0)).stream()
+                .filter(b -> "tool_use".equals(b.getType())).findFirst().orElseThrow();
+        ContentBlock toolResult = blocksOf(turn.get(1)).stream()
+                .filter(b -> "tool_result".equals(b.getType())).findFirst().orElseThrow();
+        assertThat(toolUse.getId()).isEqualTo("tc-1");
+        assertThat(toolResult.getToolUseId()).isEqualTo("tc-1"); // INV-1
+
+        // toolCalls count (1 Bash) flows into the finished signals.
+        verify(registry).onSessionLoopFinished(
+                eq(CHILD_SESSION_ID), anyString(), eq("completed"), eq(1),
+                org.mockito.ArgumentMatchers.anyLong());
     }
 
     /**
