@@ -27,6 +27,7 @@ const CHANNEL_TYPE_OPTIONS = [
   { label: 'None', value: '' },
   { label: '飞书', value: 'feishu' },
   { label: 'Telegram', value: 'telegram' },
+  { label: '微信', value: 'weixin' },
 ];
 
 const CLOCK_ICON = (
