@@ -69,8 +69,10 @@ skillforge:
     repo-root: ${SKILLFORGE_ACP_REPO_ROOT:}
     # Parent dir for per-run worktrees (MUST be OUTSIDE repo-root). Blank → OS temp.
     worktree-root: ${SKILLFORGE_ACP_WORKTREE_ROOT:}
-    # Commit-ish each run's branch is based on (default HEAD = current checkout).
-    worktree-base-ref: ${SKILLFORGE_ACP_WORKTREE_BASE_REF:HEAD}
+    # Commit-ish each run's branch is based on. Default origin/main → cc branches
+    # off the latest remote main (best-effort fetched first), so its PR diffs cleanly
+    # against main. Use HEAD to base on the current local checkout instead.
+    worktree-base-ref: ${SKILLFORGE_ACP_WORKTREE_BASE_REF:origin/main}
   websearch:
     # WEB-TOOLS-HARDENING V1: provider priority chain.
     # Ordered fallback list: try Tavily first, then Exa, then DuckDuckGo HTML.

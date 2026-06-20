@@ -894,15 +894,49 @@ public class AcpAgentRunner {
         // These are operator-config, so this is defense-in-depth, not a user boundary.
         requireSafeGitValue("worktree branch", branch);
         requireSafeGitValue("worktree base ref", baseRef);
+        Path repo = Path.of(repoRoot);
+        // If the base is a remote-tracking ref (e.g. origin/main), refresh it first so
+        // the worktree starts from the LATEST remote tip, not a stale cached one.
+        // Best-effort: an offline fetch failure must not block the run (we then branch
+        // off whatever is cached).
+        fetchBaseIfRemote(repo, baseRef);
+
         Path worktreeBase = resolveWorktreeRoot();
         Files.createDirectories(worktreeBase);
         Path worktreeDir = worktreeBase.resolve("acp-cc-" + subSessionId);
 
-        runGit(Path.of(repoRoot), "worktree", "add", "-b", branch,
-                worktreeDir.toString(), baseRef);
+        runGit(repo, "worktree", "add", "-b", branch, worktreeDir.toString(), baseRef);
         log.info("ACP worktree created (sub-session {}): branch={} dir={} base={}",
                 subSessionId, branch, worktreeDir, properties.getWorktreeBaseRef());
         return Workspace.worktree(worktreeDir, branch);
+    }
+
+    /**
+     * Best-effort refresh of a remote-tracking base ref ({@code <remote>/<branch>}, e.g.
+     * {@code origin/main}) before creating the worktree, so cc starts from the latest
+     * remote tip. Non-remote bases (HEAD, a local branch, a sha) are left as-is. A fetch
+     * failure (offline, auth) is logged and swallowed — the worktree then branches off the
+     * cached ref rather than failing the run.
+     */
+    private void fetchBaseIfRemote(Path repo, String baseRef) {
+        int slash = baseRef.indexOf('/');
+        if (slash <= 0 || slash == baseRef.length() - 1) {
+            return; // not a <remote>/<branch> form.
+        }
+        String remote = baseRef.substring(0, slash);
+        String branch = baseRef.substring(slash + 1);
+        // Both come from operator-config; guard against option-like values anyway.
+        if (remote.startsWith("-") || branch.startsWith("-")
+                || !SAFE_GIT_VALUE.matcher(remote).matches()
+                || !SAFE_GIT_VALUE.matcher(branch).matches()) {
+            return;
+        }
+        try {
+            runGit(repo, "fetch", remote, branch);
+        } catch (RuntimeException | IOException e) {
+            log.warn("ACP worktree base fetch '{} {}' failed (using cached ref): {}",
+                    remote, branch, e.toString());
+        }
     }
 
     /** worktree-root → workspace-root → OS temp, as the parent dir for worktrees. */
