@@ -40,6 +40,15 @@ source: wiki-takeaway-triage-2026-06-20.md 缺口③（审计自荐，123 个 wi
 3. dashboard 能看到被归档的技能 + 归档原因。
 4. 不破坏现有 skill eval / evolve / draft 路径。
 
+## 实现进度（2026-06-21）
+
+- **v1 已实现(dry-run 默认)** `1dc7aa05`：`SkillConsolidator` + `SkillConsolidationScheduler`(03:45 cron + yaml gate)+ `SkillConsolidatorProperties` + `V163`(archived_at TIMESTAMPTZ / archive_reason)+ `AdminSkillConsolidationController`(手动触发)。判据:isSystem=false + enabled + archivedAt IS NULL + usageCount<minUsage(默1) + createdAt<now-cooldownDays(默30)。归档=enabled=false+archivedAt+archiveReason,可逆,per-skill try/catch。
+- **dry-run 跑出 bug,已修** `06e92e32`(详见 commit):
+  - **B(根 bug,影响面广)**:`SkillCatalogReconciler` 每次 boot 无条件 `save()` 每个技能(为记 lastScannedAt),而 `updatedAt` 是 `@LastModifiedDate` → 每次启动把所有技能 updated_at 刷成 now,污染全局"最后真实改动"语义。修:只在真变化时 save();lastScannedAt 改直接 `@Modifying UPDATE`(`touchLastScannedAt`)批量刷,不 bump updatedAt。
+  - **A(curator)**:去掉 updatedAt 守护(被系统 save 污染,非用户意图信号);移除 `recentUpdateGraceDays`。
+- **live 验证**:重启后 35/36 技能 `updated_at < last_scanned_at`(scan 不再 bump update,修前=0 全相等);dry-run `candidatesFound 0→5`(挑中 5 个老废技能,含重名重复的 AgentCapabilityGapAnalysis)。
+- **开放(关 dry-run 开真归档前必做)**:① restore 保护用 exempt 标记(替代被否的 updatedAt 守护)② admin 端点 role-gating(现仅 token,跟 Memory 镜像同款 gap)③ FE:SkillList 归档筛选 + 恢复按钮 ④ findArchivalCandidates 标 readOnly tx。
+
 ## 链接
 
 | 文档 | 链接 |
