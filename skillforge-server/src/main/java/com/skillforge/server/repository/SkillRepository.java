@@ -5,6 +5,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.List;
@@ -140,25 +141,38 @@ public interface SkillRepository extends JpaRepository<SkillEntity, Long> {
 
     /**
      * SKILL-CURATOR V1 — candidates for archival: non-system, enabled, not yet
-     * archived, rarely-used, old enough, and not recently touched.
+     * archived, rarely-used, and old enough.
      *
      * <p>System skills ({@code isSystem=true}) are exempt by the query itself.
      *
-     * <p><b>Type note (java.md footgun #2):</b> {@code createdAt} is a
-     * {@link java.time.LocalDateTime} (legacy column) while {@code updatedAt} is an
-     * {@link Instant} (new-field convention). The two threshold params therefore have
-     * different types — {@code createdBefore} must be {@code LocalDateTime},
-     * {@code updatedBefore} must be {@code Instant}. The service computes both from one
-     * {@code now} so they describe the same wall-clock instant.
+     * <p><b>No {@code updatedAt} guard (SKILL-CURATOR bug A):</b> an earlier version
+     * also excluded recently-{@code updatedAt} rows to "respect manual edits". But
+     * {@code updatedAt} is {@code @LastModifiedDate} and is bumped by SYSTEM saves
+     * (reconcile/evolve/canary), not just user edits — so it is the wrong "user
+     * intent" signal and effectively excluded everything. Restore-protection (don't
+     * re-archive what a user manually restored) is deferred to a proper exempt
+     * marker, to be added when real (non-dry-run) archival is enabled.
+     *
+     * <p><b>Type note:</b> {@code createdAt} is a {@link java.time.LocalDateTime}
+     * (legacy column) — {@code createdBefore} must be {@code LocalDateTime}.
      */
     @Query("SELECT s FROM SkillEntity s "
             + "WHERE s.isSystem = false "
             + "  AND s.enabled = true "
             + "  AND s.archivedAt IS NULL "
             + "  AND s.usageCount < :minUsage "
-            + "  AND s.createdAt < :createdBefore "
-            + "  AND (s.updatedAt IS NULL OR s.updatedAt < :updatedBefore)")
+            + "  AND s.createdAt < :createdBefore")
     List<SkillEntity> findArchivalCandidates(@Param("minUsage") long minUsage,
-                                             @Param("createdBefore") java.time.LocalDateTime createdBefore,
-                                             @Param("updatedBefore") Instant updatedBefore);
+                                             @Param("createdBefore") java.time.LocalDateTime createdBefore);
+
+    /**
+     * SKILL-CURATOR bug B fix: refresh {@code last_scanned_at} for the given rows via
+     * a direct bulk UPDATE that does NOT trigger {@code @LastModifiedDate} — so
+     * scan bookkeeping never spuriously bumps {@code updated_at} (which must stay
+     * "last real content change", not "last boot"). Used by SkillCatalogReconciler.
+     */
+    @Transactional
+    @Modifying
+    @Query("UPDATE SkillEntity s SET s.lastScannedAt = :ts WHERE s.id IN :ids")
+    void touchLastScannedAt(@Param("ids") java.util.Collection<Long> ids, @Param("ts") Instant ts);
 }

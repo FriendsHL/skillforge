@@ -43,12 +43,6 @@ public class SkillConsolidatorProperties {
     private long minUsage = 1;
 
     /**
-     * Skip skills updated within this window — respects manual edits / restores so
-     * the curator never re-archives something an operator just touched.
-     */
-    private int recentUpdateGraceDays = 7;
-
-    /**
      * Mirrors the {@code skillforge.skill.consolidation.scheduled-enabled} property
      * read directly by {@link com.skillforge.server.skill.curate.SkillConsolidationScheduler}
      * via {@code @Value}. Held here so the property bag stays binding-safe (otherwise
@@ -86,14 +80,6 @@ public class SkillConsolidatorProperties {
 
     public void setMinUsage(long minUsage) {
         this.minUsage = minUsage;
-    }
-
-    public int getRecentUpdateGraceDays() {
-        return recentUpdateGraceDays;
-    }
-
-    public void setRecentUpdateGraceDays(int recentUpdateGraceDays) {
-        this.recentUpdateGraceDays = recentUpdateGraceDays;
     }
 
     public boolean isScheduledEnabled() {

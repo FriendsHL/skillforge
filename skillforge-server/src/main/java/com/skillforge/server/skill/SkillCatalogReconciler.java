@@ -243,22 +243,43 @@ public class SkillCatalogReconciler {
                 report = report.addUpdated(1);
             }
             // Always update skillPath to the canonical absolute (heals legacy relative paths).
+            boolean pathHealed = false;
             if (!absPath.equals(matched.getSkillPath())) {
                 matched.setSkillPath(absPath);
+                pathHealed = true;
             }
             // If previously flagged missing/invalid, restore to active.
+            boolean statusRestored = false;
             if ("missing".equals(matched.getArtifactStatus())
                     || "invalid".equals(matched.getArtifactStatus())) {
                 matched.setArtifactStatus("active");
+                statusRestored = true;
             }
-            matched.setLastScannedAt(Instant.now());
+            // SKILL-CURATOR bug B: only save() — which bumps @LastModifiedDate updatedAt — when
+            // something MEANINGFUL changed. Previously this saved every row every boot (to stamp
+            // lastScannedAt), spuriously bumping updatedAt on all skills and corrupting "last real
+            // change" semantics. lastScannedAt for ALL touched rows is refreshed in one direct
+            // UPDATE after the loop (touchLastScannedAt) that does NOT bump updatedAt.
+            if (changed || pathHealed || statusRestored) {
+                try {
+                    skillRepository.save(matched);
+                } catch (Exception ex) {
+                    // Per-row update failure: log + skip; siblings remain unaffected
+                    // because reconcileRuntime is no longer @Transactional.
+                    log.warn("Reconciler update failed for id={} path={}: {}",
+                            matched.getId(), absPath, ex.getMessage());
+                }
+            }
+        }
+
+        // SKILL-CURATOR bug B: refresh lastScannedAt for every touched row via ONE direct UPDATE
+        // that does NOT trigger @LastModifiedDate — so scan bookkeeping never bumps updatedAt.
+        if (!touchedIds.isEmpty()) {
             try {
-                skillRepository.save(matched);
+                skillRepository.touchLastScannedAt(touchedIds, Instant.now());
             } catch (Exception ex) {
-                // Per-row update failure: log + skip; siblings remain unaffected
-                // because reconcileRuntime is no longer @Transactional.
-                log.warn("Reconciler update failed for id={} path={}: {}",
-                        matched.getId(), absPath, ex.getMessage());
+                log.warn("Reconciler lastScannedAt batch refresh failed ({} ids): {}",
+                        touchedIds.size(), ex.getMessage());
             }
         }
 

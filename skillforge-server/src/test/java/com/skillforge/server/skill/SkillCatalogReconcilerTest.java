@@ -139,6 +139,30 @@ class SkillCatalogReconcilerTest {
     }
 
     @Test
+    @DisplayName("SKILL-CURATOR bug B: unchanged skill on re-scan is NOT re-saved (no updatedAt bump); lastScannedAt still refreshed")
+    void existingRow_unchanged_doesNotResave_butTouchesLastScanned() throws IOException {
+        Path skillDir = runtimeRoot.resolve("upload/3/uuid-3");
+        writeSkillPackage(skillDir, "Stable", "same description");
+        String canonicalPath = skillDir.toAbsolutePath().normalize().toString();
+        // contentHash starts mismatched so the 1st pass saves once + heals the hash; the 2nd pass
+        // then sees content/path/status all matching and must NOT save again (bug B fix).
+        SkillEntity row = makeRow(8L, "Stable", canonicalPath, "old-hash", "active", true, false, 1L, "upload");
+
+        when(skillRepository.findByIsSystemFalse()).thenReturn(List.of(row));
+        when(skillRepository.save(any(SkillEntity.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        reconciler.reconcileRuntime();   // hash differs → saves once (real change)
+        reconciler.reconcileRuntime();   // unchanged now → must not save again
+
+        // Only the first (changed) pass saved; the unchanged re-scan did NOT bump updatedAt.
+        verify(skillRepository, times(1)).save(any(SkillEntity.class));
+        // But lastScannedAt is refreshed on BOTH passes via the direct (no-updatedAt-bump) update.
+        verify(skillRepository, times(2))
+                .touchLastScannedAt(org.mockito.ArgumentMatchers.anyCollection(),
+                        org.mockito.ArgumentMatchers.any(java.time.Instant.class));
+    }
+
+    @Test
     @DisplayName("DB → disk: missing artifact dir → conflictResolver.markMissing()")
     void existingRow_diskMissing_marksMissing() {
         Path missingDir = runtimeRoot.resolve("upload/9/uuid-gone").toAbsolutePath().normalize();

@@ -10,7 +10,6 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
-import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.List;
 
@@ -54,7 +53,7 @@ class SkillConsolidatorTest {
         // props.dryRun defaults to true (v1 safety default)
         SkillEntity a = skill(1L, "alpha");
         SkillEntity b = skill(2L, "beta");
-        when(skillRepository.findArchivalCandidates(anyLong(), any(LocalDateTime.class), any(Instant.class)))
+        when(skillRepository.findArchivalCandidates(anyLong(), any(LocalDateTime.class)))
                 .thenReturn(List.of(a, b));
 
         SkillConsolidator.ConsolidationResult result = consolidator.consolidate();
@@ -75,7 +74,7 @@ class SkillConsolidatorTest {
         props.setDryRun(false);
         SkillEntity a = skill(1L, "alpha");
         SkillEntity b = skill(2L, "beta");
-        when(skillRepository.findArchivalCandidates(anyLong(), any(LocalDateTime.class), any(Instant.class)))
+        when(skillRepository.findArchivalCandidates(anyLong(), any(LocalDateTime.class)))
                 .thenReturn(List.of(a, b));
 
         SkillConsolidator.ConsolidationResult result = consolidator.consolidate();
@@ -101,7 +100,7 @@ class SkillConsolidatorTest {
 
         assertThat(result.candidatesFound()).isEqualTo(0);
         assertThat(result.archived()).isEqualTo(0);
-        verify(skillRepository, never()).findArchivalCandidates(anyLong(), any(), any());
+        verify(skillRepository, never()).findArchivalCandidates(anyLong(), any());
         verify(skillRepository, never()).save(any());
     }
 
@@ -111,7 +110,7 @@ class SkillConsolidatorTest {
         props.setDryRun(false);
         SkillEntity bad = skill(1L, "bad");
         SkillEntity good = skill(2L, "good");
-        when(skillRepository.findArchivalCandidates(anyLong(), any(LocalDateTime.class), any(Instant.class)))
+        when(skillRepository.findArchivalCandidates(anyLong(), any(LocalDateTime.class)))
                 .thenReturn(List.of(bad, good));
         when(skillRepository.save(bad)).thenThrow(new RuntimeException("boom"));
         when(skillRepository.save(good)).thenReturn(good);

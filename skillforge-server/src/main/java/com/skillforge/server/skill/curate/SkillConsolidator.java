@@ -7,7 +7,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
-import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -26,9 +25,13 @@ import java.util.List;
  *   <li>non-system ({@code isSystem=false}) — system skills are exempt;</li>
  *   <li>currently enabled and not already archived;</li>
  *   <li>{@code usageCount < minUsage} (default 1 ⇒ never used);</li>
- *   <li>older than {@code cooldownDays} since {@code createdAt};</li>
- *   <li>not updated within {@code recentUpdateGraceDays} (respects manual edits/restores).</li>
+ *   <li>older than {@code cooldownDays} since {@code createdAt}.</li>
  * </ul>
+ *
+ * <p>No {@code updatedAt} guard (bug A): {@code updatedAt} is bumped by system saves, not
+ * just user edits, so it is the wrong "user intent" signal. Restore-protection (don't
+ * re-archive a manually-restored skill) is deferred to a proper exempt marker, added when
+ * real (non-dry-run) archival is enabled.
  *
  * <p>Each candidate is processed in its own try/catch (INV-2): a single failure logs
  * a WARN and the batch continues with the next skill.
@@ -74,12 +77,10 @@ public class SkillConsolidator {
         boolean dryRun = props.isDryRun();
         long minUsage = props.getMinUsage();
 
-        Instant now = Instant.now();
         LocalDateTime createdBefore = LocalDateTime.now().minusDays(props.getCooldownDays());
-        Instant updatedBefore = now.minus(Duration.ofDays(props.getRecentUpdateGraceDays()));
 
         List<SkillEntity> candidates =
-                skillRepository.findArchivalCandidates(minUsage, createdBefore, updatedBefore);
+                skillRepository.findArchivalCandidates(minUsage, createdBefore);
         int candidatesFound = candidates.size();
 
         int archived = 0;
@@ -107,9 +108,9 @@ public class SkillConsolidator {
         }
 
         log.info("[SkillCurator] done dryRun={} candidatesFound={} archived={} "
-                        + "(minUsage={} cooldownDays={} recentUpdateGraceDays={})",
+                        + "(minUsage={} cooldownDays={})",
                 dryRun, candidatesFound, archived,
-                minUsage, props.getCooldownDays(), props.getRecentUpdateGraceDays());
+                minUsage, props.getCooldownDays());
         return new ConsolidationResult(candidatesFound, archived, dryRun);
     }
 }
