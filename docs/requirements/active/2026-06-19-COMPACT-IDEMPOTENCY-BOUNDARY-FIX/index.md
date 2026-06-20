@@ -1,9 +1,20 @@
 # COMPACT-IDEMPOTENCY-BOUNDARY-FIX — 压缩失效（曾压缩过的 session 自动压缩被跳过 + tool-heavy 压不动）
 
 > 创建：2026-06-19
-> 状态：**立项 / 待修**（CompactionService + compact 子系统核心文件，8 不变量 → Full + `compact-reviewer`）
+> 状态：**部分交付**（P0 止血 + range-model go-live + 结构化摘要已交付；剩 ② tool-heavy 最坏情况 / W3 watchdog / 旧 orphan 残骸复核）。CompactionService + compact 子系统核心文件，8 不变量 → Full + `compact-reviewer`。
 > 来源：用户报 session `9d3eff0f-c22c-4568-bec8-a75ffe1f952d`（微信 / agent 3）「一直有压缩问题、`/compact` 压不动多少」。系统化调试取证（日志 + DB + 代码）。
-> 优先级：**高**（线上微信 agent 正在 1.7× 窗口裸跑，压缩全被拦，随时可能 LLM 超窗失败/降质）。
+> 优先级：**高 → 中**（活的 P1 危害 ① 负 gap 已修且未再犯，见下方复验；剩余为 tool-heavy 偏弱 + 存储残骸）。
+
+## 进度（2026-06-20 复验）
+
+**已交付（均已 commit）**：① 负 gap idempotency（`3756ca43` Phase 0，gap 两端统一持久化计数空间）/ ③ 总结输入 map-reduce 分块（`3756ca43`，`MAX_SUMMARY_REDUCE_DEPTH=3`）/ 退化 guard + per-model 窗口（`3756ca43`）/ 结构化摘要 10 段模板（`9d226468`，`MAX_SUMMARY_TOKENS` 800→2000）/ range-model 存储重构 go-live（`068a4a5d`，治行膨胀）。
+
+**2026-06-20 live 取证复验**（DB + 日志）：
+- ① 负 gap **未再复发**：近期日志无 `fullCompact skipped gap=-` / `no safe boundary`，仅 routine `light compact no-op`（这轮无可修剪，正常）→ ① 修复 hold 住。
+- **新发现：持久化历史 orphan tool_use 残骸**。session `9d3eff0f`（压过 5 次）有 **6 个 orphan tool_use**（无配对 tool_result，seq 7/18/53/140/278/420），但全在当前 boundary（seq 590）**之前 = 死历史，LLM 不读 → live 视图干净、无正确性影响**。对照 session `c9129461`（压 2 次）配对完全干净（70/70，0 orphan）。性质 = 持久化记录里的 INV-1 残骸（很可能修复前旧压缩 mangle，**未 100% 归因**：旧压缩 vs 中断 turn）。
+- **结论**：活危害已修；残骸是死历史存储债（无害但属 INV-1 痕迹）。
+
+**仍开放**：② tool-heavy(SubAgent/Team) **最坏情况**（grow young-gen 已缓解，但 grow 完仍 `no safe boundary` 的极端会话压不动；根治走 storage-redesign）/ W3 hung-running watchdog（未做）/ orphan 残骸是否需一次性 cleanup（待定）/ 在 9d3eff0f 实跑确认现在能压（live 复验）。
 
 ## 现象（实测证据）
 

@@ -11,6 +11,7 @@
 - **多 Provider LLM** — Claude、DeepSeek、通义千问/百炼、vLLM、Ollama 自由切换，无需改代码
 - **多渠道网关** — 同一个 Agent 同时接入 Web、CLI、飞书（WebSocket / Webhook）、Telegram、个人微信（原生 iLink adapter：扫码登录、无需公网 IP）；`ChannelAdapter` SPI 零框架改动即可扩展到 Discord、Slack、iMessage
 - **真正的 Agent 编排** — 不止是 Chain，支持树形（SubAgent）和网状（TeamCreate/Send）两种拓扑，带持久化状态
+- **编排外部 coding agent** — 经 **ACP（开放的 Agent Client Protocol）驱动 Claude Code & Codex**，作为 git worktree 隔离的 SubAgent 在你的真实代码库上干活、自测并提 PR —— 渠道驱动的自迭代闭环（渠道 → cc/codex 改代码 → PR → 你 review/merge）
 - **自进化 Agent** — 自动评测、Prompt A/B 测试、自动晋升流水线
 - **全链路可观测** — Langfuse 风格的 Trace、Session 回放、模型用量仪表盘
 - **安全护栏** — 可配置生命周期 Hook、命令黑名单、路径穿越防护、防失控循环检测
