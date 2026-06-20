@@ -141,9 +141,15 @@ public interface SkillRepository extends JpaRepository<SkillEntity, Long> {
 
     /**
      * SKILL-CURATOR V1 — candidates for archival: non-system, enabled, not yet
-     * archived, rarely-used, and old enough.
+     * archived, not curator-exempt, rarely-used, and old enough.
      *
      * <p>System skills ({@code isSystem=true}) are exempt by the query itself.
+     *
+     * <p><b>Restore-protection (curator_exempt, V164):</b> the
+     * {@code curatorExempt = false} clause excludes skills a human deliberately
+     * restored via the dashboard ({@code POST /api/skills/{id}/restore}); the
+     * restore path sets {@code curatorExempt=true} so the curator never
+     * re-archives them.
      *
      * <p><b>No {@code updatedAt} guard (SKILL-CURATOR bug A):</b> an earlier version
      * also excluded recently-{@code updatedAt} rows to "respect manual edits". But
@@ -160,6 +166,7 @@ public interface SkillRepository extends JpaRepository<SkillEntity, Long> {
             + "WHERE s.isSystem = false "
             + "  AND s.enabled = true "
             + "  AND s.archivedAt IS NULL "
+            + "  AND s.curatorExempt = false "
             + "  AND s.usageCount < :minUsage "
             + "  AND s.createdAt < :createdBefore")
     List<SkillEntity> findArchivalCandidates(@Param("minUsage") long minUsage,

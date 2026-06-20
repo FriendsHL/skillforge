@@ -59,6 +59,16 @@ export interface SkillRow {
   originSource?: string;
   /** Convenience axis for the system/runtime tag (mirrors `isSystem`). */
   type?: SkillType;
+
+  // ─── SKILL-CURATOR human-in-loop ──────────────────────────────────────────
+  /** True when the curator archived this skill (BE: archivedAt != null). */
+  archived?: boolean;
+  /** ISO timestamp when archived; null/absent when not archived. */
+  archivedAt?: string;
+  /** Machine tag for why it was archived (e.g. `low_usage_curator`). */
+  archiveReason?: string;
+  /** True when a human restored it — the curator won't re-archive it. */
+  curatorExempt?: boolean;
 }
 
 export interface SkillDetailData {

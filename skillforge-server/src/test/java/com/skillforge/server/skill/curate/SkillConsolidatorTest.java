@@ -16,6 +16,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -123,5 +124,115 @@ class SkillConsolidatorTest {
         verify(skillRepository, times(2)).save(any(SkillEntity.class));
         assertThat(good.isEnabled()).isFalse();
         assertThat(good.getArchiveReason()).isEqualTo("low_usage_curator");
+    }
+
+    // ─── SKILL-CURATOR human-in-loop (findCandidates / applyArchival) ────────────
+
+    @Test
+    @DisplayName("findCandidates returns the list with NO mutation (preview)")
+    void findCandidates_returnsList_noMutation() {
+        SkillEntity a = skill(1L, "alpha");
+        SkillEntity b = skill(2L, "beta");
+        when(skillRepository.findArchivalCandidates(anyLong(), any(LocalDateTime.class)))
+                .thenReturn(List.of(a, b));
+
+        List<SkillEntity> candidates = consolidator.findCandidates();
+
+        assertThat(candidates).containsExactly(a, b);
+        // Preview: nothing saved, nothing archived.
+        verify(skillRepository, never()).save(any());
+        assertThat(a.isEnabled()).isTrue();
+        assertThat(a.getArchivedAt()).isNull();
+        assertThat(a.getArchiveReason()).isNull();
+        assertThat(b.isEnabled()).isTrue();
+        assertThat(b.getArchivedAt()).isNull();
+    }
+
+    @Test
+    @DisplayName("findCandidates passes minUsage + a computed createdBefore (now - cooldownDays)")
+    void findCandidates_passesThresholds() {
+        props.setMinUsage(3);
+        props.setCooldownDays(30);
+        when(skillRepository.findArchivalCandidates(anyLong(), any(LocalDateTime.class)))
+                .thenReturn(List.of());
+
+        LocalDateTime before = consolidatorCall();
+
+        // createdBefore must be ~ now - 30 days (allow a wide window for test runtime).
+        LocalDateTime expectedLow = LocalDateTime.now().minusDays(31);
+        LocalDateTime expectedHigh = LocalDateTime.now().minusDays(29);
+        assertThat(before).isAfter(expectedLow).isBefore(expectedHigh);
+    }
+
+    /** Helper: invoke findCandidates and capture the createdBefore arg passed to the repo. */
+    private LocalDateTime consolidatorCall() {
+        org.mockito.ArgumentCaptor<LocalDateTime> captor =
+                org.mockito.ArgumentCaptor.forClass(LocalDateTime.class);
+        consolidator.findCandidates();
+        verify(skillRepository).findArchivalCandidates(eq(3L), captor.capture());
+        return captor.getValue();
+    }
+
+    @Test
+    @DisplayName("applyArchival archives for REAL even when dry-run prop is true (manual apply)")
+    void applyArchival_bypassesDryRun() {
+        // props.dryRun defaults to true — applyArchival must ignore it and archive.
+        assertThat(props.isDryRun()).isTrue();
+        SkillEntity a = skill(1L, "alpha");
+        SkillEntity b = skill(2L, "beta");
+        when(skillRepository.findArchivalCandidates(anyLong(), any(LocalDateTime.class)))
+                .thenReturn(List.of(a, b));
+
+        SkillConsolidator.ConsolidationResult result = consolidator.applyArchival();
+
+        assertThat(result.dryRun()).isFalse();
+        assertThat(result.candidatesFound()).isEqualTo(2);
+        assertThat(result.archived()).isEqualTo(2);
+        verify(skillRepository, times(2)).save(any(SkillEntity.class));
+        assertThat(a.isEnabled()).isFalse();
+        assertThat(a.getArchivedAt()).isNotNull();
+        assertThat(a.getArchiveReason()).isEqualTo("low_usage_curator");
+        assertThat(b.isEnabled()).isFalse();
+        assertThat(b.getArchivedAt()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("applyArchival: one failure does not abort the batch (INV-2)")
+    void applyArchival_oneFailure_doesNotAbortBatch() {
+        SkillEntity bad = skill(1L, "bad");
+        SkillEntity good = skill(2L, "good");
+        when(skillRepository.findArchivalCandidates(anyLong(), any(LocalDateTime.class)))
+                .thenReturn(List.of(bad, good));
+        when(skillRepository.save(bad)).thenThrow(new RuntimeException("boom"));
+        when(skillRepository.save(good)).thenReturn(good);
+
+        SkillConsolidator.ConsolidationResult result = consolidator.applyArchival();
+
+        assertThat(result.candidatesFound()).isEqualTo(2);
+        assertThat(result.archived()).isEqualTo(1);
+        assertThat(good.isEnabled()).isFalse();
+    }
+
+    @Test
+    @DisplayName("a curator-exempt / restored skill is excluded by the query → never a candidate")
+    void exemptSkill_notACandidate() {
+        // The exempt clause lives in findArchivalCandidates' JPQL (s.curatorExempt =
+        // false). At this unit-test layer we assert the consolidator only ever acts on
+        // what the repository returns: an exempt skill that the query filtered out is
+        // never archived. Simulate the query already excluding the exempt row.
+        SkillEntity exempt = skill(1L, "restored-exempt");
+        exempt.setCuratorExempt(true);
+        SkillEntity candidate = skill(2L, "stale");
+        when(skillRepository.findArchivalCandidates(anyLong(), any(LocalDateTime.class)))
+                .thenReturn(List.of(candidate)); // exempt NOT returned by the query
+
+        SkillConsolidator.ConsolidationResult result = consolidator.applyArchival();
+
+        assertThat(result.candidatesFound()).isEqualTo(1);
+        assertThat(result.archived()).isEqualTo(1);
+        // The exempt skill was never touched.
+        verify(skillRepository, never()).save(exempt);
+        assertThat(exempt.isEnabled()).isTrue();
+        assertThat(exempt.getArchivedAt()).isNull();
     }
 }

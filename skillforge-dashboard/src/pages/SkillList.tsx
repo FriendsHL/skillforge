@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Button, Modal, Select, Tooltip, message, notification } from 'antd';
+import { Button, Modal, Select, Table, Tooltip, message, notification } from 'antd';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   getSkills, uploadSkill, deleteSkill,
@@ -9,9 +9,11 @@ import {
   getAgents,
   rescanSkills,
   getSkillEvalHistory,
+  getCuratorCandidates, applyCurator, restoreSkill,
   type SkillDraft,
   type RescanReport,
   type EvalHistoryEntry,
+  type SkillCuratorCandidate,
 } from '../api';
 import { useAuth } from '../contexts/AuthContext';
 import { useTaskTracker, newTaskId } from '../contexts/TaskTrackerContext';
@@ -19,7 +21,7 @@ import SkillDraftsPage from './SkillDrafts';
 import '../components/agents/agents.css';
 import '../components/skills/skills.css';
 import type { SkillRow } from '../components/skills/types';
-import { normalizeSkill } from '../components/skills/utils';
+import { normalizeSkill, timeAgo } from '../components/skills/utils';
 import { BOLT_ICON, PLUS_ICON } from '../components/skills/icons';
 import { FilterItem } from '../components/skills/FilterItem';
 import { SkillTable } from '../components/skills/SkillTable';
@@ -70,6 +72,12 @@ const SkillList: React.FC = () => {
   const [creating, setCreating] = useState(false);
   const [extracting, setExtracting] = useState(false);
   const [rescanning, setRescanning] = useState(false);
+  // SKILL-CURATOR human-in-loop
+  const [curatorOpen, setCuratorOpen] = useState(false);
+  const [curatorLoading, setCuratorLoading] = useState(false);
+  const [curatorApplying, setCuratorApplying] = useState(false);
+  const [candidates, setCandidates] = useState<SkillCuratorCandidate[]>([]);
+  const [showArchived, setShowArchived] = useState(false);
 
   const { data: rawSkills = [] } = useQuery({
     queryKey: ['skills'],
@@ -129,6 +137,61 @@ const SkillList: React.FC = () => {
       setRescanning(false);
     }
   };
+
+  // SKILL-CURATOR — open the modal and load the archival candidates (preview, no mutation).
+  const openCurator = async () => {
+    setCuratorOpen(true);
+    setCuratorLoading(true);
+    try {
+      const res = await getCuratorCandidates();
+      setCandidates(extractList<SkillCuratorCandidate>(res));
+    } catch (err: unknown) {
+      const e = err as { response?: { data?: { error?: string } } };
+      message.error(e.response?.data?.error || 'Failed to load curator candidates');
+      setCandidates([]);
+    } finally {
+      setCuratorLoading(false);
+    }
+  };
+
+  // SKILL-CURATOR — confirm + apply real archival, then refresh the skills list.
+  const handleApplyCurator = () => {
+    if (candidates.length === 0) return;
+    Modal.confirm({
+      title: `归档 ${candidates.length} 个技能？`,
+      content: '这些低使用率的旧技能将被归档（禁用）。归档后可在“显示已归档”里恢复。',
+      okText: '归档这些',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: async () => {
+        setCuratorApplying(true);
+        try {
+          const res = await applyCurator();
+          message.success(`已归档 ${res.data.archived} 个技能`);
+          setCuratorOpen(false);
+          setCandidates([]);
+          queryClient.invalidateQueries({ queryKey: ['skills'] });
+        } catch (err: unknown) {
+          const e = err as { response?: { data?: { error?: string } } };
+          message.error(e.response?.data?.error || 'Failed to archive skills');
+        } finally {
+          setCuratorApplying(false);
+        }
+      },
+    });
+  };
+
+  const restoreMutation = useMutation({
+    mutationFn: (id: number) => restoreSkill(id, currentUserId),
+    onSuccess: () => {
+      message.success('技能已恢复');
+      queryClient.invalidateQueries({ queryKey: ['skills'] });
+    },
+    onError: (err: unknown) => {
+      const e = err as { response?: { data?: { error?: string } } };
+      message.error(e.response?.data?.error || 'Failed to restore');
+    },
+  });
 
   const handleExtract = async () => {
     if (!selectedAgentId) {
@@ -253,6 +316,8 @@ const SkillList: React.FC = () => {
 
   const rows = useMemo(() => {
     return all.filter(s => {
+      // SKILL-CURATOR — hide archived skills unless the toggle is on.
+      if (!showArchived && s.archived) return false;
       if (q) {
         const ql = q.toLowerCase();
         const hay = `${s.name} ${s.description || ''} ${s.tags.join(' ')}`.toLowerCase();
@@ -265,7 +330,9 @@ const SkillList: React.FC = () => {
       if (filterSource && s.source !== filterSource) return false;
       return true;
     });
-  }, [all, q, filterStatus, filterSource]);
+  }, [all, q, filterStatus, filterSource, showArchived]);
+
+  const archivedCount = useMemo(() => all.filter(s => s.archived).length, [all]);
 
   const toggle = (key: 'status' | 'source', value: string) => {
     if (key === 'status') setFilterStatus(v => v === value ? null : value);
@@ -518,6 +585,25 @@ const SkillList: React.FC = () => {
                 Rescan
               </Button>
             </Tooltip>
+            <Tooltip title="预览并归档低使用率的旧技能（人工确认后才执行）">
+              <Button
+                size="small"
+                onClick={openCurator}
+                data-testid="curator-btn"
+              >
+                技能整理
+              </Button>
+            </Tooltip>
+            <Tooltip title={showArchived ? '隐藏已归档技能' : `显示已归档技能${archivedCount > 0 ? ` (${archivedCount})` : ''}`}>
+              <Button
+                size="small"
+                type={showArchived ? 'primary' : 'default'}
+                onClick={() => setShowArchived(v => !v)}
+                data-testid="toggle-archived-btn"
+              >
+                显示已归档{archivedCount > 0 ? ` (${archivedCount})` : ''}
+              </Button>
+            </Tooltip>
             <button className="btn-primary-sf" onClick={() => setCreating(true)}>{PLUS_ICON} New skill</button>
           </div>
         </header>
@@ -575,7 +661,13 @@ const SkillList: React.FC = () => {
                           <h3 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: 'var(--fg-1)', lineHeight: 1.3, wordBreak: 'break-word' }}>
                             {name}
                           </h3>
-                          {primary.enabled ? (
+                          {primary.archived ? (
+                            <Tooltip title={primary.archiveReason ? `已归档：${primary.archiveReason}` : '已归档'}>
+                              <span style={{ flexShrink: 0, fontSize: 10, padding: '2px 8px', borderRadius: 12, background: 'rgba(250, 173, 20, 0.15)', color: '#faad14', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                                已归档
+                              </span>
+                            </Tooltip>
+                          ) : primary.enabled ? (
                             <span style={{ flexShrink: 0, fontSize: 10, padding: '2px 8px', borderRadius: 12, background: 'rgba(82, 196, 26, 0.15)', color: '#52c41a', fontWeight: 600, whiteSpace: 'nowrap' }}>
                               LIVE
                             </span>
@@ -630,14 +722,27 @@ const SkillList: React.FC = () => {
                         color: 'var(--fg-3, #8a8a93)' 
                       }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                          <span style={{ 
-                            width: 6, 
-                            height: 6, 
-                            borderRadius: '50%', 
-                            background: totalVersions > 1 ? 'var(--accent-primary, #6366f1)' : 'var(--fg-4, #d1d5db)' 
+                          <span style={{
+                            width: 6,
+                            height: 6,
+                            borderRadius: '50%',
+                            background: totalVersions > 1 ? 'var(--accent-primary, #6366f1)' : 'var(--fg-4, #d1d5db)'
                           }}></span>
                           <span>{totalVersions} version{totalVersions > 1 ? 's' : ''}</span>
                         </div>
+                        {primary.archived && typeof primary.id === 'number' && (
+                          <Button
+                            size="small"
+                            loading={restoreMutation.isPending && restoreMutation.variables === primary.id}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              restoreMutation.mutate(primary.id as number);
+                            }}
+                            data-testid="restore-btn"
+                          >
+                            恢复
+                          </Button>
+                        )}
                       </div>
                     </div>
                   );
@@ -678,6 +783,62 @@ const SkillList: React.FC = () => {
           uploading={uploadMutation.isPending}
         />
       )}
+
+      {/* SKILL-CURATOR — preview + apply modal */}
+      <Modal
+        open={curatorOpen}
+        title="技能整理 — 归档候选"
+        onCancel={() => setCuratorOpen(false)}
+        width={720}
+        footer={[
+          <Button key="cancel" onClick={() => setCuratorOpen(false)}>
+            取消
+          </Button>,
+          <Button
+            key="apply"
+            type="primary"
+            danger
+            disabled={candidates.length === 0 || curatorLoading}
+            loading={curatorApplying}
+            onClick={handleApplyCurator}
+            data-testid="curator-apply-btn"
+          >
+            归档这些 ({candidates.length})
+          </Button>,
+        ]}
+      >
+        <p style={{ marginTop: 0, color: 'var(--fg-3, #8a8a93)', fontSize: 13 }}>
+          以下低使用率的旧技能符合归档条件。归档不会删除技能，可随时在“显示已归档”里恢复；
+          恢复后整理器不会再次归档它。
+        </p>
+        <Table<SkillCuratorCandidate>
+          size="small"
+          rowKey="id"
+          loading={curatorLoading}
+          dataSource={candidates}
+          pagination={false}
+          scroll={{ y: 360 }}
+          locale={{ emptyText: curatorLoading ? '加载中…' : '没有符合归档条件的技能' }}
+          columns={[
+            { title: '名称', dataIndex: 'name', key: 'name', ellipsis: true },
+            { title: '使用次数', dataIndex: 'usageCount', key: 'usageCount', width: 90 },
+            {
+              title: '创建时间',
+              dataIndex: 'createdAt',
+              key: 'createdAt',
+              width: 120,
+              render: (v: string | null) => (v ? timeAgo(v) : '—'),
+            },
+            {
+              title: '描述',
+              dataIndex: 'description',
+              key: 'description',
+              ellipsis: true,
+              render: (v: string | null) => v || <span style={{ color: 'var(--fg-4, #d1d5db)' }}>—</span>,
+            },
+          ]}
+        />
+      </Modal>
     </div>
   );
 };

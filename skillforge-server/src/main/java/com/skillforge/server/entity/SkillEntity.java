@@ -160,6 +160,16 @@ public class SkillEntity {
     @Column(name = "archive_reason", length = 64)
     private String archiveReason;
 
+    /**
+     * SKILL-CURATOR human-in-loop (V164 migration): when true the curator
+     * ({@code SkillConsolidator}) never treats this row as an archival candidate.
+     * Set when an operator manually restores an archived skill via the dashboard
+     * (POST /api/skills/{id}/restore) — a human deliberately brought it back, so
+     * the curator must not silently re-archive it. Default false.
+     */
+    @Column(name = "curator_exempt", nullable = false)
+    private boolean curatorExempt = false;
+
     public SkillEntity() {
     }
 
@@ -430,5 +440,13 @@ public class SkillEntity {
 
     public void setArchiveReason(String archiveReason) {
         this.archiveReason = archiveReason;
+    }
+
+    public boolean isCuratorExempt() {
+        return curatorExempt;
+    }
+
+    public void setCuratorExempt(boolean curatorExempt) {
+        this.curatorExempt = curatorExempt;
     }
 }

@@ -28,6 +28,55 @@ export interface RescanReport {
 /** P1-D: trigger a synchronous filesystem rescan and return the reconciliation report. */
 export const rescanSkills = () => api.post<RescanReport>('/skills/rescan');
 
+// ─── SKILL-CURATOR human-in-loop (preview / apply / restore) ─────────────────
+
+/**
+ * One archival candidate the curator <em>would</em> archive, previewed by the
+ * "技能整理" modal. Mirrors the BE {@code SkillCuratorCandidateDto} record exactly.
+ * `createdAt` is an ISO-8601 string (BE renders LocalDateTime.toString()); null
+ * when the column is unset. `description` may be null.
+ */
+export interface SkillCuratorCandidate {
+  id: number;
+  name: string;
+  usageCount: number;
+  createdAt: string | null;
+  description: string | null;
+}
+
+/**
+ * Result of a curator pass — mirrors the BE {@code ConsolidationResult} record.
+ * `dryRun` is false for the manual apply path.
+ */
+export interface CuratorResult {
+  candidatesFound: number;
+  archived: number;
+  dryRun: boolean;
+}
+
+/**
+ * Preview the curator's archival candidates (NO mutation). BE returns a bare
+ * JSON array of {@link SkillCuratorCandidate}.
+ */
+export const getCuratorCandidates = () =>
+  api.get<SkillCuratorCandidate[]>('/admin/skill-consolidation/candidates');
+
+/**
+ * Apply real archival to the current candidates (bypasses the cron's dry-run).
+ * The operator explicitly confirmed "归档这些".
+ */
+export const applyCurator = () =>
+  api.post<CuratorResult>('/admin/skill-consolidation/apply');
+
+/**
+ * Restore a curator-archived skill: re-enable it, clear archive bookkeeping, and
+ * mark it curator-exempt so the curator won't re-archive it. BE returns the
+ * updated skill item in the same shape as the skills list. `userId` mirrors the
+ * other write endpoints (BE uses it for audit/ownership).
+ */
+export const restoreSkill = (id: number, userId: number) =>
+  api.post<Record<string, unknown>>(`/skills/${id}/restore`, null, { params: { userId } });
+
 /**
  * SKILL-IMPORT-BATCH — single item in any of the four
  * {@link BatchImportResult} buckets. Field optionality reflects which bucket

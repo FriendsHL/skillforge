@@ -30,8 +30,18 @@ import java.util.List;
  *
  * <p>No {@code updatedAt} guard (bug A): {@code updatedAt} is bumped by system saves, not
  * just user edits, so it is the wrong "user intent" signal. Restore-protection (don't
- * re-archive a manually-restored skill) is deferred to a proper exempt marker, added when
- * real (non-dry-run) archival is enabled.
+ * re-archive a manually-restored skill) is implemented via the {@code curator_exempt}
+ * column (V164): the dashboard restore path sets it true and
+ * {@link SkillRepository#findArchivalCandidates} excludes exempt rows.
+ *
+ * <p><b>Human-in-loop entry points (dashboard-controllable):</b>
+ * <ul>
+ *   <li>{@link #findCandidates()} — preview: compute + return candidates, NO mutation.</li>
+ *   <li>{@link #applyArchival()} — manual apply: archive for real regardless of the
+ *       {@code dry-run} prop (the operator explicitly clicked "归档这些").</li>
+ *   <li>{@link #consolidate()} — cron path: honors {@code props.isDryRun()} (still
+ *       dry-run by default in v1).</li>
+ * </ul>
  *
  * <p>Each candidate is processed in its own try/catch (INV-2): a single failure logs
  * a WARN and the batch continues with the next skill.
@@ -75,42 +85,89 @@ public class SkillConsolidator {
         }
 
         boolean dryRun = props.isDryRun();
-        long minUsage = props.getMinUsage();
-
-        LocalDateTime createdBefore = LocalDateTime.now().minusDays(props.getCooldownDays());
-
-        List<SkillEntity> candidates =
-                skillRepository.findArchivalCandidates(minUsage, createdBefore);
+        List<SkillEntity> candidates = findCandidates();
         int candidatesFound = candidates.size();
 
         int archived = 0;
         for (SkillEntity skill : candidates) {
-            try {
-                if (dryRun) {
-                    log.info("[SkillCurator] DRY-RUN would archive skill id={} name={} "
-                                    + "usageCount={} createdAt={}",
-                            skill.getId(), skill.getName(), skill.getUsageCount(), skill.getCreatedAt());
-                } else {
-                    skill.setEnabled(false);
-                    skill.setArchivedAt(Instant.now());
-                    skill.setArchiveReason(REASON_LOW_USAGE);
-                    skillRepository.save(skill);
-                    archived++;
-                    log.info("[SkillCurator] archived skill id={} name={} usageCount={} createdAt={} reason={}",
-                            skill.getId(), skill.getName(), skill.getUsageCount(),
-                            skill.getCreatedAt(), REASON_LOW_USAGE);
-                }
-            } catch (Exception e) {
-                // INV-2: one skill's failure must not abort the batch.
-                log.warn("[SkillCurator] failed to archive skill id={} name={}: {}",
-                        skill.getId(), skill.getName(), e.getMessage(), e);
+            if (dryRun) {
+                log.info("[SkillCurator] DRY-RUN would archive skill id={} name={} "
+                                + "usageCount={} createdAt={}",
+                        skill.getId(), skill.getName(), skill.getUsageCount(), skill.getCreatedAt());
+            } else if (archiveOne(skill)) {
+                archived++;
             }
         }
 
         log.info("[SkillCurator] done dryRun={} candidatesFound={} archived={} "
                         + "(minUsage={} cooldownDays={})",
                 dryRun, candidatesFound, archived,
-                minUsage, props.getCooldownDays());
+                props.getMinUsage(), props.getCooldownDays());
         return new ConsolidationResult(candidatesFound, archived, dryRun);
+    }
+
+    /**
+     * Preview the rows the curator <em>would</em> archive, with NO mutation. Used by
+     * the dashboard "技能整理" candidate table ({@code GET /candidates}) and reused
+     * internally by {@link #consolidate()} / {@link #applyArchival()}.
+     *
+     * <p>Computes {@code createdBefore} as {@code now - cooldownDays}. The
+     * {@code createdBefore} type is {@link LocalDateTime} to match the legacy
+     * {@code t_skill.created_at} column (java.md footgun #2). Candidate selection
+     * (non-system / enabled / not-archived / not-exempt / low-usage / old enough)
+     * is fully enforced by {@link SkillRepository#findArchivalCandidates}.
+     */
+    public List<SkillEntity> findCandidates() {
+        LocalDateTime createdBefore = LocalDateTime.now().minusDays(props.getCooldownDays());
+        return skillRepository.findArchivalCandidates(props.getMinUsage(), createdBefore);
+    }
+
+    /**
+     * Human-in-loop manual apply: archive the current candidates for REAL, regardless
+     * of the {@code dry-run} prop (the operator explicitly clicked "归档这些" in the
+     * dashboard). The cron path stays gated on {@code props.isDryRun()} via
+     * {@link #consolidate()} — only this method bypasses dry-run.
+     *
+     * <p>Per-skill try/catch (INV-2): one failure logs a WARN and the batch continues.
+     *
+     * @return result with {@code dryRun=false} (this is always a real run)
+     */
+    public ConsolidationResult applyArchival() {
+        List<SkillEntity> candidates = findCandidates();
+        int candidatesFound = candidates.size();
+        int archived = 0;
+        for (SkillEntity skill : candidates) {
+            if (archiveOne(skill)) {
+                archived++;
+            }
+        }
+        log.info("[SkillCurator] manual apply done candidatesFound={} archived={} "
+                        + "(minUsage={} cooldownDays={})",
+                candidatesFound, archived, props.getMinUsage(), props.getCooldownDays());
+        return new ConsolidationResult(candidatesFound, archived, false);
+    }
+
+    /**
+     * Archive one skill for real (disable + stamp {@code archivedAt} / reason + save).
+     * Wrapped in try/catch so a single failure never aborts the batch (INV-2).
+     *
+     * @return true when the skill was archived; false when the save threw (logged).
+     */
+    private boolean archiveOne(SkillEntity skill) {
+        try {
+            skill.setEnabled(false);
+            skill.setArchivedAt(Instant.now());
+            skill.setArchiveReason(REASON_LOW_USAGE);
+            skillRepository.save(skill);
+            log.info("[SkillCurator] archived skill id={} name={} usageCount={} createdAt={} reason={}",
+                    skill.getId(), skill.getName(), skill.getUsageCount(),
+                    skill.getCreatedAt(), REASON_LOW_USAGE);
+            return true;
+        } catch (Exception e) {
+            // INV-2: one skill's failure must not abort the batch.
+            log.warn("[SkillCurator] failed to archive skill id={} name={}: {}",
+                    skill.getId(), skill.getName(), e.getMessage(), e);
+            return false;
+        }
     }
 }

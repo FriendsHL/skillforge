@@ -79,6 +79,11 @@ export function normalizeSkill(raw: Record<string, unknown>): SkillRow {
     lastScannedAt: typeof raw.lastScannedAt === 'string' ? raw.lastScannedAt : undefined,
     originSource,
     type,
+    // SKILL-CURATOR human-in-loop — archival visibility.
+    archived: raw.archived === true,
+    archivedAt: typeof raw.archivedAt === 'string' ? raw.archivedAt : undefined,
+    archiveReason: typeof raw.archiveReason === 'string' ? raw.archiveReason : undefined,
+    curatorExempt: raw.curatorExempt === true,
   };
 }
 
