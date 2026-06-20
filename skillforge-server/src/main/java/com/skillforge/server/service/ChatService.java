@@ -498,6 +498,30 @@ public class ChatService {
         return false;
     }
 
+    /**
+     * Resolve the per-session tool allowlist from the agent's {@code tool_ids}.
+     *
+     * <p>Returns {@code null} when no allowlist is configured (empty/absent → all
+     * registered tools allowed, unchanged behavior). When an allowlist IS set,
+     * members of a collab run additionally get {@code TeamSend} + {@code TeamList}
+     * auto-granted, so subagents can always message each other (kin-mesh) and
+     * discover teammates regardless of the agent's allowlist. Both team tools are
+     * no-ops outside a collab run and carry their own kin-adjacency / leader-only
+     * guards, so the grant is safe. Name-consistent with the hardcoded tool names
+     * used elsewhere in this method (e.g. the depth-aware exclude set).
+     */
+    static Set<String> resolveAllowedToolNames(List<String> toolIds, String collabRunId) {
+        if (toolIds == null || toolIds.isEmpty()) {
+            return null;
+        }
+        Set<String> allowed = new HashSet<>(toolIds);
+        if (collabRunId != null) {
+            allowed.add("TeamSend");
+            allowed.add("TeamList");
+        }
+        return allowed;
+    }
+
     private Message withAttachmentRefs(String sessionId, Long userId, Message userMsg, List<String> attachmentIds) {
         if (attachmentIds == null || attachmentIds.isEmpty()) {
             return userMsg;
@@ -739,13 +763,19 @@ public class ChatService {
                 }
             }
 
-            // Apply allowedToolNames from agent config (tool_ids)
+            // Apply allowedToolNames from agent config (tool_ids). Collab members also get
+            // TeamSend/TeamList auto-granted (see resolveAllowedToolNames) so subagents can
+            // always message + discover each other regardless of the agent's allowlist.
             Object toolIdsObj = agentDef.getConfig().get("tool_ids");
-            if (toolIdsObj instanceof List && !((List<?>) toolIdsObj).isEmpty()) {
+            if (toolIdsObj instanceof List) {
                 @SuppressWarnings("unchecked")
                 List<String> toolIdList = (List<String>) toolIdsObj;
-                preCtx.setAllowedToolNames(new HashSet<>(toolIdList));
-                log.info("Tool filtering: only allowing {} tools for session={}", toolIdList.size(), sessionId);
+                Set<String> allowedTools = resolveAllowedToolNames(toolIdList, collabRunId);
+                if (allowedTools != null) {
+                    preCtx.setAllowedToolNames(allowedTools);
+                    log.info("Tool filtering: allowing {} tools for session={}{}", allowedTools.size(), sessionId,
+                            collabRunId != null ? " (+TeamSend/TeamList for collab member)" : "");
+                }
             }
 
             // P11 MCP-CLIENT INV-4: per-agent enable filter for MCP-sourced tools.
