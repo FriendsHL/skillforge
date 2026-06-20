@@ -35,8 +35,53 @@ public class AcpRunnerProperties {
      * Workspace root for the cc child process. If set, each run uses a fresh temp
      * directory created UNDER this root; if unset, a fresh OS temp directory is
      * used. NEVER the SkillForge repo root — cc would operate on our own source.
+     *
+     * <p>Only consulted in the throwaway temp-dir mode (when {@link #repoRoot} is
+     * blank). In git-worktree mode the workspace lives under {@link #worktreeRoot}.
      */
     private String workspaceRoot;
+
+    /**
+     * ACP-EXTERNAL-AGENT worktree mode (option A): the git repository cc works on.
+     * When set (non-blank), each cc run executes in a fresh {@code git worktree} of
+     * this repo on its own branch ({@link #worktreeBranchPrefix} + the sub-session
+     * id), based on {@link #worktreeBaseRef} — so cc edits the REAL codebase but is
+     * isolated to a reviewable branch and never touches the main working tree.
+     *
+     * <p>When blank (default), the runner keeps the legacy throwaway temp-dir
+     * behavior (cc works in an empty scratch dir) — non-breaking opt-in.
+     */
+    private String repoRoot;
+
+    /**
+     * The commit-ish each worktree branch is based on. Default {@code "HEAD"} (build
+     * on the repo's current checkout). Set to e.g. {@code "main"} to base runs on a
+     * fixed branch for clean PRs. Only used in worktree mode.
+     */
+    private String worktreeBaseRef = "HEAD";
+
+    /**
+     * Branch-name prefix for per-run worktree branches; the sub-session id is
+     * appended. Only used in worktree mode. Must form a valid git branch name.
+     */
+    private String worktreeBranchPrefix = "acp/cc-";
+
+    /**
+     * Where per-run worktree directories are created (one sub-dir per run). MUST be
+     * OUTSIDE {@link #repoRoot} (a worktree cannot nest in its own repo). If blank,
+     * falls back to {@link #workspaceRoot} then an OS temp dir. Only used in
+     * worktree mode.
+     */
+    private String worktreeRoot;
+
+    /**
+     * Whether to KEEP the worktree + branch after a run finishes (default true) so
+     * the changes are reviewable / can become a PR — the deliberate "leave the
+     * branch for review, do not auto-merge" policy. When false, a finished run runs
+     * {@code git worktree remove --force} + {@code git branch -D} (throwaway). Only
+     * used in worktree mode.
+     */
+    private boolean keepWorktreeOnFinish = true;
 
     /**
      * Per-prompt deadline in seconds — how long a single cc run may take before the runner
@@ -129,6 +174,48 @@ public class AcpRunnerProperties {
 
     public void setWorkspaceRoot(String workspaceRoot) {
         this.workspaceRoot = workspaceRoot;
+    }
+
+    public String getRepoRoot() {
+        return repoRoot;
+    }
+
+    public void setRepoRoot(String repoRoot) {
+        this.repoRoot = repoRoot;
+    }
+
+    public String getWorktreeBaseRef() {
+        return worktreeBaseRef;
+    }
+
+    public void setWorktreeBaseRef(String worktreeBaseRef) {
+        this.worktreeBaseRef = (worktreeBaseRef == null || worktreeBaseRef.isBlank())
+                ? "HEAD" : worktreeBaseRef;
+    }
+
+    public String getWorktreeBranchPrefix() {
+        return worktreeBranchPrefix;
+    }
+
+    public void setWorktreeBranchPrefix(String worktreeBranchPrefix) {
+        this.worktreeBranchPrefix = (worktreeBranchPrefix == null || worktreeBranchPrefix.isBlank())
+                ? "acp/cc-" : worktreeBranchPrefix;
+    }
+
+    public String getWorktreeRoot() {
+        return worktreeRoot;
+    }
+
+    public void setWorktreeRoot(String worktreeRoot) {
+        this.worktreeRoot = worktreeRoot;
+    }
+
+    public boolean isKeepWorktreeOnFinish() {
+        return keepWorktreeOnFinish;
+    }
+
+    public void setKeepWorktreeOnFinish(boolean keepWorktreeOnFinish) {
+        this.keepWorktreeOnFinish = keepWorktreeOnFinish;
     }
 
     public long getPromptTimeoutSeconds() {

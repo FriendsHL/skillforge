@@ -15,7 +15,11 @@ import com.skillforge.server.service.event.SessionLoopFinishedEvent;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.mockito.ArgumentCaptor;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -75,6 +79,7 @@ class AcpAgentRunnerTest {
         SessionEntity session = new SessionEntity();
         session.setId(SUB_SESSION_ID);
         session.setUserId(1L);
+        session.setAgentId(AGENT_ID);
         when(sessionService.createSession(any(), any())).thenReturn(session);
         when(sessionService.saveSession(any())).thenAnswer(i -> i.getArgument(0));
         when(sessionService.getSession(SUB_SESSION_ID)).thenReturn(session);
@@ -207,6 +212,137 @@ class AcpAgentRunnerTest {
 
         // process/client closed (transport closed in finally).
         assertThat(transport.closed).isTrue();
+    }
+
+    @Test
+    @DisplayName("cc prompt = session agent's system prompt (framing) + assigned task")
+    void run_prependsAgentSystemPrompt() {
+        AgentEntity agent = new AgentEntity();
+        agent.setId(AGENT_ID);
+        agent.setSystemPrompt("You are a SkillForge coding agent. Follow repo conventions.");
+        when(agentRepository.findById(AGENT_ID)).thenReturn(java.util.Optional.of(agent));
+
+        FakeAcpTransport transport = scriptedTransport(List.of("done"));
+        AcpAgentRunner runner = runnerWith(transport);
+
+        runner.run("Fix the failing build", null, CALLER_USER_ID);
+
+        String promptLine = transport.sent.stream()
+                .filter(l -> l.contains("\"session/prompt\""))
+                .reduce((a, b) -> b)
+                .orElseThrow(() -> new AssertionError("no session/prompt sent"));
+        String promptText = textSentToCc(promptLine);
+        // Exact composed shape: framing, then separator, then the task.
+        assertThat(promptText).isEqualTo(
+                "You are a SkillForge coding agent. Follow repo conventions."
+                        + "\n\n---\n\n# Task\n\n"
+                        + "Fix the failing build");
+    }
+
+    @Test
+    @DisplayName("blank agent system prompt → raw task sent to cc (no framing)")
+    void run_blankSystemPrompt_sendsRawTask() {
+        AgentEntity agent = new AgentEntity();
+        agent.setId(AGENT_ID);
+        agent.setSystemPrompt("   ");
+        when(agentRepository.findById(AGENT_ID)).thenReturn(java.util.Optional.of(agent));
+
+        FakeAcpTransport transport = scriptedTransport(List.of("ok"));
+        AcpAgentRunner runner = runnerWith(transport);
+
+        runner.run("just do X", null, CALLER_USER_ID);
+
+        String promptLine = transport.sent.stream()
+                .filter(l -> l.contains("\"session/prompt\""))
+                .reduce((a, b) -> b)
+                .orElseThrow(() -> new AssertionError("no session/prompt sent"));
+        String promptText = textSentToCc(promptLine);
+        assertThat(promptText).isEqualTo("just do X");
+    }
+
+    @Test
+    @DisplayName("worktree mode: cc runs in a fresh git worktree on an isolated branch, kept for review")
+    void run_worktreeMode_createsIsolatedBranchKept(@TempDir Path tmp) throws Exception {
+        Path repo = newGitRepoWithCommit(tmp.resolve("repo"));
+        Path wtRoot = tmp.resolve("worktrees");
+        properties.setRepoRoot(repo.toString());
+        properties.setWorktreeRoot(wtRoot.toString());
+        // keepWorktreeOnFinish defaults to true.
+
+        FakeAcpTransport transport = scriptedTransport(List.of("done"));
+        AcpAgentRunner runner = runnerWith(transport);
+        runner.run("do work", null, CALLER_USER_ID);
+
+        Path worktreeDir = wtRoot.resolve("acp-cc-" + SUB_SESSION_ID);
+        String branch = "acp/cc-" + SUB_SESSION_ID;
+        // a real worktree checkout (has the repo's committed file).
+        assertThat(Files.isDirectory(worktreeDir)).isTrue();
+        assertThat(Files.exists(worktreeDir.resolve("README.md"))).isTrue();
+        // the isolated branch exists and is KEPT after the run.
+        assertThat(gitOut(repo, "branch", "--list", branch)).contains(branch);
+    }
+
+    @Test
+    @DisplayName("worktree mode keep=false: worktree dir + branch removed after the run")
+    void run_worktreeMode_removeOnFinish(@TempDir Path tmp) throws Exception {
+        Path repo = newGitRepoWithCommit(tmp.resolve("repo"));
+        Path wtRoot = tmp.resolve("worktrees");
+        properties.setRepoRoot(repo.toString());
+        properties.setWorktreeRoot(wtRoot.toString());
+        properties.setKeepWorktreeOnFinish(false);
+
+        FakeAcpTransport transport = scriptedTransport(List.of("done"));
+        AcpAgentRunner runner = runnerWith(transport);
+        runner.run("do work", null, CALLER_USER_ID);
+
+        Path worktreeDir = wtRoot.resolve("acp-cc-" + SUB_SESSION_ID);
+        String branch = "acp/cc-" + SUB_SESSION_ID;
+        assertThat(Files.exists(worktreeDir)).isFalse();
+        assertThat(gitOut(repo, "branch", "--list", branch)).doesNotContain(branch);
+    }
+
+    /** Create a throwaway git repo with one commit (worktree add needs a resolvable HEAD). */
+    private Path newGitRepoWithCommit(Path repo) throws Exception {
+        Files.createDirectories(repo);
+        git(repo, "init", "-q");
+        git(repo, "config", "user.email", "t@example.com");
+        git(repo, "config", "user.name", "tester");
+        git(repo, "config", "commit.gpgsign", "false");
+        Files.writeString(repo.resolve("README.md"), "hi");
+        git(repo, "add", "-A");
+        git(repo, "commit", "-q", "-m", "init");
+        return repo;
+    }
+
+    private void git(Path repo, String... args) throws Exception {
+        java.util.List<String> cmd = new ArrayList<>();
+        cmd.add("git");
+        java.util.Collections.addAll(cmd, args);
+        Process p = new ProcessBuilder(cmd).directory(repo.toFile()).redirectErrorStream(true).start();
+        String out = new String(p.getInputStream().readAllBytes());
+        if (!p.waitFor(60, TimeUnit.SECONDS) || p.exitValue() != 0) {
+            throw new AssertionError("git " + String.join(" ", args) + " failed: " + out);
+        }
+    }
+
+    private String gitOut(Path repo, String... args) throws Exception {
+        java.util.List<String> cmd = new ArrayList<>();
+        cmd.add("git");
+        java.util.Collections.addAll(cmd, args);
+        Process p = new ProcessBuilder(cmd).directory(repo.toFile()).redirectErrorStream(true).start();
+        String out = new String(p.getInputStream().readAllBytes());
+        p.waitFor(60, TimeUnit.SECONDS);
+        return out;
+    }
+
+    /** Extract the prompt text block cc received from a captured session/prompt line. */
+    private String textSentToCc(String promptLine) {
+        try {
+            JsonNode root = mapper.readTree(promptLine);
+            return root.path("params").path("prompt").get(0).path("text").asText();
+        } catch (Exception e) {
+            throw new AssertionError("could not parse session/prompt line: " + promptLine, e);
+        }
     }
 
     @Test

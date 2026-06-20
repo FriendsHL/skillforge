@@ -55,6 +55,15 @@ SkillForge 做 **ACP client**，cc（`@zed-industries/claude-code-acp`）/ codex
 
 **注**：AC-3 仅当 cc 经 ACP 跑在「要批准」模式才有确认事件（自动批准模式无）。AC-2b/AC-4 默认**结构级**（工具名/耗时/嵌套有，内容需后续开 `OTEL_LOG_USER_PROMPTS`）。
 
+## 实现进度（增量）
+
+> SELF-ITERATE-VIA-CC 愿景的 F2 地基（cc 当 SubAgent 在真实仓库工作 + 拿到正确任务框架）。
+
+- **F2-prompt（cc 任务说明组装）**（2026-06-20）：ACP `session/prompt` 无独立 system 字段，故 `AcpAgentRunner.buildCcPrompt` 把 session 对应 agent 的 `systemPrompt`（角色/规则框架）折进 prompt 文本 = `<systemPrompt>\n\n---\n\n# Task\n\n<task>`，覆盖 standalone + subagent 两路；缺 prompt 退化裸 task。`V160` 给 `claude-code` agent 一个真 persona（角色 + 遵守仓库规范 + 改完输出完成报告，种下 L2 确认环节习惯）。读 DB persona → 可在 dashboard 改 / codex 用另一行各自 persona。
+- **F2-worktree（option A）**（2026-06-20）：`skillforge.acp.repo-root` 配了 → 每次 cc run 在该仓库的一个 `git worktree`（分支 `acp/cc-<sub-session-id>`，base `worktree-base-ref` 默认 HEAD）里跑，cc 改真实代码但隔离到可 review 分支，主工作树不动；默认 `keep-worktree-on-finish=true` 留分支给 review（不自动合）。repo-root 空 → 退回旧 throwaway 空 temp 目录（非破坏 opt-in）。git 经 ProcessBuilder（无 shell）调，branch/baseRef 过 `requireSafeGitValue`（防 argument injection），失败输出只进服务端 log。
+- **验证**：单测（组装精确串 + worktree keep/remove 真 git repo）；全模块 `3143/0 fail`；live E2E：cc 真在 `~/.skillforge/acp-worktrees/acp-cc-<sid>` 隔离分支跑，读到真实 CLAUDE.md，报告分支名 + CLAUDE.md 首行，未改文件，分支保留。
+- **范围外（后续 phase）**：cc 改完 commit/push/建 PR（L3）；蓝绿自部署（L4）；渠道续连（L5）；自动合并永不默认。
+
 ## 风险 / 取舍
 
 - cc/codex 的 ACP 都靠 **adapter（非原生）**：codex 原生 ACP 还是 OpenAI open issue #9085；多 Node/Rust 运行时依赖 + 子进程/auth 管理。但 ACP 是**开放标准**，比逆向协议稳。

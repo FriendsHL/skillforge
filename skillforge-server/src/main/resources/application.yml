@@ -60,6 +60,17 @@ skillforge:
   # The desktop launcher passes --skillforge.spa.root=<App>/Contents/Resources/web.
   # spa:
   #   root: /absolute/path/to/dashboard/dist
+  acp:
+    # ACP-EXTERNAL-AGENT worktree mode (option A): the git repo cc works on. When
+    # set, each cc run executes in a fresh `git worktree` of this repo on its own
+    # branch (acp/cc-<sub-session-id>), so cc edits the REAL codebase isolated to a
+    # reviewable branch. Blank (default) → legacy throwaway empty temp dir.
+    # Machine-specific → supplied via env, not hardcoded here.
+    repo-root: ${SKILLFORGE_ACP_REPO_ROOT:}
+    # Parent dir for per-run worktrees (MUST be OUTSIDE repo-root). Blank → OS temp.
+    worktree-root: ${SKILLFORGE_ACP_WORKTREE_ROOT:}
+    # Commit-ish each run's branch is based on (default HEAD = current checkout).
+    worktree-base-ref: ${SKILLFORGE_ACP_WORKTREE_BASE_REF:HEAD}
   websearch:
     # WEB-TOOLS-HARDENING V1: provider priority chain.
     # Ordered fallback list: try Tavily first, then Exa, then DuckDuckGo HTML.

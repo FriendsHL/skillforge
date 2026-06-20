@@ -29,6 +29,7 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.regex.Pattern;
 
 /**
  * Runs ONE cc prompt as a SkillForge sub-session and streams it live
@@ -381,7 +382,7 @@ public class AcpAgentRunner {
         // P2-3a: authoritative run start for the trace's total duration (run start → end).
         final long runStartMs = System.currentTimeMillis();
 
-        Path cwd = null;
+        Workspace workspace = null;
         AcpClient client = null;
         // W-5: assistantText + toolCalls are WRITTEN on the cc transport reader thread
         // (via the update listener) and READ on this caller thread only AFTER
@@ -399,7 +400,8 @@ public class AcpAgentRunner {
             // routes to finishError (session never stuck "running" with no error status).
             markRunning(session);
 
-            cwd = createWorkingDir();
+            workspace = createWorkspace(subSessionId);
+            Path cwd = workspace.dir();
             // P2-1: inject OTLP telemetry env so cc exports its log/events (api_request /
             // tool_result / subagent_completed / ...) to the SkillForge OtlpReceiverController,
             // tagged with sf.session_id=<this sub-session> so the ingest layer binds them back.
@@ -432,7 +434,11 @@ public class AcpAgentRunner {
                 client.setModel(ccSessionId, model).get(handshakeTimeout(), TimeUnit.SECONDS);
             }
 
-            JsonNode promptBlock = objectMapper.createObjectNode().put("type", "text").put("text", prompt);
+            // Compose the prompt cc actually receives = the session agent's system
+            // prompt (role/rules framing) + the assigned task. ACP carries no separate
+            // system field, so the framing is folded into the prompt text.
+            String ccPrompt = buildCcPrompt(session, prompt);
+            JsonNode promptBlock = objectMapper.createObjectNode().put("type", "text").put("text", ccPrompt);
             CompletableFuture<JsonNode> promptFuture = client.prompt(ccSessionId, List.of(promptBlock));
 
             JsonNode promptResult;
@@ -475,7 +481,7 @@ public class AcpAgentRunner {
                     log.warn("ACP client close threw for sub-session {} (ignored)", subSessionId, ce);
                 }
             }
-            cleanupWorkingDir(cwd);
+            cleanupWorkspace(workspace);
         }
     }
 
@@ -738,6 +744,42 @@ public class AcpAgentRunner {
     }
 
     /**
+     * Compose the full prompt cc receives = the session agent's system prompt
+     * (role / rules framing) followed by the assigned task. ACP's
+     * {@code session/prompt} carries only prompt content (no separate system
+     * field), so the framing must be folded into the prompt text — the
+     * provider-agnostic approach (works for cc today and, later, codex). This is
+     * complementary to the agent's own runtime system prompt and any
+     * {@code CLAUDE.md} cc reads from its workspace.
+     *
+     * <p>When the session's agent has no usable system prompt (none configured,
+     * blank, or the agent row cannot be loaded), the raw task is sent unchanged —
+     * so a misconfiguration degrades to "task only", never to a failed run.
+     */
+    private String buildCcPrompt(SessionEntity session, String task) {
+        String systemPrompt = resolveAgentSystemPrompt(session.getAgentId());
+        if (systemPrompt == null || systemPrompt.isBlank()) {
+            return task;
+        }
+        return systemPrompt.strip() + "\n\n---\n\n# Task\n\n" + task;
+    }
+
+    /** Best-effort load of the agent's system prompt; null on no agent / not found / load error. */
+    private String resolveAgentSystemPrompt(Long agentId) {
+        if (agentId == null) {
+            return null;
+        }
+        try {
+            return agentRepository.findById(agentId)
+                    .map(AgentEntity::getSystemPrompt)
+                    .orElse(null);
+        } catch (RuntimeException e) {
+            log.warn("ACP: failed to load agent {} system prompt; sending raw task", agentId, e);
+            return null;
+        }
+    }
+
+    /**
      * P2-1 — build the OTLP telemetry env injected into the spawned cc child so it
      * exports its log/events to the SkillForge {@code OtlpReceiverController}, bound
      * to this run via {@code OTEL_RESOURCE_ATTRIBUTES=sf.session_id=<sub-session>}.
@@ -774,8 +816,61 @@ public class AcpAgentRunner {
         return env;
     }
 
-    /** A safe per-run cwd — NEVER the SkillForge repo root (cc would touch our own source). */
-    private Path createWorkingDir() throws IOException {
+    /**
+     * The cc child's working directory for one run + how to tear it down.
+     *
+     * @param dir        the directory cc runs in (cwd)
+     * @param isWorktree true ⇒ {@code dir} is a git worktree of the configured repo
+     *                   on {@code branch}; false ⇒ a throwaway scratch temp dir
+     * @param branch     the worktree branch name (null when {@code !isWorktree})
+     */
+    private record Workspace(Path dir, boolean isWorktree, String branch) {
+        static Workspace throwaway(Path dir) {
+            return new Workspace(dir, false, null);
+        }
+        static Workspace worktree(Path dir, String branch) {
+            return new Workspace(dir, true, branch);
+        }
+    }
+
+    /**
+     * Allowed chars for git VALUE args we build (branch name, base ref). The
+     * branch's variable part is a UUID and the base ref is operator-config — this
+     * is defense-in-depth, paired with a leading-'-' reject in
+     * {@link #requireSafeGitValue}.
+     */
+    private static final Pattern SAFE_GIT_VALUE = Pattern.compile("[A-Za-z0-9._/-]+");
+
+    /** Reject blank, non-matching, or leading-'-' (option-like) git value args. */
+    private void requireSafeGitValue(String label, String value) {
+        if (value == null || value.isBlank()
+                || value.startsWith("-")
+                || !SAFE_GIT_VALUE.matcher(value).matches()) {
+            throw new AcpException("refusing unsafe git " + label + ": " + value);
+        }
+    }
+
+    /**
+     * Create the cc working directory for this run.
+     *
+     * <p>Worktree mode (option A) — when {@code skillforge.acp.repo-root} is set: a
+     * fresh {@code git worktree} of that repo on a per-run branch
+     * ({@code <prefix><sub-session-id>}) based on {@code worktree-base-ref}. cc edits
+     * the REAL codebase, isolated to a reviewable branch; the main working tree is
+     * never touched.
+     *
+     * <p>Throwaway mode (default) — when repo-root is blank: a fresh empty temp dir
+     * (legacy behavior), under {@code workspace-root} if configured.
+     */
+    private Workspace createWorkspace(String subSessionId) throws IOException {
+        String repoRoot = properties.getRepoRoot();
+        if (repoRoot == null || repoRoot.isBlank()) {
+            return Workspace.throwaway(createThrowawayDir());
+        }
+        return createWorktree(repoRoot.strip(), subSessionId);
+    }
+
+    private Path createThrowawayDir() throws IOException {
         String root = properties.getWorkspaceRoot();
         if (root != null && !root.isBlank()) {
             Path base = Path.of(root);
@@ -785,11 +880,95 @@ public class AcpAgentRunner {
         return Files.createTempDirectory("acp-run-");
     }
 
-    private void cleanupWorkingDir(Path cwd) {
-        if (cwd == null) {
+    /**
+     * {@code git -C <repo> worktree add -b <branch> <dir> <baseRef>}. The worktree dir
+     * is created under {@code worktree-root} (must be OUTSIDE the repo — a worktree
+     * cannot nest in its own repo). Throws (failing the run) on any git error rather
+     * than silently degrading to a scratch dir, so a misconfiguration surfaces.
+     */
+    private Workspace createWorktree(String repoRoot, String subSessionId) throws IOException {
+        String branch = properties.getWorktreeBranchPrefix() + subSessionId;
+        String baseRef = properties.getWorktreeBaseRef();
+        // Both flow to git as VALUE args. SAFE_BRANCH + a leading-'-' reject blocks git
+        // argument injection (a value like "--upload-pack=..." being parsed as a flag).
+        // These are operator-config, so this is defense-in-depth, not a user boundary.
+        requireSafeGitValue("worktree branch", branch);
+        requireSafeGitValue("worktree base ref", baseRef);
+        Path worktreeBase = resolveWorktreeRoot();
+        Files.createDirectories(worktreeBase);
+        Path worktreeDir = worktreeBase.resolve("acp-cc-" + subSessionId);
+
+        runGit(Path.of(repoRoot), "worktree", "add", "-b", branch,
+                worktreeDir.toString(), baseRef);
+        log.info("ACP worktree created (sub-session {}): branch={} dir={} base={}",
+                subSessionId, branch, worktreeDir, properties.getWorktreeBaseRef());
+        return Workspace.worktree(worktreeDir, branch);
+    }
+
+    /** worktree-root → workspace-root → OS temp, as the parent dir for worktrees. */
+    private Path resolveWorktreeRoot() {
+        String wtRoot = properties.getWorktreeRoot();
+        if (wtRoot != null && !wtRoot.isBlank()) {
+            return Path.of(wtRoot.strip());
+        }
+        String wsRoot = properties.getWorkspaceRoot();
+        if (wsRoot != null && !wsRoot.isBlank()) {
+            return Path.of(wsRoot.strip());
+        }
+        return Path.of(System.getProperty("java.io.tmpdir"), "acp-worktrees");
+    }
+
+    /**
+     * Tear down the run's workspace.
+     *
+     * <ul>
+     *   <li>throwaway scratch dir → recursively deleted (as before);</li>
+     *   <li>worktree + {@code keep-worktree-on-finish=true} (default) → KEPT and the
+     *       path/branch logged so the changes are reviewable / can become a PR;</li>
+     *   <li>worktree + keep=false → {@code git worktree remove --force} +
+     *       {@code git branch -D} (best-effort).</li>
+     * </ul>
+     */
+    private void cleanupWorkspace(Workspace workspace) {
+        if (workspace == null) {
             return;
         }
-        try (var paths = Files.walk(cwd)) {
+        if (!workspace.isWorktree()) {
+            deleteRecursively(workspace.dir());
+            return;
+        }
+        if (properties.isKeepWorktreeOnFinish()) {
+            log.info("ACP worktree KEPT for review: branch={} dir={} (review via "
+                            + "`git -C {} status` / `git -C {} diff`)",
+                    workspace.branch(), workspace.dir(), workspace.dir(), workspace.dir());
+            return;
+        }
+        removeWorktree(workspace);
+    }
+
+    private void removeWorktree(Workspace workspace) {
+        String repoRoot = properties.getRepoRoot();
+        if (repoRoot == null || repoRoot.isBlank()) {
+            return; // can't reach the repo to remove; leave it.
+        }
+        Path repo = Path.of(repoRoot.strip());
+        try {
+            runGit(repo, "worktree", "remove", "--force", workspace.dir().toString());
+        } catch (RuntimeException | IOException e) {
+            log.warn("ACP worktree remove failed (dir {}): {}", workspace.dir(), e.toString());
+        }
+        try {
+            runGit(repo, "branch", "-D", workspace.branch());
+        } catch (RuntimeException | IOException e) {
+            log.warn("ACP worktree branch delete failed (branch {}): {}", workspace.branch(), e.toString());
+        }
+    }
+
+    private void deleteRecursively(Path dir) {
+        if (dir == null) {
+            return;
+        }
+        try (var paths = Files.walk(dir)) {
             paths.sorted(java.util.Comparator.reverseOrder())
                     .forEach(p -> {
                         try {
@@ -799,7 +978,49 @@ public class AcpAgentRunner {
                         }
                     });
         } catch (IOException e) {
-            log.debug("ACP working dir cleanup skipped for {}: {}", cwd, e.getMessage());
+            log.debug("ACP working dir cleanup skipped for {}: {}", dir, e.getMessage());
+        }
+    }
+
+    /**
+     * Run {@code git <args>} with {@code cwd = repo} via ProcessBuilder (no shell, so
+     * args are not subject to shell injection). Throws {@link AcpException} on a
+     * non-zero exit (with captured output) or a timeout.
+     */
+    private void runGit(Path repo, String... args) throws IOException {
+        List<String> cmd = new ArrayList<>(args.length + 1);
+        cmd.add("git");
+        java.util.Collections.addAll(cmd, args);
+        Process proc = new ProcessBuilder(cmd)
+                .directory(repo.toFile())
+                .redirectErrorStream(true)
+                .start();
+        // Drain stdout (stderr merged via redirectErrorStream) to completion BEFORE
+        // waitFor — never swap the order: a full pipe with no reader would deadlock
+        // the child against waitFor.
+        String output;
+        try (var in = proc.getInputStream()) {
+            output = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+        }
+        String summary = "git " + String.join(" ", args);
+        boolean done;
+        try {
+            done = proc.waitFor(60, TimeUnit.SECONDS);
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            proc.destroyForcibly();
+            throw new AcpException(summary + " interrupted");
+        }
+        if (!done) {
+            proc.destroyForcibly();
+            throw new AcpException(summary + " timed out");
+        }
+        if (proc.exitValue() != 0) {
+            // Full git output (may contain absolute paths / credential-helper noise) goes
+            // to the server log ONLY; the thrown message — which reaches the session owner
+            // via runtime_error broadcast — carries just the command + exit code.
+            log.warn("ACP {} failed (exit {}): {}", summary, proc.exitValue(), output.strip());
+            throw new AcpException(summary + " failed (exit " + proc.exitValue() + ")");
         }
     }
 
