@@ -144,6 +144,22 @@ public class SkillEntity {
     @Column(name = "rollout_percentage", nullable = false)
     private Integer rolloutPercentage = 100;
 
+    /**
+     * SKILL-CURATOR V1 (V163 migration): when non-null, the time the curator
+     * archived this skill (the row is also {@code enabled=false} at that point).
+     * NULL = not archived. Persisted as TIMESTAMPTZ (V70+ convention for Instant
+     * columns), mapped to {@link Instant} per java.md footgun #2.
+     */
+    @Column(name = "archived_at")
+    private Instant archivedAt;
+
+    /**
+     * SKILL-CURATOR V1 (V163 migration): short machine tag for why this skill was
+     * archived (e.g. {@code low_usage_curator}). NULL when not archived.
+     */
+    @Column(name = "archive_reason", length = 64)
+    private String archiveReason;
+
     public SkillEntity() {
     }
 
@@ -398,5 +414,21 @@ public class SkillEntity {
 
     public void setRolloutPercentage(Integer rolloutPercentage) {
         this.rolloutPercentage = rolloutPercentage;
+    }
+
+    public Instant getArchivedAt() {
+        return archivedAt;
+    }
+
+    public void setArchivedAt(Instant archivedAt) {
+        this.archivedAt = archivedAt;
+    }
+
+    public String getArchiveReason() {
+        return archiveReason;
+    }
+
+    public void setArchiveReason(String archiveReason) {
+        this.archiveReason = archiveReason;
     }
 }

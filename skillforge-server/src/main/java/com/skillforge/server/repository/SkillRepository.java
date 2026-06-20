@@ -137,4 +137,28 @@ public interface SkillRepository extends JpaRepository<SkillEntity, Long> {
     @Modifying(clearAutomatically = true)
     @Query("UPDATE SkillEntity s SET s.usageCount = s.usageCount + 1, s.successCount = s.successCount + :successIncrement WHERE s.id = :id")
     void incrementUsage(@Param("id") Long id, @Param("successIncrement") int successIncrement);
+
+    /**
+     * SKILL-CURATOR V1 — candidates for archival: non-system, enabled, not yet
+     * archived, rarely-used, old enough, and not recently touched.
+     *
+     * <p>System skills ({@code isSystem=true}) are exempt by the query itself.
+     *
+     * <p><b>Type note (java.md footgun #2):</b> {@code createdAt} is a
+     * {@link java.time.LocalDateTime} (legacy column) while {@code updatedAt} is an
+     * {@link Instant} (new-field convention). The two threshold params therefore have
+     * different types — {@code createdBefore} must be {@code LocalDateTime},
+     * {@code updatedBefore} must be {@code Instant}. The service computes both from one
+     * {@code now} so they describe the same wall-clock instant.
+     */
+    @Query("SELECT s FROM SkillEntity s "
+            + "WHERE s.isSystem = false "
+            + "  AND s.enabled = true "
+            + "  AND s.archivedAt IS NULL "
+            + "  AND s.usageCount < :minUsage "
+            + "  AND s.createdAt < :createdBefore "
+            + "  AND (s.updatedAt IS NULL OR s.updatedAt < :updatedBefore)")
+    List<SkillEntity> findArchivalCandidates(@Param("minUsage") long minUsage,
+                                             @Param("createdBefore") java.time.LocalDateTime createdBefore,
+                                             @Param("updatedBefore") Instant updatedBefore);
 }
