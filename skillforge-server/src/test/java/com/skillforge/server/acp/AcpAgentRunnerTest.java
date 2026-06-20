@@ -103,7 +103,7 @@ class AcpAgentRunnerTest {
      * The transport is captured so the test can drive canned inbound lines.
      */
     private AcpAgentRunner runnerWith(FakeAcpTransport transport) {
-        AcpClientFactory factory = (cwd, env) ->
+        AcpClientFactory factory = (adapterPackage, cwd, env) ->
                 new AcpClient(transport, mapper, new CcAcpUpdateTranslator());
         AcpPermissionBridge bridge = new AcpPermissionBridge(
                 new com.skillforge.core.engine.confirm.PendingConfirmationRegistry(),
@@ -120,7 +120,7 @@ class AcpAgentRunnerTest {
     private AcpAgentRunner subAgentRunnerWith(FakeAcpTransport transport,
                                               com.skillforge.server.subagent.SubAgentRegistry registry,
                                               org.springframework.context.ApplicationEventPublisher publisher) {
-        AcpClientFactory factory = (cwd, env) ->
+        AcpClientFactory factory = (adapterPackage, cwd, env) ->
                 new AcpClient(transport, mapper, new CcAcpUpdateTranslator());
         AcpPermissionBridge bridge = new AcpPermissionBridge(
                 new com.skillforge.core.engine.confirm.PendingConfirmationRegistry(),
@@ -258,6 +258,59 @@ class AcpAgentRunnerTest {
                 .orElseThrow(() -> new AssertionError("no session/prompt sent"));
         String promptText = textSentToCc(promptLine);
         assertThat(promptText).isEqualTo("just do X");
+    }
+
+    @Test
+    @DisplayName("codex agent (acp:codex) launches the codex adapter, no cc OTLP telemetry env")
+    void run_codexAgent_usesCodexAdapterNoCcTelemetry() {
+        AgentEntity codex = new AgentEntity();
+        codex.setId(AGENT_ID);
+        codex.setModelId("acp:codex");
+        when(agentRepository.findById(AGENT_ID)).thenReturn(java.util.Optional.of(codex));
+
+        AtomicReference<String> adapter = new AtomicReference<>();
+        AtomicReference<Map<String, String>> env = new AtomicReference<>();
+        AcpAgentRunner runner = capturingRunner(scriptedTransport(List.of("ok")), adapter, env);
+
+        runner.run("do work", null, CALLER_USER_ID);
+
+        assertThat(adapter.get()).isEqualTo("@zed-industries/codex-acp");
+        // codex ignores cc OTLP telemetry → not injected.
+        assertThat(env.get()).doesNotContainKey("CLAUDE_CODE_ENABLE_TELEMETRY");
+    }
+
+    @Test
+    @DisplayName("claude-code agent (acp:claude-code) launches the cc adapter, with cc OTLP telemetry env")
+    void run_ccAgent_usesCcAdapterWithTelemetry() {
+        AgentEntity cc = new AgentEntity();
+        cc.setId(AGENT_ID);
+        cc.setModelId("acp:claude-code");
+        when(agentRepository.findById(AGENT_ID)).thenReturn(java.util.Optional.of(cc));
+
+        AtomicReference<String> adapter = new AtomicReference<>();
+        AtomicReference<Map<String, String>> env = new AtomicReference<>();
+        AcpAgentRunner runner = capturingRunner(scriptedTransport(List.of("ok")), adapter, env);
+
+        runner.run("do work", null, CALLER_USER_ID);
+
+        assertThat(adapter.get()).isEqualTo(ProcessAcpTransport.DEFAULT_ADAPTER_PACKAGE);
+        assertThat(env.get()).containsKey("CLAUDE_CODE_ENABLE_TELEMETRY");
+    }
+
+    /** A runner whose factory captures the adapter package + extra env passed per run. */
+    private AcpAgentRunner capturingRunner(FakeAcpTransport transport,
+                                           AtomicReference<String> adapterOut,
+                                           AtomicReference<Map<String, String>> envOut) {
+        AcpClientFactory factory = (adapterPackage, cwd, env) -> {
+            adapterOut.set(adapterPackage);
+            envOut.set(env);
+            return new AcpClient(transport, mapper, new CcAcpUpdateTranslator());
+        };
+        AcpPermissionBridge bridge = new AcpPermissionBridge(
+                new com.skillforge.core.engine.confirm.PendingConfirmationRegistry(),
+                broadcaster, driverPool, 30);
+        return new AcpAgentRunner(factory, sessionService, agentRepository,
+                broadcaster, mapper, properties, bridge);
     }
 
     @Test
@@ -521,7 +574,7 @@ class AcpAgentRunnerTest {
         properties.setOtlpEndpoint("http://localhost:8080");
         FakeAcpTransport transport = scriptedTransport(List.of("ok"));
         AtomicReference<Map<String, String>> capturedEnv = new AtomicReference<>();
-        AcpClientFactory factory = (cwd, env) -> {
+        AcpClientFactory factory = (adapterPackage, cwd, env) -> {
             capturedEnv.set(env);
             return new AcpClient(transport, mapper, new CcAcpUpdateTranslator());
         };
@@ -552,7 +605,7 @@ class AcpAgentRunnerTest {
         properties.setOtlpEndpoint("");
         FakeAcpTransport transport = scriptedTransport(List.of("ok"));
         AtomicReference<Map<String, String>> capturedEnv = new AtomicReference<>();
-        AcpClientFactory factory = (cwd, env) -> {
+        AcpClientFactory factory = (adapterPackage, cwd, env) -> {
             capturedEnv.set(env);
             return new AcpClient(transport, mapper, new CcAcpUpdateTranslator());
         };
@@ -954,7 +1007,7 @@ class AcpAgentRunnerTest {
         // thread (no scheduler delay), so the finalize is deterministic without sleeps.
         // The scheduler is still passed (non-null) so the deps are considered "wired".
         properties.setTraceFinalizeGraceSeconds(0);
-        AcpClientFactory factory = (cwd, env) ->
+        AcpClientFactory factory = (adapterPackage, cwd, env) ->
                 new AcpClient(transport, mapper, new CcAcpUpdateTranslator());
         AcpPermissionBridge bridge = new AcpPermissionBridge(
                 new com.skillforge.core.engine.confirm.PendingConfirmationRegistry(),

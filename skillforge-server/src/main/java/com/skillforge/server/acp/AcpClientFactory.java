@@ -19,12 +19,15 @@ import java.util.Map;
 public interface AcpClientFactory {
 
     /**
-     * Create a fresh, unstarted {@link AcpClient} for one cc run.
+     * Create a fresh, unstarted {@link AcpClient} for one ACP agent run.
      *
-     * @param cwd      working directory for the cc child process (a per-run safe
-     *                 dir — never the SkillForge repo root)
-     * @param extraEnv extra env vars to set on the child process (may be empty)
+     * @param adapterPackage the ACP adapter npm package to launch (per-agent: cc vs
+     *                       codex vs …) — resolved by the runner from the agent's
+     *                       {@code acp:<key>} model id
+     * @param cwd            working directory for the adapter child process (a per-run
+     *                       safe dir — never the SkillForge repo root unless worktree)
+     * @param extraEnv       extra env vars to set on the child process (may be empty)
      * @return an unstarted client
      */
-    AcpClient create(String cwd, Map<String, String> extraEnv);
+    AcpClient create(String adapterPackage, String cwd, Map<String, String> extraEnv);
 }

@@ -402,10 +402,15 @@ public class AcpAgentRunner {
 
             workspace = createWorkspace(subSessionId);
             Path cwd = workspace.dir();
+            // Resolve which ACP adapter to launch from the session agent's acp:<key>
+            // model id (cc vs codex vs …). The cc-specific OTLP telemetry env is only
+            // injected for the cc adapter (codex does not honor CLAUDE_CODE_* telemetry).
+            AdapterChoice adapter = resolveAdapter(session);
             // P2-1: inject OTLP telemetry env so cc exports its log/events (api_request /
             // tool_result / subagent_completed / ...) to the SkillForge OtlpReceiverController,
             // tagged with sf.session_id=<this sub-session> so the ingest layer binds them back.
-            client = clientFactory.create(cwd.toString(), buildTelemetryEnv(session));
+            client = clientFactory.create(adapter.packageName(), cwd.toString(),
+                    buildTelemetryEnv(session, adapter.ccTelemetry()));
 
             // Accumulate + live-stream. Runs on the cc reader thread — keep it non-blocking.
             client.setUpdateListener(u -> onUpdate(subSessionId, u, assistantText, toolCalls));
@@ -779,6 +784,51 @@ public class AcpAgentRunner {
         }
     }
 
+    /** The ACP adapter package to launch for a run + whether cc-OTLP telemetry applies. */
+    private record AdapterChoice(String packageName, boolean ccTelemetry) {
+    }
+
+    /**
+     * Resolve which ACP adapter to launch from the session agent's {@code acp:<key>}
+     * model id (e.g. {@code acp:claude-code} → cc adapter, {@code acp:codex} → codex
+     * adapter), via {@link AcpRunnerProperties#getAdapters()}. cc-specific OTLP
+     * telemetry only applies to the cc adapter (codex ignores {@code CLAUDE_CODE_*}).
+     *
+     * <p>A non-{@code acp:} agent (the standalone demo path may pick an arbitrary
+     * agent) falls back to the configured default adapter with cc telemetry — the
+     * pre-codex behavior. An {@code acp:<key>} with no adapter mapped fails the run
+     * with a clear error (rather than launching the wrong adapter).
+     */
+    private AdapterChoice resolveAdapter(SessionEntity session) {
+        String modelId = loadAgentModelId(session.getAgentId());
+        if (modelId != null && modelId.startsWith("acp:")) {
+            String key = modelId.substring("acp:".length()).strip();
+            String pkg = properties.getAdapters().get(key);
+            if (pkg == null || pkg.isBlank()) {
+                throw new AcpException("no ACP adapter configured for runtime key '" + key
+                        + "' — set skillforge.acp.adapters." + key);
+            }
+            return new AdapterChoice(pkg, "claude-code".equals(key));
+        }
+        // Non-acp agent (standalone demo): default adapter + cc telemetry (pre-codex behavior).
+        return new AdapterChoice(properties.getAdapterPackage(), true);
+    }
+
+    /**
+     * Load the agent's model id; null only for no agent / agent-not-found (legit
+     * non-acp / fallback cases). A DB error is NOT swallowed — it propagates so the
+     * run fails fast rather than silently launching the wrong (default) adapter for
+     * what may be an {@code acp:codex} agent.
+     */
+    private String loadAgentModelId(Long agentId) {
+        if (agentId == null) {
+            return null;
+        }
+        return agentRepository.findById(agentId)
+                .map(AgentEntity::getModelId)
+                .orElse(null);
+    }
+
     /**
      * P2-1 — build the OTLP telemetry env injected into the spawned cc child so it
      * exports its log/events to the SkillForge {@code OtlpReceiverController}, bound
@@ -793,7 +843,12 @@ public class AcpAgentRunner {
      * itself, so we pass the BASE url only. The values are merged on top of the
      * sanitized parent env by {@code ProcessAcpTransport.sanitizeEnv}.
      */
-    private Map<String, String> buildTelemetryEnv(SessionEntity session) {
+    private Map<String, String> buildTelemetryEnv(SessionEntity session, boolean ccTelemetry) {
+        // cc-specific OTLP env (CLAUDE_CODE_ENABLE_TELEMETRY etc.) only applies to the cc
+        // adapter; codex ignores it, so skip injection for non-cc adapters.
+        if (!ccTelemetry) {
+            return Map.of();
+        }
         String endpoint = properties.getOtlpEndpoint();
         if (endpoint == null || endpoint.isBlank()) {
             return Map.of();

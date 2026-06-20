@@ -2,6 +2,9 @@ package com.skillforge.server.acp;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
+
 /**
  * Configuration for the ACP external-agent runner (ACP-EXTERNAL-AGENT P1a-2).
  *
@@ -13,10 +16,24 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 public class AcpRunnerProperties {
 
     /**
-     * The cc ACP adapter npm package launched via {@code npx --yes}. Defaults to
-     * the renamed cc adapter (see {@link ProcessAcpTransport#DEFAULT_ADAPTER_PACKAGE}).
+     * Fallback ACP adapter npm package launched via {@code npx --yes}, used when an
+     * agent's runtime key is not in {@link #adapters} (or for the non-acp standalone
+     * demo path). Defaults to the cc adapter
+     * (see {@link ProcessAcpTransport#DEFAULT_ADAPTER_PACKAGE}).
      */
     private String adapterPackage = ProcessAcpTransport.DEFAULT_ADAPTER_PACKAGE;
+
+    /**
+     * Per-agent ACP adapter map, keyed by the agent model-id runtime key (the part
+     * after {@code acp:}). The runner resolves {@code acp:<key>} → this map → adapter
+     * npm package, so different external agents launch their OWN adapter. Config
+     * entries ({@code skillforge.acp.adapters.*}) are MERGED on top of these defaults
+     * (see {@link #setAdapters}), so an operator can add a new adapter without wiping
+     * the built-in claude-code / codex mappings.
+     */
+    private Map<String, String> adapters = new LinkedHashMap<>(Map.of(
+            "claude-code", ProcessAcpTransport.DEFAULT_ADAPTER_PACKAGE,
+            "codex", "@zed-industries/codex-acp"));
 
     /**
      * SkillForge agent id that owns the cc-run sub-session. If unset, the runner
@@ -150,6 +167,17 @@ public class AcpRunnerProperties {
     public void setAdapterPackage(String adapterPackage) {
         this.adapterPackage = (adapterPackage == null || adapterPackage.isBlank())
                 ? ProcessAcpTransport.DEFAULT_ADAPTER_PACKAGE : adapterPackage;
+    }
+
+    public Map<String, String> getAdapters() {
+        return adapters;
+    }
+
+    /** Merge config entries on top of the built-in defaults (don't wipe them). */
+    public void setAdapters(Map<String, String> adapters) {
+        if (adapters != null) {
+            this.adapters.putAll(adapters);
+        }
     }
 
     public Long getAgentId() {

@@ -1754,13 +1754,12 @@ public class SkillForgeConfig {
                 otlpIngestExecutor, ccEventSpanTranslator);
     }
 
-    /** Per-run AcpClient factory — spawns a fresh cc adapter process per run. */
+    /** Per-run AcpClient factory — spawns a fresh ACP adapter process per run
+     *  (adapter package chosen per-agent by the runner: cc vs codex vs …). */
     @Bean
     public AcpClientFactory acpClientFactory(ObjectMapper objectMapper,
-                                             AcpUpdateTranslator acpUpdateTranslator,
-                                             AcpRunnerProperties acpRunnerProperties) {
-        return new ProcessAcpClientFactory(objectMapper, acpUpdateTranslator,
-                acpRunnerProperties.getAdapterPackage());
+                                             AcpUpdateTranslator acpUpdateTranslator) {
+        return new ProcessAcpClientFactory(objectMapper, acpUpdateTranslator);
     }
 
     /**
