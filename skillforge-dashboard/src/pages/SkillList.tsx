@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Button, Dropdown, Modal, Select, Table, Tooltip, message, notification } from 'antd';
-import type { MenuProps } from 'antd';
+import { Button, Modal, Select, Table, Tooltip, message, notification } from 'antd';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   getSkills, uploadSkill, deleteSkill,
@@ -552,6 +551,7 @@ const SkillList: React.FC = () => {
               <button className={view === 'grid' ? 'on' : ''} onClick={() => setView('grid')}>Grid</button>
               <button className={view === 'table' ? 'on' : ''} onClick={() => setView('table')}>Table</button>
             </div>
+            <span aria-hidden className="sf-toolbar-div" />
             {pendingDrafts.length > 0 && (
               <button
                 className="btn-ghost-sf"
@@ -576,33 +576,42 @@ const SkillList: React.FC = () => {
                 {BOLT_ICON} {extracting ? 'Extracting…' : 'Extract from Sessions'}
               </button>
             </Tooltip>
-            <Dropdown
-              trigger={['click']}
-              menu={{
-                items: [
-                  {
-                    key: 'rescan',
-                    label: rescanning ? 'Rescanning…' : 'Rescan',
-                    disabled: rescanning,
-                    onClick: handleRescan,
-                  },
-                  {
-                    key: 'curate',
-                    label: '技能整理（归档低使用技能）',
-                    onClick: openCurator,
-                  },
-                  {
-                    key: 'archived',
-                    label: showArchived
-                      ? '隐藏已归档技能'
-                      : `显示已归档技能${archivedCount > 0 ? `（${archivedCount}）` : ''}`,
-                    onClick: () => setShowArchived(v => !v),
-                  },
-                ] as MenuProps['items'],
-              }}
-            >
-              <Button size="small" data-testid="skills-more-btn">⋯ 更多</Button>
-            </Dropdown>
+            <span aria-hidden className="sf-toolbar-div" />
+            <Tooltip title="Reconcile skills against the on-disk skills directory and report missing / shadowed / invalid entries">
+              <button
+                className="btn-ghost-sf"
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+                onClick={handleRescan}
+                disabled={rescanning}
+                data-testid="rescan-btn"
+              >
+                {rescanning ? 'Rescanning…' : 'Rescan'}
+              </button>
+            </Tooltip>
+            <Tooltip title="预览并归档低使用率的旧技能（人工确认后才执行）">
+              <button
+                className="btn-ghost-sf"
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+                onClick={openCurator}
+                data-testid="curator-btn"
+              >
+                技能整理
+              </button>
+            </Tooltip>
+            <Tooltip title={showArchived ? '隐藏已归档技能' : `显示已归档技能${archivedCount > 0 ? ` (${archivedCount})` : ''}`}>
+              <button
+                className="btn-ghost-sf"
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 6,
+                  ...(showArchived ? { borderColor: 'var(--accent-primary, #6366f1)', color: 'var(--accent-primary, #6366f1)' } : {}),
+                }}
+                onClick={() => setShowArchived(v => !v)}
+                data-testid="toggle-archived-btn"
+              >
+                显示已归档{archivedCount > 0 ? ` (${archivedCount})` : ''}
+              </button>
+            </Tooltip>
+            <span aria-hidden className="sf-toolbar-div" />
             <button className="btn-primary-sf" onClick={() => setCreating(true)}>{PLUS_ICON} New skill</button>
           </div>
         </header>

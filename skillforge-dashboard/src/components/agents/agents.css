@@ -171,6 +171,16 @@
   display: flex;
   gap: 8px;
   align-items: center;
+  flex-wrap: wrap;
+}
+
+/* Vertical divider grouping the toolbar into segments (search/view · drafts · maintenance · primary). */
+.sf-toolbar-div {
+  width: 1px;
+  align-self: stretch;
+  min-height: 20px;
+  background: var(--border-1);
+  margin: 2px 2px;
 }
 
 .view-seg {
