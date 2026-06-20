@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Button, Modal, Select, Table, Tooltip, message, notification } from 'antd';
+import { Button, Dropdown, Modal, Select, Table, Tooltip, message, notification } from 'antd';
+import type { MenuProps } from 'antd';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   getSkills, uploadSkill, deleteSkill,
@@ -575,35 +576,33 @@ const SkillList: React.FC = () => {
                 {BOLT_ICON} {extracting ? 'Extracting…' : 'Extract from Sessions'}
               </button>
             </Tooltip>
-            <Tooltip title="Reconcile skills against the on-disk skills directory and report missing / shadowed / invalid entries">
-              <Button
-                size="small"
-                onClick={handleRescan}
-                loading={rescanning}
-                data-testid="rescan-btn"
-              >
-                Rescan
-              </Button>
-            </Tooltip>
-            <Tooltip title="预览并归档低使用率的旧技能（人工确认后才执行）">
-              <Button
-                size="small"
-                onClick={openCurator}
-                data-testid="curator-btn"
-              >
-                技能整理
-              </Button>
-            </Tooltip>
-            <Tooltip title={showArchived ? '隐藏已归档技能' : `显示已归档技能${archivedCount > 0 ? ` (${archivedCount})` : ''}`}>
-              <Button
-                size="small"
-                type={showArchived ? 'primary' : 'default'}
-                onClick={() => setShowArchived(v => !v)}
-                data-testid="toggle-archived-btn"
-              >
-                显示已归档{archivedCount > 0 ? ` (${archivedCount})` : ''}
-              </Button>
-            </Tooltip>
+            <Dropdown
+              trigger={['click']}
+              menu={{
+                items: [
+                  {
+                    key: 'rescan',
+                    label: rescanning ? 'Rescanning…' : 'Rescan',
+                    disabled: rescanning,
+                    onClick: handleRescan,
+                  },
+                  {
+                    key: 'curate',
+                    label: '技能整理（归档低使用技能）',
+                    onClick: openCurator,
+                  },
+                  {
+                    key: 'archived',
+                    label: showArchived
+                      ? '隐藏已归档技能'
+                      : `显示已归档技能${archivedCount > 0 ? `（${archivedCount}）` : ''}`,
+                    onClick: () => setShowArchived(v => !v),
+                  },
+                ] as MenuProps['items'],
+              }}
+            >
+              <Button size="small" data-testid="skills-more-btn">⋯ 更多</Button>
+            </Dropdown>
             <button className="btn-primary-sf" onClick={() => setCreating(true)}>{PLUS_ICON} New skill</button>
           </div>
         </header>
