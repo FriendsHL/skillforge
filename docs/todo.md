@@ -52,7 +52,8 @@
 
 | ID | 标题 | 模式 | 触发 |
 | --- | --- | --- | --- |
-| **OUTCOMES-RUBRIC-FOUNDATION** | `t_rubric` entity + grader 隔离 audit（V1）/ AgentLoopEngine 第 5 轴 exit（V2）。DREAMING 姊妹包独立 ship | Full 候选 | 用户拍是否升 active |
+| **SKILL-CURATOR** 🆕 | 技能低使用自动归档 curator（复用 `MemoryConsolidator` 模式套 `SkillEntity.usageCount`，治"无 SkillConsolidator"不对称）。来源 [wiki-takeaway-triage 缺口③](../requirements/backlog/SKILL-CURATOR/index.md)（审计自荐）。用户 2026-06-20 拍板有道理、入表 | Mid 候选 | 易摘 P1,优先于其它 triage 新需求;随时可起 |
+| **OUTCOMES-RUBRIC-FOUNDATION** | `t_rubric` entity + grader 隔离 audit（V1）/ AgentLoopEngine 第 5 轴 exit（V2）。DREAMING 姊妹包独立 ship。**注**:= triage 的 OUTCOME-DRIVEN-LOOP（缺口 D）,已在此立项 | Full 候选 | 用户拍是否升 active |
 | **WF-CONCURRENT-PIPELINE** | 学 CC 并发 pipeline（stage 重叠/无 barrier）补 workflow 引擎（现 pipeline() 串行）。AUTOEVOLVING V2(d) | Full 候选 | V2 启动 / 多阶段 fan-out 链路成瓶颈时 |
 | **CHANNEL-RICH-MESSAGE** | 微信原生视频(iLink video_item，当前视频走 file type4) + 卡片中性模型(飞书原生交互卡片 + 微信降级 text/image，iLink 无 card/button) | Mid/Full 候选 | 有富消息/卡片诉求时 |
 | **OTEL-NATIVE-TRACING** | 观测层「仿 OTel」→ 真标准 OTLP（**长期/可选**，非 ACP 必需）。逐文件实测 **~70–100 dev-day** 且付全额成本仍非纯 OTel（kind/event/聚合/cache·cost/blob/origin 无 OTel 语义约定）→ **big-bang 否决**；要做只能渐进（双写→按簇迁读 + 自进化簇并行验证→ETL→下线 LlmSpan）。ACP 可观测已由 B1 适配器满足，此包仅为"标准互通/通用 OTLP 平台"战略目标 | Full 候选 | 仅当明确要标准 OTel 平台时 |
