@@ -77,7 +77,6 @@ const SkillList: React.FC = () => {
   const [curatorLoading, setCuratorLoading] = useState(false);
   const [curatorApplying, setCuratorApplying] = useState(false);
   const [candidates, setCandidates] = useState<SkillCuratorCandidate[]>([]);
-  const [showArchived, setShowArchived] = useState(false);
 
   const { data: rawSkills = [] } = useQuery({
     queryKey: ['skills'],
@@ -316,21 +315,24 @@ const SkillList: React.FC = () => {
 
   const rows = useMemo(() => {
     return all.filter(s => {
-      // SKILL-CURATOR — hide archived skills unless the toggle is on.
-      if (!showArchived && s.archived) return false;
+      // SKILL-CURATOR — "archived" is a STATUS facet: archived rows show ONLY when the
+      // archived facet is selected; otherwise they are hidden from active/disabled/default.
+      if (filterStatus === 'archived') {
+        if (!s.archived) return false;
+      } else if (s.archived) {
+        return false;
+      }
       if (q) {
         const ql = q.toLowerCase();
         const hay = `${s.name} ${s.description || ''} ${s.tags.join(' ')}`.toLowerCase();
         if (!hay.includes(ql)) return false;
       }
-      if (filterStatus) {
-        if (filterStatus === 'active' && !s.enabled) return false;
-        if (filterStatus === 'disabled' && s.enabled) return false;
-      }
+      if (filterStatus === 'active' && !s.enabled) return false;
+      if (filterStatus === 'disabled' && s.enabled) return false;
       if (filterSource && s.source !== filterSource) return false;
       return true;
     });
-  }, [all, q, filterStatus, filterSource, showArchived]);
+  }, [all, q, filterStatus, filterSource]);
 
   const archivedCount = useMemo(() => all.filter(s => s.archived).length, [all]);
 
@@ -476,7 +478,8 @@ const SkillList: React.FC = () => {
 
         <div className="agents-filters-h">Status</div>
         <FilterItem label="active" count={all.filter(s => s.enabled).length} active={filterStatus === 'active'} onClick={() => toggle('status', 'active')} />
-        <FilterItem label="disabled" count={all.filter(s => !s.enabled).length} active={filterStatus === 'disabled'} onClick={() => toggle('status', 'disabled')} />
+        <FilterItem label="disabled" count={all.filter(s => !s.enabled && !s.archived).length} active={filterStatus === 'disabled'} onClick={() => toggle('status', 'disabled')} />
+        <FilterItem label="archived" count={archivedCount} active={filterStatus === 'archived'} onClick={() => toggle('status', 'archived')} />
 
         <div className="agents-filters-h">Source</div>
         <FilterItem label="system" count={all.filter(s => s.source === 'system').length} active={filterSource === 'system'} onClick={() => toggle('source', 'system')} />
@@ -596,19 +599,6 @@ const SkillList: React.FC = () => {
                 data-testid="curator-btn"
               >
                 技能整理
-              </button>
-            </Tooltip>
-            <Tooltip title={showArchived ? '隐藏已归档技能' : `显示已归档技能${archivedCount > 0 ? ` (${archivedCount})` : ''}`}>
-              <button
-                className="btn-ghost-sf"
-                style={{
-                  display: 'inline-flex', alignItems: 'center', gap: 6,
-                  ...(showArchived ? { borderColor: 'var(--accent-primary, #6366f1)', color: 'var(--accent-primary, #6366f1)' } : {}),
-                }}
-                onClick={() => setShowArchived(v => !v)}
-                data-testid="toggle-archived-btn"
-              >
-                显示已归档{archivedCount > 0 ? ` (${archivedCount})` : ''}
               </button>
             </Tooltip>
             <span aria-hidden className="sf-toolbar-div" />
