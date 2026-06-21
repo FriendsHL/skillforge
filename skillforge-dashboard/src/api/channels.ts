@@ -1,5 +1,11 @@
 import api from './index';
-import type { ChannelConfig, ChannelConversation, ChannelDelivery } from '../types/channel';
+import type {
+  ChannelConfig,
+  ChannelConversation,
+  ChannelDelivery,
+  WeixinQrLoginStart,
+  WeixinQrLoginStatus,
+} from '../types/channel';
 
 export interface CreateChannelConfigRequest {
   platform: string;
@@ -69,3 +75,21 @@ export const retryDelivery = (id: string) =>
 
 export const dropDelivery = (id: string) =>
   api.post(`/channel-deliveries/${id}/drop`);
+
+/**
+ * Start a WeChat (ClawBot) QR-login flow. Returns the `qrcode` polling ticket
+ * plus `qrcode_img_content` — a login URL to encode into a QR code (not an
+ * image).
+ */
+export const weixinQrLoginStart = () =>
+  api.post<WeixinQrLoginStart>('/channel-configs/weixin/qr-login/start');
+
+/**
+ * Poll the WeChat QR-login status for a previously started qrcode.
+ * `qrcode` is passed via axios `params`, which URL-encodes the value, so no
+ * manual encodeURIComponent is needed here.
+ */
+export const weixinQrLoginStatus = (qrcode: string) =>
+  api.get<WeixinQrLoginStatus>('/channel-configs/weixin/qr-login/status', {
+    params: { qrcode },
+  });
