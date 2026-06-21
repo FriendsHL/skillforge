@@ -3,11 +3,12 @@
 ---
 id: SKILL-CURATOR
 mode: mid
-status: backlog
+status: delivered (v1 dry-run，未 go-live)
 priority: P1
 risk: Mid
 created: 2026-06-20
-updated: 2026-06-20
+updated: 2026-06-21
+delivered: 2026-06-21（commit 1dc7aa05 / 06e92e32 / c20c69da，migration V163/V164；dry-run 默认 + dashboard 人控可手动归档/恢复；翻 dry-run=false go-live 待用户拍板）
 source: wiki-takeaway-triage-2026-06-20.md 缺口③（审计自荐，123 个 wiki 候选无人提，来自 capability-audit §4 的"Memory 有 curator、Skill 没有"不对称观察）
 ---
 

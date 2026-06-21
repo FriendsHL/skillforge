@@ -29,6 +29,9 @@
 
 | ID | 完成日期 | Commit | 交付索引 |
 | --- | --- | --- | --- |
+| WECHAT-CHANNEL Slice 3（FE 扫码绑定 UX：AntD QRCode 渲染 qr-login URL + 轮询自动绑定） | 2026-06-21 | PR #5 / `feat/wechat-channel-slice3` | [delivery-index](delivery-index.md) |
+| SKILL-CURATOR v1（低使用技能归档 dry-run + dashboard 人控）+ reconciler updated_at 乱 bump 根因修(B/A) | 2026-06-21 | `1dc7aa05`/`06e92e32`/`c20c69da`（V163/V164） | [delivery-index](delivery-index.md) |
+| SkillForgeConfig 拆分(5 @Configuration) + collab TeamSend 互通 + 定时渠道补微信 + Skills 页 UI | 2026-06-21 | `534c304d`/`951b0de9`/`db4da9cf`/`9113d59d` | [delivery-index](delivery-index.md) |
 | COMPACT range-model 存储重构 go-live（默认 on，V157，零膨胀验证；需求包仍 active 有开放项） | 2026-06-19 | P1 `2dac6f8b` … GO-LIVE `068a4a5d` | [delivery-index](delivery-index.md) |
 | CHANNEL-MIDTURN-PROGRESS（渠道中途进度推送，飞书默认开/微信默认关） | 2026-06-19 | `43869ded` | [delivery-index](delivery-index.md) |
 | 压缩/渠道 go-live 同期 bug 修复（agent 窗口 override / channel 路由 running / reminder 占用%分母） | 2026-06-19 | `99b50868` / `defae3e8` / `40c726f3` | [delivery-index](delivery-index.md) |
@@ -52,7 +55,6 @@
 
 | ID | 标题 | 模式 | 触发 |
 | --- | --- | --- | --- |
-| **SKILL-CURATOR** 🆕 | 技能低使用自动归档 curator（复用 `MemoryConsolidator` 模式套 `SkillEntity.usageCount`，治"无 SkillConsolidator"不对称）。来源 [wiki-takeaway-triage 缺口③](../requirements/backlog/SKILL-CURATOR/index.md)（审计自荐）。用户 2026-06-20 拍板有道理、入表 | Mid 候选 | 易摘 P1,优先于其它 triage 新需求;随时可起 |
 | **OUTCOMES-RUBRIC-FOUNDATION** | `t_rubric` entity + grader 隔离 audit（V1）/ AgentLoopEngine 第 5 轴 exit（V2）。DREAMING 姊妹包独立 ship。**注**:= triage 的 OUTCOME-DRIVEN-LOOP（缺口 D）,已在此立项 | Full 候选 | 用户拍是否升 active |
 | **WF-CONCURRENT-PIPELINE** | 学 CC 并发 pipeline（stage 重叠/无 barrier）补 workflow 引擎（现 pipeline() 串行）。AUTOEVOLVING V2(d) | Full 候选 | V2 启动 / 多阶段 fan-out 链路成瓶颈时 |
 | **CHANNEL-RICH-MESSAGE** | 微信原生视频(iLink video_item，当前视频走 file type4) + 卡片中性模型(飞书原生交互卡片 + 微信降级 text/image，iLink 无 card/button) | Mid/Full 候选 | 有富消息/卡片诉求时 |
