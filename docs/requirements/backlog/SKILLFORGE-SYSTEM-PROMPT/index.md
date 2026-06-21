@@ -3,7 +3,7 @@
 ---
 id: SKILLFORGE-SYSTEM-PROMPT
 mode: mid
-status: backlog
+status: delivered（2026-06-22；代码合并 + 全模块测试 3160/0;**live AC1/AC2 待部署后 curl 验**——部署人控）
 priority: P2
 risk: Mid
 created: 2026-06-22

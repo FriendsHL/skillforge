@@ -64,7 +64,7 @@ public class ContextBreakdownService {
     private final SessionService sessionService;
     private final SkillRegistry skillRegistry;
     private final MemoryService memoryService;
-    private final UserConfigService userConfigService;
+    private final com.skillforge.core.context.GlobalSystemPromptProvider globalSystemPromptProvider;
     private final List<ContextProvider> contextProviders;
     private final ObjectMapper objectMapper;
     /** Plan r2 §5 — view 接管 skill 列表渲染（修复 B-BE-3 残留 getAllSkillDefinitions）。 */
@@ -74,7 +74,7 @@ public class ContextBreakdownService {
                                    SessionService sessionService,
                                    SkillRegistry skillRegistry,
                                    MemoryService memoryService,
-                                   UserConfigService userConfigService,
+                                   com.skillforge.core.context.GlobalSystemPromptProvider globalSystemPromptProvider,
                                    List<ContextProvider> contextProviders,
                                    ObjectMapper objectMapper,
                                    SessionSkillResolver sessionSkillResolver) {
@@ -82,7 +82,7 @@ public class ContextBreakdownService {
         this.sessionService = sessionService;
         this.skillRegistry = skillRegistry;
         this.memoryService = memoryService;
-        this.userConfigService = userConfigService;
+        this.globalSystemPromptProvider = globalSystemPromptProvider;
         this.contextProviders = contextProviders != null ? contextProviders : List.of();
         this.objectMapper = objectMapper;
         this.sessionSkillResolver = sessionSkillResolver;
@@ -137,10 +137,13 @@ public class ContextBreakdownService {
                                                     SessionEntity session) {
         List<Segment> out = new ArrayList<>();
 
-        String claudeMd = safeProviderCall(() -> userConfigService.getClaudeMd(userId));
-        if (isNotBlank(claudeMd)) {
-            out.add(Segment.leaf("claude_md", "CLAUDE.md",
-                    TokenEstimator.estimateString(claudeMd)));
+        // SKILLFORGE-SYSTEM-PROMPT: the engine now injects the built-in global system prompt
+        // as the first stable segment (replacing per-user claudeMd), so the breakdown reports
+        // that same global prompt to stay accurate against what's actually sent to the LLM.
+        String globalPrompt = safeProviderCall(globalSystemPromptProvider::get);
+        if (isNotBlank(globalPrompt)) {
+            out.add(Segment.leaf("global_system_prompt", "Global system prompt",
+                    TokenEstimator.estimateString(globalPrompt)));
         }
 
         if (isNotBlank(agentDef.getSystemPrompt())) {

@@ -41,6 +41,7 @@
 
 | ID | 完成日期 | Commit | 交付索引 |
 | --- | --- | --- | --- |
+| SKILLFORGE-SYSTEM-PROMPT（全局系统提示词，内置、对用户不可见不可编辑，取代 per-user claudeMd 注入）**代码合并+测试 3160/0；live AC1/AC2 待部署验** | 2026-06-22 | `feat/global-system-prompt` | [delivery-index](delivery-index.md) |
 | WECHAT-CHANNEL Slice 3（FE 扫码绑定 UX：AntD QRCode 渲染 qr-login URL + 轮询自动绑定） | 2026-06-21 | PR #5 / `feat/wechat-channel-slice3` | [delivery-index](delivery-index.md) |
 | SKILL-CURATOR v1（低使用技能归档 dry-run + dashboard 人控）+ reconciler updated_at 乱 bump 根因修(B/A) | 2026-06-21 | `1dc7aa05`/`06e92e32`/`c20c69da`（V163/V164） | [delivery-index](delivery-index.md) |
 | SkillForgeConfig 拆分(5 @Configuration) + collab TeamSend 互通 + 定时渠道补微信 + Skills 页 UI | 2026-06-21 | `534c304d`/`951b0de9`/`db4da9cf`/`9113d59d` | [delivery-index](delivery-index.md) |
@@ -67,7 +68,6 @@
 
 | ID | 标题 | 模式 | 触发 |
 | --- | --- | --- | --- |
-| **SKILLFORGE-SYSTEM-PROMPT** 🆕 | **全局系统提示词**(全平台一份、**内置代码里、对用户不可见不可编辑**),拼进每个原生 agent 最前;取代现有 per-user claudeMd 槽;cc/codex 不覆盖。内容=v1 中文(已审,「先说再做」+ 项目情况 + harness 骨架)。**终定方案简化:无表/无前端,复用 claudeMd 槽,core 零改动** → [需求包](requirements/backlog/SKILLFORGE-SYSTEM-PROMPT/index.md) + [v1](requirements/backlog/SKILLFORGE-SYSTEM-PROMPT/global-system-prompt-v1-zh.md) | **Mid**（无 schema/前端） | 设计定稿+ v1 审过;**可立即实现** |
 | **OUTCOMES-RUBRIC-FOUNDATION** | `t_rubric` entity + grader 隔离 audit（V1）/ AgentLoopEngine 第 5 轴 exit（V2）。DREAMING 姊妹包独立 ship。**注**:= triage 的 OUTCOME-DRIVEN-LOOP（缺口 D）,已在此立项 | Full 候选 | 用户拍是否升 active |
 | **WF-CONCURRENT-PIPELINE** | 学 CC 并发 pipeline（stage 重叠/无 barrier）补 workflow 引擎（现 pipeline() 串行）。AUTOEVOLVING V2(d)。**已立需求包** → [backlog/WF-CONCURRENT-PIPELINE](requirements/backlog/WF-CONCURRENT-PIPELINE/index.md) | Full 候选 | V2 启动 / 多阶段 fan-out 链路成瓶颈时 |
 | **CHANNEL-RICH-MESSAGE** | 微信原生视频(iLink video_item，当前视频走 file type4) + 卡片中性模型(飞书原生交互卡片 + 微信降级 text/image，iLink 无 card/button) | Mid/Full 候选 | 有富消息/卡片诉求时 |

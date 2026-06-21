@@ -62,17 +62,18 @@ class EngineEstimateMatchesBreakdownIT {
     @Mock private SessionService sessionService;
     @Mock private SkillRegistry skillRegistry;
     @Mock private MemoryService memoryService;
-    @Mock private UserConfigService userConfigService;
     @Mock private SessionSkillResolver sessionSkillResolver;
 
     private ContextBreakdownService service;
     private final ObjectMapper objectMapper = new ObjectMapper();
+    private final com.skillforge.core.context.GlobalSystemPromptProvider globalSystemPromptProvider =
+            new com.skillforge.core.context.GlobalSystemPromptProvider();
 
     @BeforeEach
     void setUp() {
         service = new ContextBreakdownService(
                 agentService, sessionService, skillRegistry, memoryService,
-                userConfigService, List.<ContextProvider>of(), objectMapper,
+                globalSystemPromptProvider, List.<ContextProvider>of(), objectMapper,
                 sessionSkillResolver);
     }
 
@@ -135,7 +136,6 @@ class EngineEstimateMatchesBreakdownIT {
         when(skillRegistry.getAllTools()).thenReturn(tools);
         when(sessionSkillResolver.resolveFor(any(AgentDefinition.class)))
                 .thenReturn(SessionSkillView.EMPTY);
-        when(userConfigService.getClaudeMd(userId)).thenReturn(null);
         when(memoryService.previewMemoriesForPrompt(eq(userId), any())).thenReturn(null);
 
         // ── Act: dashboard path ───────────────────────────────────────────────
@@ -149,6 +149,10 @@ class EngineEstimateMatchesBreakdownIT {
         // session_context).
         // We concatenate THE SAME strings the dashboard estimates per-segment so
         // sum-of-parts vs whole-string BPE boundaries do not bite.
+        // SKILLFORGE-SYSTEM-PROMPT: the built-in global system prompt is now injected as the
+        // first system-prompt segment for every agent, so it counts toward both the dashboard
+        // breakdown and the engine estimate.
+        String globalPrompt = globalSystemPromptProvider.get();
         String agentPrompt = agentDef.getSystemPrompt();
         String toolsMd = defaultToolsGuidelines();
         String sessionCtx = "\n\n## Session Context\n"
@@ -156,7 +160,8 @@ class EngineEstimateMatchesBreakdownIT {
                 + "- sessionId: " + sessionId + "\n";
 
         // Sum-of-parts (same algorithm dashboard uses for systemPromptTotal).
-        long expectedSystemTokens = TokenEstimator.estimateString(agentPrompt)
+        long expectedSystemTokens = TokenEstimator.estimateString(globalPrompt)
+                + TokenEstimator.estimateString(agentPrompt)
                 + TokenEstimator.estimateString(toolsMd)
                 + TokenEstimator.estimateString(sessionCtx);
 
@@ -233,7 +238,6 @@ class EngineEstimateMatchesBreakdownIT {
         when(skillRegistry.getAllTools()).thenReturn(List.of());
         when(sessionSkillResolver.resolveFor(any(AgentDefinition.class)))
                 .thenReturn(SessionSkillView.EMPTY);
-        when(userConfigService.getClaudeMd(userId)).thenReturn(null);
         when(memoryService.previewMemoriesForPrompt(eq(userId), any())).thenReturn(null);
 
         ContextBreakdownDto breakdown = service.breakdown(session, userId);
