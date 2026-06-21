@@ -1,7 +1,7 @@
 # WECHAT-CHANNEL — 增加微信 channel
 
 > 创建：2026-06-18
-> 状态：**Slice 1 已交付**（2026-06-18，commit `f19cb70d`，LIVE QR 冒烟 PASS）——文本双向 + 扫码登录。**Slice 2/3 待做**：文件发送(CDN/AES type4) + FE 扫码 UX。**真端到端(手机扫码→真消息)user-gated 待用户验**。
+> 状态：**Slice 1+2+3 已交付**。Slice 1（2026-06-18 `f19cb70d`）文本双向 + 扫码登录；Slice 2（2026-06-19 `850384de`）文件发送(CDN/AES type4)；**Slice 3（2026-06-21）FE 扫码绑定 UX**（dashboard 微信平台 + AntD `<QRCode>` 渲染 qr-login 返回的 URL + 2s 轮询自动绑定）。**真端到端(手机扫码→真消息)user-gated 待用户验**。
 > 模式：Full（新 channel 平台适配器 + 外部输入 + 验签/AES 解密 + 密钥；安全敏感）
 > 来源：用户「当前 channel 只支持飞书，要加微信」+ 三轮调研（SkillForge channel 架构 / 微信各形态 API / openclaw 怎么做）。
 

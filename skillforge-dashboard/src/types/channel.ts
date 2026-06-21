@@ -32,3 +32,22 @@ export interface ChannelDelivery {
   scheduledAt: string;
   deliveredAt: string | null;
 }
+
+/** Response from POST /channel-configs/weixin/qr-login/start */
+export interface WeixinQrLoginStart {
+  /** The raw qrcode string (32-hex ticket) — pass back to status for polling. */
+  qrcode: string;
+  /**
+   * The login URL to encode into a scannable QR code (the user scans it in
+   * WeChat). This is a URL, NOT a base64 image — render it via a QR generator.
+   */
+  qrcode_img_content: string;
+}
+
+/** Response from GET /channel-configs/weixin/qr-login/status */
+export interface WeixinQrLoginStatus {
+  /** Free-form backend status, e.g. "pending" | "confirmed" | "expired". */
+  status: string;
+  /** True once the scan is confirmed and the bot token has been bound. */
+  bound: boolean;
+}

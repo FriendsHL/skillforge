@@ -368,6 +368,36 @@
   margin-bottom: 2px;
 }
 
+/* ── WeChat QR bind ──────────────────────────────────────── */
+.weixin-qr-bind {
+  display: flex;
+  flex-direction: column;
+}
+
+.weixin-qr-frame {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 18px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.07));
+  border-radius: 8px;
+}
+
+.weixin-qr-frame--loading {
+  min-height: 200px;
+  justify-content: center;
+}
+
+.weixin-qr-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-tertiary, rgba(255, 255, 255, 0.4));
+}
+
 /* ── Session link ─────────────────────────────────────────── */
 .session-link {
   font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;

@@ -24,6 +24,7 @@ import type {
   CreateChannelConfigRequest,
   UpdateChannelConfigRequest,
 } from '../../api/channels';
+import WeixinQrBind from './WeixinQrBind';
 import './channels.css';
 
 const COPY_ICON = (
@@ -64,11 +65,12 @@ function buildWebhookUrl(platform: string): string {
 const platformOptions = [
   { value: 'feishu', label: '飞书 (Feishu)' },
   { value: 'telegram', label: 'Telegram' },
+  { value: 'weixin', label: '微信 (WeChat)' },
 ];
 
 interface FormValues {
   platform: string;
-  mode: 'webhook' | 'websocket';
+  mode: 'webhook' | 'websocket' | 'push';
   displayName: string;
   defaultAgentId: number;
   active: boolean;
@@ -116,7 +118,7 @@ const ChannelConfigDrawer: React.FC<ChannelConfigDrawerProps> = ({
   useEffect(() => {
     if (!open) return;
     if (config) {
-      const mode = parseMode(config.configJson);
+      const mode = config.platform === 'weixin' ? 'push' : parseMode(config.configJson);
       form.setFieldsValue({
         platform: config.platform,
         mode,
@@ -142,14 +144,20 @@ const ChannelConfigDrawer: React.FC<ChannelConfigDrawerProps> = ({
 
   const { mutate: save, isPending } = useMutation({
     mutationFn: async (values: FormValues) => {
+      // WeChat: outbound long-poll ("push"), no webhook + no credential fields —
+      // the bot token/baseurl are filled by the backend after QR scan binding.
+      // Read the form value (not `platform` state) to avoid state/form drift; the
+      // edit effect always seeds `platform` into the form, so it is populated.
+      const isWeixin = values.platform === 'weixin';
+      const modeValue = isWeixin ? 'push' : values.mode;
       if (isEdit && config) {
         const body: UpdateChannelConfigRequest = {
           displayName: values.displayName,
           defaultAgentId: values.defaultAgentId,
           active: values.active,
-          configJson: JSON.stringify({ mode: values.mode }),
+          configJson: JSON.stringify({ mode: modeValue }),
         };
-        if (values.updateCredentials) {
+        if (!isWeixin && values.updateCredentials) {
           body.credentials = buildCredentials(values);
         }
         return updateChannelConfig(config.id, body);
@@ -159,9 +167,11 @@ const ChannelConfigDrawer: React.FC<ChannelConfigDrawerProps> = ({
           displayName: values.displayName,
           defaultAgentId: values.defaultAgentId,
           active: values.active,
-          credentials: buildCredentials(values),
-          configJson: JSON.stringify({ mode: values.mode }),
+          configJson: JSON.stringify({ mode: modeValue }),
         };
+        if (!isWeixin) {
+          body.credentials = buildCredentials(values);
+        }
         return createChannelConfig(body);
       }
     },
@@ -254,8 +264,13 @@ const ChannelConfigDrawer: React.FC<ChannelConfigDrawerProps> = ({
             <Select
               options={platformOptions}
               onChange={(v) => {
-                setPlatform(v as string);
-                form.setFieldsValue({ platform: v as string });
+                const next = v as string;
+                setPlatform(next);
+                form.setFieldsValue({
+                  platform: next,
+                  // WeChat is forced push mode (no user-facing mode select).
+                  mode: next === 'weixin' ? 'push' : 'webhook',
+                });
               }}
             />
           </Form.Item>
@@ -266,7 +281,15 @@ const ChannelConfigDrawer: React.FC<ChannelConfigDrawerProps> = ({
           name="displayName"
           rules={[{ required: true, message: 'Name is required' }]}
         >
-          <Input placeholder={platform === 'feishu' ? '飞书机器人' : 'Telegram Bot'} />
+          <Input
+            placeholder={
+              platform === 'feishu'
+                ? '飞书机器人'
+                : platform === 'weixin'
+                  ? '微信机器人'
+                  : 'Telegram Bot'
+            }
+          />
         </Form.Item>
 
         <Form.Item
@@ -288,63 +311,86 @@ const ChannelConfigDrawer: React.FC<ChannelConfigDrawerProps> = ({
           <Switch />
         </Form.Item>
 
-        <Form.Item
-          label="Push Mode"
-          name="mode"
-          rules={[{ required: true, message: 'Select push mode' }]}
-          extra="webhook 需要公网回调；websocket 由服务端主动建连飞书。"
-        >
-          <Select
-            options={[
-              { value: 'webhook', label: 'Webhook (回调模式)' },
-              { value: 'websocket', label: 'WebSocket (长连接模式)' },
-            ]}
-          />
-        </Form.Item>
+        {/* Push mode + webhook config — not applicable to WeChat (forced push). */}
+        {platform !== 'weixin' && (
+          <>
+            <Form.Item
+              label="Push Mode"
+              name="mode"
+              rules={[{ required: true, message: 'Select push mode' }]}
+              extra="webhook 需要公网回调；websocket 由服务端主动建连飞书。"
+            >
+              <Select
+                options={[
+                  { value: 'webhook', label: 'Webhook (回调模式)' },
+                  { value: 'websocket', label: 'WebSocket (长连接模式)' },
+                ]}
+              />
+            </Form.Item>
 
-        <Divider style={{ margin: '8px 0 16px' }} />
+            <Divider style={{ margin: '8px 0 16px' }} />
 
-        {/* Webhook URL */}
-        <div style={{ marginBottom: 16 }}>
-          {mode === 'webhook' ? (
+            {/* Webhook URL */}
+            <div style={{ marginBottom: 16 }}>
+              {mode === 'webhook' ? (
+                <>
+                  <p className="credentials-section-label" style={{ marginBottom: 6 }}>
+                    Webhook URL
+                  </p>
+                  <div className="webhook-url-box">
+                    <span className="webhook-url-text">{buildWebhookUrl(platform)}</span>
+                    <Tooltip title="Copy">
+                      <button
+                        type="button"
+                        onClick={handleCopyWebhook}
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          cursor: 'pointer',
+                          color: 'inherit',
+                          opacity: 0.5,
+                          padding: '2px 4px',
+                          display: 'flex',
+                          alignItems: 'center',
+                        }}
+                      >
+                        {COPY_ICON}
+                      </button>
+                    </Tooltip>
+                  </div>
+                </>
+              ) : (
+                <Alert
+                  type="info"
+                  showIcon
+                  message="WebSocket 模式无需配置回调 URL"
+                  description="此模式下由 SkillForge 服务端主动连接飞书，不需要公网 webhook。若从 webhook 切换到 websocket，请重启服务生效。"
+                />
+              )}
+            </div>
+          </>
+        )}
+
+        {/* WeChat scan-to-bind: only meaningful once the config row exists. */}
+        {platform === 'weixin' && (
+          isEdit ? (
             <>
-              <p className="credentials-section-label" style={{ marginBottom: 6 }}>
-                Webhook URL
-              </p>
-              <div className="webhook-url-box">
-                <span className="webhook-url-text">{buildWebhookUrl(platform)}</span>
-                <Tooltip title="Copy">
-                  <button
-                    type="button"
-                    onClick={handleCopyWebhook}
-                    style={{
-                      background: 'none',
-                      border: 'none',
-                      cursor: 'pointer',
-                      color: 'inherit',
-                      opacity: 0.5,
-                      padding: '2px 4px',
-                      display: 'flex',
-                      alignItems: 'center',
-                    }}
-                  >
-                    {COPY_ICON}
-                  </button>
-                </Tooltip>
-              </div>
+              <Divider style={{ margin: '8px 0 16px' }} />
+              <WeixinQrBind active={open} />
             </>
           ) : (
             <Alert
               type="info"
               showIcon
-              message="WebSocket 模式无需配置回调 URL"
-              description="此模式下由 SkillForge 服务端主动连接飞书，不需要公网 webhook。若从 webhook 切换到 websocket，请重启服务生效。"
+              style={{ marginBottom: 16 }}
+              message="先创建微信频道，再扫码绑定"
+              description="保存后重新打开该频道，即可在编辑页获取二维码并扫码绑定机器人。"
             />
-          )}
-        </div>
+          )
+        )}
 
-        {/* Credential update toggle (edit mode only) */}
-        {isEdit && (
+        {/* Credential update toggle (edit mode only; WeChat has no credentials) */}
+        {isEdit && platform !== 'weixin' && (
           <Form.Item label="Update credentials" name="updateCredentials" valuePropName="checked">
             <Switch
               size="small"
