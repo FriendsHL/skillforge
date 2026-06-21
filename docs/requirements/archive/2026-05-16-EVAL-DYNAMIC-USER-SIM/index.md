@@ -3,12 +3,14 @@
 ---
 id: EVAL-DYNAMIC-USER-SIM
 mode: full
-status: design-draft
+status: design-draft（⚠️ 2026-06-22 校准：文档落后于代码——核心引擎已实现）
 priority: P2
 risk: High
 created: 2026-05-16
-updated: 2026-05-16
+updated: 2026-06-22
 ---
+
+> **⚠️ 实现现状校准（2026-06-22）**：本包 status 虽标 design-draft，但代码层**核心引擎已落地且较深**：`skillforge-server/src/main/java/com/skillforge/server/eval/usersim/SimulatorTrialOrchestrator.java`（双引擎 ping-pong 多轮对话编排，注释标 "2026-05-16 ratify-locked"）+ `DynamicSimController`（HTTP 触发入口）+ `RunSimulatorTrial`/`RecordSimulationResult` tool + `SimulatorTrialEntity` + `MultiTurnTranscript`/`EvalJudgeMultiTurnOutput` 建模，均已存在。**真正剩余的只有一件**：把动态多轮模拟**接进 A/B 飞轮门禁**（当前是独立路径，未作为三因子 promote gate 的第三因子；`AbEvalPipeline` 未引用 orchestrator）。后续要做的是"集成"，不是"从头实现"。
 
 ## 摘要
 

@@ -1,6 +1,6 @@
 # SkillForge ToDo
 
-> 更新于：2026-06-19（COMPACT range-model 存储重构 go-live（默认 on，V157）；CHANNEL-MIDTURN-PROGRESS 交付归档；同期 3 项 bug 修复）
+> 更新于：2026-06-22（WECHAT-CHANNEL Slice 3 交付；SKILL-CURATOR/config 拆分回写；**自进化 track 状态校准 + track 层合并**——见下方「自进化 track 现状」）
 
 > 规则：这里只放当前执行状态；需求和方案细节放在链接的需求包 / archive 中。
 > 旧版：重整前长版 ToDo 已保留在 [references/legacy-todo-2026-06-16.md](references/legacy-todo-2026-06-16.md)。
@@ -18,12 +18,24 @@
 | 5 | **AUTORESEARCH-OPTIMIZATION** | AUTOEVOLVING V2 (a) 子需求：autoResearch 外部调研（arxiv + GitHub trending）→ LLM 2-stage 抽取 → Iron Law 人审 → 自动建 backlog | Full | prd-draft (V2 排期) | P3 | Full | [需求包](requirements/active/2026-05-28-AUTORESEARCH-OPTIMIZATION/index.md) | PRD 已草拟，等 V1 后续 V2 启动 |
 | 6 | **ACP-EXTERNAL-AGENT** | SkillForge 经 ACP 编排外部 coding agent（cc/codex）+ 全程可视。Track A=ACP runner / Track B=B1 OTel 适配器。**大段已交付**：P1a~P2-3a + F2(worktree+任务框架) + L1/L3(cc/codex 自测→commit→push→PR) + **cc/codex 双接入**(adapter 按 agent 选) | Full | **大段已交付（见 delivery-index）**：cc+codex 经 ACP 跑通、worktree 隔离、渠道→PR 闭环 live 验过；剩 L2 确认门(暂缓)·codex 工具标签归一化(backlog)·AC-3 确认可达(暂缓)；**L4/L5 决定不做**(部署留人) | P3 | Full | [需求包](requirements/active/2026-06-19-ACP-EXTERNAL-AGENT/index.md) | 闭环已通；后续按需:codex 工具归一化 / agent-teams P1 成本护栏（均 backlog）|
 
+## 自进化（AUTOEVOLVING）track 现状（2026-06-22 校准）
+
+> 队列 #1/#2/#3/#3b + 阶段B + AUTORESEARCH + WF-CONCURRENT-PIPELINE 全是 **AUTOEVOLVING-MASTER 一个总包**的切片（OUTCOMES-RUBRIC 是唯一例外，独立）。这里给真实状态，避免被各子包"已交付"误导。
+
+- **机器已造完，但还没证明有用**：V1（DSL+dashboard）+ 飞轮 + agent-level bundle 爬坡 + CLOSE-LOOP 闭环采纳 P1/对靶 P2 + JUDGE-GROUNDING Phase 1（配对 net-wins）+ CANDIDATE-GROUNDING Phase 2（候选 grounding）**全部 ship**。但截至今天 **0 个被证实的真改进赢家**。
+- **唯一瓶颈 = 还没真跑观察**：CANDIDATE-GROUNDING 上线后只跑过 1 次冒烟（`de0c8b2a`）；之前 todo 写"观察中"是乐观——**"≥3 轮干净评测出赢家"的观察其实没开始，0 结论**。
+- **👉 下一步（明确）**：**跑 ≥3 轮干净 evolve 观察 run**，看 CANDIDATE-GROUNDING 是否真消除净回归、能否产出第一个赢家。结果决定后续全部分叉：
+  - 出赢家 → CLOSE-LOOP **P1 闭环采纳**才有意义 → 再上 **P3 benchmark**。
+  - 0 赢家 → 升级（重开 bundle 设计 H2，或先做**阶段B 补尺子敏感度**让 harvest 场景更密）。
+- **被它 blocked、现在别先做**：阶段B（等有赢家再调尺子才不是空调参）、CLOSE-LOOP P3 benchmark（要有赢家才有比较意义）。
+- **track 层合并**：EVOLVE-JUDGE-GROUNDING（Phase 1）与 EVOLVE-CANDIDATE-GROUNDING（Phase 2）是同一条线，已合并为一条 track 看待；详细 prd/tech-design 各包保留不动。
+
 ## 阻塞 / 待决策
 
 | ID | 待决策 | 负责人 | 阻塞项 |
 | --- | --- | --- | --- |
-| **EVOLVE-BADCASE-SENSITIVITY**（CLOSE-LOOP 阶段 B） | 是否升 active：补 weightedScore 0.4 bad-case 权重的尺子敏感度（扩工具确定性误用 + 行为模式失败新 oracle）。基础设施失败明确排除 | 用户 | 阶段 A 已 ship（2026-06-08），用户拍是否升 active |
-| **EVAL-429 场景级重试** | infra 失败摘出分母已交付（2026-06-03），剩场景级自动重试是否单独排期 | 用户 | 见 [archive/2026-06-03-EVAL-429-ROBUSTNESS](requirements/archive/2026-06-03-EVAL-429-ROBUSTNESS/index.md) |
+| **EVOLVE-BADCASE-SENSITIVITY**（CLOSE-LOOP 阶段 B） | 补尺子敏感度（扩工具确定性误用 + 行为模式失败新 oracle）。**⚠️ blocked-on-winner**：见上方「自进化 track 现状」——先跑观察出赢家再调尺子，否则空调参。**现在不是决策点** | 用户 | 等观察结论 |
+| ~~EVAL-429 场景级重试~~ **已闭** | infra 失败摘出分母已交付（2026-06-03，已上线于 `AbEvalPipeline`）；**场景级重试当初明确 descoped（是决策不是缺口），不单独排期** | — | closed |
 
 ## 最近完成
 
@@ -56,13 +68,13 @@
 | ID | 标题 | 模式 | 触发 |
 | --- | --- | --- | --- |
 | **OUTCOMES-RUBRIC-FOUNDATION** | `t_rubric` entity + grader 隔离 audit（V1）/ AgentLoopEngine 第 5 轴 exit（V2）。DREAMING 姊妹包独立 ship。**注**:= triage 的 OUTCOME-DRIVEN-LOOP（缺口 D）,已在此立项 | Full 候选 | 用户拍是否升 active |
-| **WF-CONCURRENT-PIPELINE** | 学 CC 并发 pipeline（stage 重叠/无 barrier）补 workflow 引擎（现 pipeline() 串行）。AUTOEVOLVING V2(d) | Full 候选 | V2 启动 / 多阶段 fan-out 链路成瓶颈时 |
+| **WF-CONCURRENT-PIPELINE** | 学 CC 并发 pipeline（stage 重叠/无 barrier）补 workflow 引擎（现 pipeline() 串行）。AUTOEVOLVING V2(d)。**已立需求包** → [backlog/WF-CONCURRENT-PIPELINE](requirements/backlog/WF-CONCURRENT-PIPELINE/index.md) | Full 候选 | V2 启动 / 多阶段 fan-out 链路成瓶颈时 |
 | **CHANNEL-RICH-MESSAGE** | 微信原生视频(iLink video_item，当前视频走 file type4) + 卡片中性模型(飞书原生交互卡片 + 微信降级 text/image，iLink 无 card/button) | Mid/Full 候选 | 有富消息/卡片诉求时 |
 | **OTEL-NATIVE-TRACING** | 观测层「仿 OTel」→ 真标准 OTLP（**长期/可选**，非 ACP 必需）。逐文件实测 **~70–100 dev-day** 且付全额成本仍非纯 OTel（kind/event/聚合/cache·cost/blob/origin 无 OTel 语义约定）→ **big-bang 否决**；要做只能渐进（双写→按簇迁读 + 自进化簇并行验证→ETL→下线 LlmSpan）。ACP 可观测已由 B1 适配器满足，此包仅为"标准互通/通用 OTLP 平台"战略目标 | Full 候选 | 仅当明确要标准 OTel 平台时 |
 | **CHANNEL-PUSH-SERVICE** | 通用「按 sessionId 主动推送」服务(外部事件/异步工具/agent out-of-band)。CHANNEL-ASYNC-DELIVERY 的 listener 是第一个客户，复用 ReplyDeliveryService；出现第二个客户再抽 | Mid 候选 | 第二个主动推送需求出现时 |
 | **WEBSEARCH-SEARXNG-BACKEND** | WebSearch SearXNG 自部署 backend。重要不紧急 | Mid 候选 | 每周搜索量/费用升高或隐私/内网诉求 |
 | **SANDBOX-EPHEMERAL-WORKDIR-DRY** | 抽 `EphemeralWorkdir` 小工具 DRY 掉 eval/sandbox 与 CodeSandboxTool 的临时 workdir 重复（~15 行）。ROI 低纯清理 | Solo/Light | 顺手或专门 refactor 时 |
-| **EVAL-DYNAMIC-USER-SIM** | 动态用户模拟多轮评测（Phase 2/3） | — | 见需求包 |
+| **EVAL-DYNAMIC-USER-SIM** | 动态用户模拟多轮评测。**⚠️ 校准：引擎其实已实现且深**（`eval/usersim/SimulatorTrialOrchestrator` 双引擎 ping-pong + `DynamicSimController` + RunSimulatorTrial/RecordSimulationResult tool + entity），需求包却还标 design-draft（archive）。**剩**：接进 A/B 飞轮门禁（当前独立路径，未作 gate 第三因子） | Mid 候选 | 想把多轮模拟纳入评测 gate 时 |
 
 ## 暂缓需求包
 
