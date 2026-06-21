@@ -369,7 +369,10 @@ class FullCompactStrategyTest {
         // real provider's UTF-8 JSON generator throw MismatchedSurrogateException. Post-fix the cut
         // steps back one char so each chunk is surrogate-complete.
         //
-        // budget = 6000 − 4000 reserve = 2000 → approxCharsPerChunk = max(1000, 2000*4) = 8000. The
+        // budget = 7500 − 5500 reserve (SUMMARY_INPUT_RESERVE_TOKENS) = 2000 → approxCharsPerChunk =
+        // max(1000, 2000*4) = 8000. NB: window must stay > reserve+1000 or window−reserve underflows
+        // the <1000 guard and falls back to the 24000 budget → no split → this test silently passes 1
+        // chunk. The
         // first cut ends at index 8000 (last included char = 7999); placing the emoji's HIGH
         // surrogate at index 7999 makes the naive cut split the pair. Filler is VARIED ASCII words
         // so the token estimate genuinely exceeds the budget and hardSplit is actually exercised (a
@@ -391,7 +394,7 @@ class FullCompactStrategyTest {
 
         SurrogateCheckingProvider p = new SurrogateCheckingProvider();
         // Single line, no newline → forces the hardSplit path. Small window → small budget.
-        String summary = strategy.summarizeWithWindowGuard(p, null, line.toString(), 6_000);
+        String summary = strategy.summarizeWithWindowGuard(p, null, line.toString(), 7_500);
 
         // No chunk split the surrogate pair (pre-fix this was true → exception in the real path).
         assertThat(p.sawSplitSurrogate)
