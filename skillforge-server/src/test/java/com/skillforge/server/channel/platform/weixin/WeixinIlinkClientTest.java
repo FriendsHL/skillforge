@@ -215,9 +215,13 @@ class WeixinIlinkClientTest {
         List<Request> captured = new ArrayList<>();
         WeixinIlinkClient client = clientReturning(captured, r -> "{\"ret\":0,\"msgs\":[]}");
 
-        client.getUpdates("", "tok", "https://custom-host.example");
+        // 203.0.113.0/24 = RFC 5737 TEST-NET-3 (public, non-private). Use a literal IP
+        // so the SSRF guard's InetAddress.getByName parses it WITHOUT a DNS lookup —
+        // a non-resolvable hostname (e.g. *.example) would NXDOMAIN in clean-DNS CI and
+        // get rejected → silent fallback to DEFAULT_HOST → flaky local-green/CI-red.
+        client.getUpdates("", "tok", "https://203.0.113.10");
 
-        assertThat(captured.get(0).url().toString()).startsWith("https://custom-host.example/ilink/bot/getupdates");
+        assertThat(captured.get(0).url().toString()).startsWith("https://203.0.113.10/ilink/bot/getupdates");
     }
 
     @Test
