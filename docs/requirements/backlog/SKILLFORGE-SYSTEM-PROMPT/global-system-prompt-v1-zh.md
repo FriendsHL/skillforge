@@ -3,8 +3,8 @@
 > SKILLFORGE-SYSTEM-PROMPT 层① 的 v1 草稿，**用户 2026-06-22 审过 "看起来挺好的"**。
 > - 中文；结合**真实 Main Assistant（t_agent id=3）**的核心规则「先说再做」+ SkillForge 项目情况 + 规格手册 harness 骨架。
 > - **关键事实(由真实 main agent 确认)**：SkillForge 前端把 agent 输出的 text 当"思考过程"实时展示，**用户看到的是流式文本、不是隐藏 thinking** → 沟通契约是"边说边做"(与 Claude Code "thinking 隐藏/final 承载全部"相反)。
-> - 拼接位置：本骨架最前 → 实例级可编辑全局(层②) → per-user CLAUDE.md → agent 自己的 systemPrompt。
-> - 仍可调(不阻塞)：语气(现偏冷静直接)、产物目录段(暂未写，待定运行时约定后补)。
+> - 拼接位置（2026-06-22 终定）：**这份全局(内置、对用户不可见不可编辑) → agent 自己的 systemPrompt → soul → tools → behavior rules → context**。取代原 per-user CLAUDE.md 槽。
+> - 仍可调(不阻塞)：语气(现偏冷静直接)、产物目录段(暂未写，待定运行时约定后补)。改它 = 改本资源文件 + 部署。
 > - 取代 [`toplevel-prompt-v0.md`](toplevel-prompt-v0.md)(v0 是英文带决策标注的探索版)。
 
 ---

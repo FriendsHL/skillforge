@@ -2,12 +2,13 @@
 
 ---
 id: SKILLFORGE-SYSTEM-PROMPT
-mode: full
+mode: mid
 status: backlog
 priority: P2
 risk: Mid
 created: 2026-06-22
-supersedes: GLOBAL-SYSTEM-PROMPT（合并：实例级可编辑全局 = 本需求的「层②」）
+finalized: 2026-06-22（终定方案：全局 + 系统级内置、对用户不可见不可编辑；无表/前端，复用 claudeMd 槽。v1 中文 prompt 用户审过，可进实现）
+supersedes: GLOBAL-SYSTEM-PROMPT（已合并删除）
 source: 用户 2026-06-22 —— ①「要一个全局 system prompt，所有 agent 共享」②「想搞 SkillForge 最上层自己的 system prompt」，参考 research-docs `Agent-System-Prompt-规格手册.md`。两者合并为一个正式需求。
 ---
 
@@ -22,20 +23,24 @@ source: 用户 2026-06-22 —— ①「要一个全局 system prompt，所有 ag
 - **SkillForge 没有产品级"最上层"prompt**：今天 agent 拿到的只有 per-user CLAUDE.md + agent 自己的 systemPrompt + soul + 几条默认 tool guidelines。**缺一个所有 agent 共享的 harness 层骨架**（身份/安全/沟通契约/自主性/工具路由）——即手册说的 Claude Code 那种 `You are Claude Code...` 块。
 - **范围外（已记录）**：ACP 外部 agent cc/codex 的 `AcpAgentRunner.buildCcPrompt` 不拼平台 prompt，用户已拍**本需求不覆盖 cc/codex**。
 
-## 目标
+## 目标（2026-06-22 终定：全局 + 系统级，对用户不可见、不可编辑）
 
-给 SkillForge 平台级系统提示词，**两层**，叠在 per-user CLAUDE.md 之上、所有**原生** agent 共享：
+给 SkillForge 一个**全局系统提示词**（全平台一份，**内置在代码里**），静默拼进**每个原生 agent** 的 system prompt 最前段：
 
-- **层①「最上层内置骨架」（产品自带，本需求新增）**：harness 层 prompt（身份/安全/沟通契约/自主性/工具路由/编排/记忆/上下文/产物），按 [`Agent-System-Prompt-规格手册`](../../../../../research-docs/research/leaked-system-prompts/Agent-System-Prompt-规格手册.md) 的 11 槽位 + 6 元技法设计。**代码/资源内置，设计一次随版本演进，不在 dashboard 随便改。** **v1 草稿(中文，用户 2026-06-22 审过)= [`global-system-prompt-v1-zh.md`](global-system-prompt-v1-zh.md)**(取代英文探索版 [`toplevel-prompt-v0.md`](toplevel-prompt-v0.md))；结合真实 Main Assistant(t_agent id=3)核心规则「先说再做」+ SkillForge 项目情况。**关键事实已确认**：SkillForge 前端把 agent 输出文本当"思考过程"展示，用户看到流式文本而非隐藏 thinking → 沟通契约是"边说边做"(与 Claude Code 相反，修正 v0 的 0b 假设)。
-- **层②「实例级可编辑全局」（= 原 GLOBAL-SYSTEM-PROMPT 合并进来）**：admin 在 dashboard 编辑的实例级内容（固定工具手册、本实例自定规则）。单行配置表 + 编辑器。
+- **全局**（非 per-user）：一份，全实例共享。
+- **系统级、对终端用户不可见、不可编辑**：不挂任何用户/管理界面，纯代码内置资源；改它 = 改代码资源 + 部署（"固定"内容如工具手册由操作者改资源文件）。
+- 内容 = **[`global-system-prompt-v1-zh.md`](global-system-prompt-v1-zh.md)**（中文 v1，用户 2026-06-22 审过；结合真实 Main Assistant id=3「先说再做」+ SkillForge 项目情况 + 规格手册 harness 骨架；按 [规格手册](../../../../../research-docs/research/leaked-system-prompts/Agent-System-Prompt-规格手册.md) 11 槽位）。
+- **关键事实**：SkillForge 前端把 agent 输出文本当"思考过程"展示 → 用户看流式文本而非隐藏 thinking → 沟通契约"边说边做"（与 Claude Code 相反）。
+- **替换**现有 per-user `UserConfigEntity.claudeMd` 机制（那个一直无 UI、空值、per-user）→ 改读这份全局内置内容。
+- 范围：仅原生 agent；ACP cc/codex 不覆盖。
 
 ## 拼接顺序（最终）
 
 ```
-① 内置最上层骨架 → ② 实例级可编辑全局 → per-user CLAUDE.md → AGENT.md(agent systemPrompt) → SOUL.md → TOOLS.md → Behavior Rules → [cache 边界] → Context
+全局系统提示词(内置) → AGENT.md(agent 自己的 systemPrompt) → SOUL.md → TOOLS.md → Behavior Rules → [cache 边界] → Context
 ```
 
-①② 都在 stable 段（cache 友好）。①最前、最稳。
+全局段最前、属 stable 段（cache 友好）。原 per-user CLAUDE.md 段被这份全局内置取代。
 
 ## 11 槽位 → SkillForge 该填什么（层①草稿依据）
 
@@ -53,19 +58,20 @@ source: 用户 2026-06-22 —— ①「要一个全局 system prompt，所有 ag
 | 10 产物 | 文件输出路径/SHORT-LONG/环境限制 | **[决策] SkillForge 产物目录约定** |
 | 元技法 | 优先级显式排序：safety > 平台红线 > helpfulness | — |
 
-## 推荐实现（低 core 扰动）
+## 推荐实现（core 改动极小，无 schema、无前端）
 
-- **层①**：内置资源（如 `skillforge-core` resource 文件或常量）+ 注入。最简洁：在 `EngineConfig` 的 provider 处把 `内置骨架 + 实例全局 + per-user` 三段拼好喂进既有 `claudeMd` 槽 → **core 的 SystemPromptBuilder/AgentLoopEngine 零改动**。
-- **层②**：新单行配置表 `t_instance_config` + `InstanceConfigEntity.globalSystemPrompt` + service + REST + **dashboard 编辑器**（现成的 per-user UI 不存在，要新建；可顺带把 per-user CLAUDE.md 的编辑器也补上）。
-- 组合函数 `joinNonBlank(builtinTopLevel, instanceGlobal, perUserClaudeMd)`，空段不引入多余换行（保 cache）。
+- 把 v1 内容做成 **skillforge-core 内置资源**（resource 文件或常量，如 `global-system-prompt.md`）。
+- `EngineConfig` 的 `claudeMdProvider` 改为**忽略 userId、直接返回这份内置全局**（替代 `userConfigService.getClaudeMd(userId)`）。`SystemPromptBuilder` / `AgentLoopEngine` 核心**零改动**（仍走既有 claudeMd 槽）。
+- per-user `UserConfigEntity.claudeMd` 停止参与注入（列可保留不读，后续再清理）；无用户/管理 UI。
+- **无新表、无 migration、无前端编辑器。**
 
 ## 验收点
 
-- AC1：任意原生 agent 一次对话，其 LlmRequest.systemPrompt 最前依次含【内置骨架 → 实例全局 → per-user → agent 自己】，顺序正确（curl/日志验）。
-- AC2：层①内置、随版本走；层②dashboard 可编辑并即时生效。
-- AC3：层②为空 / per-user 为空时，行为与今天一致（不引入空段/多余换行扰 cache）。
-- AC4（范围外确认）：cc/codex 的 prompt **不**含平台 prompt（符合用户决策）。
-- AC5：层①草稿 v0 经用户 review 定稿（11 槽位决策点全部拍板）。
+- AC1：任意原生 agent 一次对话，其 LlmRequest.systemPrompt 最前段 = 全局内置内容（curl/日志验）。
+- AC2：换不同 userId 都拿到**同一份**全局（确认非 per-user）。
+- AC3：终端用户侧**完全看不到、改不了**这份 prompt（无任何 UI 暴露）。
+- AC4：per-user claudeMd 即使有旧值也不再影响注入（已被全局取代）。
+- AC5（范围外确认）：cc/codex 的 prompt **不**含这份全局。
 
 ## 风险 / footgun
 
@@ -73,11 +79,11 @@ source: 用户 2026-06-22 —— ①「要一个全局 system prompt，所有 ag
 - **token 预算**：①②都计入每次请求 system prompt token（`RequestTokenEstimator`），尤其层②放长手册要注意（固定内容靠 prompt cache 摊薄；非缓存 provider 每次全额）。
 - **多 provider**：层①别硬编码模型身份/cutoff（SkillForge 多 provider + per-agent 模型）；身份槽保持 provider 中立。
 - **信任级别**：①②是产品/admin 配置，trusted，不需 custom-rule 那种 sanitization；但建议长度上限。
-- 新增 entity + migration → database-reviewer；触碰 EngineConfig 装配 → java-reviewer 确认不破坏 per-user 路径。
+- 无新表/migration；触碰 `EngineConfig` 装配 → java-reviewer 确认替换 per-user→全局后注入链不破、停读 per-user claudeMd 不影响其它调用方。
 
 ## pipeline
 
-Full（新增持久化 entity + migration = schema 红线；且影响每个原生 agent 的 prompt 装配）。先 **Plan/设计**：层① v0 prompt 经用户定稿（HARD-GATE，重大设计决策）→ 再实现。reviewer：java-reviewer + database-reviewer + typescript-reviewer（dashboard 编辑器）。
+**Mid**（无 schema、无前端、复用既有 claudeMd 槽，core 引擎零改动）。设计已定稿（v1 用户审过，HARD-GATE 已过）。reviewer：java-reviewer（EngineConfig 替换 + 停读 per-user 影响面）。影响每个原生 agent 的 prompt → Phase Final 必 live 验（curl 看某 agent systemPrompt 最前段）。
 
 ## 关联
 
