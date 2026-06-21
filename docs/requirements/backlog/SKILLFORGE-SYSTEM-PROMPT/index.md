@@ -26,7 +26,7 @@ source: 用户 2026-06-22 —— ①「要一个全局 system prompt，所有 ag
 
 给 SkillForge 平台级系统提示词，**两层**，叠在 per-user CLAUDE.md 之上、所有**原生** agent 共享：
 
-- **层①「最上层内置骨架」（产品自带，本需求新增）**：harness 层 prompt（身份/安全/沟通契约/自主性/工具路由/编排/记忆/上下文/产物），按 [`Agent-System-Prompt-规格手册`](../../../../../research-docs/research/leaked-system-prompts/Agent-System-Prompt-规格手册.md) 的 11 槽位 + 6 元技法设计。**代码/资源内置，设计一次随版本演进，不在 dashboard 随便改。** v0 草稿见 [`toplevel-prompt-v0.md`](toplevel-prompt-v0.md)。
+- **层①「最上层内置骨架」（产品自带，本需求新增）**：harness 层 prompt（身份/安全/沟通契约/自主性/工具路由/编排/记忆/上下文/产物），按 [`Agent-System-Prompt-规格手册`](../../../../../research-docs/research/leaked-system-prompts/Agent-System-Prompt-规格手册.md) 的 11 槽位 + 6 元技法设计。**代码/资源内置，设计一次随版本演进，不在 dashboard 随便改。** **v1 草稿(中文，用户 2026-06-22 审过)= [`global-system-prompt-v1-zh.md`](global-system-prompt-v1-zh.md)**(取代英文探索版 [`toplevel-prompt-v0.md`](toplevel-prompt-v0.md))；结合真实 Main Assistant(t_agent id=3)核心规则「先说再做」+ SkillForge 项目情况。**关键事实已确认**：SkillForge 前端把 agent 输出文本当"思考过程"展示，用户看到流式文本而非隐藏 thinking → 沟通契约是"边说边做"(与 Claude Code 相反，修正 v0 的 0b 假设)。
 - **层②「实例级可编辑全局」（= 原 GLOBAL-SYSTEM-PROMPT 合并进来）**：admin 在 dashboard 编辑的实例级内容（固定工具手册、本实例自定规则）。单行配置表 + 编辑器。
 
 ## 拼接顺序（最终）
