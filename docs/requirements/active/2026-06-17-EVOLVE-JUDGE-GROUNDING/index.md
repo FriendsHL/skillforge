@@ -1,7 +1,7 @@
 # EVOLVE-JUDGE-GROUNDING — 自进化判定与候选对靶优化
 
 > 创建：2026-06-17（从 backlog 升 active）
-> 状态：**Phase 1 已交付**（2026-06-18，commit `5be19db9`，见 [delivery-index](../../../delivery-index.md)）/ Phase 2+ roadmap 待排（包仍 active）
+> 状态：**Phase 1 已交付**（2026-06-18，commit `5be19db9`，见 [delivery-index](../../../delivery-index.md)）。**Phase 2 = [EVOLVE-CANDIDATE-GROUNDING](../2026-06-18-EVOLVE-CANDIDATE-GROUNDING/index.md)**（已拆为独立包并交付；**2026-06-22 起两者在 track 层合并为同一条 Phase 1/2 线**，详细 prd 各包保留——见 [todo](../../../todo.md)「自进化 track 现状」）。Phase 3+ roadmap 待排（包仍 active）。
 > 模式：Full（触碰 judge "赢家判定"正确性 + evolve-loop workflow；属核心测量层）
 > 来源：对照 Anthropic《A Harness for Every Task》《Introducing Dynamic Workflows》自治多 agent 经验（对抗证伪 / pairwise 判定 / self-preferential bias）+ 自进化现状快照瓶颈（0 赢家）。
 
