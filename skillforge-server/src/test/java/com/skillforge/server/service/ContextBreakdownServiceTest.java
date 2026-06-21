@@ -39,7 +39,6 @@ class ContextBreakdownServiceTest {
     @Mock private SessionService sessionService;
     @Mock private SkillRegistry skillRegistry;
     @Mock private MemoryService memoryService;
-    @Mock private UserConfigService userConfigService;
     @Mock private SessionSkillResolver sessionSkillResolver;
 
     private ContextBreakdownService service;
@@ -48,7 +47,8 @@ class ContextBreakdownServiceTest {
     void setUp() {
         service = new ContextBreakdownService(
                 agentService, sessionService, skillRegistry, memoryService,
-                userConfigService, List.<ContextProvider>of(), new ObjectMapper(),
+                new com.skillforge.core.context.GlobalSystemPromptProvider(),
+                List.<ContextProvider>of(), new ObjectMapper(),
                 sessionSkillResolver);
     }
 
@@ -104,6 +104,35 @@ class ContextBreakdownServiceTest {
                 .orElseThrow();
         assertThat(tools.tokens())
                 .as("one Skill loader schema should be counted even when no Java tools are registered")
+                .isGreaterThan(0);
+    }
+
+    @Test
+    @DisplayName("breakdown exposes the global system prompt under system_prompt with key 'global_system_prompt'")
+    void breakdown_exposesGlobalSystemPromptSegment() {
+        AgentDefinition agentDef = new AgentDefinition();
+        agentDef.setId("42");
+        AgentEntity agentEntity = new AgentEntity();
+        agentEntity.setId(42L);
+        agentEntity.setModelId("gpt-4o");
+        SessionEntity session = new SessionEntity();
+        session.setId("s1");
+        session.setAgentId(42L);
+
+        when(agentService.getAgent(42L)).thenReturn(agentEntity);
+        when(agentService.toAgentDefinition(agentEntity)).thenReturn(agentDef);
+        when(sessionService.getContextMessages("s1")).thenReturn(List.of());
+        when(sessionSkillResolver.resolveFor(agentDef)).thenReturn(SessionSkillView.EMPTY);
+
+        ContextBreakdownDto breakdown = service.breakdown(session, 7L);
+
+        ContextBreakdownDto.Segment systemPrompt = breakdown.segments().stream()
+                .filter(s -> "system_prompt".equals(s.key()))
+                .findFirst()
+                .orElseThrow();
+        ContextBreakdownDto.Segment global = childByKey(systemPrompt, "global_system_prompt");
+        assertThat(global.tokens())
+                .as("the built-in global system prompt must be counted as a system_prompt child")
                 .isGreaterThan(0);
     }
 

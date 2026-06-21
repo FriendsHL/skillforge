@@ -79,7 +79,6 @@ import com.skillforge.server.service.LifecycleHookViewService;
 import com.skillforge.server.service.MemoryService;
 import com.skillforge.server.service.ScheduledTaskService;
 import com.skillforge.server.service.SessionService;
-import com.skillforge.server.service.UserConfigService;
 import com.skillforge.server.memory.transcript.MemoryTranscriptProperties;
 import com.skillforge.server.memory.transcript.SessionTranscriptProvider;
 import com.skillforge.server.memory.context.MemoryContextProvider;
@@ -226,7 +225,7 @@ public class EngineConfig {
                                            LifecycleHookLoopAdapter lifecycleHookLoopAdapter,
                                            LifecycleHookSkillAdapter lifecycleHookSkillAdapter,
                                            com.skillforge.server.service.MemoryService memoryService,
-                                           UserConfigService userConfigService,
+                                           com.skillforge.core.context.GlobalSystemPromptProvider globalSystemPromptProvider,
                                            com.skillforge.core.engine.confirm.SessionConfirmCache sessionConfirmCache,
                                            com.skillforge.core.engine.confirm.ToolApprovalRegistry toolApprovalRegistry,
                                            com.skillforge.core.engine.confirm.RootSessionLookup rootSessionLookup,
@@ -255,7 +254,12 @@ public class EngineConfig {
         // L1 hybrid recall pick semantically relevant knowledge/project/reference memories.
         engine.setMemoryProvider((userId, taskContext) ->
                 memoryService.getMemoriesForPromptInjection(userId, taskContext));
-        engine.setClaudeMdProvider(userId -> userConfigService.getClaudeMd(userId));
+        // SKILLFORGE-SYSTEM-PROMPT: inject the platform-wide global system prompt (built-in
+        // classpath resource) as the first stable system-prompt segment for every native
+        // agent. This replaces the legacy per-user UserConfigEntity.claudeMd injection —
+        // userId is ignored, all users/agents share one global prompt. The per-user claudeMd
+        // column/API are kept but no longer participate in prompt injection.
+        engine.setClaudeMdProvider(userId -> globalSystemPromptProvider.get());
         engine.setConfirmationPrompter(confirmationPrompter);
         engine.setSessionConfirmCache(sessionConfirmCache);
         engine.setToolApprovalRegistry(toolApprovalRegistry);

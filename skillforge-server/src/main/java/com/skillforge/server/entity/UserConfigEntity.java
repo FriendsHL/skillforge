@@ -25,6 +25,12 @@ public class UserConfigEntity {
     @Column(nullable = false, unique = true)
     private Long userId;
 
+    /**
+     * Per-user CLAUDE.md. Superseded by the built-in global system prompt
+     * (SKILLFORGE-SYSTEM-PROMPT, see GlobalSystemPromptProvider / EngineConfig): this column
+     * and its REST API are kept for backward compatibility but no longer participate in
+     * system-prompt injection — even an existing value here is ignored at prompt-build time.
+     */
     @Column(columnDefinition = "TEXT")
     private String claudeMd;
 

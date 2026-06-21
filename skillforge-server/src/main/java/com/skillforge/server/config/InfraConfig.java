@@ -142,6 +142,18 @@ public class InfraConfig {
         return new BehaviorRuleRegistry(objectMapper);
     }
 
+    /**
+     * SKILLFORGE-SYSTEM-PROMPT: platform-wide global system prompt, built into the
+     * code as a classpath resource. Wired into the engine's claudeMd slot (see
+     * {@code EngineConfig}) so it becomes the first stable segment of every native
+     * agent's system prompt, replacing the legacy per-user CLAUDE.md injection.
+     * Fails fast at startup if the resource is missing/blank.
+     */
+    @Bean
+    public com.skillforge.core.context.GlobalSystemPromptProvider globalSystemPromptProvider() {
+        return new com.skillforge.core.context.GlobalSystemPromptProvider();
+    }
+
 
     @Bean
     @ConditionalOnProperty(name = "skillforge.embedding.enabled", havingValue = "true")
