@@ -598,6 +598,69 @@ public class SkillService {
     }
 
     /**
+     * SKILL-CURATOR human-in-loop — manually restore a curator-archived skill.
+     *
+     * <p>A skill is considered archived when {@code archivedAt != null} OR it is
+     * disabled ({@code !enabled}); the curator sets both when it archives. Restore
+     * un-archives the row: re-enable, clear {@code archivedAt} / {@code archiveReason},
+     * and set {@code curatorExempt=true} so the curator never re-archives a skill a
+     * human deliberately brought back ({@link SkillRepository#findArchivalCandidates}
+     * excludes exempt rows).
+     *
+     * <p>System skills are never archived (the curator query excludes
+     * {@code isSystem=true}), so this method does not special-case them — they would
+     * fall through the "not archived" no-op path. When the skill is not archived this
+     * is a no-op returning the row unchanged (idempotent).
+     *
+     * <p>After re-enabling, re-registers the skill's definition in
+     * {@link SkillRegistry} (best-effort, mirroring {@link #toggleSkill}) so the agent
+     * can dispatch it again immediately.
+     *
+     * @param id     the skill id to restore
+     * @param userId caller user id (logged for audit; ownership is enforced at the
+     *               controller layer via the existing userId resolution pattern)
+     * @return the (possibly unchanged) skill row
+     */
+    @Transactional
+    public SkillEntity restoreArchivedSkill(Long id, Long userId) {
+        SkillEntity entity = skillRepository.findById(id)
+                .orElseThrow(() -> new RuntimeException("Skill not found: " + id));
+
+        boolean archived = entity.getArchivedAt() != null || !entity.isEnabled();
+        if (!archived) {
+            // Not archived → no-op (idempotent). Don't flip curatorExempt for an
+            // active skill the curator wouldn't touch anyway.
+            log.info("restoreArchivedSkill: skill id={} name={} not archived — no-op (userId={})",
+                    id, entity.getName(), userId);
+            return entity;
+        }
+
+        entity.setEnabled(true);
+        entity.setArchivedAt(null);
+        entity.setArchiveReason(null);
+        entity.setCuratorExempt(true);
+        SkillEntity saved = skillRepository.save(entity);
+
+        // Re-register so the agent can dispatch it again (best-effort; drift is
+        // recoverable on next startup / rescan).
+        if (entity.getSkillPath() != null) {
+            try {
+                SkillDefinition def = skillPackageLoader.loadFromDirectory(Path.of(entity.getSkillPath()));
+                skillRegistry.registerSkillDefinition(def);
+                log.info("Skill restored and registered: id={} name={} (userId={})",
+                        id, entity.getName(), userId);
+            } catch (IOException e) {
+                log.warn("restoreArchivedSkill: failed to reload skill id={} name={} from disk "
+                        + "(DB restore succeeded): {}", id, entity.getName(), e.getMessage());
+            }
+        } else {
+            log.info("Skill restored (no skillPath, registry unchanged): id={} name={} (userId={})",
+                    id, entity.getName(), userId);
+        }
+        return saved;
+    }
+
+    /**
      * 获取 Skill 详情，包含 SKILL.md 内容、reference 文件、scripts 列表。
      */
     public Map<String, Object> getSkillDetail(Long id) {

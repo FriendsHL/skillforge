@@ -179,7 +179,7 @@ class SessionMemoryCompactStrategyTest {
 
         FullCompactStrategy.PreparedCompact prep = new FullCompactStrategy.PreparedCompact(
                 /*rightEdge=*/8, window, youngGen,
-                /*beforeTokens=*/200, /*beforeCount=*/18);
+                /*beforeTokens=*/200, /*beforeCount=*/18, /*contextWindowTokens=*/128000);
 
         CompactResult result = strategy.tryCompact(prep, "memory text", 0, 0);
         assertThat(result).isNotNull();

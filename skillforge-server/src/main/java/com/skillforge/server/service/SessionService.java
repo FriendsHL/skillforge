@@ -12,13 +12,16 @@ import com.skillforge.server.dto.SessionMessageDto;
 import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.SessionMessageEntity;
 import com.skillforge.server.entity.SessionEntity;
+import com.skillforge.server.entity.SessionSummaryEntity;
 import com.skillforge.server.exception.SessionNotFoundException;
 import com.skillforge.server.repository.AgentRepository;
 import com.skillforge.server.repository.SessionMessageRepository;
 import com.skillforge.server.repository.SessionRepository;
+import com.skillforge.server.repository.SessionSummaryRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -57,6 +60,14 @@ public class SessionService {
     public static final String MESSAGE_TYPE_ASK_USER = "ask_user";
     public static final String MESSAGE_TYPE_CONFIRMATION = "confirmation";
 
+    /**
+     * COMPACT-IDEMPOTENCY-BOUNDARY-FIX storage redesign P2a (§3 provenance): provenance value for
+     * an injected range summary in the derived model view. The summary is NOT a real message row,
+     * so it has no seq_no; {@code -1} marks it so P2b's reconciliation never tries to persist it.
+     * Real rows carry their actual (non-negative) {@code seq_no} as provenance.
+     */
+    public static final long PROVENANCE_SUMMARY = -1L;
+
     private final SessionRepository sessionRepository;
     private final SessionMessageRepository sessionMessageRepository;
     private final AgentRepository agentRepository;
@@ -87,6 +98,23 @@ public class SessionService {
      * Null at unit-test time → no-op.
      */
     private ReminderBuilder reminderBuilder;
+
+    /**
+     * COMPACT-IDEMPOTENCY-BOUNDARY-FIX storage redesign P2a: range-summary store for the derived
+     * model view. Optional (setter-injected, null in legacy unit tests). When the range-model flag
+     * is OFF this is never consulted; when ON, {@link #getContextMessages(String)} derives the model
+     * view from active summaries + uncovered rows instead of the boundary slice.
+     */
+    private SessionSummaryRepository sessionSummaryRepository;
+
+    /**
+     * COMPACT-IDEMPOTENCY-BOUNDARY-FIX storage redesign P2a: routes {@link #getContextMessages}
+     * between the legacy boundary-slice read (flag OFF) and the derived range-model read (flag ON).
+     * Mirrors {@code CompactionService}'s {@code skillforge.compact.range-model.enabled} so the read
+     * and write paths flip together. Default false → no behavior change until explicitly enabled.
+     */
+    @Value("${skillforge.compact.range-model.enabled:false}")
+    private boolean rangeModelEnabled;
 
     public SessionService(SessionRepository sessionRepository,
                           SessionMessageRepository sessionMessageRepository,
@@ -127,6 +155,48 @@ public class SessionService {
     @Autowired(required = false)
     public void setReminderBuilder(ReminderBuilder reminderBuilder) {
         this.reminderBuilder = reminderBuilder;
+    }
+
+    /** P2a: optional setter for the range-summary store backing the derived model view. */
+    @Autowired(required = false)
+    public void setSessionSummaryRepository(SessionSummaryRepository sessionSummaryRepository) {
+        this.sessionSummaryRepository = sessionSummaryRepository;
+    }
+
+    /** Test seam: toggle the range-model derived read without a Spring context. */
+    public void setRangeModelEnabled(boolean rangeModelEnabled) {
+        this.rangeModelEnabled = rangeModelEnabled;
+    }
+
+    /**
+     * COMPACT-IDEMPOTENCY-BOUNDARY-FIX storage redesign P2b (B1): supplies the per-session
+     * compaction stripe lock so {@link #updateSessionMessages} can make its read-derive-compare-write
+     * body mutually exclusive with a concurrent compaction Phase 3 (insert summary + supersede +
+     * mark). {@code CompactionService} implements this. Setter-injected (optional) to avoid a
+     * constructor cycle (CompactionService already constructor-depends on SessionService); null in
+     * legacy unit tests → no extra lock (flag-OFF behavior unchanged).
+     */
+    public interface CompactionLockProvider {
+        Object lockFor(String sessionId);
+    }
+
+    /**
+     * P2b B1: the compaction lock provider. When wired AND the range-model flag is ON,
+     * {@link #updateSessionMessages} acquires this lock OUTSIDE its append lock so reconciliation and
+     * compaction Phase 3 cannot interleave (the active summary can no longer change mid-reconcile).
+     */
+    private CompactionLockProvider compactionLockProvider;
+
+    /**
+     * Wired manually by {@code CompactionService}'s constructor ({@code setCompactionLockProvider(this)})
+     * rather than via {@code @Autowired}: SessionService is constructor-injected INTO CompactionService,
+     * so an autowired setter back-edge here makes Spring see a sessionService ↔ compactionService bean
+     * cycle and refuse to start. The manual call keeps the optional semantics (null when no
+     * CompactionService bean exists — {@code updateSessionMessages} null-checks before use) without the
+     * cycle. Do NOT re-add {@code @Autowired} here.
+     */
+    public void setCompactionLockProvider(CompactionLockProvider compactionLockProvider) {
+        this.compactionLockProvider = compactionLockProvider;
     }
 
     private Map<String, Object> toListProjection(SessionEntity s) {
@@ -302,22 +372,29 @@ public class SessionService {
      */
     public record StoredMessage(long seqNo, String msgType, String messageType, String controlId,
                                 Instant answeredAt, Map<String, Object> metadata, Message message,
-                                String traceId, Instant createdAt) {
-        /** Backward-compat — defaults createdAt to null. */
+                                String traceId, Instant createdAt, Long compactedBySummaryId) {
+        /** Backward-compat — defaults compactedBySummaryId to null. */
+        public StoredMessage(long seqNo, String msgType, String messageType, String controlId,
+                             Instant answeredAt, Map<String, Object> metadata, Message message,
+                             String traceId, Instant createdAt) {
+            this(seqNo, msgType, messageType, controlId, answeredAt, metadata, message, traceId, createdAt, null);
+        }
+
+        /** Backward-compat — defaults createdAt + compactedBySummaryId to null. */
         public StoredMessage(long seqNo, String msgType, String messageType, String controlId,
                              Instant answeredAt, Map<String, Object> metadata, Message message,
                              String traceId) {
-            this(seqNo, msgType, messageType, controlId, answeredAt, metadata, message, traceId, null);
+            this(seqNo, msgType, messageType, controlId, answeredAt, metadata, message, traceId, null, null);
         }
 
-        /** Backward-compat — defaults traceId + createdAt to null. */
+        /** Backward-compat — defaults traceId + createdAt + compactedBySummaryId to null. */
         public StoredMessage(long seqNo, String msgType, String messageType, String controlId,
                              Instant answeredAt, Map<String, Object> metadata, Message message) {
-            this(seqNo, msgType, messageType, controlId, answeredAt, metadata, message, null, null);
+            this(seqNo, msgType, messageType, controlId, answeredAt, metadata, message, null, null, null);
         }
 
         public StoredMessage(long seqNo, String msgType, Map<String, Object> metadata, Message message) {
-            this(seqNo, msgType, MESSAGE_TYPE_NORMAL, null, null, metadata, message, null, null);
+            this(seqNo, msgType, MESSAGE_TYPE_NORMAL, null, null, metadata, message, null, null, null);
         }
     }
 
@@ -463,6 +540,31 @@ public class SessionService {
      */
     @Transactional(readOnly = true)
     public List<Message> getContextMessages(String id) {
+        // P2b-2a (§5(A) dual-read, §10 risk ③): derive the model view ONLY for sessions that were
+        // actually compacted under the range model — i.e. that have at least one ACTIVE range
+        // summary row. This is the migration-safety gate: flipping the flag ON globally must NOT
+        // re-derive EXISTING old-model sessions (whose compacted view is physical
+        // COMPACT_BOUNDARY + SUMMARY rows, with NO t_session_summary rows). For those,
+        // getContextMessagesWithProvenance would find no active summaries and emit the ENTIRE
+        // history (incl. old boundary/summary rows + re-appended young-gen) → context blow-up.
+        // Old-model boundary sessions AND fresh/never-compacted sessions fall through to the
+        // legacy boundary-slice path below (which correctly post-boundary-slices the former and
+        // returns all rows for the latter). The existence check is ONE indexed boolean query on
+        // the partial index idx_ss_session_active — acceptable on this per-turn hot path.
+        //
+        // WHY a genuine new-model session can never be wrongly routed to the legacy slice:
+        //   - Q3 rolling merge (CompactionService.persistCompactResult) saves the NEW summary
+        //     FIRST then supersedes priors in the SAME transaction, so a committed full-compact
+        //     leaves the session with exactly one active summary — no production path lands a
+        //     compacted new-model session at zero active summaries.
+        //   - The restore/checkpoint prune (deleteBySessionIdAndEndSeqGreaterThan) can drop
+        //     summaries, but it REWRITES the message rows back to the checkpoint state in the
+        //     same operation, so afterwards the legacy slice returns the restored row set
+        //     (correct) rather than a blown-up full history.
+        if (rangeModelEnabled && sessionSummaryRepository != null
+                && sessionSummaryRepository.existsBySessionIdAndSupersededByIsNull(id)) {
+            return getContextMessagesWithProvenance(id).messages();
+        }
         List<StoredMessage> records = getFullHistoryRecords(id);
         int lastBoundary = -1;
         for (int i = records.size() - 1; i >= 0; i--) {
@@ -481,6 +583,171 @@ public class SessionService {
             out.add(record.message());
         }
         return applyArchiveSafely(id, out);
+    }
+
+    /**
+     * COMPACT-IDEMPOTENCY-BOUNDARY-FIX storage redesign P2a (§2.4 derive + §3 provenance): the
+     * derived model view that feeds the LLM, paired with a provenance array so P2b's reconciliation
+     * can tell injected summaries (never persisted) from real rows (already persisted) and only
+     * write back genuinely new turns.
+     *
+     * <p>Construction (single linear pass over the full real history ASC by seq):
+     * <ul>
+     *   <li>A maximal run of consecutive rows whose {@code compacted_by_summary_id} == the same
+     *       <b>active</b> summary S is collapsed into ONE {@code Message.user(S.summaryText)} with
+     *       provenance {@link #PROVENANCE_SUMMARY} ({@code -1}). The whole run is skipped.</li>
+     *   <li>An uncovered row (no marker, or marker pointing at a non-active / superseded summary)
+     *       is emitted as-is with provenance = its real {@code seq_no}. SYSTEM_EVENT rows are
+     *       skipped (mirrors the legacy slice).</li>
+     * </ul>
+     *
+     * <p>Per §2.6 Q3 (rolling merge) there is normally exactly ONE active summary covering
+     * {@code [0, endSeq]}, so the typical result is {@code [summary] + uncovered tail}. The general
+     * multiple-adjacent-active-summary case is handled by run-detection keyed on the marker id.
+     *
+     * <p><b>Superseded-marker defense</b>: if a row's {@code compacted_by_summary_id} points at a
+     * summary that is NOT in the active set (it was superseded but the marker was not re-pointed —
+     * the P1 {@code markCompactedBySummary} only stamps unmarked rows, so after a Q3 merge the
+     * earliest rows still carry the OLD, now-superseded summary id), the row is treated as
+     * UNCOVERED and emitted as a real row. This is the safe choice: emitting the real row can never
+     * drop information (the rolling active summary already re-summarizes that span, so the LLM sees
+     * the content twice at worst — verbose, not lossy), whereas mapping it to the superseding
+     * summary would risk collapsing a row that the active summary's range might not actually cover.
+     * INV-1 still holds: P1 ranges end pair-complete (findSafeBoundary), and emitting extra real
+     * rows verbatim cannot split a tool_use↔tool_result pair.
+     *
+     * <p>INV-4: the injected summary is a transient {@code Message.user(...)} built here, never a
+     * persisted message row; real rows are emitted by object identity from {@code StoredMessage}.
+     */
+    @Transactional(readOnly = true)
+    public ContextWithProvenance getContextMessagesWithProvenance(String id) {
+        List<StoredMessage> records = getFullHistoryRecords(id);
+
+        // Active summary ids (superseded_by IS NULL) → summaryText, for run collapsing. Empty when
+        // the session never compacted under the range model (all rows uncovered).
+        Map<Long, String> activeSummaryText = new HashMap<>();
+        if (sessionSummaryRepository != null) {
+            List<SessionSummaryEntity> active = sessionSummaryRepository
+                    .findBySessionIdAndSupersededByIsNullOrderByStartSeqAsc(id);
+            for (SessionSummaryEntity s : active) {
+                activeSummaryText.put(s.getId(), s.getSummaryText());
+            }
+        }
+
+        List<Message> out = new ArrayList<>();
+        List<Long> provenance = new ArrayList<>();
+        int i = 0;
+        while (i < records.size()) {
+            StoredMessage record = records.get(i);
+            if (MSG_TYPE_SYSTEM_EVENT.equals(record.msgType())) {
+                i++;
+                continue;
+            }
+            Long marker = record.compactedBySummaryId();
+            String summaryText = (marker != null) ? activeSummaryText.get(marker) : null;
+            if (summaryText != null) {
+                // Start of a covered run for active summary `marker`. Consume the maximal run of
+                // consecutive rows carrying the SAME active marker (SYSTEM_EVENT rows inside the run
+                // are skipped without breaking it — they are invisible to the model view anyway).
+                emitSummary(out, provenance, summaryText);
+                while (i < records.size()) {
+                    StoredMessage r = records.get(i);
+                    if (MSG_TYPE_SYSTEM_EVENT.equals(r.msgType())) {
+                        i++;
+                        continue;
+                    }
+                    if (marker.equals(r.compactedBySummaryId())) {
+                        i++;
+                    } else {
+                        break;
+                    }
+                }
+                continue;
+            }
+            // Uncovered row (no marker, or marker pointing at a superseded / unknown summary).
+            out.add(record.message());
+            provenance.add(record.seqNo());
+            i++;
+        }
+        List<Message> archived = applyArchiveSafely(id, out);
+        // applyArchiveSafely is documented to substitute tool_result content IN PLACE and never change
+        // the list size, so provenance stays index-aligned with the returned messages. Defensive
+        // guard (P2a nit): if a future archive implementation ever returns a differently-sized list,
+        // the provenance array would silently misalign — detect and fall back to the un-archived
+        // (size-correct) list rather than hand out a misaligned provenance pairing.
+        if (archived == null || archived.size() != out.size()) {
+            log.warn("getContextMessagesWithProvenance: applyArchiveSafely changed list size ({}→{}); "
+                    + "falling back to un-archived messages to keep provenance aligned. sessionId={}",
+                    out.size(), archived == null ? "null" : archived.size(), id);
+            return new ContextWithProvenance(out, toLongArray(provenance));
+        }
+        return new ContextWithProvenance(archived, toLongArray(provenance));
+    }
+
+    private void emitSummary(List<Message> out, List<Long> provenance, String summaryText) {
+        out.add(Message.user(summaryText));
+        provenance.add(PROVENANCE_SUMMARY);
+    }
+
+    private long[] toLongArray(List<Long> values) {
+        long[] arr = new long[values.size()];
+        for (int i = 0; i < values.size(); i++) {
+            arr[i] = values.get(i);
+        }
+        return arr;
+    }
+
+    /**
+     * P2a (§3): derived model-view messages paired with a per-message provenance array.
+     * {@code provenance[i]} is {@link #PROVENANCE_SUMMARY} for an injected summary, otherwise the
+     * real {@code seq_no} of the row that produced {@code messages.get(i)}. Always index-aligned
+     * with {@code messages}.
+     */
+    public record ContextWithProvenance(List<Message> messages, long[] provenance) {}
+
+    /**
+     * COMPACT-IDEMPOTENCY-BOUNDARY-FIX storage redesign P2b (§7, B2): recompute the denormalized
+     * {@code compacted_by_summary_id} markers from the active range summaries.
+     *
+     * <p><b>Why</b>: a marker is a denormalization of "this row is covered by the active summary
+     * whose [start_seq,end_seq] contains my seq_no". Any path that re-writes message rows
+     * (DELETE+INSERT) — the divergence-guard rewrite in {@link #updateSessionMessages}, and
+     * {@code CompactionService.restoreFromCheckpoint} / {@code createBranchFromCheckpoint} — re-inserts
+     * rows via {@code AppendMessage} which carries NO {@code compactedBySummaryId} (the 7-arg
+     * constructor only preserves business/identity columns). Without recompute the markers would be
+     * wiped (B2): the derived model view would stop collapsing those rows AND a future summary could
+     * re-cover them → double-show / model-view corruption.
+     *
+     * <p><b>Algorithm</b>: clear all markers, then for each ACTIVE summary (superseded_by IS NULL)
+     * re-stamp its covered seq range via {@link SessionMessageRepository#markCompactedBySummary}
+     * (which only stamps still-unmarked rows — after the clear all rows are unmarked, so the first
+     * active summary covering a seq wins; ranges of distinct active summaries are non-overlapping by
+     * construction — P1 ranges are pair-complete and the Q3 rolling merge supersedes prior summaries).
+     *
+     * <p><b>No-op safety</b>: when the range-model flag is OFF, or the summary store is not wired
+     * (legacy unit tests), or the session has no active summaries, this method is a cheap no-op — it
+     * never touches markers a legacy session never had. Callers may invoke it unconditionally on a
+     * rewrite path; it self-guards.
+     *
+     * <p>This method assumes the caller already holds the session append lock + an active transaction
+     * (it is invoked from inside the rewrite paths, which run under {@code lockForAppend} + a REQUIRED
+     * tx). It does not open its own lock/tx.
+     */
+    void recomputeCompactedMarkers(String sessionId) {
+        if (!rangeModelEnabled || sessionSummaryRepository == null
+                || sessionMessageRepository == null
+                || storeProperties == null || !storeProperties.isRowWriteEnabled()) {
+            return;
+        }
+        List<SessionSummaryEntity> active = sessionSummaryRepository
+                .findBySessionIdAndSupersededByIsNullOrderByStartSeqAsc(sessionId);
+        // Clear unconditionally so a rewrite that drops the last summary (e.g. restore before any
+        // summary) also drops stale markers; restamp only when active summaries remain.
+        sessionMessageRepository.clearCompactedMarkers(sessionId);
+        for (SessionSummaryEntity s : active) {
+            sessionMessageRepository.markCompactedBySummary(
+                    sessionId, s.getStartSeq(), s.getEndSeq(), s.getId());
+        }
     }
 
     public long appendInteractiveControlMessage(String id, String messageType, String controlId,
@@ -521,6 +788,18 @@ public class SessionService {
         return sessionMessageRepository
                 .findBySessionIdAndMessageTypeAndControlId(sessionId, messageType, controlId)
                 .orElseThrow(() -> new IllegalArgumentException("control not found"));
+    }
+
+    /**
+     * Non-throwing variant of {@link #getControlMessage}: returns empty instead of
+     * raising when no control row matches. Used by the unified confirmation
+     * endpoint (ACP-EXTERNAL-AGENT P1c-2) to discriminate the ENGINE path (control
+     * row present) from the ACP/cc path (no control row, only a registry latch).
+     */
+    @Transactional(readOnly = true)
+    public java.util.Optional<SessionMessageEntity> findControlMessage(String sessionId, String messageType, String controlId) {
+        return sessionMessageRepository
+                .findBySessionIdAndMessageTypeAndControlId(sessionId, messageType, controlId);
     }
 
     @Transactional(readOnly = true)
@@ -691,6 +970,31 @@ public class SessionService {
      */
     public void updateSessionMessages(String id, List<Message> messages,
                                        long inputTokens, long outputTokens, String traceId) {
+        // P2b B1: under the range model, the post-loop reconciliation (read active summary → derive →
+        // compare → write) must be mutually exclusive with a concurrent compaction Phase 3 (insert
+        // summary + supersede + mark covered rows). Otherwise the active summary can change BETWEEN
+        // getContextMessages's two derived reads vs the engine view → prefix breaks → the divergence
+        // guard rewrites the injected summary as a NORMAL row (INV-4 leak). We acquire the SAME stripe
+        // lock compaction uses, OUTSIDE the append lock.
+        //
+        // Lock ORDERING (deadlock-safety): compaction always takes lockFor (compaction stripe) FIRST,
+        // then — via appendMessages/rewriteMessages — lockForAppend (append stripe). We mirror that
+        // exact order here (compaction lock → append lock), so no opposing-order acquisition exists.
+        // The two are DIFFERENT monitors (separate stripe arrays), so this nesting is required; both
+        // are plain Object monitors (reentrant), so a same-thread re-entry is safe.
+        Object compactionLock = (rangeModelEnabled && compactionLockProvider != null)
+                ? compactionLockProvider.lockFor(id) : null;
+        if (compactionLock != null) {
+            synchronized (compactionLock) {
+                updateSessionMessagesUnderCompactionLock(id, messages, inputTokens, outputTokens, traceId);
+            }
+        } else {
+            updateSessionMessagesUnderCompactionLock(id, messages, inputTokens, outputTokens, traceId);
+        }
+    }
+
+    private void updateSessionMessagesUnderCompactionLock(String id, List<Message> messages,
+                                                          long inputTokens, long outputTokens, String traceId) {
         synchronized (lockForAppend(id)) {
             requiredTxTemplate.execute(status -> {
                 List<Message> persistedContext = getContextMessages(id);
@@ -712,11 +1016,32 @@ public class SessionService {
                 // the same shape-divergence pattern from any future code path. Compact paths
                 // (light/full via CompactionService callback) sync DB BEFORE this is called,
                 // so they remain prefix-matching and don't trip the guard.
+                //
+                // P2b B1: under the range model the "existing reconciliation suffices" property is
+                // CONDITIONAL on this method holding the compaction stripe lock (acquired in the
+                // public updateSessionMessages wrapper above) — without it, a concurrent /compact
+                // Phase 3 could change the active summary between getContextMessages's reads and the
+                // engine view, breaking the prefix and tripping this guard. STEP 3's range-model
+                // branch below is the summary-safe backstop if that ever happens anyway.
                 // prefixLen<size already implies persistedContext non-empty
                 // (prefixLen>=0 cannot be < 0).
                 boolean prefixMismatch = prefixLen < persistedContext.size()
                         && messages != null && !messages.isEmpty();
-                if (prefixMismatch) {
+                if (prefixMismatch && rangeModelEnabled && sessionSummaryRepository != null) {
+                    // ===== P2b B1 STEP 3 (belt-and-suspenders) =====
+                    // Under the range model, `messages` (the engine view) is the DERIVED view: a
+                    // covered run is represented by a single injected Message.user(summaryText) with
+                    // provenance -1 — it is NOT a real row and must NEVER be persisted as a NORMAL
+                    // row (INV-4). The B1 lock should prevent a mid-reconcile summary change, but if
+                    // a mismatch still surfaces here, the legacy rewrite below would write the
+                    // injected summary as a NORMAL row → summary leak. So under the flag we take a
+                    // summary-safe rewrite: rebuild the row set as [existing REAL rows verbatim] +
+                    // [engine tail with injected summaries filtered out]. Real rows already in the DB
+                    // keep their identity/markers; only genuinely-new real turns are appended.
+                    log.warn("updateSessionMessages range-model prefix mismatch (B1 backstop), summary-safe rewrite: sessionId={}, divergeAt={}, persistedSize={}, engineSize={}",
+                            id, prefixLen, persistedContext.size(), messages.size());
+                    rangeModelSummarySafeReconcile(id, messages, prefixLen, traceId);
+                } else if (prefixMismatch) {
                     if (prefixLen > 0) {
                         // Mid-prefix divergence — strong indicator of a shape/content
                         // mismatch bug between ChatService persistence and engine output.
@@ -798,6 +1123,74 @@ public class SessionService {
                 return null;
             });
         }
+    }
+
+    /**
+     * COMPACT-IDEMPOTENCY-BOUNDARY-FIX storage redesign P2b (B1 STEP 3): summary-safe reconciliation
+     * for the range model when the divergence guard would otherwise fire. Guarantees INV-4 (no
+     * injected summary ever lands as a NORMAL message row) even if the B1 lock reasoning has a hole.
+     *
+     * <p>Real history under the range model is append-only — existing real rows are correct and must
+     * NOT be deleted/rewritten. The engine view {@code messages} is the DERIVED view: a covered run
+     * shows up as one injected {@code Message.user(activeSummaryText)} (provenance -1). We append ONLY
+     * the engine-view tail BEYOND the matched prefix ({@code prefixLen}, derived-view index space),
+     * minus any injected summary in that tail — never touching existing rows. This preserves the
+     * legacy "append the divergent delta" behavior while structurally refusing to persist a summary
+     * string as a NORMAL row.
+     *
+     * <p>This is a conservative backstop: it never deletes a real row and never writes a summary row.
+     * In the (lock-prevented) mismatch case the appended delta may, in the worst case, duplicate a
+     * real turn that was already stored — strictly preferable to leaking a summary into the
+     * user-visible history.
+     *
+     * <p><b>Accepted limitation (content-string match)</b>: {@link #isInjectedSummary} identifies an
+     * injected summary by exact text match against the active summary texts. A real USER turn whose
+     * text happens to equal an active summary's text would be filtered (silently dropped) here. This
+     * needs BOTH the B1-lock-miss race AND a USER-role text collision with a (typically long,
+     * LLM-generated) summary — double-rare. When a filter happens we {@code log.warn} so a real-message
+     * drop is observable rather than silent. The full fix is the §3 provenance array (tag each engine
+     * message with its origin so no content heuristic is needed); not done at P2b-1.
+     */
+    private void rangeModelSummarySafeReconcile(String id, List<Message> messages, int prefixLen,
+                                                String traceId) {
+        java.util.Set<String> activeSummaryTexts = new java.util.HashSet<>();
+        List<SessionSummaryEntity> active = sessionSummaryRepository
+                .findBySessionIdAndSupersededByIsNullOrderByStartSeqAsc(id);
+        for (SessionSummaryEntity s : active) {
+            if (s.getSummaryText() != null) {
+                activeSummaryTexts.add(s.getSummaryText());
+            }
+        }
+        int from = Math.max(0, prefixLen);
+        if (messages == null || from >= messages.size()) {
+            return; // nothing beyond the prefix to append
+        }
+        List<AppendMessage> wraps = new ArrayList<>(messages.size() - from);
+        for (int i = from; i < messages.size(); i++) {
+            Message m = messages.get(i);
+            if (isInjectedSummary(m, activeSummaryTexts)) {
+                // INV-4: never persist an injected summary as a NORMAL row. Log the filter so a
+                // possible false-positive (a real user turn whose text collides with a summary) is
+                // observable, not a silent drop. See "Accepted limitation" in the javadoc above.
+                log.warn("rangeModelSummarySafeReconcile: filtered a USER message matching an active "
+                        + "summary text (possible false-positive if a real user turn); sessionId={}", id);
+                continue;
+            }
+            wraps.add(new AppendMessage(m, MSG_TYPE_NORMAL, MESSAGE_TYPE_NORMAL,
+                    null, null, Collections.emptyMap(), traceId));
+        }
+        if (!wraps.isEmpty()) {
+            appendRowsOnce(id, wraps);
+        }
+    }
+
+    /** True when {@code m} is a String-content user message whose text equals an active summary. */
+    private boolean isInjectedSummary(Message m, java.util.Set<String> activeSummaryTexts) {
+        if (m == null || m.getRole() != Message.Role.USER || activeSummaryTexts.isEmpty()) {
+            return false;
+        }
+        Object content = m.getContent();
+        return content instanceof String s && activeSummaryTexts.contains(s);
     }
 
     public SessionEntity saveSession(SessionEntity session) {
@@ -1044,6 +1437,23 @@ public class SessionService {
                     Map<Long, String> oldTraceIds = snapshotTraceIds(id);
                     patched = patchTraceIds(messages, oldTraceIds);
                     rewriteRowsInNewTransaction(id, patched);
+                    // P2b B2: DELETE+INSERT drops compacted_by_summary_id on every re-inserted row
+                    // (AppendMessage carries no marker). Re-derive markers from the active summary
+                    // ranges so the derived model view keeps collapsing covered rows. No-op when the
+                    // range-model flag is OFF / no summaries exist.
+                    //
+                    // NOTE: restoreFromCheckpoint / createBranchFromCheckpoint must adjust their
+                    // summaries (prune post-checkpoint summaries on restore; copy/remap on branch)
+                    // BEFORE the markers are correct. They run their summary-fixup + an explicit
+                    // recomputeCompactedMarkers INSIDE the same transaction as this rewrite (the
+                    // checkpoint flow wraps rewriteMessages in runInTransaction), so the recompute
+                    // here uses the active-summary set as it stands at rewrite time. For restore the
+                    // post-checkpoint summary prune happens after rewrite in the same tx, so
+                    // CompactionService calls recomputeCompactedMarkers again post-prune; the extra
+                    // call here is a harmless (idempotent) first pass. For branch the summaries are
+                    // copied post-rewrite, so this first pass is a no-op (no branch summaries yet)
+                    // and CompactionService's post-copy recompute does the real work.
+                    recomputeCompactedMarkers(id);
                 }
                 SessionEntity session = getSession(id);
                 if (patched == null || patched.isEmpty()) {
@@ -1200,15 +1610,27 @@ public class SessionService {
     }
 
     /**
-     * True when a session is active and idle/waiting — i.e. safe to enqueue a new
-     * channel turn. Returns false for archived sessions, running sessions, or
-     * unknown ids.
+     * True when a session is the live channel session for its conversation — i.e. an inbound
+     * channel message should be reused into it rather than forking a new session. Active means
+     * status=active AND runtime is null/idle/running/waiting_user. {@code running} counts: a busy
+     * session enqueues the message (ChatService.chatAsync) instead of forking. Returns false for
+     * archived/closed sessions, {@code error} runtime (fork a fresh session), or unknown ids.
      */
     public boolean isChannelSessionActive(String sessionId) {
         return sessionRepository.findById(sessionId)
                 .map(s -> "active".equals(s.getStatus())
                         && (s.getRuntimeStatus() == null
                             || "idle".equals(s.getRuntimeStatus())
+                            // A running session is STILL the live channel session for its
+                            // conversation: an inbound message must be reused into it (ChatService
+                            // .chatAsync enqueues it via enqueueUserMessage, or — if the loop just
+                            // finished and the in-memory LoopContext is gone — falls through to a
+                            // fresh loop on the SAME session). Excluding "running" here made the
+                            // resolver close the conversation + spawn a NEW session whenever a
+                            // message arrived mid-run, which ALSO orphaned the original session's
+                            // async channel delivery ("频道断了，发送失败"). The only caller is
+                            // ChannelConversationResolver.resolveSession.
+                            || "running".equals(s.getRuntimeStatus())
                             || "waiting_user".equals(s.getRuntimeStatus())))
                 .orElse(false);
     }
@@ -1263,7 +1685,8 @@ public class SessionService {
                     metadata,
                     message,
                     e.getTraceId(),
-                    e.getCreatedAt()));
+                    e.getCreatedAt(),
+                    e.getCompactedBySummaryId()));
         }
         return out;
     }

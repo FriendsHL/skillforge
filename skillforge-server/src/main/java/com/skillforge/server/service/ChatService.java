@@ -10,6 +10,7 @@ import com.skillforge.core.engine.InteractiveControlRequest;
 import com.skillforge.core.engine.LoopContext;
 import com.skillforge.core.engine.LoopResult;
 import com.skillforge.core.engine.confirm.Decision;
+import com.skillforge.core.engine.confirm.PendingConfirmation;
 import com.skillforge.core.engine.confirm.PendingConfirmationRegistry;
 import com.skillforge.core.engine.confirm.RootSessionLookup;
 import com.skillforge.core.engine.confirm.SessionConfirmCache;
@@ -497,6 +498,30 @@ public class ChatService {
         return false;
     }
 
+    /**
+     * Resolve the per-session tool allowlist from the agent's {@code tool_ids}.
+     *
+     * <p>Returns {@code null} when no allowlist is configured (empty/absent → all
+     * registered tools allowed, unchanged behavior). When an allowlist IS set,
+     * members of a collab run additionally get {@code TeamSend} + {@code TeamList}
+     * auto-granted, so subagents can always message each other (kin-mesh) and
+     * discover teammates regardless of the agent's allowlist. Both team tools are
+     * no-ops outside a collab run and carry their own kin-adjacency / leader-only
+     * guards, so the grant is safe. Name-consistent with the hardcoded tool names
+     * used elsewhere in this method (e.g. the depth-aware exclude set).
+     */
+    static Set<String> resolveAllowedToolNames(List<String> toolIds, String collabRunId) {
+        if (toolIds == null || toolIds.isEmpty()) {
+            return null;
+        }
+        Set<String> allowed = new HashSet<>(toolIds);
+        if (collabRunId != null) {
+            allowed.add("TeamSend");
+            allowed.add("TeamList");
+        }
+        return allowed;
+    }
+
     private Message withAttachmentRefs(String sessionId, Long userId, Message userMsg, List<String> attachmentIds) {
         if (attachmentIds == null || attachmentIds.isEmpty()) {
             return userMsg;
@@ -738,13 +763,19 @@ public class ChatService {
                 }
             }
 
-            // Apply allowedToolNames from agent config (tool_ids)
+            // Apply allowedToolNames from agent config (tool_ids). Collab members also get
+            // TeamSend/TeamList auto-granted (see resolveAllowedToolNames) so subagents can
+            // always message + discover each other regardless of the agent's allowlist.
             Object toolIdsObj = agentDef.getConfig().get("tool_ids");
-            if (toolIdsObj instanceof List && !((List<?>) toolIdsObj).isEmpty()) {
+            if (toolIdsObj instanceof List) {
                 @SuppressWarnings("unchecked")
                 List<String> toolIdList = (List<String>) toolIdsObj;
-                preCtx.setAllowedToolNames(new HashSet<>(toolIdList));
-                log.info("Tool filtering: only allowing {} tools for session={}", toolIdList.size(), sessionId);
+                Set<String> allowedTools = resolveAllowedToolNames(toolIdList, collabRunId);
+                if (allowedTools != null) {
+                    preCtx.setAllowedToolNames(allowedTools);
+                    log.info("Tool filtering: allowing {} tools for session={}{}", allowedTools.size(), sessionId,
+                            collabRunId != null ? " (+TeamSend/TeamList for collab member)" : "");
+                }
             }
 
             // P11 MCP-CLIENT INV-4: per-agent enable filter for MCP-sourced tools.
@@ -1122,9 +1153,42 @@ public class ChatService {
         }
     }
 
+    /**
+     * Unified confirmation answer path (ACP-EXTERNAL-AGENT P1c-2, Seam 2).
+     *
+     * <p>One door, discriminated internally by whether a persisted CONTROL row
+     * exists for {@code (sessionId, CONFIRMATION, confirmationId)}:
+     * <ul>
+     *   <li><b>control row present → ENGINE path</b> (install-confirm / ask_user):
+     *       unchanged behavior — markControlAnswered + registry.complete +
+     *       {@code completeConfirmedTool} (executes the tool) + resume the engine
+     *       loop.</li>
+     *   <li><b>no control row → ACP/cc path</b>: the ACP run sub-session is a RECORD
+     *       (not engine-driven). Verify the registry has a pending confirmation for
+     *       {@code confirmationId} AND it is bound to this {@code sessionId}
+     *       (P1b Gate-2 binding), then {@code registry.complete} only — the
+     *       {@code AcpPermissionBridge} wait-thread wakes and responds to cc. NO
+     *       {@code completeConfirmedTool} / engine resume.</li>
+     *   <li><b>neither → unknown confirmation</b>: throw
+     *       {@link IllegalArgumentException} (the controller maps it to 404/410).</li>
+     * </ul>
+     *
+     * <p>The session-ownership gate ({@code requireOwnedSession}) is enforced by the
+     * caller (ChatController) for BOTH paths before this method runs — no cross-user
+     * approval regression (P1b BLOCKER stays closed). This method additionally
+     * enforces the per-confirmation session-binding gate for the ACP path.
+     */
     public void answerConfirmation(String sessionId, String confirmationId, Decision decision, Long userId) {
-        SessionMessageEntity control = sessionService.getControlMessage(
+        java.util.Optional<SessionMessageEntity> controlOpt = sessionService.findControlMessage(
                 sessionId, SessionService.MESSAGE_TYPE_CONFIRMATION, confirmationId);
+        if (controlOpt.isEmpty()) {
+            // No persisted control row → ACP/cc confirmation (or genuinely unknown).
+            answerAcpConfirmation(sessionId, confirmationId, decision, userId);
+            return;
+        }
+        SessionMessageEntity control = controlOpt.get();
+        log.info("Confirmation answered via ENGINE path: userId={} sessionId={} confirmationId={} decision={}",
+                userId, sessionId, confirmationId, decision);
         Map<String, Object> metadata = readMetadata(control);
         String toolUseId = stringValue(metadata.get("toolUseId"));
         String toolName = stringValue(metadata.get("toolName"));
@@ -1193,6 +1257,39 @@ public class ChatService {
             final String capturedRootTraceId = resumeRootTraceId;
             chatLoopExecutor.execute(() -> runLoop(sessionId, null, userId, agentEntity, history, resumeTraceId, capturedRootTraceId));
         }
+    }
+
+    /**
+     * ACP/cc confirmation answer (no persisted control row). Migrated from the
+     * now-removed {@code AcpRunController} confirmation endpoint (P1c-2): the run
+     * sub-session is a RECORD, so we only verify the per-confirmation binding gate
+     * and wake the {@link PendingConfirmationRegistry} latch — the
+     * {@code AcpPermissionBridge} wait-thread maps the decision back to cc. No
+     * engine resume / {@code completeConfirmedTool}.
+     *
+     * <p>Gate (BLOCKER-1b binding): the pending confirmation must exist AND be bound
+     * to THIS {@code sessionId}. Session ownership is enforced by the caller. A
+     * confirmationId that is unknown or bound to a different session →
+     * {@link IllegalArgumentException} (mapped to 404/410 by the controller) so a
+     * cross-session confirmation cannot be answered.
+     */
+    private void answerAcpConfirmation(String sessionId, String confirmationId, Decision decision, Long userId) {
+        PendingConfirmation pc = pendingConfirmationRegistry != null
+                ? pendingConfirmationRegistry.peek(confirmationId)
+                : null;
+        if (pc == null || !sessionId.equals(pc.sessionId())) {
+            // Neither a control row nor a session-bound registry pending → unknown.
+            throw new IllegalArgumentException("unknown confirmation");
+        }
+        // pc != null implies pendingConfirmationRegistry != null (peek above returned non-null),
+        // so the unguarded call below cannot NPE.
+        boolean woke = pendingConfirmationRegistry.complete(confirmationId, decision, null);
+        if (!woke) {
+            // Already completed / expired between peek and complete.
+            throw new IllegalArgumentException("confirmation has expired or does not exist");
+        }
+        log.info("Confirmation answered via ACP path: userId={} sessionId={} confirmationId={} decision={}",
+                userId, sessionId, confirmationId, decision);
     }
 
     private void persistPendingControl(String sessionId, InteractiveControlRequest control) {
@@ -1294,7 +1391,16 @@ public class ChatService {
         String reminderText;
         try {
             AgentDefinition agentDef = agentService.toAgentDefinition(agentEntity);
-            int contextWindowTokens = agentDef.getMaxContextTokens();
+            // The context-window denominator MUST match the window the engine gates compaction on,
+            // otherwise ContextUsageSource reports a wrong "Context X% used" and the model wraps up
+            // early thinking it is tight. Route through the canonical resolver (per-agent
+            // context_window_tokens → known-model map → default) — the SAME one
+            // CompactionService/AgentLoopEngine use. The legacy agentDef.getMaxContextTokens() read a
+            // different key (max_context_tokens) and defaulted to 100K, so the reminder divided by
+            // 100K instead of the real window (e.g. 400K) and systematically over-reported usage.
+            // getSession throws if absent; the enclosing try/catch then skips the reminder this turn.
+            int contextWindowTokens = compactionService.resolveContextWindowForSession(
+                    sessionService.getSession(sessionId));
             int requestMaxTokens = agentDef.getMaxTokens();
             String systemPrompt = agentDef.getSystemPrompt() != null ? agentDef.getSystemPrompt() : "";
             // Q2 approximation: ChatService cannot easily reconstruct the full engine-built

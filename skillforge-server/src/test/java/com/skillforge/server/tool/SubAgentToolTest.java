@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillforge.core.engine.CancellationRegistry;
 import com.skillforge.core.skill.SkillContext;
 import com.skillforge.core.skill.SkillResult;
+import com.skillforge.server.acp.AcpAgentRunner;
 import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.SessionEntity;
 import com.skillforge.server.service.AgentService;
@@ -40,6 +41,8 @@ class SubAgentToolTest {
     private CancellationRegistry cancellationRegistry;
     @Mock
     private AgentService agentService;
+    @Mock
+    private AcpAgentRunner acpAgentRunner;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -48,7 +51,7 @@ class SubAgentToolTest {
     @BeforeEach
     void setUp() {
         tool = new SubAgentTool(targetResolver, sessionService, chatService, registry,
-                cancellationRegistry, agentService, objectMapper);
+                cancellationRegistry, agentService, objectMapper, acpAgentRunner);
     }
 
     @Test
@@ -75,6 +78,67 @@ class SubAgentToolTest {
         // OBS-4 §2.1: SubAgentTool now uses 4-arg chatAsync(preserveActiveRoot=true) so
         // child inherits parent's active_root_trace_id (INV-4).
         verify(chatService).chatAsync("child", "review this", 10L, true);
+    }
+
+    @Test
+    void dispatch_acpRuntimeAgent_routesToAcpRunner_notChatAsync() {
+        // P1c-1: target with modelId "acp:claude-code" → branch to AcpAgentRunner.runAsSubAgent
+        // on the GIVEN child session, NOT ChatService.chatAsync. Everything before the
+        // branch (registerRun guard, createSubSession, attachChildSession) is reused.
+        SessionEntity parent = session("parent", 1L, null, 0);
+        AgentEntity ccAgent = agent(99L, "claude-code");
+        ccAgent.setModelId("acp:claude-code");
+        ccAgent.setOwnerId(null); // SYSTEM agent (seeded), public + dispatchable
+        SubAgentRegistry.SubAgentRun run = new SubAgentRegistry.SubAgentRun();
+        run.runId = "12345678-1234-1234-1234-123456789012";
+        SessionEntity child = session("child", 99L, "parent", 1);
+
+        when(sessionService.getSession("parent")).thenReturn(parent);
+        when(targetResolver.resolveVisibleTarget("parent", null, "claude-code")).thenReturn(ccAgent);
+        when(agentService.getAgent(99L)).thenReturn(ccAgent);
+        when(registry.registerRun(parent, 99L, "claude-code", "write hello.txt")).thenReturn(run);
+        when(sessionService.createSubSession(parent, 99L, run.runId)).thenReturn(child);
+
+        SkillResult result = tool.execute(Map.of(
+                "action", "dispatch",
+                "agentName", "claude-code",
+                "task", "write hello.txt"
+        ), new SkillContext(null, "parent", 10L));
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.getOutput()).contains("claude-code").contains("childSessionId: child");
+        // routed to cc on the GIVEN child session, with the parent's userId.
+        verify(acpAgentRunner).runAsSubAgent(child, "write hello.txt", 10L);
+        // engine path NOT taken for an acp: agent.
+        verify(chatService, never()).chatAsync(any(), any(), any(), any(Boolean.class));
+        // shared pre-branch wiring still happened.
+        verify(registry).registerRun(parent, 99L, "claude-code", "write hello.txt");
+        verify(registry).attachChildSession(run.runId, "child");
+    }
+
+    @Test
+    void dispatch_normalAgent_routesToChatAsync_notAcpRunner() {
+        // Inverse: a normal agent (null / non-acp modelId) keeps the engine path.
+        SessionEntity parent = session("parent", 1L, null, 0);
+        AgentEntity target = agent(2L, "Reviewer"); // no modelId → engine
+        SubAgentRegistry.SubAgentRun run = new SubAgentRegistry.SubAgentRun();
+        run.runId = "12345678-1234-1234-1234-123456789012";
+        SessionEntity child = session("child", 2L, "parent", 1);
+
+        when(sessionService.getSession("parent")).thenReturn(parent);
+        when(targetResolver.resolveVisibleTarget("parent", null, "Reviewer")).thenReturn(target);
+        when(registry.registerRun(parent, 2L, "Reviewer", "review this")).thenReturn(run);
+        when(sessionService.createSubSession(parent, 2L, run.runId)).thenReturn(child);
+
+        SkillResult result = tool.execute(Map.of(
+                "action", "dispatch",
+                "agentName", "Reviewer",
+                "task", "review this"
+        ), new SkillContext(null, "parent", 10L));
+
+        assertThat(result.isSuccess()).isTrue();
+        verify(chatService).chatAsync("child", "review this", 10L, true);
+        verify(acpAgentRunner, never()).runAsSubAgent(any(), any(), any());
     }
 
     @Test

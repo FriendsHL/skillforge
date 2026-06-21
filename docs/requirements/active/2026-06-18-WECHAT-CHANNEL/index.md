@@ -1,7 +1,7 @@
 # WECHAT-CHANNEL — 增加微信 channel
 
 > 创建：2026-06-18
-> 状态：**路线已拍 = B-native**（SkillForge 原生实现 iLink 协议，2026-06-18）；prd-ready / tech-design design-draft（协议逆向，实现期实跑验证）。**待 go 实现**。
+> 状态：**Slice 1 已交付**（2026-06-18，commit `f19cb70d`，LIVE QR 冒烟 PASS）——文本双向 + 扫码登录。**Slice 2/3 待做**：文件发送(CDN/AES type4) + FE 扫码 UX。**真端到端(手机扫码→真消息)user-gated 待用户验**。
 > 模式：Full（新 channel 平台适配器 + 外部输入 + 验签/AES 解密 + 密钥；安全敏感）
 > 来源：用户「当前 channel 只支持飞书，要加微信」+ 三轮调研（SkillForge channel 架构 / 微信各形态 API / openclaw 怎么做）。
 

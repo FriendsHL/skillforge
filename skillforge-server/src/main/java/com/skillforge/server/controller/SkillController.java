@@ -120,6 +120,11 @@ public class SkillController {
                 item.put("enabled", true);
                 item.put("system", true);
                 item.put("source", "system");
+                // Built-in skills are never curator-archived.
+                item.put("archived", false);
+                item.put("archivedAt", null);
+                item.put("archiveReason", null);
+                item.put("curatorExempt", false);
                 result.add(item);
             }
         }
@@ -171,6 +176,13 @@ public class SkillController {
         item.put("skillPath", entity.getSkillPath());
         item.put("shadowedBy", entity.getShadowedBy());
         item.put("lastScannedAt", entity.getLastScannedAt());
+        // SKILL-CURATOR human-in-loop — archival visibility for the FE (archived
+        // tag + restore button). `archived` is the derived boolean the FE keys off;
+        // archivedAt is the ISO instant (or null), archiveReason the machine tag.
+        item.put("archived", entity.getArchivedAt() != null);
+        item.put("archivedAt", entity.getArchivedAt());
+        item.put("archiveReason", entity.getArchiveReason());
+        item.put("curatorExempt", entity.isCuratorExempt());
         return item;
     }
 
@@ -277,6 +289,31 @@ public class SkillController {
     public ResponseEntity<SkillEntity> toggleSkill(@PathVariable Long id,
                                                     @RequestParam("enabled") boolean enabled) {
         return ResponseEntity.ok(skillService.toggleSkill(id, enabled));
+    }
+
+    /**
+     * SKILL-CURATOR human-in-loop — manually restore a curator-archived skill.
+     * Re-enables the row, clears archive bookkeeping, and marks it
+     * {@code curatorExempt=true} so the curator won't re-archive it. Returns the
+     * updated skill item in the same Map shape as {@link #listSkills} so the FE can
+     * patch its list in place. No-op (returns the row unchanged) when not archived.
+     *
+     * <p>{@code userId} mirrors the other write endpoints (upload / delete / toggle):
+     * the BE uses it for audit and ownership; the FE injects it from {@code useAuth()}.
+     */
+    @PostMapping("/{id}/restore")
+    public ResponseEntity<?> restoreSkill(@PathVariable Long id,
+                                          @RequestParam(value = "userId", required = false) Long userId) {
+        try {
+            SkillEntity restored = skillService.restoreArchivedSkill(id, userId);
+            return ResponseEntity.ok(toMapForUserRow(restored));
+        } catch (RuntimeException e) {
+            String msg = e.getMessage() != null ? e.getMessage() : "";
+            if (msg.contains("not found")) {
+                return ResponseEntity.notFound().build();
+            }
+            return ResponseEntity.badRequest().body(Map.of("error", msg));
+        }
     }
 
     /**

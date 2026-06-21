@@ -166,7 +166,125 @@ class CompactionServiceTest {
         messagesStore.put(id, msgs);
     }
 
+    /**
+     * Tool-heavy layout where the only safe full-compact boundary lands a tiny window in
+     * (a few leading user messages, then unbreakable tool_use↔tool_result pairs). Used to
+     * exercise the ② degenerate-split guard.
+     */
+    private void seedToolHeavyTinyBoundary(String id) {
+        List<Message> msgs = new ArrayList<>();
+        // 1 leading user message — the only place a safe boundary can land early.
+        msgs.add(Message.user("kickoff"));
+        // An early long-running tool_use (e.g. a SubAgent dispatch) whose tool_result only
+        // arrives at the very END. This OPEN pair spans the whole middle region, so every
+        // boundary between the dispatch and its result is unsafe (INV-1) — the only safe cut
+        // is at idx 1 (before the dispatch), forcing a degenerate tiny window (rightEdge=1).
+        Message dispatch = new Message();
+        dispatch.setRole(Message.Role.ASSISTANT);
+        dispatch.setContent(List.of(ContentBlock.toolUse("long-1", "SubAgent", Map.of("task", "big"))));
+        msgs.add(dispatch);
+        // Filler assistant text in the middle (cannot be cut because long-1 is still open).
+        for (int i = 0; i < 38; i++) {
+            Message a = new Message();
+            a.setRole(Message.Role.ASSISTANT);
+            a.setContent("interim step " + i);
+            msgs.add(a);
+        }
+        // The matching tool_result arrives last.
+        Message done = new Message();
+        done.setRole(Message.Role.USER);
+        done.setContent(List.of(ContentBlock.toolResult("long-1", "sub-agent result", false)));
+        msgs.add(done);
+        messagesStore.put(id, msgs);
+    }
+
     // ============= tests =============
+
+    // ---- COMPACT-IDEMPOTENCY-FIX ① : preemptive bypass + persisted-count gap space ----
+
+    @Test
+    @DisplayName("①: engine-preemptive over-window compact is NOT skipped even when gap is negative")
+    void preemptive_compact_bypasses_negative_gap_idempotency() {
+        // Simulate the live bug: a previously-compacted session with a high persisted high-water
+        // (lastCompactedAtMessageCount=560, messageCount=560 → persisted gap=0) while the engine's
+        // in-memory working set is small. The OLD code computed gap = inMemoryMessages.size() - 560
+        // → hugely negative → "skipped gap=-...". With the ① fix engine-preemptive bypasses the
+        // guard entirely and the compaction proceeds.
+        seedSession("sPRE-GAP", 560, 560, "running");
+        seedMessages("sPRE-GAP");
+        // Engine callback path with a small in-memory working set (30 messages from seedMessages).
+        var result = service.compactFull("sPRE-GAP", new ArrayList<>(messagesStore.get("sPRE-GAP")),
+                "engine-preemptive", "ratio 1.72 > 0.85 before LLM call");
+        assertThat(result.performed)
+                .as("engine-preemptive must never be suppressed by the idempotency guard")
+                .isTrue();
+    }
+
+    @Test
+    @DisplayName("①: engine-hard full callback also bypasses negative gap")
+    void engine_hard_compact_bypasses_negative_gap() {
+        seedSession("sHARD-GAP", 560, 560, "running");
+        seedMessages("sHARD-GAP");
+        var result = service.compactFull("sHARD-GAP", new ArrayList<>(messagesStore.get("sHARD-GAP")),
+                "engine-hard", "B1 ran but ratio still high");
+        assertThat(result.performed).isTrue();
+    }
+
+    @Test
+    @DisplayName("①: non-preemptive agent-tool full still gated by PERSISTED-count gap (not in-memory size)")
+    void agent_tool_full_uses_persisted_count_gap() {
+        // Persisted gap is 0 (messageCount == lastCompactedAtMessageCount) → must be skipped,
+        // regardless of in-memory working-set size. This proves the gap now uses the persisted
+        // count space on both sides (the old code would have used the in-memory size).
+        seedSession("sAT-GAP", 560, 560, "idle");
+        seedMessages("sAT-GAP");
+        var result = service.compactFull("sAT-GAP", new ArrayList<>(messagesStore.get("sAT-GAP")),
+                "agent-tool", "llm asked");
+        assertThat(result.performed)
+                .as("agent-tool full with persisted gap=0 must be idempotency-skipped")
+                .isFalse();
+    }
+
+    @Test
+    @DisplayName("①: agent-tool full proceeds when persisted gap is large enough")
+    void agent_tool_full_proceeds_with_large_persisted_gap() {
+        // messageCount 560, lastCompactedAt 100 → persisted gap 460 >= 5 → proceeds.
+        seedSession("sAT-OK", 560, 100, "idle");
+        seedMessages("sAT-OK");
+        var result = service.compactFull("sAT-OK", new ArrayList<>(messagesStore.get("sAT-OK")),
+                "agent-tool", "llm asked");
+        assertThat(result.performed).isTrue();
+    }
+
+    // ---- COMPACT-IDEMPOTENCY-FIX ② : degenerate-split guard ----
+
+    @Test
+    @DisplayName("②: degenerate tiny-window full compact is a true no-op (no rows appended, no event)")
+    @SuppressWarnings("unchecked")
+    void degenerate_window_fullCompact_is_true_noop() {
+        seedSession("sDEG", 41, 0, "idle");
+        seedToolHeavyTinyBoundary("sDEG");
+
+        CompactionEventEntity event = service.compact("sDEG", "full", "engine-hard", "tool heavy");
+        // True no-op: no event persisted.
+        assertThat(event).as("degenerate window must not persist a compaction event").isNull();
+        assertThat(eventStore).isEmpty();
+        // And nothing was appended (no boundary/summary/retained re-append → no row bloat).
+        verify(sessionService, org.mockito.Mockito.never()).appendMessages(eq("sDEG"), any());
+    }
+
+    @Test
+    @DisplayName("②: repeated degenerate compactions never append rows (no unbounded growth)")
+    void repeated_degenerate_compactions_do_not_grow_rows() {
+        seedSession("sDEG2", 41, 0, "idle");
+        seedToolHeavyTinyBoundary("sDEG2");
+        for (int i = 0; i < 5; i++) {
+            var r = service.compactFull("sDEG2", new ArrayList<>(messagesStore.get("sDEG2")),
+                    "engine-hard", "round " + i);
+            assertThat(r.performed).isFalse();
+        }
+        verify(sessionService, org.mockito.Mockito.never()).appendMessages(eq("sDEG2"), any());
+    }
 
     @Test
     void user_manual_bypasses_idempotency_guard() {
@@ -549,6 +667,39 @@ class CompactionServiceTest {
         int result = (int) m.invoke(service, session);
 
         assertThat(result).isEqualTo(50_000);  // YAML wins, not 200000 from model map
+    }
+
+    /**
+     * Step 0: an explicit per-agent {@code context_window_tokens} in the agent config JSON wins
+     * over BOTH the YAML provider config and the known-model map. Regression guard for the live bug
+     * where an agent's configured 400000 was silently ignored (method never read agent config) so
+     * glm-5.2 sessions ran at the flat 64K default. The only thing that should beat the override is
+     * nothing — it is the highest priority.
+     */
+    @Test
+    void resolveContextWindow_agent_config_override_wins() throws Exception {
+        LlmProperties.ProviderConfig pc = new LlmProperties.ProviderConfig();
+        pc.setModel("claude-sonnet-4-20250514");
+        pc.setContextWindowTokens(50_000);  // YAML present — must still be beaten by the agent override
+        when(llmProperties.getProviders()).thenReturn(Map.of("claude", pc));
+        when(llmProperties.getDefaultProvider()).thenReturn("claude");
+
+        SessionEntity session = new SessionEntity();
+        session.setId("s-override");
+        session.setAgentId(96L);
+
+        AgentEntity agent = new AgentEntity();
+        agent.setId(96L);
+        agent.setModelId("claude:claude-sonnet-4-20250514");
+        agent.setConfig("{\"temperature\":0.7,\"context_window_tokens\":400000}");
+        when(agentRepository.findById(96L)).thenReturn(Optional.of(agent));
+
+        java.lang.reflect.Method m = CompactionService.class.getDeclaredMethod(
+                "resolveContextWindowForSession", SessionEntity.class);
+        m.setAccessible(true);
+        int result = (int) m.invoke(service, session);
+
+        assertThat(result).isEqualTo(400_000);  // agent override wins over YAML 50000 + model map 200000
     }
 
     /**

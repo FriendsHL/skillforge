@@ -5,6 +5,7 @@ import com.skillforge.observability.domain.LlmTrace;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -93,6 +94,18 @@ public interface LlmTraceStore {
      * @param limit   最大返回行数
      */
     List<LlmSpan> listSpansByTrace(String traceId, Set<String> kinds, int limit);
+
+    /**
+     * ACP-EXTERNAL-AGENT P2-3a: count the spans of a trace grouped by {@code kind}
+     * (e.g. {@code {"llm":4, "tool":3, "event":1}}). Kinds with zero spans are absent
+     * from the map (callers default to 0).
+     *
+     * <p>Used by {@code AcpAgentRunner} to finalize a cc sub-session trace with
+     * authoritative tool/event counts derived from the actual {@code t_llm_span} rows —
+     * the cc event translator writes those spans but does not bump the trace-row
+     * aggregate counters, so the counts must be recomputed at finalize time.
+     */
+    Map<String, Long> countSpansByKind(String traceId);
 
     // ===== request records =====
 

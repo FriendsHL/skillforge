@@ -77,6 +77,15 @@ public class SessionMessageEntity {
     @Column(name = "pruned_at")
     private Instant prunedAt;
 
+    /**
+     * COMPACT-IDEMPOTENCY-BOUNDARY-FIX (storage redesign P1): id of the {@code t_session_summary}
+     * range summary that covers this row. NULL = not yet compacted into any range summary.
+     * Denormalized marker (recomputable from summary ranges — INV-5); user view shows it as a
+     * "compacted" flag, model view skips covered rows.
+     */
+    @Column(name = "compacted_by_summary_id")
+    private Long compactedBySummaryId;
+
     /** 一次性控制卡片完成时间；非空表示前端折叠为历史摘要。 */
     @Column(name = "answered_at")
     private Instant answeredAt;
@@ -198,5 +207,13 @@ public class SessionMessageEntity {
 
     public void setTraceId(String traceId) {
         this.traceId = traceId;
+    }
+
+    public Long getCompactedBySummaryId() {
+        return compactedBySummaryId;
+    }
+
+    public void setCompactedBySummaryId(Long compactedBySummaryId) {
+        this.compactedBySummaryId = compactedBySummaryId;
     }
 }

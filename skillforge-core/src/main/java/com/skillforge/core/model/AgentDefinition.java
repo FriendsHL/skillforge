@@ -162,9 +162,13 @@ public class AgentDefinition {
     }
 
     /**
-     * 获取最大上下文 token 数，默认 100000。
-     * 用于上下文压缩时判断是否需要压缩。
+     * @deprecated 读的是 legacy key {@code max_context_tokens}（默认 100000），与全系统用的
+     * 上下文窗口口径 {@code context_window_tokens} 不一致 —— 曾导致 reminder 的占用% 按 100K 算、
+     * 系统性虚高（模型误以为上下文紧张提前收尾）。**上下文窗口的权威解析**走
+     * {@code AgentLoopEngine.resolveContextWindow} / {@code CompactionService.resolveContextWindowForSession}
+     * （per-agent context_window_tokens → known-model map → 默认）。新代码不要用本方法。
      */
+    @Deprecated
     public int getMaxContextTokens() {
         Object val = config.get("max_context_tokens");
         if (val instanceof Number num) {

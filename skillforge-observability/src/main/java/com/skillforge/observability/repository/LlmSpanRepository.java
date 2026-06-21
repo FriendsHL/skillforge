@@ -61,6 +61,20 @@ public interface LlmSpanRepository extends JpaRepository<LlmSpanEntity, String> 
                                           @Param("kind") String kind);
 
     /**
+     * ACP-EXTERNAL-AGENT P2-3a: count a single trace's spans grouped by {@code kind}.
+     *
+     * <p>Returns one {@code [kind, count]} row per kind present on the trace
+     * (e.g. {@code ["llm", 4]}, {@code ["tool", 3]}, {@code ["event", 1]}). Used by
+     * {@code AcpAgentRunner} to finalize the cc sub-session trace with authoritative
+     * tool/event counts recomputed from the actual spans the cc event translator wrote.
+     * {@code kind} may be NULL for legacy rows — callers treat NULL as "llm".
+     */
+    @Query("SELECT s.kind, count(s) FROM LlmSpanEntity s "
+            + "WHERE s.traceId = :traceId "
+            + "GROUP BY s.kind")
+    List<Object[]> countByTraceIdGroupByKind(@Param("traceId") String traceId);
+
+    /**
      * ANNOTATOR-BEHAVIOR-SIGNALS (2026-05-22): per-tool call count for a session.
      * Used by {@code SpanBehaviorStatsTool} (STEP 1.5 of the session-annotator pipeline)
      * to derive behavioral efficiency signals (hasToolOveruse, top tool churn).

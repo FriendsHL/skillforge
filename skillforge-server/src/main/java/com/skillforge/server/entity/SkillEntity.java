@@ -144,6 +144,32 @@ public class SkillEntity {
     @Column(name = "rollout_percentage", nullable = false)
     private Integer rolloutPercentage = 100;
 
+    /**
+     * SKILL-CURATOR V1 (V163 migration): when non-null, the time the curator
+     * archived this skill (the row is also {@code enabled=false} at that point).
+     * NULL = not archived. Persisted as TIMESTAMPTZ (V70+ convention for Instant
+     * columns), mapped to {@link Instant} per java.md footgun #2.
+     */
+    @Column(name = "archived_at")
+    private Instant archivedAt;
+
+    /**
+     * SKILL-CURATOR V1 (V163 migration): short machine tag for why this skill was
+     * archived (e.g. {@code low_usage_curator}). NULL when not archived.
+     */
+    @Column(name = "archive_reason", length = 64)
+    private String archiveReason;
+
+    /**
+     * SKILL-CURATOR human-in-loop (V164 migration): when true the curator
+     * ({@code SkillConsolidator}) never treats this row as an archival candidate.
+     * Set when an operator manually restores an archived skill via the dashboard
+     * (POST /api/skills/{id}/restore) — a human deliberately brought it back, so
+     * the curator must not silently re-archive it. Default false.
+     */
+    @Column(name = "curator_exempt", nullable = false)
+    private boolean curatorExempt = false;
+
     public SkillEntity() {
     }
 
@@ -398,5 +424,29 @@ public class SkillEntity {
 
     public void setRolloutPercentage(Integer rolloutPercentage) {
         this.rolloutPercentage = rolloutPercentage;
+    }
+
+    public Instant getArchivedAt() {
+        return archivedAt;
+    }
+
+    public void setArchivedAt(Instant archivedAt) {
+        this.archivedAt = archivedAt;
+    }
+
+    public String getArchiveReason() {
+        return archiveReason;
+    }
+
+    public void setArchiveReason(String archiveReason) {
+        this.archiveReason = archiveReason;
+    }
+
+    public boolean isCuratorExempt() {
+        return curatorExempt;
+    }
+
+    public void setCuratorExempt(boolean curatorExempt) {
+        this.curatorExempt = curatorExempt;
     }
 }

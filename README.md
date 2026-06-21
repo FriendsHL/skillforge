@@ -9,8 +9,9 @@
 Most agent frameworks are Python-based, single-provider, and designed for prototyping. SkillForge is built for **production Java/Spring teams** that need:
 
 - **Multi-provider LLM** — swap between Claude, DeepSeek, Bailian/DashScope, vLLM, Ollama without code changes
-- **Multi-channel gateway** — one agent answers via Web, CLI, Feishu (WebSocket or webhook), Telegram; `ChannelAdapter` SPI extends to WeChat/Discord/Slack/iMessage with zero framework changes
+- **Multi-channel gateway** — one agent answers via Web, CLI, Feishu (WebSocket or webhook), Telegram, and personal WeChat (native iLink adapter: QR login, no public IP); `ChannelAdapter` SPI extends to Discord/Slack/iMessage with zero framework changes
 - **Real agent orchestration** — not just chains, but tree (SubAgent) and network (TeamCreate/Send) topologies with persistent state
+- **Orchestrate external coding agents** — drive **Claude Code & Codex over ACP** (open Agent Client Protocol) as git-worktree-isolated SubAgents that test their own work and open PRs — channel-driven self-iteration on your real codebase
 - **Self-improving agents** — automated eval, prompt A/B testing, and promotion pipelines
 - **Full observability** — Langfuse-style traces, session replay, model usage dashboards
 - **Safety guardrails** — configurable lifecycle hooks, command blocklists, path-traversal prevention, anti-runaway loop detection
@@ -19,7 +20,7 @@ Most agent frameworks are Python-based, single-provider, and designed for protot
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│   Dashboard   │   CLI    │   Feishu    │   Telegram     │
+│  Dashboard  │  CLI  │  Feishu  │  Telegram  │  WeChat   │
 ├─────────────────────────────────────────────────────────┤
 │              Channel Gateway                            │
 │   ChannelAdapter SPI │ 3-phase delivery tx │ dedup      │
@@ -117,11 +118,12 @@ Inspired by Claude Code and OpenClaw:
 
 ### Multi-Channel Gateway
 
-One agent, many surfaces — a user message from Feishu, Telegram, or the web arrives at the **same** agent loop and the reply is delivered back to the originating channel:
+One agent, many surfaces — a user message from Feishu, Telegram, WeChat, or the web arrives at the **same** agent loop and the reply is delivered back to the originating channel:
 
 - **Pluggable `ChannelAdapter` SPI** — Spring auto-collects implementations; new platforms drop in with zero framework changes
 - **Feishu (Lark)** — both **WebSocket long-polling** (no public IP needed for dev) and webhook mode; SHA-256 event signature verification; mode-switch in the dashboard with graceful reconnect (exponential backoff + jitter)
 - **Telegram** — HTML parse mode with 4096-codepoint safe splitting
+- **WeChat (personal account)** — native **iLink** adapter (no openclaw/bridge, no extra process): QR-code login, **outbound long-poll** inbound (works behind NAT, zero public callback), text two-way, and file/image send via CDN upload + AES-128-ECB. Per-message `client_id` for dedup-safe delivery; reverse-engineered protocol isolated in its own adapter
 - **3-phase delivery transaction** — `claimBatch` via `SELECT FOR UPDATE SKIP LOCKED`, `IN_FLIGHT` guard on first enqueue, `applyPrepared` → `persist` — survives crashes, no duplicate delivery under 30-second race windows
 - **Per-turn `platformMessageId` mapping** — a single session reply across multiple turns without unique-constraint collisions
 - **Dedup + retry + stale sweeper** — configurable retry policy, exponential backoff, expired-message cleanup
@@ -829,6 +831,7 @@ my-skill.zip
 - **Skill dashboard polish** (V1+V2+V2.5) — aggregate by name, evolution detail tab (Reasoning / Diff / per-scenario A/B), A/B threshold tooltip, manual promote / rollback, Drafts top-level entry + sidebar badge, exact-name draft skip, dashboard 5-stat summary card, real merge UX (Update existing / Rename / Reject), version tree (default + `?format=tree`), sibling-aware delete, isolated fork path, manual SKILL.md edit, generic file browser (references / scripts / assets / hooks)
 - **MCP Client (P11 + HTTP transport)** — stdio **and Streamable HTTP** transport + per-agent tool gating + tool name prefixing + lifecycle reload (V61 / V152); https + SSRF URL guard; dogfood `time` (stdio) + **AnySearch** (HTTP, structured vertical search) servers + dashboard `/mcp-servers` CRUD
 - **AutoEvolving V1** — DSL workflow engine (Rhino + L1 capability sandbox + 6 primitives + human-approve journal replay), OPT-REPORT rebuilt as a workflow, agent-level evolve loop hill-climbing (`weightedScore` + winner carry-forward), `/autoevolving` dashboard
+- **ACP external agents** — orchestrate **Claude Code & Codex** via ACP (Agent Client Protocol) as SubAgents (`agentName=claude-code` / `codex`); each run executes in an **isolated git worktree** off `origin/main`, self-tests, and opens a PR; per-agent adapter selection (`skillforge.acp.adapters`), the agent's system prompt is folded into the ACP prompt, tool input/result captured into the session, and the final result is delivered back to the origin channel. Self-iteration loop: channel → cc/codex edits the repo → PR → you review/merge
 - **Slash Commands (P10)** — 8 commands (`/new` `/compact` `/model` `/models` `/skill` `/tool` `/context` `/help`) with FE popup + channel intercept (V60)
 - **Scheduled Tasks (P12)** — user-defined cron / one-shot, agent tools (Create/Update/Delete/List/Get), dashboard `/schedules` + run history (V59)
 - **Prompt Cache (P13)** — 5-provider auto-cache, stable-prompt SHA stability, `cache_break` detection, dashboard hit-rate badge (V62)

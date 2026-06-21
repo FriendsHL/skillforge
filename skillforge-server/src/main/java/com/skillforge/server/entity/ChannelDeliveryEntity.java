@@ -21,7 +21,7 @@ public class ChannelDeliveryEntity {
     @Column(name = "conversation_id", nullable = false, length = 256)
     private String conversationId;
 
-    @Column(name = "inbound_message_id", nullable = false, length = 256)
+    @Column(name = "inbound_message_id", nullable = false, length = 1024)
     private String inboundMessageId;
 
     @Column(name = "session_id", length = 36)

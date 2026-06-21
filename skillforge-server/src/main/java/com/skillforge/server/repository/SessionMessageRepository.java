@@ -100,4 +100,44 @@ public interface SessionMessageRepository extends JpaRepository<SessionMessageEn
            "ORDER BY m.seqNo DESC")
     List<TraceIdView> findTailTraceIdProjections(
             @Param("sessionId") String sessionId, Pageable pageable);
+
+    /**
+     * COMPACT-IDEMPOTENCY-BOUNDARY-FIX (storage redesign P1): stamp the covering range
+     * summary id onto the real rows in {@code [start, end]} that are not yet marked. Only
+     * unmarked rows are updated ({@code compactedBySummaryId IS NULL}) so a re-run / merge
+     * never clobbers an existing marker (the prior summary's marker stays until P2's range
+     * recompute decides otherwise). Returns the number of rows updated.
+     *
+     * <p><b>Side-effect (P2a nit)</b>: {@code clearAutomatically = true} EVICTS the JPA persistence
+     * context after the bulk UPDATE (and {@code flushAutomatically = true} flushes pending changes
+     * first). This is required so a subsequent {@code SessionMessageEntity} read in the same tx sees
+     * the new {@code compacted_by_summary_id} instead of a stale first-level-cache copy. Callers must
+     * therefore treat any entity loaded BEFORE this call as detached/stale and re-read if needed
+     * (the range-model write/recompute paths only read message rows AFTER the marker UPDATE, so they
+     * are unaffected).
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Transactional
+    @Query("UPDATE SessionMessageEntity m SET m.compactedBySummaryId = :summaryId " +
+           "WHERE m.sessionId = :sessionId AND m.seqNo BETWEEN :start AND :end " +
+           "AND m.compactedBySummaryId IS NULL")
+    int markCompactedBySummary(@Param("sessionId") String sessionId,
+                               @Param("start") long start,
+                               @Param("end") long end,
+                               @Param("summaryId") Long summaryId);
+
+    /**
+     * COMPACT-IDEMPOTENCY-BOUNDARY-FIX (storage redesign P2b §7, B2): clear every
+     * {@code compacted_by_summary_id} marker for a session. Used by
+     * {@code SessionService.recomputeCompactedMarkers} as the first half of the
+     * clear-then-restamp recompute: after a rewrite (divergence guard / restore /
+     * branch) the markers are stale (point at pre-rewrite seq ids or were never
+     * carried over), so they are wiped and re-derived from the active summary
+     * ranges. Returns the number of rows cleared.
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Transactional
+    @Query("UPDATE SessionMessageEntity m SET m.compactedBySummaryId = NULL " +
+           "WHERE m.sessionId = :sessionId AND m.compactedBySummaryId IS NOT NULL")
+    int clearCompactedMarkers(@Param("sessionId") String sessionId);
 }

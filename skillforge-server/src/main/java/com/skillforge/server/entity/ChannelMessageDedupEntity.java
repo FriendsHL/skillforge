@@ -16,7 +16,7 @@ import java.time.Instant;
 public class ChannelMessageDedupEntity {
 
     @Id
-    @Column(name = "platform_message_id", length = 256)
+    @Column(name = "platform_message_id", length = 1024)
     private String platformMessageId;
 
     @Column(nullable = false, length = 64)

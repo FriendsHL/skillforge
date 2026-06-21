@@ -9,8 +9,9 @@
 大多数 Agent 框架基于 Python、绑定单一 Provider、只适合原型开发。SkillForge 专为 **Java/Spring 生产团队** 设计：
 
 - **多 Provider LLM** — Claude、DeepSeek、通义千问/百炼、vLLM、Ollama 自由切换，无需改代码
-- **多渠道网关** — 同一个 Agent 同时接入 Web、CLI、飞书（WebSocket / Webhook）、Telegram；`ChannelAdapter` SPI 零框架改动即可扩展到微信、Discord、Slack、iMessage
+- **多渠道网关** — 同一个 Agent 同时接入 Web、CLI、飞书（WebSocket / Webhook）、Telegram、个人微信（原生 iLink adapter：扫码登录、无需公网 IP）；`ChannelAdapter` SPI 零框架改动即可扩展到 Discord、Slack、iMessage
 - **真正的 Agent 编排** — 不止是 Chain，支持树形（SubAgent）和网状（TeamCreate/Send）两种拓扑，带持久化状态
+- **编排外部 coding agent** — 经 **ACP（开放的 Agent Client Protocol）驱动 Claude Code & Codex**，作为 git worktree 隔离的 SubAgent 在你的真实代码库上干活、自测并提 PR —— 渠道驱动的自迭代闭环（渠道 → cc/codex 改代码 → PR → 你 review/merge）
 - **自进化 Agent** — 自动评测、Prompt A/B 测试、自动晋升流水线
 - **全链路可观测** — Langfuse 风格的 Trace、Session 回放、模型用量仪表盘
 - **安全护栏** — 可配置生命周期 Hook、命令黑名单、路径穿越防护、防失控循环检测
@@ -19,7 +20,7 @@
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│   仪表盘      │    CLI    │    飞书     │    Telegram    │
+│   仪表盘   │  CLI   │   飞书   │  Telegram  │   微信    │
 ├─────────────────────────────────────────────────────────┤
 │              渠道网关                                     │
 │   ChannelAdapter SPI │ 三阶段投递事务 │ 去重              │
@@ -117,11 +118,12 @@ skillforge/
 
 ### 多渠道消息网关
 
-一个 Agent，多个前台入口 —— 来自飞书、Telegram、或网页的同一个用户消息都会路由到**同一个** Agent Loop，回复按原渠道送回：
+一个 Agent，多个前台入口 —— 来自飞书、Telegram、微信、或网页的同一个用户消息都会路由到**同一个** Agent Loop，回复按原渠道送回：
 
 - **`ChannelAdapter` SPI 可扩展** — Spring 自动收集实现，新平台零框架改动即可接入
 - **飞书（Lark）** — 同时支持 **WebSocket 长连接**（本地开发无需公网 IP）和 Webhook 模式；SHA-256 事件签名校验；仪表盘在线切换模式，带指数退避 + 抖动重连
 - **Telegram** — HTML parse mode，按 codepoint 安全切分 4096 字符上限
+- **微信（个人号）** — 原生 **iLink** adapter（无 openclaw / 无桥接 / 无额外进程）：扫码登录、**出站长轮询**收消息（NAT 后可用，零公网回调）、文本双向、图片/文件经 CDN 上传 + AES-128-ECB 发送。每条消息带 `client_id` 保证去重投递；异步续跑（子 Agent / Team 结果）也能投递回渠道；逆向协议隔离在独立 adapter
 - **三阶段投递事务** — `claimBatch` 走 `SELECT FOR UPDATE SKIP LOCKED`、首次入库直接打 `IN_FLIGHT` 标志防 30 秒 race、`applyPrepared` → `persist` —— 崩溃可续，重复投递可控
 - **Per-turn `platformMessageId` 映射** — 同一个 session 多轮回复不会命中 unique constraint
 - **去重 + 重试 + 超期清扫** — 可配置重试策略、指数退避、过期消息清理

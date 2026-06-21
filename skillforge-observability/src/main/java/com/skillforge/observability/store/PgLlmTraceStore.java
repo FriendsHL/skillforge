@@ -452,6 +452,22 @@ public class PgLlmTraceStore implements LlmTraceStore {
         return out;
     }
 
+    /**
+     * ACP-EXTERNAL-AGENT P2-3a: count a trace's spans grouped by kind. A NULL kind on a
+     * legacy row is folded into {@code "llm"} (the historical default, see {@link #toDomain}).
+     */
+    @Override
+    @Transactional(readOnly = true)
+    public java.util.Map<String, Long> countSpansByKind(String traceId) {
+        java.util.Map<String, Long> out = new java.util.HashMap<>();
+        for (Object[] row : spanRepository.countByTraceIdGroupByKind(traceId)) {
+            String kind = row[0] != null ? (String) row[0] : "llm";
+            long count = ((Number) row[1]).longValue();
+            out.merge(kind, count, Long::sum);
+        }
+        return out;
+    }
+
     private LlmTrace toDomain(LlmTraceEntity te) {
         return new LlmTrace(
                 te.getTraceId(), te.getSessionId(),

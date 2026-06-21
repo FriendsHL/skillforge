@@ -19,13 +19,17 @@ import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.CompactionEventEntity;
 import com.skillforge.server.entity.SessionCompactionCheckpointEntity;
 import com.skillforge.server.entity.SessionEntity;
+import com.skillforge.server.entity.SessionSummaryEntity;
 import com.skillforge.server.repository.AgentRepository;
 import com.skillforge.server.repository.CompactionEventRepository;
 import com.skillforge.server.repository.SessionCompactionCheckpointRepository;
+import com.skillforge.server.repository.SessionMessageRepository;
 import com.skillforge.server.repository.SessionRepository;
+import com.skillforge.server.repository.SessionSummaryRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -71,12 +75,41 @@ import java.util.concurrent.ConcurrentHashMap;
  * <p>事务: light 路径通过 {@link TransactionTemplate} 包裹 DB 操作; full 路径 Phase 3 同样.
  */
 @Service
-public class CompactionService implements ContextCompactorCallback {
+public class CompactionService implements ContextCompactorCallback, SessionService.CompactionLockProvider {
 
     private static final Logger log = LoggerFactory.getLogger(CompactionService.class);
 
+    /** Shared mapper for parsing the small agent config JSON (read-only → thread-safe; avoids
+     *  allocating a new ObjectMapper per call now that resolveContextWindowForSession runs per turn
+     *  via the reminder path). */
+    private static final com.fasterxml.jackson.databind.ObjectMapper CONFIG_MAPPER =
+            new com.fasterxml.jackson.databind.ObjectMapper();
+
     private static final int LOCK_STRIPES = 64;
     private static final int IDEMPOTENCY_MIN_GAP_MESSAGES = 5;
+
+    /**
+     * COMPACT-IDEMPOTENCY-FIX ①: engine-triggered "the context is genuinely over the window"
+     * sources. When the engine fires one of these it has already measured ratio &gt; threshold
+     * (or hit a context_length_exceeded overflow), so the compaction is REQUIRED and must never
+     * be skipped by the idempotency guard — otherwise a session that was previously compacted to
+     * a high persisted high-water mark gets its in-loop compaction permanently suppressed while
+     * the live context keeps growing past the window (observed: ratio=1.72 but "skipped gap=-97").
+     */
+    private static final Set<String> PREEMPTIVE_SOURCES = Set.of(
+            ContextCompactorCallback.SOURCE_ENGINE_SOFT,
+            ContextCompactorCallback.SOURCE_ENGINE_HARD,
+            ContextCompactorCallback.SOURCE_ENGINE_PREEMPTIVE,
+            ContextCompactorCallback.SOURCE_POST_OVERFLOW);
+
+    /**
+     * COMPACT-IDEMPOTENCY-FIX ②: minimum compactable-window size (number of messages BEFORE the
+     * young-gen) for a full compact to be worth doing. Below this the boundary has degenerated to
+     * a tiny prefix (common on tool-heavy sessions where the safe boundary cannot cut inside
+     * tool_use↔tool_result pairs), so the compaction reclaims ≈0 tokens for ~0 value and is
+     * treated as a true no-op (a cost/value filter — skip a zero-value compaction).
+     */
+    static final int MIN_COMPACT_WINDOW_MESSAGES = 4;
 
     private final SessionRepository sessionRepository;
     private final CompactionEventRepository eventRepository;
@@ -92,6 +125,24 @@ public class CompactionService implements ContextCompactorCallback {
     private MemoryService memoryService;
     /** P9-5: optional — when set, full-compact emits a recovery payload row after retained messages. */
     private RecoveryPayloadBuilder recoveryPayloadBuilder;
+
+    /**
+     * COMPACT-IDEMPOTENCY-BOUNDARY-FIX (storage redesign P1): range-summary store + targeted
+     * row marker. Optional (setter-injected, null in legacy unit tests) — when the range-model
+     * flag is on, full/sessionMemory compact writes a {@code t_session_summary} row instead of
+     * re-appending the young-gen, and stamps {@code compacted_by_summary_id} on the covered rows.
+     */
+    private SessionSummaryRepository sessionSummaryRepository;
+    private SessionMessageRepository sessionMessageRepository;
+
+    /**
+     * Feature flag for the range-based compaction model (storage-redesign.md §10, P1). Default
+     * FALSE → existing behavior is byte-identical (the legacy boundary + summary + re-append
+     * young-gen path). When TRUE the new flagged write path runs. Flag ON is not yet a valid live
+     * runtime state (P2 wires the derived read); P1 only exercises it under tests.
+     */
+    @Value("${skillforge.compact.range-model.enabled:false}")
+    private boolean rangeModelEnabled;
 
     private final Object[] sessionLocks;
 
@@ -122,6 +173,11 @@ public class CompactionService implements ContextCompactorCallback {
         this.eventRepository = eventRepository;
         this.checkpointRepository = checkpointRepository;
         this.sessionService = sessionService;
+        // P2b B1: hand SessionService this service as its compaction lock provider so
+        // updateSessionMessages can serialize reconciliation against compaction Phase 3 using the
+        // SAME per-session stripe lock. Registering from the constructor (not @Autowired setter)
+        // keeps the wiring deterministic and avoids a Spring circular-dependency setter cycle.
+        sessionService.setCompactionLockProvider(this);
         this.lightStrategy = lightStrategy;
         this.fullStrategy = fullStrategy;
         this.llmProviderFactory = llmProviderFactory;
@@ -155,6 +211,23 @@ public class CompactionService implements ContextCompactorCallback {
     @Autowired(required = false)
     public void setRecoveryPayloadBuilder(RecoveryPayloadBuilder recoveryPayloadBuilder) {
         this.recoveryPayloadBuilder = recoveryPayloadBuilder;
+    }
+
+    /** Optional: range-summary store for the range-model write path (storage redesign P1). */
+    @Autowired(required = false)
+    public void setSessionSummaryRepository(SessionSummaryRepository sessionSummaryRepository) {
+        this.sessionSummaryRepository = sessionSummaryRepository;
+    }
+
+    /** Optional: message store for the targeted {@code compacted_by_summary_id} marker UPDATE (P1). */
+    @Autowired(required = false)
+    public void setSessionMessageRepository(SessionMessageRepository sessionMessageRepository) {
+        this.sessionMessageRepository = sessionMessageRepository;
+    }
+
+    /** Test seam: toggle the range-model write path without a Spring context. */
+    public void setRangeModelEnabled(boolean rangeModelEnabled) {
+        this.rangeModelEnabled = rangeModelEnabled;
     }
 
     /**
@@ -232,6 +305,13 @@ public class CompactionService implements ContextCompactorCallback {
                 branch.setRuntimeStatus("idle");
                 branch = sessionService.saveSession(branch);
                 sessionService.rewriteMessages(branch.getId(), checkpointMessages);
+                // P2b B2 (§4): range-model branch — copy the source summaries that fall fully within
+                // the branch's seq range to the branch session (new ids, remapped superseded_by),
+                // then re-derive the branch markers. Branch rows keep the source seq_nos (rewrite
+                // reassigns 0..endSeq contiguously, matching source), so summary ranges transfer 1:1.
+                long branchEndSeq = resolveCheckpointEndSeq(checkpoint);
+                copyRangeSummariesToBranch(sessionId, branch.getId(), branchEndSeq);
+                sessionService.recomputeCompactedMarkers(branch.getId());
                 branchRef[0] = branch;
             });
             String branchId = branchRef[0] != null ? branchRef[0].getId() : null;
@@ -252,6 +332,15 @@ public class CompactionService implements ContextCompactorCallback {
                 sessionService.rewriteMessages(sessionId, checkpointMessages);
                 // restore 后旧 seq 空间失效，清理“位于恢复点之后”的 checkpoint，避免后续回放歧义。
                 checkpointRepository.deleteBySessionIdAfterSeqNo(sessionId, restoreEndSeq);
+                // P2b B2 (§4): range-model restore — drop summaries whose covered range extends past
+                // the restore point (their rows no longer exist), then re-derive markers from the
+                // surviving active summaries. rewriteMessages already ran one recompute, but it used
+                // the pre-prune summary set; this post-prune recompute is the authoritative pass.
+                // No-op when the flag is OFF / no summaries. Runs in the SAME restore transaction.
+                if (rangeModelEnabled && sessionSummaryRepository != null) {
+                    sessionSummaryRepository.deleteBySessionIdAndEndSeqGreaterThan(sessionId, restoreEndSeq);
+                    sessionService.recomputeCompactedMarkers(sessionId);
+                }
                 SessionEntity updated = sessionService.getSession(sessionId);
                 updated.setRuntimeStatus("idle");
                 updated.setRuntimeStep("restored_checkpoint");
@@ -345,7 +434,13 @@ public class CompactionService implements ContextCompactorCallback {
                     return;
                 }
                 if (!isBypassGuard(source, "light")) {
-                    int gap = current.size() - session.getLastCompactedAtMessageCount();
+                    // COMPACT-IDEMPOTENCY-FIX ①: gap must compare two values in the SAME counting
+                    // space. lastCompactedAtMessageCount is recorded in the persisted row-count
+                    // space (see persistCompactResult), so the gap must also use the persisted
+                    // count — NOT the engine's in-memory working-set size (current.size()), which
+                    // starts each run from the compacted subset and would yield a permanently
+                    // negative gap on any session that was previously compacted.
+                    int gap = session.getMessageCount() - session.getLastCompactedAtMessageCount();
                     if (gap < IDEMPOTENCY_MIN_GAP_MESSAGES) {
                         log.debug("callback light compact skipped (idempotency): sessionId={} gap={}", sessionId, gap);
                         out[0] = CompactCallbackResult.noOp(current, "idempotency guard");
@@ -411,11 +506,17 @@ public class CompactionService implements ContextCompactorCallback {
                 }
 
                 if (!isBypassGuard(source, "full")) {
-                    // For REST path: use the session's stored messageCount (consistent with old behavior).
-                    // For callback path: use current.size() (the engine has an accurate live count).
-                    int effectiveCount = (inMemoryMessages != null)
-                            ? inMemoryMessages.size() : session.getMessageCount();
-                    int gap = effectiveCount - session.getLastCompactedAtMessageCount();
+                    // COMPACT-IDEMPOTENCY-FIX ①: gap must compare two values in the SAME counting
+                    // space. Always use the persisted row count (session.getMessageCount()) on both
+                    // sides — same space as lastCompactedAtMessageCount (recorded in
+                    // persistCompactResult). The previous callback branch used inMemoryMessages.size()
+                    // (the engine working set, which restarts from the compacted subset each run) and
+                    // produced a permanently negative gap on any previously-compacted session,
+                    // silently suppressing in-loop compaction. Engine over-window sources
+                    // (PREEMPTIVE_SOURCES) already bypass this guard via isBypassGuard, so this branch
+                    // now only gates non-preemptive callers (e.g. agent-tool full) consistently with
+                    // the REST path.
+                    int gap = session.getMessageCount() - session.getLastCompactedAtMessageCount();
                     if (gap < IDEMPOTENCY_MIN_GAP_MESSAGES) {
                         log.info("fullCompact skipped (idempotency): sessionId={} gap={}", sessionId, gap);
                         return null;
@@ -430,6 +531,16 @@ public class CompactionService implements ContextCompactorCallback {
                 prep = fullStrategy.prepareCompact(messages, contextWindow);
                 if (prep == null) {
                     log.info("fullCompact no-op (no safe boundary): sessionId={}", sessionId);
+                    return null;
+                }
+                // COMPACT-IDEMPOTENCY-FIX ②: degenerate-split guard. On tool-heavy
+                // (SubAgent/Team) sessions the safe boundary often lands only a few messages in
+                // — summarising such a tiny window reclaims ≈0 tokens for ~0 value. If the
+                // compactable window is below MIN_COMPACT_WINDOW_MESSAGES, return a TRUE no-op now
+                // (before the LLM call) as a cost/value filter — skip the zero-value compaction.
+                if (prep.window().size() < MIN_COMPACT_WINDOW_MESSAGES) {
+                    log.info("fullCompact no-op (degenerate window): sessionId={} windowSize={} < {}",
+                            sessionId, prep.window().size(), MIN_COMPACT_WINDOW_MESSAGES);
                     return null;
                 }
 
@@ -461,7 +572,12 @@ public class CompactionService implements ContextCompactorCallback {
                             prep, memorySummary,
                             SessionMemoryCompactStrategy.DEFAULT_MAX_TOKENS,
                             SessionMemoryCompactStrategy.DEFAULT_MIN_MESSAGES);
-                    if (memoryResult != null && !isTrulyNoOp(memoryResult)) {
+                    // ②: if the memory summary did not net-reclaim tokens (isIneffective), do NOT
+                    // persist it here — fall through to Phase 2 (LLM) which may still produce an
+                    // effective summary. (Intentional: a token-ineffective memory result is a reason
+                    // to try the LLM, not to no-op the whole compaction.)
+                    if (memoryResult != null && !isTrulyNoOp(memoryResult)
+                            && !isIneffective(memoryResult)) {
                         // Memory compact succeeded — skip Phase 2 (LLM), go to Phase 3
                         final CompactResult finalMemResult = memoryResult;
                         final CompactionEventEntity[] savedEvt = {null};
@@ -498,9 +614,12 @@ public class CompactionService implements ContextCompactorCallback {
             throw new RuntimeException("fullCompact Phase 2 failed for sessionId=" + sessionId, e);
         }
 
-        if (result == null || isTrulyNoOp(result)) {
+        if (result == null || isTrulyNoOp(result) || isIneffective(result)) {
             fullCompactInFlight.remove(sessionId);
-            log.info("fullCompact no-op (LLM returned empty): sessionId={}", sessionId);
+            log.info("fullCompact no-op (LLM empty or no net reclaim): sessionId={} beforeTokens={} afterTokens={}",
+                    sessionId,
+                    result == null ? -1 : result.getBeforeTokens(),
+                    result == null ? -1 : result.getAfterTokens());
             return null;
         }
 
@@ -536,7 +655,13 @@ public class CompactionService implements ContextCompactorCallback {
                                                         String source, String reason,
                                                         CompactResult result) {
         SessionEntity fresh = sessionRepository.findById(sessionId).orElseThrow();
-        if ("full".equalsIgnoreCase(level)) {
+        if ("full".equalsIgnoreCase(level) && rangeModelEnabled) {
+            // === Range-model write path (storage redesign P1, flag ON) ===
+            // Writes a t_session_summary range row + marks covered rows, instead of appending a
+            // boundary + summary + re-appended young-gen. No message rows are appended/deleted.
+            // Falls through to the shared counter/event/broadcast tail below.
+            persistFullRangeModel(sessionId, source, result);
+        } else if ("full".equalsIgnoreCase(level)) {
             String summaryText = extractSummaryText(result.getMessages());
             Message boundary = new Message();
             boundary.setRole(Message.Role.SYSTEM);
@@ -669,6 +794,236 @@ public class CompactionService implements ContextCompactorCallback {
         return saved;
     }
 
+    /**
+     * COMPACT-IDEMPOTENCY-BOUNDARY-FIX (storage redesign P1, §2 write + §2.6 Q3 merge + §8.7 Q4):
+     * range-model full-compact persistence. Writes ONE {@code t_session_summary} row covering the
+     * real seq range, marks the covered rows' {@code compacted_by_summary_id}, supersedes the prior
+     * active summary (Q3 rolling merge), and writes a checkpoint pointing at the summary id — without
+     * appending / deleting / re-appending any message rows.
+     *
+     * <p><b>Range seq mapping (P1/P2 coupling)</b>: the strategy reports {@code rightEdge} as an index
+     * into the <i>model view</i> ({@link SessionService#getContextMessages}: post-last-boundary
+     * physical rows, SYSTEM_EVENT skipped). P2 will thread true provenance; at P1 we derive the
+     * covered range from the loaded {@link SessionService.StoredMessage} records:
+     * <ul>
+     *   <li>{@code windowSize} = the number of real window rows folded into the summary. The
+     *       compacted layout is {@code [1 summary] + youngGen}, so
+     *       {@code afterMessageCount = 1 + youngGen.size()} and the window row count is
+     *       {@code beforeMessageCount - youngGen.size() = (beforeMessageCount - afterMessageCount) + 1}.
+     *       Deriving from message counts (not {@code rightEdge}, which {@code CompactResult} does not
+     *       carry) is the P1 approximation; P2 threads true provenance.</li>
+     *   <li>{@code endSeq} = the real seq_no of the last covered model-view row
+     *       (index {@code windowSize - 1}).</li>
+     *   <li>Per §2.6 Q3 the new summary covers {@code [0, endSeq]} (rolling merge subsumes everything
+     *       up to endSeq); {@code startSeq} is therefore 0.</li>
+     * </ul>
+     */
+    private void persistFullRangeModel(String sessionId, String source, CompactResult result) {
+        if (sessionSummaryRepository == null) {
+            throw new IllegalStateException(
+                    "range-model compaction enabled but SessionSummaryRepository not wired");
+        }
+
+        // Window row count folded into the summary: the compacted shape is [summary] + youngGen,
+        // so the delta (before - after) undercounts the window by 1 (the summary row replaces the
+        // whole window). The true window size adds that 1 back.
+        int compactedCount = (result.getBeforeMessageCount() - result.getAfterMessageCount()) + 1;
+
+        // Load the full real history ONCE; both the model-view mapping and the post-range end
+        // (highest real seq) are derived from this single read (perf: avoid a second DB round-trip).
+        List<SessionService.StoredMessage> allRecords = sessionService.getFullHistoryRecords(sessionId);
+
+        // Map the model-view window onto real seq_nos. The model view is the slice of the full
+        // history after the last COMPACT_BOUNDARY (legacy rows) with SYSTEM_EVENT rows skipped —
+        // the same construction as SessionService.getContextMessages. The first `compactedCount`
+        // of those model-view rows are the window; endSeq is the real seq_no of the last one.
+        List<SessionService.StoredMessage> modelViewRows = sliceModelViewRows(allRecords);
+        if (compactedCount <= 0 || modelViewRows.isEmpty()) {
+            log.info("range-model fullCompact no-op mapping (compactedCount={} modelViewRows={}): sessionId={}",
+                    compactedCount, modelViewRows.size(), sessionId);
+            return;
+        }
+        int lastWindowIdx = Math.min(compactedCount, modelViewRows.size()) - 1;
+        long endSeq = modelViewRows.get(lastWindowIdx).seqNo();
+        long startSeq = 0L; // §2.6 Q3: rolling merge — new summary covers [0, endSeq].
+
+        String summaryText = extractSummaryText(result.getMessages());
+        String recoveryText = buildRecoveryPayloadText(sessionId);
+
+        SessionSummaryEntity summary = new SessionSummaryEntity();
+        summary.setSessionId(sessionId);
+        summary.setStartSeq(startSeq);
+        summary.setEndSeq(endSeq);
+        summary.setSummaryText(summaryText);
+        summary.setLevel("full");
+        summary.setSource(source);
+        summary.setTokensBefore(result.getBeforeTokens());
+        summary.setTokensAfter(result.getAfterTokens());
+        summary.setCompactedMessageCount(compactedCount);
+        summary.setRecoveryPayload(recoveryText);
+        SessionSummaryEntity savedSummary = sessionSummaryRepository.save(summary);
+
+        // §2.6 Q3 merge: any prior active summary is subsumed by this one → mark superseded.
+        // NOTE: this active-list query runs AFTER save(), so the just-saved new summary (which is
+        // itself active — superseded_by IS NULL) is included in the result; the id guard below
+        // explicitly skips it so we never supersede the summary by itself.
+        List<SessionSummaryEntity> priorActive =
+                sessionSummaryRepository.findBySessionIdAndSupersededByIsNullOrderByStartSeqAsc(sessionId);
+        for (SessionSummaryEntity prior : priorActive) {
+            if (!prior.getId().equals(savedSummary.getId())) {
+                sessionSummaryRepository.markSuperseded(prior.getId(), savedSummary.getId());
+            }
+        }
+
+        // Mark the covered real rows [startSeq, endSeq] (only the still-unmarked ones).
+        if (sessionMessageRepository != null) {
+            int marked = sessionMessageRepository.markCompactedBySummary(
+                    sessionId, startSeq, endSeq, savedSummary.getId());
+            log.debug("range-model fullCompact marked {} rows [{},{}] → summaryId={}: sessionId={}",
+                    marked, startSeq, endSeq, savedSummary.getId(), sessionId);
+        }
+
+        // Checkpoint points at the summary id + range (same transaction). No message rows written,
+        // so boundary_seq_no is the next-real-seq sentinel (endSeq+1) per the design note.
+        SessionCompactionCheckpointEntity checkpoint = new SessionCompactionCheckpointEntity();
+        checkpoint.setId(UUID.randomUUID().toString());
+        checkpoint.setSessionId(sessionId);
+        checkpoint.setBoundarySeqNo(endSeq + 1);
+        checkpoint.setSummarySeqNo(savedSummary.getId());
+        checkpoint.setReason(trimReason(source));
+        checkpoint.setPreRangeStartSeqNo(startSeq);
+        checkpoint.setPreRangeEndSeqNo(endSeq);
+        checkpoint.setPostRangeStartSeqNo(endSeq + 1);
+        // Highest real seq from the already-loaded list (no extra DB read).
+        long lastRealSeq = allRecords.isEmpty()
+                ? endSeq
+                : allRecords.get(allRecords.size() - 1).seqNo();
+        checkpoint.setPostRangeEndSeqNo(lastRealSeq);
+        checkpointRepository.save(checkpoint);
+    }
+
+    /**
+     * Slice the model view (post-last-boundary, SYSTEM_EVENT skipped) out of an already-loaded full
+     * history, keeping {@link SessionService.StoredMessage} seq_no provenance so window indices map
+     * back to real seq_nos. Mirrors {@link SessionService#getContextMessages} slicing.
+     *
+     * <p>INTENTIONALLY does NOT apply {@code applyArchiveSafely}: this mapping is count-only (it
+     * needs index→seq_no, not message content). Archive substitution swaps tool_result content for
+     * a preview but never changes the list size, so the index→seq mapping is exact without it;
+     * loading archive content here would be wasted work.
+     */
+    private List<SessionService.StoredMessage> sliceModelViewRows(List<SessionService.StoredMessage> all) {
+        int lastBoundary = -1;
+        for (int i = all.size() - 1; i >= 0; i--) {
+            if (SessionService.MSG_TYPE_COMPACT_BOUNDARY.equals(all.get(i).msgType())) {
+                lastBoundary = i;
+                break;
+            }
+        }
+        int start = (lastBoundary >= 0) ? lastBoundary + 1 : 0;
+        List<SessionService.StoredMessage> out = new ArrayList<>();
+        for (int i = start; i < all.size(); i++) {
+            SessionService.StoredMessage rec = all.get(i);
+            if (SessionService.MSG_TYPE_SYSTEM_EVENT.equals(rec.msgType())) {
+                continue;
+            }
+            out.add(rec);
+        }
+        return out;
+    }
+
+    /**
+     * COMPACT-IDEMPOTENCY-BOUNDARY-FIX storage redesign P2b (§4, B2): copy the source session's
+     * summaries that lie fully within {@code [0, branchEndSeq]} onto {@code branchId} as fresh rows
+     * (new auto-generated ids), preserving the {@code superseded_by} chain by remapping old→new ids.
+     *
+     * <p>Branch rows carry the same seq_nos as the source rows up to {@code branchEndSeq} (the rewrite
+     * reassigns 0..N contiguously), so a summary's {@code [start_seq,end_seq]} transfers verbatim.
+     * Summaries whose {@code end_seq > branchEndSeq} are skipped (their rows are not in the branch).
+     * No-op when the flag is OFF / store unwired. Runs inside the branch-creation transaction.
+     */
+    private void copyRangeSummariesToBranch(String sourceSessionId, String branchId, long branchEndSeq) {
+        if (!rangeModelEnabled || sessionSummaryRepository == null) {
+            return;
+        }
+        List<SessionSummaryEntity> sourceSummaries =
+                sessionSummaryRepository.findBySessionIdOrderByStartSeqAsc(sourceSessionId);
+        if (sourceSummaries.isEmpty()) {
+            return;
+        }
+        // Pass 1: copy each in-range summary, recording old-id → new-entity for superseded_by remap.
+        Map<Long, SessionSummaryEntity> oldIdToNew = new HashMap<>();
+        for (SessionSummaryEntity src : sourceSummaries) {
+            if (src.getEndSeq() > branchEndSeq) {
+                continue; // covered rows not present in the branch
+            }
+            SessionSummaryEntity copy = new SessionSummaryEntity();
+            copy.setSessionId(branchId);
+            copy.setStartSeq(src.getStartSeq());
+            copy.setEndSeq(src.getEndSeq());
+            copy.setSummaryText(src.getSummaryText());
+            copy.setLevel(src.getLevel());
+            copy.setSource(src.getSource());
+            copy.setTokensBefore(src.getTokensBefore());
+            copy.setTokensAfter(src.getTokensAfter());
+            copy.setCompactedMessageCount(src.getCompactedMessageCount());
+            copy.setRecoveryPayload(src.getRecoveryPayload());
+            // superseded_by remapped in pass 2 (target may not be saved yet).
+            SessionSummaryEntity saved = sessionSummaryRepository.save(copy);
+            oldIdToNew.put(src.getId(), saved);
+        }
+        // Pass 2: remap superseded_by to the copied targets. A superseded summary whose superseding
+        // target was out of range (skipped) is left active in the branch — harmless: the derived read
+        // collapses by active marker, and recompute restamps from active ranges.
+        for (SessionSummaryEntity src : sourceSummaries) {
+            if (src.getSupersededBy() == null) {
+                continue;
+            }
+            SessionSummaryEntity copy = oldIdToNew.get(src.getId());
+            SessionSummaryEntity newTarget = oldIdToNew.get(src.getSupersededBy());
+            if (copy != null && newTarget != null) {
+                sessionSummaryRepository.markSuperseded(copy.getId(), newTarget.getId());
+            }
+        }
+    }
+
+    /**
+     * §8.7 Q4: build the recovery payload text to persist on the summary row (no message row).
+     * Best-effort — returns null when no builder is wired or it yields nothing.
+     *
+     * <p>RecoveryPayloadBuilder currently returns String content, but to avoid silently dropping
+     * the recovery payload if it ever returns array / ContentBlock-list content, non-String content
+     * is JSON-serialized (with a toString fallback) rather than discarded.
+     */
+    private String buildRecoveryPayloadText(String sessionId) {
+        if (recoveryPayloadBuilder == null) {
+            return null;
+        }
+        try {
+            Message recovery = recoveryPayloadBuilder.build(sessionId);
+            if (recovery == null) {
+                return null;
+            }
+            Object content = recovery.getContent();
+            if (content instanceof String s) {
+                return s.isBlank() ? null : s;
+            }
+            if (content != null) {
+                // Non-String (e.g. ContentBlock list) — serialize rather than silently drop.
+                try {
+                    return new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(content);
+                } catch (Exception serEx) {
+                    log.warn("range-model recovery payload non-String content; falling back to toString: sessionId={}",
+                            sessionId, serEx);
+                    return content.toString();
+                }
+            }
+        } catch (Exception ex) {
+            log.warn("range-model recovery payload build failed; continuing: sessionId={}", sessionId, ex);
+        }
+        return null;
+    }
+
     private String extractSummaryText(List<Message> compactedMessages) {
         if (compactedMessages == null || compactedMessages.isEmpty()) {
             return "Summary unavailable";
@@ -796,10 +1151,30 @@ public class CompactionService implements ContextCompactorCallback {
         }
     }
 
-    /** 判断 source + level 组合是否绕过 idempotency guard. */
+    /**
+     * 判断 source + level 组合是否绕过 idempotency guard.
+     *
+     * <p>(source × level → bypass?) matrix:
+     * <pre>
+     *   source              | light  | full
+     *   --------------------+--------+--------
+     *   user-manual         | bypass | bypass   (explicit user action — always honored)
+     *   agent-tool          | bypass | GATED    (light is cheap/idempotent; full is gated)
+     *   engine-soft         | bypass | bypass   ┐ PREEMPTIVE_SOURCES: engine measured ratio
+     *   engine-hard         | bypass | bypass   │ &gt; threshold (or overflow) → the compaction is
+     *   engine-preemptive   | bypass | bypass   │ REQUIRED; never suppress it. When ② finds a
+     *   post-overflow       | bypass | bypass   ┘ degenerate window it just cheap-no-ops (no thrash).
+     *   other (e.g. engine-gap) | GATED | GATED
+     * </pre>
+     * engine-soft stays in PREEMPTIVE_SOURCES intentionally: engine-triggered ⇒ should compact;
+     * combined with ②'s degenerate guard it merely cheap-no-ops when the boundary is degenerate.
+     */
     private boolean isBypassGuard(String source, String level) {
         return "user-manual".equals(source)
-                || ("agent-tool".equals(source) && "light".equalsIgnoreCase(level));
+                || ("agent-tool".equals(source) && "light".equalsIgnoreCase(level))
+                // COMPACT-IDEMPOTENCY-FIX ①: engine-measured over-window compactions are
+                // required; never let the idempotency guard suppress them.
+                || PREEMPTIVE_SOURCES.contains(source);
     }
 
     /** 判断一次压缩是否真的没产出 —— 用于 #12 跳过 junk event. */
@@ -807,6 +1182,16 @@ public class CompactionService implements ContextCompactorCallback {
         return result.getTokensReclaimed() == 0
                 && (result.getStrategiesApplied() == null || result.getStrategiesApplied().isEmpty())
                 && result.getBeforeMessageCount() == result.getAfterMessageCount();
+    }
+
+    /**
+     * COMPACT-IDEMPOTENCY-FIX ②: a compaction that did not actually shrink the token footprint
+     * (afterTokens &gt;= beforeTokens) is a no-net-reclaim result — zero (or negative) value — so it
+     * is treated as a true no-op (no boundary, no event) as a cost/value filter. Complements
+     * {@link #isTrulyNoOp}, which only catches strategy-level emptiness.
+     */
+    private boolean isIneffective(CompactResult result) {
+        return result.getAfterTokens() >= result.getBeforeTokens();
     }
 
     /**
@@ -819,6 +1204,28 @@ public class CompactionService implements ContextCompactorCallback {
         try {
             if (agentRepository != null && session.getAgentId() != null) {
                 AgentEntity agent = agentRepository.findById(session.getAgentId()).orElse(null);
+                if (agent != null) {
+                    // Step 0: explicit per-agent override (highest priority) —
+                    // agent.config.context_window_tokens. ChatService injects THIS method's result
+                    // into agentDef.config (overwriting whatever toAgentDefinition put there), so
+                    // unless the override is honored here it is silently dead and every
+                    // unknown-window model (e.g. glm-5.2) falls to the flat 64K default — that is why
+                    // session 9d3eff0f sat at 64K despite a configured 400000.
+                    if (agent.getConfig() != null && !agent.getConfig().isBlank()) {
+                        try {
+                            @SuppressWarnings("unchecked")
+                            Map<String, Object> cfg = CONFIG_MAPPER
+                                    .readValue(agent.getConfig(), Map.class);
+                            Object override = cfg.get("context_window_tokens");
+                            if (override instanceof Number n && n.intValue() > 0) {
+                                return n.intValue();
+                            }
+                        } catch (Exception e) {
+                            log.warn("Failed to parse agent config context_window_tokens for session "
+                                    + "{}, falling through to model resolution", session.getId(), e);
+                        }
+                    }
+                }
                 if (agent != null && agent.getModelId() != null) {
                     String modelId = agent.getModelId();
                     String providerName;
@@ -863,7 +1270,7 @@ public class CompactionService implements ContextCompactorCallback {
                 AgentEntity agent = agentRepository.findById(session.getAgentId()).orElse(null);
                 if (agent != null && agent.getConfig() != null && !agent.getConfig().isBlank()) {
                     @SuppressWarnings("unchecked")
-                    Map<String, Object> configMap = new com.fasterxml.jackson.databind.ObjectMapper()
+                    Map<String, Object> configMap = CONFIG_MAPPER
                             .readValue(agent.getConfig(), Map.class);
                     return CompactableToolRegistry.fromAgentConfig(configMap);
                 }

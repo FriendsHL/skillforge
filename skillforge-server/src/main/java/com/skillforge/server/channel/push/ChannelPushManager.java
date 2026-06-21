@@ -71,7 +71,7 @@ public class ChannelPushManager implements SmartLifecycle {
             Set<String> seenPlatforms = new HashSet<>();
             startedConnectorPlatforms.clear();
             for (ChannelConfigDecrypted config : configs) {
-                if (!"websocket".equals(resolveMode(config.configJson()))) {
+                if (!isPushMode(config.configJson())) {
                     continue;
                 }
                 if (!seenPlatforms.add(config.platform())) {
@@ -171,17 +171,20 @@ public class ChannelPushManager implements SmartLifecycle {
         return SmartLifecycle.DEFAULT_PHASE + 100;
     }
 
-    private String resolveMode(String configJson) {
+    /**
+     * Push-eligible modes start a {@link ChannelPushConnector} at boot: {@code "websocket"}
+     * (feishu) and {@code "push"} (weixin long-poll). Everything else is webhook-driven and
+     * needs no connector.
+     */
+    private boolean isPushMode(String configJson) {
         String raw = configJson == null ? "{}" : configJson;
         try {
             JsonNode node = objectMapper.readTree(raw);
             String mode = node.path("mode").asText("");
-            if ("websocket".equalsIgnoreCase(mode)) {
-                return "websocket";
-            }
+            return "websocket".equalsIgnoreCase(mode) || "push".equalsIgnoreCase(mode);
         } catch (Exception ignored) {
             // keep webhook mode for invalid json
+            return false;
         }
-        return "webhook";
     }
 }

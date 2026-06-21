@@ -211,7 +211,7 @@ class FullCompactStrategyTest {
 
         FullCompactStrategy.PreparedCompact prep = new FullCompactStrategy.PreparedCompact(
                 /*rightEdge=*/10, window, youngGen,
-                /*beforeTokens=*/100, /*beforeCount=*/30);
+                /*beforeTokens=*/100, /*beforeCount=*/30, /*contextWindowTokens=*/32000);
 
         CompactResult r = strategy.applyPrepared(prep, mockProvider, null);
         assertThat(r).isNotNull();
@@ -236,6 +236,172 @@ class FullCompactStrategyTest {
         assertThat(cb.getType()).isEqualTo("tool_result");
         assertThat(cb.getToolUseId()).isEqualTo("tx");
         assertThat(cb.getContent()).isEqualTo("result-payload");
+    }
+
+    // ===================================================================================
+    // COMPACT-IDEMPOTENCY-FIX ③: summary input window guard / map-reduce chunking.
+    // ===================================================================================
+
+    /**
+     * A counting provider records how many chat() calls it received and the size of each
+     * input so we can assert single-shot vs map-reduce behaviour.
+     */
+    private static final class CountingProvider implements LlmProvider {
+        int calls = 0;
+        int maxInputChars = 0;
+        @Override public String getName() { return "counting"; }
+        @Override public LlmResponse chat(LlmRequest request) {
+            calls++;
+            String text = request.getMessages().get(0).getContent().toString();
+            maxInputChars = Math.max(maxInputChars, text.length());
+            LlmResponse r = new LlmResponse();
+            r.setContent("PARTIAL-" + calls);
+            return r;
+        }
+        @Override public void chatStream(LlmRequest request, LlmStreamHandler handler) { }
+    }
+
+    @Test
+    void summary_window_within_budget_is_single_shot() {
+        CountingProvider p = new CountingProvider();
+        // Small window text, very large context window → single call.
+        String summary = strategy.summarizeWithWindowGuard(p, null, "a short window text", 128_000);
+        assertThat(summary).isEqualTo("PARTIAL-1");
+        assertThat(p.calls).isEqualTo(1);
+    }
+
+    @Test
+    void summary_window_over_budget_is_chunked_map_reduce() {
+        CountingProvider p = new CountingProvider();
+        // Build a multi-line window large enough to exceed a tiny context window budget so the
+        // map-reduce path fires. Each line is its own "message" line (serializeWindow shape).
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < 4000; i++) {
+            sb.append("[user] line ").append(i)
+              .append(" with some filler content to grow the token count\n");
+        }
+        // Small context window → per-call budget (6000 − 4000 reserve = 2000) forces chunking.
+        String summary = strategy.summarizeWithWindowGuard(p, null, sb.toString(), 6_000);
+
+        // map-reduce: >= 2 map calls (#7 — if exactly one non-blank partial survives, the reduce
+        // is skipped, so total calls can be 2 rather than 3).
+        assertThat(p.calls).isGreaterThanOrEqualTo(2);
+        assertThat(summary).isNotBlank();
+        // No single call ever exceeded a sane bound — chunking actually split the input.
+        assertThat(p.maxInputChars).isLessThan(sb.length());
+    }
+
+    @Test
+    void summary_chunking_never_drops_to_empty_when_reduce_yields_text() {
+        CountingProvider p = new CountingProvider();
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < 2000; i++) sb.append("[assistant] reasoning step ").append(i).append("\n");
+        String summary = strategy.summarizeWithWindowGuard(p, null, sb.toString(), 5_000);
+        assertThat(summary).isNotBlank();
+    }
+
+    /**
+     * #2: reduce recursion is depth-bounded. A pathological provider that echoes its input verbatim
+     * means the concatenated chunk summaries never shrink below budget — without the depth cap this
+     * would recurse forever / stack-overflow. With MAX_SUMMARY_REDUCE_DEPTH it must terminate and
+     * still return a (best-effort over-budget) summary.
+     */
+    @Test
+    void summary_reduce_recursion_terminates_when_partials_never_shrink() {
+        // Provider returns a large verbatim-ish block so `combined` stays over budget every round.
+        LlmProvider echo = new LlmProvider() {
+            int n = 0;
+            @Override public String getName() { return "echo"; }
+            @Override public LlmResponse chat(LlmRequest request) {
+                n++;
+                String in = (String) request.getMessages().get(0).getContent();
+                LlmResponse r = new LlmResponse();
+                // Echo back a large chunk of the input so summaries never compress.
+                r.setContent(in.length() > 4000 ? in.substring(0, 4000) : in);
+                return r;
+            }
+            @Override public void chatStream(LlmRequest request, LlmStreamHandler handler) { }
+        };
+        StringBuilder sb = new StringBuilder();
+        String[] words = {"alpha ", "bravo ", "charlie ", "delta ", "echo ", "foxtrot "};
+        for (int i = 0; i < 6000; i++) sb.append(words[i % words.length]);
+
+        // Must return (terminate) — assertTimeout guards against a non-terminating recursion.
+        String summary = org.junit.jupiter.api.Assertions.assertTimeoutPreemptively(
+                java.time.Duration.ofSeconds(10),
+                () -> strategy.summarizeWithWindowGuard(echo, null, sb.toString(), 6_000));
+        assertThat(summary).isNotBlank();
+    }
+
+    /**
+     * Provider that captures every chunk passed to it and asserts UTF-16 surrogate integrity on
+     * each: no chunk may END with a lone high surrogate or START with a lone low surrogate. Such a
+     * split is what later makes the real provider's UTF-8 JSON generator throw
+     * MismatchedSurrogateException (#1 INV-8). Asserting directly on the chunk boundaries is robust
+     * regardless of the test-side Jackson version's lenience on in-memory String serialization.
+     */
+    private static final class SurrogateCheckingProvider implements LlmProvider {
+        int calls = 0;
+        boolean sawSplitSurrogate = false;
+        @Override public String getName() { return "surrogate-check"; }
+        @Override public LlmResponse chat(LlmRequest request) {
+            calls++;
+            String content = (String) request.getMessages().get(0).getContent();
+            if (!content.isEmpty()) {
+                char last = content.charAt(content.length() - 1);
+                char first = content.charAt(0);
+                if (Character.isHighSurrogate(last) || Character.isLowSurrogate(first)) {
+                    sawSplitSurrogate = true;
+                }
+            }
+            LlmResponse r = new LlmResponse();
+            r.setContent("OK-" + calls);
+            return r;
+        }
+        @Override public void chatStream(LlmRequest request, LlmStreamHandler handler) { }
+    }
+
+    @Test
+    void hardSplit_does_not_cut_mid_surrogate_on_oversized_emoji_line() {
+        // #1 INV-8: an oversized SINGLE line (no '\n') with a non-BMP emoji landing exactly on the
+        // hard-split boundary. Pre-fix the naive cut split the surrogate pair → a chunk ended in a
+        // lone high surrogate (and the next began with a lone low surrogate), which later makes the
+        // real provider's UTF-8 JSON generator throw MismatchedSurrogateException. Post-fix the cut
+        // steps back one char so each chunk is surrogate-complete.
+        //
+        // budget = 7500 − 5500 reserve (SUMMARY_INPUT_RESERVE_TOKENS) = 2000 → approxCharsPerChunk =
+        // max(1000, 2000*4) = 8000. NB: window must stay > reserve+1000 or window−reserve underflows
+        // the <1000 guard and falls back to the 24000 budget → no split → this test silently passes 1
+        // chunk. The
+        // first cut ends at index 8000 (last included char = 7999); placing the emoji's HIGH
+        // surrogate at index 7999 makes the naive cut split the pair. Filler is VARIED ASCII words
+        // so the token estimate genuinely exceeds the budget and hardSplit is actually exercised (a
+        // run of one repeated char BPE-compresses below budget and would skip hardSplit).
+        String emoji = "😀"; // U+1F600 — a UTF-16 surrogate pair
+        StringBuilder line = new StringBuilder();
+        String[] words = {"alpha ", "bravo ", "charlie ", "delta ", "echo ", "foxtrot ", "golf "};
+        int w = 0;
+        while (line.length() < 7999) {
+            line.append(words[w++ % words.length]);
+        }
+        line.setLength(7999);                    // exact: high surrogate will land at index 7999
+        line.append(emoji);                      // chars 7999 (high) + 8000 (low)
+        while (line.length() < 30000) {          // push well past one chunk so a real split happens
+            line.append(words[w++ % words.length]);
+        }
+        // Sanity: the high surrogate is exactly at the first naive cut boundary.
+        assertThat(Character.isHighSurrogate(line.charAt(7999))).isTrue();
+
+        SurrogateCheckingProvider p = new SurrogateCheckingProvider();
+        // Single line, no newline → forces the hardSplit path. Small window → small budget.
+        String summary = strategy.summarizeWithWindowGuard(p, null, line.toString(), 7_500);
+
+        // No chunk split the surrogate pair (pre-fix this was true → exception in the real path).
+        assertThat(p.sawSplitSurrogate)
+                .as("hardSplit must not cut between a high and low surrogate")
+                .isFalse();
+        assertThat(summary).isNotBlank();
+        assertThat(p.calls).isGreaterThanOrEqualTo(2); // line was split into >= 2 chunks
     }
 
     /** Regression: mergeSummaryIntoUser was deleted (BUG-F-1). */

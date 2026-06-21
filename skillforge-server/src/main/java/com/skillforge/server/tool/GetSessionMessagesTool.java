@@ -24,8 +24,8 @@ public class GetSessionMessagesTool implements Tool {
     private static final Logger log = LoggerFactory.getLogger(GetSessionMessagesTool.class);
     private static final int DEFAULT_LIMIT = 20;
     private static final int HARD_LIMIT = 100;
-    private static final int DEFAULT_MAX_CONTENT_CHARS = 1_000;
-    private static final int HARD_MAX_CONTENT_CHARS = 5_000;
+    private static final int DEFAULT_MAX_CONTENT_CHARS = 2_000;
+    private static final int HARD_MAX_CONTENT_CHARS = 20_000;
 
     private final SessionService sessionService;
     private final ObjectMapper objectMapper;
@@ -65,7 +65,7 @@ public class GetSessionMessagesTool implements Tool {
         ));
         properties.put("maxContentChars", Map.of(
                 "type", "integer",
-                "description", "Maximum characters for any string field inside message content. Default 1000, hard cap 5000."
+                "description", "Maximum characters for any string field inside message content. Default 2000, hard cap 20000."
         ));
         Map<String, Object> schema = new LinkedHashMap<>();
         schema.put("type", "object");

@@ -1,6 +1,6 @@
 # SkillForge 文档
 
-> 更新于：2026-06-17（新增 2 个 blog 复盘 backlog：WF-CONCURRENT-PIPELINE + EVOLVE-JUDGE-GROUNDING；新增 references/autoevolving-capability-stage-2026-06-17.md 自进化现状快照）
+> 更新于：2026-06-19（COMPACT range-model 存储重构 go-live（默认 on，V157）/ CHANNEL-MIDTURN-PROGRESS 交付归档 / 同期 3 项 bug 修复）
 > Agent 规则：先读这里，再只打开当前任务链接到的文档。
 
 编辑 docs 前，先读 [DOCS-GOVERNANCE.md](DOCS-GOVERNANCE.md)。
@@ -23,7 +23,7 @@
 | **AUTOEVOLVE-CLOSE-LOOP** | 闭环采纳 + 对靶改进 + benchmark 验证。P1/P2/G5/BC-M1/BC-M2a/engine-fix/阶段A 已交付，阶段B(EVOLVE-BADCASE-SENSITIVITY)/G3/P3 未做 | 部分交付 | [需求包](requirements/active/2026-06-03-AUTOEVOLVE-CLOSE-LOOP/index.md) | — | [PRD](requirements/active/2026-06-03-AUTOEVOLVE-CLOSE-LOOP/prd.md) | [tech-design](requirements/active/2026-06-03-AUTOEVOLVE-CLOSE-LOOP/tech-design.md) | [delivery-index](delivery-index.md) |
 | **EVOLVE-JUDGE-GROUNDING** | 自进化判定与候选对靶优化（blog 复盘）。Phase 1 = 配对/comparative 判定（复用已有 perScenarioFlips 做 net-wins 判据，治绝对打分噪声→0 赢家），无 schema 改动；Phase 2+ grounding/refuter/held-out 列 roadmap | Phase 1 已交付 / Phase 2 见下行 | [需求包](requirements/active/2026-06-17-EVOLVE-JUDGE-GROUNDING/index.md) | [MRD](requirements/active/2026-06-17-EVOLVE-JUDGE-GROUNDING/mrd.md) | [PRD](requirements/active/2026-06-17-EVOLVE-JUDGE-GROUNDING/prd.md) | [tech-design](requirements/active/2026-06-17-EVOLVE-JUDGE-GROUNDING/tech-design.md) | — |
 | **EVOLVE-CANDIDATE-GROUNDING** | EVOLVE-JUDGE-GROUNDING Phase 2：候选 per-badcase grounding + 最小 delta 编辑（治 live net -7 候选制造回归）。决策经 architect 对抗 review ENDORSE-WITH-CHANGES（A+C-seam）；退出标准 ratify。无 schema 改 | Phase 2 已交付 | [需求包](requirements/active/2026-06-18-EVOLVE-CANDIDATE-GROUNDING/index.md) | [MRD](requirements/active/2026-06-18-EVOLVE-CANDIDATE-GROUNDING/mrd.md) | [PRD](requirements/active/2026-06-18-EVOLVE-CANDIDATE-GROUNDING/prd.md) | [tech-design](requirements/active/2026-06-18-EVOLVE-CANDIDATE-GROUNDING/tech-design.md) | — |
-| **WECHAT-CHANNEL** | 加微信 channel（现仅飞书）。**路线已拍=B-native**：SkillForge 原生实现腾讯 ClawBot 的 iLink 协议（个人微信 + 本机部署 + 发文件，无 openclaw 无额外进程；协议社区逆向 eyes-open）| prd-ready（待 go 实现） | [需求包](requirements/active/2026-06-18-WECHAT-CHANNEL/index.md) | [MRD](requirements/active/2026-06-18-WECHAT-CHANNEL/mrd.md) | [PRD](requirements/active/2026-06-18-WECHAT-CHANNEL/prd.md) | [tech-design](requirements/active/2026-06-18-WECHAT-CHANNEL/tech-design.md) | — |
+| **WECHAT-CHANNEL** | 加微信 channel（现仅飞书）。**路线已拍=B-native**：SkillForge 原生实现腾讯 ClawBot 的 iLink 协议（个人微信 + 本机部署 + 发文件，无 openclaw 无额外进程；协议社区逆向 eyes-open）| Slice 1 已交付 / Slice 2-3 待做 | [需求包](requirements/active/2026-06-18-WECHAT-CHANNEL/index.md) | [MRD](requirements/active/2026-06-18-WECHAT-CHANNEL/mrd.md) | [PRD](requirements/active/2026-06-18-WECHAT-CHANNEL/prd.md) | [tech-design](requirements/active/2026-06-18-WECHAT-CHANNEL/tech-design.md) | — |
 
 > 整体方案：[plans/PROD-OPTIMIZATION-FLYWHEEL/plan.md](plans/PROD-OPTIMIZATION-FLYWHEEL/plan.md) —— 数据飞轮 / 优化闭环 6 版本拆分（**V1-V6 全部已交付**，⑤ A/B 自动 trigger 真闭环 prompt+skill 双 surface 通）
 
@@ -49,6 +49,7 @@
 
 | ID | 标题 | 需求包 | 技术方案 |
 | --- | --- | --- | --- |
+| CHANNEL-MIDTURN-PROGRESS | 渠道中途进度推送（任务执行中把 assistant 中途文本同步给飞书/微信；飞书默认开 / 微信默认关。Spring 事件 `AssistantTurnAppendedEvent` + `@Async ChannelProgressDeliveryListener`；只推含 tool_use 的轮天然去重 + 节流 + 复用 `ReplyDeliveryService`；best-effort 不打断 loop / commit `43869ded`） | [需求包](requirements/archive/2026-06-19-CHANNEL-MIDTURN-PROGRESS/index.md) | — (Lite, decisions in index.md) |
 | MCP-HTTP-ANYSEARCH | MCP HTTP transport + 远程 server AnySearch 接入（MCP-CLIENT-MVP 延期到 V2 的 HTTP transport 续作；`McpHttpTransport` 务实版 Streamable HTTP + V152 transport/url/headers schema + core collectTools 工具可见性 bug 修复 + V153/V154 seed&绑定&路由 + dashboard transport UI / Full pipeline 5 reviewer 对抗 2 blocker 修复 / commit `9c57a9fc`）| [需求包](requirements/archive/2026-06-15-MCP-HTTP-ANYSEARCH/index.md) | [tech-design](requirements/archive/2026-06-15-MCP-HTTP-ANYSEARCH/tech-design.md) |
 | AUTOEVOLVING-V1-DSL-DASHBOARD | autoEvolving V1：DSL workflow 编排引擎 + `/autoevolving` dashboard 端到端测试 milestone（Sprint 1-4 全交付，2026-05-29，commit Sprint1 `9000bd5` / Sprint3 `b675ee7` / Sprint4 `85ff279` + LLM fail-fast `9049ef8`）| [需求包](requirements/archive/2026-05-29-AUTOEVOLVING-V1-DSL-DASHBOARD/index.md) | [tech-design](requirements/archive/2026-05-29-AUTOEVOLVING-V1-DSL-DASHBOARD/tech-design.md) |
 | AUTOEVOLVE-AGENT-FLYWHEEL | autoEvolve 进化 loop：BUG-1 winner-carry-forward + 每轮 A/B 反思回流下一轮候选 + judge per-case rationale（方案 B）（2026-06-01/06-02 交付）| [需求包](requirements/archive/2026-05-31-AUTOEVOLVE-AGENT-FLYWHEEL/index.md) | [tech-design](requirements/archive/2026-05-31-AUTOEVOLVE-AGENT-FLYWHEEL/tech-design.md) |
