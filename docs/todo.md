@@ -67,6 +67,7 @@
 
 | ID | 标题 | 模式 | 触发 |
 | --- | --- | --- | --- |
+| **GLOBAL-SYSTEM-PROMPT** 🆕 | 实例级全局 system prompt（全平台一份，叠在 per-user CLAUDE.md 之上，所有**原生** agent 共享；cc/codex 不覆盖）。**注：per-user CLAUDE.md 已存在，本需求加实例级一层** → [需求包](requirements/backlog/GLOBAL-SYSTEM-PROMPT/index.md) | Full 候选（新 entity+migration） | 用户 2026-06-22 立项，小而清晰，随时可起 |
 | **OUTCOMES-RUBRIC-FOUNDATION** | `t_rubric` entity + grader 隔离 audit（V1）/ AgentLoopEngine 第 5 轴 exit（V2）。DREAMING 姊妹包独立 ship。**注**:= triage 的 OUTCOME-DRIVEN-LOOP（缺口 D）,已在此立项 | Full 候选 | 用户拍是否升 active |
 | **WF-CONCURRENT-PIPELINE** | 学 CC 并发 pipeline（stage 重叠/无 barrier）补 workflow 引擎（现 pipeline() 串行）。AUTOEVOLVING V2(d)。**已立需求包** → [backlog/WF-CONCURRENT-PIPELINE](requirements/backlog/WF-CONCURRENT-PIPELINE/index.md) | Full 候选 | V2 启动 / 多阶段 fan-out 链路成瓶颈时 |
 | **CHANNEL-RICH-MESSAGE** | 微信原生视频(iLink video_item，当前视频走 file type4) + 卡片中性模型(飞书原生交互卡片 + 微信降级 text/image，iLink 无 card/button) | Mid/Full 候选 | 有富消息/卡片诉求时 |
