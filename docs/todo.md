@@ -23,11 +23,10 @@
 > 队列 #1/#2/#3/#3b + 阶段B + AUTORESEARCH + WF-CONCURRENT-PIPELINE 全是 **AUTOEVOLVING-MASTER 一个总包**的切片（OUTCOMES-RUBRIC 是唯一例外，独立）。这里给真实状态，避免被各子包"已交付"误导。
 
 - **机器已造完，但还没证明有用**：V1（DSL+dashboard）+ 飞轮 + agent-level bundle 爬坡 + CLOSE-LOOP 闭环采纳 P1/对靶 P2 + JUDGE-GROUNDING Phase 1（配对 net-wins）+ CANDIDATE-GROUNDING Phase 2（候选 grounding）**全部 ship**。但截至今天 **0 个被证实的真改进赢家**。
-- **唯一瓶颈 = 还没真跑观察**：CANDIDATE-GROUNDING 上线后只跑过 1 次冒烟（`de0c8b2a`）；之前 todo 写"观察中"是乐观——**"≥3 轮干净评测出赢家"的观察其实没开始，0 结论**。
-- **👉 下一步（明确）**：**跑 ≥3 轮干净 evolve 观察 run**，看 CANDIDATE-GROUNDING 是否真消除净回归、能否产出第一个赢家。结果决定后续全部分叉：
-  - 出赢家 → CLOSE-LOOP **P1 闭环采纳**才有意义 → 再上 **P3 benchmark**。
-  - 0 赢家 → 升级（重开 bundle 设计 H2，或先做**阶段B 补尺子敏感度**让 harvest 场景更密）。
-- **被它 blocked、现在别先做**：阶段B（等有赢家再调尺子才不是空调参）、CLOSE-LOOP P3 benchmark（要有赢家才有比较意义）。
+- **观察 1/≥3 已跑（2026-06-22，run `bbe8a4dd`）**：① **管道/收尾层已修好**——干净跑完没卡（历史 06-05 孤儿是旧代码）；② **但候选仍负优化、0 赢家**——候选在自己该修的 target 场景 **80%→40%(−40pp)**,因为候选生成器糊了一段**通用紧箍咒**(限长/超10轮压缩/搜索≤15轮)把多步任务憋死(一个直接摆烂得 0 分)。
+- **根因定位 = 候选生成质量**（不在判据、不在管道）：候选是**大段通用重写、非最小对靶 → Phase 2 的 C-seam 未生效、且对回归无感知**。详见 [EVOLVE-CANDIDATE-GROUNDING 观察记录](requirements/active/2026-06-18-EVOLVE-CANDIDATE-GROUNDING/index.md#观察记录退出标准-3-轮)。
+- **👉 下一步**：机制已很清晰(不必凑满 3 轮)→ **Phase 3 / H2**:候选生成强制「最小 + 对靶 + 回归感知(把 target 场景喂进去=这些能力必须保住)」+ 质疑宽泛 issue(token 效率类)是否该用加 prompt 规则来修。待立项。
+- **被它 blocked、现在别先做**：阶段B / CLOSE-LOOP P3 benchmark（要先有靠谱候选 / 赢家才有意义）。
 - **track 层合并**：EVOLVE-JUDGE-GROUNDING（Phase 1）与 EVOLVE-CANDIDATE-GROUNDING（Phase 2）是同一条线，已合并为一条 track 看待；详细 prd/tech-design 各包保留不动。
 
 ## 阻塞 / 待决策
