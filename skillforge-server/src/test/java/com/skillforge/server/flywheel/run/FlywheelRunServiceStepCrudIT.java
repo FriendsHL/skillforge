@@ -211,6 +211,61 @@ class FlywheelRunServiceStepCrudIT extends AbstractPostgresIT {
                 .isInstanceOf(RuntimeException.class);
     }
 
+    @Test
+    @DisplayName("FR-C7 rolling window: countEvolveIterationStepsByAgentIdSince excludes steps older than :since (the freeze-fix)")
+    void frC7_rollingWindow_excludesOldSteps() {
+        // Two evolve runs for the SAME agent (CRIT-1: cross-run still aggregates
+        // inside the window). One iteration step is recent, two are aged out.
+        String runRecent = insertRun(99L, "evolve");
+        String runOld = insertRun(99L, "evolve");
+
+        // Recent step — created 1h before FIXED_NOW → inside any window >= 1h.
+        insertEvolveIterationStepAt(runRecent, FIXED_NOW.minus(1, java.time.temporal.ChronoUnit.HOURS));
+        // Aged-out steps — created 200h (>7d) before FIXED_NOW → outside the 168h window.
+        insertEvolveIterationStepAt(runOld, FIXED_NOW.minus(200, java.time.temporal.ChronoUnit.HOURS));
+        insertEvolveIterationStepAt(runOld, FIXED_NOW.minus(201, java.time.temporal.ChronoUnit.HOURS));
+
+        // Lifetime count (the old, buggy semantic) would be 3 → permanent freeze.
+        // Windowed count with since = FIXED_NOW - 168h must be 1 (only the recent one).
+        Instant since = FIXED_NOW.minus(168, java.time.temporal.ChronoUnit.HOURS);
+        long windowed = stepRepository.countEvolveIterationStepsByAgentIdSince(99L, since);
+        assertThat(windowed).isEqualTo(1L);
+
+        // A very old since (counts everything) proves all 3 rows really exist —
+        // i.e. the difference is the window filter, not missing rows.
+        long all = stepRepository.countEvolveIterationStepsByAgentIdSince(
+                99L, FIXED_NOW.minus(10000, java.time.temporal.ChronoUnit.HOURS));
+        assertThat(all).isEqualTo(3L);
+    }
+
+    @Test
+    @DisplayName("FR-C7 rolling window: only counts evolve_iteration steps (not other kinds) for the agent's evolve runs")
+    void frC7_rollingWindow_onlyEvolveIterationKind() {
+        String run = insertRun(88L, "evolve");
+        // An in-window evolve_iteration step counts.
+        insertEvolveIterationStepAt(run, FIXED_NOW.minus(1, java.time.temporal.ChronoUnit.HOURS));
+        // An in-window tool_call step on the same run must NOT count.
+        service.appendStep(run, "{}", FlywheelRunStepEntity.STEP_KIND_TOOL_CALL, 1);
+
+        Instant since = FIXED_NOW.minus(168, java.time.temporal.ChronoUnit.HOURS);
+        long windowed = stepRepository.countEvolveIterationStepsByAgentIdSince(88L, since);
+        assertThat(windowed).isEqualTo(1L);
+    }
+
+    /**
+     * Insert a completed {@code evolve_iteration} step with an explicit
+     * {@code created_at} (bypassing {@code @CreatedDate} auditing so the window
+     * boundary is deterministic).
+     */
+    private void insertEvolveIterationStepAt(String runId, Instant createdAt) {
+        jdbcTemplate.update(
+                "INSERT INTO t_flywheel_run_step "
+                        + "(id, run_id, step_input_json, status, step_kind, created_at, updated_at) "
+                        + "VALUES (?, ?, '{}'::jsonb, 'completed', 'evolve_iteration', ?, ?)",
+                UUID.randomUUID().toString(), runId,
+                java.sql.Timestamp.from(createdAt), java.sql.Timestamp.from(createdAt));
+    }
+
     private String insertRun(long agentId, String loopKind) {
         String id = UUID.randomUUID().toString();
         jdbcTemplate.update(

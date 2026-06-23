@@ -53,6 +53,7 @@ class TriggerAbEvalToolTest {
     @Mock private FlywheelRunService flywheelRunService;
 
     private static final int AB_BUDGET = 3;
+    private static final int AB_BUDGET_WINDOW_HOURS = 168;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private TriggerAbEvalTool tool;
@@ -61,7 +62,8 @@ class TriggerAbEvalToolTest {
     void setUp() {
         tool = new TriggerAbEvalTool(promptImproverService, skillDraftService,
                 behaviorRuleAbEvalService, agentEvolveAbEvalService, skillDraftRepository,
-                behaviorRuleVersionRepository, flywheelRunService, AB_BUDGET, objectMapper);
+                behaviorRuleVersionRepository, flywheelRunService, AB_BUDGET,
+                AB_BUDGET_WINDOW_HOURS, objectMapper);
     }
 
     private SkillResult run(Map<String, Object> input) {
@@ -302,7 +304,7 @@ class TriggerAbEvalToolTest {
     @DisplayName("FR-C7 CRIT-1: cap fires on agent count under cap → A/B fires")
     void abBudget_perAgent_underCap_fires() {
         // Per-agent count under cap → should allow through.
-        when(flywheelRunService.countEvolveAbTriggersForAgent(42L)).thenReturn(2L); // < AB_BUDGET=3
+        when(flywheelRunService.countEvolveAbTriggersForAgent(eq(42L), eq(AB_BUDGET_WINDOW_HOURS))).thenReturn(2L); // < AB_BUDGET=3
         when(promptImproverService.runAbTestAgainst(any(AbEvalRunRequest.class)))
                 .thenReturn("prompt-ab-ok");
 
@@ -315,7 +317,7 @@ class TriggerAbEvalToolTest {
 
         assertThat(result.isSuccess()).isTrue();
         assertThat(result.getOutput()).contains("\"abRunId\":\"prompt-ab-ok\"");
-        verify(flywheelRunService).countEvolveAbTriggersForAgent(42L);
+        verify(flywheelRunService).countEvolveAbTriggersForAgent(eq(42L), eq(AB_BUDGET_WINDOW_HOURS));
         verify(promptImproverService).runAbTestAgainst(any(AbEvalRunRequest.class));
     }
 
@@ -323,7 +325,7 @@ class TriggerAbEvalToolTest {
     @DisplayName("FR-C7 CRIT-1: cap fires on agent count at cap → REJECTED (no evolveRunId = no bypass)")
     void abBudget_perAgent_atCap_rejected_withoutEvolveRunId() {
         // Per-agent count at cap — LLM omitted evolveRunId, should still be REJECTED.
-        when(flywheelRunService.countEvolveAbTriggersForAgent(42L)).thenReturn(3L); // == AB_BUDGET=3
+        when(flywheelRunService.countEvolveAbTriggersForAgent(eq(42L), eq(AB_BUDGET_WINDOW_HOURS))).thenReturn(3L); // == AB_BUDGET=3
 
         Map<String, Object> input = new LinkedHashMap<>();
         input.put("surface", "prompt");
@@ -337,7 +339,7 @@ class TriggerAbEvalToolTest {
         assertThat(result.getOutput()).contains("\"status\":\"rejected\"");
         assertThat(result.getOutput()).contains("A/B budget reached");
         assertThat(result.getOutput()).contains("targetAgentId");
-        verify(flywheelRunService).countEvolveAbTriggersForAgent(42L);
+        verify(flywheelRunService).countEvolveAbTriggersForAgent(eq(42L), eq(AB_BUDGET_WINDOW_HOURS));
         verify(promptImproverService, never()).runAbTestAgainst(any(AbEvalRunRequest.class));
     }
 
@@ -345,7 +347,7 @@ class TriggerAbEvalToolTest {
     @DisplayName("FR-C7 CRIT-1: per-run count higher than per-agent → higher count used (conservative)")
     void abBudget_perRunCountHigher_takesMax() {
         // Agent count under cap, but per-run count is at cap → still reject.
-        when(flywheelRunService.countEvolveAbTriggersForAgent(42L)).thenReturn(1L); // < cap
+        when(flywheelRunService.countEvolveAbTriggersForAgent(eq(42L), eq(AB_BUDGET_WINDOW_HOURS))).thenReturn(1L); // < cap
         when(flywheelRunService.countEvolveAbTriggers("evolve-1")).thenReturn(3L); // == cap
 
         Map<String, Object> input = new LinkedHashMap<>();
@@ -364,7 +366,7 @@ class TriggerAbEvalToolTest {
     @Test
     @DisplayName("FR-C7 HIGH-3: DB error during cap count → FAIL CLOSED (reject, not allow)")
     void abBudget_dbError_failsClosed() {
-        when(flywheelRunService.countEvolveAbTriggersForAgent(42L))
+        when(flywheelRunService.countEvolveAbTriggersForAgent(eq(42L), eq(AB_BUDGET_WINDOW_HOURS)))
                 .thenThrow(new RuntimeException("DB connection lost"));
 
         Map<String, Object> input = new LinkedHashMap<>();
@@ -383,7 +385,7 @@ class TriggerAbEvalToolTest {
     @Test
     @DisplayName("FR-C7 CRIT-1: evolveRunId present + both counts under cap → A/B fires")
     void abBudget_withEvolveRunId_bothUnderCap_fires() {
-        when(flywheelRunService.countEvolveAbTriggersForAgent(42L)).thenReturn(2L);
+        when(flywheelRunService.countEvolveAbTriggersForAgent(eq(42L), eq(AB_BUDGET_WINDOW_HOURS))).thenReturn(2L);
         when(flywheelRunService.countEvolveAbTriggers("evolve-1")).thenReturn(1L);
         when(promptImproverService.runAbTestAgainst(any(AbEvalRunRequest.class)))
                 .thenReturn("prompt-ab-ok");
@@ -398,7 +400,7 @@ class TriggerAbEvalToolTest {
 
         assertThat(result.isSuccess()).isTrue();
         assertThat(result.getOutput()).contains("\"abRunId\":\"prompt-ab-ok\"");
-        verify(flywheelRunService).countEvolveAbTriggersForAgent(42L);
+        verify(flywheelRunService).countEvolveAbTriggersForAgent(eq(42L), eq(AB_BUDGET_WINDOW_HOURS));
         verify(flywheelRunService).countEvolveAbTriggers("evolve-1");
     }
 

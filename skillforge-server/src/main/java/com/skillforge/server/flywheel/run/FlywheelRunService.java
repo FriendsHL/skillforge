@@ -42,6 +42,20 @@ public class FlywheelRunService {
     private static final Logger log = LoggerFactory.getLogger(FlywheelRunService.class);
 
     /**
+     * FR-C7 (rolling-window fix): default budget window in hours (7 days) used
+     * when the configured window is out of range. See {@link #normalizeWindowHours}.
+     */
+    public static final int DEFAULT_AB_BUDGET_WINDOW_HOURS = 168;
+
+    /**
+     * FR-C7 (r1 hardening): inclusive upper bound for the budget window (1 year).
+     * A window larger than this effectively re-creates the lifetime-cumulative
+     * freeze the fix removed, so it is rejected (warn + fallback). Valid configured
+     * range is {@code [1, 8760]}.
+     */
+    public static final int MAX_AB_BUDGET_WINDOW_HOURS = 8760;
+
+    /**
      * Status transitions accepted by {@link #transitionStatus}. We rely on
      * Service-layer validation rather than a DB CHECK because the same row
      * can legally go {@code pending → running → completed} or skip running
@@ -536,19 +550,65 @@ public class FlywheelRunService {
     }
 
     /**
-     * AUTOEVOLVE-AGENT-FLYWHEEL Module C (FR-C7 CRIT-1 fix): per-agent A/B
-     * trigger count — total {@code evolve_iteration} steps across ALL evolve runs
-     * for the given agent. Used as the always-enforced cap counter in
-     * {@code TriggerAbEval}: since {@code targetAgentId} is always-required in
-     * that tool, the cap fires unconditionally (an LLM that omits
-     * {@code evolveRunId} cannot bypass it by switching to this path).
+     * AUTOEVOLVE-AGENT-FLYWHEEL Module C (FR-C7 CRIT-1 fix; FR-C7 rolling-window
+     * fix 2026-06-24): per-agent A/B trigger count — {@code evolve_iteration} steps
+     * across ALL evolve runs for the given agent <b>within a rolling time window</b>
+     * (steps created in the last {@code windowHours} hours). Used as the
+     * always-enforced cap counter in {@code TriggerAbEval}: since
+     * {@code targetAgentId} is always-required in that tool, the cap fires
+     * unconditionally (an LLM that omits {@code evolveRunId} cannot bypass it by
+     * switching to this path).
+     *
+     * <p><b>Window vs lifetime (security trade-off).</b> The count was previously
+     * lifetime-cumulative, which permanently froze any repeatedly-evolved agent
+     * once it crossed the cap. Switching to a rolling window resets the budget each
+     * window so iteration can continue, WITHOUT weakening the CRIT-1 cross-run
+     * defence: within the window the count still aggregates every evolve run for the
+     * agent (the join is unchanged), so opening multiple runs inside one window does
+     * not bypass the cap. The only relaxation is cross-window: budget that aged out
+     * of the window no longer counts — which is the intended behaviour.
+     *
+     * @param agentId     the agent being evolved (positive)
+     * @param windowHours rolling window size in hours; the count includes only
+     *                    steps with {@code created_at >= now - windowHours}. An
+     *                    out-of-range value (outside {@code [1, }
+     *                    {@value #MAX_AB_BUDGET_WINDOW_HOURS}{@code ]}) is normalized
+     *                    to {@value #DEFAULT_AB_BUDGET_WINDOW_HOURS} via
+     *                    {@link #normalizeWindowHours(int)} (warn + fallback, NOT a
+     *                    throw) so a bad config can never crash the call nor
+     *                    re-create the lifetime freeze. {@code since} is derived from
+     *                    the service's injected {@link Clock} so the window is
+     *                    test-deterministic.
      */
     @Transactional(readOnly = true)
-    public long countEvolveAbTriggersForAgent(Long agentId) {
+    public long countEvolveAbTriggersForAgent(Long agentId, int windowHours) {
         if (agentId == null || agentId <= 0L) {
             throw new IllegalArgumentException("agentId must be a positive long");
         }
-        return stepRepository.countEvolveIterationStepsByAgentId(agentId);
+        int effectiveWindowHours = normalizeWindowHours(windowHours);
+        Instant since = clock.instant().minus(effectiveWindowHours, ChronoUnit.HOURS);
+        return stepRepository.countEvolveIterationStepsByAgentIdSince(agentId, since);
+    }
+
+    /**
+     * FR-C7 (r1 hardening): clamp/validate the configured budget window to the
+     * valid range {@code [1, }{@value #MAX_AB_BUDGET_WINDOW_HOURS}{@code ]}. An
+     * out-of-range value (≤ 0 or {@code > }{@value #MAX_AB_BUDGET_WINDOW_HOURS}) is
+     * NOT honoured: it logs a warning and falls back to
+     * {@value #DEFAULT_AB_BUDGET_WINDOW_HOURS} rather than throwing (a bad config
+     * must not crash startup / the tool call) or silently accepting a window so
+     * large it re-creates the lifetime-cumulative freeze bug. Shared by
+     * {@code TriggerAbEvalTool} (constructor normalization) and this service so the
+     * two layers agree exactly.
+     */
+    public static int normalizeWindowHours(int windowHours) {
+        if (windowHours < 1 || windowHours > MAX_AB_BUDGET_WINDOW_HOURS) {
+            log.warn("FR-C7: ab-budget-window-hours={} out of range [1, {}] — falling back to "
+                    + "default {}h", windowHours, MAX_AB_BUDGET_WINDOW_HOURS,
+                    DEFAULT_AB_BUDGET_WINDOW_HOURS);
+            return DEFAULT_AB_BUDGET_WINDOW_HOURS;
+        }
+        return windowHours;
     }
 
     /**

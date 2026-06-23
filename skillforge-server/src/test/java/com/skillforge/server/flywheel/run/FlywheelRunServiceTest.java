@@ -189,6 +189,70 @@ class FlywheelRunServiceTest {
         assertThat(result.getStatus()).isEqualTo(FlywheelRunEntity.STATUS_COMPLETED);
     }
 
+    @Test
+    @DisplayName("countEvolveAbTriggersForAgent (FR-C7 rolling window): derives since=now-windowHours from the clock + delegates")
+    void countEvolveAbTriggersForAgent_rollingWindow_passesSince() {
+        // windowHours=168 (7d) → since = FIXED_NOW - 168h.
+        Instant expectedSince = FIXED_NOW.minus(168, java.time.temporal.ChronoUnit.HOURS);
+        when(stepRepository.countEvolveIterationStepsByAgentIdSince(42L, expectedSince))
+                .thenReturn(5L);
+
+        long count = service.countEvolveAbTriggersForAgent(42L, 168);
+
+        assertThat(count).isEqualTo(5L);
+        verify(stepRepository).countEvolveIterationStepsByAgentIdSince(42L, expectedSince);
+    }
+
+    @Test
+    @DisplayName("countEvolveAbTriggersForAgent (FR-C7): a different window shifts since proportionally")
+    void countEvolveAbTriggersForAgent_shorterWindow_shiftsSince() {
+        Instant expectedSince = FIXED_NOW.minus(24, java.time.temporal.ChronoUnit.HOURS);
+        when(stepRepository.countEvolveIterationStepsByAgentIdSince(42L, expectedSince))
+                .thenReturn(0L);
+
+        long count = service.countEvolveAbTriggersForAgent(42L, 24);
+
+        assertThat(count).isEqualTo(0L);
+        verify(stepRepository).countEvolveIterationStepsByAgentIdSince(42L, expectedSince);
+    }
+
+    @Test
+    @DisplayName("countEvolveAbTriggersForAgent rejects illegal agentId (<=0)")
+    void countEvolveAbTriggersForAgent_rejectsBadAgentId() {
+        assertThatThrownBy(() -> service.countEvolveAbTriggersForAgent(0L, 168))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @DisplayName("countEvolveAbTriggersForAgent (FR-C7 r1): out-of-range windowHours warns + falls back to default 168 (no throw)")
+    void countEvolveAbTriggersForAgent_outOfRangeWindow_fallsBackToDefault() {
+        // windowHours<1 and windowHours>MAX both normalize to DEFAULT (168) → since = now-168h.
+        Instant expectedSince = FIXED_NOW.minus(
+                FlywheelRunService.DEFAULT_AB_BUDGET_WINDOW_HOURS, java.time.temporal.ChronoUnit.HOURS);
+        when(stepRepository.countEvolveIterationStepsByAgentIdSince(42L, expectedSince))
+                .thenReturn(7L);
+
+        // 0 (below range) and 99999 (above 8760) both fall back — neither throws.
+        assertThat(service.countEvolveAbTriggersForAgent(42L, 0)).isEqualTo(7L);
+        assertThat(service.countEvolveAbTriggersForAgent(42L, 99999)).isEqualTo(7L);
+    }
+
+    @Test
+    @DisplayName("FlywheelRunService.normalizeWindowHours clamps to [1, 8760], else default 168")
+    void normalizeWindowHours_bounds() {
+        assertThat(FlywheelRunService.normalizeWindowHours(1)).isEqualTo(1);
+        assertThat(FlywheelRunService.normalizeWindowHours(168)).isEqualTo(168);
+        assertThat(FlywheelRunService.normalizeWindowHours(FlywheelRunService.MAX_AB_BUDGET_WINDOW_HOURS))
+                .isEqualTo(FlywheelRunService.MAX_AB_BUDGET_WINDOW_HOURS);
+        assertThat(FlywheelRunService.normalizeWindowHours(0))
+                .isEqualTo(FlywheelRunService.DEFAULT_AB_BUDGET_WINDOW_HOURS);
+        assertThat(FlywheelRunService.normalizeWindowHours(-5))
+                .isEqualTo(FlywheelRunService.DEFAULT_AB_BUDGET_WINDOW_HOURS);
+        assertThat(FlywheelRunService.normalizeWindowHours(
+                FlywheelRunService.MAX_AB_BUDGET_WINDOW_HOURS + 1))
+                .isEqualTo(FlywheelRunService.DEFAULT_AB_BUDGET_WINDOW_HOURS);
+    }
+
     private static FlywheelRunEntity pendingRun(String id) {
         FlywheelRunEntity r = new FlywheelRunEntity();
         r.setId(id);

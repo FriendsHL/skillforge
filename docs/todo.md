@@ -25,7 +25,8 @@
 - **机器已造完，但还没证明有用**：V1（DSL+dashboard）+ 飞轮 + agent-level bundle 爬坡 + CLOSE-LOOP 闭环采纳 P1/对靶 P2 + JUDGE-GROUNDING Phase 1（配对 net-wins）+ CANDIDATE-GROUNDING Phase 2（候选 grounding）**全部 ship**。但截至今天 **0 个被证实的真改进赢家**。
 - **观察 1/≥3 已跑（2026-06-22，run `bbe8a4dd`）**：① **管道/收尾层已修好**——干净跑完没卡（历史 06-05 孤儿是旧代码）；② **但候选仍负优化、0 赢家**——候选在自己该修的 target 场景 **80%→40%(−40pp)**,因为候选生成器糊了一段**通用紧箍咒**(限长/超10轮压缩/搜索≤15轮)把多步任务憋死(一个直接摆烂得 0 分)。
 - **真因（观察 3 深挖，更正前两次判断）= FR-C7 A/B 预算闸**：agent 3 累计 A/B 已达 **cap=30 → 永久冻结**，evolve run 在它上面跑不了 A/B（配置 `skillforge.evolve.ab-budget-per-run` 名义 per-run、实为 **per-agent 终身累计**，`countEvolveAbTriggersForAgent`）。**不是**候选质量差（候选其实最小对靶 + reflect 生效）、**不是**编排 bug；iter1 还出过 +25pp/0回归 候选（惜 decideKeep kept=false，次要）。详见 [观察记录 观察3](requirements/active/2026-06-18-EVOLVE-CANDIDATE-GROUNDING/index.md#观察记录退出标准-3-轮)。
-- **👉 下一步**：① **换预算有余量的 agent（如 agent 1）或调高 cap** 重跑，给 loop 公平测试；② **重审 cap 语义**（"per-run"名 vs per-agent 终身累计——会永久冻结被反复迭代的 agent，疑设计 bug）；③ 次要：查 decideKeep 为何拒 +25pp/0回归。
+- ✅ **FR-C7 已修（2026-06-24，V165，`feat/frc7-window-runworkflow`）**：终身累计 → 滚动 168h 窗（保 CRIT-1 防绕过）+ 索引 + Main Assistant 绑 RunWorkflow。live 验 agent 3 解冻（全历史 32/窗口 8 < cap30）。
+- **👉 下一步（唯一开放）**：**decideKeep 为何拒一个 +25pp/0回归 的正向候选**（疑配对 net-wins 在全 50 场景上把 5 个 target 改进稀释 → 判不显著）。现在 agent 3 有预算了,可直接重跑 evolve(maxIter≥2)观察"能否爬出真赢家",顺带定位 decideKeep。
 - **被它 blocked、现在别先做**：阶段B / CLOSE-LOOP P3 benchmark（要先有靠谱候选 / 赢家才有意义）。
 - **track 层合并**：EVOLVE-JUDGE-GROUNDING（Phase 1）与 EVOLVE-CANDIDATE-GROUNDING（Phase 2）是同一条线，已合并为一条 track 看待；详细 prd/tech-design 各包保留不动。
 

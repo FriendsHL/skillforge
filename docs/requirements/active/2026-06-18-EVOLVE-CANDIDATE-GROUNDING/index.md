@@ -1,7 +1,7 @@
 # EVOLVE-CANDIDATE-GROUNDING — 候选 per-badcase grounding（EVOLVE-JUDGE-GROUNDING Phase 2）
 
 > 创建：2026-06-18
-> 状态：**Phase 2 已交付**（2026-06-18，commit `775fe4df`）。**真因（观察 3 深挖，更正观察 1/2 判断）= FR-C7 A/B 预算闸**：agent 3 累计 A/B 已达 cap=30 → **永久冻结**，evolve run 在它上面跑不了 A/B（配置 `skillforge.evolve.ab-budget-per-run` 名义 per-run、实为 **per-agent 终身累计**）。候选生成其实 OK（最小对靶 + reflect 生效），iter1 还出过 **+25pp/0回归** 候选（惜 decideKeep 仍 kept=false，次要）。**下一步：换有预算的 agent / 调高 cap / 重审 cap 语义**。详见「观察记录」观察 3。
+> 状态：**Phase 2 已交付**（2026-06-18，commit `775fe4df`）。**真因（观察 3 深挖，更正观察 1/2 判断）= FR-C7 A/B 预算闸**：agent 3 累计 A/B 已达 cap=30 → **永久冻结**，evolve run 在它上面跑不了 A/B（配置 `skillforge.evolve.ab-budget-per-run` 名义 per-run、实为 **per-agent 终身累计**）。候选生成其实 OK（最小对靶 + reflect 生效），iter1 还出过 **+25pp/0回归** 候选（惜 decideKeep 仍 kept=false，次要）。~~下一步：换有预算的 agent / 调高 cap / 重审 cap 语义~~ → **FR-C7 已修（2026-06-24，commit `feat/frc7-window-runworkflow`，V165）**：终身累计 → 滚动 168h 窗（越界回落、保 CRIT-1 防绕过）+ 索引 + Main Assistant 绑 RunWorkflow。**live 验证 agent 3 解冻**（全历史 A/B=32 但窗口内=8 < cap30）。**剩下唯一开放项 = decideKeep 拒 +25pp/0回归 正向候选**（下一步）。
 > 模式：Full（触碰核心 evolve-loop.workflow.js + 候选生成工具 + V-migration prompt；属核心测量/进化层）
 > 前身：[EVOLVE-JUDGE-GROUNDING](../2026-06-17-EVOLVE-JUDGE-GROUNDING/index.md) Phase 1（配对判据，已交付）的 Phase 2。
 
