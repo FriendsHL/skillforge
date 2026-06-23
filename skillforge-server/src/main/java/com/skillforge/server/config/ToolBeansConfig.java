@@ -337,16 +337,18 @@ public class ToolBeansConfig {
             com.skillforge.server.repository.BehaviorRuleVersionRepository behaviorRuleVersionRepository,
             FlywheelRunService flywheelRunService,
             @Value("${skillforge.evolve.ab-budget-per-run:30}") int abBudgetPerRun,
+            @Value("${skillforge.evolve.ab-budget-window-hours:168}") int abBudgetWindowHours,
             ObjectMapper objectMapper,
             SkillRegistry skillRegistry) {
         com.skillforge.server.tool.evolve.TriggerAbEvalTool tool =
                 new com.skillforge.server.tool.evolve.TriggerAbEvalTool(
                         promptImproverService, skillDraftService, behaviorRuleAbEvalService,
                         agentEvolveAbEvalService, skillDraftRepository, behaviorRuleVersionRepository,
-                        flywheelRunService, abBudgetPerRun, objectMapper);
+                        flywheelRunService, abBudgetPerRun, abBudgetWindowHours, objectMapper);
         skillRegistry.registerTool(tool);
-        log.info("Registered TriggerAbEvalTool into SkillRegistry (FR-C7 abBudgetPerRun={})",
-                abBudgetPerRun);
+        log.info("Registered TriggerAbEvalTool into SkillRegistry "
+                        + "(FR-C7 abBudgetPerRun={} abBudgetWindowHours={})",
+                abBudgetPerRun, abBudgetWindowHours);
         return tool;
     }
 

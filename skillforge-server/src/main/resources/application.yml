@@ -167,14 +167,24 @@ skillforge:
       # 若后续 429 频发再降回 6。
       scenario-concurrency: 10
 
-  # AUTOEVOLVE-AGENT-FLYWHEEL Module C (FR-C7): per-evolve-run A/B budget cap.
+  # AUTOEVOLVE-AGENT-FLYWHEEL Module C (FR-C7): per-agent A/B budget cap.
   # The orchestrator's maxIter lives in its agent prompt (untrusted surface) and
-  # the engine's maxLoops=25 fallback is too loose for real A/B compute. When the
-  # orchestrator threads evolveRunId into TriggerAbEval, the tool counts the run's
-  # recorded A/B triggers (evolve_iteration steps) and rejects once it reaches this
-  # cap. Default 30 (TriggerAbEvalTool.DEFAULT_AB_BUDGET_PER_RUN).
+  # the engine's maxLoops=25 fallback is too loose for real A/B compute. The cap is
+  # enforced per-agent (keyed on the always-required targetAgentId) over a ROLLING
+  # TIME WINDOW: the tool counts evolve_iteration steps recorded for the agent
+  # within the last ab-budget-window-hours and rejects once they reach
+  # ab-budget-per-run. Default 30 triggers / 168h (7d).
+  #
+  # 2026-06-24 FR-C7 fix: the count used to be lifetime-cumulative, which
+  # permanently froze any repeatedly-evolved agent once it crossed the cap (agent 3
+  # hit this). The rolling window resets the budget each window while still counting
+  # per-agent — the CRIT-1 cross-run bypass guard still holds inside the window.
+  # ab-budget-window-hours valid range is [1, 8760] (1h .. 1 year); an out-of-range
+  # value warns + falls back to 168 (a huge/lifetime window would re-create the
+  # freeze; see FlywheelRunService.normalizeWindowHours).
   evolve:
     ab-budget-per-run: 30
+    ab-budget-window-hours: 168
     # AUTOEVOLVE-CLOSE-LOOP workflow-fix F5 (2026-06-07): promote/keep 阈值单一来源
     # (EvolveThresholdProperties)。prompt/skill delta 15→5（n=36 时 15pp≈5-6 个净翻转,
     # 结构性不可达）; agent 双标准 0/−3 值不变挪配置; min-measured-n=10 (F3 最小测量数

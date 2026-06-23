@@ -4,6 +4,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -98,16 +99,26 @@ public interface FlywheelRunStepRepository extends JpaRepository<FlywheelRunStep
             String runId, String stepKind);
 
     /**
-     * AUTOEVOLVE-AGENT-FLYWHEEL Module C (FR-C7 CRIT-1 fix): count
-     * {@code evolve_iteration} steps across ALL evolve runs for a given
-     * {@code agentId}. Used as the per-agent A/B budget counter in
+     * AUTOEVOLVE-AGENT-FLYWHEEL Module C (FR-C7 CRIT-1 fix; FR-C7 rolling-window
+     * fix 2026-06-24): count {@code evolve_iteration} steps across ALL evolve runs
+     * for a given {@code agentId} whose step was created within the budget window
+     * ({@code s.createdAt >= :since}). Used as the per-agent A/B budget counter in
      * {@link FlywheelRunService#countEvolveAbTriggersForAgent(Long)} — the cap
      * fires on {@code targetAgentId} (always-required in TriggerAbEval) so an
      * LLM that omits {@code evolveRunId} cannot bypass it.
      *
+     * <p><b>Why a rolling window instead of lifetime?</b> The original query
+     * counted EVERY {@code evolve_iteration} step for the agent across all time,
+     * so a repeatedly-evolved agent permanently accumulated toward the cap and
+     * eventually froze (could never trigger another A/B again — agent 3 hit this).
+     * Keying on {@code createdAt >= :since} resets the budget every window while
+     * STILL counting per-agent: within one window an LLM cannot bypass the cap by
+     * opening multiple evolve runs (the CRIT-1 cross-run guard is preserved — the
+     * join still aggregates every run for the agent inside the window).
+     *
      * <p>The JPQL join traverses:
      * {@code t_flywheel_run_step.run_id → t_flywheel_run.id (agentId = :agentId,
-     * loopKind = 'evolve')}.
+     * loopKind = 'evolve')}, filtered to {@code step.created_at >= :since}.
      */
     @Query("""
             SELECT COUNT(s)
@@ -116,6 +127,8 @@ public interface FlywheelRunStepRepository extends JpaRepository<FlywheelRunStep
             WHERE r.agentId = :agentId
               AND r.loopKind = 'evolve'
               AND s.stepKind = 'evolve_iteration'
+              AND s.createdAt >= :since
             """)
-    long countEvolveIterationStepsByAgentId(@Param("agentId") Long agentId);
+    long countEvolveIterationStepsByAgentIdSince(@Param("agentId") Long agentId,
+                                                 @Param("since") Instant since);
 }

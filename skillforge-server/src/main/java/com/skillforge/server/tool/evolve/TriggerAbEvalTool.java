@@ -83,21 +83,36 @@ import java.util.Map;
  * surface) and the generic engine {@code maxLoops=25} fallback is too loose for
  * real A/B compute. The cap is enforced on {@code targetAgentId}, which is
  * ALWAYS REQUIRED in this tool — so an LLM that omits {@code evolveRunId}
- * cannot bypass it. Implementation: count total {@code evolve_iteration} steps
- * across ALL evolve runs for the agent
- * ({@link FlywheelRunService#countEvolveAbTriggersForAgent(Long)}); when
+ * cannot bypass it. Implementation: count {@code evolve_iteration} steps across
+ * ALL evolve runs for the agent <b>within a rolling time window</b>
+ * ({@link FlywheelRunService#countEvolveAbTriggersForAgent(Long, int)}); when
  * {@code evolveRunId} is also provided use the higher of the per-run count vs
  * the per-agent count. REJECT when the count reaches the configurable cap
  * ({@code skillforge.evolve.ab-budget-per-run}, default
  * {@value #DEFAULT_AB_BUDGET_PER_RUN}). A DB error during the cap check
  * <b>fails closed</b> (rejects the trigger) — security checks must not allow
  * through on failure.
+ *
+ * <p><b>FR-C7 rolling window (2026-06-24 fix).</b> The per-agent count was
+ * originally lifetime-cumulative, so any agent that was evolved enough times
+ * permanently exhausted its budget and could never trigger another A/B (agent 3
+ * froze this way). The cap is now scoped to a rolling window
+ * ({@code skillforge.evolve.ab-budget-window-hours}, default 168h = 7 days; valid
+ * range {@code [1, 8760]} via
+ * {@link FlywheelRunService#normalizeWindowHours(int)} — an out-of-range value
+ * warns + falls back to the default rather than crashing or honouring a freeze-
+ * recreating huge window), so the budget resets every window while still counting
+ * per-agent. The CRIT-1 cross-run bypass guard is preserved: within the window the
+ * count aggregates every evolve run for the agent, so an LLM cannot dodge the cap
+ * by opening multiple runs in the same window — only budget that has aged out of
+ * the window stops counting. The default 7-day window gives an evolve loop plenty
+ * of iteration headroom while keeping the per-agent rate bounded.
  */
 public class TriggerAbEvalTool implements Tool {
 
     public static final String NAME = "TriggerAbEval";
 
-    /** FR-C7: default per-evolve-run A/B trigger cap when none is configured. */
+    /** FR-C7: default per-window per-agent A/B trigger cap when none is configured. */
     public static final int DEFAULT_AB_BUDGET_PER_RUN = 30;
 
     private static final Logger log = LoggerFactory.getLogger(TriggerAbEvalTool.class);
@@ -110,6 +125,7 @@ public class TriggerAbEvalTool implements Tool {
     private final BehaviorRuleVersionRepository behaviorRuleVersionRepository;
     private final FlywheelRunService flywheelRunService;
     private final int abBudgetPerRun;
+    private final int abBudgetWindowHours;
     private final ObjectMapper objectMapper;
 
     public TriggerAbEvalTool(PromptImproverService promptImproverService,
@@ -120,6 +136,7 @@ public class TriggerAbEvalTool implements Tool {
                              BehaviorRuleVersionRepository behaviorRuleVersionRepository,
                              FlywheelRunService flywheelRunService,
                              int abBudgetPerRun,
+                             int abBudgetWindowHours,
                              ObjectMapper objectMapper) {
         this.promptImproverService = promptImproverService;
         this.skillDraftService = skillDraftService;
@@ -129,6 +146,11 @@ public class TriggerAbEvalTool implements Tool {
         this.behaviorRuleVersionRepository = behaviorRuleVersionRepository;
         this.flywheelRunService = flywheelRunService;
         this.abBudgetPerRun = abBudgetPerRun > 0 ? abBudgetPerRun : DEFAULT_AB_BUDGET_PER_RUN;
+        // FR-C7 (r1 hardening): normalize once at construction so the value handed
+        // to the service is already in range [1, MAX]; out-of-range → warn + default
+        // (NOT a throw, NOT a silent honour of a freeze-recreating huge window).
+        // Single source of truth lives on FlywheelRunService so both layers agree.
+        this.abBudgetWindowHours = FlywheelRunService.normalizeWindowHours(abBudgetWindowHours);
         this.objectMapper = objectMapper;
     }
 
@@ -364,7 +386,7 @@ public class TriggerAbEvalTool implements Tool {
         long agentCount;
         try {
             long agentId = Long.parseLong(targetAgentId);
-            agentCount = flywheelRunService.countEvolveAbTriggersForAgent(agentId);
+            agentCount = flywheelRunService.countEvolveAbTriggersForAgent(agentId, abBudgetWindowHours);
         } catch (RuntimeException e) {
             // HIGH-3 fix: fail closed — if the budget count fails, REJECT rather
             // than allowing through. Security checks must not fail open.
@@ -394,10 +416,12 @@ public class TriggerAbEvalTool implements Tool {
 
         if (used >= abBudgetPerRun) {
             log.warn("[TriggerAbEval] FR-C7 REJECTED: targetAgentId={} reached A/B budget cap "
-                    + "(used={} cap={} evolveRunId={})", targetAgentId, used, abBudgetPerRun, evolveRunId);
+                    + "(used={} cap={} windowHours={} evolveRunId={})",
+                    targetAgentId, used, abBudgetPerRun, abBudgetWindowHours, evolveRunId);
             String msg = "per-agent A/B budget reached (targetAgentId=" + targetAgentId
-                    + ", used=" + used + ", cap=" + abBudgetPerRun + "): stop triggering A/B "
-                    + "and summarize the kept candidates for human review";
+                    + ", used=" + used + ", cap=" + abBudgetPerRun + " per " + abBudgetWindowHours
+                    + "h window): stop triggering A/B and summarize the kept candidates for "
+                    + "human review";
             try {
                 Map<String, Object> body = new LinkedHashMap<>();
                 body.put("status", "rejected");

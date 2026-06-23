@@ -80,21 +80,63 @@ public class RunWorkflowTool implements Tool {
 
     @Override
     public String getDescription() {
-        return "Trigger the DSL workflow engine. Three modes (set \"mode\"):\n"
-                + "- \"name\": run a registered workflow by its name. Provide \"name\" "
-                + "and optional \"args\" (object).\n"
-                + "- \"inline\": run an inline workflow JS source directly. Provide "
-                + "\"script\" (the full .workflow.js source, including its "
-                + "`export const meta = { name, description, phases }` block) and "
-                + "optional \"args\". The script is parsed and run in the same "
-                + "sandbox as registered workflows; it is NOT permanently registered.\n"
-                + "- \"resume\": resume a workflow run that is paused on a human-approval "
-                + "gate. Provide \"resumeRunId\", \"decision\" (\"approved\" or "
-                + "\"rejected\"), and optional \"reason\".\n"
-                + "name / inline modes return a runId and start the run ASYNCHRONOUSLY "
-                + "(it proceeds in the background and reports progress over WebSocket); "
-                + "do NOT expect a completed result inline. resume returns the same runId. "
-                + "Use this to kick off or unblock workflows on the user's behalf.";
+        return """
+                Kick off a deterministic multi-agent WORKFLOW on the DSL engine, then return \
+                immediately with a runId. Workflows orchestrate many sub-agents / tools as a \
+                repeatable, journaled program written in a small sandboxed JavaScript DSL.
+
+                Three modes (set "mode"):
+                - "name": run a workflow already registered on the server by its meta.name. \
+                Provide "name" and optional "args" (object passed to the script as `args`).
+                - "inline": run a workflow you supply on the fly. Provide "script" — the full \
+                .workflow.js source INCLUDING its `export const meta = { name, description, \
+                phases }` block (meta.name is required) — plus optional "args". The script is \
+                parsed and run in the SAME sandbox as a registered workflow; it is NOT saved/\
+                registered (one-shot).
+                - "resume": unblock a run that is paused on a humanApprove() gate. Provide \
+                "resumeRunId", "decision" ("approved" or "rejected"), and optional "reason".
+
+                ASYNC FIRE-AND-TRIGGER: name / inline return a runId and the run proceeds in \
+                the BACKGROUND on the workflow executor — you do NOT get the result inline. Do \
+                not call RunWorkflow again for the same workflow (a duplicate is rejected as \
+                "already running" and wastes turns). To get the outcome, poll the matching read \
+                tool by that runId (e.g. GetOptReport for an opt-report run) until it is \
+                completed, or wait for the WebSocket completion event. resume is likewise async.
+
+                WHEN TO USE: a determinate, repeatable orchestration — fan out one task over a \
+                batch of work items, run a fixed pipeline of stages, or a loop that needs a \
+                human-approval gate. Prefer a workflow when the structure is known up front and \
+                you want it journaled / resumable.
+                WHEN NOT TO USE: a single step you can just do yourself (call the tool / one \
+                SubAgent directly — a workflow is overhead). "I just want some parallelism" is \
+                NOT sufficient: only reach for a workflow when the orchestration is genuinely \
+                multi-step and worth the journal + sandbox cost.
+
+                INLINE DSL (what the script body may call — these are the ONLY host primitives; \
+                there is no other API):
+                - phase("title")            mark a phase boundary (progress / journaling).
+                - log("msg")                emit a workflow log line.
+                - agent(prompt, opts)       dispatch one LLM sub-agent and BLOCK for its result \
+                (string). opts selects the agent, e.g. { agentSlug: "session-annotator" }.
+                - tool(name, input)         invoke a host (Java) tool synchronously on the \
+                workflow thread and get its result (deterministic node, not an LLM).
+                - parallel([t1, t2, ...])   run sub-agent thunks concurrently; each thunk MUST \
+                tail-call agent(...) (e.g. () => agent(...)). Returns the array of results.
+                - pipeline(items, s1, s2)   V1 SERIAL fan-over: apply each stage callback across \
+                items in order.
+                - humanApprove(payload)     park the run on an approval gate; it pauses until a \
+                resume decision arrives (see mode=resume).
+                - ctx                        per-run context object (run metadata / scratch).
+                - args                       the object you passed in as "args".
+                The body returns a final value (the run result). Use plain JS for control flow.
+
+                SANDBOX HARD LIMITS (do not design around exceeding these): no Java bridge / \
+                Packages / java.*, no eval, no Function constructor, no file or network access \
+                from JS — side effects only happen through agent()/tool(). Per-run budgets: \
+                ~1,000,000 interpreter instructions, at most 1000 agent() calls, and a 30-minute \
+                wall-clock cap; exceeding any aborts the run. Keep workflows deterministic — do \
+                NOT rely on wall-clock time or randomness for control flow (parallel() ordering \
+                and journal replay assume determinism).""";
     }
 
     @Override
