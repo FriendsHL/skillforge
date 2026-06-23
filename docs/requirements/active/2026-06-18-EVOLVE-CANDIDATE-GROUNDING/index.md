@@ -1,7 +1,7 @@
 # EVOLVE-CANDIDATE-GROUNDING — 候选 per-badcase grounding（EVOLVE-JUDGE-GROUNDING Phase 2）
 
 > 创建：2026-06-18
-> 状态：**Phase 2 已交付**（2026-06-18，commit `775fe4df`）。**观察 1（maxIter=1, `bbe8a4dd`）+ 观察 2（maxIter=3, `e0606daa`）均 0 赢家**。观察 2 暴露更关键的 **loop 编排/判定 bug**：3 迭代只跑了 1 次 A/B、且一个 **+25pp/0 回归的正向候选仍 `kept=false`**。→ **根不只候选质量，叠了「不按迭代跑 A/B」+「keep 判定不采纳正向候选」两层编排/判定 bug**。详见下方「观察记录」。
+> 状态：**Phase 2 已交付**（2026-06-18，commit `775fe4df`）。**真因（观察 3 深挖，更正观察 1/2 判断）= FR-C7 A/B 预算闸**：agent 3 累计 A/B 已达 cap=30 → **永久冻结**，evolve run 在它上面跑不了 A/B（配置 `skillforge.evolve.ab-budget-per-run` 名义 per-run、实为 **per-agent 终身累计**）。候选生成其实 OK（最小对靶 + reflect 生效），iter1 还出过 **+25pp/0回归** 候选（惜 decideKeep 仍 kept=false，次要）。**下一步：换有预算的 agent / 调高 cap / 重审 cap 语义**。详见「观察记录」观察 3。
 > 模式：Full（触碰核心 evolve-loop.workflow.js + 候选生成工具 + V-migration prompt；属核心测量/进化层）
 > 前身：[EVOLVE-JUDGE-GROUNDING](../2026-06-17-EVOLVE-JUDGE-GROUNDING/index.md) Phase 1（配对判据，已交付）的 Phase 2。
 
@@ -82,6 +82,19 @@ A+C 上线后，用 Phase 1 判据作尺，agent 3 跨 **≥3 轮干净 evolve r
 - 再查 **decideKeep 为什么不采纳 +25pp/0 回归 的候选**（判定闸是否过严 / 小样本 n=5 的显著性把正向也压成不显著）。
 - 候选生成"最小+对靶"仍要做，但**当前更卡的是编排+判定**，应先修这两层再谈候选质量。
 - （模型层）candidate-gen/orchestrator 现跑 glm-5.1，偏弱；可评估换 coding plan 上的 `doubao-seed-2.0-pro` 提升指令遵循。
+
+### 观察 3 — 真因更正（2026-06-23 深挖，**推翻观察 1/2 的根因判断**）
+
+挖到 e0606daa 的 per-step 数据后，真因是 **FR-C7 A/B 预算闸**，不是候选质量、也不是控制流 bug：
+
+- iter2/3 的 `TriggerAbEval` 返回 `status: rejected, reason: "per-agent A/B budget reached (targetAgentId=3, used=30/31, cap=30)"`。
+- **FR-C7 这个 cap 配置名叫 `skillforge.evolve.ab-budget-per-run`(默认 30),但实际按 agent 累计**(`FlywheelRunService.countEvolveAbTriggersForAgent`,数该 agent 所有 run 的 A/B step 行——CRIT-1 安全修复从 per-run 改成 per-agent 累计)。**agent 3 历史累计 A/B 早 ≥30 → 永久冻结**,任何新 evolve run 在 agent 3 上最多挤进 ~0-1 次 A/B 就被拒。
+- **更正观察 1/2**:① 候选生成**其实是好的**(iter1/2/3 都"仅追加一条"最小对靶规则,reflect 真生效:iter2/3 明确纠 iter1 的过宽)；② "iter2/3 不跑 A/B" **不是编排 bug,是预算闸拒掉**；③ iter1 那次被放行的 A/B 是 **+25pp/0回归** 的好候选(只是 decideKeep 仍 kept=false——见下,这才是剩下值得查的）。
+
+**真正的下一步方向(取代前述)**：
+1. **agent 3 的 A/B 预算耗尽 = 当前最大 blocker**。要继续测/跑 loop:(a) **换一个预算有余量的 agent**(如 agent 1)；(b) 调高 `skillforge.evolve.ab-budget-per-run`；(c) **重审 cap 语义**——名字"per-run"但实为"per-agent 终身累计",会**永久冻结任何被反复迭代过的 agent**,可能该改成按窗口(per-run / 每日)而非终身。
+2. **decideKeep 为何拒 +25pp/0回归候选**(次要,但真): iter1 有真改进却 kept=false。疑似配对 net-wins 在全 50 场景上算、5 个 target 改进被 45 回归场景稀释 → 判不显著。值得单独验(用有预算的 agent 重跑能顺带看清)。
+3. 候选生成"最小对靶"**当前看是 OK 的**(具体 issue 下),不是优先级；宽泛 issue(token 效率类,见观察 1)仍可能诱发越界,低优。
 
 ## 阅读顺序
 
