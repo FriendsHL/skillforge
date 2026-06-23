@@ -1,7 +1,7 @@
 # EVOLVE-CANDIDATE-GROUNDING — 候选 per-badcase grounding（EVOLVE-JUDGE-GROUNDING Phase 2）
 
 > 创建：2026-06-18
-> 状态：**Phase 2 已交付**（2026-06-18，commit `775fe4df`）。**观察 1/≥3（2026-06-22，run `bbe8a4dd`）：候选仍负优化**（target 80%→40% = −40pp，0 赢家），且候选是**大段通用重写、非最小对靶 → C-seam(#4) 未生效**；**倾向升级 Phase 3 / H2**。详见下方「观察记录」。
+> 状态：**Phase 2 已交付**（2026-06-18，commit `775fe4df`）。**观察 1（maxIter=1, `bbe8a4dd`）+ 观察 2（maxIter=3, `e0606daa`）均 0 赢家**。观察 2 暴露更关键的 **loop 编排/判定 bug**：3 迭代只跑了 1 次 A/B、且一个 **+25pp/0 回归的正向候选仍 `kept=false`**。→ **根不只候选质量，叠了「不按迭代跑 A/B」+「keep 判定不采纳正向候选」两层编排/判定 bug**。详见下方「观察记录」。
 > 模式：Full（触碰核心 evolve-loop.workflow.js + 候选生成工具 + V-migration prompt；属核心测量/进化层）
 > 前身：[EVOLVE-JUDGE-GROUNDING](../2026-06-17-EVOLVE-JUDGE-GROUNDING/index.md) Phase 1（配对判据，已交付）的 Phase 2。
 
@@ -64,6 +64,24 @@ A+C 上线后，用 Phase 1 判据作尺，agent 3 跨 **≥3 轮干净 evolve r
 3. （承接 H2）若上述仍不够，再考虑重开 bundle 设计（per-scenario 子打分 / 限定编辑范围）。
 
 > 复现路径：`POST /api/evolve/agents/3/run?maxIter=1` → 看 `t_agent_evolve_ab_run` 的 `candidate_target_rate` vs `baseline_target_rate` + `ab_scenario_results_json` 里 subset=target 的 baseline/candidate.status 翻挂。
+
+> **⚠️ caveat（观察 1 用了 maxIter=1）**：观察 1 只生成 1 个候选、**没有第二轮**，而 orchestrator 的「predict→reconcile→reflect」是**跨迭代纠错**机制（押预测→A/B 后对账→反哺下一轮换思路），maxIter=1 下它**没机会启动**。所以"候选负优化"是 1 个数据点，不代表机制无效——见观察 2。
+
+### 观察 2/≥3 — 2026-06-23，run `e0606daa`（agent 3，**maxIter=3**，给跨迭代纠错公平机会）
+
+干净跑完 3 迭代（workflow 驱动，非 agent-19 chat session）。结果**比观察 1 更复杂、也更指向 loop 编排/keep 逻辑有 bug**：
+
+- **3 个候选都生成了**（`421389e2` / `c1312ede` / `285f6684`），**但 `t_agent_evolve_ab_run` 只有 1 条 A/B**（iter 1）→ **iter 2/3 的候选没被真正 A/B 评估**（编排异常：候选生成了但没跑对比就 `kept=false`）。
+- **唯一那条 A/B 是正向的**：target **50%→75%（+25pp）、回归 0、总体 +2.04pp** —— 是个**有改进、无回归的候选**，**却仍 `kept=false`**（3 迭代全 kept=false，0 赢家）。
+- **对观察 1 结论的纠偏**：候选**并非一律负优化**（本轮 iter-1 候选 +25pp 正向）。所以"0 赢家"的根**不只是候选质量**，还叠了两个编排/判定层 bug 嫌疑：
+  1. **不按迭代跑 A/B**：3 候选只 1 次 A/B → reflect 闭环拿不到 iter 2/3 的真实反馈，纠错无从谈起。
+  2. **keep 判定没采纳一个 +25pp/0 回归的正向候选** → decideKeep（pairwise net-wins 显著性闸 / vs-best floor）可能过严或有 bug，把真改进也判 false。
+
+**修正后的下一步方向**（比观察 1 的"只修候选生成"更全）：
+- 先查 **evolve-loop workflow 为什么 3 迭代只跑 1 次 A/B**（编排/JS 控制流 bug，最可疑）。
+- 再查 **decideKeep 为什么不采纳 +25pp/0 回归 的候选**（判定闸是否过严 / 小样本 n=5 的显著性把正向也压成不显著）。
+- 候选生成"最小+对靶"仍要做，但**当前更卡的是编排+判定**，应先修这两层再谈候选质量。
+- （模型层）candidate-gen/orchestrator 现跑 glm-5.1，偏弱；可评估换 coding plan 上的 `doubao-seed-2.0-pro` 提升指令遵循。
 
 ## 阅读顺序
 

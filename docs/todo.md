@@ -24,8 +24,10 @@
 
 - **机器已造完，但还没证明有用**：V1（DSL+dashboard）+ 飞轮 + agent-level bundle 爬坡 + CLOSE-LOOP 闭环采纳 P1/对靶 P2 + JUDGE-GROUNDING Phase 1（配对 net-wins）+ CANDIDATE-GROUNDING Phase 2（候选 grounding）**全部 ship**。但截至今天 **0 个被证实的真改进赢家**。
 - **观察 1/≥3 已跑（2026-06-22，run `bbe8a4dd`）**：① **管道/收尾层已修好**——干净跑完没卡（历史 06-05 孤儿是旧代码）；② **但候选仍负优化、0 赢家**——候选在自己该修的 target 场景 **80%→40%(−40pp)**,因为候选生成器糊了一段**通用紧箍咒**(限长/超10轮压缩/搜索≤15轮)把多步任务憋死(一个直接摆烂得 0 分)。
-- **根因定位 = 候选生成质量**（不在判据、不在管道）：候选是**大段通用重写、非最小对靶 → Phase 2 的 C-seam 未生效、且对回归无感知**。详见 [EVOLVE-CANDIDATE-GROUNDING 观察记录](requirements/active/2026-06-18-EVOLVE-CANDIDATE-GROUNDING/index.md#观察记录退出标准-3-轮)。
-- **👉 下一步**：机制已很清晰(不必凑满 3 轮)→ **Phase 3 / H2**:候选生成强制「最小 + 对靶 + 回归感知(把 target 场景喂进去=这些能力必须保住)」+ 质疑宽泛 issue(token 效率类)是否该用加 prompt 规则来修。待立项。
+- **根因定位（观察 1+2 后修正）= 多层 bug,不只候选质量**：
+  - 观察 1(maxIter=1)候选负优化,但那是单候选无纠错的不公平测试;
+  - **观察 2(maxIter=3)更关键**:3 候选只跑 1 次 A/B(**不按迭代跑 A/B** 的编排 bug)、且一个 **+25pp/0 回归的正向候选仍 kept=false**(**keep 判定不采纳正向** 的判定 bug)。候选**并非一律差**(本轮有 +25pp)。详见 [观察记录](requirements/active/2026-06-18-EVOLVE-CANDIDATE-GROUNDING/index.md#观察记录退出标准-3-轮)。
+- **👉 下一步(修正)**:先修**编排+判定**两层(① evolve-loop workflow 为何 3 迭代只跑 1 A/B ② decideKeep 为何不采纳 +25pp/0 回归候选),再谈候选"最小对靶";可评估候选/编排模型从 glm-5.1 换 coding-plan 的 doubao-seed-2.0-pro。
 - **被它 blocked、现在别先做**：阶段B / CLOSE-LOOP P3 benchmark（要先有靠谱候选 / 赢家才有意义）。
 - **track 层合并**：EVOLVE-JUDGE-GROUNDING（Phase 1）与 EVOLVE-CANDIDATE-GROUNDING（Phase 2）是同一条线，已合并为一条 track 看待；详细 prd/tech-design 各包保留不动。
 
