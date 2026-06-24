@@ -22,7 +22,6 @@ import com.skillforge.server.repository.CompactionEventRepository;
 import com.skillforge.server.repository.SessionCompactionCheckpointRepository;
 import com.skillforge.server.repository.SessionRepository;
 import com.skillforge.server.service.CompactionService;
-import com.skillforge.server.service.MemoryService;
 import com.skillforge.server.service.SessionService;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -151,10 +150,11 @@ class CompactionServiceTest {
     private void seedMessages(String id) {
         List<Message> msgs = new ArrayList<>();
         for (int i = 0; i < 10; i++) msgs.add(Message.user("front filler " + i));
-        // big tool_result pair
+        // big tool_result pair — use "Edit" so the ~35KB result exceeds its default 10KB truncation
+        // bucket (Bash now carries a larger 50KB bucket, which this mid-size result would not hit).
         Message tu = new Message();
         tu.setRole(Message.Role.ASSISTANT);
-        tu.setContent(List.of(ContentBlock.toolUse("t1", "Bash", Map.of("cmd", "cat huge"))));
+        tu.setContent(List.of(ContentBlock.toolUse("t1", "Edit", Map.of("path", "/tmp/huge"))));
         msgs.add(tu);
         StringBuilder big = new StringBuilder();
         for (int i = 0; i < 6000; i++) big.append("l").append(i).append("\n");
@@ -1026,51 +1026,4 @@ class CompactionServiceTest {
         assertThat(recoveryRow.metadata()).containsEntry("trigger", "post-overflow");
     }
 
-    @Test
-    @DisplayName("P9-5 W2 (SessionMemory): Phase 1.5 zero-LLM path also appends RECOVERY_PAYLOAD row")
-    @SuppressWarnings("unchecked")
-    void p9_5_sessionMemoryCompact_appendsRecoveryRow() {
-        seedSession("sSM", 30, 0, "idle");
-        // SessionMemory path requires session to have a userId (already 7L in seed)
-        seedMessages("sSM");
-
-        // Wire a MemoryService mock that returns a meaningful summary so Phase 1.5 fires.
-        MemoryService memoryService = mock(MemoryService.class);
-        when(memoryService.previewMemoriesForPrompt(eq(7L), any()))
-                .thenReturn("[memory] user prefers concise responses; project=skillforge.");
-        service.setMemoryService(memoryService);
-
-        FileStateCache cache = new FileStateCache();
-        cache.put("sSM", "/abs/memory.txt", "memory-path content");
-        RecoveryPayloadBuilder builder = new RecoveryPayloadBuilder(cache);
-        service.setRecoveryPayloadBuilder(builder);
-
-        org.mockito.ArgumentCaptor<List<SessionService.AppendMessage>> captor =
-                org.mockito.ArgumentCaptor.forClass(List.class);
-
-        // Phase 1.5 wins → no LLM call required, but persistCompactResult is still hit.
-        CompactionEventEntity event = service.compact("sSM", "full", "engine-hard", "memory path");
-        assertThat(event).isNotNull();
-        // It really used the session-memory strategy (not the LLM), so strategiesApplied
-        // must reflect that — sanity check the path attribution before validating recovery.
-        assertThat(event.getStrategiesApplied()).isEqualTo("llm-summary");
-        // ^ note: buildEvent hard-codes "llm-summary" for full level (existing behavior, not
-        // P9-5 scope). The path distinguisher is that previewMemoriesForPrompt was invoked
-        // and the LlmProvider mock was NOT — Mockito verifies the latter implicitly because
-        // we never set up llmProviderFactory.getProvider for sSM-specific behavior; default
-        // mock returns the existing mockProvider which would only run if Phase 2 fired.
-        verify(memoryService, atLeastOnce()).previewMemoriesForPrompt(eq(7L), any());
-
-        verify(sessionService, atLeastOnce()).appendMessages(eq("sSM"), captor.capture());
-        List<SessionService.AppendMessage> appended = captor.getValue();
-        SessionService.AppendMessage recoveryRow = appended.stream()
-                .filter(am -> SessionService.MSG_TYPE_RECOVERY_PAYLOAD.equals(am.msgType()))
-                .findFirst().orElse(null);
-        assertThat(recoveryRow).as("session-memory path must emit RECOVERY_PAYLOAD row").isNotNull();
-        // REMINDER-MVP D6: payload wrapped in <system-reminder>.
-        String memoryContent = (String) recoveryRow.message().getContent();
-        assertThat(memoryContent).startsWith("<system-reminder>\n");
-        assertThat(memoryContent).endsWith("</system-reminder>\n");
-        assertThat(memoryContent).contains("/abs/memory.txt");
-    }
 }

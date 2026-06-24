@@ -5,7 +5,6 @@ import com.skillforge.core.compact.CompactResult;
 import com.skillforge.core.compact.ContextCompactorCallback;
 import com.skillforge.core.compact.FullCompactStrategy;
 import com.skillforge.core.compact.LightCompactStrategy;
-import com.skillforge.core.compact.SessionMemoryCompactStrategy;
 import com.skillforge.core.compact.TokenEstimator;
 import com.skillforge.core.compact.recovery.RecoveryPayloadBuilder;
 import com.skillforge.core.engine.ChatEventBroadcaster;
@@ -120,17 +119,15 @@ public class CompactionService implements ContextCompactorCallback, SessionServi
     private final LlmProviderFactory llmProviderFactory;
     private final LlmProperties llmProperties;
     private final ChatEventBroadcaster broadcaster;
-    private final SessionMemoryCompactStrategy sessionMemoryCompactStrategy = new SessionMemoryCompactStrategy();
     private AgentRepository agentRepository;
-    private MemoryService memoryService;
     /** P9-5: optional — when set, full-compact emits a recovery payload row after retained messages. */
     private RecoveryPayloadBuilder recoveryPayloadBuilder;
 
     /**
      * COMPACT-IDEMPOTENCY-BOUNDARY-FIX (storage redesign P1): range-summary store + targeted
      * row marker. Optional (setter-injected, null in legacy unit tests) — when the range-model
-     * flag is on, full/sessionMemory compact writes a {@code t_session_summary} row instead of
-     * re-appending the young-gen, and stamps {@code compacted_by_summary_id} on the covered rows.
+     * flag is on, full compact writes a {@code t_session_summary} row instead of re-appending the
+     * young-gen, and stamps {@code compacted_by_summary_id} on the covered rows.
      */
     private SessionSummaryRepository sessionSummaryRepository;
     private SessionMessageRepository sessionMessageRepository;
@@ -195,12 +192,6 @@ public class CompactionService implements ContextCompactorCallback, SessionServi
     @Autowired(required = false)
     public void setAgentRepository(AgentRepository agentRepository) {
         this.agentRepository = agentRepository;
-    }
-
-    /** Optional: for session memory compact (P9-6). */
-    @Autowired(required = false)
-    public void setMemoryService(MemoryService memoryService) {
-        this.memoryService = memoryService;
     }
 
     /**
@@ -478,7 +469,13 @@ public class CompactionService implements ContextCompactorCallback, SessionServi
         // ── Phase 1: guard + boundary detection, under stripe lock ──────────────
         FullCompactStrategy.PreparedCompact prep;
         LlmProvider provider;
-        SessionEntity sessionForMemoryCompact = null; // hoisted for Phase 1.5
+        // INCREMENTAL-SUMMARY (storage redesign): the prior active summary text, read under the
+        // stripe lock for a consistent snapshot, threaded into Phase 2 so the LLM produces an
+        // EXTENDED summary (prior summary + new turns) instead of re-summarizing the whole window
+        // from scratch. Only meaningful under the range model (legacy getContextMessages slices
+        // post-last-boundary, so the prior summary is not present in the legacy window). Null when
+        // the flag is OFF / store unwired / no prior summary exists.
+        String priorSummaryText = null;
 
         synchronized (lockFor(sessionId)) {
             if (!fullCompactInFlight.add(sessionId)) {
@@ -550,9 +547,20 @@ public class CompactionService implements ContextCompactorCallback, SessionServi
                     log.warn("fullCompact skipped: default provider '{}' unavailable", providerName);
                     return null;
                 }
+                // INCREMENTAL-SUMMARY: snapshot the current active summary text (rolling merge keeps
+                // exactly one) while still under the stripe lock, so Phase 2 can feed it to the LLM
+                // as the existing summary to EXTEND rather than re-summarize from scratch. Only under
+                // the range model; the legacy path has no active summary row to read.
+                if (rangeModelEnabled && sessionSummaryRepository != null) {
+                    priorSummaryText = sessionSummaryRepository
+                            .findTopBySessionIdAndSupersededByIsNullOrderByStartSeqDesc(sessionId)
+                            .map(SessionSummaryEntity::getSummaryText)
+                            .filter(t -> t != null && !t.isBlank())
+                            .orElse(null);
+                }
+
                 // Phase 1 complete — stripe lock releases at end of synchronized block.
                 // fullCompactInFlight keeps deduplication active through Phase 2.
-                sessionForMemoryCompact = session;
                 phase1Success = true;
             } finally {
                 if (!phase1Success) {
@@ -561,49 +569,10 @@ public class CompactionService implements ContextCompactorCallback, SessionServi
             }
         }
 
-        // ── Phase 1.5: attempt session memory compact (zero-LLM) ────────────────
-        if (memoryService != null && sessionForMemoryCompact != null
-                && sessionForMemoryCompact.getUserId() != null) {
-            try {
-                String memorySummary = memoryService.previewMemoriesForPrompt(
-                        sessionForMemoryCompact.getUserId(), null);
-                if (memorySummary != null && !memorySummary.isBlank()) {
-                    CompactResult memoryResult = sessionMemoryCompactStrategy.tryCompact(
-                            prep, memorySummary,
-                            SessionMemoryCompactStrategy.DEFAULT_MAX_TOKENS,
-                            SessionMemoryCompactStrategy.DEFAULT_MIN_MESSAGES);
-                    // ②: if the memory summary did not net-reclaim tokens (isIneffective), do NOT
-                    // persist it here — fall through to Phase 2 (LLM) which may still produce an
-                    // effective summary. (Intentional: a token-ineffective memory result is a reason
-                    // to try the LLM, not to no-op the whole compaction.)
-                    if (memoryResult != null && !isTrulyNoOp(memoryResult)
-                            && !isIneffective(memoryResult)) {
-                        // Memory compact succeeded — skip Phase 2 (LLM), go to Phase 3
-                        final CompactResult finalMemResult = memoryResult;
-                        final CompactionEventEntity[] savedEvt = {null};
-                        try {
-                            synchronized (lockFor(sessionId)) {
-                                runInTransaction(() ->
-                                        savedEvt[0] = persistCompactResult(sessionId, "full", source, reason, finalMemResult)
-                                );
-                            }
-                        } finally {
-                            fullCompactInFlight.remove(sessionId);
-                        }
-                        log.info("sessionMemoryCompact succeeded: sessionId={} source={} reclaimed={} tokens",
-                                sessionId, source, memoryResult.getTokensReclaimed());
-                        return new FullCompactOutcome(savedEvt[0], memoryResult);
-                    }
-                }
-            } catch (Exception e) {
-                log.warn("sessionMemoryCompact failed, falling back to LLM: sessionId={}", sessionId, e);
-            }
-        }
-
         // ── Phase 2: LLM call, outside stripe lock ───────────────────────────────
         CompactResult result;
         try {
-            result = fullStrategy.applyPrepared(prep, provider, null);
+            result = fullStrategy.applyPrepared(prep, provider, null, priorSummaryText);
         } catch (Exception e) {
             fullCompactInFlight.remove(sessionId);
             log.error("fullCompact Phase 2 LLM call failed: sessionId={}", sessionId, e);

@@ -297,6 +297,65 @@ class LightCompactStrategyTest {
     }
 
     @Test
+    void per_tool_bucket_bash_keeps_more_than_default() {
+        // A ~20KB Bash result is BELOW Bash's 50KB bucket → NOT truncated, even though it exceeds
+        // the 10KB default that an "Edit" result of the same size would hit.
+        StringBuilder big = new StringBuilder();
+        for (int i = 0; i < 20 * 1024; i++) big.append('a'); // 20480 ASCII bytes
+        String content = big.toString();
+        assertThat(content.getBytes(StandardCharsets.UTF_8).length)
+                .isGreaterThan(CompactableToolRegistry.DEFAULT_TRUNCATE_THRESHOLD_BYTES)
+                .isLessThan(CompactableToolRegistry.DEFAULT_TRUNCATE_THRESHOLDS.get("Bash"));
+
+        List<Message> bashMsgs = new ArrayList<>();
+        for (int i = 0; i < 3; i++) bashMsgs.add(filler("pad " + i));
+        bashMsgs.add(assistantToolUse("t1", "Bash", Map.of("command", "cat big")));
+        bashMsgs.add(toolResult("t1", content, false));
+        for (int i = 0; i < 6; i++) bashMsgs.add(filler("tail " + i));
+        CompactResult bashResult = strategy.apply(bashMsgs, 32000);
+        ContentBlock bashTr = findToolResultForId(bashResult.getMessages(), "t1");
+        assertThat(bashTr).isNotNull();
+        assertThat(bashTr.getContent()).as("Bash result under its 50KB bucket must not truncate")
+                .isEqualTo(content);
+
+        // The SAME content under an "Edit" tool (default 10KB bucket) IS truncated.
+        List<Message> editMsgs = new ArrayList<>();
+        for (int i = 0; i < 3; i++) editMsgs.add(filler("pad " + i));
+        editMsgs.add(assistantToolUse("t2", "Edit", Map.of("path", "/tmp/x")));
+        editMsgs.add(toolResult("t2", content, false));
+        for (int i = 0; i < 6; i++) editMsgs.add(filler("tail " + i));
+        CompactResult editResult = strategy.apply(editMsgs, 32000);
+        ContentBlock editTr = findToolResultForId(editResult.getMessages(), "t2");
+        assertThat(editTr).isNotNull();
+        assertThat(editTr.getContent()).as("Edit result over the 10KB default must truncate")
+                .contains("chars truncated");
+    }
+
+    @Test
+    void per_tool_bucket_override_from_agent_config() {
+        // Agent config can shrink Bash's bucket so a smaller result truncates.
+        CompactableToolRegistry custom = CompactableToolRegistry.fromAgentConfig(
+                Map.of("compactable_tool_thresholds", Map.of("Bash", 4096)));
+        assertThat(custom.truncateThresholdBytesFor("Bash")).isEqualTo(4096);
+
+        StringBuilder big = new StringBuilder();
+        for (int i = 0; i < 8 * 1024; i++) big.append('a'); // 8192 bytes > 4096 override
+        String content = big.toString();
+
+        List<Message> msgs = new ArrayList<>();
+        for (int i = 0; i < 3; i++) msgs.add(filler("pad " + i));
+        msgs.add(assistantToolUse("t1", "Bash", Map.of("command", "cat big")));
+        msgs.add(toolResult("t1", content, false));
+        for (int i = 0; i < 6; i++) msgs.add(filler("tail " + i));
+
+        CompactResult r = strategy.apply(msgs, 32000, custom);
+        ContentBlock tr = findToolResultForId(r.getMessages(), "t1");
+        assertThat(tr).isNotNull();
+        assertThat(tr.getContent()).as("Bash result over the overridden 4KB bucket must truncate")
+                .contains("chars truncated");
+    }
+
+    @Test
     void skips_truncation_when_tool_use_id_not_found_in_index() {
         // Orphan tool_result with no matching tool_use — safe default: don't truncate
         List<Message> msgs = new ArrayList<>();
@@ -512,9 +571,13 @@ class LightCompactStrategyTest {
      * protection window, surrounded by enough fillers to keep the pair compactable.
      */
     private List<Message> buildBashToolResultMessages(String content) {
+        // Uses the "Edit" tool: whitelisted AND carrying the DEFAULT 10KB truncation bucket, so the
+        // tests below that assert against LARGE_TOOL_OUTPUT_BYTES (the default threshold) stay valid
+        // after per-tool buckets were introduced (Bash now has a larger 50KB bucket — see the
+        // dedicated truncates_whitelisted_tool_grep / per-tool tests for bucket-specific coverage).
         List<Message> msgs = new ArrayList<>();
         for (int i = 0; i < 3; i++) msgs.add(filler("pad " + i));
-        msgs.add(assistantToolUse("t1", "Bash", Map.of("cmd", "ls -la")));
+        msgs.add(assistantToolUse("t1", "Edit", Map.of("path", "/tmp/x")));
         msgs.add(toolResult("t1", content, false));
         for (int i = 0; i < 6; i++) msgs.add(filler("tail " + i));
         return msgs;
@@ -572,12 +635,14 @@ class LightCompactStrategyTest {
         String content1 = big1.toString();
         String content2 = big2.toString();
 
+        // Use "Edit" (default 10KB bucket) so both 30K/50K results exceed the threshold; Bash now
+        // carries a larger 50KB bucket and is covered by per_tool_bucket_* tests instead.
         List<Message> msgs = new ArrayList<>();
         for (int i = 0; i < 3; i++) msgs.add(filler("pad " + i));
-        msgs.add(assistantToolUse("t1", "Bash", Map.of("cmd", "echo a")));
+        msgs.add(assistantToolUse("t1", "Edit", Map.of("path", "/tmp/a")));
         msgs.add(toolResult("t1", content1, false));
         msgs.add(filler("between"));
-        msgs.add(assistantToolUse("t2", "Bash", Map.of("cmd", "echo b")));
+        msgs.add(assistantToolUse("t2", "Edit", Map.of("path", "/tmp/b")));
         msgs.add(toolResult("t2", content2, false));
         // Padding tail so both pairs sit outside the protection window.
         for (int i = 0; i < 6; i++) msgs.add(filler("tail " + i));
