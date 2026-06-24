@@ -75,9 +75,13 @@ class CompactionServiceRangeModelTest {
     private final AtomicLong summaryIdSeq = new AtomicLong(0);
     private final AtomicLong eventIdSeq = new AtomicLong(0);
 
+    /** Last request the provider received — lets tests assert what system prompt the LLM got. */
+    private volatile LlmRequest lastLlmRequest;
+
     private final LlmProvider mockProvider = new LlmProvider() {
         @Override public String getName() { return "mock"; }
         @Override public LlmResponse chat(LlmRequest request) {
+            lastLlmRequest = request;
             LlmResponse r = new LlmResponse();
             r.setContent("RANGE SUMMARY");
             return r;
@@ -92,6 +96,7 @@ class CompactionServiceRangeModelTest {
         summaryStore.clear();
         summaryIdSeq.set(0);
         eventIdSeq.set(0);
+        lastLlmRequest = null;
 
         sessionRepository = mock(SessionRepository.class);
         eventRepository = mock(CompactionEventRepository.class);
@@ -155,6 +160,15 @@ class CompactionServiceRangeModelTest {
                     }
                     out.sort(java.util.Comparator.comparingLong(SessionSummaryEntity::getStartSeq));
                     return out;
+                });
+        // INCREMENTAL-SUMMARY: the latest active summary (highest start_seq) is the rolling summary
+        // CompactionService reads under the lock and threads into Phase 2. Mirror real semantics.
+        when(summaryRepository.findTopBySessionIdAndSupersededByIsNullOrderByStartSeqDesc(anyString()))
+                .thenAnswer(inv -> {
+                    String id = inv.getArgument(0);
+                    return summaryStore.values().stream()
+                            .filter(s -> id.equals(s.getSessionId()) && s.getSupersededBy() == null)
+                            .max(java.util.Comparator.comparingLong(SessionSummaryEntity::getStartSeq));
                 });
         when(summaryRepository.markSuperseded(anyLong(), anyLong())).thenAnswer(inv -> {
             Long id = inv.getArgument(0);
@@ -238,6 +252,60 @@ class CompactionServiceRangeModelTest {
 
         // Checkpoint still written, pointing at the summary id.
         verify(checkpointRepository).save(any());
+    }
+
+    @Test
+    @DisplayName("flag ON: prior active summary is threaded into Phase 2 → LLM gets the INCREMENTAL prompt")
+    void rangeModel_priorSummary_drivesIncrementalLlmCall() {
+        seedSession("sINC", 30, 0, "idle");
+
+        // Pre-existing active rolling summary the service must read under the lock and feed to Phase 2.
+        String priorSummaryText = "PRIOR ROLLING SUMMARY: user wants the migration finished.";
+        SessionSummaryEntity prior = new SessionSummaryEntity();
+        prior.setId(summaryIdSeq.incrementAndGet());
+        prior.setSessionId("sINC");
+        prior.setStartSeq(0L);
+        prior.setEndSeq(SEQ_BASE - 1);
+        prior.setSummaryText(priorSummaryText);
+        prior.setLevel("full");
+        prior.setSource("engine-hard");
+        summaryStore.put(prior.getId(), prior);
+
+        // Derived range-model view = [prior summary as user head] + new turns + tool pair + tail,
+        // mirroring SessionService.getContextMessagesWithProvenance output.
+        List<Message> msgs = new ArrayList<>();
+        msgs.add(Message.user(priorSummaryText)); // the injected active-summary head
+        for (int i = 0; i < 7; i++) msgs.add(Message.user("new turn " + i));
+        Message tu = new Message();
+        tu.setRole(Message.Role.ASSISTANT);
+        tu.setContent(List.of(ContentBlock.toolUse("t1", "Bash", Map.of("cmd", "echo"))));
+        msgs.add(tu);
+        Message tr = new Message();
+        tr.setRole(Message.Role.USER);
+        tr.setContent(List.of(ContentBlock.toolResult("t1", "out", false)));
+        msgs.add(tr);
+        for (int i = 0; i < 20; i++) msgs.add(Message.user("tail " + i));
+        messagesStore.put("sINC", msgs);
+
+        CompactionEventEntity event = service.compact("sINC", "full", "engine-hard", "incremental wiring");
+        assertThat(event).isNotNull();
+
+        // WIRING PROOF: the service read the prior summary and routed Phase 2 to the incremental path
+        // (without the stub, findTop returns empty → from-scratch prompt, and this assertion fails).
+        assertThat(lastLlmRequest).as("LLM must have been called").isNotNull();
+        assertThat(lastLlmRequest.getSystemPrompt())
+                .as("prior active summary must drive the INCREMENTAL summary prompt")
+                .contains("INCREMENTAL update")
+                .contains("Do NOT drop task state from the EXISTING summary");
+
+        // The existing summary is handed to the LLM as the labeled existing block + not duplicated
+        // (stripped from the serialized window since the head equals it exactly).
+        String userText = (String) lastLlmRequest.getMessages().get(0).getContent();
+        assertThat(userText).contains("## EXISTING SUMMARY");
+        assertThat(userText).contains(priorSummaryText);
+        assertThat(userText.indexOf(priorSummaryText))
+                .as("prior summary not duplicated in the window")
+                .isEqualTo(userText.lastIndexOf(priorSummaryText));
     }
 
     @Test

@@ -18,9 +18,11 @@ import java.util.Set;
  *
  * <p>规则(按顺序应用, 达到目标后停止):
  * <ol>
- *   <li>truncate-large-tool-output: tool_result.content &gt; {@link #LARGE_TOOL_OUTPUT_BYTES}
- *       字节时按字符截断为头 {@link #TRUNCATE_HEAD_CHARS} + 尾 {@link #TRUNCATE_TAIL_CHARS}
- *       chars (UTF-8 多字节安全)</li>
+ *   <li>truncate-large-tool-output: tool_result.content 字节数超过该工具的阈值
+ *       ({@code registry.truncateThresholdBytesFor(toolName)} —— 按工具分桶, 如 Bash 50KB,
+ *       缺省 {@link CompactableToolRegistry#DEFAULT_TRUNCATE_THRESHOLD_BYTES}=10KB) 时按字符
+ *       截断为头 {@link #TRUNCATE_HEAD_CHARS} + 尾 {@link #TRUNCATE_TAIL_CHARS} chars
+ *       (UTF-8 多字节安全)</li>
  *   <li>dedup-consecutive-tools: 相邻两次 tool_use 同名同输入, 去掉较早的一对 (tool_use + tool_result)</li>
  *   <li>fold-failed-retries: 3+ 连续 is_error=true 的 tool_result 折叠为 1 条 (保留最后一次)</li>
  *   <li>drop-empty-assistant-narration: 纯过渡文本(&lt; 80 字符、下一条是 tool_use)的 assistant 文本消息</li>
@@ -221,7 +223,10 @@ public class LightCompactStrategy {
                 String content = cb.getContent();
                 if (content == null) continue;
                 int byteLen = content.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
-                if (byteLen <= LARGE_TOOL_OUTPUT_BYTES) continue;
+                // Per-tool truncation bucket: large/expendable tools (Bash, Read, ...) keep more
+                // before truncation; everything else falls back to the registry default (10KB).
+                int thresholdBytes = registry.truncateThresholdBytesFor(toolName);
+                if (byteLen <= thresholdBytes) continue;
                 // 幂等性: 已经被 truncate 过的不再二次截断 (marker 自识别)
                 if (content.contains(MARKER_INFIX)) continue;
 
@@ -251,13 +256,14 @@ public class LightCompactStrategy {
 
     /**
      * 保留头 {@link #TRUNCATE_HEAD_CHARS} + 尾 {@link #TRUNCATE_TAIL_CHARS} chars,中间替换为
-     * marker。按 char 而非 byte 切——{@link #LARGE_TOOL_OUTPUT_BYTES} 是触发阈值(byte),但
-     * 实际截断单位是 Java char(code unit),避免切坏 UTF-8 多字节序列(中文 / emoji 等)。
+     * marker。按 char 而非 byte 切——触发阈值是该工具的 byte 阈值
+     * ({@code registry.truncateThresholdBytesFor(toolName)},按工具分桶),但实际截断单位是 Java
+     * char(code unit),避免切坏 UTF-8 多字节序列(中文 / emoji 等)。
      *
      * <p>Marker 中的 "chars" 指 Java char 数。对超 BMP 字符(emoji)这里没做 codepoint 对齐,
      * 但日常 tool_result 99% ASCII/CJK BMP,代价可接受。
      *
-     * <p>调用前提: caller 已确认 content 字节数 &gt; {@link #LARGE_TOOL_OUTPUT_BYTES}
+     * <p>调用前提: caller 已确认 content 字节数 &gt; 该工具的 byte 阈值
      * 且未携带幂等 marker。
      *
      * <p>边界: 若总 char 数 ≤ HEAD + TAIL(可能因为 byteLen 大但全是高字节字符),

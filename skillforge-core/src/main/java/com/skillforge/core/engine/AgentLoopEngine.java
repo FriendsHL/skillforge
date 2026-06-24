@@ -426,7 +426,7 @@ public class AgentLoopEngine {
         // object reference that ChatService persisted to DB via appendNormalMessages —
         // we share it (no defensive copy) to keep request history byte-identical across
         // turns (BP2/BP3 prompt-cache hits). Safe because all current compactor paths
-        // (LightCompactStrategy / TimeBasedColdCleanup / SessionMemoryCompactStrategy)
+        // (LightCompactStrategy / TimeBasedColdCleanup / FullCompactStrategy)
         // do NOT mutate text-typed ContentBlocks on user messages — they only drop or
         // replace whole entries.
         // FUTURE-CHANGE GUARD: if a compactor rule is ever added that mutates user-msg

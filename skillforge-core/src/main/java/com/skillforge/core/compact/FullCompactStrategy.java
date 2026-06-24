@@ -215,9 +215,34 @@ public class FullCompactStrategy {
      * <p>This method blocks on the LLM call and must be called outside the stripe lock.
      */
     public CompactResult applyPrepared(PreparedCompact prep, LlmProvider provider, String modelId) {
-        String windowSerialized = serializeWindow(prep.window());
-        String summary = summarizeWithWindowGuard(provider, modelId, windowSerialized,
-                prep.contextWindowTokens());
+        return applyPrepared(prep, provider, modelId, null);
+    }
+
+    /**
+     * INCREMENTAL-SUMMARY overload: when {@code priorSummary} is non-blank (range-model rolling
+     * merge), the LLM is asked to EXTEND the existing summary with the new turns rather than
+     * re-summarize the whole window from scratch — this stops the "summary of a summary" drift that
+     * loses task state across repeated compactions.
+     *
+     * <p>Under the range model the window's first message is itself the prior summary (the derived
+     * model view injects {@code Message.user(activeSummaryText)} as the head). Feeding it again
+     * inside the serialized window would double it, so the leading window message is stripped when it
+     * is a String-content USER message whose text equals {@code priorSummary} (the same exact-text
+     * match the reconciliation path uses). The prior summary is then handed to the LLM as the labeled
+     * existing summary instead.
+     */
+    public CompactResult applyPrepared(PreparedCompact prep, LlmProvider provider, String modelId,
+                                       String priorSummary) {
+        boolean incremental = priorSummary != null && !priorSummary.isBlank();
+        List<Message> windowForSummary = incremental
+                ? stripLeadingPriorSummary(prep.window(), priorSummary)
+                : prep.window();
+        String windowSerialized = serializeWindow(windowForSummary);
+        String summary = incremental
+                ? summarizeIncremental(provider, modelId, priorSummary, windowSerialized,
+                        prep.contextWindowTokens())
+                : summarizeWithWindowGuard(provider, modelId, windowSerialized,
+                        prep.contextWindowTokens());
         if (summary == null || summary.isBlank()) {
             log.warn("FullCompactStrategy.applyPrepared: LLM returned empty summary, no-op");
             return null;
@@ -233,6 +258,30 @@ public class FullCompactStrategy {
         applied.add("llm-summary");
         return new CompactResult(compacted, prep.beforeTokens(), afterTokens,
                 prep.beforeCount(), compacted.size(), applied);
+    }
+
+    /**
+     * Return a copy of {@code window} with the leading message removed when it is a String-content
+     * USER message whose text equals {@code priorSummary} (the injected active-summary head under the
+     * range model). Otherwise return {@code window} unchanged — never throws, never mutates the input.
+     *
+     * <p>Relies on EXACT text equality: the derived model view injects the head as
+     * {@code Message.user(activeSummary.getSummaryText())} and {@code priorSummary} is that same
+     * persisted {@code summaryText} (no reminder wrapping, no whitespace transform on the summary
+     * message), so {@code s.equals(priorSummary)} matches the head byte-for-byte. If they ever
+     * diverged, this would simply not strip (the prior summary would appear once in the window text
+     * too — verbose, never lossy).
+     */
+    private List<Message> stripLeadingPriorSummary(List<Message> window, String priorSummary) {
+        if (window == null || window.isEmpty()) {
+            return window;
+        }
+        Message first = window.get(0);
+        if (first != null && first.getRole() == Message.Role.USER
+                && first.getContent() instanceof String s && s.equals(priorSummary)) {
+            return new ArrayList<>(window.subList(1, window.size()));
+        }
+        return window;
     }
 
     // ── private helpers ───────────────────────────────────────────────────────
@@ -486,7 +535,63 @@ public class FullCompactStrategy {
         return out;
     }
 
+    private static final String INCREMENTAL_SUMMARY_SYSTEM_PROMPT =
+            "You are a conversation compressor performing an INCREMENTAL update. You are given an " +
+            "EXISTING summary of the earlier conversation, plus the NEW conversation turns that " +
+            "happened since. Produce an UPDATED summary that covers BOTH — the existing summary's " +
+            "content AND the new turns — using the SAME section structure as the existing summary. " +
+            "Write in the conversation's primary language. Do NOT invent information.\n\n" +
+            "CRITICAL: Do NOT drop task state from the EXISTING summary. Carry forward every still-" +
+            "relevant request, pending task, pending tool call, file path, and identifier. Merge new " +
+            "information into the matching sections; only remove an item from the existing summary if " +
+            "the new turns clearly show it is now completed or obsolete.\n\n" +
+            "Keep ALL opaque identifiers exactly as written (no shortening or reconstruction) — UUIDs, " +
+            "hashes, IDs, tokens, API keys, hostnames, IPs, ports, URLs, file paths. For any tool_use " +
+            "that was emitted but did NOT yet return a tool_result, preserve the tool name AND the " +
+            "COMPLETE input arguments VERBATIM.\n\n" +
+            "Output only the updated structured summary, without preface or quotation marks. Target " +
+            "under ~1800 tokens; if space is tight prioritize recent context and pending work.";
+
+    /**
+     * INCREMENTAL-SUMMARY: merge {@code priorSummary} with the serialized new turns into an updated
+     * summary. If the combined input fits the per-call budget, a single merge call is made; otherwise
+     * the new turns are first reduced via {@link #summarizeWithWindowGuard} (reusing the bounded
+     * map-reduce) and then merged with the prior summary in one final call. Falls back to the prior
+     * summary itself if the LLM yields nothing, so an existing summary is never lost.
+     */
+    private String summarizeIncremental(LlmProvider provider, String modelId, String priorSummary,
+                                        String newWindowText, int contextWindowTokens) {
+        int perCallBudget = (contextWindowTokens > 0)
+                ? contextWindowTokens - SUMMARY_INPUT_RESERVE_TOKENS
+                : SUMMARY_INPUT_FALLBACK_BUDGET_TOKENS;
+        if (perCallBudget < 1_000) {
+            perCallBudget = SUMMARY_INPUT_FALLBACK_BUDGET_TOKENS;
+        }
+        String effectiveNewWindow = (newWindowText == null) ? "" : newWindowText;
+        int combinedTokens = TokenEstimator.estimateString(priorSummary)
+                + TokenEstimator.estimateString(effectiveNewWindow);
+        if (combinedTokens > perCallBudget && !effectiveNewWindow.isBlank()) {
+            // New turns alone are large — reduce them first (bounded map-reduce) before merging, so
+            // the final merge call stays within budget.
+            String reducedNew = summarizeWithWindowGuard(provider, modelId, effectiveNewWindow,
+                    contextWindowTokens);
+            effectiveNewWindow = (reducedNew != null && !reducedNew.isBlank()) ? reducedNew : "";
+        }
+        String mergeInput = "## EXISTING SUMMARY\n" + priorSummary.trim()
+                + "\n\n## NEW CONVERSATION TURNS\n"
+                + (effectiveNewWindow.isBlank() ? "(none)" : effectiveNewWindow.trim());
+        String merged = callLlmWithSystem(provider, modelId, INCREMENTAL_SUMMARY_SYSTEM_PROMPT, mergeInput);
+        // Never lose the existing summary: if the merge call yields nothing, keep the prior summary.
+        return (merged != null && !merged.isBlank()) ? merged : priorSummary;
+    }
+
     private String callLlm(LlmProvider provider, String modelId, String windowText) {
+        return callLlmWithSystem(provider, modelId, SUMMARY_SYSTEM_PROMPT,
+                "Please summarize the following conversation history:\n\n" + windowText);
+    }
+
+    private String callLlmWithSystem(LlmProvider provider, String modelId, String systemPrompt,
+                                     String userText) {
         // BUG-A / BUG-A prerequisite: previously this catch swallowed the exception and
         // returned null, which upstream treated as a normal "empty summary" no-op.
         // Under the BUG-A fix (performed=false is neutral, not a failure), a real LLM
@@ -494,9 +599,8 @@ public class FullCompactStrategy {
         // breaker would never open. Rethrow so CompactionService Phase 2 catches,
         // rethrows with session context, and the engine records a real failure.
         LlmRequest req = new LlmRequest();
-        req.setSystemPrompt(SUMMARY_SYSTEM_PROMPT);
-        req.setMessages(Collections.singletonList(
-                Message.user("Please summarize the following conversation history:\n\n" + windowText)));
+        req.setSystemPrompt(systemPrompt);
+        req.setMessages(Collections.singletonList(Message.user(userText)));
         req.setModel(modelId);
         req.setMaxTokens(MAX_SUMMARY_TOKENS + 200);
         req.setTemperature(0.2);
