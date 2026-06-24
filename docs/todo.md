@@ -26,7 +26,7 @@
 - **观察 1/≥3 已跑（2026-06-22，run `bbe8a4dd`）**：① **管道/收尾层已修好**——干净跑完没卡（历史 06-05 孤儿是旧代码）；② **但候选仍负优化、0 赢家**——候选在自己该修的 target 场景 **80%→40%(−40pp)**,因为候选生成器糊了一段**通用紧箍咒**(限长/超10轮压缩/搜索≤15轮)把多步任务憋死(一个直接摆烂得 0 分)。
 - **真因（观察 3 深挖，更正前两次判断）= FR-C7 A/B 预算闸**：agent 3 累计 A/B 已达 **cap=30 → 永久冻结**，evolve run 在它上面跑不了 A/B（配置 `skillforge.evolve.ab-budget-per-run` 名义 per-run、实为 **per-agent 终身累计**，`countEvolveAbTriggersForAgent`）。**不是**候选质量差（候选其实最小对靶 + reflect 生效）、**不是**编排 bug；iter1 还出过 +25pp/0回归 候选（惜 decideKeep kept=false，次要）。详见 [观察记录 观察3](requirements/active/2026-06-18-EVOLVE-CANDIDATE-GROUNDING/index.md#观察记录退出标准-3-轮)。
 - ✅ **FR-C7 已修（2026-06-24，V165，`feat/frc7-window-runworkflow`）**：终身累计 → 滚动 168h 窗（保 CRIT-1 防绕过）+ 索引 + Main Assistant 绑 RunWorkflow。live 验 agent 3 解冻（全历史 32/窗口 8 < cap30）。
-- **👉 下一步（唯一开放）**：**decideKeep 为何拒一个 +25pp/0回归 的正向候选**（疑配对 net-wins 在全 50 场景上把 5 个 target 改进稀释 → 判不显著）。现在 agent 3 有预算了,可直接重跑 evolve(maxIter≥2)观察"能否爬出真赢家",顺带定位 decideKeep。
+- ✅ **收口（2026-06-24，run `7f34d911`）**：FR-C7 解冻后重跑,**出第一个真赢家**(iter1 +4.08 kept;最小对靶 rule「SubAgent 前先 AgentDiscovery」),decideKeep 验证**正常**(keep 真赢家/拒 2 个回归)。**真因就是 FR-C7 冻结,decideKeep 无 bug。整条 evolve loop 调查闭环。** 遗留(非 bug):赢家候选 hill-climb best 待人 review 采纳;可继续多轮观察累积赢家。
 - **被它 blocked、现在别先做**：阶段B / CLOSE-LOOP P3 benchmark（要先有靠谱候选 / 赢家才有意义）。
 - **track 层合并**：EVOLVE-JUDGE-GROUNDING（Phase 1）与 EVOLVE-CANDIDATE-GROUNDING（Phase 2）是同一条线，已合并为一条 track 看待；详细 prd/tech-design 各包保留不动。
 

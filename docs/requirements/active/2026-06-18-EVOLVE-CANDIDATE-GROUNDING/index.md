@@ -1,7 +1,7 @@
 # EVOLVE-CANDIDATE-GROUNDING — 候选 per-badcase grounding（EVOLVE-JUDGE-GROUNDING Phase 2）
 
 > 创建：2026-06-18
-> 状态：**Phase 2 已交付**（2026-06-18，commit `775fe4df`）。**真因（观察 3 深挖，更正观察 1/2 判断）= FR-C7 A/B 预算闸**：agent 3 累计 A/B 已达 cap=30 → **永久冻结**，evolve run 在它上面跑不了 A/B（配置 `skillforge.evolve.ab-budget-per-run` 名义 per-run、实为 **per-agent 终身累计**）。候选生成其实 OK（最小对靶 + reflect 生效），iter1 还出过 **+25pp/0回归** 候选（惜 decideKeep 仍 kept=false，次要）。~~下一步：换有预算的 agent / 调高 cap / 重审 cap 语义~~ → **FR-C7 已修（2026-06-24，commit `feat/frc7-window-runworkflow`，V165）**：终身累计 → 滚动 168h 窗（越界回落、保 CRIT-1 防绕过）+ 索引 + Main Assistant 绑 RunWorkflow。**live 验证 agent 3 解冻**（全历史 A/B=32 但窗口内=8 < cap30）。**剩下唯一开放项 = decideKeep 拒 +25pp/0回归 正向候选**（下一步）。
+> 状态：**Phase 2 已交付**（2026-06-18，commit `775fe4df`）。**真因（观察 3 深挖，更正观察 1/2 判断）= FR-C7 A/B 预算闸**：agent 3 累计 A/B 已达 cap=30 → **永久冻结**，evolve run 在它上面跑不了 A/B（配置 `skillforge.evolve.ab-budget-per-run` 名义 per-run、实为 **per-agent 终身累计**）。候选生成其实 OK（最小对靶 + reflect 生效），iter1 还出过 **+25pp/0回归** 候选（惜 decideKeep 仍 kept=false，次要）。~~下一步：换有预算的 agent / 调高 cap / 重审 cap 语义~~ → **FR-C7 已修（2026-06-24，commit `feat/frc7-window-runworkflow`，V165）**：终身累计 → 滚动 168h 窗（越界回落、保 CRIT-1 防绕过）+ 索引 + Main Assistant 绑 RunWorkflow。**live 验证 agent 3 解冻**（全历史 A/B=32 但窗口内=8 < cap30）。**✅ 整条调查收口（观察 4，2026-06-24，run `7f34d911`）：解冻后 evolve 多轮跑通、出第一个真赢家（iter1 +4.08 kept），decideKeep 验证正常（keep 真赢家、拒回归）——真因就是 FR-C7 冻结,decideKeep 无 bug。**
 > 模式：Full（触碰核心 evolve-loop.workflow.js + 候选生成工具 + V-migration prompt；属核心测量/进化层）
 > 前身：[EVOLVE-JUDGE-GROUNDING](../2026-06-17-EVOLVE-JUDGE-GROUNDING/index.md) Phase 1（配对判据，已交付）的 Phase 2。
 
@@ -95,6 +95,21 @@ A+C 上线后，用 Phase 1 判据作尺，agent 3 跨 **≥3 轮干净 evolve r
 1. **agent 3 的 A/B 预算耗尽 = 当前最大 blocker**。要继续测/跑 loop:(a) **换一个预算有余量的 agent**(如 agent 1)；(b) 调高 `skillforge.evolve.ab-budget-per-run`；(c) **重审 cap 语义**——名字"per-run"但实为"per-agent 终身累计",会**永久冻结任何被反复迭代过的 agent**,可能该改成按窗口(per-run / 每日)而非终身。
 2. **decideKeep 为何拒 +25pp/0回归候选**(次要,但真): iter1 有真改进却 kept=false。疑似配对 net-wins 在全 50 场景上算、5 个 target 改进被 45 回归场景稀释 → 判不显著。值得单独验(用有预算的 agent 重跑能顺带看清)。
 3. 候选生成"最小对靶"**当前看是 OK 的**(具体 issue 下),不是优先级；宽泛 issue(token 效率类,见观察 1)仍可能诱发越界,低优。
+
+### 观察 4 — 收口（2026-06-24，run `7f34d911`，FR-C7 解冻后 maxIter=3）
+
+FR-C7 修复部署后,在 agent 3 上重跑(预算已解冻),**整条"evolve loop 有问题/0 赢家"调查闭环**:
+
+| iter | kept | overall Δ | 候选 |
+|---|---|---|---|
+| **1** | ✅ **true** | **+4.08** | 仅追加一条 behavior_rule:**SubAgent 派发前先 AgentDiscovery,避免误用 agentId=3 递归自派被拒**(最小/对靶/干净) |
+| 2 | false | −6.12 | 进一步收窄 SubAgent 规则 → 回归 → **正确拒** |
+| 3 | false | −2.0 | WebFetch 预检规则 → 回归 → **正确拒** |
+
+- **多轮 A/B 都放行**(iter1/2/3 各一次,不再冻结);窗口内预算 11/30(没烧爆)。
+- **decideKeep 工作正常**:keep 了 +4.08 真改进、拒了 2 个回归 → **当初没改 decideKeep 是对的**。
+- **结论(收口)**:整条线的真因 = **FR-C7 per-agent 终身累计冻结**(已修为滚动窗)。候选生成、reflect 闭环、判据(decideKeep)、管道收尾**都正常**;之前的"0 赢家"= 被冻 + 早期候选边际 + maxIter=1 不公平测试 的叠加假象。SkillForge 自进化产出**第一个被证实的真赢家**(候选,采纳仍人定夺)。
+- 遗留(非 bug):赢家 iter1 候选(AgentDiscovery-before-SubAgent 规则)是 hill-climb best,待人 review 采纳。
 
 ## 阅读顺序
 
