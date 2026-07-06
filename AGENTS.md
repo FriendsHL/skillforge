@@ -1,6 +1,6 @@
 # SkillForge Development Guidelines for Codex
 
-Source: progressive-disclosure index for `.codex/rules`, consolidated from `.claude/rules` on 2026-04-30.
+Source: progressive-disclosure index for `.codex/rules`, consolidated from `.claude/rules` on 2026-04-30 and refreshed from `.claude/{rules,agents,commands}` on 2026-07-06.
 
 These are the Codex-local working standards for this repository. Prefer these project-specific rules over generic habits when working inside SkillForge.
 
@@ -28,6 +28,22 @@ These are the Codex-local working standards for this repository. Prefer these pr
 | `.codex/rules/frontend.md` | TypeScript, React, frontend API calls, hooks, WebSocket UI, or dashboard state changes |
 | `.codex/rules/design.md` | Dashboard layout, visual design, CSS, accessibility, or frontend UX changes |
 | `.codex/rules/context-budget.md` | Changing rules/prompts/agents/commands/plugins/MCP exposure, or auditing context overhead |
+| `.codex/rules/code-review.md` | User asks for review, or pipeline/reviewer-style assessment is needed |
+| `.codex/rules/review-verdict.md` | Producing Mid/Full pipeline reviewer reports or judge summaries |
+| `.codex/rules/tdd-workflow.md` | Implementing new behavior or a bug fix where a regression test is practical |
+| `.codex/rules/refactor-clean.md` | Explicit dead-code cleanup, duplicate consolidation, or refactor-clean task |
+| `.codex/rules/java-build-resolver.md` | Java/Maven/Spring build or compilation failure |
+| `.codex/rules/security-review.md` | Auth, authorization, user input, file paths, external URLs, secrets, webhooks, dependency security |
+| `.codex/rules/database-review.md` | Flyway migrations, schema/entity changes, JPQL/native SQL, repository queries, database performance |
+| `.codex/rules/java-design-review.md` | New Service/Repository/Controller, structural Java refactor, new interface/abstract class, class >500 lines, or explicit design review |
+| `.codex/rules/typescript-review.md` | TypeScript/JavaScript review or frontend review checklist work |
+| `.codex/rules/performance-review.md` | Performance incident, slow UI/API/query, memory leak, bundle-size or render optimization |
+| `.codex/rules/llm-provider-compat.md` | `skillforge-core/llm/**`, provider protocol, SSE, reasoning, tool-call, usage, or model-family changes |
+| `.codex/rules/compact-review.md` | Compact subsystem, `CompactionService`, compact recovery, compact strategies, compact integration |
+| `.codex/rules/persistence-shape-invariant.md` | `ChatService`/`AgentLoopEngine` message construction, `SessionService` update/rewrite, `Message`/`ContentBlock` shape changes |
+| `.codex/rules/identity-column-on-rewrite.md` | Adding/changing `t_session_message` identity/association columns or rewrite preservation |
+| `.codex/rules/rules-evolution.md` | Adding/updating Codex rules or migrating Claude strategy into Codex rules |
+| `.codex/rules/claude-strategy-map.md` | Auditing how `.claude` rules/agents/commands map into Codex-compatible rules |
 
 ## Fast Triage
 
@@ -61,6 +77,10 @@ Mixed batches inherit the highest-risk item. Do not hide a Full-level change ins
 - Streaming UI updates must be throttled; do not `setState` for every delta.
 - `useImperativeHandle` refs do not trigger parent re-render. Use state for UI state, refs only for save-time snapshots.
 - Jackson discriminated unions using `@JsonTypeInfo` and `@JsonSubTypes` need no-arg constructors and should tolerate unknown properties for compatibility.
+- ChatService-persisted messages and AgentLoopEngine in-memory messages must keep byte-identical JSON shape for the same logical message.
+- New `t_session_message` identity/association columns must be preserved by rewrite paths.
+- Compact changes must preserve `tool_use`/`tool_result` pairing, summary role, boundaries, identity columns, and surrogate-safe truncation.
+- LLM provider changes must be reviewed for cross-provider SSE/tool/reasoning/cache/usage compatibility, not only Java style.
 
 ## Non-Negotiables
 

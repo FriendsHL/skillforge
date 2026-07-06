@@ -88,6 +88,31 @@
   border-color: var(--accent-primary);
 }
 
+/* Stacked variant: primary label + small descriptor underneath. Used in the
+ * page header so two adjacent CTAs read as distinct loops (audit F4). */
+.ae-trigger-btn--stacked {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 16px 9px;
+  line-height: 1.2;
+}
+
+.ae-trigger-btn-label {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.ae-trigger-btn-sub {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.75;
+}
+
 .ae-error {
   padding: 10px 14px;
   font-size: 13px;
@@ -95,6 +120,32 @@
   background: color-mix(in srgb, var(--color-error) 10%, transparent);
   border: 1px solid color-mix(in srgb, var(--color-error) 35%, transparent);
   border-radius: var(--radius-sm, 6px);
+}
+
+/* ───────────────── hero status statement ───────────────── */
+
+.ae-hero-status {
+  margin: -4px 0 0;
+  padding: 10px 16px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md, 8px);
+  background: var(--bg-base);
+}
+
+.ae-hero-status-sentence {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--fg-1);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.ae-hero-status-sep {
+  color: var(--fg-4);
+  font-weight: 400;
+  margin: 0 4px;
 }
 
 /* ───────────────── KPI strip ───────────────── */
@@ -105,8 +156,15 @@
   gap: var(--sp-4, 16px);
 }
 
+.ae-kpi-strip--3 {
+  grid-template-columns: repeat(3, 1fr);
+}
+
 @media (max-width: 900px) {
   .ae-kpi-strip {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .ae-kpi-strip--3 {
     grid-template-columns: repeat(2, 1fr);
   }
 }
@@ -192,14 +250,36 @@
 
 /* ───────────────── signal panels (bento) ───────────────── */
 
+.ae-signals-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3, 12px);
+}
+
+.ae-research-notice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border: 1px dashed var(--border-subtle);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--bg-base);
+}
+
+.ae-research-notice-text {
+  font-size: 12px;
+  color: var(--fg-3);
+  line-height: 1.5;
+}
+
 .ae-signals {
   display: grid;
-  grid-template-columns: 1.4fr 1fr 1.4fr;
+  grid-template-columns: repeat(2, 1fr);
   gap: var(--sp-4, 16px);
   align-items: start;
 }
 
-@media (max-width: 1024px) {
+@media (max-width: 768px) {
   .ae-signals {
     grid-template-columns: 1fr;
   }
@@ -328,7 +408,9 @@
 /* ───────────────── workflow DAG host ───────────────── */
 
 .ae-dag-host {
-  height: 560px;
+  /* Clamp keeps the canvas tall enough to read the graph on laptops, but
+   * stops it from eating the whole viewport on 13" screens. */
+  height: clamp(360px, 60vh, 640px);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md, 8px);
   background: var(--bg-base);
@@ -405,4 +487,36 @@
   color: var(--color-error);
   line-height: 1.4;
   word-break: break-word;
+}
+
+.ae-anomaly-li {
+  position: relative;
+}
+
+/* Quick-link sits at the row's top-right corner. Kept outside the row
+ * button so we don't nest interactive elements. */
+.ae-anomaly-dag-link {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--accent-primary);
+  background: transparent;
+  border: none;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm, 6px);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease, background 120ms ease;
+}
+
+.ae-anomaly-li:hover .ae-anomaly-dag-link,
+.ae-anomaly-dag-link:focus-visible {
+  opacity: 1;
+}
+
+.ae-anomaly-dag-link:hover {
+  background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
 }

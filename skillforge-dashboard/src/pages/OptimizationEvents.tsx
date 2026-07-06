@@ -33,7 +33,7 @@ import {
   type ListEventsResponse,
 } from '../api/attribution';
 import EventDetailDrawer from '../components/attribution/EventDetailDrawer';
-import { stageColor, surfaceColor, riskColor } from '../components/attribution/stageStyle';
+import { surfaceColor, riskColor } from '../components/attribution/stageStyle';
 import BehaviorRuleAbRowActions from '../components/optimization/BehaviorRuleAbRowActions';
 import BehaviorRuleAbDetailDrawer from '../components/optimization/BehaviorRuleAbDetailDrawer';
 import type { BehaviorRuleAbRunUpdatedMessage } from '../api/behaviorRule';
@@ -59,6 +59,39 @@ const STAGE_OPTIONS: { value: AttributionStage; label: string }[] = [
   { value: 'promoted', label: 'promoted' },
   { value: 'rolled_back', label: 'rolled_back' },
   { value: 'verified', label: 'verified' },
+];
+
+/** Phase grouping — groups the 15 raw stages into 4 logical phases (F6). */
+const STAGE_PHASES: { phase: string; phaseColor: string; stages: AttributionStage[] }[] = [
+  { phase: 'Proposal', phaseColor: 'gold', stages: ['dispatch_initiated', 'proposal_pending', 'proposal_approved', 'proposal_rejected'] },
+  { phase: 'Candidate', phaseColor: 'blue', stages: ['candidate_generating', 'candidate_ready', 'candidate_failed', 'candidate_created'] },
+  { phase: 'A/B Test', phaseColor: 'geekblue', stages: ['ab_running', 'ab_passed', 'ab_failed'] },
+  { phase: 'Rollout', phaseColor: 'purple', stages: ['canary_started', 'promoted', 'rolled_back', 'verified'] },
+];
+
+/** Map each stage → its phase colour for table chip rendering (F6). */
+const STAGE_TO_PHASE_COLOR: Record<string, string> = {};
+for (const group of STAGE_PHASES) {
+  for (const s of group.stages) {
+    STAGE_TO_PHASE_COLOR[s] = group.phaseColor;
+  }
+}
+
+/** Grouped Select options — Ant Design native optgroup format. */
+const STAGE_GROUPS = STAGE_PHASES.map((g) => ({
+  label: g.phase,
+  options: STAGE_OPTIONS.filter((o) => (g.stages as string[]).includes(o.value)).map((o) => ({
+    value: o.value,
+    label: o.label,
+  })),
+}));
+
+/** Quick-reject reasons (F8) — chip set for the reject modal. */
+const QUICK_REJECT_REASONS = [
+  'off-topic',
+  'duplicate',
+  'low-impact',
+  'risk-too-high',
 ];
 
 const SURFACE_OPTIONS: { value: AttributionSurface; label: string }[] = [
@@ -165,7 +198,26 @@ const OptimizationEvents: React.FC<OptimizationEventsProps> = ({
   const [rejectSubmitting, setRejectSubmitting] = useState<boolean>(false);
   const [rejectForm] = Form.useForm<RejectFormValues>();
 
+  // ── F8: Batch selection for pending approvals ──
+  const [selectedPendingKeys, setSelectedPendingKeys] = useState<React.Key[]>([]);
+
   const [actionLoadingId, setActionLoadingId] = useState<number | null>(null);
+
+  // ── F8: Quick-reject chip handler ──
+  const appendQuickRejectReason = useCallback(
+    (chip: string) => {
+      const current = rejectForm.getFieldValue('reason') ?? '';
+      const sep = current.trim() ? ', ' : '';
+      rejectForm.setFieldsValue({ reason: `${current}${sep}${chip}` });
+    },
+    [rejectForm],
+  );
+
+  // ── F8: Approve note state ──
+  const [approveNoteModal, setApproveNoteModal] = useState<{
+    event: OptimizationEventDto;
+  } | null>(null);
+  const [approveNote, setApproveNote] = useState('');
 
   // ───────────────────────── queries ─────────────────────────
 
@@ -335,30 +387,29 @@ const OptimizationEvents: React.FC<OptimizationEventsProps> = ({
 
   const onApprove = useCallback(
     (event: OptimizationEventDto) => {
-      Modal.confirm({
-        title: `Approve event #${event.id}?`,
-        content: `Approving will dispatch candidate generation for surface=${event.surfaceType}.`,
-        okText: 'Approve',
-        okType: 'primary',
-        cancelText: 'Cancel',
-        onOk: async () => {
-          setActionLoadingId(event.id);
-          try {
-            await approveEvent(event.id, { approverUserId: userId });
-            message.success(`Event #${event.id} approved.`);
-            invalidateAll();
-          } catch (err: unknown) {
-            const e = err as { response?: { data?: { error?: string } }; message?: string };
-            const reason = e.response?.data?.error || e.message || 'Approve failed.';
-            message.error(reason);
-          } finally {
-            setActionLoadingId(null);
-          }
-        },
-      });
+      setApproveNote('');
+      setApproveNoteModal({ event });
     },
-    [userId, invalidateAll],
+    [],
   );
+
+  const onSubmitApprove = useCallback(async () => {
+    if (!approveNoteModal) return;
+    const { event } = approveNoteModal;
+    setActionLoadingId(event.id);
+    try {
+      await approveEvent(event.id, { approverUserId: userId, note: approveNote.trim() || undefined });
+      message.success(`Event #${event.id} approved.`);
+      setApproveNoteModal(null);
+      invalidateAll();
+    } catch (err: unknown) {
+      const e = err as { response?: { data?: { error?: string } }; message?: string };
+      const reason = e.response?.data?.error || e.message || 'Approve failed.';
+      message.error(reason);
+    } finally {
+      setActionLoadingId(null);
+    }
+  }, [approveNoteModal, approveNote, userId, invalidateAll]);
 
   const onOpenReject = useCallback(
     (event: OptimizationEventDto) => {
@@ -549,7 +600,7 @@ const OptimizationEvents: React.FC<OptimizationEventsProps> = ({
         dataIndex: 'stage',
         key: 'stage',
         width: 170,
-        render: (s: string) => <Tag color={stageColor(s)}>{s}</Tag>,
+        render: (s: string) => <Tag color={STAGE_TO_PHASE_COLOR[s] ?? 'default'}>{s}</Tag>,
       },
       {
         title: 'Description',
@@ -707,6 +758,78 @@ const OptimizationEvents: React.FC<OptimizationEventsProps> = ({
         </div>
       </div>
 
+      {/* ─── F7: Client-side Funnel (纯前端, 从 timeline 数据计算) ─── */}
+      {timelineItems.length > 0 && (
+        <div style={sectionCard}>
+          <Title level={4} style={{ margin: '0 0 12px' }}>
+            Conversion funnel
+          </Title>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {(() => {
+              const phaseCounts = STAGE_PHASES.map((p) => ({
+                ...p,
+                count: timelineItems.filter((item) =>
+                  (p.stages as string[]).includes(item.stage),
+                ).length,
+              }));
+              const maxCount = Math.max(...phaseCounts.map((p) => p.count), 1);
+              const baselineCount = phaseCounts[0]?.count ?? 0;
+              return phaseCounts.map((p) => (
+                <div key={p.phase} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <span
+                    style={{
+                      width: 80,
+                      fontSize: 12,
+                      fontWeight: 600,
+                      color: 'var(--fg-1)',
+                      textAlign: 'right' as const,
+                    }}
+                  >
+                    {p.phase}
+                  </span>
+                  <div
+                    style={{
+                      flex: 1,
+                      height: 24,
+                      borderRadius: 4,
+                      background: 'var(--bg-elev, #f0f0f0)',
+                      position: 'relative',
+                      overflow: 'hidden',
+                    }}
+                  >
+                    <div
+                      style={{
+                        height: '100%',
+                        width: `${(p.count / maxCount) * 100}%`,
+                        borderRadius: 4,
+                        background: p.phaseColor === 'gold' ? '#d49a3a'
+                          : p.phaseColor === 'blue' ? '#4a8cf7'
+                          : p.phaseColor === 'geekblue' ? '#667eea'
+                          : '#a78bfa',
+                        transition: 'width 300ms ease',
+                        display: 'flex',
+                        alignItems: 'center',
+                        paddingLeft: 8,
+                        minWidth: p.count > 0 ? 40 : 0,
+                      }}
+                    >
+                      {p.count > 0 && (
+                        <span style={{ fontSize: 11, fontWeight: 600, color: '#fff' }}>
+                          {p.count}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <span style={{ width: 60, fontSize: 11, color: 'var(--fg-3)' }}>
+                    {baselineCount > 0 ? `${Math.round((p.count / baselineCount) * 100)}%` : '—'}
+                  </span>
+                </div>
+              ));
+            })()}
+          </div>
+        </div>
+      )}
+
       {/* ─── Pending Approvals ─── */}
       <div style={sectionCard}>
         <Space align="center" style={{ marginBottom: 16 }}>
@@ -743,12 +866,92 @@ const OptimizationEvents: React.FC<OptimizationEventsProps> = ({
           />
         )}
 
+        {/* ── F8: Batch action bar ── */}
+        {selectedPendingKeys.length > 0 && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              marginBottom: 12,
+              padding: '8px 12px',
+              borderRadius: 6,
+              border: '1px solid var(--border, #e0e0e0)',
+              background: 'var(--bg-elev, #f5f5f5)',
+            }}
+          >
+            <Text type="secondary" style={{ fontSize: 13 }}>
+              {selectedPendingKeys.length} selected
+            </Text>
+            <Button
+              type="primary"
+              size="small"
+              onClick={async () => {
+                let approved = 0;
+                const failed: React.Key[] = [];
+                for (const id of selectedPendingKeys) {
+                  try {
+                    await approveEvent(Number(id), { approverUserId: userId });
+                    approved += 1;
+                  } catch {
+                    failed.push(id);
+                  }
+                }
+                if (failed.length > 0) {
+                  message.warning(`Approved ${approved} events; ${failed.length} failed.`);
+                } else {
+                  message.success(`Approved ${approved} events.`);
+                }
+                setSelectedPendingKeys(failed);
+                invalidateAll();
+              }}
+            >
+              Approve all
+            </Button>
+            <Button
+              danger
+              size="small"
+              onClick={async () => {
+                let rejected = 0;
+                const failed: React.Key[] = [];
+                for (const id of selectedPendingKeys) {
+                  try {
+                    await rejectEvent(Number(id), {
+                      approverUserId: userId,
+                      reason: 'batch reject',
+                    });
+                    rejected += 1;
+                  } catch {
+                    failed.push(id);
+                  }
+                }
+                if (failed.length > 0) {
+                  message.warning(`Rejected ${rejected} events; ${failed.length} failed.`);
+                } else {
+                  message.success(`Rejected ${rejected} events.`);
+                }
+                setSelectedPendingKeys(failed);
+                invalidateAll();
+              }}
+            >
+              Reject all
+            </Button>
+            <Button size="small" onClick={() => setSelectedPendingKeys([])}>
+              Clear
+            </Button>
+          </div>
+        )}
+
         <Table<OptimizationEventDto>
           rowKey="id"
           columns={pendingColumns}
           dataSource={pendingItems}
           loading={pendingLoading}
           size="small"
+          rowSelection={{
+            selectedRowKeys: selectedPendingKeys,
+            onChange: (keys) => setSelectedPendingKeys(keys),
+          }}
           pagination={{ pageSize: 10, showSizeChanger: false, hideOnSinglePage: true }}
           locale={{
             emptyText: (
@@ -775,10 +978,10 @@ const OptimizationEvents: React.FC<OptimizationEventsProps> = ({
         <Space wrap style={{ marginBottom: 12 }}>
           <Select<AttributionStage>
             allowClear
-            placeholder="Stage"
-            style={{ minWidth: 200 }}
+            placeholder="Stage · 4 phases"
+            style={{ minWidth: 240 }}
             value={stageFilter}
-            options={STAGE_OPTIONS}
+            options={STAGE_GROUPS}
             onChange={(v) => {
               setStageFilter(v);
               setPage(0);
@@ -849,7 +1052,31 @@ const OptimizationEvents: React.FC<OptimizationEventsProps> = ({
         />
       </div>
 
-      {/* ─── Reject reason modal ─── */}
+      {/* ─── Approve note modal (F8: symmetric friction) ─── */}
+      <Modal
+        title={approveNoteModal ? `Approve event #${approveNoteModal.event.id}` : ''}
+        open={approveNoteModal !== null}
+        onOk={onSubmitApprove}
+        onCancel={() => setApproveNoteModal(null)}
+        okText="Approve"
+        okButtonProps={{ loading: actionLoadingId !== null }}
+        cancelButtonProps={{ disabled: actionLoadingId !== null }}
+        destroyOnClose
+      >
+        <p style={{ color: 'var(--fg-2)', marginBottom: 16, fontSize: 14 }}>
+          Approving will dispatch candidate generation for{' '}
+          <code>surface={approveNoteModal?.event?.surfaceType}</code>.
+        </p>
+        <Input.TextArea
+          rows={2}
+          placeholder="Optional note (why approved) — feeds back into the evolution loop..."
+          value={approveNote}
+          onChange={(e) => setApproveNote(e.target.value)}
+          autoFocus
+        />
+      </Modal>
+
+      {/* ─── Reject reason modal with quick-reason chips (F8) ─── */}
       <Modal
         title={rejectTarget ? `Reject event #${rejectTarget.id}` : 'Reject event'}
         open={rejectTarget !== null}
@@ -861,6 +1088,32 @@ const OptimizationEvents: React.FC<OptimizationEventsProps> = ({
         destroyOnClose
       >
         <Form<RejectFormValues> form={rejectForm} layout="vertical" preserve={false}>
+          {/* Quick-reason chips — click to prepend */}
+          <div style={{ marginBottom: 12 }}>
+            <div
+              style={{
+                fontSize: 11,
+                color: 'var(--fg-3)',
+                marginBottom: 6,
+                textTransform: 'uppercase',
+                letterSpacing: '0.06em',
+              }}
+            >
+              Quick reasons
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {QUICK_REJECT_REASONS.map((chip) => (
+                <Button
+                  key={chip}
+                  size="small"
+                  type="dashed"
+                  onClick={() => appendQuickRejectReason(chip)}
+                >
+                  {chip}
+                </Button>
+              ))}
+            </div>
+          </div>
           <Form.Item
             name="reason"
             label="Reason"

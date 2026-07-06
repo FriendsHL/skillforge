@@ -19,6 +19,8 @@ Read this for all implementation tasks.
 ## Testing And Review
 
 - Default to TDD for new behavior: write failing test, implement, refactor, verify.
+- For build failures, read `java-build-resolver.md` or the equivalent language build guidance and fix the first real error with minimal scope.
+- For explicit cleanup/refactor tasks, read `refactor-clean.md`; otherwise do not remove unrelated dead code.
 - Target 80%+ meaningful coverage for changed behavior, with unit, integration, and E2E coverage scaled to risk.
 - Use Arrange-Act-Assert structure and behavior-focused test names.
 - Before completion, run the relevant build/test commands and report exactly what passed or could not be run.

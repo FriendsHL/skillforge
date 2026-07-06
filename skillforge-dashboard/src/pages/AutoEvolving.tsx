@@ -8,18 +8,25 @@ import WorkflowApproveCard from '../components/workflow/WorkflowApproveCard';
 import TriggerWorkflowModal from '../components/workflow/TriggerWorkflowModal';
 import KPIStrip from '../components/autoevolving/KPIStrip';
 import SignalPanels from '../components/autoevolving/SignalPanels';
-import AnomalyPanel from '../components/autoevolving/AnomalyPanel';
 import { usePendingApprovals } from '../hooks/usePendingApprovals';
 import '../components/autoevolving/autoevolving.css';
 import EvolveTrajectoryPanel from '../components/evolve/EvolveTrajectoryPanel';
 import EvolveTriggerModal from '../components/evolve/EvolveTriggerModal';
-import HarvestedScenariosPanel from '../components/evolve/HarvestedScenariosPanel';
 
 // Lazy-load the workflow runs panel so its react-flow dependency stays in a
 // split chunk (matches Insights.tsx; avoids bundling react-flow into the main
 // page chunk + defeating the existing split).
 const WorkflowRunsPanel = React.lazy(
   () => import('../components/workflow/WorkflowRunsPanel'),
+);
+
+// Lazy-load anomaly and harvested-scenarios — below-fold panels that don't
+// need to block the initial render.
+const AnomalyPanel = React.lazy(
+  () => import('../components/autoevolving/AnomalyPanel'),
+);
+const HarvestedScenariosPanel = React.lazy(
+  () => import('../components/evolve/HarvestedScenariosPanel'),
 );
 
 /**
@@ -40,6 +47,10 @@ const AutoEvolving: React.FC = () => {
   const [evolveOpen, setEvolveOpen] = useState(false);
   const dagRef = useRef<HTMLDivElement | null>(null);
   const evolveRef = useRef<HTMLDivElement | null>(null);
+  // Run id the user just nudged into the DAG via an anomaly quick-link
+  // (audit F9a). String identity changes each click so retry-clicking the
+  // same run still scrolls back into view.
+  const [dagFocusRunId, setDagFocusRunId] = useState<string | null>(null);
 
   const scrollToEvolve = () =>
     evolveRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -94,6 +105,13 @@ const AutoEvolving: React.FC = () => {
     dagRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
+  /** Anomaly quick-link handler — focus DAG on the failing run + scroll. */
+  const openRunInDag = (runId: string) => {
+    setDagFocusRunId(runId);
+    // Defer scroll so the panel has a tick to mount/refocus first.
+    requestAnimationFrame(() => scrollToDag());
+  };
+
   return (
     <div className="ae-page" data-testid="autoevolving-page">
       <header className="ae-header">
@@ -106,22 +124,47 @@ const AutoEvolving: React.FC = () => {
         <div className="ae-header-actions">
           <button
             type="button"
-            className="ae-trigger-btn ae-trigger-btn--ghost"
+            className="ae-trigger-btn ae-trigger-btn--ghost ae-trigger-btn--stacked"
             onClick={() => setEvolveOpen(true)}
             data-testid="ae-evolve-btn"
           >
-            Evolve agent ▸
+            <span className="ae-trigger-btn-label">Evolve agent ▸</span>
+            <span className="ae-trigger-btn-sub">Improve prompts via iteration</span>
           </button>
           <button
             type="button"
-            className="ae-trigger-btn"
+            className="ae-trigger-btn ae-trigger-btn--stacked"
             onClick={() => setTriggerOpen(true)}
             data-testid="ae-trigger-btn"
           >
-            Trigger workflow ▸
+            <span className="ae-trigger-btn-label">Trigger workflow ▸</span>
+            <span className="ae-trigger-btn-sub">Run a pipeline manually</span>
           </button>
         </div>
       </header>
+
+      {/* F1: Hero status statement — answers "did the flywheel turn today?" at a glance.
+          Computed from existing front-end data; no API change required. */}
+      {!overviewLoading && !overviewError && (
+        <div className="ae-hero-status" data-testid="ae-hero-status">
+          <span className="ae-hero-status-sentence">
+            {overview?.kpi?.workflowCompletedThisWeek != null &&
+            overview.kpi.workflowCompletedThisWeek > 0
+              ? `${overview.kpi.workflowCompletedThisWeek} workflow${
+                  overview.kpi.workflowCompletedThisWeek !== 1 ? 's' : ''
+                } completed this week`
+              : 'No workflows completed yet'}
+            <span className="ae-hero-status-sep">·</span>
+            {approvals.length > 0
+              ? `${approvals.length} pending approval${approvals.length !== 1 ? 's' : ''}`
+              : 'No pending gates'}
+            <span className="ae-hero-status-sep">·</span>
+            {recentReports.length > 0
+              ? `${recentReports.length} signal${recentReports.length !== 1 ? 's' : ''} active`
+              : 'No signals detected'}
+          </span>
+        </div>
+      )}
 
       {overviewErrMsg && (
         <div className="ae-error" role="alert">
@@ -129,7 +172,19 @@ const AutoEvolving: React.FC = () => {
         </div>
       )}
 
-      <KPIStrip kpi={kpi} loading={overviewLoading} onNavigate={navigate} />
+      <KPIStrip
+        kpi={kpi}
+        loading={overviewLoading}
+        pendingApprovalsCount={approvals.length}
+        onNavigate={navigate}
+      />
+
+      {/* Evolve trajectory — hoisted above-the-fold (audit F5) so the agent's
+          live improvement curve is the first thing users see after the KPI
+          strip. Moved out of the bottom drawer where it was buried. */}
+      <section className="ae-evolve-section" aria-label="Evolve trajectory" ref={evolveRef}>
+        <EvolveTrajectoryPanel />
+      </section>
 
       {approvals.length > 0 && (
         <section className="ae-approvals" aria-label="Pending approvals">
@@ -166,17 +221,22 @@ const AutoEvolving: React.FC = () => {
           <Suspense
             fallback={<div className="ae-panel-hint">Loading workflow runs…</div>}
           >
-            <WorkflowRunsPanel />
+            <WorkflowRunsPanel focusRunId={dagFocusRunId} />
           </Suspense>
         </div>
       </section>
 
-      <AnomalyPanel anomalies={recentAnomalies} loading={overviewLoading} />
+      <Suspense fallback={<div className="ae-panel-hint">Loading anomaly diagnostics…</div>}>
+        <AnomalyPanel
+          anomalies={recentAnomalies}
+          loading={overviewLoading}
+          onOpenInDag={openRunInDag}
+        />
+      </Suspense>
 
-      <div ref={evolveRef}>
-        <EvolveTrajectoryPanel />
+      <Suspense fallback={<div className="ae-panel-hint">Loading harvested scenarios…</div>}>
         <HarvestedScenariosPanel />
-      </div>
+      </Suspense>
 
       <TriggerWorkflowModal
         open={triggerOpen}

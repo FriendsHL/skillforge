@@ -114,6 +114,9 @@ export interface ListEventsResponse {
 
 export interface ApproveRequest {
   approverUserId: number;
+  /** Optional note — symmetric to reject's mandatory reason (F8). Sent as
+   *  metadata for training the feedback loop; BE may ignore if not wired yet. */
+  note?: string;
 }
 
 export interface RejectRequest {

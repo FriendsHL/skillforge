@@ -11,6 +11,13 @@ interface AnomalyPanelProps {
   anomalies: AutoEvolvingRecentAnomaly[];
   loading?: boolean;
   onSelect?: (runId: string) => void;
+  /**
+   * Optional "jump to DAG" quick-link rendered on each row. Separate from
+   * `onSelect` so a future row-click drill-down (e.g. into a trace) can
+   * coexist with the panel-↔-DAG navigation we wire today (F9a of the
+   * Auto-Evolving UX audit).
+   */
+  onOpenInDag?: (runId: string) => void;
 }
 
 function formatTime(iso: string | null): string {
@@ -24,6 +31,7 @@ const AnomalyPanel: React.FC<AnomalyPanelProps> = ({
   anomalies,
   loading,
   onSelect,
+  onOpenInDag,
 }) => {
   return (
     <section className="ae-anomaly" aria-label="Anomaly diagnostics">
@@ -53,8 +61,25 @@ const AnomalyPanel: React.FC<AnomalyPanelProps> = ({
                 )}
               </>
             );
+            // The quick-link sits OUTSIDE the row button so we don't nest
+            // interactive elements (invalid HTML + screen-reader confusion).
+            // It's an absolutely-positioned overlay on the row's top-right.
+            const dagLink = onOpenInDag && (
+              <button
+                type="button"
+                className="ae-anomaly-dag-link"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onOpenInDag(a.runId);
+                }}
+                data-testid={`ae-anomaly-dag-link-${a.runId}`}
+                aria-label={`Open ${a.name ?? 'run'} in workflow DAG`}
+              >
+                Open in DAG ↑
+              </button>
+            );
             return (
-              <li key={a.runId}>
+              <li key={a.runId} className="ae-anomaly-li">
                 {onSelect ? (
                   <button
                     type="button"
@@ -75,6 +100,7 @@ const AnomalyPanel: React.FC<AnomalyPanelProps> = ({
                     {inner}
                   </div>
                 )}
+                {dagLink}
               </li>
             );
           })}

@@ -25,3 +25,20 @@ find .codex/rules -name "*.md" -exec wc -l {} \; | sort -n
 find .claude/agents -name "*.md" -exec wc -l {} \; 2>/dev/null | sort -n
 wc -l CLAUDE.md AGENTS.md
 ```
+
+## Codex Rule Inventory
+
+When adding a `.codex/rules` file, also update `AGENTS.md` with a precise trigger.
+Keep large Claude agent personas out of Codex rules; migrate the checks, not the
+persona. Prefer many focused rules over one huge always-read rule.
+
+After large migrations, run:
+
+```bash
+rg --files .codex/rules | sort
+wc -l .codex/rules/*.md AGENTS.md | sort -n
+git diff --check -- AGENTS.md .codex/rules
+```
+
+Use the result to identify overly heavy always-read files and candidates for
+more precise progressive disclosure.

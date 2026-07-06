@@ -438,7 +438,7 @@ skillforge:
       ark:
         type: openai
         api-key: ${ARK_API_KEY:}
-        base-url: https://ark.cn-beijing.volces.com/api/coding/v3
+        base-url: https://ark.cn-beijing.volces.com/api/plan/v3
         chat-path: /chat/completions
         # default model = 该 provider 不指定 model 时的 fallback（eval judge 走这）。
         # 用 doubao-seed-2.0-lite：非推理、maxTokens=16 也能返数字（minimax/glm/kimi 是推理模型，16 token 全烧 reasoning→content 空→judge 解析不出分）。

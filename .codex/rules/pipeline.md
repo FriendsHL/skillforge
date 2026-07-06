@@ -4,10 +4,14 @@ This is the Codex-local translation of `.claude/rules/pipeline.md`.
 
 ## Tool Mapping
 
-- Codex uses `spawn_agent` instead of Claude `TeamCreate` / `SendMessage`.
-- Use `explorer` agents for bounded codebase investigation and plan inputs.
-- Use `worker` agents for implementation slices with explicit file/module ownership.
-- Use default/reviewer-style agents for adversarial review and judging when the pipeline needs independent critique.
+- Codex does not assume Claude `TeamCreate` / `SendMessage`.
+- When multi-agent tools are available, discover them with `tool_search` and use
+  bounded explorer/worker/reviewer agents for isolated work.
+- When multi-agent tools are unavailable or not worth the overhead, the main
+  session performs the same phase gates and specialty checklists inline.
+- Use explorer-style agents for bounded codebase investigation and plan inputs.
+- Use worker-style agents for implementation slices with explicit file/module ownership.
+- Use reviewer-style agents for adversarial review and judging when the pipeline needs independent critique.
 - Do not override the model unless the user explicitly asks; inherit the parent model.
 - The main Codex session orchestrates phases, integrates results, resolves conflicts, runs final verification, and reports the outcome.
 - Tell worker agents they are not alone in the codebase, must respect unrelated edits, and must not revert changes made by others.
@@ -120,3 +124,48 @@ Mixed batches inherit the highest-risk item. Do not hide a Full-level change ins
 - `nit`: style, formatting, docs, or minor naming.
 - Reviewer nits go to `/tmp/nits-followup-<task>.md` and do not trigger another fix loop.
 - Judge PASS/FAIL decisions consider blockers and warnings, not nits.
+
+## Specialty Review Routing
+
+Codex may not have Claude `TeamCreate` / named reviewer agents available. Preserve
+the strategy by reading the relevant `.codex/rules/*` specialty checklist and
+using it in the main session review or in any available reviewer/subagent.
+
+- Compact subsystem: read `compact-review.md` in addition to `java.md`.
+- LLM provider subsystem: read `llm-provider-compat.md` in addition to `java.md`.
+- Message persistence shape: read `persistence-shape-invariant.md`.
+- `t_session_message` identity columns or rewrite preservation: read
+  `identity-column-on-rewrite.md`.
+- Flyway/entity/SQL/repository query changes: read `database-review.md`.
+- Auth/input/secrets/file/external URL/security-sensitive changes: read
+  `security-review.md`.
+- New Java service/controller/repository, structural refactor, new interface, or
+  class over 500 lines: read `java-design-review.md`.
+- TypeScript/JavaScript review: read `typescript-review.md`.
+- Performance work: read `performance-review.md`.
+- Explicit review tasks: read `code-review.md` and report with
+  `review-verdict.md` when inside Mid/Full pipeline.
+
+Specialty rules do not replace the base language rules. They add focused checks.
+
+## Retroactive Full Review
+
+If work started as Solo or Mid and later hits a Full red light, do not hide that
+fact and do not discard useful work by default. Treat the current diff as the dev
+output and run retroactive Full review:
+
+1. Capture `git diff HEAD` to a temporary file when useful.
+2. Read the specialty rules triggered by the changed files.
+3. Review as if the diff were freshly submitted.
+4. Fix blockers or stop for user direction.
+5. Run Phase Final verification before any completion claim.
+
+## Codex-Compatible Execution Notes
+
+- Use `update_plan` for multi-step tracking in the main session.
+- Use `multi_tool_use.parallel` for independent reads and inspections.
+- Use subagents only when available and genuinely helpful; otherwise perform the
+  same checklist-driven review inline.
+- When a Claude command says "Write /tmp/review-*.md", Codex can either write the
+  temporary artifact when useful or summarize the same sections in the final
+  review. Do not create extra files solely for ceremony.

@@ -3,11 +3,15 @@ import type { AutoEvolvingRecentReport } from '../../api/autoevolving';
 import type { MemoryProposal } from '../../api/memoryProposalsApi';
 
 /**
- * AUTOEVOLVING V1 Sprint 4 — three signal-source panels (bento).
+ * AUTOEVOLVING V1 Sprint 4 — two live signal-source panels (bento) + a slim
+ * V2-notice strip for the not-yet-wired Auto-research surface.
  *
- *   ① Production  — recent cross-agent OPT-REPORTs → click /insights reports tab
- *   ② AutoResearch — static placeholder (V2 surface)
- *   ③ Memory      — pending memory proposals → click /memories
+ *   ① Production — recent cross-agent OPT-REPORTs → click /insights reports tab
+ *   ② Memory     — pending memory proposals → click /memories
+ *
+ * Auto-research used to be a third panel; collapsing it to a notice strip lets
+ * the two live panels claim wider columns (F3 of the UX audit) and stops a
+ * dashed empty card from competing with real signal density.
  */
 interface SignalPanelsProps {
   recentReports: AutoEvolvingRecentReport[];
@@ -36,8 +40,23 @@ const SignalPanels: React.FC<SignalPanelsProps> = ({
   onNavigate,
 }) => {
   return (
-    <div className="ae-signals" data-testid="ae-signals">
-      {/* ① Production — OPT-REPORT */}
+    <div className="ae-signals-wrap">
+      {/* V2 notice — collapsed from a placeholder panel into a single strip. */}
+      <div
+        className="ae-research-notice"
+        role="note"
+        aria-label="Auto-research status"
+        data-testid="ae-research-notice"
+      >
+        <span className="ae-panel-badge">V2</span>
+        <span className="ae-research-notice-text">
+          Auto-research signal is not wired yet — self-initiated investigation
+          runs will land here in a future release.
+        </span>
+      </div>
+
+      <div className="ae-signals" data-testid="ae-signals">
+        {/* ① Production — OPT-REPORT */}
       <section className="ae-panel" aria-label="Production signal">
         <header className="ae-panel-head">
           <h3 className="ae-panel-title">Production</h3>
@@ -86,21 +105,9 @@ const SignalPanels: React.FC<SignalPanelsProps> = ({
         </div>
       </section>
 
-      {/* ② AutoResearch — placeholder */}
-      <section className="ae-panel ae-panel--placeholder" aria-label="Auto-research signal">
-        <header className="ae-panel-head">
-          <h3 className="ae-panel-title">Auto-research</h3>
-          <span className="ae-panel-badge">V2</span>
-        </header>
-        <div className="ae-panel-body">
-          <p className="ae-panel-hint">
-            Autonomous research signal is not wired yet. It will surface
-            self-initiated investigation runs in a future release.
-          </p>
-        </div>
-      </section>
+      {/* ② AutoResearch moved up to a notice strip — see top of this component. */}
 
-      {/* ③ Memory proposals */}
+      {/* ② Memory proposals */}
       <section className="ae-panel" aria-label="Memory proposals signal">
         <header className="ae-panel-head">
           <h3 className="ae-panel-title">Memory proposals</h3>
@@ -137,6 +144,7 @@ const SignalPanels: React.FC<SignalPanelsProps> = ({
           </ul>
         </div>
       </section>
+      </div>
     </div>
   );
 };

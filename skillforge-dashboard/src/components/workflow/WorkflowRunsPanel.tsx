@@ -56,7 +56,17 @@ interface WorkflowWsFrame {
   loopKind?: string;
 }
 
-const WorkflowRunsPanel: React.FC = () => {
+interface WorkflowRunsPanelProps {
+  /**
+   * Optional externally-driven focus signal. When the parent updates this
+   * (e.g. from an anomaly "Open in DAG" click), the panel switches its
+   * selected run to match. Internal click-to-select on the run list still
+   * works — this is a one-way nudge, not a fully-controlled value.
+   */
+  focusRunId?: string | null;
+}
+
+const WorkflowRunsPanel: React.FC<WorkflowRunsPanelProps> = ({ focusRunId }) => {
   const { userId } = useAuth();
   const queryClient = useQueryClient();
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
@@ -109,6 +119,16 @@ const WorkflowRunsPanel: React.FC = () => {
   useEffect(() => {
     selectedRunIdRef.current = effectiveSelectedRunId;
   }, [effectiveSelectedRunId]);
+
+  // ── External focus nudge (anomaly → DAG, audit F9a) ──
+  // Parent passes a runId when the user clicks "Open in DAG" on an anomaly
+  // row. We mirror it into selectedRunId so the right-pane detail re-renders
+  // around that run. Effect on focusRunId only — the parent uses a counter-
+  // suffix-free value, so repeated clicks on the same row would otherwise
+  // be no-ops (acceptable: there's nothing to "re-select").
+  useEffect(() => {
+    if (focusRunId) setSelectedRunId(focusRunId);
+  }, [focusRunId]);
 
   // ── Selected run detail ──
   const {

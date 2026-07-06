@@ -2,27 +2,37 @@ import React from 'react';
 import type { AutoEvolvingKpi } from '../../api/autoevolving';
 
 /**
- * AUTOEVOLVING V1 Sprint 4 — KPI strip (4 cards).
+ * AUTOEVOLVING — KPI strip (3 cards).
  *
- * Scale-contrast big number + label (design.md "clear hierarchy"). Each card
- * with a `to` navigates on click; the autoResearch placeholder card is inert.
+ * Semantic roles (UX audit F2):
+ *  ① Workflows running     → current load / concurrency
+ *  ② Completed this week   → velocity / flywheel speed
+ *  ③ Pending approvals     → human-in-the-loop gates
+ *
+ * Each card with a `to` navigates on click. The old "Memory proposals pending"
+ * and "Auto-research" cards are removed — memory count duplicated the signal
+ * panel, and auto-research is now a V2 notice strip (F3).
  */
 interface KpiCard {
   key: string;
   label: string;
-  /** Display value; null renders the "N/A" placeholder treatment. */
   value: number | null;
   to: string | null;
-  hint?: string;
 }
 
 interface KPIStripProps {
   kpi: AutoEvolvingKpi;
   loading?: boolean;
+  pendingApprovalsCount?: number;
   onNavigate: (to: string) => void;
 }
 
-const KPIStrip: React.FC<KPIStripProps> = ({ kpi, loading, onNavigate }) => {
+const KPIStrip: React.FC<KPIStripProps> = ({
+  kpi,
+  loading,
+  pendingApprovalsCount = 0,
+  onNavigate,
+}) => {
   const cards: KpiCard[] = [
     {
       key: 'running',
@@ -37,22 +47,15 @@ const KPIStrip: React.FC<KPIStripProps> = ({ kpi, loading, onNavigate }) => {
       to: '/insights/patterns?tab=workflows',
     },
     {
-      key: 'memory',
-      label: 'Memory proposals pending',
-      value: kpi.memoryProposalPending,
-      to: '/memories',
-    },
-    {
-      key: 'research',
-      label: 'Auto-research',
-      value: kpi.autoResearchPending,
+      key: 'approvals',
+      label: 'Pending approvals',
+      value: pendingApprovalsCount,
       to: null,
-      hint: 'Ships in V2',
     },
   ];
 
   return (
-    <div className="ae-kpi-strip" data-testid="ae-kpi-strip">
+    <div className="ae-kpi-strip ae-kpi-strip--3" data-testid="ae-kpi-strip">
       {cards.map((c) => {
         const clickable = c.to != null;
         const displayValue =
@@ -68,7 +71,6 @@ const KPIStrip: React.FC<KPIStripProps> = ({ kpi, loading, onNavigate }) => {
           >
             <span className="ae-kpi-value">{displayValue}</span>
             <span className="ae-kpi-label">{c.label}</span>
-            {c.hint && <span className="ae-kpi-hint">{c.hint}</span>}
           </button>
         );
       })}

@@ -1,0 +1,576 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<title>Auto-Evolving · UX Audit</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Fraunces:opsz,wght@9..144,400;9..144,600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0b0c0e;
+    --bg-card:#131418;
+    --bg-elev:#1a1c21;
+    --bg-soft:#0f1013;
+    --border:#23262c;
+    --border-strong:#33373f;
+    --fg-1:#eef0f2;
+    --fg-2:#b8bcc4;
+    --fg-3:#7a808b;
+    --fg-4:#5a606b;
+    --accent:#7aa2ff;
+    --accent-ink:#0a0c11;
+    --danger:#ff7a7a;
+    --warn:#f0c674;
+    --ok:#7ee0a8;
+    --info:#7bc8e8;
+    --mono:'JetBrains Mono', ui-monospace, monospace;
+    --serif:'Fraunces', Georgia, serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--fg-1);font-family:'Inter Tight',system-ui,sans-serif;font-size:15px;line-height:1.55;text-wrap:pretty}
+  a{color:var(--accent);text-decoration:none}
+  ::selection{background:var(--accent);color:var(--accent-ink)}
+
+  /* ───────── layout shell ───────── */
+  .shell{display:grid;grid-template-columns:240px 1fr;min-height:100vh}
+  .toc{position:sticky;top:0;align-self:start;height:100vh;padding:32px 24px;border-right:1px solid var(--border);background:var(--bg-soft);overflow-y:auto}
+  .toc h1{margin:0 0 4px;font-family:var(--serif);font-size:20px;font-weight:600;letter-spacing:-0.01em;line-height:1.15}
+  .toc .meta{font-family:var(--mono);font-size:10.5px;color:var(--fg-4);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:24px}
+  .toc nav{display:flex;flex-direction:column;gap:1px}
+  .toc nav a{display:flex;justify-content:space-between;gap:10px;padding:7px 10px;margin-left:-10px;font-size:13px;color:var(--fg-2);border-radius:6px}
+  .toc nav a:hover{background:var(--bg-elev);color:var(--fg-1)}
+  .toc nav a span:last-child{font-family:var(--mono);font-size:10.5px;color:var(--fg-4)}
+  .toc .legend{margin-top:28px;padding-top:20px;border-top:1px solid var(--border);font-size:11px;color:var(--fg-3);line-height:1.7}
+  .toc .legend .dot{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:6px;vertical-align:1px}
+  .dot-crit{background:var(--danger)}
+  .dot-major{background:var(--warn)}
+  .dot-minor{background:var(--info)}
+
+  main{padding:48px 56px 96px;max-width:1080px}
+
+  /* hero */
+  .hero{margin-bottom:56px}
+  .hero .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:0.1em;text-transform:uppercase;color:var(--fg-4);margin-bottom:14px}
+  .hero h1{margin:0 0 14px;font-family:var(--serif);font-size:54px;font-weight:600;letter-spacing:-0.03em;line-height:1.02}
+  .hero h1 em{font-style:italic;color:var(--accent);font-weight:400}
+  .hero p{margin:0;max-width:62ch;color:var(--fg-2);font-size:17px;line-height:1.55}
+
+  /* tldr */
+  .tldr{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin:0 0 64px;padding:24px;background:var(--bg-card);border:1px solid var(--border);border-radius:14px}
+  .tldr .stat{display:flex;flex-direction:column;gap:6px}
+  .tldr .num{font-size:34px;font-weight:600;letter-spacing:-0.025em;line-height:1;font-variant-numeric:tabular-nums}
+  .tldr .num.crit{color:var(--danger)}
+  .tldr .num.major{color:var(--warn)}
+  .tldr .num.minor{color:var(--info)}
+  .tldr .num.ok{color:var(--ok)}
+  .tldr .lbl{font-size:12px;color:var(--fg-3);line-height:1.4}
+
+  /* section */
+  section.audit{margin:0 0 80px;scroll-margin-top:24px}
+  section.audit > h2{display:flex;align-items:baseline;gap:14px;margin:0 0 8px;font-family:var(--serif);font-size:30px;font-weight:600;letter-spacing:-0.02em}
+  section.audit > h2 .idx{font-family:var(--mono);font-size:12px;color:var(--fg-4);letter-spacing:0.05em;font-weight:400}
+  section.audit > .lede{margin:0 0 28px;max-width:66ch;color:var(--fg-2);font-size:15px}
+
+  /* finding card */
+  .finding{display:grid;grid-template-columns:120px 1fr;gap:0;margin:0 0 14px;border:1px solid var(--border);border-radius:12px;overflow:hidden;background:var(--bg-card)}
+  .finding .gutter{padding:18px 14px;border-right:1px solid var(--border);background:var(--bg-soft);display:flex;flex-direction:column;gap:8px;align-items:flex-start}
+  .sev{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10px;letter-spacing:0.08em;text-transform:uppercase;padding:3px 8px;border-radius:4px;font-weight:500}
+  .sev::before{content:"";width:6px;height:6px;border-radius:50%}
+  .sev.crit{background:color-mix(in srgb,var(--danger) 14%,transparent);color:var(--danger)}
+  .sev.crit::before{background:var(--danger)}
+  .sev.major{background:color-mix(in srgb,var(--warn) 14%,transparent);color:var(--warn)}
+  .sev.major::before{background:var(--warn)}
+  .sev.minor{background:color-mix(in srgb,var(--info) 14%,transparent);color:var(--info)}
+  .sev.minor::before{background:var(--info)}
+  .effort{font-family:var(--mono);font-size:10px;color:var(--fg-4);letter-spacing:0.05em}
+  .effort b{color:var(--fg-2);font-weight:500}
+  .finding .body{padding:18px 22px 20px}
+  .finding h3{margin:0 0 4px;font-size:17px;font-weight:600;letter-spacing:-0.01em}
+  .finding .where{font-family:var(--mono);font-size:11px;color:var(--fg-4);margin-bottom:12px}
+  .finding .row{display:grid;grid-template-columns:64px 1fr;gap:14px;margin-top:10px;font-size:14px;line-height:1.6}
+  .finding .row > .k{font-family:var(--mono);font-size:10px;letter-spacing:0.08em;text-transform:uppercase;color:var(--fg-4);padding-top:3px}
+  .finding .row > .v{color:var(--fg-2)}
+  .finding .row > .v code{font-family:var(--mono);font-size:12.5px;background:var(--bg-elev);padding:1px 6px;border-radius:4px;color:var(--fg-1)}
+  .finding .row > .v.fix{color:var(--fg-1)}
+  .finding .row > .v.fix strong{color:var(--ok);font-weight:600}
+
+  /* wireframe blocks (annotated) */
+  .wf{margin:18px 0 6px;padding:14px;border:1px dashed var(--border-strong);border-radius:10px;background:var(--bg-soft);font-family:var(--mono);font-size:11.5px;color:var(--fg-2);line-height:1.7;overflow-x:auto;white-space:pre;letter-spacing:0.01em}
+  .wf b{color:var(--fg-1);font-weight:500}
+  .wf em{font-style:normal;color:var(--accent)}
+  .wf .x{color:var(--danger)}
+  .wf .v{color:var(--ok)}
+  .wf .m{color:var(--warn)}
+
+  /* before/after grid */
+  .ba{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:18px 0 6px}
+  .ba > div{padding:14px;border-radius:10px;background:var(--bg-soft);border:1px solid var(--border)}
+  .ba > div.before{border-color:color-mix(in srgb,var(--danger) 30%,var(--border))}
+  .ba > div.after{border-color:color-mix(in srgb,var(--ok) 30%,var(--border))}
+  .ba > div h4{margin:0 0 10px;font-family:var(--mono);font-size:10.5px;letter-spacing:0.08em;text-transform:uppercase;color:var(--fg-4);display:flex;justify-content:space-between}
+  .ba > div.before h4 span{color:var(--danger)}
+  .ba > div.after h4 span{color:var(--ok)}
+  .ba pre{margin:0;font-family:var(--mono);font-size:11.5px;line-height:1.6;color:var(--fg-2);white-space:pre-wrap}
+
+  /* recommendation track */
+  .track{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:48px 0 0;padding-top:32px;border-top:1px solid var(--border)}
+  .track h3{margin:0 0 14px;font-family:var(--mono);font-size:11px;letter-spacing:0.1em;text-transform:uppercase;color:var(--fg-3);font-weight:500}
+  .track ul{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:10px}
+  .track li{display:flex;gap:10px;align-items:flex-start;font-size:13px;color:var(--fg-2);line-height:1.5}
+  .track li::before{content:"";flex-shrink:0;width:6px;height:6px;border-radius:50%;margin-top:7px;background:var(--fg-4)}
+  .track .quick li::before{background:var(--ok)}
+  .track .next li::before{background:var(--warn)}
+  .track .later li::before{background:var(--info)}
+
+  /* closing */
+  footer{margin-top:80px;padding-top:32px;border-top:1px solid var(--border);font-size:13px;color:var(--fg-4);font-family:var(--mono);display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap}
+
+  /* mini badge inline */
+  .pill{display:inline-block;padding:1px 7px;border-radius:999px;font-family:var(--mono);font-size:10px;letter-spacing:0.04em;background:var(--bg-elev);color:var(--fg-3);border:1px solid var(--border)}
+  .pill.warn{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 35%,transparent)}
+
+  @media (max-width:1080px){
+    .shell{grid-template-columns:1fr}
+    .toc{position:relative;height:auto;border-right:none;border-bottom:1px solid var(--border)}
+    main{padding:32px 24px 64px}
+    .tldr{grid-template-columns:repeat(2,1fr)}
+    .finding{grid-template-columns:1fr}
+    .finding .gutter{flex-direction:row;align-items:center;border-right:none;border-bottom:1px solid var(--border)}
+    .track{grid-template-columns:1fr}
+    .ba{grid-template-columns:1fr}
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <aside class="toc">
+    <h1>Auto-Evolving<br/>UX Audit</h1>
+    <div class="meta">v1 · 2026-06-29</div>
+    <nav>
+      <a href="#tldr"><span>TL;DR</span><span>00</span></a>
+      <a href="#f1"><span>主页信息架构失焦</span><span>01</span></a>
+      <a href="#f2"><span>Memory 数字三处重复</span><span>02</span></a>
+      <a href="#f3"><span>占位卡吃掉视觉预算</span><span>03</span></a>
+      <a href="#f4"><span>两个 CTA 无法区分</span><span>04</span></a>
+      <a href="#f5"><span>Evolve 主资产被埋底</span><span>05</span></a>
+      <a href="#f6"><span>15-stage 过滤器线性堆积</span><span>06</span></a>
+      <a href="#f7"><span>缺少漏斗 / 转化视图</span><span>07</span></a>
+      <a href="#f8"><span>Approve 拒绝流断点</span><span>08</span></a>
+      <a href="#f9"><span>异常面板只显示症状</span><span>09</span></a>
+      <a href="#plan"><span>分轨建议</span><span>10</span></a>
+    </nav>
+    <div class="legend">
+      <div><span class="dot dot-crit"></span>Critical &nbsp;阻塞核心任务</div>
+      <div><span class="dot dot-major"></span>Major &nbsp;明显摩擦</div>
+      <div><span class="dot dot-minor"></span>Minor &nbsp;打磨</div>
+    </div>
+  </aside>
+
+  <main>
+    <div class="hero">
+      <div class="eyebrow">SkillForge · Design Review</div>
+      <h1>Auto-Evolving 和 Optimization Events 现存的<br/><em>9 处</em> UX 摩擦。</h1>
+      <p>这两个页面承担 SkillForge 飞轮最重要的"显示进化在发生"的责任。但当前实现把同一组数据反复呈现，把核心资产埋到底部，并要求用户记住 15 个 stage 才能用过滤器。下面是按严重度排序的诊断、对应的位置、和最小可行改法。</p>
+    </div>
+
+    <section id="tldr" class="tldr">
+      <div class="stat"><div class="num crit">3</div><div class="lbl">Critical<br/>影响核心任务完成</div></div>
+      <div class="stat"><div class="num major">4</div><div class="lbl">Major<br/>明显摩擦、可绕开</div></div>
+      <div class="stat"><div class="num minor">2</div><div class="lbl">Minor<br/>打磨级</div></div>
+      <div class="stat"><div class="num ok">~3d</div><div class="lbl">Quick wins 估时<br/>不动后端 API</div></div>
+    </section>
+
+    <!-- ───────── F1 ───────── -->
+    <section id="f1" class="audit">
+      <h2><span class="idx">01 /</span>主页是 7 块平铺，<em style="color:var(--fg-2);font-style:normal">没有视觉重心</em></h2>
+      <p class="lede">页面从上到下连续 7 个独立 section（Header → KPIStrip → Approvals → SignalPanels → WorkflowRunsPanel → AnomalyPanel → EvolveTrajectoryPanel + HarvestedScenarios），每块都用同样规格的卡片包裹，间距统一为 24px。用户进来不知道"现在最该看哪里"。这违反 Bento 布局的初衷——bento 该靠尺寸/密度/位置形成层次，而不是 7 个等大方格。</p>
+
+      <div class="finding">
+        <div class="gutter">
+          <span class="sev crit">Critical</span>
+          <span class="effort"><b>Effort</b> 中 · 1.5d</span>
+        </div>
+        <div class="body">
+          <h3>没有 hero 区，没有"现在状态"陈述</h3>
+          <div class="where">AutoEvolving.tsx:97-194 · autoevolving.css .ae-page (gap:24px 全局)</div>
+
+          <div class="wf">现状（每个 ▢ 同等视觉权重）：
+┌──────────────────────────────────────────────────┐
+│  Auto-Evolving                  [Evolve][Trigger]│
+│  Self-improvement signals, workflow runs…        │
+├──────────────────────────────────────────────────┤
+│ ▢ Running │ ▢ Done │ ▢ Memory │ ▢ Research N/A   │  <span class="m">← 4 个等大 KPI</span>
+├──────────────────────────────────────────────────┤
+│ ▢ Pending approvals (条件渲染，时有时无)         │
+├──────────────────────────────────────────────────┤
+│ ▢ Production │ ▢ AutoResearch │ ▢ Memory         │  <span class="m">← 3 列等宽</span>
+├──────────────────────────────────────────────────┤
+│ ▢ Workflow runs (560px DAG)                      │  <span class="v">← 唯一真正大块</span>
+├──────────────────────────────────────────────────┤
+│ ▢ Anomalies                                      │
+├──────────────────────────────────────────────────┤
+│ ▢ Evolve trajectory  +  Harvested scenarios      │  <span class="x">← 核心资产，最底</span>
+└──────────────────────────────────────────────────┘</div>
+
+          <div class="row"><div class="k">Why</div><div class="v">用户登录到这个页面 80% 是想回答两件事：(a) <b>飞轮今天有没有转</b>，(b) <b>有没有要我点头的</b>。当前布局对这两件事都没有给出"一眼答案"。</div></div>
+          <div class="row"><div class="k">Fix</div><div class="v fix">引入 <strong>状态摘要 hero</strong>：把 KPIStrip 升级成 1 行陈述句 +  3 个支持指标。例：<br/><em style="font-family:var(--serif);font-size:17px;color:var(--fg-1);font-style:italic">"过去 7 天进化了 4 个 agent · 2 个待你点头 · 3 条信号有效"</em><br/>然后再让 Approvals 在有内容时升级为 sticky 顶栏，Evolve trajectory 上移到 DAG 上方。</div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ───────── F2 ───────── -->
+    <section id="f2" class="audit">
+      <h2><span class="idx">02 /</span>同一个数字在屏幕上出现 <em style="color:var(--danger);font-style:normal">三次</em></h2>
+      <p class="lede">"Pending memory proposals = 5" 这条数据，在 KPI 卡、Signal 三宫格的 Memory 面板、以及 Pending approvals 区（如果有 memory approval gate）会同时显示。看似冗余备份，实际是认知噪音——用户每次扫描都要重新核对"这三处是同一个数还是不同维度"。</p>
+
+      <div class="finding">
+        <div class="gutter">
+          <span class="sev major">Major</span>
+          <span class="effort"><b>Effort</b> 小 · 0.5d</span>
+        </div>
+        <div class="body">
+          <h3>KPI / Signal / Approval 三层语义没切分清</h3>
+          <div class="where">KPIStrip.tsx + SignalPanels.tsx + WorkflowApproveCard</div>
+
+          <div class="ba">
+            <div class="before">
+              <h4>Before<span>3× 同源</span></h4>
+<pre>┌ KPI ────────────┐
+│ 5  Memory pending│  ← 计数
+└─────────────────┘
+┌ Signal: Memory ─┐
+│ • title A       │  ← 列表
+│ • title B       │
+│ • title C       │
+└─────────────────┘
+┌ Approvals ──────┐
+│ [memory] title A│  ← 卡片
+└─────────────────┘</pre>
+            </div>
+            <div class="after">
+              <h4>After<span>每层职责唯一</span></h4>
+<pre>┌ KPI: 删掉 memory 卡 ─┐
+│ 改放"飞轮速度"指标   │
+└─────────────────────┘
+┌ Signal: Memory ─────┐
+│ Today  ─── 2 new    │
+│ Past   ─── 3 stale  │  ← 趋势 + 状态
+└─────────────────────┘
+┌ Approvals ──────────┐
+│ 仅显示 humanApprove │
+│ 阻塞 workflow 的    │  ← 唯一保留"需要操作"
+└─────────────────────┘</pre>
+            </div>
+          </div>
+
+          <div class="row"><div class="k">Fix</div><div class="v fix">让每个区有<strong>唯一职责</strong>：KPI=趋势速度、Signal=信号源健康度、Approvals=阻塞性人工 gate。Memory 计数本身在 Signal 里就够，KPI 那格换成 <code>Skill rev/week</code> 或 <code>Verified gain %</code>。</div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ───────── F3 ───────── -->
+    <section id="f3" class="audit">
+      <h2><span class="idx">03 /</span>占位卡 "<em style="color:var(--warn);font-style:normal">Ships in V2</em>" 永久吃掉 1/3 横向预算</h2>
+
+      <div class="finding">
+        <div class="gutter">
+          <span class="sev major">Major</span>
+          <span class="effort"><b>Effort</b> XS · 1h</span>
+        </div>
+        <div class="body">
+          <h3>SignalPanels 中间一列长期"还没做完"</h3>
+          <div class="where">SignalPanels.tsx:90-101 · grid-template-columns: 1.4fr 1fr 1.4fr</div>
+
+          <div class="wf">现状：grid 永远占 1fr，渲染一段 "Autonomous research signal is not wired yet."
+┌────────────┬──────────────┬────────────┐
+│ Production │ Auto-research│ Memory     │
+│ list…      │ <span class="x">"Ships in V2"</span>│ list…      │
+│            │ <span class="x">说明文字</span>     │            │
+└────────────┴──────────────┴────────────┘
+                ↑
+        <span class="x">占用 25% 横向空间，0 信息量</span>
+
+建议：在 V2 落地前，AutoResearch 退化为头部一颗 <span class="pill warn">V2 · soon</span> 徽章
+┌─────────────────────┬────────────────────────┐
+│ Production          │ Memory                 │
+│ ▰▰▰▰▰▰              │ ▰▰▰▰▰▰                 │
+│ row · row · row     │ row · row · row        │
+└─────────────────────┴────────────────────────┘
+  <span class="pill warn">Auto-research 即将上线 →</span>  (单行通知条，0.5 行高)</div>
+
+          <div class="row"><div class="k">Why</div><div class="v">把"未来功能"做成卡片占位是 SaaS 常见反模式——用户每天进来都看到同一段文案，会形成"这个产品没在迭代"的潜意识印象。</div></div>
+          <div class="row"><div class="k">Fix</div><div class="v fix">改 grid 为 2 列（1fr 1fr），把 AutoResearch 卡降级为 <strong>单行通知条 + Roadmap 链接</strong>。</div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ───────── F4 ───────── -->
+    <section id="f4" class="audit">
+      <h2><span class="idx">04 /</span>两个主 CTA "<em style="color:var(--fg-1);font-style:normal">Evolve agent</em>" / "<em style="color:var(--fg-1);font-style:normal">Trigger workflow</em>" 字面无法区分</h2>
+
+      <div class="finding">
+        <div class="gutter">
+          <span class="sev crit">Critical</span>
+          <span class="effort"><b>Effort</b> 小 · 0.5d</span>
+        </div>
+        <div class="body">
+          <h3>用户读完两个按钮还是不知道该按哪个</h3>
+          <div class="where">AutoEvolving.tsx:106-123</div>
+
+          <div class="ba">
+            <div class="before">
+              <h4>Before<span>同义反复</span></h4>
+<pre>┌──────────────────┐  ┌─────────────────────┐
+│  Evolve agent ▸  │  │ Trigger workflow ▸  │
+└──────────────────┘  └─────────────────────┘
+       ↑                       ↑
+   ghost outline            primary filled
+
+(实际上两个 modal 都接 workflow，
+ 区别只是预选 template，但用户
+ 不会从字面读出这一点)</pre>
+            </div>
+            <div class="after">
+              <h4>After<span>动词差异化</span></h4>
+<pre>┌──────────────────────────────────┐
+│  ▸ Run optimization on…  ▾       │  <span class="v">主按钮 = 下拉</span>
+└──────────────────────────────────┘
+   ├ A specific agent           (旧 Evolve)
+   ├ A workflow template…       (旧 Trigger)
+   └ Custom script              (V2)
+
+  <span class="v">辅助:</span>  Schedule…   Recent runs ↗</pre>
+            </div>
+          </div>
+
+          <div class="row"><div class="k">Fix</div><div class="v fix">合并为 <strong>单一首要动作 + 下拉子动作</strong>。如果合并代价高，至少把按钮文案改成<br/>—— <code>Evolve a specific agent</code> / <code>Run a workflow template</code>，让动词后的宾语帮用户区分。</div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ───────── F5 ───────── -->
+    <section id="f5" class="audit">
+      <h2><span class="idx">05 /</span>核心资产 <em style="color:var(--fg-1);font-style:normal">EvolveTrajectory</em> 被埋到页面最底</h2>
+
+      <div class="finding">
+        <div class="gutter">
+          <span class="sev crit">Critical</span>
+          <span class="effort"><b>Effort</b> 小 · 0.5d</span>
+        </div>
+        <div class="body">
+          <h3>飞轮转动的证据反而在 fold 之下</h3>
+          <div class="where">AutoEvolving.tsx:176-179</div>
+
+          <div class="wf">页面顺序：
+1. Header        ↑ 看不到关键信息
+2. KPI           ↑
+3. Approvals     ↑
+4. Signal Panels ↑
+5. Workflow DAG  ★ 占 560px,需要滚到一半才看见
+6. Anomaly       ↑
+7. <b>EvolveTrajectory</b>   <span class="x">← 在第一屏外，需滚 ~1400px 才到</span>
+8. HarvestedScenarios       <span class="x">← 更深</span>
+
+但产品定位说："Auto-Evolving" 这个页本质是给运营看
+"我的 agent 这周进化了没"。trajectory 折线图正是回答这个问题
+最直接的视图。</div>
+
+          <div class="row"><div class="k">Fix</div><div class="v fix">把 <strong>EvolveTrajectory</strong> 提到 KPI 下面，做成横向通栏（高度 220–260px 即可），代替当前 KPI strip 的角色。原 KPI 数字直接叠在折线上方（dual-axis pattern）。WorkflowRunsPanel 和 Anomalies 下沉。</div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ───────── F6 ───────── -->
+    <section id="f6" class="audit">
+      <h2><span class="idx">06 /</span>OptimizationEvents 把 <em style="color:var(--danger);font-style:normal">15 个 stage</em> 平铺在 Select 里</h2>
+
+      <div class="finding">
+        <div class="gutter">
+          <span class="sev major">Major</span>
+          <span class="effort"><b>Effort</b> 小 · 0.5d</span>
+        </div>
+        <div class="body">
+          <h3>过滤器要求用户记住整套 stage machine</h3>
+          <div class="where">OptimizationEvents.tsx:46-62 · STAGE_OPTIONS = [15]</div>
+
+          <div class="wf">现状：[Stage filter ▾] 展开是一个 15 项的扁平列表
+  dispatch_initiated
+  proposal_pending
+  proposal_approved
+  proposal_rejected
+  candidate_generating
+  candidate_ready
+  candidate_failed
+  candidate_created          ← <span class="x">candidate_ready vs created 用户根本分不清</span>
+  ab_running
+  ab_passed
+  ab_failed
+  canary_started
+  promoted
+  rolled_back
+  verified
+
+这是后端的 stage machine，原样泄漏到 UI。
+
+建议：分组 + 阶段聚合
+┌ Phase ──────────────────────────────────┐
+│ ○ Proposal   (initiated / pending /     │
+│              approved / rejected)       │
+│ ○ Candidate  (generating / ready /      │
+│              failed / created)          │
+│ ○ A/B        (running / passed / failed)│
+│ ○ Rollout    (canary / promoted /       │
+│              rolled_back / verified)    │
+└─────────────────────────────────────────┘
+  ──  Expert mode: show raw stage ▾  ──</div>
+
+          <div class="row"><div class="k">Fix</div><div class="v fix"><strong>Stage filter 改为二级</strong>：先选 phase（4 个），phase 内再选 stage（默认全选）。把"原生 stage 列表"藏在 Expert mode 切换后面。配合 timeline 表格的 stage 列也用同样分组着色（同 phase 同色相、子 stage 用亮度区分）。</div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ───────── F7 ───────── -->
+    <section id="f7" class="audit">
+      <h2><span class="idx">07 /</span>有 15 个 stage 却<em style="color:var(--warn);font-style:normal">没有漏斗视图</em></h2>
+
+      <div class="finding">
+        <div class="gutter">
+          <span class="sev major">Major</span>
+          <span class="effort"><b>Effort</b> 中 · 1d (新组件)</span>
+        </div>
+        <div class="body">
+          <h3>OptimizationEvents 缺最该有的"转化漏斗"</h3>
+          <div class="where">OptimizationEvents.tsx 整页都是表格 + 过滤</div>
+
+          <div class="wf">缺失视图：从 proposal → promoted 的漏斗
+本周 (2026-W26)
+proposal_pending      ████████████████████  47
+proposal_approved     ██████████████        33  (70%)
+candidate_ready       ████████████          28  (60%)
+ab_passed             ███████               17  (36%)
+promoted              ████                  10  (21%)
+rolled_back           █                      2  (4%)
+                                              ──────
+                                              <span class="v">net +8 verified gains</span>
+
+附带：哪一段流失最大？(approved → candidate_ready 损失 5 个：
+点击展开 → 跳到 candidate_failed 的 5 条 row)</div>
+
+          <div class="row"><div class="k">Why</div><div class="v">该页核心运营问题是<b>"我们的进化建议有多少最终上线了"</b>。当前需要用户用 stage filter 查 5 次手动算。漏斗是这类页面的标配。</div></div>
+          <div class="row"><div class="k">Fix</div><div class="v fix">在表格上方插一行 <strong>Funnel</strong> 组件，时间窗对齐 timeline 表头，每段宽度 = count、悬停显示流失率、点击下钻到该 stage 的 row。</div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ───────── F8 ───────── -->
+    <section id="f8" class="audit">
+      <h2><span class="idx">08 /</span>Approve / Reject 流的断点</h2>
+
+      <div class="finding">
+        <div class="gutter">
+          <span class="sev major">Major</span>
+          <span class="effort"><b>Effort</b> 小 · 0.5d</span>
+        </div>
+        <div class="body">
+          <h3>Reject 必填理由，Approve 不必填理由——两边不对称</h3>
+          <div class="where">OptimizationEvents.tsx:852-883 (RejectModal)</div>
+
+          <div class="wf">当前：
+  Approve  →  直接通过 (无确认)
+  Reject   →  Modal 强制输入 reason
+
+问题：
+  • <span class="x">Approve 是更危险的动作</span>(把候选放到 A/B 跑/直接上线),
+    反而无任何 friction
+  • Reject 的 reason 不会回流到 candidate generator,无法形成学习闭环
+  • 没有 batch action (5 个 pending 时需要点 10 次)
+
+建议：
+  Approve  →  inline 确认 (小 popover)，可选写一行 "why approved"
+              → 这条 note 进入下一次候选生成的 hint
+  Reject   →  保持必填 + 增加 quick-reasons (Chip 多选：
+              "off-topic" "duplicate" "low-impact" "risk-too-high")
+  Batch    →  table 顶部勾选行后出现 [Approve all] [Reject all w/ reason]</div>
+
+          <div class="row"><div class="k">Fix</div><div class="v fix">对称化两端摩擦 + 让 reject reason 形成可被 evolve agent 读取的<strong>反馈语料</strong>。这一改动 ROI 极高，是飞轮闭环的关键一环。</div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ───────── F9 ───────── -->
+    <section id="f9" class="audit">
+      <h2><span class="idx">09 /</span>AnomalyPanel 只显示<em style="color:var(--fg-1);font-style:normal">症状</em>，不引导动作</h2>
+
+      <div class="finding">
+        <div class="gutter">
+          <span class="sev minor">Minor</span>
+          <span class="effort"><b>Effort</b> XS · 0.5d</span>
+        </div>
+        <div class="body">
+          <h3>异常红条 + 一行 reason，但用户不知道下一步该干嘛</h3>
+          <div class="where">autoevolving.css .ae-anomaly-row · AnomalyPanel.tsx</div>
+
+          <div class="row"><div class="k">Fix</div><div class="v fix">每行末尾加 1–2 个 <strong>建议动作</strong>：<code>Open trace ↗</code> · <code>Suppress 24h</code> · <code>Trigger investigation workflow</code>。让"红条 → 行动"链路闭合。</div></div>
+        </div>
+      </div>
+
+      <div class="finding">
+        <div class="gutter">
+          <span class="sev minor">Minor</span>
+          <span class="effort"><b>Effort</b> XS · 1h</span>
+        </div>
+        <div class="body">
+          <h3>顺手：DAG host 固定 560px 高，小屏上撑不开</h3>
+          <div class="where">.ae-dag-host { height:560px }</div>
+          <div class="row"><div class="k">Fix</div><div class="v fix">改 <code>min-height:420px; max-height: min(560px, 60vh)</code>，让小屏(1366×768 笔记本)不至于 DAG 把 anomaly 推到 fold 之下。</div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ───────── plan ───────── -->
+    <section id="plan" class="audit">
+      <h2><span class="idx">10 /</span>分轨建议</h2>
+      <p class="lede">按"动后端 / 不动后端"切两轨，再按时间分。Quick wins 全部不动 API，1.5 个工作日内可全部上线。</p>
+
+      <div class="track">
+        <div class="quick">
+          <h3>Quick wins · ~1.5d · 仅前端</h3>
+          <ul>
+            <li>F3: AutoResearch 占位 → 单行通知条</li>
+            <li>F4: 两个 CTA 文案 + 合并成下拉</li>
+            <li>F5: EvolveTrajectory 上移到 KPI 下</li>
+            <li>F9b: DAG 高度自适应</li>
+            <li>F9a: Anomaly 行加快捷动作链</li>
+          </ul>
+        </div>
+        <div class="next">
+          <h3>Next sprint · ~3d · 前端为主</h3>
+          <ul>
+            <li>F1: Hero 状态摘要句 + KPI 重构</li>
+            <li>F2: 三层语义切分（KPI/Signal/Approval）</li>
+            <li>F6: Stage filter 二级分组 + phase 着色</li>
+            <li>F8: Approve/Reject 对称化 + Quick reasons chip</li>
+          </ul>
+        </div>
+        <div class="later">
+          <h3>Strategic · ~1w · 含后端</h3>
+          <ul>
+            <li>F7: Optimization Funnel 组件（需要 BE 提供按 phase 聚合的 metrics endpoint）</li>
+            <li>F8: Reject reason 反哺 candidate generator（要 evolve agent 读取 feedback）</li>
+            <li>整页 Performance：lazy-load 全部 panel，首屏只保留 Trajectory + Approvals</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <footer>
+      <div>SkillForge Design Agent · UX Audit · 2026-06-29</div>
+      <div>docs/design/autoevolving-ux-audit.html</div>
+    </footer>
+  </main>
+</div>
+</body>
+</html>

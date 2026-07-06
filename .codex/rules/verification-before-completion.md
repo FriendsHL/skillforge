@@ -26,3 +26,14 @@ Before any success claim:
 - Data-persistence claims require API or SQL evidence that the value was actually stored.
 - Whole-requirement completion requires checking every `prd.md` / `tech-design.md` acceptance point.
 - Frontend usability claims require a real browser check with DOM/text assertions for critical interactions, not only screenshots or build success.
+- FE/BE contract claims require checking backend outer envelope shape against frontend API types and mocks. A passing frontend mock is not enough if the mock shape was invented.
+- New DTO/wire payload claims require either ObjectMapper roundtrip evidence or live curl raw JSON shape evidence when practical.
+- LLM provider connectivity claims require a direct provider probe or application-level request evidence, with secrets redacted.
+- Rule-migration claims require `rg --files .codex/rules`, `git diff --check`, and a coverage check against intended source files.
+
+## Completion Gate Commands
+
+- Backend changes: `mvn -pl skillforge-server -am test` unless a narrower command is justified.
+- Core/provider/tool changes: include the relevant module in Maven, for example `mvn -pl skillforge-core,skillforge-server -am test`.
+- Frontend changes: `cd skillforge-dashboard && npx tsc --noEmit && npm run build`.
+- Rule/docs-only changes: no build is required, but run formatting/whitespace checks and inspect the diff.

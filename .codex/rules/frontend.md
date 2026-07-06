@@ -5,6 +5,8 @@ Read this before touching `*.ts`, `*.tsx`, frontend API calls, React components,
 ## TypeScript And API
 
 - New API functions must not use `data: any`; define request/response interfaces.
+- API response types must match the backend outer envelope shape, not just inner DTO fields. If the backend returns `{items, ...}`, frontend code must read `r.data.items`; if the backend returns a bare list, frontend code may read `r.data`.
+- Test mocks for API calls must mirror the real backend response shape.
 - Prefer `interface` for object shapes and props; use `type` for unions, intersections, tuples, mapped types, and utility types.
 - Public/exported functions and shared utilities should have explicit parameter and return types.
 - Avoid `any`; use `unknown` at untrusted boundaries and narrow safely.
@@ -25,6 +27,9 @@ Read this before touching `*.ts`, `*.tsx`, frontend API calls, React components,
 - Frontend WebSocket subscriptions must close in `useEffect` cleanup.
 - Streaming UI updates must be throttled; do not `setState` for every delta.
 - `useImperativeHandle` refs do not trigger parent re-render. Use state for UI state, refs only for save-time snapshots.
+- Avoid stale closures in event handlers and effects; keep dependency arrays accurate or use refs intentionally.
+- Do not use array index as key for lists that can reorder.
+- Compute derived state during render or memoization instead of `useEffect` when possible.
 
 ## Ant Design And Styling
 
@@ -36,3 +41,9 @@ Read this before touching `*.ts`, `*.tsx`, frontend API calls, React components,
 - Long lists over roughly 100 rows need virtualization.
 - Dispose ECharts instances on unmount.
 - No stray `console.log` in committed code.
+
+## Review Cross-Checks
+
+- For TypeScript review, read `typescript-review.md`.
+- For performance-sensitive UI work, read `performance-review.md`.
+- For dashboard visual/design changes, also read `design.md`.
