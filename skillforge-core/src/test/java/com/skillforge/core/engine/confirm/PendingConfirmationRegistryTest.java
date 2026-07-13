@@ -12,6 +12,21 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class PendingConfirmationRegistryTest {
 
+    @Test
+    void pendingForSession_returnsOnlyUnansweredRecordsForThatSession() {
+        PendingConfirmationRegistry registry = new PendingConfirmationRegistry();
+        PendingConfirmation first = pc("first", "session-1");
+        PendingConfirmation answered = pc("answered", "session-1");
+        registry.register(first);
+        registry.register(answered);
+        registry.register(pc("other", "session-2"));
+        registry.complete("answered", Decision.APPROVED, null);
+
+        assertThat(registry.pendingForSession("session-1"))
+                .extracting(PendingConfirmation::confirmationId)
+                .containsExactly("first");
+    }
+
     private PendingConfirmation pc(String id, String sid) {
         return new PendingConfirmation(id, sid, "toolUse-" + id,
                 "clawhub", "obsidian", "clawhub install obsidian", null, 30);

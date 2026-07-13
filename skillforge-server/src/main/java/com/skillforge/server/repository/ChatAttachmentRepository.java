@@ -3,16 +3,70 @@ package com.skillforge.server.repository;
 import com.skillforge.server.entity.ChatAttachmentEntity;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
+import java.util.Optional;
 
 public interface ChatAttachmentRepository extends JpaRepository<ChatAttachmentEntity, String> {
 
     List<ChatAttachmentEntity> findBySessionIdAndIdIn(String sessionId, Collection<String> ids);
+
+    Optional<ChatAttachmentEntity> findBySessionIdAndSourceToolUseId(
+            String sessionId, String sourceToolUseId);
+
+    List<ChatAttachmentEntity> findByOriginAndStatusAndCreatedAtBefore(
+            String origin, String status, Instant before);
+
+    @Query("SELECT a FROM ChatAttachmentEntity a WHERE a.origin = 'agent_generated' AND ("
+            + "(a.status = 'uploaded' AND a.createdAt < :cutoff) OR "
+            + "(a.status IN ('publishing', 'deleting') AND "
+            + "((a.boundAt IS NULL AND a.createdAt < :cutoff) OR a.boundAt < :cutoff)))")
+    List<ChatAttachmentEntity> findStaleGeneratedArtifacts(@Param("cutoff") Instant cutoff);
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Transactional
+    @Query("UPDATE ChatAttachmentEntity a SET a.status = 'publishing', a.boundAt = :now "
+            + "WHERE a.id = :id AND a.status IN ('uploaded', 'publishing')")
+    int reserveForPublishing(@Param("id") String id, @Param("now") Instant now);
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Transactional
+    @Query("UPDATE ChatAttachmentEntity a SET a.status = 'deleting', a.boundAt = :now "
+            + "WHERE a.id = :id AND ("
+            + "(a.status = 'uploaded' AND a.createdAt < :cutoff) OR "
+            + "(a.status IN ('publishing', 'deleting') AND "
+            + "((a.boundAt IS NULL AND a.createdAt < :cutoff) OR a.boundAt < :cutoff)))")
+    int claimStaleForCleanup(
+            @Param("id") String id,
+            @Param("cutoff") Instant cutoff,
+            @Param("now") Instant now);
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Transactional
+    @Query("UPDATE ChatAttachmentEntity a SET a.status = 'published' "
+            + "WHERE a.id = :id AND a.origin = 'agent_generated' "
+            + "AND a.status IN ('uploaded', 'publishing', 'deleting')")
+    int markGeneratedPublished(@Param("id") String id);
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Transactional
+    @Query("UPDATE ChatAttachmentEntity a SET a.status = :status, a.boundAt = :boundAt "
+            + "WHERE a.id = :id AND a.status = 'deleting'")
+    int releaseCleanupClaim(
+            @Param("id") String id,
+            @Param("status") String status,
+            @Param("boundAt") Instant boundAt);
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Transactional
+    @Query("DELETE FROM ChatAttachmentEntity a WHERE a.id = :id AND a.status = 'deleting'")
+    int deleteClaimedArtifact(@Param("id") String id);
 
     /**
      * ATTACHMENT-CLEANUP (Wave1-B): find DB rows uploaded but never bound to a message
@@ -20,7 +74,8 @@ public interface ChatAttachmentRepository extends JpaRepository<ChatAttachmentEn
      * never associated the row with a chat turn, so the row + file are orphans
      * (user uploaded then closed the page / never sent).
      */
-    List<ChatAttachmentEntity> findByStatusAndSeqNoIsNullAndCreatedAtBefore(String status, Instant before);
+    List<ChatAttachmentEntity> findByOriginAndStatusAndSeqNoIsNullAndCreatedAtBefore(
+            String origin, String status, Instant before);
 
     /**
      * ATTACHMENT-CLEANUP (Wave1-B): projection of every {@code storage_path} value

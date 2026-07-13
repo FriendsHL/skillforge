@@ -60,6 +60,10 @@ skillforge:
   # The desktop launcher passes --skillforge.spa.root=<App>/Contents/Resources/web.
   # spa:
   #   root: /absolute/path/to/dashboard/dist
+  workspace:
+    root: ${SKILLFORGE_WORKSPACE_ROOT:${SKILLFORGE_ACP_REPO_ROOT:}}
+    max-preview-bytes: 262144
+    max-entries-per-directory: 500
   acp:
     # ACP-EXTERNAL-AGENT worktree mode (option A): the git repo cc works on. When
     # set, each cc run executes in a fresh `git worktree` of this repo on its own

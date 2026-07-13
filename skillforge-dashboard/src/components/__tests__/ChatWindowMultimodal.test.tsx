@@ -42,6 +42,15 @@ vi.mock('../../api/commands', () => ({
   executeCommand: vi.fn(),
 }));
 
+vi.mock('../AttachmentThumbnail', () => ({
+  default: ({ filename, caption }: { filename: string; caption?: string }) => (
+    <div data-testid="rendered-attachment">
+      {filename}
+      {caption ? `: ${caption}` : ''}
+    </div>
+  ),
+}));
+
 const errorSpy = vi.fn();
 vi.mock('antd', async () => {
   const actual = await vi.importActual<typeof import('antd')>('antd');
@@ -56,7 +65,7 @@ vi.mock('antd', async () => {
   };
 });
 
-import { ChatInput } from '../ChatWindow';
+import ChatWindow, { ChatInput } from '../ChatWindow';
 
 interface Handlers {
   onSend: ReturnType<typeof vi.fn>;
@@ -338,5 +347,40 @@ describe('ChatInput — MULTIMODAL-MVP attach button gate', () => {
     );
     const sendBtnDisabled = screen.getByLabelText('Send') as HTMLButtonElement;
     expect(sendBtnDisabled).toBeDisabled();
+  });
+});
+
+describe('ChatWindow — outbound assistant attachments', () => {
+  it('renders assistant attachments and keeps attachment-only messages in the transcript', () => {
+    render(
+      <ChatWindow
+        messages={[
+          {
+            id: 'assistant-artifact-1',
+            role: 'assistant',
+            content: '',
+            attachments: [
+              {
+                kind: 'pdf',
+                attachmentId: 'artifact-1',
+                filename: 'report.pdf',
+                caption: 'Final report',
+              },
+            ],
+          },
+        ]}
+        loading={false}
+        onSend={vi.fn()}
+        slashCommandConfig={{
+          userId: 42,
+          sessionId: 'sess-A',
+          onRedirect: vi.fn(),
+          onModelChanged: vi.fn(),
+        }}
+      />,
+    );
+
+    expect(screen.getAllByText('Assistant')).toHaveLength(1);
+    expect(screen.getByTestId('rendered-attachment')).toHaveTextContent('report.pdf: Final report');
   });
 });

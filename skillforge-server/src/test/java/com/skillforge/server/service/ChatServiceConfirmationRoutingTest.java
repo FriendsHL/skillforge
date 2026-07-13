@@ -19,6 +19,7 @@ import com.skillforge.server.entity.SessionMessageEntity;
 import com.skillforge.server.repository.ModelUsageRepository;
 import com.skillforge.server.subagent.SubAgentRegistry;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -36,6 +37,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -73,6 +75,7 @@ class ChatServiceConfirmationRoutingTest {
     private CompactionService compactionService;
     private PendingConfirmationRegistry registry;
     private ChatService chatService;
+    private ThreadPoolExecutor executor;
 
     @BeforeEach
     void setUp() {
@@ -88,18 +91,12 @@ class ChatServiceConfirmationRoutingTest {
         compactionService = mock(CompactionService.class);
         registry = mock(PendingConfirmationRegistry.class);
 
-        // Synchronous executor — engine-resume runLoop runs on the test thread.
-        ThreadPoolExecutor sync = new ThreadPoolExecutor(
-                0, 1, 1, TimeUnit.SECONDS, new LinkedBlockingQueue<>(16)) {
-            @Override
-            public void execute(Runnable command) {
-                command.run();
-            }
-        };
+        executor = new ThreadPoolExecutor(
+                1, 1, 1, TimeUnit.SECONDS, new LinkedBlockingQueue<>(16));
         lenient().when(compactionService.lockFor(anyString())).thenAnswer(inv -> new Object());
 
         chatService = new ChatService(agentService, sessionService, skillRegistry,
-                agentLoopEngine, modelUsageRepository, broadcaster, sync,
+                agentLoopEngine, modelUsageRepository, broadcaster, executor,
                 sessionTitleService, subAgentRegistry, cancellationRegistry, compactionService,
                 null, null, new ObjectMapper(), null,
                 new NoopDispatcher(),
@@ -107,6 +104,12 @@ class ChatServiceConfirmationRoutingTest {
                 sid -> sid, mock(LlmTraceStore.class),
                 mock(org.springframework.context.ApplicationEventPublisher.class),
                 null);
+    }
+
+    @AfterEach
+    void tearDown() throws InterruptedException {
+        executor.shutdownNow();
+        executor.awaitTermination(2, TimeUnit.SECONDS);
     }
 
     @Test
@@ -140,8 +143,8 @@ class ChatServiceConfirmationRoutingTest {
         com.skillforge.core.engine.LoopResult loopResult = new com.skillforge.core.engine.LoopResult();
         loopResult.setMessages(new ArrayList<>());
         loopResult.setToolCalls(new ArrayList<>());
-        lenient().when(agentLoopEngine.run(any(AgentDefinition.class), any(),
-                any(Message.class), any(), anyString(), anyLong(),
+        lenient().when(agentLoopEngine.run(any(AgentDefinition.class), nullable(String.class),
+                nullable(Message.class), any(), anyString(), anyLong(),
                 any(com.skillforge.core.engine.LoopContext.class)))
                 .thenReturn(loopResult);
 

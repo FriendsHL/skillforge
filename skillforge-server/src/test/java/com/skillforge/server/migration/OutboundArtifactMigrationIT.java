@@ -1,0 +1,157 @@
+package com.skillforge.server.migration;
+
+import io.zonky.test.db.postgres.embedded.EmbeddedPostgres;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.SingleConnectionDataSource;
+import org.springframework.jdbc.datasource.init.ScriptUtils;
+
+import java.io.IOException;
+import java.sql.Connection;
+import java.sql.SQLException;
+import java.util.List;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+class OutboundArtifactMigrationIT {
+
+    private static EmbeddedPostgres postgres;
+    private static Connection connection;
+    private static JdbcTemplate jdbcTemplate;
+
+    @BeforeAll
+    static void startPostgres() throws Exception {
+        postgres = EmbeddedPostgres.builder().start();
+        connection = postgres.getPostgresDatabase().getConnection();
+        jdbcTemplate = new JdbcTemplate(new SingleConnectionDataSource(connection, true));
+    }
+
+    @AfterAll
+    static void stopPostgres() throws SQLException, IOException {
+        if (connection != null) connection.close();
+        if (postgres != null) postgres.close();
+    }
+
+    @BeforeEach
+    void createBaselineSchema() {
+        jdbcTemplate.execute("DROP TABLE IF EXISTS t_chat_attachment");
+        jdbcTemplate.execute("DROP TABLE IF EXISTS t_agent");
+        jdbcTemplate.execute("""
+                CREATE TABLE t_chat_attachment (
+                    id VARCHAR(36) PRIMARY KEY,
+                    session_id VARCHAR(36) NOT NULL,
+                    seq_no BIGINT,
+                    status VARCHAR(16) NOT NULL DEFAULT 'uploaded',
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """);
+        jdbcTemplate.execute("""
+                CREATE TABLE t_agent (
+                    id BIGSERIAL PRIMARY KEY,
+                    name VARCHAR(255) NOT NULL,
+                    tool_ids TEXT,
+                    updated_at TIMESTAMPTZ
+                )
+                """);
+    }
+
+    @Test
+    void v169AddsArtifactColumnsConstraintsAndIndexes() {
+        jdbcTemplate.update("""
+                INSERT INTO t_chat_attachment (id, session_id, status)
+                VALUES ('attachment-1', 'session-1', 'bound')
+                """);
+
+        runV169();
+
+        List<String> columns = jdbcTemplate.queryForList("""
+                SELECT column_name FROM information_schema.columns
+                WHERE table_name = 't_chat_attachment'
+                  AND column_name IN ('origin', 'source_tool_use_id', 'sha256', 'caption')
+                ORDER BY column_name
+                """, String.class);
+        assertThat(columns).containsExactly("caption", "origin", "sha256", "source_tool_use_id");
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT origin FROM t_chat_attachment WHERE id = 'attachment-1'", String.class))
+                .isEqualTo("user_upload");
+
+        List<String> indexes = jdbcTemplate.queryForList("""
+                SELECT indexname FROM pg_indexes WHERE tablename = 't_chat_attachment'
+                """, String.class);
+        assertThat(indexes).contains(
+                "uq_chat_attachment_session_tool_use",
+                "idx_chat_attachment_origin_status_created");
+
+        assertThatThrownBy(() -> jdbcTemplate.update("""
+                INSERT INTO t_chat_attachment (id, session_id, status)
+                VALUES ('attachment-publishing', 'session-1', 'publishing')
+                """)).isInstanceOf(Exception.class);
+    }
+
+    @Test
+    void v170AddsArtifactCleanupLeaseStatusesAfterV169() {
+        runV169();
+        runV170();
+
+        jdbcTemplate.update("""
+                INSERT INTO t_chat_attachment (id, session_id, status) VALUES
+                    ('attachment-publishing', 'session-1', 'publishing'),
+                    ('attachment-deleting', 'session-1', 'deleting')
+                """);
+
+        assertThat(jdbcTemplate.queryForList(
+                "SELECT status FROM t_chat_attachment ORDER BY status", String.class))
+                .containsExactly("deleting", "publishing");
+    }
+
+    @Test
+    void unrestrictedValuesStayUnrestrictedAndExplicitAllowlistAppendsExactlyOnce() {
+        jdbcTemplate.update("""
+                INSERT INTO t_agent (name, tool_ids) VALUES
+                    ('Main Assistant', NULL),
+                    ('Main Assistant', '   '),
+                    ('Main Assistant', '[]'),
+                    ('Main Assistant', '["Bash"]'),
+                    ('Other Agent', '["Bash"]')
+                """);
+
+        runV169();
+        runV169();
+
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM t_agent WHERE name = 'Main Assistant' AND tool_ids IS NULL",
+                Integer.class)).isEqualTo(1);
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM t_agent WHERE name = 'Main Assistant' AND tool_ids = '   '",
+                Integer.class)).isEqualTo(1);
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM t_agent WHERE name = 'Main Assistant' AND tool_ids = '[]'",
+                Integer.class)).isEqualTo(1);
+
+        String explicitTools = jdbcTemplate.queryForObject("""
+                SELECT tool_ids FROM t_agent
+                WHERE name = 'Main Assistant' AND tool_ids LIKE '%Bash%'
+                """, String.class);
+        assertThat(explicitTools).isEqualTo("[\"Bash\", \"PublishChatArtifact\"]");
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT tool_ids FROM t_agent WHERE name = 'Other Agent'", String.class))
+                .isEqualTo("[\"Bash\"]");
+    }
+
+    private static void runV169() {
+        ScriptUtils.executeSqlScript(
+                connection,
+                new ClassPathResource("db/migration/V169__outbound_artifact_foundation.sql"));
+    }
+
+    private static void runV170() {
+        ScriptUtils.executeSqlScript(
+                connection,
+                new ClassPathResource("db/migration/V170__artifact_cleanup_lease_statuses.sql"));
+    }
+}

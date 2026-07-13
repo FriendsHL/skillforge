@@ -1,6 +1,6 @@
 # SkillForge 文档
 
-> 更新于：2026-06-19（COMPACT range-model 存储重构 go-live（默认 on，V157）/ CHANNEL-MIDTURN-PROGRESS 交付归档 / 同期 3 项 bug 修复）
+> 更新于：2026-07-14（iOS Companion V1 core 已实现；新增 Personal Workspace Browser 需求包）
 > Agent 规则：先读这里，再只打开当前任务链接到的文档。
 
 编辑 docs 前，先读 [DOCS-GOVERNANCE.md](DOCS-GOVERNANCE.md)。
@@ -24,6 +24,8 @@
 | **EVOLVE-JUDGE-GROUNDING** | 自进化判定与候选对靶优化（blog 复盘）。Phase 1 = 配对/comparative 判定（复用已有 perScenarioFlips 做 net-wins 判据，治绝对打分噪声→0 赢家），无 schema 改动；Phase 2+ grounding/refuter/held-out 列 roadmap | Phase 1 已交付 / Phase 2 见下行 | [需求包](requirements/active/2026-06-17-EVOLVE-JUDGE-GROUNDING/index.md) | [MRD](requirements/active/2026-06-17-EVOLVE-JUDGE-GROUNDING/mrd.md) | [PRD](requirements/active/2026-06-17-EVOLVE-JUDGE-GROUNDING/prd.md) | [tech-design](requirements/active/2026-06-17-EVOLVE-JUDGE-GROUNDING/tech-design.md) | — |
 | **EVOLVE-CANDIDATE-GROUNDING** | EVOLVE-JUDGE-GROUNDING Phase 2：候选 per-badcase grounding + 最小 delta 编辑（治 live net -7 候选制造回归）。决策经 architect 对抗 review ENDORSE-WITH-CHANGES（A+C-seam）；退出标准 ratify。无 schema 改 | Phase 2 已交付 | [需求包](requirements/active/2026-06-18-EVOLVE-CANDIDATE-GROUNDING/index.md) | [MRD](requirements/active/2026-06-18-EVOLVE-CANDIDATE-GROUNDING/mrd.md) | [PRD](requirements/active/2026-06-18-EVOLVE-CANDIDATE-GROUNDING/prd.md) | [tech-design](requirements/active/2026-06-18-EVOLVE-CANDIDATE-GROUNDING/tech-design.md) | — |
 | **WECHAT-CHANNEL** | 加微信 channel（现仅飞书）。**路线已拍=B-native**：SkillForge 原生实现腾讯 ClawBot 的 iLink 协议（个人微信 + 本机部署 + 发文件，无 openclaw 无额外进程；协议社区逆向 eyes-open）| Slice 1 已交付 / Slice 2-3 待做 | [需求包](requirements/active/2026-06-18-WECHAT-CHANNEL/index.md) | [MRD](requirements/active/2026-06-18-WECHAT-CHANNEL/mrd.md) | [PRD](requirements/active/2026-06-18-WECHAT-CHANNEL/prd.md) | [tech-design](requirements/active/2026-06-18-WECHAT-CHANNEL/tech-design.md) | — |
+| **IOS-ASSISTANT-COMPANION** | SkillForge iOS 个人助理入口：SwiftUI 原生 App，Dashboard QR 配对，LAN/Tailscale fallback，Chat/sessions/realtime/pending/附件/Control/Agents/Settings；APNs 与 TestFlight 后置 | V1 core implemented / APNs open | [需求包](requirements/active/2026-07-09-IOS-ASSISTANT-COMPANION/index.md) | [MRD](requirements/active/2026-07-09-IOS-ASSISTANT-COMPANION/mrd.md) | [PRD](requirements/active/2026-07-09-IOS-ASSISTANT-COMPANION/prd.md) | [tech-design](requirements/active/2026-07-09-IOS-ASSISTANT-COMPANION/tech-design.md) / [implementation-plan](requirements/active/2026-07-09-IOS-ASSISTANT-COMPANION/implementation-plan.md) | [delivery-index](delivery-index.md) |
+| **PERSONAL-WORKSPACE-BROWSER** | Chat 右侧 Workspace：区分本次会话附件与授权 MySpace 文件；从 `/Users/youren/myspace` 根只读浏览，支持安全文本预览、嵌套 gitignore 与路径边界 | done / V1 verified | [需求包](requirements/active/2026-07-14-PERSONAL-WORKSPACE-BROWSER/index.md) | [MRD](requirements/active/2026-07-14-PERSONAL-WORKSPACE-BROWSER/mrd.md) | [PRD](requirements/active/2026-07-14-PERSONAL-WORKSPACE-BROWSER/prd.md) | [tech-design](requirements/active/2026-07-14-PERSONAL-WORKSPACE-BROWSER/tech-design.md) | [delivery-index](delivery-index.md) |
 
 > 整体方案：[plans/PROD-OPTIMIZATION-FLYWHEEL/plan.md](plans/PROD-OPTIMIZATION-FLYWHEEL/plan.md) —— 数据飞轮 / 优化闭环 6 版本拆分（**V1-V6 全部已交付**，⑤ A/B 自动 trigger 真闭环 prompt+skill 双 surface 通）
 

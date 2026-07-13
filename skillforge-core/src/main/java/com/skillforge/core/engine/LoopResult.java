@@ -17,12 +17,14 @@ public class LoopResult {
     private int loopCount;
     private List<ToolCallRecord> toolCalls;
     private InteractiveControlRequest pendingControl;
+    private List<Message> deferredBroadcastMessages;
     /** completed / cancelled / max_loops / interrupted. 默认 completed 保持对旧调用者的兼容。 */
     private String status = "completed";
 
     public LoopResult() {
         this.messages = new ArrayList<>();
         this.toolCalls = new ArrayList<>();
+        this.deferredBroadcastMessages = new ArrayList<>();
     }
 
     public LoopResult(String finalResponse, List<Message> messages,
@@ -34,6 +36,7 @@ public class LoopResult {
         this.totalOutputTokens = totalOutputTokens;
         this.loopCount = loopCount;
         this.toolCalls = toolCalls;
+        this.deferredBroadcastMessages = new ArrayList<>();
     }
 
     public String getStatus() {
@@ -98,5 +101,15 @@ public class LoopResult {
 
     public void setPendingControl(InteractiveControlRequest pendingControl) {
         this.pendingControl = pendingControl;
+    }
+
+    public List<Message> getDeferredBroadcastMessages() {
+        return deferredBroadcastMessages;
+    }
+
+    public void setDeferredBroadcastMessages(List<Message> deferredBroadcastMessages) {
+        this.deferredBroadcastMessages = deferredBroadcastMessages != null
+                ? new ArrayList<>(deferredBroadcastMessages)
+                : new ArrayList<>();
     }
 }

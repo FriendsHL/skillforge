@@ -12,13 +12,15 @@ import org.springframework.scheduling.annotation.EnableScheduling;
         "com.skillforge.server.entity",
         "com.skillforge.server.mcp.entity",
         "com.skillforge.observability.entity",
-        "com.skillforge.server.flywheel.run"
+        "com.skillforge.server.flywheel.run",
+        "com.skillforge.server.mobile"
 })
 @org.springframework.data.jpa.repository.config.EnableJpaRepositories({
         "com.skillforge.server.repository",
         "com.skillforge.server.mcp.repository",
         "com.skillforge.observability.repository",
-        "com.skillforge.server.flywheel.run"
+        "com.skillforge.server.flywheel.run",
+        "com.skillforge.server.mobile"
 })
 @EnableJpaAuditing
 @EnableScheduling

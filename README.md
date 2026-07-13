@@ -16,11 +16,30 @@ Most agent frameworks are Python-based, single-provider, and designed for protot
 - **Full observability** — Langfuse-style traces, session replay, model usage dashboards
 - **Safety guardrails** — configurable lifecycle hooks, command blocklists, path-traversal prevention, anti-runaway loop detection
 
+## Screenshots
+
+**Live trace waterfall while the agent works** — every chat streams a per-loop activity rail (LLM calls, tool spans, timing) right beside the conversation, with `SubAgent` / `Team` tabs to watch orchestrated runs.
+
+![Chat with live activity waterfall](.github/screenshots/chat-activity-waterfall.png)
+
+| Agents | Skills |
+|:---:|:---:|
+| ![Agents](.github/screenshots/agents.png) | ![Skills](.github/screenshots/skills.png) |
+| Per-agent model, rules, hooks, skills & tool bindings | Installable, versioned building blocks (system + custom) |
+
+**Traces** — full span waterfall per run (agent → LLM → tool) with latency / tokens / cost and I/O inspection.
+
+![Traces](.github/screenshots/traces.png)
+
+**Channels** — Feishu, Telegram, and personal WeChat connections from one gateway.
+
+![Channels](.github/screenshots/channels.png)
+
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  Dashboard  │  CLI  │  Feishu  │  Telegram  │  WeChat   │
+│ Dashboard │ iOS Companion │ CLI │ Feishu │ Telegram │ WeChat │
 ├─────────────────────────────────────────────────────────┤
 │              Channel Gateway                            │
 │   ChannelAdapter SPI │ 3-phase delivery tx │ dedup      │
@@ -57,6 +76,7 @@ Most agent frameworks are Python-based, single-provider, and designed for protot
 |-------|-----------|
 | Backend | Spring Boot 3.2, Java 17, JPA / Hibernate, Flyway |
 | Frontend | React 19, Ant Design 6, Vite 8, TypeScript 5.9, TanStack Query |
+| iOS | SwiftUI, iOS 17+, Swift 6 language mode, XcodeGen, XCTest / XCUITest |
 | Database | Embedded PostgreSQL (zero-install dev), external PostgreSQL (prod) |
 | Realtime | WebSocket — per-session streaming + per-user notifications |
 | LLM | Multi-provider: Claude, OpenAI-compatible (DeepSeek, DashScope/Bailian, vLLM, Ollama) |
@@ -77,6 +97,8 @@ skillforge/
 ├── skillforge-dashboard    # React dashboard: login, chat, sessions, agents, tools,
 │                            #   skills, traces, replay, memories, usage, teams,
 │                            #   eval, channels, hook methods
+├── skillforge-ios          # Native SwiftUI companion: QR pairing, chat, sessions,
+│                            #   schedules, agents, attachments, settings
 ├── skillforge-cli          # CLI client: picocli + OkHttp, agent YAML import/export
 └── system-skills/          # File-based system skills (auto-loaded, non-deletable)
     ├── browser/            #   Browser automation via agent-browser CLI
@@ -455,6 +477,51 @@ cd skillforge-dashboard
 npm install
 npm run dev    # Vite dev server at http://localhost:3000, proxied to :8080
 ```
+
+### Install the iOS Companion
+
+The current distribution path is an Xcode development build installed directly on an iPhone. TestFlight and
+App Store distribution are not configured yet.
+
+Requirements:
+
+- macOS with Xcode and Xcode Command Line Tools.
+- An iPhone running iOS 17 or later, connected to the Mac once by cable and trusted/paired with Xcode.
+- An Apple ID added under Xcode **Settings > Accounts**. A free Personal Team works for local development.
+- The SkillForge server and dashboard running at an address the phone can reach.
+
+Generate and open the project:
+
+```bash
+brew install xcodegen             # one-time, if xcodegen is not installed
+cd skillforge-ios
+xcodegen generate                 # project.yml is the source of truth
+open SkillForge.xcodeproj
+```
+
+In Xcode, select the `SkillForge` target, open **Signing & Capabilities**, choose your development team, and
+change the bundle identifier if Xcode reports that `com.skillforge.companion.dev` is unavailable. Select the
+paired iPhone as the run destination and press Run. On the phone, enable **Developer Mode** if iOS asks for it.
+
+Configure the pairing endpoints before generating a QR:
+
+```bash
+cd skillforge-dashboard
+cp .env.example .env.local
+# Edit .env.local: keep the reachable LAN URL first and an optional Tailscale HTTPS URL second.
+npm run dev
+```
+
+Then open Dashboard **Mobile Devices**, create a new QR code, scan it in the app, verify the six-digit setup
+code, and pair. The app probes the saved endpoints in order: it prefers LAN and falls back to Tailscale/HTTPS.
+Both devices must be on the same LAN for the LAN URL, or signed into the same tailnet for the Tailscale URL.
+The QR secret is short-lived and one-time; create a new QR if it expires or if endpoint settings change.
+
+The iOS Simulator cannot use the Mac camera to scan the Dashboard QR. Use the pairing screen's manual fallback
+to paste the QR JSON and enter its setup code. Simulator tests do not validate device signing, camera access,
+Keychain fidelity, LAN/Tailscale routing, background execution, attachments, or APNs.
+
+See [`skillforge-ios/README.md`](skillforge-ios/README.md) for build and test commands.
 
 ### Configuration
 

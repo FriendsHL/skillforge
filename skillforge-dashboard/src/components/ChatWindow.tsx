@@ -568,6 +568,8 @@ export interface ChatAttachmentRef {
   pageCount?: number;
   /** Excel only — sheet count surfaced in the chip. */
   sheetCount?: number;
+  /** Optional server-supplied caption rendered with the attachment. */
+  caption?: string;
 }
 
 export interface ChatMessage {
@@ -964,15 +966,20 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
                   </span>
                 </div>
                 <div className="msg-body">
-                  {/* MULTIMODAL-MVP Phase 2: render inline thumbnails above
-                      the bubble text. Only for user bubbles for now (BE only
-                      attaches image_ref / pdf_ref on user messages — assistant
-                      replies stay text-only). userId / sessionId are required
-                      to authenticate the blob fetch; both flow in via the
-                      slashCommandConfig prop which the parent always sets in
-                      production paths. */}
-                  {isUser && msg.attachments && msg.attachments.length > 0 && slashCommandConfig && (
-                    <div className="msg-attachments">
+                  {/* Attachment download keeps using the dashboard's existing
+                      authenticated blob endpoint. Refs may belong to either
+                      role, including attachment-only assistant messages. */}
+                  {msg.attachments && msg.attachments.length > 0 && slashCommandConfig && (
+                    <div
+                      className="msg-attachments"
+                      style={{
+                        display: 'flex',
+                        flexWrap: 'wrap',
+                        justifyContent: isUser ? 'flex-end' : 'flex-start',
+                        gap: 8,
+                        marginBottom: msg.content ? 8 : 0,
+                      }}
+                    >
                       {msg.attachments.map((att) => (
                         <AttachmentThumbnail
                           key={att.attachmentId}
@@ -981,6 +988,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
                           filename={att.filename}
                           pageCount={att.pageCount}
                           sheetCount={att.sheetCount}
+                          caption={att.caption}
                           userId={slashCommandConfig.userId}
                           sessionId={slashCommandConfig.sessionId}
                         />

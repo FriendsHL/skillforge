@@ -20,6 +20,11 @@ npm run dev
 
 The Vite dev server runs at `http://localhost:3000` and proxies API calls to the Spring Boot server on `http://localhost:8080`.
 
+For iOS pairing with LAN-first and Tailscale fallback, copy `.env.example` to `.env.local`, replace both
+addresses with reachable values for the current Mac, and restart Vite. A newly generated Mobile Devices QR
+will then contain `window.location.origin` plus the configured endpoint candidates. Existing iOS pairings must
+scan a new QR once because older Keychain records contain only the endpoint present when they were paired.
+
 ## Scripts
 
 | Command | Purpose |

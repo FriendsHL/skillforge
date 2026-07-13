@@ -46,6 +46,7 @@ import org.springframework.stereotype.Service;
 
 
 import java.time.Instant;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.UUID;
 import java.util.HashSet;
@@ -53,6 +54,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
 
@@ -101,6 +104,7 @@ public class ChatService {
      * Spring with {@link LlmProperties} bean in production.
      */
     private final LlmProperties llmProperties;
+    private final ArtifactWorkspaceService artifactWorkspaceService;
 
     /**
      * P12: publishes {@link SessionLoopFinishedEvent} in the loop teardown finally
@@ -133,7 +137,8 @@ public class ChatService {
                        ApplicationEventPublisher applicationEventPublisher,
                        ReminderBuilder reminderBuilder,
                        ChatAttachmentService chatAttachmentService,
-                       LlmProperties llmProperties) {
+                       LlmProperties llmProperties,
+                       ArtifactWorkspaceService artifactWorkspaceService) {
         this.agentService = agentService;
         this.sessionService = sessionService;
         this.skillRegistry = skillRegistry;
@@ -158,6 +163,7 @@ public class ChatService {
         this.reminderBuilder = reminderBuilder;
         this.chatAttachmentService = chatAttachmentService;
         this.llmProperties = llmProperties;
+        this.artifactWorkspaceService = artifactWorkspaceService;
     }
 
     /**
@@ -194,7 +200,7 @@ public class ChatService {
                 cancellationRegistry, compactionService, collabRunRepository, collabRunService,
                 objectMapper, sessionDigestExtractor, lifecycleHookDispatcher, sessionConfirmCache,
                 pendingConfirmationRegistry, rootSessionLookup, traceStore, applicationEventPublisher,
-                reminderBuilder, null, null);
+                reminderBuilder, null, null, null);
     }
 
     /**
@@ -232,7 +238,7 @@ public class ChatService {
                 cancellationRegistry, compactionService, collabRunRepository, collabRunService,
                 objectMapper, sessionDigestExtractor, lifecycleHookDispatcher, sessionConfirmCache,
                 pendingConfirmationRegistry, rootSessionLookup, traceStore, applicationEventPublisher,
-                reminderBuilder, chatAttachmentService, null);
+                reminderBuilder, chatAttachmentService, null, null);
     }
 
     /**
@@ -616,10 +622,17 @@ public class ChatService {
         // OBS-2 M1 §D.1: traceId 在 runLoop 入口必须存在 — 优先使用调用方传入的，否则 fallback 生成。
         final String traceId = externalTraceId != null ? externalTraceId : UUID.randomUUID().toString();
         LoopContext preCtx = null;
+        Path artifactWorkspace = null;
         try {
             // 解析 agent definition,并把 session 的 executionMode 注入 config
             AgentDefinition agentDef = agentService.toAgentDefinition(agentEntity);
             SessionEntity freshSession = sessionService.getSession(sessionId);
+            if (artifactWorkspaceService != null) {
+                artifactWorkspace = artifactWorkspaceService.create(userId, sessionId, traceId);
+                String existingPrompt = agentDef.getSystemPrompt() != null ? agentDef.getSystemPrompt() : "";
+                agentDef.setSystemPrompt(existingPrompt + "\n\n"
+                        + artifactWorkspaceService.promptInstruction(artifactWorkspace));
+            }
             // MULTIMODAL-MVP redesign (2026-05-14): the agent has a single
             // `modelId` only. Effective model picks /model runtime override when
             // set, otherwise agent.modelId. No more per-turn effective-model
@@ -733,6 +746,9 @@ public class ChatService {
             log.info("Running agent loop (async): sessionId={}, agentId={}, mode={}", sessionId, agentEntity.getId(), mode);
             // 预建 LoopContext 并注册到 CancellationRegistry, 让 /cancel 端点可以找到它
             preCtx = new LoopContext();
+            if (artifactWorkspace != null) {
+                preCtx.setArtifactOutputDirectory(artifactWorkspace.toString());
+            }
             // OBS-2 M1 §D.1: 透传 traceId 到 engine，让 rootSpan id == traceId 形成单一锚点。
             preCtx.setTraceId(traceId);
             // OBS-4 §2.2: 透传 rootTraceId 到 engine，让 t_llm_trace.root_trace_id 写入对应 root。
@@ -881,6 +897,34 @@ public class ChatService {
             // OBS-2 M1 §D.5: 透传 traceId 让 engine 输出（assistant / tool_result）行 trace_id 不为 null。
             sessionService.updateSessionMessages(sessionId, finalMessages,
                     result.getTotalInputTokens(), result.getTotalOutputTokens(), traceId);
+
+            List<Message> deferredArtifactMessages = result.getDeferredBroadcastMessages();
+            if (deferredArtifactMessages != null && !deferredArtifactMessages.isEmpty()) {
+                if (broadcaster != null) {
+                    for (Message message : deferredArtifactMessages) {
+                        try {
+                            broadcaster.messageAppended(sessionId, traceId, message);
+                        } catch (RuntimeException e) {
+                            log.warn("Deferred artifact broadcast failed after persistence: sessionId={}", sessionId, e);
+                        }
+                    }
+                }
+                if (chatAttachmentService != null) {
+                    try {
+                        chatAttachmentService.markPublishedFromMessages(deferredArtifactMessages);
+                    } catch (RuntimeException e) {
+                        log.warn("Deferred artifact status repair failed: sessionId={}", sessionId, e);
+                    }
+                }
+                if (artifactWorkspaceService != null && artifactWorkspace != null) {
+                    try {
+                        artifactWorkspaceService.deleteWorkspace(artifactWorkspace);
+                        artifactWorkspace = null;
+                    } catch (RuntimeException e) {
+                        log.warn("Published artifact workspace cleanup deferred to TTL: sessionId={}", sessionId, e);
+                    }
+                }
+            }
 
             if (waitingUser) {
                 persistPendingControl(sessionId, result.getPendingControl());
@@ -1113,43 +1157,49 @@ public class ChatService {
             throw new IllegalStateException("ask continuation missing toolUseId");
         }
         synchronized (compactionService.lockFor(sessionId)) {
-            sessionService.markControlAnswered(
-                    sessionId,
-                    SessionService.MESSAGE_TYPE_ASK_USER,
-                    askId,
-                    "answered",
-                    answer,
-                    "card");
-            Message toolResult = Message.toolResult(toolUseId, "User answered: " + answer, false);
-            // OBS-2 M1 §D.4: resumeTraceId 在持久化前生成 — 让 toolResult + 后续 engine 共享同一 trace。
-            String resumeTraceId = UUID.randomUUID().toString();
+            ResumeLoopSubmission submission = reserveResumeLoop();
+            try {
+                sessionService.markControlAnswered(
+                        sessionId,
+                        SessionService.MESSAGE_TYPE_ASK_USER,
+                        askId,
+                        "answered",
+                        answer,
+                        "card");
+                Message toolResult = Message.toolResult(toolUseId, "User answered: " + answer, false);
+                // OBS-2 M1 §D.4: resumeTraceId 在持久化前生成 — 让 toolResult + 后续 engine 共享同一 trace。
+                String resumeTraceId = UUID.randomUUID().toString();
 
             // OBS-4 §2.1 §6.2: ask answer 是 user message 内的续接（原任务还没完），不是新的
             // user message 边界。读 active_root：非 null 继承（INV-3）；null 则 defensive 自己当 root
             // 并回填（兜底，正常流程上一个 trace 创建时已经回填过）。
-            String existingActiveRoot = sessionService.getActiveRootTraceId(sessionId);
-            String resumeRootTraceId;
-            if (existingActiveRoot == null) {
-                resumeRootTraceId = resumeTraceId;
-                sessionService.setActiveRootTraceId(sessionId, resumeRootTraceId);
-            } else {
-                resumeRootTraceId = existingActiveRoot;
-            }
+                String existingActiveRoot = sessionService.getActiveRootTraceId(sessionId);
+                String resumeRootTraceId;
+                if (existingActiveRoot == null) {
+                    resumeRootTraceId = resumeTraceId;
+                    sessionService.setActiveRootTraceId(sessionId, resumeRootTraceId);
+                } else {
+                    resumeRootTraceId = existingActiveRoot;
+                }
 
-            sessionService.appendNormalMessages(sessionId, List.of(toolResult), resumeTraceId);
-            SessionEntity session = sessionService.getSession(sessionId);
-            AgentEntity agentEntity = agentService.getAgent(session.getAgentId());
-            session.setRuntimeStatus("running");
-            session.setRuntimeStep("Resuming");
-            session.setRuntimeError(null);
-            sessionService.saveSession(session);
-            List<Message> history = sessionService.getContextMessages(sessionId);
-            if (broadcaster != null) {
-                broadcaster.messageAppended(sessionId, resumeTraceId, toolResult);
-                broadcaster.sessionStatus(sessionId, "running", "Resuming", null);
+                sessionService.appendNormalMessages(sessionId, List.of(toolResult), resumeTraceId);
+                SessionEntity session = sessionService.getSession(sessionId);
+                AgentEntity agentEntity = agentService.getAgent(session.getAgentId());
+                session.setRuntimeStatus("running");
+                session.setRuntimeStep("Resuming");
+                session.setRuntimeError(null);
+                sessionService.saveSession(session);
+                List<Message> history = sessionService.getContextMessages(sessionId);
+                if (broadcaster != null) {
+                    broadcaster.messageAppended(sessionId, resumeTraceId, toolResult);
+                    broadcaster.sessionStatus(sessionId, "running", "Resuming", null);
+                }
+                submission.start(new ResumeLoopRequest(
+                        sessionId, userId, agentEntity, history, resumeTraceId, resumeRootTraceId));
+            } catch (RuntimeException | Error error) {
+                submission.abort(error);
+                throw error;
             }
-            final String capturedRootTraceId = resumeRootTraceId;
-            chatLoopExecutor.execute(() -> runLoop(sessionId, null, userId, agentEntity, history, resumeTraceId, capturedRootTraceId));
         }
     }
 
@@ -1200,26 +1250,28 @@ public class ChatService {
             throw new IllegalStateException("confirmation continuation missing tool identity");
         }
         synchronized (compactionService.lockFor(sessionId)) {
-            sessionService.markControlAnswered(
+            ResumeLoopSubmission submission = reserveResumeLoop();
+            try {
+                sessionService.markControlAnswered(
                     sessionId,
                     SessionService.MESSAGE_TYPE_CONFIRMATION,
                     confirmationId,
                     decision == Decision.APPROVED ? "approved" : "denied",
                     decision.name().toLowerCase(),
                     "card");
-            if (pendingConfirmationRegistry != null) {
-                pendingConfirmationRegistry.complete(confirmationId, decision, null);
-                pendingConfirmationRegistry.removeIfPresent(confirmationId);
-            }
-            SessionEntity session = sessionService.getSession(sessionId);
-            AgentEntity agentEntity = agentService.getAgent(session.getAgentId());
-            AgentDefinition agentDef = agentService.toAgentDefinition(agentEntity);
+                if (pendingConfirmationRegistry != null) {
+                    pendingConfirmationRegistry.complete(confirmationId, decision, null);
+                    pendingConfirmationRegistry.removeIfPresent(confirmationId);
+                }
+                SessionEntity session = sessionService.getSession(sessionId);
+                AgentEntity agentEntity = agentService.getAgent(session.getAgentId());
+                AgentDefinition agentDef = agentService.toAgentDefinition(agentEntity);
             // P10 INV-4: respect session-scoped /model override on resume path too.
-            String resumeOverride = session.getRuntimeModelOverride();
-            if (resumeOverride != null && !resumeOverride.isBlank()) {
-                agentDef.setModelId(resumeOverride);
-            }
-            Message toolResult = agentLoopEngine.completeConfirmedTool(
+                String resumeOverride = session.getRuntimeModelOverride();
+                if (resumeOverride != null && !resumeOverride.isBlank()) {
+                    agentDef.setModelId(resumeOverride);
+                }
+                Message toolResult = agentLoopEngine.completeConfirmedTool(
                     agentDef,
                     sessionId,
                     userId,
@@ -1231,31 +1283,70 @@ public class ChatService {
                     installTarget,
                     decision);
             // OBS-2 M1 §D.4: resumeTraceId 在持久化前生成。
-            String resumeTraceId = UUID.randomUUID().toString();
+                String resumeTraceId = UUID.randomUUID().toString();
 
             // OBS-4 §2.1 §6.2: confirmation 答复是 user message 内的续接，不是新边界。
             // 同 answerAsk：非 null 继承；null 则 defensive 自己当 root 并回填。
-            String existingActiveRoot = sessionService.getActiveRootTraceId(sessionId);
-            String resumeRootTraceId;
-            if (existingActiveRoot == null) {
-                resumeRootTraceId = resumeTraceId;
-                sessionService.setActiveRootTraceId(sessionId, resumeRootTraceId);
-            } else {
-                resumeRootTraceId = existingActiveRoot;
-            }
+                String existingActiveRoot = sessionService.getActiveRootTraceId(sessionId);
+                String resumeRootTraceId;
+                if (existingActiveRoot == null) {
+                    resumeRootTraceId = resumeTraceId;
+                    sessionService.setActiveRootTraceId(sessionId, resumeRootTraceId);
+                } else {
+                    resumeRootTraceId = existingActiveRoot;
+                }
 
-            sessionService.appendNormalMessages(sessionId, List.of(toolResult), resumeTraceId);
-            session.setRuntimeStatus("running");
-            session.setRuntimeStep("Resuming");
-            session.setRuntimeError(null);
-            sessionService.saveSession(session);
-            List<Message> history = sessionService.getContextMessages(sessionId);
-            if (broadcaster != null) {
-                broadcaster.messageAppended(sessionId, resumeTraceId, toolResult);
-                broadcaster.sessionStatus(sessionId, "running", "Resuming", null);
+                sessionService.appendNormalMessages(sessionId, List.of(toolResult), resumeTraceId);
+                session.setRuntimeStatus("running");
+                session.setRuntimeStep("Resuming");
+                session.setRuntimeError(null);
+                sessionService.saveSession(session);
+                List<Message> history = sessionService.getContextMessages(sessionId);
+                if (broadcaster != null) {
+                    broadcaster.messageAppended(sessionId, resumeTraceId, toolResult);
+                    broadcaster.sessionStatus(sessionId, "running", "Resuming", null);
+                }
+                submission.start(new ResumeLoopRequest(
+                        sessionId, userId, agentEntity, history, resumeTraceId, resumeRootTraceId));
+            } catch (RuntimeException | Error error) {
+                submission.abort(error);
+                throw error;
             }
-            final String capturedRootTraceId = resumeRootTraceId;
-            chatLoopExecutor.execute(() -> runLoop(sessionId, null, userId, agentEntity, history, resumeTraceId, capturedRootTraceId));
+        }
+    }
+
+    /** Reserve executor capacity before consuming a one-shot control message. */
+    private ResumeLoopSubmission reserveResumeLoop() {
+        CompletableFuture<ResumeLoopRequest> prepared = new CompletableFuture<>();
+        chatLoopExecutor.execute(() -> {
+            ResumeLoopRequest request;
+            try {
+                request = prepared.join();
+            } catch (CompletionException ignored) {
+                return;
+            }
+            runLoop(request.sessionId(), null, request.userId(), request.agentEntity(),
+                    request.history(), request.traceId(), request.rootTraceId());
+        });
+        return new ResumeLoopSubmission(prepared);
+    }
+
+    private record ResumeLoopRequest(
+            String sessionId,
+            Long userId,
+            AgentEntity agentEntity,
+            List<Message> history,
+            String traceId,
+            String rootTraceId) {
+    }
+
+    private record ResumeLoopSubmission(CompletableFuture<ResumeLoopRequest> prepared) {
+        void start(ResumeLoopRequest request) {
+            prepared.complete(request);
+        }
+
+        void abort(Throwable error) {
+            prepared.completeExceptionally(error);
         }
     }
 

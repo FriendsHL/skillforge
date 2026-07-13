@@ -5,6 +5,8 @@ import {
   FileWordOutlined,
   FileExcelOutlined,
   FileTextOutlined,
+  LoadingOutlined,
+  ReloadOutlined,
 } from '@ant-design/icons';
 import { getChatAttachmentBlob } from '../api';
 
@@ -31,7 +33,10 @@ interface AttachmentThumbnailProps {
   pageCount?: number;
   /** Excel only — sheet count surfaced as a chip badge. */
   sheetCount?: number;
+  caption?: string;
 }
+
+type LoadState = 'loading' | 'loaded' | 'error';
 
 /**
  * Wave 3 — visual metadata per non-image kind. Keep the table central so
@@ -69,14 +74,16 @@ const AttachmentThumbnail: React.FC<AttachmentThumbnailProps> = ({
   sessionId,
   pageCount,
   sheetCount,
+  caption,
 }) => {
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
-  const [failed, setFailed] = useState(false);
+  const [loadState, setLoadState] = useState<LoadState>('loading');
+  const [retryAttempt, setRetryAttempt] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
     let createdUrl: string | null = null;
-    setFailed(false);
+    setLoadState('loading');
     setBlobUrl(null);
     getChatAttachmentBlob(attachmentId, userId, sessionId)
       .then((res) => {
@@ -85,10 +92,11 @@ const AttachmentThumbnail: React.FC<AttachmentThumbnailProps> = ({
         const url = URL.createObjectURL(res.data as unknown as Blob);
         createdUrl = url;
         setBlobUrl(url);
+        setLoadState('loaded');
       })
       .catch(() => {
         if (cancelled) return;
-        setFailed(true);
+        setLoadState('error');
       });
     return () => {
       cancelled = true;
@@ -96,7 +104,22 @@ const AttachmentThumbnail: React.FC<AttachmentThumbnailProps> = ({
         URL.revokeObjectURL(createdUrl);
       }
     };
-  }, [attachmentId, userId, sessionId]);
+  }, [attachmentId, userId, sessionId, retryAttempt]);
+
+  const retry = () => setRetryAttempt((attempt) => attempt + 1);
+  const captionNode = caption ? (
+    <span
+      style={{
+        color: 'var(--fg-3, #8a8a93)',
+        fontSize: 11,
+        lineHeight: 1.4,
+        maxWidth: kind === 'image' ? 200 : 280,
+        overflowWrap: 'anywhere',
+      }}
+    >
+      {caption}
+    </span>
+  ) : null;
 
   if (kind === 'pdf' || kind === 'word' || kind === 'excel' || kind === 'csv') {
     // Non-image kinds render as a compact chip with filename + optional
@@ -105,7 +128,7 @@ const AttachmentThumbnail: React.FC<AttachmentThumbnailProps> = ({
     // Word/Excel/CSV chips never get a visual thumbnail.
     const meta = CHIP_META[kind];
     const onClick = () => {
-      if (blobUrl) {
+      if (loadState === 'loaded' && blobUrl) {
         window.open(blobUrl, '_blank', 'noopener,noreferrer');
       }
     };
@@ -123,81 +146,145 @@ const AttachmentThumbnail: React.FC<AttachmentThumbnailProps> = ({
     // the tab order until the blob URL is available (matching the cursor=wait
     // affordance).
     const onKeyDown = (e: React.KeyboardEvent<HTMLSpanElement>) => {
-      if ((e.key === 'Enter' || e.key === ' ') && blobUrl) {
+      if ((e.key === 'Enter' || e.key === ' ') && loadState === 'loaded' && blobUrl) {
         e.preventDefault();
         onClick();
       }
     };
+    const tooltip = loadState === 'loaded'
+      ? 'Click to open in a new tab'
+      : loadState === 'error' ? 'Attachment could not be loaded' : 'Loading attachment';
     return (
-      <Tooltip title={blobUrl ? 'Click to open in a new tab' : 'Loading…'}>
-        <Tag
-          color="default"
-          onClick={onClick}
-          onKeyDown={onKeyDown}
-          tabIndex={blobUrl ? 0 : -1}
-          role="button"
-          aria-label={`Open ${filename} in a new tab`}
-          style={{
-            cursor: blobUrl ? 'pointer' : 'wait',
-            padding: '4px 10px',
-            fontSize: 12,
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 6,
-            borderRadius: 8,
-          }}
-          data-testid={meta.testId}
-        >
-          {meta.icon}
-          <span style={{ fontWeight: 500 }}>{filename}</span>
-          {suffix && (
-            <span style={{ color: 'var(--fg-4, #8a8a93)', fontSize: 11 }}>
-              {suffix}
-            </span>
+      <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-start', gap: 4 }}>
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          <Tooltip title={tooltip}>
+            <Tag
+              color={loadState === 'error' ? 'error' : 'default'}
+              onClick={onClick}
+              onKeyDown={onKeyDown}
+              tabIndex={loadState === 'loaded' ? 0 : -1}
+              role="button"
+              aria-disabled={loadState !== 'loaded'}
+              aria-label={`Open ${filename} in a new tab`}
+              style={{
+                cursor: loadState === 'loaded' ? 'pointer' : loadState === 'loading' ? 'wait' : 'default',
+                padding: '4px 10px',
+                fontSize: 12,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                borderRadius: 8,
+                margin: 0,
+              }}
+              data-testid={meta.testId}
+            >
+              {meta.icon}
+              <span style={{ fontWeight: 500 }}>{filename}</span>
+              {suffix && (
+                <span style={{ color: 'var(--fg-4, #8a8a93)', fontSize: 11 }}>
+                  {suffix}
+                </span>
+              )}
+              {loadState === 'loading' && <span role="status"><LoadingOutlined /> Loading</span>}
+              {loadState === 'error' && <span role="alert">Load failed</span>}
+            </Tag>
+          </Tooltip>
+          {loadState === 'error' && (
+            <button
+              type="button"
+              onClick={retry}
+              aria-label={`Retry loading ${filename}`}
+              title={`Retry loading ${filename}`}
+              style={{
+                border: '1px solid var(--border-1, #444)',
+                background: 'var(--bg-2, transparent)',
+                color: 'var(--fg-2, inherit)',
+                borderRadius: 4,
+                padding: '4px 8px',
+                cursor: 'pointer',
+              }}
+            >
+              <ReloadOutlined /> Retry
+            </button>
           )}
-        </Tag>
-      </Tooltip>
+        </div>
+        {captionNode}
+      </div>
     );
   }
 
   // image kind — render inline blob URL with AntD Image preview behavior.
-  if (failed) {
+  if (loadState === 'error') {
     return (
-      <Tag color="error" style={{ padding: '4px 10px', borderRadius: 8 }}>
-        🖼️ {filename} (load failed)
-      </Tag>
+      <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-start', gap: 4 }}>
+        <Tag color="error" role="alert" style={{ padding: '4px 10px', borderRadius: 8, margin: 0 }}>
+          {filename} · Load failed
+        </Tag>
+        <button
+          type="button"
+          onClick={retry}
+          aria-label={`Retry loading ${filename}`}
+          title={`Retry loading ${filename}`}
+          style={{
+            border: '1px solid var(--border-1, #444)',
+            background: 'var(--bg-2, transparent)',
+            color: 'var(--fg-2, inherit)',
+            borderRadius: 4,
+            padding: '4px 8px',
+            cursor: 'pointer',
+          }}
+        >
+          <ReloadOutlined /> Retry
+        </button>
+        {captionNode}
+      </div>
     );
   }
-  if (!blobUrl) {
+  if (loadState === 'loading' || !blobUrl) {
     return (
-      <div
-        data-testid="attachment-image-skeleton"
-        style={{
-          width: 96,
-          height: 96,
-          borderRadius: 8,
-          background: 'var(--bg-3, rgba(255,255,255,0.04))',
-          animation: 'pulse 1.4s ease-in-out infinite',
-        }}
-      />
+      <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-start', gap: 4 }}>
+        <div
+          data-testid="attachment-image-skeleton"
+          role="status"
+          aria-label={`Loading ${filename}`}
+          style={{
+            width: 200,
+            height: 150,
+            borderRadius: 8,
+            background: 'var(--bg-3, rgba(255,255,255,0.04))',
+            animation: 'pulse 1.4s ease-in-out infinite',
+            display: 'grid',
+            placeItems: 'center',
+            color: 'var(--fg-3, #8a8a93)',
+            fontSize: 12,
+          }}
+        >
+          <LoadingOutlined />
+        </div>
+        {captionNode}
+      </div>
     );
   }
   return (
-    <AntdImage
-      src={blobUrl}
-      alt={filename}
-      // Inline preview — click opens AntD's full-screen lightbox. Bounded so
-      // a 4K screenshot doesn't take over the chat bubble.
-      style={{
-        maxWidth: 200,
-        maxHeight: 200,
-        borderRadius: 8,
-        objectFit: 'cover',
-        display: 'block',
-      }}
-      preview={{ mask: <span style={{ fontSize: 12 }}>Preview</span> }}
-      data-testid="attachment-image-thumb"
-    />
+    <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-start', gap: 4 }}>
+      <AntdImage
+        src={blobUrl}
+        alt={filename}
+        onError={() => setLoadState('error')}
+        // Inline preview — click opens AntD's full-screen lightbox. Bounded so
+        // a 4K screenshot doesn't take over the chat bubble.
+        style={{
+          width: 200,
+          height: 150,
+          borderRadius: 8,
+          objectFit: 'cover',
+          display: 'block',
+        }}
+        preview={{ cover: <span style={{ fontSize: 12 }}>Preview</span> }}
+        data-testid="attachment-image-thumb"
+      />
+      {captionNode}
+    </div>
   );
 };
 

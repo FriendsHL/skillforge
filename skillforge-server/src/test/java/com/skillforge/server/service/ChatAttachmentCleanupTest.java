@@ -98,13 +98,14 @@ class ChatAttachmentCleanupTest {
 
         // 1 extra unreferenced file on disk (e.g. CASCADE-orphaned)
         Path stray = createFile("sess-DELETED", "stray.png");
+        Files.setLastModifiedTime(stray, java.nio.file.attribute.FileTime.from(oldStamp));
 
         rowsInDb.addAll(List.of(orphan1, orphan2, bound, fresh));
 
         // findByStatusAndSeqNoIsNullAndCreatedAtBefore returns only orphan-1 + orphan-2
         // (fresh-1 fails the created_at < before filter)
-        when(attachmentRepository.findByStatusAndSeqNoIsNullAndCreatedAtBefore(
-                eqUploaded(), any(Instant.class)))
+        when(attachmentRepository.findByOriginAndStatusAndSeqNoIsNullAndCreatedAtBefore(
+                org.mockito.ArgumentMatchers.eq("user_upload"), eqUploaded(), any(Instant.class)))
                 .thenReturn(List.of(orphan1, orphan2));
         // findAllStoragePaths returns paths from all rows still "in DB" at call time.
         // For simplicity we return the static set captured up-front — covers bound +
@@ -154,9 +155,10 @@ class ChatAttachmentCleanupTest {
         bound.setStoragePath(boundFile.toString());
 
         Path stray = createFile("sess-DELETED", "stray.png");
+        Files.setLastModifiedTime(stray, java.nio.file.attribute.FileTime.from(oldStamp));
 
-        when(attachmentRepository.findByStatusAndSeqNoIsNullAndCreatedAtBefore(
-                eqUploaded(), any(Instant.class)))
+        when(attachmentRepository.findByOriginAndStatusAndSeqNoIsNullAndCreatedAtBefore(
+                org.mockito.ArgumentMatchers.eq("user_upload"), eqUploaded(), any(Instant.class)))
                 .thenReturn(List.of(orphan1, orphan2));
         when(attachmentRepository.findAllStoragePaths())
                 .thenReturn(List.of(boundFile.toString()));
@@ -186,8 +188,8 @@ class ChatAttachmentCleanupTest {
         Path ghostPath = tempStorage.resolve("sess-A").resolve("ghost.png");
         ghost.setStoragePath(ghostPath.toString());
 
-        when(attachmentRepository.findByStatusAndSeqNoIsNullAndCreatedAtBefore(
-                eqUploaded(), any(Instant.class)))
+        when(attachmentRepository.findByOriginAndStatusAndSeqNoIsNullAndCreatedAtBefore(
+                org.mockito.ArgumentMatchers.eq("user_upload"), eqUploaded(), any(Instant.class)))
                 .thenReturn(List.of(ghost));
         when(attachmentRepository.findAllStoragePaths())
                 .thenReturn(List.of());
@@ -209,8 +211,8 @@ class ChatAttachmentCleanupTest {
         ChatAttachmentService freshService = new ChatAttachmentService(
                 attachmentRepository, missingRoot.toString());
 
-        when(attachmentRepository.findByStatusAndSeqNoIsNullAndCreatedAtBefore(
-                anyString(), any(Instant.class)))
+        when(attachmentRepository.findByOriginAndStatusAndSeqNoIsNullAndCreatedAtBefore(
+                anyString(), anyString(), any(Instant.class)))
                 .thenReturn(List.of());
         when(attachmentRepository.findAllStoragePaths())
                 .thenReturn(List.of());

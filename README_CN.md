@@ -16,11 +16,30 @@
 - **全链路可观测** — Langfuse 风格的 Trace、Session 回放、模型用量仪表盘
 - **安全护栏** — 可配置生命周期 Hook、命令黑名单、路径穿越防护、防失控循环检测
 
+## 界面截图
+
+**Agent 干活时的实时 trace 瀑布流** — 每次对话在右侧实时流式展示本轮 activity（LLM 调用、工具 span、耗时），还有 `SubAgent` / `Team` 标签实时看编排运行情况。
+
+![Chat 实时 activity 瀑布流](.github/screenshots/chat-activity-waterfall.png)
+
+| Agents | Skills |
+|:---:|:---:|
+| ![Agents](.github/screenshots/agents.png) | ![Skills](.github/screenshots/skills.png) |
+| 每个 Agent 的模型、规则、Hook、Skill 与工具绑定 | 可安装、带版本的能力积木（系统 + 自定义） |
+
+**Traces** — 每次运行的完整 span 瀑布流（agent → LLM → tool），含耗时 / token / 成本与 I/O 详情。
+
+![Traces](.github/screenshots/traces.png)
+
+**Channels** — 飞书、Telegram、个人微信，统一网关接入。
+
+![Channels](.github/screenshots/channels.png)
+
 ## 架构
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│   仪表盘   │  CLI   │   飞书   │  Telegram  │   微信    │
+│ 仪表盘 │ iOS Companion │ CLI │ 飞书 │ Telegram │ 微信 │
 ├─────────────────────────────────────────────────────────┤
 │              渠道网关                                     │
 │   ChannelAdapter SPI │ 三阶段投递事务 │ 去重              │
@@ -57,6 +76,7 @@
 |------|------|
 | 后端 | Spring Boot 3.2, Java 17, JPA / Hibernate, Flyway |
 | 前端 | React 19, Ant Design 6, Vite 8, TypeScript 5.9, TanStack Query |
+| iOS | SwiftUI、iOS 17+、Swift 6 language mode、XcodeGen、XCTest / XCUITest |
 | 数据库 | 内嵌 PostgreSQL（开发零配置）, 外部 PostgreSQL（生产） |
 | 实时通信 | WebSocket — 会话级流式推送 + 用户级通知 |
 | LLM | 多 Provider：Claude, OpenAI 兼容（DeepSeek, 通义千问/百炼, vLLM, Ollama） |
@@ -77,6 +97,8 @@ skillforge/
 ├── skillforge-dashboard    # React 仪表盘：登录, 聊天, 会话, Agent, Tool,
 │                            #   Skill, Trace, 会话回放, 记忆, 模型用量,
 │                            #   团队, 评测, 渠道, Hook Method
+├── skillforge-ios          # SwiftUI 原生 Companion：扫码配对、聊天、会话、
+│                            #   定时计划、Agent、附件与设置
 ├── skillforge-cli          # CLI 客户端：picocli + OkHttp, Agent YAML 导入/导出
 └── system-skills/          # 文件型系统 Skill（启动时自动加载，不可删除）
     ├── browser/            #   浏览器自动化（agent-browser CLI）
@@ -432,6 +454,49 @@ cd skillforge-dashboard
 npm install
 npm run dev    # Vite 开发服务器 http://localhost:3000，代理到 :8080
 ```
+
+### 安装 iOS Companion
+
+当前支持的安装方式是通过 Xcode 开发签名直接安装到 iPhone；TestFlight 和 App Store 分发尚未配置。
+
+前置条件：
+
+- 一台安装 Xcode 和 Xcode Command Line Tools 的 Mac。
+- iOS 17 或更高版本的 iPhone；首次通过数据线连接 Mac，并在手机和 Xcode 中完成信任/配对。
+- 在 Xcode **Settings > Accounts** 登录 Apple ID。免费 Personal Team 可用于本机开发测试。
+- SkillForge 后端和 Dashboard 已启动，并存在手机可访问的地址。
+
+生成并打开工程：
+
+```bash
+brew install xcodegen             # 尚未安装时只需执行一次
+cd skillforge-ios
+xcodegen generate                 # project.yml 是工程单一真源
+open SkillForge.xcodeproj
+```
+
+在 Xcode 中选择 `SkillForge` target，进入 **Signing & Capabilities**，选择自己的 Development Team。
+如果 `com.skillforge.companion.dev` 已被占用，改成自己的唯一 Bundle Identifier。选择已配对的 iPhone
+作为运行设备并点击 Run；如果系统提示，在手机 **设置 > 隐私与安全性** 中开启开发者模式。
+
+生成二维码前先配置手机可达的连接地址：
+
+```bash
+cd skillforge-dashboard
+cp .env.example .env.local
+# 编辑 .env.local：可达的局域网 URL 放第一位，可选的 Tailscale HTTPS URL 放第二位。
+npm run dev
+```
+
+打开 Dashboard 的 **Mobile Devices**，创建新二维码，在 App 中扫描，核对 6 位 setup code 后完成配对。
+App 会按顺序探测已保存的地址：优先局域网，失败后回退到 Tailscale/HTTPS。走局域网时手机和 Mac 必须
+处于同一网络；走 Tailscale 时两台设备必须登录同一 tailnet。二维码 secret 短时且只能使用一次；
+过期或连接地址变化后应重新生成二维码。
+
+iOS 模拟器不能用 Mac 摄像头扫描 Dashboard 二维码，可在配对页的 Manual fallback 中粘贴 QR JSON
+并输入 setup code。模拟器无法证明真机签名、摄像头、Keychain、LAN/Tailscale、后台行为、附件和 APNs。
+
+构建和测试命令见 [`skillforge-ios/README.md`](skillforge-ios/README.md)。
 
 ### 配置
 

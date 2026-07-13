@@ -47,6 +47,7 @@ Use Full when any red light is present:
   - `skillforge-dashboard/src/components/LifecycleHooksEditor.tsx`
   - `skillforge-dashboard/src/hooks/useLifecycleHooks.ts`
   - `skillforge-dashboard/src/constants/lifecycleHooks.ts`
+  - iOS core/security/contract paths listed in `ios-pipeline.md`
 - Multi-invariant paired protocols: `tool_use`/`tool_result`, lock/unlock, transaction begin/commit, request/response, lease/heartbeat.
 - New persistence entity, schema migration, or JPQL/native SQL change.
 - Cross-3-module feature work, a new REST endpoint plus frontend plus tests, or a broad brief over roughly 800 words.
@@ -64,6 +65,7 @@ Mixed batches inherit the highest-risk item. Do not hide a Full-level change ins
 2. Phase 1 Dev:
    - Backend-only work: one backend worker.
    - Frontend-only work: one frontend worker.
+   - iOS-only work: follow the Mid increment in `ios-pipeline.md`.
    - Cross-stack work: backend and frontend workers in parallel with disjoint ownership.
    - Tests, docs, and pure config stay attached to the relevant implementation slice unless they are the whole task.
 3. Phase 2 Review, one adversarial round:
@@ -93,6 +95,7 @@ Mixed batches inherit the highest-risk item. Do not hide a Full-level change ins
 3. Phase 2 Dev, parallel where useful:
    - Backend-only work: one backend worker.
    - Frontend-only work: one frontend worker.
+   - iOS-only work: follow the Full increment in `ios-pipeline.md`.
    - Cross-stack work: backend and frontend workers in parallel with disjoint ownership.
    - Tests, docs, and pure config stay attached to the relevant implementation slice unless they are the whole task.
    - Planner/dev prompts must require self-check before final response: reread own output, identify the three most likely issues, fix them or justify why they are acceptable, then return only the cleaned result.
@@ -142,6 +145,7 @@ using it in the main session review or in any available reviewer/subagent.
 - New Java service/controller/repository, structural refactor, new interface, or
   class over 500 lines: read `java-design-review.md`.
 - TypeScript/JavaScript review: read `typescript-review.md`.
+- Native iOS/SwiftUI work: read `ios.md` and `ios-pipeline.md`.
 - Performance work: read `performance-review.md`.
 - Explicit review tasks: read `code-review.md` and report with
   `review-verdict.md` when inside Mid/Full pipeline.

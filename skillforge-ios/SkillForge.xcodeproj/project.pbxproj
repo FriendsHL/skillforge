@@ -1,0 +1,803 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		06A2F1A7ADD71322A1321C7D /* ConnectionHealthUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CF8EBF629F78F9F2C9A7ECE /* ConnectionHealthUITests.swift */; };
+		0AD1A7AD1E4975B122B2F654 /* ConnectionHealth.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBA21D95925B4004EC9155E3 /* ConnectionHealth.swift */; };
+		152942AC64A5B474121CC3CA /* AttachmentImageLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8BC25E391568ED4E360F5A09 /* AttachmentImageLoader.swift */; };
+		15A861BA2F6A1B56AD52DC4F /* SkillForgeApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6ABABDD75C3D8174409C9A26 /* SkillForgeApp.swift */; };
+		165D942BD8C5AC5E967DAEB0 /* AttachmentDownloadRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E1A5D6DFCBDC32E854FC960 /* AttachmentDownloadRepository.swift */; };
+		1718F9314CF369E7C0710B59 /* Slice3InteractionUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBE761426F06F601C797F479 /* Slice3InteractionUITests.swift */; };
+		1B267156FBBF49F6A8791A75 /* ControlPresentationPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1162F60F3394C70C7E8BAC6F /* ControlPresentationPolicyTests.swift */; };
+		1E3FD9F6DE75889C06DD339F /* AttachmentImageLoaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51FAE704634016F3480D1809 /* AttachmentImageLoaderTests.swift */; };
+		2089B2EFD6A10333A4CCA66F /* EndpointProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 338A7D3A83156E7260BAB304 /* EndpointProbe.swift */; };
+		220E0D1E7DF58600C2397F73 /* AttachmentPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC8B326CE99D4BDC3C728D1C /* AttachmentPicker.swift */; };
+		24D65FAE07C00F2A180BDC0C /* ChatKeyboardUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C94590A3A7F262A78D75885F /* ChatKeyboardUITests.swift */; };
+		2E4169F9AF6EB13EEA0BCF37 /* ComposerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80341B5BD2C4E6637F011C05 /* ComposerView.swift */; };
+		3004BFC55C39A8AB02706196 /* CompanionTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EACEE731ECFE78313E55BBEE /* CompanionTabView.swift */; };
+		312EC8312B84CD4C958E0032 /* QRScannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1C40F145972924A8A254550 /* QRScannerView.swift */; };
+		39DF9D099030147FA7D43165 /* AgentsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38CE605A7C77D9EA25F0AD3D /* AgentsView.swift */; };
+		432B35861B3DD03EE357646B /* CompanionNavigationUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE9922CBEB56DF72276FD2A7 /* CompanionNavigationUITests.swift */; };
+		4D827691C047C4A9CA7A5C87 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19AEBE640438F3EEAB89938B /* AppState.swift */; };
+		5329758C2379AA3C56275649 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 02A80C1DD9CAD26DAE929996 /* Assets.xcassets */; };
+		734905DBD0220C284C0CBBBB /* PendingCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7600227AB7C7CCEBD02F7C12 /* PendingCardView.swift */; };
+		7A1762E4DD530BB135AA41C8 /* MobileApiClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A24EFA2F98933E5AB9E8D419 /* MobileApiClient.swift */; };
+		7D59D2A0E58E040889B1AFB3 /* ChatAttachment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DAEFA8FBE8F003B5C20DA8C /* ChatAttachment.swift */; };
+		7EFEFEC87EDA7B5FAEE51AF7 /* InteractionPolishPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75B661E11D63E6A3F394021F /* InteractionPolishPolicy.swift */; };
+		821549A63793025CFD018549 /* PairingPayloadTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF2DCEA0D217D4D852B21A41 /* PairingPayloadTests.swift */; };
+		82CFACB88D0779E0960C7640 /* AppStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B60130ECEDB6A5DA6E91C2C /* AppStateTests.swift */; };
+		8A1465B3D2E2F2B2ADB3CF6F /* EndpointProbeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 092630ECD7AADEEDFDC10F5F /* EndpointProbeTests.swift */; };
+		932F268CA3DAD4ECE1249FF1 /* ControlView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07F68232D961E958FFE0A215 /* ControlView.swift */; };
+		943406658C75E8DD2B147377 /* PairingScannerAvailabilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D457D1BF57C40582BEA41E9E /* PairingScannerAvailabilityTests.swift */; };
+		9B13C32C069C619AD0D31A48 /* AppAppearance.swift in Sources */ = {isa = PBXBuildFile; fileRef = BFBDD4D814DFD47C2B6B8B06 /* AppAppearance.swift */; };
+		9BCA7B37FDE9943270783D1C /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07CAE9FE9F849F1803AB7C48 /* ChatView.swift */; };
+		9CB7FC64C425C24A71318A08 /* OutboundAttachmentUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 656F98395456673B3DFD4FC4 /* OutboundAttachmentUITests.swift */; };
+		9EF3292D03BC82BCC19F7D83 /* SessionListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67364194DF920F3F9D7592CB /* SessionListView.swift */; };
+		A08D211506D03F294BB5E987 /* PairingScannerAvailability.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA875D7B6DE32C0A7B31A354 /* PairingScannerAvailability.swift */; };
+		A30294D1FBC1B25ECBABDF31 /* ChatMessageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6BACC42C26E65E5F66135EA /* ChatMessageTests.swift */; };
+		A637D6A68CCFE8E9E22694BE /* MarkdownText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AEC1FC615679E1E9C1215F3 /* MarkdownText.swift */; };
+		ABD3028C38981B05E706587A /* PairingPayload.swift in Sources */ = {isa = PBXBuildFile; fileRef = BAD336F4C551903EF0F7A0DD /* PairingPayload.swift */; };
+		AF183ECF86CDD849C3CE6D37 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B215BE9FDDF2644D668FB09D /* SettingsView.swift */; };
+		B15F8A581E113E931BBE7603 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46B2D1A79F27A14A4A50AA69 /* KeychainStore.swift */; };
+		B463FA36E166BFF30982DBE0 /* AttachmentCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 957B059C3668822AE2E66331 /* AttachmentCardView.swift */; };
+		C4C188877F7FDC2F96A51B4F /* NewConversationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3ED7C0765E72DEA359861F12 /* NewConversationView.swift */; };
+		C9AE591679ADCAA0B0344500 /* ChatInteractionPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFA157CADB0CFC92E1740199 /* ChatInteractionPolicy.swift */; };
+		CB4E2E96AE77AE04AD760039 /* DebugLaunchConfigurationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA2727049478C591B462C6F0 /* DebugLaunchConfigurationTests.swift */; };
+		CDBFE49A0B6C634A16A48C79 /* AttachmentDownloadRepositoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D3E2B37D53EA7C1DF19B54F /* AttachmentDownloadRepositoryTests.swift */; };
+		CEF36F244F10F31A2A0453EE /* MessageBubbleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2937E04B4FBBD52B3C35B16F /* MessageBubbleView.swift */; };
+		D0D97B7B39723C28578C0AFC /* MobileRealtimeState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87D16F2D18F82FA54839A93A /* MobileRealtimeState.swift */; };
+		D1AA823A0E8CC0828C1E95B6 /* ChatStatusText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CA3A277FFDCE5B8395D9E52 /* ChatStatusText.swift */; };
+		D26D5737AE2F19EDA06F1ABB /* PushRegistration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68E7F3A78AA21383ECDA8118 /* PushRegistration.swift */; };
+		D951F943B318ABD30D576FE9 /* MobileRealtimeStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8543512EC19622A7A251744 /* MobileRealtimeStateTests.swift */; };
+		DA50C727BC232A83105F1375 /* PairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 890405EA5349F671D17C027B /* PairingView.swift */; };
+		E14E1480BBB0EFCA35217E2B /* StreamingHandoffUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 306DA83085F8363BE2DEE7B1 /* StreamingHandoffUITests.swift */; };
+		E28241896ADC1591B57A0ABD /* ConnectionHealthPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D04B39E6BF13A2F92C09FB1 /* ConnectionHealthPolicyTests.swift */; };
+		E35E78750DB3D821816E4C59 /* InteractionPolishPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C92A558843A5504F04872267 /* InteractionPolishPolicyTests.swift */; };
+		E72A33F5EC07BBBD693E0CA6 /* AttachmentDownloadStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A701B108A2C33401CD2905EA /* AttachmentDownloadStoreTests.swift */; };
+		E79B22C91C7E4D81E8B1CAB8 /* MobileChatEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91C773F902BF656BC32B7A6D /* MobileChatEvent.swift */; };
+		EE713626A1995E1B29EF0016 /* ChatInteractionPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3318445C86AC41D25A7DB9C0 /* ChatInteractionPolicyTests.swift */; };
+		F1BE8120B2F1A9AD30636F64 /* DebugLaunchConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5D306146AA6992764AC6342 /* DebugLaunchConfiguration.swift */; };
+		F301E8D077B4E3B0E9422B83 /* AttachmentDownloadStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F643190BE5CA8508E13EC361 /* AttachmentDownloadStore.swift */; };
+		F6151C6EC4AE047455AAE6CF /* MobileApiClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C66C2F77A8C0A9AEC5AF0BF6 /* MobileApiClientTests.swift */; };
+		F662D52E7293110EF2AAD7CF /* InteractionPolishUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04D935EE85D77BA0EF1ACA31 /* InteractionPolishUITests.swift */; };
+		FE6E7C037EBB496C1312CA98 /* PendingInteraction.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30DFCD00E8EE25C9BA0AA294 /* PendingInteraction.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		37EE05C824D5247A9E345A24 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 136D46E945A13EEB27A471F3 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = E1E4E2F33E34B90D172439B7;
+			remoteInfo = SkillForge;
+		};
+		5D654CF747B7D7037E8E8965 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 136D46E945A13EEB27A471F3 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = E1E4E2F33E34B90D172439B7;
+			remoteInfo = SkillForge;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		02A80C1DD9CAD26DAE929996 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		04D935EE85D77BA0EF1ACA31 /* InteractionPolishUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InteractionPolishUITests.swift; sourceTree = "<group>"; };
+		07CAE9FE9F849F1803AB7C48 /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
+		07F68232D961E958FFE0A215 /* ControlView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlView.swift; sourceTree = "<group>"; };
+		092630ECD7AADEEDFDC10F5F /* EndpointProbeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EndpointProbeTests.swift; sourceTree = "<group>"; };
+		0CA3A277FFDCE5B8395D9E52 /* ChatStatusText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatStatusText.swift; sourceTree = "<group>"; };
+		1162F60F3394C70C7E8BAC6F /* ControlPresentationPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlPresentationPolicyTests.swift; sourceTree = "<group>"; };
+		19AEBE640438F3EEAB89938B /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
+		1CAF9B1F547A6F055F1F3FEF /* SkillForgeUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = SkillForgeUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		2937E04B4FBBD52B3C35B16F /* MessageBubbleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageBubbleView.swift; sourceTree = "<group>"; };
+		2D04B39E6BF13A2F92C09FB1 /* ConnectionHealthPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionHealthPolicyTests.swift; sourceTree = "<group>"; };
+		306DA83085F8363BE2DEE7B1 /* StreamingHandoffUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamingHandoffUITests.swift; sourceTree = "<group>"; };
+		30DFCD00E8EE25C9BA0AA294 /* PendingInteraction.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingInteraction.swift; sourceTree = "<group>"; };
+		3318445C86AC41D25A7DB9C0 /* ChatInteractionPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatInteractionPolicyTests.swift; sourceTree = "<group>"; };
+		338A7D3A83156E7260BAB304 /* EndpointProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EndpointProbe.swift; sourceTree = "<group>"; };
+		38CE605A7C77D9EA25F0AD3D /* AgentsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentsView.swift; sourceTree = "<group>"; };
+		3B60130ECEDB6A5DA6E91C2C /* AppStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateTests.swift; sourceTree = "<group>"; };
+		3ED7C0765E72DEA359861F12 /* NewConversationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewConversationView.swift; sourceTree = "<group>"; };
+		46B2D1A79F27A14A4A50AA69 /* KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainStore.swift; sourceTree = "<group>"; };
+		4FE5316511541D9DC204E5E5 /* SkillForge.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = SkillForge.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		51FAE704634016F3480D1809 /* AttachmentImageLoaderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentImageLoaderTests.swift; sourceTree = "<group>"; };
+		5D3E2B37D53EA7C1DF19B54F /* AttachmentDownloadRepositoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentDownloadRepositoryTests.swift; sourceTree = "<group>"; };
+		5DAEFA8FBE8F003B5C20DA8C /* ChatAttachment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatAttachment.swift; sourceTree = "<group>"; };
+		656F98395456673B3DFD4FC4 /* OutboundAttachmentUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutboundAttachmentUITests.swift; sourceTree = "<group>"; };
+		67364194DF920F3F9D7592CB /* SessionListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionListView.swift; sourceTree = "<group>"; };
+		68E7F3A78AA21383ECDA8118 /* PushRegistration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushRegistration.swift; sourceTree = "<group>"; };
+		6ABABDD75C3D8174409C9A26 /* SkillForgeApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkillForgeApp.swift; sourceTree = "<group>"; };
+		736E89C7B5DCF4F77413FA83 /* SkillForgeInfo.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = SkillForgeInfo.plist; sourceTree = "<group>"; };
+		75B661E11D63E6A3F394021F /* InteractionPolishPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InteractionPolishPolicy.swift; sourceTree = "<group>"; };
+		7600227AB7C7CCEBD02F7C12 /* PendingCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingCardView.swift; sourceTree = "<group>"; };
+		7CF8EBF629F78F9F2C9A7ECE /* ConnectionHealthUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionHealthUITests.swift; sourceTree = "<group>"; };
+		7DA252E2029CB8962AB1BED1 /* SkillForgeTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = SkillForgeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		80341B5BD2C4E6637F011C05 /* ComposerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerView.swift; sourceTree = "<group>"; };
+		87D16F2D18F82FA54839A93A /* MobileRealtimeState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileRealtimeState.swift; sourceTree = "<group>"; };
+		890405EA5349F671D17C027B /* PairingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingView.swift; sourceTree = "<group>"; };
+		8AEC1FC615679E1E9C1215F3 /* MarkdownText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownText.swift; sourceTree = "<group>"; };
+		8BC25E391568ED4E360F5A09 /* AttachmentImageLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentImageLoader.swift; sourceTree = "<group>"; };
+		91C773F902BF656BC32B7A6D /* MobileChatEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileChatEvent.swift; sourceTree = "<group>"; };
+		957B059C3668822AE2E66331 /* AttachmentCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentCardView.swift; sourceTree = "<group>"; };
+		9E1A5D6DFCBDC32E854FC960 /* AttachmentDownloadRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentDownloadRepository.swift; sourceTree = "<group>"; };
+		A24EFA2F98933E5AB9E8D419 /* MobileApiClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileApiClient.swift; sourceTree = "<group>"; };
+		A701B108A2C33401CD2905EA /* AttachmentDownloadStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentDownloadStoreTests.swift; sourceTree = "<group>"; };
+		B215BE9FDDF2644D668FB09D /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		BAD336F4C551903EF0F7A0DD /* PairingPayload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingPayload.swift; sourceTree = "<group>"; };
+		BF2DCEA0D217D4D852B21A41 /* PairingPayloadTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingPayloadTests.swift; sourceTree = "<group>"; };
+		BFBDD4D814DFD47C2B6B8B06 /* AppAppearance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppAppearance.swift; sourceTree = "<group>"; };
+		C1C40F145972924A8A254550 /* QRScannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRScannerView.swift; sourceTree = "<group>"; };
+		C66C2F77A8C0A9AEC5AF0BF6 /* MobileApiClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileApiClientTests.swift; sourceTree = "<group>"; };
+		C6BACC42C26E65E5F66135EA /* ChatMessageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatMessageTests.swift; sourceTree = "<group>"; };
+		C8543512EC19622A7A251744 /* MobileRealtimeStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileRealtimeStateTests.swift; sourceTree = "<group>"; };
+		C92A558843A5504F04872267 /* InteractionPolishPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InteractionPolishPolicyTests.swift; sourceTree = "<group>"; };
+		C94590A3A7F262A78D75885F /* ChatKeyboardUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatKeyboardUITests.swift; sourceTree = "<group>"; };
+		CBE761426F06F601C797F479 /* Slice3InteractionUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Slice3InteractionUITests.swift; sourceTree = "<group>"; };
+		D457D1BF57C40582BEA41E9E /* PairingScannerAvailabilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingScannerAvailabilityTests.swift; sourceTree = "<group>"; };
+		DA2727049478C591B462C6F0 /* DebugLaunchConfigurationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugLaunchConfigurationTests.swift; sourceTree = "<group>"; };
+		DA875D7B6DE32C0A7B31A354 /* PairingScannerAvailability.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingScannerAvailability.swift; sourceTree = "<group>"; };
+		DBA21D95925B4004EC9155E3 /* ConnectionHealth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionHealth.swift; sourceTree = "<group>"; };
+		DC8B326CE99D4BDC3C728D1C /* AttachmentPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentPicker.swift; sourceTree = "<group>"; };
+		E5D306146AA6992764AC6342 /* DebugLaunchConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugLaunchConfiguration.swift; sourceTree = "<group>"; };
+		EACEE731ECFE78313E55BBEE /* CompanionTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionTabView.swift; sourceTree = "<group>"; };
+		EFA157CADB0CFC92E1740199 /* ChatInteractionPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatInteractionPolicy.swift; sourceTree = "<group>"; };
+		F643190BE5CA8508E13EC361 /* AttachmentDownloadStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentDownloadStore.swift; sourceTree = "<group>"; };
+		FE9922CBEB56DF72276FD2A7 /* CompanionNavigationUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionNavigationUITests.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		0B857AB38D7B614E19A78A0B /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				4FE5316511541D9DC204E5E5 /* SkillForge.app */,
+				7DA252E2029CB8962AB1BED1 /* SkillForgeTests.xctest */,
+				1CAF9B1F547A6F055F1F3FEF /* SkillForgeUITests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		0F32F8A72A690DF7CDAC764B /* Chat */ = {
+			isa = PBXGroup;
+			children = (
+				EFA157CADB0CFC92E1740199 /* ChatInteractionPolicy.swift */,
+				0CA3A277FFDCE5B8395D9E52 /* ChatStatusText.swift */,
+				07CAE9FE9F849F1803AB7C48 /* ChatView.swift */,
+				80341B5BD2C4E6637F011C05 /* ComposerView.swift */,
+				8AEC1FC615679E1E9C1215F3 /* MarkdownText.swift */,
+				2937E04B4FBBD52B3C35B16F /* MessageBubbleView.swift */,
+				91C773F902BF656BC32B7A6D /* MobileChatEvent.swift */,
+				87D16F2D18F82FA54839A93A /* MobileRealtimeState.swift */,
+				3ED7C0765E72DEA359861F12 /* NewConversationView.swift */,
+				67364194DF920F3F9D7592CB /* SessionListView.swift */,
+			);
+			path = Chat;
+			sourceTree = "<group>";
+		};
+		185BD3E0B80C49E080CE8CEA /* Auth */ = {
+			isa = PBXGroup;
+			children = (
+				46B2D1A79F27A14A4A50AA69 /* KeychainStore.swift */,
+			);
+			path = Auth;
+			sourceTree = "<group>";
+		};
+		34EFD4A93B26FA229EABB271 /* Companion */ = {
+			isa = PBXGroup;
+			children = (
+				38CE605A7C77D9EA25F0AD3D /* AgentsView.swift */,
+				BFBDD4D814DFD47C2B6B8B06 /* AppAppearance.swift */,
+				EACEE731ECFE78313E55BBEE /* CompanionTabView.swift */,
+				DBA21D95925B4004EC9155E3 /* ConnectionHealth.swift */,
+				07F68232D961E958FFE0A215 /* ControlView.swift */,
+				75B661E11D63E6A3F394021F /* InteractionPolishPolicy.swift */,
+				B215BE9FDDF2644D668FB09D /* SettingsView.swift */,
+			);
+			path = Companion;
+			sourceTree = "<group>";
+		};
+		38E65770F824D68C599B465C /* SkillForgeUITests */ = {
+			isa = PBXGroup;
+			children = (
+				C94590A3A7F262A78D75885F /* ChatKeyboardUITests.swift */,
+				FE9922CBEB56DF72276FD2A7 /* CompanionNavigationUITests.swift */,
+				7CF8EBF629F78F9F2C9A7ECE /* ConnectionHealthUITests.swift */,
+				04D935EE85D77BA0EF1ACA31 /* InteractionPolishUITests.swift */,
+				656F98395456673B3DFD4FC4 /* OutboundAttachmentUITests.swift */,
+				CBE761426F06F601C797F479 /* Slice3InteractionUITests.swift */,
+				306DA83085F8363BE2DEE7B1 /* StreamingHandoffUITests.swift */,
+			);
+			path = SkillForgeUITests;
+			sourceTree = "<group>";
+		};
+		3BF797AFA6399E1CC43A02EC /* Networking */ = {
+			isa = PBXGroup;
+			children = (
+				338A7D3A83156E7260BAB304 /* EndpointProbe.swift */,
+				A24EFA2F98933E5AB9E8D419 /* MobileApiClient.swift */,
+			);
+			path = Networking;
+			sourceTree = "<group>";
+		};
+		6BC61537F679829B0BDDD898 /* Attachments */ = {
+			isa = PBXGroup;
+			children = (
+				957B059C3668822AE2E66331 /* AttachmentCardView.swift */,
+				9E1A5D6DFCBDC32E854FC960 /* AttachmentDownloadRepository.swift */,
+				F643190BE5CA8508E13EC361 /* AttachmentDownloadStore.swift */,
+				8BC25E391568ED4E360F5A09 /* AttachmentImageLoader.swift */,
+				DC8B326CE99D4BDC3C728D1C /* AttachmentPicker.swift */,
+				5DAEFA8FBE8F003B5C20DA8C /* ChatAttachment.swift */,
+			);
+			path = Attachments;
+			sourceTree = "<group>";
+		};
+		8ECB059A3644BC04B2CE16C3 /* Pending */ = {
+			isa = PBXGroup;
+			children = (
+				7600227AB7C7CCEBD02F7C12 /* PendingCardView.swift */,
+				30DFCD00E8EE25C9BA0AA294 /* PendingInteraction.swift */,
+			);
+			path = Pending;
+			sourceTree = "<group>";
+		};
+		9C8E8AFC0E886F3FBF778B1D /* App */ = {
+			isa = PBXGroup;
+			children = (
+				19AEBE640438F3EEAB89938B /* AppState.swift */,
+				E5D306146AA6992764AC6342 /* DebugLaunchConfiguration.swift */,
+				6ABABDD75C3D8174409C9A26 /* SkillForgeApp.swift */,
+				736E89C7B5DCF4F77413FA83 /* SkillForgeInfo.plist */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		B79AE1475AD10BA649D0AB52 /* SkillForge */ = {
+			isa = PBXGroup;
+			children = (
+				02A80C1DD9CAD26DAE929996 /* Assets.xcassets */,
+				9C8E8AFC0E886F3FBF778B1D /* App */,
+				6BC61537F679829B0BDDD898 /* Attachments */,
+				185BD3E0B80C49E080CE8CEA /* Auth */,
+				0F32F8A72A690DF7CDAC764B /* Chat */,
+				34EFD4A93B26FA229EABB271 /* Companion */,
+				3BF797AFA6399E1CC43A02EC /* Networking */,
+				EC2AAC973B39101DADA6F8BA /* Pairing */,
+				8ECB059A3644BC04B2CE16C3 /* Pending */,
+				DC6CB7FD3B894859B630391B /* Push */,
+			);
+			path = SkillForge;
+			sourceTree = "<group>";
+		};
+		C3F0DC98F34DD713A934F44C = {
+			isa = PBXGroup;
+			children = (
+				B79AE1475AD10BA649D0AB52 /* SkillForge */,
+				F303ACE21438CC4A056E0D2D /* SkillForgeTests */,
+				38E65770F824D68C599B465C /* SkillForgeUITests */,
+				0B857AB38D7B614E19A78A0B /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		DC6CB7FD3B894859B630391B /* Push */ = {
+			isa = PBXGroup;
+			children = (
+				68E7F3A78AA21383ECDA8118 /* PushRegistration.swift */,
+			);
+			path = Push;
+			sourceTree = "<group>";
+		};
+		EC2AAC973B39101DADA6F8BA /* Pairing */ = {
+			isa = PBXGroup;
+			children = (
+				BAD336F4C551903EF0F7A0DD /* PairingPayload.swift */,
+				DA875D7B6DE32C0A7B31A354 /* PairingScannerAvailability.swift */,
+				890405EA5349F671D17C027B /* PairingView.swift */,
+				C1C40F145972924A8A254550 /* QRScannerView.swift */,
+			);
+			path = Pairing;
+			sourceTree = "<group>";
+		};
+		F303ACE21438CC4A056E0D2D /* SkillForgeTests */ = {
+			isa = PBXGroup;
+			children = (
+				3B60130ECEDB6A5DA6E91C2C /* AppStateTests.swift */,
+				5D3E2B37D53EA7C1DF19B54F /* AttachmentDownloadRepositoryTests.swift */,
+				A701B108A2C33401CD2905EA /* AttachmentDownloadStoreTests.swift */,
+				51FAE704634016F3480D1809 /* AttachmentImageLoaderTests.swift */,
+				3318445C86AC41D25A7DB9C0 /* ChatInteractionPolicyTests.swift */,
+				C6BACC42C26E65E5F66135EA /* ChatMessageTests.swift */,
+				2D04B39E6BF13A2F92C09FB1 /* ConnectionHealthPolicyTests.swift */,
+				1162F60F3394C70C7E8BAC6F /* ControlPresentationPolicyTests.swift */,
+				DA2727049478C591B462C6F0 /* DebugLaunchConfigurationTests.swift */,
+				092630ECD7AADEEDFDC10F5F /* EndpointProbeTests.swift */,
+				C92A558843A5504F04872267 /* InteractionPolishPolicyTests.swift */,
+				C66C2F77A8C0A9AEC5AF0BF6 /* MobileApiClientTests.swift */,
+				C8543512EC19622A7A251744 /* MobileRealtimeStateTests.swift */,
+				BF2DCEA0D217D4D852B21A41 /* PairingPayloadTests.swift */,
+				D457D1BF57C40582BEA41E9E /* PairingScannerAvailabilityTests.swift */,
+			);
+			path = SkillForgeTests;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		7E2770573D5445730867ECC7 /* SkillForgeTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 6B2AA4F053689CA0538EF242 /* Build configuration list for PBXNativeTarget "SkillForgeTests" */;
+			buildPhases = (
+				A106065ABEDDD3B5A8FD9A53 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				DCC3218871301F2413EE05E0 /* PBXTargetDependency */,
+			);
+			name = SkillForgeTests;
+			packageProductDependencies = (
+			);
+			productName = SkillForgeTests;
+			productReference = 7DA252E2029CB8962AB1BED1 /* SkillForgeTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		E1E4E2F33E34B90D172439B7 /* SkillForge */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 92D060A607A85BF51F7BE041 /* Build configuration list for PBXNativeTarget "SkillForge" */;
+			buildPhases = (
+				F4F9CF18867066470E42E55A /* Sources */,
+				C2484B5005EB2BADC868B055 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = SkillForge;
+			packageProductDependencies = (
+			);
+			productName = SkillForge;
+			productReference = 4FE5316511541D9DC204E5E5 /* SkillForge.app */;
+			productType = "com.apple.product-type.application";
+		};
+		EFAEB1D24F05231F82919A02 /* SkillForgeUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 78D79C196972DC4D26E8275E /* Build configuration list for PBXNativeTarget "SkillForgeUITests" */;
+			buildPhases = (
+				1E7F5DB8253F14774C33139E /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				561AB641B0BDF57E5BE131D4 /* PBXTargetDependency */,
+			);
+			name = SkillForgeUITests;
+			packageProductDependencies = (
+			);
+			productName = SkillForgeUITests;
+			productReference = 1CAF9B1F547A6F055F1F3FEF /* SkillForgeUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		136D46E945A13EEB27A471F3 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					7E2770573D5445730867ECC7 = {
+						ProvisioningStyle = Automatic;
+					};
+					E1E4E2F33E34B90D172439B7 = {
+						ProvisioningStyle = Automatic;
+					};
+					EFAEB1D24F05231F82919A02 = {
+						ProvisioningStyle = Automatic;
+						TestTargetID = E1E4E2F33E34B90D172439B7;
+					};
+				};
+			};
+			buildConfigurationList = B4876933B81C35C12F13C52D /* Build configuration list for PBXProject "SkillForge" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = C3F0DC98F34DD713A934F44C;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 0B857AB38D7B614E19A78A0B /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				E1E4E2F33E34B90D172439B7 /* SkillForge */,
+				7E2770573D5445730867ECC7 /* SkillForgeTests */,
+				EFAEB1D24F05231F82919A02 /* SkillForgeUITests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		C2484B5005EB2BADC868B055 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				5329758C2379AA3C56275649 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		1E7F5DB8253F14774C33139E /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				24D65FAE07C00F2A180BDC0C /* ChatKeyboardUITests.swift in Sources */,
+				432B35861B3DD03EE357646B /* CompanionNavigationUITests.swift in Sources */,
+				06A2F1A7ADD71322A1321C7D /* ConnectionHealthUITests.swift in Sources */,
+				F662D52E7293110EF2AAD7CF /* InteractionPolishUITests.swift in Sources */,
+				9CB7FC64C425C24A71318A08 /* OutboundAttachmentUITests.swift in Sources */,
+				1718F9314CF369E7C0710B59 /* Slice3InteractionUITests.swift in Sources */,
+				E14E1480BBB0EFCA35217E2B /* StreamingHandoffUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A106065ABEDDD3B5A8FD9A53 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				82CFACB88D0779E0960C7640 /* AppStateTests.swift in Sources */,
+				CDBFE49A0B6C634A16A48C79 /* AttachmentDownloadRepositoryTests.swift in Sources */,
+				E72A33F5EC07BBBD693E0CA6 /* AttachmentDownloadStoreTests.swift in Sources */,
+				1E3FD9F6DE75889C06DD339F /* AttachmentImageLoaderTests.swift in Sources */,
+				EE713626A1995E1B29EF0016 /* ChatInteractionPolicyTests.swift in Sources */,
+				A30294D1FBC1B25ECBABDF31 /* ChatMessageTests.swift in Sources */,
+				E28241896ADC1591B57A0ABD /* ConnectionHealthPolicyTests.swift in Sources */,
+				1B267156FBBF49F6A8791A75 /* ControlPresentationPolicyTests.swift in Sources */,
+				CB4E2E96AE77AE04AD760039 /* DebugLaunchConfigurationTests.swift in Sources */,
+				8A1465B3D2E2F2B2ADB3CF6F /* EndpointProbeTests.swift in Sources */,
+				E35E78750DB3D821816E4C59 /* InteractionPolishPolicyTests.swift in Sources */,
+				F6151C6EC4AE047455AAE6CF /* MobileApiClientTests.swift in Sources */,
+				D951F943B318ABD30D576FE9 /* MobileRealtimeStateTests.swift in Sources */,
+				821549A63793025CFD018549 /* PairingPayloadTests.swift in Sources */,
+				943406658C75E8DD2B147377 /* PairingScannerAvailabilityTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F4F9CF18867066470E42E55A /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				39DF9D099030147FA7D43165 /* AgentsView.swift in Sources */,
+				9B13C32C069C619AD0D31A48 /* AppAppearance.swift in Sources */,
+				4D827691C047C4A9CA7A5C87 /* AppState.swift in Sources */,
+				B463FA36E166BFF30982DBE0 /* AttachmentCardView.swift in Sources */,
+				165D942BD8C5AC5E967DAEB0 /* AttachmentDownloadRepository.swift in Sources */,
+				F301E8D077B4E3B0E9422B83 /* AttachmentDownloadStore.swift in Sources */,
+				152942AC64A5B474121CC3CA /* AttachmentImageLoader.swift in Sources */,
+				220E0D1E7DF58600C2397F73 /* AttachmentPicker.swift in Sources */,
+				7D59D2A0E58E040889B1AFB3 /* ChatAttachment.swift in Sources */,
+				C9AE591679ADCAA0B0344500 /* ChatInteractionPolicy.swift in Sources */,
+				D1AA823A0E8CC0828C1E95B6 /* ChatStatusText.swift in Sources */,
+				9BCA7B37FDE9943270783D1C /* ChatView.swift in Sources */,
+				3004BFC55C39A8AB02706196 /* CompanionTabView.swift in Sources */,
+				2E4169F9AF6EB13EEA0BCF37 /* ComposerView.swift in Sources */,
+				0AD1A7AD1E4975B122B2F654 /* ConnectionHealth.swift in Sources */,
+				932F268CA3DAD4ECE1249FF1 /* ControlView.swift in Sources */,
+				F1BE8120B2F1A9AD30636F64 /* DebugLaunchConfiguration.swift in Sources */,
+				2089B2EFD6A10333A4CCA66F /* EndpointProbe.swift in Sources */,
+				7EFEFEC87EDA7B5FAEE51AF7 /* InteractionPolishPolicy.swift in Sources */,
+				B15F8A581E113E931BBE7603 /* KeychainStore.swift in Sources */,
+				A637D6A68CCFE8E9E22694BE /* MarkdownText.swift in Sources */,
+				CEF36F244F10F31A2A0453EE /* MessageBubbleView.swift in Sources */,
+				7A1762E4DD530BB135AA41C8 /* MobileApiClient.swift in Sources */,
+				E79B22C91C7E4D81E8B1CAB8 /* MobileChatEvent.swift in Sources */,
+				D0D97B7B39723C28578C0AFC /* MobileRealtimeState.swift in Sources */,
+				C4C188877F7FDC2F96A51B4F /* NewConversationView.swift in Sources */,
+				ABD3028C38981B05E706587A /* PairingPayload.swift in Sources */,
+				A08D211506D03F294BB5E987 /* PairingScannerAvailability.swift in Sources */,
+				DA50C727BC232A83105F1375 /* PairingView.swift in Sources */,
+				734905DBD0220C284C0CBBBB /* PendingCardView.swift in Sources */,
+				FE6E7C037EBB496C1312CA98 /* PendingInteraction.swift in Sources */,
+				D26D5737AE2F19EDA06F1ABB /* PushRegistration.swift in Sources */,
+				312EC8312B84CD4C958E0032 /* QRScannerView.swift in Sources */,
+				9EF3292D03BC82BCC19F7D83 /* SessionListView.swift in Sources */,
+				AF183ECF86CDD849C3CE6D37 /* SettingsView.swift in Sources */,
+				15A861BA2F6A1B56AD52DC4F /* SkillForgeApp.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		561AB641B0BDF57E5BE131D4 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = E1E4E2F33E34B90D172439B7 /* SkillForge */;
+			targetProxy = 5D654CF747B7D7037E8E8965 /* PBXContainerItemProxy */;
+		};
+		DCC3218871301F2413EE05E0 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = E1E4E2F33E34B90D172439B7 /* SkillForge */;
+			targetProxy = 37EE05C824D5247A9E345A24 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		0A948F2555EC6CE4995A1C26 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_FILE = SkillForge/App/SkillForgeInfo.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.skillforge.companion.dev;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		134D824058C19C49A7ED0B50 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.skillforge.companion.dev.uitests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = SkillForge;
+			};
+			name = Debug;
+		};
+		5B1078CD6B008448EE255D7C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.skillforge.companion.dev.uitests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = SkillForge;
+			};
+			name = Release;
+		};
+		712417A6AC634563EDB0AD9F /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		880A5138AC2483817FBF5202 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_FILE = SkillForge/App/SkillForgeInfo.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.skillforge.companion.dev;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		8A038C106E412E8FDFF9D0D4 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.skillforge.companion.dev.tests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/SkillForge.app/SkillForge";
+			};
+			name = Debug;
+		};
+		A111B4BFE878B2595B728995 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		F819044AD00733D29C598630 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.skillforge.companion.dev.tests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/SkillForge.app/SkillForge";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		6B2AA4F053689CA0538EF242 /* Build configuration list for PBXNativeTarget "SkillForgeTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				8A038C106E412E8FDFF9D0D4 /* Debug */,
+				F819044AD00733D29C598630 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		78D79C196972DC4D26E8275E /* Build configuration list for PBXNativeTarget "SkillForgeUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				134D824058C19C49A7ED0B50 /* Debug */,
+				5B1078CD6B008448EE255D7C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		92D060A607A85BF51F7BE041 /* Build configuration list for PBXNativeTarget "SkillForge" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				0A948F2555EC6CE4995A1C26 /* Debug */,
+				880A5138AC2483817FBF5202 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		B4876933B81C35C12F13C52D /* Build configuration list for PBXProject "SkillForge" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				712417A6AC634563EDB0AD9F /* Debug */,
+				A111B4BFE878B2595B728995 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 136D46E945A13EEB27A471F3 /* Project object */;
+}

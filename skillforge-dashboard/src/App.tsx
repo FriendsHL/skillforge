@@ -15,6 +15,7 @@ import Eval from './pages/Eval';
 import EvalDatasets from './pages/EvalDatasets';
 import HookMethods from './pages/HookMethods';
 import Channels from './pages/Channels';
+import MobileDevices from './pages/MobileDevices';
 import Insights from './pages/Insights';
 import AutoEvolving from './pages/AutoEvolving';
 import Tasks from './pages/Tasks';
@@ -62,6 +63,7 @@ function App() {
             <Route path="eval/datasets" element={<ErrorBoundary context="EvalDatasets"><EvalDatasets /></ErrorBoundary>} />
             <Route path="hooks" element={<ErrorBoundary context="Hook Methods"><HookMethods /></ErrorBoundary>} />
             <Route path="channels" element={<ErrorBoundary context="Channels"><Channels /></ErrorBoundary>} />
+            <Route path="mobile-devices" element={<ErrorBoundary context="Mobile Devices"><MobileDevices /></ErrorBoundary>} />
             <Route path="tasks" element={<ErrorBoundary context="Tasks"><Tasks /></ErrorBoundary>} />
             <Route path="schedules" element={<ErrorBoundary context="Schedules"><Schedules /></ErrorBoundary>} />
             <Route path="insights/patterns" element={<ErrorBoundary context="Insights"><Insights /></ErrorBoundary>} />

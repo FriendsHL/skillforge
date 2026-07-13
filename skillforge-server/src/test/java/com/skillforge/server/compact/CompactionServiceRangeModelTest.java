@@ -39,6 +39,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -161,6 +162,12 @@ class CompactionServiceRangeModelTest {
                     out.sort(java.util.Comparator.comparingLong(SessionSummaryEntity::getStartSeq));
                     return out;
                 });
+        when(summaryRepository.existsBySessionIdAndSupersededByIsNull(anyString()))
+                .thenAnswer(inv -> {
+                    String id = inv.getArgument(0);
+                    return summaryStore.values().stream()
+                            .anyMatch(s -> id.equals(s.getSessionId()) && s.getSupersededBy() == null);
+                });
         // INCREMENTAL-SUMMARY: the latest active summary (highest start_seq) is the rolling summary
         // CompactionService reads under the lock and threads into Phase 2. Mirror real semantics.
         when(summaryRepository.findTopBySessionIdAndSupersededByIsNullOrderByStartSeqDesc(anyString()))
@@ -214,6 +221,31 @@ class CompactionServiceRangeModelTest {
         tr.setContent(List.of(ContentBlock.toolResult("t1", "out", false)));
         msgs.add(tr);
         for (int i = 0; i < 20; i++) msgs.add(Message.user("tail " + i));
+        messagesStore.put(id, msgs);
+    }
+
+    private void seedLightCompactModelViewWithInjectedSummary(String id) {
+        List<Message> msgs = new ArrayList<>();
+        msgs.add(Message.user("[Context summary from 84 messages compacted at 2026-06-29T07:58:03Z]\n"
+                + "prior task state"));
+        for (int i = 0; i < 3; i++) {
+            msgs.add(Message.user("front filler " + i));
+        }
+        Message tu = new Message();
+        tu.setRole(Message.Role.ASSISTANT);
+        tu.setContent(List.of(ContentBlock.toolUse("lt1", "Edit", Map.of("path", "/tmp/huge"))));
+        msgs.add(tu);
+        StringBuilder big = new StringBuilder();
+        for (int i = 0; i < 7000; i++) {
+            big.append("line ").append(i).append('\n');
+        }
+        Message tr = new Message();
+        tr.setRole(Message.Role.USER);
+        tr.setContent(List.of(ContentBlock.toolResult("lt1", big.toString(), false)));
+        msgs.add(tr);
+        for (int i = 0; i < 6; i++) {
+            msgs.add(Message.user("tail " + i));
+        }
         messagesStore.put(id, msgs);
     }
 
@@ -337,5 +369,64 @@ class CompactionServiceRangeModelTest {
         // Across both rounds: zero message-row appends/rewrites (no unbounded growth).
         verify(sessionService, never()).appendMessages(eq("sRM2"), any());
         verify(sessionService, never()).rewriteMessages(eq("sRM2"), any());
+
+        // Full range-model compaction must restamp markers from the active ranges. Merely marking
+        // NULL rows leaves rows covered by superseded summaries pointing at stale ids, which can
+        // re-expose already-summarized history in the derived model view.
+        verify(messageRepository, atLeastOnce()).clearCompactedMarkers(eq("sRM2"));
+        verify(messageRepository, atLeastOnce())
+                .markCompactedBySummary(eq("sRM2"), eq(0L), anyLong(), anyLong());
+    }
+
+    @Test
+    @DisplayName("flag ON: compact with prior summary never moves the active frontier backwards")
+    void rangeModel_compactWithPriorSummaryDoesNotMoveFrontierBackwards() {
+        seedSession("sREGRESS", 30, 0, "idle");
+        seedMessages("sREGRESS");
+
+        SessionSummaryEntity prior = new SessionSummaryEntity();
+        prior.setId(summaryIdSeq.incrementAndGet());
+        prior.setSessionId("sREGRESS");
+        prior.setStartSeq(0L);
+        prior.setEndSeq(SEQ_BASE + 20);
+        prior.setSummaryText("WIDE ACTIVE SUMMARY");
+        prior.setLevel("full");
+        prior.setSource("engine-hard");
+        summaryStore.put(prior.getId(), prior);
+
+        CompactionEventEntity event = service.compact("sREGRESS", "full", "engine-hard", "regression");
+
+        assertThat(event).isNotNull();
+        assertThat(summaryStore).hasSize(2);
+        SessionSummaryEntity priorAfter = summaryStore.get(prior.getId());
+        assertThat(priorAfter.getSupersededBy()).isNotNull();
+        SessionSummaryEntity activeAfter = summaryStore.get(priorAfter.getSupersededBy());
+        assertThat(activeAfter.getEndSeq())
+                .as("new active summary must include at least the prior frontier")
+                .isGreaterThanOrEqualTo(prior.getEndSeq());
+    }
+
+    @Test
+    @DisplayName("flag ON: light compact does not rewrite derived model-view summaries into message rows")
+    void rangeModel_lightCompactDoesNotPersistDerivedSummaryView() {
+        seedSession("sLIGHT", 12, 0, "idle");
+        seedLightCompactModelViewWithInjectedSummary("sLIGHT");
+
+        SessionSummaryEntity active = new SessionSummaryEntity();
+        active.setId(summaryIdSeq.incrementAndGet());
+        active.setSessionId("sLIGHT");
+        active.setStartSeq(0L);
+        active.setEndSeq(83L);
+        active.setSummaryText("prior task state");
+        active.setLevel("full");
+        active.setSource("engine-hard");
+        summaryStore.put(active.getId(), active);
+
+        CompactionEventEntity event = service.compact("sLIGHT", "light", "engine-soft", "range light");
+
+        assertThat(event).isNull();
+        verify(sessionService, never()).saveSessionMessages(eq("sLIGHT"), any());
+        verify(sessionService, never()).rewriteMessages(eq("sLIGHT"), any());
+        verify(sessionService, never()).appendMessages(eq("sLIGHT"), any());
     }
 }

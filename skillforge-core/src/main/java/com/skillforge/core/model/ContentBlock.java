@@ -43,6 +43,7 @@ public class ContentBlock {
     @JsonProperty("mime_type")
     private String mimeType;
     private String filename;
+    private String caption;
     @JsonProperty("page_count")
     private Integer pageCount;
     /**
@@ -265,6 +266,14 @@ public class ContentBlock {
 
     public void setFilename(String filename) {
         this.filename = filename;
+    }
+
+    public String getCaption() {
+        return caption;
+    }
+
+    public void setCaption(String caption) {
+        this.caption = caption;
     }
 
     public Integer getPageCount() {

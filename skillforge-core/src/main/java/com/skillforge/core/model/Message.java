@@ -107,6 +107,12 @@ public class Message {
                         text = attachmentPlaceholder("Image", block.getFilename(), block.getAttachmentId());
                     } else if ("pdf_ref".equals(block.getType())) {
                         text = attachmentPlaceholder("PDF", block.getFilename(), block.getAttachmentId());
+                    } else if ("word_ref".equals(block.getType())) {
+                        text = attachmentPlaceholder("Word document", block.getFilename(), block.getAttachmentId());
+                    } else if ("excel_ref".equals(block.getType())) {
+                        text = attachmentPlaceholder("Excel workbook", block.getFilename(), block.getAttachmentId());
+                    } else if ("csv_ref".equals(block.getType())) {
+                        text = attachmentPlaceholder("CSV", block.getFilename(), block.getAttachmentId());
                     }
                 } else if (obj instanceof Map<?, ?> map) {
                     Object type = map.get("type");
@@ -120,6 +126,12 @@ public class Message {
                         text = attachmentPlaceholder("Image", map.get("filename"), firstPresent(map, "attachment_id", "attachmentId"));
                     } else if ("pdf_ref".equals(type)) {
                         text = attachmentPlaceholder("PDF", map.get("filename"), firstPresent(map, "attachment_id", "attachmentId"));
+                    } else if ("word_ref".equals(type)) {
+                        text = attachmentPlaceholder("Word document", map.get("filename"), firstPresent(map, "attachment_id", "attachmentId"));
+                    } else if ("excel_ref".equals(type)) {
+                        text = attachmentPlaceholder("Excel workbook", map.get("filename"), firstPresent(map, "attachment_id", "attachmentId"));
+                    } else if ("csv_ref".equals(type)) {
+                        text = attachmentPlaceholder("CSV", map.get("filename"), firstPresent(map, "attachment_id", "attachmentId"));
                     }
                 }
                 if (text != null) {

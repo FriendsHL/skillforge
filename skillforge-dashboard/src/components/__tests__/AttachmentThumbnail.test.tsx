@@ -61,10 +61,14 @@ vi.mock('../../api', () => ({
 }));
 
 import AttachmentThumbnail from '../AttachmentThumbnail';
+import { getChatAttachmentBlob } from '../../api';
+
+const getChatAttachmentBlobMock = vi.mocked(getChatAttachmentBlob);
 
 describe('AttachmentThumbnail — Wave 3 word/excel/csv chips', () => {
   afterEach(() => {
     vi.clearAllMocks();
+    getChatAttachmentBlobMock.mockResolvedValue({ data: new Blob(['x']) } as Awaited<ReturnType<typeof getChatAttachmentBlob>>);
   });
 
   it('renders a Word chip with FileWordOutlined icon and filename', async () => {
@@ -237,5 +241,57 @@ describe('AttachmentThumbnail — Wave 3 word/excel/csv chips', () => {
     await waitFor(() => {
       expect(screen.getByTestId('attachment-word-chip')).toBeInTheDocument();
     });
+  });
+
+  it('shows a document load error and retries with the same authenticated request parameters', async () => {
+    getChatAttachmentBlobMock
+      .mockRejectedValueOnce(new Error('network down'))
+      .mockResolvedValueOnce({ data: new Blob(['pdf']) } as Awaited<ReturnType<typeof getChatAttachmentBlob>>);
+
+    render(
+      <AttachmentThumbnail
+        kind="pdf"
+        attachmentId="artifact-retry"
+        filename="report.pdf"
+        userId={42}
+        sessionId="sess-A"
+      />,
+    );
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Load failed');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry loading report.pdf' }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('attachment-pdf-chip')).toHaveAttribute('tabindex', '0');
+    });
+    expect(getChatAttachmentBlobMock).toHaveBeenCalledTimes(2);
+    expect(getChatAttachmentBlobMock).toHaveBeenNthCalledWith(2, 'artifact-retry', 42, 'sess-A');
+  });
+
+  it('shows image loading and retry states and renders the supplied caption', async () => {
+    getChatAttachmentBlobMock
+      .mockRejectedValueOnce(new Error('network down'))
+      .mockResolvedValueOnce({ data: new Blob(['image']) } as Awaited<ReturnType<typeof getChatAttachmentBlob>>);
+
+    render(
+      <AttachmentThumbnail
+        kind="image"
+        attachmentId="image-retry"
+        filename="chart.png"
+        caption="Revenue by quarter"
+        userId={7}
+        sessionId="sess-B"
+      />,
+    );
+
+    expect(screen.getByRole('status', { name: 'Loading chart.png' })).toBeInTheDocument();
+    expect(screen.getByText('Revenue by quarter')).toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Load failed');
+    expect(screen.getByText('Revenue by quarter')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry loading chart.png' }));
+
+    expect(await screen.findByTestId('attachment-image-thumb')).toBeInTheDocument();
+    expect(getChatAttachmentBlobMock).toHaveBeenNthCalledWith(2, 'image-retry', 7, 'sess-B');
   });
 });

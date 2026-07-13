@@ -37,15 +37,21 @@ export function useChatSession(
   useEffect(() => {
     if (!activeSessionId) return;
     const s = settersRef.current;
+    let cancelled = false;
 
     getSessionMessages(activeSessionId, 1)
       .then((res) => {
+        if (cancelled) return;
         s.setRawMessages(stripRemindersFromMessageList(extractList(res)));
       })
-      .catch(() => message.error('Failed to load messages'));
+      .catch(() => {
+        if (cancelled) return;
+        message.error('Failed to load messages');
+      });
 
     getSession(activeSessionId, 1)
       .then((res) => {
+        if (cancelled) return;
         const d = res.data;
         s.setRuntimeStatus((d.runtimeStatus ?? 'idle') as RuntimeStatus);
         s.setRuntimeStep(d.runtimeStep ?? '');
@@ -64,6 +70,13 @@ export function useChatSession(
         s.setFullCompactCount(d.fullCompactCount ?? 0);
         s.setTotalTokensReclaimed(d.totalTokensReclaimed ?? 0);
       })
-      .catch((e) => console.error('Failed to load session details', e));
+      .catch((e) => {
+        if (cancelled) return;
+        console.error('Failed to load session details', e);
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [activeSessionId]);
 }

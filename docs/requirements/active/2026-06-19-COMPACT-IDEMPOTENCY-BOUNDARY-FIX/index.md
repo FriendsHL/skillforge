@@ -1,11 +1,17 @@
 # COMPACT-IDEMPOTENCY-BOUNDARY-FIX — 压缩失效（曾压缩过的 session 自动压缩被跳过 + tool-heavy 压不动）
 
 > 创建：2026-06-19
-> 状态：**部分交付**（P0 止血 + range-model go-live + 结构化摘要已交付；剩 ② tool-heavy 最坏情况 / W3 watchdog / 旧 orphan 残骸复核）。CompactionService + compact 子系统核心文件，8 不变量 → Full + `compact-reviewer`。
+> 状态：**部分交付**（P0 止血 + range-model go-live + 结构化摘要 + 2026-07-09 frontier 修复已实现；剩 ② tool-heavy 最坏情况 / W3 watchdog / 旧 orphan 残骸复核）。CompactionService + compact 子系统核心文件，8 不变量 → Full + `compact-reviewer`。
 > 来源：用户报 session `9d3eff0f-c22c-4568-bec8-a75ffe1f952d`（微信 / agent 3）「一直有压缩问题、`/compact` 压不动多少」。系统化调试取证（日志 + DB + 代码）。
 > 优先级：**高 → 中**（活的 P1 危害 ① 负 gap 已修且未再犯，见下方复验；剩余为 tool-heavy 偏弱 + 存储残骸）。
 
 ## 进度（2026-06-20 复验）
+
+**2026-07-09 frontier follow-up（本批待提交）**：active summary range 改为模型视图真源，
+不再依赖可能陈旧的 `compacted_by_summary_id` marker；full compact 增加单调 frontier guard，
+只 supersede 被新范围完整覆盖的 summary，并在持久化后重算 marker；range-model light compact
+禁止把派生 summary 回写成用户可见 NORMAL message。实施计划与测试矩阵见
+[range-model frontier plan](../../../superpowers/plans/2026-07-09-range-model-compaction-frontier-fix.md)。
 
 **已交付（均已 commit）**：① 负 gap idempotency（`3756ca43` Phase 0，gap 两端统一持久化计数空间）/ ③ 总结输入 map-reduce 分块（`3756ca43`，`MAX_SUMMARY_REDUCE_DEPTH=3`）/ 退化 guard + per-model 窗口（`3756ca43`）/ 结构化摘要 10 段模板（`9d226468`，`MAX_SUMMARY_TOKENS` 800→2000）/ range-model 存储重构 go-live（`068a4a5d`，治行膨胀）。
 

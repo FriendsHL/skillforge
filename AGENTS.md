@@ -6,7 +6,7 @@ These are the Codex-local working standards for this repository. Prefer these pr
 
 ## Project Baseline
 
-- SkillForge is a Java 17 + Spring Boot 3.2 + JPA/Hibernate + Maven multi-module backend with a React 19 + TypeScript + Ant Design 6 + Vite + React Router 7 dashboard.
+- SkillForge is a Java 17 + Spring Boot 3.2 + JPA/Hibernate + Maven multi-module backend with a React 19 + TypeScript + Ant Design 6 + Vite + React Router 7 dashboard and a SwiftUI iOS companion generated with XcodeGen.
 - Favor existing project patterns over new abstractions.
 - Keep work scoped. Do not mix high-risk changes with trivial cleanup in one batch.
 - Use SkillForge pipeline triage: Solo only for narrow exceptions, Mid by default, Full for red-light work.
@@ -27,6 +27,8 @@ These are the Codex-local working standards for this repository. Prefer these pr
 | `.codex/rules/java.md` | Java, JPA, repositories, services, migrations, tools, or LLM provider changes |
 | `.codex/rules/frontend.md` | TypeScript, React, frontend API calls, hooks, WebSocket UI, or dashboard state changes |
 | `.codex/rules/design.md` | Dashboard layout, visual design, CSS, accessibility, or frontend UX changes |
+| `.codex/rules/ios.md` | `skillforge-ios/**`, SwiftUI, Xcode project generation, XCTest/XCUITest, simulator, or real-device changes |
+| `.codex/rules/ios-pipeline.md` | Any non-Solo native iOS task, iOS multi-agent routing, iOS review, or iOS verification planning |
 | `.codex/rules/context-budget.md` | Changing rules/prompts/agents/commands/plugins/MCP exposure, or auditing context overhead |
 | `.codex/rules/code-review.md` | User asks for review, or pipeline/reviewer-style assessment is needed |
 | `.codex/rules/review-verdict.md` | Producing Mid/Full pipeline reviewer reports or judge summaries |
@@ -57,7 +59,7 @@ Use Solo only for:
 
 Use Full when any red light is present:
 
-- Core files: `AgentLoopEngine`, `engine/hook/*`, `core/llm/**`, `CompactionService`, `ChatService`, `SessionService`, `SessionMessageRepository`, Flyway migrations, `ChatWindow.tsx`, `Chat.tsx`, or Lifecycle Hooks editor files.
+- Core files: `AgentLoopEngine`, `engine/hook/*`, `core/llm/**`, `CompactionService`, `ChatService`, `SessionService`, `SessionMessageRepository`, Flyway migrations, `ChatWindow.tsx`, `Chat.tsx`, Lifecycle Hooks editor files, or iOS red-light paths from `ios-pipeline.md`.
 - Multi-invariant paired protocols: `tool_use`/`tool_result`, lock/unlock, transaction begin/commit, request/response, lease/heartbeat.
 - New persistence entity, schema migration, or JPQL/native SQL change.
 - Cross-3-module feature work, a new REST endpoint plus frontend plus tests, or a broad brief over roughly 800 words.

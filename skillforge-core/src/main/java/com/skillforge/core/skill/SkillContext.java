@@ -9,6 +9,7 @@ import java.util.Set;
 public class SkillContext {
 
     private String workingDirectory;
+    private String artifactOutputDirectory;
     private String sessionId;
     private Long userId;
     private String toolUseId;
@@ -37,6 +38,14 @@ public class SkillContext {
 
     public void setWorkingDirectory(String workingDirectory) {
         this.workingDirectory = workingDirectory;
+    }
+
+    public String getArtifactOutputDirectory() {
+        return artifactOutputDirectory;
+    }
+
+    public void setArtifactOutputDirectory(String artifactOutputDirectory) {
+        this.artifactOutputDirectory = artifactOutputDirectory;
     }
 
     public String getSessionId() {

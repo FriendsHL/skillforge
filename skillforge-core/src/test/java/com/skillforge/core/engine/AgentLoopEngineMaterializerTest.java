@@ -119,20 +119,41 @@ class AgentLoopEngineMaterializerTest {
     }
 
     @Test
-    @DisplayName("materializer throws → fall back to raw input (no crash, no silent corruption)")
-    void materializerThrows_fallsBackToInput() {
+    @DisplayName("materializer throws -> fallback sanitizes assistant refs but preserves user refs")
+    void materializerThrows_fallsBackToRoleAwareSanitizedCopy() {
         LoopContext ctx = new LoopContext();
         ctx.setSessionId("sess-1");
         ctx.setMessageMaterializer((sessionId, messages) -> {
             throw new IllegalStateException("simulated attachment-store failure");
         });
-        List<Message> input = List.of(userMessageWithImageRef());
+        Message assistant = new Message();
+        assistant.setRole(Message.Role.ASSISTANT);
+        assistant.setContent(List.of(ContentBlock.pdfRef("att-2", "output.pdf", 2)));
+        List<Message> input = List.of(userMessageWithImageRef(), assistant);
 
         List<Message> result = AgentLoopEngine.applyMaterializer(ctx, input);
 
-        // Fall-back returns the raw input. Provider will see image_ref and likely
-        // 400, surfaced to user via existing error path. Better than corrupting DB.
-        assertThat(result).isSameAs(input);
+        assertThat(result).isNotSameAs(input);
+        assertThat(((ContentBlock) ((List<?>) result.get(0).getContent()).get(0)).getType())
+                .isEqualTo("image_ref");
+        assertThat(result.get(1).getTextContent()).isEqualTo("[Previously delivered PDF: output.pdf]");
+        assertThat(((ContentBlock) ((List<?>) assistant.getContent()).get(0)).getType()).isEqualTo("pdf_ref");
+    }
+
+    @Test
+    @DisplayName("materializer returns null -> fallback remains assistant-sanitized")
+    void materializerReturnsNull_fallsBackToSanitizedCopy() {
+        LoopContext ctx = new LoopContext();
+        ctx.setSessionId("sess-1");
+        ctx.setMessageMaterializer((sessionId, messages) -> null);
+        Message assistant = new Message();
+        assistant.setRole(Message.Role.ASSISTANT);
+        assistant.setContent(List.of(ContentBlock.csvRef("att-2", "output.csv")));
+
+        List<Message> result = AgentLoopEngine.applyMaterializer(ctx, List.of(assistant));
+
+        assertThat(result.get(0).getTextContent()).isEqualTo("[Previously delivered CSV: output.csv]");
+        assertThat(((ContentBlock) ((List<?>) assistant.getContent()).get(0)).getType()).isEqualTo("csv_ref");
     }
 
     // -------------------------- helpers --------------------------

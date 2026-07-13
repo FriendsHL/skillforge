@@ -291,7 +291,7 @@ public class SessionService {
 
     public SessionEntity getSession(String id) {
         return sessionRepository.findById(id)
-                .orElseThrow(() -> new RuntimeException("Session not found: " + id));
+                .orElseThrow(() -> new SessionNotFoundException(id));
     }
 
     public List<SessionEntity> listUserSessions(Long userId) {
@@ -593,28 +593,19 @@ public class SessionService {
      *
      * <p>Construction (single linear pass over the full real history ASC by seq):
      * <ul>
-     *   <li>A maximal run of consecutive rows whose {@code compacted_by_summary_id} == the same
-     *       <b>active</b> summary S is collapsed into ONE {@code Message.user(S.summaryText)} with
-     *       provenance {@link #PROVENANCE_SUMMARY} ({@code -1}). The whole run is skipped.</li>
-     *   <li>An uncovered row (no marker, or marker pointing at a non-active / superseded summary)
-     *       is emitted as-is with provenance = its real {@code seq_no}. SYSTEM_EVENT rows are
-     *       skipped (mirrors the legacy slice).</li>
+     *   <li>An ACTIVE summary's real seq range is authoritative. When the scan reaches any visible
+     *       row inside {@code [start_seq,end_seq]}, the method emits exactly one
+     *       {@code Message.user(S.summaryText)} with provenance {@link #PROVENANCE_SUMMARY}
+     *       ({@code -1}) and skips all rows through {@code end_seq}.</li>
+     *   <li>An uncovered row outside every active range is emitted as-is with provenance = its real
+     *       {@code seq_no}. SYSTEM_EVENT rows are skipped (mirrors the legacy slice).</li>
      * </ul>
      *
      * <p>Per §2.6 Q3 (rolling merge) there is normally exactly ONE active summary covering
      * {@code [0, endSeq]}, so the typical result is {@code [summary] + uncovered tail}. The general
-     * multiple-adjacent-active-summary case is handled by run-detection keyed on the marker id.
-     *
-     * <p><b>Superseded-marker defense</b>: if a row's {@code compacted_by_summary_id} points at a
-     * summary that is NOT in the active set (it was superseded but the marker was not re-pointed —
-     * the P1 {@code markCompactedBySummary} only stamps unmarked rows, so after a Q3 merge the
-     * earliest rows still carry the OLD, now-superseded summary id), the row is treated as
-     * UNCOVERED and emitted as a real row. This is the safe choice: emitting the real row can never
-     * drop information (the rolling active summary already re-summarizes that span, so the LLM sees
-     * the content twice at worst — verbose, not lossy), whereas mapping it to the superseding
-     * summary would risk collapsing a row that the active summary's range might not actually cover.
-     * INV-1 still holds: P1 ranges end pair-complete (findSafeBoundary), and emitting extra real
-     * rows verbatim cannot split a tool_use↔tool_result pair.
+     * multiple-adjacent-active-summary case is handled by the ordered range scan. The
+     * {@code compacted_by_summary_id} marker is treated only as a denormalized UI/index hint; stale
+     * markers must not re-expose rows already covered by an active rolling summary.
      *
      * <p>INV-4: the injected summary is a transient {@code Message.user(...)} built here, never a
      * persisted message row; real rows are emitted by object identity from {@code StoredMessage}.
@@ -623,50 +614,43 @@ public class SessionService {
     public ContextWithProvenance getContextMessagesWithProvenance(String id) {
         List<StoredMessage> records = getFullHistoryRecords(id);
 
-        // Active summary ids (superseded_by IS NULL) → summaryText, for run collapsing. Empty when
-        // the session never compacted under the range model (all rows uncovered).
-        Map<Long, String> activeSummaryText = new HashMap<>();
-        if (sessionSummaryRepository != null) {
-            List<SessionSummaryEntity> active = sessionSummaryRepository
-                    .findBySessionIdAndSupersededByIsNullOrderByStartSeqAsc(id);
-            for (SessionSummaryEntity s : active) {
-                activeSummaryText.put(s.getId(), s.getSummaryText());
-            }
-        }
+        List<SessionSummaryEntity> activeSummaries = (sessionSummaryRepository == null)
+                ? Collections.emptyList()
+                : sessionSummaryRepository.findBySessionIdAndSupersededByIsNullOrderByStartSeqAsc(id);
 
         List<Message> out = new ArrayList<>();
         List<Long> provenance = new ArrayList<>();
         int i = 0;
+        int summaryIdx = 0;
         while (i < records.size()) {
             StoredMessage record = records.get(i);
             if (MSG_TYPE_SYSTEM_EVENT.equals(record.msgType())) {
                 i++;
                 continue;
             }
-            Long marker = record.compactedBySummaryId();
-            String summaryText = (marker != null) ? activeSummaryText.get(marker) : null;
-            if (summaryText != null) {
-                // Start of a covered run for active summary `marker`. Consume the maximal run of
-                // consecutive rows carrying the SAME active marker (SYSTEM_EVENT rows inside the run
-                // are skipped without breaking it — they are invisible to the model view anyway).
-                emitSummary(out, provenance, summaryText);
-                while (i < records.size()) {
-                    StoredMessage r = records.get(i);
-                    if (MSG_TYPE_SYSTEM_EVENT.equals(r.msgType())) {
-                        i++;
-                        continue;
-                    }
-                    if (marker.equals(r.compactedBySummaryId())) {
-                        i++;
-                    } else {
-                        break;
-                    }
-                }
-                continue;
+
+            long seq = record.seqNo();
+            while (summaryIdx < activeSummaries.size()
+                    && activeSummaries.get(summaryIdx).getEndSeq() < seq) {
+                summaryIdx++;
             }
-            // Uncovered row (no marker, or marker pointing at a superseded / unknown summary).
+            if (summaryIdx < activeSummaries.size()) {
+                SessionSummaryEntity summary = activeSummaries.get(summaryIdx);
+                if (seq >= summary.getStartSeq() && seq <= summary.getEndSeq()) {
+                    emitSummary(out, provenance, summary.getSummaryText());
+                    long endSeq = summary.getEndSeq();
+                    i++;
+                    while (i < records.size() && records.get(i).seqNo() <= endSeq) {
+                        i++;
+                    }
+                    summaryIdx++;
+                    continue;
+                }
+            }
+
+            // Uncovered row outside every active range.
             out.add(record.message());
-            provenance.add(record.seqNo());
+            provenance.add(seq);
             i++;
         }
         List<Message> archived = applyArchiveSafely(id, out);

@@ -3,6 +3,7 @@ package com.skillforge.core.compact;
 import com.skillforge.core.llm.LlmProvider;
 import com.skillforge.core.llm.LlmRequest;
 import com.skillforge.core.llm.LlmResponse;
+import com.skillforge.core.engine.AssistantAttachmentRefSanitizer;
 import com.skillforge.core.model.ContentBlock;
 import com.skillforge.core.model.Message;
 
@@ -357,6 +358,9 @@ public class FullCompactStrategy {
                             sb.append("<tool_result ")
                               .append(Boolean.TRUE.equals(cb.getIsError()) ? "error=true" : "")
                               .append("> ").append(c).append(" ");
+                        } else {
+                            String attachmentText = attachmentText(m, cb);
+                            if (attachmentText != null) sb.append(attachmentText).append(" ");
                         }
                     } else if (o instanceof Map<?, ?> mm) {
                         Object type = mm.get("type");
@@ -369,6 +373,9 @@ public class FullCompactStrategy {
                             String cs = c != null ? c.toString() : "";
                             if (cs.length() > 500) cs = cs.substring(0, 500) + "…";
                             sb.append("<tool_result> ").append(cs).append(" ");
+                        } else {
+                            String attachmentText = attachmentText(m, mm);
+                            if (attachmentText != null) sb.append(attachmentText).append(" ");
                         }
                     }
                 }
@@ -376,6 +383,17 @@ public class FullCompactStrategy {
             sb.append("\n");
         }
         return sb.toString();
+    }
+
+    private String attachmentText(Message message, Object block) {
+        if (message.getRole() == Message.Role.ASSISTANT) {
+            return AssistantAttachmentRefSanitizer.placeholderText(block);
+        }
+        Message singleBlock = new Message();
+        singleBlock.setRole(message.getRole());
+        singleBlock.setContent(List.of(block));
+        String text = singleBlock.getTextContent();
+        return text.isEmpty() ? null : text;
     }
 
     /** Max map-reduce reduce-recursion depth before accepting an over-budget single call (#2 guard). */

@@ -1132,6 +1132,8 @@ const Chat: React.FC = () => {
         onCompactClick={handleCompactClick}
         compacting={compacting}
         loopSpans={loopSpans}
+        messages={messages}
+        sessionTitle={sessionTitle}
       />
 
       <CompactionHistoryModal

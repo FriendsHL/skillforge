@@ -22,7 +22,8 @@ import org.springframework.context.annotation.Configuration;
         MemoryTranscriptProperties.class,
         EvolveThresholdProperties.class,
         AcpRunnerProperties.class,
-        SkillConsolidatorProperties.class
+        SkillConsolidatorProperties.class,
+        WorkspaceProperties.class
 })
 public class SkillForgeConfig {
 

@@ -1,6 +1,6 @@
 # SkillForge ToDo
 
-> 更新于：2026-06-22（WECHAT-CHANNEL Slice 3 交付；SKILL-CURATOR/config 拆分回写；**自进化 track 状态校准 + track 层合并**——见下方「自进化 track 现状」）
+> 更新于：2026-07-14（iOS Companion V1 core 与 Personal Workspace Browser V1 已完成 Full 验证；APNs/TestFlight 与真机发布回归继续开放）
 
 > 规则：这里只放当前执行状态；需求和方案细节放在链接的需求包 / archive 中。
 > 旧版：重整前长版 ToDo 已保留在 [references/legacy-todo-2026-06-16.md](references/legacy-todo-2026-06-16.md)。
@@ -17,6 +17,8 @@
 | 4 | **WECHAT-CHANNEL** | 加微信 channel。B-native iLink 原生 adapter。**Slice 1+2+3 已交付，全 LIVE 验证**（文本双向/扫码/文件图片发送/子Agent结果回投 + **Slice 3 FE 扫码绑定 UX：AntD QRCode 渲染 + 轮询自动绑定**）| Full | Slice 1+2+3 交付 | P2 | Full | [需求包](requirements/active/2026-06-18-WECHAT-CHANNEL/index.md) | 功能 MVP 完成；剩 ② 微信原生视频(video_item) / 卡片中性模型 / ChannelPushService 见 backlog；真手机扫码端到端 user-gated |
 | 5 | **AUTORESEARCH-OPTIMIZATION** | AUTOEVOLVING V2 (a) 子需求：autoResearch 外部调研（arxiv + GitHub trending）→ LLM 2-stage 抽取 → Iron Law 人审 → 自动建 backlog | Full | prd-draft (V2 排期) | P3 | Full | [需求包](requirements/active/2026-05-28-AUTORESEARCH-OPTIMIZATION/index.md) | PRD 已草拟，等 V1 后续 V2 启动 |
 | 6 | **ACP-EXTERNAL-AGENT** | SkillForge 经 ACP 编排外部 coding agent（cc/codex）+ 全程可视。Track A=ACP runner / Track B=B1 OTel 适配器。**大段已交付**：P1a~P2-3a + F2(worktree+任务框架) + L1/L3(cc/codex 自测→commit→push→PR) + **cc/codex 双接入**(adapter 按 agent 选) | Full | **大段已交付（见 delivery-index）**：cc+codex 经 ACP 跑通、worktree 隔离、渠道→PR 闭环 live 验过；剩 L2 确认门(暂缓)·codex 工具标签归一化(backlog)·AC-3 确认可达(暂缓)；**L4/L5 决定不做**(部署留人) | P3 | Full | [需求包](requirements/active/2026-06-19-ACP-EXTERNAL-AGENT/index.md) | 闭环已通；后续按需:codex 工具归一化 / agent-teams P1 成本护栏（均 backlog）|
+| 7 | **IOS-ASSISTANT-COMPANION** | SwiftUI 个人助理 App + mobile pairing/auth + LAN/Tailscale fallback + Chat/realtime/pending/附件/Control/Agents/Settings | Full | **V1 core verified；APNs/TestFlight open** | P2 | Full | [需求包](requirements/active/2026-07-09-IOS-ASSISTANT-COMPANION/index.md) | 单独启动 APNs delivery；发布前执行真机签名、摄像头、LAN/Tailscale 与后台回归 |
+| 8 | **PERSONAL-WORKSPACE-BROWSER** | Chat 右侧只读资料/产物层：本次 session 附件 + 授权 MySpace 文件浏览与预览 | Full | **V1 done / verified** | P2 | Full | [需求包](requirements/active/2026-07-14-PERSONAL-WORKSPACE-BROWSER/index.md) | 后续显式“加入对话”、搜索和多根授权另立切片 |
 
 ## 自进化（AUTOEVOLVING）track 现状（2026-06-22 校准）
 

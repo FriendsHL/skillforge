@@ -392,6 +392,12 @@ public class CompactionService implements ContextCompactorCallback, SessionServi
                     }
                 }
 
+                if (isRangeModelSessionWithActiveSummary(sessionId)) {
+                    log.info("light compact skipped (range-model derived view): sessionId={} source={}",
+                            sessionId, source);
+                    return;
+                }
+
                 List<Message> messages = sessionService.getContextMessages(sessionId);
                 int contextWindow = resolveContextWindowForSession(session);
                 CompactableToolRegistry registry = resolveToolRegistryForSession(session);
@@ -437,6 +443,13 @@ public class CompactionService implements ContextCompactorCallback, SessionServi
                         out[0] = CompactCallbackResult.noOp(current, "idempotency guard");
                         return;
                     }
+                }
+
+                if (isRangeModelSessionWithActiveSummary(sessionId)) {
+                    log.info("callback light compact no-op (range-model derived view): sessionId={}", sessionId);
+                    out[0] = CompactCallbackResult.noOp(current,
+                            "range-model light compact disabled for derived view");
+                    return;
                 }
 
                 int contextWindow = resolveContextWindowForSession(session);
@@ -605,6 +618,12 @@ public class CompactionService implements ContextCompactorCallback, SessionServi
             fullCompactInFlight.remove(sessionId);
         }
 
+        if (savedEvt[0] == null) {
+            log.info("fullCompact no-op (range-model persistence skipped): sessionId={} source={}",
+                    sessionId, source);
+            return null;
+        }
+
         log.info("fullCompact done: sessionId={} source={} reclaimed={} tokens",
                 sessionId, source, result.getTokensReclaimed());
         return new FullCompactOutcome(savedEvt[0], result);
@@ -615,10 +634,17 @@ public class CompactionService implements ContextCompactorCallback, SessionServi
     /** Holds both the persisted event and the CompactResult for callers that need both. */
     private record FullCompactOutcome(CompactionEventEntity event, CompactResult compactResult) {}
 
+    private boolean isRangeModelSessionWithActiveSummary(String sessionId) {
+        return rangeModelEnabled
+                && sessionSummaryRepository != null
+                && sessionSummaryRepository.existsBySessionIdAndSupersededByIsNull(sessionId);
+    }
+
     /**
      * Persist a CompactResult to DB (messages + session counters + event).
      * Must be called inside a transaction and (for thread safety) under the stripe lock.
-     * Returns the saved CompactionEventEntity.
+     * Returns the saved CompactionEventEntity, or {@code null} when the range-model persistence path
+     * intentionally converts the compact result into a true no-op.
      */
     private CompactionEventEntity persistCompactResult(String sessionId, String level,
                                                         String source, String reason,
@@ -629,7 +655,9 @@ public class CompactionService implements ContextCompactorCallback, SessionServi
             // Writes a t_session_summary range row + marks covered rows, instead of appending a
             // boundary + summary + re-appended young-gen. No message rows are appended/deleted.
             // Falls through to the shared counter/event/broadcast tail below.
-            persistFullRangeModel(sessionId, source, result);
+            if (!persistFullRangeModel(sessionId, source, result)) {
+                return null;
+            }
         } else if ("full".equalsIgnoreCase(level)) {
             String summaryText = extractSummaryText(result.getMessages());
             Message boundary = new Message();
@@ -770,24 +798,25 @@ public class CompactionService implements ContextCompactorCallback, SessionServi
      * active summary (Q3 rolling merge), and writes a checkpoint pointing at the summary id — without
      * appending / deleting / re-appending any message rows.
      *
-     * <p><b>Range seq mapping (P1/P2 coupling)</b>: the strategy reports {@code rightEdge} as an index
-     * into the <i>model view</i> ({@link SessionService#getContextMessages}: post-last-boundary
-     * physical rows, SYSTEM_EVENT skipped). P2 will thread true provenance; at P1 we derive the
-     * covered range from the loaded {@link SessionService.StoredMessage} records:
+     * <p><b>Range seq mapping</b>: {@link CompactResult} only exposes before/after model-message
+     * counts, not the prepared right edge, so we rebuild the same model-view frame sequence from the
+     * stored rows and active summary ranges. Summary frames contribute their {@code end_seq}; real-row
+     * frames contribute their {@code seq_no}. This keeps the rolling frontier monotonic even when old
+     * rows still carry stale markers pointing at superseded summaries:
      * <ul>
      *   <li>{@code windowSize} = the number of real window rows folded into the summary. The
      *       compacted layout is {@code [1 summary] + youngGen}, so
      *       {@code afterMessageCount = 1 + youngGen.size()} and the window row count is
      *       {@code beforeMessageCount - youngGen.size() = (beforeMessageCount - afterMessageCount) + 1}.
-     *       Deriving from message counts (not {@code rightEdge}, which {@code CompactResult} does not
-     *       carry) is the P1 approximation; P2 threads true provenance.</li>
+     *       Deriving the window size from counts is still an approximation, but the model-frame to
+     *       seq mapping is range-aware.</li>
      *   <li>{@code endSeq} = the real seq_no of the last covered model-view row
      *       (index {@code windowSize - 1}).</li>
      *   <li>Per §2.6 Q3 the new summary covers {@code [0, endSeq]} (rolling merge subsumes everything
      *       up to endSeq); {@code startSeq} is therefore 0.</li>
      * </ul>
      */
-    private void persistFullRangeModel(String sessionId, String source, CompactResult result) {
+    private boolean persistFullRangeModel(String sessionId, String source, CompactResult result) {
         if (sessionSummaryRepository == null) {
             throw new IllegalStateException(
                     "range-model compaction enabled but SessionSummaryRepository not wired");
@@ -801,20 +830,33 @@ public class CompactionService implements ContextCompactorCallback, SessionServi
         // Load the full real history ONCE; both the model-view mapping and the post-range end
         // (highest real seq) are derived from this single read (perf: avoid a second DB round-trip).
         List<SessionService.StoredMessage> allRecords = sessionService.getFullHistoryRecords(sessionId);
+        List<SessionSummaryEntity> priorActive =
+                sessionSummaryRepository.findBySessionIdAndSupersededByIsNullOrderByStartSeqAsc(sessionId);
 
-        // Map the model-view window onto real seq_nos. The model view is the slice of the full
-        // history after the last COMPACT_BOUNDARY (legacy rows) with SYSTEM_EVENT rows skipped —
-        // the same construction as SessionService.getContextMessages. The first `compactedCount`
-        // of those model-view rows are the window; endSeq is the real seq_no of the last one.
-        List<SessionService.StoredMessage> modelViewRows = sliceModelViewRows(allRecords);
-        if (compactedCount <= 0 || modelViewRows.isEmpty()) {
-            log.info("range-model fullCompact no-op mapping (compactedCount={} modelViewRows={}): sessionId={}",
-                    compactedCount, modelViewRows.size(), sessionId);
-            return;
+        // Map the compacted model-view window onto real seq_nos. A summary frame contributes its
+        // covered end_seq; a real-row frame contributes that row's seq_no. This mirrors
+        // SessionService.getContextMessagesWithProvenance and prevents stale markers from moving the
+        // rolling frontier backwards after a prior active summary.
+        List<ModelViewFrame> modelViewFrames = sliceModelViewFrames(allRecords, priorActive);
+        if (compactedCount <= 0 || modelViewFrames.isEmpty()) {
+            log.info("range-model fullCompact no-op mapping (compactedCount={} modelViewFrames={}): sessionId={}",
+                    compactedCount, modelViewFrames.size(), sessionId);
+            return false;
         }
-        int lastWindowIdx = Math.min(compactedCount, modelViewRows.size()) - 1;
-        long endSeq = modelViewRows.get(lastWindowIdx).seqNo();
+        int lastWindowIdx = Math.min(compactedCount, modelViewFrames.size()) - 1;
+        long endSeq = modelViewFrames.get(lastWindowIdx).endSeq();
         long startSeq = 0L; // §2.6 Q3: rolling merge — new summary covers [0, endSeq].
+
+        long priorMaxEndSeq = priorActive.stream()
+                .mapToLong(SessionSummaryEntity::getEndSeq)
+                .max()
+                .orElse(-1L);
+        if (endSeq < priorMaxEndSeq) {
+            log.warn("range-model fullCompact no-op (non-monotonic frontier): sessionId={} "
+                            + "newEndSeq={} priorActiveMaxEndSeq={} compactedCount={} modelViewFrames={}",
+                    sessionId, endSeq, priorMaxEndSeq, compactedCount, modelViewFrames.size());
+            return false;
+        }
 
         String summaryText = extractSummaryText(result.getMessages());
         String recoveryText = buildRecoveryPayloadText(sessionId);
@@ -832,25 +874,16 @@ public class CompactionService implements ContextCompactorCallback, SessionServi
         summary.setRecoveryPayload(recoveryText);
         SessionSummaryEntity savedSummary = sessionSummaryRepository.save(summary);
 
-        // §2.6 Q3 merge: any prior active summary is subsumed by this one → mark superseded.
-        // NOTE: this active-list query runs AFTER save(), so the just-saved new summary (which is
-        // itself active — superseded_by IS NULL) is included in the result; the id guard below
-        // explicitly skips it so we never supersede the summary by itself.
-        List<SessionSummaryEntity> priorActive =
-                sessionSummaryRepository.findBySessionIdAndSupersededByIsNullOrderByStartSeqAsc(sessionId);
+        // §2.6 Q3 merge: only active summaries fully contained by the new rolling range are subsumed.
+        // Do not blanket-supersede unrelated or wider active ranges; that is the frontier-regression
+        // bug that can re-expose previously compacted history.
         for (SessionSummaryEntity prior : priorActive) {
-            if (!prior.getId().equals(savedSummary.getId())) {
+            if (prior.getStartSeq() >= startSeq && prior.getEndSeq() <= endSeq) {
                 sessionSummaryRepository.markSuperseded(prior.getId(), savedSummary.getId());
             }
         }
 
-        // Mark the covered real rows [startSeq, endSeq] (only the still-unmarked ones).
-        if (sessionMessageRepository != null) {
-            int marked = sessionMessageRepository.markCompactedBySummary(
-                    sessionId, startSeq, endSeq, savedSummary.getId());
-            log.debug("range-model fullCompact marked {} rows [{},{}] → summaryId={}: sessionId={}",
-                    marked, startSeq, endSeq, savedSummary.getId(), sessionId);
-        }
+        restampActiveSummaryMarkers(sessionId);
 
         // Checkpoint points at the summary id + range (same transaction). No message rows written,
         // so boundary_seq_no is the next-real-seq sentinel (endSeq+1) per the design note.
@@ -869,36 +902,77 @@ public class CompactionService implements ContextCompactorCallback, SessionServi
                 : allRecords.get(allRecords.size() - 1).seqNo();
         checkpoint.setPostRangeEndSeqNo(lastRealSeq);
         checkpointRepository.save(checkpoint);
+        return true;
     }
 
+    private record ModelViewFrame(long endSeq) {}
+
     /**
-     * Slice the model view (post-last-boundary, SYSTEM_EVENT skipped) out of an already-loaded full
-     * history, keeping {@link SessionService.StoredMessage} seq_no provenance so window indices map
-     * back to real seq_nos. Mirrors {@link SessionService#getContextMessages} slicing.
-     *
-     * <p>INTENTIONALLY does NOT apply {@code applyArchiveSafely}: this mapping is count-only (it
-     * needs index→seq_no, not message content). Archive substitution swaps tool_result content for
-     * a preview but never changes the list size, so the index→seq mapping is exact without it;
-     * loading archive content here would be wasted work.
+     * Slice the model view out of an already-loaded full history, keeping the real seq frontier each
+     * emitted model message covers. With active summaries, this mirrors
+     * {@link SessionService#getContextMessagesWithProvenance}: active summary ranges collapse to one
+     * frame whose frontier is {@code summary.end_seq}; uncovered real rows become one frame whose
+     * frontier is {@code row.seq_no}. With no active summaries, this mirrors the legacy post-boundary
+     * slice used by {@link SessionService#getContextMessages} so first range-model compact of an old
+     * boundary session maps the same model-view window it summarized. This is count-only mapping, so it
+     * intentionally does not apply archive substitution.
      */
-    private List<SessionService.StoredMessage> sliceModelViewRows(List<SessionService.StoredMessage> all) {
-        int lastBoundary = -1;
-        for (int i = all.size() - 1; i >= 0; i--) {
-            if (SessionService.MSG_TYPE_COMPACT_BOUNDARY.equals(all.get(i).msgType())) {
-                lastBoundary = i;
-                break;
+    private List<ModelViewFrame> sliceModelViewFrames(List<SessionService.StoredMessage> all,
+                                                      List<SessionSummaryEntity> activeSummaries) {
+        int start = 0;
+        if (activeSummaries.isEmpty()) {
+            int lastBoundary = -1;
+            for (int i = all.size() - 1; i >= 0; i--) {
+                if (SessionService.MSG_TYPE_COMPACT_BOUNDARY.equals(all.get(i).msgType())) {
+                    lastBoundary = i;
+                    break;
+                }
             }
+            start = (lastBoundary >= 0) ? lastBoundary + 1 : 0;
         }
-        int start = (lastBoundary >= 0) ? lastBoundary + 1 : 0;
-        List<SessionService.StoredMessage> out = new ArrayList<>();
+        List<ModelViewFrame> out = new ArrayList<>();
+        int summaryIdx = 0;
         for (int i = start; i < all.size(); i++) {
             SessionService.StoredMessage rec = all.get(i);
             if (SessionService.MSG_TYPE_SYSTEM_EVENT.equals(rec.msgType())) {
                 continue;
             }
-            out.add(rec);
+            long seq = rec.seqNo();
+            while (summaryIdx < activeSummaries.size()
+                    && activeSummaries.get(summaryIdx).getEndSeq() < seq) {
+                summaryIdx++;
+            }
+            if (summaryIdx < activeSummaries.size()) {
+                SessionSummaryEntity summary = activeSummaries.get(summaryIdx);
+                if (seq >= summary.getStartSeq() && seq <= summary.getEndSeq()) {
+                    long endSeq = summary.getEndSeq();
+                    out.add(new ModelViewFrame(endSeq));
+                    while (i + 1 < all.size() && all.get(i + 1).seqNo() <= endSeq) {
+                        i++;
+                    }
+                    summaryIdx++;
+                    continue;
+                }
+            }
+            out.add(new ModelViewFrame(seq));
         }
         return out;
+    }
+
+    private void restampActiveSummaryMarkers(String sessionId) {
+        if (sessionMessageRepository == null || sessionSummaryRepository == null) {
+            return;
+        }
+        List<SessionSummaryEntity> active =
+                sessionSummaryRepository.findBySessionIdAndSupersededByIsNullOrderByStartSeqAsc(sessionId);
+        int cleared = sessionMessageRepository.clearCompactedMarkers(sessionId);
+        int marked = 0;
+        for (SessionSummaryEntity s : active) {
+            marked += sessionMessageRepository.markCompactedBySummary(
+                    sessionId, s.getStartSeq(), s.getEndSeq(), s.getId());
+        }
+        log.debug("range-model fullCompact restamped markers: cleared={} marked={} activeSummaries={} sessionId={}",
+                cleared, marked, active.size(), sessionId);
     }
 
     /**

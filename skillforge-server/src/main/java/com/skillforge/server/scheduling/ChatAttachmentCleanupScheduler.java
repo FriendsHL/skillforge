@@ -2,6 +2,8 @@ package com.skillforge.server.scheduling;
 
 import com.skillforge.server.service.ChatAttachmentService;
 import com.skillforge.server.service.ChatAttachmentService.CleanupResult;
+import com.skillforge.server.service.ArtifactAttachmentMaintenanceService;
+import com.skillforge.server.service.ArtifactWorkspaceService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -50,11 +52,17 @@ public class ChatAttachmentCleanupScheduler {
 
     private final ChatAttachmentService attachmentService;
     private final int thresholdHours;
+    private final ArtifactAttachmentMaintenanceService artifactMaintenanceService;
+    private final ArtifactWorkspaceService artifactWorkspaceService;
 
     public ChatAttachmentCleanupScheduler(ChatAttachmentService attachmentService,
+                                          ArtifactAttachmentMaintenanceService artifactMaintenanceService,
+                                          ArtifactWorkspaceService artifactWorkspaceService,
                                           @Value("${skillforge.chat.attachments.cleanup.threshold-hours:24}")
                                           int thresholdHours) {
         this.attachmentService = attachmentService;
+        this.artifactMaintenanceService = artifactMaintenanceService;
+        this.artifactWorkspaceService = artifactWorkspaceService;
         this.thresholdHours = thresholdHours;
     }
 
@@ -71,9 +79,15 @@ public class ChatAttachmentCleanupScheduler {
     public void runDaily() {
         try {
             CleanupResult result = attachmentService.cleanupOrphans(thresholdHours, false);
+            ArtifactAttachmentMaintenanceService.Result artifactResult =
+                    artifactMaintenanceService.repairAndCleanup(thresholdHours);
+            int workspacesDeleted = artifactWorkspaceService.cleanupExpired(thresholdHours);
             log.info("ChatAttachmentCleanupScheduler done: orphanRowsDeleted={} filesDeleted={} errors={} root={}",
                     result.orphanRowsDeleted(), result.filesDeleted(), result.errors().size(),
                     attachmentService.getStorageRoot());
+            log.info("Artifact cleanup done: repaired={} deleted={} rejectedPaths={} workspacesDeleted={}",
+                    artifactResult.repaired(), artifactResult.deleted(), artifactResult.rejectedPaths(),
+                    workspacesDeleted);
         } catch (RuntimeException e) {
             // cleanupOrphans is contract-bound not to throw, but defense in depth so an
             // unexpected throw never bubbles into Spring's TaskScheduler (which would

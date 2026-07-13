@@ -68,3 +68,9 @@ into Codex rules.
 When `.claude` changes, update the smallest relevant `.codex/rules` file and this
 map. Do not copy Claude-specific execution mechanics unless Codex has an
 equivalent capability.
+
+## Codex-Native Extensions
+
+- `ios.md` and `ios-pipeline.md` are SkillForge Codex-native extensions added
+  after the last Claude strategy refresh. They use dynamic explorer/worker roles
+  and main-session judging instead of persistent Claude iOS persona files.

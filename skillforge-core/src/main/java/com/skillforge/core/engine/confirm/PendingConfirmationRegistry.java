@@ -1,6 +1,7 @@
 package com.skillforge.core.engine.confirm;
 
 import java.util.Map;
+import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
@@ -82,6 +83,15 @@ public class PendingConfirmationRegistry {
 
     public PendingConfirmation peek(String confirmationId) {
         return byId.get(confirmationId);
+    }
+
+    /** Snapshot of unanswered confirmations for foreground REST catch-up. */
+    public List<PendingConfirmation> pendingForSession(String sessionId) {
+        if (sessionId == null) return List.of();
+        return byId.values().stream()
+                .filter(pc -> sessionId.equals(pc.sessionId()))
+                .filter(pc -> pc.decisionRef().get() == null)
+                .toList();
     }
 
     public void removeIfPresent(String confirmationId) {

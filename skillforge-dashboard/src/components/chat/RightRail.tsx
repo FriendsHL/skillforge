@@ -10,9 +10,11 @@ import {
   type ContextBreakdownSegment,
 } from '../../api';
 import type { TraceTreeDto, TraceNodeDto } from '../../types/observability';
+import type { ChatMessage } from '../ChatWindow';
 import { fmtMs } from '../sessions/detail/session-detail-utils';
 import '../sessions/detail/session-detail.css';
 import { IconCompact } from './ChatIcons';
+import WorkspaceTab from './WorkspaceTab';
 
 interface InflightTool {
   name: string;
@@ -85,9 +87,11 @@ interface RightRailProps {
   onCompactClick?: () => void;
   compacting?: boolean;
   loopSpans?: LoopSpan[];
+  messages?: ChatMessage[];
+  sessionTitle?: string;
 }
 
-type Tab = 'context' | 'activity' | 'subagent' | 'team';
+type Tab = 'context' | 'workspace' | 'activity' | 'subagent' | 'team';
 
 const formatElapsed = (ms: number): string => {
   const s = Math.max(0, Math.floor(ms / 1000));
@@ -1435,6 +1439,8 @@ function RightRail({
   onCompactClick,
   compacting,
   loopSpans,
+  messages = [],
+  sessionTitle,
 }: RightRailProps) {
   const [tab, setTab] = useState<Tab>(collabRunId ? 'team' : 'activity');
   const loopSpanCount = loopSpans?.length ?? 0;
@@ -1442,7 +1448,7 @@ function RightRail({
   const badgeCount = loopSpanCount > 0 ? loopSpanCount : activeToolCount;
 
   return (
-    <aside className="rail">
+    <aside className="rail rail-with-workspace">
       <div className="rail-tabs">
         <button
           type="button"
@@ -1450,6 +1456,13 @@ function RightRail({
           onClick={() => setTab('context')}
         >
           Context
+        </button>
+        <button
+          type="button"
+          className={`rail-tab ${tab === 'workspace' ? 'on' : ''}`}
+          onClick={() => setTab('workspace')}
+        >
+          Workspace
         </button>
         <button
           type="button"
@@ -1491,6 +1504,14 @@ function RightRail({
             compaction={compaction}
             onCompactClick={onCompactClick}
             compacting={compacting}
+          />
+        )}
+        {tab === 'workspace' && (
+          <WorkspaceTab
+            messages={messages}
+            sessionId={sessionId}
+            sessionTitle={sessionTitle}
+            userId={userId}
           />
         )}
         {tab === 'activity' && (

@@ -15,7 +15,8 @@ import java.time.Instant;
 @EntityListeners(AuditingEntityListener.class)
 @Table(name = "t_chat_attachment", indexes = {
         @Index(name = "idx_chat_attachment_session", columnList = "session_id, created_at"),
-        @Index(name = "idx_chat_attachment_session_seq", columnList = "session_id, seq_no")
+        @Index(name = "idx_chat_attachment_session_seq", columnList = "session_id, seq_no"),
+        @Index(name = "idx_chat_attachment_origin_status_created", columnList = "origin, status, created_at")
 })
 public class ChatAttachmentEntity {
 
@@ -72,6 +73,18 @@ public class ChatAttachmentEntity {
 
     @Column(name = "status", length = 16, nullable = false)
     private String status = "uploaded";
+
+    @Column(name = "origin", length = 24, nullable = false)
+    private String origin = "user_upload";
+
+    @Column(name = "source_tool_use_id", length = 128)
+    private String sourceToolUseId;
+
+    @Column(name = "sha256", length = 64)
+    private String sha256;
+
+    @Column(name = "caption", length = 1000)
+    private String caption;
 
     // ─── Observability columns (V73, MULTIMODAL-OBSERVABILITY-COLUMNS) ───
     // All four are nullable. Wire-level field names use camelCase
@@ -132,6 +145,14 @@ public class ChatAttachmentEntity {
     public void setStoragePath(String storagePath) { this.storagePath = storagePath; }
     public String getStatus() { return status; }
     public void setStatus(String status) { this.status = status; }
+    public String getOrigin() { return origin; }
+    public void setOrigin(String origin) { this.origin = origin; }
+    public String getSourceToolUseId() { return sourceToolUseId; }
+    public void setSourceToolUseId(String sourceToolUseId) { this.sourceToolUseId = sourceToolUseId; }
+    public String getSha256() { return sha256; }
+    public void setSha256(String sha256) { this.sha256 = sha256; }
+    public String getCaption() { return caption; }
+    public void setCaption(String caption) { this.caption = caption; }
     public String getErrorCode() { return errorCode; }
     public void setErrorCode(String errorCode) { this.errorCode = errorCode; }
     public String getErrorMessage() { return errorMessage; }

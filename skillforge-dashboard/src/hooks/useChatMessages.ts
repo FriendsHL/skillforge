@@ -72,6 +72,7 @@ export function normalizeMessages(list: RawMessage[]): ChatMessage[] {
             pageCount?: unknown;
             sheet_count?: unknown;
             sheetCount?: unknown;
+            caption?: unknown;
           };
           const attachmentId =
             typeof ref.attachment_id === 'string' ? ref.attachment_id : '';
@@ -104,6 +105,9 @@ export function normalizeMessages(list: RawMessage[]): ChatMessage[] {
             filename,
             pageCount,
             sheetCount,
+            caption: typeof ref.caption === 'string' && ref.caption.trim().length > 0
+              ? ref.caption
+              : undefined,
           });
         }
       }
@@ -122,6 +126,9 @@ export function normalizeMessages(list: RawMessage[]): ChatMessage[] {
     // Declared up-front so all push sites below (ask_user / summary / user /
     // assistant) can pass the same value without recomputing the typeof guard.
     const timestamp = typeof m.createdAt === 'string' ? m.createdAt : undefined;
+    const messageId = typeof m.seqNo === 'number' && Number.isFinite(m.seqNo)
+      ? String(m.seqNo)
+      : undefined;
 
     if (msgType === 'COMPACT_BOUNDARY') {
       // Boundary is a structural marker for context slicing, not a user-visible card.
@@ -242,6 +249,7 @@ export function normalizeMessages(list: RawMessage[]): ChatMessage[] {
         content: displayText,
         attachments: attachmentRefs.length > 0 ? attachmentRefs : undefined,
         timestamp,
+        id: messageId,
       });
     } else if (m.role === 'assistant') {
       const toolCalls = toolUseBlocks.map((b: any) => ({
@@ -249,6 +257,9 @@ export function normalizeMessages(list: RawMessage[]): ChatMessage[] {
         name: b.name,
         input: b.input,
       }));
+      // Keep the row when it has only reasoning or attachments. In particular,
+      // generated artifacts may intentionally produce an attachment-only
+      // terminal assistant message.
       // CHAT-REASONING-PANEL: keep the row even when it has *only*
       // reasoningContent (no visible text + no toolCalls). The
       // ReasoningPanel above the (empty) text bubble is the user-visible
@@ -256,10 +267,12 @@ export function normalizeMessages(list: RawMessage[]): ChatMessage[] {
       // dropping the row here would silently swallow that signal.
       const hasReasoning =
         typeof m.reasoningContent === 'string' && m.reasoningContent.trim().length > 0;
-      if (!text.trim() && toolCalls.length === 0 && !hasReasoning) continue;
+      if (!text.trim() && toolCalls.length === 0 && !hasReasoning && attachmentRefs.length === 0) continue;
       result.push({
         role: 'assistant',
         content: text,
+        attachments: attachmentRefs.length > 0 ? attachmentRefs : undefined,
+        id: messageId,
         // m.toolCalls runtime 是 BE 推过来的 fallback 数组（不走 content blocks 路径时），
         // RawMessage.toolCalls 类型 unknown[]，此处 narrow 成 ChatMessage.toolCalls 期望的形态。
         // 不在 RawMessage 严格类型里的原因：fallback 路径形态不固定，类型贸然窄化反而 ripple 大。
@@ -278,15 +291,20 @@ export function normalizeMessages(list: RawMessage[]): ChatMessage[] {
 
 export function useChatMessages(activeSessionId: string | undefined) {
   const [rawMessages, setRawMessages] = useState<RawMessage[]>([]);
+  const [messageSessionId, setMessageSessionId] = useState(activeSessionId);
   const [streamingText, setStreamingText] = useState<string>('');
   const [streamingToolInputs, setStreamingToolInputs] = useState<Record<string, StreamingToolInput>>({});
   const [inflightTools, setInflightTools] = useState<Record<string, InflightTool>>({});
   const [loopSpans, setLoopSpans] = useState<LoopSpan[]>([]);
 
-  const messages = useMemo(() => normalizeMessages(rawMessages), [rawMessages]);
+  const messages = useMemo(
+    () => messageSessionId === activeSessionId ? normalizeMessages(rawMessages) : [],
+    [activeSessionId, messageSessionId, rawMessages],
+  );
 
   useEffect(() => {
     setRawMessages([]);
+    setMessageSessionId(activeSessionId);
     setStreamingText('');
     setStreamingToolInputs({});
     setInflightTools({});

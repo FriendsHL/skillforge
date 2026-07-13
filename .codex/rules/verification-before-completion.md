@@ -29,6 +29,13 @@ Before any success claim:
 - FE/BE contract claims require checking backend outer envelope shape against frontend API types and mocks. A passing frontend mock is not enough if the mock shape was invented.
 - New DTO/wire payload claims require either ObjectMapper roundtrip evidence or live curl raw JSON shape evidence when practical.
 - LLM provider connectivity claims require a direct provider probe or application-level request evidence, with secrets redacted.
+- iOS test claims require an installed simulator destination and `.xcresult`
+  evidence with non-zero executed tests and exact pass/fail counts.
+- Critical iOS interaction claims require a named XCUITest plus accessibility
+  assertions and stable visual inspection; a build or screenshot alone is insufficient.
+- Simulator evidence cannot prove signing, Keychain fidelity, camera, APNs,
+  LAN/Tailscale, attachments, or background behavior. Report each real-device
+  item as `PASS`, `NOT_RUN`, or `BLOCKED`.
 - Rule-migration claims require `rg --files .codex/rules`, `git diff --check`, and a coverage check against intended source files.
 
 ## Completion Gate Commands
@@ -36,4 +43,6 @@ Before any success claim:
 - Backend changes: `mvn -pl skillforge-server -am test` unless a narrower command is justified.
 - Core/provider/tool changes: include the relevant module in Maven, for example `mvn -pl skillforge-core,skillforge-server -am test`.
 - Frontend changes: `cd skillforge-dashboard && npx tsc --noEmit && npm run build`.
+- iOS changes: `cd skillforge-ios && xcodegen generate`, run the relevant tests
+  against an installed simulator, inspect `.xcresult`, then run a Release simulator build.
 - Rule/docs-only changes: no build is required, but run formatting/whitespace checks and inspect the diff.

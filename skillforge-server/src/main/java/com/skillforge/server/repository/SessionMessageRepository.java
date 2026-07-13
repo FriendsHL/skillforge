@@ -33,6 +33,13 @@ public interface SessionMessageRepository extends JpaRepository<SessionMessageEn
 
     Optional<SessionMessageEntity> findTopByTraceIdAndRoleOrderBySeqNoDesc(String traceId, String role);
 
+    @Query("SELECT m.contentJson FROM SessionMessageEntity m "
+            + "WHERE m.sessionId = :sessionId AND m.role = 'assistant' "
+            + "AND m.contentJson LIKE CONCAT('%', :attachmentId, '%')")
+    List<String> findContentJsonCandidates(
+            @Param("sessionId") String sessionId,
+            @Param("attachmentId") String attachmentId);
+
     Page<SessionMessageEntity> findBySessionIdAndSeqNoGreaterThanEqualOrderBySeqNoAsc(
             String sessionId, long seqNo, Pageable pageable);
 

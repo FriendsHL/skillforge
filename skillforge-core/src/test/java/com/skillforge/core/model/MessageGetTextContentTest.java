@@ -57,17 +57,23 @@ class MessageGetTextContentTest {
     }
 
     @Test
-    @DisplayName("image_ref and pdf_ref blocks render safe attachment placeholders")
+    @DisplayName("all five attachment refs render safe attachment placeholders")
     void attachmentRefBlocksRenderPlaceholders() {
         Message msg = new Message();
         msg.setRole(Message.Role.USER);
         msg.setContent(List.of(
                 ContentBlock.text("please inspect"),
                 ContentBlock.imageRef("att-1", "image/png", "screen.png"),
-                ContentBlock.pdfRef("att-2", "paper.pdf", 12)));
+                ContentBlock.pdfRef("att-2", "paper.pdf", 12),
+                ContentBlock.wordRef("att-3", "notes.docx"),
+                ContentBlock.excelRef("att-4", "data.xlsx", 2),
+                ContentBlock.csvRef("att-5", "rows.csv")));
 
         assertThat(msg.getTextContent())
-                .isEqualTo("please inspect\n[Image attachment: screen.png]\n[PDF attachment: paper.pdf]");
+                .isEqualTo("please inspect\n[Image attachment: screen.png]\n[PDF attachment: paper.pdf]"
+                        + "\n[Word document attachment: notes.docx]"
+                        + "\n[Excel workbook attachment: data.xlsx]"
+                        + "\n[CSV attachment: rows.csv]");
     }
 
     // -----------------------------------------------------------------------

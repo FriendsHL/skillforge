@@ -6,7 +6,18 @@ data/
 *.class
 *.jar
 *.log
+.env.local
+.env.*.local
 .claude/worktrees/
+.codeforge/
+logs/
+
+# Xcode / iOS
+skillforge-ios/build/
+skillforge-ios/DerivedData/
+skillforge-ios/*.xcodeproj/xcuserdata/
+skillforge-ios/*.xcworkspace/xcuserdata/
+*.xcuserstate
 
 # Obsidian
 docs/.obsidian/

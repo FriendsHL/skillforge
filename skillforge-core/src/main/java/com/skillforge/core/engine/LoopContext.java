@@ -38,6 +38,8 @@ public class LoopContext {
      */
     private String rootTraceId;
     private String workingDirectory;
+    /** Dedicated directory for deliverables; never substitutes for the agent repository/worktree. */
+    private String artifactOutputDirectory;
     private long totalInputTokens;
     private long totalOutputTokens;
     private int loopCount;
@@ -256,6 +258,14 @@ public class LoopContext {
 
     public void setWorkingDirectory(String workingDirectory) {
         this.workingDirectory = workingDirectory;
+    }
+
+    public String getArtifactOutputDirectory() {
+        return artifactOutputDirectory;
+    }
+
+    public void setArtifactOutputDirectory(String artifactOutputDirectory) {
+        this.artifactOutputDirectory = artifactOutputDirectory;
     }
 
     public long getTotalInputTokens() {

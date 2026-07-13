@@ -114,6 +114,8 @@ import com.skillforge.server.channel.platform.weixin.WeixinChannelAdapter;
 import com.skillforge.server.repository.ChannelConversationRepository;
 import com.skillforge.server.subagent.SubAgentRegistry;
 import com.skillforge.server.tool.channel.SendChannelFileTool;
+import com.skillforge.server.tool.PublishChatArtifactTool;
+import com.skillforge.server.service.ChatAttachmentService;
 import org.springframework.context.annotation.Lazy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -260,6 +262,16 @@ public class ToolBeansConfig {
                 objectMapper, attachmentsRoot);
         skillRegistry.registerTool(tool);
         log.info("Registered SendChannelFileTool into SkillRegistry");
+        return tool;
+    }
+
+    @Bean
+    public PublishChatArtifactTool publishChatArtifactTool(
+            ChatAttachmentService attachmentService,
+            SkillRegistry skillRegistry) {
+        PublishChatArtifactTool tool = new PublishChatArtifactTool(attachmentService);
+        skillRegistry.registerTool(tool);
+        log.info("Registered PublishChatArtifactTool into SkillRegistry");
         return tool;
     }
 

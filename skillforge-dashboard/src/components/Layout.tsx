@@ -31,6 +31,7 @@ const primaryNav: NavItem[] = [
   { key: 'memories', path: '/memories', label: 'Memory' },
   { key: 'traces', path: '/traces', label: 'Traces' },
   { key: 'channels', path: '/channels', label: 'Channels' },
+  { key: 'mobile', path: '/mobile-devices', label: 'Mobile' },
   { key: 'tasks', path: '/tasks', label: 'Tasks' },
   { key: 'insights', path: '/insights/patterns', label: 'Optimization' },
   { key: 'autoevolving', path: '/autoevolving', label: 'Auto-Evolving' },

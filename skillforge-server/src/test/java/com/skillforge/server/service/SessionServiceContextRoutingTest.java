@@ -5,6 +5,7 @@ import com.skillforge.core.model.Message;
 import com.skillforge.server.config.SessionMessageStoreProperties;
 import com.skillforge.server.entity.SessionEntity;
 import com.skillforge.server.entity.SessionMessageEntity;
+import com.skillforge.server.entity.SessionSummaryEntity;
 import com.skillforge.server.repository.AgentRepository;
 import com.skillforge.server.repository.SessionMessageRepository;
 import com.skillforge.server.repository.SessionRepository;
@@ -97,6 +98,27 @@ class SessionServiceContextRoutingTest {
         return e;
     }
 
+    private SessionMessageEntity row(long seq, String msgType, String role, String text,
+                                     Long compactedBySummaryId) {
+        SessionMessageEntity e = row(seq, msgType, role, text);
+        e.setCompactedBySummaryId(compactedBySummaryId);
+        return e;
+    }
+
+    private SessionSummaryEntity summary(long id, long startSeq, long endSeq, String text,
+                                         Long supersededBy) {
+        SessionSummaryEntity e = new SessionSummaryEntity();
+        e.setId(id);
+        e.setSessionId(SID);
+        e.setStartSeq(startSeq);
+        e.setEndSeq(endSeq);
+        e.setSummaryText(text);
+        e.setLevel("full");
+        e.setSource("engine-hard");
+        e.setSupersededBy(supersededBy);
+        return e;
+    }
+
     @Test
     @DisplayName("(a) REGRESSION GUARD: old-model session (boundary row, NO active summary), flag ON "
             + "→ legacy post-boundary slice, NOT full history")
@@ -162,6 +184,34 @@ class SessionServiceContextRoutingTest {
         // Confirms the derive branch ran (it consults active summaries; the legacy slice never does).
         verify(sessionSummaryRepository)
                 .findBySessionIdAndSupersededByIsNullOrderByStartSeqAsc(SID);
+    }
+
+    @Test
+    @DisplayName("(b2) active range collapses covered rows even when row markers are stale")
+    void newModelSession_activeRangeWinsOverStaleMarkers() {
+        sessionService.setRangeModelEnabled(true);
+        when(sessionSummaryRepository.existsBySessionIdAndSupersededByIsNull(SID)).thenReturn(true);
+        SessionSummaryEntity active = summary(2L, 0, 5, "ACTIVE SUMMARY", null);
+        when(sessionSummaryRepository.findBySessionIdAndSupersededByIsNullOrderByStartSeqAsc(SID))
+                .thenReturn(List.of(active));
+
+        List<SessionMessageEntity> rows = new ArrayList<>();
+        for (int i = 0; i <= 3; i++) {
+            rows.add(row(i, SessionService.MSG_TYPE_NORMAL, "user", "turn " + i, 1L));
+        }
+        rows.add(row(4, SessionService.MSG_TYPE_NORMAL, "user", "turn 4", 2L));
+        rows.add(row(5, SessionService.MSG_TYPE_NORMAL, "user", "turn 5", 2L));
+        rows.add(row(6, SessionService.MSG_TYPE_NORMAL, "user", "turn 6"));
+        rows.add(row(7, SessionService.MSG_TYPE_NORMAL, "user", "turn 7"));
+        stubRows(rows);
+
+        SessionService.ContextWithProvenance ctx = sessionService.getContextMessagesWithProvenance(SID);
+
+        assertThat(ctx.messages()).hasSize(3);
+        assertThat(ctx.messages().get(0).getContent()).isEqualTo("ACTIVE SUMMARY");
+        assertThat(ctx.messages().get(1).getTextContent()).isEqualTo("turn 6");
+        assertThat(ctx.messages().get(2).getTextContent()).isEqualTo("turn 7");
+        assertThat(ctx.provenance()).containsExactly(SessionService.PROVENANCE_SUMMARY, 6L, 7L);
     }
 
     @Test

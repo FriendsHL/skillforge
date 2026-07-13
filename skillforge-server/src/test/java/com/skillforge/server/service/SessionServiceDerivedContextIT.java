@@ -34,7 +34,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *   <li>multiple adjacent active summaries → one injected summary per run</li>
  *   <li>no summaries (flag-on session never compacted) → all rows uncovered, provenance = seq_nos</li>
  *   <li>SYSTEM_EVENT rows skipped</li>
- *   <li>a row marked by a SUPERSEDED summary is treated as uncovered (defensive)</li>
+ *   <li>active summary ranges, not stale markers, are authoritative for model-view collapse</li>
  *   <li>flag OFF → legacy boundary-slice {@link SessionService#getContextMessages} unchanged</li>
  * </ul>
  */
@@ -200,33 +200,30 @@ class SessionServiceDerivedContextIT extends AbstractPostgresIT {
     }
 
     @Test
-    @DisplayName("row marked by a SUPERSEDED summary is treated as uncovered (defensive)")
-    void supersededMarker_treatedAsUncovered() {
+    @DisplayName("active summary range is authoritative even when markers point at superseded summaries")
+    void activeRangeWinsOverStaleSupersededMarkers() {
         String sid = newSession();
-        for (int i = 0; i < 5; i++) {
-            appendRow(sid, Message.user("turn " + i)); // seq 0..4
+        for (int i = 0; i < 8; i++) {
+            appendRow(sid, Message.user("turn " + i)); // seq 0..7
         }
-        // First summary covers [0,1] then gets superseded by a rolling one covering [2,3].
-        // The P1 marker for rows 0,1 still points at the OLD (now superseded) summary id.
-        SessionSummaryEntity oldS = newSummary(sid, 0, 1, "OLD SUMMARY", null);
-        mark(sid, 0, 1, oldS.getId());
-        SessionSummaryEntity newS = newSummary(sid, 2, 3, "NEW SUMMARY", null);
-        mark(sid, 2, 3, newS.getId());
-        // Now supersede the old one.
-        sessionSummaryRepository.markSuperseded(oldS.getId(), newS.getId());
+        // Old markers point at a superseded summary for seq 0..3. The active rolling summary covers
+        // 0..5, but only rows 4..5 were stamped with the active marker. The model view must still
+        // collapse 0..5 exactly once from the active range, otherwise already-covered rows are
+        // re-exposed to the LLM.
+        SessionSummaryEntity oldS = newSummary(sid, 0, 3, "OLD SUMMARY", null);
+        mark(sid, 0, 3, oldS.getId());
+        SessionSummaryEntity active = newSummary(sid, 0, 5, "ACTIVE SUMMARY", null);
+        sessionSummaryRepository.markSuperseded(oldS.getId(), active.getId());
+        mark(sid, 4, 5, active.getId());
 
         SessionService.ContextWithProvenance ctx =
                 sessionService.getContextMessagesWithProvenance(sid);
 
-        // Rows 0,1 carry a superseded marker → emitted as real rows. Rows 2,3 collapse into
-        // NEW SUMMARY. Row 4 uncovered tail.
-        assertThat(ctx.messages()).hasSize(4); // [turn0, turn1, NEW SUMMARY, turn4]
-        assertThat(ctx.messages().get(0).getTextContent()).isEqualTo("turn 0");
-        assertThat(ctx.messages().get(1).getTextContent()).isEqualTo("turn 1");
-        assertThat(ctx.messages().get(2).getContent()).isEqualTo("NEW SUMMARY");
-        assertThat(ctx.messages().get(3).getTextContent()).isEqualTo("turn 4");
-        assertThat(ctx.provenance())
-                .containsExactly(0L, 1L, SessionService.PROVENANCE_SUMMARY, 4L);
+        assertThat(ctx.messages()).hasSize(3); // [ACTIVE SUMMARY, turn6, turn7]
+        assertThat(ctx.messages().get(0).getContent()).isEqualTo("ACTIVE SUMMARY");
+        assertThat(ctx.messages().get(1).getTextContent()).isEqualTo("turn 6");
+        assertThat(ctx.messages().get(2).getTextContent()).isEqualTo("turn 7");
+        assertThat(ctx.provenance()).containsExactly(SessionService.PROVENANCE_SUMMARY, 6L, 7L);
     }
 
     @Test

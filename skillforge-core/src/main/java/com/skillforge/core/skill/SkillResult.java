@@ -2,6 +2,10 @@ package com.skillforge.core.skill;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
 /**
  * Skill 执行结果。
  */
@@ -28,6 +32,7 @@ public class SkillResult {
     private String output;
     private String error;
     private ErrorType errorType;
+    private List<PublishedArtifact> artifacts = new ArrayList<>();
 
     public SkillResult() {
     }
@@ -44,6 +49,13 @@ public class SkillResult {
      */
     public static SkillResult success(String output) {
         return new SkillResult(true, output, null, null);
+    }
+
+    /** Creates a successful provider-visible result with out-of-band artifact metadata. */
+    public static SkillResult success(String output, List<PublishedArtifact> artifacts) {
+        SkillResult result = success(output);
+        result.setArtifacts(artifacts);
+        return result;
     }
 
     /**
@@ -90,5 +102,13 @@ public class SkillResult {
 
     public void setErrorType(ErrorType errorType) {
         this.errorType = errorType;
+    }
+
+    public List<PublishedArtifact> getArtifacts() {
+        return Collections.unmodifiableList(artifacts);
+    }
+
+    public void setArtifacts(List<PublishedArtifact> artifacts) {
+        this.artifacts = artifacts != null ? new ArrayList<>(artifacts) : new ArrayList<>();
     }
 }

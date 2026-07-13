@@ -22,7 +22,9 @@ import com.skillforge.server.repository.ModelUsageRepository;
 import com.skillforge.server.subagent.SubAgentRegistry;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -75,6 +77,12 @@ class ChatServiceMultimodalCapabilityCheckTest {
      * empty to model "no model supports vision yet".
      */
     private ChatService buildChatService(LlmProperties llmProperties) {
+        return buildChatService(llmProperties, null);
+    }
+
+    private ChatService buildChatService(
+            LlmProperties llmProperties,
+            ArtifactWorkspaceService artifactWorkspaceService) {
         agentService = mock(AgentService.class);
         sessionService = mock(SessionService.class);
         SkillRegistry skillRegistry = mock(SkillRegistry.class);
@@ -106,7 +114,8 @@ class ChatServiceMultimodalCapabilityCheckTest {
                 mock(org.springframework.context.ApplicationEventPublisher.class),
                 null /* reminderBuilder */,
                 chatAttachmentService,
-                llmProperties);
+                llmProperties,
+                artifactWorkspaceService);
     }
 
     @Test
@@ -238,6 +247,43 @@ class ChatServiceMultimodalCapabilityCheckTest {
                 any(Message.class),
                 anyList(), anyString(), anyLong(),
                 any(com.skillforge.core.engine.LoopContext.class));
+    }
+
+    @Test
+    void artifactWorkspaceUsesDedicatedContextFieldWithoutReplacingWorkingDirectory() {
+        LlmProperties props = new LlmProperties();
+        props.setProviders(new LinkedHashMap<>());
+        ArtifactWorkspaceService workspaceService = mock(ArtifactWorkspaceService.class);
+        Path artifactDirectory = Path.of("/artifact-output/session-1/trace-1");
+        when(workspaceService.create(eq(7L), eq("sess-artifact"), anyString()))
+                .thenReturn(artifactDirectory);
+        when(workspaceService.promptInstruction(artifactDirectory)).thenReturn("artifact prompt");
+        chatService = buildChatService(props, workspaceService);
+
+        SessionEntity session = newSession("sess-artifact", null);
+        AgentEntity agent = newAgent(100L, "text-model");
+        AgentDefinition definition = newDef("text-model");
+        when(sessionService.getSession("sess-artifact")).thenReturn(session);
+        when(agentService.getAgent(100L)).thenReturn(agent);
+        when(agentService.toAgentDefinition(agent)).thenReturn(definition);
+        when(sessionService.getSessionMessages("sess-artifact")).thenReturn(new ArrayList<>());
+        when(sessionService.getContextMessages("sess-artifact")).thenReturn(new ArrayList<>());
+        when(sessionService.getFullHistory("sess-artifact")).thenReturn(new ArrayList<>());
+        LoopResult result = new LoopResult();
+        result.setMessages(new ArrayList<>());
+        result.setToolCalls(new ArrayList<>());
+        when(agentLoopEngine.run(any(), anyString(), any(), anyList(), anyString(), anyLong(), any()))
+                .thenReturn(result);
+
+        chatService.chatAsync("sess-artifact", "create report", 7L);
+
+        ArgumentCaptor<com.skillforge.core.engine.LoopContext> contextCaptor =
+                ArgumentCaptor.forClass(com.skillforge.core.engine.LoopContext.class);
+        verify(agentLoopEngine).run(any(), anyString(), any(), anyList(), anyString(), anyLong(),
+                contextCaptor.capture());
+        assertThat(contextCaptor.getValue().getWorkingDirectory()).isNull();
+        assertThat(contextCaptor.getValue().getArtifactOutputDirectory())
+                .isEqualTo(artifactDirectory.toString());
     }
 
     // -------------------------- helpers --------------------------

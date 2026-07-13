@@ -34,6 +34,7 @@ import com.skillforge.core.model.SkillDefinition;
 import com.skillforge.core.model.ToolSchema;
 import com.skillforge.core.model.ToolUseBlock;
 import com.skillforge.core.skill.SkillContext;
+import com.skillforge.core.skill.PublishedArtifact;
 import com.skillforge.core.skill.SkillRegistry;
 import com.skillforge.core.skill.SkillResult;
 import com.skillforge.core.skill.Tool;
@@ -463,6 +464,8 @@ public class AgentLoopEngine {
         messages = context.getMessages();
         // 确保 context 引用是 effectively final（beforeLoop 可能替换了 context 对象）
         final LoopContext loopCtx = context;
+        List<PublishedArtifact> pendingArtifacts = new ArrayList<>();
+        List<Message> deferredBroadcastMessages = new ArrayList<>();
 
         // BUG-B: user-turn entry — every new user message is a fresh chance for compaction.
         // Clear any breaker state carried over from the previous turn so recovery does not
@@ -1132,17 +1135,16 @@ public class AgentLoopEngine {
             // OBS-1 TraceLlmCallObserver continues to write t_llm_span (kind='llm') via
             // its hook into the LLM provider streaming path — no logic change here.
 
-            // d. 将 assistant 响应加入 messages 并广播
+            // d. 将 assistant 响应加入 messages. Artifact-bearing terminal messages are
+            // broadcast by ChatService only after persistence reconciliation.
             Message assistantMsg = buildAssistantMessage(response);
             messages.add(assistantMsg);
-            if (broadcaster != null && loopCtx.getSessionId() != null) {
-                broadcaster.messageAppended(loopCtx.getSessionId(), loopCtx.getTraceId(), assistantMsg);
-            }
 
             // e. 判断是否 tool_use
             if (!response.isToolUse()) {
                 // Before breaking, check if user queued new messages while we were streaming
                 if (injectQueuedMessages(loopCtx, messages)) {
+                    broadcastMessageAppended(loopCtx, assistantMsg);
                     if (loopCtx.getLoopCount() + 1 >= loopCtx.getMaxLoops()) {
                         log.warn("Queued message(s) arrived but loop is at max iterations, appending without LLM processing");
                         break;
@@ -1150,17 +1152,25 @@ public class AgentLoopEngine {
                     loopCtx.incrementLoopCount();
                     continue;
                 }
+                if (mergeArtifactsIntoAssistant(assistantMsg, pendingArtifacts)) {
+                    deferredBroadcastMessages.add(assistantMsg);
+                } else {
+                    broadcastMessageAppended(loopCtx, assistantMsg);
+                }
                 // 循环结束
                 log.info("AgentLoop completed with text response at loop {}", loopCtx.getLoopCount() + 1);
                 break;
             }
+            broadcastMessageAppended(loopCtx, assistantMsg);
 
             // 处理 tool_use: 先把 ask_user / compact_context 从列表里拆出来走特殊分支,其余并行执行
             List<ToolUseBlock> toolUseBlocks = response.getValidToolUseBlocks();
             log.info("Processing {} tool call(s) at loop {}", toolUseBlocks.size(), loopCtx.getLoopCount() + 1);
 
-            List<CompletableFuture<Message>> futures = new ArrayList<>();
-            Map<Integer, Message> askResults = new HashMap<>();
+            List<CompletableFuture<ToolExecutionOutcome>> futures = new ArrayList<>();
+            Map<Integer, CompletableFuture<ToolExecutionOutcome>> futuresByIndex = new HashMap<>();
+            java.util.Set<Integer> timedOutToolIndexes = new java.util.HashSet<>();
+            Map<Integer, ToolExecutionOutcome> askResults = new HashMap<>();
             for (int i = 0; i < toolUseBlocks.size(); i++) {
                 ToolUseBlock block = toolUseBlocks.get(i);
                 if (AskUserTool.NAME.equals(block.getName())) {
@@ -1176,7 +1186,8 @@ public class AgentLoopEngine {
                             sessionId, loopCtx, agentDef, askInput, askOutput,
                             askStart, askEnd, loopCtx.getLoopCount(), true, null,
                             obsEventCount);
-                    LoopResult waiting = buildResult(loopCtx, messages, "", toolCallRecords);
+                    insertAttachmentOnlyBeforeLastMessage(messages, pendingArtifacts, deferredBroadcastMessages);
+                    LoopResult waiting = buildResult(loopCtx, messages, "", toolCallRecords, deferredBroadcastMessages);
                     waiting.setStatus("waiting_user");
                     waiting.setPendingControl(control);
                     // OBS-2 M1 §C.8 path #7: ASK_USER waiting_user → finalize trace status='ok'.
@@ -1191,7 +1202,8 @@ public class AgentLoopEngine {
                         recordConfirmationTrace("INSTALL_CONFIRM", "install_confirmation", block, loopCtx,
                                 rootSpan, icStart, "waiting_user:" + gate.pendingControl.getControlId(),
                                 agentDef, "install_confirm", obsEventCount);
-                        LoopResult waiting = buildResult(loopCtx, messages, "", toolCallRecords);
+                        insertAttachmentOnlyBeforeLastMessage(messages, pendingArtifacts, deferredBroadcastMessages);
+                        LoopResult waiting = buildResult(loopCtx, messages, "", toolCallRecords, deferredBroadcastMessages);
                         waiting.setStatus("waiting_user");
                         waiting.setPendingControl(gate.pendingControl);
                         // OBS-2 M4: legacy AGENT_LOOP root span (t_trace_span) write path closed.
@@ -1200,8 +1212,9 @@ public class AgentLoopEngine {
                                 obsToolCallCount, obsEventCount);
                         return waiting;
                     }
-                    Message result = gate.immediateResult;
-                    askResults.put(i, result);
+                    ToolExecutionOutcome outcome = gate.immediateOutcome;
+                    Message result = outcome.toolResult();
+                    askResults.put(i, outcome);
                     String icInput = block.getInput() != null ? block.getInput().toString() : "";
                     String icOutput = result != null ? result.getTextContent() : "";
                     String icSpanId = UUID.randomUUID().toString();
@@ -1224,7 +1237,8 @@ public class AgentLoopEngine {
                                 rootSpan, confirmStart,
                                 "waiting_user:" + gate.pendingControl.getControlId(),
                                 agentDef, "agent_confirm", obsEventCount);
-                        LoopResult waiting = buildResult(loopCtx, messages, "", toolCallRecords);
+                        insertAttachmentOnlyBeforeLastMessage(messages, pendingArtifacts, deferredBroadcastMessages);
+                        LoopResult waiting = buildResult(loopCtx, messages, "", toolCallRecords, deferredBroadcastMessages);
                         waiting.setStatus("waiting_user");
                         waiting.setPendingControl(gate.pendingControl);
                         // OBS-2 M4: legacy AGENT_LOOP root span (t_trace_span) write path closed.
@@ -1233,8 +1247,9 @@ public class AgentLoopEngine {
                                 obsToolCallCount, obsEventCount);
                         return waiting;
                     }
-                    Message result = gate.immediateResult;
-                    askResults.put(i, result);
+                    ToolExecutionOutcome outcome = gate.immediateOutcome;
+                    Message result = outcome.toolResult();
+                    askResults.put(i, outcome);
                     String confirmName = "UpdateAgent".equals(block.getName())
                             ? "update_agent_confirmation"
                             : "create_agent_confirmation";
@@ -1251,7 +1266,7 @@ public class AgentLoopEngine {
                 } else if (ContextCompactTool.NAME.equals(block.getName())) {
                     long compactStart = System.currentTimeMillis();
                     Message result = handleCompactContext(block, loopCtx);
-                    askResults.put(i, result);
+                    askResults.put(i, ToolExecutionOutcome.withoutArtifacts(result));
                     String compactInput = block.getInput() != null ? block.getInput().toString() : "";
                     String compactOutput = result != null ? result.getTextContent() : "";
                     String compactSpanId = UUID.randomUUID().toString();
@@ -1272,12 +1287,14 @@ public class AgentLoopEngine {
                     }
                     final long toolStart = System.currentTimeMillis();
                     final int currentIteration = loopCtx.getLoopCount();
-                    futures.add(CompletableFuture.supplyAsync(() -> {
+                    CompletableFuture<ToolExecutionOutcome> future = CompletableFuture.supplyAsync(() -> {
+                        ToolExecutionOutcome outcome = null;
                         Message r = null;
                         String status = "success";
                         String errorMsg = null;
                         try {
-                            r = executeToolCall(fblock, loopCtx, toolCallRecords);
+                            outcome = executeToolCallOutcome(fblock, loopCtx, toolCallRecords, null);
+                            r = outcome.toolResult();
                             if (r != null && r.getContent() instanceof java.util.List<?> blocks) {
                                 for (Object o : blocks) {
                                     if (o instanceof com.skillforge.core.model.ContentBlock cb && Boolean.TRUE.equals(cb.getIsError())) {
@@ -1291,6 +1308,7 @@ public class AgentLoopEngine {
                             status = "error";
                             errorMsg = e.getMessage();
                             r = Message.toolResult(fblock.getId(), "Tool execution error: " + e.getMessage(), true);
+                            outcome = ToolExecutionOutcome.withoutArtifacts(r);
                         } finally {
                             long dur = System.currentTimeMillis() - toolStart;
                             // Record tool call for anti-runaway tracking
@@ -1303,6 +1321,7 @@ public class AgentLoopEngine {
                             if (r != null && !truncatedOutput.equals(toolOutputText)) {
                                 // 重建截断后的 tool_result message
                                 r = Message.toolResult(fblock.getId(), truncatedOutput, "error".equals(status));
+                                outcome = ToolExecutionOutcome.withoutArtifacts(r);
                                 log.info("Truncated tool result for {}: {}→{} chars",
                                         fblock.getName(), toolOutputText.length(), truncatedOutput.length());
                             }
@@ -1325,10 +1344,14 @@ public class AgentLoopEngine {
                                     "success".equals(status), errorMsg);
                         }
                         synchronized (askResults) {
-                            askResults.put(idx, r);
+                            askResults.put(idx, outcome != null
+                                    ? outcome
+                                    : ToolExecutionOutcome.withoutArtifacts(r));
                         }
-                        return r;
-                    }));
+                        return outcome != null ? outcome : ToolExecutionOutcome.withoutArtifacts(r);
+                    });
+                    futures.add(future);
+                    futuresByIndex.put(idx, future);
                 }
             }
 
@@ -1338,27 +1361,34 @@ public class AgentLoopEngine {
                         .get(120, java.util.concurrent.TimeUnit.SECONDS);
             } catch (java.util.concurrent.TimeoutException e) {
                 log.warn("Tool execution timed out after 120s, cancelling remaining futures");
+                futuresByIndex.forEach((index, future) -> {
+                    if (!future.isDone()) timedOutToolIndexes.add(index);
+                });
                 futures.forEach(f -> f.cancel(true));
             } catch (java.util.concurrent.ExecutionException e) {
                 log.error("Tool execution failed", e.getCause());
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 log.warn("Tool execution wait interrupted, cancelling futures");
+                futuresByIndex.forEach((index, future) -> {
+                    if (!future.isDone()) timedOutToolIndexes.add(index);
+                });
                 futures.forEach(f -> f.cancel(true));
             }
 
-            // 按原顺序加入 messages + 广播; 为超时未完成的工具补充 error tool_result
+            // Append every paired tool_result first, in original call order.
+            List<ToolExecutionOutcome> orderedOutcomes = new ArrayList<>(toolUseBlocks.size());
             for (int i = 0; i < toolUseBlocks.size(); i++) {
-                Message toolResult = askResults.get(i);
-                if (toolResult == null) {
-                    // Tool did not complete (timed out) — inject error tool_result
-                    toolResult = Message.toolResult(toolUseBlocks.get(i).getId(),
-                            "Tool execution timed out after 120 seconds", true);
-                }
+                ToolExecutionOutcome outcome = orderedOutcome(
+                        i, toolUseBlocks.get(i), askResults, timedOutToolIndexes);
+                orderedOutcomes.add(outcome);
+                Message toolResult = outcome.toolResult();
                 messages.add(toolResult);
-                if (broadcaster != null && loopCtx.getSessionId() != null) {
-                    broadcaster.messageAppended(loopCtx.getSessionId(), loopCtx.getTraceId(), toolResult);
-                }
+                broadcastMessageAppended(loopCtx, toolResult);
+            }
+            // Only after all pairs are closed, collect successful artifacts in that same order.
+            for (ToolExecutionOutcome outcome : orderedOutcomes) {
+                pendingArtifacts.addAll(outcome.artifacts());
             }
 
             // f. loopCount++
@@ -1376,7 +1406,8 @@ public class AgentLoopEngine {
 
         // 取消退出
         if (cancelled) {
-            LoopResult result = buildResult(loopCtx, messages, "[Cancelled by user]", toolCallRecords);
+            appendAttachmentOnlyMessage(messages, pendingArtifacts, deferredBroadcastMessages);
+            LoopResult result = buildResult(loopCtx, messages, "[Cancelled by user]", toolCallRecords, deferredBroadcastMessages);
             result.setStatus("cancelled");
             // OBS-2 M4: legacy AGENT_LOOP root span (t_trace_span) write path closed.
             // OBS-2 M1 §C.8 path #1: cancelled.
@@ -1400,7 +1431,8 @@ public class AgentLoopEngine {
                 reason = "duration_exceeded";
                 msg = "Duration limit exceeded (" + (loopCtx.getElapsedMs() / 1000) + "s). Providing best answer with current information.";
             }
-            LoopResult result = buildResult(loopCtx, messages, msg, toolCallRecords);
+            appendAttachmentOnlyMessage(messages, pendingArtifacts, deferredBroadcastMessages);
+            LoopResult result = buildResult(loopCtx, messages, msg, toolCallRecords, deferredBroadcastMessages);
             result.setStatus(reason);
             // OBS-2 M4: legacy AGENT_LOOP root span (t_trace_span) write path closed.
             // OBS-2 M1 §C.8 path #2/#3/#4: budget / duration / max_tokens exhausted.
@@ -1415,7 +1447,8 @@ public class AgentLoopEngine {
             String limitMsg = "I've reached the maximum number of processing steps (" + loopCtx.getMaxLoops()
                     + "). Please try breaking your request into smaller parts.";
             // OBS-2 M4: legacy AGENT_LOOP root span (t_trace_span) write path closed.
-            LoopResult maxLoopsResult = buildResult(loopCtx, messages, limitMsg, toolCallRecords);
+            appendAttachmentOnlyMessage(messages, pendingArtifacts, deferredBroadcastMessages);
+            LoopResult maxLoopsResult = buildResult(loopCtx, messages, limitMsg, toolCallRecords, deferredBroadcastMessages);
             maxLoopsResult.setStatus("max_loops_reached");
             // OBS-2 M1 §C.8 path #5: max_loops reached.
             finalizeTraceSafe(loopCtx, "error", "max_loops", obsLoopStartMs,
@@ -1438,7 +1471,8 @@ public class AgentLoopEngine {
         // OBS-2 M1 §C.8 path #6 / #10 (normal abortToolUse): normal exit → status='ok'.
         finalizeTraceSafe(loopCtx, "ok", null, obsLoopStartMs,
                 obsToolCallCount, obsEventCount);
-        return buildResult(loopCtx, messages, finalText, toolCallRecords);
+        appendAttachmentOnlyMessage(messages, pendingArtifacts, deferredBroadcastMessages);
+        return buildResult(loopCtx, messages, finalText, toolCallRecords, deferredBroadcastMessages);
     }
 
     /**
@@ -2004,7 +2038,7 @@ public class AgentLoopEngine {
         if (sessionConfirmCache != null
                 && sessionConfirmCache.isApproved(rootSid, installTool, installTarget)) {
             log.info("Install cache hit: rootSid={} tool={} target={}", rootSid, installTool, installTarget);
-            return ConfirmationGate.immediate(runInstallSyncWithBroadcast(block, loopCtx, toolCallRecords));
+            return ConfirmationGate.immediate(runInstallSyncOutcomeWithBroadcast(block, loopCtx, toolCallRecords));
         }
 
         // 无 prompter 配置 → 保守 fail-closed(同 SafetySkillHook 的 null path)
@@ -2305,16 +2339,20 @@ public class AgentLoopEngine {
     }
 
     private static final class ConfirmationGate {
-        private final Message immediateResult;
+        private final ToolExecutionOutcome immediateOutcome;
         private final InteractiveControlRequest pendingControl;
 
-        private ConfirmationGate(Message immediateResult, InteractiveControlRequest pendingControl) {
-            this.immediateResult = immediateResult;
+        private ConfirmationGate(ToolExecutionOutcome immediateOutcome, InteractiveControlRequest pendingControl) {
+            this.immediateOutcome = immediateOutcome;
             this.pendingControl = pendingControl;
         }
 
         static ConfirmationGate immediate(Message message) {
-            return new ConfirmationGate(message, null);
+            return immediate(ToolExecutionOutcome.withoutArtifacts(message));
+        }
+
+        static ConfirmationGate immediate(ToolExecutionOutcome outcome) {
+            return new ConfirmationGate(outcome, null);
         }
 
         static ConfirmationGate pending(InteractiveControlRequest control) {
@@ -2346,19 +2384,32 @@ public class AgentLoopEngine {
         return runToolSyncWithBroadcast(block, loopCtx, toolCallRecords, null);
     }
 
+    private ToolExecutionOutcome runInstallSyncOutcomeWithBroadcast(ToolUseBlock block, LoopContext loopCtx,
+                                                                    List<ToolCallRecord> toolCallRecords) {
+        return runToolSyncOutcomeWithBroadcast(block, loopCtx, toolCallRecords, null);
+    }
+
     private Message runToolSyncWithBroadcast(ToolUseBlock block, LoopContext loopCtx,
                                              List<ToolCallRecord> toolCallRecords,
                                              String approvalToken) {
+        return runToolSyncOutcomeWithBroadcast(block, loopCtx, toolCallRecords, approvalToken).toolResult();
+    }
+
+    private ToolExecutionOutcome runToolSyncOutcomeWithBroadcast(ToolUseBlock block, LoopContext loopCtx,
+                                                                 List<ToolCallRecord> toolCallRecords,
+                                                                 String approvalToken) {
         String sid = loopCtx.getSessionId();
         long start = System.currentTimeMillis();
         if (broadcaster != null && sid != null) {
             broadcaster.toolStarted(sid, block.getId(), block.getName(), block.getInput());
         }
+        ToolExecutionOutcome outcome = null;
         Message r = null;
         String status = "success";
         String errorMsg = null;
         try {
-            r = executeToolCall(block, loopCtx, toolCallRecords, approvalToken);
+            outcome = executeToolCallOutcome(block, loopCtx, toolCallRecords, approvalToken);
+            r = outcome.toolResult();
             if (r != null && r.getContent() instanceof java.util.List<?> blocks) {
                 for (Object o : blocks) {
                     if (o instanceof com.skillforge.core.model.ContentBlock cb
@@ -2369,12 +2420,12 @@ public class AgentLoopEngine {
                     }
                 }
             }
-            return r;
+            return outcome;
         } catch (Exception e) {
             status = "error";
             errorMsg = e.getMessage();
-            return Message.toolResult(block.getId(),
-                    "Tool execution error: " + e.getMessage(), true);
+            return ToolExecutionOutcome.withoutArtifacts(Message.toolResult(block.getId(),
+                    "Tool execution error: " + e.getMessage(), true));
         } finally {
             long dur = System.currentTimeMillis() - start;
             loopCtx.recordToolCall(block.getName());
@@ -2503,17 +2554,18 @@ public class AgentLoopEngine {
         if (loopCtx == null || messages == null) {
             return messages;
         }
+        List<Message> sanitized = AssistantAttachmentRefSanitizer.sanitize(messages);
         MessageMaterializer materializer = loopCtx.getMessageMaterializer();
         if (materializer == null) {
-            return messages;
+            return sanitized;
         }
         try {
-            List<Message> expanded = materializer.expandForProvider(loopCtx.getSessionId(), messages);
-            return expanded != null ? expanded : messages;
+            List<Message> expanded = materializer.expandForProvider(loopCtx.getSessionId(), sanitized);
+            return expanded != null ? expanded : sanitized;
         } catch (Exception e) {
-            log.warn("MessageMaterializer.expandForProvider failed (sessionId={}); falling back to raw messages: {}",
+            log.warn("MessageMaterializer.expandForProvider failed (sessionId={}); falling back to sanitized messages: {}",
                     loopCtx.getSessionId(), e.toString());
-            return messages;
+            return sanitized;
         }
     }
 
@@ -2758,6 +2810,21 @@ public class AgentLoopEngine {
     Message executeToolCall(ToolUseBlock block, LoopContext loopContext,
                             List<ToolCallRecord> toolCallRecords,
                             String approvalToken) {
+        return executeToolCall(block, loopContext, toolCallRecords, approvalToken, null);
+    }
+
+    ToolExecutionOutcome executeToolCallOutcome(ToolUseBlock block, LoopContext loopContext,
+                                                List<ToolCallRecord> toolCallRecords,
+                                                String approvalToken) {
+        List<PublishedArtifact> artifacts = new ArrayList<>();
+        Message toolResult = executeToolCall(block, loopContext, toolCallRecords, approvalToken, artifacts);
+        return new ToolExecutionOutcome(toolResult, artifacts);
+    }
+
+    private Message executeToolCall(ToolUseBlock block, LoopContext loopContext,
+                                    List<ToolCallRecord> toolCallRecords,
+                                    String approvalToken,
+                                    List<PublishedArtifact> artifactSink) {
         String skillName = block.getName();
         String toolUseId = block.getId();
         Map<String, Object> input = block.getInput() != null ? block.getInput() : Collections.emptyMap();
@@ -2852,6 +2919,7 @@ public class AgentLoopEngine {
                         loopContext.getWorkingDirectory(),
                         loopContext.getSessionId(),
                         loopContext.getUserId());
+                skillContext.setArtifactOutputDirectory(loopContext.getArtifactOutputDirectory());
                 skillContext.setToolUseId(toolUseId);
                 skillContext.setApprovalToken(approvalToken);
                 // Memory v2 (PR-2): forward already-injected memory ids so tools (memory_search)
@@ -2901,13 +2969,18 @@ public class AgentLoopEngine {
                 }
 
                 String output = result.isSuccess() ? result.getOutput() : result.getError();
-                output = ToolResultTruncator.truncate(output);
+                String truncatedOutput = ToolResultTruncator.truncate(output);
+                boolean outputTruncated = !java.util.Objects.equals(output, truncatedOutput);
+                output = truncatedOutput;
                 toolCallRecords.add(new ToolCallRecord(skillName, input, output, result.isSuccess(), duration, startTime));
                 log.debug("Tool '{}' executed, success={}, duration={}ms", skillName, result.isSuccess(), duration);
                 String errorType = (!result.isSuccess() && result.getErrorType() != null)
                         ? result.getErrorType().name()
                         : null;
                 recordTelemetry(skillName, result.isSuccess(), errorType);
+                if (artifactSink != null && result.isSuccess() && !outputTruncated) {
+                    artifactSink.addAll(result.getArtifacts());
+                }
                 return Message.toolResult(toolUseId, output, !result.isSuccess(), errorType);
             }
 
@@ -2942,9 +3015,103 @@ public class AgentLoopEngine {
     /**
      * 构建 LoopResult。
      */
+    private void broadcastMessageAppended(LoopContext context, Message message) {
+        if (broadcaster != null && context.getSessionId() != null) {
+            broadcaster.messageAppended(context.getSessionId(), context.getTraceId(), message);
+        }
+    }
+
+    static ToolExecutionOutcome orderedOutcome(int index, ToolUseBlock toolCall,
+                                               Map<Integer, ToolExecutionOutcome> outcomes,
+                                               java.util.Set<Integer> timedOutIndexes) {
+        ToolExecutionOutcome outcome = timedOutIndexes.contains(index) ? null : outcomes.get(index);
+        if (outcome != null && outcome.toolResult() != null) return outcome;
+        return ToolExecutionOutcome.withoutArtifacts(Message.toolResult(
+                toolCall.getId(), "Tool execution timed out after 120 seconds", true));
+    }
+
+    private boolean mergeArtifactsIntoAssistant(Message assistant,
+                                                List<PublishedArtifact> pendingArtifacts) {
+        if (pendingArtifacts.isEmpty()) return false;
+        List<ContentBlock> refs = artifactRefs(pendingArtifacts);
+        pendingArtifacts.clear();
+        if (refs.isEmpty()) return false;
+
+        List<Object> blocks = new ArrayList<>();
+        if (assistant.getContent() instanceof String text) {
+            if (!text.isEmpty()) blocks.add(ContentBlock.text(text));
+        } else if (assistant.getContent() instanceof List<?> existing) {
+            blocks.addAll(existing);
+        }
+        blocks.addAll(refs);
+        assistant.setContent(blocks);
+        return true;
+    }
+
+    private void appendAttachmentOnlyMessage(List<Message> messages,
+                                             List<PublishedArtifact> pendingArtifacts,
+                                             List<Message> deferredBroadcastMessages) {
+        if (pendingArtifacts.isEmpty()) return;
+        Message attachmentOnly = new Message();
+        attachmentOnly.setRole(Message.Role.ASSISTANT);
+        attachmentOnly.setContent(new ArrayList<ContentBlock>());
+        if (mergeArtifactsIntoAssistant(attachmentOnly, pendingArtifacts)) {
+            messages.add(attachmentOnly);
+            deferredBroadcastMessages.add(attachmentOnly);
+        }
+    }
+
+    private void insertAttachmentOnlyBeforeLastMessage(List<Message> messages,
+                                                       List<PublishedArtifact> pendingArtifacts,
+                                                       List<Message> deferredBroadcastMessages) {
+        int previousSize = messages.size();
+        appendAttachmentOnlyMessage(messages, pendingArtifacts, deferredBroadcastMessages);
+        if (messages.size() > previousSize && previousSize > 0) {
+            Message attachmentOnly = messages.remove(messages.size() - 1);
+            messages.add(previousSize - 1, attachmentOnly);
+        }
+    }
+
+    private List<ContentBlock> artifactRefs(List<PublishedArtifact> artifacts) {
+        List<ContentBlock> refs = new ArrayList<>(artifacts.size());
+        for (PublishedArtifact artifact : artifacts) {
+            ContentBlock ref = artifactRef(artifact);
+            if (ref != null) refs.add(ref);
+        }
+        return refs;
+    }
+
+    private ContentBlock artifactRef(PublishedArtifact artifact) {
+        if (artifact == null || artifact.getAttachmentId() == null
+                || artifact.getAttachmentId().isBlank()) {
+            log.warn("Ignoring published artifact without attachmentId");
+            return null;
+        }
+        ContentBlock ref;
+        String type = artifact.getBlockType();
+        if ("image_ref".equals(type)) {
+            ref = ContentBlock.imageRef(artifact.getAttachmentId(), artifact.getMimeType(), artifact.getFilename());
+        } else if ("pdf_ref".equals(type)) {
+            ref = ContentBlock.pdfRef(artifact.getAttachmentId(), artifact.getFilename(), artifact.getPageCount());
+        } else if ("word_ref".equals(type)) {
+            ref = ContentBlock.wordRef(artifact.getAttachmentId(), artifact.getFilename());
+        } else if ("excel_ref".equals(type)) {
+            ref = ContentBlock.excelRef(artifact.getAttachmentId(), artifact.getFilename(), artifact.getSheetCount());
+        } else if ("csv_ref".equals(type)) {
+            ref = ContentBlock.csvRef(artifact.getAttachmentId(), artifact.getFilename());
+        } else {
+            log.warn("Ignoring published artifact with unsupported blockType={}", type);
+            return null;
+        }
+        ref.setMimeType(artifact.getMimeType());
+        ref.setCaption(artifact.getCaption());
+        return ref;
+    }
+
     private LoopResult buildResult(LoopContext context, List<Message> messages,
-                                   String finalResponse, List<ToolCallRecord> toolCallRecords) {
-        return new LoopResult(
+                                   String finalResponse, List<ToolCallRecord> toolCallRecords,
+                                   List<Message> deferredBroadcastMessages) {
+        LoopResult result = new LoopResult(
                 finalResponse,
                 messages,
                 context.getTotalInputTokens(),
@@ -2952,6 +3119,8 @@ public class AgentLoopEngine {
                 context.getLoopCount(),
                 new ArrayList<>(toolCallRecords)
         );
+        result.setDeferredBroadcastMessages(deferredBroadcastMessages);
+        return result;
     }
 
     /**

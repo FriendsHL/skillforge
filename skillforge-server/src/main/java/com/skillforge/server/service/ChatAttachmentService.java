@@ -14,14 +14,31 @@ import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.text.PDFTextStripper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
+import java.nio.ByteBuffer;
+import java.nio.channels.SeekableByteChannel;
+import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
+import java.nio.file.SecureDirectoryStream;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
+import java.nio.file.attribute.BasicFileAttributeView;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.security.DigestInputStream;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
@@ -29,10 +46,12 @@ import java.util.Base64;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.HexFormat;
+import java.util.function.Consumer;
 import java.util.stream.Stream;
 
 @Service
@@ -111,11 +130,11 @@ public class ChatAttachmentService implements MessageMaterializer {
     public static final String CSV_NOT_TEXT = "CSV_NOT_TEXT";
 
     // ─── Wave 3 WORD-EXCEL MIME allowlist (top-of-file for visibility) ───
-    static final String MIME_DOC = "application/msword";
-    static final String MIME_DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-    static final String MIME_XLS = "application/vnd.ms-excel";
-    static final String MIME_XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-    static final String MIME_CSV = "text/csv";
+    static final String MIME_DOC = AttachmentTypeDetector.MIME_DOC;
+    static final String MIME_DOCX = AttachmentTypeDetector.MIME_DOCX;
+    static final String MIME_XLS = AttachmentTypeDetector.MIME_XLS;
+    static final String MIME_XLSX = AttachmentTypeDetector.MIME_XLSX;
+    static final String MIME_CSV = AttachmentTypeDetector.MIME_CSV;
 
     /**
      * Wave 2 PDF-SCAN-FALLBACK error code — recorded on
@@ -141,51 +160,27 @@ public class ChatAttachmentService implements MessageMaterializer {
      */
     private static final int MAX_PDF_PAGES = 20;
 
-    /**
-     * MULTIMODAL-MVP r2 B1: magic-byte signatures for image / PDF detection. We
-     * never trust {@code MultipartFile.getContentType()} alone (attacker-controlled
-     * HTTP header). The server-detected kind is what lands in the DB row.
-     *
-     * <p>Detection is intentionally simple — magic bytes were chosen for formats we
-     * accept (no polyglot detection). Apache Tika would be more thorough but it
-     * pulls in 20+ MB of transitive deps, not justified for 4 file types.</p>
-     */
-    private static final byte[] PNG_MAGIC = new byte[]{(byte) 0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n'};
-    private static final byte[] JPEG_MAGIC = new byte[]{(byte) 0xFF, (byte) 0xD8, (byte) 0xFF};
-    private static final byte[] WEBP_RIFF = new byte[]{'R', 'I', 'F', 'F'};
-    private static final byte[] WEBP_WEBP = new byte[]{'W', 'E', 'B', 'P'};
-    private static final byte[] PDF_MAGIC = new byte[]{'%', 'P', 'D', 'F', '-'};
-
-    /**
-     * Wave 3 WORD-EXCEL: ZIP local file header. Both {@code .docx} and {@code .xlsx}
-     * are PKZIP-wrapped OOXML packages — first 4 bytes are {@code PK\x03\x04}. Unlike
-     * PNG / JPEG / PDF, we <em>cannot</em> distinguish docx vs xlsx from the leader
-     * alone (and reading the central directory + content_types.xml is heavy).
-     *
-     * <p><b>Pragmatic policy</b>: when magic bytes are ZIP, defer kind binding to
-     * the client {@code Content-Type} header (the FE allowlist gates to docx /
-     * xlsx MIMEs specifically before sending). The server validates: detected =
-     * ZIP + header in {@link #MIME_DOCX} / {@link #MIME_XLSX} → accept and bind
-     * kind from header. Generic {@code application/zip} or absent header → reject.
-     */
-    private static final byte[] ZIP_MAGIC = new byte[]{'P', 'K', 0x03, 0x04};
-
-    /**
-     * Wave 3 WORD-EXCEL: OLE Compound File Binary (CFB) signature. Used by legacy
-     * {@code .doc} and {@code .xls}. Same as ZIP-OOXML, we can't tell {@code .doc}
-     * from {@code .xls} from the leader alone — defer to Content-Type the same way.
-     */
-    private static final byte[] OLE_MAGIC = new byte[]{
-            (byte) 0xD0, (byte) 0xCF, (byte) 0x11, (byte) 0xE0,
-            (byte) 0xA1, (byte) 0xB1, (byte) 0x1A, (byte) 0xE1};
 
     private final ChatAttachmentRepository attachmentRepository;
     private final Path storageRoot;
+    private final Consumer<Path> generatedSourceOpenedHook;
+    private static final Object[] GENERATED_IMPORT_LOCKS = new Object[256];
 
+    static {
+        java.util.Arrays.setAll(GENERATED_IMPORT_LOCKS, ignored -> new Object());
+    }
+
+    @Autowired
     public ChatAttachmentService(ChatAttachmentRepository attachmentRepository,
                                  @Value("${skillforge.chat.attachments.root:./data/chat-attachments}") String storageRoot) {
+        this(attachmentRepository, storageRoot, ignored -> { });
+    }
+
+    ChatAttachmentService(ChatAttachmentRepository attachmentRepository, String storageRoot,
+                          Consumer<Path> generatedSourceOpenedHook) {
         this.attachmentRepository = attachmentRepository;
         this.storageRoot = Path.of(storageRoot);
+        this.generatedSourceOpenedHook = generatedSourceOpenedHook;
     }
 
     @Transactional
@@ -199,13 +194,7 @@ public class ChatAttachmentService implements MessageMaterializer {
         // MIME is what we persist to DB (header MIME is discarded). When header and
         // detected MIME conflict (e.g. ZIP renamed .png with Content-Type=image/png),
         // refuse — this is almost always malicious or misconfigured.
-        byte[] head = readHeader(file);
-        String headerMime = file.getContentType() != null ? file.getContentType() : "";
-        // Wave 3 WORD-EXCEL: detection takes headerMime to disambiguate ZIP-based
-        // OOXML (.docx / .xlsx) and OLE-based legacy Office (.doc / .xls) — see
-        // detectMagic javadoc for the "ZIP / OLE leader same across family,
-        // bind kind from header" policy. CSV similarly requires header trust.
-        DetectedMime detected = detectMagic(head, headerMime);
+        AttachmentTypeDetector.DetectedType detected = AttachmentTypeDetector.detect(file);
         // V73 / OBS-COLUMNS: every rejection path below throws BEFORE we ever
         // call repository.save(...). The Iron Law: a rejected upload writes NO
         // DB row (we intentionally do NOT persist a "FAILED" placeholder for
@@ -214,20 +203,8 @@ public class ChatAttachmentService implements MessageMaterializer {
         // Future enhancement candidate: persist FAILED rows so admins can see
         // attempted-but-rejected uploads in the same query view. Out of scope
         // for Wave 1-A; tracked in the MULTIMODAL-OBSERVABILITY-COLUMNS spec.
-        if (detected == null) {
-            throw new IllegalArgumentException("Unsupported or unrecognized file content "
-                    + "(only PNG / JPEG / WebP / PDF accepted)");
-        }
-        if (!headerMime.isBlank()
-                && !"application/octet-stream".equals(headerMime)
-                && !mimeAgreesWithDetection(headerMime, detected)) {
-            // Spec §"安全与限制": MIME + magic bytes 双校验. Don't accept the upload when
-            // the two disagree — usually a polyglot / spoofed-extension attempt.
-            throw new IllegalArgumentException("Declared content-type `" + headerMime
-                    + "` does not match detected file type `" + detected.mime + "`");
-        }
-        String mimeType = detected.mime;
-        String kind = detected.kind;
+        String mimeType = detected.mimeType();
+        String kind = detected.kind();
         long size = file.getSize();
         if ("image".equals(kind) && size > MAX_IMAGE_BYTES) {
             throw new IllegalArgumentException("Image attachment exceeds 10MB");
@@ -306,6 +283,439 @@ public class ChatAttachmentService implements MessageMaterializer {
     }
 
     /**
+     * Import an agent-produced file into managed attachment storage. The source path is
+     * untrusted tool output and must resolve under this run's staging directory or the
+     * current session's managed directory.
+     */
+    public ChatAttachmentEntity importGeneratedFile(
+            String sessionId,
+            Long userId,
+            String toolUseId,
+            Path source,
+            String caption,
+            Path artifactWorkspace) {
+        requireGeneratedIdentity(sessionId, userId, toolUseId);
+        String lockKey = sessionId + '\0' + toolUseId;
+        Object lock = GENERATED_IMPORT_LOCKS[Math.floorMod(lockKey.hashCode(), GENERATED_IMPORT_LOCKS.length)];
+        synchronized (lock) {
+            return importGeneratedFileLocked(
+                    sessionId, userId, toolUseId, source, caption, artifactWorkspace);
+        }
+    }
+
+    private ChatAttachmentEntity importGeneratedFileLocked(
+            String sessionId, Long userId, String toolUseId, Path source,
+            String caption, Path artifactWorkspace) {
+        String id = UUID.nameUUIDFromBytes((sessionId + "\n" + toolUseId)
+                .getBytes(StandardCharsets.UTF_8)).toString();
+        Path sessionRoot = storageRoot.toAbsolutePath().normalize().resolve(sessionId).normalize();
+        requireUnderStorageRoot(sessionRoot);
+        Path part = sessionRoot.resolve(id + "." + UUID.randomUUID() + ".part").normalize();
+        requireUnderStorageRoot(part);
+        Path installedTarget = null;
+
+        try {
+            Files.createDirectories(sessionRoot);
+            requireCanonicalDirectoryUnderStorageRoot(sessionRoot);
+            try (OpenedGeneratedSource opened = openAllowedGeneratedSource(
+                    sessionId, source, artifactWorkspace)) {
+                SeekableByteChannel input = opened.channel();
+                generatedSourceOpenedHook.accept(opened.displayPath());
+                AttachmentTypeDetector.DetectedType type = AttachmentTypeDetector.detect(
+                        input, opened.filename());
+                long sourceSize = input.size();
+                enforceSize(type.kind(), sourceSize);
+                String copiedHash = copyAndHash(input, part);
+                opened.verify(copiedHash);
+
+                var existing = attachmentRepository.findBySessionIdAndSourceToolUseId(sessionId, toolUseId);
+                if (existing.isPresent()) return reserveMatchingReplay(existing.get(), copiedHash);
+
+                Path target = sessionRoot.resolve(
+                        id + "." + UUID.randomUUID() + type.extension()).normalize();
+                requireUnderStorageRoot(target);
+                installTarget(part, target);
+                installedTarget = target;
+                ChatAttachmentEntity entity = generatedEntity(
+                        id, sessionId, userId, toolUseId, opened.filename(), caption, type,
+                        sourceSize, copiedHash, target);
+                try {
+                    ChatAttachmentEntity saved = attachmentRepository.saveAndFlush(entity);
+                    installedTarget = null;
+                    return saved;
+                } catch (DataIntegrityViolationException conflict) {
+                    deleteGeneratedAttempt(target, sessionId);
+                    installedTarget = null;
+                    return attachmentRepository.findBySessionIdAndSourceToolUseId(sessionId, toolUseId)
+                            .map(row -> reserveMatchingReplay(row, copiedHash))
+                            .orElseThrow(() -> new IllegalStateException(
+                                    "Generated artifact idempotency conflict could not be resolved", conflict));
+                }
+            }
+        } catch (IOException e) {
+            throw new IllegalStateException("Failed to import generated artifact", e);
+        } finally {
+            if (installedTarget != null) deleteGeneratedAttempt(installedTarget, sessionId);
+            try {
+                Files.deleteIfExists(part);
+            } catch (IOException ignored) {
+                log.warn("Failed to remove generated artifact partial file for session [{}]", sessionId);
+            }
+        }
+    }
+
+    public static String sha256(Path path) {
+        MessageDigest digest = sha256Digest();
+        try (InputStream input = new DigestInputStream(Files.newInputStream(path), digest)) {
+            input.transferTo(OutputStream.nullOutputStream());
+            return HexFormat.of().formatHex(digest.digest());
+        } catch (IOException e) {
+            throw new IllegalStateException("Failed to hash generated artifact", e);
+        }
+    }
+
+    private ChatAttachmentEntity generatedEntity(
+            String id, String sessionId, Long userId, String toolUseId, String filename,
+            String caption, AttachmentTypeDetector.DetectedType type, long size,
+            String hash, Path target) {
+        ChatAttachmentEntity entity = new ChatAttachmentEntity();
+        entity.setId(id);
+        entity.setSessionId(sessionId);
+        entity.setUserId(userId);
+        entity.setKind(type.kind());
+        entity.setMimeType(type.mimeType());
+        entity.setFilename(sanitizeFilename(filename));
+        entity.setSizeBytes(size);
+        entity.setStoragePath(target.toString());
+        entity.setStatus("publishing");
+        entity.setOrigin("agent_generated");
+        entity.setSourceToolUseId(toolUseId);
+        entity.setSha256(hash);
+        entity.setCaption(sanitizeCaption(caption));
+        entity.setBoundAt(Instant.now());
+        if ("pdf".equals(type.kind())) entity.setPageCount(readPdfPageCountQuietly(target));
+        setInitialProcessingMode(entity, type.kind());
+        return entity;
+    }
+
+    private static void setInitialProcessingMode(ChatAttachmentEntity entity, String kind) {
+        switch (kind) {
+            case "image" -> entity.setProcessingMode(MODE_IMAGE_BLOCK_INLINE);
+            case "pdf" -> entity.setProcessingMode(MODE_PDF_TEXT);
+            case "word" -> entity.setProcessingMode(MODE_WORD_TEXT);
+            case "excel" -> entity.setProcessingMode(MODE_EXCEL_TEXT);
+            case "csv" -> entity.setProcessingMode(MODE_CSV_TEXT);
+            default -> throw new IllegalArgumentException("Unsupported generated artifact type");
+        }
+    }
+
+    private OpenedGeneratedSource openAllowedGeneratedSource(
+            String sessionId, Path source, Path workspace) throws IOException {
+        if (source == null || workspace == null) {
+            throw new SecurityException("Generated artifact source is outside the run workspace");
+        }
+        Path sourcePath = source.toAbsolutePath().normalize();
+        Path workspacePath = workspace.toAbsolutePath().normalize();
+        Path realWorkspace = workspace.toRealPath();
+        Path relative = relativeUnder(sourcePath, workspacePath, realWorkspace);
+        Path secureRoot = realWorkspace;
+
+        if (relative == null) {
+            Path managedSession = storageRoot.toAbsolutePath().normalize().resolve(sessionId).normalize();
+            if (Files.exists(managedSession, LinkOption.NOFOLLOW_LINKS)) {
+                Path realManagedSession = managedSession.toRealPath();
+                relative = relativeUnder(sourcePath, managedSession, realManagedSession);
+                secureRoot = realManagedSession;
+            }
+        }
+        if (relative == null || relative.getNameCount() == 0 || relative.isAbsolute()) {
+            throw new SecurityException("Generated artifact source is outside the allowed session roots");
+        }
+        for (Path component : relative) {
+            String name = component.toString();
+            if (name.isBlank() || ".".equals(name) || "..".equals(name)) {
+                throw new SecurityException("Generated artifact source contains an unsafe component");
+            }
+        }
+        return openRelativeNoFollow(secureRoot, relative, sourcePath);
+    }
+
+    private static Path relativeUnder(Path source, Path configuredRoot, Path realRoot) {
+        if (source.startsWith(configuredRoot)) return configuredRoot.relativize(source);
+        if (source.startsWith(realRoot)) return realRoot.relativize(source);
+        return null;
+    }
+
+    private static OpenedGeneratedSource openRelativeNoFollow(
+            Path root, Path relative, Path displayPath) throws IOException {
+        BasicFileAttributes rootBefore = Files.readAttributes(
+                root, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+        if (rootBefore.isSymbolicLink() || !rootBefore.isDirectory()) {
+            throw new SecurityException("Generated artifact root is not a directory");
+        }
+        List<DirectoryStream<Path>> openedDirectories = new ArrayList<>();
+        SeekableByteChannel channel = null;
+        boolean returned = false;
+        try {
+            DirectoryStream<Path> rootStream = Files.newDirectoryStream(root);
+            openedDirectories.add(rootStream);
+            if (!(rootStream instanceof SecureDirectoryStream<?>)) {
+                return openRelativeWithVerification(root, relative, displayPath);
+            }
+            SecureDirectoryStream<Path> current = requireSecureDirectory(rootStream);
+            BasicFileAttributes rootAfter = Files.readAttributes(
+                    root, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+            if (!sameFile(rootBefore, rootAfter)) {
+                throw new SecurityException("Generated artifact root changed while opening the file");
+            }
+
+            for (int i = 0; i < relative.getNameCount() - 1; i++) {
+                Path component = relative.getName(i);
+                BasicFileAttributes attrs = attributes(current, component);
+                if (attrs.isSymbolicLink() || !attrs.isDirectory()) {
+                    throw new SecurityException("Generated artifact path contains an unsafe directory");
+                }
+                DirectoryStream<Path> child = current.newDirectoryStream(
+                        component, LinkOption.NOFOLLOW_LINKS);
+                openedDirectories.add(child);
+                current = requireSecureDirectory(child);
+            }
+
+            Path filename = relative.getName(relative.getNameCount() - 1);
+            BasicFileAttributes attrs = attributes(current, filename);
+            if (attrs.isSymbolicLink() || !attrs.isRegularFile()) {
+                throw new SecurityException("Generated artifact source is not a regular file");
+            }
+            channel = current.newByteChannel(
+                    filename, Set.of(StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS));
+            OpenedGeneratedSource result = new OpenedGeneratedSource(
+                    channel, displayPath, filename.toString(), ignored -> { });
+            returned = true;
+            return result;
+        } finally {
+            for (int i = openedDirectories.size() - 1; i >= 0; i--) {
+                try {
+                    openedDirectories.get(i).close();
+                } catch (IOException ignored) {
+                    // The returned file descriptor remains valid after directory handles close.
+                }
+            }
+            if (!returned && channel != null) channel.close();
+        }
+    }
+
+    private static OpenedGeneratedSource openRelativeWithVerification(
+            Path root, Path relative, Path displayPath) throws IOException {
+        Path target = root.resolve(relative).normalize();
+        if (!target.startsWith(root)) {
+            throw new SecurityException("Generated artifact source escapes its allowed root");
+        }
+        List<PathIdentity> before = capturePathIdentity(root, relative);
+        SeekableByteChannel channel = Files.newByteChannel(
+                target, Set.of(StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS));
+        return new OpenedGeneratedSource(
+                channel,
+                displayPath,
+                relative.getName(relative.getNameCount() - 1).toString(),
+                expectedHash -> verifyFallbackSource(root, relative, target, before, expectedHash));
+    }
+
+    private static void verifyFallbackSource(
+            Path root, Path relative, Path target, List<PathIdentity> before,
+            String expectedHash) throws IOException {
+        requireSameIdentity(before, capturePathIdentity(root, relative));
+        String currentHash;
+        try (SeekableByteChannel verification = Files.newByteChannel(
+                target, Set.of(StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS))) {
+            currentHash = hashChannel(verification);
+        }
+        requireSameIdentity(before, capturePathIdentity(root, relative));
+        if (!expectedHash.equals(currentHash)) {
+            throw new SecurityException("Generated artifact source changed while it was imported");
+        }
+    }
+
+    private static List<PathIdentity> capturePathIdentity(Path root, Path relative) throws IOException {
+        List<PathIdentity> identities = new ArrayList<>();
+        Path current = root;
+        for (int i = -1; i < relative.getNameCount(); i++) {
+            if (i >= 0) current = current.resolve(relative.getName(i));
+            BasicFileAttributes attrs = Files.readAttributes(
+                    current, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+            boolean finalComponent = i == relative.getNameCount() - 1;
+            if (attrs.isSymbolicLink()
+                    || (finalComponent && !attrs.isRegularFile())
+                    || (!finalComponent && !attrs.isDirectory())
+                    || attrs.fileKey() == null) {
+                throw new SecurityException("Generated artifact path cannot be verified safely");
+            }
+            identities.add(new PathIdentity(current, attrs.fileKey(), attrs.size(), attrs.lastModifiedTime().toMillis()));
+        }
+        return identities;
+    }
+
+    private static void requireSameIdentity(List<PathIdentity> expected, List<PathIdentity> actual) {
+        if (!expected.equals(actual)) {
+            throw new SecurityException("Generated artifact path changed while it was imported");
+        }
+    }
+
+    private static String hashChannel(SeekableByteChannel source) throws IOException {
+        MessageDigest digest = sha256Digest();
+        source.position(0);
+        ByteBuffer buffer = ByteBuffer.allocate(64 * 1024);
+        while (source.read(buffer) >= 0) {
+            if (buffer.position() > 0) {
+                digest.update(buffer.array(), 0, buffer.position());
+                buffer.clear();
+            }
+        }
+        return HexFormat.of().formatHex(digest.digest());
+    }
+
+    private static BasicFileAttributes attributes(
+            SecureDirectoryStream<Path> directory, Path name) throws IOException {
+        BasicFileAttributeView view = directory.getFileAttributeView(
+                name, BasicFileAttributeView.class, LinkOption.NOFOLLOW_LINKS);
+        if (view == null) throw new IOException("Basic file attributes are unavailable");
+        return view.readAttributes();
+    }
+
+    @SuppressWarnings("unchecked")
+    private static SecureDirectoryStream<Path> requireSecureDirectory(DirectoryStream<Path> stream) {
+        if (!(stream instanceof SecureDirectoryStream<?> secure)) {
+            throw new SecurityException("Secure directory traversal is unavailable");
+        }
+        return (SecureDirectoryStream<Path>) secure;
+    }
+
+    private static boolean sameFile(BasicFileAttributes left, BasicFileAttributes right) {
+        return left.isDirectory() == right.isDirectory()
+                && left.isSymbolicLink() == right.isSymbolicLink()
+                && (left.fileKey() == null || Objects.equals(left.fileKey(), right.fileKey()));
+    }
+
+    @FunctionalInterface
+    private interface SourceVerifier {
+        void verify(String expectedHash) throws IOException;
+    }
+
+    private record PathIdentity(Path path, Object fileKey, long size, long modifiedMillis) { }
+
+    private record OpenedGeneratedSource(
+            SeekableByteChannel channel,
+            Path displayPath,
+            String filename,
+            SourceVerifier verifier) implements AutoCloseable {
+        void verify(String expectedHash) throws IOException {
+            verifier.verify(expectedHash);
+        }
+
+        @Override
+        public void close() throws IOException {
+            channel.close();
+        }
+    }
+
+    private ChatAttachmentEntity reserveMatchingReplay(ChatAttachmentEntity existing, String hash) {
+        if (!hash.equals(existing.getSha256())) {
+            throw new IllegalStateException("The same tool call attempted to publish different content");
+        }
+        if ("published".equals(existing.getStatus())) return existing;
+        Instant now = Instant.now();
+        if (attachmentRepository.reserveForPublishing(existing.getId(), now) == 1) {
+            existing.setStatus("publishing");
+            existing.setBoundAt(now);
+            return existing;
+        }
+        ChatAttachmentEntity current = attachmentRepository.findById(existing.getId())
+                .orElseThrow(() -> new IllegalStateException(
+                        "Generated artifact disappeared while reserving replay"));
+        if (!hash.equals(current.getSha256()) || !"published".equals(current.getStatus())) {
+            throw new IllegalStateException("Generated artifact is being cleaned and cannot be replayed");
+        }
+        return current;
+    }
+
+    private static void requireGeneratedIdentity(String sessionId, Long userId, String toolUseId) {
+        if (sessionId == null || sessionId.isBlank() || userId == null
+                || toolUseId == null || toolUseId.isBlank() || toolUseId.length() > 128) {
+            throw new IllegalArgumentException("Generated artifact requires session, user, and bounded tool identity");
+        }
+    }
+
+    private void requireUnderStorageRoot(Path path) {
+        if (!path.toAbsolutePath().normalize().startsWith(storageRoot.toAbsolutePath().normalize())) {
+            throw new SecurityException("Managed attachment path escapes storage root");
+        }
+    }
+
+    private void requireCanonicalDirectoryUnderStorageRoot(Path directory) throws IOException {
+        Path root = storageRoot.toAbsolutePath().normalize().toRealPath();
+        Path realDirectory = directory.toRealPath();
+        if (!realDirectory.startsWith(root) || Files.isSymbolicLink(directory)) {
+            throw new SecurityException("Managed attachment directory escapes storage root");
+        }
+    }
+
+    private static String copyAndHash(SeekableByteChannel source, Path part) throws IOException {
+        MessageDigest digest = sha256Digest();
+        source.position(0);
+        try (OutputStream output = Files.newOutputStream(
+                part, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS)) {
+            byte[] buffer = new byte[64 * 1024];
+            int read;
+            ByteBuffer byteBuffer = ByteBuffer.wrap(buffer);
+            while ((read = source.read(byteBuffer)) >= 0) {
+                if (read > 0) {
+                    output.write(buffer, 0, read);
+                    digest.update(buffer, 0, read);
+                }
+                byteBuffer.clear();
+            }
+        }
+        return HexFormat.of().formatHex(digest.digest());
+    }
+
+    private static void installTarget(Path part, Path target) throws IOException {
+        Files.move(part, target, StandardCopyOption.ATOMIC_MOVE);
+    }
+
+    private static void deleteGeneratedAttempt(Path target, String sessionId) {
+        try {
+            Files.deleteIfExists(target);
+        } catch (IOException ignored) {
+            log.warn("Failed to remove losing generated artifact file for session [{}]", sessionId);
+        }
+    }
+
+    private static MessageDigest sha256Digest() {
+        try {
+            return MessageDigest.getInstance("SHA-256");
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 is unavailable", e);
+        }
+    }
+
+    private static void enforceSize(String kind, long size) {
+        long max = switch (kind) {
+            case "image" -> MAX_IMAGE_BYTES;
+            case "pdf" -> MAX_PDF_BYTES;
+            case "word" -> MAX_WORD_BYTES;
+            case "excel" -> MAX_EXCEL_BYTES;
+            case "csv" -> MAX_CSV_BYTES;
+            default -> 0;
+        };
+        if (size > max) throw new IllegalArgumentException("Generated artifact exceeds the " + kind + " size limit");
+    }
+
+    private static String sanitizeCaption(String caption) {
+        if (caption == null || caption.isBlank()) return null;
+        String clean = caption.replaceAll("[\\r\\n\\t]", " ").trim();
+        return clean.length() > 1000 ? clean.substring(0, 1000) : clean;
+    }
+
+    /**
      * Wave 3 WORD-EXCEL: peek at the leading bytes of a multipart upload to
      * classify the kind <em>without</em> persisting anything (no DB row, no
      * file write, no disk I/O beyond reading the in-memory upload). Used by
@@ -324,138 +734,11 @@ public class ChatAttachmentService implements MessageMaterializer {
         if (file == null || file.isEmpty()) {
             return null;
         }
-        byte[] head;
         try {
-            head = readHeader(file);
+            return AttachmentTypeDetector.detect(file).kind();
         } catch (RuntimeException e) {
             return null;
         }
-        String headerMime = file.getContentType() != null ? file.getContentType() : "";
-        DetectedMime detected = detectMagic(head, headerMime);
-        return detected == null ? null : detected.kind;
-    }
-
-    /**
-     * MULTIMODAL-MVP r2 B1: read up to the first 12 bytes from a {@link MultipartFile}.
-     * Used only for magic-byte detection — we don't keep the bytes around (the file
-     * is re-streamed to disk via {@code file.transferTo}).
-     */
-    private static byte[] readHeader(MultipartFile file) {
-        try (var stream = file.getInputStream()) {
-            byte[] head = new byte[12];
-            int read = 0;
-            int n;
-            while (read < head.length && (n = stream.read(head, read, head.length - read)) != -1) {
-                read += n;
-            }
-            if (read < head.length) {
-                byte[] truncated = new byte[read];
-                System.arraycopy(head, 0, truncated, 0, read);
-                return truncated;
-            }
-            return head;
-        } catch (IOException e) {
-            throw new IllegalArgumentException("Failed to read upload header for magic-byte validation", e);
-        }
-    }
-
-    /** Server-detected file type. */
-    private static final class DetectedMime {
-        final String mime;
-        final String kind;
-        DetectedMime(String mime, String kind) {
-            this.mime = mime;
-            this.kind = kind;
-        }
-    }
-
-    /**
-     * MULTIMODAL-MVP r2 B1 + Wave 3 WORD-EXCEL: detect MIME by leading bytes.
-     * Returns {@code null} when the content does not match any allowed format.
-     *
-     * <p>For unambiguous formats (PNG / JPEG / WebP / PDF) the detection is by
-     * magic bytes alone. For ZIP-based OOXML (.docx / .xlsx) and OLE-based legacy
-     * Office (.doc / .xls), the leader is the <em>same</em> across the format
-     * family — we additionally consult the declared {@code Content-Type} header
-     * to disambiguate. {@code headerMime} may be {@code null} or blank; in that
-     * case we cannot disambiguate ZIP/OLE and return {@code null} (reject).</p>
-     *
-     * <p>CSV has no reliable magic — we trust the {@code text/csv} header AND
-     * verify the leading bytes contain no embedded NUL (binary-file guard).</p>
-     */
-    private static DetectedMime detectMagic(byte[] head, String headerMime) {
-        if (startsWith(head, PNG_MAGIC)) return new DetectedMime("image/png", "image");
-        if (startsWith(head, JPEG_MAGIC)) return new DetectedMime("image/jpeg", "image");
-        if (startsWith(head, WEBP_RIFF) && head.length >= 12 && matchesAt(head, 8, WEBP_WEBP)) {
-            return new DetectedMime("image/webp", "image");
-        }
-        if (startsWith(head, PDF_MAGIC)) return new DetectedMime("application/pdf", "pdf");
-        // Wave 3 WORD-EXCEL: ZIP-based OOXML — bind kind from declared header.
-        if (startsWith(head, ZIP_MAGIC)) {
-            String h = headerMime == null ? "" : headerMime.toLowerCase(Locale.ROOT);
-            if (MIME_DOCX.equals(h)) return new DetectedMime(MIME_DOCX, "word");
-            if (MIME_XLSX.equals(h)) return new DetectedMime(MIME_XLSX, "excel");
-            // ZIP bytes without a Word/Excel header are not in our allowlist —
-            // refuse rather than guess (could be jar / unrelated zip).
-            return null;
-        }
-        // Wave 3 WORD-EXCEL: OLE CFB — legacy .doc / .xls. Bind kind from header.
-        if (startsWith(head, OLE_MAGIC)) {
-            String h = headerMime == null ? "" : headerMime.toLowerCase(Locale.ROOT);
-            if (MIME_DOC.equals(h)) return new DetectedMime(MIME_DOC, "word");
-            if (MIME_XLS.equals(h)) return new DetectedMime(MIME_XLS, "excel");
-            return null;
-        }
-        // Wave 3 WORD-EXCEL: CSV — no magic signature exists. Trust header IFF
-        // the header is exactly text/csv AND the leading bytes are printable
-        // ASCII (no NUL). This is a pragmatic guard: an attacker can still
-        // upload garbage labeled "text/csv" as long as it's not binary, but the
-        // downstream parser will reject malformed content with CSV_PARSE_FAILED
-        // and the LLM only ever sees the extracted-text envelope.
-        if (MIME_CSV.equals(headerMime == null ? "" : headerMime.toLowerCase(Locale.ROOT))
-                && looksPrintableAscii(head)) {
-            return new DetectedMime(MIME_CSV, "csv");
-        }
-        return null;
-    }
-
-    /**
-     * Wave 3 WORD-EXCEL: returns true when {@code head} contains no embedded NUL
-     * byte. NUL is a strong signal of a binary file masquerading as text/csv.
-     * Empty / null header is treated as "looks fine" (the caller is reading 12
-     * bytes; tiny CSV files might genuinely be that small).
-     */
-    private static boolean looksPrintableAscii(byte[] head) {
-        if (head == null) return true;
-        for (byte b : head) {
-            if (b == 0) return false;
-        }
-        return true;
-    }
-
-    private static boolean startsWith(byte[] src, byte[] prefix) {
-        return matchesAt(src, 0, prefix);
-    }
-
-    private static boolean matchesAt(byte[] src, int offset, byte[] expected) {
-        if (src == null || src.length < offset + expected.length) return false;
-        for (int i = 0; i < expected.length; i++) {
-            if (src[offset + i] != expected[i]) return false;
-        }
-        return true;
-    }
-
-    /**
-     * Returns true when the request's declared Content-Type is consistent with the
-     * server-detected type. Treats {@code image/jpg} as equivalent to
-     * {@code image/jpeg} (common browser misnomer).
-     */
-    private static boolean mimeAgreesWithDetection(String headerMime, DetectedMime detected) {
-        String h = headerMime.toLowerCase();
-        if (h.equals(detected.mime)) return true;
-        // Browsers sometimes send image/jpg for jpegs; accept it.
-        if ("image/jpg".equals(h) && "image/jpeg".equals(detected.mime)) return true;
-        return false;
     }
 
     @Transactional
@@ -514,6 +797,30 @@ public class ChatAttachmentService implements MessageMaterializer {
             }
         }
         return blocks;
+    }
+
+    @Transactional
+    public void markPublishedFromMessages(List<Message> messages) {
+        if (messages == null || messages.isEmpty()) return;
+        Set<String> ids = new HashSet<>();
+        for (Message message : messages) {
+            if (message == null || !(message.getContent() instanceof List<?> blocks)) continue;
+            for (Object block : blocks) {
+                String type = blockType(block);
+                if (isAttachmentRef(type)) {
+                    String id = blockString(block, "attachment_id", "attachmentId");
+                    if (id != null && !id.isBlank()) ids.add(id);
+                }
+            }
+        }
+        for (String id : ids) {
+            attachmentRepository.markGeneratedPublished(id);
+        }
+    }
+
+    private static boolean isAttachmentRef(String type) {
+        return "image_ref".equals(type) || "pdf_ref".equals(type) || "word_ref".equals(type)
+                || "excel_ref".equals(type) || "csv_ref".equals(type);
     }
 
     /**
@@ -1001,7 +1308,8 @@ public class ChatAttachmentService implements MessageMaterializer {
         List<ChatAttachmentEntity> orphanRows;
         try {
             orphanRows = attachmentRepository
-                    .findByStatusAndSeqNoIsNullAndCreatedAtBefore("uploaded", before);
+                    .findByOriginAndStatusAndSeqNoIsNullAndCreatedAtBefore(
+                            "user_upload", "uploaded", before);
         } catch (RuntimeException e) {
             errors.add("findByStatusAndSeqNoIsNullAndCreatedAtBefore failed: " + e.getMessage());
             orphanRows = List.of();
@@ -1022,18 +1330,19 @@ public class ChatAttachmentService implements MessageMaterializer {
                 // file belonged to.
                 if (storagePath != null) {
                     try {
+                        Path managedPath = requireManagedCleanupPath(row.getSessionId(), storagePath);
                         if (!dryRun) {
-                            if (Files.deleteIfExists(Path.of(storagePath))) {
+                            if (Files.deleteIfExists(managedPath)) {
                                 filesDeleted++;
                             }
-                        } else if (Files.exists(Path.of(storagePath))) {
+                        } else if (Files.exists(managedPath)) {
                             // dry-run: count the file we WOULD delete
                             filesDeleted++;
                         }
-                    } catch (IOException ioe) {
-                        log.warn("ATTACHMENT-CLEANUP: failed to delete orphan file path={} reason={}",
-                                storagePath, ioe.getMessage());
-                        errors.add("delete file " + storagePath + ": " + ioe.getMessage());
+                    } catch (IOException | SecurityException ioe) {
+                        log.warn("ATTACHMENT-CLEANUP: failed to delete orphan file id={} reason={}",
+                                row.getId(), ioe.getMessage());
+                        errors.add("delete file for row " + row.getId() + ": " + ioe.getMessage());
                     }
                 }
                 if (!dryRun) {
@@ -1066,6 +1375,12 @@ public class ChatAttachmentService implements MessageMaterializer {
                             .filter(Files::isRegularFile)
                             .toList();
                     for (Path file : diskFiles) {
+                        try {
+                            if (!Files.getLastModifiedTime(file).toInstant().isBefore(before)) continue;
+                        } catch (IOException ioe) {
+                            errors.add("read modified time for " + file.getFileName() + ": " + ioe.getMessage());
+                            continue;
+                        }
                         String norm = normalizeForCompare(file.toString());
                         if (referencedPaths.contains(norm)) continue;
                         // Files we just deleted (or would delete) in Step A are already
@@ -1112,6 +1427,22 @@ public class ChatAttachmentService implements MessageMaterializer {
         } catch (RuntimeException e) {
             return raw;
         }
+    }
+
+    private Path requireManagedCleanupPath(String sessionId, String rawPath) throws IOException {
+        Path normalizedRoot = storageRoot.toAbsolutePath().normalize();
+        Path sessionRoot = normalizedRoot.resolve(sessionId).normalize();
+        Path configured = Path.of(rawPath).toAbsolutePath().normalize();
+        if (!configured.startsWith(sessionRoot)) {
+            throw new SecurityException("Attachment cleanup path is outside managed storage");
+        }
+        if (!Files.exists(configured)) return configured;
+        Path realRoot = normalizedRoot.toRealPath();
+        Path realFile = configured.toRealPath();
+        if (!realFile.startsWith(realRoot.resolve(sessionId).normalize()) || !Files.isRegularFile(realFile)) {
+            throw new SecurityException("Attachment cleanup path is outside managed storage");
+        }
+        return realFile;
     }
 
     /**
