@@ -74,7 +74,7 @@ SkillForge iOS 端不做 dashboard 缩小版，而做 **Assistant Companion**：
 
 ## 当前执行
 
-1. V1 core 已完成代码实现，本批执行 Full pipeline 全量验证与交付记录。
+1. V1 core 已完成代码实现和本批 Full pipeline 验证，交付记录见 `docs/delivery-index.md`。
 2. Slice 4 剩余为 APNs delivery、证书链路和真实后台通知，不阻塞 Xcode 直装使用。
 3. Navigation Foundation：配对后使用原生四栏导航
    `Chat / Control / Agents / Settings`。Chat 仍是默认入口；Control 分别承载
