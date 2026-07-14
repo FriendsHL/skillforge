@@ -34,6 +34,9 @@ export function useChatWebSocket(
         wsReconnectDelayRef.current = 2000;
       };
       ws.onmessage = (ev) => {
+        if (wsRef.current !== ws) {
+          return;
+        }
         try {
           const evt = JSON.parse(ev.data);
           onEventRef.current(evt);

@@ -1,4 +1,4 @@
-import { useCallback, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
 import type {
   ConfirmationChoice,
@@ -31,6 +31,7 @@ interface WsEvent {
 }
 
 export interface WsEventHandlerDeps {
+  activeSessionId: string | undefined;
   setRuntimeStatus: Dispatch<SetStateAction<RuntimeStatus>>;
   setRuntimeStep: Dispatch<SetStateAction<string>>;
   setRuntimeError: Dispatch<SetStateAction<string>>;
@@ -66,6 +67,7 @@ export interface WsEventHandlerDeps {
 
 export function useChatWsEventHandler(deps: WsEventHandlerDeps) {
   const {
+    activeSessionId,
     setRuntimeStatus,
     setRuntimeStep,
     setRuntimeError,
@@ -98,10 +100,23 @@ export function useChatWsEventHandler(deps: WsEventHandlerDeps) {
    */
   const reasoningStartTsRef = useRef<number | null>(null);
 
+  useEffect(() => {
+    lastSnapshotVersionRef.current = -1;
+    activeLlmSpanIdRef.current = null;
+    reasoningStartTsRef.current = null;
+  }, [activeSessionId]);
+
   return useCallback(
     (evtRaw: unknown) => {
       const evt = evtRaw as WsEvent | null;
       if (!evt || !evt.type) return;
+      if (
+        activeSessionId &&
+        typeof evt.sessionId === 'string' &&
+        evt.sessionId !== activeSessionId
+      ) {
+        return;
+      }
       if (evt.type === 'session_status') {
         setRuntimeStatus(((evt.status as string) ?? 'idle') as RuntimeStatus);
         setRuntimeStep((evt.step as string) ?? '');
@@ -423,6 +438,7 @@ export function useChatWsEventHandler(deps: WsEventHandlerDeps) {
       }
     },
     [
+      activeSessionId,
       setRuntimeStatus,
       setRuntimeStep,
       setRuntimeError,

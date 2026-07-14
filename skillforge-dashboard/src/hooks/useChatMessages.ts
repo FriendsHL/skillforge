@@ -296,10 +296,11 @@ export function useChatMessages(activeSessionId: string | undefined) {
   const [streamingToolInputs, setStreamingToolInputs] = useState<Record<string, StreamingToolInput>>({});
   const [inflightTools, setInflightTools] = useState<Record<string, InflightTool>>({});
   const [loopSpans, setLoopSpans] = useState<LoopSpan[]>([]);
+  const ownsActiveSession = messageSessionId === activeSessionId;
 
   const messages = useMemo(
-    () => messageSessionId === activeSessionId ? normalizeMessages(rawMessages) : [],
-    [activeSessionId, messageSessionId, rawMessages],
+    () => ownsActiveSession ? normalizeMessages(rawMessages) : [],
+    [ownsActiveSession, rawMessages],
   );
 
   useEffect(() => {
@@ -315,13 +316,13 @@ export function useChatMessages(activeSessionId: string | undefined) {
     rawMessages,
     setRawMessages,
     messages,
-    streamingText,
+    streamingText: ownsActiveSession ? streamingText : '',
     setStreamingText,
-    streamingToolInputs,
+    streamingToolInputs: ownsActiveSession ? streamingToolInputs : {},
     setStreamingToolInputs,
-    inflightTools,
+    inflightTools: ownsActiveSession ? inflightTools : {},
     setInflightTools,
-    loopSpans,
+    loopSpans: ownsActiveSession ? loopSpans : [],
     setLoopSpans,
   };
 }

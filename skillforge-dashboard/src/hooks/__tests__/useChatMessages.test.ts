@@ -210,4 +210,55 @@ describe('useChatMessages — session ownership', () => {
     ).toBe(false);
     expect(result.current.messages).toEqual([]);
   });
+
+  it('never exposes previous session streaming state during a session switch', () => {
+    const renders: Array<{
+      sessionId: string | undefined;
+      streamingText: string;
+      streamingToolIds: string[];
+      inflightToolIds: string[];
+      loopSpanIds: string[];
+    }> = [];
+    const { result, rerender } = renderHook(
+      ({ sessionId }: { sessionId: string | undefined }) => {
+        const state = useChatMessages(sessionId);
+        renders.push({
+          sessionId,
+          streamingText: state.streamingText,
+          streamingToolIds: Object.keys(state.streamingToolInputs),
+          inflightToolIds: Object.keys(state.inflightTools),
+          loopSpanIds: state.loopSpans.map((span) => span.id),
+        });
+        return state;
+      },
+      { initialProps: { sessionId: 'session-a' } },
+    );
+
+    act(() => {
+      result.current.setStreamingText('session-a partial reply');
+      result.current.setStreamingToolInputs({
+        'tool-a': { name: 'search', jsonBuffer: '{', startTs: 1 },
+      });
+      result.current.setInflightTools({
+        'tool-a': { name: 'search', input: {}, startTs: 1 },
+      });
+      result.current.setLoopSpans([
+        { id: 'span-a', type: 'LLM_CALL', name: 'model', startTs: 1 },
+      ]);
+    });
+
+    renders.length = 0;
+    rerender({ sessionId: 'session-b' });
+
+    expect(
+      renders.some(
+        (render) =>
+          render.sessionId === 'session-b' &&
+          (render.streamingText.includes('session-a') ||
+            render.streamingToolIds.includes('tool-a') ||
+            render.inflightToolIds.includes('tool-a') ||
+            render.loopSpanIds.includes('span-a')),
+      ),
+    ).toBe(false);
+  });
 });

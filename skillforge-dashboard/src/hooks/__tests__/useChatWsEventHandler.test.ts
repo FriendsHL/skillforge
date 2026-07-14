@@ -16,6 +16,7 @@ import { useChatWsEventHandler, type WsEventHandlerDeps } from '../useChatWsEven
 
 function makeDeps(overrides: Partial<WsEventHandlerDeps> = {}): WsEventHandlerDeps {
   return {
+    activeSessionId: 's1',
     setRuntimeStatus: vi.fn(),
     setRuntimeStep: vi.fn(),
     setRuntimeError: vi.fn(),
@@ -188,5 +189,53 @@ describe('useChatWsEventHandler — CHAT-REASONING-PANEL', () => {
     // User messages don't end an assistant turn — leave reasoning state alone.
     expect(setStreamingReasoningText).not.toHaveBeenCalled();
     expect(setReasoningDurationMs).not.toHaveBeenCalled();
+  });
+
+  it('resets snapshot ordering when the active session changes', () => {
+    const setRawMessages = vi.fn();
+    const baseDeps = makeDeps({ setRawMessages });
+    const { result, rerender } = renderHook(
+      ({ sessionId }: { sessionId: string }) =>
+        useChatWsEventHandler({ ...baseDeps, activeSessionId: sessionId }),
+      { initialProps: { sessionId: 'session-a' } },
+    );
+
+    act(() => {
+      result.current({
+        type: 'messages_snapshot',
+        sessionId: 'session-a',
+        snapshotVersion: 50,
+        messages: [],
+      });
+    });
+    setRawMessages.mockClear();
+
+    rerender({ sessionId: 'session-b' });
+    act(() => {
+      result.current({
+        type: 'message_appended',
+        sessionId: 'session-b',
+        snapshotVersion: 1,
+        message: { role: 'assistant', content: 'session-b reply' },
+      });
+    });
+
+    expect(setRawMessages).toHaveBeenCalledOnce();
+  });
+
+  it('ignores an event explicitly owned by another session', () => {
+    const setStreamingText = vi.fn();
+    const deps = makeDeps({ activeSessionId: 'session-b', setStreamingText });
+    const { result } = renderHook(() => useChatWsEventHandler(deps));
+
+    act(() => {
+      result.current({
+        type: 'text_delta',
+        sessionId: 'session-a',
+        delta: 'stale session text',
+      });
+    });
+
+    expect(setStreamingText).not.toHaveBeenCalled();
   });
 });

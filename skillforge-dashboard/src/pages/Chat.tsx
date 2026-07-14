@@ -143,6 +143,7 @@ const Chat: React.FC = () => {
   const [checkpointActionLoading, setCheckpointActionLoading] = useState<string | null>(null);
   const [compacting, setCompacting] = useState(false);
   const [compactionNotice, setCompactionNotice] = useState(false);
+  const [transientSessionId, setTransientSessionId] = useState(activeSessionId);
   const [collabMembers, setCollabMembers] = useState<CollabMember[]>([]);
   const [peerMessages, setPeerMessages] = useState<PeerMessage[]>([]);
   const activeSessionIdRef = useRef<string | undefined>(activeSessionId);
@@ -247,10 +248,15 @@ const Chat: React.FC = () => {
   }, [selectedAgent, userId, agents]);
 
   useEffect(() => {
+    setTransientSessionId(activeSessionId);
     setPendingAsk(null);
     setPendingConfirm(null);
     setConfirmSubmitting(null);
+    setRuntimeStatus('idle');
+    setRuntimeStep('');
     setRuntimeError('');
+    setStreamingReasoningText('');
+    setReasoningDurationMs(null);
     setCancelling(false);
     setViewMode('chat');
     setParentSessionId(null);
@@ -262,10 +268,6 @@ const Chat: React.FC = () => {
     setCheckpoints([]);
     setSelectedCheckpoint(undefined);
     setCheckpointModalOpen(false);
-    if (!activeSessionId) {
-      setRuntimeStatus('idle');
-      setRuntimeStep('');
-    }
   }, [activeSessionId]);
 
   useChatSession(activeSessionId, {
@@ -296,6 +298,7 @@ const Chat: React.FC = () => {
   }, [agents, selectedAgent]);
 
   const handleWsEvent = useChatWsEventHandler({
+    activeSessionId,
     setRuntimeStatus,
     setRuntimeStep,
     setRuntimeError,
@@ -611,10 +614,20 @@ const Chat: React.FC = () => {
   // §8 定义：runtimeStatus === 'waiting_user' 且 pendingAsk/pendingConfirm 任一非空时 disable。
   // 两 latch 用 OR 连接是防御 —— 后端 B3 fix 已保证两者不并存，但事件顺序抖动时
   // 前端至少不会放行输入。Phase 2.3 加 isSystemAgent OR：system agent 永远只读发送。
+  const ownsTransientState = transientSessionId === activeSessionId;
+  const visibleRuntimeStatus: RuntimeStatus = ownsTransientState ? runtimeStatus : 'idle';
+  const visibleRuntimeStep = ownsTransientState ? runtimeStep : '';
+  const visibleRuntimeError = ownsTransientState ? runtimeError : '';
+  const visiblePendingAsk = ownsTransientState ? pendingAsk : null;
+  const visiblePendingConfirm = ownsTransientState ? pendingConfirm : null;
+  const visibleConfirmSubmitting = ownsTransientState ? confirmSubmitting : null;
+  const visibleCompactionNotice = ownsTransientState && compactionNotice;
+  const visibleStreamingReasoningText = ownsTransientState ? streamingReasoningText : '';
+  const visibleReasoningDurationMs = ownsTransientState ? reasoningDurationMs : null;
   const inputDisabled =
     isSystemAgent ||
-    (runtimeStatus === 'waiting_user' &&
-      (pendingAsk != null || pendingConfirm != null));
+    (visibleRuntimeStatus === 'waiting_user' &&
+      (visiblePendingAsk != null || visiblePendingConfirm != null));
 
   const combinedInflightTools = useMemo(() => {
     const merged: Record<string, InflightTool> = {};
@@ -644,7 +657,7 @@ const Chat: React.FC = () => {
   }, [activeSessionId, userId]);
 
   const handleCompactClick = async () => {
-    if (!activeSessionId || compacting || runtimeStatus === 'running') return;
+    if (!activeSessionId || compacting || visibleRuntimeStatus === 'running') return;
     setCompacting(true);
     try {
       const res = await compactSession(
@@ -1040,9 +1053,9 @@ const Chat: React.FC = () => {
 
             {activeSessionId && (
               <RuntimeBanner
-                runtimeStatus={runtimeStatus}
-                runtimeStep={runtimeStep}
-                runtimeError={runtimeError}
+                runtimeStatus={visibleRuntimeStatus}
+                runtimeStep={visibleRuntimeStep}
+                runtimeError={visibleRuntimeError}
                 cancelling={cancelling}
                 onCancel={handleCancel}
               />
@@ -1050,32 +1063,32 @@ const Chat: React.FC = () => {
 
             {viewMode === 'chat' ? (
               <>
-                {pendingAsk && (
+                {visiblePendingAsk && (
                   <PendingAskCard
-                    pendingAsk={pendingAsk}
+                    pendingAsk={visiblePendingAsk}
                     otherInput={otherInput}
                     onOtherInputChange={setOtherInput}
                     onAnswer={handleAnswerAsk}
                   />
                 )}
-                {pendingConfirm && (
+                {visiblePendingConfirm && (
                   <InstallConfirmationCard
-                    payload={pendingConfirm}
-                    submitting={confirmSubmitting != null}
-                    submittingDecision={confirmSubmitting}
+                    payload={visiblePendingConfirm}
+                    submitting={visibleConfirmSubmitting != null}
+                    submittingDecision={visibleConfirmSubmitting}
                     onDecision={handleConfirmDecision}
                   />
                 )}
                 <ChatWindow
                   messages={messages}
-                  loading={runtimeStatus === 'running'}
+                  loading={visibleRuntimeStatus === 'running'}
                   onSend={handleSend}
                   inputDisabled={inputDisabled}
                   inflightTools={combinedInflightTools}
                   streamingText={streamingText}
-                  compactionNotice={compactionNotice}
+                  compactionNotice={visibleCompactionNotice}
                   onCompactionDismiss={() => setCompactionNotice(false)}
-                  runtimeStatus={runtimeStatus}
+                  runtimeStatus={visibleRuntimeStatus}
                   agentName={agentName}
                   onAnswerAsk={handleAnswerAskMessage}
                   onConfirmDecision={handleConfirmDecisionMessage}
@@ -1090,8 +1103,8 @@ const Chat: React.FC = () => {
                      default expand state on completed reasoning panels
                      in the messages list. Null = collapsed (the
                      conservative default). */
-                  streamingReasoningText={streamingReasoningText}
-                  reasoningDurationMs={reasoningDurationMs}
+                  streamingReasoningText={visibleStreamingReasoningText}
+                  reasoningDurationMs={visibleReasoningDurationMs}
                   agentThinkingVisible={activeAgent?.thinkingVisible ?? null}
                 />
               </>
@@ -1123,7 +1136,7 @@ const Chat: React.FC = () => {
         collabLeaderSessionId={collabLeaderSessionId}
         peerMessages={peerMessages}
         inflightTools={combinedInflightTools}
-        runtimeStatus={runtimeStatus}
+        runtimeStatus={visibleRuntimeStatus}
         tokenUsage={tokenUsage}
         compaction={compactionSummary}
         currentSessionId={activeSessionId ?? null}
