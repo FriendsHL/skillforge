@@ -54,6 +54,8 @@ class OutboundArtifactMigrationIT {
                 CREATE TABLE t_agent (
                     id BIGSERIAL PRIMARY KEY,
                     name VARCHAR(255) NOT NULL,
+                    agent_type VARCHAR(32) NOT NULL DEFAULT 'user',
+                    status VARCHAR(32) NOT NULL DEFAULT 'active',
                     tool_ids TEXT,
                     updated_at TIMESTAMPTZ
                 )
@@ -143,6 +145,36 @@ class OutboundArtifactMigrationIT {
                 .isEqualTo("[\"Bash\"]");
     }
 
+    @Test
+    void v172GrantsArtifactPublishingToActiveUserAgentsOnlyAndIsIdempotent() {
+        jdbcTemplate.update("""
+                INSERT INTO t_agent (name, agent_type, status, tool_ids) VALUES
+                    ('Research Agent', 'user', 'active', '["WebSearch","Write"]'),
+                    ('Already Enabled', 'user', 'active', '["Write","PublishChatArtifact"]'),
+                    ('Unrestricted Null', 'user', 'active', NULL),
+                    ('Unrestricted Empty', 'user', 'active', '[]'),
+                    ('Inactive User', 'user', 'inactive', '["Write"]'),
+                    ('System Agent', 'system', 'active', '["Write"]')
+                """);
+
+        runV172();
+        runV172();
+
+        assertThat(toolsFor("Research Agent"))
+                .isEqualTo("[\"WebSearch\", \"Write\", \"PublishChatArtifact\"]");
+        assertThat(toolsFor("Already Enabled"))
+                .isEqualTo("[\"Write\",\"PublishChatArtifact\"]");
+        assertThat(toolsFor("Unrestricted Null")).isNull();
+        assertThat(toolsFor("Unrestricted Empty")).isEqualTo("[]");
+        assertThat(toolsFor("Inactive User")).isEqualTo("[\"Write\"]");
+        assertThat(toolsFor("System Agent")).isEqualTo("[\"Write\"]");
+    }
+
+    private static String toolsFor(String name) {
+        return jdbcTemplate.queryForObject(
+                "SELECT tool_ids FROM t_agent WHERE name = ?", String.class, name);
+    }
+
     private static void runV169() {
         ScriptUtils.executeSqlScript(
                 connection,
@@ -153,5 +185,11 @@ class OutboundArtifactMigrationIT {
         ScriptUtils.executeSqlScript(
                 connection,
                 new ClassPathResource("db/migration/V170__artifact_cleanup_lease_statuses.sql"));
+    }
+
+    private static void runV172() {
+        ScriptUtils.executeSqlScript(
+                connection,
+                new ClassPathResource("db/migration/V172__grant_artifact_publish_to_user_agents.sql"));
     }
 }
