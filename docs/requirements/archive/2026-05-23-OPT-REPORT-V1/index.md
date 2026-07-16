@@ -1,7 +1,7 @@
 # OPT-REPORT-V1 — 优化报告链路（new flywheel route）
 
 > 创建：2026-05-22
-> 状态：active
+> 状态：done / archived（V1.0–V1.3，commit `e3fde131` / `f50d91b8`；后续自动化另立需求）
 > 模式：Full pipeline（涉及 schema + 新 agent + 跨栈 + 新 trigger 路径）
 > 跟现有链路关系：**并行存在**，不替换。未来某版考虑合并/二选一。
 

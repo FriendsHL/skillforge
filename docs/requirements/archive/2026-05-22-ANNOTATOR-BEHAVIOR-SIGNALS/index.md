@@ -1,7 +1,7 @@
 # ANNOTATOR-BEHAVIOR-SIGNALS
 
 > 创建：2026-05-22
-> 状态：active
+> 状态：done / archived（commit `f273bae7`）
 > 模式：Mid pipeline（纯 BE，无 schema 变更）
 
 ## User Request

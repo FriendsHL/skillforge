@@ -1,6 +1,6 @@
 # DESKTOP-MACOS-PACKAGE — SkillForge macOS 桌面安装包
 
-> 状态：tech-design 草拟（用户离线，goal 指令直推；所有「草拟」决策待用户 ratify，Phase Final 后回写）
+> 状态：deferred（Electron/JRE/embedded PG 基础已实现于 `a65f8ac3`，但 `.dmg`、签名、公证和完整安装验收未收口；按需恢复）
 > 档位：🔴 Full（红灯 #4：新增 npm 模块 + 跨模块新增）
 > 日期：2026-06-10
 

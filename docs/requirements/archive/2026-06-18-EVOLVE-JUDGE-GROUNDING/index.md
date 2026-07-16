@@ -1,7 +1,7 @@
 # EVOLVE-JUDGE-GROUNDING — 自进化判定与候选对靶优化
 
 > 创建：2026-06-17（从 backlog 升 active）
-> 状态：**Phase 1 已交付**（2026-06-18，commit `5be19db9`，见 [delivery-index](../../../delivery-index.md)）。**Phase 2 = [EVOLVE-CANDIDATE-GROUNDING](../2026-06-18-EVOLVE-CANDIDATE-GROUNDING/index.md)**（已拆为独立包并交付；**2026-06-22 起两者在 track 层合并为同一条 Phase 1/2 线**，详细 prd 各包保留——见 [todo](../../../todo.md)「自进化 track 现状」）。Phase 3+ roadmap 待排（包仍 active）。
+> 状态：**done / archived；Phase 1 已交付**（2026-06-18，commit `5be19db9`，见 [delivery-index](../../../delivery-index.md)）。**Phase 2 = [EVOLVE-CANDIDATE-GROUNDING](../2026-06-18-EVOLVE-CANDIDATE-GROUNDING/index.md)**（独立包并已交付）。Phase 3+ 若启动应另立需求，不再让本包保持 active。
 > 模式：Full（触碰 judge "赢家判定"正确性 + evolve-loop workflow；属核心测量层）
 > 来源：对照 Anthropic《A Harness for Every Task》《Introducing Dynamic Workflows》自治多 agent 经验（对抗证伪 / pairwise 判定 / self-preferential bias）+ 自进化现状快照瓶颈（0 赢家）。
 
@@ -29,6 +29,6 @@ PRD/tech-design 已 ratify（Q1 配对为主+绝对分降 advisory / Q2 minNetWi
 ## 关联
 
 - 现状：[autoevolving 能力现状快照](../../../references/autoevolving-capability-stage-2026-06-17.md) B/C
-- 强相关：[AUTOEVOLVE-CLOSE-LOOP](../2026-06-03-AUTOEVOLVE-CLOSE-LOOP/index.md) 阶段B（EVOLVE-BADCASE-SENSITIVITY，尺子敏感度）—— **本需求管"判定方法"，阶段B 管"尺子刻度"，互补，协调排期**
-- 归属：[AUTOEVOLVING-MASTER](../2026-05-28-AUTOEVOLVING-MASTER/index.md) V3（falsification + predicted_impact 的前置子集）
+- 强相关：[AUTOEVOLVE-CLOSE-LOOP](../../active/2026-06-03-AUTOEVOLVE-CLOSE-LOOP/index.md) 阶段B（EVOLVE-BADCASE-SENSITIVITY，尺子敏感度）—— **本需求管“判定方法”，阶段B 管“尺子刻度”，互补，协调排期**
+- 归属：[AUTOEVOLVING-MASTER](../../active/2026-05-28-AUTOEVOLVING-MASTER/index.md) V3（falsification + predicted_impact 的前置子集）
 - 姊妹方向：[WF-CONCURRENT-PIPELINE](../../backlog/WF-CONCURRENT-PIPELINE/index.md)（Phase 2 的多阶段 fan-out 链路受益于它）

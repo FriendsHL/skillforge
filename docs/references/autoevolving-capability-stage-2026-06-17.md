@@ -52,4 +52,4 @@
 ## F. 由本次 blog 复盘新立的两个方向（backlog）
 
 1. **[WF-CONCURRENT-PIPELINE](../requirements/backlog/WF-CONCURRENT-PIPELINE/index.md)** — 学 CC 的并发 pipeline（stage 间重叠、无 barrier）补强 L1 引擎（现 `pipeline()` V1 串行）。归属 V2(d) DSL Phase 2。
-2. **[EVOLVE-JUDGE-GROUNDING](../requirements/active/2026-06-17-EVOLVE-JUDGE-GROUNDING/index.md)**（已升 active，prd-ready）— 参考 CC 的对抗证伪 + pairwise/锦标赛判定经验，治 L2/L3 的"绝对打分 + 候选不对靶"瓶颈。Phase 1 = 配对判定。跟 CLOSE-LOOP 阶段B + V3 falsification 合流。
+2. **[EVOLVE-JUDGE-GROUNDING](../requirements/archive/2026-06-18-EVOLVE-JUDGE-GROUNDING/index.md)**（Phase 1 已交付并归档）— 参考 CC 的对抗证伪 + pairwise/锦标赛判定经验，治 L2/L3 的“绝对打分 + 候选不对靶”瓶颈。Phase 1 = 配对判定。跟 CLOSE-LOOP 阶段B + V3 falsification 合流。

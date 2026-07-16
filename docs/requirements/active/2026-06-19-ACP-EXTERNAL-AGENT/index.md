@@ -1,7 +1,7 @@
 # ACP-EXTERNAL-AGENT — SkillForge 经 ACP 编排外部 coding agent（cc / codex）+ 全程可视
 
 > 创建：2026-06-19
-> 状态：**方案已固化（2026-06-19）：Track A = ACP runner + Track B = B1 OTel 适配器（cc OTel→翻译进现有 LlmSpan）**；待排期实现（Full + Plan）。**B3 真 OTel 大爆破已评估否决**（~70–100 dev-day + 还得不到纯标准 OTel，见 tech-design），改作长期可选的渐进迁移。
+> 状态：**主体已交付**（cc/codex ACP runner、子 session 可视化、worktree 隔离、测试→push→PR 主闭环已验证）；开放项仅 L2 确认门、Codex 工具标签归一化和 AC-3 确认可达，后续应按需拆包。**B3 真 OTel 大爆破已否决**，只保留长期可选渐进迁移。
 > 来源：用户「SkillForge 作 main agent，经 ACP 操作本地 Claude Code / Codex，并把它们的执行过程（含调了几个子 agent、各自干了啥、要不要确认）显示在 SkillForge session / 可观测里」。多轮讨论 + 联网核实 ACP / OTel 现状（见 mrd 出处）。
 
 ## 一句话

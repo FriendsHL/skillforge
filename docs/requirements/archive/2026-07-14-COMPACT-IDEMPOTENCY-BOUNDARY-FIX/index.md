@@ -1,7 +1,7 @@
 # COMPACT-IDEMPOTENCY-BOUNDARY-FIX — 压缩失效（曾压缩过的 session 自动压缩被跳过 + tool-heavy 压不动）
 
 > 创建：2026-06-19
-> 状态：**部分交付**（P0 止血 + range-model go-live + 结构化摘要 + 2026-07-09 frontier 修复已实现；剩 ② tool-heavy 最坏情况 / W3 watchdog / 旧 orphan 残骸复核）。CompactionService + compact 子系统核心文件，8 不变量 → Full + `compact-reviewer`。
+> 状态：**done / archived**（原始负 gap、总结窗口、存储膨胀与 range-model frontier 问题均已修复；极端 no-safe-boundary、watchdog 和旧 orphan 清理拆为 backlog/watchlist，不再阻塞本需求收口）。CompactionService + compact 子系统核心文件，8 不变量 → Full + `compact-reviewer`。
 > 来源：用户报 session `9d3eff0f-c22c-4568-bec8-a75ffe1f952d`（微信 / agent 3）「一直有压缩问题、`/compact` 压不动多少」。系统化调试取证（日志 + DB + 代码）。
 > 优先级：**高 → 中**（活的 P1 危害 ① 负 gap 已修且未再犯，见下方复验；剩余为 tool-heavy 偏弱 + 存储残骸）。
 
@@ -20,7 +20,7 @@
 - **新发现：持久化历史 orphan tool_use 残骸**。session `9d3eff0f`（压过 5 次）有 **6 个 orphan tool_use**（无配对 tool_result，seq 7/18/53/140/278/420），但全在当前 boundary（seq 590）**之前 = 死历史，LLM 不读 → live 视图干净、无正确性影响**。对照 session `c9129461`（压 2 次）配对完全干净（70/70，0 orphan）。性质 = 持久化记录里的 INV-1 残骸（很可能修复前旧压缩 mangle，**未 100% 归因**：旧压缩 vs 中断 turn）。
 - **结论**：活危害已修；残骸是死历史存储债（无害但属 INV-1 痕迹）。
 
-**仍开放**：② tool-heavy(SubAgent/Team) **最坏情况**（grow young-gen 已缓解，但 grow 完仍 `no safe boundary` 的极端会话压不动；根治走 storage-redesign）/ W3 hung-running watchdog（未做）/ orphan 残骸是否需一次性 cleanup（待定）/ 在 9d3eff0f 实跑确认现在能压（live 复验）。
+**归档时转为 backlog/watchlist**：② tool-heavy(SubAgent/Team) grow 完仍 `no safe boundary` 的极端非法/残缺历史；W3 hung-running watchdog；旧 orphan 是否一次性 cleanup。当前无新的 live 故障复现，不再把这些增强项记作本需求未完成。
 
 ## 现象（实测证据）
 
@@ -93,4 +93,4 @@ engine 每次 run 从**压缩后子集**（远小于 560）起步 → gap 恒负
 ## 关联
 - 核心文件：`CompactionService` / `skillforge-core/compact/*` / `AgentLoopEngine` resolveContextWindow
 - 多 session 受影响（9d3eff0f / c9129461 …），非个例
-- 与 [`persistence-shape-invariant.md`](../../../.claude/rules/persistence-shape-invariant.md) / [`identity-column-on-rewrite.md`](../../../.claude/rules/identity-column-on-rewrite.md) 直接相关
+- 与 [`persistence-shape-invariant.md`](../../../../.codex/rules/persistence-shape-invariant.md) / [`identity-column-on-rewrite.md`](../../../../.codex/rules/identity-column-on-rewrite.md) 直接相关
