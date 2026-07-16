@@ -2359,6 +2359,23 @@ html[data-density="spacious"] { --density: 1; }
 .runtime-rd .cancel-btn:hover {
   background: rgba(184, 65, 47, 0.1);
 }
+.runtime-rd .retry-btn {
+  border: 1px solid currentColor;
+  background: var(--bg-surface);
+  padding: 4px 10px;
+  border-radius: 5px;
+  font-size: 12px;
+  cursor: pointer;
+  color: var(--err);
+  font-family: inherit;
+}
+.runtime-rd .retry-btn:hover:not(:disabled) {
+  background: rgba(184, 65, 47, 0.1);
+}
+.runtime-rd .retry-btn:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
 
 /* Messages */
 .chat-redesign .scroll {
@@ -4415,4 +4432,3 @@ html[data-density="spacious"] { --density: 1; }
   padding-bottom: 0;
   background: transparent;
 }
-

@@ -24,6 +24,7 @@ import {
   sendMessage,
   uploadChatAttachment,
   cancelChat,
+  retryFailedChatTurn,
   answerAsk,
   setSessionMode,
   getSession,
@@ -130,6 +131,7 @@ const Chat: React.FC = () => {
   const [confirmSubmitting, setConfirmSubmitting] = useState<ConfirmationDecision | null>(null);
   const [otherInput, setOtherInput] = useState('');
   const [cancelling, setCancelling] = useState(false);
+  const [retrying, setRetrying] = useState(false);
   const [lightCompactCount, setLightCompactCount] = useState(0);
   const [fullCompactCount, setFullCompactCount] = useState(0);
   const [totalTokensReclaimed, setTotalTokensReclaimed] = useState(0);
@@ -258,6 +260,7 @@ const Chat: React.FC = () => {
     setStreamingReasoningText('');
     setReasoningDurationMs(null);
     setCancelling(false);
+    setRetrying(false);
     setViewMode('chat');
     setParentSessionId(null);
     setSessionDepth(0);
@@ -511,6 +514,35 @@ const Chat: React.FC = () => {
       setOtherInput('');
     } catch {
       message.error('Failed to submit answer');
+    }
+  };
+
+  const handleRetry = async () => {
+    const sid = activeSessionId;
+    if (!sid || retrying) return;
+    setRetrying(true);
+    try {
+      await retryFailedChatTurn(sid, userId);
+      if (activeSessionIdRef.current === sid) {
+        setLoopSpans([]);
+        setRuntimeStatus('running');
+        setRuntimeStep('Retrying');
+        setRuntimeError('');
+      }
+    } catch (e: unknown) {
+      if (activeSessionIdRef.current !== sid) return;
+      const response = (e as {
+        response?: { status?: number; data?: { error?: string } };
+      }).response;
+      if (response?.status === 429) {
+        message.error('Server is busy, please try again later');
+      } else {
+        message.error(response?.data?.error || 'Failed to retry this turn');
+      }
+    } finally {
+      if (activeSessionIdRef.current === sid) {
+        setRetrying(false);
+      }
     }
   };
 
@@ -1057,7 +1089,9 @@ const Chat: React.FC = () => {
                 runtimeStep={visibleRuntimeStep}
                 runtimeError={visibleRuntimeError}
                 cancelling={cancelling}
+                retrying={retrying}
                 onCancel={handleCancel}
+                onRetry={handleRetry}
               />
             )}
 

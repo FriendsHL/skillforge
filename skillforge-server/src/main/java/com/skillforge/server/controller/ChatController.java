@@ -523,6 +523,30 @@ public class ChatController {
     }
 
     /**
+     * Retry the last failed user turn without adding another user message.
+     */
+    @PostMapping("/{sessionId}/retry")
+    public ResponseEntity<Map<String, Object>> retryFailedTurn(@PathVariable String sessionId,
+                                                                @RequestParam Long userId) {
+        ResponseEntity<SessionEntity> check = requireOwnedSession(sessionId, userId);
+        if (!check.getStatusCode().is2xxSuccessful()) {
+            return ResponseEntity.status(check.getStatusCode()).build();
+        }
+        try {
+            chatService.retryFailedTurnAsync(sessionId);
+        } catch (RejectedExecutionException e) {
+            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                    .body(Map.of("error", "Server is busy, please try again later"));
+        } catch (IllegalStateException e) {
+            return ResponseEntity.status(HttpStatus.CONFLICT)
+                    .body(Map.of("error", e.getMessage()));
+        }
+        return ResponseEntity.accepted().body(Map.of(
+                "sessionId", sessionId,
+                "status", "accepted"));
+    }
+
+    /**
      * 前端回答 install confirmation 卡片 (approve / deny)。
      * Body: { confirmationId: string, decision: "approved" | "denied", userId: number }
      */

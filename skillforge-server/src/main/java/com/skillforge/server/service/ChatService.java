@@ -56,8 +56,10 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.atomic.AtomicInteger;
 
 @Service
 public class ChatService {
@@ -105,6 +107,7 @@ public class ChatService {
      */
     private final LlmProperties llmProperties;
     private final ArtifactWorkspaceService artifactWorkspaceService;
+    private final ConcurrentHashMap<String, AtomicInteger> activeLoopTaskCounts = new ConcurrentHashMap<>();
 
     /**
      * P12: publishes {@link SessionLoopFinishedEvent} in the loop teardown finally
@@ -619,10 +622,13 @@ public class ChatService {
         String finalMessage = null;
         int toolCallCount = 0;
         String finalStatus = "completed";
+        String deferredErrorDetail = null;
+        SessionEntity deferredErrorSession = null;
         // OBS-2 M1 §D.1: traceId 在 runLoop 入口必须存在 — 优先使用调用方传入的，否则 fallback 生成。
         final String traceId = externalTraceId != null ? externalTraceId : UUID.randomUUID().toString();
         LoopContext preCtx = null;
         Path artifactWorkspace = null;
+        markLoopTaskStarted(sessionId);
         try {
             // 解析 agent definition,并把 session 的 executionMode 注入 config
             AgentDefinition agentDef = agentService.toAgentDefinition(agentEntity);
@@ -681,8 +687,10 @@ public class ChatService {
             // constructor is the Spring-injected path). The 22/23-arg constructors
             // pass null for test compat only — fail loud if a multimodal turn ever
             // reaches the null-llmProperties code path.
-            boolean hasMultimodalBlocks = userMsgWithReminder != null
-                    && messageHasMultimodalBlocks(userMsgWithReminder);
+            Message currentUserTurn = userMsgWithReminder != null
+                    ? userMsgWithReminder
+                    : findLatestUserTurn(history);
+            boolean hasMultimodalBlocks = messageHasMultimodalBlocks(currentUserTurn);
             if (hasMultimodalBlocks) {
                 if (llmProperties == null) {
                     throw new IllegalStateException(
@@ -1055,13 +1063,11 @@ public class ChatService {
                 SessionEntity s = sessionService.getSession(sessionId);
                 s.setCompletedAt(java.time.Instant.now());
                 s.setRuntimeStatus("error");
-                s.setRuntimeStep(null);
+                s.setRuntimeStep(isSafeToRetryFailure(sessionId, preCtx) ? "retryable" : null);
                 s.setRuntimeError(errorDetail);
                 sessionService.saveSession(s);
-                if (broadcaster != null) {
-                    broadcaster.sessionStatus(sessionId, "error", null, errorDetail);
-                    broadcaster.userEvent(s.getUserId(), sessionUpdatedPayload(s, s.getMessageCount()));
-                }
+                deferredErrorDetail = errorDetail;
+                deferredErrorSession = s;
                 // SessionEnd hook on error path as well (reason=error)
                 try {
                     AgentDefinition errDef = agentService.toAgentDefinition(agentEntity);
@@ -1143,6 +1149,21 @@ public class ChatService {
                 }
             } catch (Exception collabErr) {
                 log.error("CollabRun hook failed: sessionId={}", sessionId, collabErr);
+            }
+            // Publish exception failures only after teardown is complete. Otherwise the Retry
+            // action can start a new loop while this finally block is still clearing the old
+            // session's registries and confirmations. Keep the reservation until the old
+            // error event is published so it cannot overwrite a newer retry's running event.
+            try {
+                if (deferredErrorSession != null && broadcaster != null) {
+                    broadcaster.sessionStatus(sessionId, "error",
+                            deferredErrorSession.getRuntimeStep(), deferredErrorDetail);
+                    broadcaster.userEvent(deferredErrorSession.getUserId(),
+                            sessionUpdatedPayload(deferredErrorSession,
+                                    deferredErrorSession.getMessageCount()));
+                }
+            } finally {
+                markLoopTaskFinished(sessionId);
             }
         }
     }
@@ -1325,8 +1346,9 @@ public class ChatService {
             } catch (CompletionException ignored) {
                 return;
             }
-            runLoop(request.sessionId(), null, request.userId(), request.agentEntity(),
-                    request.history(), request.traceId(), request.rootTraceId());
+            runLoop(request.sessionId(), request.userMessage(), request.userMessageBlock(),
+                    request.userId(), request.agentEntity(), request.history(),
+                    request.traceId(), request.rootTraceId());
         });
         return new ResumeLoopSubmission(prepared);
     }
@@ -1337,7 +1359,19 @@ public class ChatService {
             AgentEntity agentEntity,
             List<Message> history,
             String traceId,
-            String rootTraceId) {
+            String rootTraceId,
+            String userMessage,
+            Message userMessageBlock) {
+
+        private ResumeLoopRequest(String sessionId,
+                                  Long userId,
+                                  AgentEntity agentEntity,
+                                  List<Message> history,
+                                  String traceId,
+                                  String rootTraceId) {
+            this(sessionId, userId, agentEntity, history, traceId, rootTraceId,
+                    null, null);
+        }
     }
 
     private record ResumeLoopSubmission(CompletableFuture<ResumeLoopRequest> prepared) {
@@ -1348,6 +1382,176 @@ public class ChatService {
         void abort(Throwable error) {
             prepared.completeExceptionally(error);
         }
+    }
+
+    /**
+     * Retry the persisted user turn that most recently failed without appending a duplicate
+     * user message. The previous turn remains the immutable history prefix; this method only
+     * allocates a fresh trace and starts the loop from that prefix.
+     */
+    public void retryFailedTurnAsync(String sessionId) {
+        synchronized (compactionService.lockFor(sessionId)) {
+            SessionEntity session = sessionService.getSession(sessionId);
+            if (!"error".equals(session.getRuntimeStatus())) {
+                throw new IllegalStateException("session is not in error state");
+            }
+            if (!"retryable".equals(session.getRuntimeStep())) {
+                throw new IllegalStateException("session failure is not retryable");
+            }
+            if (hasActiveLoopTask(sessionId)) {
+                throw new IllegalStateException("failed loop is still finishing");
+            }
+            Long executionUserId = session.getUserId();
+            if (executionUserId == null) {
+                throw new IllegalStateException("session has no execution owner");
+            }
+
+            List<Message> persistedHistory = sessionService.getContextMessages(sessionId);
+            if (persistedHistory.isEmpty()
+                    || !isRetryableUserTurn(persistedHistory.get(persistedHistory.size() - 1))) {
+                throw new IllegalStateException("session has no retryable failed user turn");
+            }
+            Message failedUserTurn = persistedHistory.get(persistedHistory.size() - 1);
+            List<Message> historyPrefix = new ArrayList<>(
+                    persistedHistory.subList(0, persistedHistory.size() - 1));
+            String retryUserMessage = extractRetryUserText(failedUserTurn);
+
+            // Reserve capacity before changing persisted runtime state. If the executor is
+            // saturated, the session stays in error and the user can retry again later.
+            ResumeLoopSubmission submission = reserveResumeLoop();
+            try {
+                AgentEntity agentEntity = agentService.getAgent(session.getAgentId());
+                String retryTraceId = UUID.randomUUID().toString();
+                String retryRootTraceId = sessionService.getActiveRootTraceId(sessionId);
+                if (retryRootTraceId == null) {
+                    retryRootTraceId = retryTraceId;
+                    sessionService.setActiveRootTraceId(sessionId, retryRootTraceId);
+                }
+
+                session.setCompletedAt(null);
+                session.setRuntimeStatus("running");
+                session.setRuntimeStep("Retrying");
+                session.setRuntimeError(null);
+                sessionService.saveSession(session);
+                if (broadcaster != null) {
+                    broadcaster.sessionStatus(sessionId, "running", "Retrying", null);
+                    broadcaster.userEvent(session.getUserId(),
+                            sessionUpdatedPayload(session, session.getMessageCount()));
+                }
+                submission.start(new ResumeLoopRequest(
+                        sessionId, executionUserId, agentEntity, historyPrefix,
+                        retryTraceId, retryRootTraceId, retryUserMessage, failedUserTurn));
+            } catch (RuntimeException | Error error) {
+                submission.abort(error);
+                throw error;
+            }
+        }
+    }
+
+    private static boolean isRetryableUserTurn(Message message) {
+        if (message == null || message.getRole() != Message.Role.USER) {
+            return false;
+        }
+        if (!(message.getContent() instanceof List<?> blocks)) {
+            return true;
+        }
+        for (Object block : blocks) {
+            String type = null;
+            if (block instanceof ContentBlock contentBlock) {
+                type = contentBlock.getType();
+            } else if (block instanceof Map<?, ?> map && map.get("type") != null) {
+                type = map.get("type").toString();
+            }
+            if ("tool_result".equals(type)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    static Message findLatestUserTurn(List<Message> history) {
+        if (history == null) {
+            return null;
+        }
+        for (int i = history.size() - 1; i >= 0; i--) {
+            Message message = history.get(i);
+            if (isRetryableUserTurn(message)) {
+                return message;
+            }
+        }
+        return null;
+    }
+
+    static String extractRetryUserText(Message message) {
+        if (message == null) {
+            return null;
+        }
+        Object content = message.getContent();
+        if (content instanceof String text) {
+            return text;
+        }
+        if (!(content instanceof List<?> blocks)) {
+            return message.getTextContent();
+        }
+        List<String> userText = new ArrayList<>();
+        for (Object block : blocks) {
+            String type = null;
+            String text = null;
+            if (block instanceof ContentBlock contentBlock) {
+                type = contentBlock.getType();
+                text = contentBlock.getText();
+            } else if (block instanceof Map<?, ?> map) {
+                Object typeValue = map.get("type");
+                Object textValue = map.get("text");
+                type = typeValue != null ? typeValue.toString() : null;
+                text = textValue != null ? textValue.toString() : null;
+            }
+            if ("text".equals(type)
+                    && text != null
+                    && !text.startsWith("<system-reminder>")) {
+                userText.add(text);
+            }
+        }
+        return userText.isEmpty() ? null : String.join("\n", userText);
+    }
+
+    private boolean isSafeToRetryFailure(String sessionId, LoopContext loopContext) {
+        try {
+            List<Message> history = sessionService.getContextMessages(sessionId);
+            return isSafeToRetryFailure(loopContext, history);
+        } catch (RuntimeException e) {
+            log.warn("Failed to determine retry eligibility: sessionId={}", sessionId, e);
+            return false;
+        }
+    }
+
+    static boolean isSafeToRetryFailure(LoopContext loopContext, List<Message> history) {
+        if (loopContext != null && !loopContext.getToolCallCounts().isEmpty()) {
+            return false;
+        }
+        return history != null
+                && !history.isEmpty()
+                && isRetryableUserTurn(history.get(history.size() - 1));
+    }
+
+    private void markLoopTaskStarted(String sessionId) {
+        if (sessionId == null) return;
+        activeLoopTaskCounts.compute(sessionId, (ignored, count) -> {
+            AtomicInteger next = count != null ? count : new AtomicInteger();
+            next.incrementAndGet();
+            return next;
+        });
+    }
+
+    private void markLoopTaskFinished(String sessionId) {
+        if (sessionId == null) return;
+        activeLoopTaskCounts.computeIfPresent(sessionId,
+                (ignored, count) -> count.decrementAndGet() <= 0 ? null : count);
+    }
+
+    private boolean hasActiveLoopTask(String sessionId) {
+        AtomicInteger count = activeLoopTaskCounts.get(sessionId);
+        return count != null && count.get() > 0;
     }
 
     /**

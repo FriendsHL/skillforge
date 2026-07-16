@@ -6,7 +6,9 @@ interface RuntimeBannerProps {
   runtimeStep: string;
   runtimeError: string;
   cancelling: boolean;
+  retrying: boolean;
   onCancel: () => void;
+  onRetry: () => void;
 }
 
 const RuntimeBanner: React.FC<RuntimeBannerProps> = ({
@@ -14,7 +16,9 @@ const RuntimeBanner: React.FC<RuntimeBannerProps> = ({
   runtimeStep,
   runtimeError,
   cancelling,
+  retrying,
   onCancel,
+  onRetry,
 }) => {
   if (runtimeStatus === 'idle' && runtimeStep !== 'cancelled') return null;
 
@@ -57,6 +61,17 @@ const RuntimeBanner: React.FC<RuntimeBannerProps> = ({
           <strong>Runtime error</strong>
           {runtimeError ? <> · {runtimeError}</> : null}
         </span>
+        {runtimeStep === 'retryable' && (
+          <button
+            type="button"
+            className="retry-btn"
+            disabled={retrying}
+            aria-label={retrying ? 'Retrying failed turn' : 'Retry failed turn'}
+            onClick={onRetry}
+          >
+            {retrying ? 'Retrying…' : 'Retry'}
+          </button>
+        )}
       </div>
     );
   }

@@ -137,6 +137,7 @@ class AgentLoopEngineCompactTest {
         assertThat(cb.lightCalls).isEqualTo(1);
         assertThat(cb.sourceLabels).containsExactly("light:agent-tool");
         assertThat(lc.isCompactedThisIteration()).isTrue();
+        assertThat(lc.getToolCallCounts()).containsEntry(ContextCompactTool.NAME, 1);
         com.skillforge.core.model.ContentBlock cb0 =
                 (com.skillforge.core.model.ContentBlock) ((List<?>) result.getContent()).get(0);
         assertThat(cb0.getIsError()).isFalse();

@@ -76,6 +76,8 @@ export const getChatAttachmentBlob = (
   });
 export const cancelChat = (sessionId: string, userId: number) =>
   api.post(`/chat/${sessionId}/cancel`, null, { params: { userId } });
+export const retryFailedChatTurn = (sessionId: string, userId: number) =>
+  api.post(`/chat/${sessionId}/retry`, null, { params: { userId } });
 export const answerAsk = (sessionId: string, askId: string, answer: string, userId: number) =>
   api.post(`/chat/${sessionId}/answer`, { askId, answer, userId });
 

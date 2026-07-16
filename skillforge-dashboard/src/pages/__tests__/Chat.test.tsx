@@ -80,6 +80,14 @@ const getSessionsMock = vi.fn(() =>
     ],
   }),
 );
+const retryFailedChatTurnMock = vi.fn(() => Promise.resolve({ data: {} }));
+const chatSessionSettersCapture: {
+  current: null | {
+    setRuntimeStatus: (status: 'idle' | 'running' | 'waiting_user' | 'error') => void;
+    setRuntimeStep: (step: string) => void;
+    setRuntimeError: (error: string) => void;
+  };
+} = { current: null };
 
 vi.mock('../../api', () => ({
   getAgents: (...args: unknown[]) => getAgentsMock(...(args as [])),
@@ -89,6 +97,7 @@ vi.mock('../../api', () => ({
   sendMessage: vi.fn(() => Promise.resolve({ data: {} })),
   uploadChatAttachment: vi.fn(() => Promise.resolve({ data: { id: 'a' } })),
   cancelChat: vi.fn(() => Promise.resolve({ data: {} })),
+  retryFailedChatTurn: (...args: unknown[]) => retryFailedChatTurnMock(...(args as [string, number])),
   answerAsk: vi.fn(() => Promise.resolve({ data: {} })),
   setSessionMode: vi.fn(() => Promise.resolve({ data: {} })),
   getSession: vi.fn(() => Promise.resolve({ data: {} })),
@@ -152,7 +161,12 @@ vi.mock('../../hooks/useCollabState', () => ({
   }),
 }));
 vi.mock('../../hooks/useChatSession', () => ({
-  useChatSession: () => {},
+  useChatSession: (
+    _activeSessionId: string | undefined,
+    setters: NonNullable<typeof chatSessionSettersCapture.current>,
+  ) => {
+    chatSessionSettersCapture.current = setters;
+  },
 }));
 vi.mock('../../hooks/useChatWsEventHandler', () => ({
   useChatWsEventHandler: () => () => {},
@@ -183,7 +197,27 @@ vi.mock('../../components/ChatWindow', () => {
 vi.mock('../../components/SessionReplay', () => ({ default: () => <div /> }));
 vi.mock('../../components/CompactionHistoryModal', () => ({ default: () => <div /> }));
 vi.mock('../../components/CheckpointModal', () => ({ default: () => <div /> }));
-vi.mock('../../components/RuntimeBanner', () => ({ default: () => <div data-testid="runtime-banner" /> }));
+vi.mock('../../components/RuntimeBanner', () => ({
+  default: (props: {
+    runtimeStatus: string;
+    runtimeStep: string;
+    retrying: boolean;
+    onRetry: () => void;
+  }) => (
+    <div data-testid="runtime-banner">
+      {props.runtimeStatus === 'error' && props.runtimeStep === 'retryable' && (
+        <button
+          type="button"
+          data-testid="runtime-retry"
+          disabled={props.retrying}
+          onClick={props.onRetry}
+        >
+          Retry
+        </button>
+      )}
+    </div>
+  ),
+}));
 vi.mock('../../components/PendingAskCard', () => ({ default: () => <div /> }));
 vi.mock('../../components/InstallConfirmationCard', () => ({ default: () => <div /> }));
 // ChatSidebar shim — surface props (activeAgentTab, scoped agent list,
@@ -265,6 +299,8 @@ describe('Chat — system agent send gate (SYSTEM-AGENT-TYPING Phase 2.3)', () =
   beforeEach(() => {
     getAgentsMock.mockClear();
     getSessionsMock.mockClear();
+    retryFailedChatTurnMock.mockClear();
+    chatSessionSettersCapture.current = null;
     // Phase 2 UX refactor — chat sidebar tab is persisted in localStorage.
     // Clear between tests so localStorage state from one case doesn't leak
     // into the next (which would otherwise auto-flip the tab before the
@@ -386,5 +422,25 @@ describe('Chat — system agent send gate (SYSTEM-AGENT-TYPING Phase 2.3)', () =
     );
     // localStorage persistence — manual switch wins, written to the chat key.
     expect(window.localStorage.getItem('chat.active_agent_tab')).toBe('system');
+  });
+
+  it('retries an errored turn through the dedicated retry endpoint', async () => {
+    renderChatWithAgent(userAgent.id, 's-user-1');
+    await screen.findByTestId('chat-window');
+
+    act(() => {
+      chatSessionSettersCapture.current?.setRuntimeError('Provider unavailable');
+      chatSessionSettersCapture.current?.setRuntimeStep('retryable');
+      chatSessionSettersCapture.current?.setRuntimeStatus('error');
+    });
+
+    fireEvent.click(await screen.findByTestId('runtime-retry'));
+
+    await waitFor(() => {
+      expect(retryFailedChatTurnMock).toHaveBeenCalledWith('s-user-1', 1);
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId('runtime-retry')).not.toBeInTheDocument();
+    });
   });
 });

@@ -2713,6 +2713,10 @@ public class AgentLoopEngine {
         String level = input.get("level") != null ? input.get("level").toString() : "light";
         String reason = input.get("reason") != null ? input.get("reason").toString() : "(no reason)";
 
+        // This special tool bypasses executeToolCallOutcome. Record it here so failed-turn
+        // retry cannot replay a turn after compaction has already rewritten context.
+        loopCtx.recordToolCall(ContextCompactTool.NAME);
+
         if (compactorCallback == null) {
             return Message.toolResult(toolUseId, "compact_context is not available in this runtime.", true);
         }
