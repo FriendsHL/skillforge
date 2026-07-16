@@ -31,6 +31,7 @@
 		7EFEFEC87EDA7B5FAEE51AF7 /* InteractionPolishPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75B661E11D63E6A3F394021F /* InteractionPolishPolicy.swift */; };
 		821549A63793025CFD018549 /* PairingPayloadTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF2DCEA0D217D4D852B21A41 /* PairingPayloadTests.swift */; };
 		82CFACB88D0779E0960C7640 /* AppStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B60130ECEDB6A5DA6E91C2C /* AppStateTests.swift */; };
+		86B8C43B0678F68EDA2F9CA9 /* PrototypeParityUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62635092A022C8824B763E43 /* PrototypeParityUITests.swift */; };
 		8A1465B3D2E2F2B2ADB3CF6F /* EndpointProbeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 092630ECD7AADEEDFDC10F5F /* EndpointProbeTests.swift */; };
 		932F268CA3DAD4ECE1249FF1 /* ControlView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07F68232D961E958FFE0A215 /* ControlView.swift */; };
 		943406658C75E8DD2B147377 /* PairingScannerAvailabilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D457D1BF57C40582BEA41E9E /* PairingScannerAvailabilityTests.swift */; };
@@ -107,8 +108,10 @@
 		46B2D1A79F27A14A4A50AA69 /* KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainStore.swift; sourceTree = "<group>"; };
 		4FE5316511541D9DC204E5E5 /* SkillForge.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = SkillForge.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		51FAE704634016F3480D1809 /* AttachmentImageLoaderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentImageLoaderTests.swift; sourceTree = "<group>"; };
+		57D75DCD41113CE22731FC60 /* SkillForge.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = SkillForge.entitlements; sourceTree = "<group>"; };
 		5D3E2B37D53EA7C1DF19B54F /* AttachmentDownloadRepositoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentDownloadRepositoryTests.swift; sourceTree = "<group>"; };
 		5DAEFA8FBE8F003B5C20DA8C /* ChatAttachment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatAttachment.swift; sourceTree = "<group>"; };
+		62635092A022C8824B763E43 /* PrototypeParityUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrototypeParityUITests.swift; sourceTree = "<group>"; };
 		656F98395456673B3DFD4FC4 /* OutboundAttachmentUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutboundAttachmentUITests.swift; sourceTree = "<group>"; };
 		67364194DF920F3F9D7592CB /* SessionListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionListView.swift; sourceTree = "<group>"; };
 		68E7F3A78AA21383ECDA8118 /* PushRegistration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushRegistration.swift; sourceTree = "<group>"; };
@@ -209,6 +212,7 @@
 				7CF8EBF629F78F9F2C9A7ECE /* ConnectionHealthUITests.swift */,
 				04D935EE85D77BA0EF1ACA31 /* InteractionPolishUITests.swift */,
 				656F98395456673B3DFD4FC4 /* OutboundAttachmentUITests.swift */,
+				62635092A022C8824B763E43 /* PrototypeParityUITests.swift */,
 				CBE761426F06F601C797F479 /* Slice3InteractionUITests.swift */,
 				306DA83085F8363BE2DEE7B1 /* StreamingHandoffUITests.swift */,
 			);
@@ -261,6 +265,7 @@
 			isa = PBXGroup;
 			children = (
 				02A80C1DD9CAD26DAE929996 /* Assets.xcassets */,
+				57D75DCD41113CE22731FC60 /* SkillForge.entitlements */,
 				9C8E8AFC0E886F3FBF778B1D /* App */,
 				6BC61537F679829B0BDDD898 /* Attachments */,
 				185BD3E0B80C49E080CE8CEA /* Auth */,
@@ -445,6 +450,7 @@
 				06A2F1A7ADD71322A1321C7D /* ConnectionHealthUITests.swift in Sources */,
 				F662D52E7293110EF2AAD7CF /* InteractionPolishUITests.swift in Sources */,
 				9CB7FC64C425C24A71318A08 /* OutboundAttachmentUITests.swift in Sources */,
+				86B8C43B0678F68EDA2F9CA9 /* PrototypeParityUITests.swift in Sources */,
 				1718F9314CF369E7C0710B59 /* Slice3InteractionUITests.swift in Sources */,
 				E14E1480BBB0EFCA35217E2B /* StreamingHandoffUITests.swift in Sources */,
 			);
@@ -535,6 +541,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = "";
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				INFOPLIST_FILE = SkillForge/App/SkillForgeInfo.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
@@ -651,7 +658,9 @@
 		880A5138AC2483817FBF5202 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				APS_ENVIRONMENT = production;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = SkillForge/SkillForge.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				INFOPLIST_FILE = SkillForge/App/SkillForgeInfo.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;

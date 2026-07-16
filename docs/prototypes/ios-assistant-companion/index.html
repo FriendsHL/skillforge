@@ -3,2011 +3,289 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>SkillForge iOS Assistant Companion Prototype</title>
+  <title>SkillForge iOS — Current & Proposed</title>
   <style>
     :root {
-      color-scheme: dark;
-      --bg: #111214;
-      --surface: #181a1f;
-      --surface-2: #20232a;
-      --surface-3: #282c35;
-      --phone: #f6f7f2;
-      --phone-2: #ebece6;
-      --ink: #f6f6f0;
-      --ink-dark: #14161b;
-      --muted: #9ba1ad;
-      --muted-dark: #636974;
-      --line: rgba(255, 255, 255, 0.11);
-      --line-dark: rgba(20, 22, 27, 0.12);
-      --blue: #4a8cff;
-      --blue-2: #d9e7ff;
-      --green: #38b27b;
-      --green-2: #dff5e7;
-      --amber: #d88c2d;
-      --amber-2: #fff0d5;
-      --red: #e35d5d;
-      --red-2: #ffe1df;
-      --violet: #7c6df2;
-      --radius-xs: 4px;
-      --radius-sm: 8px;
-      --radius-md: 12px;
-      --shadow-deep: 0 24px 80px rgba(0, 0, 0, 0.36);
-      --shadow-soft: 0 12px 36px rgba(0, 0, 0, 0.18);
-      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    }
-
-    * {
-      box-sizing: border-box;
-    }
-
-    html {
-      min-height: 100%;
-      background: var(--bg);
-    }
-
-    body {
-      min-height: 100%;
-      margin: 0;
-      background:
-        linear-gradient(135deg, #111214 0%, #17181c 43%, #14161a 100%);
-      color: var(--ink);
-    }
-
-    button,
-    input {
-      font: inherit;
-    }
-
-    button {
-      cursor: pointer;
-    }
-
-    .prototype-shell {
-      min-height: 100vh;
-      display: grid;
-      grid-template-columns: minmax(220px, 0.82fr) minmax(360px, 480px) minmax(260px, 0.9fr);
-      gap: 28px;
-      align-items: center;
-      max-width: 1380px;
-      margin: 0 auto;
-      padding: 36px;
-    }
-
-    .product-panel,
-    .control-panel {
-      align-self: stretch;
-      min-height: 640px;
-      border: 1px solid var(--line);
-      border-radius: var(--radius-md);
-      background: rgba(24, 26, 31, 0.82);
-      box-shadow: var(--shadow-soft);
-      backdrop-filter: blur(18px);
-    }
-
-    .product-panel {
-      display: flex;
-      flex-direction: column;
-      justify-content: space-between;
-      padding: 24px;
-    }
-
-    .brand-lockup {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      margin-bottom: 28px;
-    }
-
-    .brand-mark {
-      width: 38px;
-      height: 38px;
-      display: grid;
-      place-items: center;
-      border-radius: 10px;
-      background: #e6683d;
-      color: #fff8f0;
-      font-size: 14px;
-      font-weight: 760;
-      box-shadow: 0 10px 28px rgba(230, 104, 61, 0.22);
-    }
-
-    .brand-title {
-      margin: 0;
-      font-size: 17px;
-      line-height: 1.1;
-      font-weight: 760;
-    }
-
-    .brand-subtitle {
-      margin: 4px 0 0;
-      color: var(--muted);
-      font-size: 12px;
-      line-height: 1.3;
-    }
-
-    .screen-switcher {
-      display: grid;
-      gap: 8px;
-      margin: 0;
-      padding: 0;
-      list-style: none;
-    }
-
-    .switch-button {
-      width: 100%;
-      display: grid;
-      grid-template-columns: 28px 1fr auto;
-      align-items: center;
-      gap: 10px;
-      min-height: 46px;
-      padding: 8px 10px;
-      border: 1px solid transparent;
-      border-radius: var(--radius-sm);
-      background: transparent;
-      color: var(--ink);
-      text-align: left;
-      transition: border-color 180ms ease, background 180ms ease, transform 180ms ease;
-    }
-
-    .switch-button:hover,
-    .switch-button:focus-visible {
-      outline: 0;
-      border-color: var(--line);
-      background: rgba(255, 255, 255, 0.05);
-    }
-
-    .switch-button.is-active {
-      border-color: rgba(74, 140, 255, 0.42);
-      background: rgba(74, 140, 255, 0.13);
-    }
-
-    .switch-icon {
-      width: 28px;
-      height: 28px;
-      display: grid;
-      place-items: center;
-      border-radius: var(--radius-xs);
-      background: rgba(255, 255, 255, 0.08);
-      color: var(--blue-2);
-      font-size: 14px;
-    }
-
-    .switch-copy {
-      min-width: 0;
-    }
-
-    .switch-label {
-      display: block;
-      font-size: 13px;
-      line-height: 1.2;
-      font-weight: 720;
-    }
-
-    .switch-meta {
-      display: block;
-      margin-top: 3px;
-      color: var(--muted);
-      font-size: 11px;
-      line-height: 1.2;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
-    .switch-state {
-      width: 8px;
-      height: 8px;
-      border-radius: 99px;
-      background: rgba(255, 255, 255, 0.24);
-    }
-
-    .switch-button.is-active .switch-state {
-      background: var(--green);
-      box-shadow: 0 0 0 4px rgba(56, 178, 123, 0.14);
-    }
-
-    .scope-block {
-      border-top: 1px solid var(--line);
-      padding-top: 18px;
-    }
-
-    .scope-title {
-      margin: 0 0 10px;
-      color: var(--muted);
-      font-size: 11px;
-      font-weight: 760;
-      text-transform: uppercase;
-    }
-
-    .scope-grid {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 7px;
-    }
-
-    .scope-pill {
-      padding: 6px 8px;
-      border: 1px solid var(--line);
-      border-radius: 999px;
-      background: rgba(255, 255, 255, 0.04);
-      color: #d5d9e1;
-      font-size: 11px;
-      line-height: 1;
-    }
-
-    .phone-stage {
-      display: grid;
-      place-items: center;
-      min-width: 0;
-    }
-
-    .phone-frame {
-      position: relative;
-      width: min(100%, 430px);
-      aspect-ratio: 430 / 894;
-      border-radius: 44px;
-      padding: 14px;
-      background: #07080a;
-      box-shadow:
-        inset 0 0 0 1px rgba(255, 255, 255, 0.1),
-        inset 0 -24px 32px rgba(255, 255, 255, 0.05),
-        var(--shadow-deep);
-    }
-
-    .phone-frame::before {
-      content: "";
-      position: absolute;
-      top: 9px;
-      left: 50%;
-      width: 118px;
-      height: 30px;
-      transform: translateX(-50%);
-      border-radius: 0 0 20px 20px;
-      background: #07080a;
-      z-index: 4;
-    }
-
-    .phone-frame::after {
-      content: "";
-      position: absolute;
-      top: 21px;
-      left: 50%;
-      width: 48px;
-      height: 5px;
-      transform: translateX(-50%);
-      border-radius: 99px;
-      background: #22252b;
-      z-index: 5;
-    }
-
-    .phone-screen {
-      position: relative;
-      width: 100%;
-      height: 100%;
-      overflow: hidden;
-      border-radius: 34px;
-      background: var(--phone);
-      color: var(--ink-dark);
-      isolation: isolate;
-    }
-
-    .ios-status {
-      position: absolute;
-      top: 0;
-      left: 0;
-      right: 0;
-      z-index: 3;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      height: 48px;
-      padding: 0 27px;
-      color: #111318;
-      font-size: 12px;
-      font-weight: 760;
-      pointer-events: none;
-    }
-
-    .ios-indicators {
-      display: flex;
-      align-items: center;
-      gap: 5px;
-    }
-
-    .signal-bars {
-      display: inline-grid;
-      grid-template-columns: repeat(4, 3px);
-      align-items: end;
-      gap: 2px;
-      height: 11px;
-    }
-
-    .signal-bars span {
-      display: block;
-      width: 3px;
-      border-radius: 2px;
-      background: #111318;
-    }
-
-    .signal-bars span:nth-child(1) { height: 4px; }
-    .signal-bars span:nth-child(2) { height: 6px; }
-    .signal-bars span:nth-child(3) { height: 8px; }
-    .signal-bars span:nth-child(4) { height: 10px; }
-
-    .battery {
-      width: 19px;
-      height: 9px;
-      border: 1.5px solid #111318;
-      border-radius: 3px;
-      position: relative;
-    }
-
-    .battery::before {
-      content: "";
-      position: absolute;
-      inset: 2px 5px 2px 2px;
-      border-radius: 2px;
-      background: #111318;
-    }
-
-    .battery::after {
-      content: "";
-      position: absolute;
-      top: 2px;
-      right: -4px;
-      width: 2px;
-      height: 4px;
-      border-radius: 0 2px 2px 0;
-      background: #111318;
-    }
-
-    .screen {
-      position: absolute;
-      inset: 0;
-      display: grid;
-      grid-template-rows: auto 1fr auto;
-      opacity: 0;
-      transform: translateX(18px);
-      pointer-events: none;
-      transition: opacity 220ms ease, transform 220ms ease;
-      background: var(--phone);
-    }
-
-    .screen.is-active {
-      opacity: 1;
-      transform: translateX(0);
-      pointer-events: auto;
-      z-index: 2;
-    }
-
-    .app-header {
-      padding: 58px 18px 12px;
-      border-bottom: 1px solid var(--line-dark);
-      background: rgba(246, 247, 242, 0.92);
-      backdrop-filter: blur(18px);
-    }
-
-    .app-header.compact {
-      padding-bottom: 10px;
-    }
-
-    .header-row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-    }
-
-    .assistant-lockup {
-      display: flex;
-      align-items: center;
-      min-width: 0;
-      gap: 10px;
-    }
-
-    .assistant-avatar {
-      flex: 0 0 auto;
-      width: 34px;
-      height: 34px;
-      display: grid;
-      place-items: center;
-      border-radius: 9px;
-      background: #1e222a;
-      color: #fff;
-      font-weight: 780;
-      font-size: 12px;
-    }
-
-    .assistant-name {
-      margin: 0;
-      font-size: 18px;
-      line-height: 1.1;
-      font-weight: 780;
-    }
-
-    .assistant-subtitle {
-      margin: 3px 0 0;
-      color: var(--muted-dark);
-      font-size: 12px;
-      line-height: 1.2;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
-    .icon-button {
-      flex: 0 0 auto;
-      width: 34px;
-      height: 34px;
-      display: grid;
-      place-items: center;
-      border: 1px solid var(--line-dark);
-      border-radius: 10px;
-      background: #fff;
-      color: #1b1d22;
-      font-size: 16px;
-      line-height: 1;
-      transition: transform 180ms ease, border-color 180ms ease, background 180ms ease;
-    }
-
-    .phone-screen.is-sheet-open .add-button {
-      transform: rotate(45deg);
-      border-color: rgba(74, 140, 255, 0.42);
-      background: var(--blue-2);
-    }
-
-    .status-strip {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-      margin-top: 14px;
-      padding: 8px 10px;
-      border: 1px solid rgba(56, 178, 123, 0.22);
-      border-radius: var(--radius-sm);
-      background: var(--green-2);
-      color: #214f38;
-      font-size: 12px;
-      line-height: 1.2;
-    }
-
-    .pulse-dot {
-      width: 8px;
-      height: 8px;
-      flex: 0 0 auto;
-      border-radius: 99px;
-      background: var(--green);
-      box-shadow: 0 0 0 5px rgba(56, 178, 123, 0.16);
-    }
-
-    .screen-body {
-      overflow: auto;
-      min-height: 0;
-      padding: 14px 18px 12px;
-      scrollbar-width: none;
-    }
-
-    .screen-body::-webkit-scrollbar {
-      display: none;
-    }
-
-    .message-stack {
-      display: grid;
-      gap: 10px;
-      padding-bottom: 10px;
-    }
-
-    .day-divider {
-      justify-self: center;
-      padding: 5px 8px;
-      border-radius: 999px;
-      background: rgba(20, 22, 27, 0.06);
-      color: var(--muted-dark);
-      font-size: 11px;
-      line-height: 1;
-    }
-
-    .bubble {
-      max-width: 84%;
-      padding: 10px 12px;
-      border-radius: 17px;
-      font-size: 14px;
-      line-height: 1.42;
-      box-shadow: 0 4px 16px rgba(31, 34, 42, 0.08);
-    }
-
-    .bubble.user {
-      justify-self: end;
-      border-bottom-right-radius: 5px;
-      background: var(--blue);
-      color: #fff;
-    }
-
-    .bubble.assistant {
-      justify-self: start;
-      border-bottom-left-radius: 5px;
-      background: #fff;
-      color: #16181d;
-      border: 1px solid rgba(20, 22, 27, 0.06);
-    }
-
-    .activity-card,
-    .decision-card,
-    .pairing-card,
-    .notification-card,
-    .settings-section {
-      border: 1px solid var(--line-dark);
-      border-radius: var(--radius-md);
-      background: #fff;
-      box-shadow: 0 8px 24px rgba(27, 30, 38, 0.07);
-    }
-
-    .activity-card {
-      display: grid;
-      gap: 8px;
-      padding: 12px;
-    }
-
-    .activity-row {
-      display: grid;
-      grid-template-columns: 18px 1fr auto;
-      align-items: center;
-      gap: 9px;
-      color: #333842;
-      font-size: 12px;
-      line-height: 1.25;
-    }
-
-    .activity-row .spinner {
-      width: 14px;
-      height: 14px;
-      border: 2px solid #d9dde5;
-      border-top-color: var(--blue);
-      border-radius: 99px;
-      animation: spin 1s linear infinite;
-    }
-
-    .activity-path {
-      color: var(--muted-dark);
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
-    .card-eyebrow {
-      margin: 0 0 8px;
-      color: var(--muted-dark);
-      font-size: 11px;
-      line-height: 1;
-      font-weight: 780;
-      text-transform: uppercase;
-    }
-
-    .decision-card {
-      display: grid;
-      gap: 10px;
-      padding: 13px;
-      border-color: rgba(216, 140, 45, 0.36);
-      background: linear-gradient(180deg, #fff 0%, #fffaf1 100%);
-    }
-
-    .decision-title {
-      margin: 0;
-      color: #2c261c;
-      font-size: 14px;
-      line-height: 1.28;
-      font-weight: 760;
-    }
-
-    .decision-copy {
-      margin: 0;
-      color: #5e5548;
-      font-size: 12px;
-      line-height: 1.45;
-    }
-
-    .decision-actions {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 8px;
-    }
-
-    .action-button {
-      min-height: 34px;
-      border: 1px solid var(--line-dark);
-      border-radius: var(--radius-sm);
-      background: #fff;
-      color: #1e222a;
-      font-size: 13px;
-      font-weight: 720;
-    }
-
-    .action-button.primary {
-      border-color: var(--blue);
-      background: var(--blue);
-      color: #fff;
-    }
-
-    .composer {
-      display: grid;
-      grid-template-columns: 34px 1fr 34px;
-      align-items: center;
-      gap: 8px;
-      padding: 10px 14px 28px;
-      border-top: 1px solid var(--line-dark);
-      background: rgba(246, 247, 242, 0.95);
-    }
-
-    .chat-screen .composer {
-      padding-bottom: 94px;
-    }
-
-    .composer-input {
-      min-width: 0;
-      height: 36px;
-      display: flex;
-      align-items: center;
-      padding: 0 12px;
-      border: 1px solid var(--line-dark);
-      border-radius: 999px;
-      background: #fff;
-      color: var(--muted-dark);
-      font-size: 13px;
-    }
-
-    .screen-nav {
-      position: absolute;
-      left: 12px;
-      right: 12px;
-      bottom: 8px;
-      z-index: 6;
-      display: grid;
-      grid-template-columns: repeat(4, 1fr);
-      gap: 5px;
-      padding: 5px;
-      border: 1px solid rgba(20, 22, 27, 0.08);
-      border-radius: 18px;
-      background: rgba(255, 255, 255, 0.8);
-      backdrop-filter: blur(18px);
-    }
-
-    .phone-screen.is-pairing .screen-nav {
-      display: none;
-    }
-
-    .phone-screen.is-sheet-open .screen-nav {
-      opacity: 0.24;
-      pointer-events: none;
-    }
-
-    .nav-tab {
-      display: grid;
-      place-items: center;
-      min-height: 38px;
-      border: 0;
-      border-radius: 14px;
-      background: transparent;
-      color: #565d68;
-      font-size: 17px;
-    }
-
-    .nav-tab.is-active {
-      background: #171a20;
-      color: #fff;
-    }
-
-    .sheet-backdrop {
-      position: absolute;
-      inset: 0;
-      z-index: 7;
-      background: rgba(18, 20, 25, 0.2);
-      opacity: 0;
-      pointer-events: none;
-      transition: opacity 180ms ease;
-    }
-
-    .phone-screen.is-sheet-open .sheet-backdrop {
-      opacity: 1;
-      pointer-events: auto;
-    }
-
-    .action-sheet {
-      position: absolute;
-      left: 12px;
-      right: 12px;
-      bottom: 74px;
-      z-index: 8;
-      display: grid;
-      gap: 10px;
-      padding: 10px;
-      border: 1px solid rgba(20, 22, 27, 0.1);
-      border-radius: 22px;
-      background: rgba(255, 255, 255, 0.94);
-      box-shadow: 0 18px 48px rgba(20, 22, 27, 0.24);
-      backdrop-filter: blur(22px);
-      opacity: 0;
-      transform: translateY(22px);
-      pointer-events: none;
-      transition: opacity 180ms ease, transform 180ms ease;
-    }
-
-    .phone-screen.is-sheet-open .action-sheet {
-      opacity: 1;
-      transform: translateY(0);
-      pointer-events: auto;
-    }
-
-    .sheet-handle {
-      justify-self: center;
-      width: 38px;
-      height: 4px;
-      border-radius: 99px;
-      background: rgba(20, 22, 27, 0.18);
-    }
-
-    .sheet-head {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      padding: 2px 2px 0;
-    }
-
-    .sheet-title {
-      margin: 0;
-      font-size: 14px;
-      line-height: 1.2;
-      font-weight: 780;
-      color: #171a20;
-    }
-
-    .sheet-subtitle {
-      margin: 3px 0 0;
-      color: var(--muted-dark);
-      font-size: 11px;
-      line-height: 1.2;
-    }
-
-    .sheet-close {
-      width: 30px;
-      height: 30px;
-      border: 0;
-      border-radius: 999px;
-      background: rgba(20, 22, 27, 0.08);
-      color: #171a20;
-      font-size: 17px;
-    }
-
-    .sheet-actions {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 8px;
-    }
-
-    .sheet-action {
-      min-height: 66px;
-      display: grid;
-      grid-template-columns: 28px 1fr;
-      align-items: center;
-      gap: 9px;
-      padding: 10px;
-      border: 1px solid rgba(20, 22, 27, 0.1);
-      border-radius: var(--radius-md);
-      background: #fff;
-      color: #171a20;
-      text-align: left;
-    }
-
-    .sheet-action.primary {
-      grid-column: span 2;
-      background: #171a20;
-      color: #fff;
-    }
-
-    .sheet-action-icon {
-      width: 28px;
-      height: 28px;
-      display: grid;
-      place-items: center;
-      border-radius: var(--radius-xs);
-      background: rgba(74, 140, 255, 0.14);
-      color: #1f5ec7;
-      font-size: 15px;
-      font-weight: 780;
-    }
-
-    .sheet-action.primary .sheet-action-icon {
-      background: rgba(255, 255, 255, 0.12);
-      color: #fff;
-    }
-
-    .sheet-action strong {
-      display: block;
-      font-size: 13px;
-      line-height: 1.15;
-    }
-
-    .sheet-action span:last-child {
-      display: block;
-      min-width: 0;
-    }
-
-    .sheet-action small {
-      display: block;
-      margin-top: 3px;
-      color: var(--muted-dark);
-      font-size: 11px;
-      line-height: 1.2;
-    }
-
-    .sheet-action.primary small {
-      color: rgba(255, 255, 255, 0.68);
-    }
-
-    .pairing-screen {
-      grid-template-rows: auto 1fr;
-      background: #eff1ea;
-    }
-
-    .pairing-body {
-      display: grid;
-      align-content: center;
-      gap: 16px;
-      padding: 24px 22px 34px;
-    }
-
-    .pairing-card {
-      display: grid;
-      gap: 14px;
-      padding: 18px;
-      text-align: center;
-    }
-
-    .scanner-view {
-      position: relative;
-      min-height: 318px;
-      display: grid;
-      place-items: center;
-      overflow: hidden;
-      border-radius: 24px;
-      background:
-        linear-gradient(135deg, rgba(19, 23, 31, 0.96), rgba(34, 39, 48, 0.94)),
-        #171a20;
-      color: #fff;
-      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
-    }
-
-    .scanner-view::before {
-      content: "";
-      position: absolute;
-      inset: 0;
-      background:
-        linear-gradient(rgba(255, 255, 255, 0.08) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(255, 255, 255, 0.08) 1px, transparent 1px);
-      background-size: 42px 42px;
-      opacity: 0.16;
-    }
-
-    .scanner-frame {
-      position: relative;
-      z-index: 1;
-      width: 224px;
-      height: 224px;
-      display: grid;
-      place-items: center;
-      border-radius: 22px;
-    }
-
-    .scanner-corner {
-      position: absolute;
-      width: 34px;
-      height: 34px;
-      border-color: rgba(255, 255, 255, 0.92);
-      border-style: solid;
-    }
-
-    .scanner-corner:nth-child(1) {
-      top: 0;
-      left: 0;
-      border-width: 3px 0 0 3px;
-      border-top-left-radius: 18px;
-    }
-
-    .scanner-corner:nth-child(2) {
-      top: 0;
-      right: 0;
-      border-width: 3px 3px 0 0;
-      border-top-right-radius: 18px;
-    }
-
-    .scanner-corner:nth-child(3) {
-      right: 0;
-      bottom: 0;
-      border-width: 0 3px 3px 0;
-      border-bottom-right-radius: 18px;
-    }
-
-    .scanner-corner:nth-child(4) {
-      bottom: 0;
-      left: 0;
-      border-width: 0 0 3px 3px;
-      border-bottom-left-radius: 18px;
-    }
-
-    .scanner-caption {
-      position: absolute;
-      left: 18px;
-      right: 18px;
-      bottom: 16px;
-      z-index: 1;
-      display: grid;
-      gap: 4px;
-      justify-items: center;
-      color: rgba(255, 255, 255, 0.78);
-      font-size: 12px;
-      line-height: 1.3;
-    }
-
-    .qr-grid {
-      width: min(100%, 162px);
-      aspect-ratio: 1 / 1;
-      display: grid;
-      grid-template-columns: repeat(17, 1fr);
-      grid-template-rows: repeat(17, 1fr);
-      gap: 2px;
-      margin: 0 auto;
-      padding: 10px;
-      border-radius: 14px;
-      background: #f8f8f2;
-      box-shadow: inset 0 0 0 1px rgba(20, 22, 27, 0.08);
-    }
-
-    .qr-cell {
-      border-radius: 2px;
-      background: transparent;
-    }
-
-    .qr-cell.is-on {
-      background: #111318;
-    }
-
-    .pairing-title {
-      margin: 0;
-      font-size: 21px;
-      line-height: 1.15;
-      font-weight: 820;
-    }
-
-    .pairing-copy {
-      margin: 0;
-      color: var(--muted-dark);
-      font-size: 13px;
-      line-height: 1.45;
-    }
-
-    .endpoint-list {
-      display: grid;
-      gap: 8px;
-    }
-
-    .endpoint-row {
-      display: grid;
-      grid-template-columns: auto 1fr auto;
-      align-items: center;
-      gap: 8px;
-      padding: 9px 10px;
-      border: 1px solid var(--line-dark);
-      border-radius: var(--radius-sm);
-      background: #fff;
-      font-size: 12px;
-      line-height: 1.2;
-    }
-
-    .endpoint-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 99px;
-      background: var(--green);
-    }
-
-    .endpoint-dot.pending {
-      background: var(--amber);
-    }
-
-    .endpoint-url {
-      min-width: 0;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
-    .endpoint-badge {
-      color: var(--muted-dark);
-      font-size: 11px;
-    }
-
-    .pending-body,
-    .sessions-body,
-    .notifications-body,
-    .settings-body {
-      display: grid;
-      align-content: start;
-      gap: 12px;
-      padding-bottom: 70px;
-    }
-
-    .session-agent-card {
-      display: grid;
-      grid-template-columns: 42px 1fr auto;
-      align-items: center;
-      gap: 10px;
-      padding: 12px;
-      border: 1px solid var(--line-dark);
-      border-radius: var(--radius-md);
-      background: #171a20;
-      color: #fff;
-      box-shadow: 0 10px 28px rgba(20, 22, 27, 0.16);
-    }
-
-    .session-agent-mark {
-      width: 42px;
-      height: 42px;
-      display: grid;
-      place-items: center;
-      border-radius: 12px;
-      background: rgba(255, 255, 255, 0.1);
-      font-size: 13px;
-      font-weight: 780;
-    }
-
-    .session-agent-title {
-      margin: 0;
-      font-size: 15px;
-      line-height: 1.2;
-      font-weight: 780;
-    }
-
-    .session-agent-copy {
-      margin: 3px 0 0;
-      color: rgba(255, 255, 255, 0.66);
-      font-size: 12px;
-      line-height: 1.25;
-    }
-
-    .session-card {
-      width: 100%;
-      display: grid;
-      grid-template-columns: 1fr auto;
-      gap: 12px;
-      align-items: center;
-      min-height: 72px;
-      padding: 12px;
-      border: 1px solid var(--line-dark);
-      border-radius: var(--radius-md);
-      background: #fff;
-      color: #171a20;
-      text-align: left;
-      box-shadow: 0 8px 22px rgba(27, 30, 38, 0.06);
-    }
-
-    .session-card.is-current {
-      border-color: rgba(74, 140, 255, 0.42);
-      box-shadow: 0 0 0 3px rgba(74, 140, 255, 0.12);
-    }
-
-    .session-title {
-      margin: 0;
-      font-size: 13px;
-      line-height: 1.25;
-      font-weight: 780;
-    }
-
-    .session-preview {
-      margin: 4px 0 0;
-      color: var(--muted-dark);
-      font-size: 12px;
-      line-height: 1.35;
-    }
-
-    .session-meta {
-      display: grid;
-      justify-items: end;
-      gap: 6px;
-    }
-
-    .session-time {
-      color: var(--muted-dark);
-      font-size: 11px;
-      white-space: nowrap;
-    }
-
-    .pending-summary {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 10px;
-    }
-
-    .metric-tile {
-      min-height: 84px;
-      display: grid;
-      align-content: center;
-      gap: 5px;
-      padding: 13px;
-      border: 1px solid var(--line-dark);
-      border-radius: var(--radius-md);
-      background: #fff;
-    }
-
-    .metric-value {
-      font-size: 28px;
-      line-height: 1;
-      font-weight: 820;
-    }
-
-    .metric-label {
-      color: var(--muted-dark);
-      font-size: 12px;
-      line-height: 1.2;
-    }
-
-    .notification-card {
-      display: grid;
-      grid-template-columns: 38px 1fr auto;
-      align-items: center;
-      gap: 10px;
-      padding: 12px;
-    }
-
-    .notification-icon {
-      width: 38px;
-      height: 38px;
-      display: grid;
-      place-items: center;
-      border-radius: 10px;
-      background: var(--blue-2);
-      color: #1f5ec7;
-      font-size: 18px;
-    }
-
-    .notification-icon.warn {
-      background: var(--amber-2);
-      color: #9a5a12;
-    }
-
-    .notification-icon.done {
-      background: var(--green-2);
-      color: #1e714d;
-    }
-
-    .notification-title {
-      margin: 0;
-      font-size: 13px;
-      line-height: 1.25;
-      font-weight: 760;
-    }
-
-    .notification-copy {
-      margin: 3px 0 0;
-      color: var(--muted-dark);
-      font-size: 12px;
-      line-height: 1.3;
-    }
-
-    .notification-time {
-      color: var(--muted-dark);
-      font-size: 11px;
-      white-space: nowrap;
-    }
-
-    .settings-section {
-      display: grid;
-      gap: 0;
-      overflow: hidden;
-    }
-
-    .settings-row {
-      display: grid;
-      grid-template-columns: 1fr auto;
-      align-items: center;
-      gap: 12px;
-      min-height: 54px;
-      padding: 12px 13px;
-      border-bottom: 1px solid rgba(20, 22, 27, 0.08);
-    }
-
-    .settings-row:last-child {
-      border-bottom: 0;
-    }
-
-    .settings-key {
-      margin: 0;
-      font-size: 13px;
-      line-height: 1.25;
-      font-weight: 720;
-    }
-
-    .settings-value {
-      margin: 3px 0 0;
-      color: var(--muted-dark);
-      font-size: 12px;
-      line-height: 1.25;
-    }
-
-    .status-chip {
-      padding: 5px 8px;
-      border-radius: 999px;
-      background: var(--green-2);
-      color: #1f704d;
-      font-size: 11px;
-      font-weight: 760;
-      white-space: nowrap;
-    }
-
-    .status-chip.warn {
-      background: var(--amber-2);
-      color: #8d5417;
-    }
-
-    .status-chip.danger {
-      background: var(--red-2);
-      color: #a23a3a;
-    }
-
-    .control-panel {
-      display: grid;
-      grid-template-rows: auto 1fr auto;
-      padding: 24px;
-      gap: 18px;
-    }
-
-    .panel-heading {
-      margin: 0;
-      font-size: 20px;
-      line-height: 1.15;
-      font-weight: 780;
-    }
-
-    .panel-copy {
-      margin: 8px 0 0;
-      color: var(--muted);
-      font-size: 13px;
-      line-height: 1.55;
-    }
-
-    .flow-list {
-      display: grid;
-      gap: 10px;
-      align-content: start;
-      margin: 0;
-      padding: 0;
-      list-style: none;
-    }
-
-    .flow-item {
-      display: grid;
-      grid-template-columns: 26px 1fr;
-      gap: 10px;
-      padding: 12px;
-      border: 1px solid var(--line);
-      border-radius: var(--radius-sm);
-      background: rgba(255, 255, 255, 0.04);
-    }
-
-    .flow-step {
-      width: 26px;
-      height: 26px;
-      display: grid;
-      place-items: center;
-      border-radius: var(--radius-xs);
-      background: rgba(255, 255, 255, 0.08);
-      color: var(--blue-2);
-      font-size: 12px;
-      font-weight: 780;
-    }
-
-    .flow-title {
-      margin: 0;
-      font-size: 13px;
-      line-height: 1.25;
-      font-weight: 760;
-    }
-
-    .flow-copy {
-      margin: 4px 0 0;
-      color: var(--muted);
-      font-size: 12px;
-      line-height: 1.4;
-    }
-
-    .build-note {
-      border-top: 1px solid var(--line);
-      padding-top: 14px;
-      color: var(--muted);
-      font-size: 12px;
-      line-height: 1.5;
-    }
-
-    .build-note strong {
-      color: var(--ink);
-    }
-
-    @keyframes spin {
-      to {
-        transform: rotate(360deg);
-      }
-    }
-
-    @media (max-width: 1120px) {
-      .prototype-shell {
-        grid-template-columns: minmax(280px, 430px) minmax(320px, 1fr);
-        align-items: start;
-      }
-
-      .phone-stage {
-        grid-row: span 2;
-      }
-
-      .product-panel,
-      .control-panel {
-        min-height: auto;
-      }
-    }
-
-    @media (max-width: 820px) {
-      body {
-        background: var(--bg);
-      }
-
-      .prototype-shell {
-        grid-template-columns: 1fr;
-        gap: 18px;
-        padding: 16px;
-      }
-
-      .product-panel,
-      .control-panel {
-        min-height: auto;
-        padding: 16px;
-      }
-
-      .product-panel {
-        gap: 16px;
-      }
-
-      .screen-switcher {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-      }
-
-      .switch-button {
-        grid-template-columns: 26px 1fr;
-      }
-
-      .switch-state {
-        display: none;
-      }
-
-      .phone-frame {
-        width: min(100%, 390px);
-      }
-    }
-
-    @media (max-width: 460px) {
-      .prototype-shell {
-        padding: 10px;
-      }
-
-      .screen-switcher {
-        grid-template-columns: 1fr;
-      }
-
-      .phone-frame {
-        padding: 9px;
-        border-radius: 34px;
-      }
-
-      .phone-screen {
-        border-radius: 27px;
-      }
-
-      .app-header {
-        padding-left: 14px;
-        padding-right: 14px;
-      }
-
-      .screen-body {
-        padding-left: 14px;
-        padding-right: 14px;
-      }
-
-      .bubble {
-        max-width: 90%;
-      }
-    }
-
-    @media (prefers-reduced-motion: reduce) {
-      *,
-      *::before,
-      *::after {
-        animation-duration: 0.01ms;
-        animation-iteration-count: 1;
-        scroll-behavior: auto;
-        transition-duration: 0.01ms;
-      }
-    }
+      color-scheme: light dark;
+      --studio: #15161a;
+      --studio-panel: #1e2025;
+      --studio-line: rgba(255,255,255,.11);
+      --studio-text: #f7f7f4;
+      --studio-muted: #a1a3aa;
+      --app-bg: #f3f3f8;
+      --app-card: #fff;
+      --app-text: #07080a;
+      --app-muted: #8c8d94;
+      --app-line: #e6e6e9;
+      --orange: #f4510b;
+      --green: #30c769;
+      --blue: #0a84ff;
+      --shadow: 0 18px 52px rgba(0,0,0,.24);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: var(--studio); color: var(--studio-text); }
+    button, input { font: inherit; }
+    button { cursor: pointer; }
+    .studio {
+      min-height: 100vh; max-width: 1460px; margin: auto; padding: 28px;
+      display: grid; grid-template-columns: 280px minmax(390px, 460px) 310px; gap: 28px; align-items: center;
+    }
+    .panel {
+      align-self: stretch; min-height: 720px; padding: 22px; border: 1px solid var(--studio-line);
+      border-radius: 18px; background: var(--studio-panel); box-shadow: var(--shadow);
+    }
+    .brand { display: flex; gap: 12px; align-items: center; margin-bottom: 24px; }
+    .brand-mark { width: 40px; height: 40px; border-radius: 11px; display: grid; place-items: center; background: var(--orange); font-weight: 800; }
+    .brand h1, .brand p { margin: 0; }
+    .brand h1 { font-size: 17px; }
+    .brand p { margin-top: 4px; color: var(--studio-muted); font-size: 12px; }
+    .mode-switch { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; padding: 4px; margin-bottom: 18px; border-radius: 12px; background: rgba(255,255,255,.06); }
+    .mode-button { border: 0; border-radius: 9px; padding: 9px; background: transparent; color: var(--studio-muted); font-size: 12px; font-weight: 700; }
+    .mode-button.is-active { background: #fff; color: #141519; }
+    .screen-nav { display: grid; gap: 7px; }
+    .screen-button { width: 100%; display: grid; grid-template-columns: 30px 1fr auto; gap: 10px; align-items: center; border: 1px solid transparent; border-radius: 12px; padding: 9px; background: transparent; color: var(--studio-text); text-align: left; }
+    .screen-button:hover, .screen-button:focus-visible { border-color: var(--studio-line); background: rgba(255,255,255,.04); }
+    .screen-button.is-active { border-color: rgba(244,81,11,.45); background: rgba(244,81,11,.12); }
+    .screen-icon { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 8px; background: rgba(255,255,255,.08); }
+    .screen-copy strong, .screen-copy small { display: block; }
+    .screen-copy strong { font-size: 13px; }
+    .screen-copy small { margin-top: 3px; color: var(--studio-muted); font-size: 11px; }
+    .state-dot { width: 8px; height: 8px; border-radius: 99px; background: #555861; }
+    .screen-button.is-active .state-dot { background: var(--green); }
+    .proposed-label { color: #ffd2bd !important; }
+    .scope { margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--studio-line); }
+    .scope h2 { margin: 0 0 10px; color: var(--studio-muted); font-size: 11px; text-transform: uppercase; }
+    .scope p { margin: 0; color: var(--studio-muted); font-size: 12px; line-height: 1.55; }
+    .phone-stage { display: grid; place-items: center; }
+    .phone { position: relative; width: min(100%, 430px); aspect-ratio: 430 / 874; padding: 12px; border-radius: 48px; background: #070709; box-shadow: 0 34px 90px rgba(0,0,0,.52); }
+    .phone::before { content: ""; position: absolute; z-index: 20; top: 20px; left: 50%; width: 116px; height: 34px; transform: translateX(-50%); border-radius: 22px; background: #000; }
+    .viewport { position: relative; height: 100%; overflow: hidden; border-radius: 38px; background: var(--app-bg); color: var(--app-text); }
+    .statusbar { position: absolute; z-index: 15; top: 0; left: 0; right: 0; height: 54px; display: flex; justify-content: space-between; align-items: center; padding: 8px 28px 0; font-size: 13px; font-weight: 700; pointer-events: none; }
+    .screen { position: absolute; inset: 0; display: none; padding: 64px 18px 102px; overflow: auto; background: var(--app-bg); }
+    .screen.is-active { display: block; }
+    .screen.chat { padding: 58px 0 142px; }
+    .chat-header { padding: 8px 18px 12px; border-bottom: 1px solid rgba(0,0,0,.04); }
+    .agent-row { display: grid; grid-template-columns: 42px 42px 1fr 44px; align-items: center; gap: 9px; }
+    .round-button { width: 42px; height: 42px; border: 0; border-radius: 99px; background: #fff; color: var(--app-text); font-size: 20px; box-shadow: 0 6px 18px rgba(0,0,0,.05); }
+    .agent-avatar { width: 42px; height: 42px; display: grid; place-items: center; border-radius: 11px; background: #171b26; color: #fff; font-size: 13px; font-weight: 800; }
+    .agent-name strong, .agent-name small { display: block; }
+    .agent-name strong { font-size: 17px; }
+    .agent-name small { margin-top: 3px; color: var(--app-muted); font-size: 11px; }
+    .runtime { display: grid; grid-template-columns: 10px 1fr auto; gap: 9px; align-items: center; margin-top: 12px; padding: 10px 12px; border: 1px solid rgba(48,199,105,.22); border-radius: 11px; background: #dff5e7; font-size: 12px; }
+    .runtime-dot { width: 8px; height: 8px; border-radius: 99px; background: var(--green); }
+    .runtime span:last-child { color: var(--app-muted); }
+    .transcript { padding: 18px; }
+    .bubble { max-width: 86%; margin-bottom: 10px; padding: 13px 14px; border-radius: 20px; background: #fff; box-shadow: 0 10px 28px rgba(0,0,0,.06); font-size: 14px; line-height: 1.42; }
+    .bubble.user { margin-left: auto; background: var(--orange); color: #fff; }
+    .scroll-bottom { position: absolute; right: 20px; bottom: 150px; width: 42px; height: 42px; border: 0; border-radius: 99px; background: #151923; color: #fff; font-size: 21px; box-shadow: 0 9px 22px rgba(0,0,0,.16); }
+    .composer { position: absolute; z-index: 8; left: 0; right: 0; bottom: 76px; display: grid; grid-template-columns: 44px 1fr 40px; gap: 8px; align-items: center; padding: 9px 14px; border-top: 1px solid var(--app-line); background: rgba(255,255,255,.9); backdrop-filter: blur(16px); }
+    .attach { width: 42px; height: 42px; border: 0; border-radius: 99px; background: #e4f3ff; color: var(--blue); font-size: 21px; }
+    .input { height: 42px; display: flex; align-items: center; padding: 0 13px; border: 1px solid var(--app-line); border-radius: 22px; background: #fff; color: #c2c2c7; font-size: 13px; }
+    .send { width: 38px; height: 38px; border: 0; border-radius: 99px; background: #e6e6e9; color: #fff; font-size: 18px; }
+    .large-title { margin: 40px 0 22px; font-size: 42px; line-height: 1; letter-spacing: -1.6px; }
+    .refresh { position: absolute; top: 70px; right: 22px; width: 44px; height: 44px; border: 0; border-radius: 99px; background: #fff; color: var(--orange); font-size: 21px; box-shadow: 0 8px 22px rgba(0,0,0,.06); }
+    .intro { display: grid; grid-template-columns: 56px 1fr; gap: 14px; align-items: center; margin: 0 18px 28px; }
+    .intro-icon { width: 56px; height: 56px; display: grid; place-items: center; border-radius: 14px; background: var(--orange); color: #fff; font-size: 27px; }
+    .intro h3, .intro p { margin: 0; }
+    .intro h3 { font-size: 21px; }
+    .intro p { margin-top: 4px; color: var(--app-muted); font-size: 13px; }
+    .section-title { margin: 24px 18px 11px; color: var(--app-muted); font-size: 18px; }
+    .group { overflow: hidden; border-radius: 24px; background: #fff; }
+    .list-row { display: grid; grid-template-columns: 38px 1fr auto; gap: 10px; align-items: center; min-height: 70px; margin-left: 16px; padding: 12px 16px 12px 0; border-bottom: 1px solid var(--app-line); }
+    .list-row:last-child { border-bottom: 0; }
+    .row-icon { color: var(--orange); font-size: 22px; text-align: center; }
+    .row-copy strong, .row-copy small { display: block; }
+    .row-copy strong { font-size: 17px; }
+    .row-copy small { margin-top: 3px; color: var(--app-muted); font-size: 12px; line-height: 1.35; }
+    .row-state { color: var(--app-muted); font-size: 12px; }
+    .row-state.good { color: var(--green); }
+    .search { margin-bottom: 24px; padding: 12px 16px; border-radius: 18px; background: #e4e4e9; color: var(--app-muted); font-size: 18px; }
+    .agent-card { border-radius: 24px; overflow: hidden; background: #fff; }
+    .agent-item { display: grid; grid-template-columns: 40px 1fr auto; gap: 10px; padding: 17px 15px; border-bottom: 1px solid var(--app-line); }
+    .agent-item:last-child { border-bottom: 0; }
+    .person { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 99px; background: #111; color: #fff; }
+    .agent-item:first-child .person { background: var(--orange); }
+    .agent-item h3, .agent-item p { margin: 0; }
+    .agent-item h3 { font-size: 17px; }
+    .agent-item p { margin-top: 6px; color: var(--app-muted); font-size: 12px; line-height: 1.45; }
+    .default { margin-left: 6px; color: var(--orange); font-size: 11px; }
+    .settings-group { margin-bottom: 22px; }
+    .settings-group .group { border-radius: 22px; }
+    .settings-row { display: flex; justify-content: space-between; gap: 12px; padding: 15px 16px; border-bottom: 1px solid var(--app-line); font-size: 16px; }
+    .settings-row:last-child { border-bottom: 0; }
+    .settings-row span:last-child { color: var(--app-muted); }
+    .health { display: grid; grid-template-columns: 36px 1fr auto; gap: 10px; align-items: center; padding: 15px; }
+    .health-mark { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 99px; background: var(--green); color: #fff; }
+    .health strong, .health small { display: block; }
+    .health small { margin-top: 4px; color: var(--app-muted); font-size: 12px; }
+    .proposed-banner { margin-bottom: 12px; padding: 8px 10px; border-radius: 10px; background: #fff0e9; color: #9d3608; font-size: 11px; font-weight: 700; }
+    .artifact-card { padding: 12px; border: 1px solid #ddd9ff; border-radius: 20px; background: linear-gradient(145deg,#fff,#f1efff); box-shadow: 0 12px 30px rgba(60,45,150,.12); }
+    .artifact-preview { height: 150px; display: grid; grid-template-columns: 1fr 1fr; align-items: end; gap: 10px; padding: 18px; border-radius: 16px; background: #1d2130; }
+    .ring { width: 86px; height: 86px; border-radius: 99px; background: conic-gradient(#7c6df2 0 42%,#f4510b 42% 70%,#30c769 70% 88%,#343947 88%); position: relative; }
+    .ring::after { content: "¥8.2k"; position: absolute; inset: 15px; display: grid; place-items: center; border-radius: 99px; background: #1d2130; color: #fff; font-size: 12px; font-weight: 700; }
+    .bars { height: 104px; display: flex; gap: 7px; align-items: end; }
+    .bars span { flex: 1; border-radius: 5px 5px 2px 2px; background: #7c6df2; }
+    .bars span:nth-child(1) { height: 45%; } .bars span:nth-child(2) { height: 82%; background: var(--orange); } .bars span:nth-child(3) { height: 62%; background: var(--green); }
+    .artifact-title { display: flex; justify-content: space-between; gap: 8px; align-items: start; margin-top: 12px; }
+    .artifact-title h3, .artifact-title p { margin: 0; }
+    .artifact-title h3 { font-size: 17px; }
+    .artifact-title p { margin-top: 4px; color: var(--app-muted); font-size: 12px; }
+    .badge { padding: 5px 7px; border-radius: 99px; background: #e7e3ff; color: #4a3eab; font-size: 9px; font-weight: 800; }
+    .artifact-meta { display: flex; justify-content: space-between; margin: 10px 0; color: var(--app-muted); font-size: 10px; }
+    .open-artifact { width: 100%; min-height: 40px; border: 0; border-radius: 12px; background: #171a22; color: #fff; font-weight: 700; }
+    .artifact-screen { padding: 62px 16px 24px; background: linear-gradient(180deg,#f0efff,#f3f3f8 34%); }
+    .artifact-toolbar { display: grid; grid-template-columns: 42px 1fr 42px; gap: 10px; align-items: center; margin-bottom: 18px; }
+    .artifact-toolbar div { text-align: center; }
+    .artifact-toolbar strong, .artifact-toolbar small { display: block; }
+    .artifact-toolbar small { margin-top: 3px; color: var(--app-muted); font-size: 10px; }
+    .artifact-hero h2, .artifact-hero p { margin: 0; }
+    .artifact-hero h2 { margin-top: 4px; font-size: 25px; }
+    .artifact-hero p { color: var(--app-muted); font-size: 12px; }
+    .budget-summary { display: flex; justify-content: space-between; margin: 16px 0 12px; padding: 15px; border-radius: 17px; background: #1d2130; color: #fff; }
+    .budget-summary strong, .budget-summary small { display: block; }
+    .budget-summary strong { font-size: 20px; } .budget-summary small { margin-top: 3px; color: #aaaebb; font-size: 10px; }
+    .budget-list { display: grid; gap: 8px; }
+    .budget-item { padding: 12px; border-radius: 15px; background: #fff; }
+    .budget-row { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 12px; }
+    .budget-range { width: 100%; accent-color: #7c6df2; }
+    .artifact-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
+    .artifact-action { min-height: 40px; border: 1px solid var(--app-line); border-radius: 12px; background: #fff; color: var(--app-text); font-size: 12px; font-weight: 700; }
+    .artifact-action.primary { border-color: #171a22; background: #171a22; color: #fff; }
+    .tabs { position: absolute; z-index: 10; left: 14px; right: 14px; bottom: 10px; height: 70px; display: grid; grid-template-columns: repeat(4,1fr); padding: 5px; border-radius: 34px; background: rgba(255,255,255,.92); box-shadow: 0 14px 38px rgba(0,0,0,.13); backdrop-filter: blur(18px); }
+    .tab { border: 0; border-radius: 29px; display: grid; place-items: center; align-content: center; gap: 2px; background: transparent; color: #111217; font-size: 19px; }
+    .tab small { font-size: 10px; font-weight: 650; }
+    .tab.is-active { background: #e6e6e9; color: var(--orange); }
+    .viewport.is-artifact .tabs { display: none; }
+    .notes h2 { margin: 0 0 10px; font-size: 20px; }
+    .notes > p { margin: 0 0 20px; color: var(--studio-muted); font-size: 12px; line-height: 1.55; }
+    .checklist { display: grid; gap: 10px; }
+    .check { display: grid; grid-template-columns: 24px 1fr; gap: 9px; padding: 11px; border: 1px solid var(--studio-line); border-radius: 12px; background: rgba(255,255,255,.035); }
+    .check-mark { width: 24px; height: 24px; display: grid; place-items: center; border-radius: 7px; background: rgba(48,199,105,.14); color: #7ee7a7; font-size: 12px; }
+    .check h3, .check p { margin: 0; }
+    .check h3 { font-size: 13px; } .check p { margin-top: 4px; color: var(--studio-muted); font-size: 11px; line-height: 1.4; }
+    .legend { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--studio-line); color: var(--studio-muted); font-size: 11px; line-height: 1.5; }
+    @media (max-width: 1080px) { .studio { grid-template-columns: 250px minmax(370px,430px); align-items: start; } .notes { grid-column: 1 / -1; min-height: 0; } }
+    @media (max-width: 760px) { .studio { grid-template-columns: 1fr; padding: 14px; } .panel { min-height: 0; } .screen-nav { grid-template-columns: repeat(2,1fr); } .phone { width: min(100%,430px); } }
+    @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
   </style>
 </head>
 <body>
-  <main class="prototype-shell" aria-label="SkillForge iOS Assistant Companion prototype">
-    <aside class="product-panel" aria-label="Prototype navigation">
-      <div>
-        <div class="brand-lockup">
-          <div class="brand-mark" aria-hidden="true">SF</div>
-          <div>
-            <h1 class="brand-title">iOS Assistant Companion</h1>
-            <p class="brand-subtitle">SkillForge personal mobile entry</p>
-          </div>
-        </div>
-
-        <nav aria-label="Prototype screens">
-          <ul class="screen-switcher">
-            <li>
-              <button class="switch-button is-active" type="button" data-target="chat">
-                <span class="switch-icon" aria-hidden="true">●</span>
-                <span class="switch-copy">
-                  <span class="switch-label">Chat first</span>
-                  <span class="switch-meta">默认助理 / 实时状态</span>
-                </span>
-                <span class="switch-state" aria-hidden="true"></span>
-              </button>
-            </li>
-            <li>
-              <button class="switch-button" type="button" data-target="pairing">
-                <span class="switch-icon" aria-hidden="true">⌗</span>
-                <span class="switch-copy">
-                  <span class="switch-label">Pairing</span>
-                  <span class="switch-meta">扫描管理端 QR</span>
-                </span>
-                <span class="switch-state" aria-hidden="true"></span>
-              </button>
-            </li>
-            <li>
-              <button class="switch-button" type="button" data-target="pending">
-                <span class="switch-icon" aria-hidden="true">✓</span>
-                <span class="switch-copy">
-                  <span class="switch-label">Pending</span>
-                  <span class="switch-meta">ask_user / confirmation</span>
-                </span>
-                <span class="switch-state" aria-hidden="true"></span>
-              </button>
-            </li>
-            <li>
-              <button class="switch-button" type="button" data-target="sessions">
-                <span class="switch-icon" aria-hidden="true">≡</span>
-                <span class="switch-copy">
-                  <span class="switch-label">Sessions</span>
-                  <span class="switch-meta">同 agent 多会话</span>
-                </span>
-                <span class="switch-state" aria-hidden="true"></span>
-              </button>
-            </li>
-            <li>
-              <button class="switch-button" type="button" data-target="notifications">
-                <span class="switch-icon" aria-hidden="true">!</span>
-                <span class="switch-copy">
-                  <span class="switch-label">Push Inbox</span>
-                  <span class="switch-meta">完成 / 失败 / 需输入</span>
-                </span>
-                <span class="switch-state" aria-hidden="true"></span>
-              </button>
-            </li>
-            <li>
-              <button class="switch-button" type="button" data-target="settings">
-                <span class="switch-icon" aria-hidden="true">⚙</span>
-                <span class="switch-copy">
-                  <span class="switch-label">Device</span>
-                  <span class="switch-meta">token / scope / revoke</span>
-                </span>
-                <span class="switch-state" aria-hidden="true"></span>
-              </button>
-            </li>
-          </ul>
-        </nav>
+  <main class="studio">
+    <aside class="panel">
+      <div class="brand"><div class="brand-mark">SF</div><div><h1>iOS Companion</h1><p>Prototype parity workspace</p></div></div>
+      <div class="mode-switch" aria-label="Prototype mode">
+        <button class="mode-button is-active" data-mode="current">Current</button>
+        <button class="mode-button" data-mode="proposed">Proposed</button>
       </div>
-
-      <section class="scope-block" aria-label="V1 scope">
-        <h2 class="scope-title">V1 surface</h2>
-        <div class="scope-grid">
-          <span class="scope-pill">QR Pairing</span>
-          <span class="scope-pill">Chat</span>
-          <span class="scope-pill">Sessions</span>
-          <span class="scope-pill">Cards</span>
-          <span class="scope-pill">Attachments</span>
-          <span class="scope-pill">Push</span>
-          <span class="scope-pill">Revoke</span>
-        </div>
-      </section>
+      <nav class="screen-nav" aria-label="Prototype screens">
+        <button class="screen-button is-active" data-screen-target="chat" data-mode-scope="current"><span class="screen-icon">●</span><span class="screen-copy"><strong>Chat</strong><small>As-built · SwiftUI</small></span><span class="state-dot"></span></button>
+        <button class="screen-button" data-screen-target="control" data-mode-scope="current"><span class="screen-icon">▦</span><span class="screen-copy"><strong>Control</strong><small>Schedules / sessions</small></span><span class="state-dot"></span></button>
+        <button class="screen-button" data-screen-target="agents" data-mode-scope="current"><span class="screen-icon">♟</span><span class="screen-copy"><strong>Agents</strong><small>Configuration roster</small></span><span class="state-dot"></span></button>
+        <button class="screen-button" data-screen-target="settings" data-mode-scope="current"><span class="screen-icon">⚙</span><span class="screen-copy"><strong>Settings</strong><small>Connection / device</small></span><span class="state-dot"></span></button>
+        <button class="screen-button" data-screen-target="artifact-chat" data-mode-scope="proposed" hidden><span class="screen-icon">◇</span><span class="screen-copy"><strong class="proposed-label">Personal App</strong><small>Proposed message card</small></span><span class="state-dot"></span></button>
+        <button class="screen-button" data-screen-target="personal-app" data-mode-scope="proposed" hidden><span class="screen-icon">◈</span><span class="screen-copy"><strong class="proposed-label">Full-screen App</strong><small>IOS-INTERACTIVE-ARTIFACTS</small></span><span class="state-dot"></span></button>
+      </nav>
+      <section class="scope"><h2>Parity rule</h2><p>Current 以真实 App 与 XCUITest 截图为准；Proposed 只呈现已批准但尚未实现的需求。</p></section>
     </aside>
 
-    <section class="phone-stage" aria-label="iPhone preview">
-      <div class="phone-frame">
-        <div class="phone-screen">
-          <div class="ios-status" aria-hidden="true">
-            <span>9:41</span>
-            <span class="ios-indicators">
-              <span class="signal-bars"><span></span><span></span><span></span><span></span></span>
-              <span>5G</span>
-              <span class="battery"></span>
-            </span>
+    <section class="phone-stage" aria-label="iPhone prototype">
+      <div class="phone"><div class="viewport" id="viewport">
+        <div class="statusbar"><span>9:41</span><span>•••• ◉ ▰</span></div>
+
+        <section class="screen chat is-active" data-screen="chat">
+          <header class="chat-header">
+            <div class="agent-row"><button class="round-button">▣</button><div class="agent-avatar">SF</div><div class="agent-name"><strong>Main Assistant</strong><small>SkillForge Mac 已连接</small></div><button class="round-button">＋</button></div>
+            <div class="runtime"><span class="runtime-dot"></span><strong>Agent 运行中</strong><span>127.0.0.1</span></div>
+          </header>
+          <div class="transcript"><div class="bubble">The deterministic tab fixture keeps this transcript in memory.</div></div>
+          <button class="scroll-bottom">↓</button>
+          <footer class="composer"><button class="attach">⌕</button><div class="input">Message SkillForge</div><button class="send">↑</button></footer>
+        </section>
+
+        <section class="screen" data-screen="control">
+          <button class="refresh">↻</button><h2 class="large-title">Control</h2>
+          <div class="intro"><div class="intro-icon">▦</div><div><h3>SkillForge Control</h3><p>Schedules, runs, and conversations</p></div></div>
+          <h3 class="section-title">Scheduled Automations</h3><div class="group">
+            <div class="list-row"><div class="row-icon">◴</div><div class="row-copy"><strong>Morning brief</strong><small>Main Assistant · Cron 0 0 7 * * *<br>Next 4 days ago</small></div><span class="row-state good">Ready ›</span></div>
+            <div class="list-row"><div class="row-icon">Ⅱ</div><div class="row-copy"><strong>Release monitor</strong><small>Release Agent · Cron 0 */30 * * * *<br><span style="color:var(--orange)">Paused</span></small></div><span class="row-state">Paused ›</span></div>
           </div>
+          <h3 class="section-title">Workspace</h3><div class="group"><div class="list-row"><div class="row-icon" style="color:var(--blue)">▣</div><div class="row-copy"><strong>Sessions</strong><small>4 conversations</small></div><span class="row-state">›</span></div></div>
+        </section>
 
-          <section class="screen chat-screen is-active" data-screen="chat" aria-label="Chat screen">
-            <header class="app-header">
-              <div class="header-row">
-                <div class="assistant-lockup">
-                  <div class="assistant-avatar" aria-hidden="true">SF</div>
-                  <div>
-                    <h2 class="assistant-name">Main Assistant</h2>
-                    <p class="assistant-subtitle">SkillForge Mac 已连接</p>
-                  </div>
-                </div>
-                <button class="icon-button add-button" type="button" aria-label="Open quick actions" data-open-sheet>＋</button>
-              </div>
-              <div class="status-strip">
-                <span class="pulse-dot" aria-hidden="true"></span>
-                <span>运行中 · 正在整理 iOS 需求包</span>
-                <strong>12s</strong>
-              </div>
-            </header>
-            <div class="screen-body">
-              <div class="message-stack">
-                <div class="day-divider">Today</div>
-                <p class="bubble user">把 iOS Companion 的 PRD 和技术方案整理成一个可看的原型。</p>
-                <p class="bubble assistant">我会按已确认的 Chat-first 路线处理，并保留扫码配对、确认卡片和设备撤销入口。</p>
-                <article class="activity-card" aria-label="Running activity">
-                  <div class="activity-row">
-                    <span class="spinner" aria-hidden="true"></span>
-                    <span>读取需求包</span>
-                    <span class="activity-path">IOS-ASSISTANT-COMPANION</span>
-                  </div>
-                  <div class="activity-row">
-                    <span class="pulse-dot" aria-hidden="true"></span>
-                    <span>生成移动端页面草图</span>
-                    <span class="activity-path">SwiftUI shell</span>
-                  </div>
-                </article>
-                <article class="decision-card" aria-label="Pending confirmation">
-                  <p class="card-eyebrow">Confirmation required</p>
-                  <h3 class="decision-title">把 iOS V1 加入下一轮 backlog refinement？</h3>
-                  <p class="decision-copy">本次只记录产品原型，不启动后端 schema 或 SwiftUI 实现。</p>
-                  <div class="decision-actions">
-                    <button class="action-button primary" type="button">批准</button>
-                    <button class="action-button" type="button">稍后</button>
-                  </div>
-                </article>
-              </div>
-            </div>
-            <footer class="composer">
-              <button class="icon-button" type="button" aria-label="Attach file">⌁</button>
-              <div class="composer-input">发消息给 SkillForge...</div>
-              <button class="icon-button" type="button" aria-label="Send message">↑</button>
-            </footer>
-          </section>
+        <section class="screen" data-screen="agents">
+          <button class="refresh">↻</button><h2 class="large-title">Agents</h2><div class="search">⌕&nbsp;&nbsp; Search Agents</div><h3 class="section-title">Configuration Roster</h3>
+          <div class="agent-card">
+            <article class="agent-item"><div class="person">●</div><div><h3>Main Assistant <span class="default">Default</span></h3><p>Coordinates daily work and routes specialized tasks.<br>Role: Main Assistant · Model: claude-sonnet<br>Status: Active · Visibility: Private · Source: Default</p></div><span>›</span></article>
+            <article class="agent-item"><div class="person">●</div><div><h3>Release Agent</h3><p>Reviews release readiness and deployment health.<br>Role: Code · Model: gpt-5-codex<br>Status: Active · Visibility: Private · Source: Owned</p></div><span>›</span></article>
+            <article class="agent-item"><div class="person">♣</div><div><h3>Research Commons</h3><p>A shared research configuration with protected internals.<br>Role: Research · Model: claude-sonnet</p></div><span>›</span></article>
+          </div>
+        </section>
 
-          <section class="screen pairing-screen" data-screen="pairing" aria-label="Pairing screen">
-            <header class="app-header compact">
-              <div class="header-row">
-                <div>
-                  <h2 class="assistant-name">扫描管理端二维码</h2>
-                  <p class="assistant-subtitle">SkillForge Dashboard · Pair iPhone</p>
-                </div>
-                <button class="icon-button" type="button" aria-label="Enter setup code">#</button>
-              </div>
-            </header>
-            <div class="pairing-body">
-              <article class="pairing-card">
-                <div class="scanner-view" aria-label="iOS camera scanner preview">
-                  <div class="scanner-frame" aria-label="Scan frame for SkillForge Dashboard QR">
-                    <span class="scanner-corner" aria-hidden="true"></span>
-                    <span class="scanner-corner" aria-hidden="true"></span>
-                    <span class="scanner-corner" aria-hidden="true"></span>
-                    <span class="scanner-corner" aria-hidden="true"></span>
-                    <div class="qr-grid" id="qrGrid" aria-label="SkillForge Dashboard pairing QR in camera view"></div>
-                  </div>
-                  <div class="scanner-caption">
-                    <strong>对准 SkillForge 管理端二维码</strong>
-                    <span>二维码由 Dashboard 生成，iOS 只负责扫描和 claim pairing。</span>
-                  </div>
-                </div>
-                <div>
-                  <h3 class="pairing-title">等待扫描 Dashboard QR</h3>
-                  <p class="pairing-copy">识别后读取 pairingId、pairingSecret 和 endpoints[]，再选择首个可达 endpoint。</p>
-                </div>
-                <button class="action-button primary" type="button">已识别，继续配对</button>
-              </article>
-              <div class="endpoint-list" aria-label="Endpoint probe results">
-                <div class="endpoint-row">
-                  <span class="endpoint-dot" aria-hidden="true"></span>
-                  <span class="endpoint-url">https://skillforge.tailnet.ts.net</span>
-                  <span class="endpoint-badge">selected</span>
-                </div>
-                <div class="endpoint-row">
-                  <span class="endpoint-dot pending" aria-hidden="true"></span>
-                  <span class="endpoint-url">http://192.168.1.10:8080</span>
-                  <span class="endpoint-badge">local</span>
-                </div>
-              </div>
-            </div>
-          </section>
+        <section class="screen" data-screen="settings">
+          <h2 class="large-title">Settings</h2><h3 class="section-title">Connection</h3><div class="group health"><span class="health-mark">✓</span><div><strong>Running normally</strong><small>Endpoint, service, and device authorization are available.</small></div><span>›</span></div>
+          <h3 class="section-title">Device</h3><div class="group settings-group"><div class="settings-row"><span>Name</span><span>Simulator</span></div><div class="settings-row"><span>Device ID</span><span>ui-test-device</span></div><div class="settings-row"><span>App Version</span><span>1.0 (1)</span></div></div>
+          <h3 class="section-title">Notifications</h3><div class="group"><div class="list-row"><div class="row-icon" style="color:var(--app-muted)">♧</div><div class="row-copy"><strong>Not enabled</strong><small>SkillForge has not requested notification permission.</small></div></div><div class="settings-row" style="color:var(--orange)"><span>Enable Notifications</span><span></span></div><div class="settings-row" style="color:var(--orange)"><span>Refresh Status</span><span></span></div></div>
+        </section>
 
-          <section class="screen" data-screen="sessions" aria-label="Session history screen">
-            <header class="app-header compact">
-              <div class="header-row">
-                <div>
-                  <h2 class="assistant-name">Sessions</h2>
-                  <p class="assistant-subtitle">Main Assistant · 12 conversations</p>
-                </div>
-                <button class="icon-button add-button" type="button" aria-label="Create new session" data-open-sheet>＋</button>
-              </div>
-            </header>
-            <div class="screen-body sessions-body">
-              <article class="session-agent-card">
-                <span class="session-agent-mark" aria-hidden="true">SF</span>
-                <div>
-                  <h3 class="session-agent-title">Main Assistant</h3>
-                  <p class="session-agent-copy">同一个 agent 可以保留多个独立 session。</p>
-                </div>
-                <span class="status-chip">active</span>
-              </article>
-              <button class="session-card is-current" type="button" data-target="chat">
-                <span>
-                  <strong class="session-title">iOS Companion 原型</strong>
-                  <span class="session-preview">正在整理需求包，等待 backlog refinement 确认。</span>
-                </span>
-                <span class="session-meta">
-                  <span class="status-chip warn">running</span>
-                  <span class="session-time">now</span>
-                </span>
-              </button>
-              <button class="session-card" type="button" data-target="chat">
-                <span>
-                  <strong class="session-title">上下文压缩问题复盘</strong>
-                  <span class="session-preview">range-model、full compact、trace 与模型输入分层。</span>
-                </span>
-                <span class="session-meta">
-                  <span class="status-chip">done</span>
-                  <span class="session-time">2h</span>
-                </span>
-              </button>
-              <button class="session-card" type="button" data-target="chat">
-                <span>
-                  <strong class="session-title">Ark provider 连接调试</strong>
-                  <span class="session-preview">401、API key source、backend restart 验证。</span>
-                </span>
-                <span class="session-meta">
-                  <span class="status-chip">done</span>
-                  <span class="session-time">1d</span>
-                </span>
-              </button>
-              <button class="session-card" type="button" data-target="chat">
-                <span>
-                  <strong class="session-title">OpenClaw iOS 调研</strong>
-                  <span class="session-preview">QR pairing、endpoints probe、push 和 Talk mode 边界。</span>
-                </span>
-                <span class="session-meta">
-                  <span class="status-chip">saved</span>
-                  <span class="session-time">1d</span>
-                </span>
-              </button>
-            </div>
-          </section>
+        <section class="screen chat" data-screen="artifact-chat">
+          <header class="chat-header"><div class="proposed-banner">PROPOSED · IOS-INTERACTIVE-ARTIFACTS</div><div class="agent-row"><button class="round-button">▣</button><div class="agent-avatar">RA</div><div class="agent-name"><strong>Research Agent</strong><small>家庭预算分析 · 已完成</small></div><button class="round-button">•••</button></div></header>
+          <div class="transcript"><div class="bubble user">分析这份账单，做一个我在手机上能调整的七月预算。</div><div class="bubble">七月预算建议为 8,200 元。我同时生成了一个离线预算规划器。</div><article class="artifact-card"><div class="artifact-preview"><div class="ring"></div><div class="bars"><span></span><span></span><span></span></div></div><div class="artifact-title"><div><h3>七月家庭预算</h3><p>调整分类额度，实时查看结余。</p></div><span class="badge">PERSONAL APP</span></div><div class="artifact-meta"><span>离线运行 · 无额外权限</span><span>刚刚</span></div><button class="open-artifact" data-screen-target="personal-app">打开规划器</button></article></div>
+          <footer class="composer"><button class="attach">⌕</button><div class="input">继续调整这份预算...</div><button class="send">↑</button></footer>
+        </section>
 
-          <section class="screen" data-screen="pending" aria-label="Pending screen">
-            <header class="app-header compact">
-              <div class="header-row">
-                <div>
-                  <h2 class="assistant-name">Pending</h2>
-                  <p class="assistant-subtitle">需要你处理的助理输入</p>
-                </div>
-                <button class="icon-button" type="button" aria-label="Refresh pending items">↻</button>
-              </div>
-            </header>
-            <div class="screen-body pending-body">
-              <div class="pending-summary">
-                <div class="metric-tile">
-                  <span class="metric-value">2</span>
-                  <span class="metric-label">等待确认</span>
-                </div>
-                <div class="metric-tile">
-                  <span class="metric-value">1</span>
-                  <span class="metric-label">运行中</span>
-                </div>
-              </div>
-              <article class="decision-card">
-                <p class="card-eyebrow">ask_user</p>
-                <h3 class="decision-title">原型页要偏 iOS 原生还是 SkillForge dashboard 风格？</h3>
-                <p class="decision-copy">当前建议：iOS 原生结构 + SkillForge 深色精密感，避免做成 dashboard 缩小版。</p>
-                <div class="decision-actions">
-                  <button class="action-button primary" type="button">采用建议</button>
-                  <button class="action-button" type="button">补充说明</button>
-                </div>
-              </article>
-              <article class="decision-card">
-                <p class="card-eyebrow">ACP confirmation</p>
-                <h3 class="decision-title">允许 Codex 修改 tech-design.md？</h3>
-                <p class="decision-copy">来源：Design Agent · 会话 iOS Companion backlog。</p>
-                <div class="decision-actions">
-                  <button class="action-button primary" type="button">Approve</button>
-                  <button class="action-button" type="button">Deny</button>
-                </div>
-              </article>
-            </div>
-          </section>
+        <section class="screen artifact-screen" data-screen="personal-app">
+          <div class="proposed-banner">PROPOSED · 离线、自包含、无 Tool Bridge</div><div class="artifact-toolbar"><button class="round-button" data-screen-target="artifact-chat">‹</button><div><strong>七月家庭预算</strong><small>Research Agent 生成</small></div><button class="round-button">ⓘ</button></div>
+          <div class="artifact-hero"><p>剩余预算会随你的调整实时变化</p><h2>把钱花在重要的地方</h2></div><div class="budget-summary"><div><strong id="budgetTotal">¥8,200</strong><small>本月计划支出</small></div><div><strong id="budgetRemaining">¥1,800</strong><small>预计结余</small></div></div>
+          <div class="budget-list">
+            <label class="budget-item"><span class="budget-row"><strong>餐饮</strong><span data-budget-value>¥2,600</span></span><input class="budget-range" type="range" min="1200" max="4000" step="100" value="2600"></label>
+            <label class="budget-item"><span class="budget-row"><strong>交通</strong><span data-budget-value>¥1,400</span></span><input class="budget-range" type="range" min="600" max="2500" step="100" value="1400"></label>
+            <label class="budget-item"><span class="budget-row"><strong>生活与购物</strong><span data-budget-value>¥2,100</span></span><input class="budget-range" type="range" min="800" max="3500" step="100" value="2100"></label>
+            <label class="budget-item"><span class="budget-row"><strong>储蓄与其他</strong><span data-budget-value>¥2,100</span></span><input class="budget-range" type="range" min="1000" max="4000" step="100" value="2100"></label>
+          </div><div class="artifact-actions"><button class="artifact-action" id="resetBudget">重置</button><button class="artifact-action primary">把调整发给 Agent</button></div>
+        </section>
 
-          <section class="screen" data-screen="notifications" aria-label="Notifications screen">
-            <header class="app-header compact">
-              <div class="header-row">
-                <div>
-                  <h2 class="assistant-name">Inbox</h2>
-                  <p class="assistant-subtitle">SkillForge notifications</p>
-                </div>
-                <span class="status-chip warn">APNs dev</span>
-              </div>
-            </header>
-            <div class="screen-body notifications-body">
-              <article class="notification-card">
-                <span class="notification-icon warn" aria-hidden="true">!</span>
-                <div>
-                  <h3 class="notification-title">需要输入</h3>
-                  <p class="notification-copy">Main Assistant 正在等待你的确认。</p>
-                </div>
-                <time class="notification-time">now</time>
-              </article>
-              <article class="notification-card">
-                <span class="notification-icon done" aria-hidden="true">✓</span>
-                <div>
-                  <h3 class="notification-title">任务完成</h3>
-                  <p class="notification-copy">已生成 iOS Companion 需求包。</p>
-                </div>
-                <time class="notification-time">8m</time>
-              </article>
-              <article class="notification-card">
-                <span class="notification-icon" aria-hidden="true">↑</span>
-                <div>
-                  <h3 class="notification-title">文件已上传</h3>
-                  <p class="notification-copy">prd.md 已附加到当前 session。</p>
-                </div>
-                <time class="notification-time">23m</time>
-              </article>
-            </div>
-          </section>
-
-          <section class="screen" data-screen="settings" aria-label="Device settings screen">
-            <header class="app-header compact">
-              <div class="header-row">
-                <div>
-                  <h2 class="assistant-name">Device</h2>
-                  <p class="assistant-subtitle">Youren's iPhone · active</p>
-                </div>
-                <span class="status-chip">active</span>
-              </div>
-            </header>
-            <div class="screen-body settings-body">
-              <section class="settings-section" aria-label="Connection settings">
-                <div class="settings-row">
-                  <div>
-                    <p class="settings-key">Endpoint</p>
-                    <p class="settings-value">skillforge.tailnet.ts.net</p>
-                  </div>
-                  <span class="status-chip">reachable</span>
-                </div>
-                <div class="settings-row">
-                  <div>
-                    <p class="settings-key">Device token</p>
-                    <p class="settings-value">Keychain · returned once</p>
-                  </div>
-                  <span class="status-chip">stored</span>
-                </div>
-              </section>
-              <section class="settings-section" aria-label="Scope settings">
-                <div class="settings-row">
-                  <div>
-                    <p class="settings-key">Chat</p>
-                    <p class="settings-value">read / write / realtime</p>
-                  </div>
-                  <span class="status-chip">on</span>
-                </div>
-                <div class="settings-row">
-                  <div>
-                    <p class="settings-key">Confirmation</p>
-                    <p class="settings-value">ask_user / approve / deny</p>
-                  </div>
-                  <span class="status-chip">on</span>
-                </div>
-                <div class="settings-row">
-                  <div>
-                    <p class="settings-key">Device access</p>
-                    <p class="settings-value">no contacts · no calendar · no location</p>
-                  </div>
-                  <span class="status-chip warn">limited</span>
-                </div>
-              </section>
-              <button class="action-button" type="button">撤销此设备</button>
-            </div>
-          </section>
-
-          <nav class="screen-nav" aria-label="Phone tab bar">
-            <button class="nav-tab is-active" type="button" data-target="chat" aria-label="Chat">●</button>
-            <button class="nav-tab" type="button" data-target="sessions" aria-label="Sessions">≡</button>
-            <button class="nav-tab" type="button" data-target="pending" aria-label="Pending">✓</button>
-            <button class="nav-tab" type="button" data-target="settings" aria-label="Settings">⚙</button>
-          </nav>
-
-          <button class="sheet-backdrop" type="button" aria-label="Close quick actions" data-close-sheet></button>
-          <section class="action-sheet" aria-label="Quick actions" aria-hidden="true">
-            <span class="sheet-handle" aria-hidden="true"></span>
-            <div class="sheet-head">
-              <div>
-                <h2 class="sheet-title">Quick Actions</h2>
-                <p class="sheet-subtitle">Main Assistant · 当前 server 已连接</p>
-              </div>
-              <button class="sheet-close" type="button" aria-label="Close quick actions" data-close-sheet>×</button>
-            </div>
-            <div class="sheet-actions">
-              <button class="sheet-action primary" type="button" data-target="chat">
-                <span class="sheet-action-icon" aria-hidden="true">＋</span>
-                <span>
-                  <strong>新建任务</strong>
-                  <small>为 Main Assistant 开一个新 session</small>
-                </span>
-              </button>
-              <button class="sheet-action" type="button">
-                <span class="sheet-action-icon" aria-hidden="true">⌁</span>
-                <span>
-                  <strong>添加附件</strong>
-                  <small>图片、文件或拍照上传</small>
-                </span>
-              </button>
-              <button class="sheet-action" type="button">
-                <span class="sheet-action-icon" aria-hidden="true">⌘</span>
-                <span>
-                  <strong>粘贴链接/文本</strong>
-                  <small>把剪贴板变成消息草稿</small>
-                </span>
-              </button>
-              <button class="sheet-action" type="button" data-target="pairing">
-                <span class="sheet-action-icon" aria-hidden="true">⌗</span>
-                <span>
-                  <strong>扫码连接</strong>
-                  <small>扫描管理端 QR 重新配对 server</small>
-                </span>
-              </button>
-              <button class="sheet-action" type="button" data-target="sessions">
-                <span class="sheet-action-icon" aria-hidden="true">≡</span>
-                <span>
-                  <strong>历史会话</strong>
-                  <small>查看同 agent 的多个 session</small>
-                </span>
-              </button>
-            </div>
-          </section>
-        </div>
-      </div>
+        <nav class="tabs" aria-label="Current App tabs"><button class="tab is-active" data-tab="chat">●<small>Chat</small></button><button class="tab" data-tab="control">▦<small>Control</small></button><button class="tab" data-tab="agents">♟<small>Agents</small></button><button class="tab" data-tab="settings">⚙<small>Settings</small></button></nav>
+      </div></div>
     </section>
 
-    <aside class="control-panel" aria-label="Prototype notes">
-      <div>
-        <h2 class="panel-heading">Prototype Coverage</h2>
-        <p class="panel-copy">对应 IOS-ASSISTANT-COMPANION V1：先做用户能用的手机助理入口，再把更重的 Share Extension、语音和手机 tool node 放到后续版本。</p>
-      </div>
-
-      <ol class="flow-list">
-        <li class="flow-item">
-          <span class="flow-step">1</span>
-          <div>
-            <h3 class="flow-title">Pair</h3>
-            <p class="flow-copy">Dashboard 生成短期 QR，iOS probe endpoints[] 并保存首个可达 endpoint。</p>
-          </div>
-        </li>
-        <li class="flow-item">
-          <span class="flow-step">2</span>
-          <div>
-            <h3 class="flow-title">Chat</h3>
-            <p class="flow-copy">配对后直接进入默认助理会话，保留附件和系统键盘听写入口。</p>
-          </div>
-        </li>
-        <li class="flow-item">
-          <span class="flow-step">3</span>
-          <div>
-            <h3 class="flow-title">Decide</h3>
-            <p class="flow-copy">ask_user 与 confirmation 做成内联卡片，适合移动端快速处理。</p>
-          </div>
-        </li>
-        <li class="flow-item">
-          <span class="flow-step">4</span>
-          <div>
-            <h3 class="flow-title">Notify</h3>
-            <p class="flow-copy">push 只负责唤醒和跳转，真实状态仍由前台 REST catch-up 获取。</p>
-          </div>
-        </li>
-        <li class="flow-item">
-          <span class="flow-step">5</span>
-          <div>
-            <h3 class="flow-title">Revoke</h3>
-            <p class="flow-copy">device token 从服务端派生身份，撤销后不能继续访问 session。</p>
-          </div>
-        </li>
-      </ol>
-
-      <p class="build-note"><strong>Static artifact.</strong> 这个页面不连接后端，不保存任何 token；它用于对齐移动端信息架构和首版交互范围。</p>
-    </aside>
+    <aside class="panel notes"><h2>Parity Checklist</h2><p>基线来自 iPhone 17 Pro / iOS 26.5 deterministic XCUITest 截图。</p><div class="checklist">
+      <article class="check"><span class="check-mark">✓</span><div><h3>Navigation</h3><p>Current 固定为 Chat / Control / Agents / Settings。</p></div></article>
+      <article class="check"><span class="check-mark">✓</span><div><h3>Visual tokens</h3><p>系统大标题、暖灰背景、白色分组、橙色强调、浮动 Tab Bar。</p></div></article>
+      <article class="check"><span class="check-mark">✓</span><div><h3>Current surfaces</h3><p>Chat header/status/composer、Control schedules、Agents roster、Settings health/device。</p></div></article>
+      <article class="check"><span class="check-mark">◇</span><div><h3>Proposed only</h3><p>Personal App 卡片与全屏规划器明确标记需求 ID，尚未进入真实 App。</p></div></article>
+    </div><p class="legend">Current 改动需要真实截图证据；Proposed 实现并验收后才能合并进 Current。</p></aside>
   </main>
-
   <script>
-    const screenButtons = document.querySelectorAll("button[data-target]");
-    const navigationButtons = document.querySelectorAll(".switch-button[data-target], .nav-tab[data-target]");
-    const screens = document.querySelectorAll("[data-screen]");
-    const phoneScreen = document.querySelector(".phone-screen");
-    const actionSheet = document.querySelector(".action-sheet");
-    const qrGrid = document.getElementById("qrGrid");
-    const qrPattern = [
-      1,1,1,1,1,1,1,0,1,0,1,1,1,1,1,1,1,
-      1,0,0,0,0,0,1,0,0,1,1,0,0,0,0,0,1,
-      1,0,1,1,1,0,1,1,0,1,1,0,1,1,1,0,1,
-      1,0,1,1,1,0,1,0,1,0,0,0,1,1,1,0,1,
-      1,0,1,1,1,0,1,0,1,1,0,0,1,1,1,0,1,
-      1,0,0,0,0,0,1,1,0,0,1,0,0,0,0,0,1,
-      1,1,1,1,1,1,1,0,1,0,1,1,1,1,1,1,1,
-      0,0,1,0,1,0,0,1,1,0,0,1,0,0,1,0,0,
-      1,0,0,1,1,1,0,1,0,1,1,0,1,0,0,1,1,
-      0,1,1,0,0,1,1,0,1,0,1,1,0,1,1,0,0,
-      1,1,0,1,0,0,1,1,1,1,0,0,1,1,0,1,0,
-      0,0,1,0,1,1,0,0,1,0,1,1,0,0,1,0,1,
-      1,1,1,1,1,1,1,0,1,1,0,1,1,1,1,1,1,
-      1,0,0,0,0,0,1,0,0,1,0,0,0,0,0,0,1,
-      1,0,1,1,1,0,1,1,0,1,1,0,1,1,1,0,1,
-      1,0,0,0,0,0,1,0,1,0,0,1,0,0,0,1,0,
-      1,1,1,1,1,1,1,1,0,1,1,0,1,0,1,1,1
-    ];
-
-    function setSheetOpen(open) {
-      phoneScreen.classList.toggle("is-sheet-open", open);
-      actionSheet.setAttribute("aria-hidden", String(!open));
+    const viewport = document.getElementById('viewport');
+    const screens = [...document.querySelectorAll('[data-screen]')];
+    const screenButtons = [...document.querySelectorAll('[data-screen-target]')];
+    const tabs = [...document.querySelectorAll('[data-tab]')];
+    const modeButtons = [...document.querySelectorAll('[data-mode]')];
+    const budgetRanges = [...document.querySelectorAll('.budget-range')];
+    const initialBudgets = [2600, 1400, 2100, 2100];
+    function openScreen(name) {
+      screens.forEach(screen => screen.classList.toggle('is-active', screen.dataset.screen === name));
+      screenButtons.forEach(button => button.classList.toggle('is-active', button.dataset.screenTarget === name));
+      tabs.forEach(tab => tab.classList.toggle('is-active', tab.dataset.tab === name));
+      viewport.classList.toggle('is-artifact', name === 'personal-app');
     }
-
-    function setActiveScreen(name) {
-      screens.forEach((screen) => {
-        screen.classList.toggle("is-active", screen.dataset.screen === name);
-      });
-      navigationButtons.forEach((button) => {
-        button.classList.toggle("is-active", button.dataset.target === name);
-      });
-      phoneScreen.classList.toggle("is-pairing", name === "pairing");
-      setSheetOpen(false);
+    function setMode(mode) {
+      modeButtons.forEach(button => button.classList.toggle('is-active', button.dataset.mode === mode));
+      document.querySelectorAll('[data-mode-scope]').forEach(button => { button.hidden = button.dataset.modeScope !== mode; });
+      openScreen(mode === 'current' ? 'chat' : 'artifact-chat');
     }
-
-    screenButtons.forEach((button) => {
-      button.addEventListener("click", () => setActiveScreen(button.dataset.target));
-    });
-
-    document.querySelectorAll("[data-open-sheet]").forEach((button) => {
-      button.addEventListener("click", () => setSheetOpen(!phoneScreen.classList.contains("is-sheet-open")));
-    });
-
-    document.querySelectorAll("[data-close-sheet]").forEach((button) => {
-      button.addEventListener("click", () => setSheetOpen(false));
-    });
-
-    document.addEventListener("keydown", (event) => {
-      if (event.key === "Escape") {
-        setSheetOpen(false);
-      }
-    });
-
-    qrPattern.forEach((value) => {
-      const cell = document.createElement("span");
-      cell.className = value ? "qr-cell is-on" : "qr-cell";
-      qrGrid.appendChild(cell);
-    });
+    function updateBudget() {
+      let total = 0;
+      budgetRanges.forEach(range => { const value = Number(range.value); total += value; range.closest('.budget-item').querySelector('[data-budget-value]').textContent = `¥${value.toLocaleString('zh-CN')}`; });
+      document.getElementById('budgetTotal').textContent = `¥${total.toLocaleString('zh-CN')}`;
+      document.getElementById('budgetRemaining').textContent = `¥${Math.max(0,10000-total).toLocaleString('zh-CN')}`;
+    }
+    screenButtons.forEach(button => button.addEventListener('click', () => openScreen(button.dataset.screenTarget)));
+    tabs.forEach(tab => tab.addEventListener('click', () => openScreen(tab.dataset.tab)));
+    modeButtons.forEach(button => button.addEventListener('click', () => setMode(button.dataset.mode)));
+    budgetRanges.forEach(range => range.addEventListener('input', updateBudget));
+    document.getElementById('resetBudget').addEventListener('click', () => { budgetRanges.forEach((range,index) => range.value = initialBudgets[index]); updateBudget(); });
   </script>
 </body>
 </html>
