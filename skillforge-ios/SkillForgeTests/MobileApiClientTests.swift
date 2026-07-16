@@ -59,6 +59,40 @@ final class MobileApiClientTests: XCTestCase {
         XCTAssertEqual(observedBody?["platform"] as? String, "ios")
     }
 
+    func testRegistersAPNsTokenWithAuthorizedMobileEndpoint() async throws {
+        nonisolated(unsafe) var observedRequest: URLRequest?
+        URLProtocolStub.requestHandler = { request in
+            observedRequest = request
+            let response = HTTPURLResponse(
+                url: request.url!, statusCode: 200, httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, Data("""
+            {
+              "id": "00000000-0000-0000-0000-000000000001",
+              "environment": "development",
+              "status": "active",
+              "registeredAt": "2026-07-16T09:00:00Z"
+            }
+            """.utf8))
+        }
+        let client = MobileApiClient(
+            baseURL: URL(string: "http://127.0.0.1:8080")!,
+            deviceToken: "device-token",
+            session: EndpointProbeTests.stubbedSession()
+        )
+
+        let result = try await client.registerPushToken("ab" + String(repeating: "01", count: 31), environment: "development")
+
+        let request = try XCTUnwrap(observedRequest)
+        XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertEqual(request.url?.path, "/api/mobile/client/push-token")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer device-token")
+        let body = try XCTUnwrap(Self.requestBodyJSON(request))
+        XCTAssertEqual(body["environment"] as? String, "development")
+        XCTAssertEqual(result.status, "active")
+    }
+
     func testUsesMobileChatSessionEndpoints() async throws {
         nonisolated(unsafe) var observedRequests: [(method: String?, path: String?, auth: String?, body: [String: Any]?)] = []
 

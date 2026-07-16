@@ -41,7 +41,7 @@ public class MobileClientController {
                         "deviceName", mobilePrincipal.deviceName(),
                         "scopes", mobilePrincipal.scopes()),
                 "defaultAgent", defaultAgent,
-                "features", new MobileFeatureFlags(true, true, false, false)));
+                "features", new MobileFeatureFlags(true, true, true, true)));
     }
 
     @GetMapping("/agents")

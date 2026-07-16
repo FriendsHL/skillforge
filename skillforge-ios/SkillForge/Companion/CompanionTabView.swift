@@ -17,6 +17,7 @@ struct CompanionTabView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage(AppAppearance.storageKey) private var appearanceRawValue = AppAppearance.system.rawValue
+    @ObservedObject private var pushRouter = PushNotificationRouter.shared
 
     let endpoint: URL
     let deviceToken: String
@@ -192,6 +193,32 @@ struct CompanionTabView: View {
             while !Task.isCancelled {
                 await appState.refreshEndpointSelection()
                 try? await Task.sleep(for: .seconds(4))
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .skillForgeDidRegisterPushToken)) { note in
+            guard let token = note.object as? String else { return }
+            Task {
+                do {
+                    _ = try await client.registerPushToken(token, environment: PushEnvironment.current)
+                    NotificationCenter.default.post(name: .skillForgePushTokenUploadSucceeded, object: nil)
+                } catch {
+                    NotificationCenter.default.post(
+                        name: .skillForgePushTokenUploadFailed,
+                        object: error.localizedDescription
+                    )
+                }
+            }
+        }
+        .task(id: pushRouter.pendingSessionID) {
+            guard !usesDeterministicFixture, let sessionID = pushRouter.pendingSessionID else { return }
+            do {
+                let session = try await client.getSession(sessionId: sessionID)
+                openSession(session)
+                pushRouter.consume(sessionID)
+            } catch MobileApiError.httpStatus(401, _) {
+                disconnectLocally()
+            } catch {
+                // Keep the route pending; foreground refresh or endpoint failover can retry it.
             }
         }
     }

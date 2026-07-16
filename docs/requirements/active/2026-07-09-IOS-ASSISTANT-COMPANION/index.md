@@ -1,7 +1,7 @@
 # IOS-ASSISTANT-COMPANION — SkillForge iOS 个人助理入口
 
 > 创建：2026-07-09
-> 状态：active / V1 core implemented（APNs、TestFlight 和完整真机回归仍开放）
+> 状态：active / V1 core implemented（Agent 文件交付真实 E2E 与 APNs 已拆独立 P1；TestFlight 和完整真机回归仍开放）
 > 模式：Full（新增 SwiftUI iOS App + 后端移动端配对/API/auth/push + schema）
 > 来源：用户希望参考 OpenClaw iOS 扫码连接方式，为 SkillForge 做偏个人助理入口的 iOS 产品。
 
@@ -65,17 +65,18 @@ SkillForge iOS 端不做 dashboard 缩小版，而做 **Assistant Companion**：
 | LAN + Tailscale endpoint fallback | 已实现 | QR 保存完整候选集；连接优先 LAN、失败后切 Tailscale/HTTPS，不盲重发业务 POST。 |
 | Chat / sessions / realtime | 已实现 | 历史、发送、状态、流式文本、工具卡片、Markdown、断线 REST catch-up。 |
 | ask/confirmation | 已实现 | 移动 facade 校验设备与 session ownership。 |
-| 上传与 Agent 生成附件 | 已实现 | 图片/文件上传；生成产物经 `PublishChatArtifact` 进入同一 assistant message 并可鉴权下载。 |
+| 上传与 Agent 生成附件 | 基础设施已实现 / 用户流程未验收 | 图片/文件上传可用；生成产物已有 `PublishChatArtifact`、assistant ref 与鉴权下载，但 normal-chat image/document E2E 未通过且用户报告不可用，见独立 P1。 |
 | Control / schedules | 已实现 | 计划列表、运行历史、立即运行、暂停/启用。 |
 | Agents | 已实现（只读） | 查看身份、模型、执行策略、Skills、Tools 与 Prompt 配置摘要，不从该页创建 session。 |
 | Settings / diagnostics | 已实现 | 连接健康、通知权限、外观、隐私、断开重配。 |
-| APNs delivery | 未完成 | 目前只有本地权限/注册骨架；证书、token 持久化与服务端发送另立切片。 |
+| APNs delivery | 未完成 / 已拆 P1 | 目前只有本地权限/注册骨架；证书、token 持久化、服务端发送和通知点击路由见独立需求。 |
 | TestFlight / App Store | 未完成 | 当前正式支持 Xcode 开发签名直装真机。 |
 
 ## 当前执行
 
 1. V1 core 已完成代码实现和本批 Full pipeline 验证，交付记录见 `docs/delivery-index.md`。
-2. Slice 4 剩余为 APNs delivery、证书链路和真实后台通知，不阻塞 Xcode 直装使用。
+2. Agent 文件交付真实 E2E 见 [IOS-AGENT-FILE-DELIVERY](../2026-07-16-IOS-AGENT-FILE-DELIVERY/index.md)。
+3. APNs delivery、证书链路和真实后台通知见 [IOS-TASK-COMPLETION-PUSH](../2026-07-16-IOS-TASK-COMPLETION-PUSH/index.md)。
 3. Navigation Foundation：配对后使用原生四栏导航
    `Chat / Control / Agents / Settings`。Chat 仍是默认入口；Control 分别承载
    Schedule、Run 和 Session 入口；Agents 用于检查 Agent 配置与能力；Settings
@@ -150,5 +151,7 @@ SkillForge iOS 端不做 dashboard 缩小版，而做 **Assistant Companion**：
 ## 关联
 
 - OpenClaw iOS pairing 模型调研：本需求的产品参考。
-- SkillForge channel 架构：[WECHAT-CHANNEL](../2026-06-18-WECHAT-CHANNEL/index.md)。
+- SkillForge channel 架构：[WECHAT-CHANNEL](../../archive/2026-06-21-WECHAT-CHANNEL/index.md)。
+- Agent 文件交付缺口：[IOS-AGENT-FILE-DELIVERY](../2026-07-16-IOS-AGENT-FILE-DELIVERY/index.md)。
+- Task 完成通知：[IOS-TASK-COMPLETION-PUSH](../2026-07-16-IOS-TASK-COMPLETION-PUSH/index.md)。
 - 移动端 push / confirmation 相关现有路径：`ChatService`、`ChatController`、`PendingConfirmationRegistry`、`ChatEventBroadcaster`。

@@ -135,7 +135,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Notifications")
                 } footer: {
-                    Text("This reports iOS permission only. Server registration status is not available in this app yet.")
+                    Text("SkillForge registers this iPhone with the server after iOS grants notification permission.")
                 }
 
                 Section("Appearance") {
@@ -198,6 +198,15 @@ struct SettingsView: View {
                 guard phase == .active else { return }
                 refreshNotificationStatus()
                 runConnectionCheck()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .skillForgePushRegistrationFailed)) { note in
+                notificationErrorText = note.object as? String ?? "iOS push registration failed."
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .skillForgePushTokenUploadFailed)) { note in
+                notificationErrorText = note.object as? String ?? "Server push registration failed."
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .skillForgePushTokenUploadSucceeded)) { _ in
+                notificationErrorText = nil
             }
         }
         .onDisappear {
@@ -276,7 +285,7 @@ struct SettingsView: View {
         notificationState = .loading
         Task { @MainActor in
             do {
-                _ = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound])
+                _ = try await PushRegistration().requestAuthorizationIfNeeded()
                 await loadNotificationStatus()
             } catch {
                 notificationErrorText = error.localizedDescription

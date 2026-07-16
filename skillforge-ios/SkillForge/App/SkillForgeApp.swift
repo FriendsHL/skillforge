@@ -1,7 +1,45 @@
 import SwiftUI
+import UIKit
+@preconcurrency import UserNotifications
+
+final class SkillForgeAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
+    func application(
+        _ application: UIApplication,
+        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
+    ) -> Bool {
+        UNUserNotificationCenter.current().delegate = self
+        return true
+    }
+
+    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        let token = deviceToken.map { String(format: "%02x", $0) }.joined()
+        NotificationCenter.default.post(name: .skillForgeDidRegisterPushToken, object: token)
+    }
+
+    func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
+        NotificationCenter.default.post(name: .skillForgePushRegistrationFailed, object: error.localizedDescription)
+    }
+
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification
+    ) async -> UNNotificationPresentationOptions {
+        []
+    }
+
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse
+    ) async {
+        guard let sessionID = response.notification.request.content.userInfo["sessionId"] as? String,
+              sessionID.isEmpty == false else { return }
+        await MainActor.run { PushNotificationRouter.shared.route(to: sessionID) }
+    }
+}
 
 @main
 struct SkillForgeApp: App {
+    @UIApplicationDelegateAdaptor(SkillForgeAppDelegate.self) private var appDelegate
     @StateObject private var appState: AppState
 
     init() {

@@ -446,6 +446,13 @@ struct MobileScheduleActionResponse: Decodable, Equatable {
     let status: String
 }
 
+struct MobilePushRegistrationResponse: Decodable, Equatable {
+    let id: UUID
+    let environment: String
+    let status: String
+    let registeredAt: String
+}
+
 enum MobileApiError: Error, LocalizedError {
     case invalidResponse
     case missingDeviceToken
@@ -518,6 +525,16 @@ struct MobileApiClient {
             path: "/api/mobile/client/agents/\(id)",
             method: "GET",
             body: Optional<String>.none,
+            authorized: true
+        )
+    }
+
+    func registerPushToken(_ token: String, environment: String) async throws -> MobilePushRegistrationResponse {
+        struct Request: Encodable { let token: String; let environment: String }
+        return try await send(
+            path: "/api/mobile/client/push-token",
+            method: "POST",
+            body: Request(token: token, environment: environment),
             authorized: true
         )
     }

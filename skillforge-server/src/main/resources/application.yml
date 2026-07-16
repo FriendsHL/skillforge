@@ -98,6 +98,19 @@ skillforge:
         - localhost
         - 127.0.0.1
 
+  mobile:
+    push:
+      # Base64-encoded 32-byte AES key protecting APNs device tokens at rest.
+      encryption-key: ${SKILLFORGE_MOBILE_PUSH_ENCRYPTION_KEY:}
+      poll-ms: ${SKILLFORGE_MOBILE_PUSH_POLL_MS:10000}
+      initial-delay-ms: ${SKILLFORGE_MOBILE_PUSH_INITIAL_DELAY_MS:15000}
+      apns:
+        team-id: ${SKILLFORGE_APNS_TEAM_ID:}
+        key-id: ${SKILLFORGE_APNS_KEY_ID:}
+        topic: ${SKILLFORGE_APNS_TOPIC:com.skillforge.companion.dev}
+        # Multiline .p8 PEM or a value whose newlines are escaped as \n.
+        private-key: ${SKILLFORGE_APNS_PRIVATE_KEY:}
+
   # P11 MCP-CLIENT: feature flag for the MCP client subsystem.
   # true (default) → McpServerLifecycle starts enabled servers from t_mcp_server on boot,
   # listens to CRUD events, exposes mcp_<server>_<tool> tools per agent.mcp_server_ids.
