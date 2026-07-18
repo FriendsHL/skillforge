@@ -39,10 +39,29 @@ Mid includes isolated SwiftUI views, ordinary visible behavior, local reducers o
 parsers, deterministic fixtures, and focused XCTest/XCUITest additions that do
 not alter security, lifecycle, build capabilities, or wire contracts.
 
+Do not classify iOS work as Full only because it touches a large or central view
+file such as `ChatView.swift`. Classify by the behavior and failure boundary.
+Ordinary local App interaction remains Mid even when its established
+implementation lives in that file.
+
+Mid includes these local-App changes when they do not alter a wire contract,
+background lifecycle, security boundary, or reconciliation invariant:
+
+- Chat layout, scroll/follow policy, animation, keyboard interaction, local
+  unread counters, typing/running indicators, and deterministic UI hooks.
+- Agent/Session search, filtering, grouping, detail actions, and explicit local
+  navigation using existing APIs.
+- Local presentation state shared by existing tabs when a stale value can cause
+  only a recoverable UI inconsistency, not message loss, duplicate execution, or
+  an auth/privacy failure.
+
 Full is required for any of these red lights:
 
-- `ChatView.swift`, `MobileRealtimeState.swift`, app entry/root navigation, or
-  shared transcript/composer/session state.
+- Changes to `MobileRealtimeState.swift` or shared transcript/composer/session
+  ownership that alter WebSocket/REST reconciliation, message identity,
+  send/retry idempotency, cancellation, or persistence semantics.
+- App entry/root navigation changes that alter authentication, pairing,
+  notification/deep-link lifecycle, or broadly migrate cross-tab ownership.
 - Pairing, endpoint selection, mobile auth, Keychain, token lifecycle, or device
   revocation.
 - WebSocket/REST reconciliation, streaming identity, retry/idempotency, task
@@ -54,6 +73,11 @@ Full is required for any of these red lights:
 - Camera/QR, photos/files, attachment upload, APNs, deep links, or background work.
 - A new third-party dependency, broad architecture/state migration, or any
   cross-stack backend/dashboard/iOS protocol change.
+
+When one brief mixes Mid local interaction with a Full red-light capability,
+split it into independently verifiable increments where practical. For example,
+implement local Chat follow behavior and Agent/Session navigation as Mid, then
+route APNs/background or protocol changes through a separate Full increment.
 
 Mixed work inherits its highest risk. A visible SwiftUI change is Mid by default,
 not Solo, because layout, focus, navigation, and scrolling need runtime evidence.
