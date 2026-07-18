@@ -1,0 +1,12 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Budget</title></head><body>
+<label>Food <input id="food" type="range" min="0" max="5000" value="2600"></label>
+<output id="value">2600</output>
+<button id="save">Save</button>
+<script>
+const food = document.getElementById('food');
+const value = document.getElementById('value');
+food.addEventListener('input', () => value.textContent = food.value);
+document.getElementById('save').addEventListener('click', () => {
+  window.webkit?.messageHandlers?.skillforge?.postMessage({method:'saveState', payload:{food:Number(food.value)}});
+});
+</script></body></html>

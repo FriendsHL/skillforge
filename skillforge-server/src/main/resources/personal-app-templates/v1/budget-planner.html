@@ -1,0 +1,645 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>SkillForge 月度预算规划器</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --space-1: 8px;
+      --space-2: 16px;
+      --space-3: 24px;
+      --space-4: 32px;
+      --radius-sm: 12px;
+      --radius-md: 16px;
+      --radius-lg: 20px;
+      --target: 44px;
+      --accent: #32313c;
+      --accent-contrast: #ffffff;
+      --highlight: #e76830;
+      --highlight-soft: #fff0e7;
+      --positive: #25815e;
+      --negative: #c9473d;
+      --background: #f4f3ef;
+      --surface: #ffffff;
+      --surface-muted: #ecebe7;
+      --text: #1d1c20;
+      --text-muted: #6c6971;
+      --border: rgba(40, 38, 45, 0.12);
+      --shadow: 0 16px 42px rgba(55, 45, 35, 0.10);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+      font-size: 16px;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 90% -10%, rgba(231, 104, 48, 0.18), transparent 32%),
+        var(--background);
+      line-height: 1.45;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    button, input, textarea { font: inherit; }
+    button, input { min-height: var(--target); }
+
+    button, input, textarea {
+      border: 1px solid var(--border);
+      color: var(--text);
+      background: var(--surface);
+    }
+
+    button {
+      cursor: pointer;
+      border-radius: var(--radius-sm);
+      font-weight: 700;
+    }
+
+    button:focus-visible, input:focus-visible, textarea:focus-visible {
+      outline: 3px solid color-mix(in srgb, var(--highlight) 48%, transparent);
+      outline-offset: 2px;
+    }
+
+    .shell {
+      width: min(100%, 720px);
+      margin: 0 auto;
+      padding: max(var(--space-2), env(safe-area-inset-top)) var(--space-2) 0;
+    }
+
+    .hero {
+      position: relative;
+      overflow: hidden;
+      padding: var(--space-3);
+      border-radius: var(--radius-lg);
+      color: #ffffff;
+      background: linear-gradient(145deg, #25242d, #4b4652);
+      box-shadow: var(--shadow);
+    }
+
+    .hero::after {
+      content: "";
+      position: absolute;
+      width: 170px;
+      height: 170px;
+      right: -64px;
+      top: -72px;
+      border-radius: 50%;
+      background: rgba(231, 104, 48, 0.72);
+    }
+
+    .eyebrow {
+      position: relative;
+      z-index: 1;
+      margin: 0 0 var(--space-1);
+      color: rgba(255, 255, 255, 0.72);
+      font-size: 0.78rem;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      position: relative;
+      z-index: 1;
+      margin: 0;
+      max-width: 75%;
+      font-size: clamp(1.8rem, 8vw, 2.7rem);
+      line-height: 1.08;
+      letter-spacing: -0.035em;
+    }
+
+    .income-field {
+      position: relative;
+      z-index: 1;
+      display: grid;
+      gap: 6px;
+      margin-top: var(--space-3);
+    }
+
+    .income-field span { color: rgba(255, 255, 255, 0.72); font-size: 0.82rem; }
+
+    .money-input {
+      display: flex;
+      align-items: center;
+      gap: var(--space-1);
+      width: min(100%, 320px);
+      padding: 4px 12px;
+      border: 1px solid rgba(255, 255, 255, 0.22);
+      border-radius: var(--radius-sm);
+      background: rgba(255, 255, 255, 0.10);
+    }
+
+    .money-input strong { font-size: 1.15rem; }
+
+    .money-input input {
+      width: 100%;
+      border: 0;
+      color: #ffffff;
+      background: transparent;
+      font-size: 1.2rem;
+      font-weight: 750;
+      outline: 0;
+    }
+
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: var(--space-1);
+      margin-top: var(--space-2);
+    }
+
+    .summary-card {
+      padding: var(--space-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      background: var(--surface);
+      box-shadow: 0 8px 26px rgba(55, 45, 35, 0.06);
+    }
+
+    .summary-card span, .summary-card strong { display: block; }
+    .summary-card span { color: var(--text-muted); font-size: 0.78rem; }
+    .summary-card strong { margin-top: 4px; font-size: clamp(1.15rem, 5vw, 1.5rem); }
+    .summary-card.balance-positive strong { color: var(--positive); }
+    .summary-card.balance-negative strong { color: var(--negative); }
+
+    main { padding: var(--space-3) 0; }
+
+    .section-heading {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-1);
+      margin-bottom: var(--space-2);
+    }
+
+    .section-heading h2 { margin: 0; font-size: 1.15rem; }
+    .section-heading p { margin: 0; color: var(--text-muted); font-size: 0.82rem; }
+
+    .category-list {
+      display: grid;
+      gap: 12px;
+    }
+
+    .category {
+      padding: var(--space-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      background: var(--surface);
+    }
+
+    .category-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(118px, 0.68fr);
+      align-items: center;
+      gap: var(--space-1);
+    }
+
+    .category-name {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+      font-weight: 720;
+    }
+
+    .tone-dot { width: 12px; height: 12px; border-radius: 50%; flex: 0 0 auto; }
+    .tone-violet { background: #7c67dc; }
+    .tone-orange { background: #e77a37; }
+    .tone-blue { background: #448bc9; }
+    .tone-pink { background: #cc6795; }
+    .tone-green { background: #3a9a72; }
+    .tone-neutral { background: #77747c; }
+
+    .category input {
+      width: 100%;
+      padding: 0 10px;
+      border-radius: 10px;
+      text-align: right;
+      font-weight: 700;
+    }
+
+    .allocation-track {
+      height: 6px;
+      margin-top: 12px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: var(--surface-muted);
+    }
+
+    .allocation-fill {
+      height: 100%;
+      width: 0;
+      border-radius: inherit;
+      background: var(--highlight);
+      transition: width 180ms ease;
+    }
+
+    .empty {
+      padding: var(--space-4) var(--space-2);
+      border: 1px dashed var(--border);
+      border-radius: var(--radius-lg);
+      color: var(--text-muted);
+      text-align: center;
+      background: var(--surface);
+    }
+
+    .note-card {
+      margin-top: var(--space-3);
+      padding: var(--space-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      background: var(--surface);
+    }
+
+    .note-card label {
+      display: block;
+      margin-bottom: var(--space-1);
+      color: var(--text-muted);
+      font-size: 0.82rem;
+      font-weight: 700;
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 92px;
+      padding: 12px;
+      resize: vertical;
+      border-radius: var(--radius-sm);
+    }
+
+    footer {
+      position: sticky;
+      z-index: 5;
+      bottom: 0;
+      margin: 0 calc(var(--space-2) * -1);
+      padding: 12px var(--space-2) calc(12px + env(safe-area-inset-bottom));
+      border-top: 1px solid var(--border);
+      background: color-mix(in srgb, var(--background) 90%, transparent);
+      backdrop-filter: blur(20px);
+    }
+
+    .footer-status {
+      min-height: 22px;
+      margin-bottom: var(--space-1);
+      color: var(--text-muted);
+      text-align: center;
+      font-size: 0.8rem;
+    }
+
+    .footer-actions {
+      display: grid;
+      grid-template-columns: 0.72fr 1fr 1.18fr;
+      gap: var(--space-1);
+    }
+
+    .footer-actions button { padding: 0 10px; }
+    .primary { border-color: transparent; color: var(--accent-contrast); background: var(--accent); }
+    .save { border-color: transparent; color: #ffffff; background: var(--highlight); }
+
+    @media (min-width: 620px) {
+      .summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .category { padding: 20px; }
+    }
+
+    @media (max-width: 390px) {
+      .footer-actions { grid-template-columns: 1fr 1fr; }
+      .footer-actions #reset { grid-column: 1 / -1; }
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --accent: #f2f0f7;
+        --accent-contrast: #1b1a20;
+        --highlight: #f17a43;
+        --highlight-soft: #3d271e;
+        --positive: #64c59a;
+        --negative: #ff8278;
+        --background: #111014;
+        --surface: #1c1b20;
+        --surface-muted: #2b2930;
+        --text: #f5f3f7;
+        --text-muted: #aaa6af;
+        --border: rgba(248, 244, 255, 0.13);
+        --shadow: 0 18px 46px rgba(0, 0, 0, 0.32);
+      }
+      .hero { background: linear-gradient(145deg, #242129, #3c3540); }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        scroll-behavior: auto !important;
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell" id="app">
+    <header class="hero">
+      <p class="eyebrow">SkillForge · Personal App</p>
+      <h1 id="planner-title">月度预算规划器</h1>
+      <label class="income-field" for="income">
+        <span>本月可用收入</span>
+        <span class="money-input">
+          <strong id="currency-symbol">¥</strong>
+          <input id="income" type="number" min="0" step="100" inputmode="decimal" aria-label="本月可用收入">
+        </span>
+      </label>
+    </header>
+
+    <section class="summary" aria-label="预算汇总">
+      <div class="summary-card">
+        <span>计划支出</span>
+        <strong id="expense-total">¥0</strong>
+      </div>
+      <div class="summary-card" id="balance-card">
+        <span>预计结余</span>
+        <strong id="balance-total">¥0</strong>
+      </div>
+      <div class="summary-card">
+        <span>预算使用率</span>
+        <strong id="usage-total">0%</strong>
+      </div>
+    </section>
+
+    <main>
+      <div class="section-heading">
+        <div>
+          <h2>分类预算</h2>
+          <p>调整金额，汇总会实时更新</p>
+        </div>
+      </div>
+      <section class="category-list" id="category-list" aria-live="polite"></section>
+      <section class="note-card" aria-labelledby="note-label">
+        <label id="note-label" for="note">提交给 Agent 的备注</label>
+        <textarea id="note" maxlength="1000" placeholder="例如：帮我找出还能优化的两项支出"></textarea>
+      </section>
+    </main>
+
+    <footer>
+      <div class="footer-status" id="status" role="status" aria-live="polite"></div>
+      <div class="footer-actions">
+        <button type="button" id="reset">重置</button>
+        <button type="button" id="save" class="save">保存方案</button>
+        <button type="button" id="submit" class="primary">提交给 Agent</button>
+      </div>
+    </footer>
+  </div>
+
+  <script>
+    (() => {
+      "use strict";
+
+      const bridge = window.SkillForgeArtifact && typeof window.SkillForgeArtifact === "object"
+        ? window.SkillForgeArtifact
+        : null;
+      const DEMO_DATA = Object.freeze({
+        title: "本地预览预算",
+        currency: "¥",
+        income: 18000,
+        categories: [
+          { key: "housing", label: "住房", amount: 5200, tone: "violet" },
+          { key: "food", label: "餐饮", amount: 2600, tone: "orange" },
+          { key: "transport", label: "交通", amount: 1200, tone: "blue" },
+          { key: "lifestyle", label: "生活", amount: 1800, tone: "pink" },
+          { key: "savings", label: "储蓄", amount: 4000, tone: "green" }
+        ]
+      });
+      const sourceData = bridge ? bridge.initialData : DEMO_DATA;
+      const savedState = bridge ? bridge.savedState : null;
+
+      const isRecord = value => value !== null && typeof value === "object" && !Array.isArray(value);
+      const toAmount = value => {
+        const number = Number(value);
+        return Number.isFinite(number) ? Math.max(0, number) : 0;
+      };
+      const data = normalizeData(isRecord(sourceData) ? sourceData : {});
+      const restored = isRecord(savedState) ? savedState : {};
+      const restoredAmounts = isRecord(restored.amounts) ? restored.amounts : {};
+      const initialState = {
+        income: data.income,
+        amounts: Object.fromEntries(data.categories.map(category => [category.key, category.amount])),
+        note: ""
+      };
+      const state = {
+        income: Object.prototype.hasOwnProperty.call(restored, "income")
+          ? toAmount(restored.income)
+          : initialState.income,
+        amounts: Object.fromEntries(data.categories.map(category => [
+          category.key,
+          Object.prototype.hasOwnProperty.call(restoredAmounts, category.key)
+            ? toAmount(restoredAmounts[category.key])
+            : category.amount
+        ])),
+        note: typeof restored.note === "string" ? restored.note.slice(0, 1000) : ""
+      };
+
+      const elements = {
+        title: document.getElementById("planner-title"),
+        currency: document.getElementById("currency-symbol"),
+        income: document.getElementById("income"),
+        expenses: document.getElementById("expense-total"),
+        balance: document.getElementById("balance-total"),
+        balanceCard: document.getElementById("balance-card"),
+        usage: document.getElementById("usage-total"),
+        categories: document.getElementById("category-list"),
+        note: document.getElementById("note"),
+        status: document.getElementById("status")
+      };
+
+      elements.title.textContent = data.title || "月度预算规划器";
+      elements.currency.textContent = data.currency;
+      elements.income.value = String(state.income);
+      elements.note.value = state.note;
+
+      function normalizeData(value) {
+        const usedKeys = new Set();
+        const categories = Array.isArray(value.categories) ? value.categories.flatMap((item, index) => {
+          const safe = isRecord(item) ? item : {};
+          const fallbackKey = `category_${index + 1}`;
+          const candidate = typeof safe.key === "string" ? safe.key : fallbackKey;
+          const key = /^[A-Za-z][A-Za-z0-9_-]{0,31}$/.test(candidate) && !usedKeys.has(candidate)
+            ? candidate
+            : fallbackKey;
+          if (usedKeys.has(key)) return [];
+          usedKeys.add(key);
+          return [{
+            key,
+            label: String(safe.label || `分类 ${index + 1}`),
+            amount: toAmount(safe.amount),
+            tone: ["violet", "orange", "blue", "pink", "green"].includes(safe.tone)
+              ? safe.tone
+              : "neutral"
+          }];
+        }) : [];
+        return {
+          title: typeof value.title === "string" ? value.title : "月度预算规划器",
+          currency: typeof value.currency === "string" && value.currency.length <= 4 ? value.currency : "¥",
+          income: toAmount(value.income),
+          categories
+        };
+      }
+
+      function formatMoney(value) {
+        return `${data.currency}${new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 0 }).format(value)}`;
+      }
+
+      function statePayload() {
+        return {
+          income: state.income,
+          amounts: { ...state.amounts },
+          note: state.note
+        };
+      }
+
+      function totals() {
+        const expenses = data.categories.reduce(
+          (sum, category) => sum + toAmount(state.amounts[category.key]),
+          0
+        );
+        return {
+          expenses,
+          balance: state.income - expenses,
+          usage: state.income > 0 ? Math.round((expenses / state.income) * 100) : 0
+        };
+      }
+
+      function renderCategories() {
+        elements.categories.replaceChildren();
+        if (data.categories.length === 0) {
+          const empty = document.createElement("div");
+          empty.className = "empty";
+          empty.textContent = "这份 Personal App 尚未注入预算分类。";
+          elements.categories.append(empty);
+          return;
+        }
+        data.categories.forEach(category => {
+          const card = document.createElement("label");
+          card.className = "category";
+          const row = document.createElement("span");
+          row.className = "category-row";
+          const name = document.createElement("span");
+          name.className = "category-name";
+          const dot = document.createElement("span");
+          dot.className = `tone-dot tone-${category.tone}`;
+          dot.setAttribute("aria-hidden", "true");
+          const label = document.createElement("span");
+          label.textContent = category.label;
+          name.append(dot, label);
+
+          const input = document.createElement("input");
+          input.type = "number";
+          input.min = "0";
+          input.step = "100";
+          input.inputMode = "decimal";
+          input.value = String(state.amounts[category.key]);
+          input.setAttribute("data-budget-key", category.key);
+          input.setAttribute("aria-label", `${category.label}预算`);
+          input.addEventListener("input", event => {
+            state.amounts[category.key] = toAmount(event.target.value);
+            renderTotals();
+            renderAllocationBars();
+          });
+          row.append(name, input);
+
+          const track = document.createElement("span");
+          track.className = "allocation-track";
+          track.setAttribute("aria-hidden", "true");
+          const fill = document.createElement("span");
+          fill.className = "allocation-fill";
+          fill.dataset.allocationKey = category.key;
+          track.append(fill);
+          card.append(row, track);
+          elements.categories.append(card);
+        });
+      }
+
+      function renderAllocationBars() {
+        data.categories.forEach(category => {
+          const fill = elements.categories.querySelector(
+            `[data-allocation-key="${category.key}"]`
+          );
+          if (!fill) return;
+          const percentage = state.income > 0
+            ? Math.min(100, Math.round((state.amounts[category.key] / state.income) * 100))
+            : 0;
+          fill.style.width = `${percentage}%`;
+        });
+      }
+
+      function renderTotals() {
+        const result = totals();
+        elements.expenses.textContent = formatMoney(result.expenses);
+        elements.balance.textContent = formatMoney(result.balance);
+        elements.usage.textContent = `${result.usage}%`;
+        elements.balanceCard.classList.toggle("balance-positive", result.balance >= 0);
+        elements.balanceCard.classList.toggle("balance-negative", result.balance < 0);
+      }
+
+      function render() {
+        elements.income.value = String(state.income);
+        elements.note.value = state.note;
+        renderCategories();
+        renderTotals();
+        renderAllocationBars();
+      }
+
+      function setStatus(message, isError) {
+        elements.status.textContent = message;
+        elements.status.style.color = isError ? "var(--negative)" : "var(--text-muted)";
+      }
+
+      function resetBudget() {
+        state.income = initialState.income;
+        state.amounts = { ...initialState.amounts };
+        state.note = initialState.note;
+        render();
+        setStatus("已恢复这份预算的初始方案。", false);
+      }
+
+      function saveState() {
+        state.note = elements.note.value.slice(0, 1000);
+        if (bridge && typeof bridge.saveState === "function") {
+          bridge.saveState(statePayload());
+          setStatus("预算方案已保存到 SkillForge。", false);
+        } else {
+          setStatus("本地预览不会持久化预算。", true);
+        }
+      }
+
+      function submitSnapshot() {
+        state.note = elements.note.value.slice(0, 1000);
+        if (bridge && typeof bridge.submitSnapshot === "function") {
+          bridge.submitSnapshot(statePayload());
+          setStatus("等待 SkillForge 原生确认。", false);
+        } else {
+          setStatus("本地预览不能提交给 Agent。", true);
+        }
+      }
+
+      elements.income.addEventListener("input", event => {
+        state.income = toAmount(event.target.value);
+        renderTotals();
+        renderAllocationBars();
+      });
+      elements.note.addEventListener("input", event => {
+        state.note = event.target.value.slice(0, 1000);
+      });
+      document.getElementById("reset").addEventListener("click", resetBudget);
+      document.getElementById("save").addEventListener("click", saveState);
+      document.getElementById("submit").addEventListener("click", submitSnapshot);
+
+      render();
+      setStatus(bridge ? "已加载 SkillForge 数据。" : "本地预览 · 使用演示数据。", false);
+    })();
+  </script>
+</body>
+</html>

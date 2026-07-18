@@ -10,6 +10,7 @@ import java.nio.file.SecureDirectoryStream;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.Comparator;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -28,9 +29,25 @@ class ArtifactWorkspaceServiceTest {
 
         assertThat(workspace).isDirectory();
         assertThat(workspace).isEqualTo(tempDir.toRealPath().resolve("7/session-1/trace-1"));
+        assertThat(workspace.resolve(".skillforge")).doesNotExist();
         assertThat(service.promptInstruction(workspace))
                 .contains(workspace.toString())
-                .contains("PublishChatArtifact");
+                .contains("absolute path")
+                .contains("template_id")
+                .contains("ai-daily-brief-v1")
+                .contains("budget-planner-v1")
+                .contains("amounts:{[categoryKey]:number}")
+                .contains("file_path")
+                .contains("PublishChatArtifact")
+                .contains("PublishInteractiveArtifact")
+                .contains("image, PDF, Word, Excel, or CSV")
+                .contains("HTML and HTM files are rejected by PublishChatArtifact")
+                .contains("Historical run files are reference-only")
+                .contains("rewrite the final file inside the current run workspace")
+                .contains("never publish a historical path directly")
+                .contains("state_schema supports only")
+                .contains("string, number, integer, boolean, object, and array")
+                .contains("16 KiB, depth 8, and 1024 JSON value nodes");
     }
 
     @Test
@@ -75,7 +92,7 @@ class ArtifactWorkspaceServiceTest {
         Path workspace = service.create(7L, "session-1", "trace-1");
         Path outside = Files.createTempDirectory("artifact-replacement-preserved");
         Files.writeString(outside.resolve("keep.txt"), "keep");
-        Files.delete(workspace);
+        deleteFixtureTree(workspace);
         Files.createSymbolicLink(workspace, outside);
 
         assertThatThrownBy(() -> service.deleteWorkspace(workspace))
@@ -91,7 +108,7 @@ class ArtifactWorkspaceServiceTest {
         Path outside = Files.createTempDirectory("artifact-component-preserved");
         Path outsideTrace = Files.createDirectories(outside.resolve("trace-outside"));
         Files.writeString(outsideTrace.resolve("keep.txt"), "keep");
-        Files.delete(workspace);
+        deleteFixtureTree(workspace);
         Files.delete(workspace.getParent());
         Files.createSymbolicLink(workspace.getParent(), outside);
 
@@ -102,6 +119,14 @@ class ArtifactWorkspaceServiceTest {
     private static boolean supportsSecureDirectoryStream(Path root) throws Exception {
         try (DirectoryStream<Path> stream = Files.newDirectoryStream(root)) {
             return stream instanceof SecureDirectoryStream<?>;
+        }
+    }
+
+    private static void deleteFixtureTree(Path root) throws Exception {
+        try (var paths = Files.walk(root)) {
+            for (Path path : paths.sorted(Comparator.reverseOrder()).toList()) {
+                Files.delete(path);
+            }
         }
     }
 }

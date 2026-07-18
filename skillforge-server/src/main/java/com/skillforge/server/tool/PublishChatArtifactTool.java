@@ -8,9 +8,11 @@ import com.skillforge.core.skill.Tool;
 import com.skillforge.server.entity.ChatAttachmentEntity;
 import com.skillforge.server.service.ChatAttachmentService;
 
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 public class PublishChatArtifactTool implements Tool {
@@ -30,7 +32,9 @@ public class PublishChatArtifactTool implements Tool {
     @Override
     public String getDescription() {
         return "Publish a generated image, PDF, Word, Excel, or CSV file into the current chat. "
-                + "The file must be under the artifact workspace provided in the system prompt.";
+                + "HTML and HTM files are not supported; publish an offline Personal App with "
+                + "PublishInteractiveArtifact instead. The final file must be newly written under the "
+                + "current run artifact workspace provided in the system prompt.";
     }
 
     @Override
@@ -38,7 +42,9 @@ public class PublishChatArtifactTool implements Tool {
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put("file_path", Map.of(
                 "type", "string",
-                "description", "Absolute path to a final file inside this run's artifact workspace."));
+                "description", "Absolute path to a final ordinary supported file, not HTML or HTM, inside "
+                        + "the current run artifact workspace. A historical run file may be read as a "
+                        + "reference but must be rewritten here before publishing."));
         properties.put("caption", Map.of(
                 "type", "string",
                 "description", "Optional short caption shown with the attachment."));
@@ -59,6 +65,20 @@ public class PublishChatArtifactTool implements Tool {
                 || filePath.isBlank()) {
             return SkillResult.validationError("file_path is required");
         }
+        Path requestedFile;
+        try {
+            requestedFile = Path.of(filePath);
+        } catch (InvalidPathException e) {
+            return SkillResult.validationError("file_path is invalid");
+        }
+        Path basename = requestedFile.getFileName();
+        if (basename != null) {
+            String normalized = basename.toString().toLowerCase(Locale.ROOT);
+            if (normalized.endsWith(".html") || normalized.endsWith(".htm")) {
+                return SkillResult.validationError(
+                        "HTML and HTM files must be published with PublishInteractiveArtifact");
+            }
+        }
         if (context == null || blank(context.getSessionId()) || context.getUserId() == null
                 || blank(context.getToolUseId()) || blank(context.getArtifactOutputDirectory())) {
             return SkillResult.error("PublishChatArtifact is unavailable outside an active artifact workspace");
@@ -67,7 +87,7 @@ public class PublishChatArtifactTool implements Tool {
         try {
             ChatAttachmentEntity attachment = attachmentService.importGeneratedFile(
                     context.getSessionId(), context.getUserId(), context.getToolUseId(),
-                    Path.of(filePath), caption, Path.of(context.getArtifactOutputDirectory()));
+                    requestedFile, caption, Path.of(context.getArtifactOutputDirectory()));
             PublishedArtifact artifact = new PublishedArtifact(
                     attachment.getId(), attachment.getKind() + "_ref", attachment.getFilename(),
                     attachment.getMimeType(), attachment.getPageCount(),

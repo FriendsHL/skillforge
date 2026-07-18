@@ -1,6 +1,7 @@
 package com.skillforge.server.tool;
 
 import com.skillforge.core.skill.SkillContext;
+import com.skillforge.core.skill.SkillResult;
 import com.skillforge.server.entity.ChatAttachmentEntity;
 import com.skillforge.server.service.ChatAttachmentService;
 import org.junit.jupiter.api.Test;
@@ -9,15 +10,53 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 @ExtendWith(MockitoExtension.class)
 class PublishChatArtifactToolTest {
 
     @Mock ChatAttachmentService attachmentService;
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void contractRoutesOnlyOrdinarySupportedFilesAndExplicitlyRejectsHtml() {
+        PublishChatArtifactTool tool = new PublishChatArtifactTool(attachmentService);
+        Map<String, Object> properties = (Map<String, Object>)
+                tool.getToolSchema().getInputSchema().get("properties");
+        Map<String, Object> filePath = (Map<String, Object>) properties.get("file_path");
+
+        assertThat(tool.getDescription())
+                .contains("image, PDF, Word, Excel, or CSV")
+                .contains("HTML and HTM")
+                .contains("PublishInteractiveArtifact");
+        assertThat(filePath.get("description").toString())
+                .contains("current run")
+                .contains("not HTML or HTM")
+                .contains("historical run");
+    }
+
+    @Test
+    void rejectsHtmlAndHtmBeforeImportWithInteractivePublishingGuidance() {
+        SkillContext context = new SkillContext("/repo", "session-1", 7L);
+        context.setArtifactOutputDirectory("/tmp/workspace");
+        context.setToolUseId("tool-1");
+        PublishChatArtifactTool tool = new PublishChatArtifactTool(attachmentService);
+
+        for (String path : List.of("/tmp/workspace/app.html", "/tmp/workspace/REPORT.HTM")) {
+            var result = tool.execute(Map.of("file_path", path), context);
+
+            assertThat(result.isSuccess()).as(path).isFalse();
+            assertThat(result.getErrorType()).as(path).isEqualTo(SkillResult.ErrorType.VALIDATION);
+            assertThat(result.getError()).as(path)
+                    .contains("HTML", "PublishInteractiveArtifact");
+        }
+        verifyNoInteractions(attachmentService);
+    }
 
     @Test
     void returnsTypedArtifactSidecarWithoutEmbeddingMetadataInText() {
@@ -60,5 +99,24 @@ class PublishChatArtifactToolTest {
 
         assertThat(result.isSuccess()).isFalse();
         assertThat(result.getError()).contains("active artifact workspace");
+    }
+
+    @Test
+    void returnsImportFailureAsSkillResultForTheLlm() {
+        Path workspace = Path.of("/tmp/workspace");
+        Path file = workspace.resolve("report.pdf");
+        when(attachmentService.importGeneratedFile(
+                "session-1", 7L, "tool-1", file, null, workspace))
+                .thenThrow(new SecurityException("source is outside the current run workspace"));
+        SkillContext context = new SkillContext("/repo", "session-1", 7L);
+        context.setArtifactOutputDirectory(workspace.toString());
+        context.setToolUseId("tool-1");
+
+        var result = new PublishChatArtifactTool(attachmentService).execute(
+                Map.of("file_path", file.toString()), context);
+
+        assertThat(result.isSuccess()).isFalse();
+        assertThat(result.getError()).contains(
+                "PublishChatArtifact", "outside the current run workspace");
     }
 }

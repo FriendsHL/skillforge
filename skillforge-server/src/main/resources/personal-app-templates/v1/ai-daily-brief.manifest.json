@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "title": "AI 早报",
+  "fallback": "移动端 AI 早报，支持来源与优先级筛选、已读、收藏、备注和提交 Agent 分析。",
+  "permissions": [],
+  "network": [],
+  "initialData": {
+    "dateLabel": "本地预览",
+    "timeWindow": "Demo · 23:00 – 11:00",
+    "items": [
+      {
+        "id": "demo-official-1",
+        "title": "Agent 平台发布新的互操作能力",
+        "summary": "这是无 Bridge 本地预览使用的演示内容，不代表真实新闻。",
+        "source": "official",
+        "sourceLabel": "官方动态",
+        "priority": "important",
+        "publishedAt": "08:30",
+        "url": ""
+      },
+      {
+        "id": "demo-github-1",
+        "title": "开源 Agent 工具进入趋势榜",
+        "summary": "发布时请通过 initial_data 注入经过整理的真实条目。",
+        "source": "github",
+        "sourceLabel": "GitHub",
+        "priority": "normal",
+        "publishedAt": "07:10",
+        "url": ""
+      }
+    ]
+  },
+  "stateSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "selectedSource",
+      "selectedPriority",
+      "showUnreadOnly",
+      "showFavoritesOnly",
+      "readIds",
+      "favoriteIds",
+      "note"
+    ],
+    "properties": {
+      "selectedSource": { "type": "string" },
+      "selectedPriority": { "type": "string" },
+      "showUnreadOnly": { "type": "boolean" },
+      "showFavoritesOnly": { "type": "boolean" },
+      "readIds": { "type": "array" },
+      "favoriteIds": { "type": "array" },
+      "note": { "type": "string" }
+    }
+  }
+}

@@ -64,8 +64,25 @@ public class ArtifactWorkspaceService {
 
     public String promptInstruction(Path workspace) {
         Path canonical = requireCanonicalWorkspace(workspace);
-        return "Generated deliverables must be written under " + canonical
-                + ". Publish each final file with PublishChatArtifact. Do not publish files from other directories.";
+        return "Current run artifact workspace absolute path: " + canonical + ". "
+                + "For a standard Personal App, call PublishInteractiveArtifact with exactly one template_id: "
+                + PersonalAppTemplateCatalog.AI_DAILY_BRIEF_ID
+                + " initial_data={dateLabel,timeWindow,items:[{id,title,summary,source,sourceLabel,"
+                + "priority,publishedAt,url}]}; or "
+                + PersonalAppTemplateCatalog.BUDGET_PLANNER_ID
+                + " initial_data={title,currency,income,categories:[{key,label,amount,tone}]} "
+                + "with platform-managed saved state={income,amounts:{[categoryKey]:number},note}. "
+                + "Do not provide file_path in template mode. "
+                + "For a custom offline HTML Personal App, write a new final file inside the current run "
+                + "workspace, then call PublishInteractiveArtifact with file_path and state_schema. "
+                + "state_schema supports only string, number, integer, boolean, object, and array types; "
+                + "object schemas may use properties, required, and additionalProperties, array schemas "
+                + "may use items, and unsupported keywords are rejected. state_schema is limited to "
+                + "16 KiB, depth 8, and 1024 JSON value nodes. "
+                + "For an ordinary image, PDF, Word, Excel, or CSV file, use PublishChatArtifact. "
+                + "HTML and HTM files are rejected by PublishChatArtifact. "
+                + "Historical run files are reference-only: read them if needed, but rewrite the final file "
+                + "inside the current run workspace and never publish a historical path directly.";
     }
 
     public void deleteWorkspace(Path workspace) {

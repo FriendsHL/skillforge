@@ -37,7 +37,7 @@ public class ContentBlock {
     @JsonProperty("error_type")
     private String errorType;
 
-    // attachment reference types: image_ref / pdf_ref / word_ref / excel_ref / csv_ref
+    // attachment reference types, including interactive_artifact_ref
     @JsonProperty("attachment_id")
     private String attachmentId;
     @JsonProperty("mime_type")
@@ -56,6 +56,10 @@ public class ContentBlock {
      */
     @JsonProperty("sheet_count")
     private Integer sheetCount;
+    // interactive_artifact_ref display/protocol metadata. HTML and manifest data remain out of transcript.
+    private String title;
+    @JsonProperty("artifact_schema_version")
+    private Integer artifactSchemaVersion;
 
     // provider-bound materialized image type; never persisted in session history.
     @JsonProperty("data_base64")
@@ -169,6 +173,17 @@ public class ContentBlock {
         block.setType("csv_ref");
         block.setAttachmentId(attachmentId);
         block.setFilename(filename);
+        return block;
+    }
+
+    public static ContentBlock interactiveArtifactRef(String attachmentId, String filename,
+                                                      String title, Integer schemaVersion) {
+        ContentBlock block = new ContentBlock();
+        block.setType("interactive_artifact_ref");
+        block.setAttachmentId(attachmentId);
+        block.setFilename(filename);
+        block.setTitle(title);
+        block.setArtifactSchemaVersion(schemaVersion);
         return block;
     }
 
@@ -298,5 +313,12 @@ public class ContentBlock {
 
     public void setSheetCount(Integer sheetCount) {
         this.sheetCount = sheetCount;
+    }
+
+    public String getTitle() { return title; }
+    public void setTitle(String title) { this.title = title; }
+    public Integer getArtifactSchemaVersion() { return artifactSchemaVersion; }
+    public void setArtifactSchemaVersion(Integer artifactSchemaVersion) {
+        this.artifactSchemaVersion = artifactSchemaVersion;
     }
 }

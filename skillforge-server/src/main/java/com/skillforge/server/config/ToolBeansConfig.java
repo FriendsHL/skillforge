@@ -115,7 +115,10 @@ import com.skillforge.server.repository.ChannelConversationRepository;
 import com.skillforge.server.subagent.SubAgentRegistry;
 import com.skillforge.server.tool.channel.SendChannelFileTool;
 import com.skillforge.server.tool.PublishChatArtifactTool;
+import com.skillforge.server.tool.PublishInteractiveArtifactTool;
+import com.skillforge.server.artifact.InteractiveArtifactValidator;
 import com.skillforge.server.service.ChatAttachmentService;
+import com.skillforge.server.service.PersonalAppTemplateCatalog;
 import org.springframework.context.annotation.Lazy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -272,6 +275,24 @@ public class ToolBeansConfig {
         PublishChatArtifactTool tool = new PublishChatArtifactTool(attachmentService);
         skillRegistry.registerTool(tool);
         log.info("Registered PublishChatArtifactTool into SkillRegistry");
+        return tool;
+    }
+
+    @Bean
+    public PersonalAppTemplateCatalog personalAppTemplateCatalog(ObjectMapper objectMapper) {
+        return new PersonalAppTemplateCatalog(objectMapper);
+    }
+
+    @Bean
+    public PublishInteractiveArtifactTool publishInteractiveArtifactTool(
+            ChatAttachmentService attachmentService,
+            PersonalAppTemplateCatalog templateCatalog,
+            ObjectMapper objectMapper,
+            SkillRegistry skillRegistry) {
+        PublishInteractiveArtifactTool tool = new PublishInteractiveArtifactTool(
+                attachmentService, templateCatalog, new InteractiveArtifactValidator(objectMapper));
+        skillRegistry.registerTool(tool);
+        log.info("Registered PublishInteractiveArtifactTool into SkillRegistry");
         return tool;
     }
 

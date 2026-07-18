@@ -46,6 +46,8 @@ class OutboundArtifactMigrationIT {
                     id VARCHAR(36) PRIMARY KEY,
                     session_id VARCHAR(36) NOT NULL,
                     seq_no BIGINT,
+                    kind VARCHAR(16) NOT NULL DEFAULT 'pdf',
+                    mime_type VARCHAR(128) NOT NULL DEFAULT 'application/pdf',
                     status VARCHAR(16) NOT NULL DEFAULT 'uploaded',
                     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
                 )
@@ -170,6 +172,51 @@ class OutboundArtifactMigrationIT {
         assertThat(toolsFor("System Agent")).isEqualTo("[\"Write\"]");
     }
 
+    @Test
+    void v173RequiresManifestOnlyForInteractiveHtml() {
+        runV173();
+
+        jdbcTemplate.update("""
+                INSERT INTO t_chat_attachment (id, session_id, kind, mime_type, status)
+                VALUES ('pdf-1', 'session-1', 'pdf', 'application/pdf', 'uploaded')
+                """);
+        jdbcTemplate.update("""
+                INSERT INTO t_chat_attachment (
+                    id, session_id, kind, mime_type, status, interactive_manifest_json)
+                VALUES ('app-1', 'session-1', 'interactive', 'text/html', 'uploaded', '{}')
+                """);
+
+        assertThatThrownBy(() -> jdbcTemplate.update("""
+                INSERT INTO t_chat_attachment (id, session_id, kind, mime_type, status)
+                VALUES ('app-missing', 'session-1', 'interactive', 'text/html', 'uploaded')
+                """)).isInstanceOf(Exception.class);
+        assertThatThrownBy(() -> jdbcTemplate.update("""
+                INSERT INTO t_chat_attachment (
+                    id, session_id, kind, mime_type, status, interactive_manifest_json)
+                VALUES ('pdf-manifest', 'session-1', 'pdf', 'application/pdf', 'uploaded', '{}')
+                """)).isInstanceOf(Exception.class);
+    }
+
+    @Test
+    void v174GrantsInteractivePublisherOnlyToExplicitActiveUserAllowlists() {
+        jdbcTemplate.update("""
+                INSERT INTO t_agent (name, agent_type, status, tool_ids) VALUES
+                    ('Research Agent', 'user', 'active', '["Write"]'),
+                    ('Unrestricted', 'user', 'active', '[]'),
+                    ('Inactive', 'user', 'inactive', '["Write"]'),
+                    ('System', 'system', 'active', '["Write"]')
+                """);
+
+        runV174();
+        runV174();
+
+        assertThat(toolsFor("Research Agent"))
+                .isEqualTo("[\"Write\", \"PublishInteractiveArtifact\"]");
+        assertThat(toolsFor("Unrestricted")).isEqualTo("[]");
+        assertThat(toolsFor("Inactive")).isEqualTo("[\"Write\"]");
+        assertThat(toolsFor("System")).isEqualTo("[\"Write\"]");
+    }
+
     private static String toolsFor(String name) {
         return jdbcTemplate.queryForObject(
                 "SELECT tool_ids FROM t_agent WHERE name = ?", String.class, name);
@@ -191,5 +238,17 @@ class OutboundArtifactMigrationIT {
         ScriptUtils.executeSqlScript(
                 connection,
                 new ClassPathResource("db/migration/V172__grant_artifact_publish_to_user_agents.sql"));
+    }
+
+    private static void runV173() {
+        ScriptUtils.executeSqlScript(
+                connection,
+                new ClassPathResource("db/migration/V173__interactive_artifact_manifest.sql"));
+    }
+
+    private static void runV174() {
+        ScriptUtils.executeSqlScript(
+                connection,
+                new ClassPathResource("db/migration/V174__grant_interactive_artifact_publish.sql"));
     }
 }

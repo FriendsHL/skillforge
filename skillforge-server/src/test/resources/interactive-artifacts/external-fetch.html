@@ -1,0 +1,5 @@
+<!doctype html><html><body><script>
+fetch('https://example.invalid/leak');
+const xhr = new XMLHttpRequest(); xhr.open('GET', 'https://example.invalid/xhr'); xhr.send();
+new WebSocket('wss://example.invalid/socket');
+</script></body></html>

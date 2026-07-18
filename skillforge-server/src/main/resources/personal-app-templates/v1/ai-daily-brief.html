@@ -1,0 +1,707 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>SkillForge AI 早报</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --space-1: 8px;
+      --space-2: 16px;
+      --space-3: 24px;
+      --space-4: 32px;
+      --radius-sm: 12px;
+      --radius-md: 16px;
+      --radius-lg: 20px;
+      --target: 44px;
+      --accent: #6558e8;
+      --accent-soft: #ebe9ff;
+      --accent-ink: #382ca7;
+      --background: #f5f5fa;
+      --surface: rgba(255, 255, 255, 0.92);
+      --surface-raised: #ffffff;
+      --surface-muted: #ececf3;
+      --text: #181820;
+      --text-muted: #666675;
+      --border: rgba(37, 35, 52, 0.12);
+      --important: #d9493f;
+      --normal: #299467;
+      --priority-important: #8f1d18;
+      --priority-normal: #145c3d;
+      --shadow: 0 14px 38px rgba(43, 37, 89, 0.10);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+      font-size: 16px;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at 12% -8%, rgba(101, 88, 232, 0.18), transparent 34%),
+        var(--background);
+      color: var(--text);
+      line-height: 1.45;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    button, select, input, textarea { font: inherit; }
+
+    button, select, .toggle {
+      min-height: var(--target);
+    }
+
+    button, select, textarea {
+      border: 1px solid var(--border);
+      color: var(--text);
+      background: var(--surface-raised);
+    }
+
+    button {
+      cursor: pointer;
+      border-radius: var(--radius-sm);
+      font-weight: 650;
+    }
+
+    button:focus-visible, select:focus-visible, textarea:focus-visible, input:focus-visible {
+      outline: 3px solid color-mix(in srgb, var(--accent) 45%, transparent);
+      outline-offset: 2px;
+    }
+
+    .shell {
+      width: min(100%, 760px);
+      margin: 0 auto;
+      padding: max(var(--space-2), env(safe-area-inset-top)) var(--space-2) 0;
+    }
+
+    .hero {
+      padding: var(--space-3);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      background: linear-gradient(145deg, var(--surface-raised), var(--accent-soft));
+      box-shadow: var(--shadow);
+    }
+
+    .eyebrow {
+      margin: 0 0 var(--space-1);
+      color: var(--accent-ink);
+      font-size: 0.78rem;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(1.8rem, 8vw, 2.7rem);
+      line-height: 1.08;
+      letter-spacing: -0.035em;
+    }
+
+    .window {
+      margin: var(--space-1) 0 0;
+      color: var(--text-muted);
+      font-size: 0.92rem;
+    }
+
+    #summary {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: var(--space-1);
+      margin-top: var(--space-3);
+    }
+
+    .metric {
+      padding: 12px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: color-mix(in srgb, var(--surface-raised) 78%, transparent);
+    }
+
+    .metric strong, .metric span { display: block; }
+    .metric strong { font-size: 1.25rem; }
+    .metric span { color: var(--text-muted); font-size: 0.78rem; }
+
+    .controls {
+      margin-top: var(--space-2);
+      padding: var(--space-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      background: var(--surface);
+      backdrop-filter: blur(18px);
+    }
+
+    .control-label {
+      display: block;
+      margin-bottom: var(--space-1);
+      color: var(--text-muted);
+      font-size: 0.82rem;
+      font-weight: 700;
+    }
+
+    .filter-row {
+      display: flex;
+      gap: var(--space-1);
+      overflow-x: auto;
+      padding: 2px 2px var(--space-1);
+      scrollbar-width: none;
+    }
+
+    .filter-row::-webkit-scrollbar { display: none; }
+
+    .filter-chip {
+      flex: 0 0 auto;
+      padding: 0 14px;
+      border-radius: 999px;
+      color: var(--text-muted);
+    }
+
+    .filter-chip[aria-pressed="true"] {
+      border-color: transparent;
+      color: #ffffff;
+      background: var(--accent);
+    }
+
+    .control-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: var(--space-1);
+      margin-top: var(--space-1);
+    }
+
+    select {
+      width: 100%;
+      padding: 0 12px;
+      border-radius: var(--radius-sm);
+    }
+
+    .toggle {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 12px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--surface-raised);
+      font-weight: 600;
+    }
+
+    .toggle input { width: 20px; height: 20px; accent-color: var(--accent); }
+
+    main { padding: var(--space-3) 0; }
+
+    .story-list {
+      display: grid;
+      gap: var(--space-2);
+    }
+
+    .story {
+      position: relative;
+      padding: var(--space-2);
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      background: var(--surface-raised);
+      box-shadow: 0 8px 26px rgba(43, 37, 89, 0.07);
+    }
+
+    .story::before {
+      content: "";
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: 4px;
+      background: var(--accent);
+    }
+
+    .story[data-read="true"] {
+      border-color: color-mix(in srgb, var(--text-muted) 35%, var(--border));
+      box-shadow: none;
+    }
+
+    .story-top, .story-meta, .story-actions {
+      display: flex;
+      align-items: center;
+      gap: var(--space-1);
+    }
+
+    .story-top { justify-content: space-between; }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      padding: 2px 9px;
+      border-radius: 999px;
+      background: var(--surface-muted);
+      color: var(--text-muted);
+      font-size: 0.75rem;
+      font-weight: 750;
+    }
+
+    .priority-important { color: var(--priority-important); }
+    .priority-normal { color: var(--priority-normal); }
+
+    .story h2 {
+      margin: 12px 0 var(--space-1);
+      font-size: 1.12rem;
+      line-height: 1.3;
+      letter-spacing: -0.012em;
+    }
+
+    .story p { margin: 0; color: var(--text-muted); }
+
+    .story-meta {
+      margin-top: 12px;
+      color: var(--text-muted);
+      font-size: 0.82rem;
+    }
+
+    .story-actions {
+      flex-wrap: wrap;
+      margin-top: var(--space-2);
+    }
+
+    .story-actions button {
+      flex: 1 1 110px;
+      padding: 0 12px;
+      background: var(--surface-muted);
+    }
+
+    .story-actions .favorite-active {
+      border-color: color-mix(in srgb, #d6a300 45%, transparent);
+      color: #7b5a00;
+      background: #fff2bd;
+    }
+
+    .empty {
+      padding: var(--space-4) var(--space-2);
+      text-align: center;
+      border: 1px dashed var(--border);
+      border-radius: var(--radius-lg);
+      color: var(--text-muted);
+      background: var(--surface);
+    }
+
+    .note-card {
+      margin-top: var(--space-3);
+      padding: var(--space-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      background: var(--surface-raised);
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 104px;
+      padding: 12px;
+      resize: vertical;
+      border-radius: var(--radius-sm);
+    }
+
+    footer {
+      position: sticky;
+      z-index: 5;
+      bottom: 0;
+      margin: 0 calc(var(--space-2) * -1);
+      padding: 12px var(--space-2) calc(12px + env(safe-area-inset-bottom));
+      border-top: 1px solid var(--border);
+      background: color-mix(in srgb, var(--background) 88%, transparent);
+      backdrop-filter: blur(20px);
+    }
+
+    .footer-status {
+      min-height: 22px;
+      margin-bottom: var(--space-1);
+      color: var(--text-muted);
+      text-align: center;
+      font-size: 0.8rem;
+    }
+
+    .footer-actions {
+      display: grid;
+      grid-template-columns: 0.9fr 1.2fr;
+      gap: var(--space-1);
+    }
+
+    .footer-actions button { padding: 0 12px; }
+    .primary { border-color: transparent; color: #ffffff; background: var(--accent); }
+
+    @media (min-width: 620px) {
+      .control-grid { grid-template-columns: 1.1fr 1fr 1fr; }
+      .story { padding: var(--space-3); }
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --accent: #887cff;
+        --accent-soft: #26233f;
+        --accent-ink: #bcb5ff;
+        --background: #0d0d13;
+        --surface: rgba(25, 25, 34, 0.92);
+        --surface-raised: #181820;
+        --surface-muted: #262630;
+        --text: #f5f4fb;
+        --text-muted: #aaa8b8;
+        --border: rgba(235, 232, 255, 0.13);
+        --priority-important: #ff9d96;
+        --priority-normal: #70d7aa;
+        --shadow: 0 18px 44px rgba(0, 0, 0, 0.30);
+      }
+      .story-actions .favorite-active { color: #ffe58a; background: #463a16; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        scroll-behavior: auto !important;
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell" id="app">
+    <header class="hero">
+      <p class="eyebrow">SkillForge · Personal App</p>
+      <h1 id="brief-title">AI 早报</h1>
+      <p class="window" id="time-window"></p>
+      <div id="summary" aria-label="早报统计"></div>
+    </header>
+
+    <section class="controls" aria-label="早报筛选">
+      <span class="control-label">来源</span>
+      <div class="filter-row" id="source-filters" role="group" aria-label="按来源筛选"></div>
+      <div class="control-grid">
+        <label>
+          <span class="control-label">优先级</span>
+          <select id="priority-filter" aria-label="按优先级筛选">
+            <option value="all">全部优先级</option>
+            <option value="important">重要</option>
+            <option value="normal">一般</option>
+          </select>
+        </label>
+        <label class="toggle" for="unread-only">
+          <input type="checkbox" id="unread-only">
+          <span>只看未读</span>
+        </label>
+        <label class="toggle" for="favorites-only">
+          <input type="checkbox" id="favorites-only">
+          <span>只看收藏</span>
+        </label>
+      </div>
+    </section>
+
+    <main>
+      <div class="story-list" id="news-list" aria-live="polite"></div>
+      <section class="note-card" aria-labelledby="note-label">
+        <label id="note-label" class="control-label" for="note">给 Agent 的备注</label>
+        <textarea id="note" maxlength="1000" placeholder="例如：重点比较收藏内容的产品机会"></textarea>
+      </section>
+    </main>
+
+    <footer>
+      <div class="footer-status" id="status" role="status" aria-live="polite"></div>
+      <div class="footer-actions">
+        <button type="button" id="save">保存进度</button>
+        <button type="button" id="submit" class="primary">提交给 Agent</button>
+      </div>
+    </footer>
+  </div>
+
+  <script>
+    (() => {
+      "use strict";
+
+      const bridge = window.SkillForgeArtifact && typeof window.SkillForgeArtifact === "object"
+        ? window.SkillForgeArtifact
+        : null;
+      const DEMO_DATA = Object.freeze({
+        dateLabel: "本地预览",
+        timeWindow: "Demo · 23:00 – 11:00",
+        items: [
+          {
+            id: "demo-official-1",
+            title: "Agent 平台发布新的互操作能力",
+            summary: "这是无 Bridge 本地预览使用的演示内容，不代表真实新闻。",
+            source: "official",
+            sourceLabel: "官方动态",
+            priority: "important",
+            publishedAt: "08:30",
+            url: ""
+          },
+          {
+            id: "demo-github-1",
+            title: "开源 Agent 工具进入趋势榜",
+            summary: "发布时请通过 initial_data 注入经过整理的真实条目。",
+            source: "github",
+            sourceLabel: "GitHub",
+            priority: "normal",
+            publishedAt: "07:10",
+            url: ""
+          }
+        ]
+      });
+      const sourceData = bridge ? bridge.initialData : DEMO_DATA;
+      const savedState = bridge ? bridge.savedState : null;
+
+      const isRecord = value => value !== null && typeof value === "object" && !Array.isArray(value);
+      const data = normalizeData(isRecord(sourceData) ? sourceData : {});
+      const restored = isRecord(savedState) ? savedState : {};
+      const state = {
+        selectedSource: typeof restored.selectedSource === "string" ? restored.selectedSource : "all",
+        selectedPriority: typeof restored.selectedPriority === "string" ? restored.selectedPriority : "all",
+        showUnreadOnly: restored.showUnreadOnly === true,
+        showFavoritesOnly: restored.showFavoritesOnly === true,
+        readIds: new Set(Array.isArray(restored.readIds) ? restored.readIds.map(String) : []),
+        favoriteIds: new Set(Array.isArray(restored.favoriteIds) ? restored.favoriteIds.map(String) : []),
+        note: typeof restored.note === "string" ? restored.note.slice(0, 1000) : ""
+      };
+
+      const elements = {
+        title: document.getElementById("brief-title"),
+        window: document.getElementById("time-window"),
+        summary: document.getElementById("summary"),
+        sources: document.getElementById("source-filters"),
+        priority: document.getElementById("priority-filter"),
+        unreadOnly: document.getElementById("unread-only"),
+        favoritesOnly: document.getElementById("favorites-only"),
+        list: document.getElementById("news-list"),
+        note: document.getElementById("note"),
+        status: document.getElementById("status")
+      };
+
+      elements.title.textContent = data.dateLabel ? `AI 早报 · ${data.dateLabel}` : "AI 早报";
+      elements.window.textContent = data.timeWindow;
+      elements.priority.value = state.selectedPriority;
+      elements.unreadOnly.checked = state.showUnreadOnly;
+      elements.favoritesOnly.checked = state.showFavoritesOnly;
+      elements.note.value = state.note;
+
+      function normalizeData(value) {
+        const items = Array.isArray(value.items) ? value.items.map((item, index) => {
+          const safe = isRecord(item) ? item : {};
+          return {
+            id: String(safe.id || `item-${index + 1}`),
+            title: String(safe.title || "未命名条目"),
+            summary: String(safe.summary || "暂无摘要"),
+            source: String(safe.source || "other"),
+            sourceLabel: String(safe.sourceLabel || safe.source || "其他"),
+            priority: safe.priority === "important" ? "important" : "normal",
+            publishedAt: String(safe.publishedAt || "时间未知"),
+            url: typeof safe.url === "string" ? safe.url.trim() : ""
+          };
+        }) : [];
+        return {
+          dateLabel: typeof value.dateLabel === "string" ? value.dateLabel : "",
+          timeWindow: typeof value.timeWindow === "string" ? value.timeWindow : "",
+          items
+        };
+      }
+
+      function statePayload() {
+        return {
+          selectedSource: state.selectedSource,
+          selectedPriority: state.selectedPriority,
+          showUnreadOnly: state.showUnreadOnly,
+          showFavoritesOnly: state.showFavoritesOnly,
+          readIds: Array.from(state.readIds),
+          favoriteIds: Array.from(state.favoriteIds),
+          note: state.note
+        };
+      }
+
+      function sourceOptions() {
+        const options = new Map([["all", "全部"]]);
+        data.items.forEach(item => options.set(item.source, item.sourceLabel));
+        return Array.from(options.entries());
+      }
+
+      function visibleItems() {
+        return data.items.filter(item => {
+          if (state.selectedSource !== "all" && item.source !== state.selectedSource) return false;
+          if (state.selectedPriority !== "all" && item.priority !== state.selectedPriority) return false;
+          if (state.showUnreadOnly && state.readIds.has(item.id)) return false;
+          if (state.showFavoritesOnly && !state.favoriteIds.has(item.id)) return false;
+          return true;
+        });
+      }
+
+      function renderSources() {
+        elements.sources.replaceChildren();
+        sourceOptions().forEach(([value, label]) => {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "filter-chip";
+          button.textContent = label;
+          button.dataset.source = value;
+          button.setAttribute("aria-pressed", String(state.selectedSource === value));
+          button.addEventListener("click", () => {
+            state.selectedSource = value;
+            render();
+          });
+          elements.sources.append(button);
+        });
+      }
+
+      function metric(value, label) {
+        const box = document.createElement("div");
+        box.className = "metric";
+        const strong = document.createElement("strong");
+        strong.textContent = String(value);
+        const caption = document.createElement("span");
+        caption.textContent = label;
+        box.append(strong, caption);
+        return box;
+      }
+
+      function renderSummary() {
+        elements.summary.replaceChildren(
+          metric(data.items.length, "总条目"),
+          metric(state.readIds.size, "已读"),
+          metric(state.favoriteIds.size, "收藏")
+        );
+      }
+
+      function actionButton(label, handler, className) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = label;
+        if (className) button.className = className;
+        button.addEventListener("click", handler);
+        return button;
+      }
+
+      function toggleRead(id) {
+        if (state.readIds.has(id)) state.readIds.delete(id);
+        else state.readIds.add(id);
+        render();
+      }
+
+      function toggleFavorite(id) {
+        if (state.favoriteIds.has(id)) state.favoriteIds.delete(id);
+        else state.favoriteIds.add(id);
+        render();
+      }
+
+      function requestOpenURL(item) {
+        if (bridge && typeof bridge.requestOpenURL === "function" && item.url) {
+          bridge.requestOpenURL(item.url);
+          setStatus("已交给 SkillForge 确认打开。", false);
+        } else {
+          setStatus("当前 App 版本未提供受控链接打开能力。", true);
+        }
+      }
+
+      function renderStory(item) {
+        const article = document.createElement("article");
+        article.className = "story";
+        article.dataset.read = String(state.readIds.has(item.id));
+
+        const top = document.createElement("div");
+        top.className = "story-top";
+        const source = document.createElement("span");
+        source.className = "badge";
+        source.textContent = item.sourceLabel;
+        const priority = document.createElement("span");
+        priority.className = `badge priority-${item.priority}`;
+        priority.textContent = item.priority === "important" ? "● 重要" : "● 一般";
+        top.append(source, priority);
+
+        const heading = document.createElement("h2");
+        heading.textContent = item.title;
+        const summary = document.createElement("p");
+        summary.textContent = item.summary;
+        const meta = document.createElement("div");
+        meta.className = "story-meta";
+        meta.textContent = item.publishedAt;
+
+        const actions = document.createElement("div");
+        actions.className = "story-actions";
+        if (item.url) actions.append(actionButton("打开原文", () => requestOpenURL(item)));
+        actions.append(actionButton(
+          state.readIds.has(item.id) ? "标为未读" : "标为已读",
+          () => toggleRead(item.id)
+        ));
+        actions.append(actionButton(
+          state.favoriteIds.has(item.id) ? "已收藏" : "收藏",
+          () => toggleFavorite(item.id),
+          state.favoriteIds.has(item.id) ? "favorite-active" : ""
+        ));
+        article.append(top, heading, summary, meta, actions);
+        return article;
+      }
+
+      function renderStories() {
+        elements.list.replaceChildren();
+        const items = visibleItems();
+        if (items.length === 0) {
+          const empty = document.createElement("div");
+          empty.className = "empty";
+          empty.textContent = data.items.length === 0
+            ? "这份 Personal App 尚未注入早报数据。"
+            : "没有符合当前筛选条件的条目。";
+          elements.list.append(empty);
+          return;
+        }
+        items.forEach(item => elements.list.append(renderStory(item)));
+      }
+
+      function setStatus(message, isError) {
+        elements.status.textContent = message;
+        elements.status.style.color = isError ? "var(--important)" : "var(--text-muted)";
+      }
+
+      function saveState() {
+        state.note = elements.note.value.slice(0, 1000);
+        if (bridge && typeof bridge.saveState === "function") {
+          bridge.saveState(statePayload());
+          setStatus("进度已保存到 SkillForge。", false);
+        } else {
+          setStatus("本地预览不会持久化进度。", true);
+        }
+      }
+
+      function submitSnapshot() {
+        state.note = elements.note.value.slice(0, 1000);
+        if (bridge && typeof bridge.submitSnapshot === "function") {
+          bridge.submitSnapshot(statePayload());
+          setStatus("等待 SkillForge 原生确认。", false);
+        } else {
+          setStatus("本地预览不能提交给 Agent。", true);
+        }
+      }
+
+      function render() {
+        renderSources();
+        renderSummary();
+        renderStories();
+      }
+
+      elements.priority.addEventListener("change", event => {
+        state.selectedPriority = event.target.value;
+        render();
+      });
+      elements.unreadOnly.addEventListener("change", event => {
+        state.showUnreadOnly = event.target.checked;
+        render();
+      });
+      elements.favoritesOnly.addEventListener("change", event => {
+        state.showFavoritesOnly = event.target.checked;
+        render();
+      });
+      elements.note.addEventListener("input", event => {
+        state.note = event.target.value.slice(0, 1000);
+      });
+      document.getElementById("save").addEventListener("click", saveState);
+      document.getElementById("submit").addEventListener("click", submitSnapshot);
+
+      render();
+      setStatus(bridge ? "已加载 SkillForge 数据。" : "本地预览 · 使用演示数据。", false);
+    })();
+  </script>
+</body>
+</html>

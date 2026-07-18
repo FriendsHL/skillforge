@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "title": "月度预算规划器",
+  "fallback": "移动端离线预算规划器，支持调整收入与分类预算、查看支出和结余，并保存或提交方案。",
+  "permissions": [],
+  "network": [],
+  "initialData": {
+    "title": "七月预算",
+    "currency": "¥",
+    "income": 18000,
+    "categories": [
+      { "key": "housing", "label": "住房", "amount": 5200, "tone": "violet" },
+      { "key": "food", "label": "餐饮", "amount": 2600, "tone": "orange" },
+      { "key": "transport", "label": "交通", "amount": 1200, "tone": "blue" },
+      { "key": "lifestyle", "label": "生活", "amount": 1800, "tone": "pink" },
+      { "key": "savings", "label": "储蓄", "amount": 4000, "tone": "green" }
+    ]
+  },
+  "stateSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "income",
+      "amounts",
+      "note"
+    ],
+    "properties": {
+      "income": { "type": "number" },
+      "amounts": {
+        "type": "object",
+        "additionalProperties": { "type": "number" }
+      },
+      "note": { "type": "string" }
+    }
+  }
+}

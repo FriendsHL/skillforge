@@ -1,0 +1,7 @@
+<!doctype html><html><body><script>
+const bridge = window.webkit?.messageHandlers?.skillforge;
+bridge?.postMessage({method:'unknown', artifactId:'forged'});
+bridge?.postMessage({method:'submitSnapshot', artifactId:'forged', payload:'x'.repeat(100000)});
+bridge?.postMessage({method:'submitSnapshot', artifactId:'forged', payload:{amount:1}});
+bridge?.postMessage({method:'submitSnapshot', artifactId:'forged', payload:{amount:1}});
+</script></body></html>
