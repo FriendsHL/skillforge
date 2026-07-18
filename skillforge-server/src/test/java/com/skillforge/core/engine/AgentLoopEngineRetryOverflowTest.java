@@ -32,9 +32,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  *   <li>throw {@link LlmContextLengthExceededException} (via {@code handler.onError})</li>
  *   <li>or return a normal text response</li>
  * </ul>
- * Combined with a recording compact callback the test asserts that a single overflow is
- * caught + compacted + retried, and that two consecutive overflows surface the original
- * exception instead of looping.
+ * Combined with a recording compact callback the test asserts that context overflow can
+ * compact and retry at most three times, while no-op/no-progress compaction fails closed.
  */
 class AgentLoopEngineRetryOverflowTest {
 
@@ -97,13 +96,25 @@ class AgentLoopEngineRetryOverflowTest {
         @Override
         public CompactCallbackResult compactFull(String sessionId, List<Message> currentMessages,
                                                    String sourceLabel, String reason) {
-            fullCalls.incrementAndGet();
+            int attempt = fullCalls.incrementAndGet();
             sources.add("full:" + sourceLabel);
             List<Message> compacted = currentMessages.size() > 1
                     ? new ArrayList<>(currentMessages.subList(currentMessages.size() - 1, currentMessages.size()))
                     : currentMessages;
-            return new CompactCallbackResult(compacted, true, 100, currentMessages.size() * 50,
-                    compacted.size() * 50, "full");
+            int beforeTokens = 500 - ((attempt - 1) * 100);
+            int afterTokens = beforeTokens - 100;
+            return new CompactCallbackResult(compacted, true, 100, beforeTokens,
+                    afterTokens, "full");
+        }
+    }
+
+    private static class NoProgressCallback extends RecordingCallback {
+        @Override
+        public CompactCallbackResult compactFull(String sessionId, List<Message> currentMessages,
+                                                   String sourceLabel, String reason) {
+            fullCalls.incrementAndGet();
+            sources.add("full:" + sourceLabel);
+            return new CompactCallbackResult(currentMessages, true, 0, 100, 100, "no progress");
         }
     }
 
@@ -165,8 +176,8 @@ class AgentLoopEngineRetryOverflowTest {
     }
 
     @Test
-    @DisplayName("AC-5: two consecutive overflows → only one retry, then surface")
-    void two_overflows_in_a_row_surfaces_after_one_retry() {
+    @DisplayName("two consecutive overflows → compact twice, third model request succeeds")
+    void two_overflows_then_success_compactsTwice() {
         ScriptedProvider provider = new ScriptedProvider().script(
                 ScriptedProvider.Event.OVERFLOW,
                 ScriptedProvider.Event.OVERFLOW,
@@ -174,15 +185,67 @@ class AgentLoopEngineRetryOverflowTest {
         RecordingCallback cb = new RecordingCallback();
         AgentLoopEngine engine = engineWith(provider, cb);
 
+        assertThat(engine.run(agentDef(), "hello", new ArrayList<>(), "session-two-compacts", 1L))
+                .isNotNull();
+
+        assertThat(provider.callCount).isEqualTo(3);
+        assertThat(cb.fullCalls.get()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("three consecutive overflows → compact three times, fourth model request succeeds")
+    void three_overflows_then_success_compactsThreeTimes() {
+        ScriptedProvider provider = new ScriptedProvider().script(
+                ScriptedProvider.Event.OVERFLOW,
+                ScriptedProvider.Event.OVERFLOW,
+                ScriptedProvider.Event.OVERFLOW,
+                ScriptedProvider.Event.TEXT_RESPONSE);
+        RecordingCallback cb = new RecordingCallback();
+        AgentLoopEngine engine = engineWith(provider, cb);
+
+        assertThat(engine.run(agentDef(), "hello", new ArrayList<>(), "session-2", 1L))
+                .isNotNull();
+
+        assertThat(provider.callCount).isEqualTo(4);
+        assertThat(cb.fullCalls.get()).isEqualTo(3);
+    }
+
+    @Test
+    @DisplayName("four consecutive overflows → compact cap exhausted after three retries")
+    void four_overflows_in_a_row_surfaces_afterThreeCompacts() {
+        ScriptedProvider provider = new ScriptedProvider().script(
+                ScriptedProvider.Event.OVERFLOW,
+                ScriptedProvider.Event.OVERFLOW,
+                ScriptedProvider.Event.OVERFLOW,
+                ScriptedProvider.Event.OVERFLOW,
+                ScriptedProvider.Event.TEXT_RESPONSE);
+        RecordingCallback cb = new RecordingCallback();
+        AgentLoopEngine engine = engineWith(provider, cb);
+
         assertThatThrownBy(() ->
-                engine.run(agentDef(), "hello", new ArrayList<>(), "session-2", 1L))
-                .isInstanceOf(RuntimeException.class)
+                engine.run(agentDef(), "hello", new ArrayList<>(), "session-exhausted", 1L))
+                .isInstanceOf(LlmContextLengthExceededException.class)
                 .hasMessageContaining("overflow");
 
-        assertThat(provider.callCount).as("chatStream called twice — original + one retry, no third")
-                .isEqualTo(2);
-        assertThat(cb.fullCalls.get()).as("only one compactFull from retry path")
-                .isEqualTo(1);
+        assertThat(provider.callCount).isEqualTo(4);
+        assertThat(cb.fullCalls.get()).isEqualTo(3);
+    }
+
+    @Test
+    @DisplayName("performed compact without token progress → surface overflow without retry")
+    void compactFull_noProgress_surfacesOverflow() {
+        ScriptedProvider provider = new ScriptedProvider().script(
+                ScriptedProvider.Event.OVERFLOW,
+                ScriptedProvider.Event.TEXT_RESPONSE);
+        NoProgressCallback cb = new NoProgressCallback();
+        AgentLoopEngine engine = engineWith(provider, cb);
+
+        assertThatThrownBy(() ->
+                engine.run(agentDef(), "hello", new ArrayList<>(), "session-no-progress", 1L))
+                .isInstanceOf(LlmContextLengthExceededException.class);
+
+        assertThat(provider.callCount).isEqualTo(1);
+        assertThat(cb.fullCalls.get()).isEqualTo(1);
     }
 
     @Test

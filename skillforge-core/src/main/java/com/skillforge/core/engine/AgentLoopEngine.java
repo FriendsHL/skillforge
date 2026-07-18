@@ -70,6 +70,8 @@ public class AgentLoopEngine {
     static final int BREAKER_TRIP_THRESHOLD = 3;
     /** After breaker trips, allow one half-open retry once this window has elapsed. */
     static final long BREAKER_HALF_OPEN_WINDOW_MS = 60_000L;
+    /** Maximum full-compaction attempts for one provider context-overflow cycle. */
+    static final int MAX_POST_OVERFLOW_COMPACT_ATTEMPTS = 3;
     static final String SKILL_LOADER_TOOL_NAME = "Skill";
 
     private final LlmProviderFactory llmProviderFactory;
@@ -893,13 +895,13 @@ public class AgentLoopEngine {
             }
 
             // b. 流式调用 LLM,文本增量通过 broadcaster.assistantDelta 推到前端
-            // CTX-1 — wrapped in a retry loop bounded to a single retry on
+            // CTX-1 — wrapped in a retry loop bounded to three compaction attempts on
             // {@link LlmContextLengthExceededException}: provider rejects with
-            // context_length_exceeded → engine runs a one-shot compactFull and re-issues
-            // the (now smaller) request once. This is a fresh chatStream call (delta
+            // context_length_exceeded → engine runs compactFull and re-issues the
+            // progressively smaller request. This is a fresh chatStream call (delta
             // counters reset), so it does not violate the "chatStream not retried"
             // footgun #3 (which was about resuming an already-emitting stream).
-            boolean retriedOverflow = false;
+            int postOverflowCompactAttempts = 0;
             LlmResponse response = null;
             // llmCallStart and streamWarnings need to span retries for the LLM_CALL span; reset per attempt.
             long llmCallStart = System.currentTimeMillis();
@@ -1028,20 +1030,23 @@ public class AgentLoopEngine {
                 Throwable e = errHolder.get();
                 LlmContextLengthExceededException overflow = unwrapContextOverflow(e);
                 if (overflow != null) {
-                    if (retriedOverflow || compactorCallback == null) {
-                        log.error("Context overflow surfaced at loop {} (retried={}, compactor={}): sessionId={}",
-                                loopCtx.getLoopCount(), retriedOverflow,
+                    if (postOverflowCompactAttempts >= MAX_POST_OVERFLOW_COMPACT_ATTEMPTS
+                            || compactorCallback == null) {
+                        log.error("Context overflow surfaced at loop {} (compactAttempts={}, compactor={}): sessionId={}",
+                                loopCtx.getLoopCount(), postOverflowCompactAttempts,
                                 compactorCallback != null, sessionId, overflow);
                         throw overflow;
                     }
-                    log.warn("Context overflow caught at loop {}, attempting one-shot compactFull + retry: sessionId={}",
-                            loopCtx.getLoopCount(), sessionId, overflow);
+                    int compactAttempt = postOverflowCompactAttempts + 1;
+                    log.warn("Context overflow caught at loop {}, attempting compactFull {}/{} + retry: sessionId={}",
+                            loopCtx.getLoopCount(), compactAttempt,
+                            MAX_POST_OVERFLOW_COMPACT_ATTEMPTS, sessionId, overflow);
                     CompactCallbackResult cr;
                     try {
                         cr = compactorCallback.compactFull(
                                 loopCtx.getSessionId(), messages,
                                 ContextCompactorCallback.SOURCE_POST_OVERFLOW,
-                                "context_length_exceeded:" + overflow.getMessage());
+                                "context_length_exceeded:attempt=" + compactAttempt + ":" + overflow.getMessage());
                     } catch (Exception compactEx) {
                         recordCompactFailure(loopCtx);
                         log.error("Post-overflow compactFull failed (consecutive failures: {})",
@@ -1052,6 +1057,13 @@ public class AgentLoopEngine {
                         log.warn("Post-overflow compactFull returned no-op (in-flight / idempotent), surfacing overflow");
                         throw overflow;
                     }
+                    if (cr.tokensReclaimed <= 0 || cr.afterTokens >= cr.beforeTokens) {
+                        log.warn("Post-overflow compactFull made no token progress: attempt={}/{}, "
+                                        + "reclaimed={}, before={}, after={}; surfacing overflow",
+                                compactAttempt, MAX_POST_OVERFLOW_COMPACT_ATTEMPTS,
+                                cr.tokensReclaimed, cr.beforeTokens, cr.afterTokens);
+                        throw overflow;
+                    }
                     loopCtx.resetCompactFailures();
                     messages = cr.messages;
                     loopCtx.setMessages(messages);
@@ -1059,9 +1071,10 @@ public class AgentLoopEngine {
                     // retried chatStream call sees the same trimming envelope as the initial attempt.
                     budgetResult = ToolResultRequestBudgeter.apply(messages, requestToolResultBudgetChars);
                     request.setMessages(budgetResult.messages);
-                    retriedOverflow = true;
-                    log.info("Post-overflow compactFull done: reclaimed {} tokens, retrying chatStream",
-                            cr.tokensReclaimed);
+                    postOverflowCompactAttempts = compactAttempt;
+                    log.info("Post-overflow compactFull {}/{} done: reclaimed {} tokens ({} -> {}), retrying chatStream",
+                            compactAttempt, MAX_POST_OVERFLOW_COMPACT_ATTEMPTS,
+                            cr.tokensReclaimed, cr.beforeTokens, cr.afterTokens);
                     continue; // retry inner loop with compacted messages.
                 }
                 log.error("LLM stream returned error at loop {}", loopCtx.getLoopCount(), e);

@@ -28,7 +28,7 @@ public interface ContextCompactorCallback {
     String SOURCE_ENGINE_HARD = "engine-hard";
     /** Engine preemptive trigger: ratio &gt; preemptiveRatio just before the LLM call → full compact. */
     String SOURCE_ENGINE_PREEMPTIVE = "engine-preemptive";
-    /** Post-overflow trigger: provider raised context_length_exceeded → one-shot full compact. */
+    /** Post-overflow trigger: provider raised context_length_exceeded → bounded full compact retries. */
     String SOURCE_POST_OVERFLOW = "post-overflow";
 
     /**
