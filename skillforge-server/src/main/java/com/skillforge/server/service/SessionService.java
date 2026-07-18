@@ -91,6 +91,9 @@ public class SessionService {
      */
     private ToolResultArchiveService toolResultArchiveService;
 
+    /** Optional in legacy unit tests; production wires the source-link reconciler. */
+    private PersonalAppSourceLinkReconciler personalAppSourceLinkReconciler;
+
     /**
      * Q2 BE-W1: ReminderBuilder per-session debounce map needs to be cleared on session
      * deletion, otherwise the Spring singleton accumulates dead entries (≈20MB / 100K
@@ -148,6 +151,12 @@ public class SessionService {
     @Autowired(required = false)
     public void setToolResultArchiveService(ToolResultArchiveService toolResultArchiveService) {
         this.toolResultArchiveService = toolResultArchiveService;
+    }
+
+    @Autowired(required = false)
+    public void setPersonalAppSourceLinkReconciler(
+            PersonalAppSourceLinkReconciler personalAppSourceLinkReconciler) {
+        this.personalAppSourceLinkReconciler = personalAppSourceLinkReconciler;
     }
 
     /** Q2 BE-W1: optional setter for the singleton ReminderBuilder; clears per-session
@@ -209,6 +218,10 @@ public class SessionService {
         m.put("runtimeStatus", s.getRuntimeStatus());
         m.put("runtimeStep", s.getRuntimeStep());
         m.put("runtimeError", s.getRuntimeError());
+        m.put("failureSource", s.getRuntimeFailureSource());
+        m.put("failureCode", s.getRuntimeFailureCode());
+        m.put("retryable", s.isRuntimeRetryable());
+        m.put("sideEffects", s.getRuntimeSideEffects());
         m.put("messageCount", s.getMessageCount());
         m.put("totalInputTokens", s.getTotalInputTokens());
         m.put("totalOutputTokens", s.getTotalOutputTokens());
@@ -830,6 +843,10 @@ public class SessionService {
                         merged.add(appendMessage.message());
                     }
                     writeLegacyOnly(id, merged);
+                    if (personalAppSourceLinkReconciler != null) {
+                        personalAppSourceLinkReconciler.clearForRewrite(id);
+                        personalAppSourceLinkReconciler.reconcileAppended(id, 0L, merged);
+                    }
                     return (long) merged.size() - 1L;
                 });
                 return lastSeq != null ? lastSeq : -1L;
@@ -1838,6 +1855,7 @@ public class SessionService {
 
     private void rewriteRowsInNewTransaction(String id, List<AppendMessage> messages) {
         if (TransactionSynchronizationManager.isActualTransactionActive()) {
+            clearPersonalAppSourceLinksForRewrite(id);
             sessionMessageRepository.deleteBySessionId(id);
             if (messages != null && !messages.isEmpty()) {
                 appendRowsOnce(id, messages);
@@ -1845,12 +1863,19 @@ public class SessionService {
             return;
         }
         requiresNewTxTemplate.execute(status -> {
+            clearPersonalAppSourceLinksForRewrite(id);
             sessionMessageRepository.deleteBySessionId(id);
             if (messages != null && !messages.isEmpty()) {
                 appendRowsOnce(id, messages);
             }
             return null;
         });
+    }
+
+    private void clearPersonalAppSourceLinksForRewrite(String sessionId) {
+        if (personalAppSourceLinkReconciler != null) {
+            personalAppSourceLinkReconciler.clearForRewrite(sessionId);
+        }
     }
 
     private long appendRowsOnce(String id, List<AppendMessage> messages) {
@@ -1876,6 +1901,14 @@ public class SessionService {
             entities.add(e);
         }
         sessionMessageRepository.saveAll(entities);
+        if (personalAppSourceLinkReconciler != null) {
+            List<Message> persistedMessages = new ArrayList<>(messages.size());
+            for (AppendMessage append : messages) {
+                persistedMessages.add(append.message());
+            }
+            personalAppSourceLinkReconciler.reconcileAppended(
+                    id, base + 1L, persistedMessages);
+        }
         return base + messages.size();
     }
 

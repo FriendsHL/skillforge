@@ -8,6 +8,7 @@ import com.skillforge.server.dto.SessionMessageDto;
 import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.ChatAttachmentEntity;
 import com.skillforge.server.entity.SessionEntity;
+import com.skillforge.server.exception.RetryBusyException;
 import com.skillforge.server.exception.SessionNotFoundException;
 import com.skillforge.server.repository.AgentRepository;
 import com.skillforge.server.service.ChatAttachmentService;
@@ -96,6 +97,65 @@ class MobileChatControllerTest {
 
         verify(sessionService).listUserSessions(1L);
         verify(sessionService, never()).listUserSessions(999L);
+    }
+
+    @Test
+    @DisplayName("GET /api/mobile/client/sessions exposes runtime failure facts and server-computed retryability")
+    void getSession_retryableFailure_returnsRuntimeFacts() throws Exception {
+        SessionEntity failed = session("session-1", 1L, 3L);
+        failed.setRuntimeStatus("error");
+        failed.setRuntimeStep("retryable");
+        failed.setRuntimeError("Model response timed out");
+        failed.setRuntimeFailureSource("network");
+        failed.setRuntimeFailureCode("NETWORK_TIMEOUT");
+        failed.setRuntimeRetryable(true);
+        failed.setRuntimeSideEffects("none");
+        when(sessionService.getSession("session-1")).thenReturn(failed);
+
+        mvc.perform(get("/api/mobile/client/sessions/session-1")
+                        .with(principal(1L, "chat:read")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.runtimeStatus").value("error"))
+                .andExpect(jsonPath("$.runtimeStep").value("retryable"))
+                .andExpect(jsonPath("$.runtimeError").value("Model response timed out"))
+                .andExpect(jsonPath("$.failureSource").value("network"))
+                .andExpect(jsonPath("$.failureCode").value("NETWORK_TIMEOUT"))
+                .andExpect(jsonPath("$.retryable").value(true))
+                .andExpect(jsonPath("$.sideEffects").value("none"));
+    }
+
+    @Test
+    @DisplayName("GET session fails closed when an untrusted source carries a stale retryable flag")
+    void getSession_untrustedRetryableSource_returnsRetryableFalse() throws Exception {
+        SessionEntity failed = session("session-1", 1L, 3L);
+        failed.setRuntimeStatus("error");
+        failed.setRuntimeFailureSource("tool");
+        failed.setRuntimeFailureCode("TOOL_FAILED");
+        failed.setRuntimeRetryable(true);
+        failed.setRuntimeSideEffects("none");
+        when(sessionService.getSession("session-1")).thenReturn(failed);
+
+        mvc.perform(get("/api/mobile/client/sessions/session-1")
+                        .with(principal(1L, "chat:read")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.failureSource").value("tool"))
+                .andExpect(jsonPath("$.retryable").value(false));
+    }
+
+    @Test
+    @DisplayName("GET /api/mobile/client/sessions does not make clients infer retryability from runtimeStep")
+    void listSessions_nonErrorStatusWithRetryableStep_returnsRetryableFalse() throws Exception {
+        SessionEntity running = session("session-1", 1L, 3L);
+        running.setRuntimeStatus("running");
+        running.setRuntimeStep("retryable");
+        running.setRuntimeRetryable(false);
+        when(sessionService.listUserSessions(1L)).thenReturn(List.of(running));
+
+        mvc.perform(get("/api/mobile/client/sessions")
+                        .with(principal(1L, "chat:read")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].runtimeStep").value("retryable"))
+                .andExpect(jsonPath("$[0].retryable").value(false));
     }
 
     @Test
@@ -298,6 +358,101 @@ class MobileChatControllerTest {
                 .andExpect(jsonPath("$.status").value("accepted"));
 
         verify(chatService).chatAsync(eq("session-1"), eq("hello"), eq(1L), eq(List.of()));
+    }
+
+    @Test
+    @DisplayName("POST /api/mobile/client/sessions/{id}/retry safely retries as the mobile principal")
+    void retryFailedTurn_ownedSessionWithChatWrite_returnsAccepted() throws Exception {
+        when(sessionService.getSession("session-1")).thenReturn(session("session-1", 1L, 3L));
+
+        mvc.perform(post("/api/mobile/client/sessions/session-1/retry")
+                        .param("userId", "999")
+                        .with(principal(1L, "chat:write")))
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.sessionId").value("session-1"))
+                .andExpect(jsonPath("$.status").value("accepted"));
+
+        verify(chatService).retryFailedTurnAsync("session-1");
+    }
+
+    @Test
+    @DisplayName("POST retry requires a mobile principal")
+    void retryFailedTurn_withoutPrincipal_returnsUnauthorized() throws Exception {
+        mvc.perform(post("/api/mobile/client/sessions/session-1/retry"))
+                .andExpect(status().isUnauthorized());
+
+        verify(chatService, never()).retryFailedTurnAsync(any());
+    }
+
+    @Test
+    @DisplayName("POST retry requires chat:write")
+    void retryFailedTurn_withoutChatWrite_returnsForbidden() throws Exception {
+        mvc.perform(post("/api/mobile/client/sessions/session-1/retry")
+                        .with(principal(1L, "chat:read")))
+                .andExpect(status().isForbidden());
+
+        verify(chatService, never()).retryFailedTurnAsync(any());
+    }
+
+    @Test
+    @DisplayName("POST retry rejects a session owned by another user")
+    void retryFailedTurn_crossUserSession_returnsForbidden() throws Exception {
+        when(sessionService.getSession("session-2")).thenReturn(session("session-2", 2L, 3L));
+
+        mvc.perform(post("/api/mobile/client/sessions/session-2/retry")
+                        .with(principal(1L, "chat:write")))
+                .andExpect(status().isForbidden());
+
+        verify(chatService, never()).retryFailedTurnAsync(any());
+    }
+
+    @Test
+    @DisplayName("POST retry maps a non-retryable state to 409")
+    void retryFailedTurn_nonRetryableState_returnsConflict() throws Exception {
+        when(sessionService.getSession("session-1")).thenReturn(session("session-1", 1L, 3L));
+        doThrow(new IllegalStateException(
+                "session failure is not retryable: /Users/private/runtime secret-token"))
+                .when(chatService).retryFailedTurnAsync("session-1");
+
+        mvc.perform(post("/api/mobile/client/sessions/session-1/retry")
+                        .with(principal(1L, "chat:write")))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("RETRY_NOT_ALLOWED"))
+                .andExpect(jsonPath("$.message").value("This turn cannot be retried safely."))
+                .andExpect(jsonPath("$.retryable").value(false))
+                .andExpect(jsonPath("$.error").doesNotExist());
+    }
+
+    @Test
+    @DisplayName("POST retry maps a loop still finishing to retryable 429")
+    void retryFailedTurn_oldLoopStillFinishing_returnsTooManyRequests() throws Exception {
+        when(sessionService.getSession("session-1")).thenReturn(session("session-1", 1L, 3L));
+        doThrow(new RetryBusyException())
+                .when(chatService).retryFailedTurnAsync("session-1");
+
+        mvc.perform(post("/api/mobile/client/sessions/session-1/retry")
+                        .with(principal(1L, "chat:write")))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(jsonPath("$.code").value("RETRY_BUSY"))
+                .andExpect(jsonPath("$.message").value("Server is busy. Please try again later."))
+                .andExpect(jsonPath("$.retryable").value(true))
+                .andExpect(jsonPath("$.error").doesNotExist());
+    }
+
+    @Test
+    @DisplayName("POST retry maps executor saturation to retryable 429")
+    void retryFailedTurn_rejectedExecutor_returnsTooManyRequests() throws Exception {
+        when(sessionService.getSession("session-1")).thenReturn(session("session-1", 1L, 3L));
+        doThrow(new RejectedExecutionException("queue full /Users/private/runtime"))
+                .when(chatService).retryFailedTurnAsync("session-1");
+
+        mvc.perform(post("/api/mobile/client/sessions/session-1/retry")
+                        .with(principal(1L, "chat:write")))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(jsonPath("$.code").value("RETRY_BUSY"))
+                .andExpect(jsonPath("$.message").value("Server is busy. Please try again later."))
+                .andExpect(jsonPath("$.retryable").value(true))
+                .andExpect(jsonPath("$.error").doesNotExist());
     }
 
     @Test

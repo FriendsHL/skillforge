@@ -4,6 +4,9 @@ import com.skillforge.core.model.ContentBlock;
 import com.skillforge.core.model.Message;
 import com.skillforge.server.entity.SessionEntity;
 import com.skillforge.server.repository.SessionRepository;
+import com.skillforge.server.runtime.RuntimeFailureClassifier;
+import com.skillforge.server.runtime.RuntimeFailureFact;
+import com.skillforge.server.runtime.RuntimeFailureState;
 import com.skillforge.server.service.SessionService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -43,6 +46,8 @@ import java.util.Set;
 public class PendingConfirmationStartupRecovery implements SmartLifecycle {
 
     private static final Logger log = LoggerFactory.getLogger(PendingConfirmationStartupRecovery.class);
+    private static final RuntimeFailureClassifier RUNTIME_FAILURE_CLASSIFIER =
+            new RuntimeFailureClassifier();
 
     /** Phase: well before WebServerStartStopLifecycle (which uses ~Integer.MAX_VALUE). */
     public static final int PHASE = Integer.MIN_VALUE + 100;
@@ -146,10 +151,14 @@ public class PendingConfirmationStartupRecovery implements SmartLifecycle {
                     sessionId, orphanIds.size());
         }
         s.setRuntimeStatus("error");
-        s.setRuntimeStep(null);
-        s.setRuntimeError(orphanIds.isEmpty()
-                ? "Server restarted while session was active"
-                : "Recovered from restart: " + orphanIds.size() + " orphan tool_use(s) repaired");
+        RuntimeFailureFact failure = orphanIds.isEmpty()
+                ? RUNTIME_FAILURE_CLASSIFIER.harnessFailure(
+                        "SERVER_RESTART_INTERRUPTED",
+                        "The server restarted while this run was active.", "possible")
+                : RUNTIME_FAILURE_CLASSIFIER.harnessFailure(
+                        "SERVER_RESTART_ORPHAN_TOOL_USE",
+                        "The server restarted after a tool operation.", "observed");
+        RuntimeFailureState.apply(s, failure);
         sessionService.saveSession(s);
         return orphanIds.size();
     }

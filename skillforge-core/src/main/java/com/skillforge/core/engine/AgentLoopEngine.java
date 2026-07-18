@@ -466,6 +466,12 @@ public class AgentLoopEngine {
         messages = context.getMessages();
         // 确保 context 引用是 effectively final（beforeLoop 可能替换了 context 对象）
         final LoopContext loopCtx = context;
+        // ChatService retains the caller-owned externalContext for exception-path retry
+        // classification. A LoopHook is allowed to replace the context, so mirror all
+        // subsequent stream/tool evidence back to that original object fail-closed.
+        if (externalContext != null && loopCtx != externalContext) {
+            loopCtx.mirrorRetrySafetyEvidenceTo(externalContext);
+        }
         List<PublishedArtifact> pendingArtifacts = new ArrayList<>();
         List<Message> deferredBroadcastMessages = new ArrayList<>();
 
@@ -951,6 +957,9 @@ public class AgentLoopEngine {
                         return loopCtx.isCancelled();
                     }
                     @Override public void onText(String text) {
+                        if (text != null && !text.isEmpty()) {
+                            loopCtx.recordProviderStreamDelta();
+                        }
                         if (broadcaster != null && broadcastSid != null && text != null && !text.isEmpty()) {
                             broadcaster.assistantDelta(broadcastSid, text);
                             broadcaster.textDelta(broadcastSid, text);
@@ -958,16 +967,23 @@ public class AgentLoopEngine {
                     }
                     // CHAT-REASONING-PANEL: route reasoning_content delta on dedicated channel.
                     @Override public void onReasoning(String reasoning) {
+                        if (reasoning != null && !reasoning.isEmpty()) {
+                            loopCtx.recordProviderStreamDelta();
+                        }
                         if (broadcaster != null && broadcastSid != null && reasoning != null && !reasoning.isEmpty()) {
                             broadcaster.reasoningDelta(broadcastSid, reasoning);
                         }
                     }
                     @Override public void onToolUseStart(String toolUseId, String name) {
+                        loopCtx.recordProviderStreamDelta();
                         if (toolUseId != null) {
                             streamToolNames.put(toolUseId, name != null ? name : "");
                         }
                     }
                     @Override public void onToolUseInputDelta(String toolUseId, String jsonFragment) {
+                        if (jsonFragment != null && !jsonFragment.isEmpty()) {
+                            loopCtx.recordProviderStreamDelta();
+                        }
                         if (broadcaster != null && broadcastSid != null && toolUseId != null
                                 && jsonFragment != null && !jsonFragment.isEmpty()) {
                             broadcaster.toolUseDelta(broadcastSid, toolUseId,
@@ -975,11 +991,13 @@ public class AgentLoopEngine {
                         }
                     }
                     @Override public void onToolUseEnd(String toolUseId, java.util.Map<String, Object> parsedInput) {
+                        loopCtx.recordProviderStreamDelta();
                         if (broadcaster != null && broadcastSid != null && toolUseId != null) {
                             broadcaster.toolUseComplete(broadcastSid, toolUseId, parsedInput);
                         }
                     }
                     @Override public void onToolUse(com.skillforge.core.model.ToolUseBlock block) {
+                        loopCtx.recordProviderStreamDelta();
                         // tool_use 的可视化由后续 tool_started 事件覆盖,此处不广播
                     }
                     @Override public void onComplete(LlmResponse fullResponse) {
@@ -1620,6 +1638,9 @@ public class AgentLoopEngine {
                     return loopCtx.isCancelled();
                 }
                 @Override public void onText(String text) {
+                    if (text != null && !text.isEmpty()) {
+                        loopCtx.recordProviderStreamDelta();
+                    }
                     // Stream continuation deltas to the same UI assistant pane so users
                     // see the response continue rather than restart.
                     if (broadcaster != null && broadcastSid != null && text != null && !text.isEmpty()) {
@@ -1629,11 +1650,26 @@ public class AgentLoopEngine {
                 }
                 // CHAT-REASONING-PANEL: continuation path also forwards reasoning deltas.
                 @Override public void onReasoning(String reasoning) {
+                    if (reasoning != null && !reasoning.isEmpty()) {
+                        loopCtx.recordProviderStreamDelta();
+                    }
                     if (broadcaster != null && broadcastSid != null && reasoning != null && !reasoning.isEmpty()) {
                         broadcaster.reasoningDelta(broadcastSid, reasoning);
                     }
                 }
+                @Override public void onToolUseStart(String toolUseId, String name) {
+                    loopCtx.recordProviderStreamDelta();
+                }
+                @Override public void onToolUseInputDelta(String toolUseId, String jsonFragment) {
+                    if (jsonFragment != null && !jsonFragment.isEmpty()) {
+                        loopCtx.recordProviderStreamDelta();
+                    }
+                }
+                @Override public void onToolUseEnd(String toolUseId, java.util.Map<String, Object> parsedInput) {
+                    loopCtx.recordProviderStreamDelta();
+                }
                 @Override public void onToolUse(com.skillforge.core.model.ToolUseBlock block) {
+                    loopCtx.recordProviderStreamDelta();
                     // Continuation request omits tools; if the provider still emits a tool_use
                     // we ignore it (the merged response will be assembled from text only).
                 }
@@ -3091,7 +3127,15 @@ public class AgentLoopEngine {
 
     private List<ContentBlock> artifactRefs(List<PublishedArtifact> artifacts) {
         List<ContentBlock> refs = new ArrayList<>(artifacts.size());
+        boolean hasInteractiveArtifact = false;
         for (PublishedArtifact artifact : artifacts) {
+            if (artifact != null && "interactive_artifact_ref".equals(artifact.getBlockType())) {
+                if (hasInteractiveArtifact) {
+                    log.warn("Ignoring additional interactive artifact in the same assistant message");
+                    continue;
+                }
+                hasInteractiveArtifact = true;
+            }
             ContentBlock ref = artifactRef(artifact);
             if (ref != null) refs.add(ref);
         }
@@ -3116,6 +3160,10 @@ public class AgentLoopEngine {
             ref = ContentBlock.excelRef(artifact.getAttachmentId(), artifact.getFilename(), artifact.getSheetCount());
         } else if ("csv_ref".equals(type)) {
             ref = ContentBlock.csvRef(artifact.getAttachmentId(), artifact.getFilename());
+        } else if ("interactive_artifact_ref".equals(type)) {
+            ref = ContentBlock.interactiveArtifactRef(
+                    artifact.getAttachmentId(), artifact.getFilename(), artifact.getTitle(),
+                    artifact.getArtifactSchemaVersion());
         } else {
             log.warn("Ignoring published artifact with unsupported blockType={}", type);
             return null;

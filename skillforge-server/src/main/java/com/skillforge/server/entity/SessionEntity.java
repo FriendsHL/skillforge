@@ -1,5 +1,6 @@
 package com.skillforge.server.entity;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EntityListeners;
@@ -62,6 +63,22 @@ public class SessionEntity {
     /** 最近一次错误消息 */
     @Column(columnDefinition = "TEXT")
     private String runtimeError;
+
+    /** Stable owner of the latest runtime failure. */
+    @Column(name = "runtime_failure_source", length = 32)
+    private String runtimeFailureSource;
+
+    /** Stable machine-readable code for the latest runtime failure. */
+    @Column(name = "runtime_failure_code", length = 64)
+    private String runtimeFailureCode;
+
+    /** Server-authoritative safe-replay decision. */
+    @Column(name = "runtime_retryable", nullable = false)
+    private boolean runtimeRetryable = false;
+
+    /** Side-effect evidence: none / possible / observed. */
+    @Column(name = "runtime_side_effects", length = 16)
+    private String runtimeSideEffects;
 
     /** 执行模式: ask / auto (覆盖 Agent 默认值) */
     @Column(length = 16)
@@ -351,6 +368,58 @@ public class SessionEntity {
 
     public void setRuntimeError(String runtimeError) {
         this.runtimeError = runtimeError;
+    }
+
+    public String getRuntimeFailureSource() {
+        return runtimeFailureSource;
+    }
+
+    public void setRuntimeFailureSource(String runtimeFailureSource) {
+        this.runtimeFailureSource = runtimeFailureSource;
+    }
+
+    public String getRuntimeFailureCode() {
+        return runtimeFailureCode;
+    }
+
+    public void setRuntimeFailureCode(String runtimeFailureCode) {
+        this.runtimeFailureCode = runtimeFailureCode;
+    }
+
+    public boolean isRuntimeRetryable() {
+        return runtimeRetryable;
+    }
+
+    public void setRuntimeRetryable(boolean runtimeRetryable) {
+        this.runtimeRetryable = runtimeRetryable;
+    }
+
+    public String getRuntimeSideEffects() {
+        return runtimeSideEffects;
+    }
+
+    public void setRuntimeSideEffects(String runtimeSideEffects) {
+        this.runtimeSideEffects = runtimeSideEffects;
+    }
+
+    @JsonProperty("failureSource")
+    public String getFailureSource() {
+        return runtimeFailureSource;
+    }
+
+    @JsonProperty("failureCode")
+    public String getFailureCode() {
+        return runtimeFailureCode;
+    }
+
+    @JsonProperty("retryable")
+    public boolean isRetryable() {
+        return runtimeRetryable;
+    }
+
+    @JsonProperty("sideEffects")
+    public String getSideEffects() {
+        return runtimeSideEffects;
     }
 
     public String getExecutionMode() {

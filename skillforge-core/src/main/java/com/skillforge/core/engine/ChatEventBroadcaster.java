@@ -16,6 +16,16 @@ public interface ChatEventBroadcaster {
     void sessionStatus(String sessionId, String status, String step, String error);
 
     /**
+     * Broadcast status plus the server-authoritative structured failure fact.
+     * The additive default preserves existing broadcaster implementations.
+     */
+    default void sessionStatus(String sessionId, String status, String step, String error,
+                               String failureSource, String failureCode, boolean retryable,
+                               String sideEffects) {
+        sessionStatus(sessionId, status, step, error);
+    }
+
+    /**
      * 广播一条新消息追加事件(engine 执行过程中每当有新消息落入 messages 列表时调用)。
      *
      * <p>OBS-2 M1: 加 {@code traceId} 参数，让 implementation（{@code ChatWebSocketHandler}）

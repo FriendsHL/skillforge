@@ -31,10 +31,15 @@ import com.skillforge.server.entity.ModelUsageEntity;
 import com.skillforge.server.entity.SessionEntity;
 import com.skillforge.server.entity.SessionMessageEntity;
 import com.skillforge.server.exception.MultimodalNoVisionException;
+import com.skillforge.server.exception.RetryBusyException;
 import com.skillforge.server.repository.CollabRunRepository;
 import com.skillforge.server.repository.ModelUsageRepository;
 import com.skillforge.server.memory.SessionDigestExtractor;
 import com.skillforge.server.service.event.SessionLoopFinishedEvent;
+import com.skillforge.server.runtime.RuntimeFailureClassifier;
+import com.skillforge.server.runtime.RuntimeFailureEvidence;
+import com.skillforge.server.runtime.RuntimeFailureFact;
+import com.skillforge.server.runtime.RuntimeFailureState;
 import com.skillforge.server.subagent.CollabRunService;
 import com.skillforge.server.subagent.SubAgentRegistry;
 import org.slf4j.Logger;
@@ -65,6 +70,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class ChatService {
 
     private static final Logger log = LoggerFactory.getLogger(ChatService.class);
+    private static final RuntimeFailureClassifier RUNTIME_FAILURE_CLASSIFIER =
+            new RuntimeFailureClassifier();
 
     private final AgentService agentService;
     private final SessionService sessionService;
@@ -422,13 +429,14 @@ public class ChatService {
                         log.warn("SessionStart hook aborted session {}; refusing to start loop", sessionId);
                         session = sessionService.getSession(sessionId);
                         session.setRuntimeStatus("error");
-                        session.setRuntimeStep(null);
-                        session.setRuntimeError("Aborted by SessionStart hook");
+                        RuntimeFailureFact failure = RUNTIME_FAILURE_CLASSIFIER.hookFailure(
+                                "SESSION_START_HOOK_ABORTED",
+                                "A session start policy stopped the run.");
+                        RuntimeFailureState.apply(session, failure);
                         session.setCompletedAt(java.time.Instant.now());
                         sessionService.saveSession(session);
                         if (broadcaster != null) {
-                            broadcaster.sessionStatus(sessionId, "error", null,
-                                    "Aborted by SessionStart hook");
+                            broadcastFailureStatus(sessionId, session);
                             broadcaster.userEvent(session.getUserId(),
                                     sessionUpdatedPayload(session, fullHistory.size() + 1));
                         }
@@ -442,8 +450,8 @@ public class ChatService {
             // 3. 更新 runtime 状态 + 记录 lastUserMessageAt
             session = sessionService.getSession(sessionId);
             session.setRuntimeStatus("running");
+            RuntimeFailureState.clear(session);
             session.setRuntimeStep("Starting");
-            session.setRuntimeError(null);
             session.setLastUserMessageAt(java.time.Instant.now());
             sessionService.saveSession(session);
 
@@ -464,8 +472,35 @@ public class ChatService {
             // Message object it persisted to DB. Without this the engine would rebuild
             // Message.user(userMessage) from the raw string and drop the reminder.
             final Message userMsgWithReminder = userMsg;
-            chatLoopExecutor.execute(() -> runLoop(sessionId, normalizedUserMessage, userMsgWithReminder, userId,
-                    agentEntity, historyForLoop, capturedTraceId, capturedRootTraceId));
+            try {
+                chatLoopExecutor.execute(() -> runLoop(
+                        sessionId, normalizedUserMessage, userMsgWithReminder, userId,
+                        agentEntity, historyForLoop, capturedTraceId, capturedRootTraceId));
+            } catch (RejectedExecutionException rejected) {
+                // The user row is already durable, but the loop never started: zero SSE,
+                // zero tools, and therefore a safe retry through retryFailedTurnAsync.
+                SessionEntity rejectedSession = sessionService.getSession(sessionId);
+                rejectedSession.setRuntimeStatus("error");
+                rejectedSession.setCompletedAt(java.time.Instant.now());
+                RuntimeFailureFact queueFailure = fullHistory.isEmpty()
+                        ? RUNTIME_FAILURE_CLASSIFIER.harnessFailure(
+                                "EXECUTOR_BUSY", "The agent runtime is busy.", "possible")
+                        : RUNTIME_FAILURE_CLASSIFIER.retryableHarnessFailure(
+                                "EXECUTOR_BUSY", "The agent runtime is busy. Please retry.");
+                RuntimeFailureState.apply(rejectedSession, queueFailure);
+                sessionService.saveSession(rejectedSession);
+                if (broadcaster != null) {
+                    try {
+                        broadcastFailureStatus(sessionId, rejectedSession);
+                        broadcaster.userEvent(rejectedSession.getUserId(),
+                                sessionUpdatedPayload(rejectedSession, fullHistory.size() + 1));
+                    } catch (RuntimeException broadcastError) {
+                        log.warn("Executor rejection status broadcast failed: sessionId={}",
+                                sessionId, broadcastError);
+                    }
+                }
+                throw rejected;
+            }
         }
     }
 
@@ -564,10 +599,29 @@ public class ChatService {
         m.put("runtimeStatus", s.getRuntimeStatus());
         m.put("runtimeStep", s.getRuntimeStep());
         m.put("runtimeError", s.getRuntimeError());
+        m.put("failureSource", s.getRuntimeFailureSource());
+        m.put("failureCode", s.getRuntimeFailureCode());
+        m.put("retryable", s.isRuntimeRetryable());
+        m.put("sideEffects", s.getRuntimeSideEffects());
         m.put("messageCount", messageCount);
         m.put("title", s.getTitle());
         m.put("updatedAt", s.getUpdatedAt());
         return m;
+    }
+
+    private void broadcastFailureStatus(String sessionId, SessionEntity session) {
+        if (broadcaster == null) {
+            return;
+        }
+        broadcaster.sessionStatus(
+                sessionId,
+                "error",
+                session.getRuntimeStep(),
+                session.getRuntimeError(),
+                session.getRuntimeFailureSource(),
+                session.getRuntimeFailureCode(),
+                session.isRuntimeRetryable(),
+                session.getRuntimeSideEffects());
     }
 
     /**
@@ -622,7 +676,6 @@ public class ChatService {
         String finalMessage = null;
         int toolCallCount = 0;
         String finalStatus = "completed";
-        String deferredErrorDetail = null;
         SessionEntity deferredErrorSession = null;
         // OBS-2 M1 §D.1: traceId 在 runLoop 入口必须存在 — 优先使用调用方传入的，否则 fallback 生成。
         final String traceId = externalTraceId != null ? externalTraceId : UUID.randomUUID().toString();
@@ -953,8 +1006,8 @@ public class ChatService {
                 SessionEntity s = sessionService.getSession(sessionId);
                 s.setCompletedAt(java.time.Instant.now());
                 s.setRuntimeStatus("waiting_user");
+                RuntimeFailureState.clear(s);
                 s.setRuntimeStep("waiting_control");
-                s.setRuntimeError(null);
                 sessionService.saveSession(s);
                 if (broadcaster != null) {
                     broadcaster.sessionStatus(sessionId, "waiting_user", "waiting_control", null);
@@ -987,8 +1040,8 @@ public class ChatService {
             s.setCompletedAt(java.time.Instant.now());
             if (wasAbortedByHook) {
                 s.setRuntimeStatus("error");
-                s.setRuntimeStep(null);
-                s.setRuntimeError(finalMessage != null ? finalMessage : "Aborted by lifecycle hook");
+                RuntimeFailureState.apply(s, RUNTIME_FAILURE_CLASSIFIER.hookFailure(
+                        "LIFECYCLE_HOOK_ABORTED", "A lifecycle policy stopped the run."));
             } else {
                 // SubAgent terminate guard: 父显式 'terminate' 子 session 时 handleTerminate
                 // 把 child.runtime_status 设为 "terminated"。loop teardown 不能 downgrade 它
@@ -999,13 +1052,13 @@ public class ChatService {
                 if (!"terminated".equals(s.getRuntimeStatus())) {
                     s.setRuntimeStatus("idle");
                 }
+                RuntimeFailureState.clear(s);
                 s.setRuntimeStep(wasCancelled ? "cancelled" : null);
-                s.setRuntimeError(null);
             }
             sessionService.saveSession(s);
             if (broadcaster != null) {
                 if (wasAbortedByHook) {
-                    broadcaster.sessionStatus(sessionId, "error", null, s.getRuntimeError());
+                    broadcastFailureStatus(sessionId, s);
                 } else {
                     broadcaster.sessionStatus(sessionId, "idle", wasCancelled ? "cancelled" : null, null);
                 }
@@ -1039,9 +1092,7 @@ public class ChatService {
             // 用户友好错误信息：根据 cause chain 识别常见异常类型映射成 actionable 中文提示，
             // 写入 runtime_error / WS error 推给前端展示。完整 stack trace 仅记日志（line above），
             // 不再回灌前端避免暴露内部结构 + 让用户能直接看懂"该重试 / 调超时 / 检查网络"。
-            String safeError = "Agent loop failed";
-            String errorDetail = toFriendlyChatError(e);
-            finalMessage = safeError;
+            finalMessage = "Agent loop failed";
             // OBS-2 M1 §D.8.3 (r2 review r2): exception path 保底 finalize trace。
             // engine 抛 unhandled exception 时确保 t_llm_trace.status 不留 'running'。
             // toolCallCount/eventCount 用 0/0 fallback（exception 路径下 engine 局部计数器
@@ -1063,10 +1114,10 @@ public class ChatService {
                 SessionEntity s = sessionService.getSession(sessionId);
                 s.setCompletedAt(java.time.Instant.now());
                 s.setRuntimeStatus("error");
-                s.setRuntimeStep(isSafeToRetryFailure(sessionId, preCtx) ? "retryable" : null);
-                s.setRuntimeError(errorDetail);
+                RuntimeFailureFact failure = RUNTIME_FAILURE_CLASSIFIER.classify(
+                        e, failureEvidence(sessionId, preCtx));
+                RuntimeFailureState.apply(s, failure);
                 sessionService.saveSession(s);
-                deferredErrorDetail = errorDetail;
                 deferredErrorSession = s;
                 // SessionEnd hook on error path as well (reason=error)
                 try {
@@ -1156,8 +1207,7 @@ public class ChatService {
             // error event is published so it cannot overwrite a newer retry's running event.
             try {
                 if (deferredErrorSession != null && broadcaster != null) {
-                    broadcaster.sessionStatus(sessionId, "error",
-                            deferredErrorSession.getRuntimeStep(), deferredErrorDetail);
+                    broadcastFailureStatus(sessionId, deferredErrorSession);
                     broadcaster.userEvent(deferredErrorSession.getUserId(),
                             sessionUpdatedPayload(deferredErrorSession,
                                     deferredErrorSession.getMessageCount()));
@@ -1207,8 +1257,8 @@ public class ChatService {
                 SessionEntity session = sessionService.getSession(sessionId);
                 AgentEntity agentEntity = agentService.getAgent(session.getAgentId());
                 session.setRuntimeStatus("running");
+                RuntimeFailureState.clear(session);
                 session.setRuntimeStep("Resuming");
-                session.setRuntimeError(null);
                 sessionService.saveSession(session);
                 List<Message> history = sessionService.getContextMessages(sessionId);
                 if (broadcaster != null) {
@@ -1319,8 +1369,8 @@ public class ChatService {
 
                 sessionService.appendNormalMessages(sessionId, List.of(toolResult), resumeTraceId);
                 session.setRuntimeStatus("running");
+                RuntimeFailureState.clear(session);
                 session.setRuntimeStep("Resuming");
-                session.setRuntimeError(null);
                 sessionService.saveSession(session);
                 List<Message> history = sessionService.getContextMessages(sessionId);
                 if (broadcaster != null) {
@@ -1395,11 +1445,11 @@ public class ChatService {
             if (!"error".equals(session.getRuntimeStatus())) {
                 throw new IllegalStateException("session is not in error state");
             }
-            if (!"retryable".equals(session.getRuntimeStep())) {
+            if (!RuntimeFailureState.isRetryAllowed(session)) {
                 throw new IllegalStateException("session failure is not retryable");
             }
             if (hasActiveLoopTask(sessionId)) {
-                throw new IllegalStateException("failed loop is still finishing");
+                throw new RetryBusyException();
             }
             Long executionUserId = session.getUserId();
             if (executionUserId == null) {
@@ -1430,8 +1480,8 @@ public class ChatService {
 
                 session.setCompletedAt(null);
                 session.setRuntimeStatus("running");
+                RuntimeFailureState.clear(session);
                 session.setRuntimeStep("Retrying");
-                session.setRuntimeError(null);
                 sessionService.saveSession(session);
                 if (broadcaster != null) {
                     broadcaster.sessionStatus(sessionId, "running", "Retrying", null);
@@ -1515,23 +1565,31 @@ public class ChatService {
         return userText.isEmpty() ? null : String.join("\n", userText);
     }
 
-    private boolean isSafeToRetryFailure(String sessionId, LoopContext loopContext) {
-        try {
-            List<Message> history = sessionService.getContextMessages(sessionId);
-            return isSafeToRetryFailure(loopContext, history);
-        } catch (RuntimeException e) {
-            log.warn("Failed to determine retry eligibility: sessionId={}", sessionId, e);
-            return false;
-        }
-    }
-
     static boolean isSafeToRetryFailure(LoopContext loopContext, List<Message> history) {
-        if (loopContext != null && !loopContext.getToolCallCounts().isEmpty()) {
+        if (loopContext != null && (loopContext.hasObservedProviderStreamDelta()
+                || !loopContext.getToolCallCounts().isEmpty())) {
             return false;
         }
         return history != null
                 && !history.isEmpty()
                 && isRetryableUserTurn(history.get(history.size() - 1));
+    }
+
+    private RuntimeFailureEvidence failureEvidence(String sessionId, LoopContext loopContext) {
+        boolean streamDelta = loopContext != null
+                && loopContext.hasObservedProviderStreamDelta();
+        boolean toolCall = loopContext != null
+                && !loopContext.getToolCallCounts().isEmpty();
+        try {
+            List<Message> history = sessionService.getContextMessages(sessionId);
+            boolean tailIsUser = history != null && !history.isEmpty()
+                    && isRetryableUserTurn(history.get(history.size() - 1));
+            return new RuntimeFailureEvidence(streamDelta, toolCall, tailIsUser);
+        } catch (RuntimeException evidenceError) {
+            log.warn("Failed to collect runtime failure evidence: sessionId={}",
+                    sessionId, evidenceError);
+            return new RuntimeFailureEvidence(streamDelta, toolCall, false);
+        }
     }
 
     private void markLoopTaskStarted(String sessionId) {
@@ -1736,97 +1794,4 @@ public class ChatService {
         return msg;
     }
 
-    /**
-     * Map a chat-loop exception to a user-facing actionable hint (Chinese).
-     * Walks the cause chain to identify common HTTP / network failure modes from
-     * okhttp / SSE streaming and gives users a clear next step. Falls back to
-     * the top-level message (no stack) for unrecognized types. Full stack stays
-     * in {@code log.error} above this caller.
-     */
-    private static String toFriendlyChatError(Throwable e) {
-        for (Throwable c = e; c != null; c = c.getCause()) {
-            if (c instanceof MultimodalNoVisionException mnv) {
-                // MULTIMODAL-MVP redesign (2026-05-14): the agent now has a single
-                // modelId; vision-capable status drives the FE upload gate and the
-                // BE upload-endpoint gate. This exception is the runtime
-                // defense-in-depth (race: agent model swapped between upload and
-                // send). FE detects the stable wire CODE and prompts user to
-                // switch the agent's main model to a vision-capable one.
-                return MultimodalNoVisionException.CODE + ": 当前 agent 的主模型 `"
-                        + mnv.getModelId() + "` 不支持图像 / PDF 输入。"
-                        + "请把 agent 配置中的模型切换为多模态模型（picker 上带 \"多模态\" 标签的项），"
-                        + "或在 application.yml 的 provider.vision-models 中加入此模型 id。";
-            }
-            if (c instanceof java.net.SocketTimeoutException) {
-                return "模型响应超时：流式响应中长时间未收到新 chunk。"
-                        + "推理模型深度思考时常见，可重试，或在 application.yml 调高对应 provider 的 read-timeout-seconds。";
-            }
-            if (c instanceof java.net.UnknownHostException) {
-                return "无法解析 LLM 提供方域名（" + safeMsgOrType(c) + "）。"
-                        + "检查 application.yml 里该 provider 的 base-url 拼写、DNS、或代理设置。";
-            }
-            if (c instanceof java.net.ConnectException) {
-                return "连接 LLM 提供方失败（" + safeMsgOrType(c) + "）。"
-                        + "检查网络 / API key / base-url 是否正确，或 provider 是否短暂不可用。";
-            }
-            if (c instanceof javax.net.ssl.SSLHandshakeException) {
-                return "TLS 握手失败（" + safeMsgOrType(c) + "）。"
-                        + "可能是证书过期、代理拦截、或 base-url 协议错误（http / https 混用）。";
-            }
-            // okhttp 取消（用户主动 stop / cancellation）保持原 message
-            if (c instanceof java.io.InterruptedIOException) {
-                return "请求被中断（可能是用户取消或服务关闭）。可重新发送 message。";
-            }
-        }
-        // 未识别类型：保留 top-level message（不带 stack）让开发者也有线索
-        String topMsg = e.getMessage();
-        if (topMsg == null || topMsg.isBlank()) topMsg = e.getClass().getSimpleName();
-
-        // 识别常见 LLM provider HTTP 错误 — 给出可操作 hint（不修底层异常类型，
-        // OkHttp / okhttp-based providers 抛 RuntimeException with message
-        // "<provider> API error: HTTP <code> - <body>" 模式）
-        if (topMsg.contains("HTTP 401")
-                || topMsg.contains("invalid_api_key")
-                || topMsg.contains("invalid access token or token expired")) {
-            String provider = extractProviderFromError(topMsg);
-            return "LLM 调用未授权（HTTP 401）：" + provider + " 的 API key 失效或未配置。"
-                    + "检查对应环境变量（ANTHROPIC_API_KEY / DASHSCOPE_API_KEY / DEEPSEEK_API_KEY / XIAOMI_MIMO_API_KEY）"
-                    + "是否有效，或在 agent 配置中切换到一个可用 provider 的模型（dashboard Agents 页可改）。";
-        }
-        if (topMsg.contains("HTTP 403")) {
-            return "LLM 调用被拒绝（HTTP 403）：API key 权限不足、配额耗尽、或 IP 被封。"
-                    + "登录 provider 控制台核查余额 / 配额 / 白名单设置。";
-        }
-        if (topMsg.contains("HTTP 429")) {
-            return "LLM 调用被限流（HTTP 429）：触发了 provider 的速率限制，请稍后重试，"
-                    + "或降低并发 / 升级 provider 计费档位。";
-        }
-        if (topMsg.contains("HTTP 5") && (topMsg.contains("HTTP 500") || topMsg.contains("HTTP 502")
-                || topMsg.contains("HTTP 503") || topMsg.contains("HTTP 504"))) {
-            return "LLM 提供方服务端错误（" + (topMsg.contains("HTTP 504") ? "HTTP 504 网关超时" :
-                    topMsg.contains("HTTP 503") ? "HTTP 503 服务不可用" :
-                    topMsg.contains("HTTP 502") ? "HTTP 502 网关错误" : "HTTP 500")
-                    + "）：provider 短暂不可用，可重试。持续报错请检查 provider 状态页。";
-        }
-        return "Agent 执行失败：" + topMsg + "。完整堆栈见 server 日志。";
-    }
-
-    /**
-     * 从错误消息形如 "<provider> API error: HTTP 401 - ..." 提取 provider 名。
-     * 5 个 provider 命名：claude / bailian / dashscope / deepseek / xiaomi-mimo。
-     */
-    private static String extractProviderFromError(String msg) {
-        if (msg.contains("bailian")) return "bailian (dashscope)";
-        if (msg.contains("dashscope")) return "bailian (dashscope)";
-        if (msg.contains("claude") || msg.contains("anthropic")) return "claude (anthropic)";
-        if (msg.contains("deepseek")) return "deepseek";
-        if (msg.contains("xiaomi") || msg.contains("mimo")) return "xiaomi-mimo";
-        return "LLM provider";
-    }
-
-    /** Return non-blank getMessage() or fall back to simple class name. */
-    private static String safeMsgOrType(Throwable t) {
-        String m = t.getMessage();
-        return (m != null && !m.isBlank()) ? m : t.getClass().getSimpleName();
-    }
 }

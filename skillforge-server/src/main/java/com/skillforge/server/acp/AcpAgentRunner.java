@@ -10,6 +10,9 @@ import com.skillforge.server.acp.otlp.CcEventSpanTranslator;
 import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.SessionEntity;
 import com.skillforge.server.repository.AgentRepository;
+import com.skillforge.server.runtime.RuntimeFailureClassifier;
+import com.skillforge.server.runtime.RuntimeFailureFact;
+import com.skillforge.server.runtime.RuntimeFailureState;
 import com.skillforge.server.service.SessionService;
 import com.skillforge.server.service.event.SessionLoopFinishedEvent;
 import com.skillforge.server.subagent.SubAgentRegistry;
@@ -70,6 +73,8 @@ import java.util.regex.Pattern;
 public class AcpAgentRunner {
 
     private static final Logger log = LoggerFactory.getLogger(AcpAgentRunner.class);
+    private static final RuntimeFailureClassifier RUNTIME_FAILURE_CLASSIFIER =
+            new RuntimeFailureClassifier();
 
     private final AcpClientFactory clientFactory;
     private final SessionService sessionService;
@@ -287,7 +292,7 @@ public class AcpAgentRunner {
                 // an unexpected throw still delivers a result to the parent (no hang).
                 log.error("ACP runAsSubAgent unexpected failure (child {}): {}",
                         childSessionId, e.toString(), e);
-                outcome = CcOutcome.error(safeErr(e), 0);
+                outcome = CcOutcome.error("ACP agent run failed.", 0);
             }
             finishSubAgent(childSessionId, userId, outcome, System.currentTimeMillis() - startedAt);
         });
@@ -474,10 +479,11 @@ public class AcpAgentRunner {
             return CcOutcome.ok(assistantText.toString(), subagents, toolCallCount);
         } catch (Exception e) {
             log.error("ACP run failed for sub-session {}: {}", subSessionId, e.toString(), e);
-            finishError(subSessionId, e, streamEnded);
+            RuntimeFailureFact failure = finishError(
+                    subSessionId, e, streamEnded, toolCalls.toolCallCount() > 0);
             // P2-3a: finalize the cc trace as error (covers cc failure + prompt timeout).
-            scheduleTraceFinalize(subSessionId, "error", safeErr(e), runStartMs);
-            return CcOutcome.error(safeErr(e), toolCalls.toolCallCount());
+            scheduleTraceFinalize(subSessionId, "error", failure.sanitizedError(), runStartMs);
+            return CcOutcome.error(failure.sanitizedError(), toolCalls.toolCallCount());
         } finally {
             if (client != null) {
                 try {
@@ -539,8 +545,8 @@ public class AcpAgentRunner {
 
     private void markRunning(SessionEntity session) {
         session.setRuntimeStatus("running");
+        RuntimeFailureState.clear(session);
         session.setRuntimeStep("ACP cc");
-        session.setRuntimeError(null);
         sessionService.saveSession(session);
         broadcaster.sessionStatus(session.getId(), "running", "ACP cc", null);
     }
@@ -589,8 +595,8 @@ public class AcpAgentRunner {
 
         SessionEntity session = sessionService.getSession(subSessionId);
         session.setRuntimeStatus("idle");
+        RuntimeFailureState.clear(session);
         session.setRuntimeStep(null);
-        session.setRuntimeError(null);
         // AC-2a: surface the subagent count on the (viewable, persisted) sub-session title.
         if (subagentCount > 0) {
             session.setTitle("ACP cc run (" + subagentCount
@@ -605,23 +611,35 @@ public class AcpAgentRunner {
                 subSessionId, stopReason, fullText.length(), subagentCount);
     }
 
-    private void finishError(String subSessionId, Exception e, AtomicBoolean streamEnded) {
+    private RuntimeFailureFact finishError(String subSessionId, Exception error,
+                                           AtomicBoolean streamEnded,
+                                           boolean toolCallObserved) {
         // compact-W4: the run's accumulated tool calls are INTENTIONALLY discarded on
         // the error path — we do NOT partially persist tool_use/tool_result here. A
         // partial persist could leave an orphan tool_use (its completion may never have
         // arrived) violating INV-1; finishOk is the only place that persists the turn,
         // and only it pairs every tool_use with a (real or synthesized) tool_result.
+        boolean promptTimeout = error instanceof AcpException
+                && error.getMessage() != null
+                && error.getMessage().startsWith("ACP prompt timed out after ");
+        RuntimeFailureFact failure = RUNTIME_FAILURE_CLASSIFIER.harnessFailure(
+                promptTimeout ? "ACP_PROMPT_TIMEOUT" : "ACP_RUN_FAILED",
+                promptTimeout ? "ACP agent run timed out." : "ACP agent run failed.",
+                toolCallObserved ? "observed" : "possible");
         try {
             emitStreamEndOnce(subSessionId, streamEnded);
             SessionEntity session = sessionService.getSession(subSessionId);
             session.setRuntimeStatus("error");
-            session.setRuntimeStep(null);
-            session.setRuntimeError(safeErr(e));
+            RuntimeFailureState.apply(session, failure);
             sessionService.saveSession(session);
-            broadcaster.sessionStatus(subSessionId, "error", null, safeErr(e));
+            broadcaster.sessionStatus(subSessionId, "error", session.getRuntimeStep(),
+                    session.getRuntimeError(), session.getRuntimeFailureSource(),
+                    session.getRuntimeFailureCode(), session.isRuntimeRetryable(),
+                    session.getRuntimeSideEffects());
         } catch (RuntimeException re) {
             log.warn("ACP failed to set error status on sub-session {} (ignored)", subSessionId, re);
         }
+        return failure;
     }
 
     // ───────────────────────────── trace finalize (P2-3a) ─────────────────────────────
@@ -1118,8 +1136,4 @@ public class AcpAgentRunner {
         return Math.min(60, Math.max(10, properties.getPromptTimeoutSeconds()));
     }
 
-    private static String safeErr(Exception e) {
-        String msg = e.getMessage();
-        return (msg == null || msg.isBlank()) ? e.getClass().getSimpleName() : msg;
-    }
 }

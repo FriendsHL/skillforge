@@ -74,6 +74,11 @@ class PendingConfirmationStartupRecoveryTest {
         assertThat(cb.getIsError()).isTrue();
         assertThat(cb.getContent()).contains("Install confirmation aborted");
         assertThat(sess.getRuntimeStatus()).isEqualTo("error");
+        assertThat(sess.getRuntimeFailureSource()).isEqualTo("harness");
+        assertThat(sess.getRuntimeFailureCode()).isEqualTo("SERVER_RESTART_ORPHAN_TOOL_USE");
+        assertThat(sess.isRuntimeRetryable()).isFalse();
+        assertThat(sess.getRuntimeSideEffects()).isEqualTo("observed");
+        assertThat(sess.getRuntimeError()).isEqualTo("The server restarted after a tool operation.");
     }
 
     @Test
@@ -106,7 +111,11 @@ class PendingConfirmationStartupRecoveryTest {
 
         verify(sessionService, never()).appendNormalMessages(anyString(), any());
         assertThat(sess.getRuntimeStatus()).isEqualTo("error");
-        assertThat(sess.getRuntimeError()).contains("Server restarted");
+        assertThat(sess.getRuntimeFailureSource()).isEqualTo("harness");
+        assertThat(sess.getRuntimeFailureCode()).isEqualTo("SERVER_RESTART_INTERRUPTED");
+        assertThat(sess.isRuntimeRetryable()).isFalse();
+        assertThat(sess.getRuntimeSideEffects()).isEqualTo("possible");
+        assertThat(sess.getRuntimeError()).isEqualTo("The server restarted while this run was active.");
     }
 
     @Test

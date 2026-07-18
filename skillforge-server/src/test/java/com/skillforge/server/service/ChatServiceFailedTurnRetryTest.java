@@ -16,14 +16,18 @@ import com.skillforge.core.skill.SkillRegistry;
 import com.skillforge.observability.api.LlmTraceStore;
 import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.SessionEntity;
+import com.skillforge.server.exception.RetryBusyException;
 import com.skillforge.server.memory.SessionDigestExtractor;
 import com.skillforge.server.repository.ModelUsageRepository;
 import com.skillforge.server.subagent.SubAgentRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
+import java.net.SocketTimeoutException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
@@ -73,6 +77,10 @@ class ChatServiceFailedTurnRetryTest {
         session.setRuntimeStatus("error");
         session.setRuntimeStep("retryable");
         session.setRuntimeError("provider unavailable");
+        session.setRuntimeFailureSource("network");
+        session.setRuntimeFailureCode("NETWORK_TIMEOUT");
+        session.setRuntimeRetryable(true);
+        session.setRuntimeSideEffects("none");
         session.setMessageCount(1);
         when(sessionService.getSession(SESSION_ID)).thenReturn(session);
 
@@ -106,9 +114,19 @@ class ChatServiceFailedTurnRetryTest {
         assertThat(session.getRuntimeStatus()).isEqualTo("running");
         assertThat(session.getRuntimeStep()).isEqualTo("Retrying");
         assertThat(session.getRuntimeError()).isNull();
+        assertThat(session.getRuntimeFailureSource()).isNull();
+        assertThat(session.getRuntimeFailureCode()).isNull();
+        assertThat(session.isRuntimeRetryable()).isFalse();
+        assertThat(session.getRuntimeSideEffects()).isNull();
         verify(sessionService, never()).appendNormalMessages(anyString(), any(), anyString());
         verify(broadcaster).sessionStatus(SESSION_ID, "running", "Retrying", null);
-        verify(broadcaster).userEvent(eq(USER_ID), any());
+        ArgumentCaptor<Map<String, Object>> update = ArgumentCaptor.forClass(Map.class);
+        verify(broadcaster).userEvent(eq(USER_ID), update.capture());
+        assertThat(update.getValue()).containsEntry("failureSource", null)
+                .containsEntry("failureCode", null)
+                .containsEntry("retryable", false)
+                .containsEntry("sideEffects", null)
+                .containsEntry("runtimeError", null);
 
         executor.submitted.run();
         verify(agentLoopEngine).run(
@@ -136,7 +154,8 @@ class ChatServiceFailedTurnRetryTest {
         when(agentLoopEngine.run(
                 any(AgentDefinition.class), eq("try again"), eq(failedUserTurn),
                 eq(List.of()), eq(SESSION_ID), eq(USER_ID), any(LoopContext.class)))
-                .thenThrow(new RuntimeException("provider unavailable"));
+                .thenThrow(new RuntimeException("provider wrapper",
+                        new SocketTimeoutException("secret upstream timeout")));
 
         CountDownLatch errorBroadcastEntered = new CountDownLatch(1);
         CountDownLatch allowErrorBroadcastToFinish = new CountDownLatch(1);
@@ -147,7 +166,7 @@ class ChatServiceFailedTurnRetryTest {
             }
             return null;
         }).when(broadcaster).sessionStatus(
-                eq(SESSION_ID), anyString(), any(), any());
+                eq(SESSION_ID), anyString(), any(), any(), any(), any(), any(Boolean.class), any());
 
         chatService.retryFailedTurnAsync(SESSION_ID);
         Thread oldLoop = new Thread(executor.submitted);
@@ -155,12 +174,16 @@ class ChatServiceFailedTurnRetryTest {
 
         assertThat(errorBroadcastEntered.await(2, TimeUnit.SECONDS)).isTrue();
         assertThatThrownBy(() -> chatService.retryFailedTurnAsync(SESSION_ID))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("still finishing");
+                .isInstanceOf(RetryBusyException.class);
 
         allowErrorBroadcastToFinish.countDown();
         oldLoop.join(2_000);
         assertThat(oldLoop.isAlive()).isFalse();
+        assertThat(session.getRuntimeFailureSource()).isEqualTo("network");
+        assertThat(session.getRuntimeFailureCode()).isEqualTo("NETWORK_TIMEOUT");
+        assertThat(session.isRuntimeRetryable()).isTrue();
+        assertThat(session.getRuntimeSideEffects()).isEqualTo("none");
+        assertThat(session.getRuntimeError()).doesNotContain("secret upstream timeout");
 
         chatService.retryFailedTurnAsync(SESSION_ID);
         assertThat(session.getRuntimeStatus()).isEqualTo("running");
@@ -195,6 +218,8 @@ class ChatServiceFailedTurnRetryTest {
     void retryFailedTurn_policyAbort_isRejectedWithoutSubmitting() {
         session.setRuntimeError("Aborted by SessionStart hook");
         session.setRuntimeStep(null);
+        session.setRuntimeRetryable(false);
+        session.setRuntimeSideEffects("possible");
         when(sessionService.getContextMessages(SESSION_ID)).thenReturn(List.of(Message.user("try again")));
 
         assertThatThrownBy(() -> chatService.retryFailedTurnAsync(SESSION_ID))
@@ -239,6 +264,59 @@ class ChatServiceFailedTurnRetryTest {
         assertThat(ChatService.isSafeToRetryFailure(
                 loopContext, List.of(Message.user("compact then continue"))))
                 .isFalse();
+    }
+
+    @Test
+    void retryEligibility_rejectsAttemptAfterAnyProviderStreamDelta() {
+        LoopContext loopContext = new LoopContext();
+        loopContext.recordProviderStreamDelta();
+
+        assertThat(ChatService.isSafeToRetryFailure(
+                loopContext, List.of(Message.user("continue"))))
+                .isFalse();
+    }
+
+    @Test
+    void retryFailedTurn_staleLegacyStepWithoutAuthoritativeFact_isRejected() {
+        session.setRuntimeStep("retryable");
+        session.setRuntimeRetryable(false);
+        session.setRuntimeSideEffects(null);
+        when(sessionService.getContextMessages(SESSION_ID)).thenReturn(List.of(Message.user("retry")));
+
+        assertThatThrownBy(() -> chatService.retryFailedTurnAsync(SESSION_ID))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("not retryable");
+        assertThat(executor.submitted).isNull();
+    }
+
+    @Test
+    void retryFailedTurn_possibleSideEffectsOverrideRetryableFlag() {
+        session.setRuntimeRetryable(true);
+        session.setRuntimeSideEffects("possible");
+        when(sessionService.getContextMessages(SESSION_ID)).thenReturn(List.of(Message.user("retry")));
+
+        assertThatThrownBy(() -> chatService.retryFailedTurnAsync(SESSION_ID))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("not retryable");
+        assertThat(executor.submitted).isNull();
+    }
+
+    @Test
+    void retryFailedTurn_rejectsUntrustedFailureSourcesEvenWhenBooleanIsTrue() {
+        when(sessionService.getContextMessages(SESSION_ID)).thenReturn(List.of(Message.user("retry")));
+
+        for (String source : List.of("unknown", "tool", "user_action")) {
+            session.setRuntimeFailureSource(source);
+            session.setRuntimeFailureCode("UNTRUSTED_FAILURE");
+
+            assertThatThrownBy(() -> chatService.retryFailedTurnAsync(SESSION_ID))
+                    .as("source=%s", source)
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("not retryable");
+        }
+
+        assertThat(executor.submitted).isNull();
+        verify(sessionService, never()).saveSession(any());
     }
 
     @Test

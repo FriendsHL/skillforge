@@ -144,7 +144,8 @@ class ChatServiceMultimodalCapabilityCheckTest {
         when(agentService.getAgent(100L)).thenReturn(agent);
         when(agentService.toAgentDefinition(agent)).thenReturn(def);
         when(sessionService.getSessionMessages("sess-no-vision")).thenReturn(new ArrayList<>());
-        when(sessionService.getContextMessages("sess-no-vision")).thenReturn(new ArrayList<>());
+        when(sessionService.getContextMessages("sess-no-vision"))
+                .thenReturn(new ArrayList<>(), List.of(Message.user("describe")));
         when(sessionService.getFullHistory("sess-no-vision")).thenReturn(new ArrayList<>());
         // SessionEntity reloads inside runLoop / catch block: returning the same `sess`
         // keeps state consistent across saveSession round-trips.
@@ -158,12 +159,14 @@ class ChatServiceMultimodalCapabilityCheckTest {
                 any(Message.class),
                 anyList(), anyString(), anyLong(),
                 any(com.skillforge.core.engine.LoopContext.class));
-        // runtimeError contains the stable wire code so the FE can detect + prompt.
-        assertThat(sess.getRuntimeError())
-                .isNotNull()
-                .contains(MultimodalNoVisionException.CODE)
-                .contains("non-vision-model");
         assertThat(sess.getRuntimeStatus()).isEqualTo("error");
+        assertThat(sess.getRuntimeFailureSource()).isEqualTo("user_action");
+        assertThat(sess.getRuntimeFailureCode()).isEqualTo(MultimodalNoVisionException.CODE);
+        assertThat(sess.isRuntimeRetryable()).isFalse();
+        assertThat(sess.getRuntimeSideEffects()).isEqualTo("none");
+        assertThat(sess.getRuntimeError())
+                .isEqualTo("The selected model does not support this input.")
+                .doesNotContain("non-vision-model");
     }
 
     @Test

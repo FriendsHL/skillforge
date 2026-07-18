@@ -26,6 +26,7 @@ import org.springframework.transaction.support.SimpleTransactionStatus;
 
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -75,16 +76,17 @@ class ScenarioRunnerToolTest {
         );
         ReflectionTestUtils.setField(tool, "entityManager", entityManager);
 
-        when(transactionManager.getTransaction(any(TransactionDefinition.class)))
-                .thenReturn(new SimpleTransactionStatus());
-        when(entityManager.createNativeQuery(anyString())).thenReturn(query);
-        when(query.setParameter(anyString(), any())).thenReturn(query);
-        when(query.executeUpdate()).thenReturn(1);
     }
 
     @Test
     @DisplayName("runScenarioMultiTurn_turnEngineThrows_stillRewritesTraceOrigin")
     void runScenarioMultiTurn_turnEngineThrows_stillRewritesTraceOrigin() throws Exception {
+        when(transactionManager.getTransaction(any(TransactionDefinition.class)))
+                .thenReturn(new SimpleTransactionStatus());
+        when(entityManager.createNativeQuery(anyString())).thenReturn(query);
+        when(query.setParameter(anyString(), any())).thenReturn(query);
+        when(query.executeUpdate()).thenReturn(1);
+
         EvalScenario scenario = new EvalScenario();
         scenario.setId("sc-multi");
         scenario.setName("Multi-turn");
@@ -116,5 +118,46 @@ class ScenarioRunnerToolTest {
         assertThat(result.getStatus()).isEqualTo("ERROR");
         verify(entityManager, times(1)).createNativeQuery(anyString());
         verify(sandboxFactory, times(1)).cleanupSandbox("eval-1", "sc-multi");
+    }
+
+    @Test
+    void updateEvalSessionStatus_timeout_writesStructuredHarnessFailure() {
+        SessionEntity session = new SessionEntity();
+        session.setId("eval-session");
+        session.setRuntimeStatus("running");
+        when(sessionRepository.findById("eval-session")).thenReturn(Optional.of(session));
+
+        ReflectionTestUtils.invokeMethod(
+                tool, "updateEvalSessionStatus", "eval-session", "timeout");
+
+        assertThat(session.getRuntimeStatus()).isEqualTo("error");
+        assertThat(session.getRuntimeFailureSource()).isEqualTo("harness");
+        assertThat(session.getRuntimeFailureCode()).isEqualTo("EVAL_SCENARIO_TIMEOUT");
+        assertThat(session.isRuntimeRetryable()).isFalse();
+        assertThat(session.getRuntimeSideEffects()).isEqualTo("possible");
+        assertThat(session.getRuntimeError()).isEqualTo("The evaluation scenario timed out.");
+    }
+
+    @Test
+    void updateEvalSessionStatus_completed_clearsStaleFailureFact() {
+        SessionEntity session = new SessionEntity();
+        session.setId("eval-session");
+        session.setRuntimeStatus("error");
+        session.setRuntimeFailureSource("harness");
+        session.setRuntimeFailureCode("EVAL_SCENARIO_FAILED");
+        session.setRuntimeRetryable(false);
+        session.setRuntimeSideEffects("possible");
+        session.setRuntimeError("stale");
+        when(sessionRepository.findById("eval-session")).thenReturn(Optional.of(session));
+
+        ReflectionTestUtils.invokeMethod(
+                tool, "updateEvalSessionStatus", "eval-session", "completed");
+
+        assertThat(session.getRuntimeStatus()).isEqualTo("idle");
+        assertThat(session.getRuntimeFailureSource()).isNull();
+        assertThat(session.getRuntimeFailureCode()).isNull();
+        assertThat(session.isRuntimeRetryable()).isFalse();
+        assertThat(session.getRuntimeSideEffects()).isNull();
+        assertThat(session.getRuntimeError()).isNull();
     }
 }

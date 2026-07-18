@@ -62,6 +62,22 @@ public class LoopContext {
     /** Per-tool call count tracking for high-frequency detection. */
     private final Map<String, Integer> toolCallCounts = new ConcurrentHashMap<>();
 
+    /**
+     * Monotonic evidence that the provider emitted at least one semantic SSE chunk
+     * during this turn. Once true it deliberately never resets: replaying the user
+     * turn could duplicate text/reasoning already shown to the user, even when no
+     * tool was executed.
+     */
+    private final AtomicBoolean providerStreamDeltaObserved = new AtomicBoolean(false);
+
+    /**
+     * Original caller context that must receive monotonic retry-safety evidence when a
+     * {@link LoopHook} replaces this context from {@code beforeLoop}. ChatService owns the
+     * original context, so losing evidence on a replacement would make an unsafe replay
+     * appear eligible. The engine attaches this mirror before provider/tool execution.
+     */
+    private volatile LoopContext retrySafetyEvidenceMirror;
+
     /** Recent tool call hashes (toolName#inputHash) for no-progress detection. */
     private final List<String> recentToolHashes = new ArrayList<>();
 
@@ -393,6 +409,10 @@ public class LoopContext {
     /** Record a tool call for frequency tracking. */
     public void recordToolCall(String toolName) {
         toolCallCounts.merge(toolName, 1, Integer::sum);
+        LoopContext mirror = retrySafetyEvidenceMirror;
+        if (mirror != null && mirror != this) {
+            mirror.toolCallCounts.merge(toolName, 1, Integer::sum);
+        }
     }
 
     /** Get the call count for a specific tool. */
@@ -403,6 +423,36 @@ public class LoopContext {
     /** Get all tool call counts. */
     public Map<String, Integer> getToolCallCounts() {
         return toolCallCounts;
+    }
+
+    /** Record provider SSE output that makes automatic replay unsafe. */
+    public void recordProviderStreamDelta() {
+        providerStreamDeltaObserved.set(true);
+        LoopContext mirror = retrySafetyEvidenceMirror;
+        if (mirror != null && mirror != this) {
+            mirror.providerStreamDeltaObserved.set(true);
+        }
+    }
+
+    /** Whether any text, reasoning, or tool-use SSE output has been observed. */
+    public boolean hasObservedProviderStreamDelta() {
+        return providerStreamDeltaObserved.get();
+    }
+
+    /**
+     * Preserve fail-closed retry evidence on the caller-owned context across a hook
+     * replacement. Package-private because only the engine should establish this link.
+     */
+    void mirrorRetrySafetyEvidenceTo(LoopContext target) {
+        if (target == null || target == this) {
+            return;
+        }
+        if (providerStreamDeltaObserved.get()) {
+            target.providerStreamDeltaObserved.set(true);
+        }
+        toolCallCounts.forEach((toolName, count) ->
+                target.toolCallCounts.merge(toolName, count, Integer::sum));
+        retrySafetyEvidenceMirror = target;
     }
 
     /** Elapsed time since loop start in milliseconds. */

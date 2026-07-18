@@ -369,6 +369,11 @@ public class SessionTitleService {
             payload.put("type", "session_updated");
             payload.put("sessionId", sessionId);
             payload.put("title", title);
+            payload.put("runtimeError", s.getRuntimeError());
+            payload.put("failureSource", s.getRuntimeFailureSource());
+            payload.put("failureCode", s.getRuntimeFailureCode());
+            payload.put("retryable", s.isRuntimeRetryable());
+            payload.put("sideEffects", s.getRuntimeSideEffects());
             payload.put("updatedAt", s.getUpdatedAt());
             broadcaster.userEvent(s.getUserId(), payload);
         } catch (Throwable t) {

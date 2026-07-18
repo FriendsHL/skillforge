@@ -25,6 +25,7 @@ import com.skillforge.server.repository.SessionCompactionCheckpointRepository;
 import com.skillforge.server.repository.SessionMessageRepository;
 import com.skillforge.server.repository.SessionRepository;
 import com.skillforge.server.repository.SessionSummaryRepository;
+import com.skillforge.server.runtime.RuntimeFailureState;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -334,8 +335,8 @@ public class CompactionService implements ContextCompactorCallback, SessionServi
                 }
                 SessionEntity updated = sessionService.getSession(sessionId);
                 updated.setRuntimeStatus("idle");
+                RuntimeFailureState.clear(updated);
                 updated.setRuntimeStep("restored_checkpoint");
-                updated.setRuntimeError(null);
                 updated.setLastCompactedAtMessageCount(updated.getMessageCount());
                 sessionService.saveSession(updated);
             });
@@ -1352,6 +1353,11 @@ public class CompactionService implements ContextCompactorCallback, SessionServi
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("type", "session_updated");
             payload.put("sessionId", s.getId());
+            payload.put("runtimeError", s.getRuntimeError());
+            payload.put("failureSource", s.getRuntimeFailureSource());
+            payload.put("failureCode", s.getRuntimeFailureCode());
+            payload.put("retryable", s.isRuntimeRetryable());
+            payload.put("sideEffects", s.getRuntimeSideEffects());
             payload.put("messageCount", s.getMessageCount());
             payload.put("lightCompactCount", s.getLightCompactCount());
             payload.put("fullCompactCount", s.getFullCompactCount());

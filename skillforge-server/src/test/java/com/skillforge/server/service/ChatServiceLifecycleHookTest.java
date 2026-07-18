@@ -190,7 +190,13 @@ class ChatServiceLifecycleHookTest {
 
         assertThat(dispatcher.sessionStartCalls.get()).isEqualTo(1);
         assertThat(loopSubmitted.get()).as("loop must not be submitted after SessionStart ABORT").isFalse();
-        verify(broadcaster, atLeastOnce()).sessionStatus(eq("sess-2"), eq("error"), any(), anyString());
+        assertThat(session.getRuntimeFailureSource()).isEqualTo("harness");
+        assertThat(session.getRuntimeFailureCode()).isEqualTo("SESSION_START_HOOK_ABORTED");
+        assertThat(session.isRuntimeRetryable()).isFalse();
+        assertThat(session.getRuntimeSideEffects()).isEqualTo("possible");
+        verify(broadcaster, atLeastOnce()).sessionStatus(
+                eq("sess-2"), eq("error"), any(), anyString(),
+                eq("harness"), eq("SESSION_START_HOOK_ABORTED"), eq(false), eq("possible"));
     }
 
     @Test

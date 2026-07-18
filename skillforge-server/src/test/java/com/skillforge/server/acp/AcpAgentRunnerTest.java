@@ -471,7 +471,15 @@ class AcpAgentRunnerTest {
                 .isInstanceOf(AcpException.class);
 
         // sub-session marked error + client closed.
-        verify(broadcaster).sessionStatus(eq(SUB_SESSION_ID), eq("error"), isNull(), anyString());
+        SessionEntity failed = sessionService.getSession(SUB_SESSION_ID);
+        assertThat(failed.getRuntimeFailureSource()).isEqualTo("harness");
+        assertThat(failed.getRuntimeFailureCode()).isEqualTo("ACP_RUN_FAILED");
+        assertThat(failed.isRuntimeRetryable()).isFalse();
+        assertThat(failed.getRuntimeSideEffects()).isEqualTo("possible");
+        assertThat(failed.getRuntimeError()).isEqualTo("ACP agent run failed.");
+        verify(broadcaster).sessionStatus(
+                SUB_SESSION_ID, "error", null, "ACP agent run failed.",
+                "harness", "ACP_RUN_FAILED", false, "possible");
         verify(sessionService, never()).appendNormalMessages(anyString(), any());
         assertThat(transport.closed).isTrue();
     }
@@ -518,7 +526,9 @@ class AcpAgentRunnerTest {
         assertThat(sentCancel).isTrue();
         // transport/process closed in finally + sub-session marked error.
         assertThat(transport.closed).isTrue();
-        verify(broadcaster).sessionStatus(eq(SUB_SESSION_ID), eq("error"), isNull(), anyString());
+        verify(broadcaster).sessionStatus(
+                SUB_SESSION_ID, "error", null, "ACP agent run timed out.",
+                "harness", "ACP_PROMPT_TIMEOUT", false, "possible");
         verify(sessionService, never()).appendNormalMessages(anyString(), any());
     }
 
@@ -898,7 +908,13 @@ class AcpAgentRunnerTest {
         runner.runAsSubAgent(child, "do the task", CALLER_USER_ID);
 
         // child marked error.
-        verify(broadcaster).sessionStatus(eq(CHILD_SESSION_ID), eq("error"), isNull(), anyString());
+        assertThat(child.getRuntimeFailureSource()).isEqualTo("harness");
+        assertThat(child.getRuntimeFailureCode()).isEqualTo("ACP_RUN_FAILED");
+        assertThat(child.isRuntimeRetryable()).isFalse();
+        assertThat(child.getRuntimeSideEffects()).isEqualTo("possible");
+        verify(broadcaster).sessionStatus(
+                CHILD_SESSION_ID, "error", null, "ACP agent run failed.",
+                "harness", "ACP_RUN_FAILED", false, "possible");
         // no turn persisted on the error path (INV-1: no orphan tool_use).
         verify(sessionService, never()).appendNormalMessages(anyString(), any());
 

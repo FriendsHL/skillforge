@@ -305,6 +305,11 @@ class SubAgentToolTest {
         SubAgentRegistry.SubAgentRun run = run("run-1", "parent", "child", "Reviewer");
         SessionEntity child = session("child", 2L, "parent", 1);
         child.setRuntimeStatus("running");
+        child.setRuntimeFailureSource("harness");
+        child.setRuntimeFailureCode("STALE_FAILURE");
+        child.setRuntimeRetryable(false);
+        child.setRuntimeSideEffects("possible");
+        child.setRuntimeError("stale");
 
         when(registry.getRun("run-1")).thenReturn(run);
         when(sessionService.getSession("child")).thenReturn(child);
@@ -457,6 +462,10 @@ class SubAgentToolTest {
         verify(registry).markRunTerminated("run-1");
         // child runtime_status should be flipped to "terminated" and saved.
         assertThat(child.getRuntimeStatus()).isEqualTo("terminated");
+        assertThat(child.getRuntimeFailureSource()).isNull();
+        assertThat(child.getRuntimeFailureCode()).isNull();
+        assertThat(child.getRuntimeSideEffects()).isNull();
+        assertThat(child.getRuntimeError()).isNull();
         verify(sessionService).saveSession(child);
     }
 

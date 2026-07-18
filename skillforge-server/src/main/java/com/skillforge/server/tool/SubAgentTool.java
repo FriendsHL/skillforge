@@ -10,6 +10,7 @@ import com.skillforge.core.skill.SkillResult;
 import com.skillforge.server.acp.AcpAgentRunner;
 import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.SessionEntity;
+import com.skillforge.server.runtime.RuntimeFailureState;
 import com.skillforge.server.service.AgentService;
 import com.skillforge.server.service.AgentTargetResolver;
 import com.skillforge.server.service.ChatService;
@@ -496,6 +497,7 @@ public class SubAgentTool implements Tool {
             try {
                 SessionEntity child = sessionService.getSession(run.childSessionId);
                 child.setRuntimeStatus("terminated");
+                RuntimeFailureState.clear(child);
                 sessionService.saveSession(child);
             } catch (Exception e) {
                 log.warn("Failed to set child runtime_status=terminated for {}", run.childSessionId, e);

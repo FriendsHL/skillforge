@@ -17,6 +17,7 @@ import com.skillforge.server.config.LlmProperties;
 import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.CompactionEventEntity;
 import com.skillforge.server.entity.SessionEntity;
+import com.skillforge.server.entity.SessionCompactionCheckpointEntity;
 import com.skillforge.server.repository.AgentRepository;
 import com.skillforge.server.repository.CompactionEventRepository;
 import com.skillforge.server.repository.SessionCompactionCheckpointRepository;
@@ -164,6 +165,50 @@ class CompactionServiceTest {
         msgs.add(tr);
         for (int i = 0; i < 18; i++) msgs.add(Message.user("tail " + i));
         messagesStore.put(id, msgs);
+    }
+
+    @Test
+    void restoreCheckpoint_clearsStructuredFailureAndPreservesRewrittenRowShape() {
+        SessionEntity failed = seedSession("sRestore", 2, 0, "error");
+        failed.setRuntimeStep("retryable");
+        failed.setRuntimeError("stale failure");
+        failed.setRuntimeFailureSource("network");
+        failed.setRuntimeFailureCode("NETWORK_TIMEOUT");
+        failed.setRuntimeRetryable(true);
+        failed.setRuntimeSideEffects("none");
+        when(sessionService.getSession("sRestore")).thenReturn(failed);
+        when(sessionService.saveSession(any(SessionEntity.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        SessionCompactionCheckpointEntity checkpoint = new SessionCompactionCheckpointEntity();
+        checkpoint.setId("checkpoint-1");
+        checkpoint.setSessionId("sRestore");
+        checkpoint.setBoundarySeqNo(1L);
+        checkpoint.setReason("manual");
+        when(checkpointRepository.findById("checkpoint-1")).thenReturn(Optional.of(checkpoint));
+        when(sessionService.getFullHistoryRecords("sRestore")).thenReturn(List.of(
+                new SessionService.StoredMessage(
+                        1L, SessionService.MSG_TYPE_NORMAL, SessionService.MESSAGE_TYPE_NORMAL,
+                        null, null, Map.of(), Message.user("kept"), "trace-kept")));
+
+        SessionEntity restored = service.restoreFromCheckpoint("sRestore", "checkpoint-1");
+
+        assertThat(restored.getRuntimeStatus()).isEqualTo("idle");
+        assertThat(restored.getRuntimeStep()).isEqualTo("restored_checkpoint");
+        assertThat(restored.getRuntimeError()).isNull();
+        assertThat(restored.getRuntimeFailureSource()).isNull();
+        assertThat(restored.getRuntimeFailureCode()).isNull();
+        assertThat(restored.isRuntimeRetryable()).isFalse();
+        assertThat(restored.getRuntimeSideEffects()).isNull();
+
+        @SuppressWarnings("unchecked")
+        org.mockito.ArgumentCaptor<List<SessionService.AppendMessage>> rewritten =
+                org.mockito.ArgumentCaptor.forClass(List.class);
+        verify(sessionService).rewriteMessages(eq("sRestore"), rewritten.capture());
+        assertThat(rewritten.getValue()).hasSize(1);
+        assertThat(rewritten.getValue().get(0).msgType()).isEqualTo(SessionService.MSG_TYPE_NORMAL);
+        assertThat(rewritten.getValue().get(0).messageType()).isEqualTo(SessionService.MESSAGE_TYPE_NORMAL);
+        assertThat(rewritten.getValue().get(0).traceId()).isEqualTo("trace-kept");
+        verify(checkpointRepository).deleteBySessionIdAfterSeqNo("sRestore", 1L);
     }
 
     /**

@@ -228,12 +228,23 @@ public class ChatWebSocketHandler extends TextWebSocketHandler implements ChatEv
 
     @Override
     public void sessionStatus(String sessionId, String status, String step, String error) {
+        sessionStatus(sessionId, status, step, error, null, null, false, null);
+    }
+
+    @Override
+    public void sessionStatus(String sessionId, String status, String step, String error,
+                              String failureSource, String failureCode, boolean retryable,
+                              String sideEffects) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("type", "session_status");
         payload.put("sessionId", sessionId);
         payload.put("status", status);
         payload.put("step", step);
         payload.put("error", error);
+        payload.put("failureSource", failureSource);
+        payload.put("failureCode", failureCode);
+        payload.put("retryable", retryable);
+        payload.put("sideEffects", sideEffects);
         broadcast(sessionId, payload);
 
         if ("idle".equals(status) || "error".equals(status)) {

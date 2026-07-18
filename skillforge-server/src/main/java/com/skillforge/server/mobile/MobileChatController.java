@@ -143,6 +143,26 @@ public class MobileChatController {
         return ResponseEntity.accepted().body(new MobileAcceptedResponse(sessionId, "accepted"));
     }
 
+    @PostMapping("/sessions/{sessionId}/retry")
+    public ResponseEntity<?> retryFailedTurn(@PathVariable String sessionId,
+                                             HttpServletRequest request) {
+        MobileDevicePrincipal principal = requirePrincipal(request);
+        requireScope(principal, SCOPE_CHAT_WRITE);
+        requireMobileOwnedSession(sessionId, principal);
+        try {
+            chatService.retryFailedTurnAsync(sessionId);
+        } catch (RejectedExecutionException e) {
+            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                    .body(new MobileRetryErrorResponse(
+                            "RETRY_BUSY", "Server is busy. Please try again later.", true));
+        } catch (IllegalStateException e) {
+            return ResponseEntity.status(HttpStatus.CONFLICT)
+                    .body(new MobileRetryErrorResponse(
+                            "RETRY_NOT_ALLOWED", "This turn cannot be retried safely.", false));
+        }
+        return ResponseEntity.accepted().body(new MobileAcceptedResponse(sessionId, "accepted"));
+    }
+
     @PostMapping("/sessions/{sessionId}/answer")
     public ResponseEntity<?> answerAsk(@PathVariable String sessionId,
                                        HttpServletRequest request,

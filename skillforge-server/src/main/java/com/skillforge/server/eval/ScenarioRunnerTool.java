@@ -13,6 +13,8 @@ import com.skillforge.server.eval.sandbox.SandboxSkillRegistryFactory;
 import com.skillforge.server.eval.scenario.EvalScenario;
 import com.skillforge.server.repository.EvalSessionRepository;
 import com.skillforge.server.repository.SessionRepository;
+import com.skillforge.server.runtime.RuntimeFailureClassifier;
+import com.skillforge.server.runtime.RuntimeFailureState;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import org.slf4j.Logger;
@@ -68,6 +70,8 @@ import java.util.concurrent.TimeoutException;
 public class ScenarioRunnerTool {
 
     private static final Logger log = LoggerFactory.getLogger(ScenarioRunnerTool.class);
+    private static final RuntimeFailureClassifier RUNTIME_FAILURE_CLASSIFIER =
+            new RuntimeFailureClassifier();
 
     private final EvalSessionRepository evalSessionRepository;
     private final SessionRepository sessionRepository;
@@ -394,13 +398,18 @@ public class ScenarioRunnerTool {
                 evalSessionRepository.save(es);
             });
             sessionRepository.findById(evalSessionId).ifPresent(se -> {
-                // mirror runtime status; mapping handled at OBS UI layer.
-                String runtime = switch (status) {
-                    case "completed" -> "idle";
-                    case "timeout"   -> "error";
-                    default          -> status;
-                };
-                se.setRuntimeStatus(runtime);
+                if ("timeout".equals(status)) {
+                    RuntimeFailureState.apply(se, RUNTIME_FAILURE_CLASSIFIER.harnessFailure(
+                            "EVAL_SCENARIO_TIMEOUT", "The evaluation scenario timed out.",
+                            "possible"));
+                } else if ("failed".equals(status)) {
+                    RuntimeFailureState.apply(se, RUNTIME_FAILURE_CLASSIFIER.harnessFailure(
+                            "EVAL_SCENARIO_FAILED", "The evaluation scenario failed.",
+                            "possible"));
+                } else {
+                    se.setRuntimeStatus("completed".equals(status) ? "idle" : status);
+                    RuntimeFailureState.clear(se);
+                }
                 se.setCompletedAt(Instant.now());
                 sessionRepository.save(se);
             });
