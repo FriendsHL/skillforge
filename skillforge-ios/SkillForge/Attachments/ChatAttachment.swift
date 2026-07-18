@@ -7,6 +7,7 @@ struct ChatAttachment: Identifiable, Equatable, Sendable {
         case word
         case excel
         case csv
+        case interactive
         case unknown(String)
 
         init(blockType: String) {
@@ -16,6 +17,7 @@ struct ChatAttachment: Identifiable, Equatable, Sendable {
             case "word_ref": self = .word
             case "excel_ref": self = .excel
             case "csv_ref": self = .csv
+            case "interactive_artifact_ref": self = .interactive
             default: self = .unknown(blockType)
             }
         }
@@ -27,6 +29,7 @@ struct ChatAttachment: Identifiable, Equatable, Sendable {
             case .word: "Word document"
             case .excel: "Excel workbook"
             case .csv: "CSV"
+            case .interactive: "Personal App"
             case .unknown: "Attachment"
             }
         }
@@ -38,6 +41,7 @@ struct ChatAttachment: Identifiable, Equatable, Sendable {
             case .word: "doc.text"
             case .excel: "tablecells"
             case .csv: "list.bullet.rectangle"
+            case .interactive: "app.badge"
             case .unknown: "paperclip"
             }
         }
@@ -51,6 +55,8 @@ struct ChatAttachment: Identifiable, Equatable, Sendable {
     let sheetCount: Int?
     let byteSize: Int64?
     let caption: String?
+    let title: String?
+    let artifactSchemaVersion: Int?
 
     init(
         id: String,
@@ -60,7 +66,9 @@ struct ChatAttachment: Identifiable, Equatable, Sendable {
         pageCount: Int? = nil,
         sheetCount: Int? = nil,
         byteSize: Int64? = nil,
-        caption: String? = nil
+        caption: String? = nil,
+        title: String? = nil,
+        artifactSchemaVersion: Int? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -70,6 +78,8 @@ struct ChatAttachment: Identifiable, Equatable, Sendable {
         self.sheetCount = sheetCount
         self.byteSize = byteSize
         self.caption = caption
+        self.title = title
+        self.artifactSchemaVersion = artifactSchemaVersion
     }
 
     var detailText: String {

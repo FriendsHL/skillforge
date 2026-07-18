@@ -5,14 +5,64 @@ import UIKit
 struct AttachmentCardView: View {
     let sessionID: String
     let attachment: ChatAttachment
+    let messageCreatedAt: Date?
+    let sourceLabel: String?
+    let sourceMessageSeq: Int64?
+    let sourceAgentID: Int64?
+    let sourceSessionTitle: String?
     @ObservedObject var store: AttachmentDownloadStore
     let onUnauthorized: @MainActor () -> Void
+    let onSubmitSnapshot: @MainActor (String) -> Void
 
     @State private var showPreview = false
     @State private var shareItem: ShareItem?
     @State private var thumbnail: AttachmentDecodedImage?
 
+    init(
+        sessionID: String,
+        attachment: ChatAttachment,
+        messageCreatedAt: Date? = nil,
+        sourceLabel: String? = nil,
+        sourceMessageSeq: Int64? = nil,
+        sourceAgentID: Int64? = nil,
+        sourceSessionTitle: String? = nil,
+        store: AttachmentDownloadStore,
+        onUnauthorized: @escaping @MainActor () -> Void,
+        onSubmitSnapshot: @escaping @MainActor (String) -> Void
+    ) {
+        self.sessionID = sessionID
+        self.attachment = attachment
+        self.messageCreatedAt = messageCreatedAt
+        self.sourceLabel = sourceLabel
+        self.sourceMessageSeq = sourceMessageSeq
+        self.sourceAgentID = sourceAgentID
+        self.sourceSessionTitle = sourceSessionTitle
+        self.store = store
+        self.onUnauthorized = onUnauthorized
+        self.onSubmitSnapshot = onSubmitSnapshot
+    }
+
+    @ViewBuilder
     var body: some View {
+        if attachment.kind == .interactive {
+            PersonalAppCardView(
+                sessionID: sessionID,
+                attachment: attachment,
+                messageCreatedAt: messageCreatedAt,
+                sourceLabel: sourceLabel,
+                sourceMessageSeq: sourceMessageSeq,
+                sourceAgentID: sourceAgentID,
+                sourceSessionTitle: sourceSessionTitle,
+                store: store,
+                onUnauthorized: onUnauthorized,
+                onSubmitSnapshot: onSubmitSnapshot
+            )
+        } else {
+            standardAttachmentCard
+        }
+    }
+
+    private var standardAttachmentCard: some View {
         Group {
             if attachment.kind == .image {
                 imageCard
@@ -20,11 +70,11 @@ struct AttachmentCardView: View {
                 documentCard
             }
         }
-        .frame(maxWidth: 340, alignment: .leading)
-        .background(Color.white)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(uiColor: .secondarySystemBackground))
         .overlay {
             RoundedRectangle(cornerRadius: 8)
-                .stroke(Color.black.opacity(0.08), lineWidth: 1)
+                .stroke(Color(uiColor: .separator).opacity(0.35), lineWidth: 1)
         }
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .accessibilityElement(children: .contain)
@@ -49,7 +99,7 @@ struct AttachmentCardView: View {
     private var imageCard: some View {
         VStack(alignment: .leading, spacing: 0) {
             ZStack {
-                Color(red: 0.94, green: 0.95, blue: 0.96)
+                Color(uiColor: .tertiarySystemFill)
                 if let thumbnail {
                     Image(decorative: thumbnail.cgImage, scale: 1)
                         .resizable()
@@ -106,9 +156,10 @@ struct AttachmentCardView: View {
             HStack(alignment: .top, spacing: 12) {
                 Image(systemName: attachment.kind.systemImage)
                     .font(.title2)
-                    .foregroundStyle(Color(red: 0.90, green: 0.35, blue: 0.18))
+                    .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+                    .foregroundStyle(Color(uiColor: .systemOrange))
                     .frame(width: 44, height: 44)
-                    .background(Color(red: 1.0, green: 0.94, blue: 0.91))
+                    .background(Color(uiColor: .systemOrange).opacity(0.14))
                     .clipShape(RoundedRectangle(cornerRadius: 7))
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 4) {

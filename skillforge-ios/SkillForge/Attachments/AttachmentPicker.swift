@@ -20,6 +20,8 @@ struct AttachmentPicker: View {
         } label: {
             Image(systemName: "paperclip")
         }
+        .frame(minWidth: 44, minHeight: 44)
+        .contentShape(Rectangle())
         .disabled(isDisabled)
         .accessibilityLabel("Attach file")
         .accessibilityIdentifier("chat.attachFile")
