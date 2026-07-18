@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>SkillForge iOS — Current & Proposed</title>
+  <title>SkillForge iOS — Current &amp; Proposed</title>
   <style>
     :root {
       color-scheme: light dark;
@@ -25,7 +25,7 @@
     }
     * { box-sizing: border-box; }
     body { margin: 0; min-height: 100vh; background: var(--studio); color: var(--studio-text); }
-    button, input { font: inherit; }
+    button, input, select { font: inherit; }
     button { cursor: pointer; }
     .studio {
       min-height: 100vh; max-width: 1460px; margin: auto; padding: 28px;
@@ -43,10 +43,13 @@
     .mode-switch { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; padding: 4px; margin-bottom: 18px; border-radius: 12px; background: rgba(255,255,255,.06); }
     .mode-button { border: 0; border-radius: 9px; padding: 9px; background: transparent; color: var(--studio-muted); font-size: 12px; font-weight: 700; }
     .mode-button.is-active { background: #fff; color: #141519; }
+    .mode-button:disabled { cursor: default; opacity: .48; }
     .screen-nav { display: grid; gap: 7px; }
-    .screen-button { width: 100%; display: grid; grid-template-columns: 30px 1fr auto; gap: 10px; align-items: center; border: 1px solid transparent; border-radius: 12px; padding: 9px; background: transparent; color: var(--studio-text); text-align: left; }
+    .screen-button { position: relative; width: 100%; display: grid; grid-template-columns: 30px 1fr auto; gap: 10px; align-items: center; border: 1px solid transparent; border-radius: 12px; padding: 9px 10px 9px 12px; background: transparent; color: var(--studio-text); text-align: left; }
+    .screen-button[hidden] { display: none; }
     .screen-button:hover, .screen-button:focus-visible { border-color: var(--studio-line); background: rgba(255,255,255,.04); }
-    .screen-button.is-active { border-color: rgba(244,81,11,.45); background: rgba(244,81,11,.12); }
+    .screen-button.is-active { border-color: transparent; background: rgba(255,255,255,.065); box-shadow: inset 3px 0 0 rgba(244,81,11,.86); }
+    .screen-button.is-active .screen-icon { background: rgba(244,81,11,.13); color: #ff9d72; }
     .screen-icon { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 8px; background: rgba(255,255,255,.08); }
     .screen-copy strong, .screen-copy small { display: block; }
     .screen-copy strong { font-size: 13px; }
@@ -77,12 +80,206 @@
     .runtime span:last-child { color: var(--app-muted); }
     .transcript { padding: 18px; }
     .bubble { max-width: 86%; margin-bottom: 10px; padding: 13px 14px; border-radius: 20px; background: #fff; box-shadow: 0 10px 28px rgba(0,0,0,.06); font-size: 14px; line-height: 1.42; }
-    .bubble.user { margin-left: auto; background: var(--orange); color: #fff; }
+    .bubble.user { margin-left: auto; border: 1px solid #f4c7b0; background: #fdebe2; color: #352017; }
     .scroll-bottom { position: absolute; right: 20px; bottom: 150px; width: 42px; height: 42px; border: 0; border-radius: 99px; background: #151923; color: #fff; font-size: 21px; box-shadow: 0 9px 22px rgba(0,0,0,.16); }
     .composer { position: absolute; z-index: 8; left: 0; right: 0; bottom: 76px; display: grid; grid-template-columns: 44px 1fr 40px; gap: 8px; align-items: center; padding: 9px 14px; border-top: 1px solid var(--app-line); background: rgba(255,255,255,.9); backdrop-filter: blur(16px); }
     .attach { width: 42px; height: 42px; border: 0; border-radius: 99px; background: #e4f3ff; color: var(--blue); font-size: 21px; }
     .input { height: 42px; display: flex; align-items: center; padding: 0 13px; border: 1px solid var(--app-line); border-radius: 22px; background: #fff; color: #c2c2c7; font-size: 13px; }
     .send { width: 38px; height: 38px; border: 0; border-radius: 99px; background: #e6e6e9; color: #fff; font-size: 18px; }
+    .agent-first-chat { background: #f7f7f9; }
+    .agent-first-chat .chat-header { position: sticky; z-index: 6; top: 0; padding: 8px 16px 9px; border-bottom-color: rgba(0,0,0,.055); background: rgba(247,247,249,.92); backdrop-filter: blur(18px); }
+    .agent-first-chat .agent-row { grid-template-columns: 42px 1fr 42px; }
+    .agent-first-chat .agent-name { text-align: center; }
+    .agent-first-chat .agent-name strong { font-size: 15px; }
+    .agent-first-chat .agent-name small { font-size: 10px; }
+    .runtime-compact { display: flex; justify-content: center; align-items: center; gap: 6px; margin-top: 7px; color: #6c6d75; font-size: 10px; }
+    .runtime-compact .runtime-dot { width: 6px; height: 6px; }
+    .agent-first-transcript { padding: 14px 17px 150px; }
+    .user-turn { display: flex; justify-content: flex-end; margin: 0 0 19px; }
+    .user-prompt { max-width: 76%; padding: 11px 14px; border: 1px solid #c7d9f8; border-radius: 18px 18px 5px 18px; background: #eaf2ff; color: #17233a; font-size: 13px; line-height: 1.42; }
+    .user-prompt.long-query { max-width: 92%; }
+    .assistant-turn { width: 100%; margin-bottom: 20px; }
+    .assistant-turn-header { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+    .assistant-mini-avatar { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 9px; background: #171b26; color: #fff; font-size: 9px; font-weight: 850; }
+    .assistant-turn-header strong { font-size: 12px; }
+    .assistant-turn-header time { margin-left: auto; color: var(--app-muted); font-size: 9px; }
+    .agent-answer-body { width: 100%; color: #1d1e22; font-size: 14px; line-height: 1.58; }
+    .agent-answer-body h3, .agent-answer-body p { margin: 0; }
+    .agent-answer-body h3 { margin-bottom: 8px; font-size: 19px; line-height: 1.28; letter-spacing: -.35px; }
+    .agent-answer-body p + p { margin-top: 9px; }
+    .agent-answer-body strong { font-weight: 750; }
+    .answer-list { display: grid; gap: 8px; margin: 14px 0; }
+    .answer-point { display: grid; grid-template-columns: 24px 1fr; gap: 9px; align-items: start; }
+    .answer-point > span:first-child { width: 24px; height: 24px; display: grid; place-items: center; border-radius: 8px; background: #ece9ff; color: #5448c8; font-size: 10px; font-weight: 850; }
+    .answer-point strong, .answer-point small { display: block; }
+    .answer-point strong { font-size: 12px; }
+    .answer-point small { margin-top: 2px; color: #777981; font-size: 10px; line-height: 1.45; }
+    .inline-agent-result { margin-top: 14px; padding: 12px; border: 1px solid #e2e2e7; border-radius: 15px; background: rgba(255,255,255,.78); }
+    .inline-agent-result header { display: flex; align-items: center; gap: 8px; }
+    .result-mark { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 9px; background: #171b26; color: #fff; font-size: 10px; font-weight: 850; }
+    .inline-agent-result header div { min-width: 0; }
+    .inline-agent-result header strong, .inline-agent-result header small { display: block; }
+    .inline-agent-result header strong { font-size: 12px; }
+    .inline-agent-result header small { margin-top: 2px; color: var(--app-muted); font-size: 9px; }
+    .result-state { margin-left: auto; padding: 4px 7px; border-radius: 99px; background: #e1f7e8; color: #148643; font-size: 8px; font-weight: 800; }
+    .inline-agent-result p { margin-top: 9px; color: #676970; font-size: 10px; line-height: 1.45; }
+    .agent-first-composer { position: absolute; z-index: 8; left: 14px; right: 14px; bottom: 84px; padding: 6px; border: 1px solid rgba(0,0,0,.07); border-radius: 28px; background: rgba(255,255,255,.94); box-shadow: 0 10px 28px rgba(0,0,0,.1); backdrop-filter: blur(18px); }
+    .agent-compose-row { display: grid; grid-template-columns: 44px 1fr 44px; gap: 7px; align-items: center; }
+    .agent-compose-row button { width: 44px; height: 44px; border: 0; border-radius: 99px; background: #f0f0f3; color: #202126; font-size: 17px; }
+    .agent-compose-row button:last-child { background: #171b26; color: #fff; }
+    .agent-compose-input { overflow: hidden; color: #aaabb2; font-size: 11px; line-height: 1.15; text-overflow: ellipsis; white-space: nowrap; }
+    .agent-first-chat .scroll-bottom { right: 20px; bottom: 148px; width: 44px; height: 44px; font-size: 18px; }
+    .proposed-chip { width: max-content; margin-bottom: 13px; padding: 5px 8px; border: 1px solid #bed1f3; border-radius: 99px; background: #edf4ff; color: #315b99; font-size: 8px; font-weight: 800; letter-spacing: .55px; }
+    .query-palette-title { margin: 0; font-size: 20px; line-height: 1.24; letter-spacing: -.35px; }
+    .query-palette-intro { margin: 7px 0 15px; color: #6f7380; font-size: 11px; line-height: 1.5; }
+    .color-comparison { display: grid; min-width: 0; gap: 9px; }
+    .color-option { min-width: 0; padding: 10px; border: 1px solid #e2e3e8; border-radius: 15px; background: rgba(255,255,255,.74); }
+    .color-option.is-recommended { border-color: #a9c4f0; box-shadow: 0 8px 24px rgba(67,111,181,.1); }
+    .color-option header { display: flex; justify-content: space-between; gap: 8px; align-items: center; margin-bottom: 8px; }
+    .color-option header strong { font-size: 11px; }
+    .color-option header span { padding: 3px 6px; border-radius: 99px; background: #ededf1; color: #767983; font-size: 7px; font-weight: 800; }
+    .color-option.is-recommended header span { background: #e2edff; color: #315b99; }
+    .query-swatch { width: 82%; max-width: 82%; margin-left: auto; padding: 10px 12px; border-radius: 17px 17px 5px 17px; overflow-wrap: anywhere; font-size: 11px; line-height: 1.42; }
+    .query-swatch.warm { border: 1px solid #f4c7b0; background: #fdebe2; color: #352017; }
+    .query-swatch.soft-blue, .user-prompt.soft-blue { border: 1px solid #c7d9f8; background: #eaf2ff; color: #17233a; }
+    .query-swatch.solid-blue { border: 1px solid #3478f6; background: #3478f6; color: #fff; }
+    .palette-verdict { margin: 11px 1px 0; padding: 10px 11px; border-left: 3px solid #5d8fd8; border-radius: 4px 12px 12px 4px; background: #edf4ff; color: #38516f; font-size: 10px; line-height: 1.5; }
+    .markdown-proposal { color: #1d2330; }
+    .markdown-proposal .md-eyebrow { margin-bottom: 7px; color: #5274a8; font-size: 8px; font-weight: 800; letter-spacing: .65px; text-transform: uppercase; }
+    .markdown-proposal h2, .markdown-proposal h3, .markdown-proposal p, .markdown-proposal blockquote, .markdown-proposal ol, .markdown-proposal ul { margin: 0; }
+    .markdown-proposal h2 { font-size: 22px; line-height: 1.22; letter-spacing: -.55px; }
+    .markdown-proposal h3 { margin-top: 17px; font-size: 14px; line-height: 1.3; }
+    .markdown-proposal .md-lede { margin-top: 9px; color: #575e6c; font-size: 12px; line-height: 1.58; }
+    .md-callout { margin-top: 13px; padding: 12px; border: 1px solid #cbdcf7; border-radius: 14px; background: linear-gradient(145deg,#f5f9ff,#eaf2ff); }
+    .md-callout strong, .md-callout span { display: block; }
+    .md-callout strong { color: #315b99; font-size: 9px; letter-spacing: .3px; }
+    .md-callout span { margin-top: 5px; color: #26354b; font-size: 11px; line-height: 1.48; }
+    .md-bullet-list { display: grid; gap: 8px; margin-top: 10px !important; padding: 0; list-style: none; }
+    .md-bullet-list li { position: relative; padding-left: 16px; color: #454c59; font-size: 11px; line-height: 1.48; }
+    .md-bullet-list li::before { content: ""; position: absolute; top: .55em; left: 1px; width: 6px; height: 6px; border-radius: 99px; background: #5d8fd8; box-shadow: 0 0 0 3px #e6effd; }
+    .md-quote { margin-top: 14px !important; padding: 11px 12px; border-left: 3px solid #91a9cc; border-radius: 4px 12px 12px 4px; background: #f0f3f8; color: #5c6472; font-size: 10px; line-height: 1.5; }
+    .md-link { display: inline-flex; gap: 5px; align-items: center; margin-top: 12px; color: #376cbb; font-size: 10px; font-weight: 700; text-decoration: none; }
+    .md-result-summary { display: grid; grid-template-columns: 34px 1fr; gap: 10px; align-items: center; margin-top: 13px; padding: 11px; border: 1px solid #cce8d6; border-radius: 14px; background: #eefaf2; }
+    .md-result-summary > span { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 11px; background: #2eaa65; color: #fff; font-size: 16px; font-weight: 800; }
+    .md-result-summary strong, .md-result-summary small { display: block; }
+    .md-result-summary strong { font-size: 11px; }
+    .md-result-summary small { margin-top: 3px; color: #62706a; font-size: 9px; line-height: 1.35; }
+    .md-steps { display: grid; gap: 9px; margin-top: 10px !important; padding: 0; list-style: none; counter-reset: markdown-step; }
+    .md-steps li { display: grid; grid-template-columns: 25px 1fr; gap: 9px; align-items: start; color: #454c59; font-size: 11px; line-height: 1.45; counter-increment: markdown-step; }
+    .md-steps li::before { content: counter(markdown-step); width: 25px; height: 25px; display: grid; place-items: center; border-radius: 8px; background: #e6effd; color: #376cbb; font-size: 9px; font-weight: 850; }
+    .md-code { overflow: hidden; margin-top: 13px; border: 1px solid #292f3c; border-radius: 13px; background: #171b25; color: #dce4f2; }
+    .md-code header { display: flex; justify-content: space-between; align-items: center; min-height: 38px; padding: 0 8px 0 11px; border-bottom: 1px solid rgba(255,255,255,.08); color: #8f9db2; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 8px; }
+    .md-code button { min-width: 44px; min-height: 32px; border: 0; border-radius: 8px; background: rgba(255,255,255,.08); color: #c8d2e1; font-size: 9px; }
+    .md-code pre { margin: 0; padding: 12px; overflow-x: auto; color: #e3e9f3; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 9px; line-height: 1.55; }
+    .md-code .token-keyword { color: #c79bff; }
+    .md-code .token-string { color: #8dd9a8; }
+    .md-next { margin-top: 12px !important; color: #555d6b; font-size: 10px; line-height: 1.5; }
+    .proposed-chat-screen .chat-header { padding-top: 7px; padding-bottom: 10px; }
+    .proposed-chat-nav { display: grid; grid-template-columns: 42px minmax(0,1fr) 42px; gap: 10px; align-items: center; }
+    .proposed-chat-identity { min-width: 0; text-align: center; }
+    .proposed-chat-identity strong { display: block; overflow: hidden; color: #18191d; font-size: 15px; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
+    .proposed-chat-meta { display: flex; justify-content: center; align-items: center; gap: 5px; min-width: 0; margin-top: 4px; color: #74767e; font-size: 9px; }
+    .proposed-chat-meta .runtime-dot { width: 6px; height: 6px; flex: none; }
+    .proposed-chat-meta .agent-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .proposed-transcript { padding-top: 13px; }
+    .proposed-transcript .assistant-turn-header { margin-bottom: 8px; }
+    .proposed-transcript .agent-answer-body { font-size: 12px; line-height: 1.5; }
+    .tool-activity-stack { display: grid; gap: 8px; margin-top: 12px; }
+    .tool-activity { position: relative; overflow: hidden; padding: 10px 11px; border: 1px solid #e1e4e9; border-radius: 14px; background: rgba(255,255,255,.86); }
+    .tool-activity::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 3px; background: #8d96a5; }
+    .tool-activity.pending { border-color: #d5e4fb; background: #f6f9ff; }
+    .tool-activity.pending::before { background: #4d86d8; }
+    .tool-activity.success { border-color: #d8eadf; background: #f6fbf8; }
+    .tool-activity.success::before { background: #2da461; }
+    .tool-activity.error { border-color: #f3d1d1; background: #fff8f8; }
+    .tool-activity.error::before { background: #dc4c4c; }
+    .tool-activity-head { display: grid; grid-template-columns: 28px minmax(0,1fr) 44px; gap: 8px; align-items: center; min-height: 44px; margin: -8px -7px; padding: 8px 7px; list-style: none; cursor: pointer; }
+    .tool-activity-head::-webkit-details-marker { display: none; }
+    .tool-state-mark { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 9px; background: #e7edf7; color: #4d6689; font-size: 11px; font-weight: 850; }
+    .pending .tool-state-mark { background: #e3efff; color: #3978c9; }
+    .success .tool-state-mark { background: #e1f5e8; color: #168449; }
+    .error .tool-state-mark { background: #ffe5e5; color: #bd3333; }
+    .mini-spinner { width: 13px; height: 13px; border: 2px solid rgba(57,120,201,.22); border-top-color: #3978c9; border-radius: 99px; animation: spin 1s linear infinite; }
+    .tool-copy { min-width: 0; }
+    .tool-copy strong, .tool-copy small { display: block; }
+    .tool-copy strong { color: #24272d; font-size: 10px; line-height: 1.3; }
+    .tool-copy small { overflow: hidden; margin-top: 2px; color: #8a8d95; font: 7px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; text-overflow: ellipsis; white-space: nowrap; }
+    .tool-copy em { display: block; overflow: hidden; margin-top: 4px; color: #656a74; font-size: 8px; font-style: normal; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
+    .error .tool-copy em { color: #8d4545; }
+    .tool-disclosure { width: 44px; height: 44px; display: grid; place-items: center; margin: -8px -7px -8px 0; color: #777b84; font-size: 15px; transition: transform .18s ease; }
+    .tool-activity[open] .tool-disclosure { transform: rotate(180deg); }
+    .tool-activity p { margin: 7px 0 0 36px; color: #656a74; font-size: 9px; line-height: 1.45; }
+    .tool-activity.error p { color: #8d4545; }
+    .tool-expanded { margin: 9px 0 1px 36px; padding-top: 9px; border-top: 1px solid rgba(95,101,113,.12); }
+    .tool-detail-row { display: grid; grid-template-columns: 48px minmax(0,1fr); gap: 7px; padding: 4px 0; color: #616671; font-size: 8px; line-height: 1.45; }
+    .tool-detail-row > span:first-child { color: #989ba3; }
+    .tool-detail-row code { overflow-wrap: anywhere; color: #4d535f; font: 7px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .tool-detail-row strong { color: #343941; font-size: 8px; }
+    .error .tool-detail-row strong { color: #9f3f3f; }
+    .tool-result-action { min-height: 44px; margin: 4px 0 -6px -10px; padding: 0 10px; border: 0; background: transparent; color: #3978c9; font-size: 8px; font-weight: 800; }
+    .proposed-hub, .proposed-agents { padding: 61px 15px 102px; background: #f7f7f9; }
+    .proposed-topline { display: flex; justify-content: space-between; align-items: center; margin-bottom: 13px; }
+    .proposed-topline h2 { margin: 0; font-size: 29px; letter-spacing: -.8px; }
+    .proposed-topline button { width: 42px; height: 42px; border: 0; border-radius: 99px; background: #fff; color: #24262b; font-size: 18px; box-shadow: 0 6px 20px rgba(0,0,0,.05); }
+    .gateway-summary { padding: 14px; border-radius: 20px; background: linear-gradient(145deg,#171b25,#292e3b); color: #fff; box-shadow: 0 15px 32px rgba(25,29,39,.16); }
+    .gateway-summary header { display: grid; grid-template-columns: 38px 1fr auto; gap: 10px; align-items: center; }
+    .gateway-mark { width: 38px; height: 38px; display: grid; place-items: center; border-radius: 11px; background: var(--orange); font-size: 11px; font-weight: 850; }
+    .gateway-copy strong, .gateway-copy small { display: block; }
+    .gateway-copy strong { font-size: 13px; }
+    .gateway-copy small { margin-top: 3px; color: #aeb4c2; font-size: 8px; }
+    .gateway-state { display: flex; gap: 5px; align-items: center; color: #bde9ca; font-size: 8px; font-weight: 750; }
+    .gateway-state .runtime-dot { width: 6px; height: 6px; }
+    .gateway-facts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
+    .gateway-fact { padding: 9px; border: 1px solid rgba(255,255,255,.09); border-radius: 11px; background: rgba(255,255,255,.055); }
+    .gateway-fact strong, .gateway-fact span { display: block; }
+    .gateway-fact strong { font-size: 10px; }
+    .gateway-fact span { margin-top: 3px; color: #aeb4c2; font-size: 7px; }
+    .proposed-section-title { display: flex; justify-content: space-between; align-items: baseline; margin: 17px 2px 8px; }
+    .proposed-section-title strong { font-size: 13px; }
+    .proposed-section-title span { color: #898c94; font-size: 8px; }
+    .current-work-card { padding: 12px; border: 1px solid #dbe5f4; border-radius: 17px; background: #fff; box-shadow: 0 9px 24px rgba(41,56,79,.06); }
+    .current-work-card header { display: grid; grid-template-columns: 33px minmax(0,1fr) auto; gap: 9px; align-items: center; }
+    .work-icon { width: 33px; height: 33px; display: grid; place-items: center; border-radius: 10px; background: #e8f1ff; color: #3978c9; font-size: 13px; }
+    .work-copy strong, .work-copy small { display: block; }
+    .work-copy strong { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+    .work-copy small { margin-top: 3px; color: #858891; font-size: 8px; }
+    .work-status { padding: 4px 7px; border-radius: 99px; background: #e9f2ff; color: #3978c9; font-size: 7px; font-weight: 800; }
+    .work-progress { height: 4px; margin-top: 11px; overflow: hidden; border-radius: 99px; background: #e8ebf0; }
+    .work-progress span { display: block; width: 68%; height: 100%; border-radius: inherit; background: #4d86d8; }
+    .compact-list { overflow: hidden; border: 1px solid #e7e7eb; border-radius: 17px; background: #fff; }
+    .compact-row { display: grid; grid-template-columns: 32px minmax(0,1fr) auto; gap: 9px; align-items: center; min-height: 54px; margin-left: 12px; padding: 9px 12px 9px 0; border-bottom: 1px solid #ececf0; }
+    .compact-row:last-child { border-bottom: 0; }
+    .compact-row-icon { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 10px; background: #f0efff; color: #5b50c8; font-size: 12px; font-weight: 800; }
+    .compact-row-copy { min-width: 0; }
+    .compact-row-copy strong, .compact-row-copy small { display: block; }
+    .compact-row-copy strong { overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+    .compact-row-copy small { overflow: hidden; margin-top: 3px; color: #8a8d95; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+    .compact-row-state { color: #898c94; font-size: 8px; }
+    .hub-shortcuts { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+    .hub-shortcut { padding: 12px; border: 1px solid #e7e7eb; border-radius: 16px; background: #fff; }
+    .hub-shortcut span, .hub-shortcut strong, .hub-shortcut small { display: block; }
+    .hub-shortcut span { color: #5b50c8; font-size: 16px; }
+    .hub-shortcut strong { margin-top: 8px; font-size: 10px; }
+    .hub-shortcut small { margin-top: 3px; color: #8a8d95; font-size: 8px; }
+    .agent-filter-row { display: flex; gap: 7px; margin: 10px 0 13px; }
+    .agent-filter { min-height: 34px; padding: 0 13px; border: 1px solid #e0e1e5; border-radius: 99px; background: #fff; color: #72757d; font-size: 9px; font-weight: 750; }
+    .agent-filter.is-active { border-color: #171b25; background: #171b25; color: #fff; }
+    .proposed-agent-list { display: grid; gap: 9px; }
+    .proposed-agent-card { display: grid; grid-template-columns: 44px minmax(0,1fr) auto; gap: 11px; align-items: center; padding: 12px; border: 1px solid #e5e5e9; border-radius: 18px; background: #fff; box-shadow: 0 8px 22px rgba(0,0,0,.035); }
+    .proposed-agent-avatar { position: relative; width: 44px; height: 44px; display: grid; place-items: center; border-radius: 14px; background: #171b25; color: #fff; font-size: 12px; font-weight: 850; }
+    .proposed-agent-avatar.research { background: linear-gradient(145deg,#225c4c,#31a36e); }
+    .proposed-agent-avatar.release { background: linear-gradient(145deg,#53396f,#8a61b2); }
+    .agent-online-dot { position: absolute; right: -2px; bottom: -2px; width: 12px; height: 12px; border: 2px solid #fff; border-radius: 99px; background: var(--green); }
+    .proposed-agent-copy { min-width: 0; }
+    .proposed-agent-copy strong, .proposed-agent-copy p, .proposed-agent-copy small { display: block; margin: 0; }
+    .proposed-agent-copy strong { font-size: 11px; }
+    .proposed-agent-copy p { overflow: hidden; margin-top: 4px; color: #666a73; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+    .proposed-agent-copy small { margin-top: 4px; color: #9a9ca3; font-size: 7px; }
+    .agent-badges { display: grid; justify-items: end; gap: 5px; }
+    .agent-badge { padding: 4px 6px; border-radius: 99px; background: #fff0e9; color: #b44311; font-size: 7px; font-weight: 800; }
+    .agent-badge.current { background: #e9f2ff; color: #3978c9; }
+    .agent-detail-note { margin: 12px 2px 0; padding: 10px 11px; border-radius: 13px; background: #ececf1; color: #777a83; font-size: 8px; line-height: 1.45; }
+    @keyframes spin { to { transform: rotate(360deg); } }
     .large-title { margin: 40px 0 22px; font-size: 42px; line-height: 1; letter-spacing: -1.6px; }
     .refresh { position: absolute; top: 70px; right: 22px; width: 44px; height: 44px; border: 0; border-radius: 99px; background: #fff; color: var(--orange); font-size: 21px; box-shadow: 0 8px 22px rgba(0,0,0,.06); }
     .intro { display: grid; grid-template-columns: 56px 1fr; gap: 14px; align-items: center; margin: 0 18px 28px; }
@@ -94,6 +291,7 @@
     .group { overflow: hidden; border-radius: 24px; background: #fff; }
     .list-row { display: grid; grid-template-columns: 38px 1fr auto; gap: 10px; align-items: center; min-height: 70px; margin-left: 16px; padding: 12px 16px 12px 0; border-bottom: 1px solid var(--app-line); }
     .list-row:last-child { border-bottom: 0; }
+    .workspace-route { width: calc(100% - 16px); border: 0; border-bottom: 1px solid var(--app-line); background: transparent; color: var(--app-text); text-align: left; }
     .row-icon { color: var(--orange); font-size: 22px; text-align: center; }
     .row-copy strong, .row-copy small { display: block; }
     .row-copy strong { font-size: 17px; }
@@ -133,7 +331,10 @@
     .artifact-title p { margin-top: 4px; color: var(--app-muted); font-size: 12px; }
     .badge { padding: 5px 7px; border-radius: 99px; background: #e7e3ff; color: #4a3eab; font-size: 9px; font-weight: 800; }
     .artifact-meta { display: flex; justify-content: space-between; margin: 10px 0; color: var(--app-muted); font-size: 10px; }
-    .open-artifact { width: 100%; min-height: 40px; border: 0; border-radius: 12px; background: #171a22; color: #fff; font-weight: 700; }
+    .artifact-card-actions { display: grid; grid-template-columns: 1fr 44px; gap: 8px; }
+    .open-artifact, .share-artifact { min-height: 44px; border: 0; border-radius: 12px; font-weight: 700; }
+    .open-artifact { width: 100%; background: #171a22; color: #fff; }
+    .share-artifact { background: #ededf0; color: #171a22; font-size: 17px; }
     .artifact-screen { padding: 62px 16px 24px; background: linear-gradient(180deg,#f0efff,#f3f3f8 34%); }
     .artifact-toolbar { display: grid; grid-template-columns: 42px 1fr 42px; gap: 10px; align-items: center; margin-bottom: 18px; }
     .artifact-toolbar div { text-align: center; }
@@ -152,11 +353,63 @@
     .artifact-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
     .artifact-action { min-height: 40px; border: 1px solid var(--app-line); border-radius: 12px; background: #fff; color: var(--app-text); font-size: 12px; font-weight: 700; }
     .artifact-action.primary { border-color: #171a22; background: #171a22; color: #fff; }
+    .screen[data-screen="launch"] { display: none; place-items: center; padding: 54px 18px 30px; overflow: hidden; }
+    .screen[data-screen="launch"].is-active { display: grid; }
+    .launch-content { display: grid; place-items: center; gap: 15px; text-align: center; }
+    .launch-mark { position: relative; width: 96px; height: 96px; display: grid; place-items: center; border-radius: 24px; background: #11130f; color: #fff; font-size: 34px; box-shadow: 0 12px 34px rgba(0,0,0,.13); }
+    .launch-mark::before { content: ""; position: absolute; top: 11px; left: 11px; width: 19px; height: 19px; border-radius: 6px; background: var(--orange); }
+    .launch-mark::after { content: ""; position: absolute; top: 12px; right: 12px; width: 15px; height: 15px; border-radius: 99px; background: #50c78c; }
+    .launch-content h2, .launch-content p { margin: 0; }
+    .launch-content h2 { margin-top: 8px; font-size: 29px; }
+    .launch-content p { color: var(--app-muted); font-size: 14px; }
+    .launch-spinner { width: 19px; height: 19px; margin-top: 8px; border: 3px solid rgba(244,81,11,.22); border-top-color: var(--orange); border-radius: 99px; animation: spin .8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .screen[data-screen="app-library"] { flex-direction: column; padding: 0 0 88px; overflow: hidden; }
+    .screen[data-screen="app-library"].is-active { display: flex; }
+    .library-top { position: relative; z-index: 8; padding: 64px 18px 10px; border-bottom: 1px solid rgba(0,0,0,.055); background: rgba(243,243,248,.93); backdrop-filter: blur(18px); }
+    .library-scroll { flex: 1 1 auto; min-height: 0; padding: 12px 18px 26px; overflow-y: auto; overscroll-behavior: contain; }
+    .library-header { display: grid; grid-template-columns: 42px 1fr 42px; align-items: center; gap: 10px; margin: 0 0 12px; }
+    .library-header .large-title { margin: 0; font-size: 19px; letter-spacing: -.25px; text-align: center; }
+    .library-header-spacer { width: 42px; height: 42px; }
+    .library-search { display: block; margin-bottom: 10px; padding: 10px 13px; border-radius: 13px; background: #e4e4e9; color: var(--app-muted); font-size: 14px; }
+    .library-filter { display: flex; gap: 7px; margin-bottom: 9px; overflow-x: auto; scrollbar-width: none; }
+    .filter-chip { flex: 0 0 auto; min-height: 30px; padding: 0 11px; border: 1px solid var(--app-line); border-radius: 99px; background: #fff; color: var(--app-muted); font-size: 11px; font-weight: 700; }
+    .filter-chip.is-active { border-color: #5d50f3; background: #5d50f3; color: #fff; }
+    .library-facets { display: flex; gap: 7px; margin: 0; overflow-x: auto; scrollbar-width: none; }
+    .library-select { flex: 0 0 auto; max-width: 148px; height: 32px; padding: 0 26px 0 10px; border: 1px solid var(--app-line); border-radius: 10px; background: #fff; color: var(--app-text); font-size: 10px; }
+    .library-caption { display: flex; justify-content: space-between; align-items: center; margin: 0 2px 10px; }
+    .library-caption strong { font-size: 13px; }
+    .library-caption span { color: var(--app-muted); font-size: 11px; }
+    .app-library { display: grid; gap: 10px; }
+    .library-card { display: grid; grid-template-columns: 64px 1fr; grid-template-areas: "thumb copy" "actions actions"; gap: 10px 11px; align-items: start; padding: 11px; border: 1px solid transparent; border-radius: 18px; background: #fff; color: var(--app-text); text-align: left; box-shadow: 0 8px 24px rgba(0,0,0,.045); }
+    .library-card.is-unavailable { border-color: #f0d0d0; background: #fffafa; }
+    .library-card[hidden] { display: none; }
+    .library-thumb { grid-area: thumb; width: 64px; height: 82px; display: grid; place-items: center; border-radius: 14px; background: linear-gradient(145deg,#22283a,#5f53d7); color: #fff; font-size: 24px; font-weight: 750; }
+    .library-card:nth-child(2) .library-thumb { background: linear-gradient(145deg,#102a24,#36aa78); }
+    .library-card:nth-child(3) .library-thumb { background: linear-gradient(145deg,#392414,#f27a31); }
+    .library-copy { grid-area: copy; min-width: 0; }
+    .library-title { display: grid; grid-template-columns: 1fr 30px; gap: 5px; align-items: start; }
+    .library-title strong { font-size: 15px; line-height: 1.18; }
+    .library-favorite { width: 30px; height: 30px; border: 0; background: transparent; color: #ffbf00; font-size: 19px; }
+    .library-favorite.is-empty { color: var(--app-muted); }
+    .library-summary { display: -webkit-box; margin: 5px 0 0; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; color: var(--app-muted); font-size: 10px; line-height: 1.35; }
+    .library-copy small { display: block; margin-top: 5px; color: var(--app-muted); font-size: 9px; line-height: 1.4; }
+    .library-tags { display: flex; gap: 5px; margin-top: 7px; }
+    .library-tags span { padding: 3px 6px; border-radius: 99px; background: #f0efff; color: #5146ae; font-size: 8px; font-weight: 800; }
+    .library-tags .downloaded { background: #e0f7f8; color: #078e98; }
+    .library-tags .warning { background: #fee5e5; color: #a72d2d; }
+    .library-actions { grid-area: actions; display: grid; grid-template-columns: 88px 1fr 38px 38px; gap: 7px; }
+    .library-card.is-unavailable .library-actions { grid-template-columns: 100px 1fr 38px; }
+    .library-action { min-height: 40px; padding: 0 9px; border: 0; border-radius: 11px; background: #ededf0; color: var(--app-text); font-size: 9px; font-weight: 750; }
+    .library-action.primary { border-color: #171a22; background: #171a22; color: #fff; }
+    .library-action:disabled { opacity: .42; }
+    .library-empty { padding: 28px 14px; border-radius: 18px; background: #fff; color: var(--app-muted); text-align: center; font-size: 12px; }
+    .prototype-toast { position: absolute; z-index: 30; left: 50%; bottom: 96px; width: max-content; max-width: 84%; padding: 10px 14px; transform: translateX(-50%); border-radius: 99px; background: rgba(23,26,34,.94); color: #fff; font-size: 11px; box-shadow: 0 10px 26px rgba(0,0,0,.2); }
     .tabs { position: absolute; z-index: 10; left: 14px; right: 14px; bottom: 10px; height: 70px; display: grid; grid-template-columns: repeat(4,1fr); padding: 5px; border-radius: 34px; background: rgba(255,255,255,.92); box-shadow: 0 14px 38px rgba(0,0,0,.13); backdrop-filter: blur(18px); }
     .tab { border: 0; border-radius: 29px; display: grid; place-items: center; align-content: center; gap: 2px; background: transparent; color: #111217; font-size: 19px; }
     .tab small { font-size: 10px; font-weight: 650; }
     .tab.is-active { background: #e6e6e9; color: var(--orange); }
-    .viewport.is-artifact .tabs { display: none; }
+    .viewport.is-artifact .tabs, .viewport.is-launch .tabs { display: none; }
     .notes h2 { margin: 0 0 10px; font-size: 20px; }
     .notes > p { margin: 0 0 20px; color: var(--studio-muted); font-size: 12px; line-height: 1.55; }
     .checklist { display: grid; gap: 10px; }
@@ -176,31 +429,63 @@
       <div class="brand"><div class="brand-mark">SF</div><div><h1>iOS Companion</h1><p>Prototype parity workspace</p></div></div>
       <div class="mode-switch" aria-label="Prototype mode">
         <button class="mode-button is-active" data-mode="current">Current</button>
-        <button class="mode-button" data-mode="proposed">Proposed</button>
+        <button class="mode-button" data-mode="proposed">Proposed · 4</button>
       </div>
       <nav class="screen-nav" aria-label="Prototype screens">
-        <button class="screen-button is-active" data-screen-target="chat" data-mode-scope="current"><span class="screen-icon">●</span><span class="screen-copy"><strong>Chat</strong><small>As-built · SwiftUI</small></span><span class="state-dot"></span></button>
+        <button class="screen-button" data-screen-target="launch" data-mode-scope="current"><span class="screen-icon">SF</span><span class="screen-copy"><strong>Launch</strong><small>Restoring workspace</small></span><span class="state-dot"></span></button>
+        <button class="screen-button is-active" data-screen-target="chat" data-mode-scope="current"><span class="screen-icon">●</span><span class="screen-copy"><strong>Chat</strong><small>Agent-first · As-built</small></span><span class="state-dot"></span></button>
         <button class="screen-button" data-screen-target="control" data-mode-scope="current"><span class="screen-icon">▦</span><span class="screen-copy"><strong>Control</strong><small>Schedules / sessions</small></span><span class="state-dot"></span></button>
         <button class="screen-button" data-screen-target="agents" data-mode-scope="current"><span class="screen-icon">♟</span><span class="screen-copy"><strong>Agents</strong><small>Configuration roster</small></span><span class="state-dot"></span></button>
         <button class="screen-button" data-screen-target="settings" data-mode-scope="current"><span class="screen-icon">⚙</span><span class="screen-copy"><strong>Settings</strong><small>Connection / device</small></span><span class="state-dot"></span></button>
-        <button class="screen-button" data-screen-target="artifact-chat" data-mode-scope="proposed" hidden><span class="screen-icon">◇</span><span class="screen-copy"><strong class="proposed-label">Personal App</strong><small>Proposed message card</small></span><span class="state-dot"></span></button>
-        <button class="screen-button" data-screen-target="personal-app" data-mode-scope="proposed" hidden><span class="screen-icon">◈</span><span class="screen-copy"><strong class="proposed-label">Full-screen App</strong><small>IOS-INTERACTIVE-ARTIFACTS</small></span><span class="state-dot"></span></button>
+        <button class="screen-button" data-screen-target="artifact-chat" data-mode-scope="current"><span class="screen-icon">◇</span><span class="screen-copy"><strong>Personal App Card</strong><small>As-built · Chat result</small></span><span class="state-dot"></span></button>
+        <button class="screen-button" data-screen-target="markdown-report" data-mode-scope="current"><span class="screen-icon">¶</span><span class="screen-copy"><strong>Markdown Report</strong><small>As-built semantic blocks</small></span><span class="state-dot"></span></button>
+        <button class="screen-button" data-screen-target="markdown-execution" data-mode-scope="current"><span class="screen-icon">⌘</span><span class="screen-copy"><strong>Markdown Result</strong><small>As-built steps and code</small></span><span class="state-dot"></span></button>
+        <button class="screen-button" data-screen-target="app-library" data-mode-scope="current"><span class="screen-icon">▦</span><span class="screen-copy"><strong>Personal Apps</strong><small>Control → Workspace</small></span><span class="state-dot"></span></button>
+        <button class="screen-button" data-screen-target="personal-app" data-mode-scope="current"><span class="screen-icon">◈</span><span class="screen-copy"><strong>Full-screen App</strong><small>As-built · secured viewer</small></span><span class="state-dot"></span></button>
+        <button class="screen-button" data-screen-target="proposed-chat-experience" data-mode-scope="proposed" hidden><span class="screen-icon">●</span><span class="screen-copy"><strong class="proposed-label">Chat + Tools</strong><small>Session identity · 3 states</small></span><span class="state-dot"></span></button>
+        <button class="screen-button" data-screen-target="proposed-control-hub" data-mode-scope="proposed" hidden><span class="screen-icon">▦</span><span class="screen-copy"><strong class="proposed-label">Control Hub</strong><small>Now / recent / workspace</small></span><span class="state-dot"></span></button>
+        <button class="screen-button" data-screen-target="proposed-agents-roster" data-mode-scope="proposed" hidden><span class="screen-icon">♟</span><span class="screen-copy"><strong class="proposed-label">Agents Roster</strong><small>Searchable · lightweight</small></span><span class="state-dot"></span></button>
+        <button class="screen-button" data-screen-target="proposed-query-colors" data-mode-scope="proposed" hidden><span class="screen-icon">Aa</span><span class="screen-copy"><strong class="proposed-label">Query decision</strong><small>Implemented palette record</small></span><span class="state-dot"></span></button>
       </nav>
-      <section class="scope"><h2>Parity rule</h2><p>Current 以真实 App 与 XCUITest 截图为准；Proposed 只呈现已批准但尚未实现的需求。</p></section>
+      <section class="scope"><h2>Parity rule</h2><p>Current 以真实 App 与 XCUITest 截图为准；Proposed 是待确认方案，落地并验证后才能迁入 Current。</p></section>
     </aside>
 
     <section class="phone-stage" aria-label="iPhone prototype">
       <div class="phone"><div class="viewport" id="viewport">
         <div class="statusbar"><span>9:41</span><span>•••• ◉ ▰</span></div>
 
-        <section class="screen chat is-active" data-screen="chat">
+        <section class="screen" data-screen="launch">
+          <div class="launch-content"><div class="launch-mark">SF</div><h2>SkillForge</h2><p>Restoring your workspace</p><span class="launch-spinner" aria-label="Loading"></span></div>
+        </section>
+
+        <section class="screen chat agent-first-chat is-active" data-screen="chat">
           <header class="chat-header">
-            <div class="agent-row"><button class="round-button">▣</button><div class="agent-avatar">SF</div><div class="agent-name"><strong>Main Assistant</strong><small>SkillForge Mac 已连接</small></div><button class="round-button">＋</button></div>
-            <div class="runtime"><span class="runtime-dot"></span><strong>Agent 运行中</strong><span>127.0.0.1</span></div>
+            <div class="agent-row"><button class="round-button" aria-label="打开侧栏">▣</button><div class="agent-name"><strong>Main Assistant</strong><small>Personal workspace</small></div><button class="round-button" aria-label="新建对话">＋</button></div>
+            <div class="runtime-compact"><span class="runtime-dot"></span><strong>已连接</strong><span>· SkillForge Mac 已连接</span></div>
           </header>
-          <div class="transcript"><div class="bubble">The deterministic tab fixture keeps this transcript in memory.</div></div>
-          <button class="scroll-bottom">↓</button>
-          <footer class="composer"><button class="attach">⌕</button><div class="input">Message SkillForge</div><button class="send">↑</button></footer>
+          <div class="agent-first-transcript">
+            <div class="user-turn"><div class="user-prompt">把今天生成的 Personal Apps 和任务结果整理一下，告诉我下一步先看什么。</div></div>
+            <article class="assistant-turn">
+              <header class="assistant-turn-header"><span class="assistant-mini-avatar">SF</span><strong>Main Assistant</strong><time>刚刚</time></header>
+              <div class="agent-answer-body">
+                <h3>先看 AI 早报，再处理两个需要确认的结果</h3>
+                <p>我把今天的输出按“现在值得打开”和“之后再处理”分好了。手机端会让我的回复占据主要阅读宽度，不再套用管理端那种窄消息卡。</p>
+                <div class="answer-list">
+                  <div class="answer-point"><span>1</span><div><strong>AI 早报阅读器</strong><small>7 条未读，已经下载，可离线继续阅读。</small></div></div>
+                  <div class="answer-point"><span>2</span><div><strong>七月家庭预算</strong><small>有一份未提交的调整，打开后可以继续修改。</small></div></div>
+                  <div class="answer-point"><span>3</span><div><strong>Release Readiness Board</strong><small>Agent 已完成检查，还有 2 个风险项等待你确认。</small></div></div>
+                </div>
+                <aside class="inline-agent-result">
+                  <header><span class="result-mark">AI</span><div><strong>AI 早报阅读器</strong><small>Personal App · 今天 08:16 更新</small></div><span class="result-state">可离线</span></header>
+                  <p>35 条资讯 · 7 条未读 · 已保存你的收藏和阅读进度</p>
+                </aside>
+              </div>
+            </article>
+          </div>
+          <button class="scroll-bottom" aria-label="滚动到底部">↓</button>
+          <footer class="agent-first-composer">
+            <div class="agent-compose-row"><button aria-label="添加附件">⌕</button><div class="agent-compose-input">继续问 Main Assistant…</div><button aria-label="发送">↑</button></div>
+          </footer>
         </section>
 
         <section class="screen" data-screen="control">
@@ -210,7 +495,7 @@
             <div class="list-row"><div class="row-icon">◴</div><div class="row-copy"><strong>Morning brief</strong><small>Main Assistant · Cron 0 0 7 * * *<br>Next 4 days ago</small></div><span class="row-state good">Ready ›</span></div>
             <div class="list-row"><div class="row-icon">Ⅱ</div><div class="row-copy"><strong>Release monitor</strong><small>Release Agent · Cron 0 */30 * * * *<br><span style="color:var(--orange)">Paused</span></small></div><span class="row-state">Paused ›</span></div>
           </div>
-          <h3 class="section-title">Workspace</h3><div class="group"><div class="list-row"><div class="row-icon" style="color:var(--blue)">▣</div><div class="row-copy"><strong>Sessions</strong><small>4 conversations</small></div><span class="row-state">›</span></div></div>
+          <h3 class="section-title">Workspace</h3><div class="group"><div class="list-row"><div class="row-icon" style="color:var(--blue)">▣</div><div class="row-copy"><strong>Sessions</strong><small>4 conversations</small></div><span class="row-state">›</span></div><button class="list-row workspace-route" data-screen-target="app-library"><span class="row-icon" style="color:#6657d9">▦</span><span class="row-copy"><strong>Personal Apps</strong><small>Search, favorites, verified offline copies</small></span><span class="row-state">9 ›</span></button></div>
         </section>
 
         <section class="screen" data-screen="agents">
@@ -228,14 +513,210 @@
           <h3 class="section-title">Notifications</h3><div class="group"><div class="list-row"><div class="row-icon" style="color:var(--app-muted)">♧</div><div class="row-copy"><strong>Not enabled</strong><small>SkillForge has not requested notification permission.</small></div></div><div class="settings-row" style="color:var(--orange)"><span>Enable Notifications</span><span></span></div><div class="settings-row" style="color:var(--orange)"><span>Refresh Status</span><span></span></div></div>
         </section>
 
-        <section class="screen chat" data-screen="artifact-chat">
-          <header class="chat-header"><div class="proposed-banner">PROPOSED · IOS-INTERACTIVE-ARTIFACTS</div><div class="agent-row"><button class="round-button">▣</button><div class="agent-avatar">RA</div><div class="agent-name"><strong>Research Agent</strong><small>家庭预算分析 · 已完成</small></div><button class="round-button">•••</button></div></header>
-          <div class="transcript"><div class="bubble user">分析这份账单，做一个我在手机上能调整的七月预算。</div><div class="bubble">七月预算建议为 8,200 元。我同时生成了一个离线预算规划器。</div><article class="artifact-card"><div class="artifact-preview"><div class="ring"></div><div class="bars"><span></span><span></span><span></span></div></div><div class="artifact-title"><div><h3>七月家庭预算</h3><p>调整分类额度，实时查看结余。</p></div><span class="badge">PERSONAL APP</span></div><div class="artifact-meta"><span>离线运行 · 无额外权限</span><span>刚刚</span></div><button class="open-artifact" data-screen-target="personal-app">打开规划器</button></article></div>
-          <footer class="composer"><button class="attach">⌕</button><div class="input">继续调整这份预算...</div><button class="send">↑</button></footer>
+        <section class="screen chat agent-first-chat" data-screen="artifact-chat">
+          <header class="chat-header">
+            <div class="agent-row"><button class="round-button" aria-label="打开侧栏">▣</button><div class="agent-name"><strong>Research Agent</strong><small>Personal workspace</small></div><button class="round-button" aria-label="新建对话">＋</button></div>
+            <div class="runtime-compact"><span class="runtime-dot"></span><strong>已连接</strong><span>· SkillForge Mac 已连接</span></div>
+          </header>
+          <div class="agent-first-transcript">
+            <div class="user-turn"><div class="user-prompt">分析这份账单，做一个我在手机上能调整的七月预算。</div></div>
+            <article class="assistant-turn">
+              <header class="assistant-turn-header"><span class="assistant-mini-avatar">SF</span><strong>Research Agent</strong><time>刚刚</time></header>
+              <div class="agent-answer-body">
+                <p>七月预算建议为 8,200 元。我同时生成了一个离线预算规划器。</p>
+                <article class="artifact-card"><div class="artifact-preview"><div class="ring"></div><div class="bars"><span></span><span></span><span></span></div></div><div class="artifact-title"><div><h3>七月家庭预算</h3><p>调整分类额度，实时查看结余。</p></div><span class="badge">PERSONAL APP</span></div><div class="artifact-meta"><span>离线运行 · 无额外权限</span><span>Research Agent · 刚刚</span></div><div class="artifact-card-actions"><button class="open-artifact" data-screen-target="personal-app">↗ 打开规划器</button><button class="share-artifact" aria-label="分享">↥</button></div></article>
+              </div>
+            </article>
+          </div>
+          <button class="scroll-bottom" aria-label="滚动到底部">↓</button>
+          <footer class="agent-first-composer">
+            <div class="agent-compose-row"><button aria-label="添加附件">⌕</button><div class="agent-compose-input">继续问 Research Agent…</div><button aria-label="发送">↑</button></div>
+          </footer>
+        </section>
+
+        <section class="screen chat agent-first-chat proposed-chat-screen" data-screen="proposed-chat-experience">
+          <header class="chat-header">
+            <div class="proposed-chat-nav">
+              <button class="round-button" aria-label="打开 Sessions">▣</button>
+              <div class="proposed-chat-identity">
+                <strong>iOS 移动体验优化</strong>
+                <span class="proposed-chat-meta"><span class="agent-label">Main Assistant</span><span>·</span><span class="runtime-dot"></span><span>已连接</span></span>
+              </div>
+              <button class="round-button" aria-label="新建对话">＋</button>
+            </div>
+          </header>
+          <div class="agent-first-transcript proposed-transcript">
+            <span class="proposed-chip">PROPOSED · SESSION FIRST + COMPACT TOOL ACTIVITY</span>
+            <div class="user-turn"><div class="user-prompt soft-blue long-query">请整理过去 24 小时最重要的 AI 新闻，按来源和优先级去重，生成一个可以离线阅读的 Personal App，并标出我今天最值得先看的内容。</div></div>
+            <article class="assistant-turn">
+              <header class="assistant-turn-header"><span class="assistant-mini-avatar">SF</span><strong>Main Assistant</strong><time>刚刚</time></header>
+              <div class="agent-answer-body">
+                <p>我已完成来源检索，正在生成离线阅读页面。工具细节不会挤占正文，但状态和错误会始终清楚可见。</p>
+                <div class="tool-activity-stack" aria-label="工具活动状态示例">
+                  <details class="tool-activity pending">
+                    <summary class="tool-activity-head"><span class="tool-state-mark"><span class="mini-spinner"></span></span><span class="tool-copy"><strong>正在发布 Personal App</strong><small>PublishInteractiveArtifact</small><em>AI 早报阅读器 · 当前 Session workspace</em></span><span class="tool-disclosure" aria-hidden="true">⌄</span></summary>
+                    <div class="tool-expanded"><div class="tool-detail-row"><span>当前步骤</span><strong>验证 manifest 与离线资源</strong></div><div class="tool-detail-row"><span>输入</span><code>title: AI 早报阅读器 · template: news_brief</code></div><div class="tool-detail-row"><span>已运行</span><strong>1.4 秒</strong></div></div>
+                  </details>
+                  <details class="tool-activity success" open>
+                    <summary class="tool-activity-head"><span class="tool-state-mark">✓</span><span class="tool-copy"><strong>已检索 35 条资讯</strong><small>WebSearch</small><em>5 个来源 · 已去重并按优先级整理</em></span><span class="tool-disclosure" aria-hidden="true">⌄</span></summary>
+                    <div class="tool-expanded"><div class="tool-detail-row"><span>输入</span><code>AI agent news · 过去 24 小时 · 5 个来源</code></div><div class="tool-detail-row"><span>结果</span><strong>35 条结果，去重后保留 24 条</strong></div><div class="tool-detail-row"><span>耗时</span><strong>1.8 秒</strong></div><button class="tool-result-action">查看完整结果 ›</button></div>
+                  </details>
+                  <details class="tool-activity error">
+                    <summary class="tool-activity-head"><span class="tool-state-mark">!</span><span class="tool-copy"><strong>文件发布失败</strong><small>PublishChatArtifact</small><em>文件不在当前 Session workspace · 已交回 Agent 修正</em></span><span class="tool-disclosure" aria-hidden="true">⌄</span></summary>
+                    <div class="tool-expanded"><div class="tool-detail-row"><span>故障来源</span><strong>Tool · workspace boundary</strong></div><div class="tool-detail-row"><span>错误码</span><code>ARTIFACT_SOURCE_OUTSIDE_SESSION_ROOTS</code></div><div class="tool-detail-row"><span>下一步</span><strong>Agent 将在当前 workspace 重新生成并发布</strong></div></div>
+                  </details>
+                </div>
+              </div>
+            </article>
+          </div>
+          <button class="scroll-bottom" aria-label="滚动到底部">↓</button>
+          <footer class="agent-first-composer"><div class="agent-compose-row"><button aria-label="添加附件">⌕</button><div class="agent-compose-input">继续问 Main Assistant…</div><button aria-label="发送">↑</button></div></footer>
+        </section>
+
+        <section class="screen proposed-hub" data-screen="proposed-control-hub">
+          <header class="proposed-topline"><h2>Control</h2><button aria-label="刷新 Control">↻</button></header>
+          <article class="gateway-summary">
+            <header><span class="gateway-mark">SF</span><span class="gateway-copy"><strong>SkillForge Mac</strong><small>Main Assistant · macbook-air.tail0c8124.ts.net</small></span><span class="gateway-state"><span class="runtime-dot"></span>已连接</span></header>
+            <div class="gateway-facts"><span class="gateway-fact"><strong>4 个 Sessions</strong><span>1 个正在运行</span></span><span class="gateway-fact"><strong>3 个 Agents</strong><span>Main 为默认</span></span></div>
+          </article>
+          <div class="proposed-section-title"><strong>当前工作</strong><span>查看全部</span></div>
+          <article class="current-work-card">
+            <header><span class="work-icon">↻</span><span class="work-copy"><strong>iOS 移动体验优化</strong><small>Main Assistant · 2 分钟前更新</small></span><span class="work-status">运行中</span></header>
+            <div class="work-progress" aria-label="任务进度 68%"><span></span></div>
+          </article>
+          <div class="proposed-section-title"><strong>最近对话</strong><span>Sessions ›</span></div>
+          <div class="compact-list">
+            <article class="compact-row"><span class="compact-row-icon">AI</span><span class="compact-row-copy"><strong>AI 早报整理</strong><small>7 条未读 · 已生成 Personal App</small></span><span class="compact-row-state">08:16 ›</span></article>
+            <article class="compact-row"><span class="compact-row-icon">¥</span><span class="compact-row-copy"><strong>七月家庭预算</strong><small>等待你确认 1 项调整</small></span><span class="compact-row-state">昨天 ›</span></article>
+          </div>
+          <div class="proposed-section-title"><strong>管理与 Workspace</strong><span></span></div>
+          <div class="hub-shortcuts"><article class="hub-shortcut"><span>◴</span><strong>自动化</strong><small>2 个启用 · 1 个暂停</small></article><article class="hub-shortcut"><span>▦</span><strong>Personal Apps</strong><small>9 个 · 6 个已下载</small></article></div>
+        </section>
+
+        <section class="screen proposed-agents" data-screen="proposed-agents-roster">
+          <header class="proposed-topline"><h2>Agents</h2><button aria-label="新建 Agent">＋</button></header>
+          <div class="search">⌕&nbsp;&nbsp; 搜索 Agent</div>
+          <div class="agent-filter-row" aria-label="Agent 筛选"><button class="agent-filter is-active">全部 3</button><button class="agent-filter">可用 3</button><button class="agent-filter">默认 1</button></div>
+          <div class="proposed-agent-list">
+            <article class="proposed-agent-card"><span class="proposed-agent-avatar">SF<span class="agent-online-dot"></span></span><span class="proposed-agent-copy"><strong>Main Assistant</strong><p>协调日常工作并分派专业任务</p><small>claude-sonnet · 12 tools</small></span><span class="agent-badges"><span class="agent-badge current">当前</span><span class="agent-badge">默认</span></span></article>
+            <article class="proposed-agent-card"><span class="proposed-agent-avatar release">R<span class="agent-online-dot"></span></span><span class="proposed-agent-copy"><strong>Release Agent</strong><p>检查发布准备度与部署健康</p><small>gpt-5-codex · 8 tools</small></span><span class="agent-badges"><span class="compact-row-state">›</span></span></article>
+            <article class="proposed-agent-card"><span class="proposed-agent-avatar research">RC<span class="agent-online-dot"></span></span><span class="proposed-agent-copy"><strong>Research Commons</strong><p>共享研究配置，内部提示受保护</p><small>claude-sonnet · shared</small></span><span class="agent-badges"><span class="compact-row-state">›</span></span></article>
+          </div>
+          <p class="agent-detail-note">点入 Agent 后再查看模型、角色、思考策略、Tools、Skills 与 Prompt 元数据；Roster 只保留选择所需的信息。</p>
+        </section>
+
+        <section class="screen chat agent-first-chat" data-screen="proposed-query-colors">
+          <header class="chat-header">
+            <div class="agent-row"><button class="round-button" aria-label="打开侧栏">▣</button><div class="agent-name"><strong>Main Assistant</strong><small>Personal workspace</small></div><button class="round-button" aria-label="新建对话">＋</button></div>
+            <div class="runtime-compact"><span class="runtime-dot"></span><strong>已连接</strong><span>· SkillForge Mac 已连接</span></div>
+          </header>
+          <div class="agent-first-transcript">
+            <span class="proposed-chip">DECISION RECORD · OPTION B IMPLEMENTED</span>
+            <article class="assistant-turn">
+              <header class="assistant-turn-header"><span class="assistant-mini-avatar">SF</span><strong>视觉方案评审</strong><time>候选</time></header>
+              <div class="agent-answer-body">
+                <h3 class="query-palette-title">用户 Query：三种底色对比</h3>
+                <p class="query-palette-intro">同一句较长 Query 放在真实聊天宽度里比较。目标是清楚区分用户与 Agent，同时让长文本保持轻盈。</p>
+                <div class="color-comparison">
+                  <article class="color-option"><header><strong>A · 历史暖色</strong><span>已替换</span></header><div class="query-swatch warm">把今天生成的 Personal Apps 和任务结果整理一下，告诉我下一步先看什么。</div></article>
+                  <article class="color-option is-recommended"><header><strong>B · 当前柔和蓝</strong><span>已实现</span></header><div class="query-swatch soft-blue">把今天生成的 Personal Apps 和任务结果整理一下，告诉我下一步先看什么。</div></article>
+                  <article class="color-option"><header><strong>C · 饱和蓝</strong><span>不建议长文</span></header><div class="query-swatch solid-blue">把今天生成的 Personal Apps 和任务结果整理一下，告诉我下一步先看什么。</div></article>
+                </div>
+                <p class="palette-verdict"><strong>已采用 B：</strong>柔和蓝建立明确的用户角色感，同时不会像饱和蓝一样抢走 Agent 长回复的阅读重心。</p>
+              </div>
+            </article>
+          </div>
+          <button class="scroll-bottom" aria-label="滚动到底部">↓</button>
+          <footer class="agent-first-composer"><div class="agent-compose-row"><button aria-label="添加附件">⌕</button><div class="agent-compose-input">继续问 Main Assistant…</div><button aria-label="发送">↑</button></div></footer>
+        </section>
+
+        <section class="screen chat agent-first-chat" data-screen="markdown-report">
+          <header class="chat-header">
+            <div class="agent-row"><button class="round-button" aria-label="打开侧栏">▣</button><div class="agent-name"><strong>Research Agent</strong><small>Personal workspace</small></div><button class="round-button" aria-label="新建对话">＋</button></div>
+            <div class="runtime-compact"><span class="runtime-dot"></span><strong>已连接</strong><span>· SkillForge Mac 已连接</span></div>
+          </header>
+          <div class="agent-first-transcript">
+            <span class="proposed-chip">CURRENT · MARKDOWN RESEARCH ANSWER</span>
+            <div class="user-turn"><div class="user-prompt">调研一下手机端展示交互式 HTML 结果是否可行，并先给我结论。</div></div>
+            <article class="assistant-turn">
+              <header class="assistant-turn-header"><span class="assistant-mini-avatar">SF</span><strong>Research Agent</strong><time>刚刚</time></header>
+              <div class="agent-answer-body markdown-proposal">
+                <h2>手机端适合“可操作结果”，但不应替代所有 Markdown</h2>
+                <p class="md-lede">结论不是二选一：短答案继续用 Markdown；当结果需要筛选、保存进度或反复操作时，再升级为 Personal App。</p>
+                <h3>为什么在手机上可行</h3>
+                <ul class="md-bullet-list"><li><strong>触控更自然：</strong>筛选、收藏和滑块比长表格更适合窄屏。</li><li><strong>结果可持续：</strong>保存状态后，下次打开能从上次位置继续。</li><li><strong>风险可控制：</strong>离线、自包含页面配合受控 Bridge，不直接开放任意系统能力。</li></ul>
+                <blockquote class="md-quote">推荐原则：先让答案可读，再让高价值结果可操作；不要把每条回复都包装成 App。</blockquote>
+                <a class="md-link" href="#">↗ 查看完整调研与验收依据</a>
+              </div>
+            </article>
+          </div>
+          <button class="scroll-bottom" aria-label="滚动到底部">↓</button>
+          <footer class="agent-first-composer"><div class="agent-compose-row"><button aria-label="添加附件">⌕</button><div class="agent-compose-input">继续问 Research Agent…</div><button aria-label="发送">↑</button></div></footer>
+        </section>
+
+        <section class="screen chat agent-first-chat" data-screen="markdown-execution">
+          <header class="chat-header">
+            <div class="agent-row"><button class="round-button" aria-label="打开侧栏">▣</button><div class="agent-name"><strong>Code Agent</strong><small>Personal workspace</small></div><button class="round-button" aria-label="新建对话">＋</button></div>
+            <div class="runtime-compact"><span class="runtime-dot"></span><strong>已连接</strong><span>· SkillForge Mac 已连接</span></div>
+          </header>
+          <div class="agent-first-transcript">
+            <span class="proposed-chip">CURRENT · MARKDOWN EXECUTION RESULT</span>
+            <div class="user-turn"><div class="user-prompt">把登录页的崩溃修好，并告诉我改了什么、怎么验证。</div></div>
+            <article class="assistant-turn">
+              <header class="assistant-turn-header"><span class="assistant-mini-avatar">SF</span><strong>Code Agent</strong><time>刚刚</time></header>
+              <div class="agent-answer-body markdown-proposal">
+                <h2>登录页崩溃已修复</h2>
+                <p class="md-lede">3 个检查全部通过：单元测试、模拟器构建和冷启动回归。</p>
+                <h3>这次修改</h3>
+                <ol class="md-steps"><li>在读取凭证前处理空 Keychain 返回值。</li><li>保留现有登录状态，不改变网络请求协议。</li><li>补充一次无凭证冷启动的回归测试。</li></ol>
+                <div class="md-code"><header><span>swift</span><button type="button">复制</button></header><pre><code><span class="token-keyword">guard let</span> token = credentials.token <span class="token-keyword">else</span> {
+  <span class="token-keyword">return</span> .signedOut
+}</code></pre></div>
+                <p class="md-next"><strong>下一步：</strong>你可以在真机退出账号后重新启动一次，确认登录页稳定显示。</p>
+              </div>
+            </article>
+          </div>
+          <button class="scroll-bottom" aria-label="滚动到底部">↓</button>
+          <footer class="agent-first-composer"><div class="agent-compose-row"><button aria-label="添加附件">⌕</button><div class="agent-compose-input">继续问 Code Agent…</div><button aria-label="发送">↑</button></div></footer>
+        </section>
+
+        <section class="screen" data-screen="app-library">
+          <div class="library-top">
+            <header class="library-header"><button class="round-button" data-screen-target="control">‹</button><h2 class="large-title">Personal Apps</h2><span class="library-header-spacer"></span></header>
+            <label class="library-search">⌕&nbsp;&nbsp;<input id="librarySearch" aria-label="搜索 Personal Apps" placeholder="搜索 Personal Apps" style="width:82%;border:0;outline:0;background:transparent;color:inherit"></label>
+            <div class="library-filter" aria-label="Personal App collections"><button class="filter-chip is-active" data-library-scope="recent">最近使用</button><button class="filter-chip" data-library-scope="favorite">收藏</button><button class="filter-chip" data-library-scope="downloaded">已下载</button><button class="filter-chip" data-library-scope="all">全部</button></div>
+            <div class="library-facets">
+              <select class="library-select" id="libraryAgent" aria-label="按 Agent 筛选"><option value="all">全部 Agent</option><option value="main">Main Assistant</option><option value="research">Research Agent</option><option value="code">Code Agent</option></select>
+              <select class="library-select" id="librarySession" aria-label="按 Session 筛选"><option value="all">全部 Session</option><option value="budget">家庭预算分析</option><option value="brief">AI 早报整理任务</option><option value="requirements">iOS 需求整理</option></select>
+              <select class="library-select" id="libraryTime" aria-label="按生成时间筛选"><option value="all">Any time</option><option value="0">Today</option><option value="7">Past week</option><option value="30">Past month</option></select>
+            </div>
+          </div>
+          <div class="library-scroll">
+            <div class="library-caption"><strong id="libraryHeading">最近使用</strong><span id="libraryCount">4 个结果</span></div>
+            <div class="app-library" id="personalAppLibrary">
+              <article class="library-card" data-library-item data-agent="research" data-session="budget" data-age-days="0" data-favorite="true" data-downloaded="true" data-recent="true" data-search="七月家庭预算 调整分类额度 research agent 家庭预算分析">
+                <span class="library-thumb">七月</span><span class="library-copy"><span class="library-title"><strong>七月家庭预算</strong><button class="library-favorite" data-library-favorite aria-label="取消收藏">★</button></span><span class="library-summary">调整分类额度，实时查看结余；较长说明会在两行内精简展示。</span><small>Research Agent · 家庭预算分析<br>创建于今天 08:05 · 刚刚打开</small><span class="library-tags"><span class="downloaded">已下载</span><span>无额外权限</span></span></span>
+                <span class="library-actions"><button class="library-action primary" data-screen-target="personal-app">↗ 打开</button><button class="library-action" data-source-session="budget">↪ 查看来源</button><button class="library-action" data-library-action="share" aria-label="分享">↥</button><button class="library-action" data-library-action="clear" aria-label="清除本地副本">⌫</button></span>
+              </article>
+              <article class="library-card" data-library-item data-agent="main" data-session="brief" data-age-days="0" data-favorite="true" data-downloaded="true" data-recent="true" data-search="ai 早报阅读器 新闻 main assistant ai 早报整理任务">
+                <span class="library-thumb">AI</span><span class="library-copy"><span class="library-title"><strong>AI 早报阅读器</strong><button class="library-favorite" data-library-favorite aria-label="取消收藏">★</button></span><span class="library-summary">35 条 AI 资讯，支持筛选、收藏、已读标记和保存阅读进度。</span><small>Main Assistant · AI 早报整理任务<br>创建于今天 08:00 · 08:16 打开</small><span class="library-tags"><span class="downloaded">已下载</span><span>无额外权限</span></span></span>
+                <span class="library-actions"><button class="library-action primary" data-screen-target="personal-app">↗ 打开</button><button class="library-action" data-source-session="brief">↪ 查看来源</button><button class="library-action" data-library-action="share" aria-label="分享">↥</button><button class="library-action" data-library-action="clear" aria-label="清除本地副本">⌫</button></span>
+              </article>
+              <article class="library-card" data-library-item data-agent="code" data-session="requirements" data-age-days="1" data-favorite="false" data-downloaded="false" data-recent="true" data-search="skillforge 需求看板 code agent ios 需求整理">
+                <span class="library-thumb">SF</span><span class="library-copy"><span class="library-title"><strong>SkillForge 需求看板</strong><button class="library-favorite is-empty" data-library-favorite aria-label="添加收藏">☆</button></span><span class="library-summary">集中查看需求状态、验收证据和下一步开发顺序。</span><small>Code Agent · iOS 需求整理<br>创建于昨天 14:20 · 尚未打开</small><span class="library-tags"><span>在线</span><span>无额外权限</span></span></span>
+                <span class="library-actions"><button class="library-action primary" data-screen-target="personal-app">↗ 打开</button><button class="library-action" data-source-session="requirements">↪ 查看来源</button><button class="library-action" data-library-action="share" aria-label="分享">↥</button></span>
+              </article>
+              <article class="library-card is-unavailable" data-library-item data-agent="main" data-session="brief" data-age-days="12" data-favorite="false" data-downloaded="false" data-recent="true" data-search="旧版 ai 趋势雷达 main assistant ai 早报整理任务 失效">
+                <span class="library-thumb">!</span><span class="library-copy"><span class="library-title"><strong>旧版 AI 趋势雷达</strong><button class="library-favorite is-empty" data-library-favorite aria-label="添加收藏">☆</button></span><span class="library-summary">服务端文件已删除，仍保留来源对话记录。</span><small>Main Assistant · AI 早报整理任务<br>创建于 7 月 5 日 · 尚未打开</small><span class="library-tags"><span>在线</span><span>无额外权限</span><span class="warning">已失效</span></span></span>
+                <span class="library-actions"><button class="library-action primary" disabled>无法打开</button><button class="library-action" data-source-session="brief">↪ 查看来源</button><button class="library-action" disabled aria-label="分享">↥</button></span>
+              </article>
+              <div class="library-empty" id="libraryEmpty" hidden>没有符合当前筛选条件的 Personal App。</div>
+            </div>
+          </div>
         </section>
 
         <section class="screen artifact-screen" data-screen="personal-app">
-          <div class="proposed-banner">PROPOSED · 离线、自包含、无 Tool Bridge</div><div class="artifact-toolbar"><button class="round-button" data-screen-target="artifact-chat">‹</button><div><strong>七月家庭预算</strong><small>Research Agent 生成</small></div><button class="round-button">ⓘ</button></div>
+          <div class="proposed-banner">CURRENT · 离线、自包含、受控 Bridge</div><div class="artifact-toolbar"><button class="round-button" data-screen-target="app-library">‹</button><div><strong>七月家庭预算</strong><small>Research Agent 生成</small></div><button class="round-button">ⓘ</button></div>
           <div class="artifact-hero"><p>剩余预算会随你的调整实时变化</p><h2>把钱花在重要的地方</h2></div><div class="budget-summary"><div><strong id="budgetTotal">¥8,200</strong><small>本月计划支出</small></div><div><strong id="budgetRemaining">¥1,800</strong><small>预计结余</small></div></div>
           <div class="budget-list">
             <label class="budget-item"><span class="budget-row"><strong>餐饮</strong><span data-budget-value>¥2,600</span></span><input class="budget-range" type="range" min="1200" max="4000" step="100" value="2600"></label>
@@ -246,6 +727,7 @@
         </section>
 
         <nav class="tabs" aria-label="Current App tabs"><button class="tab is-active" data-tab="chat">●<small>Chat</small></button><button class="tab" data-tab="control">▦<small>Control</small></button><button class="tab" data-tab="agents">♟<small>Agents</small></button><button class="tab" data-tab="settings">⚙<small>Settings</small></button></nav>
+        <div class="prototype-toast" id="prototypeToast" role="status" hidden></div>
       </div></div>
     </section>
 
@@ -253,8 +735,13 @@
       <article class="check"><span class="check-mark">✓</span><div><h3>Navigation</h3><p>Current 固定为 Chat / Control / Agents / Settings。</p></div></article>
       <article class="check"><span class="check-mark">✓</span><div><h3>Visual tokens</h3><p>系统大标题、暖灰背景、白色分组、橙色强调、浮动 Tab Bar。</p></div></article>
       <article class="check"><span class="check-mark">✓</span><div><h3>Current surfaces</h3><p>Chat header/status/composer、Control schedules、Agents roster、Settings health/device。</p></div></article>
-      <article class="check"><span class="check-mark">◇</span><div><h3>Proposed only</h3><p>Personal App 卡片与全屏规划器明确标记需求 ID，尚未进入真实 App。</p></div></article>
-    </div><p class="legend">Current 改动需要真实截图证据；Proposed 实现并验收后才能合并进 Current。</p></aside>
+      <article class="check"><span class="check-mark">✓</span><div><h3>Launch &amp; loading</h3><p>冷启动先显示品牌恢复页；Personal Apps 首次请求使用同构骨架卡片，不出现纯白空窗。</p></div></article>
+      <article class="check"><span class="check-mark">✓</span><div><h3>Personal Apps Library</h3><p>Current 入口位于 Control → Workspace；长摘要最多两行，卡片保留来源、时间、离线/权限事实和完整操作。</p></div></article>
+      <article class="check"><span class="check-mark">✓</span><div><h3>Agent-first Chat</h3><p>Current 让 Agent 回复接近全宽、用户 Query 使用柔和蓝紧凑气泡，并把 Tool、文件与 Personal App 结果嵌进答案流。</p></div></article>
+      <article class="check"><span class="check-mark">✓</span><div><h3>Query Color</h3><p>柔和蓝 B 已进入真实 App；历史暖色与饱和蓝只保留为设计决策记录。</p></div></article>
+      <article class="check"><span class="check-mark">✓</span><div><h3>Markdown</h3><p>Current 覆盖三级标题、段落、两种列表、引用、代码语言栏、复制反馈和系统链接。</p></div></article>
+      <article class="check"><span class="check-mark">○</span><div><h3>Proposed · 2026-07-18</h3><p>两行 Chat 身份、Tool 三态、Control Hub 与轻量 Agents Roster 正等待视觉确认，尚未计入 Current。</p></div></article>
+    </div><p class="legend">Current 以真实 SwiftUI 和 XCUITest 截图为准；Proposed 经用户确认、实现和验证后才能迁入 Current。</p></aside>
   </main>
   <script>
     const viewport = document.getElementById('viewport');
@@ -263,17 +750,34 @@
     const tabs = [...document.querySelectorAll('[data-tab]')];
     const modeButtons = [...document.querySelectorAll('[data-mode]')];
     const budgetRanges = [...document.querySelectorAll('.budget-range')];
+    const libraryItems = [...document.querySelectorAll('[data-library-item]')];
+    const libraryScopeButtons = [...document.querySelectorAll('[data-library-scope]')];
+    const librarySearch = document.getElementById('librarySearch');
+    const libraryAgent = document.getElementById('libraryAgent');
+    const librarySession = document.getElementById('librarySession');
+    const libraryTime = document.getElementById('libraryTime');
+    const libraryHeading = document.getElementById('libraryHeading');
+    const libraryCount = document.getElementById('libraryCount');
+    const libraryEmpty = document.getElementById('libraryEmpty');
+    const prototypeToast = document.getElementById('prototypeToast');
+    let prototypeMode = 'current';
+    let libraryScope = 'recent';
     const initialBudgets = [2600, 1400, 2100, 2100];
     function openScreen(name) {
       screens.forEach(screen => screen.classList.toggle('is-active', screen.dataset.screen === name));
       screenButtons.forEach(button => button.classList.toggle('is-active', button.dataset.screenTarget === name));
-      tabs.forEach(tab => tab.classList.toggle('is-active', tab.dataset.tab === name));
+      const proposedTabs = { 'proposed-chat-experience': 'chat', 'proposed-query-colors': 'chat', 'proposed-control-hub': 'control', 'proposed-agents-roster': 'agents' };
+      const isChatExample = name === 'artifact-chat' || name === 'markdown-report' || name === 'markdown-execution';
+      const tabName = proposedTabs[name] || (name === 'app-library' ? 'control' : (isChatExample ? 'chat' : name));
+      tabs.forEach(tab => tab.classList.toggle('is-active', tab.dataset.tab === tabName));
       viewport.classList.toggle('is-artifact', name === 'personal-app');
+      viewport.classList.toggle('is-launch', name === 'launch');
     }
     function setMode(mode) {
+      prototypeMode = mode;
       modeButtons.forEach(button => button.classList.toggle('is-active', button.dataset.mode === mode));
       document.querySelectorAll('[data-mode-scope]').forEach(button => { button.hidden = button.dataset.modeScope !== mode; });
-      openScreen(mode === 'current' ? 'chat' : 'artifact-chat');
+      openScreen(mode === 'proposed' ? 'proposed-chat-experience' : 'chat');
     }
     function updateBudget() {
       let total = 0;
@@ -281,11 +785,79 @@
       document.getElementById('budgetTotal').textContent = `¥${total.toLocaleString('zh-CN')}`;
       document.getElementById('budgetRemaining').textContent = `¥${Math.max(0,10000-total).toLocaleString('zh-CN')}`;
     }
+    function updateLibrary() {
+      const query = librarySearch.value.trim().toLocaleLowerCase('zh-CN');
+      let visibleCount = 0;
+      libraryItems.forEach(item => {
+        const inScope = libraryScope === 'all' || item.dataset[libraryScope] === 'true';
+        const inAgent = libraryAgent.value === 'all' || item.dataset.agent === libraryAgent.value;
+        const inSession = librarySession.value === 'all' || item.dataset.session === librarySession.value;
+        const inTime = libraryTime.value === 'all' || Number(item.dataset.ageDays) <= Number(libraryTime.value);
+        const inSearch = !query || item.dataset.search.toLocaleLowerCase('zh-CN').includes(query);
+        const visible = inScope && inAgent && inSession && inTime && inSearch;
+        item.hidden = !visible;
+        if (visible) visibleCount += 1;
+      });
+      const labels = { recent: '最近使用', favorite: '收藏', downloaded: '已下载', all: '全部 Personal Apps' };
+      libraryHeading.textContent = labels[libraryScope];
+      libraryCount.textContent = `${visibleCount} 个结果`;
+      libraryEmpty.hidden = visibleCount !== 0;
+    }
+    function showPrototypeToast(message) {
+      prototypeToast.textContent = message;
+      prototypeToast.hidden = false;
+      window.clearTimeout(showPrototypeToast.timer);
+      showPrototypeToast.timer = window.setTimeout(() => { prototypeToast.hidden = true; }, 2200);
+    }
     screenButtons.forEach(button => button.addEventListener('click', () => openScreen(button.dataset.screenTarget)));
-    tabs.forEach(tab => tab.addEventListener('click', () => openScreen(tab.dataset.tab)));
+    tabs.forEach(tab => tab.addEventListener('click', () => {
+      const proposedTargets = { chat: 'proposed-chat-experience', control: 'proposed-control-hub', agents: 'proposed-agents-roster' };
+      if (prototypeMode === 'proposed' && proposedTargets[tab.dataset.tab]) {
+        openScreen(proposedTargets[tab.dataset.tab]);
+        return;
+      }
+      if (prototypeMode === 'proposed') setMode('current');
+      openScreen(tab.dataset.tab);
+    }));
     modeButtons.forEach(button => button.addEventListener('click', () => setMode(button.dataset.mode)));
     budgetRanges.forEach(range => range.addEventListener('input', updateBudget));
+    libraryScopeButtons.forEach(button => button.addEventListener('click', () => {
+      libraryScope = button.dataset.libraryScope;
+      libraryScopeButtons.forEach(candidate => candidate.classList.toggle('is-active', candidate === button));
+      updateLibrary();
+    }));
+    librarySearch.addEventListener('input', updateLibrary);
+    libraryAgent.addEventListener('change', updateLibrary);
+    librarySession.addEventListener('change', updateLibrary);
+    libraryTime.addEventListener('change', updateLibrary);
+    document.querySelectorAll('[data-source-session]').forEach(button => button.addEventListener('click', event => {
+      event.stopPropagation();
+      openScreen('chat');
+      showPrototypeToast(`已跳回来源 Session，并定位生成消息 · ${button.dataset.sourceSession}`);
+    }));
+    document.querySelectorAll('[data-library-favorite]').forEach(button => button.addEventListener('click', event => {
+      event.stopPropagation();
+      const item = button.closest('[data-library-item]');
+      const isFavorite = item.dataset.favorite !== 'true';
+      item.dataset.favorite = String(isFavorite);
+      button.textContent = isFavorite ? '★' : '☆';
+      button.classList.toggle('is-empty', !isFavorite);
+      button.setAttribute('aria-label', isFavorite ? '取消收藏' : '添加收藏');
+      showPrototypeToast(isFavorite ? '已收藏 Personal App' : '已取消收藏');
+      updateLibrary();
+    }));
+    document.querySelectorAll('[data-library-action]').forEach(button => button.addEventListener('click', event => {
+      event.stopPropagation();
+      showPrototypeToast(button.dataset.libraryAction === 'share' ? '已打开系统分享面板' : '已清除本地副本');
+    }));
     document.getElementById('resetBudget').addEventListener('click', () => { budgetRanges.forEach((range,index) => range.value = initialBudgets[index]); updateBudget(); });
+    updateLibrary();
+    const initialPrototypeParams = new URLSearchParams(window.location.search);
+    const initialPrototypeMode = initialPrototypeParams.get('mode') === 'proposed' ? 'proposed' : 'current';
+    setMode(initialPrototypeMode);
+    const initialPrototypeScreen = initialPrototypeParams.get('screen');
+    const initialScreenButton = screenButtons.find(button => button.dataset.screenTarget === initialPrototypeScreen && button.dataset.modeScope === initialPrototypeMode);
+    if (initialScreenButton) openScreen(initialPrototypeScreen);
   </script>
 </body>
 </html>

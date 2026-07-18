@@ -44,6 +44,21 @@ struct SkillForgeApp: App {
 
     init() {
         #if DEBUG
+        if DebugLaunchConfiguration.isInteractiveArtifactUITest {
+            if ProcessInfo.processInfo.arguments.contains("--personal-app-valid-saved-state") {
+                try? PersonalAppStateStore.save(
+                    Data(#"{"food":2800}"#.utf8),
+                    artifactID: "interactive-budget"
+                )
+            } else if ProcessInfo.processInfo.arguments.contains("--personal-app-invalid-saved-state") {
+                try? PersonalAppStateStore.save(
+                    Data(#"{"food":"stale"}"#.utf8),
+                    artifactID: "interactive-budget"
+                )
+            } else {
+                PersonalAppStateStore.reset(artifactID: "interactive-budget")
+            }
+        }
         _appState = StateObject(wrappedValue: AppState(loadOnInit: !DebugLaunchConfiguration.isUITest))
         #else
         _appState = StateObject(wrappedValue: AppState())
@@ -60,14 +75,51 @@ struct SkillForgeApp: App {
 
 private struct RootView: View {
     @EnvironmentObject private var appState: AppState
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
         Group {
             #if DEBUG
             if DebugLaunchConfiguration.isStreamingHandoffUITest {
                 ChatView.streamingHandoffUITestFixture()
+            } else if DebugLaunchConfiguration.isPersonalAppLibraryUITest {
+                CompanionTabView.personalAppLibraryUITestFixture()
+                    .dynamicTypeSize(
+                        DebugLaunchConfiguration.usesAccessibilityXXXL
+                            ? .accessibility5
+                            : dynamicTypeSize
+                    )
+                    .preferredColorScheme(
+                        ProcessInfo.processInfo.arguments.contains("--personal-app-library-dark")
+                            ? .dark
+                            : .light
+                    )
+            } else if DebugLaunchConfiguration.isRuntimeErrorUITest {
+                ChatView.runtimeErrorUITestFixture()
+                    .dynamicTypeSize(
+                        DebugLaunchConfiguration.usesAccessibilityXXXL
+                            ? .accessibility5
+                            : dynamicTypeSize
+                    )
+            } else if DebugLaunchConfiguration.isInteractiveArtifactUITest {
+                ChatView.interactiveArtifactUITestFixture()
+                    .environment(
+                        \.personalAppExternalURLOpener,
+                        PersonalAppExternalURLOpener { _ in }
+                    )
+                    .dynamicTypeSize(
+                        DebugLaunchConfiguration.usesAccessibilityXXXL
+                            ? .accessibility5
+                            : dynamicTypeSize
+                    )
+                    .preferredColorScheme(
+                        DebugLaunchConfiguration.usesPersonalAppCardDarkMode ? .dark : .light
+                    )
             } else if DebugLaunchConfiguration.isOutboundAttachmentsUITest {
                 ChatView.outboundAttachmentsUITestFixture()
+                    .preferredColorScheme(
+                        DebugLaunchConfiguration.usesChatDarkMode ? .dark : .light
+                    )
             } else if DebugLaunchConfiguration.isPairingUITest {
                 PairingView()
             } else if DebugLaunchConfiguration.isTabsUITest {
@@ -75,7 +127,24 @@ private struct RootView: View {
             } else if DebugLaunchConfiguration.isSlice3UITest {
                 ChatView.slice3UITestFixture()
             } else if DebugLaunchConfiguration.isChatUITest {
-                ChatView.uiTestFixture()
+                if DebugLaunchConfiguration.usesCompanionShell {
+                    CompanionTabView.tabsUITestFixture()
+                        .dynamicTypeSize(
+                            DebugLaunchConfiguration.usesAccessibilityXXXL
+                                ? .accessibility5
+                                : dynamicTypeSize
+                        )
+                } else {
+                    ChatView.uiTestFixture()
+                        .dynamicTypeSize(
+                            DebugLaunchConfiguration.usesAccessibilityXXXL
+                                ? .accessibility5
+                                : dynamicTypeSize
+                        )
+                        .preferredColorScheme(
+                            DebugLaunchConfiguration.usesChatDarkMode ? .dark : .light
+                        )
+                }
             } else {
                 phaseView
             }
@@ -90,7 +159,7 @@ private struct RootView: View {
         Group {
             switch appState.phase {
             case .loading:
-                ProgressView("Loading SkillForge")
+                SkillForgeLaunchView()
             case .needsPairing:
                 PairingView()
             case let .paired(endpoint, deviceToken, device, defaultAgent):
@@ -102,5 +171,57 @@ private struct RootView: View {
                 )
             }
         }
+    }
+}
+
+struct SkillForgeLaunchView: View {
+    var body: some View {
+        ZStack {
+            Color("LaunchBackground")
+                .ignoresSafeArea()
+
+            VStack(spacing: 18) {
+                launchMark
+
+                VStack(spacing: 6) {
+                    Text("SkillForge")
+                        .font(.title.bold())
+                        .foregroundStyle(.primary)
+                    Text("Restoring your workspace")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+
+                ProgressView()
+                    .tint(CompanionStyle.orange)
+                    .accessibilityLabel("Restoring your workspace")
+                    .accessibilityIdentifier("app.launch.progress")
+            }
+            .padding(32)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("app.launch")
+    }
+
+    private var launchMark: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(CompanionStyle.ink)
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(CompanionStyle.orange)
+                .frame(width: 19, height: 19)
+                .offset(x: -27, y: -27)
+            Circle()
+                .fill(Color(red: 0.31, green: 0.78, blue: 0.55))
+                .frame(width: 15, height: 15)
+                .offset(x: 28, y: -27)
+            Text("SF")
+                .font(.system(size: 34, weight: .medium, design: .rounded))
+                .foregroundStyle(.white)
+        }
+        .frame(width: 96, height: 96)
+        .shadow(color: .black.opacity(0.12), radius: 18, y: 9)
+        .accessibilityHidden(true)
     }
 }

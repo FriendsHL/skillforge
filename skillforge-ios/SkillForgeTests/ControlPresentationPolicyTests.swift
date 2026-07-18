@@ -27,6 +27,64 @@ final class ControlPresentationPolicyTests: XCTestCase {
         )
     }
 
+    func testCurrentWorkIncludesOnlyRunningWaitingAndErrorSessionsInRecencyOrder() {
+        let sessions = [
+            session(id: "idle", runtimeStatus: "idle", updatedAt: "2026-07-10T12:00:00Z"),
+            session(id: "waiting", runtimeStatus: "waiting_user", updatedAt: "2026-07-10T10:00:00Z"),
+            session(id: "failed", runtimeStatus: "error", updatedAt: "2026-07-10T11:00:00Z"),
+            session(id: "running", runtimeStatus: "running", updatedAt: "2026-07-10T09:00:00Z")
+        ]
+
+        XCTAssertEqual(
+            ControlPresentationPolicy.currentWorkSessions(sessions).map(\.id),
+            ["failed", "waiting", "running"]
+        )
+    }
+
+    func testCurrentWorkIsCappedSoLaterControlSectionsRemainReachable() {
+        let sessions = (1...8).map { index in
+            session(
+                id: "active-\(index)",
+                runtimeStatus: index.isMultiple(of: 2) ? "running" : "waiting_user",
+                updatedAt: "2026-07-10T0\(index):00:00Z"
+            )
+        }
+
+        XCTAssertEqual(ControlPresentationPolicy.currentWorkSessions(sessions).count, 5)
+        XCTAssertEqual(ControlPresentationPolicy.currentWorkSessions(sessions, limit: 2).count, 2)
+    }
+
+    func testRecentSessionsAreRecencyOrderedAndLimited() {
+        let sessions = (1...6).map { index in
+            session(
+                id: "session-\(index)",
+                runtimeStatus: "idle",
+                updatedAt: "2026-07-10T0\(index):00:00Z"
+            )
+        }
+
+        XCTAssertEqual(
+            ControlPresentationPolicy.recentSessions(sessions, limit: 3).map(\.id),
+            ["session-6", "session-5", "session-4"]
+        )
+        XCTAssertTrue(ControlPresentationPolicy.recentSessions(sessions, limit: 0).isEmpty)
+    }
+
+    func testSessionWorkPresentationUsesStructuredRuntimeState() {
+        XCTAssertEqual(
+            ControlPresentationPolicy.workStatus(session(id: "run", runtimeStatus: "running", updatedAt: nil)).text,
+            "Running"
+        )
+        XCTAssertEqual(
+            ControlPresentationPolicy.workStatus(session(id: "wait", runtimeStatus: "waiting_confirmation", updatedAt: nil)).text,
+            "Waiting"
+        )
+        XCTAssertEqual(
+            ControlPresentationPolicy.workStatus(session(id: "error", runtimeStatus: "error", updatedAt: nil)).text,
+            "Needs attention"
+        )
+    }
+
     func testScheduleAndRunPresentationUsesConcreteDomainFields() {
         let task = schedule(id: 7, enabled: true, nextFireAt: "2026-07-12T08:00:00Z")
         let run = MobileScheduledTaskRun(
@@ -85,14 +143,18 @@ final class ControlPresentationPolicyTests: XCTestCase {
         )
     }
 
-    private func session(id: String, updatedAt: String) -> MobileSession {
+    private func session(
+        id: String,
+        runtimeStatus: String = "idle",
+        updatedAt: String?
+    ) -> MobileSession {
         MobileSession(
             id: id,
             userId: 1,
             agentId: 3,
             title: id,
             status: "active",
-            runtimeStatus: "idle",
+            runtimeStatus: runtimeStatus,
             messageCount: 1,
             updatedAt: updatedAt
         )

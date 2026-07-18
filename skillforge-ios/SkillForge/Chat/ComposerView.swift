@@ -6,6 +6,7 @@ struct ComposerView: View {
     let isSending: Bool
     let isUploading: Bool
     let attachments: [MobileUploadedAttachment]
+    let assistantName: String
     let focus: FocusState<Bool>.Binding
     let onSelectAttachment: (Result<URL, Error>) -> Void
     let onRemoveAttachment: (String) -> Void
@@ -17,69 +18,65 @@ struct ComposerView: View {
                 attachmentStrip
             }
 
-            HStack(alignment: .bottom, spacing: 9) {
+            HStack(alignment: .bottom, spacing: 7) {
                 AttachmentPicker(
                     isDisabled: isSending || isUploading,
                     onSelection: onSelectAttachment
                 )
-                .font(.title3)
-                .foregroundStyle(.blue)
+                .font(.title3.weight(.medium))
+                .foregroundStyle(CompanionStyle.ink)
                 .frame(width: 44, height: 44)
-                .background(Color.blue.opacity(0.10))
+                .background(Color(uiColor: .secondarySystemFill))
                 .clipShape(Circle())
 
-                HStack(alignment: .bottom, spacing: 8) {
-                    TextField("Message SkillForge", text: $text, axis: .vertical)
-                        .focused(focus)
-                        .accessibilityIdentifier("chat.composer")
-                        .textFieldStyle(.plain)
-                        .lineLimit(1...4)
-                        .submitLabel(.send)
-                        .font(.body)
-                        .padding(.vertical, 8)
-                        .onSubmit(send)
+                TextField("继续问 \(assistantName)…", text: $text, axis: .vertical)
+                    .focused(focus)
+                    .accessibilityIdentifier("chat.composer")
+                    .textFieldStyle(.plain)
+                    .lineLimit(1...4)
+                    .submitLabel(.send)
+                    .font(.body)
+                    .padding(.vertical, 8)
+                    .onSubmit(send)
 
-                    Button(action: send) {
-                        Group {
-                            if isSending {
-                                ProgressView()
-                                    .controlSize(.small)
-                            } else {
-                                Image(systemName: "arrow.up")
-                                    .font(.headline.weight(.bold))
-                            }
+                Button(action: send) {
+                    Group {
+                        if isSending {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Image(systemName: "arrow.up")
+                                .font(.headline.weight(.bold))
                         }
-                        .foregroundStyle(.white)
-                        .frame(width: 36, height: 36)
-                        .background(sendEnabled ? Color.blue : Color.gray.opacity(0.35))
-                        .clipShape(Circle())
                     }
-                    .buttonStyle(.plain)
-                    .frame(width: 44, height: 44)
-                    .disabled(!sendEnabled)
-                    .accessibilityLabel("Send message")
-                    .accessibilityIdentifier("chat.send")
+                    .foregroundStyle(.white)
+                    .frame(width: 36, height: 36)
+                    .background(sendEnabled ? CompanionStyle.ink : Color.secondary.opacity(0.22))
+                    .clipShape(Circle())
                 }
-                .padding(.leading, 13)
-                .padding(.trailing, 5)
-                .padding(.vertical, 5)
-                .background(.white)
-                .overlay {
-                    RoundedRectangle(cornerRadius: 20, style: .continuous)
-                        .stroke(Color.black.opacity(0.08), lineWidth: 1)
-                }
-                .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                .buttonStyle(.plain)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+                .disabled(!sendEnabled)
+                .accessibilityLabel("Send message")
+                .accessibilityIdentifier("chat.send")
             }
+            .padding(6)
+            .background(.regularMaterial)
+            .overlay {
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+            .shadow(color: Color.black.opacity(0.08), radius: 14, x: 0, y: 5)
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("chat.composerSurface")
         }
         .padding(.horizontal, 12)
-        .padding(.top, 8)
-        .padding(.bottom, 10)
-        .background(Color(.systemBackground))
-        .overlay(alignment: .top) {
-            Rectangle()
-                .fill(Color.black.opacity(0.06))
-                .frame(height: 1)
-        }
+        .padding(.top, 6)
+        .padding(.bottom, 4)
+        .background(Color(uiColor: .systemGroupedBackground))
+        .dynamicTypeSize(...DynamicTypeSize.accessibility1)
     }
 
     private var attachmentStrip: some View {
@@ -99,11 +96,13 @@ struct ComposerView: View {
                                 .foregroundStyle(.secondary)
                         }
                         .buttonStyle(.plain)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                         .accessibilityLabel("移除 \(attachment.filename)")
                         .accessibilityIdentifier("chat.attachment.remove.\(attachment.id)")
                     }
                     .padding(.horizontal, 10)
-                    .frame(height: 34)
+                    .frame(minHeight: 44)
                     .background(Color.blue.opacity(0.08))
                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 }
@@ -116,14 +115,14 @@ struct ComposerView: View {
                             .font(.caption)
                     }
                     .padding(.horizontal, 10)
-                    .frame(height: 34)
+                    .frame(minHeight: 44)
                     .background(Color(.secondarySystemBackground))
                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                     .accessibilityIdentifier("chat.attachmentUploading")
                 }
             }
         }
-        .frame(height: 34)
+        .frame(minHeight: 44)
     }
 
     private var sendEnabled: Bool {

@@ -1,6 +1,6 @@
 # IOS-PROTOTYPE-APP-PARITY — iOS 原型与真实 App 一致性
 
-> 状态：Phase 1 implemented，待用户视觉确认
+> 状态：Current 基线已同步至柔和蓝 Query 与安全 Markdown 语义块；新一轮 Chat/Control/Agents Target 待设计
 > 模式：Full（可能触及多页面 SwiftUI、导航、视觉设计、XCUITest 与原型资产）
 > 优先级：P1，Interactive Artifact 实施前置设计门
 
@@ -23,10 +23,11 @@
 采用“双层原型”，不在“只信原型”与“只信实现”之间二选一：
 
 - **Current / As-built**：以真实 App 和稳定截图为事实源，原型必须同步当前导航、组件和状态。
-- **Target / Proposed**：只展示已批准的未来改动，并为每个差异链接对应需求 ID。
+- **Target / Proposed**：展示已批准的未来改动，或用户明确要求先看的视觉候选；每个差异必须链接需求 ID，
+  并明确区分“待确认”与“已批准”。
 - 未批准概念不得伪装成已经存在的页面；已实现页面也不得继续沿用过期原型。
 
-## 当前已知漂移
+## 立项时已知漂移（已处理）
 
 - 原型仍是早期四 Tab：Chat / Sessions / Pending / Settings；当前 App 已采用 Companion Tab 结构，包含
   Chat、Control、Agents、Settings 等真实页面。
@@ -34,7 +35,8 @@
 - 真实 App 已包含附件下载、连接健康、Agent 列表、schedule/control 等实现，而旧原型覆盖不完整。
 - 原型视觉基于早期自定义 light shell；真实 SwiftUI 的间距、字体、颜色、导航栏、tab bar 和系统组件表现
   已经发生变化。
-- 新增 Personal App 页面目前是目标态，不是已实现功能，需要明确标记为 Proposed。
+- 立项时 Personal App 页面只是目标态；Interactive Artifact 与 Personal Apps Library 落地后，已在 2026-07-17
+  合并回 Current，并保留真实 SwiftUI owner、accessibility ID 与自动化证据。
 
 ## 功能需求
 
@@ -53,7 +55,7 @@
 - 从真机/模拟器采集 Chat、Control、Agents、Settings、附件、pending interaction、连接异常等关键状态。
 - 对照 SwiftUI hierarchy 与 accessibility identifiers 建页面清单。
 - 把旧原型重构为 Current 基线，删除或移到 Proposed 的虚构/过期入口。
-- Personal App 卡片和全屏 Viewer 保留在 Proposed 区域。
+- 尚未实现的 Personal App 卡片和全屏 Viewer 保留在 Proposed 区域；实现并通过开发门后再迁入 Current。
 
 ### Phase 2：评估 App 是否按目标原型优化
 
@@ -86,12 +88,38 @@
 
 ## 下一步
 
-Phase 1 已完成：原型已追平当前 App 的 Chat / Control / Agents / Settings 信息架构，并将 Personal App
-卡片及全屏 Viewer 隔离在 Proposed 模式。逐页 owner、状态和验证证据见
+Phase 1 及后续已批准页面同步已经完成：原型先追平 Chat / Control / Agents / Settings，随后把已经落地的
+Personal App 消息卡片、全屏 Viewer、Personal Apps Library、品牌恢复页和 Library 骨架加载态迁入 Current。
+逐页 owner、状态和验证证据见
 [parity-matrix.md](parity-matrix.md)。
 
-下一步由用户视觉确认 Current 与 Proposed；确认后再决定哪些 Proposed 视觉改进反向优化真实 App，并启动
-`IOS-INTERACTIVE-ARTIFACTS` Full pipeline。
+`IOS-CHAT-MARKDOWN-VISUAL-POLISH` 已由用户选择柔和蓝 Query、语义 Markdown 和代码复制，并通过 Mid 实现门
+迁入 Current。下一步继续真机视觉确认；新的 Chat 顶栏、工具卡片与 Control/Agents 信息架构先进入 Target 原型，
+用户确认后再修改生产 SwiftUI。
+
+## Agent-first Chat Current 同步（2026-07-18）
+
+- 根据“手机端应让 Agent 回复占比更大、弱化管理端卡片感”的反馈，新增
+  `IOS-AGENT-FIRST-CHAT` 目标页，用户确认后已按 Full pipeline 落到生产 SwiftUI。
+- Current 现采用紧凑柔和蓝用户 Query、接近全宽的 Agent 正文、内联 Tool/文件/Personal App 和紧邻 Tab Bar 的输入区；
+  已删除原型中生产不存在的复制、重新生成、朗读、回复分享及模型/模式控件。
+- 独立的 Personal App Card 场景复用同一 Agent-first header、assistant turn 与 composer，不再保留旧聊天壳。
+- Current/As-built 以真实 surface identifier、生产 `CompanionTabView` fixture 和 light/dark/XXXL 截图为事实源；
+  蓝色 Query 与 Markdown 完成开发门后已迁入 Current；三色选择仅作为 Design record 保留。
+- 最新完整 scheme 已于 2026-07-18 通过 337/337（268 XCTest + 69 XCUITest），Release simulator build
+  通过；真机视觉与 VoiceOver 仍为 `NOT_RUN`。
+- 自动浏览器运行时在当前环境不可用；HTML 使用 DOM/JavaScript 冒烟、Quick Look 静态渲染与人工截图复核，
+  关键生产交互仍由 XCUITest 证明，不声称浏览器点击验证通过。
+
+## Query / Markdown Current 同步（2026-07-18）
+
+- 用户选择柔和蓝 Query；生产 token、Light/Dark/XXXL 自动化与 Current Chat 已同步。
+- Markdown Current 只使用生产 renderer 支持的三级标题、列表、引用、链接、代码语言栏与精确复制反馈；
+  不执行 HTML，也不承诺 table/citation。
+- 三页均完成 JavaScript/DOM 断言和 Quick Look 静态渲染复核；应用内浏览器当前无可用实例，
+  因此点击切换仍未记为 PASS。
+- 完整 iOS scheme 337/337 与 Release simulator build 通过；结果包为
+  `/tmp/SkillForge-Markdown-Full-20260718.xcresult`。
 
 ## Phase 1 实施记录（2026-07-17）
 
@@ -101,3 +129,13 @@ Phase 1 已完成：原型已追平当前 App 的 Chat / Control / Agents / Sett
 - Current 保留真实的四 Tab shell、页面层级与关键状态；Personal App 只存在于 Proposed，且标记需求 ID。
 - HTML DOM 冒烟覆盖模式切换、六个页面切换、预算滑杆重算与重置。
 - 本阶段没有把 Personal App 功能写入生产 SwiftUI，也没有改变真实 App 的视觉实现。
+
+## 后续 Current 同步记录（2026-07-17）
+
+- `IOS-INTERACTIVE-ARTIFACTS`、`IOS-RUNTIME-RECOVERY-ARTIFACT-POLISH` 和 `IOS-PERSONAL-APP-LIBRARY`
+  完成开发门后，Personal App 消息卡片、Viewer 与跨 Session Library 已从 Proposed 迁入 Current。
+- 增加真实冷启动的 SkillForge 品牌恢复页，以及 Library 首次请求的筛选框架 + 同构卡片骨架，避免白屏/空窗跳变。
+- Library Current 卡片同步真实实现：64×82 monogram、最多两行/96 字符摘要、来源与时间事实、离线/权限状态、
+  Open/Source/Share/Clear 操作，以及 unavailable 红色语义。
+- 自动浏览器控制在本机验证环境不可用；本轮使用 inline JavaScript 语法检查、DOM marker/count 冒烟与 macOS
+  Quick Look 静态渲染兜底。真实交互与视觉事实仍以 XCUITest 截图和用户真机确认作为最终证据。

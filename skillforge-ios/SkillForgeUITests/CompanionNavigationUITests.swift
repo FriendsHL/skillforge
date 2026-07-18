@@ -61,9 +61,10 @@ final class CompanionNavigationUITests: XCTestCase {
     func testControlSessionSelectionRoutesToExpectedChatSessionMessage() {
         let app = launchApp()
 
-        XCTAssertTrue(app.staticTexts["Agent 运行中"].waitForExistence(timeout: 5))
+        assertChatHeader(in: app, contains: "运行中")
         tapTab("tab.control", in: app)
         let sessions = app.descendants(matching: .any)[Fixture.sessionsRow]
+        scrollToElement(sessions, in: app)
         XCTAssertTrue(sessions.waitForExistence(timeout: 5))
         sessions.tap()
         let routedSession = app.descendants(matching: .any)[Fixture.routedSessionRow]
@@ -72,7 +73,7 @@ final class CompanionNavigationUITests: XCTestCase {
         routedSession.tap()
 
         assertChatIsVisible(in: app)
-        XCTAssertTrue(app.staticTexts["等待确认"].waitForExistence(timeout: 5))
+        assertChatHeader(in: app, contains: "等待确认")
         let routedMessage = app.descendants(matching: .any)[Fixture.routedTaskMessage]
         XCTAssertTrue(routedMessage.waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts[Fixture.routedTaskMessageText].waitForExistence(timeout: 5))
@@ -83,6 +84,7 @@ final class CompanionNavigationUITests: XCTestCase {
 
         tapTab("tab.control", in: app)
         let sessions = app.descendants(matching: .any)[Fixture.sessionsRow]
+        scrollToElement(sessions, in: app)
         XCTAssertTrue(sessions.waitForExistence(timeout: 5))
         sessions.tap()
         let routedSession = app.descendants(matching: .any)[Fixture.crossAgentSessionRow]
@@ -91,8 +93,19 @@ final class CompanionNavigationUITests: XCTestCase {
         routedSession.tap()
 
         assertChatIsVisible(in: app)
-        XCTAssertTrue(app.staticTexts[Fixture.alternateAgentName].waitForExistence(timeout: 5))
+        assertChatHeader(in: app, contains: Fixture.alternateAgentName)
         XCTAssertEqual(app.scrollViews["chat.transcript"].value as? String, "tabs-release-agent")
+    }
+
+    func testChatSessionsSheetIncludesSessionsFromOtherAgents() {
+        let app = launchApp()
+
+        let sessions = app.buttons.matching(NSPredicate(format: "label == 'Sessions'")).firstMatch
+        XCTAssertTrue(sessions.waitForExistence(timeout: 5))
+        sessions.tap()
+
+        XCTAssertTrue(app.buttons["sessions.session.tabs-running"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["sessions.session.tabs-release-agent"].waitForExistence(timeout: 5))
     }
 
     func testScheduleRunRoutesToItsConcreteChatSession() {
@@ -100,6 +113,7 @@ final class CompanionNavigationUITests: XCTestCase {
 
         tapTab("tab.control", in: app)
         let schedule = app.descendants(matching: .any)[Fixture.scheduleRow]
+        scrollToElement(schedule, in: app)
         XCTAssertTrue(schedule.waitForExistence(timeout: 5))
         schedule.tap()
         let run = app.descendants(matching: .any)[Fixture.routedRunRow]
@@ -115,7 +129,9 @@ final class CompanionNavigationUITests: XCTestCase {
         let app = launchApp()
 
         tapTab("tab.control", in: app)
-        app.descendants(matching: .any)[Fixture.scheduleRow].tap()
+        let schedule = app.descendants(matching: .any)[Fixture.scheduleRow]
+        scrollToElement(schedule, in: app)
+        schedule.tap()
 
         let runNow = app.buttons["control.schedule.run.7"]
         XCTAssertTrue(runNow.waitForExistence(timeout: 5))
@@ -191,6 +207,62 @@ final class CompanionNavigationUITests: XCTestCase {
         assertExactlyFourTabs(in: app)
     }
 
+    func testAgentsRosterSeparatesCurrentAndDefaultBadgesAndCombinesStatusFilter() {
+        let app = launchApp()
+        tapTab("tab.agents", in: app)
+
+        let currentDefaultRow = app.descendants(matching: .any)["agents.row.1"]
+        XCTAssertTrue(currentDefaultRow.waitForExistence(timeout: 5))
+        XCTAssertTrue(currentDefaultRow.label.contains("当前"))
+        XCTAssertTrue(currentDefaultRow.label.contains("默认"))
+        XCTAssertFalse(app.descendants(matching: .any)["agents.row.2"].label.contains("当前"))
+
+        app.buttons["可用"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["agents.row.2"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["agents.row.3"].waitForExistence(timeout: 5))
+
+        app.buttons["默认"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["agents.row.1"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.descendants(matching: .any)["agents.row.2"].exists)
+    }
+
+    func testAgentDetailCanOpenFilteredSessionsAndRouteToChat() {
+        let app = launchApp()
+        tapTab("tab.agents", in: app)
+
+        let agent = app.descendants(matching: .any)[Fixture.alternateAgentRow]
+        XCTAssertTrue(agent.waitForExistence(timeout: 5))
+        agent.tap()
+
+        let sessions = app.buttons["agents.detail.sessions"]
+        XCTAssertTrue(sessions.waitForExistence(timeout: 5))
+        sessions.tap()
+
+        XCTAssertTrue(app.buttons["sessions.session.tabs-release-agent"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["sessions.session.tabs-running"].exists)
+        app.buttons["sessions.session.tabs-release-agent"].tap()
+
+        assertChatIsVisible(in: app)
+        assertChatHeader(in: app, contains: Fixture.alternateAgentName)
+    }
+
+    func testCancellingAgentRoutedNewConversationRestoresDefaultForHeaderPlus() {
+        let app = launchApp()
+        tapTab("tab.agents", in: app)
+        let agent = app.descendants(matching: .any)[Fixture.alternateAgentRow]
+        XCTAssertTrue(agent.waitForExistence(timeout: 5))
+        agent.tap()
+
+        app.buttons["agents.detail.startConversation"].tap()
+        XCTAssertEqual(app.buttons["newConversation.agent.2"].value as? String, "Selected")
+        app.buttons["newConversation.cancel"].tap()
+
+        tapTab("tab.chat", in: app)
+        app.buttons["chat.newConversation"].tap()
+        XCTAssertEqual(app.buttons["newConversation.agent.1"].value as? String, "Selected")
+        XCTAssertEqual(app.buttons["newConversation.agent.2"].value as? String, "Not selected")
+    }
+
     func testAgentsRosterAndDetailAtMaximumDynamicTypeRemainReadableAndNavigable() {
         let app = launchApp(extraArguments: [
             "-UIPreferredContentSizeCategoryName",
@@ -201,7 +273,6 @@ final class CompanionNavigationUITests: XCTestCase {
         let alternateAgent = app.descendants(matching: .any)[Fixture.alternateAgentRow]
         scrollToElement(alternateAgent, in: app)
         XCTAssertTrue(alternateAgent.label.contains(Fixture.alternateAgentName))
-        XCTAssertTrue(alternateAgent.label.contains("gpt-5-codex"))
         XCTAssertTrue(alternateAgent.label.localizedCaseInsensitiveContains("active"))
         XCTAssertTrue(alternateAgent.isHittable)
         alternateAgent.tap()
@@ -255,10 +326,28 @@ final class CompanionNavigationUITests: XCTestCase {
 
     private func launchApp(extraArguments: [String] = []) -> XCUIApplication {
         continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
         app.launchArguments = [Fixture.launchArgument] + extraArguments
         app.launch()
         return app
+    }
+
+    private func assertChatHeader(
+        in app: XCUIApplication,
+        contains expectedText: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let header = app.descendants(matching: .any)["chat.header.agent"]
+        XCTAssertTrue(header.waitForExistence(timeout: 5), file: file, line: line)
+        let value = header.value as? String ?? header.label
+        XCTAssertTrue(
+            value.localizedCaseInsensitiveContains(expectedText),
+            "Expected Chat header '\(value)' to contain '\(expectedText)'",
+            file: file,
+            line: line
+        )
     }
 
     private func assertExactlyFourTabs(

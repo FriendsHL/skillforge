@@ -4,6 +4,13 @@ import XCTest
 
 @MainActor
 final class DebugLaunchConfigurationTests: XCTestCase {
+    func testLaunchLoadingArgumentSelectsProductionStartupFixture() {
+        XCTAssertEqual(
+            DebugLaunchConfiguration.mode(arguments: ["SkillForge", "--ui-testing-launch-loading"]),
+            .launchLoading
+        )
+    }
+
     func testOutboundAttachmentArgumentSelectsDedicatedFixture() {
         XCTAssertEqual(
             DebugLaunchConfiguration.mode(arguments: ["SkillForge", "--ui-testing-outbound-attachments"]),
@@ -36,6 +43,13 @@ final class DebugLaunchConfigurationTests: XCTestCase {
 
     func testUnknownArgumentsDoNotEnableUITestFixture() {
         XCTAssertNil(DebugLaunchConfiguration.mode(arguments: ["SkillForge", "--unrelated-argument"]))
+    }
+
+    func testPersonalAppLibraryArgumentSelectsDedicatedProductionViewFixture() {
+        XCTAssertEqual(
+            DebugLaunchConfiguration.mode(arguments: ["SkillForge", "--ui-testing-personal-app-library"]),
+            .personalAppLibrary
+        )
     }
 
     func testOutboundFixtureTakesPriorityOverOtherFixtureArguments() {

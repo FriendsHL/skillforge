@@ -4,10 +4,14 @@ struct ControlView: View {
     let endpoint: URL
     let deviceToken: String
     let agents: [MobileAgentCatalogItem]
+    let currentAgentName: String?
     let isActive: Bool
     let usesDeterministicFixture: Bool
-    let onUnauthorized: () -> Void
+    @ObservedObject var attachmentStore: AttachmentDownloadStore
+    @StateObject private var connectionMonitor: ConnectionHealthMonitor
+    let onUnauthorized: @MainActor @Sendable () -> Void
     let onOpenSession: (MobileSession) -> Void
+    let onOpenSource: (MobileSession, Int64) -> Void
 
     @State private var schedules: [MobileScheduledTask]
     @State private var sessions: [MobileSession]
@@ -15,41 +19,66 @@ struct ControlView: View {
     @State private var isLoading: Bool
     @State private var scheduleErrorText: String?
     @State private var sessionErrorText: String?
+    @State private var fixturePersonalApps: [MobilePersonalApp]
 
     init(
         endpoint: URL,
         deviceToken: String,
         agents: [MobileAgentCatalogItem],
+        currentAgentName: String? = nil,
         isActive: Bool,
         initialSchedules: [MobileScheduledTask] = [],
         initialRuns: [MobileScheduledTaskRun] = [],
         initialSessions: [MobileSession] = [],
+        initialPersonalApps: [MobilePersonalApp] = [],
         usesDeterministicFixture: Bool = false,
-        onUnauthorized: @escaping () -> Void = {},
-        onOpenSession: @escaping (MobileSession) -> Void
+        attachmentStore: AttachmentDownloadStore,
+        onUnauthorized: @escaping @MainActor @Sendable () -> Void = {},
+        onOpenSession: @escaping (MobileSession) -> Void,
+        onOpenSource: @escaping (MobileSession, Int64) -> Void = { _, _ in }
     ) {
         self.endpoint = endpoint
         self.deviceToken = deviceToken
         self.agents = agents
+        self.currentAgentName = currentAgentName
         self.isActive = isActive
         self.usesDeterministicFixture = usesDeterministicFixture
+        self.attachmentStore = attachmentStore
         self.onUnauthorized = onUnauthorized
         self.onOpenSession = onOpenSession
+        self.onOpenSource = onOpenSource
         _schedules = State(initialValue: initialSchedules)
         _sessions = State(initialValue: initialSessions)
         _fixtureRuns = State(initialValue: initialRuns)
         _isLoading = State(initialValue: !usesDeterministicFixture)
+        _fixturePersonalApps = State(initialValue: initialPersonalApps)
+        let healthClient = MobileApiClient(baseURL: endpoint, deviceToken: deviceToken)
+        let pairingIdentity = endpoint.absoluteString
+        let probe: ConnectionHealthMonitor.Probe
+        #if DEBUG
+        if usesDeterministicFixture {
+            probe = {}
+        } else {
+            probe = { _ = try await healthClient.me() }
+        }
+        #else
+        probe = { _ = try await healthClient.me() }
+        #endif
+        _connectionMonitor = StateObject(
+            wrappedValue: ConnectionHealthMonitor(
+                pairingIdentity: pairingIdentity,
+                probe: probe,
+                onUnauthorized: onUnauthorized
+            )
+        )
     }
 
     var body: some View {
         NavigationStack {
             List {
-                Section {
-                    controlSummary
-                }
-                .listRowBackground(Color.clear)
-                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 8, trailing: 16))
-
+                connectionSection
+                currentWorkSection
+                recentConversationsSection
                 scheduleSection
                 workspaceSection
             }
@@ -60,7 +89,7 @@ struct ControlView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
-                        Task { await refresh() }
+                        Task { await refreshAll() }
                     } label: {
                         Image(systemName: "arrow.clockwise")
                     }
@@ -68,40 +97,102 @@ struct ControlView: View {
                     .accessibilityLabel("Reload Control")
                 }
             }
-            .refreshable { await refresh() }
+            .refreshable { await refreshAll() }
         }
         .task(id: isActive) {
-            guard isActive, !usesDeterministicFixture else { return }
+            guard isActive else {
+                connectionMonitor.cancel()
+                return
+            }
+            connectionMonitor.check(pairingIdentity: endpoint.absoluteString)
+            guard !usesDeterministicFixture else { return }
             await refresh()
         }
+        .onDisappear { connectionMonitor.cancel() }
     }
 
     private var client: MobileApiClient {
         MobileApiClient(baseURL: endpoint, deviceToken: deviceToken)
     }
 
-    private var controlSummary: some View {
-        HStack(spacing: 14) {
-            Image(systemName: "square.grid.2x2.fill")
-                .font(.title2.weight(.semibold))
-                .foregroundStyle(.white)
-                .frame(width: 48, height: 48)
-                .background(CompanionStyle.orange, in: RoundedRectangle(cornerRadius: 8))
-            VStack(alignment: .leading, spacing: 4) {
-                Text("SkillForge Control")
-                    .font(.headline)
-                Text("Schedules, runs, and conversations")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+    @MainActor
+    private func refreshAll() async {
+        connectionMonitor.check(pairingIdentity: endpoint.absoluteString)
+        await refresh()
+    }
+
+    private var connectionSection: some View {
+        Section("Connection") {
+            Label {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(connectionMonitor.state.phase.controlTitle)
+                        .font(.body.weight(.semibold))
+                    Text(endpointDisplayText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    if let currentAgentName, !currentAgentName.isEmpty {
+                        Text("Current Agent · \(currentAgentName)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+            } icon: {
+                Image(systemName: "desktopcomputer")
+                    .foregroundStyle(CompanionStyle.orange)
             }
-            Spacer()
+            .accessibilityIdentifier("control.connection")
         }
-        .padding(.vertical, 6)
+    }
+
+    @ViewBuilder
+    private var currentWorkSection: some View {
+        Section("Current work") {
+            if isLoading && sessions.isEmpty {
+                loadingRow("Loading current work")
+            } else if let sessionErrorText, sessions.isEmpty {
+                errorRow(sessionErrorText)
+            } else if currentWorkSessions.isEmpty {
+                Label("Nothing needs attention", systemImage: "checkmark.circle")
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("control.currentWork.empty")
+            } else {
+                ForEach(currentWorkSessions) { session in
+                    sessionButton(session, identifierPrefix: "control.currentWork")
+                }
+                if let sessionErrorText {
+                    errorRow(sessionErrorText)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var recentConversationsSection: some View {
+        Section("Recent conversations") {
+            if isLoading && sessions.isEmpty {
+                loadingRow("Loading conversations")
+            } else if let sessionErrorText, sessions.isEmpty {
+                errorRow(sessionErrorText)
+            } else if recentSessions.isEmpty {
+                Label("No conversations yet", systemImage: "bubble.left.and.bubble.right")
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("control.recent.empty")
+            } else {
+                ForEach(recentSessions) { session in
+                    sessionButton(session, identifierPrefix: "control.recent")
+                }
+                if let sessionErrorText {
+                    errorRow(sessionErrorText)
+                }
+            }
+        }
     }
 
     @ViewBuilder
     private var scheduleSection: some View {
-        Section("Scheduled Automations") {
+        Section("Automations") {
             if isLoading && schedules.isEmpty {
                 HStack(spacing: 10) {
                     ProgressView()
@@ -147,6 +238,36 @@ struct ControlView: View {
     private var workspaceSection: some View {
         Section("Workspace") {
             NavigationLink {
+                WorkspaceView(
+                    endpoint: endpoint,
+                    deviceToken: deviceToken,
+                    agents: agents,
+                    sessions: sessions,
+                    sessionErrorText: sessionErrorText,
+                    initialPersonalApps: fixturePersonalApps,
+                    usesDeterministicFixture: usesDeterministicFixture,
+                    attachmentStore: attachmentStore,
+                    onUnauthorized: onUnauthorized,
+                    onOpenSession: onOpenSession,
+                    onOpenSource: openPersonalAppSource
+                )
+            } label: {
+                Label {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Workspace")
+                            .font(.body.weight(.semibold))
+                        Text("Personal Apps and conversations")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } icon: {
+                    Image(systemName: "square.grid.2x2.fill")
+                        .foregroundStyle(CompanionStyle.orange)
+                }
+            }
+            .accessibilityIdentifier("control.workspace")
+
+            NavigationLink {
                 ControlSessionsView(
                     sessions: sessions,
                     agents: agents,
@@ -171,11 +292,78 @@ struct ControlView: View {
         }
     }
 
+    @MainActor
+    private func openPersonalAppSource(sessionID: String, sourceMessageSeq: Int64) async throws {
+        if let session = sessions.first(where: { $0.id == sessionID }) {
+            onOpenSource(session, sourceMessageSeq)
+            return
+        }
+        guard !usesDeterministicFixture else { throw MobileApiError.invalidResponse }
+        let session = try await client.getSession(sessionId: sessionID)
+        onOpenSource(session, sourceMessageSeq)
+    }
+
     private var sessionSubtitle: String {
         if let sessionErrorText, sessions.isEmpty {
             return sessionErrorText
         }
         return sessions.isEmpty ? "No conversations yet" : "\(sessions.count) conversations"
+    }
+
+    private var endpointDisplayText: String {
+        guard let host = endpoint.host else { return "Paired endpoint saved" }
+        if let port = endpoint.port { return "\(host):\(port)" }
+        return host
+    }
+
+    private var currentWorkSessions: [MobileSession] {
+        ControlPresentationPolicy.currentWorkSessions(sessions)
+    }
+
+    private var recentSessions: [MobileSession] {
+        ControlPresentationPolicy.recentSessions(sessions, limit: 3)
+    }
+
+    private func sessionButton(_ session: MobileSession, identifierPrefix: String) -> some View {
+        let status = ControlPresentationPolicy.workStatus(session)
+        return Button {
+            onOpenSession(session)
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: status.symbol)
+                    .foregroundStyle(status.color)
+                    .frame(width: 26)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(ControlPresentationPolicy.sessionTitle(session))
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    Text("\(agentName(for: session.agentId)) · \(status.text)")
+                        .font(.caption)
+                        .foregroundStyle(status.color)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.right")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("\(identifierPrefix).\(session.id)")
+    }
+
+    private func loadingRow(_ text: String) -> some View {
+        HStack(spacing: 10) {
+            ProgressView()
+            Text(text).foregroundStyle(.secondary)
+        }
+    }
+
+    private func errorRow(_ text: String) -> some View {
+        Label(text, systemImage: "exclamationmark.triangle.fill")
+            .font(.caption)
+            .foregroundStyle(.red)
     }
 
     @MainActor
@@ -515,7 +703,7 @@ private struct ScheduleDetailView: View {
     }
 }
 
-private struct ControlSessionsView: View {
+struct ControlSessionsView: View {
     let sessions: [MobileSession]
     let agents: [MobileAgentCatalogItem]
     let errorText: String?
@@ -586,6 +774,33 @@ enum ControlPresentationPolicy {
 
     static func orderedSessions(_ sessions: [MobileSession]) -> [MobileSession] {
         sessions.sorted { ($0.updatedAt ?? "") > ($1.updatedAt ?? "") }
+    }
+
+    static func currentWorkSessions(_ sessions: [MobileSession], limit: Int = 5) -> [MobileSession] {
+        Array(
+            orderedSessions(sessions)
+                .filter { SessionListPolicy.group(for: $0) != .other }
+                .prefix(max(0, limit))
+        )
+    }
+
+    static func recentSessions(_ sessions: [MobileSession], limit: Int = 3) -> [MobileSession] {
+        Array(orderedSessions(sessions).prefix(max(0, limit)))
+    }
+
+    static func workStatus(_ session: MobileSession) -> ControlWorkStatus {
+        switch SessionListPolicy.group(for: session) {
+        case .running: .running
+        case .waiting: .waiting
+        case .error: .error
+        case .other: .idle
+        }
+    }
+
+    static func sessionTitle(_ session: MobileSession) -> String {
+        guard let title = session.title?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !title.isEmpty else { return "New Session" }
+        return title
     }
 
     static func scheduleText(_ task: MobileScheduledTask) -> String {
@@ -662,5 +877,51 @@ enum ControlPresentationPolicy {
         guard let value else { return nil }
         return (try? Date.ISO8601FormatStyle(includingFractionalSeconds: true).parse(value))
             ?? (try? Date.ISO8601FormatStyle().parse(value))
+    }
+}
+
+enum ControlWorkStatus {
+    case running
+    case waiting
+    case error
+    case idle
+
+    var text: String {
+        switch self {
+        case .running: "Running"
+        case .waiting: "Waiting"
+        case .error: "Needs attention"
+        case .idle: "Idle"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .running: "bolt.fill"
+        case .waiting: "person.crop.circle.badge.questionmark"
+        case .error: "exclamationmark.triangle.fill"
+        case .idle: "bubble.left.fill"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .running: .blue
+        case .waiting: .orange
+        case .error: .red
+        case .idle: .secondary
+        }
+    }
+}
+
+private extension ConnectionHealthPhase {
+    var controlTitle: String {
+        switch self {
+        case .notChecked: "SkillForge Mac paired"
+        case .checking: "Checking SkillForge Mac"
+        case .healthy: "SkillForge Mac connected"
+        case .offline: "SkillForge Mac offline"
+        case .serviceIssue: "SkillForge Mac needs attention"
+        }
     }
 }

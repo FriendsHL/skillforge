@@ -11,6 +11,17 @@ enum CompanionTab: Hashable {
 struct ChatRoute: Identifiable, Equatable {
     let id = UUID()
     let session: MobileSession
+    let sourceMessageSeq: Int64?
+
+    init(session: MobileSession, sourceMessageSeq: Int64? = nil) {
+        self.session = session
+        self.sourceMessageSeq = sourceMessageSeq
+    }
+}
+
+struct NewConversationRoute: Identifiable, Equatable {
+    let id = UUID()
+    let agentID: Int64
 }
 
 struct CompanionTabView: View {
@@ -30,17 +41,21 @@ struct CompanionTabView: View {
     private let fixtureRuns: [MobileScheduledTaskRun]
     private let fixtureAgentDetails: [Int64: MobileAgentDetail]
     private let fixtureMessages: [ChatMessage]
+    private let fixturePersonalApps: [MobilePersonalApp]
     private let preference: SelectedAgentPreference
 
     @State private var selectedTab: CompanionTab = .chat
     @State private var selectedAgent: MobileAgentSummary?
+    @State private var currentSessionAgent: MobileAgentSummary?
     @State private var agents: [MobileAgentCatalogItem]
     @State private var isLoadingAgents: Bool
     @State private var isAgentSelectionReady: Bool
     @State private var agentErrorText: String?
     @State private var chatRoute: ChatRoute?
+    @State private var newConversationRoute: NewConversationRoute?
     @State private var rootCleanupToken = 0
     @State private var fixtureDisconnected = false
+    @StateObject private var attachmentStore: AttachmentDownloadStore
 
     init(
         endpoint: URL,
@@ -53,8 +68,10 @@ struct CompanionTabView: View {
         initialRuns: [MobileScheduledTaskRun] = [],
         initialAgentDetails: [Int64: MobileAgentDetail] = [:],
         initialMessages: [ChatMessage] = [],
+        initialPersonalApps: [MobilePersonalApp] = [],
         usesDeterministicFixture: Bool = false,
-        userDefaults: UserDefaults = .standard
+        userDefaults: UserDefaults = .standard,
+        attachmentStore: AttachmentDownloadStore? = nil
     ) {
         self.endpoint = endpoint
         self.deviceToken = deviceToken
@@ -66,6 +83,7 @@ struct CompanionTabView: View {
         fixtureRuns = initialRuns
         fixtureAgentDetails = initialAgentDetails
         fixtureMessages = initialMessages
+        fixturePersonalApps = initialPersonalApps
         preference = SelectedAgentPreference(
             userDefaults: userDefaults,
             namespace: device?.id ?? endpoint.absoluteString
@@ -77,9 +95,20 @@ struct CompanionTabView: View {
             catalog: initialAgents
         )?.summary ?? defaultAgent
         _selectedAgent = State(initialValue: initialSelection)
+        _currentSessionAgent = State(initialValue: initialSessions.first.flatMap { session in
+            initialAgents.first(where: { $0.id == session.agentId })?.summary
+        })
         _agents = State(initialValue: initialAgents)
         _isLoadingAgents = State(initialValue: !usesDeterministicFixture && initialAgents.isEmpty)
         _isAgentSelectionReady = State(initialValue: usesDeterministicFixture || !initialAgents.isEmpty)
+        let deviceIdentity = device?.id ?? "token:\(deviceToken)"
+        _attachmentStore = StateObject(wrappedValue: attachmentStore ?? AttachmentDownloadStore(
+            repository: AttachmentDownloadRepository(
+                endpoint: endpoint,
+                deviceID: deviceIdentity,
+                deviceToken: deviceToken
+            )
+        ))
     }
 
     @ViewBuilder
@@ -107,10 +136,17 @@ struct CompanionTabView: View {
                         usesDeterministicFixture: usesDeterministicFixture,
                         isActive: selectedTab == .chat,
                         route: chatRoute,
+                        newConversationRoute: newConversationRoute,
                         rootCleanupToken: rootCleanupToken,
                         onRouteHandled: clearHandledRoute,
+                        onNewConversationRouteHandled: { id in
+                            guard newConversationRoute?.id == id else { return }
+                            newConversationRoute = nil
+                        },
                         onDisconnectRequested: disconnectLocally,
-                        onChatAgentSelected: selectChatAgent
+                        onChatAgentSelected: selectChatAgent,
+                        onNewConversationAgentSelected: selectPreferredAgent,
+                        attachmentStore: attachmentStore
                     )
                     .id("companion.chat")
                 } else {
@@ -129,13 +165,19 @@ struct CompanionTabView: View {
                 endpoint: endpoint,
                 deviceToken: deviceToken,
                 agents: agents,
+                currentAgentName: currentSessionAgent?.name,
                 isActive: selectedTab == .control,
                 initialSchedules: fixtureSchedules,
                 initialRuns: fixtureRuns,
                 initialSessions: fixtureSessions,
+                initialPersonalApps: fixturePersonalApps,
                 usesDeterministicFixture: usesDeterministicFixture,
+                attachmentStore: attachmentStore,
                 onUnauthorized: disconnectLocally,
-                onOpenSession: openSession
+                onOpenSession: openSession,
+                onOpenSource: { session, sourceMessageSeq in
+                    openSession(session, sourceMessageSeq: sourceMessageSeq)
+                }
             )
             .tabItem {
                 Label("Control", systemImage: "square.grid.2x2.fill")
@@ -151,6 +193,13 @@ struct CompanionTabView: View {
                 errorText: agentErrorText,
                 usesDeterministicFixture: usesDeterministicFixture,
                 fixtureDetails: fixtureAgentDetails,
+                currentAgentID: currentSessionAgent?.id,
+                initialSessions: fixtureSessions,
+                onStartConversation: { agent in
+                    selectedTab = .chat
+                    newConversationRoute = NewConversationRoute(agentID: agent.id)
+                },
+                onOpenSession: openSession,
                 onRetry: reloadAgents,
                 onUnauthorized: disconnectLocally
             )
@@ -232,19 +281,26 @@ struct CompanionTabView: View {
     }
 
     private func selectChatAgent(_ agent: MobileAgentCatalogItem) {
+        currentSessionAgent = agent.summary
+    }
+
+    private func selectPreferredAgent(_ agent: MobileAgentCatalogItem) {
         preference.save(agent.id)
         selectedAgent = agent.summary
     }
 
     private func openSession(_ session: MobileSession) {
+        openSession(session, sourceMessageSeq: nil)
+    }
+
+    private func openSession(_ session: MobileSession, sourceMessageSeq: Int64?) {
         if let sessionAgent = agents.first(where: { $0.id == session.agentId }) {
-            preference.save(sessionAgent.id)
-            selectedAgent = sessionAgent.summary
+            currentSessionAgent = sessionAgent.summary
         }
         selectedTab = .chat
         Task { @MainActor in
             await Task.yield()
-            chatRoute = ChatRoute(session: session)
+            chatRoute = ChatRoute(session: session, sourceMessageSeq: sourceMessageSeq)
         }
     }
 
@@ -421,4 +477,28 @@ enum CompanionStyle {
     static let warmBackground = Color(uiColor: .systemGroupedBackground)
     static let ink = Color(red: 0.08, green: 0.08, blue: 0.07)
     static let orange = Color(red: 0.93, green: 0.35, blue: 0.08)
+    static let userQueryBackground = Color(
+        uiColor: UIColor { traits in
+            if traits.userInterfaceStyle == .dark {
+                return UIColor(red: 0x18 / 255, green: 0x2A / 255, blue: 0x44 / 255, alpha: 1)
+            }
+            return UIColor(red: 0xEA / 255, green: 0xF2 / 255, blue: 0xFF / 255, alpha: 1)
+        }
+    )
+    static let userQueryForeground = Color(
+        uiColor: UIColor { traits in
+            if traits.userInterfaceStyle == .dark {
+                return UIColor(red: 0xF5 / 255, green: 0xF8 / 255, blue: 0xFF / 255, alpha: 1)
+            }
+            return UIColor(red: 0x17 / 255, green: 0x23 / 255, blue: 0x3A / 255, alpha: 1)
+        }
+    )
+    static let userQueryBorder = Color(
+        uiColor: UIColor { traits in
+            if traits.userInterfaceStyle == .dark {
+                return UIColor(red: 0x35 / 255, green: 0x51 / 255, blue: 0x7A / 255, alpha: 1)
+            }
+            return UIColor(red: 0xC7 / 255, green: 0xD9 / 255, blue: 0xF8 / 255, alpha: 1)
+        }
+    )
 }

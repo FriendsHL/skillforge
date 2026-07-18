@@ -72,7 +72,6 @@ struct NewConversationView: View {
                     Button("Cancel") { dismiss() }
                         .disabled(isCreating)
                         .accessibilityIdentifier("newConversation.cancel")
-                        .accessibilityIdentifier("newConversation.cancel")
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(action: createConversation) {

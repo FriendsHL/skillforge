@@ -42,6 +42,53 @@ final class ChatMessageTests: XCTestCase {
         XCTAssertEqual(message.contentBlocks[1].attachment?.byteSize, 8192)
     }
 
+    func testDecodesInteractiveArtifactReferenceMetadata() throws {
+        let message = try decodeMessage("""
+        {
+          "seqNo": 33,
+          "role": "assistant",
+          "content": [{
+            "type": "interactive_artifact_ref",
+            "attachment_id": "app-1",
+            "mime_type": "text/html",
+            "filename": "budget.html",
+            "caption": "Offline budget planner",
+            "title": "July budget",
+            "artifact_schema_version": 1
+          }]
+        }
+        """)
+
+        let attachment = try XCTUnwrap(message.contentBlocks.first?.attachment)
+        XCTAssertEqual(attachment.kind, .interactive)
+        XCTAssertEqual(attachment.title, "July budget")
+        XCTAssertEqual(attachment.artifactSchemaVersion, 1)
+        XCTAssertEqual(attachment.caption, "Offline budget planner")
+    }
+
+    func testNormalizesRealMessageCreatedAtWithoutInventingMissingTime() throws {
+        let withTime = try decodeMessage("""
+        {
+          "seqNo": 34,
+          "role": "assistant",
+          "createdAt": "2026-07-16T18:30:00.123Z",
+          "content": "Timed response"
+        }
+        """)
+        let withoutTime = try decodeMessage("""
+        { "seqNo": 35, "role": "assistant", "content": "Untimed response" }
+        """)
+
+        let normalized = ChatMessage.normalize([withTime, withoutTime])
+
+        XCTAssertEqual(
+            normalized[0].createdAt,
+            try Date.ISO8601FormatStyle(includingFractionalSeconds: true)
+                .parse("2026-07-16T18:30:00.123Z")
+        )
+        XCTAssertNil(normalized[1].createdAt)
+    }
+
     func testNormalizesPureAndMixedAttachmentsWithoutChangingStableMessageIds() throws {
         let pure = try decodeMessage("""
         {
@@ -142,11 +189,33 @@ final class ChatMessageTests: XCTestCase {
         ```
         """)
 
-        XCTAssertEqual(blocks.map(\.kind), [.heading, .paragraph, .unorderedList, .code])
+        XCTAssertEqual(blocks.map(\.kind), [.heading(level: 1), .paragraph, .unorderedList, .code])
         XCTAssertEqual(blocks[0].text, "执行计划")
         XCTAssertEqual(blocks[2].items, ["读取配置", "运行测试"])
         XCTAssertEqual(blocks[3].language, "swift")
         XCTAssertEqual(blocks[3].text, "let status = \"running\"")
+    }
+
+    func testMarkdownParserPreservesSupportedHeadingLevels() {
+        let blocks = MarkdownBlock.parse("""
+        # Report
+        ## Findings
+        ### Details
+        """)
+
+        XCTAssertEqual(
+            blocks.map(\.kind),
+            [.heading(level: 1), .heading(level: 2), .heading(level: 3)]
+        )
+    }
+
+    @MainActor
+    func testMarkdownCodeCopyActionForwardsExactPayload() {
+        var written: String?
+
+        MarkdownCodeCopyAction.perform("let status = \"ready\"\n") { written = $0 }
+
+        XCTAssertEqual(written, "let status = \"ready\"\n")
     }
 
     func testNormalizesToolUseAndResultIntoAssistantToolCard() throws {
@@ -277,6 +346,73 @@ final class ChatMessageTests: XCTestCase {
         XCTAssertEqual(pending?.kind, .confirmation)
         XCTAssertEqual(pending?.question, "确认安装依赖")
         XCTAssertEqual(pending?.context, "Agent 请求安装 marked")
+    }
+
+    func testDecodesStructuredFailureFactsFromBothRealtimeEventShapes() throws {
+        let statusEvent = try JSONDecoder().decode(MobileChatEvent.self, from: Data("""
+        {
+          "type": "session_status",
+          "sessionId": "session-1",
+          "status": "error",
+          "error": "连接模型服务超时",
+          "failureSource": "network",
+          "failureCode": "FIRST_TOKEN_TIMEOUT",
+          "retryable": true,
+          "sideEffects": "none"
+        }
+        """.utf8))
+        let updatedEvent = try JSONDecoder().decode(MobileChatEvent.self, from: Data("""
+        {
+          "type": "session_updated",
+          "sessionId": "session-1",
+          "runtimeStatus": "error",
+          "runtimeError": "工具执行失败",
+          "failureSource": "tool",
+          "failureCode": "TOOL_VALIDATION",
+          "retryable": false,
+          "sideEffects": "possible"
+        }
+        """.utf8))
+
+        XCTAssertEqual(statusEvent.failureSource, .network)
+        XCTAssertEqual(statusEvent.failureCode, "FIRST_TOKEN_TIMEOUT")
+        XCTAssertEqual(statusEvent.sideEffects, .noEffects)
+        XCTAssertEqual(statusEvent.retryable, true)
+        XCTAssertEqual(updatedEvent.runtimeStatus, "error")
+        XCTAssertEqual(updatedEvent.runtimeError, "工具执行失败")
+        XCTAssertEqual(updatedEvent.failureSource, .tool)
+        XCTAssertEqual(updatedEvent.failureCode, "TOOL_VALIDATION")
+        XCTAssertEqual(updatedEvent.sideEffects, .possible)
+        XCTAssertEqual(updatedEvent.retryable, false)
+    }
+
+    func testUnknownAndLegacyRealtimeFailureFactsDecodeWithoutInferringSafety() throws {
+        let future = try JSONDecoder().decode(MobileChatEvent.self, from: Data("""
+        {
+          "type": "session_status",
+          "sessionId": "session-1",
+          "status": "error",
+          "failureSource": "future_source",
+          "retryable": "unknown",
+          "sideEffects": { "future": true }
+        }
+        """.utf8))
+        let legacy = try JSONDecoder().decode(MobileChatEvent.self, from: Data("""
+        {
+          "type": "session_status",
+          "sessionId": "session-1",
+          "status": "error",
+          "error": "legacy failure"
+        }
+        """.utf8))
+
+        XCTAssertEqual(future.failureSource, .unknown)
+        XCTAssertEqual(future.sideEffects, .unknown)
+        XCTAssertNil(future.retryable)
+        XCTAssertNil(legacy.failureSource)
+        XCTAssertNil(legacy.failureCode)
+        XCTAssertNil(legacy.sideEffects)
+        XCTAssertNil(legacy.retryable)
     }
 
     private func decodeMessage(_ json: String) throws -> MobileSessionMessage {

@@ -67,6 +67,12 @@ final class StreamingHandoffUITests: XCTestCase {
         transcript.swipeDown()
         continueCheckpoint("streaming", in: app)
         XCTAssertTrue(waitForCheckpoint("tool-complete", in: app, timeout: 5))
+        let latestButton = app.buttons["chat.scrollToBottom"]
+        XCTAssertTrue(latestButton.waitForExistence(timeout: 3))
+        XCTAssertTrue(
+            latestButton.label.contains("1 条新消息"),
+            "One streaming Assistant turn must count once while follow is paused"
+        )
         continueCheckpoint("tool-complete", in: app)
         XCTAssertTrue(waitForCheckpoint("persisted", in: app, timeout: 5))
         continueCheckpoint("persisted", in: app)

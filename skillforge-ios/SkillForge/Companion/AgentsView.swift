@@ -8,10 +8,15 @@ struct AgentsView: View {
     let errorText: String?
     let usesDeterministicFixture: Bool
     let fixtureDetails: [Int64: MobileAgentDetail]
+    let currentAgentID: Int64?
+    let initialSessions: [MobileSession]
+    let onStartConversation: (MobileAgentCatalogItem) -> Void
+    let onOpenSession: (MobileSession) -> Void
     let onRetry: () -> Void
     let onUnauthorized: () -> Void
 
     @State private var searchText = ""
+    @State private var selectedFilter: AgentsRosterFilter = .all
 
     init(
         endpoint: URL,
@@ -21,6 +26,10 @@ struct AgentsView: View {
         errorText: String?,
         usesDeterministicFixture: Bool = false,
         fixtureDetails: [Int64: MobileAgentDetail] = [:],
+        currentAgentID: Int64? = nil,
+        initialSessions: [MobileSession] = [],
+        onStartConversation: @escaping (MobileAgentCatalogItem) -> Void = { _ in },
+        onOpenSession: @escaping (MobileSession) -> Void = { _ in },
         onRetry: @escaping () -> Void,
         onUnauthorized: @escaping () -> Void = {}
     ) {
@@ -31,6 +40,10 @@ struct AgentsView: View {
         self.errorText = errorText
         self.usesDeterministicFixture = usesDeterministicFixture
         self.fixtureDetails = fixtureDetails
+        self.currentAgentID = currentAgentID
+        self.initialSessions = initialSessions
+        self.onStartConversation = onStartConversation
+        self.onOpenSession = onOpenSession
         self.onRetry = onRetry
         self.onUnauthorized = onUnauthorized
     }
@@ -45,6 +58,9 @@ struct AgentsView: View {
             .safeAreaPadding(.bottom, 72)
             .navigationTitle("Agents")
             .searchable(text: $searchText, prompt: "Search Agents")
+            .safeAreaInset(edge: .top, spacing: 0) {
+                filterBar
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button(action: onRetry) {
@@ -61,11 +77,29 @@ struct AgentsView: View {
                         client: MobileApiClient(baseURL: endpoint, deviceToken: deviceToken),
                         fixtureDetail: fixtureDetails[agentId],
                         usesDeterministicFixture: usesDeterministicFixture,
+                        initialSessions: initialSessions,
+                        onStartConversation: onStartConversation,
+                        onOpenSession: onOpenSession,
                         onUnauthorized: onUnauthorized
                     )
                 }
             }
         }
+    }
+
+    private var filterBar: some View {
+        Picker("Agent filter", selection: $selectedFilter) {
+            ForEach(AgentsRosterFilter.allCases) { filter in
+                Text(filter.title)
+                    .tag(filter)
+                    .accessibilityIdentifier("agents.filter.\(filter.rawValue)")
+            }
+        }
+        .pickerStyle(.segmented)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(CompanionStyle.warmBackground)
+        .accessibilityIdentifier("agents.filter")
     }
 
     @ViewBuilder
@@ -109,10 +143,12 @@ struct AgentsView: View {
             Section("Configuration Roster") {
                 ForEach(filteredAgents) { agent in
                     NavigationLink(value: agent.id) {
-                        AgentRosterRow(agent: agent)
+                        AgentRosterRow(agent: agent, currentAgentID: currentAgentID)
                     }
                     .accessibilityIdentifier("agents.row.\(agent.id)")
-                    .accessibilityLabel(agent.accessibilitySummary)
+                    .accessibilityLabel(
+                        agent.rosterAccessibilitySummary(currentAgentID: currentAgentID)
+                    )
                 }
             }
 
@@ -127,18 +163,13 @@ struct AgentsView: View {
     }
 
     private var filteredAgents: [MobileAgentCatalogItem] {
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return agents }
-        return agents.filter { agent in
-            [agent.name, agent.description, agent.role, agent.modelId]
-                .compactMap { $0 }
-                .contains { $0.localizedCaseInsensitiveContains(query) }
-        }
+        AgentsRosterPolicy.filtered(agents, query: searchText, filter: selectedFilter)
     }
 }
 
 private struct AgentRosterRow: View {
     let agent: MobileAgentCatalogItem
+    let currentAgentID: Int64?
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
@@ -151,22 +182,16 @@ private struct AgentRosterRow: View {
         }
         .padding(.vertical, 5)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(agent.accessibilitySummary)
+        .accessibilityLabel(agent.rosterAccessibilitySummary(currentAgentID: currentAgentID))
     }
 
     private var standardLayout: some View {
         HStack(alignment: .top, spacing: 13) {
             agentIcon
             VStack(alignment: .leading, spacing: 6) {
-                nameAndDefault
+                nameAndBadges
                 description
-                Text("Role: \(agent.role.displayValue) · Model: \(agent.modelId ?? "Not configured")")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Text(
-                    "Status: \(agent.status.displayName) · Visibility: \(agent.visibility.displayName) · Source: \(agent.source.displayName)"
-                )
+                Text("\(agent.status.displayName) · \(agent.source.displayName)")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -181,16 +206,9 @@ private struct AgentRosterRow: View {
             Text(agent.name)
                 .font(.headline)
                 .fixedSize(horizontal: false, vertical: true)
-            if agent.isDefault {
-                Text("Default")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(CompanionStyle.orange)
-            }
+            badges
             description
-            metadataLine("Role", agent.role.displayValue)
-            metadataLine("Model", agent.modelId ?? "Not configured")
             metadataLine("Status", agent.status.displayName)
-            metadataLine("Visibility", agent.visibility.displayName)
             metadataLine("Source", agent.source.displayName)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -203,15 +221,28 @@ private struct AgentRosterRow: View {
             .frame(width: 36, height: 36, alignment: .leading)
     }
 
-    private var nameAndDefault: some View {
+    private var nameAndBadges: some View {
         HStack(alignment: .firstTextBaseline, spacing: 7) {
             Text(agent.name)
                 .font(.body.weight(.semibold))
                 .fixedSize(horizontal: false, vertical: true)
-            if agent.isDefault {
-                Text("Default")
+            badges
+        }
+    }
+
+    private var badges: some View {
+        HStack(spacing: 5) {
+            ForEach(AgentsRosterPolicy.badges(for: agent, currentAgentID: currentAgentID)) { badge in
+                Text(badge.title)
                     .font(.caption2.weight(.semibold))
-                    .foregroundStyle(CompanionStyle.orange)
+                    .foregroundStyle(badge == .current ? Color.white : CompanionStyle.orange)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(
+                        badge == .current ? CompanionStyle.ink : CompanionStyle.orange.opacity(0.12),
+                        in: Capsule()
+                    )
+                    .accessibilityIdentifier("agents.row.\(agent.id).\(badge.rawValue)Badge")
             }
         }
     }
@@ -238,32 +269,125 @@ private struct AgentRosterRow: View {
     }
 }
 
+enum AgentsRosterFilter: String, CaseIterable, Identifiable {
+    case all
+    case available
+    case defaultAgent = "default"
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .all: "全部"
+        case .available: "可用"
+        case .defaultAgent: "默认"
+        }
+    }
+}
+
+enum AgentRosterBadge: String, Identifiable, Equatable {
+    case current
+    case defaultAgent = "default"
+
+    var id: String { rawValue }
+    var title: String { self == .current ? "当前" : "默认" }
+}
+
+enum AgentsRosterPolicy {
+    static func filtered(
+        _ agents: [MobileAgentCatalogItem],
+        query: String,
+        filter: AgentsRosterFilter
+    ) -> [MobileAgentCatalogItem] {
+        let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        return agents.filter { agent in
+            let matchesFilter = switch filter {
+            case .all: true
+            case .available: agent.status.localizedCaseInsensitiveCompare("active") == .orderedSame
+            case .defaultAgent: agent.isDefault
+            }
+            guard matchesFilter, !normalizedQuery.isEmpty else { return matchesFilter }
+            return [agent.name, agent.description]
+                .compactMap { $0 }
+                .contains { $0.localizedCaseInsensitiveContains(normalizedQuery) }
+        }
+    }
+
+    static func badges(
+        for agent: MobileAgentCatalogItem,
+        currentAgentID: Int64?
+    ) -> [AgentRosterBadge] {
+        var badges: [AgentRosterBadge] = []
+        if agent.id == currentAgentID { badges.append(.current) }
+        if agent.isDefault { badges.append(.defaultAgent) }
+        return badges
+    }
+}
+
+enum AgentSessionScope: String, CaseIterable, Identifiable {
+    case agent
+    case all
+
+    var id: String { rawValue }
+    var title: String { self == .agent ? "该 Agent" : "全部 Agent" }
+}
+
+enum AgentSessionPolicy {
+    static func filtered(
+        _ sessions: [MobileSession],
+        agentID: Int64,
+        scope: AgentSessionScope
+    ) -> [MobileSession] {
+        scope == .agent ? sessions.filter { $0.agentId == agentID } : sessions
+    }
+
+    static func mostRecent(_ sessions: [MobileSession], agentID: Int64) -> MobileSession? {
+        sessions
+            .filter { $0.agentId == agentID }
+            .max { lhs, rhs in (lhs.updatedAt ?? "") < (rhs.updatedAt ?? "") }
+    }
+}
+
 private struct AgentDetailView: View {
     let agent: MobileAgentCatalogItem
     let client: MobileApiClient
     let fixtureDetail: MobileAgentDetail?
     let usesDeterministicFixture: Bool
+    let initialSessions: [MobileSession]
+    let onStartConversation: (MobileAgentCatalogItem) -> Void
+    let onOpenSession: (MobileSession) -> Void
     let onUnauthorized: () -> Void
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     @State private var detail: MobileAgentDetail?
     @State private var isLoading: Bool
     @State private var errorText: String?
+    @State private var sessions: [MobileSession]
+    @State private var sessionsErrorText: String?
+    @State private var sessionsOpen = false
+    @State private var sessionScope = AgentSessionScope.agent
 
     init(
         agent: MobileAgentCatalogItem,
         client: MobileApiClient,
         fixtureDetail: MobileAgentDetail?,
         usesDeterministicFixture: Bool,
+        initialSessions: [MobileSession],
+        onStartConversation: @escaping (MobileAgentCatalogItem) -> Void,
+        onOpenSession: @escaping (MobileSession) -> Void,
         onUnauthorized: @escaping () -> Void
     ) {
         self.agent = agent
         self.client = client
         self.fixtureDetail = fixtureDetail
         self.usesDeterministicFixture = usesDeterministicFixture
+        self.initialSessions = initialSessions
+        self.onStartConversation = onStartConversation
+        self.onOpenSession = onOpenSession
         self.onUnauthorized = onUnauthorized
         _detail = State(initialValue: fixtureDetail)
         _isLoading = State(initialValue: !usesDeterministicFixture)
+        _sessions = State(initialValue: initialSessions)
     }
 
     var body: some View {
@@ -296,10 +420,50 @@ private struct AgentDetailView: View {
             guard !usesDeterministicFixture, detail == nil else { return }
             await load()
         }
+        .sheet(isPresented: $sessionsOpen) {
+            NavigationStack {
+                VStack(spacing: 0) {
+                    Picker("Session scope", selection: $sessionScope) {
+                        ForEach(AgentSessionScope.allCases) { scope in Text(scope.title).tag(scope) }
+                    }
+                    .pickerStyle(.segmented)
+                    .padding()
+                    SessionListView(
+                        defaultAgent: agent.summary,
+                        sessions: AgentSessionPolicy.filtered(sessions, agentID: agent.id, scope: sessionScope),
+                        selectedSessionId: nil,
+                        onSelect: { session in sessionsOpen = false; onOpenSession(session) },
+                        onCreate: { sessionsOpen = false; onStartConversation(agent) },
+                        onRefresh: { await loadSessions() }
+                    )
+                }
+            }
+        }
     }
 
     private func detailList(_ detail: MobileAgentDetail) -> some View {
         List {
+            Section("Chat") {
+                Button("开始新对话", systemImage: "plus.bubble") { onStartConversation(agent) }
+                    .accessibilityIdentifier("agents.detail.startConversation")
+                Button("继续最近对话", systemImage: "arrow.forward.circle") {
+                    if let session = AgentSessionPolicy.mostRecent(sessions, agentID: agent.id) {
+                        onOpenSession(session)
+                    }
+                }
+                .disabled(AgentSessionPolicy.mostRecent(sessions, agentID: agent.id) == nil)
+                .accessibilityIdentifier("agents.detail.continueRecent")
+                Button("查看全部 Sessions", systemImage: "rectangle.stack") { sessionsOpen = true }
+                    .accessibilityIdentifier("agents.detail.sessions")
+                if let sessionsErrorText {
+                    Label(sessionsErrorText, systemImage: "wifi.exclamationmark")
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                    Button("重新加载 Sessions", systemImage: "arrow.clockwise") {
+                        Task { await loadSessions() }
+                    }
+                }
+            }
             Section("Overview") {
                 if let description = detail.description, !description.isEmpty {
                     Text(description)
@@ -436,9 +600,25 @@ private struct AgentDetailView: View {
         defer { isLoading = false }
         do {
             detail = try await client.getAgent(id: agent.id)
+            await loadSessions()
         } catch {
             guard !Task.isCancelled else { return }
             errorText = errorMessage(for: error)
+            if case let MobileApiError.httpStatus(status, _) = error, status == 401 {
+                onUnauthorized()
+            }
+        }
+    }
+
+    @MainActor
+    private func loadSessions() async {
+        guard !usesDeterministicFixture else { return }
+        sessionsErrorText = nil
+        do {
+            sessions = try await client.listSessions()
+        } catch {
+            guard !Task.isCancelled else { return }
+            sessionsErrorText = "Sessions 暂时无法加载。"
             if case let MobileApiError.httpStatus(status, _) = error, status == 401 {
                 onUnauthorized()
             }
@@ -463,8 +643,9 @@ private struct AgentDetailView: View {
 }
 
 private extension MobileAgentCatalogItem {
-    var accessibilitySummary: String {
-        [name, modelId, role?.displayName, status.displayName, visibility.displayName, source.displayName]
+    func rosterAccessibilitySummary(currentAgentID: Int64?) -> String {
+        let badges = AgentsRosterPolicy.badges(for: self, currentAgentID: currentAgentID).map(\.title)
+        return ([name] + badges + [description, status.displayName, source.displayName])
             .compactMap { $0 }
             .joined(separator: ", ")
     }
