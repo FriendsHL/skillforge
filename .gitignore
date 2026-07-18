@@ -17,6 +17,7 @@ skillforge-ios/build/
 skillforge-ios/DerivedData/
 skillforge-ios/*.xcodeproj/xcuserdata/
 skillforge-ios/*.xcworkspace/xcuserdata/
+skillforge-ios/Config/Signing.local.xcconfig
 *.xcuserstate
 
 # Obsidian

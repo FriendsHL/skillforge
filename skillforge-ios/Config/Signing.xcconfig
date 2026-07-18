@@ -1,0 +1,6 @@
+// Shared signing defaults. Keep personal Apple team identifiers out of Git.
+// Create Signing.local.xcconfig beside this file for physical-device builds:
+// DEVELOPMENT_TEAM = YOUR_TEAM_ID
+
+DEVELOPMENT_TEAM =
+#include? "Signing.local.xcconfig"
