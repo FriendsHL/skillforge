@@ -186,6 +186,233 @@ final class MobileApiClientTests: XCTestCase {
         XCTAssertEqual(observedRequests[3].body?["message"] as? String, "hello")
     }
 
+    func testDecodesRuntimeRecoveryFieldsAndRemainsBackwardCompatible() throws {
+        let current = try JSONDecoder().decode(MobileSession.self, from: Data("""
+        {
+          "id": "failed-session",
+          "agentId": 3,
+          "status": "active",
+          "runtimeStatus": "error",
+          "runtimeStep": "retryable",
+          "runtimeError": "模型服务在响应前超时",
+          "retryable": true
+        }
+        """.utf8))
+        let legacy = try JSONDecoder().decode(MobileSession.self, from: Data("""
+        {
+          "id": "legacy-session",
+          "agentId": 3,
+          "status": "active",
+          "runtimeStatus": "idle"
+        }
+        """.utf8))
+
+        XCTAssertEqual(current.runtimeStep, "retryable")
+        XCTAssertEqual(current.runtimeError, "模型服务在响应前超时")
+        XCTAssertEqual(current.retryable, true)
+        XCTAssertNil(legacy.runtimeStep)
+        XCTAssertNil(legacy.runtimeError)
+        XCTAssertNil(legacy.retryable)
+    }
+
+    func testDecodesStructuredRuntimeFailureFactAndFailsClosedForFutureValues() throws {
+        let current = try JSONDecoder().decode(MobileSession.self, from: Data("""
+        {
+          "id": "failed-session",
+          "agentId": 3,
+          "runtimeStatus": "error",
+          "runtimeError": "模型服务暂时不可用",
+          "failureSource": "model_provider",
+          "failureCode": "PROVIDER_503",
+          "retryable": true,
+          "sideEffects": "none"
+        }
+        """.utf8))
+        let future = try JSONDecoder().decode(MobileSession.self, from: Data("""
+        {
+          "id": "future-session",
+          "agentId": 3,
+          "runtimeStatus": "error",
+          "failureSource": "provider_proxy",
+          "failureCode": 503,
+          "retryable": "server_decides",
+          "sideEffects": "maybe"
+        }
+        """.utf8))
+        let legacy = try JSONDecoder().decode(MobileSession.self, from: Data("""
+        {
+          "id": "legacy-session",
+          "agentId": 3,
+          "runtimeStatus": "error",
+          "runtimeError": "legacy failure"
+        }
+        """.utf8))
+
+        XCTAssertEqual(current.failureSource, .modelProvider)
+        XCTAssertEqual(current.failureCode, "PROVIDER_503")
+        XCTAssertEqual(current.sideEffects, .noEffects)
+        XCTAssertEqual(current.retryable, true)
+        XCTAssertEqual(future.failureSource, .unknown)
+        XCTAssertNil(future.failureCode)
+        XCTAssertNil(future.retryable, "Unknown retry values must fail closed")
+        XCTAssertEqual(future.sideEffects, .unknown)
+        XCTAssertNil(legacy.failureSource)
+        XCTAssertNil(legacy.failureCode)
+        XCTAssertNil(legacy.sideEffects)
+        XCTAssertNil(legacy.retryable)
+    }
+
+    func testRetriesFailedTurnThroughAuthorizedMobileEndpointWithoutRequestBody() async throws {
+        nonisolated(unsafe) var observedRequest: URLRequest?
+        URLProtocolStub.requestHandler = { request in
+            observedRequest = request
+            let response = HTTPURLResponse(
+                url: request.url!, statusCode: 202, httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, Data("""
+            { "sessionId": "failed-session", "status": "accepted" }
+            """.utf8))
+        }
+        let client = MobileApiClient(
+            baseURL: URL(string: "http://127.0.0.1:8080")!,
+            deviceToken: "device-token",
+            session: EndpointProbeTests.stubbedSession()
+        )
+
+        let response = try await client.retrySession(sessionId: "failed-session")
+
+        let request = try XCTUnwrap(observedRequest)
+        XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertEqual(request.url?.path, "/api/mobile/client/sessions/failed-session/retry")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer device-token")
+        XCTAssertNil(request.httpBody)
+        XCTAssertEqual(response.sessionId, "failed-session")
+        XCTAssertEqual(response.status, "accepted")
+    }
+
+    func testRetryDecodesControlledConflictEnvelopeWithoutExposingRawBody() async throws {
+        URLProtocolStub.requestHandler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!, statusCode: 409, httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, Data(#"{"code":"RETRY_NOT_ALLOWED","message":"This turn cannot be retried safely.","retryable":false,"debug":"secret stack trace"}"#.utf8))
+        }
+        let client = MobileApiClient(
+            baseURL: URL(string: "http://127.0.0.1:8080")!,
+            deviceToken: "device-token",
+            session: EndpointProbeTests.stubbedSession()
+        )
+
+        do {
+            _ = try await client.retrySession(sessionId: "failed-session")
+            XCTFail("Expected retry conflict")
+        } catch let MobileApiError.retryRejected(status, code, message, retryable) {
+            XCTAssertEqual(status, 409)
+            XCTAssertEqual(code, "RETRY_NOT_ALLOWED")
+            XCTAssertEqual(message, "This turn cannot be retried safely.")
+            XCTAssertEqual(retryable, false)
+            XCTAssertEqual(MobileApiError.retryRejected(
+                status: status,
+                code: code,
+                message: message,
+                retryable: retryable
+            ).localizedDescription, message)
+            XCTAssertFalse(message.contains("secret"))
+        } catch {
+            XCTFail("Expected controlled retry rejection, got \(error)")
+        }
+    }
+
+    func testRetryDecodesRateLimitEnvelopeAndKeepsServerRetryDecision() async throws {
+        URLProtocolStub.requestHandler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!, statusCode: 429, httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, Data(#"{"code":"RETRY_BUSY","message":"Server is busy. Please try again later.","retryable":true}"#.utf8))
+        }
+
+        do {
+            _ = try await retryClient().retrySession(sessionId: "failed-session")
+            XCTFail("Expected rate limit")
+        } catch let MobileApiError.retryRejected(status, code, message, retryable) {
+            XCTAssertEqual(status, 429)
+            XCTAssertEqual(code, "RETRY_BUSY")
+            XCTAssertEqual(message, "Server is busy. Please try again later.")
+            XCTAssertEqual(retryable, true)
+        } catch {
+            XCTFail("Expected controlled retry rejection, got \(error)")
+        }
+    }
+
+    func testRetryMalformedErrorUsesSafeFallbackAndNeverRawResponseBody() async throws {
+        URLProtocolStub.requestHandler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!, statusCode: 409, httpVersion: nil,
+                headerFields: ["Content-Type": "text/plain"]
+            )!
+            return (response, Data("database password=do-not-show".utf8))
+        }
+
+        do {
+            _ = try await retryClient().retrySession(sessionId: "failed-session")
+            XCTFail("Expected conflict")
+        } catch let MobileApiError.retryRejected(status, code, message, retryable) {
+            XCTAssertEqual(status, 409)
+            XCTAssertNil(code)
+            XCTAssertEqual(message, "当前任务不能安全重试。")
+            XCTAssertNil(retryable)
+            XCTAssertFalse(message.contains("password"))
+        } catch {
+            XCTFail("Expected controlled retry rejection, got \(error)")
+        }
+    }
+
+    func testRetryEnvelopeRejectsControlCharactersBeforeShowingServerFields() async throws {
+        URLProtocolStub.requestHandler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!, statusCode: 409, httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, Data(#"{"code":"RETRY_NOT_ALLOWED\u0000DEBUG","message":"安全文案\nsecret diagnostic","retryable":false}"#.utf8))
+        }
+
+        do {
+            _ = try await retryClient().retrySession(sessionId: "failed-session")
+            XCTFail("Expected conflict")
+        } catch let MobileApiError.retryRejected(status, code, message, retryable) {
+            XCTAssertEqual(status, 409)
+            XCTAssertNil(code)
+            XCTAssertEqual(message, "当前任务不能安全重试。")
+            XCTAssertEqual(retryable, false)
+            XCTAssertFalse(message.contains("secret"))
+        } catch {
+            XCTFail("Expected controlled retry rejection, got \(error)")
+        }
+    }
+
+    func testRetryUnauthorizedRemainsPairingResetCompatibleWithoutRawBody() async throws {
+        URLProtocolStub.requestHandler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!, statusCode: 401, httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, Data(#"{"message":"token=secret"}"#.utf8))
+        }
+
+        do {
+            _ = try await retryClient().retrySession(sessionId: "failed-session")
+            XCTFail("Expected unauthorized")
+        } catch let MobileApiError.httpStatus(status, body) {
+            XCTAssertEqual(status, 401)
+            XCTAssertTrue(body.isEmpty)
+        } catch {
+            XCTFail("Expected pairing-compatible 401, got \(error)")
+        }
+    }
+
     func testListAgentsUsesAuthorizedEndpointAndDecodesSafeConfigurationSummary() async throws {
         nonisolated(unsafe) var observedRequest: URLRequest?
         URLProtocolStub.requestHandler = { request in
@@ -709,6 +936,14 @@ final class MobileApiClientTests: XCTestCase {
     }
 
     private func agentClient() -> MobileApiClient {
+        MobileApiClient(
+            baseURL: URL(string: "http://127.0.0.1:8080")!,
+            deviceToken: "device-token",
+            session: EndpointProbeTests.stubbedSession()
+        )
+    }
+
+    private func retryClient() -> MobileApiClient {
         MobileApiClient(
             baseURL: URL(string: "http://127.0.0.1:8080")!,
             deviceToken: "device-token",

@@ -274,6 +274,50 @@ struct MobileMeResponse: Decodable {
     let features: MobileFeatureFlags
 }
 
+enum MobileRuntimeFailureSource: Equatable, Sendable, Decodable {
+    case modelProvider
+    case network
+    case tool
+    case harness
+    case userAction
+    case unknown
+
+    init(from decoder: Decoder) throws {
+        guard let rawValue = try? decoder.singleValueContainer().decode(String.self) else {
+            self = .unknown
+            return
+        }
+        switch rawValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "model_provider": self = .modelProvider
+        case "network": self = .network
+        case "tool": self = .tool
+        case "harness": self = .harness
+        case "user_action": self = .userAction
+        default: self = .unknown
+        }
+    }
+}
+
+enum MobileRuntimeSideEffects: Equatable, Sendable, Decodable {
+    case noEffects
+    case possible
+    case observed
+    case unknown
+
+    init(from decoder: Decoder) throws {
+        guard let rawValue = try? decoder.singleValueContainer().decode(String.self) else {
+            self = .unknown
+            return
+        }
+        switch rawValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "none": self = .noEffects
+        case "possible": self = .possible
+        case "observed": self = .observed
+        default: self = .unknown
+        }
+    }
+}
+
 struct MobileSession: Decodable, Identifiable, Equatable {
     let id: String
     let userId: Int64?
@@ -281,8 +325,69 @@ struct MobileSession: Decodable, Identifiable, Equatable {
     let title: String?
     let status: String?
     let runtimeStatus: String?
+    let runtimeStep: String?
+    let runtimeError: String?
+    let failureSource: MobileRuntimeFailureSource?
+    let failureCode: String?
+    let retryable: Bool?
+    let sideEffects: MobileRuntimeSideEffects?
     let messageCount: Int?
     let updatedAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, userId, agentId, title, status, runtimeStatus, runtimeStep, runtimeError
+        case failureSource, failureCode, retryable, sideEffects, messageCount, updatedAt
+    }
+
+    init(
+        id: String,
+        userId: Int64?,
+        agentId: Int64,
+        title: String?,
+        status: String?,
+        runtimeStatus: String?,
+        runtimeStep: String? = nil,
+        runtimeError: String? = nil,
+        failureSource: MobileRuntimeFailureSource? = nil,
+        failureCode: String? = nil,
+        retryable: Bool? = nil,
+        sideEffects: MobileRuntimeSideEffects? = nil,
+        messageCount: Int?,
+        updatedAt: String?
+    ) {
+        self.id = id
+        self.userId = userId
+        self.agentId = agentId
+        self.title = title
+        self.status = status
+        self.runtimeStatus = runtimeStatus
+        self.runtimeStep = runtimeStep
+        self.runtimeError = runtimeError
+        self.failureSource = failureSource
+        self.failureCode = failureCode
+        self.retryable = retryable
+        self.sideEffects = sideEffects
+        self.messageCount = messageCount
+        self.updatedAt = updatedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        userId = try container.decodeIfPresent(Int64.self, forKey: .userId)
+        agentId = try container.decode(Int64.self, forKey: .agentId)
+        title = try container.decodeIfPresent(String.self, forKey: .title)
+        status = try container.decodeIfPresent(String.self, forKey: .status)
+        runtimeStatus = try container.decodeIfPresent(String.self, forKey: .runtimeStatus)
+        runtimeStep = try container.decodeIfPresent(String.self, forKey: .runtimeStep)
+        runtimeError = try container.decodeIfPresent(String.self, forKey: .runtimeError)
+        failureSource = try? container.decode(MobileRuntimeFailureSource.self, forKey: .failureSource)
+        failureCode = try? container.decode(String.self, forKey: .failureCode)
+        retryable = try? container.decode(Bool.self, forKey: .retryable)
+        sideEffects = try? container.decode(MobileRuntimeSideEffects.self, forKey: .sideEffects)
+        messageCount = try container.decodeIfPresent(Int.self, forKey: .messageCount)
+        updatedAt = try container.decodeIfPresent(String.self, forKey: .updatedAt)
+    }
 }
 
 struct MobileSessionMessage: Decodable, Identifiable, Equatable {
@@ -453,10 +558,141 @@ struct MobilePushRegistrationResponse: Decodable, Equatable {
     let registeredAt: String
 }
 
+enum MobilePersonalAppAvailability: Equatable, Decodable, Sendable {
+    case available
+    case unavailable
+    case revoked
+    case unknown(String)
+
+    init(from decoder: Decoder) throws {
+        let value = try decoder.singleValueContainer().decode(String.self)
+        switch value.lowercased() {
+        case "available": self = .available
+        case "unavailable": self = .unavailable
+        case "revoked": self = .revoked
+        default: self = .unknown(value)
+        }
+    }
+
+    var isAvailable: Bool {
+        self == .available
+    }
+}
+
+struct MobilePersonalApp: Decodable, Identifiable, Equatable, Sendable {
+    let artifactId: String
+    let sessionId: String
+    let sourceMessageSeq: Int64
+    let title: String
+    let caption: String?
+    let schemaVersion: Int
+    let permissions: [String]
+    let network: [String]
+    let agentId: Int64
+    let agentName: String
+    let sessionTitle: String?
+    let createdAt: String
+    let lastOpenedAt: String?
+    let favorite: Bool
+    let availability: MobilePersonalAppAvailability
+
+    var id: String { artifactId }
+
+    func withPreference(_ receipt: MobilePersonalAppReceipt) -> MobilePersonalApp {
+        guard receipt.artifactId == artifactId else { return self }
+        return MobilePersonalApp(
+            artifactId: artifactId,
+            sessionId: sessionId,
+            sourceMessageSeq: sourceMessageSeq,
+            title: title,
+            caption: caption,
+            schemaVersion: schemaVersion,
+            permissions: permissions,
+            network: network,
+            agentId: agentId,
+            agentName: agentName,
+            sessionTitle: sessionTitle,
+            createdAt: createdAt,
+            lastOpenedAt: receipt.lastOpenedAt ?? lastOpenedAt,
+            favorite: receipt.favorite,
+            availability: availability
+        )
+    }
+
+    func withAvailability(_ availability: MobilePersonalAppAvailability) -> MobilePersonalApp {
+        MobilePersonalApp(
+            artifactId: artifactId,
+            sessionId: sessionId,
+            sourceMessageSeq: sourceMessageSeq,
+            title: title,
+            caption: caption,
+            schemaVersion: schemaVersion,
+            permissions: permissions,
+            network: network,
+            agentId: agentId,
+            agentName: agentName,
+            sessionTitle: sessionTitle,
+            createdAt: createdAt,
+            lastOpenedAt: lastOpenedAt,
+            favorite: favorite,
+            availability: availability
+        )
+    }
+}
+
+struct MobilePersonalAppPage: Decodable, Equatable, Sendable {
+    let items: [MobilePersonalApp]
+    let nextCursor: String?
+}
+
+struct MobilePersonalAppReceipt: Decodable, Equatable, Sendable {
+    let artifactId: String
+    let favorite: Bool
+    let lastOpenedAt: String?
+}
+
+enum MobilePersonalAppSort: String, Equatable, Sendable {
+    case recent
+    case created
+}
+
+struct MobilePersonalAppQuery: Equatable, Sendable {
+    let cursor: String?
+    let limit: Int
+    let sort: MobilePersonalAppSort
+    let search: String?
+    let agentId: Int64?
+    let sessionId: String?
+    let favorite: Bool?
+    let createdAfter: Date?
+
+    init(
+        cursor: String? = nil,
+        limit: Int = 25,
+        sort: MobilePersonalAppSort = .recent,
+        search: String? = nil,
+        agentId: Int64? = nil,
+        sessionId: String? = nil,
+        favorite: Bool? = nil,
+        createdAfter: Date? = nil
+    ) {
+        self.cursor = cursor
+        self.limit = limit
+        self.sort = sort
+        self.search = search
+        self.agentId = agentId
+        self.sessionId = sessionId
+        self.favorite = favorite
+        self.createdAfter = createdAfter
+    }
+}
+
 enum MobileApiError: Error, LocalizedError {
     case invalidResponse
     case missingDeviceToken
     case httpStatus(Int, String)
+    case retryRejected(status: Int, code: String?, message: String, retryable: Bool?)
+    case personalAppRejected(status: Int, code: String?, message: String)
 
     var errorDescription: String? {
         switch self {
@@ -466,8 +702,40 @@ enum MobileApiError: Error, LocalizedError {
             return "Missing SkillForge mobile device token"
         case let .httpStatus(status, body):
             return body.isEmpty ? "SkillForge request failed with HTTP \(status)" : body
+        case let .retryRejected(_, _, message, _):
+            return message
+        case let .personalAppRejected(_, _, message):
+            return message
         }
     }
+}
+
+private struct MobileRetryErrorEnvelope: Decodable {
+    let code: String?
+    let message: String?
+    let retryable: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case code, message, retryable
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        code = try? container.decode(String.self, forKey: .code)
+        message = try? container.decode(String.self, forKey: .message)
+        retryable = try? container.decode(Bool.self, forKey: .retryable)
+    }
+}
+
+private struct MobilePersonalAppErrorEnvelope: Decodable {
+    let code: String?
+    let message: String?
+}
+
+private enum MobileErrorResponsePolicy: Equatable {
+    case rawBody
+    case retryEnvelope
+    case personalAppEnvelope
 }
 
 struct MobileApiClient {
@@ -541,6 +809,73 @@ struct MobileApiClient {
 
     func listSessions() async throws -> [MobileSession] {
         try await send(path: "/api/mobile/client/sessions", method: "GET", body: Optional<String>.none, authorized: true)
+    }
+
+    func listPersonalApps(
+        query: MobilePersonalAppQuery = MobilePersonalAppQuery()
+    ) async throws -> MobilePersonalAppPage {
+        try validate(query: query)
+        var queryItems = [
+            URLQueryItem(name: "limit", value: String(query.limit)),
+            URLQueryItem(name: "sort", value: query.sort.rawValue)
+        ]
+        if let cursor = normalizedQueryValue(query.cursor) {
+            queryItems.append(URLQueryItem(name: "cursor", value: cursor))
+        }
+        if let search = normalizedQueryValue(query.search) {
+            queryItems.append(URLQueryItem(name: "q", value: search))
+        }
+        if let agentId = query.agentId {
+            queryItems.append(URLQueryItem(name: "agentId", value: String(agentId)))
+        }
+        if let sessionId = query.sessionId {
+            queryItems.append(URLQueryItem(name: "sessionId", value: sessionId))
+        }
+        if let favorite = query.favorite {
+            queryItems.append(URLQueryItem(name: "favorite", value: String(favorite)))
+        }
+        if let createdAfter = query.createdAfter {
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime]
+            queryItems.append(URLQueryItem(
+                name: "createdAfter",
+                value: formatter.string(from: createdAfter)
+            ))
+        }
+        return try await send(
+            path: "/api/mobile/client/personal-apps",
+            method: "GET",
+            body: Optional<String>.none,
+            authorized: true,
+            queryItems: queryItems,
+            errorResponsePolicy: .personalAppEnvelope
+        )
+    }
+
+    func setPersonalAppFavorite(
+        artifactId: String,
+        favorite: Bool
+    ) async throws -> MobilePersonalAppReceipt {
+        struct PreferenceRequest: Encodable { let favorite: Bool }
+        try validatePersonalAppPathComponent(artifactId)
+        return try await send(
+            path: "/api/mobile/client/personal-apps/\(artifactId)/preference",
+            method: "PATCH",
+            body: PreferenceRequest(favorite: favorite),
+            authorized: true,
+            errorResponsePolicy: .personalAppEnvelope
+        )
+    }
+
+    func recordPersonalAppOpened(artifactId: String) async throws -> MobilePersonalAppReceipt {
+        try validatePersonalAppPathComponent(artifactId)
+        return try await send(
+            path: "/api/mobile/client/personal-apps/\(artifactId)/opened",
+            method: "POST",
+            body: Optional<String>.none,
+            authorized: true,
+            errorResponsePolicy: .personalAppEnvelope
+        )
     }
 
     func listSchedules() async throws -> [MobileScheduledTask] {
@@ -639,6 +974,16 @@ struct MobileApiClient {
             method: "POST",
             body: SendMessageRequest(message: text, attachmentIds: attachmentIds),
             authorized: true
+        )
+    }
+
+    func retrySession(sessionId: String) async throws -> MobileSendMessageResponse {
+        try await send(
+            path: "/api/mobile/client/sessions/\(sessionId)/retry",
+            method: "POST",
+            body: Optional<String>.none,
+            authorized: true,
+            errorResponsePolicy: .retryEnvelope
         )
     }
 
@@ -753,7 +1098,8 @@ struct MobileApiClient {
         method: String,
         body: RequestBody?,
         authorized: Bool,
-        queryItems: [URLQueryItem] = []
+        queryItems: [URLQueryItem] = [],
+        errorResponsePolicy: MobileErrorResponsePolicy = .rawBody
     ) async throws -> ResponseBody {
         let pathURL = baseURL.skillForgeAppendingPath(path)
         var components = URLComponents(url: pathURL, resolvingAgainstBaseURL: false)
@@ -779,15 +1125,120 @@ struct MobileApiClient {
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw MobileApiError.invalidResponse }
         guard (200..<300).contains(http.statusCode) else {
-            throw MobileApiError.httpStatus(http.statusCode, String(data: data, encoding: .utf8) ?? "")
+            throw mappedHTTPError(
+                status: http.statusCode,
+                data: data,
+                policy: errorResponsePolicy
+            )
         }
         return try JSONDecoder().decode(ResponseBody.self, from: data)
+    }
+
+    private func mappedHTTPError(
+        status: Int,
+        data: Data,
+        policy: MobileErrorResponsePolicy
+    ) -> MobileApiError {
+        if policy == .personalAppEnvelope {
+            guard status != 401 else { return .httpStatus(status, "") }
+            let envelope = try? JSONDecoder().decode(MobilePersonalAppErrorEnvelope.self, from: data)
+            let code = envelope?.code?.skillForgeSafeField(maximumCharacters: 64)
+            let message = envelope?.message?.skillForgeSafeField(maximumCharacters: 500)
+                ?? Self.personalAppFallbackMessage(for: status)
+            return .personalAppRejected(status: status, code: code, message: message)
+        }
+        guard policy == .retryEnvelope else {
+            return .httpStatus(status, String(data: data, encoding: .utf8) ?? "")
+        }
+        guard status != 401 else {
+            return .httpStatus(status, "")
+        }
+
+        let envelope = try? JSONDecoder().decode(MobileRetryErrorEnvelope.self, from: data)
+        let code = envelope?.code?.skillForgeSafeField(maximumCharacters: 64)
+        let message = envelope?.message?.skillForgeSafeField(maximumCharacters: 500)
+            ?? Self.retryFallbackMessage(for: status)
+        return .retryRejected(
+            status: status,
+            code: code,
+            message: message,
+            retryable: envelope?.retryable
+        )
+    }
+
+    private static func retryFallbackMessage(for status: Int) -> String {
+        switch status {
+        case 409: "当前任务不能安全重试。"
+        case 429: "请求过于频繁，请稍后再试。"
+        default: "重试请求失败，请稍后再试。"
+        }
+    }
+
+    private static func personalAppFallbackMessage(for status: Int) -> String {
+        switch status {
+        case 403, 404: "This Personal App is no longer available."
+        case 429: "Too many Personal App requests. Please try again shortly."
+        default: "The Personal Apps request failed. Please try again."
+        }
+    }
+
+    private func validate(query: MobilePersonalAppQuery) throws {
+        guard (1...50).contains(query.limit) else { throw MobileApiError.invalidResponse }
+        if let cursor = query.cursor {
+            guard normalizedQueryValue(cursor, maximumCharacters: 1_024) != nil else {
+                throw MobileApiError.invalidResponse
+            }
+        }
+        if let search = query.search,
+           normalizedQueryValue(search, maximumCharacters: 200) == nil,
+           !search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            throw MobileApiError.invalidResponse
+        }
+        if let sessionId = query.sessionId {
+            try validatePersonalAppPathComponent(sessionId)
+        }
+        if let agentId = query.agentId, agentId <= 0 {
+            throw MobileApiError.invalidResponse
+        }
+    }
+
+    private func normalizedQueryValue(
+        _ value: String?,
+        maximumCharacters: Int = 1_024
+    ) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.count <= maximumCharacters else { return nil }
+        guard !trimmed.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) else {
+            return nil
+        }
+        return trimmed
+    }
+
+    private func validatePersonalAppPathComponent(_ value: String) throws {
+        guard !value.isEmpty, value != ".", value != "..", value.utf8.count <= 128 else {
+            throw MobileApiError.invalidResponse
+        }
+        guard value.unicodeScalars.allSatisfy({
+            CharacterSet.alphanumerics.contains($0) || "-_.".unicodeScalars.contains($0)
+        }) else {
+            throw MobileApiError.invalidResponse
+        }
     }
 }
 
 private extension String {
     var isBlank: Bool {
         trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    func skillForgeSafeField(maximumCharacters: Int) -> String? {
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        guard !trimmed.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) else {
+            return nil
+        }
+        return String(trimmed.prefix(maximumCharacters))
     }
 }
 
@@ -823,6 +1274,8 @@ struct MobileContentBlock: Decodable, Equatable {
     let sheetCount: Int?
     let byteSize: Int64?
     let caption: String?
+    let title: String?
+    let artifactSchemaVersion: Int?
 
     enum CodingKeys: String, CodingKey {
         case type
@@ -852,6 +1305,9 @@ struct MobileContentBlock: Decodable, Equatable {
         case fileSizeSnake = "file_size"
         case size
         case caption
+        case title
+        case artifactSchemaVersion
+        case artifactSchemaVersionSnake = "artifact_schema_version"
     }
 
     init(
@@ -869,7 +1325,9 @@ struct MobileContentBlock: Decodable, Equatable {
         pageCount: Int? = nil,
         sheetCount: Int? = nil,
         byteSize: Int64? = nil,
-        caption: String? = nil
+        caption: String? = nil,
+        title: String? = nil,
+        artifactSchemaVersion: Int? = nil
     ) {
         self.type = type
         self.text = text
@@ -886,6 +1344,8 @@ struct MobileContentBlock: Decodable, Equatable {
         self.sheetCount = sheetCount
         self.byteSize = byteSize
         self.caption = caption
+        self.title = title
+        self.artifactSchemaVersion = artifactSchemaVersion
     }
 
     init(from decoder: Decoder) throws {
@@ -920,6 +1380,9 @@ struct MobileContentBlock: Decodable, Equatable {
         let genericSize = try container.decodeIfPresent(Int64.self, forKey: .size)
         byteSize = snakeByteSize ?? camelByteSize ?? snakeFileSize ?? camelFileSize ?? genericSize
         caption = try container.decodeIfPresent(String.self, forKey: .caption)
+        title = try container.decodeIfPresent(String.self, forKey: .title)
+        artifactSchemaVersion = try container.decodeIfPresent(Int.self, forKey: .artifactSchemaVersionSnake)
+            ?? container.decodeIfPresent(Int.self, forKey: .artifactSchemaVersion)
     }
 
     static func text(_ text: String) -> MobileContentBlock {
@@ -939,12 +1402,14 @@ struct MobileContentBlock: Decodable, Equatable {
             pageCount: pageCount,
             sheetCount: sheetCount,
             byteSize: byteSize,
-            caption: caption?.isBlank == false ? caption : nil
+            caption: caption?.isBlank == false ? caption : nil,
+            title: title?.isBlank == false ? title : nil,
+            artifactSchemaVersion: artifactSchemaVersion
         )
     }
 }
 
-enum MobileJSONValue: Decodable, Equatable {
+enum MobileJSONValue: Decodable, Equatable, Sendable {
     case string(String)
     case number(String)
     case bool(Bool)
@@ -1011,6 +1476,17 @@ enum MobileJSONValue: Decodable, Equatable {
             return values.map(\.previewText).joined(separator: "\n")
         case .null:
             return ""
+        }
+    }
+
+    var foundationValue: Any {
+        switch self {
+        case let .string(value): value
+        case let .number(value): NSDecimalNumber(string: value)
+        case let .bool(value): value
+        case let .object(value): value.mapValues(\.foundationValue)
+        case let .array(value): value.map(\.foundationValue)
+        case .null: NSNull()
         }
     }
 }
