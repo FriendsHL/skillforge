@@ -16,6 +16,8 @@ import java.time.Instant;
 @Table(name = "t_chat_attachment", indexes = {
         @Index(name = "idx_chat_attachment_session", columnList = "session_id, created_at"),
         @Index(name = "idx_chat_attachment_session_seq", columnList = "session_id, seq_no"),
+        @Index(name = "idx_chat_attachment_session_source_message",
+                columnList = "session_id, source_message_seq"),
         @Index(name = "idx_chat_attachment_origin_status_created", columnList = "origin, status, created_at")
 })
 public class ChatAttachmentEntity {
@@ -32,6 +34,9 @@ public class ChatAttachmentEntity {
 
     @Column(name = "seq_no")
     private Long seqNo;
+
+    @Column(name = "source_message_seq")
+    private Long sourceMessageSeq;
 
     @Column(name = "kind", length = 16, nullable = false)
     private String kind;
@@ -86,6 +91,9 @@ public class ChatAttachmentEntity {
     @Column(name = "caption", length = 1000)
     private String caption;
 
+    @Column(name = "interactive_manifest_json", columnDefinition = "TEXT")
+    private String interactiveManifestJson;
+
     // ─── Observability columns (V73, MULTIMODAL-OBSERVABILITY-COLUMNS) ───
     // All four are nullable. Wire-level field names use camelCase
     // (errorCode / errorMessage / processingMode / extractedTextChars) — see
@@ -131,6 +139,8 @@ public class ChatAttachmentEntity {
     public void setUserId(Long userId) { this.userId = userId; }
     public Long getSeqNo() { return seqNo; }
     public void setSeqNo(Long seqNo) { this.seqNo = seqNo; }
+    public Long getSourceMessageSeq() { return sourceMessageSeq; }
+    public void setSourceMessageSeq(Long sourceMessageSeq) { this.sourceMessageSeq = sourceMessageSeq; }
     public String getKind() { return kind; }
     public void setKind(String kind) { this.kind = kind; }
     public String getMimeType() { return mimeType; }
@@ -153,6 +163,10 @@ public class ChatAttachmentEntity {
     public void setSha256(String sha256) { this.sha256 = sha256; }
     public String getCaption() { return caption; }
     public void setCaption(String caption) { this.caption = caption; }
+    public String getInteractiveManifestJson() { return interactiveManifestJson; }
+    public void setInteractiveManifestJson(String interactiveManifestJson) {
+        this.interactiveManifestJson = interactiveManifestJson;
+    }
     public String getErrorCode() { return errorCode; }
     public void setErrorCode(String errorCode) { this.errorCode = errorCode; }
     public String getErrorMessage() { return errorMessage; }

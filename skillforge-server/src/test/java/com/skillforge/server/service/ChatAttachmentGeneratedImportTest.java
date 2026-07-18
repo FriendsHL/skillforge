@@ -126,6 +126,22 @@ class ChatAttachmentGeneratedImportTest {
     }
 
     @Test
+    void rejectsHistoricalFileFromTheSameSessionManagedDirectory() throws Exception {
+        Path historical = Files.createDirectories(storageRoot.resolve("session-1"))
+                .resolve("historical.pdf");
+        Files.writeString(historical, "%PDF-1.4\nhistorical");
+
+        assertThatThrownBy(() -> service.importGeneratedFile(
+                "session-1", 7L, "tool-history", historical, null, stagingRoot))
+                .isInstanceOf(SecurityException.class)
+                .hasMessageContaining("current run workspace");
+
+        assertThat(historical).hasContent("%PDF-1.4\nhistorical");
+        verify(repository, never()).findBySessionIdAndSourceToolUseId(any(), any());
+        verify(repository, never()).saveAndFlush(any());
+    }
+
+    @Test
     void retryReplacesStaleZeroByteTargetWhenDatabaseRowWasNeverCreated() throws Exception {
         Path source = stagingRoot.resolve("report.pdf");
         Files.writeString(source, "%PDF-1.4\nrecovered");

@@ -68,6 +68,25 @@ public class MobileAttachmentController {
         return new ResponseEntity<>(stream(file, range.start(), range.length()), base, HttpStatus.PARTIAL_CONTENT);
     }
 
+    @GetMapping(value = "/{attachmentId}/manifest", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<String> manifest(
+            @PathVariable String sessionId,
+            @PathVariable String attachmentId,
+            HttpServletRequest request) {
+        MobileDevicePrincipal principal = principal(request);
+        if (!scopes(principal).contains(SCOPE_CHAT_READ)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        }
+        return downloadService.findAssistantArtifactManifest(
+                        sessionId, attachmentId, principal.userId())
+                .map(json -> ResponseEntity.ok()
+                        .cacheControl(CacheControl.noStore())
+                        .header("X-Content-Type-Options", "nosniff")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body(json))
+                .orElseGet(() -> ResponseEntity.notFound().build());
+    }
+
     private static ResponseEntity<StreamingResponseBody> full(
             MobileAttachmentDownloadService.Download file, HttpHeaders headers) {
         headers.setContentLength(file.size());

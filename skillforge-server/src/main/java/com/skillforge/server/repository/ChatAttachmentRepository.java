@@ -54,6 +54,22 @@ public interface ChatAttachmentRepository extends JpaRepository<ChatAttachmentEn
             + "AND a.status IN ('uploaded', 'publishing', 'deleting')")
     int markGeneratedPublished(@Param("id") String id);
 
+    @Modifying(flushAutomatically = true)
+    @Query("UPDATE ChatAttachmentEntity a SET a.sourceMessageSeq = :sourceMessageSeq, "
+            + "a.status = 'published' WHERE a.id = :id AND a.sessionId = :sessionId "
+            + "AND a.kind = 'interactive' AND a.origin = 'agent_generated'")
+    int bindPersonalAppSourceMessage(
+            @Param("sessionId") String sessionId,
+            @Param("id") String id,
+            @Param("sourceMessageSeq") long sourceMessageSeq);
+
+    @Modifying(flushAutomatically = true)
+    @Query("UPDATE ChatAttachmentEntity a SET a.sourceMessageSeq = NULL, "
+            + "a.status = CASE WHEN a.status = 'published' THEN 'uploaded' ELSE a.status END "
+            + "WHERE a.sessionId = :sessionId AND a.kind = 'interactive' "
+            + "AND a.origin = 'agent_generated' AND a.sourceMessageSeq IS NOT NULL")
+    int clearPersonalAppSourceMessages(@Param("sessionId") String sessionId);
+
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Transactional
     @Query("UPDATE ChatAttachmentEntity a SET a.status = :status, a.boundAt = :boundAt "

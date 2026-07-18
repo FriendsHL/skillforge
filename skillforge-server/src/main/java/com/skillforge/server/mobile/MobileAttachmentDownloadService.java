@@ -95,6 +95,21 @@ public class MobileAttachmentDownloadService {
 
     public Optional<Download> findAssistantArtifact(
             String sessionId, String attachmentId, Long principalUserId) {
+        return findOwnedReferencedAttachment(sessionId, attachmentId, principalUserId)
+                .flatMap(this::openVerifiedDownload);
+    }
+
+    public Optional<String> findAssistantArtifactManifest(
+            String sessionId, String attachmentId, Long principalUserId) {
+        return findOwnedReferencedAttachment(sessionId, attachmentId, principalUserId)
+                .filter(attachment -> "interactive".equals(attachment.getKind()))
+                .filter(attachment -> "text/html".equals(attachment.getMimeType()))
+                .map(ChatAttachmentEntity::getInteractiveManifestJson)
+                .filter(manifest -> !manifest.isBlank());
+    }
+
+    private Optional<ChatAttachmentEntity> findOwnedReferencedAttachment(
+            String sessionId, String attachmentId, Long principalUserId) {
         if (principalUserId == null || principalUserId == 0L) return Optional.empty();
         boolean ownsSession = sessionRepository.findById(sessionId)
                 .filter(session -> principalUserId.equals(session.getUserId()))
@@ -104,8 +119,7 @@ public class MobileAttachmentDownloadService {
                 .filter(attachment -> sessionId.equals(attachment.getSessionId()))
                 .filter(attachment -> principalUserId.equals(attachment.getUserId()))
                 .filter(attachment -> "agent_generated".equals(attachment.getOrigin()))
-                .filter(maintenanceService::isReferenced)
-                .flatMap(this::openVerifiedDownload);
+                .filter(maintenanceService::isReferenced);
     }
 
     private Optional<Download> openVerifiedDownload(ChatAttachmentEntity attachment) {

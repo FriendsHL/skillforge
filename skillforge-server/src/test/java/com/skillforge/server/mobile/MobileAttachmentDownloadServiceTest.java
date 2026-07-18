@@ -29,6 +29,30 @@ class MobileAttachmentDownloadServiceTest {
     @TempDir Path root;
 
     @Test
+    void manifestRequiresSameOwnershipReferenceAndInteractiveKind() {
+        SessionEntity session = new SessionEntity();
+        session.setId("session-1");
+        session.setUserId(7L);
+        ChatAttachmentEntity attachment = new ChatAttachmentEntity();
+        attachment.setId("artifact-1");
+        attachment.setSessionId("session-1");
+        attachment.setUserId(7L);
+        attachment.setOrigin("agent_generated");
+        attachment.setKind("interactive");
+        attachment.setMimeType("text/html");
+        attachment.setInteractiveManifestJson("{\"schemaVersion\":1}");
+        when(sessionRepository.findById("session-1")).thenReturn(Optional.of(session));
+        when(attachmentRepository.findById("artifact-1")).thenReturn(Optional.of(attachment));
+        when(maintenanceService.isReferenced(attachment)).thenReturn(true);
+        MobileAttachmentDownloadService service = new MobileAttachmentDownloadService(
+                sessionRepository, attachmentRepository, maintenanceService, root.toString());
+
+        assertThat(service.findAssistantArtifactManifest("session-1", "artifact-1", 7L))
+                .contains("{\"schemaVersion\":1}");
+        assertThat(service.findAssistantArtifactManifest("session-1", "artifact-1", 8L)).isEmpty();
+    }
+
+    @Test
     void exactPrincipalOwnershipIsRequiredAndSystemUserIsNeverWildcard() throws Exception {
         SessionEntity session = new SessionEntity();
         session.setId("session-1");
