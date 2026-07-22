@@ -1008,6 +1008,7 @@ public class ChatService {
                 s.setRuntimeStatus("waiting_user");
                 RuntimeFailureState.clear(s);
                 s.setRuntimeStep("waiting_control");
+                clearRecoveryState(s);
                 sessionService.saveSession(s);
                 if (broadcaster != null) {
                     broadcaster.sessionStatus(sessionId, "waiting_user", "waiting_control", null);
@@ -1054,6 +1055,7 @@ public class ChatService {
                 }
                 RuntimeFailureState.clear(s);
                 s.setRuntimeStep(wasCancelled ? "cancelled" : null);
+                clearRecoveryState(s);
             }
             sessionService.saveSession(s);
             if (broadcaster != null) {
@@ -1496,6 +1498,89 @@ public class ChatService {
                 throw error;
             }
         }
+    }
+
+    /**
+     * Resume a loop abandoned by a previous JVM without appending a synthetic user message.
+     * The persisted transcript is the source of truth: a user tail is replayed as the current
+     * turn, while a paired tool_result tail is passed as completed history.
+     */
+    public void resumeInterruptedTurnAsync(String sessionId) {
+        synchronized (compactionService.lockFor(sessionId)) {
+            SessionEntity session = sessionService.getSession(sessionId);
+            if (!"running".equals(session.getRuntimeStatus())) {
+                throw new IllegalStateException("session is not an interrupted running task");
+            }
+            if (hasActiveLoopTask(sessionId)) {
+                throw new RetryBusyException();
+            }
+            Long executionUserId = session.getUserId();
+            if (executionUserId == null) {
+                throw new IllegalStateException("session has no execution owner");
+            }
+            List<Message> persisted = sessionService.getContextMessages(sessionId);
+            if (persisted.isEmpty()) {
+                throw new IllegalStateException("session has no persisted recovery boundary");
+            }
+
+            Message tail = persisted.get(persisted.size() - 1);
+            List<Message> history;
+            String userText = null;
+            Message userBlock = null;
+            if (isRetryableUserTurn(tail)) {
+                history = new ArrayList<>(persisted.subList(0, persisted.size() - 1));
+                userText = extractRetryUserText(tail);
+                userBlock = tail;
+            } else if (isToolResultMessage(tail)) {
+                history = new ArrayList<>(persisted);
+            } else {
+                throw new IllegalStateException("session tail is not a resumable boundary");
+            }
+
+            ResumeLoopSubmission submission = reserveResumeLoop();
+            try {
+                AgentEntity agent = agentService.getAgent(session.getAgentId());
+                String traceId = UUID.randomUUID().toString();
+                String rootTraceId = sessionService.getActiveRootTraceId(sessionId);
+                if (rootTraceId == null) {
+                    rootTraceId = traceId;
+                    sessionService.setActiveRootTraceId(sessionId, rootTraceId);
+                }
+                session.setCompletedAt(null);
+                session.setRuntimeStep("Recovering");
+                RuntimeFailureState.clear(session);
+                sessionService.saveSession(session);
+                if (broadcaster != null) {
+                    broadcaster.sessionStatus(sessionId, "running", "Recovering", null);
+                    broadcaster.userEvent(session.getUserId(),
+                            sessionUpdatedPayload(session, session.getMessageCount()));
+                }
+                submission.start(new ResumeLoopRequest(sessionId, executionUserId, agent,
+                        history, traceId, rootTraceId, userText, userBlock));
+            } catch (RuntimeException | Error error) {
+                submission.abort(error);
+                throw error;
+            }
+        }
+    }
+
+    private static boolean isToolResultMessage(Message message) {
+        if (message == null || message.getRole() != Message.Role.USER
+                || !(message.getContent() instanceof List<?> blocks)) {
+            return false;
+        }
+        for (Object block : blocks) {
+            if (block instanceof ContentBlock cb && "tool_result".equals(cb.getType())) return true;
+            if (block instanceof Map<?, ?> map && "tool_result".equals(String.valueOf(map.get("type")))) return true;
+        }
+        return false;
+    }
+
+    private static void clearRecoveryState(SessionEntity session) {
+        session.setRecoveryAttempts(0);
+        session.setRecoveryState("none");
+        session.setRecoveryReason(null);
+        session.setRecoveryStartedAt(null);
     }
 
     private static boolean isRetryableUserTurn(Message message) {

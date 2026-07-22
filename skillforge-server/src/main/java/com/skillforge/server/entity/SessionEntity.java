@@ -80,6 +80,20 @@ public class SessionEntity {
     @Column(name = "runtime_side_effects", length = 16)
     private String runtimeSideEffects;
 
+    /** Consecutive startup recovery claims; capped by the recovery coordinator. */
+    @Column(name = "recovery_attempts", nullable = false)
+    private int recoveryAttempts = 0;
+
+    /** none / recovering / interrupted / wedged. */
+    @Column(name = "recovery_state", nullable = false, length = 16)
+    private String recoveryState = "none";
+
+    @Column(name = "recovery_reason", length = 64)
+    private String recoveryReason;
+
+    @Column(name = "recovery_started_at")
+    private Instant recoveryStartedAt;
+
     /** 执行模式: ask / auto (覆盖 Agent 默认值) */
     @Column(length = 16)
     private String executionMode = "ask";
@@ -401,6 +415,15 @@ public class SessionEntity {
     public void setRuntimeSideEffects(String runtimeSideEffects) {
         this.runtimeSideEffects = runtimeSideEffects;
     }
+
+    public int getRecoveryAttempts() { return recoveryAttempts; }
+    public void setRecoveryAttempts(int recoveryAttempts) { this.recoveryAttempts = recoveryAttempts; }
+    public String getRecoveryState() { return recoveryState; }
+    public void setRecoveryState(String recoveryState) { this.recoveryState = recoveryState; }
+    public String getRecoveryReason() { return recoveryReason; }
+    public void setRecoveryReason(String recoveryReason) { this.recoveryReason = recoveryReason; }
+    public Instant getRecoveryStartedAt() { return recoveryStartedAt; }
+    public void setRecoveryStartedAt(Instant recoveryStartedAt) { this.recoveryStartedAt = recoveryStartedAt; }
 
     @JsonProperty("failureSource")
     public String getFailureSource() {

@@ -83,7 +83,7 @@ class SubAgentStartupRecoveryTest {
 
         // OBS-4 §2.1: startup recovery uses 4-arg chatAsync(preserveActiveRoot=true) to keep
         // child's persisted active_root (decision Q5: active_root persisted across JVM restart).
-        verify(chatService, times(1)).chatAsync(eq("c-running"), contains("Resume from restart"), eq(11L), eq(true));
+        verify(chatService, times(1)).resumeInterruptedTurnAsync("c-running");
         verify(subAgentRegistry, never())
                 .onSessionLoopFinished(anyString(), anyString(), anyString(), anyInt(), anyLong());
         verify(subAgentRegistry, never()).notifyParentOfOrphanRun(any(), anyString());

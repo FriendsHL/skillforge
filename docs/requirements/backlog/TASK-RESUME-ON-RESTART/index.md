@@ -3,7 +3,7 @@
 ---
 id: TASK-RESUME-ON-RESTART
 mode: full
-status: kill-recovery MVP scope proposed; implementation not started
+status: kill-recovery MVP root and SubAgent recovery implemented; Workflow/operations pending
 priority: P1
 risk: High
 created: 2026-06-24
@@ -34,7 +34,7 @@ OpenClaw 当前方案中值得复用的不是具体 SQLite 实现，而是以下
 2. turn admission、恢复 claim 和原始请求关联必须持久化。
 3. 启动时同时检查显式恢复标记与“仍 running 但没有活 owner”的孤儿任务。
 4. 自动恢复有持久化次数预算、退避、稳定 dispatch ID 和 tombstone，不能无限循环。
-5. Kill Recovery MVP 对孤立 tool_use 采用删除并从完整消息边界重跑，明确接受可能重复副作用；完整方案再通过 receipt 做精确判定。
+5. Kill Recovery MVP 从最后完整持久化消息边界重跑；正常路径不产生持久化孤立 tool_use，异常孤立数据 fail closed，明确接受可能重复副作用。
 6. main session、subagent、background task、cron、ACP 由明确的 lifecycle owner 分别处置。
 7. 对无法安全续接的 transcript，明确要求用户重试，而不是制造“已恢复”的假象。
 
@@ -56,7 +56,7 @@ OpenClaw 当前方案中值得复用的不是具体 SQLite 实现，而是以下
 | 决策 | 结论 |
 | --- | --- |
 | 恢复精度 | 最近一个持久化安全边界，不承诺指令级/mid-tool 精确续点 |
-| MVP 副作用策略 | 删除孤立 tool_use 并重新唤醒 task；不新增 Tool Receipt，接受 at-least-once 与重复副作用风险 |
+| MVP 副作用策略 | 从完整持久化边界重新唤醒 task；不新增 Tool Receipt，异常孤立数据标 interrupted，接受 at-least-once 与重复副作用风险 |
 | waiting_user | 恢复 registry/card，保持等待，不自动发起新的 agent turn |
 | 根 turn 恢复 | 从原始 source turn 继续，不追加伪造 user Query；恢复 directive 存 claim 并仅注入 engine 的防御性 context copy |
 | 多实例 | 从第一版就使用 owner instance + epoch + lease + CAS claim，不能依赖单机 startup 假设 |

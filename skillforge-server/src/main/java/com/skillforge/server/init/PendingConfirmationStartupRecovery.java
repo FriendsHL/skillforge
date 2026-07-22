@@ -8,27 +8,27 @@ import com.skillforge.server.runtime.RuntimeFailureClassifier;
 import com.skillforge.server.runtime.RuntimeFailureFact;
 import com.skillforge.server.runtime.RuntimeFailureState;
 import com.skillforge.server.service.SessionService;
+import com.skillforge.server.service.ChatService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.SmartLifecycle;
 import org.springframework.stereotype.Component;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
 /**
- * B4 fix: on server restart, repair sessions that were mid-install-confirmation
- * (or any orphan {@code tool_use} case). For each session in
+ * On server restart, recover production sessions abandoned in {@code running} state.
+ * For each session in
  * {@code runtimeStatus IN ('running', 'waiting_user')}:
  *
  * <ul>
- *   <li>Collect orphan tool_use ids — tool_use blocks whose id is never referenced by
- *       a tool_result in the persisted message list.</li>
- *   <li>Append one fabricated {@code tool_result(isError=true)} per orphan to preserve
- *       the tool_use ↔ tool_result 1:1 pairing invariant.</li>
- *   <li>Transition session to {@code runtimeStatus = "error"} with an informative reason.</li>
+ *   <li>Preserve {@code waiting_user} controls without auto-answering them.</li>
+ *   <li>Resume from a persisted user/tool_result boundary without adding a synthetic query.</li>
+ *   <li>Fail closed on exceptional orphan tool_use history and after three attempts.</li>
  * </ul>
  *
  * <p>Implements {@link SmartLifecycle} with {@code phase = Integer.MIN_VALUE + 100} so
@@ -54,13 +54,16 @@ public class PendingConfirmationStartupRecovery implements SmartLifecycle {
 
     private final SessionRepository sessionRepository;
     private final SessionService sessionService;
+    private final ChatService chatService;
 
     private volatile boolean running = false;
 
     public PendingConfirmationStartupRecovery(SessionRepository sessionRepository,
-                                              SessionService sessionService) {
+                                              SessionService sessionService,
+                                              ChatService chatService) {
         this.sessionRepository = sessionRepository;
         this.sessionService = sessionService;
+        this.chatService = chatService;
     }
 
     @Override
@@ -112,6 +115,15 @@ public class PendingConfirmationStartupRecovery implements SmartLifecycle {
             if (SessionEntity.ORIGIN_EVAL.equals(s.getOrigin())) {
                 continue;
             }
+            // Child sessions are owned by SubAgentStartupRecovery, which also reconciles
+            // the durable run row and parent delivery. Avoid double submission here.
+            if (s.getParentSessionId() != null) {
+                continue;
+            }
+            if ("waiting_user".equals(rs)) {
+                log.info("Recovery: preserving waiting_user sessionId={}", s.getId());
+                continue;
+            }
             scanned++;
             try {
                 int orphans = repairSession(s);
@@ -141,26 +153,59 @@ public class PendingConfirmationStartupRecovery implements SmartLifecycle {
         List<String> orphanIds = collectOrphanToolUseIds(msgs);
 
         if (!orphanIds.isEmpty()) {
-            List<Message> fabricated = new ArrayList<>(orphanIds.size());
-            for (String id : orphanIds) {
-                fabricated.add(Message.toolResult(id,
-                        "Install confirmation aborted due to server restart", true));
-            }
-            sessionService.appendNormalMessages(sessionId, fabricated);
-            log.warn("Recovery: sessionId={} appended {} fabricated tool_result(s) for orphan tool_use",
-                    sessionId, orphanIds.size());
+            markInterrupted(s, "SERVER_RESTART_ORPHAN_TOOL_USE",
+                    "Persisted history contains an incomplete tool call.", "observed");
+            return orphanIds.size();
         }
-        s.setRuntimeStatus("error");
-        RuntimeFailureFact failure = orphanIds.isEmpty()
-                ? RUNTIME_FAILURE_CLASSIFIER.harnessFailure(
-                        "SERVER_RESTART_INTERRUPTED",
-                        "The server restarted while this run was active.", "possible")
-                : RUNTIME_FAILURE_CLASSIFIER.harnessFailure(
-                        "SERVER_RESTART_ORPHAN_TOOL_USE",
-                        "The server restarted after a tool operation.", "observed");
-        RuntimeFailureState.apply(s, failure);
+        if (msgs.isEmpty()) {
+            markInterrupted(s, "SERVER_RESTART_NO_CHECKPOINT",
+                    "No persisted recovery boundary is available.", "possible");
+            return 0;
+        }
+        Message tail = msgs.get(msgs.size() - 1);
+        if (tail.getRole() == Message.Role.ASSISTANT) {
+            s.setRuntimeStatus("idle");
+            s.setRecoveryAttempts(0);
+            s.setRecoveryState("none");
+            s.setRecoveryReason(null);
+            s.setRecoveryStartedAt(null);
+            RuntimeFailureState.clear(s);
+            sessionService.saveSession(s);
+            return 0;
+        }
+        if (s.getRecoveryAttempts() >= 3) {
+            s.setRuntimeStatus("error");
+            s.setRecoveryState("wedged");
+            s.setRecoveryReason("RECOVERY_ATTEMPTS_EXHAUSTED");
+            RuntimeFailureState.apply(s, RUNTIME_FAILURE_CLASSIFIER.harnessFailure(
+                    "RECOVERY_ATTEMPTS_EXHAUSTED", "Automatic recovery was exhausted.", "possible"));
+            s.setRuntimeStatus("error");
+            sessionService.saveSession(s);
+            return 0;
+        }
+        s.setRecoveryAttempts(s.getRecoveryAttempts() + 1);
+        s.setRecoveryState("recovering");
+        s.setRecoveryReason("SERVER_RESTART");
+        s.setRecoveryStartedAt(Instant.now());
         sessionService.saveSession(s);
-        return orphanIds.size();
+        try {
+            chatService.resumeInterruptedTurnAsync(sessionId);
+        } catch (RuntimeException error) {
+            markInterrupted(s, "RECOVERY_DISPATCH_FAILED",
+                    "The interrupted task could not be resubmitted.", "possible");
+            throw error;
+        }
+        return 0;
+    }
+
+    private void markInterrupted(SessionEntity session, String code, String message, String sideEffects) {
+        session.setRuntimeStatus("error");
+        session.setRecoveryState("interrupted");
+        session.setRecoveryReason(code);
+        RuntimeFailureFact failure = RUNTIME_FAILURE_CLASSIFIER.harnessFailure(code, message, sideEffects);
+        RuntimeFailureState.apply(session, failure);
+        session.setRuntimeStatus("error");
+        sessionService.saveSession(session);
     }
 
     /** Collect tool_use ids whose matching tool_result is never observed in the message list. */

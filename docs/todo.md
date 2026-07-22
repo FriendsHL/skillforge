@@ -18,7 +18,7 @@
 | 8 | **IOS-AGENT-FILE-DELIVERY** | Agent 在普通 Chat 中向 App 用户交付生成文件 | Full | implemented；真实 Agent + iOS 真机验收待运行 | P1 | 真机 image/document 下载、预览、分享 |
 | 9 | **IOS-TASK-COMPLETION-PUSH** | Task 完成/失败/等待输入后的 APNs 系统通知 | Full | implemented；真实 APNs 到机验收待凭据和真机 | P1 | 配置付费 Apple team/APNs 凭据后验收 |
 | 10 | **IOS-AGENT-SESSION-LIVE-FOLLOW** | Agent/Session 导航、智能跟随、`···` 运行指示器与新消息提醒 | Mid / Full split | Phase 1 已实现并验证；Phase 2 待设计 | P1 | Mid 本地交互已交付；跨 Session badge/banner、APNs/后台与对账另走 Full |
-| 11 | **TASK-RESUME-ON-RESTART** | kill 后恢复遗留 running task | Full | 单实例 Kill Recovery MVP 已提出；待批准，未实现 | P1 | 启动时统一扫描 root/SubAgent/Workflow；安全 tail 继续，未知副作用转 Interrupted |
+| 11 | **TASK-RESUME-ON-RESTART** | kill 后恢复遗留 running task | Full | Root/SubAgent 持久化边界恢复已实现；Workflow 与真实 kill 验收待完成 | P1 | 补 Workflow frontier 恢复与真进程 kill/restart 验收 |
 | 12 | **CONTEXT-OVERFLOW-TRIPLE-FULL-COMPACT** | context overflow 后最多三次 Full Compact + retry | Full | Core 已实现；74 项聚焦回归与 3471 项 Core+Server reactor 测试通过 | P1 | 联调真实 provider 的 context overflow 错误映射与 UI 提示 |
 | 13 | **IOS-ASSISTANT-COMPANION** | iOS V1 core 的发布收口 | Full | V1 core verified；TestFlight/真机发布回归开放 | P2 | 文件交付和 APNs 已拆包；补签名、摄像头、LAN/Tailscale、后台真机门 |
 | 14 | **AUTOEVOLVING-MASTER** | V2–V5 总路线 | Full | V1 done；V2–V5 待启动 | P2 | 从 AUTORESEARCH 子包启动 V2 |

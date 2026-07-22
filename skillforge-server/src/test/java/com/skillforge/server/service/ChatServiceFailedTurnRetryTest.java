@@ -39,6 +39,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
@@ -132,6 +133,44 @@ class ChatServiceFailedTurnRetryTest {
         verify(agentLoopEngine).run(
                 any(AgentDefinition.class), eq("try again"), eq(failedUserTurn),
                 eq(List.of()), eq(SESSION_ID), eq(USER_ID), any(LoopContext.class));
+    }
+
+    @Test
+    void restartRecovery_runningWithUserTail_resumesWithoutAppendingSyntheticMessage() {
+        session.setRuntimeStatus("running");
+        Message userTurn = Message.user("finish this task");
+        when(sessionService.getContextMessages(SESSION_ID)).thenReturn(List.of(userTurn));
+        when(sessionService.getActiveRootTraceId(SESSION_ID)).thenReturn("root-1");
+        when(agentLoopEngine.run(any(AgentDefinition.class), eq("finish this task"), eq(userTurn),
+                eq(List.of()), eq(SESSION_ID), eq(USER_ID), any(LoopContext.class)))
+                .thenReturn(new LoopResult("done", new ArrayList<>(List.of(userTurn, Message.assistant("done"))),
+                        1, 1, 0, List.of()));
+
+        chatService.resumeInterruptedTurnAsync(SESSION_ID);
+        executor.submitted.run();
+
+        verify(sessionService, never()).appendNormalMessages(anyString(), any(), anyString());
+        verify(agentLoopEngine).run(any(AgentDefinition.class), eq("finish this task"), eq(userTurn),
+                eq(List.of()), eq(SESSION_ID), eq(USER_ID), any(LoopContext.class));
+    }
+
+    @Test
+    void restartRecovery_runningWithToolResultTail_continuesFromWholeHistory() {
+        session.setRuntimeStatus("running");
+        Message userTurn = Message.user("research");
+        Message toolResult = Message.toolResult("tool-1", "result", false);
+        List<Message> persisted = List.of(userTurn, toolResult);
+        when(sessionService.getContextMessages(SESSION_ID)).thenReturn(persisted);
+        when(sessionService.getActiveRootTraceId(SESSION_ID)).thenReturn("root-1");
+        when(agentLoopEngine.run(any(AgentDefinition.class), isNull(), isNull(), eq(persisted),
+                eq(SESSION_ID), eq(USER_ID), any(LoopContext.class)))
+                .thenReturn(new LoopResult("done", new ArrayList<>(persisted), 1, 1, 0, List.of()));
+
+        chatService.resumeInterruptedTurnAsync(SESSION_ID);
+        executor.submitted.run();
+
+        verify(agentLoopEngine).run(any(AgentDefinition.class), isNull(), isNull(), eq(persisted),
+                eq(SESSION_ID), eq(USER_ID), any(LoopContext.class));
     }
 
     @Test

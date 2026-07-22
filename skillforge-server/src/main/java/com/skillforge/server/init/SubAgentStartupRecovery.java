@@ -24,7 +24,7 @@ import java.util.Optional;
  * 对每一条 status=RUNNING 的 SubAgentRunEntity:
  *  - childSessionId == null           → 派发流程没完成,mark CANCELLED
  *  - child.runtimeStatus == running   → 前次 JVM 挂掉 mid-loop,chatLoopExecutor 任务丢了,
- *                                        通过 chatService.chatAsync 用 "[Resume ...]" 消息重启子 loop
+ *                                        从持久化消息边界恢复，不新增合成 user message
  *  - child.runtimeStatus == idle/err  → 子 loop 跑完但 finally 钩子没触发,走 registry 恢复路径
  *  - child 不存在                      → mark CANCELLED 并通知父
  *
@@ -107,18 +107,33 @@ public class SubAgentStartupRecovery implements ApplicationRunner {
         }
         String rs = child.getRuntimeStatus();
         if ("running".equals(rs)) {
+            if (child.getRecoveryAttempts() >= 3) {
+                child.setRuntimeStatus("error");
+                child.setRecoveryState("wedged");
+                child.setRecoveryReason("RECOVERY_ATTEMPTS_EXHAUSTED");
+                sessionRepository.save(child);
+                markCancelled(run, "Startup recovery: automatic recovery attempts exhausted");
+                subAgentRegistry.notifyParentOfOrphanRun(run,
+                        "Startup recovery: automatic recovery attempts exhausted");
+                return;
+            }
+            child.setRecoveryAttempts(child.getRecoveryAttempts() + 1);
+            child.setRecoveryState("recovering");
+            child.setRecoveryReason("SERVER_RESTART");
+            child.setRecoveryStartedAt(Instant.now());
+            sessionRepository.save(child);
             // 前次 JVM 挂掉 mid-loop,重新起一个 chatAsync 继续
-            log.info("Startup recovery: resubmitting child session {} (run {}) via chatAsync [restart resume]",
+            log.info("Startup recovery: resubmitting child session {} (run {}) from persisted boundary",
                     childId, run.getRunId());
             try {
-                // OBS-4 §2.1: preserveActiveRoot=true — restart resume 是合成续接，child session
-                // 的 active_root（如有）从 DB 持久化中保留下来；不要清空（决策 Q5：active_root 持久化）。
-                chatService.chatAsync(childId,
-                        "[Resume from restart] Continue your previous work.",
-                        child.getUserId(), true);
+                chatService.resumeInterruptedTurnAsync(childId);
             } catch (Exception e) {
                 log.error("Startup recovery: chatAsync failed for child session {}, marking run CANCELLED",
                         childId, e);
+                child.setRuntimeStatus("error");
+                child.setRecoveryState("interrupted");
+                child.setRecoveryReason("RECOVERY_DISPATCH_FAILED");
+                sessionRepository.save(child);
                 markCancelled(run, "Startup recovery: failed to resubmit child loop: " + e.getMessage());
                 subAgentRegistry.notifyParentOfOrphanRun(run,
                         "Startup recovery: failed to resubmit child loop: " + e.getMessage());

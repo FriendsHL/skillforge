@@ -58,7 +58,7 @@ Recovery 完成前，Chat/Task 新 admission 返回明确 `SERVER_RECOVERING`，
 | user message，尚无 Tool | 自动继续 |
 | 完整 Assistant terminal message | 只修正 runtime 状态，不再调用模型 |
 | 完整 tool_result | 从该结果后继续 |
-| orphan tool_use | 删除未配对的 tool_use，将该调用视为未发生，从上一条完整消息边界重新唤醒 task |
+| orphan tool_use | 当前正常持久化顺序下不应出现；作为异常数据标 Interrupted，不自动改写或重放 |
 | pending Ask/Confirmation control row | 重建 registry，保持 waiting_user |
 | transcript 无法解析/定义不兼容 | 标 Interrupted，显示原因 |
 
@@ -70,19 +70,18 @@ Recovery 完成前，Chat/Task 新 admission 返回明确 `SERVER_RECOVERING`，
 - directive 不作为新的 user Query 持久化，避免重复消息和 persistence-shape 漂移。
 - continuation 只允许一个 startup owner 提交一次。
 
-### 6. Orphan Tool 修复策略
+### 6. Orphan Tool 防御策略
 
-- MVP 不增加 `Tool Execution Receipt` 表，也不补造 `tool_result`。
-- 启动恢复发现 Assistant 消息中存在未配对 `tool_use` 时，事务性重写 transcript，删除该孤立 block；如果整条 Assistant 消息因此为空，则删除该消息。
-- 重写后必须重新校验 `tool_use/tool_result` 配对、消息 identity/association 列和持久化 JSON shape，再从上一条完整消息边界恢复 agent loop。
-- 被删除的调用视为没有发生，模型可以重新决定是否调用同一工具；系统不强制复刻旧参数。
-- 该策略无法判断工具是否在 kill 前已产生外部副作用，因此可能重复执行。MVP 明确接受这一风险，并通过日志与 recovery event 记录被删除的 `tool_use_id`、tool name 和恢复 attempt。
+- MVP 不增加 `Tool Execution Receipt` 表，也不补造或删除消息。
+- 当前 Agent Loop 在完整 loop 返回后统一持久化 Assistant/tool_result，因此进程在工具执行期间被 kill 时，数据库通常只保留上一条完整 user 或 tool_result 边界。
+- 启动恢复若意外发现未配对 `tool_use`，说明来自历史版本或特殊持久化路径；Session 标 Interrupted，等待人工处置。
+- 正常恢复从最后一条完整持久化边界重新调用模型，接受工具可能 at-least-once 执行及重复副作用风险。
 
 ## MVP 不变量
 
 1. startup 前已经返回 started 的 user Query 只能存在一条。
 2. tool_use/tool_result 必须配对。
-3. orphan Tool 必须从 transcript 删除后再恢复，不允许把未配对消息直接发送给模型。
+3. orphan Tool 作为异常数据 fail closed，不允许把未配对消息直接发送给模型。
 4. waiting_user 不得被改成普通 error，也不得自动回答。
 5. 同一 task 单次启动最多提交一个 recovery executor job。
 6. 连续三次恢复失败后不再形成启动死循环。
@@ -92,7 +91,7 @@ Recovery 完成前，Chat/Task 新 admission 返回明确 `SERVER_RECOVERING`，
 1. 根 turn 在 LLM stream 中 kill，重启后继续并产生一个最终回答。
 2. user row 已提交但 executor 尚未运行时 kill，重启后只执行一次。
 3. Tool 完成并持久化 result 后 kill，重启不重复 Tool。
-4. Tool 运行中 kill 且无 result，重启删除孤立 tool_use 并重新唤醒 task；最终 transcript 保持配对。
+4. Tool 运行中 kill 且无持久化 result，重启从上一条完整边界重新唤醒 task；最终 transcript 保持配对。
 5. waiting_user kill 后仍显示原卡片，回答一次只继续一次。
 6. SubAgent 恢复后 parent 只收到一次结果。
 7. Workflow 有安全 frontier 时继续；无 frontier 时不永久卡 running。

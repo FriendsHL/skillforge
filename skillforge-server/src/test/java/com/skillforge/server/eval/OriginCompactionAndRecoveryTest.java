@@ -86,6 +86,7 @@ class OriginCompactionAndRecoveryTest {
         // Eval session — chatAsync resume must NOT be invoked.
         verify(chatService, never()).chatAsync(anyString(), anyString(), anyLong(), anyBoolean());
         verify(chatService, never()).chatAsync(anyString(), anyString(), anyLong());
+        verify(chatService, never()).resumeInterruptedTurnAsync(anyString());
         // The run row must be marked CANCELLED with an explanatory message.
         verify(runRepository, times(1)).save(run);
         // Final message tracks the "eval skipped" reason explicitly.
@@ -126,8 +127,7 @@ class OriginCompactionAndRecoveryTest {
 
         recovery.run(null);
 
-        verify(chatService, times(1)).chatAsync(eq("child-prod-1"),
-                contains("[Resume from restart]"), eq(7L), eq(true));
+        verify(chatService, times(1)).resumeInterruptedTurnAsync("child-prod-1");
     }
 
     // -----------------------------------------------------------------------
@@ -139,8 +139,9 @@ class OriginCompactionAndRecoveryTest {
     void pendingConfirmationRecovery_evalSession_skipped() {
         SessionRepository sessionRepository = mock(SessionRepository.class);
         SessionService sessionService = mock(SessionService.class);
+        ChatService chatService = mock(ChatService.class);
         PendingConfirmationStartupRecovery recovery =
-                new PendingConfirmationStartupRecovery(sessionRepository, sessionService);
+                new PendingConfirmationStartupRecovery(sessionRepository, sessionService, chatService);
 
         SessionEntity evalSess = new SessionEntity();
         evalSess.setId("eval-1");
@@ -163,8 +164,9 @@ class OriginCompactionAndRecoveryTest {
     void pendingConfirmationRecovery_productionSession_stillRepaired() {
         SessionRepository sessionRepository = mock(SessionRepository.class);
         SessionService sessionService = mock(SessionService.class);
+        ChatService chatService = mock(ChatService.class);
         PendingConfirmationStartupRecovery recovery =
-                new PendingConfirmationStartupRecovery(sessionRepository, sessionService);
+                new PendingConfirmationStartupRecovery(sessionRepository, sessionService, chatService);
 
         SessionEntity prodSess = new SessionEntity();
         prodSess.setId("prod-1");
@@ -177,8 +179,9 @@ class OriginCompactionAndRecoveryTest {
 
         recovery.start();
 
-        // No orphans, so no fabricate; but session still gets saved (status flipped to error).
+        // No checkpoint is available, so production recovery fails closed as interrupted.
         verify(sessionService, times(1)).saveSession(prodSess);
         org.assertj.core.api.Assertions.assertThat(prodSess.getRuntimeStatus()).isEqualTo("error");
+        org.assertj.core.api.Assertions.assertThat(prodSess.getRecoveryState()).isEqualTo("interrupted");
     }
 }

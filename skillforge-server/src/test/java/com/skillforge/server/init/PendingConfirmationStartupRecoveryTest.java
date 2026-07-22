@@ -4,6 +4,7 @@ import com.skillforge.core.model.ContentBlock;
 import com.skillforge.core.model.Message;
 import com.skillforge.server.entity.SessionEntity;
 import com.skillforge.server.repository.SessionRepository;
+import com.skillforge.server.service.ChatService;
 import com.skillforge.server.service.SessionService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -28,13 +29,15 @@ class PendingConfirmationStartupRecoveryTest {
 
     private SessionRepository sessionRepo;
     private SessionService sessionService;
+    private ChatService chatService;
     private PendingConfirmationStartupRecovery recovery;
 
     @BeforeEach
     void setup() {
         sessionRepo = mock(SessionRepository.class);
         sessionService = mock(SessionService.class);
-        recovery = new PendingConfirmationStartupRecovery(sessionRepo, sessionService);
+        chatService = mock(ChatService.class);
+        recovery = new PendingConfirmationStartupRecovery(sessionRepo, sessionService, chatService);
     }
 
     private SessionEntity s(String id, String status) {
@@ -54,7 +57,7 @@ class PendingConfirmationStartupRecoveryTest {
     }
 
     @Test
-    @DisplayName("orphan tool_use → fabricated error tool_result + status error")
+    @DisplayName("orphan tool_use → interrupted without fabricating tool_result")
     void orphanRepaired() {
         SessionEntity sess = s("sid1", "running");
         when(sessionRepo.findAll()).thenReturn(List.of(sess));
@@ -63,26 +66,19 @@ class PendingConfirmationStartupRecoveryTest {
 
         recovery.runRecovery();
 
-        ArgumentCaptor<List<Message>> captor = ArgumentCaptor.forClass(List.class);
-        verify(sessionService).appendNormalMessages(eq("sid1"), captor.capture());
-        List<Message> appended = captor.getValue();
-        assertThat(appended).hasSize(1);
-        Object content = appended.get(0).getContent();
-        ContentBlock cb = (ContentBlock) ((List<?>) content).get(0);
-        assertThat(cb.getType()).isEqualTo("tool_result");
-        assertThat(cb.getToolUseId()).isEqualTo("tu-1");
-        assertThat(cb.getIsError()).isTrue();
-        assertThat(cb.getContent()).contains("Install confirmation aborted");
+        verify(sessionService, never()).appendNormalMessages(anyString(), any());
+        verify(chatService, never()).resumeInterruptedTurnAsync(anyString());
         assertThat(sess.getRuntimeStatus()).isEqualTo("error");
+        assertThat(sess.getRecoveryState()).isEqualTo("interrupted");
         assertThat(sess.getRuntimeFailureSource()).isEqualTo("harness");
         assertThat(sess.getRuntimeFailureCode()).isEqualTo("SERVER_RESTART_ORPHAN_TOOL_USE");
         assertThat(sess.isRuntimeRetryable()).isFalse();
         assertThat(sess.getRuntimeSideEffects()).isEqualTo("observed");
-        assertThat(sess.getRuntimeError()).isEqualTo("The server restarted after a tool operation.");
+        assertThat(sess.getRuntimeError()).isEqualTo("Persisted history contains an incomplete tool call.");
     }
 
     @Test
-    @DisplayName("multiple orphans → all repaired in one append batch")
+    @DisplayName("waiting_user is preserved and never auto-resumed")
     void multipleOrphans() {
         SessionEntity sess = s("sid1", "waiting_user");
         when(sessionRepo.findAll()).thenReturn(List.of(sess));
@@ -93,12 +89,13 @@ class PendingConfirmationStartupRecoveryTest {
         recovery.runRecovery();
 
         ArgumentCaptor<List<Message>> captor = ArgumentCaptor.forClass(List.class);
-        verify(sessionService).appendNormalMessages(eq("sid1"), captor.capture());
-        assertThat(captor.getValue()).hasSize(2);
+        verify(sessionService, never()).appendNormalMessages(anyString(), any());
+        verify(chatService, never()).resumeInterruptedTurnAsync(anyString());
+        assertThat(sess.getRuntimeStatus()).isEqualTo("waiting_user");
     }
 
     @Test
-    @DisplayName("no orphans → status error, no appendNormalMessages")
+    @DisplayName("running session without orphan → resume from persisted boundary")
     void noOrphansJustMark() {
         SessionEntity sess = s("sid1", "running");
         when(sessionRepo.findAll()).thenReturn(List.of(sess));
@@ -110,12 +107,9 @@ class PendingConfirmationStartupRecoveryTest {
         recovery.runRecovery();
 
         verify(sessionService, never()).appendNormalMessages(anyString(), any());
-        assertThat(sess.getRuntimeStatus()).isEqualTo("error");
-        assertThat(sess.getRuntimeFailureSource()).isEqualTo("harness");
-        assertThat(sess.getRuntimeFailureCode()).isEqualTo("SERVER_RESTART_INTERRUPTED");
-        assertThat(sess.isRuntimeRetryable()).isFalse();
-        assertThat(sess.getRuntimeSideEffects()).isEqualTo("possible");
-        assertThat(sess.getRuntimeError()).isEqualTo("The server restarted while this run was active.");
+        verify(chatService).resumeInterruptedTurnAsync("sid1");
+        assertThat(sess.getRecoveryAttempts()).isEqualTo(1);
+        assertThat(sess.getRecoveryState()).isEqualTo("recovering");
     }
 
     @Test
@@ -145,5 +139,19 @@ class PendingConfirmationStartupRecoveryTest {
     void phaseOrdering() {
         assertThat(recovery.getPhase()).isLessThan(Integer.MAX_VALUE - 1);
         assertThat(recovery.getPhase()).isEqualTo(Integer.MIN_VALUE + 100);
+    }
+
+    @Test
+    void exhaustedRecoveryBudget_becomesWedgedWithoutDispatch() {
+        SessionEntity sess = s("sid1", "running");
+        sess.setRecoveryAttempts(3);
+        when(sessionRepo.findAll()).thenReturn(List.of(sess));
+        when(sessionService.getFullHistory("sid1")).thenReturn(List.of(Message.user("continue")));
+
+        recovery.runRecovery();
+
+        assertThat(sess.getRuntimeStatus()).isEqualTo("error");
+        assertThat(sess.getRecoveryState()).isEqualTo("wedged");
+        verify(chatService, never()).resumeInterruptedTurnAsync(anyString());
     }
 }

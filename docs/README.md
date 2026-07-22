@@ -37,7 +37,7 @@
 
 | ID | 状态 | 需求包 |
 | --- | --- | --- |
-| **TASK-RESUME-ON-RESTART** | 首期收窄为单实例 kill-running MVP；待批准，尚未实现 | [需求包](requirements/backlog/TASK-RESUME-ON-RESTART/index.md) |
+| **TASK-RESUME-ON-RESTART** | 单实例 kill-running MVP；Root/SubAgent 边界恢复已实现，Workflow/真 kill 验收待完成 | [需求包](requirements/backlog/TASK-RESUME-ON-RESTART/index.md) |
 | **CONTEXT-OVERFLOW-TRIPLE-FULL-COMPACT** | context overflow 最多三次 Full Compact；Core 已实现并通过 Core+Server 回归 | [需求包](requirements/backlog/CONTEXT-OVERFLOW-TRIPLE-FULL-COMPACT/index.md) |
 | **WF-CONCURRENT-PIPELINE** | AUTOEVOLVING V2(d) | [需求包](requirements/backlog/WF-CONCURRENT-PIPELINE/index.md) |
 | **OUTCOMES-RUBRIC-FOUNDATION** | 等用户升 active | [需求包](requirements/backlog/OUTCOMES-RUBRIC-FOUNDATION/index.md) |
