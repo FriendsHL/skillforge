@@ -116,6 +116,13 @@ import com.skillforge.server.subagent.SubAgentRegistry;
 import com.skillforge.server.tool.channel.SendChannelFileTool;
 import com.skillforge.server.tool.PublishChatArtifactTool;
 import com.skillforge.server.tool.PublishInteractiveArtifactTool;
+import com.skillforge.server.tool.GenerateImageTool;
+import com.skillforge.server.media.ArkImageGenerationClient;
+import com.skillforge.server.media.ArkImageProperties;
+import com.skillforge.server.media.ArkVideoProperties;
+import com.skillforge.server.media.ArkVideoGenerationClient;
+import com.skillforge.server.media.MediaGenerationService;
+import com.skillforge.server.tool.GenerateVideoTool;
 import com.skillforge.server.artifact.InteractiveArtifactValidator;
 import com.skillforge.server.service.ChatAttachmentService;
 import com.skillforge.server.service.PersonalAppTemplateCatalog;
@@ -137,6 +144,7 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 @Configuration
+@EnableConfigurationProperties({ArkImageProperties.class, ArkVideoProperties.class})
 public class ToolBeansConfig {
 
     private static final Logger log = LoggerFactory.getLogger(ToolBeansConfig.class);
@@ -275,6 +283,41 @@ public class ToolBeansConfig {
         PublishChatArtifactTool tool = new PublishChatArtifactTool(attachmentService);
         skillRegistry.registerTool(tool);
         log.info("Registered PublishChatArtifactTool into SkillRegistry");
+        return tool;
+    }
+
+    @Bean
+    @ConditionalOnProperty(prefix = "skillforge.media.ark.image", name = "enabled", havingValue = "true")
+    public ArkImageGenerationClient arkImageGenerationClient(
+            ArkImageProperties properties, ObjectMapper objectMapper) {
+        return new ArkImageGenerationClient(properties, objectMapper);
+    }
+
+    @Bean
+    @ConditionalOnProperty(prefix = "skillforge.media.ark.image", name = "enabled", havingValue = "true")
+    public GenerateImageTool generateImageTool(
+            ArkImageGenerationClient client,
+            ChatAttachmentService attachmentService,
+            SkillRegistry skillRegistry) {
+        GenerateImageTool tool = new GenerateImageTool(client, attachmentService);
+        skillRegistry.registerTool(tool);
+        log.info("Registered GenerateImageTool into SkillRegistry");
+        return tool;
+    }
+
+    @Bean
+    @ConditionalOnProperty(prefix = "skillforge.media.ark.video", name = "enabled", havingValue = "true")
+    public ArkVideoGenerationClient arkVideoGenerationClient(
+            ArkVideoProperties properties, ObjectMapper objectMapper) {
+        return new ArkVideoGenerationClient(properties, objectMapper);
+    }
+
+    @Bean
+    @ConditionalOnProperty(prefix = "skillforge.media.ark.video", name = "enabled", havingValue = "true")
+    public GenerateVideoTool generateVideoTool(MediaGenerationService service, SkillRegistry skillRegistry) {
+        GenerateVideoTool tool = new GenerateVideoTool(service);
+        skillRegistry.registerTool(tool);
+        log.info("Registered GenerateVideoTool into SkillRegistry");
         return tool;
     }
 

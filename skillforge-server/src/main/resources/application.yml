@@ -54,6 +54,26 @@ flywheel:
 
 # SkillForge configuration
 skillforge:
+  media:
+    ark:
+      image:
+        enabled: ${ARK_IMAGE_ENABLED:false}
+        api-key: ${ARK_API_KEY:}
+        base-url: https://ark.cn-beijing.volces.com/api/plan/v3
+        model: doubao-seedream-5.0-lite
+        timeout-seconds: 120
+        max-download-bytes: 10485760
+        allowed-download-hosts:
+          - ark-acg-cn-beijing.tos-cn-beijing.volces.com
+      video:
+        enabled: ${ARK_VIDEO_ENABLED:false}
+        api-key: ${ARK_API_KEY:}
+        base-url: https://ark.cn-beijing.volces.com/api/plan/v3
+        model: doubao-seedance-1-5-pro-251215
+        timeout-seconds: 30
+        max-download-bytes: 209715200
+        allowed-download-hosts:
+          - ark-content-generation-cn-beijing.tos-cn-beijing.volces.com
   # DESKTOP-MACOS-PACKAGE D2: when set, SpaStaticConfig serves the built dashboard
   # SPA from this filesystem dir (same-origin → FE needs zero changes). UNSET by
   # default → bean inactive → dev behaviour unchanged (server serves no static SPA).

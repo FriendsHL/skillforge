@@ -1,5 +1,19 @@
 import Foundation
 
+struct MobileMediaJob: Decodable, Equatable, Sendable {
+    let id: String
+    let sessionId: String
+    let mediaType: String
+    let provider: String
+    let model: String
+    let status: String
+    let resultAttachmentId: String?
+    let errorCode: String?
+    let errorMessage: String?
+    let createdAt: Date?
+    let updatedAt: Date?
+}
+
 struct MobilePairingClaimResponse: Decodable {
     let deviceId: String
     let deviceToken: String
@@ -950,6 +964,24 @@ struct MobileApiClient {
         )
     }
 
+    func getMediaJob(sessionId: String, jobId: String) async throws -> MobileMediaJob {
+        try await send(
+            path: "/api/mobile/client/sessions/\(sessionId)/media/jobs/\(jobId)",
+            method: "GET",
+            body: Optional<String>.none,
+            authorized: true
+        )
+    }
+
+    func cancelMediaJob(sessionId: String, jobId: String) async throws -> MobileMediaJob {
+        try await send(
+            path: "/api/mobile/client/sessions/\(sessionId)/media/jobs/\(jobId)/cancel",
+            method: "POST",
+            body: Optional<String>.none,
+            authorized: true
+        )
+    }
+
     func getPendingConfirmations(sessionId: String) async throws -> [MobilePendingConfirmation] {
         try await send(
             path: "/api/mobile/client/sessions/\(sessionId)/pending-confirmations",
@@ -1276,6 +1308,8 @@ struct MobileContentBlock: Decodable, Equatable {
     let caption: String?
     let title: String?
     let artifactSchemaVersion: Int?
+    let jobId: String?
+    let mediaType: String?
 
     enum CodingKeys: String, CodingKey {
         case type
@@ -1308,6 +1342,10 @@ struct MobileContentBlock: Decodable, Equatable {
         case title
         case artifactSchemaVersion
         case artifactSchemaVersionSnake = "artifact_schema_version"
+        case jobId
+        case jobIdSnake = "job_id"
+        case mediaType
+        case mediaTypeSnake = "media_type"
     }
 
     init(
@@ -1327,7 +1365,9 @@ struct MobileContentBlock: Decodable, Equatable {
         byteSize: Int64? = nil,
         caption: String? = nil,
         title: String? = nil,
-        artifactSchemaVersion: Int? = nil
+        artifactSchemaVersion: Int? = nil,
+        jobId: String? = nil,
+        mediaType: String? = nil
     ) {
         self.type = type
         self.text = text
@@ -1346,6 +1386,8 @@ struct MobileContentBlock: Decodable, Equatable {
         self.caption = caption
         self.title = title
         self.artifactSchemaVersion = artifactSchemaVersion
+        self.jobId = jobId
+        self.mediaType = mediaType
     }
 
     init(from decoder: Decoder) throws {
@@ -1383,6 +1425,10 @@ struct MobileContentBlock: Decodable, Equatable {
         title = try container.decodeIfPresent(String.self, forKey: .title)
         artifactSchemaVersion = try container.decodeIfPresent(Int.self, forKey: .artifactSchemaVersionSnake)
             ?? container.decodeIfPresent(Int.self, forKey: .artifactSchemaVersion)
+        jobId = try container.decodeIfPresent(String.self, forKey: .jobIdSnake)
+            ?? container.decodeIfPresent(String.self, forKey: .jobId)
+        mediaType = try container.decodeIfPresent(String.self, forKey: .mediaTypeSnake)
+            ?? container.decodeIfPresent(String.self, forKey: .mediaType)
     }
 
     static func text(_ text: String) -> MobileContentBlock {

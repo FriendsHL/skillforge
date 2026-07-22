@@ -60,6 +60,10 @@ public class ContentBlock {
     private String title;
     @JsonProperty("artifact_schema_version")
     private Integer artifactSchemaVersion;
+    @JsonProperty("job_id")
+    private String jobId;
+    @JsonProperty("media_type")
+    private String mediaType;
 
     // provider-bound materialized image type; never persisted in session history.
     @JsonProperty("data_base64")
@@ -184,6 +188,14 @@ public class ContentBlock {
         block.setFilename(filename);
         block.setTitle(title);
         block.setArtifactSchemaVersion(schemaVersion);
+        return block;
+    }
+
+    public static ContentBlock mediaJobRef(String jobId, String mediaType) {
+        ContentBlock block = new ContentBlock();
+        block.setType("media_job_ref");
+        block.setJobId(jobId);
+        block.setMediaType(mediaType);
         return block;
     }
 
@@ -321,4 +333,9 @@ public class ContentBlock {
     public void setArtifactSchemaVersion(Integer artifactSchemaVersion) {
         this.artifactSchemaVersion = artifactSchemaVersion;
     }
+
+    public String getJobId() { return jobId; }
+    public void setJobId(String jobId) { this.jobId = jobId; }
+    public String getMediaType() { return mediaType; }
+    public void setMediaType(String mediaType) { this.mediaType = mediaType; }
 }

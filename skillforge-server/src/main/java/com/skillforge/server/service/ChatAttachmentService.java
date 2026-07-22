@@ -65,6 +65,7 @@ public class ChatAttachmentService implements MessageMaterializer {
     private static final Logger log = LoggerFactory.getLogger(ChatAttachmentService.class);
 
     private static final long MAX_IMAGE_BYTES = 10L * 1024 * 1024;
+    private static final long MAX_VIDEO_BYTES = 200L * 1024 * 1024;
     private static final long MAX_PDF_BYTES = 25L * 1024 * 1024;
     private static final int MAX_PDF_TEXT_CHARS = 20_000;
     /** Wave 3 WORD-EXCEL: per-upload size caps for text-extraction file types. */
@@ -237,6 +238,9 @@ public class ChatAttachmentService implements MessageMaterializer {
         if ("image".equals(kind) && size > MAX_IMAGE_BYTES) {
             throw new IllegalArgumentException("Image attachment exceeds 10MB");
         }
+        if ("video".equals(kind) && size > MAX_VIDEO_BYTES) {
+            throw new IllegalArgumentException("Video attachment exceeds 200MB");
+        }
         if ("pdf".equals(kind) && size > MAX_PDF_BYTES) {
             throw new IllegalArgumentException("PDF attachment exceeds 25MB");
         }
@@ -330,6 +334,16 @@ public class ChatAttachmentService implements MessageMaterializer {
             return importGeneratedFileLocked(
                     sessionId, userId, toolUseId, source, caption, artifactWorkspace);
         }
+    }
+
+    @Transactional(readOnly = true)
+    public java.util.Optional<ChatAttachmentEntity> findGeneratedByToolUse(
+            String sessionId, String toolUseId) {
+        if (sessionId == null || sessionId.isBlank() || toolUseId == null || toolUseId.isBlank()) {
+            return java.util.Optional.empty();
+        }
+        return attachmentRepository.findBySessionIdAndSourceToolUseId(sessionId, toolUseId)
+                .filter(row -> "agent_generated".equals(row.getOrigin()));
     }
 
     public ChatAttachmentEntity importInteractiveArtifact(

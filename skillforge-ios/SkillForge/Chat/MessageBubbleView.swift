@@ -9,9 +9,11 @@ struct MessageBubbleView: View {
     let sourceAgentID: Int64?
     let sourceSessionTitle: String?
     @ObservedObject var attachmentStore: AttachmentDownloadStore
+    let client: MobileApiClient
     @Binding var expandedToolCallIDs: Set<String>
     let onUnauthorized: @MainActor () -> Void
     let onSubmitArtifactSnapshot: @MainActor (String) -> Void
+    let onRegenerateImage: @MainActor () -> Void
 
     var body: some View {
         ChatTurnLayout(
@@ -161,10 +163,21 @@ struct MessageBubbleView: View {
                         sourceMessageSeq: message.remoteSeqNo,
                         sourceAgentID: sourceAgentID,
                         sourceSessionTitle: sourceSessionTitle,
+                        isGeneratedImage: ChatMessage.isGeneratedImage(attachment, toolCalls: message.toolCalls),
                         store: attachmentStore,
                         onUnauthorized: onUnauthorized,
-                        onSubmitSnapshot: onSubmitArtifactSnapshot
+                        onSubmitSnapshot: onSubmitArtifactSnapshot,
+                        onRegenerateImage: onRegenerateImage
                     )
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        if !message.mediaJobs.isEmpty {
+            VStack(spacing: 8) {
+                ForEach(message.mediaJobs) { reference in
+                    MediaJobCardView(reference: reference, sessionID: sessionID, client: client,
+                                     attachmentStore: attachmentStore, onUnauthorized: onUnauthorized)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)

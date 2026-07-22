@@ -36,6 +36,7 @@
 		60E482C604E54236D3E3FD80 /* PersonalAppLibraryUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87227C5D9EB8B7E4F8D6C3D9 /* PersonalAppLibraryUITests.swift */; };
 		6E6181092DFA8CCAF8EAAA72 /* AgentsRosterPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FB5ED370D5308D94D53AABE /* AgentsRosterPolicyTests.swift */; };
 		71EC74EF8E1C91532F20DCD7 /* PersonalAppBridgeSecurityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0ED26C0B414F5A7F08DB89B9 /* PersonalAppBridgeSecurityTests.swift */; };
+		72A13A757D8D952E0B4474D6 /* MediaJobCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1EB246CC4A58922BE02F425 /* MediaJobCardView.swift */; };
 		734905DBD0220C284C0CBBBB /* PendingCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7600227AB7C7CCEBD02F7C12 /* PendingCardView.swift */; };
 		7A1762E4DD530BB135AA41C8 /* MobileApiClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A24EFA2F98933E5AB9E8D419 /* MobileApiClient.swift */; };
 		7D59D2A0E58E040889B1AFB3 /* ChatAttachment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DAEFA8FBE8F003B5C20DA8C /* ChatAttachment.swift */; };
@@ -185,6 +186,7 @@
 		DB7210ACBEEFEBA09877E57F /* InteractiveArtifactUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InteractiveArtifactUITests.swift; sourceTree = "<group>"; };
 		DBA21D95925B4004EC9155E3 /* ConnectionHealth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionHealth.swift; sourceTree = "<group>"; };
 		DC8B326CE99D4BDC3C728D1C /* AttachmentPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentPicker.swift; sourceTree = "<group>"; };
+		E1EB246CC4A58922BE02F425 /* MediaJobCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaJobCardView.swift; sourceTree = "<group>"; };
 		E5D306146AA6992764AC6342 /* DebugLaunchConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugLaunchConfiguration.swift; sourceTree = "<group>"; };
 		EACEE731ECFE78313E55BBEE /* CompanionTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionTabView.swift; sourceTree = "<group>"; };
 		EFA157CADB0CFC92E1740199 /* ChatInteractionPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatInteractionPolicy.swift; sourceTree = "<group>"; };
@@ -301,6 +303,7 @@
 				8BC25E391568ED4E360F5A09 /* AttachmentImageLoader.swift */,
 				DC8B326CE99D4BDC3C728D1C /* AttachmentPicker.swift */,
 				5DAEFA8FBE8F003B5C20DA8C /* ChatAttachment.swift */,
+				E1EB246CC4A58922BE02F425 /* MediaJobCardView.swift */,
 				CD9EC079B22EAD5B460C874C /* PersonalAppCardView.swift */,
 			);
 			path = Attachments;
@@ -595,6 +598,7 @@
 				7EFEFEC87EDA7B5FAEE51AF7 /* InteractionPolishPolicy.swift in Sources */,
 				B15F8A581E113E931BBE7603 /* KeychainStore.swift in Sources */,
 				A637D6A68CCFE8E9E22694BE /* MarkdownText.swift in Sources */,
+				72A13A757D8D952E0B4474D6 /* MediaJobCardView.swift in Sources */,
 				CEF36F244F10F31A2A0453EE /* MessageBubbleView.swift in Sources */,
 				7A1762E4DD530BB135AA41C8 /* MobileApiClient.swift in Sources */,
 				E79B22C91C7E4D81E8B1CAB8 /* MobileChatEvent.swift in Sources */,

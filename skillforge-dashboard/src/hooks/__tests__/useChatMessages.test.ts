@@ -95,6 +95,13 @@ describe('normalizeMessages — createdAt → timestamp passthrough', () => {
 });
 
 describe('normalizeMessages — outbound assistant attachments', () => {
+  it('retains an attachment-free media job reference', () => {
+    const out = normalizeMessages([{ role: 'assistant', content: [
+      { type: 'media_job_ref', job_id: 'job-1', media_type: 'video' },
+    ] }]);
+    expect(out).toHaveLength(1);
+    expect(out[0].mediaJobs).toEqual([{ jobId: 'job-1', mediaType: 'video' }]);
+  });
   it('retains an attachment-only assistant message and its caption', () => {
     const raw: RawMessage[] = [
       {

@@ -3,6 +3,7 @@ import Foundation
 struct ChatAttachment: Identifiable, Equatable, Sendable {
     enum Kind: Equatable, Hashable, Sendable {
         case image
+        case video
         case pdf
         case word
         case excel
@@ -13,6 +14,7 @@ struct ChatAttachment: Identifiable, Equatable, Sendable {
         init(blockType: String) {
             switch blockType.lowercased() {
             case "image_ref": self = .image
+            case "video_ref": self = .video
             case "pdf_ref": self = .pdf
             case "word_ref": self = .word
             case "excel_ref": self = .excel
@@ -25,6 +27,7 @@ struct ChatAttachment: Identifiable, Equatable, Sendable {
         var label: String {
             switch self {
             case .image: "Image"
+            case .video: "Video"
             case .pdf: "PDF"
             case .word: "Word document"
             case .excel: "Excel workbook"
@@ -37,6 +40,7 @@ struct ChatAttachment: Identifiable, Equatable, Sendable {
         var systemImage: String {
             switch self {
             case .image: "photo"
+            case .video: "play.rectangle"
             case .pdf: "doc.richtext"
             case .word: "doc.text"
             case .excel: "tablecells"

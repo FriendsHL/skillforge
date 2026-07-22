@@ -17,6 +17,8 @@ public class PublishedArtifact {
     private String caption;
     private String title;
     private Integer artifactSchemaVersion;
+    private String jobId;
+    private String mediaType;
 
     public PublishedArtifact() {
     }
@@ -61,6 +63,10 @@ public class PublishedArtifact {
     public void setArtifactSchemaVersion(Integer artifactSchemaVersion) {
         this.artifactSchemaVersion = artifactSchemaVersion;
     }
+    public String getJobId() { return jobId; }
+    public void setJobId(String jobId) { this.jobId = jobId; }
+    public String getMediaType() { return mediaType; }
+    public void setMediaType(String mediaType) { this.mediaType = mediaType; }
 
     @Override
     public boolean equals(Object other) {
@@ -74,12 +80,14 @@ public class PublishedArtifact {
                 && Objects.equals(sheetCount, that.sheetCount)
                 && Objects.equals(caption, that.caption)
                 && Objects.equals(title, that.title)
-                && Objects.equals(artifactSchemaVersion, that.artifactSchemaVersion);
+                && Objects.equals(artifactSchemaVersion, that.artifactSchemaVersion)
+                && Objects.equals(jobId, that.jobId)
+                && Objects.equals(mediaType, that.mediaType);
     }
 
     @Override
     public int hashCode() {
         return Objects.hash(attachmentId, blockType, filename, mimeType, pageCount, sheetCount,
-                caption, title, artifactSchemaVersion);
+                caption, title, artifactSchemaVersion, jobId, mediaType);
     }
 }

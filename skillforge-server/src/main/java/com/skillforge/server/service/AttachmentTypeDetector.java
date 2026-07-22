@@ -114,6 +114,7 @@ public final class AttachmentTypeDetector {
             else if (startsWith(head, JPEG)) type = new DetectedType("image/jpeg", "image", ".jpg");
             else if (isWebp(head)) type = new DetectedType("image/webp", "image", ".webp");
             else if (startsWith(head, PDF)) type = new DetectedType("application/pdf", "pdf", ".pdf");
+            else if (isMp4(head)) type = new DetectedType("video/mp4", "video", ".mp4");
             else if (startsWith(head, ZIP)) type = detectOoxml(input);
             else if (startsWith(head, OLE)) type = detectOle(input);
             else if (MIME_CSV.equals(declared) && validUtf8Text(input)) {
@@ -208,6 +209,10 @@ public final class AttachmentTypeDetector {
     private static boolean isWebp(byte[] head) {
         return head.length >= 12 && head[0] == 'R' && head[1] == 'I' && head[2] == 'F' && head[3] == 'F'
                 && head[8] == 'W' && head[9] == 'E' && head[10] == 'B' && head[11] == 'P';
+    }
+
+    private static boolean isMp4(byte[] head) {
+        return head.length >= 12 && head[4] == 'f' && head[5] == 't' && head[6] == 'y' && head[7] == 'p';
     }
 
     private static boolean startsWith(byte[] bytes, byte[] prefix) {

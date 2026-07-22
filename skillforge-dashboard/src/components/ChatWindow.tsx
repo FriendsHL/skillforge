@@ -3,6 +3,7 @@ import { Tooltip, message } from 'antd';
 import { type ToolCall } from './ToolCallTimeline';
 import MarkdownRenderer from './MarkdownRenderer';
 import AttachmentThumbnail from './AttachmentThumbnail';
+import MediaJobCard from './MediaJobCard';
 import PendingAskCard from './PendingAskCard';
 import InstallConfirmationCard from './InstallConfirmationCard';
 import ReasoningPanel from './ReasoningPanel';
@@ -571,6 +572,7 @@ export interface ChatAttachmentRef {
   /** Optional server-supplied caption rendered with the attachment. */
   caption?: string;
 }
+export interface MediaJobRef { jobId: string; mediaType: 'video' | 'audio'; }
 
 export interface ChatMessage {
   role: 'user' | 'assistant' | 'summary';
@@ -585,6 +587,7 @@ export interface ChatMessage {
   /** Inline attachment refs (image_ref / pdf_ref). Renderer shows thumbnails
    *  above the message body. Phase 2. */
   attachments?: ChatAttachmentRef[];
+  mediaJobs?: MediaJobRef[];
   /**
    * CHAT-REASONING-PANEL: assistant-only reasoning / thinking text persisted on
    * `t_session_message.reasoning_content` (OpenAI-compatible providers:
@@ -995,6 +998,9 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
                       ))}
                     </div>
                   )}
+                  {msg.mediaJobs && slashCommandConfig && msg.mediaJobs.map((job) => (
+                    <MediaJobCard key={job.jobId} jobId={job.jobId} userId={slashCommandConfig.userId} sessionId={slashCommandConfig.sessionId} />
+                  ))}
                   {/* CHAT-REASONING-PANEL: completed-message reasoning panel.
                       Renders above the bubble text. ReasoningPanel returns
                       null when reasoningContent is empty/whitespace, so this

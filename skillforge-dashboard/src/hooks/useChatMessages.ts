@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { ChatAttachmentRef, ChatMessage } from '../components/ChatWindow';
+import type { ChatAttachmentRef, ChatMessage, MediaJobRef } from '../components/ChatWindow';
 import type { RawMessage, ContentBlock } from '../types/messages';
 
 export interface InflightTool {
@@ -40,6 +40,7 @@ export function normalizeMessages(list: RawMessage[]): ChatMessage[] {
     const toolUseBlocks: ContentBlock[] = [];
     const toolResultBlocks: ContentBlock[] = [];
     const attachmentRefs: ChatAttachmentRef[] = [];
+    const mediaJobRefs: MediaJobRef[] = [];
     if (typeof content === 'string') {
       text = content;
     } else if (Array.isArray(content)) {
@@ -52,6 +53,10 @@ export function normalizeMessages(list: RawMessage[]): ChatMessage[] {
           toolUseBlocks.push(b);
         } else if (b.type === 'tool_result') {
           toolResultBlocks.push(b);
+        } else if (b.type === 'media_job_ref') {
+          const jobId = typeof b.job_id === 'string' ? b.job_id : typeof b.jobId === 'string' ? b.jobId : '';
+          const mediaType = b.media_type === 'audio' || b.mediaType === 'audio' ? 'audio' : 'video';
+          if (jobId) mediaJobRefs.push({ jobId, mediaType });
         } else if (
           b.type === 'image_ref' ||
           b.type === 'pdf_ref' ||
@@ -112,13 +117,13 @@ export function normalizeMessages(list: RawMessage[]): ChatMessage[] {
         }
       }
     }
-    return { text, toolUseBlocks, toolResultBlocks, attachmentRefs };
+    return { text, toolUseBlocks, toolResultBlocks, attachmentRefs, mediaJobRefs };
   };
 
   for (const m of list) {
     const msgType = typeof m.msgType === 'string' ? m.msgType.toUpperCase() : '';
     const messageType = typeof m.messageType === 'string' ? m.messageType : 'normal';
-    const { text, toolUseBlocks, toolResultBlocks, attachmentRefs } = extractBlocks(m.content);
+    const { text, toolUseBlocks, toolResultBlocks, attachmentRefs, mediaJobRefs } = extractBlocks(m.content);
 
     // Server-side createdAt (ISO string). Surfaced on hover via msg-time. May
     // be absent on legacy rows / pre-feature sessions — `ChatMessage.timestamp`
@@ -216,7 +221,7 @@ export function normalizeMessages(list: RawMessage[]): ChatMessage[] {
       // Phase 2: a pure-attachment user message (image + no caption) has an
       // empty `text` but non-empty `attachmentRefs` — keep the row so the
       // thumbnails render. Drop only when BOTH text and attachments are empty.
-      if (!text.trim() && attachmentRefs.length === 0) continue;
+      if (!text.trim() && attachmentRefs.length === 0 && mediaJobRefs.length === 0) continue;
 
       // Compaction 压缩摘要注入为 user 消息：
       //   独立形态: "[Context summary from N messages...]\n...summary..." — 跳过不显示
@@ -248,6 +253,7 @@ export function normalizeMessages(list: RawMessage[]): ChatMessage[] {
         role: 'user',
         content: displayText,
         attachments: attachmentRefs.length > 0 ? attachmentRefs : undefined,
+        mediaJobs: mediaJobRefs.length > 0 ? mediaJobRefs : undefined,
         timestamp,
         id: messageId,
       });
@@ -267,11 +273,12 @@ export function normalizeMessages(list: RawMessage[]): ChatMessage[] {
       // dropping the row here would silently swallow that signal.
       const hasReasoning =
         typeof m.reasoningContent === 'string' && m.reasoningContent.trim().length > 0;
-      if (!text.trim() && toolCalls.length === 0 && !hasReasoning && attachmentRefs.length === 0) continue;
+      if (!text.trim() && toolCalls.length === 0 && !hasReasoning && attachmentRefs.length === 0 && mediaJobRefs.length === 0) continue;
       result.push({
         role: 'assistant',
         content: text,
         attachments: attachmentRefs.length > 0 ? attachmentRefs : undefined,
+        mediaJobs: mediaJobRefs.length > 0 ? mediaJobRefs : undefined,
         id: messageId,
         // m.toolCalls runtime 是 BE 推过来的 fallback 数组（不走 content blocks 路径时），
         // RawMessage.toolCalls 类型 unknown[]，此处 narrow 成 ChatMessage.toolCalls 期望的形态。

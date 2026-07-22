@@ -31,4 +31,19 @@ class SkillResultPublishedArtifactTest {
         assertThat(SkillResult.error("failed").getArtifacts()).isEmpty();
         assertThat(SkillResult.validationError("invalid").getArtifacts()).isEmpty();
     }
+
+    @Test
+    void serialization_mediaJobRef_roundTripsJobIdentity() throws Exception {
+        PublishedArtifact ref = new PublishedArtifact();
+        ref.setBlockType("media_job_ref");
+        ref.setJobId("job-1");
+        ref.setMediaType("video");
+        SkillResult original = SkillResult.success("queued", List.of(ref));
+
+        String json = objectMapper.writeValueAsString(original);
+        SkillResult restored = objectMapper.readValue(json, SkillResult.class);
+
+        assertThat(restored.getArtifacts()).containsExactly(ref);
+        assertThat(objectMapper.writeValueAsString(restored)).isEqualTo(json);
+    }
 }

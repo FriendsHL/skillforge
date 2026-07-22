@@ -3,6 +3,24 @@ import XCTest
 @testable import SkillForge
 
 final class ChatMessageTests: XCTestCase {
+    func testGeneratedImagePresentationRequiresSuccessfulGenerateImageTool() {
+        let image = ChatAttachment(id: "image-1", kind: .image, filename: "generated.jpg")
+        let persistedSeedreamImage = ChatAttachment(
+            id: "image-2",
+            kind: .image,
+            filename: "seedream-call_abc123.jpg"
+        )
+        let success = ChatMessage.ToolCall(id: "tool-1", name: "GenerateImage", inputPreview: "{}", output: nil, status: .success)
+        let pending = ChatMessage.ToolCall(id: "tool-2", name: "GenerateImage", inputPreview: "{}", output: nil, status: .pending)
+
+        XCTAssertTrue(ChatMessage.isGeneratedImage(image, toolCalls: [success]))
+        XCTAssertTrue(ChatMessage.isGeneratedImage(persistedSeedreamImage, toolCalls: []))
+        XCTAssertFalse(ChatMessage.isGeneratedImage(image, toolCalls: [pending]))
+        XCTAssertFalse(ChatMessage.isGeneratedImage(
+            ChatAttachment(id: "pdf-1", kind: .pdf, filename: "file.pdf"),
+            toolCalls: [success]
+        ))
+    }
     func testDecodesAttachmentMetadataUsingSnakeAndCamelAliases() throws {
         let message = try decodeMessage("""
         {

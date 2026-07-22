@@ -411,7 +411,7 @@ extension ChatView {
             id: "outbound-image",
             kind: .image,
             mimeType: "image/png",
-            filename: "release-chart.png",
+            filename: "seedream-call_fixture.jpg",
             byteSize: files.imageSize,
             caption: "Release readiness chart"
         )
@@ -462,6 +462,9 @@ extension ChatView {
                     id: "outbound-attachments-message",
                     role: .assistant,
                     text: "",
+                    // Production persists GenerateImage tool_use in an earlier message;
+                    // the final assistant message contains only the generated image ref.
+                    toolCalls: [],
                     attachments: [image, document, retry]
                 )
             ],

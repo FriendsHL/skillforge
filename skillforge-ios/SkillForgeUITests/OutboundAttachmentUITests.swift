@@ -12,10 +12,13 @@ final class OutboundAttachmentUITests: XCTestCase {
         static let imageOpen = "attachment.open.outbound-image"
         static let imagePreview = "attachment.preview.outbound-image"
         static let imagePreviewDone = "attachment.preview.done.outbound-image"
+        static let imagePreviewZoom = "attachment.preview.zoom.outbound-image"
         static let documentOpen = "attachment.open.outbound-document"
         static let documentPreview = "attachment.preview.outbound-document"
         static let documentPreviewDone = "attachment.preview.done.outbound-document"
         static let imageShare = "attachment.share.outbound-image"
+        static let imageRegenerate = "attachment.regenerate.outbound-image"
+        static let imageStatus = "attachment.generated.status.outbound-image"
     }
 
     func testOutboundCardsRetryAndPreviewPreserveTranscript() {
@@ -28,8 +31,9 @@ final class OutboundAttachmentUITests: XCTestCase {
         assertElementExists(Fixture.imageCard, in: app, transcript: transcript)
         assertElementExists(Fixture.documentCard, in: app, transcript: transcript)
         assertElementExists(Fixture.retryCard, in: app, transcript: transcript)
-        XCTAssertTrue(app.descendants(matching: .any)[Fixture.imageCard].label.contains("release-chart.png"))
+        XCTAssertTrue(app.descendants(matching: .any)[Fixture.imageCard].label.contains("seedream-call_fixture.jpg"))
         XCTAssertTrue(app.descendants(matching: .any)[Fixture.imageCard].label.contains("ready"))
+        XCTAssertTrue(app.staticTexts[Fixture.imageStatus].waitForExistence(timeout: 3))
         XCTAssertTrue(app.descendants(matching: .any)[Fixture.retryCard].label.contains("download failed"))
 
         let retry = app.descendants(matching: .any)[Fixture.retryButton]
@@ -50,6 +54,11 @@ final class OutboundAttachmentUITests: XCTestCase {
         let done = app.buttons[Fixture.imagePreviewDone]
         XCTAssertTrue(preview.waitForExistence(timeout: 5))
         XCTAssertTrue(done.waitForExistence(timeout: 5))
+        let zoomSurface = app.staticTexts[Fixture.imagePreviewZoom].firstMatch
+        XCTAssertTrue(zoomSurface.waitForExistence(timeout: 5))
+        XCTAssertEqual(zoomSurface.value as? String, "100%")
+        preview.pinch(withScale: 2.0, velocity: 1.0)
+        XCTAssertNotEqual(zoomSurface.value as? String, "100%")
 
         let previewScreenshot = XCTAttachment(screenshot: app.screenshot())
         previewScreenshot.name = "outbound-image-preview"
@@ -60,6 +69,10 @@ final class OutboundAttachmentUITests: XCTestCase {
         XCTAssertTrue(waitForDisappearance(preview))
         XCTAssertTrue(transcript.waitForExistence(timeout: 5))
         XCTAssertTrue(message.waitForExistence(timeout: 5))
+
+        let regenerate = app.buttons[Fixture.imageRegenerate]
+        scrollToElement(regenerate, in: transcript)
+        XCTAssertTrue(regenerate.isHittable)
 
         let documentOpen = app.buttons[Fixture.documentOpen]
         scrollToElement(documentOpen, in: transcript)
@@ -77,6 +90,11 @@ final class OutboundAttachmentUITests: XCTestCase {
         transcriptScreenshot.name = "outbound-attachment-cards"
         transcriptScreenshot.lifetime = .keepAlways
         add(transcriptScreenshot)
+
+        scrollToElement(regenerate, in: transcript)
+        XCTAssertTrue(regenerate.isHittable)
+        regenerate.tap()
+        XCTAssertTrue(app.staticTexts["请按刚才相同的要求再次生成这张图片。"].waitForExistence(timeout: 5))
     }
 
     func testImageSharePresentsSystemActivityController() {
@@ -107,7 +125,7 @@ final class OutboundAttachmentUITests: XCTestCase {
 
         let imageCard = app.descendants(matching: .any)[Fixture.imageCard]
         scrollToElement(imageCard, in: transcript)
-        XCTAssertTrue(imageCard.label.contains("release-chart.png"))
+        XCTAssertTrue(imageCard.label.contains("seedream-call_fixture.jpg"))
         let imageOpen = app.buttons[Fixture.imageOpen]
         scrollToElement(imageOpen, in: transcript)
         XCTAssertTrue(imageOpen.isHittable)

@@ -3143,8 +3143,15 @@ public class AgentLoopEngine {
     }
 
     private ContentBlock artifactRef(PublishedArtifact artifact) {
-        if (artifact == null || artifact.getAttachmentId() == null
-                || artifact.getAttachmentId().isBlank()) {
+        if (artifact == null) return null;
+        if ("media_job_ref".equals(artifact.getBlockType())) {
+            if (artifact.getJobId() == null || artifact.getJobId().isBlank()) {
+                log.warn("Ignoring published media job without jobId");
+                return null;
+            }
+            return ContentBlock.mediaJobRef(artifact.getJobId(), artifact.getMediaType());
+        }
+        if (artifact.getAttachmentId() == null || artifact.getAttachmentId().isBlank()) {
             log.warn("Ignoring published artifact without attachmentId");
             return null;
         }

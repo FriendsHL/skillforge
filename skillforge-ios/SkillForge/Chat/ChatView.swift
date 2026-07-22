@@ -531,6 +531,7 @@ struct ChatView: View {
                                     sourceAgentID: selectedSession?.agentId,
                                     sourceSessionTitle: selectedSession?.title,
                                     attachmentStore: attachmentStore,
+                                    client: client,
                                     expandedToolCallIDs: $expandedToolCallIDs,
                                     onUnauthorized: disconnectForUnauthorizedAttachment,
                                     onSubmitArtifactSnapshot: { snapshotMessage in
@@ -541,6 +542,10 @@ struct ChatView: View {
                                                 submittedDraft: snapshotMessage
                                             )
                                         }
+                                    },
+                                    onRegenerateImage: {
+                                        let request = "请按刚才相同的要求再次生成这张图片。"
+                                        startSend(request, submittedDraft: request, attachments: [])
                                     }
                                     )
                                 }
@@ -2802,6 +2807,10 @@ extension Notification.Name {
 }
 
 struct ChatMessage: Identifiable, Equatable {
+    struct MediaJobRef: Identifiable, Equatable {
+        let id: String
+        let mediaType: String
+    }
     enum Role {
         case user
         case assistant
@@ -2837,6 +2846,7 @@ struct ChatMessage: Identifiable, Equatable {
     let text: String
     var toolCalls: [ToolCall]
     let attachments: [ChatAttachment]
+    let mediaJobs: [MediaJobRef]
     let createdAt: Date?
     let reasoningContent: String?
     let isStreaming: Bool
@@ -2848,6 +2858,7 @@ struct ChatMessage: Identifiable, Equatable {
         text: String,
         toolCalls: [ToolCall] = [],
         attachments: [ChatAttachment] = [],
+        mediaJobs: [MediaJobRef] = [],
         createdAt: Date? = nil,
         reasoningContent: String? = nil,
         isStreaming: Bool = false,
@@ -2858,6 +2869,7 @@ struct ChatMessage: Identifiable, Equatable {
         self.text = text
         self.toolCalls = toolCalls
         self.attachments = attachments
+        self.mediaJobs = mediaJobs
         self.createdAt = createdAt
         self.reasoningContent = reasoningContent
         self.isStreaming = isStreaming
@@ -2890,6 +2902,12 @@ struct ChatMessage: Identifiable, Equatable {
             let toolUseBlocks = blocks.filter { $0.type == "tool_use" }
             let toolResultBlocks = blocks.filter { $0.type == "tool_result" }
             let attachments = blocks.compactMap(\.attachment)
+            let mediaJobs = blocks.compactMap { block -> MediaJobRef? in
+                guard block.type == "media_job_ref",
+                      let id = block.jobId?.trimmingCharacters(in: .whitespacesAndNewlines),
+                      !id.isEmpty else { return nil }
+                return MediaJobRef(id: id, mediaType: block.mediaType ?? "video")
+            }
             var text = Self.visibleText(from: textBlocks.compactMap(\.text).joined(separator: "\n"))
             if text == "[NORMAL]" {
                 text = ""
@@ -2919,12 +2937,13 @@ struct ChatMessage: Identifiable, Equatable {
                         result[lastIndex] = previous
                     }
                 }
-                guard !text.isEmpty || !attachments.isEmpty else { continue }
+                guard !text.isEmpty || !attachments.isEmpty || !mediaJobs.isEmpty else { continue }
                 result.append(ChatMessage(
                     id: "remote-\(message.seqNo)",
                     role: .user,
                     text: text,
                     attachments: attachments,
+                    mediaJobs: mediaJobs,
                     createdAt: Self.parseCreatedAt(message.createdAt),
                     remoteSeqNo: message.seqNo
                 ))
@@ -2941,13 +2960,14 @@ struct ChatMessage: Identifiable, Equatable {
                 )
             }
             let reasoning = Self.visibleText(from: message.reasoningContent ?? "")
-            guard !text.isEmpty || !toolCalls.isEmpty || !reasoning.isEmpty || !attachments.isEmpty else { continue }
+            guard !text.isEmpty || !toolCalls.isEmpty || !reasoning.isEmpty || !attachments.isEmpty || !mediaJobs.isEmpty else { continue }
             result.append(ChatMessage(
                 id: "remote-\(message.seqNo)",
                 role: .assistant,
                 text: text,
                 toolCalls: toolCalls,
                 attachments: attachments,
+                mediaJobs: mediaJobs,
                 createdAt: Self.parseCreatedAt(message.createdAt),
                 reasoningContent: reasoning.isEmpty ? nil : reasoning,
                 remoteSeqNo: message.seqNo
@@ -2955,6 +2975,18 @@ struct ChatMessage: Identifiable, Equatable {
         }
 
         return result
+    }
+
+    static func isGeneratedImage(_ attachment: ChatAttachment, toolCalls: [ToolCall]) -> Bool {
+        guard attachment.kind == .image else { return false }
+        let hasLocalGenerateImageCall = toolCalls.contains {
+            $0.status == .success
+                && $0.name.replacingOccurrences(of: "_", with: "").lowercased() == "generateimage"
+        }
+        // Generated artifacts are appended to the final assistant message, while their
+        // GenerateImage tool_use lives in an earlier persisted message. Preserve support
+        // for those existing transcripts using the tool's stable output filename prefix.
+        return hasLocalGenerateImageCall || attachment.filename.lowercased().hasPrefix("seedream-")
     }
 
     private static func visibleText(from rawText: String) -> String {
