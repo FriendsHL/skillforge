@@ -36,6 +36,9 @@ Provider 必须暴露 capability descriptor，服务层先验证参数再调用�
 
 ### `t_media_generation_job`
 
+落地时点：P1 同步图片复用现有 `t_chat_attachment.source_tool_use_id` 做计费前重放去重，不创建本表；
+本节从 P2 首个异步音频/视频增量开始生效。同步图片若未来转为异步，也统一迁入本状态机。
+
 必需字段：
 
 ```text
@@ -223,7 +226,7 @@ Dashboard `<audio>/<video>` 和 iOS AVPlayer 都需要 Range 访问。推荐 pla
 - 响应支持 ETag、If-Range、206、nosniff 和 private/no-store 策略。
 - access log、异常和 metrics 对 ticket 脱敏。
 
-MVP 可对小文件完整下载后播放，但视频 milestone 的正式验收必须走 Range。
+MVP 可对小文件完整下载后播放，但 P2 视频阶段的正式验收必须走 Range。
 
 ## 7. 外部下载
 

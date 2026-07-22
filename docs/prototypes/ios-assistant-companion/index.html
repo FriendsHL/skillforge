@@ -217,6 +217,33 @@
     .tool-detail-row strong { color: #343941; font-size: 8px; }
     .error .tool-detail-row strong { color: #9f3f3f; }
     .tool-result-action { min-height: 44px; margin: 4px 0 -6px -10px; padding: 0 10px; border: 0; background: transparent; color: #3978c9; font-size: 8px; font-weight: 800; }
+    .media-result-card { overflow: hidden; margin-top: 12px; border: 1px solid #e1e4e9; border-radius: 16px; background: #fff; box-shadow: 0 10px 24px rgba(22,27,38,.07); }
+    .media-result-head { display: flex; gap: 9px; align-items: center; min-height: 48px; padding: 8px 11px; }
+    .media-result-icon { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 9px; background: #e8f0ff; color: #4779c4; font-size: 14px; }
+    .media-result-copy { min-width: 0; flex: 1; }
+    .media-result-copy strong, .media-result-copy small { display: block; }
+    .media-result-copy strong { font-size: 10px; }
+    .media-result-copy small { margin-top: 3px; color: #858a94; font-size: 8px; }
+    .media-result-state { padding: 4px 7px; border-radius: 99px; background: #e7f7ec; color: #23854c; font-size: 8px; font-weight: 800; }
+    .media-result-image { position: relative; width: calc(100% - 20px); aspect-ratio: 16 / 9; margin: 0 10px; overflow: hidden; border-radius: 12px; background: linear-gradient(180deg,#101a39 0%,#5b2d73 48%,#171d33 49%,#090d18 100%); }
+    .media-result-image::before { content: ""; position: absolute; inset: 18% 8% 19%; background: linear-gradient(90deg,transparent 0 7%,#17275c 7% 18%,transparent 18% 22%,#312052 22% 34%,transparent 34% 38%,#17396e 38% 48%,transparent 48% 54%,#50234f 54% 67%,transparent 67% 72%,#16305d 72% 84%,transparent 84%); filter: drop-shadow(0 0 7px #ef4c9b); }
+    .media-result-image::after { content: "上海 · 未来夜景"; position: absolute; left: 11px; bottom: 9px; color: rgba(255,255,255,.9); font-size: 9px; font-weight: 750; letter-spacing: .2px; text-shadow: 0 1px 4px #000; }
+    .media-result-meta { display: flex; justify-content: space-between; padding: 9px 11px; color: #858a94; font-size: 8px; }
+    .media-result-actions { display: grid; grid-template-columns: repeat(3,1fr); border-top: 1px solid #eceef1; }
+    .media-result-actions button { min-height: 44px; border: 0; border-right: 1px solid #eceef1; background: #fff; color: #333740; font-size: 9px; font-weight: 750; }
+    .media-result-actions button:last-child { border-right: 0; color: var(--orange); }
+    .media-result-actions button:active { background: #f3f4f6; }
+    .media-generating { margin-top: 12px; padding: 11px; border: 1px solid #d9e5f7; border-radius: 15px; background: #f7faff; }
+    .media-generating[hidden], .media-result-card[hidden] { display: none; }
+    .media-state-switch { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; margin-top: 10px; padding: 3px; border-radius: 10px; background: #e9eaee; }
+    .media-state-switch button { min-height: 32px; border: 0; border-radius: 8px; background: transparent; color: #777b84; font-size: 9px; font-weight: 750; }
+    .media-state-switch button.is-active { background: #fff; color: #25282e; box-shadow: 0 2px 7px rgba(0,0,0,.08); }
+    .media-generating header { display: flex; gap: 8px; align-items: center; }
+    .media-generating strong { flex: 1; font-size: 10px; }
+    .media-dots { color: #4d86d8; font-size: 14px; letter-spacing: 2px; animation: mediaPulse 1.2s ease-in-out infinite; }
+    .media-skeleton { height: 82px; margin-top: 9px; border-radius: 11px; background: linear-gradient(110deg,#e9edf4 25%,#f8faff 42%,#e9edf4 58%); background-size: 220% 100%; animation: mediaShimmer 1.5s linear infinite; }
+    @keyframes mediaPulse { 50% { opacity: .35; transform: translateY(-1px); } }
+    @keyframes mediaShimmer { to { background-position-x: -220%; } }
     .proposed-hub, .proposed-agents { padding: 61px 15px 102px; background: #f7f7f9; }
     .proposed-topline { display: flex; justify-content: space-between; align-items: center; margin-bottom: 13px; }
     .proposed-topline h2 { margin: 0; font-size: 29px; letter-spacing: -.8px; }
@@ -429,7 +456,7 @@
       <div class="brand"><div class="brand-mark">SF</div><div><h1>iOS Companion</h1><p>Prototype parity workspace</p></div></div>
       <div class="mode-switch" aria-label="Prototype mode">
         <button class="mode-button is-active" data-mode="current">Current</button>
-        <button class="mode-button" data-mode="proposed">Proposed · 4</button>
+        <button class="mode-button" data-mode="proposed">Design archive · 4</button>
       </div>
       <nav class="screen-nav" aria-label="Prototype screens">
         <button class="screen-button" data-screen-target="launch" data-mode-scope="current"><span class="screen-icon">SF</span><span class="screen-copy"><strong>Launch</strong><small>Restoring workspace</small></span><span class="state-dot"></span></button>
@@ -442,6 +469,7 @@
         <button class="screen-button" data-screen-target="markdown-execution" data-mode-scope="current"><span class="screen-icon">⌘</span><span class="screen-copy"><strong>Markdown Result</strong><small>As-built steps and code</small></span><span class="state-dot"></span></button>
         <button class="screen-button" data-screen-target="app-library" data-mode-scope="current"><span class="screen-icon">▦</span><span class="screen-copy"><strong>Personal Apps</strong><small>Control → Workspace</small></span><span class="state-dot"></span></button>
         <button class="screen-button" data-screen-target="personal-app" data-mode-scope="current"><span class="screen-icon">◈</span><span class="screen-copy"><strong>Full-screen App</strong><small>As-built · secured viewer</small></span><span class="state-dot"></span></button>
+        <button class="screen-button" data-screen-target="generated-image-result" data-mode-scope="current"><span class="screen-icon">▧</span><span class="screen-copy"><strong>Generated Image</strong><small>As-built · preview and zoom</small></span><span class="state-dot"></span></button>
         <button class="screen-button" data-screen-target="proposed-chat-experience" data-mode-scope="proposed" hidden><span class="screen-icon">●</span><span class="screen-copy"><strong class="proposed-label">Chat + Tools</strong><small>Session identity · 3 states</small></span><span class="state-dot"></span></button>
         <button class="screen-button" data-screen-target="proposed-control-hub" data-mode-scope="proposed" hidden><span class="screen-icon">▦</span><span class="screen-copy"><strong class="proposed-label">Control Hub</strong><small>Now / recent / workspace</small></span><span class="state-dot"></span></button>
         <button class="screen-button" data-screen-target="proposed-agents-roster" data-mode-scope="proposed" hidden><span class="screen-icon">♟</span><span class="screen-copy"><strong class="proposed-label">Agents Roster</strong><small>Searchable · lightweight</small></span><span class="state-dot"></span></button>
@@ -571,6 +599,32 @@
           </div>
           <button class="scroll-bottom" aria-label="滚动到底部">↓</button>
           <footer class="agent-first-composer"><div class="agent-compose-row"><button aria-label="添加附件">⌕</button><div class="agent-compose-input">继续问 Main Assistant…</div><button aria-label="发送">↑</button></div></footer>
+        </section>
+
+        <section class="screen chat agent-first-chat proposed-chat-screen" data-screen="generated-image-result">
+          <header class="chat-header">
+            <div class="proposed-chat-nav"><button class="round-button" aria-label="打开 Sessions">▣</button><div class="proposed-chat-identity"><strong>图片创作</strong><span class="proposed-chat-meta"><span class="agent-label">Research Agent</span><span>·</span><span class="runtime-dot"></span><span>已连接</span></span></div><button class="round-button" aria-label="新建对话">＋</button></div>
+          </header>
+          <div class="agent-first-transcript proposed-transcript">
+            <span class="proposed-chip">CURRENT · IOS GENERATED IMAGE RESULT</span>
+            <div class="user-turn"><div class="user-prompt soft-blue">生成一张赛博朋克风格的上海夜景，适合作为手机壁纸。</div></div>
+            <article class="assistant-turn">
+              <header class="assistant-turn-header"><span class="assistant-mini-avatar">SF</span><strong>Research Agent</strong><time>刚刚</time></header>
+              <div class="agent-answer-body">
+                <p>我按竖屏壁纸方向生成了一版。生成时只展示稳定状态，不伪造百分比；完成后图片直接进入回答流。</p>
+                <div class="media-state-switch" aria-label="切换图片任务状态"><button data-media-state="generating">生成中</button><button class="is-active" data-media-state="ready">已完成</button></div>
+                <section class="media-generating" id="mediaGeneratingState" aria-label="图片生成中状态" hidden><header><span class="mini-spinner"></span><strong>正在生成图片</strong><span class="media-dots">•••</span></header><div class="media-skeleton"></div></section>
+                <article class="media-result-card" id="mediaReadyState">
+                  <header class="media-result-head"><span class="media-result-icon">▧</span><span class="media-result-copy"><strong>图片已生成</strong><small>Seedream 5.0 lite · 刚刚</small></span><span class="media-result-state">成功</span></header>
+                  <button class="media-result-image" data-media-action="preview" aria-label="全屏预览生成图片"></button>
+                  <div class="media-result-meta"><span>2048 × 2048 · JPEG</span><span>已保存到 Session</span></div>
+                  <footer class="media-result-actions"><button data-media-action="preview">⌕ 预览</button><button data-media-action="share">↥ 分享</button><button data-media-action="regenerate">↻ 再次生成</button></footer>
+                </article>
+              </div>
+            </article>
+          </div>
+          <button class="scroll-bottom" aria-label="滚动到底部">↓</button>
+          <footer class="agent-first-composer"><div class="agent-compose-row"><button aria-label="添加附件">⌕</button><div class="agent-compose-input">继续问 Research Agent…</div><button aria-label="发送">↑</button></div></footer>
         </section>
 
         <section class="screen proposed-hub" data-screen="proposed-control-hub">
@@ -740,8 +794,9 @@
       <article class="check"><span class="check-mark">✓</span><div><h3>Agent-first Chat</h3><p>Current 让 Agent 回复接近全宽、用户 Query 使用柔和蓝紧凑气泡，并把 Tool、文件与 Personal App 结果嵌进答案流。</p></div></article>
       <article class="check"><span class="check-mark">✓</span><div><h3>Query Color</h3><p>柔和蓝 B 已进入真实 App；历史暖色与饱和蓝只保留为设计决策记录。</p></div></article>
       <article class="check"><span class="check-mark">✓</span><div><h3>Markdown</h3><p>Current 覆盖三级标题、段落、两种列表、引用、代码语言栏、复制反馈和系统链接。</p></div></article>
-      <article class="check"><span class="check-mark">○</span><div><h3>Proposed · 2026-07-18</h3><p>两行 Chat 身份、Tool 三态、Control Hub 与轻量 Agents Roster 正等待视觉确认，尚未计入 Current。</p></div></article>
-    </div><p class="legend">Current 以真实 SwiftUI 和 XCUITest 截图为准；Proposed 经用户确认、实现和验证后才能迁入 Current。</p></aside>
+      <article class="check"><span class="check-mark">✓</span><div><h3>Implemented · 2026-07-18</h3><p>两行 Chat 身份、Tool 三态、Control Hub、轻量 Agents Roster 与柔和蓝 Query 已进入真实 App；Proposed 页面仅保留设计记录。</p></div></article>
+      <article class="check"><span class="check-mark">✓</span><div><h3>Current · Image Result</h3><p>iOS 已实现专用生图卡片、全屏预览、捏合/双击缩放、分享与再次生成。</p></div></article>
+    </div><p class="legend">Current 以真实 SwiftUI 和 XCUITest 截图为准；Design archive 只保存早期概念，不代表当前 App 像素现状。</p></aside>
   </main>
   <script>
     const viewport = document.getElementById('viewport');
@@ -766,7 +821,7 @@
     function openScreen(name) {
       screens.forEach(screen => screen.classList.toggle('is-active', screen.dataset.screen === name));
       screenButtons.forEach(button => button.classList.toggle('is-active', button.dataset.screenTarget === name));
-      const proposedTabs = { 'proposed-chat-experience': 'chat', 'proposed-query-colors': 'chat', 'proposed-control-hub': 'control', 'proposed-agents-roster': 'agents' };
+      const proposedTabs = { 'proposed-chat-experience': 'chat', 'generated-image-result': 'chat', 'proposed-query-colors': 'chat', 'proposed-control-hub': 'control', 'proposed-agents-roster': 'agents' };
       const isChatExample = name === 'artifact-chat' || name === 'markdown-report' || name === 'markdown-execution';
       const tabName = proposedTabs[name] || (name === 'app-library' ? 'control' : (isChatExample ? 'chat' : name));
       tabs.forEach(tab => tab.classList.toggle('is-active', tab.dataset.tab === tabName));
@@ -849,6 +904,16 @@
     document.querySelectorAll('[data-library-action]').forEach(button => button.addEventListener('click', event => {
       event.stopPropagation();
       showPrototypeToast(button.dataset.libraryAction === 'share' ? '已打开系统分享面板' : '已清除本地副本');
+    }));
+    document.querySelectorAll('[data-media-action]').forEach(button => button.addEventListener('click', () => {
+      const messages = { preview: '已打开全屏图片预览', share: '已打开系统分享面板', regenerate: '已创建新的图片生成请求' };
+      showPrototypeToast(messages[button.dataset.mediaAction]);
+    }));
+    document.querySelectorAll('[data-media-state]').forEach(button => button.addEventListener('click', () => {
+      const isGenerating = button.dataset.mediaState === 'generating';
+      document.getElementById('mediaGeneratingState').hidden = !isGenerating;
+      document.getElementById('mediaReadyState').hidden = isGenerating;
+      document.querySelectorAll('[data-media-state]').forEach(candidate => candidate.classList.toggle('is-active', candidate === button));
     }));
     document.getElementById('resetBudget').addEventListener('click', () => { budgetRanges.forEach((range,index) => range.value = initialBudgets[index]); updateBudget(); });
     updateLibrary();

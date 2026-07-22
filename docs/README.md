@@ -16,7 +16,7 @@
 
 | ID | 标题 | 状态 | 需求包 |
 | --- | --- | --- | --- |
-| **MULTIMODAL-MEDIA-RUNTIME** | 图片、音频、视频生成/理解、管理端与 iOS 统一呈现 | proposed / Full；等待方案审批后从 M0 provider spike 启动 | [需求包](requirements/active/2026-07-22-MULTIMODAL-MEDIA-RUNTIME/index.md) |
+| **MULTIMODAL-MEDIA-RUNTIME** | 图片、音频、视频生成/理解、管理端与 iOS 统一呈现 | P0/P1 complete / Full；Main Agent Seedream 真生图与跨端 `image_ref` 闭环完成，视频当前不可新增接入 | [需求包](requirements/active/2026-07-22-MULTIMODAL-MEDIA-RUNTIME/index.md) |
 | **IOS-CHAT-CONTROL-AGENTS-EXPERIENCE** | Chat 滚动、身份 Header、Tool 卡片与 Control/Agents 信息架构 | P0 code complete / focused 31/31 + stability 10/10；final Full gate BLOCKED_ENV；P1 Proposed 待确认 | [需求包](requirements/active/2026-07-18-IOS-CHAT-CONTROL-AGENTS-EXPERIENCE/index.md) |
 | **IOS-AGENT-SESSION-LIVE-FOLLOW** | Agent/Session 导航、流式智能跟随、运行指示器与新消息提醒 | Phase 1 已实现并验证；Phase 2 Full 提醒能力待设计 | [需求包](requirements/active/2026-07-18-IOS-AGENT-SESSION-LIVE-FOLLOW/index.md) |
 | **IOS-LOCAL-SIGNING-STABILITY** | 本机 Apple Team / XcodeGen 签名选择持久化 | implemented / Full automated verified；待 iPhone 重连做 GUI no-prompt 验收 | [需求包](requirements/active/2026-07-18-IOS-LOCAL-SIGNING-STABILITY/index.md) |
