@@ -1,12 +1,13 @@
 # SkillForge ToDo
 
-> 更新于：2026-07-19（任务恢复首期收窄为 kill-running MVP；新增 context overflow 最多三次 Full Compact）
+> 更新于：2026-07-22（新增多模态 Media Runtime 需求拆分，尚未进入实现）
 > 规则：这里只放当前执行状态；范围与方案见需求包，交付事实见 [delivery-index.md](delivery-index.md)。
 
 ## 当前队列
 
 | 顺序 | ID | 标题 | 模式 | 状态 | 优先级 | 下一步 |
 | --- | --- | --- | --- | --- | --- | --- |
+| - | **MULTIMODAL-MEDIA-RUNTIME** | 图片、音频、视频生成/理解、管理端与 iOS 统一呈现 | Full | proposed；总包、PRD、技术方案与 M0–M7 拆分已起草 | P1 | 用户审批总方案；批准后先执行 M0 Ark 真实能力与账号验证，不直接进入跨端开发 |
 | 0 | **IOS-CHAT-CONTROL-AGENTS-EXPERIENCE** | Chat 滚动、身份 Header、Tool 卡片与 Control/Agents 信息架构 | Full | P0 code complete / focused 31/31 + stability 10/10；final Full gate BLOCKED_ENV；P1 Proposed 四屏待确认 | P0/P1 | 恢复 CoreSimulator host 后补完整 scheme 与正常 Release packaging；真机确认惯性点击和空白屏修复；用户确认 Proposed 后实现 P1-A 至 P1-D |
 | 1 | **IOS-LOCAL-SIGNING-STABILITY** | 本机 Apple Team / XcodeGen 签名选择持久化 | Full | implemented / 最新 337 iOS tests + 连续 device signing build verified | P1 | 重连 iPhone，从 Xcode 连续 Run 两次，确认 GUI 不再要求选择 Team |
 | 2 | **IOS-CHAT-MARKDOWN-VISUAL-POLISH** | 蓝色用户 Query 与 Markdown 阅读体验 | Mid | implemented / 337 iOS tests + Release verified | P1 | 用户真机视觉/VoiceOver 与系统剪贴板验收 |
@@ -28,6 +29,7 @@
 
 需求包：
 
+- [MULTIMODAL-MEDIA-RUNTIME](requirements/active/2026-07-22-MULTIMODAL-MEDIA-RUNTIME/index.md)
 - [IOS-CHAT-CONTROL-AGENTS-EXPERIENCE](requirements/active/2026-07-18-IOS-CHAT-CONTROL-AGENTS-EXPERIENCE/index.md)
 - [IOS-AGENT-SESSION-LIVE-FOLLOW](requirements/active/2026-07-18-IOS-AGENT-SESSION-LIVE-FOLLOW/index.md)
 - [IOS-LOCAL-SIGNING-STABILITY](requirements/active/2026-07-18-IOS-LOCAL-SIGNING-STABILITY/index.md)
