@@ -10,6 +10,7 @@ import com.skillforge.core.compact.RequestTokenEstimator;
 import com.skillforge.core.compact.TimeBasedColdCleanup;
 import com.skillforge.core.compact.TokenEstimator;
 import com.skillforge.core.context.ContextProvider;
+import com.skillforge.core.context.DynamicSystemPromptAppender;
 import com.skillforge.core.context.SystemPromptBuilder;
 import com.skillforge.core.engine.confirm.ChannelUnavailableException;
 import com.skillforge.core.engine.confirm.ConfirmationPrompter;
@@ -501,18 +502,8 @@ public class AgentLoopEngine {
         StringBuilder dynamicSection = new StringBuilder(promptParts.dynamic());
 
         // 4.0.1 注入 Session Context (userId / sessionId) — 让 Agent 自动知道当前用户/会话
-        if (userId != null || loopCtx.getSessionId() != null) {
-            if (dynamicSection.length() > 0) dynamicSection.append("\n\n");
-            dynamicSection.append("## Session Context\n");
-            if (userId != null) {
-                dynamicSection.append("- userId: ")
-                        .append(sanitizePromptValue(String.valueOf(userId))).append("\n");
-            }
-            if (loopCtx.getSessionId() != null) {
-                dynamicSection.append("- sessionId: ")
-                        .append(sanitizePromptValue(loopCtx.getSessionId())).append("\n");
-            }
-        }
+        DynamicSystemPromptAppender.appendSessionContext(
+                dynamicSection, userId, loopCtx.getSessionId());
 
         // 4.1 注入用户记忆到 system prompt (skip if lightContext / skip_memory flag set)
         // Memory v2 (PR-2): provider 现在是 BiFunction(userId, taskContext) → MemoryInjection。
@@ -522,8 +513,7 @@ public class AgentLoopEngine {
         if (memoryProvider != null && !skipMemory) {
             MemoryInjection mi = memoryProvider.apply(userId, userMessage);
             if (mi != null && mi.text() != null && !mi.text().isBlank()) {
-                if (dynamicSection.length() > 0) dynamicSection.append("\n\n");
-                dynamicSection.append("## User Memories\n\n").append(mi.text());
+                DynamicSystemPromptAppender.appendUserMemories(dynamicSection, mi.text());
             }
             if (mi != null && mi.injectedIds() != null && !mi.injectedIds().isEmpty()) {
                 loopCtx.setInjectedMemoryIds(mi.injectedIds());
@@ -1955,10 +1945,6 @@ public class AgentLoopEngine {
         }
         control.setOptions(options);
         return control;
-    }
-
-    private static String sanitizePromptValue(String value) {
-        return value == null ? null : value.replaceAll("[\r\n\t]", " ").trim();
     }
 
     // ================== install confirmation dispatch branch ==================

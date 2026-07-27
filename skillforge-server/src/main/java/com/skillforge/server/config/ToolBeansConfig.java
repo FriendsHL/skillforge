@@ -117,6 +117,7 @@ import com.skillforge.server.tool.channel.SendChannelFileTool;
 import com.skillforge.server.tool.PublishChatArtifactTool;
 import com.skillforge.server.tool.PublishInteractiveArtifactTool;
 import com.skillforge.server.tool.GenerateImageTool;
+import com.skillforge.server.tool.EditImageTool;
 import com.skillforge.server.media.ArkImageGenerationClient;
 import com.skillforge.server.media.ArkImageProperties;
 import com.skillforge.server.media.ArkVideoProperties;
@@ -302,6 +303,18 @@ public class ToolBeansConfig {
         GenerateImageTool tool = new GenerateImageTool(client, attachmentService);
         skillRegistry.registerTool(tool);
         log.info("Registered GenerateImageTool into SkillRegistry");
+        return tool;
+    }
+
+    @Bean
+    @ConditionalOnProperty(prefix = "skillforge.media.ark.image", name = "enabled", havingValue = "true")
+    public EditImageTool editImageTool(
+            ArkImageGenerationClient client,
+            ChatAttachmentService attachmentService,
+            SkillRegistry skillRegistry) {
+        EditImageTool tool = new EditImageTool(client, attachmentService);
+        skillRegistry.registerTool(tool);
+        log.info("Registered EditImageTool into SkillRegistry");
         return tool;
     }
 

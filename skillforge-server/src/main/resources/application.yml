@@ -54,6 +54,9 @@ flywheel:
 
 # SkillForge configuration
 skillforge:
+  context:
+    observation:
+      enabled: ${SKILLFORGE_CONTEXT_OBSERVATION_ENABLED:true}
   media:
     ark:
       image:

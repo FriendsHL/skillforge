@@ -10,6 +10,7 @@
 import React from 'react';
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import type { SkillDraft } from '../../api';
 
@@ -78,6 +79,14 @@ vi.mock('../../contexts/AuthContext', () => ({
   useAuth: () => ({ token: null, userId: 1, login: vi.fn(), logout: vi.fn() }),
 }));
 
+vi.mock('../../contexts/TaskTrackerContext', () => ({
+  useTaskTracker: () => ({
+    addTask: vi.fn(),
+    updateTask: vi.fn(),
+  }),
+  newTaskId: () => 'task-test',
+}));
+
 import SkillList from '../SkillList';
 
 function renderPage() {
@@ -86,7 +95,9 @@ function renderPage() {
   });
   return render(
     <QueryClientProvider client={client}>
-      <SkillList />
+      <MemoryRouter>
+        <SkillList />
+      </MemoryRouter>
     </QueryClientProvider>,
   );
 }

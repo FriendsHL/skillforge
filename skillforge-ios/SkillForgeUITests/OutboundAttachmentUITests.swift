@@ -18,6 +18,7 @@ final class OutboundAttachmentUITests: XCTestCase {
         static let documentPreviewDone = "attachment.preview.done.outbound-document"
         static let imageShare = "attachment.share.outbound-image"
         static let imageRegenerate = "attachment.regenerate.outbound-image"
+        static let imageEdit = "attachment.edit.outbound-image"
         static let imageStatus = "attachment.generated.status.outbound-image"
     }
 
@@ -113,6 +114,24 @@ final class OutboundAttachmentUITests: XCTestCase {
         close.tap()
         XCTAssertTrue(waitForDisappearance(app.otherElements["ActivityListView"]))
         XCTAssertTrue(transcript.waitForExistence(timeout: 5))
+    }
+
+    func testEditGeneratedImagePrefillsExactAttachmentReference() {
+        let app = launchApp()
+        let transcript = app.scrollViews["chat.transcript"]
+        XCTAssertTrue(transcript.waitForExistence(timeout: 5))
+
+        let edit = app.buttons[Fixture.imageEdit]
+        scrollToElement(edit, in: transcript)
+        XCTAssertTrue(edit.isHittable)
+        edit.tap()
+
+        let composer = app.textFields["chat.composer"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 5))
+        XCTAssertTrue((composer.value as? String)?.contains(
+            "attachment_id=outbound-image"
+        ) == true)
+        XCTAssertTrue((composer.value as? String)?.contains("修改要求") == true)
     }
 
     func testAttachmentCardsRemainOperableAtAccessibilityXXXL() {

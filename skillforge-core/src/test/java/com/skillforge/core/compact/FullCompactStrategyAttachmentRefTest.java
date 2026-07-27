@@ -27,10 +27,10 @@ class FullCompactStrategyAttachmentRefTest {
         String text = (String) serializeWindow.invoke(new FullCompactStrategy(), List.of(assistant));
 
         assertThat(text).contains(
-                "[Previously delivered image: chart.png]",
-                "[Previously delivered PDF: report.pdf]",
-                "[Previously delivered Word document: notes.docx]",
-                "[Previously delivered Excel workbook: data.xlsx]",
-                "[Previously delivered CSV: rows.csv]");
+                "[Previously delivered image: chart.png; attachment_id=1]",
+                "[Previously delivered PDF: report.pdf; attachment_id=2]",
+                "[Previously delivered Word document: notes.docx; attachment_id=3]",
+                "[Previously delivered Excel workbook: data.xlsx; attachment_id=4]",
+                "[Previously delivered CSV: rows.csv; attachment_id=5]");
     }
 }

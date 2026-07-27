@@ -23,4 +23,13 @@ public record SystemPromptParts(String stable, String dynamic) {
         stable = stable == null ? "" : stable;
         dynamic = dynamic == null ? "" : dynamic;
     }
+
+    /**
+     * Render the same legacy single-string form used by callers without cache parts.
+     */
+    public String combined() {
+        if (dynamic.isEmpty()) return stable;
+        if (stable.isEmpty()) return dynamic;
+        return stable + "\n\n" + dynamic;
+    }
 }

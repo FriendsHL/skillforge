@@ -94,8 +94,10 @@ describe('ToolSpanDetailView (SubAgent rendering)', () => {
     renderWithProviders({ ...baseSummary, subagentSessionId: null });
 
     await waitFor(() => {
-      expect(screen.getByText('do thing')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Input' })).toBeInTheDocument();
     });
+    fireEvent.click(screen.getByRole('button', { name: 'Input' }));
+    expect(screen.getByText('do thing')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Jump to child session/ })).toBeNull();
   });
 

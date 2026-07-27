@@ -1,6 +1,6 @@
 # MULTIMODAL-MEDIA-RUNTIME — 图片、音频、视频统一能力
 
-> 状态：P0 / P1 同步图片闭环 complete；P2-B 视频异步代码闭环 complete、真实 Provider 验收 blocked；P2-A 音频未开始
+> 状态：P0 / P1 同步图片闭环 complete；P1.1 图片迭代闭环 implementing；P2-B 视频异步代码闭环 complete、真实 Provider 验收 blocked；P2-A 音频未开始
 > 模式：Full
 > 优先级：P1
 > 日期：2026-07-22
@@ -43,6 +43,7 @@
 | --- | --- | --- | --- |
 | P0 | 账号与 Provider Spike | 订阅专用 Media endpoint、Seedream 真调用、Seedance 可用性与套餐边界 | **PASS**：图片成功；视频阻塞已明确；密钥未入库/日志 |
 | P1 | 同步图片闭环 | 订阅端点保护、GenerateImage、Attachment 幂等、Dashboard+iOS 既有 `image_ref` 交付 | Ark Main Agent 真生图、刷新不重复、跨端呈现回归 |
+| P1.1 | 图片迭代闭环 | 显式引用历史图片、EditImage、衍生版本关系、Compact 资产定位 | 编辑不覆盖原图；压缩后从图片卡片继续创作仍指向同一原图 |
 | P2 | 音频与视频异步闭环 | 视频 job、轮询/取消/恢复、转存与两端播放器已实现；TTS、Range/APNs 待后续增量 | 视频 Provider 开通后补真活；音频独立推进 |
 | P3 | 理解与创作体验 | ASR、视频抽帧/字幕、受控 materialization、Media Creator Agent | 多模态问答与专用 Agent 共用同一 Runtime |
 

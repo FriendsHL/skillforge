@@ -14,6 +14,7 @@ struct MessageBubbleView: View {
     let onUnauthorized: @MainActor () -> Void
     let onSubmitArtifactSnapshot: @MainActor (String) -> Void
     let onRegenerateImage: @MainActor () -> Void
+    let onEditImage: @MainActor (ChatAttachment) -> Void
 
     var body: some View {
         ChatTurnLayout(
@@ -167,7 +168,8 @@ struct MessageBubbleView: View {
                         store: attachmentStore,
                         onUnauthorized: onUnauthorized,
                         onSubmitSnapshot: onSubmitArtifactSnapshot,
-                        onRegenerateImage: onRegenerateImage
+                        onRegenerateImage: onRegenerateImage,
+                        onEditImage: onEditImage
                     )
                 }
             }

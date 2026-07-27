@@ -91,6 +91,12 @@ public class ChatAttachmentEntity {
     @Column(name = "caption", length = 1000)
     private String caption;
 
+    @Column(name = "derived_from_attachment_id", length = 36)
+    private String derivedFromAttachmentId;
+
+    @Column(name = "derivation_operation", length = 32)
+    private String derivationOperation;
+
     @Column(name = "interactive_manifest_json", columnDefinition = "TEXT")
     private String interactiveManifestJson;
 
@@ -163,6 +169,14 @@ public class ChatAttachmentEntity {
     public void setSha256(String sha256) { this.sha256 = sha256; }
     public String getCaption() { return caption; }
     public void setCaption(String caption) { this.caption = caption; }
+    public String getDerivedFromAttachmentId() { return derivedFromAttachmentId; }
+    public void setDerivedFromAttachmentId(String derivedFromAttachmentId) {
+        this.derivedFromAttachmentId = derivedFromAttachmentId;
+    }
+    public String getDerivationOperation() { return derivationOperation; }
+    public void setDerivationOperation(String derivationOperation) {
+        this.derivationOperation = derivationOperation;
+    }
     public String getInteractiveManifestJson() { return interactiveManifestJson; }
     public void setInteractiveManifestJson(String interactiveManifestJson) {
         this.interactiveManifestJson = interactiveManifestJson;

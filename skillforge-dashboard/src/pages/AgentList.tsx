@@ -351,11 +351,18 @@ const AgentList: React.FC = () => {
           SYSTEM-AGENT-TYPING Phase 2 UX refactor — underline tabs matching
           the SkillList Skills/Drafts tab pattern.
         */}
-        <div className="underline-tabs" data-testid="agent-type-tabs">
+        <div
+          className="underline-tabs"
+          data-testid="agent-type-tabs"
+          role="tablist"
+          aria-label="Agent type"
+        >
           {TAB_KEYS.map((k) => (
             <button
               key={k}
               type="button"
+              role="tab"
+              aria-selected={activeTab === k}
               className={activeTab === k ? 'on' : ''}
               onClick={() => setActiveTab(k)}
             >

@@ -546,6 +546,13 @@ struct ChatView: View {
                                     onRegenerateImage: {
                                         let request = "请按刚才相同的要求再次生成这张图片。"
                                         startSend(request, submittedDraft: request, attachments: [])
+                                    },
+                                    onEditImage: { attachment in
+                                        composerText = """
+                                        请使用 EditImage 基于图片 attachment_id=\(attachment.id) 继续创作。
+                                        修改要求：
+                                        """
+                                        composerFocused = true
                                     }
                                     )
                                 }

@@ -6,9 +6,14 @@ import com.skillforge.core.model.AgentDefinition;
 import com.skillforge.core.model.Message;
 import com.skillforge.core.model.SkillDefinition;
 import com.skillforge.core.skill.SkillRegistry;
+import com.skillforge.core.skill.SkillContext;
+import com.skillforge.core.skill.SkillResult;
+import com.skillforge.core.skill.Tool;
+import com.skillforge.core.model.ToolSchema;
 import com.skillforge.core.skill.view.SessionSkillResolver;
 import com.skillforge.core.skill.view.SessionSkillView;
 import com.skillforge.server.dto.ContextBreakdownDto;
+import com.skillforge.server.config.ContextObservationProperties;
 import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.SessionEntity;
 import org.junit.jupiter.api.BeforeEach;
@@ -45,11 +50,13 @@ class ContextBreakdownServiceTest {
 
     @BeforeEach
     void setUp() {
+        ContextObservationProperties observationProperties = new ContextObservationProperties();
+        observationProperties.setEnabled(true);
         service = new ContextBreakdownService(
                 agentService, sessionService, skillRegistry, memoryService,
                 new com.skillforge.core.context.GlobalSystemPromptProvider(),
                 List.<ContextProvider>of(), new ObjectMapper(),
-                sessionSkillResolver);
+                sessionSkillResolver, observationProperties);
     }
 
     private SkillDefinition def(String name, boolean isSystem) {
@@ -105,6 +112,64 @@ class ContextBreakdownServiceTest {
         assertThat(tools.tokens())
                 .as("one Skill loader schema should be counted even when no Java tools are registered")
                 .isGreaterThan(0);
+        assertThat(tools.children()).hasSize(1);
+        assertThat(tools.children().get(0).key()).isEqualTo("tool_schema_Skill");
+        assertThat(tools.children().get(0).metadata().kind()).isEqualTo("SKILL_LOADER");
+        assertThat(tools.children().get(0).metadata().contentHash()).hasSize(64);
+    }
+
+    @Test
+    @DisplayName("breakdown classifies MCP and media schemas without exposing schema bodies")
+    void breakdown_classifiesCapabilityKinds() {
+        Tool mcp = stubTool("mcp_github_search");
+        Tool media = stubTool("generate_image");
+        AgentDefinition agentDef = new AgentDefinition();
+        agentDef.setId("42");
+        AgentEntity agentEntity = new AgentEntity();
+        agentEntity.setId(42L);
+        agentEntity.setModelId("gpt-4o");
+        SessionEntity session = new SessionEntity();
+        session.setId("s1");
+        session.setAgentId(42L);
+        when(agentService.getAgent(42L)).thenReturn(agentEntity);
+        when(agentService.toAgentDefinition(agentEntity)).thenReturn(agentDef);
+        when(sessionService.getContextMessages("s1")).thenReturn(List.of());
+        when(skillRegistry.getAllTools()).thenReturn(List.of(mcp, media));
+        when(sessionSkillResolver.resolveFor(agentDef)).thenReturn(SessionSkillView.EMPTY);
+
+        ContextBreakdownDto.Segment tools = service.breakdown(session, 7L).segments().stream()
+                .filter(s -> "tool_schemas".equals(s.key()))
+                .findFirst()
+                .orElseThrow();
+
+        assertThat(childByKey(tools, "tool_schema_mcp_github_search").metadata().kind())
+                .isEqualTo("MCP");
+        assertThat(childByKey(tools, "tool_schema_generate_image").metadata().kind())
+                .isEqualTo("MEDIA");
+    }
+
+    private static Tool stubTool(String name) {
+        return new Tool() {
+            @Override
+            public String getName() {
+                return name;
+            }
+
+            @Override
+            public String getDescription() {
+                return "test";
+            }
+
+            @Override
+            public ToolSchema getToolSchema() {
+                return new ToolSchema(name, "test", Map.of("type", "object"));
+            }
+
+            @Override
+            public SkillResult execute(Map<String, Object> input, SkillContext context) {
+                throw new UnsupportedOperationException();
+            }
+        };
     }
 
     @Test
@@ -134,6 +199,54 @@ class ContextBreakdownServiceTest {
         assertThat(global.tokens())
                 .as("the built-in global system prompt must be counted as a system_prompt child")
                 .isGreaterThan(0);
+        assertThat(global.metadata().sourceType()).isEqualTo("GLOBAL");
+        assertThat(global.metadata().placement()).isEqualTo("STABLE_SYSTEM");
+        assertThat(global.metadata().cacheable()).isTrue();
+        assertThat(global.metadata().contentHash()).hasSize(64);
+        assertThat(breakdown.observation()).isNotNull();
+        assertThat(breakdown.observation().stablePrefixHash()).hasSize(64);
+        assertThat(breakdown.observation().assemblyHash()).hasSize(64);
+        assertThat(breakdown.observation().toolSchemasHash()).hasSize(64);
+        assertThat(breakdown.observation().durationMicros()).isNotNegative();
+    }
+
+    @Test
+    @DisplayName("observation rollback switch restores legacy breakdown without metadata")
+    void breakdown_observationDisabled_restoresLegacySegments() {
+        ContextObservationProperties disabled = new ContextObservationProperties();
+        disabled.setEnabled(false);
+        service = new ContextBreakdownService(
+                agentService, sessionService, skillRegistry, memoryService,
+                new com.skillforge.core.context.GlobalSystemPromptProvider(),
+                List.<ContextProvider>of(), new ObjectMapper(),
+                sessionSkillResolver, disabled);
+
+        AgentDefinition agentDef = new AgentDefinition();
+        agentDef.setId("42");
+        AgentEntity agentEntity = new AgentEntity();
+        agentEntity.setId(42L);
+        agentEntity.setModelId("gpt-4o");
+        SessionEntity session = new SessionEntity();
+        session.setId("s1");
+        session.setAgentId(42L);
+        when(agentService.getAgent(42L)).thenReturn(agentEntity);
+        when(agentService.toAgentDefinition(agentEntity)).thenReturn(agentDef);
+        when(sessionService.getContextMessages("s1")).thenReturn(List.of());
+        when(sessionSkillResolver.resolveFor(agentDef)).thenReturn(SessionSkillView.EMPTY);
+
+        ContextBreakdownDto breakdown = service.breakdown(session, 7L);
+        ContextBreakdownDto.Segment systemPrompt = breakdown.segments().stream()
+                .filter(s -> "system_prompt".equals(s.key()))
+                .findFirst()
+                .orElseThrow();
+
+        assertThat(childByKey(systemPrompt, "global_system_prompt").metadata()).isNull();
+        assertThat(breakdown.observation()).isNull();
+        assertThat(breakdown.segments().stream()
+                .filter(s -> "tool_schemas".equals(s.key()))
+                .findFirst()
+                .orElseThrow()
+                .children()).isNull();
     }
 
     @Test

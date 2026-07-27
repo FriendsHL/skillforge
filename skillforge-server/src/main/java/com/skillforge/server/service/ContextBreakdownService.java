@@ -5,7 +5,13 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillforge.core.compact.RequestTokenEstimator;
 import com.skillforge.core.compact.TokenEstimator;
 import com.skillforge.core.context.ContextProvider;
+import com.skillforge.core.context.DynamicSystemPromptAppender;
+import com.skillforge.core.context.ObservedSystemPromptParts;
+import com.skillforge.core.context.PromptFragmentObservation;
+import com.skillforge.core.context.PromptObservationHashes;
+import com.skillforge.core.context.SystemPromptBuilder;
 import com.skillforge.core.engine.AgentLoopEngine;
+import com.skillforge.core.llm.cache.ToolNormalizer;
 import com.skillforge.core.llm.ModelConfig;
 import com.skillforge.core.model.AgentDefinition;
 import com.skillforge.core.model.ContentBlock;
@@ -18,6 +24,9 @@ import com.skillforge.core.skill.view.SessionSkillResolver;
 import com.skillforge.core.skill.view.SessionSkillView;
 import com.skillforge.server.dto.ContextBreakdownDto;
 import com.skillforge.server.dto.ContextBreakdownDto.Segment;
+import com.skillforge.server.dto.ContextBreakdownDto.SegmentMetadata;
+import com.skillforge.server.dto.ContextBreakdownDto.ObservationSummary;
+import com.skillforge.server.config.ContextObservationProperties;
 import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.SessionEntity;
 import org.slf4j.Logger;
@@ -69,6 +78,7 @@ public class ContextBreakdownService {
     private final ObjectMapper objectMapper;
     /** Plan r2 §5 — view 接管 skill 列表渲染（修复 B-BE-3 残留 getAllSkillDefinitions）。 */
     private final SessionSkillResolver sessionSkillResolver;
+    private final ContextObservationProperties observationProperties;
 
     public ContextBreakdownService(AgentService agentService,
                                    SessionService sessionService,
@@ -77,7 +87,8 @@ public class ContextBreakdownService {
                                    com.skillforge.core.context.GlobalSystemPromptProvider globalSystemPromptProvider,
                                    List<ContextProvider> contextProviders,
                                    ObjectMapper objectMapper,
-                                   SessionSkillResolver sessionSkillResolver) {
+                                   SessionSkillResolver sessionSkillResolver,
+                                   ContextObservationProperties observationProperties) {
         this.agentService = agentService;
         this.sessionService = sessionService;
         this.skillRegistry = skillRegistry;
@@ -86,20 +97,23 @@ public class ContextBreakdownService {
         this.contextProviders = contextProviders != null ? contextProviders : List.of();
         this.objectMapper = objectMapper;
         this.sessionSkillResolver = sessionSkillResolver;
+        this.observationProperties = observationProperties;
     }
 
     @Transactional(readOnly = true)
     public ContextBreakdownDto breakdown(SessionEntity session, Long userId) {
+        long observationStartNanos = System.nanoTime();
         AgentEntity agentEntity = agentService.getAgent(session.getAgentId());
         AgentDefinition agentDef = agentService.toAgentDefinition(agentEntity);
         String sessionId = session.getId();
 
-        List<Segment> systemPromptChildren = buildSystemPromptSegments(agentDef, userId, session);
+        SystemPromptSegments systemPrompt =
+                buildSystemPromptSegments(agentDef, userId, session);
+        List<Segment> systemPromptChildren = systemPrompt.segments();
         long systemPromptTotal = sumTokens(systemPromptChildren);
 
-        long toolSchemasTokens = estimateToolSchemasTokens(agentDef);
-        Segment toolSchemas = Segment.leaf(
-                "tool_schemas", "Tool schemas (JSON)", toolSchemasTokens);
+        ToolSchemasBreakdown toolSchemasBreakdown = buildToolSchemasSegment(agentDef);
+        Segment toolSchemas = toolSchemasBreakdown.segment();
 
         List<Message> context = sessionService.getContextMessages(sessionId);
         List<Segment> messageChildren = bucketMessages(context);
@@ -127,14 +141,112 @@ public class ContextBreakdownService {
                 ? (int) Math.min(100L, Math.round(total * 100.0 / windowLimit))
                 : 0;
 
-        return new ContextBreakdownDto(sessionId, total, windowLimit, pct, segments);
+        ObservationSummary observation = null;
+        if (observationProperties != null && observationProperties.isEnabled()) {
+            observation = new ObservationSummary(
+                    systemPrompt.stableHash(),
+                    systemPrompt.assemblyHash(),
+                    toolSchemasBreakdown.hash(),
+                    Math.max(0L, (System.nanoTime() - observationStartNanos) / 1_000L));
+        }
+        return new ContextBreakdownDto(
+                sessionId, total, windowLimit, pct, segments, observation);
     }
 
     // ─────────────────────────── system prompt segments ───────────────────────────
 
-    private List<Segment> buildSystemPromptSegments(AgentDefinition agentDef,
-                                                    Long userId,
-                                                    SessionEntity session) {
+    private SystemPromptSegments buildSystemPromptSegments(
+            AgentDefinition agentDef, Long userId, SessionEntity session) {
+        if (observationProperties != null && observationProperties.isEnabled()) {
+            return buildObservedSystemPromptSegments(agentDef, userId, session);
+        }
+        return buildLegacySystemPromptSegments(agentDef, userId, session);
+    }
+
+    private SystemPromptSegments buildObservedSystemPromptSegments(
+            AgentDefinition agentDef, Long userId, SessionEntity session) {
+        List<Segment> out = new ArrayList<>();
+        String globalPrompt = safeProviderCall(globalSystemPromptProvider::get);
+        ObservedSystemPromptParts observed =
+                new SystemPromptBuilder(agentDef, List.of(), contextProviders)
+                        .buildObserved(globalPrompt);
+        for (PromptFragmentObservation fragment : observed.fragments()) {
+            out.add(Segment.observed(
+                    fragment.id(),
+                    promptFragmentLabel(fragment.id()),
+                    fragment.estimatedTokens(),
+                    new SegmentMetadata(
+                            fragment.sourceType().name(),
+                            fragment.placement().name(),
+                            fragment.stable(),
+                            fragment.cacheable(),
+                            fragment.contentHash(),
+                            null,
+                            fragment.sourceIds().isEmpty()
+                                    ? null : String.join(",", fragment.sourceIds()),
+                            null)));
+        }
+
+        StringBuilder dynamic = new StringBuilder(observed.parts().dynamic());
+        String sessionCtx = DynamicSystemPromptAppender.appendSessionContext(
+                dynamic, userId, session.getId());
+        if (!sessionCtx.isEmpty()) {
+            out.add(Segment.observed(
+                    "session_context", "Session context",
+                    TokenEstimator.estimateString(sessionCtx),
+                    dynamicMetadata("SESSION_CONTEXT", sessionCtx)));
+        }
+
+        Map<String, Object> cfg = agentDef.getConfig();
+        boolean skipMemory = cfg != null && Boolean.TRUE.equals(cfg.get("skip_memory"));
+        if (!skipMemory) {
+            String memories = safeProviderCall(
+                    () -> memoryService.previewMemoriesForPrompt(userId, null));
+            if (isNotBlank(memories)) {
+                String memoryFragment =
+                        DynamicSystemPromptAppender.appendUserMemories(dynamic, memories);
+                out.add(Segment.observed(
+                        "user_memories", "User memories",
+                        TokenEstimator.estimateString(memoryFragment),
+                        dynamicMetadata("MEMORY", memoryFragment)));
+            }
+        }
+        String assembly;
+        if (dynamic.isEmpty()) {
+            assembly = observed.parts().stable();
+        } else if (observed.parts().stable().isEmpty()) {
+            assembly = dynamic.toString();
+        } else {
+            assembly = observed.parts().stable()
+                    + com.skillforge.core.llm.cache.CacheBoundary.MARKER_WITH_NEWLINES
+                    + dynamic;
+        }
+        long assemblyTokens = TokenEstimator.estimateString(assembly);
+        long framingTokens = assemblyTokens - sumTokens(out);
+        if (framingTokens > 0) {
+            out.add(Segment.observed(
+                    "prompt_framing",
+                    "Prompt framing / cache boundary",
+                    framingTokens,
+                    new SegmentMetadata(
+                            "ASSEMBLY",
+                            "SYSTEM_BOUNDARY",
+                            null,
+                            null,
+                            PromptObservationHashes.sha256(
+                                    com.skillforge.core.llm.cache.CacheBoundary.MARKER_WITH_NEWLINES),
+                            null,
+                            null,
+                            null)));
+        }
+        return new SystemPromptSegments(
+                out,
+                observed.stableHash(),
+                PromptObservationHashes.sha256(assembly));
+    }
+
+    private SystemPromptSegments buildLegacySystemPromptSegments(
+            AgentDefinition agentDef, Long userId, SessionEntity session) {
         List<Segment> out = new ArrayList<>();
 
         // SKILLFORGE-SYSTEM-PROMPT: the engine now injects the built-in global system prompt
@@ -194,7 +306,31 @@ public class ContextBreakdownService {
             }
         }
 
-        return out;
+        return new SystemPromptSegments(out, null, null);
+    }
+
+    private static SegmentMetadata dynamicMetadata(String sourceType, String rendered) {
+        return new SegmentMetadata(
+                sourceType,
+                "DYNAMIC_SYSTEM",
+                false,
+                false,
+                PromptObservationHashes.sha256(rendered),
+                null,
+                null,
+                null);
+    }
+
+    private static String promptFragmentLabel(String id) {
+        if ("global_system_prompt".equals(id)) return "Global system prompt";
+        if ("agent_prompt".equals(id)) return "Agent prompt";
+        if ("soul".equals(id)) return "SOUL.md";
+        if ("tools_md".equals(id)) return "TOOLS.md / Guidelines";
+        if ("behavior_rules".equals(id)) return "Behavior rules";
+        if (id != null && id.startsWith("env_context.")) {
+            return "Environment context · " + id.substring("env_context.".length());
+        }
+        return id == null ? "Prompt fragment" : id;
     }
 
     /**
@@ -290,7 +426,7 @@ public class ContextBreakdownService {
 
     // ───────────────────────────── tool schemas ─────────────────────────────
 
-    private long estimateToolSchemasTokens(AgentDefinition agentDef) {
+    private ToolSchemasBreakdown buildToolSchemasSegment(AgentDefinition agentDef) {
         Collection<Tool> skills = skillRegistry.getAllTools();
         // CTX-1 — collect ToolSchemas first then delegate to RequestTokenEstimator so
         // the dashboard count and the engine's compact-trigger ratio share one
@@ -314,7 +450,51 @@ public class ContextBreakdownService {
         if (!visibleSkills.isEmpty()) {
             schemas.add(AgentLoopEngine.skillLoaderToolSchema(visibleSkills));
         }
-        return RequestTokenEstimator.estimateToolSchemas(schemas, objectMapper);
+        long total = RequestTokenEstimator.estimateToolSchemas(schemas, objectMapper);
+        if (observationProperties == null || !observationProperties.isEnabled()) {
+            return new ToolSchemasBreakdown(
+                    Segment.leaf("tool_schemas", "Tool schemas (JSON)", total), null);
+        }
+        List<Segment> children = new ArrayList<>(schemas.size());
+        for (ToolSchema schema : schemas) {
+            if (schema == null) continue;
+            int tokens = RequestTokenEstimator.estimateToolSchemas(List.of(schema), objectMapper);
+            String kind = capabilityKind(schema);
+            children.add(Segment.observed(
+                    "tool_schema_" + sanitizeKey(schema.getName()),
+                    nullSafe(schema.getName()),
+                    tokens,
+                    new SegmentMetadata(
+                            null,
+                            null,
+                            null,
+                            null,
+                            ToolNormalizer.hashTool(schema, objectMapper),
+                            kind,
+                            capabilitySource(schema, kind),
+                            "VISIBLE_BY_CURRENT_AGENT_POLICY")));
+        }
+        children.sort(java.util.Comparator.comparingLong(Segment::tokens).reversed());
+        return new ToolSchemasBreakdown(
+                new Segment("tool_schemas", "Tool schemas (JSON)", total, children),
+                ToolNormalizer.hashTools(schemas, objectMapper));
+    }
+
+    private static String capabilityKind(ToolSchema schema) {
+        String name = nullSafe(schema.getName());
+        String lower = name.toLowerCase(Locale.ROOT);
+        if ("Skill".equals(name)) return "SKILL_LOADER";
+        if (lower.contains("image") || lower.contains("video") || lower.contains("audio")) {
+            return "MEDIA";
+        }
+        if (lower.startsWith("mcp_")) return "MCP";
+        return "TOOL";
+    }
+
+    private static String capabilitySource(ToolSchema schema, String kind) {
+        if ("SKILL_LOADER".equals(kind)) return "SessionSkillView";
+        if ("MCP".equals(kind)) return "MCP";
+        return "SkillRegistry";
     }
 
     private List<SkillDefinition> resolveVisibleSkillDefs(AgentDefinition agentDef) {
@@ -541,6 +721,13 @@ public class ContextBreakdownService {
         long total = 0L;
         for (Segment s : segs) total += s.tokens();
         return total;
+    }
+
+    private record SystemPromptSegments(
+            List<Segment> segments, String stableHash, String assemblyHash) {
+    }
+
+    private record ToolSchemasBreakdown(Segment segment, String hash) {
     }
 
     private static boolean isNotBlank(String s) {

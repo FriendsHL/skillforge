@@ -1,6 +1,6 @@
 # Research Report — SkillForge 多模态媒体能力
 
-> 调研日期：2026-07-22
+> 调研日期：2026-07-22；媒体传输与上下文管理补充调研：2026-07-24
 > 范围：SkillForge 后端、Dashboard、iOS、`../research-docs`、Ark/OpenAI/Apple 官方能力
 
 ## 1. 本地能力基线
@@ -117,3 +117,74 @@ Provider 选择器。ChatGPT、阿里或可灵的消费者订阅均不推定包�
 5. 实时语音的网络和生命周期与文件生成不同，必须独立拆包。
 6. 火山 agent plan 订阅与标准 Media API 是不同授权面；订阅本身有专用 Media endpoint 和模型白名单，
    Provider 配置必须按套餐路由，不能复用标准 `/api/v3` 或假定所有视觉模型都可用。
+
+## 6. 媒体传输与上下文管理补充调研（2026-07-24）
+
+### 6.1 官方 API 的共同规律
+
+官方接口并没有统一要求使用 Base64：
+
+- Ark 图片生成的 `image` 输入支持 URL 或 Base64，输出支持临时 URL 或 Base64。
+- OpenAI Responses 的图片输入支持公网 URL、Data URL 和已上传的 `file_id`；图片编辑还可引用
+  `file_id`。生成结果和流式 partial image 可能返回 Base64。
+- Anthropic Messages 的视觉输入支持 URL 和 Base64；其 Files API 可将上传文件作为可复用引用。
+- Gemini 对图片、音频、视频和文档同时提供 inline data、Files API 和云存储引用。官方明确建议较大、
+  较长或需复用的视频走 Files API；inline data 只适合小文件和一次性请求。
+
+这说明 Provider 协议应在调用边界适配，不能让某一种外部载体成为 SkillForge 的内部资产协议。
+
+官方参考：
+
+- [Ark 图片生成 API](https://api.volcengine.com/api-docs/view?action=ImageGenerations&serviceCode=ark&version=2024-01-01)
+- [OpenAI API Quickstart：图片与文件输入](https://platform.openai.com/docs/quickstart/make-your-first-api-request)
+- [Anthropic Vision](https://docs.anthropic.com/en/docs/build-with-claude/vision)
+- [Gemini File input methods](https://ai.google.dev/gemini-api/docs/file-input-methods)
+- [Gemini Video understanding](https://ai.google.dev/gemini-api/docs/video-understanding)
+
+### 6.2 URL、Base64 和 Provider File ID 的适用边界
+
+| 载体 | 优点 | 风险/限制 | SkillForge 用法 |
+| --- | --- | --- | --- |
+| SkillForge `attachment_id` | 稳定、短、可鉴权、可 Compact | Provider 不认识 | 消息、Tool 参数、数据库中的唯一长期引用 |
+| 公网短时签名 URL | 请求小、适合大文件、Provider 可拉取 | 需要 Provider 可访问的对象存储；会过期 | 图片优先、音视频默认；仅在调用时生成 |
+| Provider File ID/URI | 可复用、请求小、适合视频处理 | Provider 专有、有过期和删除策略 | 按 provider+attachment+hash 缓存的远端副本 |
+| Base64/Data URL | 无需公网存储、兼容性最好 | 体积约增加三分之一；JSON、内存和网络开销大 | 小图片的一次性最终回退；禁止进入历史 |
+| Provider 临时结果 URL | 下载方便 | 有效期短、不可作为产品资产 | 只用于服务端受控下载并转存 |
+
+因此“继续使用之前的地址”只有在该地址仍有效且 Provider 可访问时才成立。SkillForge 当前本地鉴权下载
+地址对 Ark 等公网服务通常不可达；上一次生成结果的 Provider URL 又可能过期。长期复用必须以
+`attachment_id` 为入口，再在每次调用时解析成当时可用的传输载体。
+
+### 6.3 对当前 SkillForge 的评估
+
+当前实现的正确部分：
+
+- 数据库和 Agent 历史只保存 `image_ref + attachment_id`，不保存 Base64 和 Provider 临时 URL。
+- `EditImage` 只在调用 Ark 的最后边界生成 Data URL，Tool Result 仍为轻量 `image_ref`。
+- 视觉理解的 `MessageMaterializer` 创建请求副本，不改变持久化消息形状。
+- 图片原件会转存到受管 Attachment，Provider URL 失效不影响展示和再次使用。
+
+当前实现需要演进的部分：
+
+- `EditImage` 固定使用 Base64，没有按大小、Provider 能力和复用次数选择 URL/File ID。
+- 视觉理解每次 materialize 都可能重新读取、压缩、Base64 编码同一图片，缺少可复用 Provider handle。
+- 尚无统一的媒体派生物模型；视频理解需要 transcript、poster、关键帧，音频需要 transcript/waveform，
+  不应每次重新预处理。
+- Compact 虽保留 `attachment_id`，但仍需要资产摘要索引来决定何时重新加载原媒体或派生物。
+
+### 6.4 推荐结论
+
+采用“稳定资产引用 + 延迟物化 + Provider 句柄缓存”的三层模型：
+
+1. Agent 和数据库只认识稳定的 `attachment_id` 及紧凑 metadata。
+2. 服务端根据操作、模型能力、媒体大小和复用预期，选择 inline、signed URL、provider upload 或派生物。
+3. Provider File ID/URI 作为可过期缓存，不作为真相源；失效后从 Attachment 重新创建。
+
+默认策略：
+
+- 小图片、单次 Ark 编辑：允许 Base64/Data URL。
+- 重复图片理解或编辑：优先 Provider File ID；Provider 不支持时使用对象存储短签名 URL。
+- 音频：优先 transcript；确需原生音频时使用 Provider File ID/签名 URL。
+- 视频：默认 transcript + 稀疏关键帧；确需原生视频理解时必须使用 Provider File ID/云存储 URL，
+  禁止把完整视频 Base64 放入普通 Chat 请求。
+- 输出无论返回 URL 还是 Base64，都必须流式/限额转存到 Attachment，随后丢弃外部载体。

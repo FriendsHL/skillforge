@@ -24,7 +24,7 @@ public class GenerateImageTool implements Tool {
     public static final String NAME = "GenerateImage";
     private static final Logger log = LoggerFactory.getLogger(GenerateImageTool.class);
     private static final int MAX_PROMPT_CHARS = 2_000;
-    private static final Set<String> ALLOWED_SIZES = Set.of("1K", "2K", "4K");
+    private static final Set<String> ALLOWED_SIZES = Set.of("2K", "3K", "4K");
 
     private final ArkImageGenerationClient client;
     private final ChatAttachmentService attachmentService;
@@ -46,7 +46,7 @@ public class GenerateImageTool implements Tool {
     public ToolSchema getToolSchema() {
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put("prompt", Map.of("type", "string", "description", "Detailed image description."));
-        properties.put("size", Map.of("type", "string", "enum", List.of("1K", "2K", "4K"),
+        properties.put("size", Map.of("type", "string", "enum", List.of("2K", "3K", "4K"),
                 "description", "Output resolution tier. Defaults to 2K."));
         properties.put("watermark", Map.of("type", "boolean", "description", "Whether to retain provider watermark. Defaults to true."));
         properties.put("caption", Map.of("type", "string", "description", "Optional short caption shown in chat."));
@@ -63,7 +63,7 @@ public class GenerateImageTool implements Tool {
         }
         if (prompt.length() > MAX_PROMPT_CHARS) return SkillResult.validationError("prompt exceeds 2000 characters");
         String size = input.get("size") instanceof String value ? value : "2K";
-        if (!ALLOWED_SIZES.contains(size)) return SkillResult.validationError("size must be 1K, 2K, or 4K");
+        if (!ALLOWED_SIZES.contains(size)) return SkillResult.validationError("size must be 2K, 3K, or 4K");
         boolean watermark = !(input.get("watermark") instanceof Boolean value) || value;
         String caption = input.get("caption") instanceof String value ? value : null;
         if (!validContext(context)) return SkillResult.error("GenerateImage is unavailable outside an active artifact workspace");

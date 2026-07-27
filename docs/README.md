@@ -1,6 +1,6 @@
 # SkillForge 文档
 
-> 更新于：2026-07-22（新增图片、音频、视频统一 Media Runtime 需求包与分期路线）
+> 更新于：2026-07-27（新增 Opus 5 时代的 Agent Context Runtime 完整需求包）
 > Agent 规则：先读这里，再只打开当前任务链接到的文档。
 
 ## 从这里开始
@@ -16,6 +16,8 @@
 
 | ID | 标题 | 状态 | 需求包 |
 | --- | --- | --- | --- |
+| **AGENT-CONTEXT-GOVERNANCE** | System Prompt、Memory、Tool Result、Skill/MCP 能力与 Compact 连续性治理 | Design Proposed / Full；六期独立交付 | [需求包](requirements/active/2026-07-26-AGENT-CONTEXT-GOVERNANCE/index.md) |
+| **REALTIME-VOICE-CONVERSATION** | iOS 实时语音对话、打断、字幕与 Agent Tool 编排 | Design Proposed / Full；Ark first，Qwen-compatible | [需求包](requirements/active/2026-07-23-REALTIME-VOICE-CONVERSATION/index.md) |
 | **MULTIMODAL-MEDIA-RUNTIME** | 图片、音频、视频生成/理解、管理端与 iOS 统一呈现 | P0/P1 complete / Full；Main Agent Seedream 真生图与跨端 `image_ref` 闭环完成，视频当前不可新增接入 | [需求包](requirements/active/2026-07-22-MULTIMODAL-MEDIA-RUNTIME/index.md) |
 | **IOS-CHAT-CONTROL-AGENTS-EXPERIENCE** | Chat 滚动、身份 Header、Tool 卡片与 Control/Agents 信息架构 | P0 code complete / focused 31/31 + stability 10/10；final Full gate BLOCKED_ENV；P1 Proposed 待确认 | [需求包](requirements/active/2026-07-18-IOS-CHAT-CONTROL-AGENTS-EXPERIENCE/index.md) |
 | **IOS-AGENT-SESSION-LIVE-FOLLOW** | Agent/Session 导航、流式智能跟随、运行指示器与新消息提醒 | Phase 1 已实现并验证；Phase 2 Full 提醒能力待设计 | [需求包](requirements/active/2026-07-18-IOS-AGENT-SESSION-LIVE-FOLLOW/index.md) |

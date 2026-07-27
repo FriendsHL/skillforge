@@ -61,10 +61,18 @@ P1 作为同一期产品验收，按四个 Full 增量串行交付：
 - 复用现有 typed `image_ref`、鉴权下载、缓存、预览与分享链路。
 - 对同一 Attachment ID 保持单次呈现；刷新由服务端消息快照对账。
 
+### P1.1 — 图片迭代闭环
+
+- 增加 `EditImage`，以当前 Session 的受管图片附件作为输入。
+- 增加图片衍生关系，编辑产生新附件且不覆盖源图。
+- iOS 图片卡片区分“再次生成”和“基于此图创作”，后者显式携带附件 ID。
+- Full Compact 的附件占位保留稳定 ID，但不物化二进制。
+- Dashboard 沿用 typed `image_ref`，补充显式引用入口时使用同一请求协议。
+
 ### 延后 P2/P3
 
 - `t_media_generation_job`、Provider SPI/capability descriptor、lease worker、Jobs/Providers 管理页和 job WebSocket event。
-- `EditImage`、专用“再次生成”按钮与 Media Creator Agent；当前可通过新 query 再次调用 `GenerateImage`。
+- Media Creator Agent 与批量参考图编排。
 
 ### 验收
 

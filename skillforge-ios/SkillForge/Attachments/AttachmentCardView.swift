@@ -15,6 +15,7 @@ struct AttachmentCardView: View {
     let onUnauthorized: @MainActor () -> Void
     let onSubmitSnapshot: @MainActor (String) -> Void
     let onRegenerateImage: @MainActor () -> Void
+    let onEditImage: @MainActor (ChatAttachment) -> Void
 
     @State private var showPreview = false
     @State private var shareItem: ShareItem?
@@ -32,7 +33,8 @@ struct AttachmentCardView: View {
         store: AttachmentDownloadStore,
         onUnauthorized: @escaping @MainActor () -> Void,
         onSubmitSnapshot: @escaping @MainActor (String) -> Void,
-        onRegenerateImage: @escaping @MainActor () -> Void = {}
+        onRegenerateImage: @escaping @MainActor () -> Void = {},
+        onEditImage: @escaping @MainActor (ChatAttachment) -> Void = { _ in }
     ) {
         self.sessionID = sessionID
         self.attachment = attachment
@@ -46,6 +48,7 @@ struct AttachmentCardView: View {
         self.onUnauthorized = onUnauthorized
         self.onSubmitSnapshot = onSubmitSnapshot
         self.onRegenerateImage = onRegenerateImage
+        self.onEditImage = onEditImage
     }
 
     @ViewBuilder
@@ -165,6 +168,10 @@ struct AttachmentCardView: View {
                 Divider()
                 generatedAction("再次生成", systemImage: "arrow.clockwise", identifier: "attachment.regenerate.\(attachment.id)", tint: .orange) {
                     onRegenerateImage()
+                }
+                Divider()
+                generatedAction("基于此图", systemImage: "wand.and.stars", identifier: "attachment.edit.\(attachment.id)", tint: .orange) {
+                    onEditImage(attachment)
                 }
             }
             .frame(height: 48)

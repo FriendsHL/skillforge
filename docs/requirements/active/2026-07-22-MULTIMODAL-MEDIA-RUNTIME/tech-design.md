@@ -108,9 +108,15 @@ channel_count
 frame_rate
 poster_attachment_id
 media_metadata_json
+derived_from_attachment_id
+derivation_operation
 ```
 
 常用检索字段独立成列；provider 私有扩展进入 JSON。所有新时间字段使用 `Instant/TIMESTAMPTZ`。
+`derived_from_attachment_id` 是指向 `t_chat_attachment(id)` 的可空自引用外键；
+源附件删除时使用 `ON DELETE SET NULL`，避免删除源图级联删除用户已经保留的衍生版本。
+索引覆盖 `derived_from_attachment_id`。`derivation_operation` 首期只允许
+`EDIT_IMAGE`，后续可扩展 `VARIATION`、`UPSCALE`。
 
 ## 3. 状态机
 
@@ -149,6 +155,35 @@ EXPIRED
 
 Tool 在受控 timeout 内生成并导入 Attachment，返回 `PublishedArtifact`。若转为异步，返回 `media_job_ref`。
 
+`EditImage` 输入：
+
+```json
+{
+  "source_attachment_id": "attachment UUID",
+  "prompt": "保留构图，把天空改成雨夜",
+  "size": "2K",
+  "watermark": true,
+  "caption": "雨夜版本"
+}
+```
+
+服务端先按 `(session_id,user_id,attachment_id)` 加载已就绪的 image Attachment，
+限制输入字节和 MIME，再仅在 Ark 请求边界编码为 Data URL。Ark 返回结果沿用
+`GenerateImage` 的下载 allowlist、大小限制和 Attachment 导入链路。Tool Result
+仍只发布新的 `image_ref`。
+
+客户端从图片卡片发起时，把源附件作为当前 user turn 的显式引用，同时提交编辑指令；
+Agent 调用 `EditImage` 时复制该 attachment ID。历史 assistant `image_ref` 不会在每轮
+自动物化，避免重复发送所有旧图片。
+
+Full Compact 的摘要序列化为附件保留紧凑稳定标识：
+
+```text
+[Previously delivered image: generated.jpg; attachment_id=<uuid>]
+```
+
+这只帮助 Agent 恢复语义和工具参数，不承担授权。Tool 执行时仍必须重新校验附件归属。
+
 ### 视频/长音频
 
 1. Tool 创建 job 并提交 provider。
@@ -175,6 +210,94 @@ Provider-bound materialization：
 - `media_job_ref` -> 紧凑文本状态，不把内部请求 JSON 上送。
 - `audio_ref` -> transcription 或 provider 原生 audio；由 agent/model capability 决定。
 - `video_ref` -> transcript + selected frames + metadata，只有明确支持时才原生视频输入。
+
+### 媒体引用与传输分层
+
+内部协议与 Provider 传输必须分离：
+
+```text
+Message / Tool
+attachment_id
+    ↓ ownership + session + MIME + size validation
+MediaAssetResolver
+    ↓ capability / size / reuse / privacy policy
+INLINE | SIGNED_URL | PROVIDER_FILE | DERIVATIVES
+    ↓ provider-specific request DTO
+Ark / OpenAI / Anthropic / Gemini / future providers
+```
+
+新增内部抽象（名称可在实现设计审查时调整）：
+
+```java
+record MediaAssetRef(
+    String attachmentId,
+    String sha256,
+    String mimeType,
+    long sizeBytes
+) {}
+
+record ProviderMediaHandle(
+    String provider,
+    String attachmentId,
+    String contentHash,
+    TransportKind transportKind,
+    String remoteId,
+    Instant expiresAt
+) {}
+```
+
+`ProviderMediaHandle` 是可重建缓存，不是资产真相源。建议后续用独立表持久化，唯一键为
+`(provider, attachment_id, content_hash, purpose)`；不得写入消息 JSON。远端 ID、到期时间和删除状态可以
+保存，完整签名 URL、Base64 和用户媒体内容不得保存。
+
+传输选择策略：
+
+1. Provider 原生支持 upload/file reference 且素材会复用：`PROVIDER_FILE`。
+2. 已配置 Provider 可访问的对象存储：生成 5–15 分钟的 `SIGNED_URL`。
+3. 小图片、一次性调用且不超过 Provider/SkillForge 限额：`INLINE`。
+4. 音频/视频理解优先使用已有 transcript、poster、关键帧等 `DERIVATIVES`。
+5. 完整视频不得走 `INLINE`；大音频默认也不得走 `INLINE`。
+
+初始建议阈值不是协议常量，放配置并受 Provider 上限二次约束：
+
+- inline 图片原始输入不超过 5 MiB；进入请求前可生成 provider-specific rendition。
+- inline 音频默认关闭，仅在明确支持且一次性短片段时开启。
+- inline 视频始终关闭。
+- Base64 只在请求序列化阶段产生，不写日志、事件、数据库、缓存或异常正文。
+
+当前 Ark `EditImage` 可继续使用 inline 作为第一阶段兼容实现，因为本地 Attachment URL 对公网 Ark
+不可达；对象存储或 Ark 可复用文件接口接入后，由 resolver 自动切换，Tool schema 和客户端协议不变。
+
+### 上下文与 Compact 规则
+
+上下文保留的是资产语义，不是媒体字节：
+
+```json
+{
+  "type": "image_ref",
+  "attachment_id": "...",
+  "filename": "generated.jpg",
+  "caption": "雨夜版本"
+}
+```
+
+- 当前 user turn 明确引用的媒体才允许物化；不得自动重新发送全部历史图片。
+- Tool 参数必须使用精确 `attachment_id`，不能依赖“上一张图”的自然语言猜测。
+- Compact 保留 `attachment_id`、媒体类型、短标题/摘要以及必要的派生关系；删除 URL、Base64、
+  Provider request/response 和播放 ticket。
+- Compact 后需要理解媒体时，通过 `attachment_id` 重新加载；句柄失效则重新 upload/sign，不重新生成资产。
+- 图片可建立一次性视觉摘要；音频持久化 transcript；视频持久化 transcript、章节、poster 和关键帧。
+  日常问答优先使用这些派生物，用户明确要求像素级、听觉或时序分析时才加载原媒体。
+- 派生物也使用 Attachment，并通过 relation/purpose 指向原资产，避免把大段派生内容塞入 summary。
+
+### 失败与恢复
+
+- 签名 URL 过期：重新签名并重试一次，不重新生成媒体。
+- Provider File ID 失效：从本地 Attachment 重新上传，原子替换 handle。
+- 上传成功但服务被 kill：通过 content hash + provider lookup/idempotency 能力恢复；不支持查询的
+  Provider 允许产生孤立远端缓存，由 TTL 清理，但不得重复生成最终资产。
+- Provider 输出下载中断：保留 generation job/provider request ID，重新获取结果地址并续传或重下。
+- 所有物化路径在读取前重新执行 user/session ownership 校验；不得接受 LLM 或客户端给出的任意 URL。
 
 ## 5. API 和事件
 

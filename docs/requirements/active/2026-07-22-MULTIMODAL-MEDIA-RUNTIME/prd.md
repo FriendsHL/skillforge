@@ -15,6 +15,12 @@
 - `GenerateImage`：文本生成图片，支持比例、数量和可选参考附件。
 - `EditImage`：对已有图片附件进行编辑。
 - 成功结果必须形成 `image_ref`，失败必须返回明确错误。
+- `EditImage` 必须显式接收当前 Session 内、当前用户可读的
+  `source_attachment_id`；不得依赖“刚才那张图”从自然语言历史猜测。
+- 图片编辑不得覆盖源附件。新附件记录 `derived_from_attachment_id` 和
+  `derivation_operation=EDIT_IMAGE`，形成可追溯版本链。
+- Provider 图片输入只允许在调用边界从受管附件物化。Base64、供应商临时 URL、
+  本机路径和完整 Provider 响应不得进入 Tool Result、消息历史或 Compact 摘要。
 
 ### 音频
 
@@ -43,6 +49,8 @@
 
 - Dashboard 显示原比例缩略图和 lightbox；iOS 显示缩略图和全屏预览。
 - 支持下载、分享、再次生成和作为参考继续编辑。
+- “再次生成”只复用文本意图；“基于此图创作”必须提交卡片绑定的附件 ID，
+  两个动作不得使用相同文案或静默互相降级。
 - 大图必须使用缩略图，不在消息列表直接解码原始尺寸。
 
 ### 音频
@@ -109,3 +117,5 @@
 8. 跨用户、跨 session、撤销设备和过期 playback ticket 均无法读取媒体。
 9. WebSocket 断线、REST catch-up 和 App 重启不产生重复卡片或附件。
 10. 所有 provider 错误、审核拒绝、下载失败和预算拒绝有稳定状态与用户提示。
+11. 对历史生成图片执行“基于此图创作”，服务端收到准确源附件 ID，产生新附件且不覆盖原图。
+12. 源图片进入 Full Compact 后，用户仍可从历史图片卡片发起编辑；Compact 不保存或复制图片二进制。

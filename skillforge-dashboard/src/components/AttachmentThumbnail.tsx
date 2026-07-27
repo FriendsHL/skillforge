@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Image as AntdImage, Tag, Tooltip } from 'antd';
+import { Button, Image as AntdImage, Tag, Tooltip } from 'antd';
 import {
   FilePdfOutlined,
   FileWordOutlined,
@@ -34,6 +34,7 @@ interface AttachmentThumbnailProps {
   /** Excel only — sheet count surfaced as a chip badge. */
   sheetCount?: number;
   caption?: string;
+  onEditImage?: (attachmentId: string) => void;
 }
 
 type LoadState = 'loading' | 'loaded' | 'error';
@@ -75,6 +76,7 @@ const AttachmentThumbnail: React.FC<AttachmentThumbnailProps> = ({
   pageCount,
   sheetCount,
   caption,
+  onEditImage,
 }) => {
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
   const [loadState, setLoadState] = useState<LoadState>('loading');
@@ -284,6 +286,17 @@ const AttachmentThumbnail: React.FC<AttachmentThumbnailProps> = ({
         data-testid="attachment-image-thumb"
       />
       {captionNode}
+      {onEditImage && (
+        <Button
+          type="text"
+          size="small"
+          onClick={() => onEditImage(attachmentId)}
+          data-testid={`attachment-edit-${attachmentId}`}
+          style={{ paddingInline: 0, color: 'var(--accent)' }}
+        >
+          基于此图创作
+        </Button>
+      )}
     </div>
   );
 };

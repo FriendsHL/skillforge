@@ -71,7 +71,13 @@ public final class AssistantAttachmentRefSanitizer {
     }
 
     private static String placeholder(String label, Object filename, Object attachmentId) {
-        Object display = filename != null && !filename.toString().isBlank() ? filename : attachmentId;
+        boolean hasFilename = filename != null && !filename.toString().isBlank();
+        boolean hasId = attachmentId != null && !attachmentId.toString().isBlank();
+        if (hasFilename && hasId) {
+            return "[Previously delivered " + label + ": " + filename
+                    + "; attachment_id=" + attachmentId + "]";
+        }
+        Object display = hasFilename ? filename : attachmentId;
         return display == null || display.toString().isBlank()
                 ? "[Previously delivered " + label + "]"
                 : "[Previously delivered " + label + ": " + display + "]";

@@ -4,6 +4,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillforge.core.compact.RequestTokenEstimator;
 import com.skillforge.core.compact.TokenEstimator;
 import com.skillforge.core.context.ContextProvider;
+import com.skillforge.core.context.DynamicSystemPromptAppender;
+import com.skillforge.core.context.SystemPromptBuilder;
+import com.skillforge.core.llm.cache.CacheBoundary;
+import com.skillforge.core.llm.cache.SystemPromptParts;
 import com.skillforge.core.model.AgentDefinition;
 import com.skillforge.core.model.Message;
 import com.skillforge.core.model.ToolSchema;
@@ -16,6 +20,7 @@ import com.skillforge.core.skill.view.SessionSkillView;
 import com.skillforge.server.dto.ContextBreakdownDto;
 import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.SessionEntity;
+import com.skillforge.server.config.ContextObservationProperties;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -71,10 +76,12 @@ class EngineEstimateMatchesBreakdownIT {
 
     @BeforeEach
     void setUp() {
+        ContextObservationProperties observationProperties = new ContextObservationProperties();
+        observationProperties.setEnabled(true);
         service = new ContextBreakdownService(
                 agentService, sessionService, skillRegistry, memoryService,
                 globalSystemPromptProvider, List.<ContextProvider>of(), objectMapper,
-                sessionSkillResolver);
+                sessionSkillResolver, observationProperties);
     }
 
     /** Stub Tool with a fixed schema so we control the tool_schemas estimate. */
@@ -142,28 +149,16 @@ class EngineEstimateMatchesBreakdownIT {
         ContextBreakdownDto breakdown = service.breakdown(session, userId);
 
         // ── Act: engine path ──────────────────────────────────────────────────
-        // Reconstruct the systemPrompt the engine would build under this minimal
-        // config, segment-by-segment. The reconstruction mirrors the order
-        // ContextBreakdownService.buildSystemPromptSegments uses, with only the
-        // segments this minimal test triggers (agent_prompt, tools_md guidelines,
-        // session_context).
-        // We concatenate THE SAME strings the dashboard estimates per-segment so
-        // sum-of-parts vs whole-string BPE boundaries do not bite.
-        // SKILLFORGE-SYSTEM-PROMPT: the built-in global system prompt is now injected as the
-        // first system-prompt segment for every agent, so it counts toward both the dashboard
-        // breakdown and the engine estimate.
         String globalPrompt = globalSystemPromptProvider.get();
-        String agentPrompt = agentDef.getSystemPrompt();
-        String toolsMd = defaultToolsGuidelines();
-        String sessionCtx = "\n\n## Session Context\n"
-                + "- userId: " + userId + "\n"
-                + "- sessionId: " + sessionId + "\n";
-
-        // Sum-of-parts (same algorithm dashboard uses for systemPromptTotal).
-        long expectedSystemTokens = TokenEstimator.estimateString(globalPrompt)
-                + TokenEstimator.estimateString(agentPrompt)
-                + TokenEstimator.estimateString(toolsMd)
-                + TokenEstimator.estimateString(sessionCtx);
+        SystemPromptParts promptParts =
+                new SystemPromptBuilder(agentDef, List.of(), List.of())
+                        .buildWithBoundary(globalPrompt);
+        StringBuilder dynamic = new StringBuilder(promptParts.dynamic());
+        DynamicSystemPromptAppender.appendSessionContext(dynamic, userId, sessionId);
+        String systemPrompt = promptParts.stable()
+                + CacheBoundary.MARKER_WITH_NEWLINES
+                + dynamic;
+        long expectedSystemTokens = TokenEstimator.estimateString(systemPrompt);
 
         // Tools (shared algorithm — guaranteed equal).
         long expectedToolsTokens = RequestTokenEstimator.estimateToolSchemas(toolSchemas, objectMapper);
@@ -246,20 +241,5 @@ class EngineEstimateMatchesBreakdownIT {
                 .filter(s -> "output_reserved".equals(s.key()))
                 .findFirst().orElseThrow();
         assertThat(outputReservedSeg.tokens()).isZero();
-    }
-
-    /**
-     * Mirror of {@code ContextBreakdownService.DEFAULT_TOOLS_GUIDELINES}. Kept inline
-     * so test failures point to the divergence directly rather than through reflection.
-     * If that constant changes, this test will surface the mismatch immediately.
-     */
-    private static String defaultToolsGuidelines() {
-        return "## Tool Usage Guidelines\n\n"
-                + "- Use Read instead of running `cat` or `head` via Bash\n"
-                + "- Use Glob instead of running `find` or `ls` via Bash\n"
-                + "- Use Grep instead of running `grep` or `rg` via Bash\n"
-                + "- Use Edit for modifying existing files instead of Write\n"
-                + "- Always read a file before editing or overwriting it\n"
-                + "- Use absolute file paths whenever possible\n";
     }
 }

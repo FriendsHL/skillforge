@@ -3,7 +3,7 @@
  * output for a generic (non-SubAgent) tool span.
  */
 import React from 'react';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
@@ -65,7 +65,9 @@ describe('ToolSpanDetailView (generic tool)', () => {
       expect(bashes.length).toBeGreaterThan(0);
     });
     expect(screen.getByText('ok')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Input' }));
     expect(screen.getByText('ls -la')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Output' }));
     expect(screen.getByText(/total 0/)).toBeInTheDocument();
     // No SubAgent jump for non-SubAgent tools.
     expect(screen.queryByRole('button', { name: /Jump to child session/ })).toBeNull();

@@ -53,6 +53,30 @@ class ArkImageGenerationClientTest {
     }
 
     @Test
+    void generate_withSourceImage_sendsDataUrlOnlyAtProviderBoundary() throws Exception {
+        List<String> requestBodies = new ArrayList<>();
+        Interceptor interceptor = chain -> {
+            okio.Buffer buffer = new okio.Buffer();
+            chain.request().body().writeTo(buffer);
+            requestBodies.add(buffer.readUtf8());
+            return response(chain, 200, "application/json", """
+                    {"data":[{"url":"https://media.example/result.jpg","size":"2048x2048"}]}
+                    """);
+        };
+        ArkImageGenerationClient client = new ArkImageGenerationClient(
+                properties(), new ObjectMapper(),
+                new OkHttpClient.Builder().addInterceptor(interceptor).build());
+
+        client.generate("make it rainy", "2K", false, new byte[]{1, 2, 3}, "image/jpeg");
+
+        assertThat(requestBodies).singleElement().satisfies(body -> {
+            assertThat(body).contains("\"image\":[\"data:image/jpeg;base64,AQID\"]");
+            assertThat(body).contains("\"size\":\"2k\"");
+            assertThat(body).doesNotContain("attachment_id");
+        });
+    }
+
+    @Test
     void download_untrustedHost_rejectsBeforeNetworkCall() {
         ArkImageGenerationClient client = new ArkImageGenerationClient(
                 properties(), new ObjectMapper(), new OkHttpClient());

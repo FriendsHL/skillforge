@@ -90,6 +90,7 @@ interface ChatInputProps {
    * 的本地 selected/uploading 状态").
    */
   sessionResetKey?: string;
+  prefill?: { revision: number; text: string };
 }
 
 const MULTIMODAL_GATE_TOOLTIP = '请把 agent 的主模型切换为多模态模型（picker 上带「多模态」标签的项）';
@@ -155,7 +156,7 @@ function chipKindLabel(file: File): 'PDF' | 'IMG' | 'DOC' | 'XLS' | 'CSV' {
 }
 
 const ChatInput: React.FC<ChatInputProps> = React.memo(
-  ({ disabled, onSend, slashCommands, multimodalEnabled, onOpenAgentConfig, sessionResetKey }) => {
+  ({ disabled, onSend, slashCommands, multimodalEnabled, onOpenAgentConfig, sessionResetKey, prefill }) => {
     const [input, setInput] = useState('');
     const [popupOpen, setPopupOpen] = useState(false);
     const [selectedIdx, setSelectedIdx] = useState(0);
@@ -169,6 +170,14 @@ const ChatInput: React.FC<ChatInputProps> = React.memo(
     useEffect(() => {
       setFiles([]);
     }, [sessionResetKey]);
+
+    useEffect(() => {
+      if (!prefill) return;
+      setInput(prefill.text);
+      requestAnimationFrame(() => {
+        textareaRef.current?.focus();
+      });
+    }, [prefill]);
 
     const autosize = useCallback(() => {
       const el = textareaRef.current;
@@ -787,6 +796,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
   const [commandModalOpen, setCommandModalOpen] = useState(false);
   const [commandModalTitle, setCommandModalTitle] = useState<string>('');
   const [commandModalBody, setCommandModalBody] = useState<string>('');
+  const [inputPrefill, setInputPrefill] = useState<{ revision: number; text: string }>();
 
   const handleShowCommandModal = useCallback((title: string, markdownBody: string) => {
     setCommandModalTitle(title);
@@ -994,6 +1004,10 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
                           caption={att.caption}
                           userId={slashCommandConfig.userId}
                           sessionId={slashCommandConfig.sessionId}
+                          onEditImage={(attachmentId) => setInputPrefill((previous) => ({
+                            revision: (previous?.revision ?? 0) + 1,
+                            text: `请使用 EditImage 基于图片 attachment_id=${attachmentId} 继续创作。\n修改要求：`,
+                          }))}
                         />
                       ))}
                     </div>
@@ -1101,6 +1115,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
         multimodalEnabled={multimodalEnabled}
         onOpenAgentConfig={onOpenAgentConfig}
         sessionResetKey={sessionResetKey}
+        prefill={inputPrefill}
       />
       <CommandResultModal
         open={commandModalOpen}

@@ -10,7 +10,7 @@
  *      path while wiring up the system-skill branch).
  */
 import React from 'react';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { SkillDrawer } from '../SkillDrawer';
@@ -70,7 +70,7 @@ function makeRow(overrides: Partial<SkillRow>): SkillRow {
   };
 }
 
-function renderDrawer(skill: SkillRow) {
+function renderDrawer(skill: SkillRow, siblingVersions?: SkillRow[]) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: Infinity } },
   });
@@ -89,6 +89,7 @@ function renderDrawer(skill: SkillRow) {
         onDelete={onDelete}
         currentUserId={1}
         sourceAgentId={null}
+        siblingVersions={siblingVersions}
       />
     </QueryClientProvider>,
   );
@@ -100,7 +101,7 @@ describe('SkillDrawer — system skill governance (P1-D T9)', () => {
     vi.clearAllMocks();
   });
 
-  it('renders Delete as disabled for isSystem=true skills and exposes the tooltip text', async () => {
+  it('renders system skills as marketplace-managed without version deletion', () => {
     const sysRow = makeRow({
       id: 42,
       name: 'system-skill',
@@ -111,30 +112,12 @@ describe('SkillDrawer — system skill governance (P1-D T9)', () => {
       originSource: 'filesystem',
     });
     const { onDelete } = renderDrawer(sysRow);
-
-    // The disabled Delete button is wrapped in a span (AntD Tooltip footgun
-    // workaround) and tagged with data-testid="system-delete-disabled".
-    const deleteBtn = await screen.findByTestId('system-delete-disabled');
-    expect(deleteBtn).toBeDisabled();
-    expect(deleteBtn).toHaveAttribute('aria-disabled', 'true');
-
-    // Tooltip text must render with the exact Chinese copy required by plan.
-    // We mount the tooltip via fireEvent.mouseOver on the wrapping span — AntD
-    // attaches its mouseenter listener there to dodge the disabled-button bug.
-    const wrapper = deleteBtn.parentElement!;
-    fireEvent.mouseOver(wrapper);
-    await waitFor(() => {
-      expect(screen.getByText('System skill 不可删除')).toBeInTheDocument();
-    });
-
-    // Even if a click somehow fires, onDelete must NOT be invoked. The
-    // wrapping span has pointer-events:none on the inner button, so jsdom
-    // clicks land on the disabled button which never propagates.
-    fireEvent.click(deleteBtn);
+    expect(screen.getByText(/System skills are managed via the marketplace/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Delete Version/i })).not.toBeInTheDocument();
     expect(onDelete).not.toHaveBeenCalled();
   });
 
-  it('renders Delete + Disable as enabled for isSystem=false skills (regression guard)', async () => {
+  it('offers deletion only after selecting a non-live candidate version', () => {
     const customRow = makeRow({
       id: 7,
       name: 'custom-skill',
@@ -144,18 +127,18 @@ describe('SkillDrawer — system skill governance (P1-D T9)', () => {
       type: 'runtime',
       originSource: 'upload',
     });
-    const { onDelete, onToggle } = renderDrawer(customRow);
+    const candidate = makeRow({
+      id: 8,
+      name: 'custom-skill',
+      enabled: false,
+      semver: '1.1.0',
+      parentSkillId: 7,
+    });
+    const { onDelete } = renderDrawer(customRow, [customRow, candidate]);
 
-    // The disabled-system testid must NOT exist on a non-system skill.
-    expect(screen.queryByTestId('system-delete-disabled')).not.toBeInTheDocument();
-
-    const deleteBtn = await screen.findByRole('button', { name: /^delete$/i });
-    expect(deleteBtn).not.toBeDisabled();
-    fireEvent.click(deleteBtn);
-    expect(onDelete).toHaveBeenCalledWith(7);
-
-    const toggleBtn = screen.getByRole('button', { name: /disable/i });
-    fireEvent.click(toggleBtn);
-    expect(onToggle).toHaveBeenCalledWith(7, false);
+    expect(screen.queryByRole('button', { name: /Delete Version/i })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText('v1.1.0'));
+    expect(screen.getByRole('button', { name: /Delete Version/i })).toBeEnabled();
+    expect(onDelete).not.toHaveBeenCalled();
   });
 });

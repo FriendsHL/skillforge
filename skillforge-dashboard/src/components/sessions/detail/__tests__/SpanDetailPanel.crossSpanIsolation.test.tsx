@@ -91,7 +91,9 @@ describe('SpanDetailPanel cross-span isolation (FE-B1)', () => {
       </QueryClientProvider>,
     );
 
-    // Wait for spanA detail to be fetched + rendered.
+    // Wait for spanA detail, then open the request tab (Meta is the default).
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Request' })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Request' }));
     await waitFor(() => expect(screen.getByText('INPUT-span-a')).toBeInTheDocument());
 
     // Click "load full payload" button in the request PayloadViewer.
@@ -111,6 +113,8 @@ describe('SpanDetailPanel cross-span isolation (FE-B1)', () => {
         <SpanDetailPanel span={spanB} />
       </QueryClientProvider>,
     );
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Request' })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Request' }));
     await waitFor(() => expect(screen.getByText('INPUT-span-b')).toBeInTheDocument());
 
     // The remounted PayloadViewer must have fresh state: load button enabled again,

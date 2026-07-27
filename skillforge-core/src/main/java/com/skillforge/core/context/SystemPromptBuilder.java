@@ -1,6 +1,7 @@
 package com.skillforge.core.context;
 
 import com.skillforge.core.llm.cache.SystemPromptParts;
+import com.skillforge.core.compact.TokenEstimator;
 import com.skillforge.core.model.AgentDefinition;
 import com.skillforge.core.model.SkillDefinition;
 
@@ -44,15 +45,7 @@ public class SystemPromptBuilder {
      */
     public String build(String claudeMd) {
         SystemPromptParts parts = buildWithBoundary(claudeMd);
-        // Backward compat: legacy callers want a single string. Concatenate with a newline
-        // separator (no marker) — providers that don't honor cache_control see no change.
-        if (parts.dynamic().isEmpty()) {
-            return parts.stable();
-        }
-        if (parts.stable().isEmpty()) {
-            return parts.dynamic();
-        }
-        return parts.stable() + "\n\n" + parts.dynamic();
+        return parts.combined();
     }
 
     /**
@@ -81,27 +74,53 @@ public class SystemPromptBuilder {
      * {@link com.skillforge.core.llm.LlmRequest#getSystemPrompt() systemPrompt}.
      */
     public SystemPromptParts buildWithBoundary(String claudeMd) {
+        return buildInternal(claudeMd, false).parts();
+    }
+
+    /**
+     * Build the existing prompt and collect content-free metadata from the same append
+     * operations. Observations never participate in rendering.
+     */
+    public ObservedSystemPromptParts buildObserved(String claudeMd) {
+        return buildInternal(claudeMd, true);
+    }
+
+    private ObservedSystemPromptParts buildInternal(String claudeMd, boolean observe) {
         StringBuilder stable = new StringBuilder();
+        List<PromptFragmentObservation> observations = observe ? new ArrayList<>() : null;
 
         // 1. CLAUDE.md — 全局规则
         if (claudeMd != null && !claudeMd.isBlank()) {
+            int start = stable.length();
             stable.append(claudeMd.strip()).append("\n\n");
+            observe(observations, "global_system_prompt", PromptSourceType.GLOBAL,
+                    PromptPlacement.STABLE_SYSTEM, true, true,
+                    List.of("global"), stable.substring(start));
         }
 
         // 2. AGENT.md — 核心指令
         String agentPrompt = agentDefinition.getSystemPrompt();
         if (agentPrompt != null && !agentPrompt.isBlank()) {
+            int start = stable.length();
             stable.append(agentPrompt.strip()).append("\n\n");
+            observe(observations, "agent_prompt", PromptSourceType.AGENT,
+                    PromptPlacement.STABLE_SYSTEM, true, true,
+                    List.of(nullSafe(agentDefinition.getId())), stable.substring(start));
         }
 
         // 3. SOUL.md — 人格/语气
         String soulPrompt = agentDefinition.getSoulPrompt();
         if (soulPrompt != null && !soulPrompt.isBlank()) {
+            int start = stable.length();
             stable.append(soulPrompt.strip()).append("\n\n");
+            observe(observations, "soul", PromptSourceType.SOUL,
+                    PromptPlacement.STABLE_SYSTEM, true, true,
+                    List.of(nullSafe(agentDefinition.getId())), stable.substring(start));
         }
 
         // 4. TOOLS.md — 工具经验（有则替代默认 Guidelines）
         String toolsPrompt = agentDefinition.getToolsPrompt();
+        int toolsStart = stable.length();
         if (toolsPrompt != null && !toolsPrompt.isBlank()) {
             stable.append(toolsPrompt.strip()).append("\n\n");
         } else {
@@ -114,9 +133,20 @@ public class SystemPromptBuilder {
             stable.append("- Use absolute file paths whenever possible\n");
             stable.append("\n");
         }
+        observe(observations, "tools_md", PromptSourceType.TOOL_GUIDANCE,
+                PromptPlacement.STABLE_SYSTEM, true, true,
+                List.of(nullSafe(agentDefinition.getId())),
+                stable.substring(toolsStart));
 
         // 5. Behavior Rules — before Context (recency bias)
+        int behaviorStart = stable.length();
         appendBehaviorRules(stable);
+        if (stable.length() > behaviorStart) {
+            observe(observations, "behavior_rules", PromptSourceType.BEHAVIOR_RULES,
+                    PromptPlacement.STABLE_SYSTEM, true, true,
+                    List.of(nullSafe(agentDefinition.getId())),
+                    stable.substring(behaviorStart));
+        }
 
         // 6. Context from providers — DYNAMIC (current_date / live env)
         StringBuilder dynamic = new StringBuilder();
@@ -127,12 +157,18 @@ public class SystemPromptBuilder {
             for (ContextProvider provider : contextProviders) {
                 Map<String, String> context = provider.getContext();
                 if (context != null && !context.isEmpty()) {
+                    int providerStart = ctxSection.length();
                     ctxSection.append("### ").append(provider.getName()).append("\n");
                     for (Map.Entry<String, String> entry : context.entrySet()) {
                         ctxSection.append("- ").append(entry.getKey()).append(": ")
                                 .append(entry.getValue()).append("\n");
                     }
                     ctxSection.append("\n");
+                    observe(observations, "env_context." + safeId(provider.getName()),
+                            PromptSourceType.RUNTIME_CONTEXT,
+                            PromptPlacement.DYNAMIC_SYSTEM, false, false,
+                            List.of(nullSafe(provider.getName())),
+                            ctxSection.substring(providerStart));
                     any = true;
                 }
             }
@@ -141,9 +177,46 @@ public class SystemPromptBuilder {
             }
         }
 
-        return new SystemPromptParts(
+        SystemPromptParts parts = new SystemPromptParts(
                 stable.toString().stripTrailing(),
                 dynamic.toString().stripTrailing());
+        return new ObservedSystemPromptParts(
+                parts,
+                observations == null ? List.of() : observations,
+                observe ? PromptObservationHashes.sha256(parts.stable()) : "",
+                observe ? PromptObservationHashes.sha256(parts.combined()) : "");
+    }
+
+    private static void observe(
+            List<PromptFragmentObservation> observations,
+            String id,
+            PromptSourceType sourceType,
+            PromptPlacement placement,
+            boolean stable,
+            boolean cacheable,
+            List<String> sourceIds,
+            String renderedFragment) {
+        if (observations == null) {
+            return;
+        }
+        observations.add(new PromptFragmentObservation(
+                id,
+                sourceType,
+                placement,
+                stable,
+                cacheable,
+                TokenEstimator.estimateString(renderedFragment),
+                sourceIds,
+                PromptObservationHashes.sha256(renderedFragment)));
+    }
+
+    private static String safeId(String value) {
+        if (value == null || value.isBlank()) return "unknown";
+        return value.replaceAll("[^A-Za-z0-9_.-]", "_");
+    }
+
+    private static String nullSafe(Object value) {
+        return value == null ? "" : value.toString();
     }
 
     /**

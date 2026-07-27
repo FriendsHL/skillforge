@@ -18,6 +18,8 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.time.Duration;
 import java.util.LinkedHashMap;
+import java.util.Base64;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
@@ -47,14 +49,28 @@ public class ArkImageGenerationClient {
     }
 
     public GeneratedImage generate(String prompt, String size, boolean watermark) {
+        return generate(prompt, size, watermark, null, null);
+    }
+
+    public GeneratedImage generate(String prompt, String size, boolean watermark,
+                                   byte[] sourceImage, String sourceMimeType) {
         requireConfigured();
         requireSubscriptionEndpoint();
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("model", properties.getModel());
         payload.put("prompt", prompt);
-        payload.put("size", size);
+        payload.put("size", size == null ? null : size.toLowerCase(java.util.Locale.ROOT));
         payload.put("response_format", "url");
         payload.put("watermark", watermark);
+        if (sourceImage != null) {
+            if (sourceImage.length == 0) throw new IllegalArgumentException("Source image is empty");
+            if (sourceMimeType == null || !sourceMimeType.startsWith("image/")) {
+                throw new IllegalArgumentException("Source attachment is not an image");
+            }
+            String dataUrl = "data:" + sourceMimeType + ";base64,"
+                    + Base64.getEncoder().encodeToString(sourceImage);
+            payload.put("image", List.of(dataUrl));
+        }
         Request request = new Request.Builder()
                 .url(normalizeBaseUrl(properties.getBaseUrl()) + "/images/generations")
                 .header("Authorization", "Bearer " + properties.getApiKey())

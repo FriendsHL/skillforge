@@ -26,11 +26,11 @@ class AssistantAttachmentRefSanitizerTest {
 
         assertThat(sanitized).isNotSameAs(assistant);
         assertThat(sanitized.get(0).getTextContent()).isEqualTo(String.join("\n",
-                "[Previously delivered image: chart.png]",
-                "[Previously delivered PDF: report.pdf]",
-                "[Previously delivered Word document: notes.docx]",
-                "[Previously delivered Excel workbook: data.xlsx]",
-                "[Previously delivered CSV: rows.csv]"));
+                "[Previously delivered image: chart.png; attachment_id=i]",
+                "[Previously delivered PDF: report.pdf; attachment_id=p]",
+                "[Previously delivered Word document: notes.docx; attachment_id=w]",
+                "[Previously delivered Excel workbook: data.xlsx; attachment_id=e]",
+                "[Previously delivered CSV: rows.csv; attachment_id=c]"));
         assertThat(((List<?>) assistant.getContent())).allMatch(ContentBlock.class::isInstance);
         assertThat(((ContentBlock) ((List<?>) assistant.getContent()).get(0)).getType()).isEqualTo("image_ref");
     }

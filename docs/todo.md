@@ -1,12 +1,14 @@
 # SkillForge ToDo
 
-> 更新于：2026-07-22（多模态 P0/P1 同步图片闭环已实现，P2 音视频异步底座待进入）
+> 更新于：2026-07-27（Agent Context Runtime 完整需求包已形成，待用户批准分期实施）
 > 规则：这里只放当前执行状态；范围与方案见需求包，交付事实见 [delivery-index.md](delivery-index.md)。
 
 ## 当前队列
 
 | 顺序 | ID | 标题 | 模式 | 状态 | 优先级 | 下一步 |
 | --- | --- | --- | --- | --- | --- | --- |
+| - | **AGENT-CONTEXT-GOVERNANCE** | Opus 5 时代的 Agent 上下文与能力治理 | Full | Design Proposed；P0–P5 六期设计完成 | P1 | 用户批准后先做不改变请求字节的 P0 真实基线与同源观测 |
+| - | **REALTIME-VOICE-CONVERSATION** | iOS 实时语音对话 | Full | Design Proposed；Ark ASR + Seed Pro + TTS，Qwen-compatible | P1 | 用户批准设计后先执行 Phase 0 Ark 活体 Spike |
 | - | **MULTIMODAL-MEDIA-RUNTIME** | 图片、音频、视频生成/理解、管理端与 iOS 统一呈现 | Full | P0/P1 complete：Main Agent Seedream 真生图、Attachment 转存与跨端 `image_ref` 闭环；Seedance 当前不可新增接入 | P1/P2 | 用户验收同步生图；另行批准后进入 P2 异步 Job、音频与视频 |
 | 0 | **IOS-CHAT-CONTROL-AGENTS-EXPERIENCE** | Chat 滚动、身份 Header、Tool 卡片与 Control/Agents 信息架构 | Full | P0 code complete / focused 31/31 + stability 10/10；final Full gate BLOCKED_ENV；P1 Proposed 四屏待确认 | P0/P1 | 恢复 CoreSimulator host 后补完整 scheme 与正常 Release packaging；真机确认惯性点击和空白屏修复；用户确认 Proposed 后实现 P1-A 至 P1-D |
 | 1 | **IOS-LOCAL-SIGNING-STABILITY** | 本机 Apple Team / XcodeGen 签名选择持久化 | Full | implemented / 最新 337 iOS tests + 连续 device signing build verified | P1 | 重连 iPhone，从 Xcode 连续 Run 两次，确认 GUI 不再要求选择 Team |
@@ -29,6 +31,8 @@
 
 需求包：
 
+- [AGENT-CONTEXT-GOVERNANCE](requirements/active/2026-07-26-AGENT-CONTEXT-GOVERNANCE/index.md)
+- [REALTIME-VOICE-CONVERSATION](requirements/active/2026-07-23-REALTIME-VOICE-CONVERSATION/index.md)
 - [MULTIMODAL-MEDIA-RUNTIME](requirements/active/2026-07-22-MULTIMODAL-MEDIA-RUNTIME/index.md)
 - [IOS-CHAT-CONTROL-AGENTS-EXPERIENCE](requirements/active/2026-07-18-IOS-CHAT-CONTROL-AGENTS-EXPERIENCE/index.md)
 - [IOS-AGENT-SESSION-LIVE-FOLLOW](requirements/active/2026-07-18-IOS-AGENT-SESSION-LIVE-FOLLOW/index.md)

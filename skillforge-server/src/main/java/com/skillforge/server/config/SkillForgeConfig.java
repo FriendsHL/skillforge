@@ -23,7 +23,8 @@ import org.springframework.context.annotation.Configuration;
         EvolveThresholdProperties.class,
         AcpRunnerProperties.class,
         SkillConsolidatorProperties.class,
-        WorkspaceProperties.class
+        WorkspaceProperties.class,
+        ContextObservationProperties.class
 })
 public class SkillForgeConfig {
 

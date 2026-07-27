@@ -1461,6 +1461,26 @@ public class ChatAttachmentService implements MessageMaterializer {
         return attachment;
     }
 
+    @Transactional
+    public void recordDerivation(String attachmentId, String sourceAttachmentId, String operation) {
+        if (!"EDIT_IMAGE".equals(operation)) {
+            throw new IllegalArgumentException("Unsupported attachment derivation operation");
+        }
+        ChatAttachmentEntity derived = attachmentRepository.findById(attachmentId)
+                .orElseThrow(() -> new IllegalArgumentException("Derived attachment does not exist"));
+        ChatAttachmentEntity source = attachmentRepository.findById(sourceAttachmentId)
+                .orElseThrow(() -> new IllegalArgumentException("Source attachment does not exist"));
+        if (!derived.getSessionId().equals(source.getSessionId())
+                || !derived.getUserId().equals(source.getUserId())
+                || derived.getId().equals(source.getId())
+                || !"image".equals(derived.getKind()) || !"image".equals(source.getKind())) {
+            throw new IllegalArgumentException("Attachment derivation must stay within one owned image session");
+        }
+        derived.setDerivedFromAttachmentId(sourceAttachmentId);
+        derived.setDerivationOperation(operation);
+        attachmentRepository.save(derived);
+    }
+
     /** Hard cap on the admin attachment listing — the JPQL query is bounded by this. */
     public static final int ADMIN_ATTACHMENTS_MAX_LIMIT = 500;
 

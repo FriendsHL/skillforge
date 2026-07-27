@@ -71,6 +71,24 @@ describe('AttachmentThumbnail — Wave 3 word/excel/csv chips', () => {
     getChatAttachmentBlobMock.mockResolvedValue({ data: new Blob(['x']) } as Awaited<ReturnType<typeof getChatAttachmentBlob>>);
   });
 
+  it('passes the exact image attachment id to continue-creation action', async () => {
+    const onEditImage = vi.fn();
+    render(
+      <AttachmentThumbnail
+        kind="image"
+        attachmentId="image-source-1"
+        filename="source.jpg"
+        userId={42}
+        sessionId="sess-A"
+        onEditImage={onEditImage}
+      />,
+    );
+
+    fireEvent.click(await screen.findByTestId('attachment-edit-image-source-1'));
+
+    expect(onEditImage).toHaveBeenCalledWith('image-source-1');
+  });
+
   it('renders a Word chip with FileWordOutlined icon and filename', async () => {
     render(
       <AttachmentThumbnail

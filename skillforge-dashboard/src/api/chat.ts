@@ -135,6 +135,17 @@ export interface ContextBreakdownSegment {
   label: string;
   tokens: number;
   children?: ContextBreakdownSegment[];
+  metadata?: ContextBreakdownMetadata;
+}
+export interface ContextBreakdownMetadata {
+  sourceType?: string | null;
+  placement?: string | null;
+  stable?: boolean | null;
+  cacheable?: boolean | null;
+  contentHash?: string | null;
+  kind?: string | null;
+  source?: string | null;
+  exposureReason?: string | null;
 }
 export interface ContextBreakdown {
   sessionId: string;
@@ -142,12 +153,20 @@ export interface ContextBreakdown {
   windowLimit: number;
   pct: number;
   segments: ContextBreakdownSegment[];
+  observation?: ContextObservationSummary;
+}
+export interface ContextObservationSummary {
+  stablePrefixHash: string;
+  assemblyHash: string;
+  toolSchemasHash: string;
+  durationMicros: number;
 }
 interface RawBreakdownSegment {
   key: string;
   label: string;
   tokens: number;
   children?: RawBreakdownSegment[] | null;
+  metadata?: ContextBreakdownMetadata | null;
 }
 interface RawBreakdown {
   sessionId: string;
@@ -155,6 +174,7 @@ interface RawBreakdown {
   windowLimit: number;
   pct: number;
   segments: RawBreakdownSegment[];
+  observation?: ContextObservationSummary | null;
 }
 
 function normalizeSegments(segs: RawBreakdownSegment[]): ContextBreakdownSegment[] {
@@ -163,6 +183,7 @@ function normalizeSegments(segs: RawBreakdownSegment[]): ContextBreakdownSegment
     label: s.label,
     tokens: s.tokens,
     children: s.children == null ? undefined : normalizeSegments(s.children),
+    metadata: s.metadata ?? undefined,
   }));
 }
 
@@ -182,6 +203,7 @@ export const getContextBreakdown = async (
       windowLimit: raw.windowLimit,
       pct: raw.pct,
       segments: normalizeSegments(raw.segments),
+      observation: raw.observation ?? undefined,
     },
   };
 };

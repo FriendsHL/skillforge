@@ -123,10 +123,8 @@ describe('AutoEvolving page', () => {
     await waitFor(() => {
       expect(screen.getByTestId('ae-kpi-running')).toHaveTextContent('2');
       expect(screen.getByTestId('ae-kpi-completed')).toHaveTextContent('5');
-      expect(screen.getByTestId('ae-kpi-memory')).toHaveTextContent('3');
+      expect(screen.getByTestId('ae-kpi-approvals')).toHaveTextContent('0');
     });
-    // autoResearch placeholder
-    expect(screen.getByTestId('ae-kpi-research')).toHaveTextContent('N/A');
   });
 
   it('navigates on production report row click', async () => {

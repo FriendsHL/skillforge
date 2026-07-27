@@ -136,7 +136,8 @@ class AgentLoopEngineMaterializerTest {
         assertThat(result).isNotSameAs(input);
         assertThat(((ContentBlock) ((List<?>) result.get(0).getContent()).get(0)).getType())
                 .isEqualTo("image_ref");
-        assertThat(result.get(1).getTextContent()).isEqualTo("[Previously delivered PDF: output.pdf]");
+        assertThat(result.get(1).getTextContent())
+                .isEqualTo("[Previously delivered PDF: output.pdf; attachment_id=att-2]");
         assertThat(((ContentBlock) ((List<?>) assistant.getContent()).get(0)).getType()).isEqualTo("pdf_ref");
     }
 
@@ -152,7 +153,8 @@ class AgentLoopEngineMaterializerTest {
 
         List<Message> result = AgentLoopEngine.applyMaterializer(ctx, List.of(assistant));
 
-        assertThat(result.get(0).getTextContent()).isEqualTo("[Previously delivered CSV: output.csv]");
+        assertThat(result.get(0).getTextContent())
+                .isEqualTo("[Previously delivered CSV: output.csv; attachment_id=att-2]");
         assertThat(((ContentBlock) ((List<?>) assistant.getContent()).get(0)).getType()).isEqualTo("csv_ref");
     }
 
