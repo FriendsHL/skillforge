@@ -81,62 +81,37 @@ public class RunWorkflowTool implements Tool {
     @Override
     public String getDescription() {
         return """
-                Kick off a deterministic multi-agent WORKFLOW on the DSL engine, then return \
-                immediately with a runId. Workflows orchestrate many sub-agents / tools as a \
-                repeatable, journaled program written in a small sandboxed JavaScript DSL.
+                异步运行可记录、可恢复的多步骤工作流并立即返回 runId；最终结果不会在本次调用中直接返回。
 
-                Three modes (set "mode"):
-                - "name": run a workflow already registered on the server by its meta.name. \
-                Provide "name" and optional "args" (object passed to the script as `args`).
-                - "inline": run a workflow you supply on the fly. Provide "script" — the full \
-                .workflow.js source INCLUDING its `export const meta = { name, description, \
-                phases }` block (meta.name is required) — plus optional "args". The script is \
-                parsed and run in the SAME sandbox as a registered workflow; it is NOT saved/\
-                registered (one-shot).
-                - "resume": unblock a run that is paused on a humanApprove() gate. Provide \
-                "resumeRunId", "decision" ("approved" or "rejected"), and optional "reason".
+                三种模式：
+                - name：用 name 和可选 args 运行已注册工作流。
+                - inline：没有已注册工作流时，用 script 和可选 args 运行一次性 .workflow.js；脚本不保存、不注册。
+                - resume：用 resumeRunId、decision（approved/rejected）和可选 reason 恢复 humanApprove 暂停的运行。
 
-                ASYNC FIRE-AND-TRIGGER: name / inline return a runId and the run proceeds in \
-                the BACKGROUND on the workflow executor — you do NOT get the result inline. Do \
-                not call RunWorkflow again for the same workflow (a duplicate is rejected as \
-                "already running" and wastes turns). To get the outcome, poll the matching read \
-                tool by that runId (e.g. GetOptReport for an opt-report run) until it is \
-                completed, or wait for the WebSocket completion event. resume is likewise async.
+                Inline script 必须以静态 meta 开头：
+                export const meta = {
+                  name: 'temporary-workflow',
+                  description: 'one-shot workflow',
+                  phases: [{ title: 'Work', detail: 'do the work' }]
+                }
+                phase('Work')
+                log('started')
+                var result = agent('完成任务并返回结果', { agentSlug: '目标-agent-slug' })
+                return { ok: true, result: result }
 
-                WHEN TO USE: a determinate, repeatable orchestration — fan out one task over a \
-                batch of work items, run a fixed pipeline of stages, or a loop that needs a \
-                human-approval gate. Prefer a workflow when the structure is known up front and \
-                you want it journaled / resumable.
-                WHEN NOT TO USE: a single step you can just do yourself (call the tool / one \
-                SubAgent directly — a workflow is overhead). "I just want some parallelism" is \
-                NOT sufficient: only reach for a workflow when the orchestration is genuinely \
-                multi-step and worth the journal + sandbox cost.
+                可用 DSL：
+                - phase(title)：报告阶段；log(message)：记录进度。
+                - agent(prompt, options)：调用子 Agent；options 可含 agentSlug、schema、phase。
+                - tool(name, input)：同步调用工作流允许的宿主工具并返回结果。
+                - parallel([function(){ return agent(...) }, ...])：并发执行 Agent thunk 并返回结果数组。
+                - pipeline(items, stage1, stage2, ...)：按阶段串行处理 items，可在阶段内组合 parallel。
+                - humanApprove(payload)：持久化暂停，等待之后以 resume 模式批准或拒绝。
+                - args：调用方传入参数；ctx：当前运行上下文。脚本最后 return 最终值。
 
-                INLINE DSL (what the script body may call — these are the ONLY host primitives; \
-                there is no other API):
-                - phase("title")            mark a phase boundary (progress / journaling).
-                - log("msg")                emit a workflow log line.
-                - agent(prompt, opts)       dispatch one LLM sub-agent and BLOCK for its result \
-                (string). opts selects the agent, e.g. { agentSlug: "session-annotator" }.
-                - tool(name, input)         invoke a host (Java) tool synchronously on the \
-                workflow thread and get its result (deterministic node, not an LLM).
-                - parallel([t1, t2, ...])   run sub-agent thunks concurrently; each thunk MUST \
-                tail-call agent(...) (e.g. () => agent(...)). Returns the array of results.
-                - pipeline(items, s1, s2)   V1 SERIAL fan-over: apply each stage callback across \
-                items in order.
-                - humanApprove(payload)     park the run on an approval gate; it pauses until a \
-                resume decision arrives (see mode=resume).
-                - ctx                        per-run context object (run metadata / scratch).
-                - args                       the object you passed in as "args".
-                The body returns a final value (the run result). Use plain JS for control flow.
-
-                SANDBOX HARD LIMITS (do not design around exceeding these): no Java bridge / \
-                Packages / java.*, no eval, no Function constructor, no file or network access \
-                from JS — side effects only happen through agent()/tool(). Per-run budgets: \
-                ~1,000,000 interpreter instructions, at most 1000 agent() calls, and a 30-minute \
-                wall-clock cap; exceeding any aborts the run. Keep workflows deterministic — do \
-                NOT rely on wall-clock time or randomness for control flow (parallel() ordering \
-                and journal replay assume determinism).""";
+                仅在结构预先明确、值得记录/恢复或需要人工审批的多步骤编排中使用；单步任务用普通工具或 SubAgent。
+                沙箱内不能直接访问文件或网络，也不能访问 Java、eval 或 Function；副作用只能通过 agent() 或 tool()。
+                工作流应保持确定性，避免依赖随机数或当前时间控制执行路径。
+                """;
     }
 
     @Override

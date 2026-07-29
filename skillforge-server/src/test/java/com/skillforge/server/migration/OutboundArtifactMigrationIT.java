@@ -217,6 +217,28 @@ class OutboundArtifactMigrationIT {
         assertThat(toolsFor("System")).isEqualTo("[\"Write\"]");
     }
 
+    @Test
+    void v187MovesCodeRegistrationOutOfMainAssistantOnly() {
+        jdbcTemplate.update("""
+                INSERT INTO t_agent (name, agent_type, status, tool_ids) VALUES
+                    ('Main Assistant', 'user', 'active',
+                     '["Bash","RegisterScriptMethod","RegisterCompiledMethod","SubAgent"]'),
+                    ('Code Agent', 'user', 'active',
+                     '["CodeSandbox","CodeReview","RegisterScriptMethod","RegisterCompiledMethod"]'),
+                    ('Other Agent', 'user', 'active',
+                     '["RegisterScriptMethod","RegisterCompiledMethod"]')
+                """);
+
+        runV187();
+        runV187();
+
+        assertThat(toolsFor("Main Assistant")).isEqualTo("[\"Bash\", \"SubAgent\"]");
+        assertThat(toolsFor("Code Agent"))
+                .contains("CodeSandbox", "CodeReview", "RegisterScriptMethod", "RegisterCompiledMethod");
+        assertThat(toolsFor("Other Agent"))
+                .isEqualTo("[\"RegisterScriptMethod\",\"RegisterCompiledMethod\"]");
+    }
+
     private static String toolsFor(String name) {
         return jdbcTemplate.queryForObject(
                 "SELECT tool_ids FROM t_agent WHERE name = ?", String.class, name);
@@ -250,5 +272,11 @@ class OutboundArtifactMigrationIT {
         ScriptUtils.executeSqlScript(
                 connection,
                 new ClassPathResource("db/migration/V174__grant_interactive_artifact_publish.sql"));
+    }
+
+    private static void runV187() {
+        ScriptUtils.executeSqlScript(
+                connection,
+                new ClassPathResource("db/migration/V187__delegate_code_registration_from_main.sql"));
     }
 }

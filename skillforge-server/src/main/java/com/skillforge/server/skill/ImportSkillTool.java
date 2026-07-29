@@ -43,12 +43,11 @@ public class ImportSkillTool implements Tool {
 
     @Override
     public String getDescription() {
-        return "把第三方 marketplace（ClawHub / GitHub / SkillHub）已经装好的 skill 注册到 SkillForge。"
-                + "适用场景：你刚刚用 `npx clawhub install <slug>` / `gh repo clone <repo>` / "
-                + "`npx @skill-hub/cli install <slug>` 把 skill 装到外部目录，"
-                + "调本工具把它复制到 SkillForge 的 runtime root + 写入 t_skill 表 + 注册到 SkillRegistry，"
-                + "之后 dashboard 能看到、后续 agent turn 能调用。"
-                + "不调用本工具，第三方 CLI 装的 skill SkillForge 不可见。";
+        return "将一个已经安装且包含 SKILL.md 的本地 skill 目录导入 SkillForge。"
+                + "来源可以是 ClawHub、GitHub、SkillHub 或 filesystem；"
+                + "导入时会校验路径、执行安全扫描、复制到 SkillForge runtime root、持久化并注册。"
+                + "本工具不负责搜索、下载或安装 skill；如果只有 marketplace 名称或 Git 地址，"
+                + "应先走需要用户确认的受控安装流程，得到本地目录后再调用本工具。";
     }
 
     @Override

@@ -51,6 +51,31 @@ class RunWorkflowToolTest {
         tool = new RunWorkflowTool(runnerService, registry, objectMapper);
     }
 
+    @Test
+    void descriptionCoversInlineDslContractAndMinimalRunnableExample() {
+        assertThat(tool.getDescription())
+                .contains(
+                        "runId",
+                        "name",
+                        "inline",
+                        "resume",
+                        "export const meta",
+                        "phase",
+                        "log",
+                        "agent",
+                        "tool",
+                        "parallel",
+                        "pipeline",
+                        "humanApprove",
+                        "ctx",
+                        "args",
+                        "return")
+                .contains("没有已注册工作流")
+                .contains("不保存")
+                .contains("文件或网络")
+                .hasSizeLessThan(2_600);
+    }
+
     // ───────────────────────────── name mode ─────────────────────────────
 
     @Test

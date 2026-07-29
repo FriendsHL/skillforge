@@ -51,6 +51,15 @@ class ImportSkillToolTest {
     }
 
     @Test
+    void descriptionOnlyCoversImportContractNotMarketplaceInstallationCommands() {
+        assertThat(tool.getDescription())
+                .contains("已经安装", "SKILL.md", "SkillForge", "安全扫描", "受控安装流程")
+                .doesNotContain("npx clawhub")
+                .doesNotContain("gh repo clone")
+                .hasSizeLessThan(360);
+    }
+
+    @Test
     @DisplayName("execute_clawhubInput_delegatesToService")
     void execute_clawhubInput_delegatesToService() {
         ImportResult expected = new ImportResult(
