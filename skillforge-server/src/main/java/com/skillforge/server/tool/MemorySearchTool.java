@@ -122,8 +122,12 @@ public class MemorySearchTool implements Tool {
             }
 
             String output = merged.stream()
-                    .map(r -> String.format("[id=%d, type=%s, score=%.3f] %s: %s",
-                            r.memoryId(), r.type(), r.score(), r.title(), r.snippet()))
+                    .map(r -> String.format(
+                            "[id=%d, type=%s, score=%.3f, provenance=%s, confirmation=%s, "
+                                    + "confidence=%s, version=%d] %s: %s",
+                            r.memoryId(), r.type(), r.score(),
+                            r.provenanceSource(), r.confirmationStatus(),
+                            r.confidence(), r.version(), r.title(), r.snippet()))
                     .collect(Collectors.joining("\n"));
 
             return SkillResult.success("Found " + merged.size() + " memories:\n" + output);

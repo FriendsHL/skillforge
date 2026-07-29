@@ -25,6 +25,7 @@ export interface UpdateMemoryRequest {
   content?: string;
   type?: string;
   source?: string;
+  version?: number;
 }
 
 export const createMemory = (data: CreateMemoryRequest) => api.post('/memories', data);

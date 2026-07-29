@@ -55,6 +55,15 @@ flywheel:
 # SkillForge configuration
 skillforge:
   context:
+    assembly:
+      enabled: ${SKILLFORGE_CONTEXT_ASSEMBLY_ENABLED:true}
+    structured-reminder:
+      enabled: ${SKILLFORGE_STRUCTURED_REMINDER_ENABLED:true}
+    capability:
+      catalog-enabled: ${SKILLFORGE_TOOL_CATALOG_ENABLED:true}
+      tool-search-enabled: ${SKILLFORGE_TOOL_SEARCH_ENABLED:true}
+      # Shadow rollout first: false keeps every currently authorized schema loaded.
+      deferred-schemas-enabled: ${SKILLFORGE_DEFERRED_TOOL_SCHEMAS_ENABLED:false}
     observation:
       enabled: ${SKILLFORGE_CONTEXT_OBSERVATION_ENABLED:true}
   media:

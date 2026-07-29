@@ -10,10 +10,15 @@ import com.skillforge.core.skill.SkillContext;
 import com.skillforge.core.skill.SkillResult;
 import com.skillforge.core.skill.Tool;
 import com.skillforge.core.model.ToolSchema;
+import com.skillforge.core.reminder.ReminderBuilder;
+import com.skillforge.core.reminder.ReminderContext;
+import com.skillforge.core.reminder.ReminderEntry;
+import com.skillforge.core.reminder.ReminderSource;
 import com.skillforge.core.skill.view.SessionSkillResolver;
 import com.skillforge.core.skill.view.SessionSkillView;
 import com.skillforge.server.dto.ContextBreakdownDto;
 import com.skillforge.server.config.ContextObservationProperties;
+import com.skillforge.server.config.ContextCapabilityProperties;
 import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.SessionEntity;
 import org.junit.jupiter.api.BeforeEach;
@@ -56,7 +61,8 @@ class ContextBreakdownServiceTest {
                 agentService, sessionService, skillRegistry, memoryService,
                 new com.skillforge.core.context.GlobalSystemPromptProvider(),
                 List.<ContextProvider>of(), new ObjectMapper(),
-                sessionSkillResolver, observationProperties);
+                sessionSkillResolver, observationProperties, null,
+                disabledCapabilityProperties());
     }
 
     private SkillDefinition def(String name, boolean isSystem) {
@@ -148,6 +154,51 @@ class ContextBreakdownServiceTest {
                 .isEqualTo("MEDIA");
     }
 
+    @Test
+    @DisplayName("catalog observation explains ToolSearch and rollout exposure reasons")
+    void breakdown_catalogObservation_explainsExposureReasons() {
+        ContextCapabilityProperties capability = new ContextCapabilityProperties();
+        capability.setCatalogEnabled(true);
+        capability.setToolSearchEnabled(true);
+        capability.setDeferredSchemasEnabled(false);
+        ContextObservationProperties observation = new ContextObservationProperties();
+        observation.setEnabled(true);
+        service = new ContextBreakdownService(
+                agentService, sessionService, skillRegistry, memoryService,
+                new com.skillforge.core.context.GlobalSystemPromptProvider(),
+                List.<ContextProvider>of(), new ObjectMapper(),
+                sessionSkillResolver, observation, null, capability);
+        Tool mcp = stubTool("mcp_github_search");
+        AgentDefinition agentDef = new AgentDefinition();
+        agentDef.setId("42");
+        AgentEntity agentEntity = new AgentEntity();
+        agentEntity.setId(42L);
+        agentEntity.setModelId("gpt-4o");
+        SessionEntity session = new SessionEntity();
+        session.setId("s1");
+        session.setAgentId(42L);
+        when(agentService.getAgent(42L)).thenReturn(agentEntity);
+        when(agentService.toAgentDefinition(agentEntity)).thenReturn(agentDef);
+        when(sessionService.getContextMessages("s1")).thenReturn(List.of());
+        when(skillRegistry.getAllTools()).thenReturn(List.of(mcp));
+        when(sessionSkillResolver.resolveFor(agentDef)).thenReturn(SessionSkillView.EMPTY);
+
+        ContextBreakdownDto.Segment tools = service.breakdown(session, 7L).segments().stream()
+                .filter(s -> "tool_schemas".equals(s.key()))
+                .findFirst()
+                .orElseThrow();
+
+        ContextBreakdownDto.Segment search = childByKey(tools, "tool_schema_ToolSearch");
+        assertThat(search.metadata().kind()).isEqualTo("ENGINE");
+        assertThat(search.metadata().exposureReason()).isEqualTo("ALWAYS_LOADED");
+        ContextBreakdownDto.Segment mcpSchema =
+                childByKey(tools, "tool_schema_mcp_github_search");
+        assertThat(mcpSchema.metadata().kind()).isEqualTo("MCP");
+        assertThat(mcpSchema.metadata().source()).isEqualTo("MCP_REGISTRY");
+        assertThat(mcpSchema.metadata().exposureReason())
+                .isEqualTo("VISIBLE_BECAUSE_DEFERRED_ENFORCEMENT_DISABLED");
+    }
+
     private static Tool stubTool(String name) {
         return new Tool() {
             @Override
@@ -170,6 +221,14 @@ class ContextBreakdownServiceTest {
                 throw new UnsupportedOperationException();
             }
         };
+    }
+
+    private static ContextCapabilityProperties disabledCapabilityProperties() {
+        ContextCapabilityProperties properties = new ContextCapabilityProperties();
+        properties.setCatalogEnabled(false);
+        properties.setToolSearchEnabled(false);
+        properties.setDeferredSchemasEnabled(false);
+        return properties;
     }
 
     @Test
@@ -203,11 +262,70 @@ class ContextBreakdownServiceTest {
         assertThat(global.metadata().placement()).isEqualTo("STABLE_SYSTEM");
         assertThat(global.metadata().cacheable()).isTrue();
         assertThat(global.metadata().contentHash()).hasSize(64);
+        assertThat(global.metadata().authority()).isEqualTo("PLATFORM");
+        assertThat(global.metadata().trustLevel()).isEqualTo("TRUSTED_INSTRUCTION");
+        assertThat(global.metadata().lifecycle()).isEqualTo("SESSION");
+        assertThat(global.metadata().compactPolicy()).isEqualTo("RELOAD_BY_ID");
+        ContextBreakdownDto.Segment sessionContext =
+                childByKey(systemPrompt, "session_context");
+        assertThat(sessionContext.metadata().authority()).isEqualTo("PLATFORM");
+        assertThat(sessionContext.metadata().trustLevel())
+                .isEqualTo("TRUSTED_RUNTIME_DATA");
         assertThat(breakdown.observation()).isNotNull();
         assertThat(breakdown.observation().stablePrefixHash()).hasSize(64);
         assertThat(breakdown.observation().assemblyHash()).hasSize(64);
         assertThat(breakdown.observation().toolSchemasHash()).hasSize(64);
         assertThat(breakdown.observation().durationMicros()).isNotNegative();
+    }
+
+    @Test
+    @DisplayName("breakdown exposes content-free reminder diagnostics without double-counting tokens")
+    void breakdown_exposesReminderDiagnosticsWithoutDoubleCounting() {
+        ReminderSource source = new ReminderSource() {
+            @Override public String getName() { return "todo-list"; }
+            @Override public boolean shouldEmit(ReminderContext ctx) { return true; }
+            @Override public ReminderEntry emit(ReminderContext ctx) {
+                return new ReminderEntry("secret todo body", 4);
+            }
+        };
+        ReminderBuilder builder =
+                new ReminderBuilder(List.of(source), 5_000, true, true);
+        builder.build(new ReminderContext("s1", 7L, 0, List.of(), 100_000));
+        ContextObservationProperties observationProperties = new ContextObservationProperties();
+        observationProperties.setEnabled(true);
+        service = new ContextBreakdownService(
+                agentService, sessionService, skillRegistry, memoryService,
+                new com.skillforge.core.context.GlobalSystemPromptProvider(),
+                List.<ContextProvider>of(), new ObjectMapper(),
+                sessionSkillResolver, observationProperties, builder,
+                disabledCapabilityProperties());
+
+        AgentDefinition agentDef = new AgentDefinition();
+        agentDef.setId("42");
+        AgentEntity agentEntity = new AgentEntity();
+        agentEntity.setId(42L);
+        agentEntity.setModelId("gpt-4o");
+        SessionEntity session = new SessionEntity();
+        session.setId("s1");
+        session.setAgentId(42L);
+        when(agentService.getAgent(42L)).thenReturn(agentEntity);
+        when(agentService.toAgentDefinition(agentEntity)).thenReturn(agentDef);
+        when(sessionService.getContextMessages("s1")).thenReturn(List.of());
+        when(sessionSkillResolver.resolveFor(agentDef)).thenReturn(SessionSkillView.EMPTY);
+
+        ContextBreakdownDto breakdown = service.breakdown(session, 7L);
+
+        ContextBreakdownDto.Segment reminders = breakdown.segments().stream()
+                .filter(s -> "reminder_observations".equals(s.key()))
+                .findFirst()
+                .orElseThrow();
+        assertThat(reminders.tokens()).isZero();
+        assertThat(reminders.children()).singleElement().satisfies(child -> {
+            assertThat(child.label()).doesNotContain("secret todo body");
+            assertThat(child.metadata().source()).isEqualTo("TODO_LIST");
+            assertThat(child.metadata().contentHash()).hasSize(64);
+            assertThat(child.metadata().placement()).isEqualTo("BEFORE_NEXT_MODEL_CALL");
+        });
     }
 
     @Test
@@ -219,7 +337,8 @@ class ContextBreakdownServiceTest {
                 agentService, sessionService, skillRegistry, memoryService,
                 new com.skillforge.core.context.GlobalSystemPromptProvider(),
                 List.<ContextProvider>of(), new ObjectMapper(),
-                sessionSkillResolver, disabled);
+                sessionSkillResolver, disabled, null,
+                disabledCapabilityProperties());
 
         AgentDefinition agentDef = new AgentDefinition();
         agentDef.setId("42");

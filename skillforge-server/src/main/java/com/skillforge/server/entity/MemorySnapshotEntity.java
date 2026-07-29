@@ -62,6 +62,15 @@ public class MemorySnapshotEntity {
     @Column(name = "last_scored_at")
     private Instant lastScoredAt;
 
+    @Column(name = "provenance_source", nullable = false, length = 32)
+    private String provenanceSource = "LEGACY_UNKNOWN";
+
+    @Column(name = "confirmation_status", nullable = false, length = 16)
+    private String confirmationStatus = "UNVERIFIED";
+
+    @Column(name = "confidence")
+    private Double confidence;
+
     private LocalDateTime memoryCreatedAt;
 
     private LocalDateTime memoryUpdatedAt;
@@ -197,6 +206,30 @@ public class MemorySnapshotEntity {
 
     public void setLastScoredAt(Instant lastScoredAt) {
         this.lastScoredAt = lastScoredAt;
+    }
+
+    public String getProvenanceSource() {
+        return provenanceSource;
+    }
+
+    public void setProvenanceSource(String provenanceSource) {
+        this.provenanceSource = provenanceSource;
+    }
+
+    public String getConfirmationStatus() {
+        return confirmationStatus;
+    }
+
+    public void setConfirmationStatus(String confirmationStatus) {
+        this.confirmationStatus = confirmationStatus;
+    }
+
+    public Double getConfidence() {
+        return confidence;
+    }
+
+    public void setConfidence(Double confidence) {
+        this.confidence = confidence;
     }
 
     public LocalDateTime getMemoryCreatedAt() {

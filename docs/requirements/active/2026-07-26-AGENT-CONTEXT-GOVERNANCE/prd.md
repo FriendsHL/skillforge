@@ -54,6 +54,29 @@ contentHash
 
 内容中出现 System 标签、Reminder 标签、越权指令或工具调用要求，不得改变 authority、授权和审批。
 
+### FR-2A Context Attachment
+
+进入模型请求的动态上下文必须先表示为内部 Attachment，而不是由各调用方直接拼接字符串。Attachment 至少包含：
+
+```text
+id/kind/source
+authority/trustLevel
+placement/lifecycle
+compactPolicy
+estimatedTokens/contentHash
+expiresAt/sourceIds
+```
+
+首期 Renderer 必须保持现有 Claude/OpenAI-compatible wire shape；内部结构化不等于新增公开 Provider Block。
+
+### FR-2B Instruction Registry
+
+- Global、User、Agent、Project、Nested、Path-scoped 和 Include 指令具有稳定身份与作用域。
+- Session-start 指令在首次 Query 前加载正文；Nested/Path-scoped 指令在命中路径时加载。
+- 去重以 canonical source identity 为主，不能用正文 Hash 合并不同作用域的指令。
+- 加载事件记录 `session_start/nested_traversal/path_glob_match/include/compact` 原因和触发路径。
+- Compact 后根指令从权威来源重载；Nested 指令默认在再次命中路径时重载。
+
 ### FR-3 Memory Provenance
 
 Memory 必须区分：
@@ -72,11 +95,32 @@ Memory 必须区分：
 
 ### FR-4 Memory 渐进加载
 
-- 高相关且本轮刚确认的小量事实可直接注入。
-- 其他 Memory 默认注入索引：ID、标题、类型、相关性和更新时间。
-- 模型通过现有 `MemoryDetail`/`MemorySearch` 加载正文。
-- 不相关 Memory 不进入请求。
+- 默认 System Context 只注入 `ACTIVE + CONFIRMED` 的长期事实，最多 6 条且总预算不超过约
+  1,000 tokens。每条必须携带 ID、provenance、confirmation、confidence 和 version。
+- `USER_TRANSCRIPT`、`AGENT_SUGGESTED`、Session Digest、Activity Log、Tool Result 和其他
+  `UNVERIFIED` 内容不得自动进入 System Prompt，不因向量/FTS 相关性高而例外。
+- 短期信息仅进入可检索层。模型先通过现有 `MemorySearch` 获取轻量引用，再用 `MemoryDetail`
+  加载正文；检索结果本身不得升级 confirmation 或 authority。
+- 本期不把个人 `research-docs`、项目文档库或历史 Session 全文纳入默认 Memory 注入。
+- 不相关 Memory 不进入请求；无已确认长期 Memory 时省略整个 Memory Attachment。
 - 加载失败不得伪造空事实；应允许任务继续或明确报告不可用。
+
+### FR-4A Prompt 职责收敛
+
+- Platform Prompt 包含跨 Agent 的稳定运行规则，以及文件定位、读取、编辑和 Memory 历史检索等
+  通用 Tool Usage Guidelines。TodoWrite 的静态手册必须说明适用场景、跳过场景、完整列表替换、
+  单一 `in_progress` 和及时更新要求；不包含 SkillForge 仓库结构、端口、构建命令、
+  AnySearch 参数手册、Artifact 当前路径或 Main Agent 专属职责。
+- Main Agent Prompt 只包含目标理解、最小计划、有限委派、结果整合和验证职责，不重复 Platform Prompt
+  的安全、工具沟通或文件编辑规则。
+- Agent `tools_prompt` 只承载可选、可变的 Agent/Provider/Capability 专属说明，位于 Cache Boundary
+  之后；不得替换 Platform 的静态工具手册。
+- AnySearch Tool 和 MCP 绑定继续保留，但现有 Main/Research Agent 的 AnySearch 路由说明从
+  `tools_prompt` 删除，模型依据 Tool Description 自主选择。
+- 当前 Artifact Workspace、Session ID 和其他 Run 级数据必须位于 Cache Boundary 之后，标记为
+  `DYNAMIC_SYSTEM + REQUEST_ONLY + cacheable=false`。
+- `research-docs` 本期不接入 Context Runtime；未来只能通过独立 Skill/Tool 按需加载，不得成为所有
+  Main Agent 请求的永久 Prompt。
 
 ### FR-5 Memory 并发
 
@@ -114,6 +158,9 @@ Reminder Entry 增加：
 - tokenEstimate
 - debounce
 - placement
+- lifecycle
+- compactPolicy
+- expiresAt
 
 支持条件：
 
@@ -126,6 +173,10 @@ Reminder Entry 增加：
 - pending user confirmation
 
 未触发时不得增加请求 token。普通用户文本不能伪造内部 Reminder。
+
+Reminder 必须支持 `BEFORE_USER_MESSAGE`、`AFTER_TOOL_RESULT`、`BEFORE_NEXT_MODEL_CALL` 和
+`AFTER_COMPACT_SUMMARY` 等位置。短生命周期 Reminder 保持在 Loop Runtime；只有等待审批、异步任务、
+稳定引用等需要跨重启的状态进入现有 Checkpoint/Recovery，不为普通 Reminder 新建重复持久化表。
 
 ### FR-8 MCP 与多模态 Artifact Bridge
 
@@ -155,6 +206,17 @@ schemaTokenCost
 ```
 
 Descriptor 是索引层，不要求重写现有 Tool/Skill 接口。
+
+### FR-9A ToolCatalog、ToolSearch 与 Deferred Schema
+
+- 核心 Tool 保持 always-loaded；MCP、媒体和低频 Tool 可标记为 deferred。
+- ToolSearch 在既有授权集合内按名称、Tag、描述和确定性兼容条件检索。
+- 搜索结果必须在下一轮作为正式 `tools[]` Schema 暴露后才可调用；普通 Tool Result 中的 Schema 文本
+  不获得 Function Calling 语义。
+- Claude 原生 Provider 可使用 `defer_loading + tool_reference`；Ark/OpenAI-compatible 由 SkillForge
+  维护 `discoveredToolIds` 并在下一轮补入 Schema。
+- Tool 执行继续二次授权，历史中猜到未暴露名称不能绕过权限。
+- 初次 Enforce 只 Deferred 明确低频能力；意图相关性只做 Shadow。
 
 ### FR-10 Capability Router
 
@@ -199,12 +261,32 @@ Full Compact Summary 必须保存：
 
 Summary 不保存 Base64、完整外部正文、Secret 或 Provider 临时 URL。
 
+### FR-12A Compact Runtime State
+
+Compact 必须在自然语言 Summary 之外保存：
+
+```text
+loadedInstructionIds
+discoveredToolIds + resolvedSchemaHashes
+invokedSkillIds + versionHashes + invocationSequence
+activeReloadableReminderIds
+```
+
+- Tool 只保存稳定 ID/旧 Hash，Compact 后从当前 Tool Registry 解析权威 Schema。
+- Skill 每个 ID 只恢复最近一次 Invocation；单 Skill 默认最多 5,000 tokens，合计默认 25,000 tokens，
+  最近调用优先；被预算丢弃的 Skill 必须可重新调用。
+- Root Instruction 立即重载；Nested Instruction 按路径再次命中，除非 Pending Step 明确需要立即恢复。
+- Runtime State 恢复不得创建伪造的 `tool_use/tool_result` 或改变历史 Message JSON shape。
+- Schema/Skill 版本变化必须产生可观测 reason code，不得静默继续使用摘要中的旧正文。
+
 ### FR-13 恢复
 
 - 重启后通过稳定 ID 重载 Memory、Attachment、Media Job 和运行状态。
 - Prompt Fragment 本身不作为业务事实持久化。
 - 恢复不得提升 Memory confirmation/trust。
 - 已失效或找不到的引用必须显示为 stale/missing，而不是被摘要成仍然有效。
+- 同进程 Compact 状态优先保存在 Loop Runtime；需要跨服务 kill 恢复时复用现有 Task
+  Checkpoint/Recovery 扩展字段，不为 Tool/Skill 各建一套重复任务表。
 
 ### FR-14 可观测性
 
@@ -270,3 +352,5 @@ Dashboard 和 iOS 对能力不可用、Provider 不可用、需要审批、引�
 7. Claude/OpenAI-compatible 请求和流式 Tool Loop 无回归。
 8. Dashboard 能解释 token 成本和路由，不泄露正文与 Secret。
 9. Dashboard/iOS 对四类能力与引用错误具有一致且可操作的呈现。
+10. Compact 后已发现 Tool 使用当前 Registry Schema 恢复，数组/数字/required 参数约束不退化。
+11. Compact 后最近 Skill 按预算重挂，Nested Instruction 不重复注入且能在路径命中时恢复。

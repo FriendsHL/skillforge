@@ -258,12 +258,14 @@ public class InfraConfig {
             com.skillforge.core.reminder.MemoryAgeSource memoryAgeSource,
             com.skillforge.core.reminder.FileActivitySource fileActivitySource,
             @Value("${skillforge.reminder.enabled:true}") boolean globalEnabled,
+            @Value("${skillforge.context.structured-reminder.enabled:true}") boolean structuredEnabled,
             @Value("${skillforge.reminder.total-budget-tokens:5000}") int totalBudgetTokens) {
         // Ordered: most-actionable first → ContextUsage → TodoList → MemoryAge → FileActivity.
         return new com.skillforge.core.reminder.ReminderBuilder(
                 List.of(contextUsageSource, todoListSource, memoryAgeSource, fileActivitySource),
                 totalBudgetTokens,
-                globalEnabled);
+                globalEnabled,
+                structuredEnabled);
     }
 
 

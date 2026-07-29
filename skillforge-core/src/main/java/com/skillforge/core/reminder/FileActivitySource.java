@@ -2,6 +2,9 @@ package com.skillforge.core.reminder;
 
 import com.skillforge.core.compact.TokenEstimator;
 import com.skillforge.core.compact.recovery.FileStateCache;
+import com.skillforge.core.context.ContextLifecycle;
+import com.skillforge.core.context.PromptCompactPolicy;
+import com.skillforge.core.context.PromptPlacement;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -100,7 +103,18 @@ public class FileActivitySource implements ReminderSource {
             builder.setLastEmitted(ctx.getSessionId(), NAME, ctx.getCurrentTurnIndex());
         }
         String text = sb.toString();
-        return new ReminderEntry(text, TokenEstimator.estimateString(text));
+        return new ReminderEntry(
+                NAME,
+                ReminderSourceType.FILE_ACTIVITY,
+                ReminderSeverity.INFO,
+                ReminderReasonCode.RECENT_FILE_CONTEXT,
+                text,
+                TokenEstimator.estimateString(text),
+                intervalTurns,
+                PromptPlacement.BEFORE_NEXT_MODEL_CALL,
+                ContextLifecycle.UNTIL_STATE_CHANGE,
+                PromptCompactPolicy.RELOAD_BY_ID,
+                null);
     }
 
     private boolean debounceElapsed(ReminderContext ctx) {

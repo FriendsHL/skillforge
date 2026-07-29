@@ -84,7 +84,12 @@ public class MemoryDetailTool implements Tool {
             }
 
             return SkillResult.success(
-                    "[" + memory.getType() + "] " + memory.getTitle() + "\n\n" + memory.getContent());
+                    "[" + memory.getType() + "] " + memory.getTitle()
+                            + "\nprovenance=" + memory.getProvenanceSource()
+                            + ", confirmation=" + memory.getConfirmationStatus()
+                            + ", confidence=" + memory.getConfidence()
+                            + ", version=" + memory.getVersion()
+                            + "\n\n" + memory.getContent());
         } catch (Exception e) {
             log.warn("Memory detail retrieval failed: {}", e.getMessage(), e);
             return SkillResult.error("Failed to retrieve memory");

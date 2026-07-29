@@ -64,6 +64,13 @@ public class SessionEntity {
     @Column(columnDefinition = "TEXT")
     private String runtimeError;
 
+    /**
+     * Versioned JSON checkpoint for deferred Tool discovery and invoked Skill
+     * references. It contains stable IDs and hashes, never Tool schemas or Skill bodies.
+     */
+    @Column(name = "context_runtime_json", columnDefinition = "TEXT")
+    private String contextRuntimeJson;
+
     /** Stable owner of the latest runtime failure. */
     @Column(name = "runtime_failure_source", length = 32)
     private String runtimeFailureSource;
@@ -374,6 +381,14 @@ public class SessionEntity {
 
     public void setRuntimeStep(String runtimeStep) {
         this.runtimeStep = runtimeStep;
+    }
+
+    public String getContextRuntimeJson() {
+        return contextRuntimeJson;
+    }
+
+    public void setContextRuntimeJson(String contextRuntimeJson) {
+        this.contextRuntimeJson = contextRuntimeJson;
     }
 
     public String getRuntimeError() {

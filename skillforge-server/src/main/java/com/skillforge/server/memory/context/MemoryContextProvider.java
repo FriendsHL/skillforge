@@ -26,7 +26,13 @@ public class MemoryContextProvider {
         if (injection != null && injection.injectedIds() != null) {
             ids.addAll(injection.injectedIds());
         }
-        return new MemoryContextSnapshot(userId, taskContext, rendered, ids, sha256(rendered));
+        return new MemoryContextSnapshot(
+                userId,
+                taskContext,
+                rendered,
+                ids,
+                sha256(rendered),
+                injection != null ? injection.provenance() : java.util.List.of());
     }
 
     private static String sha256(String text) {

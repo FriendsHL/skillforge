@@ -7,6 +7,7 @@ import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 import org.springframework.data.annotation.CreatedDate;
@@ -102,6 +103,26 @@ public class MemoryEntity {
     /** MEMORY-LLM-SYNTHESIS (V68): links back to the synthesis run that produced or modified this row. */
     @Column(name = "synthesis_run_id", length = 64)
     private String synthesisRunId;
+
+    /**
+     * Where the current memory content originated. Kept separate from
+     * memoryKind, which describes synthesis form rather than evidence authority.
+     */
+    @Column(name = "provenance_source", nullable = false, length = 32)
+    private String provenanceSource = "LEGACY_UNKNOWN";
+
+    /** UNVERIFIED / CONFIRMED / REJECTED. */
+    @Column(name = "confirmation_status", nullable = false, length = 16)
+    private String confirmationStatus = "UNVERIFIED";
+
+    /** Optional normalized confidence in [0,1]. */
+    @Column(name = "confidence")
+    private Double confidence;
+
+    /** Optimistic concurrency token; prevents silent last-writer-wins updates. */
+    @Version
+    @Column(name = "version", nullable = false)
+    private Long version = 0L;
 
     @CreatedDate
     private LocalDateTime createdAt;
@@ -262,6 +283,38 @@ public class MemoryEntity {
 
     public void setSynthesisRunId(String synthesisRunId) {
         this.synthesisRunId = synthesisRunId;
+    }
+
+    public String getProvenanceSource() {
+        return provenanceSource;
+    }
+
+    public void setProvenanceSource(String provenanceSource) {
+        this.provenanceSource = provenanceSource;
+    }
+
+    public String getConfirmationStatus() {
+        return confirmationStatus;
+    }
+
+    public void setConfirmationStatus(String confirmationStatus) {
+        this.confirmationStatus = confirmationStatus;
+    }
+
+    public Double getConfidence() {
+        return confidence;
+    }
+
+    public void setConfidence(Double confidence) {
+        this.confidence = confidence;
+    }
+
+    public Long getVersion() {
+        return version;
+    }
+
+    public void setVersion(Long version) {
+        this.version = version;
     }
 
     public LocalDateTime getCreatedAt() {

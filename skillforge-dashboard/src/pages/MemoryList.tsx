@@ -46,6 +46,10 @@ interface MemoryRow {
   status: MemoryLifecycleStatus;
   importance: string;
   score: number | null;
+  provenanceSource: string;
+  confirmationStatus: string;
+  confidence: number | null;
+  version: number;
   raw: Record<string, unknown>;
 }
 
@@ -90,6 +94,10 @@ function normalizeMemory(raw: Record<string, unknown>): MemoryRow {
     status: String(raw.status || 'ACTIVE').toUpperCase() as MemoryLifecycleStatus,
     importance: String(raw.importance || 'medium'),
     score: raw.lastScore == null ? null : Number(raw.lastScore),
+    provenanceSource: String(raw.provenanceSource || 'LEGACY_UNKNOWN'),
+    confirmationStatus: String(raw.confirmationStatus || 'UNVERIFIED'),
+    confidence: raw.confidence == null ? null : Number(raw.confidence),
+    version: Number(raw.version || 0),
     raw,
   };
 }
@@ -169,8 +177,18 @@ const MemoryActiveTab: React.FC = () => {
   };
 
   const updateMut = useMutation({
-    mutationFn: ({ id, content }: { id: number; content: string }) => updateMemory(id, { content }),
-    onSuccess: invalidate,
+    mutationFn: ({ id, content, version }: { id: number; content: string; version: number }) =>
+      updateMemory(id, { content, version }),
+    onSuccess: () => {
+      setOpen(null);
+      invalidate();
+    },
+    onError: (err: unknown) => {
+      const status = (err as { response?: { status?: number } })?.response?.status;
+      if (status === 409) {
+        message.warning('This memory changed elsewhere. Refresh and review the latest version.');
+      }
+    },
   });
   const deleteMut = useMutation({
     mutationFn: (id: number) => deleteMemory(id),
@@ -492,7 +510,7 @@ const MemoryActiveTab: React.FC = () => {
           editVal={editVal}
           setEditVal={setEditVal}
           onClose={() => setOpen(null)}
-          onSave={() => updateMut.mutate({ id: open.id, content: editVal })}
+          onSave={() => updateMut.mutate({ id: open.id, content: editVal, version: open.version })}
           onRevert={() => setEditVal(open.value)}
           onDelete={() => deleteMut.mutate(open.id)}
           onRestore={() => restoreMut.mutate(open.id)}
@@ -546,6 +564,8 @@ function MemoryDrawer({ memory, editVal, setEditVal, onClose, onSave, onRevert, 
             <span className={`mem-scope scope-${memory.scope}`}>{memory.scope}</span>
             <span className={`mem-status mem-status--${memory.status.toLowerCase()}`}>{memory.status.toLowerCase()}</span>
             <span className={`mem-importance mem-importance--${memory.importance}`}>{memory.importance}</span>
+            <span className="kv-chip-sf">{memory.confirmationStatus.toLowerCase()}</span>
+            <span className="kv-chip-sf">{memory.provenanceSource.toLowerCase()}</span>
             <span className="kv-chip-sf">score · {memory.score == null ? '—' : memory.score.toFixed(2)}</span>
             <span className="kv-chip-sf">recall · {memory.hits}</span>
             <span className="kv-chip-sf">updated {memory.updated}</span>
@@ -580,6 +600,10 @@ function MemoryDrawer({ memory, editVal, setEditVal, onClose, onSave, onRevert, 
               <div><span>score</span><em>{memory.score == null ? '—' : memory.score.toFixed(2)}</em></div>
               <div><span>recall</span><em>{String(memory.hits)}</em></div>
               <div><span>updated</span><em>{memory.updated}</em></div>
+              <div><span>provenance</span><em>{memory.provenanceSource}</em></div>
+              <div><span>confirmation</span><em>{memory.confirmationStatus}</em></div>
+              <div><span>confidence</span><em>{memory.confidence == null ? '—' : memory.confidence.toFixed(2)}</em></div>
+              <div><span>version</span><em>{String(memory.version)}</em></div>
             </div>
           </div>
         </div>

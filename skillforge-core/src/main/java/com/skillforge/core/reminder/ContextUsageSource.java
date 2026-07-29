@@ -2,6 +2,9 @@ package com.skillforge.core.reminder;
 
 import com.skillforge.core.compact.RequestTokenEstimator;
 import com.skillforge.core.compact.TokenEstimator;
+import com.skillforge.core.context.ContextLifecycle;
+import com.skillforge.core.context.PromptCompactPolicy;
+import com.skillforge.core.context.PromptPlacement;
 import com.skillforge.core.llm.CompactThresholds;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -92,7 +95,19 @@ public class ContextUsageSource implements ReminderSource {
         String hint = nextThresholdHint(pct, thresholds);
         String text = String.format("Context: %.0f%% used (%d/%d tokens)%s",
                 pct, used, max, hint.isEmpty() ? "" : ", " + hint);
-        return new ReminderEntry(text, TokenEstimator.estimateString(text));
+        return new ReminderEntry(
+                NAME,
+                ReminderSourceType.CONTEXT_USAGE,
+                pct >= thresholds.getPreemptiveRatio() * 100
+                        ? ReminderSeverity.CRITICAL : ReminderSeverity.WARNING,
+                ReminderReasonCode.CONTEXT_THRESHOLD_REACHED,
+                text,
+                TokenEstimator.estimateString(text),
+                intervalTurns,
+                PromptPlacement.BEFORE_NEXT_MODEL_CALL,
+                ContextLifecycle.UNTIL_STATE_CHANGE,
+                PromptCompactPolicy.DROP_ON_COMPACT,
+                null);
     }
 
     private boolean debounceElapsed(ReminderContext ctx) {

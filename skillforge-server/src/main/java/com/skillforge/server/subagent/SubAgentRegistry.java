@@ -6,6 +6,9 @@ import com.skillforge.server.entity.SubAgentRunEntity;
 import com.skillforge.server.repository.SessionRepository;
 import com.skillforge.server.repository.SubAgentPendingResultRepository;
 import com.skillforge.server.repository.SubAgentRunRepository;
+import com.skillforge.core.context.LowTrustContextBoundary;
+import com.skillforge.core.context.PromptSourceType;
+import org.springframework.beans.factory.annotation.Value;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
@@ -60,6 +63,13 @@ public class SubAgentRegistry {
     private final SubAgentRunRepository runRepository;
     private final SubAgentPendingResultRepository pendingRepository;
     private final ObjectProvider<com.skillforge.server.service.ChatService> chatServiceProvider;
+
+    @Value("${skillforge.context.assembly.enabled:true}")
+    private boolean contextAssemblyEnabled;
+
+    void setContextAssemblyEnabledForTest(boolean enabled) {
+        this.contextAssemblyEnabled = enabled;
+    }
 
     public SubAgentRegistry(SessionRepository sessionRepository,
                             SubAgentRunRepository runRepository,
@@ -274,6 +284,9 @@ public class SubAgentRegistry {
                 combined.append(rows.get(i).getPayload());
             }
             String payload = combined.toString();
+            if (contextAssemblyEnabled) {
+                payload = LowTrustContextBoundary.wrap(PromptSourceType.SUBAGENT, payload);
+            }
             int n = rows.size();
 
             // 先删除再 chatAsync:保证不会重复投递;如果 chatAsync 抛错,把合并后的 payload 作为单行塞回

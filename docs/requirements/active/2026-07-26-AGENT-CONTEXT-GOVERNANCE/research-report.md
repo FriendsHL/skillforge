@@ -4,13 +4,13 @@
 
 ### 本地与官方制品
 
-- 本机安装：Claude Code `2.1.195`，Mach-O arm64。
+- 本机安装：Claude Code `2.1.220`，Mach-O arm64。
 - 官方 npm 元数据：`@anthropic-ai/claude-code@2.1.220`。
 - 官方原生包：`@anthropic-ai/claude-code-darwin-arm64@2.1.220`。
 - 2.1.220 构建时间：`2026-07-24T22:17:45Z`。
 - 2.1.220 Git SHA：`4073f59596e272f39393db4f96abc5f4b10eff21`。
 
-本机自更新因下载问题没有完成，分析使用下载到临时目录的官方原生二进制，没有替换现有可执行文件。
+本机当前可执行文件与分析版本均为 `2.1.220`。
 
 ### 社区样本
 
@@ -68,16 +68,33 @@ Prompt 内容会根据模型、工具集合、权限模式、输出风格、运�
 
 - Skill 列表常驻，详细 Skill 按需加载。
 - Agent 类型只暴露描述和工具范围。
-- Deferred Tool 只先暴露名称，再按需发现 Schema。
+- MCP/低频 Tool 的完整 Schema 可通过 ToolSearch 延迟发现；原生 Tool Search 使用
+  `defer_loading + tool_reference`，OpenAI-compatible Harness 需要在下一轮 `tools[]` 中正式补入 Schema。
 - Memory 使用索引与单条内容分离的模型。
 
-### 3.3 上下文连续性
+### 3.3 Instruction 与 Reminder
+
+- 用户级和项目根 CLAUDE.md 在 Session 启动时加载正文；嵌套 CLAUDE.md 和 path-scoped rules
+  在访问对应目录/文件时加载。
+- 指令加载具有 `session_start`、`nested_traversal`、`path_glob_match`、`include`、`compact`
+  等原因；路径身份用于去重，不能只按正文 Hash 去重不同作用域的文件。
+- Claude Code 内部把动态 Harness Context 作为 meta attachment/context part 管理，但 Provider
+  边界仍可能渲染成 `<system-reminder>` 文本、meta user content 或中途 system block。
+- Reminder 的价值是记录来源、位置、生命周期、去重和截断语义，不是新增一个公开
+  Anthropic `system_reminder` Content Block。
+
+### 3.4 Compact 连续性
 
 - 长会话允许自动 Compact，不要求提前结束任务。
 - Compact Prompt 特别保护用户反馈、改变方向的决定、安全约束和未完成状态。
 - 已经确认的事实不应在 Compact 后重新推导。
+- Project-root CLAUDE.md 和 Auto Memory 在 Compact 后从权威来源重载；嵌套指令在再次访问路径时重载。
+- ToolSearch 已发现工具通过 Compact 外的 discovered-tool 状态恢复，完整 Schema 从 Tool Registry
+  重新解析，不能依赖 Summary 复制 JSON Schema。
+- Skill Invocation 在 Compact 后按最近调用优先重挂：每个 Skill 最多保留前 5,000 tokens，
+  合计预算 25,000 tokens；超预算的旧 Skill 可以被丢弃并允许重新调用。
 
-### 3.4 行为与验证
+### 3.5 行为与验证
 
 - 区分 verified 与 assumed。
 - 不把范围外重构混入当前任务。
@@ -107,8 +124,21 @@ Prompt 内容会根据模型、工具集合、权限模式、输出风格、运�
 5. Tool/Skill/MCP/Media 缺少统一的副作用、费用、异步、恢复、媒体类型和可用性描述。
 6. Compact 擅长保护消息形状，但摘要没有统一保存用户决策、否决方向和 verified/assumed 状态。
 7. 多实例恢复、Workflow Startup Recovery 属于相关但独立的可靠性需求，不应混入 Prompt 重构。
+8. `ReminderEntry` 当前只有文本和 token 估算，缺少来源、placement、lifecycle 和 compact policy。
+9. Tool Schema 当前基本全量注入；Skill 虽渐进加载，但 Tool/Skill/Instruction 都缺少统一的 Compact
+   Runtime State Snapshot。
 
-## 6. 对社区 Opus 5 Prompt 的使用边界
+## 6. 对 SkillForge 的新增结论
+
+1. 先建立内部 `ContextAttachment`，再改变 Provider placement；第一批必须保持 wire byte-shape。
+2. Reminder V2、Instruction Registry 和 ToolSearch 是三个不同子系统，不能用一个“渐进加载”概念代替。
+3. Deferred Tool 的搜索结果只有在下一轮成为正式 `tools[]` Schema 后才可调用；普通 tool result
+   返回 Schema 文本不具备 Function Calling 约束力。
+4. Compact 必须分开保存业务 Continuity 与 Harness Runtime State：
+   `loadedInstructionIds`、`discoveredToolIds`、`invokedSkillIds` 不能只存在自然语言 Summary 中。
+5. Tool/Skill/Instruction 恢复优先保存稳定 ID 和版本 Hash，正文从 Registry/文件/Skill Package 重建。
+
+## 7. 对社区 Opus 5 Prompt 的使用边界
 
 可借鉴：
 

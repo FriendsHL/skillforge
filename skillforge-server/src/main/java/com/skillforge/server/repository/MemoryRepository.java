@@ -66,7 +66,8 @@ public interface MemoryRepository extends JpaRepository<MemoryEntity, Long> {
     // recall results (memory_search tool + L1 hybrid both go through this).
     @Query(value = """
         SELECT id, type, title, content, tags, recall_count,
-               ts_rank(search_vector, plainto_tsquery('simple', :query)) AS rank
+               ts_rank(search_vector, plainto_tsquery('simple', :query)) AS rank,
+               provenance_source, confirmation_status, confidence, version
         FROM t_memory
         WHERE user_id = :userId
           AND status = 'ACTIVE'
@@ -83,7 +84,8 @@ public interface MemoryRepository extends JpaRepository<MemoryEntity, Long> {
     // Memory v2 (PR-2): AND status='ACTIVE' filter — same rationale as findByFts.
     @Query(value = """
         SELECT id, type, title, content, tags, recall_count,
-               (embedding <=> CAST(:embedding AS vector)) AS distance
+               (embedding <=> CAST(:embedding AS vector)) AS distance,
+               provenance_source, confirmation_status, confidence, version
         FROM t_memory
         WHERE user_id = :userId
           AND status = 'ACTIVE'
@@ -99,7 +101,8 @@ public interface MemoryRepository extends JpaRepository<MemoryEntity, Long> {
     // Add-time dedup recall: same user + same type + ACTIVE only. Uses cosine distance.
     @Query(value = """
         SELECT id, type, title, content, tags, recall_count,
-               (embedding <=> CAST(:embedding AS vector)) AS distance
+               (embedding <=> CAST(:embedding AS vector)) AS distance,
+               provenance_source, confirmation_status, confidence, version
         FROM t_memory
         WHERE user_id = :userId
           AND type = :type

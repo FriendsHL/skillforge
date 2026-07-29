@@ -1,6 +1,9 @@
 package com.skillforge.core.reminder;
 
 import com.skillforge.core.compact.TokenEstimator;
+import com.skillforge.core.context.ContextLifecycle;
+import com.skillforge.core.context.PromptCompactPolicy;
+import com.skillforge.core.context.PromptPlacement;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -84,7 +87,18 @@ public class MemoryAgeSource implements ReminderSource {
                 .append(staleDaysThreshold).append(" days)");
         s.lastRecalledAt().ifPresent(t -> sb.append(", last recalled ").append(formatAge(t)));
         String text = sb.toString();
-        return new ReminderEntry(text, TokenEstimator.estimateString(text));
+        return new ReminderEntry(
+                NAME,
+                ReminderSourceType.MEMORY_AGE,
+                ReminderSeverity.INFO,
+                ReminderReasonCode.STALE_MEMORY_AVAILABLE,
+                text,
+                TokenEstimator.estimateString(text),
+                intervalTurns,
+                PromptPlacement.BEFORE_NEXT_MODEL_CALL,
+                ContextLifecycle.UNTIL_STATE_CHANGE,
+                PromptCompactPolicy.RELOAD_BY_ID,
+                null);
     }
 
     private boolean debounceElapsed(ReminderContext ctx) {

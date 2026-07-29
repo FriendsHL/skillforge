@@ -688,9 +688,9 @@ public class ChatService {
             SessionEntity freshSession = sessionService.getSession(sessionId);
             if (artifactWorkspaceService != null) {
                 artifactWorkspace = artifactWorkspaceService.create(userId, sessionId, traceId);
-                String existingPrompt = agentDef.getSystemPrompt() != null ? agentDef.getSystemPrompt() : "";
-                agentDef.setSystemPrompt(existingPrompt + "\n\n"
-                        + artifactWorkspaceService.promptInstruction(artifactWorkspace));
+                agentDef.getConfig().put(
+                        AgentLoopEngine.RUNTIME_SYSTEM_CONTEXT_CONFIG,
+                        artifactWorkspaceService.promptInstruction(artifactWorkspace));
             }
             // MULTIMODAL-MVP redesign (2026-05-14): the agent has a single
             // `modelId` only. Effective model picks /model runtime override when

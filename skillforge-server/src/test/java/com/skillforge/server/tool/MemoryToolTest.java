@@ -51,7 +51,8 @@ class MemoryToolTest {
         saved.setId(101L);
         saved.setUserId(42L);
         saved.setTitle("prefers concise output");
-        when(memoryService.createMemory(org.mockito.ArgumentMatchers.any(MemoryEntity.class)))
+        when(memoryService.createAgentSuggestedMemory(
+                org.mockito.ArgumentMatchers.any(MemoryEntity.class)))
                 .thenReturn(saved);
 
         Map<String, Object> input = new HashMap<>();
@@ -65,7 +66,7 @@ class MemoryToolTest {
 
         assertThat(res.isSuccess()).isTrue();
         ArgumentCaptor<MemoryEntity> captor = ArgumentCaptor.forClass(MemoryEntity.class);
-        verify(memoryService).createMemory(captor.capture());
+        verify(memoryService).createAgentSuggestedMemory(captor.capture());
         assertThat(captor.getValue().getUserId()).isEqualTo(42L);
         assertThat(captor.getValue().getType()).isEqualTo("preference");
     }
@@ -85,7 +86,8 @@ class MemoryToolTest {
 
         assertThat(res.isSuccess()).isFalse();
         assertThat(res.getError()).contains("User context is missing");
-        verify(memoryService, never()).createMemory(org.mockito.ArgumentMatchers.any());
+        verify(memoryService, never()).createAgentSuggestedMemory(
+                org.mockito.ArgumentMatchers.any());
     }
 
     @Test
@@ -101,7 +103,8 @@ class MemoryToolTest {
 
         assertThat(res.isSuccess()).isFalse();
         assertThat(res.getError()).contains("User context is missing");
-        verify(memoryService, never()).createMemory(org.mockito.ArgumentMatchers.any());
+        verify(memoryService, never()).createAgentSuggestedMemory(
+                org.mockito.ArgumentMatchers.any());
     }
 
     // ─── delete ───────────────────────────────────────────────────────────────

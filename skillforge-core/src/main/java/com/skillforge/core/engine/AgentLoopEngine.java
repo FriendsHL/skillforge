@@ -9,9 +9,16 @@ import com.skillforge.core.compact.ContextCompactorCallback.CompactCallbackResul
 import com.skillforge.core.compact.RequestTokenEstimator;
 import com.skillforge.core.compact.TimeBasedColdCleanup;
 import com.skillforge.core.compact.TokenEstimator;
+import com.skillforge.core.context.ContextAttachment;
 import com.skillforge.core.context.ContextProvider;
 import com.skillforge.core.context.DynamicSystemPromptAppender;
+import com.skillforge.core.context.LegacyCompatiblePromptRenderer;
+import com.skillforge.core.context.PromptAssembly;
 import com.skillforge.core.context.SystemPromptBuilder;
+import com.skillforge.core.context.LowTrustContextBoundary;
+import com.skillforge.core.context.ToolResultTrustClassifier;
+import com.skillforge.core.context.PromptObservationHashes;
+import com.skillforge.core.context.runtime.ContextRuntimeStore;
 import com.skillforge.core.engine.confirm.ChannelUnavailableException;
 import com.skillforge.core.engine.confirm.ConfirmationPrompter;
 import com.skillforge.core.engine.confirm.ConfirmationPromptPayload;
@@ -33,6 +40,9 @@ import com.skillforge.core.model.ContentBlock;
 import com.skillforge.core.model.Message;
 import com.skillforge.core.model.SkillDefinition;
 import com.skillforge.core.model.ToolSchema;
+import com.skillforge.core.capability.ToolCatalog;
+import com.skillforge.core.capability.ToolDescriptor;
+import com.skillforge.core.capability.ToolSearchCapability;
 import com.skillforge.core.model.ToolUseBlock;
 import com.skillforge.core.skill.SkillContext;
 import com.skillforge.core.skill.PublishedArtifact;
@@ -73,7 +83,10 @@ public class AgentLoopEngine {
     static final long BREAKER_HALF_OPEN_WINDOW_MS = 60_000L;
     /** Maximum full-compaction attempts for one provider context-overflow cycle. */
     static final int MAX_POST_OVERFLOW_COMPACT_ATTEMPTS = 3;
+    private static final int MAX_RECOVERED_SKILL_TOKENS = 25_000;
+    private static final int MAX_RECOVERED_TOKENS_PER_SKILL = 5_000;
     static final String SKILL_LOADER_TOOL_NAME = "Skill";
+    public static final String RUNTIME_SYSTEM_CONTEXT_CONFIG = "runtime_system_context";
 
     private final LlmProviderFactory llmProviderFactory;
     private final String defaultProviderName;
@@ -158,6 +171,14 @@ public class AgentLoopEngine {
      * after every loop run (idempotent if already absent).  null disables eviction.
      */
     private com.skillforge.core.compact.recovery.FileStateCache fileStateCache;
+    /** Optional persisted checkpoint for deferred Tool and invoked Skill references. */
+    private ContextRuntimeStore contextRuntimeStore;
+    /** P1 rollback switch. False preserves the pre-assembly low-trust byte shape. */
+    private boolean contextAssemblyEnabled = true;
+    /** P4 catalog/search rollout switches. Defaults preserve legacy test/runtime behavior. */
+    private boolean toolCatalogEnabled = false;
+    private boolean toolSearchEnabled = false;
+    private boolean deferredToolSchemasEnabled = false;
 
     /**
      * P9-2: request-time tool_result aggregate budget (chars). 0 / 负数禁用 budgeter。
@@ -226,6 +247,26 @@ public class AgentLoopEngine {
      */
     public void setFileStateCache(com.skillforge.core.compact.recovery.FileStateCache fileStateCache) {
         this.fileStateCache = fileStateCache;
+    }
+
+    public void setContextRuntimeStore(ContextRuntimeStore contextRuntimeStore) {
+        this.contextRuntimeStore = contextRuntimeStore;
+    }
+
+    public void setContextAssemblyEnabled(boolean contextAssemblyEnabled) {
+        this.contextAssemblyEnabled = contextAssemblyEnabled;
+    }
+
+    public void setToolCatalogEnabled(boolean toolCatalogEnabled) {
+        this.toolCatalogEnabled = toolCatalogEnabled;
+    }
+
+    public void setToolSearchEnabled(boolean toolSearchEnabled) {
+        this.toolSearchEnabled = toolSearchEnabled;
+    }
+
+    public void setDeferredToolSchemasEnabled(boolean deferredToolSchemasEnabled) {
+        this.deferredToolSchemasEnabled = deferredToolSchemasEnabled;
     }
 
     public void setRootSessionLookup(RootSessionLookup rootSessionLookup) {
@@ -480,6 +521,7 @@ public class AgentLoopEngine {
         // Clear any breaker state carried over from the previous turn so recovery does not
         // depend solely on the 60s half-open window.
         loopCtx.resetCompactFailures();
+        restoreContextRuntime(loopCtx);
 
         // Plan r2 §5: resolve per-session skill view (system + user packages, minus disabled).
         // Inject into LoopContext so collectTools / executeToolCall can read from it.
@@ -495,15 +537,34 @@ public class AgentLoopEngine {
         // and the loop-ending reminder appended later via promptSuffix.
         String claudeMd = claudeMdProvider != null ? claudeMdProvider.apply(userId) : null;
         List<SkillDefinition> skillDefs = resolveVisibleSkillDefs(loopCtx);
-        com.skillforge.core.llm.cache.SystemPromptParts promptParts =
+        PromptAssembly promptAssembly =
                 new SystemPromptBuilder(agentDef, skillDefs, contextProviders)
-                        .buildWithBoundary(claudeMd);
+                        .buildAssembly(claudeMd);
+        LegacyCompatiblePromptRenderer promptRenderer = new LegacyCompatiblePromptRenderer();
+        com.skillforge.core.llm.cache.SystemPromptParts promptParts =
+                promptAssembly.render(promptRenderer);
         String stableSection = promptParts.stable();
         StringBuilder dynamicSection = new StringBuilder(promptParts.dynamic());
 
         // 4.0.1 注入 Session Context (userId / sessionId) — 让 Agent 自动知道当前用户/会话
-        DynamicSystemPromptAppender.appendSessionContext(
+        String sessionContextFragment = DynamicSystemPromptAppender.appendSessionContext(
                 dynamicSection, userId, loopCtx.getSessionId());
+        if (!sessionContextFragment.isEmpty()) {
+            promptAssembly = promptAssembly.withAttachment(ContextAttachment.sessionContext(
+                    sessionContextFragment, userId, loopCtx.getSessionId()));
+        }
+
+        Object runtimeContext = agentDef.getConfig().get(RUNTIME_SYSTEM_CONTEXT_CONFIG);
+        if (runtimeContext instanceof String value && !value.isBlank()) {
+            String runtimeFragment = DynamicSystemPromptAppender.appendRuntimeContext(
+                    dynamicSection, "Artifact Workspace", value);
+            promptAssembly = promptAssembly.withAttachment(ContextAttachment.runtime(
+                    "artifact_workspace",
+                    runtimeFragment,
+                    loopCtx.getSessionId() == null
+                            ? List.of()
+                            : List.of("session:" + loopCtx.getSessionId())));
+        }
 
         // 4.1 注入用户记忆到 system prompt (skip if lightContext / skip_memory flag set)
         // Memory v2 (PR-2): provider 现在是 BiFunction(userId, taskContext) → MemoryInjection。
@@ -513,12 +574,33 @@ public class AgentLoopEngine {
         if (memoryProvider != null && !skipMemory) {
             MemoryInjection mi = memoryProvider.apply(userId, userMessage);
             if (mi != null && mi.text() != null && !mi.text().isBlank()) {
-                DynamicSystemPromptAppender.appendUserMemories(dynamicSection, mi.text());
+                String memoryFragment =
+                        DynamicSystemPromptAppender.appendUserMemories(dynamicSection, mi.text());
+                PromptAssembly legacyAssembly = promptAssembly.withAttachment(
+                        ContextAttachment.userMemories(memoryFragment, mi.injectedIds(), false));
+                PromptAssembly boundedAssembly = promptAssembly.withAttachment(
+                        ContextAttachment.userMemories(memoryFragment, mi.injectedIds(), true));
+                String legacyHash = PromptObservationHashes.sha256(
+                        legacyAssembly.render(new LegacyCompatiblePromptRenderer(true)).combined());
+                String boundedHash = PromptObservationHashes.sha256(
+                        boundedAssembly.render(new LegacyCompatiblePromptRenderer(true)).combined());
+                log.debug("Context assembly shadow comparison: sessionId={}, category={}, "
+                                + "legacyHash={}, assemblyHash={}",
+                        loopCtx.getSessionId(),
+                        legacyHash.equals(boundedHash) ? "byte_identical" : "low_trust_boundary",
+                        legacyHash, boundedHash);
+                promptAssembly = contextAssemblyEnabled ? boundedAssembly : legacyAssembly;
             }
             if (mi != null && mi.injectedIds() != null && !mi.injectedIds().isEmpty()) {
                 loopCtx.setInjectedMemoryIds(mi.injectedIds());
             }
         }
+
+        // Render once after all dynamic attachments have been classified. The compatibility
+        // renderer preserves the previous byte shape and cache boundary placement.
+        promptParts = promptAssembly.render(new LegacyCompatiblePromptRenderer(true));
+        stableSection = promptParts.stable();
+        dynamicSection = new StringBuilder(promptParts.dynamic());
 
         // Compose final systemPrompt with cache boundary marker. Providers that recognise
         // the marker (ClaudeProvider) split on it to install a cache_control breakpoint;
@@ -621,6 +703,10 @@ public class AgentLoopEngine {
             requestToolResultBudgetChars = n.intValue();
         }
         while (loopCtx.getLoopCount() < loopCtx.getMaxLoops()) {
+            // P4: rebuild from the current authorized surface so ToolSearch discoveries
+            // made in the previous iteration materialize as authoritative schemas now.
+            tools = collectTools(loopCtx, loopCtx.getExecutionMode(),
+                    loopCtx.getExcludedSkillNames(), loopCtx.getAllowedToolNames());
             // P9-2 (Judge FIX-1): reset per-iteration — per-turn 语义；防死循环只保护单次 LLM call 的 continuation
             hasAttemptedMaxTokensRecovery = false;
             // 取消检查(每次迭代开头)
@@ -817,17 +903,19 @@ public class AgentLoopEngine {
             // was empty earlier), promptSuffix would otherwise leak into the stable
             // cache-eligible block and silently break cache hits. Force-insert MARKER
             // before appending promptSuffix when no marker is present.
-            if (promptSuffix.isEmpty()) {
+            String runtimeRecovery = renderSkillRecoveryAppendix(loopCtx, messages);
+            if (promptSuffix.isEmpty() && runtimeRecovery.isEmpty()) {
                 request.setSystemPrompt(systemPrompt);
             } else if (systemPrompt.contains(
                     com.skillforge.core.llm.cache.CacheBoundary.MARKER)) {
                 // Marker already in place — promptSuffix lands inside the dynamic block.
-                request.setSystemPrompt(systemPrompt + promptSuffix);
+                request.setSystemPrompt(systemPrompt + promptSuffix + runtimeRecovery);
             } else {
                 // No marker yet: insert one so promptSuffix stays out of the stable block.
                 request.setSystemPrompt(systemPrompt
                         + com.skillforge.core.llm.cache.CacheBoundary.MARKER_WITH_NEWLINES
-                        + promptSuffix.toString().stripLeading());
+                        + promptSuffix.toString().stripLeading()
+                        + runtimeRecovery);
             }
             request.setMessages(messages);
             request.setTools(tools);
@@ -1815,6 +1903,18 @@ public class AgentLoopEngine {
             tools.add(ContextCompactTool.toolSchema());
         }
 
+        if (toolCatalogEnabled) {
+            if (toolSearchEnabled) {
+                tools.add(ToolSearchCapability.schema());
+            }
+            ToolCatalog catalog = ToolCatalog.fromAuthorizedSchemas(tools, jsonMapper);
+            if (loopCtx != null) {
+                loopCtx.setToolCatalog(catalog);
+            }
+            return catalog.exposedSchemas(
+                    loopCtx != null ? loopCtx.getToolDiscoveryState() : null,
+                    deferredToolSchemasEnabled);
+        }
         return tools;
     }
 
@@ -2837,11 +2937,183 @@ public class AgentLoopEngine {
 
         SkillDefinition skillDef = skillDefOpt.get();
         String content = skillDef.getPromptContent() != null ? skillDef.getPromptContent() : "";
+        if (loopContext != null) {
+            loopContext.recordSkillInvocation(
+                    skillToLoad,
+                    PromptObservationHashes.sha256(content),
+                    content);
+            persistContextRuntime(loopContext);
+        }
         long duration = System.currentTimeMillis() - startTime;
         toolCallRecords.add(new ToolCallRecord(skillToLoad, input, content, true, duration, startTime));
         log.debug("Skill loader returned promptContent for '{}', duration={}ms", skillToLoad, duration);
         recordTelemetry(skillToLoad, true, null);
         return Message.toolResult(toolUseId, content, false);
+    }
+
+    private Message executeToolSearch(
+            String toolUseId,
+            Map<String, Object> input,
+            LoopContext loopContext,
+            List<ToolCallRecord> toolCallRecords,
+            long startTime) {
+        Object rawQuery = input != null ? input.get("query") : null;
+        if (!(rawQuery instanceof String query) || query.isBlank()) {
+            String error = "ToolSearch requires a non-empty 'query' string.";
+            toolCallRecords.add(new ToolCallRecord(
+                    ToolSearchCapability.NAME, input, error, false,
+                    System.currentTimeMillis() - startTime, startTime));
+            recordTelemetry(ToolSearchCapability.NAME, false,
+                    SkillResult.ErrorType.VALIDATION.name());
+            return Message.toolResult(
+                    toolUseId, error, true, SkillResult.ErrorType.VALIDATION.name());
+        }
+        ToolCatalog catalog = loopContext != null ? loopContext.getToolCatalog() : null;
+        if (!toolCatalogEnabled || !toolSearchEnabled || catalog == null) {
+            String error = "ToolSearch is unavailable for this session.";
+            return Message.toolResult(
+                    toolUseId, error, true, SkillResult.ErrorType.NOT_ALLOWED.name());
+        }
+        int maxResults = 5;
+        Object rawMax = input.get("max_results");
+        if (rawMax instanceof Number number) {
+            maxResults = Math.max(1, Math.min(20, number.intValue()));
+        }
+        List<ToolDescriptor> matches = catalog.search(query, maxResults);
+        for (ToolDescriptor descriptor : matches) {
+            loopContext.getToolDiscoveryState().discover(descriptor);
+        }
+        persistContextRuntime(loopContext);
+        String result = renderToolSearchResult(query, matches);
+        toolCallRecords.add(new ToolCallRecord(
+                ToolSearchCapability.NAME, input, result, true,
+                System.currentTimeMillis() - startTime, startTime));
+        recordTelemetry(ToolSearchCapability.NAME, true, null);
+        return Message.toolResult(toolUseId, result, false);
+    }
+
+    private static String renderToolSearchResult(
+            String query, List<ToolDescriptor> matches) {
+        if (matches == null || matches.isEmpty()) {
+            return "No authorized capabilities matched query: " + query;
+        }
+        StringBuilder out = new StringBuilder(
+                "Discovered authorized capabilities. Their authoritative schemas "
+                        + "will be exposed on the next model call:");
+        for (ToolDescriptor descriptor : matches) {
+            out.append("\n- ").append(descriptor.name())
+                    .append(" [").append(descriptor.kind()).append("]")
+                    .append(" schemaHash=").append(descriptor.schemaHash());
+            if (!descriptor.description().isBlank()) {
+                out.append("\n  ").append(descriptor.description());
+            }
+        }
+        return out.toString();
+    }
+
+    private void restoreContextRuntime(LoopContext context) {
+        if (contextRuntimeStore == null || context == null
+                || context.getSessionId() == null || context.getSessionId().isBlank()) {
+            return;
+        }
+        try {
+            contextRuntimeStore.load(context.getSessionId())
+                    .ifPresent(context::restoreRuntimeSnapshot);
+        } catch (RuntimeException ex) {
+            log.warn("Context runtime restore failed; continuing without checkpoint: sessionId={}",
+                    context.getSessionId(), ex);
+        }
+    }
+
+    private void persistContextRuntime(LoopContext context) {
+        if (contextRuntimeStore == null || context == null
+                || context.getSessionId() == null || context.getSessionId().isBlank()) {
+            return;
+        }
+        try {
+            contextRuntimeStore.save(context.getSessionId(), context.runtimeSnapshot());
+        } catch (RuntimeException ex) {
+            log.warn("Context runtime checkpoint failed; continuing current loop: sessionId={}",
+                    context.getSessionId(), ex);
+        }
+    }
+
+    /**
+     * Reattach authoritative Skill bodies only after a full-compact summary is
+     * present. Checkpoints carry references and hashes; content is always
+     * resolved again from the current authorized Skill view.
+     */
+    String renderSkillRecoveryAppendix(
+            LoopContext context, List<Message> messages) {
+        if (context == null || !containsCompactSummary(messages)) return "";
+        List<com.skillforge.core.context.runtime.SkillInvocationRef> refs =
+                context.runtimeSnapshot().invokedSkills().stream()
+                        .sorted(java.util.Comparator.comparingLong(
+                                com.skillforge.core.context.runtime.SkillInvocationRef
+                                        ::invocationSequence).reversed())
+                        .toList();
+        if (refs.isEmpty()) return "";
+        com.skillforge.core.skill.view.SessionSkillView view = context.getSkillView();
+        if (view == null) return "";
+
+        int used = 0;
+        StringBuilder body = new StringBuilder();
+        for (com.skillforge.core.context.runtime.SkillInvocationRef ref : refs) {
+            if (ref.estimatedTokens() > MAX_RECOVERED_TOKENS_PER_SKILL) {
+                log.info("Skill recovery dropped by per-skill budget: sessionId={}, skill={}",
+                        context.getSessionId(), ref.skillId());
+                continue;
+            }
+            Optional<SkillDefinition> current = view.resolve(ref.skillId());
+            if (current.isEmpty()) {
+                log.info("Skill recovery skipped because authorization/registry entry is absent: "
+                                + "sessionId={}, skill={}",
+                        context.getSessionId(), ref.skillId());
+                continue;
+            }
+            String content = current.get().getPromptContent() == null
+                    ? "" : current.get().getPromptContent();
+            if (!PromptObservationHashes.sha256(content).equals(ref.versionHash())) {
+                log.info("Skill recovery skipped because version hash changed: sessionId={}, skill={}",
+                        context.getSessionId(), ref.skillId());
+                continue;
+            }
+            int tokens = TokenEstimator.estimateString(content);
+            if (used + tokens > MAX_RECOVERED_SKILL_TOKENS) {
+                log.info("Skill recovery dropped by aggregate budget: sessionId={}, skill={}",
+                        context.getSessionId(), ref.skillId());
+                continue;
+            }
+            body.append("\n\n### Skill: ").append(ref.skillId()).append('\n')
+                    .append(content);
+            used += tokens;
+        }
+        if (body.isEmpty()) return "";
+        return "\n\n<context-recovery source=\"skill-registry\">"
+                + body
+                + "\n</context-recovery>";
+    }
+
+    private static boolean containsCompactSummary(List<Message> messages) {
+        if (messages == null) return false;
+        for (Message message : messages) {
+            if (message == null || message.getContent() == null) continue;
+            Object content = message.getContent();
+            if (content instanceof String text
+                    && text.startsWith("[Context summary from ")) {
+                return true;
+            }
+            if (content instanceof List<?> blocks) {
+                for (Object block : blocks) {
+                    if (block instanceof ContentBlock contentBlock
+                            && contentBlock.getText() != null
+                            && contentBlock.getText().startsWith("[Context summary from ")) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
     }
 
     // Package-private for AgentLoopEngineTelemetryTest / NotAllowedHijackShortCircuitTest
@@ -2905,7 +3177,8 @@ public class AgentLoopEngine {
             boolean isBuiltinTool = skillRegistry.getTool(skillName).isPresent();
             boolean isEngineSpecial = SKILL_LOADER_TOOL_NAME.equals(skillName)
                     || AskUserTool.NAME.equals(skillName)
-                    || ContextCompactTool.NAME.equals(skillName);
+                    || ContextCompactTool.NAME.equals(skillName)
+                    || ToolSearchCapability.NAME.equals(skillName);
             com.skillforge.core.skill.view.SessionSkillView view = loopContext != null
                     ? loopContext.getSkillView() : null;
             if (!isBuiltinTool && !isEngineSpecial && view != null && !view.isAllowed(skillName)) {
@@ -2928,8 +3201,35 @@ public class AgentLoopEngine {
                         SkillResult.ErrorType.NOT_ALLOWED.name());
             }
 
+            if (ToolSearchCapability.NAME.equals(skillName)) {
+                return executeToolSearch(
+                        toolUseId, input, loopContext, toolCallRecords, startTime);
+            }
+
             if (SKILL_LOADER_TOOL_NAME.equals(skillName)) {
                 return executeSkillLoaderTool(toolUseId, input, loopContext, toolCallRecords, startTime);
+            }
+
+            // P4 fail-closed dispatch gate: knowing a deferred tool name does not grant
+            // execution. The schema must have been discovered from this loop's already
+            // authorized catalog and still match its current hash.
+            if (deferredToolSchemasEnabled && loopContext != null
+                    && loopContext.getToolCatalog() != null) {
+                ToolDescriptor descriptor =
+                        loopContext.getToolCatalog().findByName(skillName);
+                if (descriptor != null && !descriptor.alwaysLoaded()
+                        && !loopContext.getToolDiscoveryState().isDiscovered(descriptor)) {
+                    String error = "[NOT DISCOVERED] tool '" + skillName
+                            + "' is authorized but deferred. Call ToolSearch first.";
+                    toolCallRecords.add(new ToolCallRecord(
+                            skillName, input, error, false,
+                            System.currentTimeMillis() - startTime, startTime));
+                    recordTelemetry(
+                            skillName, false, SkillResult.ErrorType.NOT_ALLOWED.name());
+                    return Message.toolResult(
+                            toolUseId, error, true,
+                            SkillResult.ErrorType.NOT_ALLOWED.name());
+                }
             }
 
             // Legacy direct SkillDefinition calls are still accepted for compatibility, but
@@ -3011,6 +3311,13 @@ public class AgentLoopEngine {
                 String truncatedOutput = ToolResultTruncator.truncate(output);
                 boolean outputTruncated = !java.util.Objects.equals(output, truncatedOutput);
                 output = truncatedOutput;
+                if (contextAssemblyEnabled && result.isSuccess()) {
+                    Optional<com.skillforge.core.context.PromptSourceType> source =
+                            ToolResultTrustClassifier.classify(skillName);
+                    if (source.isPresent()) {
+                        output = LowTrustContextBoundary.wrap(source.get(), output);
+                    }
+                }
                 toolCallRecords.add(new ToolCallRecord(skillName, input, output, result.isSuccess(), duration, startTime));
                 log.debug("Tool '{}' executed, success={}, duration={}ms", skillName, result.isSuccess(), duration);
                 String errorType = (!result.isSuccess() && result.getErrorType() != null)

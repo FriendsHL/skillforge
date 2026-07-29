@@ -1,7 +1,6 @@
 package com.skillforge.core.context;
 
 import com.skillforge.core.llm.cache.SystemPromptParts;
-import com.skillforge.core.compact.TokenEstimator;
 import com.skillforge.core.model.AgentDefinition;
 import com.skillforge.core.model.SkillDefinition;
 
@@ -74,7 +73,14 @@ public class SystemPromptBuilder {
      * {@link com.skillforge.core.llm.LlmRequest#getSystemPrompt() systemPrompt}.
      */
     public SystemPromptParts buildWithBoundary(String claudeMd) {
-        return buildInternal(claudeMd, false).parts();
+        return buildAssembly(claudeMd).render(new LegacyCompatiblePromptRenderer());
+    }
+
+    /**
+     * Build the typed prompt inputs before provider-compatible rendering.
+     */
+    public PromptAssembly buildAssembly(String claudeMd) {
+        return buildAttachmentAssembly(claudeMd);
     }
 
     /**
@@ -82,18 +88,25 @@ public class SystemPromptBuilder {
      * operations. Observations never participate in rendering.
      */
     public ObservedSystemPromptParts buildObserved(String claudeMd) {
-        return buildInternal(claudeMd, true);
+        PromptAssembly assembly = buildAssembly(claudeMd);
+        SystemPromptParts parts = assembly.render(new LegacyCompatiblePromptRenderer());
+        return new ObservedSystemPromptParts(
+                parts,
+                assembly.observations(),
+                assembly.attachments(),
+                PromptObservationHashes.sha256(parts.stable()),
+                PromptObservationHashes.sha256(parts.combined()));
     }
 
-    private ObservedSystemPromptParts buildInternal(String claudeMd, boolean observe) {
+    private PromptAssembly buildAttachmentAssembly(String claudeMd) {
         StringBuilder stable = new StringBuilder();
-        List<PromptFragmentObservation> observations = observe ? new ArrayList<>() : null;
+        List<ContextAttachment> attachments = new ArrayList<>();
 
         // 1. CLAUDE.md — 全局规则
         if (claudeMd != null && !claudeMd.isBlank()) {
             int start = stable.length();
             stable.append(claudeMd.strip()).append("\n\n");
-            observe(observations, "global_system_prompt", PromptSourceType.GLOBAL,
+            attach(attachments, "global_system_prompt", PromptSourceType.GLOBAL,
                     PromptPlacement.STABLE_SYSTEM, true, true,
                     List.of("global"), stable.substring(start));
         }
@@ -103,7 +116,7 @@ public class SystemPromptBuilder {
         if (agentPrompt != null && !agentPrompt.isBlank()) {
             int start = stable.length();
             stable.append(agentPrompt.strip()).append("\n\n");
-            observe(observations, "agent_prompt", PromptSourceType.AGENT,
+            attach(attachments, "agent_prompt", PromptSourceType.AGENT,
                     PromptPlacement.STABLE_SYSTEM, true, true,
                     List.of(nullSafe(agentDefinition.getId())), stable.substring(start));
         }
@@ -113,43 +126,32 @@ public class SystemPromptBuilder {
         if (soulPrompt != null && !soulPrompt.isBlank()) {
             int start = stable.length();
             stable.append(soulPrompt.strip()).append("\n\n");
-            observe(observations, "soul", PromptSourceType.SOUL,
+            attach(attachments, "soul", PromptSourceType.SOUL,
                     PromptPlacement.STABLE_SYSTEM, true, true,
                     List.of(nullSafe(agentDefinition.getId())), stable.substring(start));
         }
 
-        // 4. TOOLS.md — 工具经验（有则替代默认 Guidelines）
+        // 4. Agent-specific tool guidance is dynamic. Cross-agent routing and file/memory
+        // usage rules belong to the global prompt and must not be duplicated here.
         String toolsPrompt = agentDefinition.getToolsPrompt();
-        int toolsStart = stable.length();
         if (toolsPrompt != null && !toolsPrompt.isBlank()) {
-            stable.append(toolsPrompt.strip()).append("\n\n");
-        } else {
-            stable.append("## Tool Usage Guidelines\n\n");
-            stable.append("- Use Read instead of running `cat` or `head` via Bash\n");
-            stable.append("- Use Glob instead of running `find` or `ls` via Bash\n");
-            stable.append("- Use Grep instead of running `grep` or `rg` via Bash\n");
-            stable.append("- Use Edit for modifying existing files instead of Write\n");
-            stable.append("- Always read a file before editing or overwriting it\n");
-            stable.append("- Use absolute file paths whenever possible\n");
-            stable.append("\n");
+            String renderedGuidance = toolsPrompt.strip() + "\n\n";
+            attach(attachments, "tools_md", PromptSourceType.TOOL_GUIDANCE,
+                    PromptPlacement.DYNAMIC_SYSTEM, false, false,
+                    List.of(nullSafe(agentDefinition.getId())), renderedGuidance);
         }
-        observe(observations, "tools_md", PromptSourceType.TOOL_GUIDANCE,
-                PromptPlacement.STABLE_SYSTEM, true, true,
-                List.of(nullSafe(agentDefinition.getId())),
-                stable.substring(toolsStart));
 
         // 5. Behavior Rules — before Context (recency bias)
         int behaviorStart = stable.length();
         appendBehaviorRules(stable);
         if (stable.length() > behaviorStart) {
-            observe(observations, "behavior_rules", PromptSourceType.BEHAVIOR_RULES,
+            attach(attachments, "behavior_rules", PromptSourceType.BEHAVIOR_RULES,
                     PromptPlacement.STABLE_SYSTEM, true, true,
                     List.of(nullSafe(agentDefinition.getId())),
                     stable.substring(behaviorStart));
         }
 
         // 6. Context from providers — DYNAMIC (current_date / live env)
-        StringBuilder dynamic = new StringBuilder();
         if (contextProviders != null && !contextProviders.isEmpty()) {
             StringBuilder ctxSection = new StringBuilder();
             ctxSection.append("## Context\n\n");
@@ -157,14 +159,14 @@ public class SystemPromptBuilder {
             for (ContextProvider provider : contextProviders) {
                 Map<String, String> context = provider.getContext();
                 if (context != null && !context.isEmpty()) {
-                    int providerStart = ctxSection.length();
+                    int providerStart = any ? ctxSection.length() : 0;
                     ctxSection.append("### ").append(provider.getName()).append("\n");
                     for (Map.Entry<String, String> entry : context.entrySet()) {
                         ctxSection.append("- ").append(entry.getKey()).append(": ")
                                 .append(entry.getValue()).append("\n");
                     }
                     ctxSection.append("\n");
-                    observe(observations, "env_context." + safeId(provider.getName()),
+                    attach(attachments, "env_context." + safeId(provider.getName()),
                             PromptSourceType.RUNTIME_CONTEXT,
                             PromptPlacement.DYNAMIC_SYSTEM, false, false,
                             List.of(nullSafe(provider.getName())),
@@ -172,23 +174,13 @@ public class SystemPromptBuilder {
                     any = true;
                 }
             }
-            if (any) {
-                dynamic.append(ctxSection);
-            }
         }
 
-        SystemPromptParts parts = new SystemPromptParts(
-                stable.toString().stripTrailing(),
-                dynamic.toString().stripTrailing());
-        return new ObservedSystemPromptParts(
-                parts,
-                observations == null ? List.of() : observations,
-                observe ? PromptObservationHashes.sha256(parts.stable()) : "",
-                observe ? PromptObservationHashes.sha256(parts.combined()) : "");
+        return new PromptAssembly(attachments);
     }
 
-    private static void observe(
-            List<PromptFragmentObservation> observations,
+    private static void attach(
+            List<ContextAttachment> attachments,
             String id,
             PromptSourceType sourceType,
             PromptPlacement placement,
@@ -196,18 +188,23 @@ public class SystemPromptBuilder {
             boolean cacheable,
             List<String> sourceIds,
             String renderedFragment) {
-        if (observations == null) {
-            return;
-        }
-        observations.add(new PromptFragmentObservation(
-                id,
-                sourceType,
-                placement,
-                stable,
-                cacheable,
-                TokenEstimator.estimateString(renderedFragment),
-                sourceIds,
-                PromptObservationHashes.sha256(renderedFragment)));
+        PromptAuthority authority = sourceType == PromptSourceType.GLOBAL
+                ? PromptAuthority.PLATFORM
+                : sourceType == PromptSourceType.RUNTIME_CONTEXT
+                ? PromptAuthority.PLATFORM
+                : PromptAuthority.AGENT_CONFIG;
+        PromptTrustLevel trust = sourceType == PromptSourceType.GLOBAL
+                ? PromptTrustLevel.TRUSTED_INSTRUCTION
+                : sourceType == PromptSourceType.RUNTIME_CONTEXT
+                ? PromptTrustLevel.TRUSTED_RUNTIME_DATA
+                : PromptTrustLevel.CONFIGURED_INSTRUCTION;
+        ContextKind kind = sourceType == PromptSourceType.RUNTIME_CONTEXT
+                ? ContextKind.RUNTIME_CONTEXT : ContextKind.INSTRUCTION;
+        attachments.add(ContextAttachment.create(
+                id, kind, sourceType, authority, trust, placement,
+                stable ? ContextLifecycle.SESSION : ContextLifecycle.REQUEST_ONLY,
+                stable ? PromptCompactPolicy.RELOAD_BY_ID : PromptCompactPolicy.DROP_ON_COMPACT,
+                renderedFragment, stable, cacheable, sourceIds));
     }
 
     private static String safeId(String value) {

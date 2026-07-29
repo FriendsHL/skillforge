@@ -61,7 +61,24 @@ public record ContextBreakdownDto(
             String contentHash,
             String kind,
             String source,
-            String exposureReason) {
+            String exposureReason,
+            String authority,
+            String trustLevel,
+            String lifecycle,
+            String compactPolicy) {
+
+        public SegmentMetadata(
+                String sourceType,
+                String placement,
+                Boolean stable,
+                Boolean cacheable,
+                String contentHash,
+                String kind,
+                String source,
+                String exposureReason) {
+            this(sourceType, placement, stable, cacheable, contentHash, kind, source,
+                    exposureReason, null, null, null, null);
+        }
     }
 
     public record ObservationSummary(

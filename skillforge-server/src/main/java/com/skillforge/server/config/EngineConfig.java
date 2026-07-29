@@ -233,6 +233,9 @@ public class EngineConfig {
                                            com.skillforge.core.skill.view.SessionSkillResolver sessionSkillResolver,
                                            com.skillforge.server.service.SkillService skillService,
                                            FileStateCache fileStateCache,
+                                           com.skillforge.server.service.JpaContextRuntimeStore contextRuntimeStore,
+                                           ContextAssemblyProperties contextAssemblyProperties,
+                                           ContextCapabilityProperties contextCapabilityProperties,
                                            com.fasterxml.jackson.databind.ObjectMapper objectMapper) {
         String defaultProvider = llmProperties.getDefaultProvider() != null
                 ? llmProperties.getDefaultProvider() : "claude";
@@ -269,6 +272,12 @@ public class EngineConfig {
         engine.setSkillTelemetryRecorder(skillService::recordUsage);
         // P9-5: per-session file state cache for post-compact recovery payload.
         engine.setFileStateCache(fileStateCache);
+        engine.setContextRuntimeStore(contextRuntimeStore);
+        engine.setContextAssemblyEnabled(contextAssemblyProperties.isEnabled());
+        engine.setToolCatalogEnabled(contextCapabilityProperties.isCatalogEnabled());
+        engine.setToolSearchEnabled(contextCapabilityProperties.isToolSearchEnabled());
+        engine.setDeferredToolSchemasEnabled(
+                contextCapabilityProperties.isDeferredSchemasEnabled());
         // Q2 (cache-friendly migration, 2026-05-10): reminderBuilder no longer wired into the
         // engine — ChatService injects the <system-reminder> as a ContentBlock on the user
         // Message at chatAsync entry, so it persists with the message and stays byte-identical

@@ -3,10 +3,16 @@ package com.skillforge.server.reminder;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillforge.core.compact.TokenEstimator;
+import com.skillforge.core.context.ContextLifecycle;
+import com.skillforge.core.context.PromptCompactPolicy;
+import com.skillforge.core.context.PromptPlacement;
 import com.skillforge.core.reminder.ReminderBuilder;
 import com.skillforge.core.reminder.ReminderContext;
 import com.skillforge.core.reminder.ReminderEntry;
+import com.skillforge.core.reminder.ReminderReasonCode;
+import com.skillforge.core.reminder.ReminderSeverity;
 import com.skillforge.core.reminder.ReminderSource;
+import com.skillforge.core.reminder.ReminderSourceType;
 import com.skillforge.server.skill.TodoStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -73,7 +79,18 @@ public class TodoListSource implements ReminderSource {
         if (builder != null) {
             builder.setLastEmitted(ctx.getSessionId(), NAME, ctx.getCurrentTurnIndex());
         }
-        return new ReminderEntry(text, TokenEstimator.estimateString(text));
+        return new ReminderEntry(
+                NAME,
+                ReminderSourceType.TODO_LIST,
+                ReminderSeverity.INFO,
+                ReminderReasonCode.PENDING_TODOS,
+                text,
+                TokenEstimator.estimateString(text),
+                intervalTurns,
+                PromptPlacement.BEFORE_NEXT_MODEL_CALL,
+                ContextLifecycle.UNTIL_STATE_CHANGE,
+                PromptCompactPolicy.RELOAD_BY_ID,
+                null);
     }
 
     private List<TodoItem> readTodos(String sessionId) {

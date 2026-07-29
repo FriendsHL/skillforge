@@ -104,6 +104,8 @@ class MemoryServiceStatusFilterTest {
         m.setContent(content);
         m.setRecallCount(0);
         m.setStatus("ACTIVE");
+        m.setProvenanceSource("USER_EXPLICIT");
+        m.setConfirmationStatus("CONFIRMED");
         m.setUpdatedAt(LocalDateTime.now(ZoneOffset.UTC));
         m.setCreatedAt(LocalDateTime.now(ZoneOffset.UTC));
         return m;

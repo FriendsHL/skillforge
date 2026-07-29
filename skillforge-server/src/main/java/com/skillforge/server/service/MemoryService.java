@@ -1,6 +1,7 @@
 package com.skillforge.server.service;
 
 import com.skillforge.core.engine.MemoryInjection;
+import com.skillforge.core.engine.MemoryInjectionRef;
 import com.skillforge.core.reminder.MemoryAgeStatsProvider;
 import com.skillforge.server.config.MemoryProperties;
 import com.skillforge.server.dto.MemorySearchResult;
@@ -101,6 +102,23 @@ public class MemoryService {
     @Transactional
     public MemoryEntity createMemory(MemoryEntity memory) {
         memory.setExtractionBatchId(null);
+        memory.setProvenanceSource("USER_EXPLICIT");
+        memory.setConfirmationStatus("CONFIRMED");
+        memory.setConfidence(1.0d);
+        MemoryEntity saved = memoryRepository.save(memory);
+        scheduleEmbeddingAfterCommit(saved);
+        return saved;
+    }
+
+    /** Agent-proposed memory is durable but never masquerades as user-confirmed fact. */
+    @Transactional
+    public MemoryEntity createAgentSuggestedMemory(MemoryEntity memory) {
+        memory.setExtractionBatchId(null);
+        memory.setProvenanceSource("AGENT_SUGGESTED");
+        memory.setConfirmationStatus("UNVERIFIED");
+        if (memory.getConfidence() == null) {
+            memory.setConfidence(0.5d);
+        }
         MemoryEntity saved = memoryRepository.save(memory);
         scheduleEmbeddingAfterCommit(saved);
         return saved;
@@ -110,11 +128,19 @@ public class MemoryService {
     public MemoryEntity updateMemory(Long id, MemoryEntity memory) {
         MemoryEntity existing = memoryRepository.findById(id)
                 .orElseThrow(() -> new RuntimeException("Memory not found: " + id));
-        existing.setType(memory.getType());
-        existing.setTitle(memory.getTitle());
-        existing.setContent(memory.getContent());
-        existing.setTags(memory.getTags());
+        if (memory.getVersion() != null
+                && !memory.getVersion().equals(existing.getVersion())) {
+            throw new MemoryVersionConflictException(
+                    id, memory.getVersion(), existing.getVersion());
+        }
+        if (memory.getType() != null) existing.setType(memory.getType());
+        if (memory.getTitle() != null) existing.setTitle(memory.getTitle());
+        if (memory.getContent() != null) existing.setContent(memory.getContent());
+        if (memory.getTags() != null) existing.setTags(memory.getTags());
         existing.setExtractionBatchId(null);
+        existing.setProvenanceSource("USER_EXPLICIT");
+        existing.setConfirmationStatus("CONFIRMED");
+        existing.setConfidence(1.0d);
         MemoryEntity saved = memoryRepository.save(existing);
         scheduleEmbeddingAfterCommit(saved);
         return saved;
@@ -150,7 +176,17 @@ public class MemoryService {
         String content = (String) row[3];
         // row[4] = tags, row[5] = recall_count, row[6] = rank/distance
         double score = row[6] != null ? ((Number) row[6]).doubleValue() : 0.0;
-        return new MemorySearchResult(id, type, title, content, score);
+        String provenance = row.length > 7 && row[7] != null
+                ? String.valueOf(row[7]) : "LEGACY_UNKNOWN";
+        String confirmation = row.length > 8 && row[8] != null
+                ? String.valueOf(row[8]) : "UNVERIFIED";
+        Double confidence = row.length > 9 && row[9] != null
+                ? ((Number) row[9]).doubleValue() : null;
+        Long version = row.length > 10 && row[10] != null
+                ? ((Number) row[10]).longValue() : 0L;
+        return new MemorySearchResult(
+                id, type, title, content, score,
+                provenance, confirmation, confidence, version);
     }
 
     private String buildEmbedText(MemoryEntity m) {
@@ -320,6 +356,8 @@ public class MemoryService {
         entity.setTags(tags);
         entity.setImportance(extractImportance(tags));
         entity.setExtractionBatchId(normalizeBatchId(extractionBatchId));
+        entity.setProvenanceSource("USER_TRANSCRIPT");
+        entity.setConfirmationStatus("UNVERIFIED");
         MemoryEntity saved = memoryRepository.save(entity);
         persistKnownEmbeddingOrSchedule(saved, embedding);
     }
@@ -365,6 +403,8 @@ public class MemoryService {
         target.setTags(tags);
         target.setImportance(maxImportance(target.getImportance(), extractImportance(tags)));
         target.setExtractionBatchId(normalizeBatchId(extractionBatchId));
+        target.setProvenanceSource("USER_TRANSCRIPT");
+        target.setConfirmationStatus("UNVERIFIED");
         reviveMemory(target);
         MemoryEntity saved = memoryRepository.save(target);
         persistKnownEmbeddingOrSchedule(saved, knownEmbedding);
@@ -381,6 +421,8 @@ public class MemoryService {
         target.setTags(mergeCsvTags(target.getTags(), tags));
         target.setImportance(maxImportance(target.getImportance(), extractImportance(tags)));
         target.setExtractionBatchId(normalizeBatchId(extractionBatchId));
+        target.setProvenanceSource("USER_TRANSCRIPT");
+        target.setConfirmationStatus("UNVERIFIED");
         reviveMemory(target);
         MemoryEntity saved = memoryRepository.save(target);
         scheduleEmbeddingAfterCommit(saved);
@@ -610,6 +652,9 @@ public class MemoryService {
         snapshot.setImportance(memory.getImportance() != null ? memory.getImportance() : "medium");
         snapshot.setLastScore(memory.getLastScore());
         snapshot.setLastScoredAt(memory.getLastScoredAt());
+        snapshot.setProvenanceSource(memory.getProvenanceSource());
+        snapshot.setConfirmationStatus(memory.getConfirmationStatus());
+        snapshot.setConfidence(memory.getConfidence());
         snapshot.setMemoryCreatedAt(memory.getCreatedAt());
         snapshot.setMemoryUpdatedAt(memory.getUpdatedAt());
         snapshot.setSnapshotAt(snapshotAt);
@@ -634,6 +679,9 @@ public class MemoryService {
         memory.setImportance(snapshot.getImportance() != null ? snapshot.getImportance() : "medium");
         memory.setLastScore(snapshot.getLastScore());
         memory.setLastScoredAt(snapshot.getLastScoredAt());
+        memory.setProvenanceSource(snapshot.getProvenanceSource());
+        memory.setConfirmationStatus(snapshot.getConfirmationStatus());
+        memory.setConfidence(snapshot.getConfidence());
         memory.setCreatedAt(snapshot.getMemoryCreatedAt());
         memory.setUpdatedAt(snapshot.getMemoryUpdatedAt());
     }
@@ -682,72 +730,14 @@ public class MemoryService {
         return matchCount * recencyBoost * recallBoost;
     }
 
-    // ──────────────────────────────────────────────────────────────────────────
-    //  Memory v2 (PR-2) — L0/L1 layered prompt injection
-    // ──────────────────────────────────────────────────────────────────────────
-    //
-    // L0 = preference + feedback memories (always inject, recency-ordered, hard cap
-    //      L0_BUDGET_CHARS = 2048). Per-entry cap L0_PER_ENTRY_CHARS = 200.
-    // L1 = knowledge + project + reference memories (task-aware hybrid recall:
-    //      FTS + Vector → RRF → top-K=8, hard cap L1_BUDGET_CHARS = 4096). Per-entry
-    //      cap L1_PER_ENTRY_CHARS = 500. taskContext null/blank/length<3 → fallback
-    //      to recency ordering.
-    //
-    // All budgets are CHAR counts (matches String.length() / sb.length() — NOT UTF-8
-    // bytes). Constants are intentionally hard-coded here; PR-3 will yaml-ify via
-    // MemoryProperties (and rename keys *-bytes → *-chars in the design doc).
-    //
-    // Public API surface (PR-2):
-    //   - getMemoriesForPromptInjection(userId, taskContext) — @Transactional, bumps
-    //     recall_count for every injected id. Used by AgentLoopEngine.memoryProvider.
-    //   - previewMemoriesForPrompt(userId, taskContext)      — @Transactional(readOnly),
-    //     same rendered text, zero side effects. Used by ContextBreakdownService /
-    //     CompactionService for size-estimation paths.
-    //
-    // ⚠️ The legacy 1-arg + 2-arg getMemoriesForPrompt overloads were removed in PR-2;
-    // callers must migrate to the two methods above.
-
-    /** L0 budget: preference + feedback total chars (matches String.length(), NOT UTF-8 bytes). */
-    private static final int L0_BUDGET_CHARS = 2048;
-    /** L1 budget: knowledge + project + reference total chars. */
-    private static final int L1_BUDGET_CHARS = 4096;
-    /** Per-entry char cap inside L0 sections (preferences are typically short). */
-    private static final int L0_PER_ENTRY_CHARS = 200;
-    /** Per-entry char cap inside L1 sections (knowledge content can be long). */
-    private static final int L1_PER_ENTRY_CHARS = 500;
-    /** L1 RRF top-K — final number of L1 entries returned. */
-    private static final int L1_TOP_K = 8;
-    /** FTS candidate fetch limit (per query). Larger than L1_TOP_K so RRF + filter has room. */
-    private static final int FTS_LIMIT = 20;
-    /** Vector candidate fetch limit (per query). */
-    private static final int VEC_LIMIT = 20;
-    /** Reciprocal-Rank-Fusion smoothing constant (industry default). */
-    private static final int RRF_K = 60;
-    /** Min taskContext length to bother running hybrid recall (skip "hi" / "ok" / etc.). */
-    private static final int TASK_CONTEXT_MIN_LEN = 3;
-
-    /** L1 types eligible for hybrid recall, in canonical render order. */
-    private static final List<String> L1_TYPES = List.of("knowledge", "project", "reference");
+    private static final int AUTO_INJECTION_MAX_ENTRIES = 6;
+    private static final int AUTO_INJECTION_MAX_CHARS = 3_200;
+    private static final int AUTO_INJECTION_PER_ENTRY_CHARS = 400;
 
     /**
-     * Memory v2 (PR-2): get memories for system-prompt injection with task-aware L0/L1 layering.
-     * <p>
-     * L0 (preference + feedback): always injected, recency-ordered. Total budget {@value #L0_BUDGET_CHARS} chars,
-     * <strong>split evenly</strong> between Preferences (≤{@value #L0_BUDGET_CHARS}/2) and Feedback (≤{@value #L0_BUDGET_CHARS}/2);
-     * an empty section does <strong>not</strong> grant its budget to the other side (by-design, see plan §3.4 step 2).
-     * <br>
-     * L1 (knowledge + project + reference): if {@code taskContext} is non-blank and ≥{@value #TASK_CONTEXT_MIN_LEN}
-     * chars, runs hybrid (FTS + Vector) recall fused via RRF → top-{@value #L1_TOP_K}; else falls back
-     * to recency-ordered top entries. Capped to {@value #L1_BUDGET_CHARS} chars.
-     * <p>
-     * Side effect: increments {@code recall_count} for every injected memory id (L0 + L1).
-     * <p>
-     * Default propagation {@code @Transactional} (REQUIRED) — recall_count UPDATE needs a write tx.
-     *
-     * @param userId      the user whose memories to fetch (must be non-null caller side; null returns "")
-     * @param taskContext current user message used to drive L1 hybrid recall; null/blank/<3 chars
-     *                    falls back to recency ordering (skips FTS + embedding calls)
-     * @return non-null {@link MemoryInjection}; {@code text()} may be blank if user has zero ACTIVE memories
+     * Injects only explicit, confirmed long-term memories. Session digests, extraction
+     * candidates and other unverified data remain available through memory search/detail
+     * tools, but never consume every turn's system prompt.
      */
     @Transactional
     public MemoryInjection getMemoriesForPromptInjection(Long userId, String taskContext) {
@@ -759,17 +749,10 @@ public class MemoryService {
                 memoryRepository.incrementRecallCount(id, now);
             }
         }
-        return new MemoryInjection(rendered, injectedIds);
+        return new MemoryInjection(rendered, injectedIds, provenanceFor(injectedIds));
     }
 
-    /**
-     * Memory v2 (PR-2): preview the prompt-injection block without bumping recall counts. For
-     * read-only callers (e.g. {@code ContextBreakdownService} size estimation,
-     * {@code CompactionService} session-memory compact) — returns the same text a real
-     * {@link #getMemoriesForPromptInjection} call would produce, but with zero side effects.
-     * <p>
-     * {@code @Transactional(readOnly = true)} for connection pooling efficiency; no UPDATEs run.
-     */
+    /** Preview the same confirmed block without recall-count side effects. */
     @Transactional(readOnly = true)
     public String previewMemoriesForPrompt(Long userId, String taskContext) {
         return previewMemoryInjectionForPrompt(userId, taskContext).text();
@@ -783,222 +766,69 @@ public class MemoryService {
     public MemoryInjection previewMemoryInjectionForPrompt(Long userId, String taskContext) {
         Set<Long> injectedIds = new LinkedHashSet<>();
         String rendered = renderMemoriesForPromptInjection(userId, taskContext, injectedIds);
-        return new MemoryInjection(rendered, injectedIds);
+        return new MemoryInjection(rendered, injectedIds, provenanceFor(injectedIds));
     }
 
-    /**
-     * Memory v2 (PR-2): shared L0/L1 renderer — collects rendered text + injected ids in one pass.
-     * <p>
-     * Intentionally NOT annotated {@code @Transactional}: Spring AOP doesn't apply to private
-     * methods (java.md footgun #2). Tx boundary lives on the two public callers above.
-     * <p>
-     * Algorithm:
-     * <ol>
-     *   <li>L0 — fetch ACTIVE preference + feedback memories ordered by updatedAt DESC,
-     *       render under "### Preferences" / "### Feedback" with per-entry cap
-     *       {@value #L0_PER_ENTRY_CHARS} and section budget {@value #L0_BUDGET_CHARS}.</li>
-     *   <li>L1 — if taskContext is null/blank/<{@value #TASK_CONTEXT_MIN_LEN} chars, fall back to
-     *       recency ordering of K/P/R types (skips FTS + embedding I/O); else run FTS
-     *       (limit {@value #FTS_LIMIT}) + Vector (limit {@value #VEC_LIMIT}) → RRF (K={@value #RRF_K})
-     *       → top-{@value #L1_TOP_K}. Filter to L1 types only. Render under
-     *       "### Knowledge &amp; Context" with per-entry cap {@value #L1_PER_ENTRY_CHARS}
-     *       and section budget {@value #L1_BUDGET_CHARS}.</li>
-     * </ol>
-     * Empty user → returns "". Hybrid recall returning empty (rare) → recency fallback for L1.
-     */
+    private List<MemoryInjectionRef> provenanceFor(Set<Long> memoryIds) {
+        if (memoryIds == null || memoryIds.isEmpty()) return List.of();
+        Map<Long, MemoryEntity> byId = memoryRepository.findAllById(memoryIds).stream()
+                .collect(Collectors.toMap(MemoryEntity::getId, memory -> memory));
+        List<MemoryInjectionRef> refs = new ArrayList<>();
+        for (Long id : memoryIds) {
+            MemoryEntity memory = byId.get(id);
+            if (memory == null) continue;
+            refs.add(new MemoryInjectionRef(
+                    memory.getId(),
+                    memory.getProvenanceSource(),
+                    memory.getConfirmationStatus(),
+                    memory.getConfidence(),
+                    memory.getVersion()));
+        }
+        return refs;
+    }
+
     private String renderMemoriesForPromptInjection(Long userId, String taskContext,
                                                     Set<Long> injectedIds) {
         if (userId == null) return "";
 
-        List<MemoryEntity> activeMemories = memoryRepository
-                .findByUserIdAndStatusOrderByUpdatedAtDesc(userId, "ACTIVE");
-        if (activeMemories.isEmpty()) return "";
-
-        Map<String, List<MemoryEntity>> byType = activeMemories.stream()
-                .collect(Collectors.groupingBy(
-                        m -> m.getType() != null ? m.getType() : "knowledge"));
-
-        StringBuilder sb = new StringBuilder();
-
-        // ── L0: preference + feedback ──────────────────────────────────────────
-        appendL0Section(sb, byType.get("preference"), "Preferences", injectedIds);
-        appendL0Section(sb, byType.get("feedback"), "Feedback", injectedIds);
-
-        // ── L1: knowledge + project + reference ────────────────────────────────
-        boolean hasTaskContext = taskContext != null
-                && !taskContext.isBlank()
-                && taskContext.length() >= TASK_CONTEXT_MIN_LEN;
-
-        List<MemoryEntity> l1Candidates = collectL1Candidates(byType);
-
-        if (hasTaskContext) {
-            List<MemorySearchResult> ranked = hybridRecallL1(userId, taskContext);
-            if (!ranked.isEmpty()) {
-                appendL1RankedSection(sb, ranked, injectedIds);
-            } else if (!l1Candidates.isEmpty()) {
-                // Hybrid returned empty (rare: tsquery whitespace, no embedding hits) — fall back.
-                appendL1RecencySection(sb, l1Candidates, injectedIds);
-            }
-        } else if (!l1Candidates.isEmpty()) {
-            appendL1RecencySection(sb, l1Candidates, injectedIds);
-        }
-
-        return sb.toString();
-    }
-
-    /** Collect L1 candidates from the type-grouped map, in canonical type order, recency within. */
-    private static List<MemoryEntity> collectL1Candidates(Map<String, List<MemoryEntity>> byType) {
-        List<MemoryEntity> kpr = new ArrayList<>();
-        for (String type : L1_TYPES) {
-            List<MemoryEntity> bucket = byType.get(type);
-            if (bucket != null) kpr.addAll(bucket);
-        }
-        // findByUserIdAndStatusOrderByUpdatedAtDesc already sorted DESC, but type-grouping
-        // erased the order across types — re-sort to keep recency consistent in fallback.
-        kpr.sort(Comparator.comparing(MemoryEntity::getUpdatedAt,
-                Comparator.nullsLast(Comparator.reverseOrder())));
-        return kpr;
-    }
-
-    /** Run FTS + Vector hybrid recall and fuse with RRF. Vector skipped if embedding unavailable. */
-    private List<MemorySearchResult> hybridRecallL1(Long userId, String taskContext) {
-        List<MemorySearchResult> fts;
-        try {
-            fts = searchByFts(userId, taskContext, FTS_LIMIT);
-        } catch (Exception e) {
-            log.warn("L1 FTS recall failed for user={}: {}", userId, e.getMessage());
-            fts = List.of();
-        }
-
-        List<MemorySearchResult> vec = embeddingService.embed(taskContext)
-                .map(v -> {
-                    try {
-                        return searchByVector(userId, v, VEC_LIMIT);
-                    } catch (Exception e) {
-                        log.warn("L1 Vector recall failed for user={}: {}", userId, e.getMessage());
-                        return List.<MemorySearchResult>of();
-                    }
-                })
-                .orElse(List.of());
-
-        // Filter to L1 types only — never let preference/feedback leak into L1 section.
-        Set<String> l1Set = Set.copyOf(L1_TYPES);
-        fts = fts.stream().filter(r -> l1Set.contains(r.type())).toList();
-        vec = vec.stream().filter(r -> l1Set.contains(r.type())).toList();
-
-        return rrfMerge(fts, vec, L1_TOP_K);
-    }
-
-    /**
-     * Reciprocal Rank Fusion (K={@value #RRF_K}). Returns top-K fused results.
-     * Local helper for L1; intentionally NOT shared with {@link com.skillforge.server.tool.MemorySearchTool}
-     * to keep PR-2 scope tight (would need a 3rd caller before extracting a util).
-     */
-    private static List<MemorySearchResult> rrfMerge(
-            List<MemorySearchResult> fts,
-            List<MemorySearchResult> vec,
-            int topK) {
-
-        Map<Long, Double> scores = new HashMap<>();
-        for (int i = 0; i < fts.size(); i++) {
-            scores.merge(fts.get(i).memoryId(), 1.0 / (RRF_K + i + 1), Double::sum);
-        }
-        for (int i = 0; i < vec.size(); i++) {
-            scores.merge(vec.get(i).memoryId(), 1.0 / (RRF_K + i + 1), Double::sum);
-        }
-
-        Map<Long, MemorySearchResult> byId = new HashMap<>();
-        fts.forEach(r -> byId.put(r.memoryId(), r));
-        vec.forEach(r -> byId.putIfAbsent(r.memoryId(), r));
-
-        return scores.entrySet().stream()
-                .sorted(Map.Entry.<Long, Double>comparingByValue().reversed())
-                .limit(topK)
-                .map(e -> byId.get(e.getKey()).withScore(e.getValue()))
+        List<MemoryEntity> confirmed = memoryRepository
+                .findByUserIdAndStatusOrderByUpdatedAtDesc(userId, "ACTIVE")
+                .stream()
+                .filter(memory -> "CONFIRMED".equals(memory.getConfirmationStatus()))
+                .limit(AUTO_INJECTION_MAX_ENTRIES)
                 .toList();
+        if (confirmed.isEmpty()) return "";
+
+        StringBuilder rendered = new StringBuilder("### Confirmed Long-term Memory\n");
+        for (MemoryEntity memory : confirmed) {
+            String entry = renderConfirmedEntry(memory);
+            if (rendered.length() + entry.length() > AUTO_INJECTION_MAX_CHARS) {
+                break;
+            }
+            rendered.append(entry);
+            if (memory.getId() != null) {
+                injectedIds.add(memory.getId());
+            }
+        }
+        return injectedIds.isEmpty() ? "" : rendered.toString();
     }
 
-    /**
-     * Append an L0 section (preference / feedback). Section budget = L0_BUDGET_CHARS / 2 so
-     * the two L0 sections share the L0 budget evenly. Per-entry cap L0_PER_ENTRY_CHARS.
-     */
-    private static void appendL0Section(StringBuilder sb, List<MemoryEntity> memories,
-                                        String sectionTitle, Set<Long> injectedIds) {
-        if (memories == null || memories.isEmpty()) return;
-        int sectionStart = sb.length();
-        int sectionBudget = L0_BUDGET_CHARS / 2; // Preferences + Feedback share L0_BUDGET_CHARS
-
-        sb.append("### ").append(sectionTitle).append("\n");
-        for (MemoryEntity m : memories) {
-            // Stop before exceeding section budget (compute against current section growth).
-            if (sb.length() - sectionStart >= sectionBudget) break;
-            String entry = renderEntry(m, L0_PER_ENTRY_CHARS);
-            sb.append(entry);
-            if (m.getId() != null) injectedIds.add(m.getId());
+    private static String renderConfirmedEntry(MemoryEntity memory) {
+        String content = memory.getContent() != null ? memory.getContent() : "";
+        if (content.length() > AUTO_INJECTION_PER_ENTRY_CHARS) {
+            content = content.substring(0, AUTO_INJECTION_PER_ENTRY_CHARS) + "...[truncated]";
         }
-        sb.append("\n");
+        String title = memory.getTitle() != null ? memory.getTitle() : "Untitled";
+        return "- [memory:" + memory.getId()
+                + " provenance=" + safeMetadata(memory.getProvenanceSource())
+                + " confirmation=" + safeMetadata(memory.getConfirmationStatus())
+                + " confidence=" + memory.getConfidence()
+                + " version=" + memory.getVersion()
+                + "] **" + title + "**: " + content + "\n";
     }
 
-    /**
-     * Append L1 hybrid-ranked section with per-entry + section budget caps.
-     *
-     * @implNote In the default config the section is bounded by
-     *           {@code L1_TOP_K * L1_PER_ENTRY_CHARS = 8 * 500 = 4000} chars, which sits below
-     *           {@link #L1_BUDGET_CHARS}={@value #L1_BUDGET_CHARS}. The section-budget break is therefore a
-     *           <strong>defensive cap</strong> that only kicks in if {@link #L1_PER_ENTRY_CHARS} or
-     *           {@link #L1_TOP_K} are raised in the future.
-     */
-    private static void appendL1RankedSection(StringBuilder sb, List<MemorySearchResult> ranked,
-                                              Set<Long> injectedIds) {
-        int sectionStart = sb.length();
-        sb.append("### Knowledge & Context (ranked by relevance)\n");
-        for (MemorySearchResult r : ranked) {
-            if (sb.length() - sectionStart >= L1_BUDGET_CHARS) break;
-            sb.append(renderEntryFromResult(r, L1_PER_ENTRY_CHARS));
-            injectedIds.add(r.memoryId());
-        }
-        sb.append("\n");
-    }
-
-    /** Append L1 recency-fallback section (taskContext absent or hybrid empty). */
-    private static void appendL1RecencySection(StringBuilder sb, List<MemoryEntity> candidates,
-                                               Set<Long> injectedIds) {
-        int sectionStart = sb.length();
-        sb.append("### Knowledge & Context\n");
-        int taken = 0;
-        for (MemoryEntity m : candidates) {
-            if (taken >= L1_TOP_K) break;
-            if (sb.length() - sectionStart >= L1_BUDGET_CHARS) break;
-            sb.append(renderEntry(m, L1_PER_ENTRY_CHARS));
-            if (m.getId() != null) injectedIds.add(m.getId());
-            taken++;
-        }
-        sb.append("\n");
-    }
-
-    /** Render a single entry as "- **title**: content" with per-entry char cap. */
-    private static String renderEntry(MemoryEntity m, int perEntryCap) {
-        StringBuilder e = new StringBuilder();
-        e.append("- ");
-        if (m.getTitle() != null) e.append("**").append(m.getTitle()).append("**: ");
-        String content = m.getContent() != null ? m.getContent() : "";
-        if (content.length() > perEntryCap) {
-            content = content.substring(0, perEntryCap) + "...[truncated]";
-        }
-        e.append(content).append("\n");
-        return e.toString();
-    }
-
-    /** Render an L1 hybrid-recall result as "- **title**: content" with per-entry char cap. */
-    private static String renderEntryFromResult(MemorySearchResult r, int perEntryCap) {
-        StringBuilder e = new StringBuilder();
-        e.append("- ");
-        if (r.title() != null) e.append("**").append(r.title()).append("**: ");
-        String content = r.content() != null ? r.content() : "";
-        if (content.length() > perEntryCap) {
-            content = content.substring(0, perEntryCap) + "...[truncated]";
-        }
-        e.append(content).append("\n");
-        return e.toString();
+    private static String safeMetadata(String value) {
+        if (value == null || value.isBlank()) return "UNKNOWN";
+        return value.replaceAll("[^A-Za-z0-9_.-]", "_");
     }
 }

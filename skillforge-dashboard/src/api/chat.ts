@@ -146,6 +146,10 @@ export interface ContextBreakdownMetadata {
   kind?: string | null;
   source?: string | null;
   exposureReason?: string | null;
+  authority?: string | null;
+  trustLevel?: string | null;
+  lifecycle?: string | null;
+  compactPolicy?: string | null;
 }
 export interface ContextBreakdown {
   sessionId: string;

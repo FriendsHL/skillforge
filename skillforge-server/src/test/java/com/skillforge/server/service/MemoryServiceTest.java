@@ -17,6 +17,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class MemoryServiceTest {
 
@@ -288,6 +289,36 @@ class MemoryServiceTest {
         MemoryEntity result = memoryService.updateMemory(7L, replacement);
 
         assertThat(result.getExtractionBatchId()).isNull();
+        assertThat(result.getProvenanceSource()).isEqualTo("USER_EXPLICIT");
+        assertThat(result.getConfirmationStatus()).isEqualTo("CONFIRMED");
+    }
+
+    @Test
+    @DisplayName("manual update rejects a stale disconnected version")
+    void updateMemory_staleVersion_rejected() {
+        MemoryEntity existing = memory(7L, 1L, "knowledge", "title", "old");
+        existing.setVersion(3L);
+        findByIdResult = existing;
+        MemoryEntity replacement = memory(null, 1L, "knowledge", "title", "new");
+        replacement.setVersion(2L);
+
+        assertThatThrownBy(() -> memoryService.updateMemory(7L, replacement))
+                .isInstanceOf(MemoryVersionConflictException.class)
+                .hasMessageContaining("expected=2")
+                .hasMessageContaining("actual=3");
+        assertThat(savedMemories).isEmpty();
+    }
+
+    @Test
+    @DisplayName("agent-created memory remains explicitly unverified")
+    void createAgentSuggestedMemory_isNotUserConfirmed() {
+        MemoryEntity memory = memory(null, 1L, "preference", "tone", "be concise");
+
+        MemoryEntity result = memoryService.createAgentSuggestedMemory(memory);
+
+        assertThat(result.getProvenanceSource()).isEqualTo("AGENT_SUGGESTED");
+        assertThat(result.getConfirmationStatus()).isEqualTo("UNVERIFIED");
+        assertThat(result.getConfidence()).isEqualTo(0.5d);
     }
 
     @Test
@@ -320,6 +351,9 @@ class MemoryServiceTest {
         existing.setLastScore(0.42);
         existing.setLastScoredAt(Instant.parse("2026-04-26T00:00:00Z"));
         existing.setArchivedAt(Instant.parse("2026-04-25T00:00:00Z"));
+        existing.setProvenanceSource("USER_EXPLICIT");
+        existing.setConfirmationStatus("CONFIRMED");
+        existing.setConfidence(0.95d);
         memoriesForUser.add(existing);
 
         memoryService.beginExtractionBatch(1L);
@@ -331,6 +365,9 @@ class MemoryServiceTest {
         assertThat(snapshot.getLastScore()).isEqualTo(0.42);
         assertThat(snapshot.getLastScoredAt()).isEqualTo(Instant.parse("2026-04-26T00:00:00Z"));
         assertThat(snapshot.getArchivedAt()).isEqualTo(Instant.parse("2026-04-25T00:00:00Z"));
+        assertThat(snapshot.getProvenanceSource()).isEqualTo("USER_EXPLICIT");
+        assertThat(snapshot.getConfirmationStatus()).isEqualTo("CONFIRMED");
+        assertThat(snapshot.getConfidence()).isEqualTo(0.95d);
     }
 
     @Test
@@ -351,6 +388,9 @@ class MemoryServiceTest {
         snap.setLastScore(0.9);
         snap.setLastScoredAt(Instant.parse("2026-04-26T00:00:00Z"));
         snap.setArchivedAt(Instant.parse("2026-04-25T00:00:00Z"));
+        snap.setProvenanceSource("USER_EXPLICIT");
+        snap.setConfirmationStatus("CONFIRMED");
+        snap.setConfidence(0.9d);
         batchSnapshots.add(snap);
 
         MemoryService.RollbackResult result = memoryService.rollbackExtractionBatch("batch-1", 1L);
@@ -361,6 +401,9 @@ class MemoryServiceTest {
         assertThat(changed.getLastScore()).isEqualTo(0.9);
         assertThat(changed.getLastScoredAt()).isEqualTo(Instant.parse("2026-04-26T00:00:00Z"));
         assertThat(changed.getArchivedAt()).isEqualTo(Instant.parse("2026-04-25T00:00:00Z"));
+        assertThat(changed.getProvenanceSource()).isEqualTo("USER_EXPLICIT");
+        assertThat(changed.getConfirmationStatus()).isEqualTo("CONFIRMED");
+        assertThat(changed.getConfidence()).isEqualTo(0.9d);
     }
 
     @Test

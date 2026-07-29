@@ -2,6 +2,11 @@ package com.skillforge.core.engine;
 
 import com.skillforge.core.model.AgentDefinition;
 import com.skillforge.core.model.Message;
+import com.skillforge.core.capability.ToolCatalog;
+import com.skillforge.core.capability.ToolDiscoveryState;
+import com.skillforge.core.compact.TokenEstimator;
+import com.skillforge.core.context.runtime.ContextRuntimeSnapshot;
+import com.skillforge.core.context.runtime.SkillInvocationRef;
 import com.skillforge.core.skill.view.SessionSkillView;
 
 import java.util.ArrayList;
@@ -11,6 +16,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
@@ -162,6 +168,14 @@ public class LoopContext {
      * <p>{@code null} 仅出现在未注入的旧调用路径（向后兼容）；引擎处理时按"无授权 skill 包"语义。
      */
     private SessionSkillView skillView;
+    /** Current iteration's already-authorized tool catalog. Never grants permissions. */
+    private transient ToolCatalog toolCatalog;
+    /** Deferred-schema discoveries made during this loop. */
+    private final ToolDiscoveryState toolDiscoveryState = new ToolDiscoveryState();
+    /** Latest successful invocation per Skill, keyed by stable registry name. */
+    private final ConcurrentHashMap<String, SkillInvocationRef> invokedSkills =
+            new ConcurrentHashMap<>();
+    private final AtomicLong skillInvocationSequence = new AtomicLong();
 
     /**
      * Plan r2 §5 B-4：第 N 次 NOT_ALLOWED 触发反 hijack 短路时由 executeToolCall 置 true。
@@ -606,6 +620,58 @@ public class LoopContext {
 
     public void setSkillView(SessionSkillView skillView) {
         this.skillView = skillView;
+    }
+
+    public ToolCatalog getToolCatalog() {
+        return toolCatalog;
+    }
+
+    public void setToolCatalog(ToolCatalog toolCatalog) {
+        this.toolCatalog = toolCatalog;
+    }
+
+    public ToolDiscoveryState getToolDiscoveryState() {
+        return toolDiscoveryState;
+    }
+
+    public void recordSkillInvocation(String skillId, String versionHash, String content) {
+        if (skillId == null || skillId.isBlank()) return;
+        long sequence = skillInvocationSequence.incrementAndGet();
+        invokedSkills.put(skillId, new SkillInvocationRef(
+                skillId,
+                versionHash,
+                sequence,
+                TokenEstimator.estimateString(content == null ? "" : content)));
+    }
+
+    public ContextRuntimeSnapshot runtimeSnapshot() {
+        List<SkillInvocationRef> skills = invokedSkills.values().stream()
+                .sorted(java.util.Comparator.comparingLong(
+                        SkillInvocationRef::invocationSequence))
+                .toList();
+        return new ContextRuntimeSnapshot(
+                ContextRuntimeSnapshot.CURRENT_VERSION,
+                toolDiscoveryState.resolvedSchemaHashes(),
+                skills);
+    }
+
+    public void restoreRuntimeSnapshot(ContextRuntimeSnapshot snapshot) {
+        if (snapshot == null || snapshot.version() != ContextRuntimeSnapshot.CURRENT_VERSION) {
+            return;
+        }
+        toolDiscoveryState.restore(snapshot.discoveredToolSchemaHashes());
+        invokedSkills.clear();
+        long maxSequence = 0L;
+        for (SkillInvocationRef ref : snapshot.invokedSkills()) {
+            if (ref == null || ref.skillId().isBlank()) continue;
+            invokedSkills.merge(
+                    ref.skillId(),
+                    ref,
+                    (left, right) -> left.invocationSequence() >= right.invocationSequence()
+                            ? left : right);
+            maxSequence = Math.max(maxSequence, ref.invocationSequence());
+        }
+        skillInvocationSequence.set(maxSequence);
     }
 
     /** Plan r2 §5 B-4: 引擎主循环每 tool_use round 末尾检查；true → 终止本 turn。 */

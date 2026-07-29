@@ -24,7 +24,9 @@ import org.springframework.context.annotation.Configuration;
         AcpRunnerProperties.class,
         SkillConsolidatorProperties.class,
         WorkspaceProperties.class,
-        ContextObservationProperties.class
+        ContextObservationProperties.class,
+        ContextAssemblyProperties.class,
+        ContextCapabilityProperties.class
 })
 public class SkillForgeConfig {
 

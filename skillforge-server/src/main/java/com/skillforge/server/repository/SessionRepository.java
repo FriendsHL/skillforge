@@ -5,6 +5,7 @@ import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.repository.query.Param;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -13,6 +14,15 @@ import java.util.List;
 import java.util.Optional;
 
 public interface SessionRepository extends JpaRepository<SessionEntity, String> {
+
+    @Query("SELECT s.contextRuntimeJson FROM SessionEntity s WHERE s.id = :id")
+    Optional<String> findContextRuntimeJsonById(@Param("id") String id);
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("UPDATE SessionEntity s SET s.contextRuntimeJson = :json WHERE s.id = :id")
+    int updateContextRuntimeJson(
+            @Param("id") String id,
+            @Param("json") String json);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT s FROM SessionEntity s WHERE s.id = :id")

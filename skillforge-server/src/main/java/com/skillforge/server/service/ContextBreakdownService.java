@@ -4,10 +4,15 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillforge.core.compact.RequestTokenEstimator;
 import com.skillforge.core.compact.TokenEstimator;
+import com.skillforge.core.capability.ToolCatalog;
+import com.skillforge.core.capability.ToolDescriptor;
+import com.skillforge.core.capability.ToolDiscoveryState;
+import com.skillforge.core.capability.ToolSearchCapability;
+import com.skillforge.core.context.ContextAttachment;
 import com.skillforge.core.context.ContextProvider;
 import com.skillforge.core.context.DynamicSystemPromptAppender;
-import com.skillforge.core.context.ObservedSystemPromptParts;
-import com.skillforge.core.context.PromptFragmentObservation;
+import com.skillforge.core.context.LegacyCompatiblePromptRenderer;
+import com.skillforge.core.context.PromptAssembly;
 import com.skillforge.core.context.PromptObservationHashes;
 import com.skillforge.core.context.SystemPromptBuilder;
 import com.skillforge.core.engine.AgentLoopEngine;
@@ -18,6 +23,8 @@ import com.skillforge.core.model.ContentBlock;
 import com.skillforge.core.model.Message;
 import com.skillforge.core.model.SkillDefinition;
 import com.skillforge.core.model.ToolSchema;
+import com.skillforge.core.reminder.ReminderBuilder;
+import com.skillforge.core.reminder.ReminderObservation;
 import com.skillforge.core.skill.SkillRegistry;
 import com.skillforge.core.skill.Tool;
 import com.skillforge.core.skill.view.SessionSkillResolver;
@@ -27,6 +34,7 @@ import com.skillforge.server.dto.ContextBreakdownDto.Segment;
 import com.skillforge.server.dto.ContextBreakdownDto.SegmentMetadata;
 import com.skillforge.server.dto.ContextBreakdownDto.ObservationSummary;
 import com.skillforge.server.config.ContextObservationProperties;
+import com.skillforge.server.config.ContextCapabilityProperties;
 import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.SessionEntity;
 import org.slf4j.Logger;
@@ -79,6 +87,8 @@ public class ContextBreakdownService {
     /** Plan r2 §5 — view 接管 skill 列表渲染（修复 B-BE-3 残留 getAllSkillDefinitions）。 */
     private final SessionSkillResolver sessionSkillResolver;
     private final ContextObservationProperties observationProperties;
+    private final ReminderBuilder reminderBuilder;
+    private final ContextCapabilityProperties capabilityProperties;
 
     public ContextBreakdownService(AgentService agentService,
                                    SessionService sessionService,
@@ -88,7 +98,9 @@ public class ContextBreakdownService {
                                    List<ContextProvider> contextProviders,
                                    ObjectMapper objectMapper,
                                    SessionSkillResolver sessionSkillResolver,
-                                   ContextObservationProperties observationProperties) {
+                                   ContextObservationProperties observationProperties,
+                                   ReminderBuilder reminderBuilder,
+                                   ContextCapabilityProperties capabilityProperties) {
         this.agentService = agentService;
         this.sessionService = sessionService;
         this.skillRegistry = skillRegistry;
@@ -98,6 +110,8 @@ public class ContextBreakdownService {
         this.objectMapper = objectMapper;
         this.sessionSkillResolver = sessionSkillResolver;
         this.observationProperties = observationProperties;
+        this.reminderBuilder = reminderBuilder;
+        this.capabilityProperties = capabilityProperties;
     }
 
     @Transactional(readOnly = true)
@@ -133,6 +147,10 @@ public class ContextBreakdownService {
                 "system_prompt", "System prompt", systemPromptTotal, systemPromptChildren));
         segments.add(toolSchemas);
         segments.add(new Segment("messages", "Messages", messagesTotal, messageChildren));
+        Segment reminderObservations = buildReminderObservations(sessionId);
+        if (reminderObservations != null) {
+            segments.add(reminderObservations);
+        }
         segments.add(outputReservedSeg);
 
         long total = sumTokens(segments);
@@ -153,6 +171,36 @@ public class ContextBreakdownService {
                 sessionId, total, windowLimit, pct, segments, observation);
     }
 
+    private Segment buildReminderObservations(String sessionId) {
+        if (reminderBuilder == null || !reminderBuilder.isStructuredEnabled()) return null;
+        List<ReminderObservation> observations = reminderBuilder.getLastObservations(sessionId);
+        if (observations.isEmpty()) return null;
+        List<Segment> children = observations.stream()
+                .map(observation -> Segment.observed(
+                        "reminder:" + observation.id(),
+                        "Reminder · " + observation.source().name(),
+                        0,
+                        new SegmentMetadata(
+                                "REMINDER",
+                                observation.placement().name(),
+                                false,
+                                false,
+                                observation.contentHash(),
+                                "REMINDER",
+                                observation.source().name(),
+                                observation.reasonCode().name(),
+                                "PLATFORM",
+                                "TRUSTED_RUNTIME_DATA",
+                                observation.lifecycle().name(),
+                                observation.compactPolicy().name())))
+                .toList();
+        return new Segment(
+                "reminder_observations",
+                "Reminder diagnostics (already counted in messages)",
+                0,
+                children);
+    }
+
     // ─────────────────────────── system prompt segments ───────────────────────────
 
     private SystemPromptSegments buildSystemPromptSegments(
@@ -167,34 +215,30 @@ public class ContextBreakdownService {
             AgentDefinition agentDef, Long userId, SessionEntity session) {
         List<Segment> out = new ArrayList<>();
         String globalPrompt = safeProviderCall(globalSystemPromptProvider::get);
-        ObservedSystemPromptParts observed =
+        PromptAssembly assembly =
                 new SystemPromptBuilder(agentDef, List.of(), contextProviders)
-                        .buildObserved(globalPrompt);
-        for (PromptFragmentObservation fragment : observed.fragments()) {
+                        .buildAssembly(globalPrompt);
+        LegacyCompatiblePromptRenderer renderer = new LegacyCompatiblePromptRenderer();
+        com.skillforge.core.llm.cache.SystemPromptParts parts = assembly.render(renderer);
+        for (ContextAttachment attachment : assembly.attachments()) {
             out.add(Segment.observed(
-                    fragment.id(),
-                    promptFragmentLabel(fragment.id()),
-                    fragment.estimatedTokens(),
-                    new SegmentMetadata(
-                            fragment.sourceType().name(),
-                            fragment.placement().name(),
-                            fragment.stable(),
-                            fragment.cacheable(),
-                            fragment.contentHash(),
-                            null,
-                            fragment.sourceIds().isEmpty()
-                                    ? null : String.join(",", fragment.sourceIds()),
-                            null)));
+                    attachment.id(),
+                    promptFragmentLabel(attachment.id()),
+                    attachment.estimatedTokens(),
+                    attachmentMetadata(attachment)));
         }
 
-        StringBuilder dynamic = new StringBuilder(observed.parts().dynamic());
+        StringBuilder dynamic = new StringBuilder(parts.dynamic());
         String sessionCtx = DynamicSystemPromptAppender.appendSessionContext(
                 dynamic, userId, session.getId());
         if (!sessionCtx.isEmpty()) {
+            ContextAttachment sessionAttachment =
+                    ContextAttachment.sessionContext(sessionCtx, userId, session.getId());
+            assembly = assembly.withAttachment(sessionAttachment);
             out.add(Segment.observed(
                     "session_context", "Session context",
-                    TokenEstimator.estimateString(sessionCtx),
-                    dynamicMetadata("SESSION_CONTEXT", sessionCtx)));
+                    sessionAttachment.estimatedTokens(),
+                    attachmentMetadata(sessionAttachment)));
         }
 
         Map<String, Object> cfg = agentDef.getConfig();
@@ -205,23 +249,27 @@ public class ContextBreakdownService {
             if (isNotBlank(memories)) {
                 String memoryFragment =
                         DynamicSystemPromptAppender.appendUserMemories(dynamic, memories);
+                ContextAttachment memoryAttachment =
+                        ContextAttachment.userMemories(memoryFragment, List.of());
+                assembly = assembly.withAttachment(memoryAttachment);
                 out.add(Segment.observed(
                         "user_memories", "User memories",
-                        TokenEstimator.estimateString(memoryFragment),
-                        dynamicMetadata("MEMORY", memoryFragment)));
+                        memoryAttachment.estimatedTokens(),
+                        attachmentMetadata(memoryAttachment)));
             }
         }
-        String assembly;
-        if (dynamic.isEmpty()) {
-            assembly = observed.parts().stable();
-        } else if (observed.parts().stable().isEmpty()) {
-            assembly = dynamic.toString();
+        parts = assembly.render(new LegacyCompatiblePromptRenderer(true));
+        String renderedAssembly;
+        if (parts.dynamic().isEmpty()) {
+            renderedAssembly = parts.stable();
+        } else if (parts.stable().isEmpty()) {
+            renderedAssembly = parts.dynamic();
         } else {
-            assembly = observed.parts().stable()
+            renderedAssembly = parts.stable()
                     + com.skillforge.core.llm.cache.CacheBoundary.MARKER_WITH_NEWLINES
-                    + dynamic;
+                    + parts.dynamic();
         }
-        long assemblyTokens = TokenEstimator.estimateString(assembly);
+        long assemblyTokens = TokenEstimator.estimateString(renderedAssembly);
         long framingTokens = assemblyTokens - sumTokens(out);
         if (framingTokens > 0) {
             out.add(Segment.observed(
@@ -241,8 +289,8 @@ public class ContextBreakdownService {
         }
         return new SystemPromptSegments(
                 out,
-                observed.stableHash(),
-                PromptObservationHashes.sha256(assembly));
+                PromptObservationHashes.sha256(parts.stable()),
+                PromptObservationHashes.sha256(renderedAssembly));
     }
 
     private SystemPromptSegments buildLegacySystemPromptSegments(
@@ -309,16 +357,21 @@ public class ContextBreakdownService {
         return new SystemPromptSegments(out, null, null);
     }
 
-    private static SegmentMetadata dynamicMetadata(String sourceType, String rendered) {
+    private static SegmentMetadata attachmentMetadata(ContextAttachment attachment) {
         return new SegmentMetadata(
-                sourceType,
-                "DYNAMIC_SYSTEM",
-                false,
-                false,
-                PromptObservationHashes.sha256(rendered),
+                attachment.sourceType().name(),
+                attachment.placement().name(),
+                attachment.stable(),
+                attachment.cacheable(),
+                attachment.contentHash(),
                 null,
+                attachment.sourceIds().isEmpty()
+                        ? null : String.join(",", attachment.sourceIds()),
                 null,
-                null);
+                attachment.authority().name(),
+                attachment.trustLevel().name(),
+                attachment.lifecycle().name(),
+                attachment.compactPolicy().name());
     }
 
     private static String promptFragmentLabel(String id) {
@@ -450,6 +503,16 @@ public class ContextBreakdownService {
         if (!visibleSkills.isEmpty()) {
             schemas.add(AgentLoopEngine.skillLoaderToolSchema(visibleSkills));
         }
+        ToolCatalog catalog = null;
+        if (capabilityProperties != null && capabilityProperties.isCatalogEnabled()) {
+            if (capabilityProperties.isToolSearchEnabled()) {
+                schemas.add(ToolSearchCapability.schema());
+            }
+            catalog = ToolCatalog.fromAuthorizedSchemas(schemas, objectMapper);
+            schemas = catalog.exposedSchemas(
+                    new ToolDiscoveryState(),
+                    capabilityProperties.isDeferredSchemasEnabled());
+        }
         long total = RequestTokenEstimator.estimateToolSchemas(schemas, objectMapper);
         if (observationProperties == null || !observationProperties.isEnabled()) {
             return new ToolSchemasBreakdown(
@@ -459,7 +522,15 @@ public class ContextBreakdownService {
         for (ToolSchema schema : schemas) {
             if (schema == null) continue;
             int tokens = RequestTokenEstimator.estimateToolSchemas(List.of(schema), objectMapper);
-            String kind = capabilityKind(schema);
+            ToolDescriptor descriptor = catalog != null ? catalog.findByName(schema.getName()) : null;
+            String kind = descriptor != null ? descriptor.kind().name() : capabilityKind(schema);
+            String source = descriptor != null
+                    ? descriptor.source().name() : capabilitySource(schema, kind);
+            String exposureReason = descriptor != null
+                    ? (descriptor.alwaysLoaded()
+                        ? "ALWAYS_LOADED"
+                        : "VISIBLE_BECAUSE_DEFERRED_ENFORCEMENT_DISABLED")
+                    : "VISIBLE_BY_CURRENT_AGENT_POLICY";
             children.add(Segment.observed(
                     "tool_schema_" + sanitizeKey(schema.getName()),
                     nullSafe(schema.getName()),
@@ -471,8 +542,8 @@ public class ContextBreakdownService {
                             null,
                             ToolNormalizer.hashTool(schema, objectMapper),
                             kind,
-                            capabilitySource(schema, kind),
-                            "VISIBLE_BY_CURRENT_AGENT_POLICY")));
+                            source,
+                            exposureReason)));
         }
         children.sort(java.util.Comparator.comparingLong(Segment::tokens).reversed());
         return new ToolSchemasBreakdown(

@@ -133,7 +133,7 @@ public class MemoryTool implements Tool {
         memory.setContent(content);
         memory.setTags(tags);
 
-        MemoryEntity saved = memoryService.createMemory(memory);
+        MemoryEntity saved = memoryService.createAgentSuggestedMemory(memory);
         return SkillResult.success("Memory saved with id=" + saved.getId() + ", title=\"" + saved.getTitle() + "\"");
     }
 

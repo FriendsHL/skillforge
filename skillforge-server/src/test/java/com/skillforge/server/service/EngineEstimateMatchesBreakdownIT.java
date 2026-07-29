@@ -21,6 +21,7 @@ import com.skillforge.server.dto.ContextBreakdownDto;
 import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.SessionEntity;
 import com.skillforge.server.config.ContextObservationProperties;
+import com.skillforge.server.config.ContextCapabilityProperties;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -81,7 +82,8 @@ class EngineEstimateMatchesBreakdownIT {
         service = new ContextBreakdownService(
                 agentService, sessionService, skillRegistry, memoryService,
                 globalSystemPromptProvider, List.<ContextProvider>of(), objectMapper,
-                sessionSkillResolver, observationProperties);
+                sessionSkillResolver, observationProperties, null,
+                disabledCapabilityProperties());
     }
 
     /** Stub Tool with a fixed schema so we control the tool_schemas estimate. */
@@ -96,6 +98,14 @@ class EngineEstimateMatchesBreakdownIT {
         @Override public SkillResult execute(Map<String, Object> input, SkillContext context) {
             throw new UnsupportedOperationException();
         }
+    }
+
+    private static ContextCapabilityProperties disabledCapabilityProperties() {
+        ContextCapabilityProperties properties = new ContextCapabilityProperties();
+        properties.setCatalogEnabled(false);
+        properties.setToolSearchEnabled(false);
+        properties.setDeferredSchemasEnabled(false);
+        return properties;
     }
 
     @Test

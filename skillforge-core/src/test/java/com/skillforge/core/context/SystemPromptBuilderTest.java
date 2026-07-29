@@ -50,8 +50,6 @@ class SystemPromptBuilderTest {
 
                 Calm and concise
 
-                Use the provided tools carefully.
-
                 ## Behavior Rules
 
                 <user-configured-guidelines>
@@ -59,6 +57,8 @@ class SystemPromptBuilderTest {
                 MUST:
                 - preserve user changes
                 </user-configured-guidelines>
+
+                Use the provided tools carefully.
 
                 ## Context
 
@@ -77,6 +77,18 @@ class SystemPromptBuilderTest {
                         "tools_md",
                         "behavior_rules",
                         "env_context.Runtime");
+        assertThat(observed.attachments())
+                .extracting(ContextAttachment::id)
+                .containsExactlyElementsOf(observed.fragments().stream()
+                        .map(PromptFragmentObservation::id)
+                        .toList());
+        assertThat(observed.attachments())
+                .allSatisfy(attachment -> {
+                    assertThat(attachment.authority()).isNotNull();
+                    assertThat(attachment.trustLevel()).isNotNull();
+                    assertThat(attachment.lifecycle()).isNotNull();
+                    assertThat(attachment.compactPolicy()).isNotNull();
+                });
         assertThat(observed.fragments())
                 .allSatisfy(fragment -> {
                     assertThat(fragment.contentHash()).hasSize(64);

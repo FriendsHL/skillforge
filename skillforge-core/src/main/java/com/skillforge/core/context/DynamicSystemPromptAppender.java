@@ -40,6 +40,20 @@ public final class DynamicSystemPromptAppender {
         return target.substring(start);
     }
 
+    public static String appendRuntimeContext(
+            StringBuilder target, String heading, String content) {
+        if (content == null || content.isBlank()) {
+            return "";
+        }
+        int start = target.length();
+        if (target.length() > 0) target.append("\n\n");
+        target.append("## ")
+                .append(sanitizePromptValue(heading != null ? heading : "Runtime Context"))
+                .append("\n\n")
+                .append(content.strip());
+        return target.substring(start);
+    }
+
     private static String sanitizePromptValue(String value) {
         return value == null ? null : value.replaceAll("[\r\n\t]", " ").trim();
     }

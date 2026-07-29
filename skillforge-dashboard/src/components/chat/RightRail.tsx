@@ -1082,36 +1082,51 @@ function ContextTab({
               onToggle={toggle}
             />
             {data.observation && (
-              <div
-                aria-label="Context observation hashes"
+              <details
                 style={{
                   marginTop: 12,
                   paddingTop: 10,
                   borderTop: '1px solid var(--border-1, rgba(255,255,255,0.08))',
-                  display: 'grid',
-                  gridTemplateColumns: 'auto 1fr',
-                  columnGap: 8,
-                  rowGap: 4,
                   fontFamily: 'var(--font-mono)',
                   fontSize: 9,
                   color: 'var(--fg-4)',
                 }}
               >
-                <span>stable</span>
-                <span title={data.observation.stablePrefixHash}>
-                  #{data.observation.stablePrefixHash.slice(0, 12)}
-                </span>
-                <span>assembly</span>
-                <span title={data.observation.assemblyHash}>
-                  #{data.observation.assemblyHash.slice(0, 12)}
-                </span>
-                <span>schemas</span>
-                <span title={data.observation.toolSchemasHash}>
-                  #{data.observation.toolSchemasHash.slice(0, 12)}
-                </span>
-                <span>observed</span>
-                <span>{(data.observation.durationMicros / 1000).toFixed(2)} ms</span>
-              </div>
+                <summary
+                  style={{
+                    cursor: 'pointer',
+                    letterSpacing: '0.06em',
+                    textTransform: 'uppercase',
+                  }}
+                >
+                  Diagnostics
+                </summary>
+                <div
+                  aria-label="Context observation hashes"
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'auto 1fr',
+                    columnGap: 8,
+                    rowGap: 4,
+                    marginTop: 8,
+                  }}
+                >
+                  <span>stable</span>
+                  <span title={data.observation.stablePrefixHash}>
+                    #{data.observation.stablePrefixHash.slice(0, 12)}
+                  </span>
+                  <span>assembly</span>
+                  <span title={data.observation.assemblyHash}>
+                    #{data.observation.assemblyHash.slice(0, 12)}
+                  </span>
+                  <span>schemas</span>
+                  <span title={data.observation.toolSchemasHash}>
+                    #{data.observation.toolSchemasHash.slice(0, 12)}
+                  </span>
+                  <span>observed</span>
+                  <span>{(data.observation.durationMicros / 1000).toFixed(2)} ms</span>
+                </div>
+              </details>
             )}
             <p
               style={{
@@ -1380,7 +1395,21 @@ function SegmentList({
                             {cIsOpen ? '▾' : '▸'}
                           </span>
                         )}
-                        <span style={{ flex: 1, minWidth: 0, color: 'var(--fg-3)' }}>{c.label}</span>
+                        <span
+                          title={c.metadata
+                            ? [
+                                c.metadata.placement === 'STABLE_SYSTEM' ? 'Stable' : 'Dynamic',
+                                c.metadata.kind ?? c.metadata.sourceType,
+                                c.metadata.cacheable === true ? 'Cache eligible' : null,
+                                c.metadata.contentHash
+                                  ? `sha256:${c.metadata.contentHash}`
+                                  : null,
+                              ].filter(Boolean).join(' · ')
+                            : undefined}
+                          style={{ flex: 1, minWidth: 0, color: 'var(--fg-3)' }}
+                        >
+                          {c.label}
+                        </span>
                         <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--fg-3)' }}>
                           {fmtTokens(c.tokens)}
                         </span>
@@ -1396,45 +1425,6 @@ function SegmentList({
                           {cPct.toFixed(1)}%
                         </span>
                       </button>
-                      {c.metadata && (
-                        <div
-                          title={[
-                            c.metadata.sourceType,
-                            c.metadata.kind,
-                            c.metadata.source,
-                            c.metadata.exposureReason,
-                            c.metadata.contentHash
-                              ? `sha256:${c.metadata.contentHash}`
-                              : null,
-                          ]
-                            .filter(Boolean)
-                            .join(' · ')}
-                          style={{
-                            display: 'flex',
-                            flexWrap: 'wrap',
-                            gap: 4,
-                            marginTop: 3,
-                            fontFamily: 'var(--font-mono)',
-                            fontSize: 9,
-                            color: 'var(--fg-4)',
-                          }}
-                        >
-                          <span>
-                            {c.metadata.kind ?? c.metadata.sourceType ?? 'OBSERVED'}
-                          </span>
-                          {c.metadata.placement && (
-                            <span>
-                              {c.metadata.placement === 'STABLE_SYSTEM'
-                                ? 'STABLE'
-                                : 'DYNAMIC'}
-                            </span>
-                          )}
-                          {c.metadata.cacheable === true && <span>CACHEABLE</span>}
-                          {c.metadata.contentHash && (
-                            <span>#{c.metadata.contentHash.slice(0, 8)}</span>
-                          )}
-                        </div>
-                      )}
                       {cHasChildren && cIsOpen && c.children && (
                         <div
                           id={cPanelId}

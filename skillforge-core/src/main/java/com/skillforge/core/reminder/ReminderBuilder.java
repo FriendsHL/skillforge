@@ -1,8 +1,15 @@
 package com.skillforge.core.reminder;
 
+import com.skillforge.core.context.ContextAttachment;
+import com.skillforge.core.context.ContextKind;
+import com.skillforge.core.context.PromptAuthority;
+import com.skillforge.core.context.PromptObservationHashes;
+import com.skillforge.core.context.PromptSourceType;
+import com.skillforge.core.context.PromptTrustLevel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -50,6 +57,9 @@ public class ReminderBuilder {
     private final List<ReminderSource> sources;
     private final int totalBudgetTokens;
     private final boolean globalEnabled;
+    private final boolean structuredEnabled;
+    private final ReminderCompatibilityRenderer compatibilityRenderer =
+            new ReminderCompatibilityRenderer();
 
     /**
      * Q2: per-session per-source debounce state.
@@ -58,6 +68,8 @@ public class ReminderBuilder {
      * any session whose loop was not currently in flight).
      */
     private final Map<String, Map<String, Integer>> debounceBySession = new ConcurrentHashMap<>();
+    private final Map<String, List<ReminderObservation>> observationsBySession =
+            new ConcurrentHashMap<>();
 
     /**
      * @param sources           ordered source list (D7); {@code null} → empty list
@@ -65,12 +77,21 @@ public class ReminderBuilder {
      * @param globalEnabled     master switch; false → {@link #build} short-circuits to ""
      */
     public ReminderBuilder(List<ReminderSource> sources, int totalBudgetTokens, boolean globalEnabled) {
+        this(sources, totalBudgetTokens, globalEnabled, true);
+    }
+
+    public ReminderBuilder(List<ReminderSource> sources,
+                           int totalBudgetTokens,
+                           boolean globalEnabled,
+                           boolean structuredEnabled) {
         this.sources = sources != null ? List.copyOf(sources) : Collections.emptyList();
         this.totalBudgetTokens = totalBudgetTokens > 0 ? totalBudgetTokens : DEFAULT_TOTAL_BUDGET_TOKENS;
         this.globalEnabled = globalEnabled;
+        this.structuredEnabled = structuredEnabled;
     }
 
     public boolean isGlobalEnabled() { return globalEnabled; }
+    public boolean isStructuredEnabled() { return structuredEnabled; }
     public int getTotalBudgetTokens() { return totalBudgetTokens; }
 
     /**
@@ -113,6 +134,16 @@ public class ReminderBuilder {
     public void clearSession(String sessionId) {
         if (sessionId == null) return;
         debounceBySession.remove(sessionId);
+        observationsBySession.remove(sessionId);
+    }
+
+    /**
+     * Latest content-free reminder metadata for a session. This is diagnostic
+     * runtime state only and intentionally disappears on restart.
+     */
+    public List<ReminderObservation> getLastObservations(String sessionId) {
+        if (sessionId == null) return List.of();
+        return observationsBySession.getOrDefault(sessionId, List.of());
     }
 
     /**
@@ -126,8 +157,17 @@ public class ReminderBuilder {
      *         own framing.
      */
     public String build(ReminderContext ctx) {
-        if (!globalEnabled) return "";
-        if (ctx == null) return "";
+        return buildResult(ctx).renderedText();
+    }
+
+    /**
+     * Build typed reminder entries and their traceable ContextAttachments. When
+     * structured mode is disabled, rendered bytes still come from the exact
+     * legacy algorithm and the metadata lists remain empty.
+     */
+    public ReminderBuildResult buildResult(ReminderContext ctx) {
+        if (!globalEnabled) return ReminderBuildResult.empty();
+        if (ctx == null) return ReminderBuildResult.empty();
 
         List<ReminderEntry> entries = new ArrayList<>();
         int totalTokens = 0;
@@ -135,6 +175,10 @@ public class ReminderBuilder {
         for (ReminderSource source : sources) {
             ReminderEntry entry = invokeSafely(source, ctx);
             if (entry == null) continue;
+            if (structuredEnabled) {
+                entry = entry.withSourceDefaults(safeName(source));
+                if (isExpired(entry)) continue;
+            }
             // Budget gate: always admit the first entry so an oversized critical signal still
             // lands. Subsequent entries are gated.
             if (!entries.isEmpty() && totalTokens + entry.estimatedTokens() > totalBudgetTokens) {
@@ -144,16 +188,66 @@ public class ReminderBuilder {
             totalTokens += entry.estimatedTokens();
         }
 
-        if (entries.isEmpty()) return "";
-
-        StringBuilder sb = new StringBuilder(256);
-        sb.append("<system-reminder>\n");
-        for (ReminderEntry e : entries) {
-            sb.append(e.text());
-            if (!e.text().endsWith("\n")) sb.append('\n');
+        String rendered = compatibilityRenderer.render(entries);
+        if (!structuredEnabled || entries.isEmpty()) {
+            updateObservations(ctx.getSessionId(), List.of());
+            return new ReminderBuildResult(rendered, List.of(), List.of());
         }
-        sb.append("</system-reminder>\n");
-        return sb.toString();
+        List<ContextAttachment> attachments =
+                entries.stream().map(ReminderBuilder::toAttachment).toList();
+        updateObservations(ctx.getSessionId(), entries.stream()
+                .map(ReminderBuilder::toObservation)
+                .toList());
+        return new ReminderBuildResult(rendered, entries, attachments);
+    }
+
+    private static boolean isExpired(ReminderEntry entry) {
+        return entry.expiresAt() != null && !entry.expiresAt().isAfter(Instant.now());
+    }
+
+    private static ContextAttachment toAttachment(ReminderEntry entry) {
+        String content = entry.text();
+        return new ContextAttachment(
+                "reminder:" + entry.id(),
+                ContextKind.REMINDER,
+                PromptSourceType.REMINDER,
+                PromptAuthority.PLATFORM,
+                PromptTrustLevel.TRUSTED_RUNTIME_DATA,
+                entry.placement(),
+                entry.lifecycle(),
+                entry.compactPolicy(),
+                content,
+                false,
+                false,
+                entry.estimatedTokens(),
+                entry.expiresAt(),
+                List.of(entry.source().name(), entry.reasonCode().name(),
+                        entry.severity().name()),
+                PromptObservationHashes.sha256(content));
+    }
+
+    private static ReminderObservation toObservation(ReminderEntry entry) {
+        return new ReminderObservation(
+                entry.id(),
+                entry.source(),
+                entry.severity(),
+                entry.reasonCode(),
+                entry.estimatedTokens(),
+                entry.placement(),
+                entry.lifecycle(),
+                entry.compactPolicy(),
+                entry.expiresAt(),
+                PromptObservationHashes.sha256(entry.text()));
+    }
+
+    private void updateObservations(
+            String sessionId, List<ReminderObservation> observations) {
+        if (sessionId == null) return;
+        if (observations == null || observations.isEmpty()) {
+            observationsBySession.remove(sessionId);
+            return;
+        }
+        observationsBySession.put(sessionId, List.copyOf(observations));
     }
 
     /** Run source.shouldEmit + emit, wrapping any throw in WARN log + null return. */

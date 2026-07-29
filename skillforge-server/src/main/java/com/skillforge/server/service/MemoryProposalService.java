@@ -213,6 +213,8 @@ public class MemoryProposalService {
             m.setContent(m.getOriginalContent());
             m.setOriginalContent(null);
             m.setMemoryKind(null);
+            m.setProvenanceSource("SYNTHESIS_REVERTED");
+            m.setConfirmationStatus("UNVERIFIED");
             memoryRepository.save(m);
         }
         // Proposal stays approved — revert is a memory action, not a proposal-status action.
@@ -253,8 +255,18 @@ public class MemoryProposalService {
             s.setArchivedReason("llm_dedup_merge_with_" + winnerId + "_proposal_" + p.getId());
             // W-6 fix: dedup path also stamps synthesis_run_id on the archived row.
             s.setSynthesisRunId(p.getSynthesisRunId());
+            s.setProvenanceSource("SYNTHESIS_APPROVED");
+            s.setConfirmationStatus("REJECTED");
             memoryRepository.save(s);
         }
+        sources.stream()
+                .filter(source -> source.getId().equals(winnerId))
+                .findFirst()
+                .ifPresent(winner -> {
+                    winner.setProvenanceSource("SYNTHESIS_APPROVED");
+                    winner.setConfirmationStatus("CONFIRMED");
+                    memoryRepository.save(winner);
+                });
     }
 
     private void applyReflection(MemoryProposalEntity p, List<MemoryEntity> sources) {
@@ -271,6 +283,8 @@ public class MemoryProposalService {
         // type stays in the business taxonomy — knowledge is a sensible default.
         reflection.setType("knowledge");
         reflection.setTags("auto-reflection,llm-synthesis");
+        reflection.setProvenanceSource("SYNTHESIS_APPROVED");
+        reflection.setConfirmationStatus("CONFIRMED");
         memoryRepository.save(reflection);
         // Source memories are intentionally not modified.
     }
@@ -288,6 +302,8 @@ public class MemoryProposalService {
         }
         target.setMemoryKind("optimized");
         target.setSynthesisRunId(p.getSynthesisRunId());
+        target.setProvenanceSource("SYNTHESIS_APPROVED");
+        target.setConfirmationStatus("CONFIRMED");
         memoryRepository.save(target);
     }
 
@@ -304,6 +320,8 @@ public class MemoryProposalService {
             if (s.getId().equals(winnerId)) {
                 // Bump winner importance: user has actively endorsed it over a contradicting fact.
                 s.setImportance("high");
+                s.setProvenanceSource("SYNTHESIS_APPROVED");
+                s.setConfirmationStatus("CONFIRMED");
                 memoryRepository.save(s);
                 continue;
             }
@@ -311,6 +329,8 @@ public class MemoryProposalService {
             if (s.getArchivedAt() == null) s.setArchivedAt(Instant.now());
             s.setArchivedReason("llm_contradiction_" + winnerId + "_proposal_" + p.getId());
             s.setSynthesisRunId(p.getSynthesisRunId());
+            s.setProvenanceSource("SYNTHESIS_APPROVED");
+            s.setConfirmationStatus("REJECTED");
             memoryRepository.save(s);
         }
     }

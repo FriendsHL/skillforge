@@ -7,40 +7,26 @@ import static org.assertj.core.api.Assertions.assertThat;
 class DynamicSystemPromptAppenderTest {
 
     @Test
-    void appendsSessionAndMemoryWithLegacyByteShape() {
-        StringBuilder dynamic = new StringBuilder("## Context\n\n- current_date: 2026-07-27");
+    void appendsRuntimeContextAsASeparateDynamicFragment() {
+        StringBuilder target = new StringBuilder("existing");
 
-        String sessionFragment =
-                DynamicSystemPromptAppender.appendSessionContext(dynamic, 7L, "s1\ninjected");
-        String memoryFragment =
-                DynamicSystemPromptAppender.appendUserMemories(dynamic, "remember this");
+        String fragment = DynamicSystemPromptAppender.appendRuntimeContext(
+                target,
+                "Artifact Workspace",
+                "Current path: /tmp/run-1");
 
-        assertThat(sessionFragment).isEqualTo("""
-
-
-                ## Session Context
-                - userId: 7
-                - sessionId: s1 injected
-                """);
-        assertThat(memoryFragment).isEqualTo("""
-
-
-                ## User Memories
-
-                remember this""");
-        assertThat(dynamic.toString()).isEqualTo(
-                "## Context\n\n- current_date: 2026-07-27"
-                        + sessionFragment + memoryFragment);
+        assertThat(fragment)
+                .startsWith("\n\n## Artifact Workspace")
+                .contains("Current path: /tmp/run-1");
+        assertThat(target.toString()).isEqualTo("existing" + fragment);
     }
 
     @Test
-    void skipsEmptyFragments() {
-        StringBuilder dynamic = new StringBuilder();
+    void blankRuntimeContextDoesNotChangeTarget() {
+        StringBuilder target = new StringBuilder("existing");
 
-        assertThat(DynamicSystemPromptAppender.appendSessionContext(
-                dynamic, null, null)).isEmpty();
-        assertThat(DynamicSystemPromptAppender.appendUserMemories(
-                dynamic, " \n ")).isEmpty();
-        assertThat(dynamic).isEmpty();
+        assertThat(DynamicSystemPromptAppender.appendRuntimeContext(
+                target, "Artifact Workspace", " ")).isEmpty();
+        assertThat(target.toString()).isEqualTo("existing");
     }
 }

@@ -19,7 +19,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class SystemPromptBuilderBoundaryTest {
 
     @Test
-    @DisplayName("stable section contains agent prompt + tools guidelines + behavior rules")
+    @DisplayName("stable section contains global + agent + soul but no generated tool manual")
     void stableContainsStableSourcesOnly() {
         AgentDefinition agent = new AgentDefinition();
         agent.setSystemPrompt("Be helpful and precise.");
@@ -28,15 +28,30 @@ class SystemPromptBuilderBoundaryTest {
         SystemPromptParts parts = new SystemPromptBuilder(agent, List.of(), List.of())
                 .buildWithBoundary("# CLAUDE.md\nGlobal rules.");
 
-        // INV-1: stable carries CLAUDE.md / agent / soul / tool guidelines.
+        // The global prompt owns static tool guidance; the builder must not duplicate it.
         assertThat(parts.stable()).contains("Global rules");
         assertThat(parts.stable()).contains("Be helpful and precise");
         assertThat(parts.stable()).contains("Speak warmly");
-        assertThat(parts.stable()).contains("Tool Usage Guidelines");
+        assertThat(parts.stable()).doesNotContain("Tool Usage Guidelines");
         // Stable must NOT contain context provider data (which is dynamic).
         assertThat(parts.stable()).doesNotContain("## Context");
         // Stable must NOT carry the boundary marker itself.
         assertThat(parts.stable()).doesNotContain("SKILLFORGE_CACHE_BOUNDARY");
+    }
+
+    @Test
+    @DisplayName("agent-specific tools prompt is dynamic and never replaces global guidance")
+    void agentToolsPromptIsDynamic() {
+        AgentDefinition agent = new AgentDefinition();
+        agent.setSystemPrompt("Base prompt");
+        agent.setToolsPrompt("Provider-specific runtime routing.");
+
+        SystemPromptParts parts = new SystemPromptBuilder(agent, List.of(), List.of())
+                .buildWithBoundary("Global static tool manual.");
+
+        assertThat(parts.stable()).contains("Global static tool manual.");
+        assertThat(parts.stable()).doesNotContain("Provider-specific runtime routing.");
+        assertThat(parts.dynamic()).contains("Provider-specific runtime routing.");
     }
 
     @Test

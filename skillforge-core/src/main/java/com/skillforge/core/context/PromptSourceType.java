@@ -10,5 +10,12 @@ public enum PromptSourceType {
     SOUL,
     TOOL_GUIDANCE,
     BEHAVIOR_RULES,
-    RUNTIME_CONTEXT
+    RUNTIME_CONTEXT,
+    SESSION_CONTEXT,
+    MEMORY,
+    RAG,
+    WEB,
+    FILE,
+    SUBAGENT,
+    REMINDER
 }

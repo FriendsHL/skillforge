@@ -1,8 +1,15 @@
 package com.skillforge.core.reminder;
 
+import com.skillforge.core.context.ContextLifecycle;
+import com.skillforge.core.context.ContextKind;
+import com.skillforge.core.context.PromptAuthority;
+import com.skillforge.core.context.PromptCompactPolicy;
+import com.skillforge.core.context.PromptPlacement;
+import com.skillforge.core.context.PromptSourceType;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.time.Instant;
 import java.util.Collections;
 import java.util.List;
 
@@ -100,6 +107,114 @@ class ReminderBuilderTest {
         // must start with the literal tag (FE filter expects exact prefix).
         assertThat(out).startsWith("<system-reminder>\n");
         assertThat(out).endsWith("</system-reminder>\n");
+    }
+
+    @Test
+    @DisplayName("structured result keeps compatibility bytes and exposes content-free authority metadata")
+    void structuredResult_preservesBytesAndExposesMetadata() {
+        ReminderSource source = new ReminderSource() {
+            @Override public String getName() { return "permission"; }
+            @Override public boolean shouldEmit(ReminderContext ctx) { return true; }
+            @Override public ReminderEntry emit(ReminderContext ctx) {
+                return new ReminderEntry(
+                        "permission:42",
+                        ReminderSourceType.PERMISSION,
+                        ReminderSeverity.WARNING,
+                        ReminderReasonCode.PERMISSION_STATE_CHANGED,
+                        "Permission is waiting",
+                        5,
+                        2,
+                        PromptPlacement.AFTER_TOOL_RESULT,
+                        ContextLifecycle.UNTIL_STATE_CHANGE,
+                        PromptCompactPolicy.KEEP_METADATA,
+                        null);
+            }
+        };
+        ReminderBuilder structured = new ReminderBuilder(List.of(source), 5000, true, true);
+        ReminderBuilder legacy = new ReminderBuilder(List.of(source), 5000, true, false);
+
+        ReminderBuildResult result = structured.buildResult(newCtx(structured));
+
+        assertThat(result.renderedText()).isEqualTo(legacy.build(newCtx(legacy)));
+        assertThat(result.entries()).singleElement().satisfies(entry -> {
+            assertThat(entry.reasonCode()).isEqualTo(ReminderReasonCode.PERMISSION_STATE_CHANGED);
+            assertThat(entry.placement()).isEqualTo(PromptPlacement.AFTER_TOOL_RESULT);
+            assertThat(entry.lifecycle()).isEqualTo(ContextLifecycle.UNTIL_STATE_CHANGE);
+        });
+        assertThat(result.attachments()).singleElement().satisfies(attachment -> {
+            assertThat(attachment.kind()).isEqualTo(ContextKind.REMINDER);
+            assertThat(attachment.sourceType()).isEqualTo(PromptSourceType.REMINDER);
+            assertThat(attachment.authority()).isEqualTo(PromptAuthority.PLATFORM);
+            assertThat(attachment.sourceIds()).containsExactly(
+                    "PERMISSION", "PERMISSION_STATE_CHANGED", "WARNING");
+        });
+        assertThat(structured.getLastObservations("s1")).singleElement()
+                .satisfies(observation -> {
+                    assertThat(observation.contentHash()).hasSize(64);
+                    assertThat(observation.reasonCode())
+                            .isEqualTo(ReminderReasonCode.PERMISSION_STATE_CHANGED);
+                });
+        assertThat(legacy.buildResult(newCtx(legacy)).attachments()).isEmpty();
+        assertThat(legacy.getLastObservations("s1")).isEmpty();
+    }
+
+    @Test
+    @DisplayName("expired entries add zero text and zero attachments")
+    void expiredEntry_isDropped() {
+        ReminderSource expired = new ReminderSource() {
+            @Override public String getName() { return "expired"; }
+            @Override public boolean shouldEmit(ReminderContext ctx) { return true; }
+            @Override public ReminderEntry emit(ReminderContext ctx) {
+                return new ReminderEntry(
+                        "expired", ReminderSourceType.OTHER, ReminderSeverity.INFO,
+                        ReminderReasonCode.UNSPECIFIED, "must not render", 3, 0,
+                        PromptPlacement.BEFORE_NEXT_MODEL_CALL,
+                        ContextLifecycle.SINGLE_TURN,
+                        PromptCompactPolicy.DROP_ON_COMPACT,
+                        Instant.EPOCH);
+            }
+        };
+        ReminderBuilder builder = new ReminderBuilder(List.of(expired), 5000, true, true);
+
+        ReminderBuildResult result = builder.buildResult(newCtx(builder));
+
+        assertThat(result.renderedText()).isEmpty();
+        assertThat(result.entries()).isEmpty();
+        assertThat(result.attachments()).isEmpty();
+
+        ReminderBuilder rollbackBuilder =
+                new ReminderBuilder(List.of(expired), 5000, true, false);
+        assertThat(rollbackBuilder.build(newCtx(rollbackBuilder)))
+                .contains("must not render");
+    }
+
+    @Test
+    @DisplayName("state change that stops emission clears prior runtime observations")
+    void stateChange_stopsEmissionAndClearsObservation() {
+        java.util.concurrent.atomic.AtomicBoolean active =
+                new java.util.concurrent.atomic.AtomicBoolean(true);
+        ReminderSource stateful = new ReminderSource() {
+            @Override public String getName() { return "stateful"; }
+            @Override public boolean shouldEmit(ReminderContext ctx) { return active.get(); }
+            @Override public ReminderEntry emit(ReminderContext ctx) {
+                return new ReminderEntry(
+                        "stateful", ReminderSourceType.OTHER, ReminderSeverity.INFO,
+                        ReminderReasonCode.UNSPECIFIED, "active state", 3, 0,
+                        PromptPlacement.BEFORE_NEXT_MODEL_CALL,
+                        ContextLifecycle.UNTIL_STATE_CHANGE,
+                        PromptCompactPolicy.DROP_ON_COMPACT,
+                        null);
+            }
+        };
+        ReminderBuilder builder = new ReminderBuilder(List.of(stateful), 5000, true, true);
+        ReminderContext ctx = newCtx(builder);
+        builder.build(ctx);
+        assertThat(builder.getLastObservations("s1")).hasSize(1);
+
+        active.set(false);
+        assertThat(builder.build(ctx)).isEmpty();
+
+        assertThat(builder.getLastObservations("s1")).isEmpty();
     }
 
     @Test

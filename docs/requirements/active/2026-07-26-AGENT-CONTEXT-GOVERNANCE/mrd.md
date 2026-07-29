@@ -47,6 +47,8 @@ Agent Runtime。能力数量增长后，主要瓶颈不再是“有没有功能�
 - G5：Compact 和恢复保留决定、来源、资产和运行状态，不提升内容权威。
 - G6：Claude、OpenAI-compatible 和后续 Provider 共享内部模型，但保留各自 wire protocol。
 - G7：迁移过程中请求行为可 shadow 比对，每期可独立回滚。
+- G8：Instruction、Tool 和 Skill 的按需加载状态在 Compact 后可确定性重建，不依赖模型复述 Schema/正文。
+- G9：Reminder 在内部具有来源、位置和生命周期，用户文本不能伪造 Runtime Authority。
 
 ## 5. 成功指标
 
@@ -66,9 +68,11 @@ Agent Runtime。能力数量增长后，主要瓶颈不再是“有没有功能�
 ### 成本与体验
 
 - P1 相同业务内容的 System Prompt token 增幅不超过 5%。
-- P4 在高 Tool/MCP Agent 上，Schema token P50 降低至少 25%，任务成功率不低于基线 2 个百分点以上。
+- P4 在高 Tool/MCP Agent 上，Schema token P50 降低至少 25%，任务成功率相对基线下降不超过 2 个百分点。
 - 未触发 Reminder 的请求新增 token 为 0。
 - Context Breakdown 与 Provider 前最终估算偏差保持在既有 TokenEstimator 可解释范围内。
+- Compact 后已发现 Tool Schema 恢复率 100%，恢复后的 Schema Hash 来自当前权威 Registry。
+- Compact 后符合预算的最近 Skill Invocation 恢复率 100%；被预算丢弃的 Skill 有明确原因码且可重新加载。
 
 ## 6. 约束
 

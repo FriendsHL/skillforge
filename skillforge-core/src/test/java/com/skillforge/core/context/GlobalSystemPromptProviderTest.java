@@ -16,14 +16,47 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class GlobalSystemPromptProviderTest {
 
     @Test
-    @DisplayName("loads non-blank prompt with the platform identity feature line")
+    @DisplayName("loads a concise platform prompt without project-specific implementation details")
     void loads_nonBlank_withFeatureLine() {
         String prompt = new GlobalSystemPromptProvider().get();
 
         assertThat(prompt).isNotBlank();
-        // Feature lines from the audited v1 content — guards against an empty/wrong resource.
-        assertThat(prompt).contains("运行在 SkillForge 平台上的 AI agent");
-        assertThat(prompt).contains("先说,再做");
+        assertThat(prompt).contains("SkillForge AI Agent 平台");
+        assertThat(prompt).contains("工具调用");
+        assertThat(prompt).contains("Grep", "Read", "Edit", "memory_search");
+        assertThat(prompt).contains("之前", "上次");
+        assertThat(prompt).contains(
+                "### 任务进度管理（TodoWrite）",
+                "三个或以上",
+                "不要为简单问答",
+                "最多只能有一个 in_progress",
+                "完整任务列表");
+        assertThat(prompt).contains(
+                "### Web 搜索与页面读取",
+                "WebSearch",
+                "WebFetch",
+                "### Session 历史与执行诊断",
+                "GetSessionMessages",
+                "GetTrace",
+                "### Agent 委派与团队协作",
+                "AgentDiscovery",
+                "SubAgent",
+                "TeamCreate",
+                "### Agent 配置与 Hook",
+                "GetAgentConfig",
+                "GetAgentHooks",
+                "### 定时任务",
+                "CreateScheduledTask",
+                "### 文件、应用与多媒体发布",
+                "PublishChatArtifact",
+                "PublishInteractiveArtifact",
+                "GenerateImage",
+                "EditImage",
+                "GenerateVideo");
+        assertThat(prompt).doesNotContain("AnySearch");
+        assertThat(prompt).doesNotContain("skillforge-core");
+        assertThat(prompt).doesNotContain("内嵌 PostgreSQL");
+        assertThat(prompt.length()).isLessThan(4_000);
     }
 
     @Test
@@ -37,7 +70,7 @@ class GlobalSystemPromptProviderTest {
         String built = new SystemPromptBuilder(agent, List.of(), List.of()).build(globalPrompt);
 
         assertThat(built).startsWith(globalPrompt.strip());
-        assertThat(built.indexOf("运行在 SkillForge 平台上的 AI agent"))
+        assertThat(built.indexOf("SkillForge AI Agent 平台"))
                 .as("global prompt appears before the agent's own prompt")
                 .isLessThan(built.indexOf("You are the test agent."));
     }
