@@ -16,6 +16,27 @@ Most agent frameworks are Python-based, single-provider, and designed for protot
 - **Full observability** — Langfuse-style traces, session replay, model usage dashboards
 - **Safety guardrails** — configurable lifecycle hooks, command blocklists, path-traversal prevention, anti-runaway loop detection
 
+## Capability Map
+
+| Area | What is available |
+|------|-------------------|
+| Agent runtime | Streaming agent loop, structured tool calls, cancellation, recovery, compact, reminders |
+| Context | Layered prompt assembly, stable cache boundary, structured runtime/session context, context breakdown |
+| Memory | Small long-term-memory injection plus on-demand `memory_search` → `memory_detail` retrieval |
+| Orchestration | SubAgent tree, Team network, durable JavaScript DSL workflows with approval/resume |
+| Extensibility | Java Tools, SKILL.md packages, MCP servers, lifecycle hooks, Code Agent |
+| Multimodal | Ark image generation/editing and optional asynchronous video generation |
+| Clients | React dashboard, SwiftUI iOS companion, CLI, Feishu, Telegram, personal WeChat |
+| Quality | Traces, replay, eval datasets, LLM judge, A/B testing, prompt/skill evolution |
+
+## Documentation Map
+
+- [Chinese README](README_CN.md) — the same project overview in Chinese.
+- [Documentation index](docs/README.md) — architecture, requirements, delivery records, and operational notes.
+- [iOS guide](skillforge-ios/README.md) — XcodeGen, device pairing, build, and test instructions.
+- [Development rules](AGENTS.md) — repository-specific pipeline, review, and verification requirements.
+- [Active requirements](docs/requirements/active/) — work currently being designed or delivered.
+
 ## Screenshots
 
 **Live trace waterfall while the agent works** — every chat streams a per-loop activity rail (LLM calls, tool spans, timing) right beside the conversation, with `SubAgent` / `Team` tabs to watch orchestrated runs.
@@ -117,18 +138,22 @@ skillforge/
 - **Loop cancel** — `POST /cancel` flips a flag checked at iteration boundaries; the dashboard shows a cancel button on the running banner.
 - **Ask mode vs Auto mode** — per-session configuration. In ask mode the engine injects an `ask_user` tool for multiple-choice decisions; auto mode suppresses it.
 
-### Multi-file Agent Configuration
+### Context Assembly & Prompt Governance
 
-Inspired by Claude Code and OpenClaw:
+SkillForge assembles model input as typed, observable layers instead of treating it as one giant prompt:
 
-| File | Scope | Purpose |
-|------|-------|---------|
-| **CLAUDE.md** | Global | Rules and guidelines for all agents |
-| **AGENT.md** | Per-agent | Core instructions (`systemPrompt`) |
-| **SOUL.md** | Per-agent | Persona & tone (optional) |
-| **TOOLS.md** | Per-agent | Custom tool usage rules (optional) |
-| **RULES.md** | Per-agent | Behavior rules (structured + free-form) |
-| **MEMORY.md** | Per-agent | Auto-injected from Memory system |
+| Layer | Lifetime | Content |
+|------|----------|---------|
+| Global platform prompt | Stable/cacheable | Shared role, safety, autonomy, and tool-selection rules |
+| Agent prompt + soul | Stable/cacheable | Per-agent responsibility, domain instructions, and tone |
+| Tool guidance + behavior rules | Stable/cacheable | Cross-tool routing and configurable behavioral constraints |
+| Runtime/session context | Dynamic | Working directory, date, session identity, and recovery checkpoints |
+| Long-term memory summary | Dynamic and bounded | Only stable, high-value user/project facts |
+| Retrieved memory | On demand | `memory_search` returns candidates; `memory_detail` loads selected bodies |
+| Structured reminders | Event-driven | Todo, context pressure, file activity, and memory freshness signals |
+
+`CLAUDE.md` remains a legacy-compatible optional source, but it is no longer the primary global policy layer.
+Compact checkpoints preserve the capability catalog and re-materialize loaded Tool/Skill context when the loop resumes.
 
 ### Agent & Model Controls
 
@@ -137,6 +162,13 @@ Inspired by Claude Code and OpenClaw:
 - **Per-agent runtime controls** — `modelId`, visibility, execution mode, max loop count, selected tools/skills, behavior rules, lifecycle hooks, and prompt sections can be configured per agent.
 - **Thinking mode / reasoning effort** — agents can opt into provider-aware `thinkingMode` and `reasoningEffort`; the OpenAI-compatible adapter preserves or drops `reasoning_content` according to each provider family.
 - **YAML import/export** — agents can be versioned as files through the API and CLI.
+
+### Multimodal Media
+
+- **Ark image generation** — `GenerateImage` publishes generated images as session artifacts instead of injecting Base64 into model context.
+- **Image iteration** — `EditImage` accepts a stable attachment reference and produces a new immutable artifact linked to the session.
+- **Video generation** — `GenerateVideo` uses Ark's asynchronous task API when `ARK_VIDEO_ENABLED=true`; results are downloaded into managed storage before publication.
+- **Client rendering** — Dashboard and iOS consume typed attachment blocks, keeping binary payloads out of message JSON and compact summaries.
 
 ### Multi-Channel Gateway
 
@@ -355,7 +387,7 @@ SkillForge as a Model Context Protocol *host* — connect external **stdio and r
 - **Tool prefixing** — every MCP tool is registered as `mcp_<server>_<tool>` to avoid name collisions with built-in tools; per-server name regex `[a-z0-9_]+ ≤ 32`
 - **Lifecycle reload** — `@TransactionalEventListener(AFTER_COMMIT) + @Transactional(propagation=REQUIRES_NEW)` reloads the registry on `t_mcp_server` upsert without restart
 - **Secret masking** — server config edits return `"***"` for sensitive env **and header** values; backend preserves originals on `***` round-trip
-- **Default dogfood servers** — `time` (stdio, Anthropic official `uvx mcp-server-time`) + **AnySearch** (HTTP, structured vertical data — real-time stock / forex / crypto quotes, financial statements, academic citations via Crossref, CVE, patents across 17 domains), bound to the Research Agent + Main Assistant with `tools_prompt` routing guidance (structured queries → AnySearch, general web → WebSearch)
+- **Default dogfood servers** — `time` (stdio, Anthropic official `uvx mcp-server-time`) + **AnySearch** (HTTP, structured vertical data — real-time stock / forex / crypto quotes, financial statements, academic citations via Crossref, CVE, patents across 17 domains). MCP bindings are configured per agent; routing guidance belongs to the bound agent or skill rather than the global platform prompt.
 - **Dashboard `/mcp-servers`** — full CRUD (stdio: command / args; http: url / headers key-value editor with `***` masking) + connection status + test-connection dry-run + delete reference check (409 when agents still reference)
 
 ### Slash Commands
@@ -431,8 +463,8 @@ export PATH=$JAVA_HOME/bin:$PATH
 ### Build & Run (production jar)
 
 ```bash
-# Set your API key
-export DASHSCOPE_API_KEY=sk-your-key-here
+# Configure at least one provider used by application.yml
+export ARK_API_KEY=your-key-here
 
 # Build all modules — run from repo root, packages every sub-module in order
 mvn clean package -DskipTests
@@ -608,14 +640,14 @@ clawhub:
 
 > **Tool vs Skill**: a **Tool** is the unit an agent can *invoke* (has a schema + `execute` method); a **Skill** is a packaged capability (Java class or file-based SKILL.md) that may register one or more Tools. Every Skill is a Tool, but user-defined Skills can also be loaded without being bound to a specific Tool schema. Tool semantics were formalized in P13-11.
 
-### System Tools (Java, always available)
+### System Tools (Java, assigned per agent)
 
 | Tool | Description |
 |------|-------------|
 | **Bash** | Shell commands with safety rules and timeout |
-| **FileRead** | Read files with line numbers, offset/limit |
-| **FileWrite** | Write/create files |
-| **FileEdit** | Exact string replacement |
+| **Read** | Read a known file with offset/limit |
+| **Write** | Create a new file |
+| **Edit** | Exact replacement in an already-read file |
 | **Glob** | Find files by pattern |
 | **Grep** | Search contents by regex |
 | **WebFetch** | Fetch URL content (size-capped) |
@@ -629,8 +661,12 @@ clawhub:
 | **TeamSend** | Message peer / parent / broadcast |
 | **TeamList** | List team members |
 | **TeamKill** | Cancel member or team |
-| **RegisterScriptMethod** | Agent registers a new bash/node hook method |
-| **RegisterCompiledMethod** | Agent submits a Java hook method for compile + approval |
+| **RunWorkflow** | Run a registered or one-shot inline DSL workflow; resume approval gates |
+| **ImportSkill** | Import an already-installed, scanned SKILL.md directory |
+| **GenerateImage / EditImage** | Create or iterate images through Ark |
+| **GenerateVideo** | Start Ark asynchronous video generation when enabled |
+| **RegisterScriptMethod** | Code Agent registers a reviewed bash/node hook method |
+| **RegisterCompiledMethod** | Code Agent submits reviewed Java hook code for compile + approval |
 
 ### System Skills (file-based, non-deletable)
 

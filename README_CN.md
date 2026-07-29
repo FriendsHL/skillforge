@@ -16,6 +16,27 @@
 - **全链路可观测** — Langfuse 风格的 Trace、Session 回放、模型用量仪表盘
 - **安全护栏** — 可配置生命周期 Hook、命令黑名单、路径穿越防护、防失控循环检测
 
+## 能力地图
+
+| 领域 | 当前能力 |
+|------|----------|
+| Agent 运行时 | 流式 Agent Loop、结构化工具调用、取消、重启恢复、压缩、Reminder |
+| 上下文 | 分层 Prompt 拼装、稳定缓存边界、结构化运行时/Session 上下文、Context Breakdown |
+| Memory | 少量长期记忆注入，短期信息通过 `memory_search` → `memory_detail` 按需加载 |
+| 编排 | SubAgent 树、Team 网络、支持审批与恢复的持久化 JavaScript DSL Workflow |
+| 扩展 | Java Tool、SKILL.md、MCP、Lifecycle Hook、Code Agent |
+| 多模态 | Ark 生图/图片编辑，以及可选的异步视频生成 |
+| 客户端 | React Dashboard、SwiftUI iOS、CLI、飞书、Telegram、个人微信 |
+| 质量体系 | Trace、Replay、评测集、LLM Judge、A/B、Prompt/Skill 自进化 |
+
+## 文档导航
+
+- [English README](README.md) — 英文项目总览。
+- [文档索引](docs/README.md) — 架构、需求、交付记录与运维说明。
+- [iOS 指南](skillforge-ios/README.md) — XcodeGen、真机配对、构建与测试。
+- [开发规范](AGENTS.md) — 本仓库 Pipeline、Review 和验证要求。
+- [进行中的需求](docs/requirements/active/) — 当前正在设计或交付的工作。
+
 ## 界面截图
 
 **Agent 干活时的实时 trace 瀑布流** — 每次对话在右侧实时流式展示本轮 activity（LLM 调用、工具 span、耗时），还有 `SubAgent` / `Team` 标签实时看编排运行情况。
@@ -117,18 +138,22 @@ skillforge/
 - **循环取消** — `POST /cancel` 设置标志位，引擎在迭代边界检查；仪表盘运行横幅显示取消按钮。
 - **Ask 模式 vs Auto 模式** — 按会话配置。Ask 模式下引擎注入 `ask_user` 工具用于多选决策；Auto 模式禁用该工具。
 
-### 多文件 Agent 配置
+### 上下文拼装与 Prompt 治理
 
-借鉴 Claude Code 和 OpenClaw 的设计：
+SkillForge 将模型输入组织成可观测的类型化分层，而不是把所有信息塞进一段巨型 Prompt：
 
-| 文件 | 作用域 | 用途 |
-|------|--------|------|
-| **CLAUDE.md** | 全局 | 所有 Agent 的通用规则和指南 |
-| **AGENT.md** | 单个 Agent | 核心指令（`systemPrompt`） |
-| **SOUL.md** | 单个 Agent | 人设与语气（可选） |
-| **TOOLS.md** | 单个 Agent | 自定义工具使用规则（可选） |
-| **RULES.md** | 单个 Agent | 行为规范（结构化 + 自由条目） |
-| **MEMORY.md** | 单个 Agent | 从记忆系统自动注入 |
+| 分层 | 生命周期 | 内容 |
+|------|----------|------|
+| 平台 Global Prompt | 稳定/可缓存 | 公共角色、安全、自主性和工具选择规则 |
+| Agent Prompt + Soul | 稳定/可缓存 | Agent 职责、领域指令与表达风格 |
+| Tool Guidelines + Behavior Rules | 稳定/可缓存 | 相邻工具路由和可配置行为约束 |
+| Runtime/Session Context | 动态 | 工作目录、日期、Session 身份与恢复检查点 |
+| 长期记忆摘要 | 动态且有界 | 稳定、高价值的用户或项目信息 |
+| 检索记忆 | 按需 | `memory_search` 返回候选，`memory_detail` 加载选中正文 |
+| Structured Reminder | 事件驱动 | Todo、上下文压力、文件活动、Memory 新鲜度信号 |
+
+`CLAUDE.md` 仍作为兼容旧数据的可选来源，但不再承担平台全局策略的主入口。
+Compact 检查点会保存能力目录，并在 Agent Loop 恢复时重新物化已加载的 Tool/Skill 上下文。
 
 ### Agent & 模型控制
 
@@ -137,6 +162,13 @@ skillforge/
 - **按 Agent 配运行参数** — `modelId`、可见性、执行模式、最大循环次数、工具/Skill 选择、行为规范、Lifecycle Hook、Prompt 分段都可按 Agent 配置。
 - **Thinking mode / reasoning effort** — Agent 可配置 provider-aware 的 `thinkingMode` 和 `reasoningEffort`；OpenAI 兼容适配层会按 Provider family 保留或丢弃 `reasoning_content`。
 - **YAML 导入/导出** — Agent 可通过 API 和 CLI 以 YAML 文件形式版本化管理。
+
+### 多模态媒体
+
+- **Ark 生图** — `GenerateImage` 将结果发布为 Session Artifact，不把 Base64 注入模型上下文。
+- **图片迭代** — `EditImage` 接收稳定的附件引用，生成新的不可变 Artifact 并关联到 Session。
+- **视频生成** — `ARK_VIDEO_ENABLED=true` 时，`GenerateVideo` 通过 Ark 异步任务 API 生成视频，完成后下载到受管存储再发布。
+- **客户端呈现** — Dashboard 和 iOS 使用类型化 Attachment Block，二进制内容不会进入消息 JSON 或 Compact 摘要。
 
 ### 多渠道消息网关
 
@@ -334,7 +366,7 @@ SkillForge 作为 Model Context Protocol *host* —— 连接外部 **stdio 和�
 - **工具前缀** — 每个 MCP 工具注册为 `mcp_<server>_<tool>` 避免与 built-in 工具命名冲突；per-server name 正则 `[a-z0-9_]+ ≤ 32`
 - **生命周期 reload** — `@TransactionalEventListener(AFTER_COMMIT) + @Transactional(propagation=REQUIRES_NEW)` 在 `t_mcp_server` upsert 时热加载 registry，无需重启
 - **Secret masking** — server 配置编辑返回 `"***"` 脱敏 env **和 header** 敏感值；后端在 `***` round-trip 时保留原值
-- **默认 dogfood server** — `time`（stdio，Anthropic 官方 `uvx mcp-server-time`）+ **AnySearch**（HTTP，结构化垂直数据 —— 实时股 / 汇 / 币行情、财报、Crossref 学术引文、CVE、专利，覆盖 17 域），绑定 Research Agent + Main Assistant，配 `tools_prompt` 路由引导（结构化查询 → AnySearch，通用网页 → WebSearch）
+- **默认 dogfood server** — `time`（stdio，Anthropic 官方 `uvx mcp-server-time`）+ **AnySearch**（HTTP，结构化垂直数据 —— 实时股 / 汇 / 币行情、财报、Crossref 学术引文、CVE、专利，覆盖 17 域）。MCP 按 Agent 绑定；路由规则属于对应 Agent 或 Skill，不再放进平台 Global Prompt。
 - **仪表盘 `/mcp-servers`** — 全量 CRUD（stdio: command / args；http: url / headers 键值编辑器带 `***` 脱敏）+ 连接状态 + test-connection dry-run + 删除引用检查（仍被 Agent 引用时返回 409）
 
 ### Slash Commands
@@ -410,8 +442,8 @@ export PATH=$JAVA_HOME/bin:$PATH
 ### 构建运行（生产 jar 方式）
 
 ```bash
-# 设置 API Key
-export DASHSCOPE_API_KEY=sk-your-key-here
+# 配置 application.yml 当前启用 Provider 所需的 API Key
+export ARK_API_KEY=your-key-here
 
 # 构建所有模块 —— 必须在仓库根目录执行，按依赖顺序打包全部子模块
 mvn clean package -DskipTests
@@ -583,14 +615,14 @@ clawhub:
 
 > **Tool vs Skill**：**Tool** 是 Agent 可以*调用*的最小单元（带 schema + `execute`）；**Skill** 是可打包的能力（Java 类或文件型 SKILL.md 包），可以注册一个或多个 Tool。所有 Skill 都是 Tool，但用户自定义的 Skill 也可以独立加载不绑定某个 Tool schema。P13-11 正式引入了 Tool 语义层。
 
-### 系统工具（Java 实现，始终可用）
+### 系统工具（Java 实现，按 Agent 授权）
 
 | 工具 | 说明 |
 |------|------|
 | **Bash** | 带安全规则和超时的 Shell 命令执行 |
-| **FileRead** | 读取文件（行号、偏移/限制） |
-| **FileWrite** | 写入/创建文件 |
-| **FileEdit** | 精确字符串替换 |
+| **Read** | 按偏移/限制读取已知文件 |
+| **Write** | 创建新文件 |
+| **Edit** | 对已经读取的文件做精确替换 |
 | **Glob** | 按模式查找文件 |
 | **Grep** | 按正则搜索文件内容 |
 | **WebFetch** | 抓取 URL 内容（大小截断） |
@@ -604,8 +636,12 @@ clawhub:
 | **TeamSend** | 给同伴/父级/广播发消息 |
 | **TeamList** | 列出团队成员 |
 | **TeamKill** | 取消成员或团队 |
-| **RegisterScriptMethod** | Agent 注册一个 bash/node 脚本方法 |
-| **RegisterCompiledMethod** | Agent 提交一个 Java Hook Method 走编译 + 审批 |
+| **RunWorkflow** | 运行已注册或一次性 Inline DSL Workflow，恢复审批 Gate |
+| **ImportSkill** | 导入已经安装并完成安全扫描的 SKILL.md 目录 |
+| **GenerateImage / EditImage** | 通过 Ark 生成或迭代图片 |
+| **GenerateVideo** | 启用后启动 Ark 异步视频生成 |
+| **RegisterScriptMethod** | Code Agent 注册审查后的 bash/node Hook Method |
+| **RegisterCompiledMethod** | Code Agent 提交审查后的 Java Hook Method，走编译 + 审批 |
 
 ### 系统 Skill（文件型，不可删除）
 
