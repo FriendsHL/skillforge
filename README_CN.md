@@ -2,7 +2,7 @@
 
 [English](README.md)
 
-**服务端 AI Agent 平台** — 可配置 Skill 系统、多 LLM Provider 接入、多 Agent 协作，以及自进化评测流水线。基于 Spring Boot + React 构建，面向需要完全掌控 Agent 基础设施的团队。
+**开源、生产级的 Java/Spring Agent Harness** — 完整覆盖 Agent Runtime、Tool、Skill、MCP、上下文与 Memory 治理、多 Agent 编排、评测、自进化和多渠道客户端。面向希望完整掌控 Agent 运行、恢复、演进与用户触达链路的团队。
 
 ## 为什么选择 SkillForge？
 

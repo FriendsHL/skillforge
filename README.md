@@ -2,7 +2,7 @@
 
 [中文文档](README_CN.md)
 
-**Server-side Agentic AI Platform** — configurable Skills, multi-provider LLMs, multi-agent collaboration, and a self-improving eval pipeline. Built with Spring Boot + React for teams who want full control over their agent infrastructure.
+**Open-source, production-grade Agent Harness for Java/Spring** — a complete agent runtime with Tools, Skills, MCP, context and memory governance, multi-agent orchestration, evaluation, self-improvement, and multi-channel clients. Built for teams that need full control over how agents run, recover, evolve, and reach users.
 
 ## Why SkillForge?
 

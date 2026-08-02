@@ -10,7 +10,7 @@
     <packaging>pom</packaging>
 
     <name>SkillForge</name>
-    <description>Server-side Agentic Assistant Platform with configurable Skills and Agents</description>
+    <description>Open-source, production-grade Java Agent Harness with tools, skills, MCP, context governance, multi-agent orchestration, evaluation, and self-improvement</description>
 
     <parent>
         <groupId>org.springframework.boot</groupId>
