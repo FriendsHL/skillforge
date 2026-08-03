@@ -41,7 +41,7 @@ Most agent frameworks are Python-based, single-provider, and designed for protot
 
 **Live trace waterfall while the agent works** — every chat streams a per-loop activity rail (LLM calls, tool spans, timing) right beside the conversation, with `SubAgent` / `Team` tabs to watch orchestrated runs.
 
-![Chat with live activity waterfall](.github/screenshots/chat-activity-waterfall.png)
+![Chat with live activity waterfall](.github/screenshots/chat-activity-waterfall-redacted.png)
 
 | Agents | Skills |
 |:---:|:---:|
@@ -50,11 +50,15 @@ Most agent frameworks are Python-based, single-provider, and designed for protot
 
 **Traces** — full span waterfall per run (agent → LLM → tool) with latency / tokens / cost and I/O inspection.
 
-![Traces](.github/screenshots/traces.png)
+![Traces](.github/screenshots/traces-redacted.png)
 
 **Channels** — Feishu, Telegram, and personal WeChat connections from one gateway.
 
-![Channels](.github/screenshots/channels.png)
+![Channels](.github/screenshots/channels-redacted.png)
+
+**Eval &amp; Self-Improvement** - eval datasets, LLM-judge scoring, pass-rate tracking, and automated prompt/skill evolution pipelines.
+
+![Eval &amp; Self-Improvement](.github/screenshots/eval-self-improvement.png)
 
 ## Architecture
 

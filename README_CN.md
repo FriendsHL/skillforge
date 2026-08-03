@@ -41,7 +41,7 @@
 
 **Agent 干活时的实时 trace 瀑布流** — 每次对话在右侧实时流式展示本轮 activity（LLM 调用、工具 span、耗时），还有 `SubAgent` / `Team` 标签实时看编排运行情况。
 
-![Chat 实时 activity 瀑布流](.github/screenshots/chat-activity-waterfall.png)
+![Chat 实时 activity 瀑布流](.github/screenshots/chat-activity-waterfall-redacted.png)
 
 | Agents | Skills |
 |:---:|:---:|
@@ -50,11 +50,15 @@
 
 **Traces** — 每次运行的完整 span 瀑布流（agent → LLM → tool），含耗时 / token / 成本与 I/O 详情。
 
-![Traces](.github/screenshots/traces.png)
+![Traces](.github/screenshots/traces-redacted.png)
 
 **Channels** — 飞书、Telegram、个人微信，统一网关接入。
 
-![Channels](.github/screenshots/channels.png)
+![Channels](.github/screenshots/channels-redacted.png)
+
+**评测与自进化** - 评测数据集、LLM Judge 打分、通过率追踪，以及自动化的 Prompt/Skill 演进流水线。
+
+![评测与自进化](.github/screenshots/eval-self-improvement.png)
 
 ## 架构
 
