@@ -43,6 +43,13 @@ Most agent frameworks are Python-based, single-provider, and designed for protot
 
 ![Chat with live activity waterfall](.github/screenshots/chat-activity-waterfall-redacted.png)
 
+**Native iOS companion** — monitor active work and switch between agent configurations from the same mobile workspace.
+
+| Control | Agents |
+|:---:|:---:|
+| ![iOS Control](.github/screenshots/ios-control.png) | ![iOS Agents](.github/screenshots/ios-agents.png) |
+| Runtime status, current work, conversations, and automations | Searchable agent roster with current/default configuration state |
+
 | Agents | Skills |
 |:---:|:---:|
 | ![Agents](.github/screenshots/agents.png) | ![Skills](.github/screenshots/skills.png) |

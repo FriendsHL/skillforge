@@ -43,6 +43,13 @@
 
 ![Chat 实时 activity 瀑布流](.github/screenshots/chat-activity-waterfall-redacted.png)
 
+**原生 iOS Companion** — 在同一个移动端工作区查看运行任务，并在不同 Agent 配置之间切换。
+
+| Control | Agents |
+|:---:|:---:|
+| ![iOS Control](.github/screenshots/ios-control.png) | ![iOS Agents](.github/screenshots/ios-agents.png) |
+| 运行状态、当前任务、最近会话与自动化 | 可搜索的 Agent 列表，以及当前和默认配置状态 |
+
 | Agents | Skills |
 |:---:|:---:|
 | ![Agents](.github/screenshots/agents.png) | ![Skills](.github/screenshots/skills.png) |
