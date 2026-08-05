@@ -11,6 +11,7 @@ import java.nio.file.Path;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class GrepToolTest {
@@ -53,5 +54,35 @@ class GrepToolTest {
 
         assertTrue(result.isSuccess());
         assertTrue(result.getOutput().contains("hello"));
+    }
+
+    @Test
+    @DisplayName("path 指向具体文件时只搜索该文件")
+    void execute_filePath_searchesThatFile() throws Exception {
+        GrepTool skill = new GrepTool();
+        Path matchingFile = tempDir.resolve("README.md");
+        Files.writeString(matchingFile, "SkillForge browser contract\n");
+        Files.writeString(tempDir.resolve("other.md"), "SkillForge browser contract\n");
+
+        SkillResult result = skill.execute(
+                Map.of("pattern", "browser contract", "path", matchingFile.toString()),
+                new SkillContext(tempDir.toString(), "s-file", 1L));
+
+        assertTrue(result.isSuccess(), result.getError());
+        assertTrue(result.getOutput().contains("README.md:1:"));
+        assertEquals(1, result.getOutput().lines().count());
+    }
+
+    @Test
+    @DisplayName("不存在的 path 属于参数校验错误")
+    void execute_missingPath_returnsValidationError() {
+        GrepTool skill = new GrepTool();
+
+        SkillResult result = skill.execute(
+                Map.of("pattern", "anything", "path", tempDir.resolve("missing.md").toString()),
+                new SkillContext(tempDir.toString(), "s-missing", 1L));
+
+        assertFalse(result.isSuccess());
+        assertEquals(SkillResult.ErrorType.VALIDATION, result.getErrorType());
     }
 }

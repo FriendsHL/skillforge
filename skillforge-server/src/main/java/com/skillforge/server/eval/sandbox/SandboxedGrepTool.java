@@ -64,26 +64,27 @@ class SandboxedGrepTool implements Tool {
                 return SkillResult.error("Access denied: path is outside sandbox directory");
             }
             if (!Files.exists(searchRoot)) {
-                return SkillResult.error("Path does not exist: " + searchRoot);
+                return SkillResult.validationError("Path does not exist: " + searchRoot);
             }
-            // Parity with production GrepTool: a non-directory search path is an error
-            // (production does not search a single file). Keeping the sandbox faithful
-            // to the production tool is what lets a harvested failure reproduce here.
-            if (!Files.isDirectory(searchRoot)) {
-                return SkillResult.error("Path is not a directory: " + searchRoot);
+            if (!Files.isDirectory(searchRoot) && !Files.isRegularFile(searchRoot)) {
+                return SkillResult.validationError("Path must be a regular file or directory: " + searchRoot);
             }
 
             Pattern pattern = Pattern.compile(patternStr, Pattern.CASE_INSENSITIVE);
             List<String> results = new ArrayList<>();
 
-            Files.walkFileTree(searchRoot, new SimpleFileVisitor<>() {
-                @Override
-                public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
-                    if (results.size() >= MAX_RESULTS) return FileVisitResult.TERMINATE;
-                    searchFile(file, pattern, results);
-                    return FileVisitResult.CONTINUE;
-                }
-            });
+            if (Files.isRegularFile(searchRoot)) {
+                searchFile(searchRoot, pattern, results);
+            } else {
+                Files.walkFileTree(searchRoot, new SimpleFileVisitor<>() {
+                    @Override
+                    public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
+                        if (results.size() >= MAX_RESULTS) return FileVisitResult.TERMINATE;
+                        searchFile(file, pattern, results);
+                        return FileVisitResult.CONTINUE;
+                    }
+                });
+            }
 
             if (results.isEmpty()) {
                 return SkillResult.success("No matches found for pattern: " + patternStr);

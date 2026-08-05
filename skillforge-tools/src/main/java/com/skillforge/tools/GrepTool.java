@@ -44,7 +44,7 @@ public class GrepTool implements Tool {
         ));
         properties.put("path", Map.of(
                 "type", "string",
-                "description", "Directory to search in, defaults to working directory"
+                "description", "File or directory to search in; defaults to the working directory"
         ));
         properties.put("glob", Map.of(
                 "type", "string",
@@ -83,8 +83,11 @@ public class GrepTool implements Tool {
             }
 
             Path root = Path.of(searchPath);
-            if (!Files.isDirectory(root)) {
-                return SkillResult.error("Path is not a directory: " + searchPath);
+            if (!Files.exists(root)) {
+                return SkillResult.validationError("Path does not exist: " + searchPath);
+            }
+            if (!Files.isDirectory(root) && !Files.isRegularFile(root)) {
+                return SkillResult.validationError("Path must be a regular file or directory: " + searchPath);
             }
 
             String globPattern = (String) input.get("glob");
@@ -94,9 +97,14 @@ public class GrepTool implements Tool {
 
             List<String> matches = new ArrayList<>();
 
-            Files.walkFileTree(root, new SimpleFileVisitor<>() {
+            Path walkRoot = Files.isRegularFile(root) ? root.getParent() : root;
+            Path singleFile = Files.isRegularFile(root) ? root : null;
+            Files.walkFileTree(walkRoot, new SimpleFileVisitor<>() {
                 @Override
                 public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
+                    if (singleFile != null && !file.equals(singleFile)) {
+                        return FileVisitResult.CONTINUE;
+                    }
                     if (matches.size() >= MAX_RESULTS) {
                         return FileVisitResult.TERMINATE;
                     }

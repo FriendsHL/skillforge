@@ -1,6 +1,7 @@
 package com.skillforge.server.skill;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.skillforge.core.skill.SkillContext;
 import com.skillforge.core.skill.SkillResult;
 import com.skillforge.server.security.skill.SkillScanDecision;
@@ -53,10 +54,10 @@ class ImportSkillToolTest {
     @Test
     void descriptionOnlyCoversImportContractNotMarketplaceInstallationCommands() {
         assertThat(tool.getDescription())
-                .contains("已经安装", "SKILL.md", "SkillForge", "安全扫描", "受控安装流程")
+                .contains("已经安装", "SKILL.md", "SkillForge", "安全扫描", "受控安装流程", "不要使用 Bash")
                 .doesNotContain("npx clawhub")
                 .doesNotContain("gh repo clone")
-                .hasSizeLessThan(360);
+                .hasSizeLessThan(460);
     }
 
     @Test
@@ -163,20 +164,79 @@ class ImportSkillToolTest {
     }
 
     @Test
-    @DisplayName("execute_serviceThrowsIllegalArgument_returnsExecutionError")
-    void execute_serviceThrowsIllegalArgument_returnsExecutionError() {
+    @DisplayName("execute_sourceOutsideInstallRoot_returnsActionableValidationError")
+    void execute_sourceOutsideInstallRoot_returnsActionableValidationError() {
         when(importService.importSkill(any(Path.class), eq(SkillSource.CLAWHUB), eq(1L), eq(false)))
-                .thenThrow(new IllegalArgumentException("sourcePath not in allowed roots: /etc"));
+                .thenThrow(new IllegalArgumentException(
+                        "sourcePath not in allowed roots: /repo/.claude/skills/browser"));
 
         Map<String, Object> input = new HashMap<>();
-        input.put("sourcePath", "/etc/passwd");
+        input.put("sourcePath", "/repo/.claude/skills/browser");
         input.put("source", "clawhub");
 
         SkillResult result = tool.execute(input, ctx(1L));
 
         assertThat(result.isSuccess()).isFalse();
         assertThat(result.getErrorType()).isEqualTo(SkillResult.ErrorType.EXECUTION);
-        assertThat(result.getError()).contains("sourcePath not in allowed roots");
+        assertThat(json(result.getError()))
+                .containsEntry("errorCode", "SKILL_NOT_INSTALLED")
+                .containsEntry("failedField", "sourcePath")
+                .containsEntry("retryable", false)
+                .hasEntrySatisfying("suggestedAction", action -> assertThat(action.toString())
+                        .contains("受控安装流程", "SKILL.md")
+                        .containsIgnoringCase("Bash"));
+        assertThat(result.getError()).doesNotContain("/repo", ".claude/skills/browser");
+    }
+
+    @Test
+    void execute_directoryWithoutManifest_returnsSpecificValidationError() {
+        when(importService.importSkill(any(Path.class), eq(SkillSource.FILESYSTEM), eq(1L), eq(false)))
+                .thenThrow(new IllegalArgumentException("SKILL.md not found in /installed/not-a-skill"));
+
+        SkillResult result = tool.execute(Map.of(
+                "sourcePath", "/installed/not-a-skill",
+                "source", "filesystem"), ctx(1L));
+
+        assertThat(result.getErrorType()).isEqualTo(SkillResult.ErrorType.VALIDATION);
+        assertThat(json(result.getError()))
+                .containsEntry("errorCode", "SKILL_MANIFEST_MISSING")
+                .containsEntry("failedField", "sourcePath")
+                .hasEntrySatisfying("suggestedAction", action ->
+                        assertThat(action.toString()).contains("直接包含 SKILL.md"));
+        assertThat(result.getError()).doesNotContain("/installed/not-a-skill");
+    }
+
+    @Test
+    void execute_disabledImportRoot_isNonRetryableExecutionError() {
+        when(importService.importSkill(any(Path.class), eq(SkillSource.FILESYSTEM), eq(1L), eq(false)))
+                .thenThrow(new IllegalArgumentException(
+                        "skillforge.skill-import.allowed-source-roots is empty; ImportSkill is disabled"));
+
+        SkillResult result = tool.execute(Map.of(
+                "sourcePath", "/installed/example",
+                "source", "filesystem"), ctx(1L));
+
+        assertThat(result.getErrorType()).isEqualTo(SkillResult.ErrorType.EXECUTION);
+        assertThat(json(result.getError()))
+                .containsEntry("errorCode", "SKILL_IMPORT_DISABLED")
+                .containsEntry("retryable", false);
+    }
+
+    @Test
+    void execute_invalidSkillPackage_isNonRetryableExecutionError() {
+        when(importService.importSkill(any(Path.class), eq(SkillSource.FILESYSTEM), eq(1L), eq(false)))
+                .thenThrow(new IllegalArgumentException(
+                        "Failed to parse skill package at /installed/broken: invalid frontmatter"));
+
+        SkillResult result = tool.execute(Map.of(
+                "sourcePath", "/installed/broken",
+                "source", "filesystem"), ctx(1L));
+
+        assertThat(result.getErrorType()).isEqualTo(SkillResult.ErrorType.EXECUTION);
+        assertThat(json(result.getError()))
+                .containsEntry("errorCode", "SKILL_PACKAGE_INVALID")
+                .containsEntry("retryable", false);
+        assertThat(result.getError()).doesNotContain("/installed/broken");
     }
 
     @Test
@@ -221,10 +281,47 @@ class ImportSkillToolTest {
 
         assertThat(result.isSuccess()).isFalse();
         assertThat(result.getErrorType()).isEqualTo(SkillResult.ErrorType.EXECUTION);
-        assertThat(result.getError()).contains("Skill import blocked by security scan");
-        assertThat(result.getError()).contains("SF-SCAN-SHELL-PIPE-EXEC");
-        assertThat(result.getError()).contains("The skill was not imported");
-        assertThat(result.getError()).doesNotContain("SkillSecurityException");
+        assertThat(json(result.getError()))
+                .containsEntry("errorCode", "SKILL_SECURITY_BLOCKED")
+                .containsEntry("highestSeverity", "HIGH")
+                .containsEntry("findingCount", 1)
+                .containsEntry("retryable", false)
+                .hasEntrySatisfying("ruleIds", ruleIds ->
+                        assertThat(ruleIds).isEqualTo(List.of("SF-SCAN-SHELL-PIPE-EXEC")));
+        assertThat(result.getError())
+                .doesNotContain("SkillSecurityException", "install.sh", "evil.example", "payload.sh", "| sh");
+    }
+
+    @Test
+    void execute_mediumSecurityException_requiresUserApprovalWithoutLeakingFindingDetails() {
+        SkillScanFinding finding = new SkillScanFinding(
+                SkillScanSeverity.MEDIUM,
+                "SF-SCAN-SECRET-LITERAL",
+                ".env.production",
+                3,
+                "Possible embedded secret.",
+                "ARK_API_KEY=do-not-return-this-value");
+        SkillScanResult scanResult = new SkillScanResult(
+                SkillScanDecision.ALLOW_WITH_WARNINGS,
+                SkillScanSeverity.MEDIUM,
+                List.of(finding));
+        when(importService.importSkill(any(Path.class), eq(SkillSource.GITHUB), eq(7L), eq(false)))
+                .thenThrow(SkillSecurityException.blocked(scanResult, true));
+
+        SkillResult result = tool.execute(Map.of(
+                "sourcePath", "/installed/review-required",
+                "source", "github"), ctx(7L));
+
+        assertThat(result.getErrorType()).isEqualTo(SkillResult.ErrorType.EXECUTION);
+        assertThat(json(result.getError()))
+                .containsEntry("errorCode", "SKILL_SECURITY_APPROVAL_REQUIRED")
+                .containsEntry("highestSeverity", "MEDIUM")
+                .containsEntry("findingCount", 1)
+                .containsEntry("retryable", false)
+                .hasEntrySatisfying("suggestedAction", action -> assertThat(action.toString())
+                        .contains("用户明确确认", "allowMediumRisk=true"));
+        assertThat(result.getError())
+                .doesNotContain(".env.production", "ARK_API_KEY", "do-not-return-this-value");
     }
 
     @Test
@@ -240,5 +337,13 @@ class ImportSkillToolTest {
 
     private static SkillContext ctx(Long userId) {
         return new SkillContext("/", "session-1", userId);
+    }
+
+    private Map<String, Object> json(String value) {
+        try {
+            return objectMapper.readValue(value, new TypeReference<>() { });
+        } catch (Exception e) {
+            throw new AssertionError("Expected JSON tool result: " + value, e);
+        }
     }
 }
