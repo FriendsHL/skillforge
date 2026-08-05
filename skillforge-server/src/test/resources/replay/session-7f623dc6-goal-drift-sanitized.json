@@ -1,0 +1,154 @@
+{
+  "fixtureVersion": 1,
+  "sourceSessionId": "7f623dc6-3610-46c2-9b95-6f3e0e1f4764",
+  "sanitization": {
+    "content": "Paraphrased Chinese requirements only",
+    "removed": ["local paths", "external URLs", "tool payload values", "generated HTML", "provider output"]
+  },
+  "initialGoal": "Research current open-source Agent frameworks.",
+  "events": [
+    {
+      "seq": 6,
+      "type": "user_scope_change",
+      "intent": "Explore adding podcast capability to SkillForge."
+    },
+    {
+      "seq": 41,
+      "type": "user_scope_correction",
+      "intent": "Collect blog and podcast material and turn useful viewpoints into readable summaries."
+    },
+    {
+      "seq": 49,
+      "type": "user_acceptance_extension",
+      "intent": "Organize daily; preserve Chinese content and translate foreign material when necessary; distinguish this from the AI daily brief."
+    },
+    {
+      "seq": 52,
+      "type": "tool_success",
+      "tool": "CreateScheduledTask"
+    },
+    {
+      "seq": 58,
+      "type": "tool_failure",
+      "tool": "PublishInteractiveArtifact",
+      "errorCode": "ARTIFACT_WORKSPACE_MISMATCH"
+    },
+    {
+      "seq": 64,
+      "type": "tool_failure",
+      "tool": "PublishInteractiveArtifact",
+      "errorCode": "ARTIFACT_WORKSPACE_MISMATCH"
+    },
+    {
+      "seq": 71,
+      "type": "user_priority",
+      "intent": "Run one sample now for review."
+    },
+    {
+      "seq": 96,
+      "type": "user_scope_extension",
+      "intent": "Generate an in-chat Personal App and improve its information sources."
+    },
+    {
+      "seq": 101,
+      "type": "tool_failure",
+      "tool": "PublishInteractiveArtifact",
+      "errorCode": "ARTIFACT_FORBIDDEN_CAPABILITY"
+    },
+    {
+      "seq": 119,
+      "type": "tool_success",
+      "tool": "PublishInteractiveArtifact",
+      "mode": "template"
+    },
+    {
+      "seq": 126,
+      "type": "user_acceptance_correction",
+      "intent": "Read concrete content inside the app while keeping an optional original-source link."
+    },
+    {
+      "seq": 138,
+      "type": "user_acceptance_correction",
+      "intent": "The app must show article content itself instead of forcing browser navigation."
+    },
+    {
+      "seq": 148,
+      "type": "user_rejection",
+      "intent": "The current delivery still opens the browser and does not meet the requirement."
+    },
+    {
+      "seq": 158,
+      "type": "user_acceptance_correction",
+      "intent": "Show full content in-app and also provide an optional link to the original."
+    },
+    {
+      "seq": 164,
+      "type": "user_acceptance_correction",
+      "intent": "Each item needs a summary, expandable full content, and an original-source action."
+    },
+    {
+      "seq": 174,
+      "type": "user_rejection",
+      "intent": "The Personal App presentation is still incorrect."
+    },
+    {
+      "seq": 210,
+      "type": "user_scope_correction",
+      "intent": "Fix source links, prioritize podcast viewpoints over generic hot topics, separate framework/viewpoint/industry categories, and polish the layout."
+    },
+    {
+      "seq": 240,
+      "type": "user_tool_question",
+      "intent": "Explain repeated Personal App failures and why the latest delivery appears unchanged."
+    },
+    {
+      "seq": 246,
+      "type": "user_rejection",
+      "intent": "Use the previously acceptable version as the base and improve it."
+    },
+    {
+      "seq": 247,
+      "type": "user_continue",
+      "intent": "Continue the latest corrected goal."
+    },
+    {
+      "seq": 248,
+      "type": "tool_success",
+      "tool": "PublishInteractiveArtifact",
+      "mode": "custom"
+    },
+    {
+      "seq": 249,
+      "type": "compact_reload",
+      "intent": "Reload open Task state from persistent storage."
+    },
+    {
+      "seq": 250,
+      "type": "service_restart_reload",
+      "intent": "Rebuild the Task service and continue from persisted state."
+    },
+    {
+      "seq": 251,
+      "type": "historical_tool_message",
+      "tool": "TodoWrite"
+    }
+  ],
+  "observedToolTotals": {
+    "PublishInteractiveArtifact": {"calls": 24, "failed": 16, "succeeded": 8},
+    "TodoWrite": {"calls": 6, "failed": 0, "succeeded": 6},
+    "Bash": {"calls": 22, "failed": 1, "succeeded": 21},
+    "UpdateScheduledTask": {"calls": 7, "failed": 0, "succeeded": 7}
+  },
+  "requiredAssertions": [
+    "ordinary_followup_does_not_mutate_tasks",
+    "acceptance_correction_updates_existing_task",
+    "independent_scope_creates_pending_task",
+    "explicit_priority_switches_in_progress_task",
+    "user_rejection_reopens_completed_task",
+    "tool_failure_never_becomes_business_goal",
+    "custom_artifact_can_recover_without_goal_drift",
+    "compact_and_restart_reload_open_tasks",
+    "historical_todowrite_remains_renderable",
+    "final_response_follows_latest_user_goal"
+  ]
+}

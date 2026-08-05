@@ -51,10 +51,7 @@ import com.skillforge.server.code.ScriptMethodService;
 import com.skillforge.server.skill.ImportSkillTool;
 import com.skillforge.server.skill.SkillImportProperties;
 import com.skillforge.server.skill.SkillImportService;
-import com.skillforge.server.skill.TodoStore;
 import com.skillforge.server.security.skill.SkillSecurityScanProperties;
-import com.skillforge.server.reminder.TodoListSource;
-import com.skillforge.server.tool.TodoWriteTool;
 import com.skillforge.server.tool.MemoryDetailTool;
 import com.skillforge.server.tool.MemorySearchTool;
 import com.skillforge.server.tool.MemoryTool;
@@ -163,6 +160,7 @@ public class CompactionConfig {
     @Bean
     public RecoveryPayloadBuilder recoveryPayloadBuilder(
             FileStateCache fileStateCache,
+            com.skillforge.server.reminder.TaskReminderSource taskReminderSource,
             @Value("${skillforge.compact.recovery.enabled:true}") boolean enabled,
             @Value("${skillforge.compact.recovery.max-files:5}") int maxFiles,
             @Value("${skillforge.compact.recovery.max-tokens-per-file:5000}") int maxTokensPerFile) {
@@ -170,6 +168,7 @@ public class CompactionConfig {
         builder.setEnabled(enabled);
         builder.setMaxFiles(maxFiles);
         builder.setMaxTokensPerFile(maxTokensPerFile);
+        builder.setContributors(List.of(taskReminderSource::renderForRecovery));
         return builder;
     }
 

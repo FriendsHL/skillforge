@@ -72,6 +72,7 @@ public record ReminderEntry(
             case ContextUsageSource.NAME -> ReminderSourceType.CONTEXT_USAGE;
             case MemoryAgeSource.NAME -> ReminderSourceType.MEMORY_AGE;
             case FileActivitySource.NAME -> ReminderSourceType.FILE_ACTIVITY;
+            case "task-state" -> ReminderSourceType.TASK_STATE;
             case "todo-list" -> ReminderSourceType.TODO_LIST;
             default -> ReminderSourceType.OTHER;
         };

@@ -28,6 +28,15 @@ class RecoveryPayloadBuilderTest {
     }
 
     @Test
+    @DisplayName("persistent contributor restores state even when file cache is empty")
+    void contributorOnly_buildsRecoveryPayload() {
+        builder.setContributors(java.util.List.of(sessionId -> "Task t1 is still in_progress"));
+        Message message = builder.build("s-tasks");
+        assertThat(message).isNotNull();
+        assertThat((String) message.getContent()).contains("Task t1 is still in_progress", "<system-reminder>");
+    }
+
+    @Test
     @DisplayName("null/blank sessionId returns null")
     void blankSessionId_returnsNull() {
         cache.put("s1", "/x.txt", "y");

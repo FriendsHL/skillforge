@@ -328,8 +328,8 @@ skillforge:
       max-tokens-per-file: 5000
   # REMINDER-MVP: <system-reminder> framework + reminder sources.
   # PRD D5 default cadence — Context every turn (≥70%); Memory every 5 turns (>7d stale);
-  # Todo every turn when TodoWrite has state; File every 5 turns (top-5 files older than 30s).
-  # Source order is fixed in code (ContextUsage → TodoList → MemoryAge → FileActivity)
+  # Persistent task state every turn when open tasks exist; File every 5 turns.
+  # Source order is fixed in code (ContextUsage → TaskState → MemoryAge → FileActivity)
   # under a shared 5K token budget.
   reminder:
     enabled: true                      # global master switch
@@ -342,10 +342,10 @@ skillforge:
       enabled: true
       interval-turns: 1
       pct-threshold: 70
-    todo-list:
+    task-state:
       enabled: true
       interval-turns: 1
-      max-todos: 20
+      max-tasks: 20
     file-activity:
       enabled: true
       interval-turns: 5

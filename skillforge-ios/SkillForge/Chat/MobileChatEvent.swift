@@ -30,13 +30,15 @@ struct MobileChatEvent: Decodable, Equatable {
     let title: String?
     let messageCount: Int?
     let updatedAt: String?
+    let tasks: [MobileSessionTask]?
+    let generatedAt: String?
 
     enum CodingKeys: String, CodingKey {
         case type, sessionId, status, runtimeStatus, step, runtimeStep, error, runtimeError
         case failureSource, failureCode, retryable, sideEffects
         case delta, text, toolUseId, toolName, name, input, jsonFragment, message
         case askId, question, context, options, allowOther, payload
-        case title, messageCount, updatedAt
+        case title, messageCount, updatedAt, tasks, generatedAt
     }
 
     init(from decoder: Decoder) throws {
@@ -70,6 +72,8 @@ struct MobileChatEvent: Decodable, Equatable {
         title = try? container.decode(String.self, forKey: .title)
         messageCount = try? container.decode(Int.self, forKey: .messageCount)
         updatedAt = try? container.decode(String.self, forKey: .updatedAt)
+        tasks = try? container.decode([MobileSessionTask].self, forKey: .tasks)
+        generatedAt = try? container.decode(String.self, forKey: .generatedAt)
     }
 
     var assistantTextDelta: String? {
@@ -78,6 +82,11 @@ struct MobileChatEvent: Decodable, Equatable {
 
     var resolvedToolName: String? {
         toolName ?? name
+    }
+
+    var sessionTaskSnapshot: MobileSessionTaskSnapshot? {
+        guard type == "session_tasks_snapshot", let tasks, let generatedAt else { return nil }
+        return MobileSessionTaskSnapshot(sessionId: sessionId, tasks: tasks, generatedAt: generatedAt)
     }
 }
 

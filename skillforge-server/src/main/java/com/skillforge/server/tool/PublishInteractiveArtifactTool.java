@@ -1,5 +1,7 @@
 package com.skillforge.server.tool;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillforge.core.model.ToolSchema;
 import com.skillforge.core.skill.PublishedArtifact;
 import com.skillforge.core.skill.SkillContext;
@@ -7,11 +9,15 @@ import com.skillforge.core.skill.SkillResult;
 import com.skillforge.core.skill.Tool;
 import com.skillforge.server.artifact.InteractiveArtifactManifest;
 import com.skillforge.server.artifact.InteractiveArtifactValidator;
+import com.skillforge.server.artifact.InteractiveArtifactViolationException;
 import com.skillforge.server.entity.ChatAttachmentEntity;
 import com.skillforge.server.service.ChatAttachmentService;
 import com.skillforge.server.service.PersonalAppTemplateCatalog;
 
 import java.nio.file.Path;
+import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
+import java.nio.file.LinkOption;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -24,14 +30,17 @@ public class PublishInteractiveArtifactTool implements Tool {
     private final ChatAttachmentService attachmentService;
     private final PersonalAppTemplateCatalog templateCatalog;
     private final InteractiveArtifactValidator artifactValidator;
+    private final ObjectMapper objectMapper;
 
     public PublishInteractiveArtifactTool(
             ChatAttachmentService attachmentService,
             PersonalAppTemplateCatalog templateCatalog,
-            InteractiveArtifactValidator artifactValidator) {
+            InteractiveArtifactValidator artifactValidator,
+            ObjectMapper objectMapper) {
         this.attachmentService = Objects.requireNonNull(attachmentService);
         this.templateCatalog = Objects.requireNonNull(templateCatalog);
         this.artifactValidator = Objects.requireNonNull(artifactValidator);
+        this.objectMapper = Objects.requireNonNull(objectMapper);
     }
 
     @Override
@@ -41,12 +50,20 @@ public class PublishInteractiveArtifactTool implements Tool {
 
     @Override
     public String getDescription() {
-        return "Publish one offline HTML Personal App into the current chat. "
-                + "Provide exactly one source: template_id for a platform template, or file_path for "
-                + "a custom self-contained offline HTML file newly written in the current run artifact "
-                + "workspace. Historical run files are reference-only: rewrite the final file in the "
-                + "current run workspace and never publish a historical path directly. "
-                + "Remote resources, network access, device permissions, and tool calls are forbidden.";
+        return "Publish one offline HTML Personal App into the current chat. Platform templates are an "
+                + "optional fast path; custom file mode is a first-class option when the user's layout or "
+                + "interaction needs do not fit a template. Provide exactly one source: template_id, or "
+                + "file_path for a custom self-contained offline HTML file newly written in the current run artifact "
+                + "workspace. Custom pages should be responsive on iPhone and desktop, use clear hierarchy "
+                + "and expandable detail where useful; source links must put the absolute "
+                + "http(s) URL in data-sf-url on a button or link-like control; the platform bridge handles "
+                + "its click with user confirmation. URLs inside executable JavaScript are forbidden. "
+                + "Ordinary href navigation is forbidden; escape untrusted data. Do not use inline on* event "
+                + "handlers; attach events with addEventListener. Do not use innerHTML, outerHTML, or "
+                + "insertAdjacentHTML; build dynamic content with createElement and textContent. "
+                + "Historical run files are reference-only: rewrite the final file "
+                + "in the current run workspace and never publish a historical path directly. Remote "
+                + "resources, network access, device permissions, and tool calls are forbidden.";
     }
 
     @Override
@@ -90,27 +107,32 @@ public class PublishInteractiveArtifactTool implements Tool {
     @Override
     public SkillResult execute(Map<String, Object> input, SkillContext context) {
         if (input == null) {
-            return SkillResult.validationError("title, fallback, and exactly one of file_path or template_id are required");
+            return validationFailure("ARTIFACT_INPUT_REQUIRED", "input", false,
+                    "Provide title, fallback, and exactly one of template_id or file_path.");
         }
         String title = string(input, "title");
         String fallback = string(input, "fallback");
         if (title == null || fallback == null) {
-            return SkillResult.validationError("title and fallback are required");
+            return validationFailure("ARTIFACT_METADATA_REQUIRED", "title|fallback", false,
+                    "Provide non-empty title and fallback fields within the advertised limits.");
         }
 
         String filePath = string(input, "file_path");
         String templateId = string(input, "template_id");
         if ((filePath == null) == (templateId == null)) {
-            return SkillResult.validationError("Provide exactly one of file_path or template_id");
+            return validationFailure("ARTIFACT_MODE_CONFLICT", "file_path|template_id", false,
+                    "Choose exactly one mode: template_id or file_path.");
         }
         if (context == null || blank(context.getSessionId()) || context.getUserId() == null
                 || blank(context.getToolUseId())) {
-            return SkillResult.error("PublishInteractiveArtifact is unavailable outside an active session");
+            return executionFailure("ARTIFACT_SESSION_UNAVAILABLE", "session", false,
+                    "Publish from an active chat session and current tool call.");
         }
 
         Map<String, Object> suppliedInitialData = optionalMap(input, "initial_data");
         if (input.containsKey("initial_data") && suppliedInitialData == null) {
-            return SkillResult.validationError("initial_data must be an object");
+            return validationFailure("ARTIFACT_INITIAL_DATA_INVALID", "initial_data", false,
+                    "Pass initial_data as a JSON object.");
         }
 
         try {
@@ -132,14 +154,16 @@ public class PublishInteractiveArtifactTool implements Tool {
             Map<String, Object> suppliedInitialData) {
         PersonalAppTemplateCatalog.Template template = templateCatalog.find(templateId).orElse(null);
         if (template == null) {
-            return SkillResult.validationError("Unknown template_id: " + templateId);
+            return validationFailure("ARTIFACT_TEMPLATE_UNKNOWN", "template_id", false,
+                    "Use one of the template_id enum values, or switch to custom file mode.");
         }
 
         Map<String, Object> stateSchema = template.manifest().stateSchema();
         if (input.containsKey("state_schema")) {
             Map<String, Object> suppliedStateSchema = optionalMap(input, "state_schema");
             if (suppliedStateSchema == null || !stateSchema.equals(suppliedStateSchema)) {
-                return SkillResult.validationError("Template mode state_schema must match the platform state_schema");
+                return validationFailure("ARTIFACT_SCHEMA_INVALID", "state_schema", false,
+                        "Omit state_schema in template mode or pass the exact platform schema.");
             }
         }
         Map<String, Object> initialData = suppliedInitialData != null
@@ -162,18 +186,50 @@ public class PublishInteractiveArtifactTool implements Tool {
             String fallback,
             Map<String, Object> suppliedInitialData) {
         if (blank(context.getArtifactOutputDirectory())) {
-            return SkillResult.error("PublishInteractiveArtifact custom file mode requires an active artifact workspace");
+            return executionFailure("ARTIFACT_WORKSPACE_UNAVAILABLE", "file_path", false,
+                    "Create the custom file in the artifact workspace for the current run.");
         }
         Map<String, Object> stateSchema = optionalMap(input, "state_schema");
         if (stateSchema == null) {
-            return SkillResult.validationError("state_schema is required for custom file mode");
+            return validationFailure("ARTIFACT_SCHEMA_REQUIRED", "state_schema", false,
+                    "Provide a supported state_schema for custom file mode.");
         }
         InteractiveArtifactManifest manifest = manifest(
                 title, fallback, suppliedInitialData != null ? suppliedInitialData : Map.of(), stateSchema);
         artifactValidator.validateManifest(manifest);
 
-        Path file = Path.of(filePath);
-        Path workspace = Path.of(context.getArtifactOutputDirectory());
+        Path file;
+        Path workspace;
+        try {
+            Path suppliedFile = Path.of(filePath);
+            if (!suppliedFile.isAbsolute()) {
+                return validationFailure("ARTIFACT_FILE_PATH_INVALID", "file_path", false,
+                        "Use an absolute file_path inside the current run artifact workspace.");
+            }
+            file = suppliedFile.normalize();
+            workspace = Path.of(context.getArtifactOutputDirectory()).toAbsolutePath().normalize();
+        } catch (InvalidPathException e) {
+            return validationFailure("ARTIFACT_FILE_PATH_INVALID", "file_path", false,
+                    "Use an absolute file_path inside the current run artifact workspace.");
+        }
+        if (!file.startsWith(workspace)) {
+            return validationFailure("ARTIFACT_WORKSPACE_MISMATCH", "file_path", false,
+                    "Rewrite the final HTML inside the current run artifact workspace, then publish that new path.");
+        }
+        String filename = file.getFileName() == null
+                ? "" : file.getFileName().toString().toLowerCase(java.util.Locale.ROOT);
+        if (!(filename.endsWith(".html") || filename.endsWith(".htm"))) {
+            return validationFailure("ARTIFACT_FILE_EXTENSION_INVALID", "file_path", false,
+                    "Write the custom Personal App as a .html or .htm file in the current run workspace.");
+        }
+        if (Files.notExists(file, LinkOption.NOFOLLOW_LINKS)) {
+            return validationFailure("ARTIFACT_FILE_NOT_FOUND", "file_path", false,
+                    "Write the final HTML file in the current run workspace before publishing it.");
+        }
+        if (!Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)) {
+            return validationFailure("ARTIFACT_FILE_INVALID", "file_path", false,
+                    "Use a regular, non-symlink HTML file inside the current run workspace.");
+        }
         ChatAttachmentEntity attachment = attachmentService.importInteractiveArtifact(
                 context.getSessionId(), context.getUserId(), context.getToolUseId(), file,
                 string(input, "caption"), workspace, manifest);
@@ -189,20 +245,125 @@ public class PublishInteractiveArtifactTool implements Tool {
                 1, title, fallback, List.of(), List.of(), initialData, stateSchema);
     }
 
-    private static SkillResult success(
+    private SkillResult success(
             ChatAttachmentEntity attachment,
             InteractiveArtifactManifest manifest) {
         PublishedArtifact artifact = new PublishedArtifact(
                 attachment.getId(), "interactive_artifact_ref", attachment.getFilename(),
                 attachment.getMimeType(), null, null, manifest.fallback(), manifest.title(), 1);
-        return SkillResult.success(
-                "Personal App published: " + manifest.title(), List.of(artifact));
+        Map<String, Object> output = new LinkedHashMap<>();
+        output.put("success", true);
+        output.put("artifactId", attachment.getId());
+        output.put("address", "/api/chat/attachments/" + attachment.getId() + "/data");
+        output.put("status", "published");
+        output.put("title", manifest.title());
+        return SkillResult.success(json(output), List.of(artifact));
     }
 
-    private static SkillResult failure(RuntimeException failure) {
-        String detail = failure.getMessage();
-        if (detail == null || detail.isBlank()) detail = failure.getClass().getSimpleName();
-        return SkillResult.error("PublishInteractiveArtifact: " + detail);
+    private SkillResult failure(RuntimeException failure) {
+        if (failure instanceof InteractiveArtifactViolationException violation) {
+            return forbiddenCapabilityFailure(violation);
+        }
+        String detail = failure.getMessage() == null ? "" : failure.getMessage().toLowerCase();
+        if (detail.contains("state") && detail.contains("schema")) {
+            return validationFailure("ARTIFACT_SCHEMA_INVALID", "state_schema", false,
+                    "Use only the supported state_schema types and keywords within size and depth limits.");
+        }
+        if (detail.contains("initialdata") || detail.contains("initial_data")) {
+            return validationFailure("ARTIFACT_INITIAL_DATA_INVALID", "initial_data", false,
+                    "Reduce or correct initial_data and keep it within the advertised limits.");
+        }
+        if (detail.contains("forbidden")) {
+            return validationFailure("ARTIFACT_FORBIDDEN_CAPABILITY", "file_path", false,
+                    "Remove active external resources, network/device access, inline handlers, or other forbidden capabilities.");
+        }
+        if (failure instanceof SecurityException
+                || detail.contains("workspace") || detail.contains("unsafe component")
+                || detail.contains("outside the current run")) {
+            return validationFailure("ARTIFACT_WORKSPACE_MISMATCH", "file_path", false,
+                    "Rewrite the final HTML inside the current run artifact workspace, then publish that new path.");
+        }
+        if (detail.contains("size limit") || detail.contains("exceeds")) {
+            return validationFailure("ARTIFACT_FILE_TOO_LARGE", "file_path", false,
+                    "Reduce the self-contained HTML below the advertised size limit.");
+        }
+        if (detail.contains("different content") || detail.contains("idempotency")) {
+            return executionFailure("ARTIFACT_IDEMPOTENCY_CONFLICT", "file_path|template_id", false,
+                    "Use a new tool call for different content; do not reuse an earlier tool call identity.");
+        }
+        if (detail.contains("valid utf-8") || detail.contains("html is required")) {
+            return validationFailure("ARTIFACT_HTML_INVALID", "file_path", false,
+                    "Write a non-empty UTF-8 HTML document and publish that file again.");
+        }
+        if (detail.contains("title length") || detail.contains("fallback length")
+                || detail.contains("manifest is required") || detail.contains("schemaversion")) {
+            return validationFailure("ARTIFACT_METADATA_INVALID", "title|fallback", false,
+                    "Correct the Personal App title, fallback, or manifest metadata before publishing.");
+        }
+        if (failure instanceof IllegalArgumentException) {
+            return validationFailure("ARTIFACT_INPUT_INVALID", "file_path|state_schema|initial_data", false,
+                    "Correct the invalid Personal App input before publishing again.");
+        }
+        return executionFailure("ARTIFACT_IO_FAILURE", "file_path|template_id", true,
+                "Keep the user goal unchanged and retry once after checking the selected source.");
+    }
+
+    private SkillResult validationFailure(String code, String field, boolean retryable, String action) {
+        return structuredFailure(SkillResult.ErrorType.VALIDATION, code, field, retryable, action);
+    }
+
+    private SkillResult executionFailure(String code, String field, boolean retryable, String action) {
+        return structuredFailure(SkillResult.ErrorType.EXECUTION, code, field, retryable, action);
+    }
+
+    private SkillResult forbiddenCapabilityFailure(InteractiveArtifactViolationException violation) {
+        Map<String, Object> payload = baseFailure(
+                SkillResult.ErrorType.VALIDATION,
+                "ARTIFACT_FORBIDDEN_CAPABILITY",
+                "file_path",
+                false,
+                violation.getSuggestedAction());
+        payload.put("violationCode", violation.getViolationCode());
+        payload.put("message", violation.getMessage());
+        return SkillResult.validationError(json(payload));
+    }
+
+    private SkillResult structuredFailure(
+            SkillResult.ErrorType type,
+            String code,
+            String field,
+            boolean retryable,
+            String action) {
+        Map<String, Object> payload = baseFailure(type, code, field, retryable, action);
+        return type == SkillResult.ErrorType.VALIDATION
+                ? SkillResult.validationError(json(payload))
+                : SkillResult.error(json(payload));
+    }
+
+    private static Map<String, Object> baseFailure(
+            SkillResult.ErrorType type,
+            String code,
+            String field,
+            boolean retryable,
+            String action) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("success", false);
+        payload.put("errorCode", code);
+        payload.put("errorType", type.name());
+        payload.put("retryable", retryable);
+        payload.put("failedField", field);
+        payload.put("suggestedAction", action);
+        return payload;
+    }
+
+    private String json(Map<String, Object> payload) {
+        try {
+            return objectMapper.writeValueAsString(payload);
+        } catch (JsonProcessingException e) {
+            return "{\"success\":false,\"errorCode\":\"ARTIFACT_RESULT_SERIALIZATION_FAILED\","
+                    + "\"errorType\":\"EXECUTION\",\"retryable\":false,"
+                    + "\"failedField\":\"result\",\"suggestedAction\":\"Report the blocked publish operation.\"}";
+        }
     }
 
     private static Map<String, Object> optionalMap(Map<String, Object> input, String key) {

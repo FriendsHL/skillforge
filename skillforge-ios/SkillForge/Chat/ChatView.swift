@@ -142,6 +142,8 @@ struct ChatView: View {
     @State private var scrollFollowState = ChatScrollFollowState.initial
     @State private var awaitingAssistantActivity = false
     @State private var assistantTurnSequence = 0
+    @State private var sessionTaskState = SessionTaskState.idle
+    @State private var sessionTaskReloadID = 0
     @State private var transcriptViewportHeight: CGFloat = 0
     @State private var acceptedAgentSelectionID: Int64?
     @State private var fixtureSessionSequence = 0
@@ -245,6 +247,11 @@ struct ChatView: View {
                         .padding(.vertical, 8)
                         .accessibilityIdentifier("chat.sourceRouteNotice")
                 }
+                SessionTaskProgressView(
+                    state: sessionTaskState,
+                    reduceMotion: accessibilityReduceMotion,
+                    onRetry: { sessionTaskReloadID &+= 1 }
+                )
                 chatScroller
                 ComposerView(
                     text: $composerText,
@@ -339,6 +346,9 @@ struct ChatView: View {
                 #if DEBUG
                 await runDeterministicStreamingHandoffIfNeeded()
                 #endif
+            }
+            .task(id: "\(selectedSession?.id ?? "none"):\(sessionTaskReloadID)") {
+                await loadSessionTasksForSelection()
             }
             .onChange(of: isActive) { _, active in
                 if active {
@@ -1003,6 +1013,7 @@ struct ChatView: View {
         attachmentUploadTask = nil
         isUploadingAttachment = false
         stopRealtime()
+        sessionTaskState = .idle
         attachmentStore.clearAll()
     }
 
@@ -1641,6 +1652,66 @@ struct ChatView: View {
     }
 
     @MainActor
+    private func loadSessionTasksForSelection() async {
+        guard let sessionID = selectedSession?.id else {
+            sessionTaskState = .idle
+            return
+        }
+        if usesDeterministicFixture {
+            #if DEBUG
+            let tasks = ProcessInfo.processInfo.arguments.contains("--ui-testing-session-tasks")
+                ? Self.deterministicSessionTasks
+                : []
+            sessionTaskState = .ready(sessionID: sessionID, tasks: tasks)
+            #else
+            sessionTaskState = .ready(sessionID: sessionID, tasks: [])
+            #endif
+            return
+        }
+
+        if sessionTaskState.sessionID == sessionID {
+            sessionTaskState.phase = .loading
+        } else {
+            sessionTaskState = .loading(sessionID: sessionID)
+        }
+        do {
+            let snapshot = try await client.getTasks(sessionId: sessionID)
+            guard !Task.isCancelled, selectedSession?.id == sessionID else { return }
+            sessionTaskState.merge(snapshot: snapshot)
+        } catch {
+            guard !Task.isCancelled, selectedSession?.id == sessionID else { return }
+            if isUnauthorized(error) {
+                handle(error)
+                return
+            }
+            sessionTaskState.markFailed(error.localizedDescription, sessionID: sessionID)
+        }
+    }
+
+    #if DEBUG
+    private static let deterministicSessionTasks = [
+        MobileSessionTask(
+            taskId: "fixture-task-complete", subject: "梳理需求", description: "确认任务范围",
+            activeForm: nil, status: .completed, owner: nil, blocked: false,
+            blockedBy: [], blocks: [], createdAt: "2026-08-05T09:00:00Z",
+            updatedAt: "2026-08-05T09:10:00Z", version: 2
+        ),
+        MobileSessionTask(
+            taskId: "fixture-task-current", subject: "实现 iOS 进度卡", description: "实现可折叠任务进度",
+            activeForm: "正在实现 iOS 进度卡", status: .inProgress, owner: "Main Agent", blocked: false,
+            blockedBy: [], blocks: [], createdAt: "2026-08-05T09:11:00Z",
+            updatedAt: "2026-08-05T09:20:00Z", version: 1
+        ),
+        MobileSessionTask(
+            taskId: "fixture-task-blocked", subject: "真实后端联调", description: "等待 API 可用",
+            activeForm: nil, status: .pending, owner: nil, blocked: true,
+            blockedBy: ["fixture-task-current"], blocks: [], createdAt: "2026-08-05T09:21:00Z",
+            updatedAt: "2026-08-05T09:21:00Z", version: 1
+        )
+    ]
+    #endif
+
+    @MainActor
     private func send(
         _ text: String,
         attachments: [MobileUploadedAttachment],
@@ -2048,6 +2119,7 @@ struct ChatView: View {
         pendingAutoScrollAfterKeyboard = false
         pendingSourceMessageSeq = nil
         sourceRouteNotice = nil
+        sessionTaskState = .idle
     }
 
     @MainActor
@@ -2317,12 +2389,16 @@ struct ChatView: View {
         guard event.sessionId == selectedSession?.id else { return }
         let isSessionMetadataEvent = event.type == "session_status"
             || event.type == "session_updated"
-        if !isSessionMetadataEvent {
+        let isTaskSnapshotEvent = event.type == "session_tasks_snapshot"
+        if !isSessionMetadataEvent && !isTaskSnapshotEvent {
             guard runtimeMetadataAuthority.recordRealtimeFact(sessionId: event.sessionId) else {
                 return
             }
         }
         switch event.type {
+        case "session_tasks_snapshot":
+            guard let snapshot = event.sessionTaskSnapshot else { return }
+            sessionTaskState.merge(snapshot: snapshot)
         case "session_status", "session_updated":
             guard applyRealtimeSessionFact(event) else { return }
             guard let eventRuntimeStatus = MobileRuntimeSessionReducer.resolvedRuntimeStatus(for: event) else {

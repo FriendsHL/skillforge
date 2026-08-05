@@ -8,6 +8,32 @@ final class MobileApiClientTests: XCTestCase {
         super.tearDown()
     }
 
+    func testGetsAuthorizedSessionTaskSnapshot() async throws {
+        nonisolated(unsafe) var observedRequest: URLRequest?
+        URLProtocolStub.requestHandler = { request in
+            observedRequest = request
+            let response = HTTPURLResponse(
+                url: request.url!, statusCode: 200, httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, Data("""
+            {"sessionId":"session-1","tasks":[],"generatedAt":"2026-08-05T10:00:00Z"}
+            """.utf8))
+        }
+        let client = MobileApiClient(
+            baseURL: URL(string: "http://127.0.0.1:8080")!,
+            deviceToken: "device-token",
+            session: EndpointProbeTests.stubbedSession()
+        )
+
+        let snapshot = try await client.getTasks(sessionId: "session-1")
+
+        XCTAssertEqual(snapshot.sessionId, "session-1")
+        XCTAssertEqual(observedRequest?.url?.path, "/api/mobile/client/sessions/session-1/tasks")
+        XCTAssertEqual(observedRequest?.httpMethod, "GET")
+        XCTAssertEqual(observedRequest?.value(forHTTPHeaderField: "Authorization"), "Bearer device-token")
+    }
+
     func testClaimsPairingWithOneTimeSecret() async throws {
         let payload = try PairingPayload.decode(from: """
         {

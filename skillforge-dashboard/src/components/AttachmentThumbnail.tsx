@@ -9,6 +9,7 @@ import {
   ReloadOutlined,
 } from '@ant-design/icons';
 import { getChatAttachmentBlob } from '../api';
+import PersonalAppAttachment from './PersonalAppAttachment';
 
 /**
  * MULTIMODAL-MVP Phase 2 / Wave 3: render an inline thumbnail (image) or chip
@@ -24,7 +25,7 @@ import { getChatAttachmentBlob } from '../api';
  * the user still knows what they uploaded even if the data endpoint is down.</p>
  */
 interface AttachmentThumbnailProps {
-  kind: 'image' | 'pdf' | 'word' | 'excel' | 'csv';
+  kind: 'image' | 'pdf' | 'word' | 'excel' | 'csv' | 'interactive';
   attachmentId: string;
   filename: string;
   userId: number;
@@ -34,8 +35,13 @@ interface AttachmentThumbnailProps {
   /** Excel only — sheet count surfaced as a chip badge. */
   sheetCount?: number;
   caption?: string;
+  title?: string;
   onEditImage?: (attachmentId: string) => void;
 }
+
+type BinaryAttachmentThumbnailProps = Omit<AttachmentThumbnailProps, 'kind'> & {
+  kind: Exclude<AttachmentThumbnailProps['kind'], 'interactive'>;
+};
 
 type LoadState = 'loading' | 'loaded' | 'error';
 
@@ -67,7 +73,7 @@ const CHIP_META: Record<
   },
 };
 
-const AttachmentThumbnail: React.FC<AttachmentThumbnailProps> = ({
+const BinaryAttachmentThumbnail: React.FC<BinaryAttachmentThumbnailProps> = ({
   kind,
   attachmentId,
   filename,
@@ -299,6 +305,14 @@ const AttachmentThumbnail: React.FC<AttachmentThumbnailProps> = ({
       )}
     </div>
   );
+};
+
+const AttachmentThumbnail: React.FC<AttachmentThumbnailProps> = (props) => {
+  const { kind, ...rest } = props;
+  if (kind === 'interactive') {
+    return <PersonalAppAttachment {...rest} />;
+  }
+  return <BinaryAttachmentThumbnail kind={kind} {...rest} />;
 };
 
 export default React.memo(AttachmentThumbnail);

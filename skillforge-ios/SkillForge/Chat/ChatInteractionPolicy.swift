@@ -239,10 +239,16 @@ enum ToolActivityPresentationPolicy {
     static func resolve(_ toolCall: ChatMessage.ToolCall) -> ToolActivityPresentation {
         let rawInput = nonBlank(toolCall.inputPreview)
         let rawOutput = nonBlank(toolCall.output)
-        let summary = switch toolCall.status {
+        let fallbackSummary = switch toolCall.status {
         case .pending: rawInput ?? rawOutput
         case .success, .error: rawOutput ?? rawInput
         }
+        let summary = taskChangeSummary(
+            name: toolCall.name,
+            status: toolCall.status,
+            rawInput: rawInput,
+            rawOutput: rawOutput
+        ) ?? fallbackSummary
         return ToolActivityPresentation(
             title: title(name: toolCall.name, status: toolCall.status),
             summary: summary,
@@ -258,6 +264,12 @@ enum ToolActivityPresentationPolicy {
     private static func title(name: String, status: ChatMessage.ToolCall.Status) -> String {
         let action: (pending: String, success: String, error: String)
         switch name.lowercased() {
+        case "taskcreate", "task_create":
+            action = ("正在创建任务", "已创建任务", "任务创建失败")
+        case "taskupdate", "task_update":
+            action = ("正在更新任务", "已更新任务", "任务更新失败")
+        case "todowrite", "todo_write":
+            action = ("正在记录历史计划", "已记录历史计划", "历史计划记录失败")
         case "publishinteractiveartifact", "publish_interactive_artifact":
             action = ("正在发布 Personal App", "已发布 Personal App", "Personal App 发布失败")
         case "publishchatartifact", "publish_chat_artifact":
@@ -277,6 +289,118 @@ enum ToolActivityPresentationPolicy {
     private static func nonBlank(_ value: String?) -> String? {
         let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines)
         return normalized?.isEmpty == false ? normalized : nil
+    }
+
+    private static func taskChangeSummary(
+        name: String,
+        status: ChatMessage.ToolCall.Status,
+        rawInput: String?,
+        rawOutput: String?
+    ) -> String? {
+        let normalizedName = name.lowercased()
+        guard ["taskcreate", "task_create", "taskupdate", "task_update"]
+            .contains(normalizedName) else { return nil }
+        if ["taskupdate", "task_update"].contains(normalizedName),
+           let incremental = taskUpdateIncrementalSummary(
+               status: status,
+               rawInput: rawInput,
+               rawOutput: rawOutput
+           ) {
+            return incremental
+        }
+        let source = status == .pending ? (rawInput ?? rawOutput) : (rawOutput ?? rawInput)
+        guard let source,
+              let data = source.data(using: .utf8),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        let task = root["task"] as? [String: Any] ?? root
+        let subject = nonBlank(task["subject"] as? String)
+        let activeForm = nonBlank(task["activeForm"] as? String)
+        let taskStatus = nonBlank(task["status"] as? String)
+        guard subject != nil || activeForm != nil || taskStatus != nil else { return nil }
+
+        var parts: [String] = []
+        if let subject { parts.append(subject) }
+        if taskStatus == "in_progress", let activeForm {
+            parts.append(activeForm)
+        } else if let taskStatus {
+            parts.append(taskStatusLabel(taskStatus))
+        } else if let activeForm {
+            parts.append(activeForm)
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private static func taskUpdateIncrementalSummary(
+        status: ChatMessage.ToolCall.Status,
+        rawInput: String?,
+        rawOutput: String?
+    ) -> String? {
+        guard let input = jsonObject(rawInput) else { return nil }
+        let outputRoot = jsonObject(rawOutput)
+        let outputTask = outputRoot?["task"] as? [String: Any] ?? outputRoot
+        let subject = nonBlank(outputTask?["subject"] as? String)
+            ?? nonBlank(input["subject"] as? String)
+        var changes: [String] = []
+
+        if let value = nonBlank(input["subject"] as? String) {
+            changes.append("标题：\(value)")
+        }
+        if input["description"] is String {
+            changes.append("更新了描述")
+        }
+        if let value = nonBlank(input["activeForm"] as? String)
+            ?? nonBlank(input["active_form"] as? String) {
+            changes.append("当前动作：\(value)")
+        }
+        if let value = nonBlank(input["status"] as? String) {
+            changes.append("状态：\(taskStatusLabel(value))")
+        }
+        if input.keys.contains("owner") {
+            if let value = nonBlank(input["owner"] as? String) {
+                changes.append("负责人：\(value)")
+            } else {
+                changes.append("清除负责人")
+            }
+        }
+        if input["metadata"] is [String: Any] {
+            changes.append("更新了元数据")
+        }
+        if let values = input["addBlockedBy"] as? [Any], !values.isEmpty {
+            changes.append("新增依赖 \(values.count) 项")
+        }
+        if let values = input["addBlocks"] as? [Any], !values.isEmpty {
+            changes.append("新增阻塞 \(values.count) 项")
+        }
+        guard !changes.isEmpty else { return nil }
+
+        var parts: [String] = []
+        if let subject { parts.append(subject) }
+        parts.append(contentsOf: changes)
+        if status == .error {
+            parts.append("未生效")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private static func jsonObject(_ raw: String?) -> [String: Any]? {
+        guard let raw,
+              let data = raw.data(using: .utf8),
+              let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        return value
+    }
+
+    private static func taskStatusLabel(_ status: String) -> String {
+        switch status {
+        case "pending": "待处理"
+        case "in_progress": "进行中"
+        case "completed": "已完成"
+        case "deleted": "已删除"
+        default: status
+        }
     }
 }
 

@@ -528,6 +528,9 @@ final class PersonalAppBridgeSecurityTests: XCTestCase {
         ] {
             XCTAssertTrue(script.contains(token), token)
         }
+        XCTAssertTrue(script.contains("closest('[data-sf-url]')"))
+        XCTAssertTrue(script.contains("window.SkillForgeArtifact.requestOpenURL(url)"))
+        XCTAssertTrue(script.contains("event.preventDefault()"))
     }
 
     func testConfirmationStateIsFirstWinsUntilCancelled() throws {

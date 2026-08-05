@@ -424,6 +424,15 @@ public class ChatWebSocketHandler extends TextWebSocketHandler implements ChatEv
     }
 
     @Override
+    public void sessionTasksSnapshot(String sessionId, Map<String, Object> snapshot) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("type", "session_tasks_snapshot");
+        if (snapshot != null) payload.putAll(snapshot);
+        payload.put("sessionId", sessionId);
+        broadcast(sessionId, payload);
+    }
+
+    @Override
     public void textDelta(String sessionId, String delta) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("type", "text_delta");

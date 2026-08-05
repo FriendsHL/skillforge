@@ -5,6 +5,8 @@ package com.skillforge.core.reminder;
  */
 public enum ReminderSourceType {
     CONTEXT_USAGE,
+    TASK_STATE,
+    /** Historical TodoWrite reminder value retained for persisted message compatibility. */
     TODO_LIST,
     MEMORY_AGE,
     FILE_ACTIVITY,

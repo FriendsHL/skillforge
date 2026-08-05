@@ -297,6 +297,22 @@ class InteractiveArtifactValidatorTest {
     }
 
     @Test
+    void reportsSpecificViolationsForCommonCustomPageAuthoringMistakes() {
+        assertViolation(
+                "<button onclick=\"toggle()\">Go</button>",
+                "INLINE_EVENT_HANDLER",
+                "addEventListener");
+        assertViolation(
+                "<script>list.innerHTML = '<article>Item</article>';</script>",
+                "DYNAMIC_HTML_INJECTION",
+                "textContent");
+        assertViolation(
+                "<script>const source = 'https://example.com/story';</script>",
+                "URL_LITERAL_IN_SCRIPT",
+                "data-sf-url");
+    }
+
+    @Test
     void rejectsPermissionsNetworkAndOversizedStateSchema() {
         assertThatThrownBy(() -> validator.validate(
                 new InteractiveArtifactManifest(1, "Title", "Fallback",
@@ -456,6 +472,14 @@ class InteractiveArtifactValidatorTest {
                 .as(name)
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("forbidden");
+    }
+
+    private void assertViolation(String body, String violationCode, String suggestedAction) {
+        assertThatThrownBy(() -> validator.validate(validManifest(), html(body)))
+                .isInstanceOfSatisfying(InteractiveArtifactViolationException.class, failure -> {
+                    assertThat(failure.getViolationCode()).isEqualTo(violationCode);
+                    assertThat(failure.getSuggestedAction()).contains(suggestedAction);
+                });
     }
 
     private static byte[] html(String body) {

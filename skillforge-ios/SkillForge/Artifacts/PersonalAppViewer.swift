@@ -280,6 +280,15 @@ enum PersonalAppBootstrapScriptBuilder {
             window.webkit.messageHandlers.skillforge.postMessage({method:'requestOpenURL', artifactId:skillForgeArtifactID, url:url});
           }
         });
+        document.addEventListener('click', function(event) {
+          const origin = event.target;
+          const target = origin instanceof Element ? origin.closest('[data-sf-url]') : null;
+          if (!target) return;
+          const url = target.getAttribute('data-sf-url');
+          if (!url) return;
+          event.preventDefault();
+          window.SkillForgeArtifact.requestOpenURL(url);
+        });
         """
     }
 

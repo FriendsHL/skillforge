@@ -51,10 +51,8 @@ import com.skillforge.server.code.ScriptMethodService;
 import com.skillforge.server.skill.ImportSkillTool;
 import com.skillforge.server.skill.SkillImportProperties;
 import com.skillforge.server.skill.SkillImportService;
-import com.skillforge.server.skill.TodoStore;
 import com.skillforge.server.security.skill.SkillSecurityScanProperties;
-import com.skillforge.server.reminder.TodoListSource;
-import com.skillforge.server.tool.TodoWriteTool;
+import com.skillforge.server.reminder.TaskReminderSource;
 import com.skillforge.server.tool.MemoryDetailTool;
 import com.skillforge.server.tool.MemorySearchTool;
 import com.skillforge.server.tool.MemoryTool;
@@ -79,6 +77,7 @@ import com.skillforge.server.service.LifecycleHookViewService;
 import com.skillforge.server.service.MemoryService;
 import com.skillforge.server.service.ScheduledTaskService;
 import com.skillforge.server.service.SessionService;
+import com.skillforge.server.service.SessionTaskService;
 import com.skillforge.server.service.UserConfigService;
 import com.skillforge.server.memory.transcript.MemoryTranscriptProperties;
 import com.skillforge.server.memory.transcript.SessionTranscriptProvider;
@@ -229,13 +228,12 @@ public class InfraConfig {
 
 
     @Bean
-    public TodoListSource todoListSource(
-            TodoStore todoStore,
-            ObjectMapper objectMapper,
-            @Value("${skillforge.reminder.todo-list.enabled:true}") boolean enabled,
-            @Value("${skillforge.reminder.todo-list.interval-turns:1}") int intervalTurns,
-            @Value("${skillforge.reminder.todo-list.max-todos:20}") int maxTodos) {
-        return new TodoListSource(todoStore, objectMapper, enabled, intervalTurns, maxTodos);
+    public TaskReminderSource taskReminderSource(
+            SessionTaskService taskService,
+            @Value("${skillforge.reminder.task-state.enabled:true}") boolean enabled,
+            @Value("${skillforge.reminder.task-state.interval-turns:1}") int intervalTurns,
+            @Value("${skillforge.reminder.task-state.max-tasks:20}") int maxTasks) {
+        return new TaskReminderSource(taskService, enabled, intervalTurns, maxTasks);
     }
 
 
@@ -254,15 +252,15 @@ public class InfraConfig {
     @Bean
     public com.skillforge.core.reminder.ReminderBuilder reminderBuilder(
             com.skillforge.core.reminder.ContextUsageSource contextUsageSource,
-            TodoListSource todoListSource,
+            TaskReminderSource taskReminderSource,
             com.skillforge.core.reminder.MemoryAgeSource memoryAgeSource,
             com.skillforge.core.reminder.FileActivitySource fileActivitySource,
             @Value("${skillforge.reminder.enabled:true}") boolean globalEnabled,
             @Value("${skillforge.context.structured-reminder.enabled:true}") boolean structuredEnabled,
             @Value("${skillforge.reminder.total-budget-tokens:5000}") int totalBudgetTokens) {
-        // Ordered: most-actionable first → ContextUsage → TodoList → MemoryAge → FileActivity.
+        // Ordered: most-actionable first → ContextUsage → TaskState → MemoryAge → FileActivity.
         return new com.skillforge.core.reminder.ReminderBuilder(
-                List.of(contextUsageSource, todoListSource, memoryAgeSource, fileActivitySource),
+                List.of(contextUsageSource, taskReminderSource, memoryAgeSource, fileActivitySource),
                 totalBudgetTokens,
                 globalEnabled,
                 structuredEnabled);

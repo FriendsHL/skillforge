@@ -924,6 +924,29 @@ class CompactionServiceTest {
     }
 
     @Test
+    @DisplayName("session tasks are restored into the immediate post-compact model view without file cache")
+    @SuppressWarnings("unchecked")
+    void fullCompact_appendsTaskRecovery_whenOnlyPersistentContributorHasState() {
+        seedSession("sTaskRecovery", 30, 0, "idle");
+        seedMessages("sTaskRecovery");
+        RecoveryPayloadBuilder builder = new RecoveryPayloadBuilder(new FileStateCache());
+        builder.setContributors(List.of(sessionId -> "Task t-1 remains in_progress"));
+        service.setRecoveryPayloadBuilder(builder);
+
+        org.mockito.ArgumentCaptor<List<SessionService.AppendMessage>> captor =
+                org.mockito.ArgumentCaptor.forClass(List.class);
+        service.compact("sTaskRecovery", "full", "engine-hard", "task recovery");
+        verify(sessionService, atLeastOnce()).appendMessages(eq("sTaskRecovery"), captor.capture());
+
+        SessionService.AppendMessage recovery = captor.getValue().stream()
+                .filter(row -> SessionService.MSG_TYPE_RECOVERY_PAYLOAD.equals(row.msgType()))
+                .findFirst().orElseThrow();
+        assertThat(recovery.message().getRole()).isEqualTo(Message.Role.USER);
+        assertThat((String) recovery.message().getContent())
+                .contains("Task t-1 remains in_progress", "<system-reminder>");
+    }
+
+    @Test
     @DisplayName("P9-5: empty cache → no RECOVERY_PAYLOAD row appended (4 paths preserved)")
     @SuppressWarnings("unchecked")
     void p9_5_fullCompact_skipsRecoveryRow_whenCacheEmpty() {

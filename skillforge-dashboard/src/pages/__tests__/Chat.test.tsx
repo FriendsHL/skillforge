@@ -81,6 +81,12 @@ const getSessionsMock = vi.fn(() =>
   }),
 );
 const retryFailedChatTurnMock = vi.fn(() => Promise.resolve({ data: {} }));
+const taskHookMocks = vi.hoisted(() => ({
+  handleWsEvent: vi.fn(),
+  retry: vi.fn(),
+  chatHandler: vi.fn(),
+  socketHandler: null as ((event: unknown) => void) | null,
+}));
 const chatSessionSettersCapture: {
   current: null | {
     setRuntimeStatus: (status: 'idle' | 'running' | 'waiting_user' | 'error') => void;
@@ -143,7 +149,9 @@ vi.mock('../../hooks/useChatMessages', () => ({
   }),
 }));
 vi.mock('../../hooks/useChatWebSocket', () => ({
-  useChatWebSocket: () => {},
+  useChatWebSocket: (_sessionId: string | undefined, onEvent: (event: unknown) => void) => {
+    taskHookMocks.socketHandler = onEvent;
+  },
 }));
 vi.mock('../../hooks/useLlmModels', () => ({
   useLlmModels: () => ({ options: [] }),
@@ -169,7 +177,16 @@ vi.mock('../../hooks/useChatSession', () => ({
   },
 }));
 vi.mock('../../hooks/useChatWsEventHandler', () => ({
-  useChatWsEventHandler: () => () => {},
+  useChatWsEventHandler: () => taskHookMocks.chatHandler,
+}));
+vi.mock('../../hooks/useSessionTasks', () => ({
+  useSessionTasks: () => ({
+    tasks: [],
+    loading: false,
+    error: 'Task progress unavailable',
+    retry: taskHookMocks.retry,
+    handleWsEvent: taskHookMocks.handleWsEvent,
+  }),
 }));
 
 // ---- Child component mocks ------------------------------------------------
@@ -216,6 +233,11 @@ vi.mock('../../components/RuntimeBanner', () => ({
         </button>
       )}
     </div>
+  ),
+}));
+vi.mock('../../components/chat/SessionTaskProgress', () => ({
+  default: (props: { error: string | null }) => (
+    <div data-testid="session-task-progress">{props.error ?? 'tasks ready'}</div>
   ),
 }));
 vi.mock('../../components/PendingAskCard', () => ({ default: () => <div /> }));
@@ -300,6 +322,10 @@ describe('Chat — system agent send gate (SYSTEM-AGENT-TYPING Phase 2.3)', () =
     getAgentsMock.mockClear();
     getSessionsMock.mockClear();
     retryFailedChatTurnMock.mockClear();
+    taskHookMocks.handleWsEvent.mockClear();
+    taskHookMocks.chatHandler.mockClear();
+    taskHookMocks.retry.mockClear();
+    taskHookMocks.socketHandler = null;
     chatSessionSettersCapture.current = null;
     // Phase 2 UX refactor — chat sidebar tab is persisted in localStorage.
     // Clear between tests so localStorage state from one case doesn't leak
@@ -351,6 +377,33 @@ describe('Chat — system agent send gate (SYSTEM-AGENT-TYPING Phase 2.3)', () =
     // Send gate is only set by the system-agent path; with no pendingAsk /
     // pendingConfirm in this test setup, inputDisabled must be false.
     expect(screen.getByTestId('chat-window-input-disabled').textContent).toBe('false');
+  });
+
+  it('keeps Chat usable when the independent task region fails to load', async () => {
+    renderChatWithAgent(userAgent.id);
+
+    await waitFor(() => expect(screen.getByTestId('chat-window')).toBeInTheDocument());
+    expect(screen.getByTestId('session-task-progress')).toHaveTextContent(
+      'Task progress unavailable',
+    );
+    expect(screen.getByTestId('chat-window-input-disabled')).toHaveTextContent('false');
+  });
+
+  it('routes the existing chat socket event to both chat and task handlers', async () => {
+    renderChatWithAgent(userAgent.id);
+    await waitFor(() => expect(taskHookMocks.socketHandler).not.toBeNull());
+    const event = {
+      type: 'session_tasks_snapshot',
+      sessionId: 's-test-1',
+      summary: { total: 0, pending: 0, in_progress: 0, completed: 0, deleted: 0, blocked: 0 },
+      tasks: [],
+      generatedAt: '2026-08-05T10:00:00Z',
+    };
+
+    act(() => taskHookMocks.socketHandler?.(event));
+
+    expect(taskHookMocks.chatHandler).toHaveBeenCalledWith(event);
+    expect(taskHookMocks.handleWsEvent).toHaveBeenCalledWith(event);
   });
 
   // ---- Phase 2 UX refactor (2026-05-18) — sidebar Tabs --------------------

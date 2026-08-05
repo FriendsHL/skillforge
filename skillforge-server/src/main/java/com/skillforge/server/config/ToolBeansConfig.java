@@ -51,10 +51,7 @@ import com.skillforge.server.code.ScriptMethodService;
 import com.skillforge.server.skill.ImportSkillTool;
 import com.skillforge.server.skill.SkillImportProperties;
 import com.skillforge.server.skill.SkillImportService;
-import com.skillforge.server.skill.TodoStore;
 import com.skillforge.server.security.skill.SkillSecurityScanProperties;
-import com.skillforge.server.reminder.TodoListSource;
-import com.skillforge.server.tool.TodoWriteTool;
 import com.skillforge.server.tool.MemoryDetailTool;
 import com.skillforge.server.tool.MemorySearchTool;
 import com.skillforge.server.tool.MemoryTool;
@@ -346,7 +343,7 @@ public class ToolBeansConfig {
             ObjectMapper objectMapper,
             SkillRegistry skillRegistry) {
         PublishInteractiveArtifactTool tool = new PublishInteractiveArtifactTool(
-                attachmentService, templateCatalog, new InteractiveArtifactValidator(objectMapper));
+                attachmentService, templateCatalog, new InteractiveArtifactValidator(objectMapper), objectMapper);
         skillRegistry.registerTool(tool);
         log.info("Registered PublishInteractiveArtifactTool into SkillRegistry");
         return tool;
@@ -746,11 +743,35 @@ public class ToolBeansConfig {
 
 
     @Bean
-    public TodoWriteTool todoWriteTool(TodoStore todoStore, SkillRegistry skillRegistry) {
-        TodoWriteTool tool = new TodoWriteTool(todoStore);
-        skillRegistry.registerTool(tool);
-        log.info("Registered TodoWriteTool into SkillRegistry");
-        return tool;
+    public com.skillforge.server.tool.task.TaskCreateTool taskCreateTool(
+            com.skillforge.server.service.SessionTaskService taskService,
+            ObjectMapper objectMapper, SkillRegistry skillRegistry) {
+        var tool = new com.skillforge.server.tool.task.TaskCreateTool(taskService, objectMapper);
+        skillRegistry.registerTool(tool); return tool;
+    }
+
+    @Bean
+    public com.skillforge.server.tool.task.TaskUpdateTool taskUpdateTool(
+            com.skillforge.server.service.SessionTaskService taskService,
+            ObjectMapper objectMapper, SkillRegistry skillRegistry) {
+        var tool = new com.skillforge.server.tool.task.TaskUpdateTool(taskService, objectMapper);
+        skillRegistry.registerTool(tool); return tool;
+    }
+
+    @Bean
+    public com.skillforge.server.tool.task.TaskGetTool taskGetTool(
+            com.skillforge.server.service.SessionTaskService taskService,
+            ObjectMapper objectMapper, SkillRegistry skillRegistry) {
+        var tool = new com.skillforge.server.tool.task.TaskGetTool(taskService, objectMapper);
+        skillRegistry.registerTool(tool); return tool;
+    }
+
+    @Bean
+    public com.skillforge.server.tool.task.TaskListTool taskListTool(
+            com.skillforge.server.service.SessionTaskService taskService,
+            ObjectMapper objectMapper, SkillRegistry skillRegistry) {
+        var tool = new com.skillforge.server.tool.task.TaskListTool(taskService, objectMapper);
+        skillRegistry.registerTool(tool); return tool;
     }
 
 

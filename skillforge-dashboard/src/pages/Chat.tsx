@@ -54,8 +54,10 @@ import {
   type ExecutionMode,
 } from '../hooks/useChatSession';
 import { useChatWsEventHandler } from '../hooks/useChatWsEventHandler';
+import { useSessionTasks } from '../hooks/useSessionTasks';
 import { useAuth } from '../contexts/AuthContext';
 import { useLocalStorageString } from '../hooks/useLocalStorageString';
+import SessionTaskProgress from '../components/chat/SessionTaskProgress';
 
 interface PendingAskOption {
   label: string;
@@ -300,7 +302,7 @@ const Chat: React.FC = () => {
     return a.modelId.includes(':') ? a.modelId.split(':').pop() : a.modelId;
   }, [agents, selectedAgent]);
 
-  const handleWsEvent = useChatWsEventHandler({
+  const handleChatWsEvent = useChatWsEventHandler({
     activeSessionId,
     setRuntimeStatus,
     setRuntimeStep,
@@ -321,6 +323,21 @@ const Chat: React.FC = () => {
     setStreamingReasoningText,
     setReasoningDurationMs,
   });
+
+  const {
+    tasks: sessionTasks,
+    loading: sessionTasksLoading,
+    error: sessionTasksError,
+    retry: retrySessionTasks,
+    handleWsEvent: handleSessionTasksWsEvent,
+  } = useSessionTasks(activeSessionId, userId);
+  const handleWsEvent = useCallback((event: unknown): void => {
+    handleChatWsEvent(event);
+    handleSessionTasksWsEvent(event);
+  }, [handleChatWsEvent, handleSessionTasksWsEvent]);
+  const handleSessionTaskRetry = useCallback((): void => {
+    void retrySessionTasks();
+  }, [retrySessionTasks]);
 
   useChatWebSocket(activeSessionId, handleWsEvent);
 
@@ -1097,6 +1114,15 @@ const Chat: React.FC = () => {
 
             {viewMode === 'chat' ? (
               <>
+                {activeSessionId && (
+                  <SessionTaskProgress
+                    key={activeSessionId}
+                    tasks={sessionTasks}
+                    loading={sessionTasksLoading}
+                    error={sessionTasksError}
+                    onRetry={handleSessionTaskRetry}
+                  />
+                )}
                 {visiblePendingAsk && (
                   <PendingAskCard
                     pendingAsk={visiblePendingAsk}

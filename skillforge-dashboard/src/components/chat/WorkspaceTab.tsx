@@ -10,6 +10,7 @@ import {
   FilePdfOutlined,
   FileTextOutlined,
   FileWordOutlined,
+  AppstoreOutlined,
   FolderOpenOutlined,
   FolderOutlined,
   LoadingOutlined,
@@ -53,6 +54,7 @@ function fileIcon(kind: ChatAttachmentRef['kind']) {
     case 'word': return <FileWordOutlined />;
     case 'excel': return <FileExcelOutlined />;
     case 'csv': return <FileTextOutlined />;
+    case 'interactive': return <AppstoreOutlined />;
   }
 }
 

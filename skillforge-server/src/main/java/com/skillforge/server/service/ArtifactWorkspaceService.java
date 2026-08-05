@@ -65,7 +65,9 @@ public class ArtifactWorkspaceService {
     public String promptInstruction(Path workspace) {
         Path canonical = requireCanonicalWorkspace(workspace);
         return "Current run artifact workspace absolute path: " + canonical + ". "
-                + "For a standard Personal App, call PublishInteractiveArtifact with exactly one template_id: "
+                + "Platform templates are an optional fast path, not the Personal App capability boundary. "
+                + "For a standard Personal App that matches an existing template, call "
+                + "PublishInteractiveArtifact with exactly one template_id: "
                 + PersonalAppTemplateCatalog.AI_DAILY_BRIEF_ID
                 + " initial_data={dateLabel,timeWindow,items:[{id,title,summary,source,sourceLabel,"
                 + "priority,publishedAt,url}]}; or "
@@ -73,8 +75,15 @@ public class ArtifactWorkspaceService {
                 + " initial_data={title,currency,income,categories:[{key,label,amount,tone}]} "
                 + "with platform-managed saved state={income,amounts:{[categoryKey]:number},note}. "
                 + "Do not provide file_path in template mode. "
-                + "For a custom offline HTML Personal App, write a new final file inside the current run "
+                + "Custom file mode is a first-class option when the requested information architecture or "
+                + "interaction does not fit a template. For a custom offline HTML Personal App, write a new "
+                + "final file inside the current run "
                 + "workspace, then call PublishInteractiveArtifact with file_path and state_schema. "
+                + "Make custom pages responsive on iPhone and desktop, with clear hierarchy, useful detail "
+                + "expansion. For source links, put the absolute http(s) URL in data-sf-url "
+                + "on a button or link-like control; the platform bridge handles its click with user "
+                + "confirmation. Ordinary href navigation is forbidden; escape untrusted data and do not "
+                + "add remote scripts or undeclared capabilities. "
                 + "state_schema supports only string, number, integer, boolean, object, and array types; "
                 + "object schemas may use properties, required, and additionalProperties, array schemas "
                 + "may use items, and unsupported keywords are rejected. state_schema is limited to "

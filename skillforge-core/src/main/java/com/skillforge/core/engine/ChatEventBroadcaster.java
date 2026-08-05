@@ -72,6 +72,11 @@ public interface ChatEventBroadcaster {
         // no-op default
     }
 
+    /** Persistent session task state changed; payload is the bounded server snapshot envelope. */
+    default void sessionTasksSnapshot(String sessionId, Map<String, Object> snapshot) {
+        // no-op default
+    }
+
     // ---- 细粒度 token 流式事件(additive, 默认 no-op) ----
 
     /** 文本 token 增量(与 assistantDelta 语义一致,保留以对齐 LlmStreamHandler 命名)。 */

@@ -2,6 +2,24 @@ import XCTest
 @testable import SkillForge
 
 final class MobileRealtimeStateTests: XCTestCase {
+    func testSessionTaskSnapshotEventDecodesFrozenEnvelope() throws {
+        let event = try decodeEvent("""
+        {
+          "type": "session_tasks_snapshot", "sessionId": "session-1",
+          "generatedAt": "2026-08-05T10:00:00Z",
+          "tasks": [{
+            "taskId":"task-1","subject":"Build","description":"Build it",
+            "activeForm":"Building","status":"in_progress","owner":null,
+            "blocked":false,"blockedBy":[],"blocks":[],
+            "createdAt":"2026-08-05T09:00:00Z","updatedAt":"2026-08-05T09:10:00Z","version":2
+          }]
+        }
+        """)
+
+        XCTAssertEqual(event.sessionTaskSnapshot?.sessionId, "session-1")
+        XCTAssertEqual(event.sessionTaskSnapshot?.tasks.first?.taskId, "task-1")
+        XCTAssertEqual(event.sessionTaskSnapshot?.tasks.first?.version, 2)
+    }
     func testSessionStatusImmediatelyAppliesFailureFactBeforeMetadataCatchUp() throws {
         let event = try decodeEvent("""
         {

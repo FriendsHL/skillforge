@@ -17,6 +17,7 @@ import {
 } from '../types/command';
 import CommandPopup from './chat/CommandPopup';
 import CommandResultModal from './chat/CommandResultModal';
+import TaskToolCallCard from './chat/TaskToolCallCard';
 import { RoleAvatar } from './chat/primitives';
 import {
   IconAttach,
@@ -571,7 +572,7 @@ export { ChatInput };
  *  via `AttachmentThumbnail`. Mirrors BE `image_ref` / `pdf_ref` / `word_ref`
  *  / `excel_ref` / `csv_ref` content blocks. */
 export interface ChatAttachmentRef {
-  kind: 'image' | 'pdf' | 'word' | 'excel' | 'csv';
+  kind: 'image' | 'pdf' | 'word' | 'excel' | 'csv' | 'interactive';
   attachmentId: string;
   filename: string;
   /** PDF only — page count surfaced in the chip. */
@@ -580,6 +581,10 @@ export interface ChatAttachmentRef {
   sheetCount?: number;
   /** Optional server-supplied caption rendered with the attachment. */
   caption?: string;
+  /** Personal App display title; HTML and manifest remain outside the transcript. */
+  title?: string;
+  /** Personal App protocol version. */
+  artifactSchemaVersion?: number;
 }
 export interface MediaJobRef { jobId: string; mediaType: 'video' | 'audio'; }
 
@@ -1002,6 +1007,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
                           pageCount={att.pageCount}
                           sheetCount={att.sheetCount}
                           caption={att.caption}
+                          title={att.title}
                           userId={slashCommandConfig.userId}
                           sessionId={slashCommandConfig.sessionId}
                           onEditImage={(attachmentId) => setInputPrefill((previous) => ({
@@ -1033,7 +1039,11 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
                   {!isUser && msg.toolCalls && msg.toolCalls.length > 0 && (
                     <div className="tool-calls">
                       {msg.toolCalls.map((tc, i) => (
-                        <ToolCallRow key={tc.id ?? i} tc={tc} />
+                        tc.name === 'TaskCreate' || tc.name === 'TaskUpdate' ? (
+                          <TaskToolCallCard key={tc.id ?? `${tc.name}-${i}`} toolCall={tc} />
+                        ) : (
+                          <ToolCallRow key={tc.id ?? `${tc.name}-${i}`} tc={tc} />
+                        )
                       ))}
                     </div>
                   )}

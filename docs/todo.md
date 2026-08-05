@@ -1,12 +1,13 @@
 # SkillForge ToDo
 
-> 更新于：2026-07-29（Agent Context Runtime P0–P2、P4–P6 已交付；P3 按产品决策跳过）
+> 更新于：2026-08-05（Task/目标连续性/Artifact 恢复已完成自动化与运行态验证）
 > 规则：这里只放当前执行状态；范围与方案见需求包，交付事实见 [delivery-index.md](delivery-index.md)。
 
 ## 当前队列
 
 | 顺序 | ID | 标题 | 模式 | 状态 | 优先级 | 下一步 |
 | --- | --- | --- | --- | --- | --- | --- |
+| - | **AGENT-GOAL-AND-TOOL-RECOVERY** | 持久化 Task、目标连续性与 Artifact 恢复 | Full | implemented / Full automated verified；待浏览器与真机 dogfood | P0 | 用户验收多轮追加、Task 进度与 Artifact 自定义页面 |
 | - | **AGENT-CONTEXT-GOVERNANCE** | Opus 5 时代的 Agent 上下文与能力治理 | Full | P0–P2、P4–P6 已交付；P3（CLAUDE.md/Instruction Registry）按产品方向跳过 | P7 | Result Provenance、MCP Artifact Bridge |
 | - | **REALTIME-VOICE-CONVERSATION** | iOS 实时语音对话 | Full | Design Proposed；Ark ASR + Seed Pro + TTS，Qwen-compatible | P1 | 用户批准设计后先执行 Phase 0 Ark 活体 Spike |
 | - | **MULTIMODAL-MEDIA-RUNTIME** | 图片、音频、视频生成/理解、管理端与 iOS 统一呈现 | Full | P0/P1 complete：Main Agent Seedream 真生图、Attachment 转存与跨端 `image_ref` 闭环；Seedance 当前不可新增接入 | P1/P2 | 用户验收同步生图；另行批准后进入 P2 异步 Job、音频与视频 |
@@ -31,6 +32,7 @@
 
 需求包：
 
+- [AGENT-GOAL-AND-TOOL-RECOVERY](requirements/active/2026-08-05-AGENT-GOAL-AND-TOOL-RECOVERY/index.md)
 - [AGENT-CONTEXT-GOVERNANCE](requirements/active/2026-07-26-AGENT-CONTEXT-GOVERNANCE/index.md)
 - [REALTIME-VOICE-CONVERSATION](requirements/active/2026-07-23-REALTIME-VOICE-CONVERSATION/index.md)
 - [MULTIMODAL-MEDIA-RUNTIME](requirements/active/2026-07-22-MULTIMODAL-MEDIA-RUNTIME/index.md)

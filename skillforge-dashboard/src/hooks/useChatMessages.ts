@@ -62,7 +62,8 @@ export function normalizeMessages(list: RawMessage[]): ChatMessage[] {
           b.type === 'pdf_ref' ||
           b.type === 'word_ref' ||
           b.type === 'excel_ref' ||
-          b.type === 'csv_ref'
+          b.type === 'csv_ref' ||
+          b.type === 'interactive_artifact_ref'
         ) {
           // MULTIMODAL-MVP Phase 2 / Wave 3: collect refs so ChatWindow can
           // render inline thumbnails (image) / chips (pdf / word / excel /
@@ -78,6 +79,9 @@ export function normalizeMessages(list: RawMessage[]): ChatMessage[] {
             sheet_count?: unknown;
             sheetCount?: unknown;
             caption?: unknown;
+            title?: unknown;
+            artifact_schema_version?: unknown;
+            artifactSchemaVersion?: unknown;
           };
           const attachmentId =
             typeof ref.attachment_id === 'string' ? ref.attachment_id : '';
@@ -95,6 +99,12 @@ export function normalizeMessages(list: RawMessage[]): ChatMessage[] {
           const rawSheets = ref.sheet_count ?? ref.sheetCount;
           const sheetCount =
             typeof rawSheets === 'number' && Number.isFinite(rawSheets) ? rawSheets : undefined;
+          const rawArtifactSchemaVersion =
+            ref.artifact_schema_version ?? ref.artifactSchemaVersion;
+          const artifactSchemaVersion =
+            typeof rawArtifactSchemaVersion === 'number' && Number.isFinite(rawArtifactSchemaVersion)
+              ? rawArtifactSchemaVersion
+              : undefined;
           let kind: ChatAttachmentRef['kind'];
           switch (b.type) {
             case 'image_ref': kind = 'image'; break;
@@ -102,6 +112,7 @@ export function normalizeMessages(list: RawMessage[]): ChatMessage[] {
             case 'word_ref':  kind = 'word'; break;
             case 'excel_ref': kind = 'excel'; break;
             case 'csv_ref':   kind = 'csv'; break;
+            case 'interactive_artifact_ref': kind = 'interactive'; break;
             default:          continue;
           }
           attachmentRefs.push({
@@ -113,6 +124,10 @@ export function normalizeMessages(list: RawMessage[]): ChatMessage[] {
             caption: typeof ref.caption === 'string' && ref.caption.trim().length > 0
               ? ref.caption
               : undefined,
+            title: typeof ref.title === 'string' && ref.title.trim().length > 0
+              ? ref.title
+              : undefined,
+            artifactSchemaVersion,
           });
         }
       }

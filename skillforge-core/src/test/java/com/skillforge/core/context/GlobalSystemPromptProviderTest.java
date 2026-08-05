@@ -22,17 +22,28 @@ class GlobalSystemPromptProviderTest {
 
         assertThat(prompt).isNotBlank();
         assertThat(prompt).contains("SkillForge AI Agent 平台");
+        assertThat(prompt).contains("运行模型由 Agent 配置决定", "不假设固定 Provider");
         assertThat(prompt).contains("工具调用");
         assertThat(prompt).contains("Grep", "Read", "Edit", "memory_search");
         assertThat(prompt).contains("`browser` Skill", "Node Playwright");
         assertThat(prompt).doesNotContain("agent-browser");
         assertThat(prompt).contains("之前", "上次");
         assertThat(prompt).contains(
-                "### 任务进度管理（TodoWrite）",
+                "### 任务进度管理",
                 "三个或以上",
                 "不要为简单问答",
-                "最多只能有一个 in_progress",
-                "完整任务列表");
+                "TaskCreate",
+                "TaskUpdate",
+                "TaskGet",
+                "TaskList",
+                "用户的新指令",
+                "发现必要的新步骤",
+                "工具失败是执行事实",
+                "不是用户的业务目标",
+                "不要为修复工具失败自动创建业务 Task",
+                "重新设为 pending",
+                "最新指令");
+        assertThat(prompt).doesNotContain("TodoWrite");
         assertThat(prompt).contains(
                 "### Web 搜索与页面读取",
                 "WebSearch",
@@ -56,6 +67,8 @@ class GlobalSystemPromptProviderTest {
                 "EditImage",
                 "GenerateVideo");
         assertThat(prompt).doesNotContain("AnySearch");
+        assertThat(prompt).contains("供应链攻击", "批量攻击/DoS", "双用途安全任务");
+        assertThat(prompt).contains("删除或覆盖前", "核对实际目标");
         assertThat(prompt).doesNotContain("skillforge-core");
         assertThat(prompt).doesNotContain("内嵌 PostgreSQL");
         assertThat(prompt.length()).isLessThan(4_000);

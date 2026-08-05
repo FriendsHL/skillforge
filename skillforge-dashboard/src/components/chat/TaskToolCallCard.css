@@ -1,0 +1,55 @@
+.task-tool-card__summary {
+  align-items: center;
+}
+
+.task-tool-card__copy {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 2px 10px;
+}
+
+.task-tool-card__label,
+.task-tool-card__change,
+.task-tool-card__active-form {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.task-tool-card__label {
+  color: var(--fg-3);
+}
+
+.task-tool-card__copy strong {
+  overflow: hidden;
+  color: var(--fg-1);
+  font-size: 12px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-tool-card__change {
+  grid-column: 1 / -1;
+  color: var(--info);
+}
+
+.task-tool-card__active-form {
+  max-width: 200px;
+  overflow: hidden;
+  color: var(--fg-3);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-tool-card--error .task-tool-card__change,
+.task-tool-card--error .task-tool-card__label {
+  color: var(--err);
+}
+
+@media (max-width: 767px) {
+  .task-tool-card__active-form {
+    display: none;
+  }
+}

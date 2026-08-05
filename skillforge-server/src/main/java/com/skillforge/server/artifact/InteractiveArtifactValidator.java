@@ -54,28 +54,78 @@ public final class InteractiveArtifactValidator {
     );
     private static final Pattern PROTOCOL_RELATIVE_URL = pattern("//[^/\\s?#]");
     private static final Pattern EXECUTABLE_PROTOCOL_RELATIVE_URL = pattern("['\"`]//[^/]");
-    private static final List<Pattern> FORBIDDEN_EXECUTABLE_SCRIPT = List.of(
-            pattern("\\b(?:(?:window|globalThis|self)\\s*\\.\\s*)?fetch\\s*\\("),
-            pattern("\\b(?:XMLHttpRequest|WebSocket|EventSource)\\b"),
-            pattern("\\b(?:(?:navigator|window\\s*\\.\\s*navigator)\\s*\\.\\s*)?sendBeacon\\s*\\("),
-            pattern("\\bimport\\s*(?:\\(|['\"]|Scripts\\s*\\()"),
-            pattern("\\b(?:window|globalThis|self|top|parent)\\s*\\.\\s*open\\s*\\("),
-            pattern("\\b(?:(?:window|document)\\s*\\.\\s*)?location\\b"),
-            pattern("\\b(?:navigator\\s*\\.\\s*)?clipboard\\b"),
-            pattern("\\b(?:atob|btoa|eval)\\s*\\("),
-            pattern("\\bdocument\\s*\\.\\s*write(?:ln)?\\s*\\("),
-            pattern("\\bsetAttribute(?:NS)?\\s*\\(\\s*['\"](?:src|srcset|href|xlink:href|action|formaction|poster|ping)['\"]"),
-            pattern("\\bexecCommand\\s*\\(\\s*['\"]\\s*(?:copy|cut|paste)\\s*['\"]"),
-            pattern("\\b(?:setTimeout|setInterval)\\s*\\(\\s*['\"`]"),
-            pattern("\\bDOMParser\\b"),
-            pattern("\\b(?:innerHTML|outerHTML|insertAdjacentHTML)\\b"),
-            pattern("\\b(?:Worker|SharedWorker)\\b"),
-            pattern("\\b(?:navigator\\s*\\.\\s*)?serviceWorker\\b"),
-            pattern("\\b(?:mediaDevices|getUserMedia|webkitGetUserMedia|mozGetUserMedia|getDisplayMedia|geolocation)\\b"),
-            Pattern.compile("\\b(?:new\\s+)?Function\\s*\\(", Pattern.DOTALL),
-            Pattern.compile("\\bString\\s*\\.\\s*from(?:CharCode|CodePoint)\\s*\\(", Pattern.DOTALL),
-            URL_LITERAL,
-            EXECUTABLE_PROTOCOL_RELATIVE_URL);
+    private static final List<ExecutableRule> FORBIDDEN_EXECUTABLE_SCRIPT = List.of(
+            scriptRule("NETWORK_ACCESS", "network API such as fetch",
+                    "Remove network calls; Personal Apps must operate entirely offline.",
+                    "\\b(?:(?:window|globalThis|self)\\s*\\.\\s*)?fetch\\s*\\("),
+            scriptRule("NETWORK_ACCESS", "network API such as XMLHttpRequest, WebSocket, or EventSource",
+                    "Remove network calls; Personal Apps must operate entirely offline.",
+                    "\\b(?:XMLHttpRequest|WebSocket|EventSource)\\b"),
+            scriptRule("NETWORK_ACCESS", "network API such as sendBeacon",
+                    "Remove network calls; Personal Apps must operate entirely offline.",
+                    "\\b(?:(?:navigator|window\\s*\\.\\s*navigator)\\s*\\.\\s*)?sendBeacon\\s*\\("),
+            scriptRule("NETWORK_ACCESS", "dynamic script import",
+                    "Bundle all behavior into the HTML and remove import/importScripts calls.",
+                    "\\bimport\\s*(?:\\(|['\"]|Scripts\\s*\\()"),
+            scriptRule("NAVIGATION_ACCESS", "window navigation",
+                    "Remove window.open; use a static data-sf-url control for user-confirmed source links.",
+                    "\\b(?:window|globalThis|self|top|parent)\\s*\\.\\s*open\\s*\\("),
+            scriptRule("NAVIGATION_ACCESS", "location navigation",
+                    "Remove location access; use a static data-sf-url control for user-confirmed source links.",
+                    "\\b(?:(?:window|document)\\s*\\.\\s*)?location\\b"),
+            scriptRule("CLIPBOARD_ACCESS", "clipboard access",
+                    "Remove clipboard access and keep copyable content as selectable text.",
+                    "\\b(?:navigator\\s*\\.\\s*)?clipboard\\b"),
+            scriptRule("DYNAMIC_CODE_EXECUTION", "encoded or evaluated code",
+                    "Remove atob, btoa, and eval; keep executable logic directly readable in the document.",
+                    "\\b(?:atob|btoa|eval)\\s*\\("),
+            scriptRule("DYNAMIC_HTML_INJECTION", "document.write HTML injection",
+                    "Build elements with createElement, textContent, and append instead.",
+                    "\\bdocument\\s*\\.\\s*write(?:ln)?\\s*\\("),
+            scriptRule("ACTIVE_ATTRIBUTE_MUTATION", "active resource attribute mutation",
+                    "Remove dynamic src/href-style attributes; keep source links in static data-sf-url attributes.",
+                    "\\bsetAttribute(?:NS)?\\s*\\(\\s*['\"](?:src|srcset|href|xlink:href|action|formaction|poster|ping)['\"]"),
+            scriptRule("CLIPBOARD_ACCESS", "legacy clipboard command",
+                    "Remove copy/cut/paste commands and keep copyable content as selectable text.",
+                    "\\bexecCommand\\s*\\(\\s*['\"]\\s*(?:copy|cut|paste)\\s*['\"]"),
+            scriptRule("DYNAMIC_CODE_EXECUTION", "string-based timer execution",
+                    "Pass a function to setTimeout/setInterval instead of executable strings.",
+                    "\\b(?:setTimeout|setInterval)\\s*\\(\\s*['\"`]"),
+            scriptRule("DYNAMIC_HTML_INJECTION", "DOMParser HTML injection",
+                    "Build elements with createElement, textContent, and append instead.",
+                    "\\bDOMParser\\b"),
+            scriptRule("DYNAMIC_HTML_INJECTION", "dynamic HTML injection via innerHTML, outerHTML, or insertAdjacentHTML",
+                    "Build elements with createElement, textContent, and append instead.",
+                    "\\b(?:innerHTML|outerHTML|insertAdjacentHTML)\\b"),
+            scriptRule("WORKER_EXECUTION", "Worker or SharedWorker execution",
+                    "Remove worker creation and run bounded logic directly in the offline page.",
+                    "\\b(?:Worker|SharedWorker)\\b"),
+            scriptRule("WORKER_EXECUTION", "service worker access",
+                    "Remove service worker access; Personal Apps are already stored and served by the platform.",
+                    "\\b(?:navigator\\s*\\.\\s*)?serviceWorker\\b"),
+            scriptRule("DEVICE_PERMISSION", "device permission API",
+                    "Remove camera, microphone, display, or location access from the Personal App.",
+                    "\\b(?:mediaDevices|getUserMedia|webkitGetUserMedia|mozGetUserMedia|getDisplayMedia|geolocation)\\b"),
+            new ExecutableRule(
+                    "DYNAMIC_CODE_EXECUTION",
+                    Pattern.compile("\\b(?:new\\s+)?Function\\s*\\(", Pattern.DOTALL),
+                    "Function constructor",
+                    "Remove generated code and keep executable logic directly readable in the document."),
+            new ExecutableRule(
+                    "DYNAMIC_CODE_EXECUTION",
+                    Pattern.compile("\\bString\\s*\\.\\s*from(?:CharCode|CodePoint)\\s*\\(", Pattern.DOTALL),
+                    "character-code obfuscation",
+                    "Remove character-code generated identifiers and keep executable logic directly readable."),
+            new ExecutableRule(
+                    "URL_LITERAL_IN_SCRIPT",
+                    URL_LITERAL,
+                    "URL literal inside executable JavaScript",
+                    "Move each source URL to a static data-sf-url attribute; do not store URLs in executable JavaScript."),
+            new ExecutableRule(
+                    "URL_LITERAL_IN_SCRIPT",
+                    EXECUTABLE_PROTOCOL_RELATIVE_URL,
+                    "protocol-relative URL inside executable JavaScript",
+                    "Move each source URL to a static data-sf-url attribute; do not store URLs in executable JavaScript."));
 
     private final ObjectMapper objectMapper;
 
@@ -114,36 +164,42 @@ public final class InteractiveArtifactValidator {
             throw invalid("HTML must be valid UTF-8");
         }
         if (html.codePoints().anyMatch(InteractiveArtifactValidator::isForbiddenHtmlControl)) {
-            throw forbidden("control character");
+            throw forbidden("HTML_CONTROL_CHARACTER", "control character",
+                    "Remove control characters and keep the document as valid UTF-8 text.");
         }
         Document document = Jsoup.parse(html);
         scanComments(document);
         for (Element element : document.getAllElements()) {
             String tag = element.normalName();
             if (FORBIDDEN_TAGS.contains(tag)) {
-                throw forbidden("active <" + tag + "> element");
+                throw forbidden("ACTIVE_EMBED_ELEMENT", "active <" + tag + "> element",
+                        "Remove iframe/object/embed/portal/base elements and render content inline.");
             }
             if ("meta".equals(tag)
                     && "refresh".equalsIgnoreCase(element.attr("http-equiv").strip())) {
-                throw forbidden("meta refresh");
+                throw forbidden("META_REFRESH", "meta refresh",
+                        "Remove meta refresh and keep navigation behind static data-sf-url controls.");
             }
             if ("input".equals(tag)
                     && "file".equalsIgnoreCase(element.attr("type").strip())) {
-                throw forbidden("file input permission entry point");
+                throw forbidden("FILE_INPUT", "file input permission entry point",
+                        "Remove file inputs; Personal Apps cannot request local files.");
             }
 
             for (Attribute attribute : element.attributes()) {
                 String name = attribute.getKey().toLowerCase(Locale.ROOT);
                 if (name.length() > 2 && name.startsWith("on")) {
-                    throw forbidden("inline event handler");
+                    throw forbidden("INLINE_EVENT_HANDLER", "inline event handler",
+                            "Remove on* attributes and attach handlers with addEventListener instead.");
                 }
                 if ("capture".equals(name)) {
-                    throw forbidden("capture permission entry point");
+                    throw forbidden("DEVICE_CAPTURE_ATTRIBUTE", "capture permission entry point",
+                            "Remove capture attributes and device permission entry points.");
                 }
                 if ("data-sf-url".equals(name)) {
                     validateDataSfUrl(attribute.getValue());
                 } else if (containsUrlLiteral(attribute.getValue())) {
-                    throw forbidden("URL outside an approved inert data slot");
+                    throw urlOutsideDataSlot();
                 }
                 if (ACTIVE_REFERENCE_ATTRIBUTES.contains(name)) {
                     validateActiveReference(tag, name, attribute.getValue());
@@ -166,10 +222,12 @@ public final class InteractiveArtifactValidator {
         if ("application/json".equalsIgnoreCase(script.attr("type").strip())) {
             try {
                 if (source.isBlank() || objectMapper.readTree(source) == null) {
-                    throw forbidden("invalid application/json data block");
+                    throw forbidden("INVALID_JSON_DATA_BLOCK", "invalid application/json data block",
+                            "Replace the block contents with valid JSON or remove the data block.");
                 }
             } catch (JsonProcessingException e) {
-                throw forbidden("invalid application/json data block");
+                throw forbidden("INVALID_JSON_DATA_BLOCK", "invalid application/json data block",
+                        "Replace the block contents with valid JSON or remove the data block.");
             }
             return;
         }
@@ -179,14 +237,16 @@ public final class InteractiveArtifactValidator {
     private static void validateActiveReference(String tag, String attribute, String value) {
         if (("script".equals(tag) && "src".equals(attribute))
                 || ("link".equals(tag) && "href".equals(attribute))) {
-            throw forbidden("external script or link resource");
+            throw forbidden("ACTIVE_EXTERNAL_RESOURCE", "external script or link resource",
+                    "Remove script src/link href and inline all required code and styles.");
         }
         String normalized = value.strip();
         if (("href".equals(attribute) || "xlink:href".equals(attribute))
                 && normalized.startsWith("#") && normalized.length() > 1) {
             return;
         }
-        throw forbidden("active " + attribute + " reference");
+        throw forbidden("ACTIVE_RESOURCE_REFERENCE", "active " + attribute + " reference",
+                "Remove active src/href-style references; the HTML must be self-contained.");
     }
 
     private static void validateDataSfUrl(String value) {
@@ -197,7 +257,7 @@ public final class InteractiveArtifactValidator {
                 || value.codePoints().anyMatch(codePoint ->
                         Character.getType(codePoint) == Character.CONTROL)
                 || !hasValidPercentEscapes(value)) {
-            throw forbidden("data-sf-url value");
+            throw invalidDataSfUrl();
         }
         try {
             URI uri = new URI(value);
@@ -208,10 +268,10 @@ public final class InteractiveArtifactValidator {
                     || !isConservativeHttpAuthority(uri.getRawAuthority())
                     || host == null || host.isEmpty()
                     || uri.getUserInfo() != null) {
-                throw forbidden("data-sf-url value");
+                throw invalidDataSfUrl();
             }
         } catch (URISyntaxException e) {
-            throw forbidden("data-sf-url value");
+            throw invalidDataSfUrl();
         }
     }
 
@@ -302,16 +362,19 @@ public final class InteractiveArtifactValidator {
         if (css == null || css.isBlank()) return;
         String canonical = decodeCssEscapes(BLOCK_COMMENT.matcher(css).replaceAll(""));
         if (containsUrlLiteral(canonical)) {
-            throw forbidden("CSS URL literal");
+            throw forbidden("CSS_URL_LITERAL", "CSS URL literal",
+                    "Remove URLs from CSS and keep styles fully inline without external resources.");
         }
         if (CSS_IMPORT.matcher(canonical).find()) {
-            throw forbidden("CSS @import");
+            throw forbidden("CSS_IMPORT", "CSS @import",
+                    "Remove @import and inline the required CSS rules in the document.");
         }
         var urls = CSS_URL.matcher(canonical);
         while (urls.find()) {
             String target = urls.group(2).strip();
             if (!target.startsWith("#") || target.length() == 1) {
-                throw forbidden("CSS url resource");
+                throw forbidden("CSS_RESOURCE_REFERENCE", "CSS url resource",
+                        "Remove CSS url() resources; only local fragment references are allowed.");
             }
         }
     }
@@ -322,7 +385,7 @@ public final class InteractiveArtifactValidator {
         while (!pending.isEmpty()) {
             Node current = pending.pop();
             if (current instanceof Comment comment && containsUrlLiteral(comment.getData())) {
-                throw forbidden("URL outside an approved inert data slot");
+                throw urlOutsideDataSlot();
             }
             for (int i = current.childNodeSize() - 1; i >= 0; i--) {
                 pending.push(current.childNode(i));
@@ -337,9 +400,9 @@ public final class InteractiveArtifactValidator {
     private static void scanExecutable(String source, String scope) {
         if (source == null || source.isBlank()) return;
         String canonical = normalizeExecutableScript(source);
-        for (Pattern pattern : FORBIDDEN_EXECUTABLE_SCRIPT) {
-            if (pattern.matcher(canonical).find()) {
-                throw forbidden(scope + " capability");
+        for (ExecutableRule rule : FORBIDDEN_EXECUTABLE_SCRIPT) {
+            if (rule.pattern().matcher(canonical).find()) {
+                throw forbidden(rule.code(), scope + " " + rule.capability(), rule.suggestedAction());
             }
         }
     }
@@ -689,11 +752,33 @@ public final class InteractiveArtifactValidator {
         return Pattern.compile(regex, Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
     }
 
-    private static IllegalArgumentException forbidden(String capability) {
-        return invalid("HTML contains forbidden " + capability);
+    private static ExecutableRule scriptRule(
+            String code, String capability, String suggestedAction, String regex) {
+        return new ExecutableRule(code, pattern(regex), capability, suggestedAction);
+    }
+
+    private static InteractiveArtifactViolationException invalidDataSfUrl() {
+        return forbidden("INVALID_DATA_SF_URL", "data-sf-url value",
+                "Use a static, absolute http(s) URL without credentials, control characters, or invalid escapes.");
+    }
+
+    private static InteractiveArtifactViolationException urlOutsideDataSlot() {
+        return forbidden("URL_OUTSIDE_DATA_SLOT", "URL outside an approved inert data slot",
+                "Move each source URL to a static data-sf-url attribute and remove it from other HTML, CSS, or comments.");
+    }
+
+    private static InteractiveArtifactViolationException forbidden(
+            String code, String capability, String suggestedAction) {
+        return new InteractiveArtifactViolationException(
+                code,
+                "Interactive artifact HTML contains forbidden " + capability,
+                suggestedAction);
     }
 
     private static IllegalArgumentException invalid(String message) {
         return new IllegalArgumentException("Interactive artifact " + message);
     }
+
+    private record ExecutableRule(
+            String code, Pattern pattern, String capability, String suggestedAction) { }
 }

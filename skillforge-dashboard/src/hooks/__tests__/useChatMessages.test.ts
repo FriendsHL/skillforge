@@ -138,6 +138,31 @@ describe('normalizeMessages — outbound assistant attachments', () => {
     });
   });
 
+  it('retains Personal App metadata for the sandboxed desktop viewer', () => {
+    const out = normalizeMessages([{
+      role: 'assistant',
+      content: [{
+        type: 'interactive_artifact_ref',
+        attachment_id: 'app-1',
+        filename: 'brief.html',
+        title: 'Podcast brief',
+        artifact_schema_version: 1,
+      }],
+    }]);
+
+    expect(out).toHaveLength(1);
+    expect(out[0].attachments).toEqual([{
+      kind: 'interactive',
+      attachmentId: 'app-1',
+      filename: 'brief.html',
+      pageCount: undefined,
+      sheetCount: undefined,
+      caption: undefined,
+      title: 'Podcast brief',
+      artifactSchemaVersion: 1,
+    }]);
+  });
+
   it('keeps mixed assistant text and all supported attachment refs in one message', () => {
     const raw: RawMessage[] = [
       {

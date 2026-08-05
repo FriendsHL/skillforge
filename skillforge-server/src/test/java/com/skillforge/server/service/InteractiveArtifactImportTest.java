@@ -2,6 +2,7 @@ package com.skillforge.server.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillforge.server.artifact.InteractiveArtifactManifest;
+import com.skillforge.server.artifact.InteractiveArtifactViolationException;
 import com.skillforge.server.entity.ChatAttachmentEntity;
 import com.skillforge.server.repository.ChatAttachmentRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -73,8 +74,10 @@ class InteractiveArtifactImportTest {
 
         assertThatThrownBy(() -> service.importInteractiveArtifact(
                 "session-1", 7L, "tool-2", source, null, stagingRoot, manifest()))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("forbidden");
+                .isInstanceOfSatisfying(InteractiveArtifactViolationException.class, failure -> {
+                    assertThat(failure.getViolationCode()).isEqualTo("NETWORK_ACCESS");
+                    assertThat(failure.getSuggestedAction()).contains("offline");
+                });
         verify(repository, never()).saveAndFlush(any());
     }
 

@@ -964,6 +964,15 @@ struct MobileApiClient {
         )
     }
 
+    func getTasks(sessionId: String) async throws -> MobileSessionTaskSnapshot {
+        try await send(
+            path: "/api/mobile/client/sessions/\(sessionId)/tasks",
+            method: "GET",
+            body: Optional<String>.none,
+            authorized: true
+        )
+    }
+
     func getMediaJob(sessionId: String, jobId: String) async throws -> MobileMediaJob {
         try await send(
             path: "/api/mobile/client/sessions/\(sessionId)/media/jobs/\(jobId)",

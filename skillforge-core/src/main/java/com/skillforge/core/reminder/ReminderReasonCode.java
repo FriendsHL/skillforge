@@ -7,6 +7,8 @@ package com.skillforge.core.reminder;
  */
 public enum ReminderReasonCode {
     CONTEXT_THRESHOLD_REACHED,
+    PENDING_TASKS,
+    /** Historical TodoWrite reason retained for persisted message compatibility. */
     PENDING_TODOS,
     STALE_MEMORY_AVAILABLE,
     RECENT_FILE_CONTEXT,

@@ -9,6 +9,7 @@ import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.ArrayList;
 
 /**
  * P9-5: build the post-compact recovery payload (a single user-role {@link Message}) from
@@ -54,6 +55,7 @@ public class RecoveryPayloadBuilder {
             DateTimeFormatter.ofPattern("HH:mm").withZone(ZoneId.of("UTC"));
 
     private final FileStateCache fileStateCache;
+    private volatile List<RecoveryPayloadContributor> contributors = List.of();
 
     private boolean enabled = true;
     private int maxFiles = DEFAULT_MAX_FILES;
@@ -75,16 +77,27 @@ public class RecoveryPayloadBuilder {
         if (sessionId == null || sessionId.isBlank()) {
             return null;
         }
-        List<FileStateCache.FileEntry> files;
+        List<FileStateCache.FileEntry> files = List.of();
         try {
             int budget = (int) Math.min((long) maxFiles * maxTokensPerFile, Integer.MAX_VALUE);
             files = fileStateCache.snapshot(sessionId, maxFiles, budget);
         } catch (Exception ex) {
             log.warn("RecoveryPayloadBuilder snapshot failed for sessionId={} — skipping recovery payload",
                     sessionId, ex);
-            return null;
+            // File recovery is best-effort; persistent contributors may still have state.
         }
-        if (files == null || files.isEmpty()) {
+        if (files == null) files = List.of();
+        List<String> contributed = new ArrayList<>();
+        for (RecoveryPayloadContributor contributor : contributors) {
+            try {
+                String text = contributor.contribute(sessionId);
+                if (text != null && !text.isBlank()) contributed.add(text.trim());
+            } catch (Exception ex) {
+                log.warn("Recovery payload contributor failed for sessionId={}; skipping contributor",
+                        sessionId, ex);
+            }
+        }
+        if (files.isEmpty() && contributed.isEmpty()) {
             return null;
         }
 
@@ -94,11 +107,15 @@ public class RecoveryPayloadBuilder {
         // B2 / preemptive / post-overflow / session-memory) and persistence; we only changed
         // the rendered string here.
         sb.append("<system-reminder>\n");
-        sb.append("[Recovery payload — ")
-          .append(files.size())
-          .append(files.size() == 1 ? " most recently accessed file at " : " most recently accessed files at ")
-          .append(HEADER_TIME_FMT.format(Instant.now()))
-          .append("]\n\n");
+        if (!files.isEmpty()) {
+            sb.append("[Recovery payload — ")
+                    .append(files.size())
+                    .append(files.size() == 1 ? " most recently accessed file at " : " most recently accessed files at ")
+                    .append(HEADER_TIME_FMT.format(Instant.now()))
+                    .append("]\n\n");
+        } else {
+            sb.append("[Recovery payload at ").append(HEADER_TIME_FMT.format(Instant.now())).append("]\n\n");
+        }
 
         for (FileStateCache.FileEntry e : files) {
             sb.append("### ")
@@ -116,6 +133,9 @@ public class RecoveryPayloadBuilder {
                 sb.append('\n');
             }
             sb.append("```\n\n");
+        }
+        for (String text : contributed) {
+            sb.append("## Restored persistent state\n").append(text).append("\n\n");
         }
         sb.append("</system-reminder>\n");
         return Message.user(sb.toString());
@@ -149,5 +169,10 @@ public class RecoveryPayloadBuilder {
 
     public int getMaxTokensPerFile() {
         return maxTokensPerFile;
+    }
+
+    public void setContributors(List<RecoveryPayloadContributor> contributors) {
+        this.contributors = contributors == null ? List.of()
+                : contributors.stream().filter(java.util.Objects::nonNull).toList();
     }
 }

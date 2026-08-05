@@ -1,6 +1,6 @@
 # SkillForge 文档
 
-> 更新于：2026-07-29（Agent Context Runtime P0–P2 已交付，P3–P9 分期实施已批准）
+> 更新于：2026-08-05（Task/目标连续性/Artifact 恢复已完成自动化与运行态验证）
 > Agent 规则：先读这里，再只打开当前任务链接到的文档。
 
 ## 从这里开始
@@ -16,6 +16,7 @@
 
 | ID | 标题 | 状态 | 需求包 |
 | --- | --- | --- | --- |
+| **AGENT-GOAL-AND-TOOL-RECOVERY** | 持久化 Task、目标连续性与 Artifact 恢复 | implemented / Full automated verified；待浏览器与真机 dogfood | [需求包](requirements/active/2026-08-05-AGENT-GOAL-AND-TOOL-RECOVERY/index.md) |
 | **HARNESS-BENCHMARK-COMPARISON** | SkillForge 与 Claude Code/Codex/OpenHands 的同模型公开 Benchmark 横向评测 | 需求包完成；等待 Context Governance P2–P6 | [需求包](requirements/active/2026-07-29-HARNESS-BENCHMARK-COMPARISON/index.md) |
 | **AGENT-CONTEXT-GOVERNANCE** | System Prompt、Instruction、Reminder、ToolSearch、Memory 与 Compact 连续性治理 | P0–P2 已交付 / Full；P3–P9 已批准分期实施 | [需求包](requirements/active/2026-07-26-AGENT-CONTEXT-GOVERNANCE/index.md) |
 | **REALTIME-VOICE-CONVERSATION** | iOS 实时语音对话、打断、字幕与 Agent Tool 编排 | Design Proposed / Full；Ark first，Qwen-compatible | [需求包](requirements/active/2026-07-23-REALTIME-VOICE-CONVERSATION/index.md) |
