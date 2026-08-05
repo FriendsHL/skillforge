@@ -133,7 +133,7 @@ skillforge/
 │                            #   定时计划、Agent、附件与设置
 ├── skillforge-cli          # CLI 客户端：picocli + OkHttp, Agent YAML 导入/导出
 └── system-skills/          # 文件型系统 Skill（启动时自动加载，不可删除）
-    ├── browser/            #   浏览器自动化（agent-browser CLI）
+    ├── browser/            #   通过已安装的 Node Playwright 进行浏览器自动化
     ├── clawhub/            #   ClawHub 市场搜索 + 安装
     ├── github/             #   GitHub API + gh CLI
     ├── skill-creator/      #   Agent 自己创建 / 编辑 / 校验 SKILL.md 包
@@ -658,7 +658,7 @@ clawhub:
 
 | Skill | 说明 |
 |-------|------|
-| **Browser** | 浏览器自动化（`npx agent-browser` CLI） |
+| **Browser** | 通过已安装的 Node Playwright 进行浏览器自动化 |
 | **ClawHub** | 市场搜索 + 安装 |
 | **GitHub** | GitHub API + `gh` CLI |
 | **SkillHub** | SkillHub 市场 |

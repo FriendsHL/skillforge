@@ -668,7 +668,7 @@ export async function fetchCollabRunSnapshot(collabRunId: string): Promise<Colla
 
 ### 浏览器 e2e
 
-- [ ] `agent-browser` 起 Coordinator session → 用 chat 输入触发 TeamCreate × 2 → 跳 `/collab-runs/:id` → 断言 3 个节点
+- [ ] 加载 `browser` Skill，通过项目内置 Node Playwright 启动 Coordinator session → 用 chat 输入触发 TeamCreate × 2 → 跳 `/collab-runs/:id` → 断言 3 个节点
 - [ ] 等子 agent 完成 → 节点变绿
 - [ ] 刷新页面 → snapshot 重建后看板仍正确（D5 验证）
 

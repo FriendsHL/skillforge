@@ -388,11 +388,6 @@ skillforge:
   # but production runtime ignores it — SkillStorageService/UserSkillLoader use
   # SkillForgeHomeResolver.getRuntimeRoot() as source of truth.
   skills-dir: ./data/skills
-  # Browser skill persistent profile (keeps login cookies/storage across runs)
-  browser:
-    profile-dir: ./data/browser-profile
-    default-timeout-ms: 30000
-    login-timeout-seconds: 300
   # LLM provider configs
   llm:
     default-provider: ark  # 2026-06-05: 切回 ark（5h 配额已重置；ark 的 deepseek-flash/glm-5.1/doubao-lite 是正经配置，judge 用 doubao-lite 非推理能返数字）。短暂切 xiaomi-mimo 是因当时 ark 配额耗尽，现恢复。default-provider 决定 GenerateCandidate(PromptImproverService) + eval judge 等走默认 provider 的组件。

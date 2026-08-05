@@ -24,6 +24,8 @@ class GlobalSystemPromptProviderTest {
         assertThat(prompt).contains("SkillForge AI Agent 平台");
         assertThat(prompt).contains("工具调用");
         assertThat(prompt).contains("Grep", "Read", "Edit", "memory_search");
+        assertThat(prompt).contains("`browser` Skill", "Node Playwright");
+        assertThat(prompt).doesNotContain("agent-browser");
         assertThat(prompt).contains("之前", "上次");
         assertThat(prompt).contains(
                 "### 任务进度管理（TodoWrite）",

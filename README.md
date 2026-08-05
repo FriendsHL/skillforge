@@ -133,7 +133,7 @@ skillforge/
 │                            #   schedules, agents, attachments, settings
 ├── skillforge-cli          # CLI client: picocli + OkHttp, agent YAML import/export
 └── system-skills/          # File-based system skills (auto-loaded, non-deletable)
-    ├── browser/            #   Browser automation via agent-browser CLI
+    ├── browser/            #   Browser automation via installed Node Playwright
     ├── clawhub/            #   ClawHub marketplace search + install
     ├── github/             #   GitHub API + gh CLI
     ├── skill-creator/      #   Scaffold / edit / validate SKILL.md packages
@@ -683,7 +683,7 @@ clawhub:
 
 | Skill | Description |
 |-------|-------------|
-| **Browser** | Web automation via `npx agent-browser` CLI |
+| **Browser** | Web automation via the installed Node Playwright runtime |
 | **ClawHub** | Marketplace search + install |
 | **GitHub** | GitHub API + `gh` CLI |
 | **SkillHub** | SkillHub marketplace |

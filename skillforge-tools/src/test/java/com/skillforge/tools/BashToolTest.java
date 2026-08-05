@@ -140,7 +140,9 @@ class BashToolTest {
         assertThat(tool.getDescription())
                 .contains("exit status")
                 .contains("600000")
+                .contains("browser Skill", "Playwright workflow")
                 .doesNotContain("Use Read instead")
+                .doesNotContain("Browser tools")
                 .doesNotContain("Git safety");
         assertThatNoException().isThrownBy(tool::getToolSchema);
     }

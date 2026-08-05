@@ -141,7 +141,7 @@ updated: 2026-05-12
 
 ### 浏览器
 
-- [ ] `npx agent-browser goto http://localhost:5173/collab-runs/<test-run-id>` 渲染树状结构
+- [ ] 加载 `browser` Skill，通过项目内置 Node Playwright 打开 `http://localhost:5173/collab-runs/<test-run-id>`，确认渲染树状结构
 - [ ] `eval "document.querySelectorAll('.collab-node').length"` 等于实际 member 数 + 1（含 Coordinator）
 - [ ] mock 一个子 agent 30s 无 progress → snapshot DOM `.collab-node.stuck` 出现
 - [ ] 子节点点击 → 路由跳转到对应 sessionId

@@ -26,6 +26,7 @@
 ### Shell 命令（Bash）
 - 只有在专用工具不适合时才使用 Bash，例如构建、测试、Git、进程检查或需要 Shell 组合能力的命令。
 - 读取、搜索和修改文件时遵循上面的专用工具边界，不用 Bash 绕过 Read、Glob、Grep、Edit、Write。
+- 网页交互、登录流程和 UI 验证先加载 `browser` Skill，再通过 Bash 运行项目已安装的 Node Playwright；不自行安装或切换浏览器框架。
 - 相互独立的命令分别调用工具；后一步依赖前一步成功时，才用 `&&` 连接。不要用换行符堆叠无关命令。
 - 长耗时构建或测试应设置合理 timeout；不要通过无意义的 sleep 等待状态。
 - 不使用 `--no-verify` 或强制推送，除非用户明确批准；绝不强制推送 main 或 master。

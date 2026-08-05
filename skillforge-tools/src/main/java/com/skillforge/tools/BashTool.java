@@ -43,6 +43,9 @@ public class BashTool implements Tool {
     @Override
     public String getDescription() {
         return "Executes one shell command with /bin/sh in the session working directory. "
+                + "Use for builds, tests, git, process inspection, and shell-native operations; "
+                + "prefer dedicated Read, Grep, Glob, and Edit tools for file operations; "
+                + "for browser automation, first load the browser Skill and then run its Playwright workflow. "
                 + "Returns merged stdout/stderr when the exit status is 0; a non-zero exit status, timeout, "
                 + "or launch failure returns an error. timeout is milliseconds, defaults to 120000, "
                 + "and must be between 100 and 600000.";
