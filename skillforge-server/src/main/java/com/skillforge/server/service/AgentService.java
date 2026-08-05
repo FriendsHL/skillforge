@@ -41,19 +41,30 @@ public class AgentService {
     private final AgentRepository agentRepository;
     private final ObjectMapper objectMapper;
     private final BehaviorRuleRegistry behaviorRuleRegistry;
+    private final AgentToolConfigurationValidator toolConfigurationValidator;
 
     public AgentService(AgentRepository agentRepository,
                         ObjectMapper objectMapper,
                         BehaviorRuleRegistry behaviorRuleRegistry) {
+        this(agentRepository, objectMapper, behaviorRuleRegistry, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public AgentService(AgentRepository agentRepository,
+                        ObjectMapper objectMapper,
+                        BehaviorRuleRegistry behaviorRuleRegistry,
+                        AgentToolConfigurationValidator toolConfigurationValidator) {
         this.agentRepository = agentRepository;
         this.objectMapper = objectMapper;
         this.behaviorRuleRegistry = behaviorRuleRegistry;
+        this.toolConfigurationValidator = toolConfigurationValidator;
     }
 
     public AgentEntity createAgent(AgentEntity agent) {
         validateLifecycleHooksSize(agent);
         validateLifecycleHooksSemantics(agent);
         if (agent.isPublic() == null) agent.setPublic(false);
+        validateToolConfiguration(agent);
         return agentRepository.save(agent);
     }
 
@@ -97,6 +108,7 @@ public class AgentService {
         // Treat any non-null value as "user explicitly set this", including empty string
         // which means "clear the whitelist" — null = "leave as-is".
         if (updated.getMcpServerIds() != null) existing.setMcpServerIds(updated.getMcpServerIds());
+        validateToolConfiguration(existing);
         AgentEntity saved = agentRepository.save(existing);
         log.info("Agent {} updated: fields={}", id, nonNullFieldNames(updated));
         return saved;
@@ -285,6 +297,7 @@ public class AgentService {
      * 将 AgentEntity 转为 core 模块的 AgentDefinition，解析 JSON 字段。
      */
     public AgentDefinition toAgentDefinition(AgentEntity entity) {
+        validateToolConfiguration(entity);
         AgentDefinition def = new AgentDefinition();
         def.setId(String.valueOf(entity.getId()));
         def.setName(entity.getName());
@@ -382,6 +395,14 @@ public class AgentService {
         }
 
         return def;
+    }
+
+    private void validateToolConfiguration(AgentEntity agent) {
+        // The legacy constructor remains for focused unit tests outside Spring. Production
+        // wiring always injects the validator through the @Autowired constructor.
+        if (toolConfigurationValidator != null) {
+            toolConfigurationValidator.validate(agent);
+        }
     }
 
     private LifecycleHooksConfig parseLifecycleHooksLenient(AgentEntity entity) {
