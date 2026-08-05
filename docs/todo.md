@@ -86,6 +86,7 @@
 
 | ID | 触发条件 |
 | --- | --- |
+| **AGENT-TEAM-TASK-GRAPH** | Agent Team/Coordinator 需要共享 owner、依赖、领取、解锁和恢复时升 active |
 | **WF-CONCURRENT-PIPELINE** | AUTOEVOLVING V2(d) 启动或串行 pipeline 成为瓶颈 |
 | **OUTCOMES-RUBRIC-FOUNDATION** | 用户决定把 rubric/grader 升 active |
 | **COMPACT-V2-STORAGE** | recovery 回取或截断 cache 抖动出现真实需求 |

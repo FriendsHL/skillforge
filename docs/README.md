@@ -42,6 +42,7 @@
 
 | ID | 状态 | 需求包 |
 | --- | --- | --- |
+| **AGENT-TEAM-TASK-GRAPH** | Backlog / Full；等待真实 Agent Team 共享任务场景触发 | [需求包](requirements/backlog/AGENT-TEAM-TASK-GRAPH/index.md) |
 | **TASK-RESUME-ON-RESTART** | 单实例 kill-running MVP；Root/SubAgent 边界恢复已实现，Workflow/真 kill 验收待完成 | [需求包](requirements/backlog/TASK-RESUME-ON-RESTART/index.md) |
 | **CONTEXT-OVERFLOW-TRIPLE-FULL-COMPACT** | context overflow 最多三次 Full Compact；Core 已实现并通过 Core+Server 回归 | [需求包](requirements/backlog/CONTEXT-OVERFLOW-TRIPLE-FULL-COMPACT/index.md) |
 | **WF-CONCURRENT-PIPELINE** | AUTOEVOLVING V2(d) | [需求包](requirements/backlog/WF-CONCURRENT-PIPELINE/index.md) |
