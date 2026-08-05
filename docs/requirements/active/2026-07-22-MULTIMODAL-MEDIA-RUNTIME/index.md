@@ -45,9 +45,27 @@
 | P1 | 同步图片闭环 | 订阅端点保护、GenerateImage、Attachment 幂等、Dashboard+iOS 既有 `image_ref` 交付 | Ark Main Agent 真生图、刷新不重复、跨端呈现回归 |
 | P1.1 | 图片迭代闭环 | 显式引用历史图片、EditImage、衍生版本关系、Compact 资产定位 | 编辑不覆盖原图；压缩后从图片卡片继续创作仍指向同一原图 |
 | P2 | 音频与视频异步闭环 | 视频 job、轮询/取消/恢复、转存与两端播放器已实现；TTS、Range/APNs 待后续增量 | 视频 Provider 开通后补真活；音频独立推进 |
-| P3 | 理解与创作体验 | ASR、视频抽帧/字幕、受控 materialization、Media Creator Agent | 多模态问答与专用 Agent 共用同一 Runtime |
+| P3 | 理解与创作体验 | ASR、视频抽帧/字幕、受控 materialization、Playwright 截图视觉闭环、Media Creator Agent | 多模态问答与专用 Agent 共用同一 Runtime |
 
 实时语音仍是独立需求包，不纳入上述四期，避免持续音频会话拖慢文件媒体能力交付。
+
+### P3 增量：Playwright 截图视觉闭环
+
+Playwright 现在通过 `browser` Skill 与 Bash 脚本执行，截图先写入当前 run workspace；
+`SendChannelFile` 可以把该文件交付给用户，
+但 Agent Loop 不会因此自动获得图像像素。后续改造应复用现有 Attachment 协议，不向消息历史
+写入 Base64：
+
+1. 截图仍保留 workspace-relative `path`，供发送、归档和调试。
+2. Server 层将 PNG 导入 `ChatAttachmentService`，生成受管 `attachmentId`。
+3. 通用文件发布边界返回 `PublishedArtifact(image_ref)`，使 Dashboard/iOS 可展示；
+   不恢复自定义 Browser Tool。
+4. 需要 Agent 做视觉判断时，在下一轮 request copy 中 materialize 为 Provider 图片输入；
+   persisted message 始终只保留 `image_ref`。
+5. Compact/replay 必须保留稳定引用，不把图片转成文本摘要或丢失附件身份。
+
+独立验收两条链路：（a）截图可发给用户；（b）视觉模型能根据同一张截图识别
+遮挡、留白、脱敏失败和页面状态，再驱动后续 Playwright action。
 
 ## 与现有需求的关系
 
