@@ -497,7 +497,7 @@ skillforge:
           - glm-5.2
           - deepseek-v4-flash
           - deepseek-v4-pro
-          - kimi-k2.6
+          - kimi-k3
         read-timeout-seconds: 240
 
   # Memory extraction configuration
