@@ -125,6 +125,7 @@ public class ChatAttachmentService implements MessageMaterializer {
     public static final String MODE_CSV_TEXT = "CSV_TEXT";
     public static final String MODE_INTERACTIVE_ARTIFACT_CUSTOM = "INTERACTIVE_ARTIFACT_CUSTOM";
     public static final String MODE_INTERACTIVE_ARTIFACT_TEMPLATE = "INTERACTIVE_ARTIFACT_TEMPLATE";
+    public static final String DERIVATION_REVISE_INTERACTIVE = "REVISE_INTERACTIVE";
     /** Word parser threw at materialization — text-only placeholder shipped. */
     public static final String WORD_PARSE_FAILED = "WORD_PARSE_FAILED";
     /** Excel parser threw at materialization — text-only placeholder shipped. */
@@ -354,13 +355,28 @@ public class ChatAttachmentService implements MessageMaterializer {
             String caption,
             Path artifactWorkspace,
             InteractiveArtifactManifest manifest) {
+        return importInteractiveArtifact(sessionId, userId, toolUseId, source, caption,
+                artifactWorkspace, manifest, null);
+    }
+
+    public ChatAttachmentEntity importInteractiveArtifact(
+            String sessionId,
+            Long userId,
+            String toolUseId,
+            Path source,
+            String caption,
+            Path artifactWorkspace,
+            InteractiveArtifactManifest manifest,
+            String replacementArtifactId) {
         requireGeneratedIdentity(sessionId, userId, toolUseId);
+        String replacementId = requireOwnedInteractiveReplacement(
+                replacementArtifactId, sessionId, userId, toolUseId);
         String manifestJson = serializeManifest(manifest);
         String lockKey = sessionId + '\0' + toolUseId;
         Object lock = GENERATED_IMPORT_LOCKS[Math.floorMod(lockKey.hashCode(), GENERATED_IMPORT_LOCKS.length)];
         synchronized (lock) {
             return importInteractiveArtifactLocked(sessionId, userId, toolUseId, source, caption,
-                    artifactWorkspace, manifest, manifestJson);
+                    artifactWorkspace, manifest, manifestJson, replacementId);
         }
     }
 
@@ -378,7 +394,22 @@ public class ChatAttachmentService implements MessageMaterializer {
             String caption,
             byte[] htmlBytes,
             InteractiveArtifactManifest manifest) {
+        return importInteractiveArtifactBytes(sessionId, userId, toolUseId, filename, caption,
+                htmlBytes, manifest, null);
+    }
+
+    public ChatAttachmentEntity importInteractiveArtifactBytes(
+            String sessionId,
+            Long userId,
+            String toolUseId,
+            String filename,
+            String caption,
+            byte[] htmlBytes,
+            InteractiveArtifactManifest manifest,
+            String replacementArtifactId) {
         requireGeneratedIdentity(sessionId, userId, toolUseId);
+        String replacementId = requireOwnedInteractiveReplacement(
+                replacementArtifactId, sessionId, userId, toolUseId);
         String safeFilename = requireTrustedInteractiveFilename(filename);
         String safeCaption = sanitizeCaption(caption);
         byte[] trustedBytes = htmlBytes == null ? null : htmlBytes.clone();
@@ -391,7 +422,7 @@ public class ChatAttachmentService implements MessageMaterializer {
         synchronized (lock) {
             return importInteractiveArtifactBytesLocked(
                     sessionId, userId, toolUseId, safeFilename, safeCaption,
-                    trustedBytes, contentHash, manifestJson);
+                    trustedBytes, contentHash, manifestJson, replacementId);
         }
     }
 
@@ -403,13 +434,15 @@ public class ChatAttachmentService implements MessageMaterializer {
             String safeCaption,
             byte[] htmlBytes,
             String contentHash,
-            String manifestJson) {
+            String manifestJson,
+            String replacementArtifactId) {
         String id = generatedAttachmentId(sessionId, toolUseId);
         var existing = attachmentRepository.findBySessionIdAndSourceToolUseId(sessionId, toolUseId);
         if (existing.isPresent()) {
             return reserveMatchingInteractiveReplay(
                     existing.get(), id, sessionId, userId, toolUseId, safeFilename, safeCaption,
-                    htmlBytes.length, contentHash, manifestJson, MODE_INTERACTIVE_ARTIFACT_TEMPLATE);
+                    htmlBytes.length, contentHash, manifestJson, MODE_INTERACTIVE_ARTIFACT_TEMPLATE,
+                    replacementArtifactId);
         }
 
         Path sessionRoot = storageRoot.toAbsolutePath().normalize().resolve(sessionId).normalize();
@@ -433,7 +466,7 @@ public class ChatAttachmentService implements MessageMaterializer {
             ChatAttachmentEntity entity = generatedInteractiveEntity(
                     id, sessionId, userId, toolUseId, safeFilename, safeCaption,
                     htmlBytes.length, contentHash, target, manifestJson,
-                    MODE_INTERACTIVE_ARTIFACT_TEMPLATE);
+                    MODE_INTERACTIVE_ARTIFACT_TEMPLATE, replacementArtifactId);
             try {
                 ChatAttachmentEntity saved = attachmentRepository.saveAndFlush(entity);
                 installedTarget = null;
@@ -448,7 +481,7 @@ public class ChatAttachmentService implements MessageMaterializer {
                 return reserveMatchingInteractiveReplay(
                         replay, id, sessionId, userId, toolUseId, safeFilename, safeCaption,
                         htmlBytes.length, contentHash, manifestJson,
-                        MODE_INTERACTIVE_ARTIFACT_TEMPLATE);
+                        MODE_INTERACTIVE_ARTIFACT_TEMPLATE, replacementArtifactId);
             }
         } catch (IOException e) {
             throw new IllegalStateException("Failed to import trusted interactive artifact", e);
@@ -464,7 +497,8 @@ public class ChatAttachmentService implements MessageMaterializer {
 
     private ChatAttachmentEntity importInteractiveArtifactLocked(
             String sessionId, Long userId, String toolUseId, Path source, String caption,
-            Path artifactWorkspace, InteractiveArtifactManifest manifest, String manifestJson) {
+            Path artifactWorkspace, InteractiveArtifactManifest manifest, String manifestJson,
+            String replacementArtifactId) {
         String id = generatedAttachmentId(sessionId, toolUseId);
         Path sessionRoot = storageRoot.toAbsolutePath().normalize().resolve(sessionId).normalize();
         requireUnderStorageRoot(sessionRoot);
@@ -492,7 +526,8 @@ public class ChatAttachmentService implements MessageMaterializer {
                 if (existing.isPresent()) {
                     return reserveMatchingInteractiveReplay(
                             existing.get(), id, sessionId, userId, toolUseId, safeFilename, safeCaption,
-                            sourceSize, copiedHash, manifestJson, MODE_INTERACTIVE_ARTIFACT_CUSTOM);
+                            sourceSize, copiedHash, manifestJson, MODE_INTERACTIVE_ARTIFACT_CUSTOM,
+                            replacementArtifactId);
                 }
 
                 Path target = sessionRoot.resolve(id + "." + UUID.randomUUID() + ".html").normalize();
@@ -502,7 +537,7 @@ public class ChatAttachmentService implements MessageMaterializer {
                 ChatAttachmentEntity entity = generatedInteractiveEntity(
                         id, sessionId, userId, toolUseId, safeFilename, safeCaption,
                         sourceSize, copiedHash, target, manifestJson,
-                        MODE_INTERACTIVE_ARTIFACT_CUSTOM);
+                        MODE_INTERACTIVE_ARTIFACT_CUSTOM, replacementArtifactId);
                 try {
                     ChatAttachmentEntity saved = attachmentRepository.saveAndFlush(entity);
                     installedTarget = null;
@@ -516,7 +551,8 @@ public class ChatAttachmentService implements MessageMaterializer {
                                     "Interactive artifact idempotency conflict could not be resolved", conflict));
                     return reserveMatchingInteractiveReplay(
                             replay, id, sessionId, userId, toolUseId, safeFilename, safeCaption,
-                            sourceSize, copiedHash, manifestJson, MODE_INTERACTIVE_ARTIFACT_CUSTOM);
+                            sourceSize, copiedHash, manifestJson, MODE_INTERACTIVE_ARTIFACT_CUSTOM,
+                            replacementArtifactId);
                 }
             }
         } catch (IOException e) {
@@ -534,7 +570,7 @@ public class ChatAttachmentService implements MessageMaterializer {
     private ChatAttachmentEntity generatedInteractiveEntity(
             String id, String sessionId, Long userId, String toolUseId, String filename,
             String caption, long size, String hash, Path target, String manifestJson,
-            String processingMode) {
+            String processingMode, String replacementArtifactId) {
         ChatAttachmentEntity entity = new ChatAttachmentEntity();
         entity.setId(id);
         entity.setSessionId(sessionId);
@@ -551,6 +587,10 @@ public class ChatAttachmentService implements MessageMaterializer {
         entity.setCaption(sanitizeCaption(caption));
         entity.setInteractiveManifestJson(manifestJson);
         entity.setProcessingMode(processingMode);
+        if (replacementArtifactId != null) {
+            entity.setDerivedFromAttachmentId(replacementArtifactId);
+            entity.setDerivationOperation(DERIVATION_REVISE_INTERACTIVE);
+        }
         entity.setBoundAt(Instant.now());
         return entity;
     }
@@ -574,7 +614,8 @@ public class ChatAttachmentService implements MessageMaterializer {
             long contentSize,
             String contentHash,
             String manifestJson,
-            String processingMode) {
+            String processingMode,
+            String replacementArtifactId) {
         boolean manifestMatches;
         try {
             manifestMatches = existing.getInteractiveManifestJson() != null
@@ -595,6 +636,9 @@ public class ChatAttachmentService implements MessageMaterializer {
                 || contentSize != existing.getSizeBytes()
                 || !contentHash.equals(existing.getSha256())
                 || !processingMode.equals(existing.getProcessingMode())
+                || !Objects.equals(replacementArtifactId, existing.getDerivedFromAttachmentId())
+                || !Objects.equals(replacementArtifactId == null ? null : DERIVATION_REVISE_INTERACTIVE,
+                existing.getDerivationOperation())
                 || !manifestMatches) {
             throw new IllegalStateException(
                     "The same tool call attempted to publish a different interactive artifact payload");
@@ -612,15 +656,42 @@ public class ChatAttachmentService implements MessageMaterializer {
             long contentSize,
             String contentHash,
             String manifestJson,
-            String processingMode) {
+            String processingMode,
+            String replacementArtifactId) {
         requireMatchingInteractiveReplay(
                 existing, expectedId, sessionId, userId, toolUseId, safeFilename, safeCaption,
-                contentSize, contentHash, manifestJson, processingMode);
+                contentSize, contentHash, manifestJson, processingMode, replacementArtifactId);
         ChatAttachmentEntity reserved = reserveMatchingReplay(existing, contentHash);
         requireMatchingInteractiveReplay(
                 reserved, expectedId, sessionId, userId, toolUseId, safeFilename, safeCaption,
-                contentSize, contentHash, manifestJson, processingMode);
+                contentSize, contentHash, manifestJson, processingMode, replacementArtifactId);
         return reserved;
+    }
+
+    private String requireOwnedInteractiveReplacement(
+            String replacementArtifactId,
+            String sessionId,
+            Long userId,
+            String toolUseId) {
+        if (replacementArtifactId == null || replacementArtifactId.isBlank()) {
+            return null;
+        }
+        if (replacementArtifactId.length() > 36
+                || replacementArtifactId.equals(generatedAttachmentId(sessionId, toolUseId))) {
+            throw new IllegalArgumentException(
+                    "Replacement artifact must belong to the owned interactive session");
+        }
+        ChatAttachmentEntity source = attachmentRepository.findById(replacementArtifactId)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Replacement artifact does not exist in the owned interactive session"));
+        if (!sessionId.equals(source.getSessionId())
+                || !userId.equals(source.getUserId())
+                || !"interactive".equals(source.getKind())
+                || !"agent_generated".equals(source.getOrigin())) {
+            throw new IllegalArgumentException(
+                    "Replacement artifact must belong to the owned interactive session");
+        }
+        return replacementArtifactId;
     }
 
     private ChatAttachmentEntity importGeneratedFileLocked(

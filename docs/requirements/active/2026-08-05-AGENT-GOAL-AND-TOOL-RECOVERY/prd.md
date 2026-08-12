@@ -104,15 +104,20 @@ objective/acceptanceCriteria 独立状态机。
 
 ### FR-9 两种一级发布模式
 
-- Template：只传 `template_id + initial_data`，不传 `file_path`。
-- Custom：在当前 run artifact workspace 写入新的最终 HTML，再传 `file_path + state_schema`；不直接发布历史路径。
+- Template：只传 `template_id + initial_data`，不传 `entry_file`。
+- Custom：在当前 run artifact workspace 写入新的最终 HTML，再传相对 `entry_file + state_schema`；模型不得复制、
+  重建或猜测 workspace 的绝对路径。运行时继续读取历史消息中的 `file_path`，但不再把它暴露给新模型调用。
 - 模板是快速路径，不是能力边界；Agent 可根据需求自行设计 Custom 页面。
+- 修改既有 Personal App 时可传 `replace_artifact_id`。服务端创建新 Artifact，并通过派生字段关联旧版本；旧消息
+  引用的内容保持不可变，不做原地覆盖。
 
 ### FR-10 Custom 页面规范
 
 - 同时适配 iPhone 与桌面；有清晰标题、摘要、层级、导航/展开细节和原文链接。
 - 转义不可信数据；禁止危险外部脚本和未声明能力；状态必须符合受支持的 `state_schema`。
 - 发布前统一预检 workspace、文件存在性/大小、HTML 能力、schema 和安全规则。
+- HTML 必须是完整文档：显式 doctype、html/body、闭合文档边界和非空可渲染 body；CDATA 包装、HTML 片段和
+  截断文档不得发布成功。
 
 ### FR-11 结构化结果
 
@@ -125,7 +130,9 @@ objective/acceptanceCriteria 独立状态机。
   "errorType": "VALIDATION",
   "retryable": false,
   "failedField": "state_schema",
-  "suggestedAction": "修正 schema 后重新发布"
+  "suggestedAction": "修正 schema 后重新发布",
+  "recoveryAction": "CORRECT_ARGUMENTS",
+  "preserveUserGoal": true
 }
 ```
 

@@ -19,6 +19,8 @@ Artifact 工具失败后 Agent 围绕工具错误偏离用户目标的问题。D
 5. `PublishInteractiveArtifact` 的 template/custom 契约、通用页面规范、预检和结构化错误。
 6. Dashboard 与 iOS 的 Task 进度、当前动作、阻塞原因和历史 Todo 卡片兼容。
 7. 真实问题 Session 的脱敏、确定性回放与跨层行为回归测试。
+8. Dogfood Session `93fc675b-c8b9-4e5e-9ac4-439361590983` 的 P0 修正：Custom 发布改用相对
+   `entry_file`，拒绝不可渲染 HTML，结构化返回恢复动作，并支持不可变的 Artifact 修订链。
 
 ## 明确延期
 
@@ -47,6 +49,8 @@ Artifact 工具失败后 Agent 围绕工具错误偏离用户目标的问题。D
 - iOS：305 项单测与 1 项关键 XCUITest 通过；Release Simulator build 与 XcodeGen diff-check 通过；TaskUpdate 卡片覆盖 owner/metadata 增量文案。
 - 运行态：Flyway V188/V189 成功；Task 表存在；Main Assistant 已从 `TodoWrite` 迁移到四个 Task 工具；认证后的 Task snapshot API 返回 200，未知 Session 返回结构化 404。
 - Full Pipeline 第三轮独立审查为 `PASS_WITH_NOTES`，0 blocker / 0 major；审查留下的 3 个测试与呈现小项均已补齐并重新验证。
+- Artifact P0 follow-up：聚焦测试 72/72；后端全量 3558 项执行、0 failure / 0 error、179 skipped；真实
+  PostgreSQL 验证 V191 可重复更新派生操作约束，并由完整 Flyway 路径从 V187 升至 V191。
 - 环境限制：当前自动化浏览器通道没有可用实例，因此未声称完成真实浏览器交互验收；用户端浏览器与 iOS 真机体验保留为 dogfood 门。
 
 ## 文档

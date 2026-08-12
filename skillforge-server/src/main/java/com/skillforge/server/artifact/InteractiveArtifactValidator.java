@@ -54,6 +54,15 @@ public final class InteractiveArtifactValidator {
     );
     private static final Pattern PROTOCOL_RELATIVE_URL = pattern("//[^/\\s?#]");
     private static final Pattern EXECUTABLE_PROTOCOL_RELATIVE_URL = pattern("['\"`]//[^/]");
+    private static final Pattern HTML_DOCUMENT_START = Pattern.compile(
+            "\\A\\s*<!doctype\\s+html(?:\\s+[^>]*)?>\\s*<html(?:\\s[^>]*)?>",
+            Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
+    private static final Pattern EXPLICIT_BODY = Pattern.compile(
+            "<body(?:\\s[^>]*)?>", Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
+    private static final Pattern HTML_DOCUMENT_END = Pattern.compile(
+            "</body\\s*>\\s*</html\\s*>\\s*\\z", Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
+    private static final Set<String> NON_RENDERING_BODY_ELEMENTS =
+            Set.of("script", "style", "template", "noscript");
     private static final List<ExecutableRule> FORBIDDEN_EXECUTABLE_SCRIPT = List.of(
             scriptRule("NETWORK_ACCESS", "network API such as fetch",
                     "Remove network calls; Personal Apps must operate entirely offline.",
@@ -214,6 +223,21 @@ public final class InteractiveArtifactValidator {
             } else if ("script".equals(tag)) {
                 scanScriptElement(element);
             }
+        }
+        validateDocumentStructure(html, document);
+    }
+
+    private static void validateDocumentStructure(String html, Document document) {
+        Element body = document.body();
+        boolean hasRenderableBody = body != null
+                && (!body.ownText().isBlank() || body.children().stream()
+                .anyMatch(child -> !NON_RENDERING_BODY_ELEMENTS.contains(child.normalName())));
+        if (!HTML_DOCUMENT_START.matcher(html).find()
+                || !EXPLICIT_BODY.matcher(html).find()
+                || !HTML_DOCUMENT_END.matcher(html).find()
+                || !hasRenderableBody) {
+            throw invalid("HTML document structure requires <!doctype html>, explicit html/body tags, "
+                    + "and a non-empty renderable body");
         }
     }
 

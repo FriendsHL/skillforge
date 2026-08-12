@@ -102,7 +102,9 @@ Task 不依赖历史 `tool_use/tool_result` 恢复。Reminder 每轮按 Session 
 ### 7.1 Mode adapter
 
 `PublishInteractiveArtifact` 在执行前解析为互斥的 `TemplateRequest` 或 `CustomFileRequest`，混传/漏传立即返回
-validation error。Custom 解析后的真实路径必须仍在当前 run workspace 内。
+validation error。Custom 的模型协议只暴露相对 `entry_file`，由服务端相对当前 run workspace 解析；绝对
+`file_path` 仅保留为历史 trace 重放兼容输入，不出现在 Tool Schema 和 workspace authoring instruction 中。
+解析后的真实路径必须仍在当前 run workspace 内。
 
 ### 7.2 Preflight
 
@@ -110,7 +112,7 @@ validation error。Custom 解析后的真实路径必须仍在当前 run workspa
 
 1. 参数互斥与必填。
 2. workspace 和 real path containment。
-3. 文件类型、大小、UTF-8 与自包含 HTML。
+3. 文件类型、大小、UTF-8、完整文档结构与非空可渲染 body。
 4. 禁止能力/外部脚本/危险 URL 检查。
 5. `state_schema` 大小、深度、节点和受支持关键字校验。
 6. 发布存储。
@@ -119,7 +121,17 @@ validation error。Custom 解析后的真实路径必须仍在当前 run workspa
 `ARTIFACT_FILE_NOT_FOUND`、`ARTIFACT_FORBIDDEN_CAPABILITY`、`ARTIFACT_SCHEMA_INVALID`、
 `ARTIFACT_IO_FAILURE`。成功仅返回引用和状态；Renderer 对 HTML/base64 设置硬上限。
 
-### 7.3 通用 authoring guideline
+所有失败增加稳定 `recoveryAction` 和 `preserveUserGoal=true`。路径类失败引导 `WRITE_CURRENT_ENTRY`，HTML/能力
+失败引导 `EDIT_CURRENT_ENTRY`，修订来源失败引导 `SELECT_OWNED_ARTIFACT`；输出不回显 HTML、base64 或本地绝对
+路径。
+
+### 7.3 不可变修订
+
+`replace_artifact_id` 必须指向当前 user/session 下的 agent-generated interactive Artifact。发布仍生成新的、由
+tool-use identity 决定的 Attachment ID，并复用 `derived_from_attachment_id` 与 `derivation_operation` 记录
+`REVISE_INTERACTIVE`。同一 tool call 的重放还必须匹配修订来源；不同内容或不同来源继续触发幂等冲突。
+
+### 7.4 通用 authoring guideline
 
 不新增内容特定模板。提供一份通用交互页面规范，指导 Agent 根据用户需求决定信息架构、响应式布局、展开阅读和
 来源跳转；现有 template 保持兼容并作为快速路径。

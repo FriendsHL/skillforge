@@ -53,8 +53,11 @@ public class PublishInteractiveArtifactTool implements Tool {
         return "Publish one offline HTML Personal App into the current chat. Platform templates are an "
                 + "optional fast path; custom file mode is a first-class option when the user's layout or "
                 + "interaction needs do not fit a template. Provide exactly one source: template_id, or "
-                + "file_path for a custom self-contained offline HTML file newly written in the current run artifact "
-                + "workspace. Custom pages should be responsive on iPhone and desktop, use clear hierarchy "
+                + "entry_file for a custom self-contained offline HTML document newly written in the current run "
+                + "artifact workspace. entry_file is relative to that workspace; never copy or reconstruct its "
+                + "absolute path. To revise an already published Personal App, pass its artifact id as "
+                + "replace_artifact_id; the result is a new traceable version and does not overwrite history. "
+                + "Custom pages should be responsive on iPhone and desktop, use clear hierarchy "
                 + "and expandable detail where useful; source links must put the absolute "
                 + "http(s) URL in data-sf-url on a button or link-like control; the platform bridge handles "
                 + "its click with user confirmation. URLs inside executable JavaScript are forbidden. "
@@ -72,12 +75,21 @@ public class PublishInteractiveArtifactTool implements Tool {
         properties.put("template_id", Map.of(
                 "type", "string",
                 "enum", templateCatalog.templateIds(),
-                "description", "Platform-owned Personal App template. Do not combine with file_path."));
-        properties.put("file_path", Map.of(
+                "description", "Platform-owned Personal App template. Do not combine with entry_file."));
+        properties.put("entry_file", Map.of(
                 "type", "string",
-                "description", "Absolute path to a custom UTF-8 self-contained HTML file in the current "
-                        + "run artifact workspace. Historical run files must be rewritten into the current "
-                        + "run first. Do not combine with template_id."));
+                "minLength", 1,
+                "maxLength", 255,
+                "description", "Relative path of a custom UTF-8 self-contained HTML document newly written "
+                        + "inside the current run artifact workspace, for example report.html. Do not pass an "
+                        + "absolute path or ../. Historical files must first be rewritten into the current run. "
+                        + "Do not combine with template_id."));
+        properties.put("replace_artifact_id", Map.of(
+                "type", "string",
+                "minLength", 1,
+                "maxLength", 36,
+                "description", "Optional id of an existing Personal App from this same user and session. "
+                        + "Publishes a new version linked to it; the historical artifact remains immutable."));
         properties.put("title", Map.of("type", "string", "minLength", 1, "maxLength", 80));
         properties.put("fallback", Map.of("type", "string", "minLength", 1, "maxLength", 500));
         properties.put("initial_data", Map.of(
@@ -108,7 +120,7 @@ public class PublishInteractiveArtifactTool implements Tool {
     public SkillResult execute(Map<String, Object> input, SkillContext context) {
         if (input == null) {
             return validationFailure("ARTIFACT_INPUT_REQUIRED", "input", false,
-                    "Provide title, fallback, and exactly one of template_id or file_path.");
+                    "Provide title, fallback, and exactly one of template_id or entry_file.");
         }
         String title = string(input, "title");
         String fallback = string(input, "fallback");
@@ -117,11 +129,20 @@ public class PublishInteractiveArtifactTool implements Tool {
                     "Provide non-empty title and fallback fields within the advertised limits.");
         }
 
-        String filePath = string(input, "file_path");
+        String entryFile = string(input, "entry_file");
+        String legacyFilePath = string(input, "file_path");
         String templateId = string(input, "template_id");
-        if ((filePath == null) == (templateId == null)) {
-            return validationFailure("ARTIFACT_MODE_CONFLICT", "file_path|template_id", false,
-                    "Choose exactly one mode: template_id or file_path.");
+        int sourceCount = (entryFile == null ? 0 : 1)
+                + (legacyFilePath == null ? 0 : 1)
+                + (templateId == null ? 0 : 1);
+        if (sourceCount != 1) {
+            return validationFailure("ARTIFACT_MODE_CONFLICT", "entry_file|template_id", false,
+                    "Choose exactly one mode: template_id or entry_file.");
+        }
+        String replacementId = string(input, "replace_artifact_id");
+        if (input.containsKey("replace_artifact_id") && replacementId == null) {
+            return validationFailure("ARTIFACT_REPLACEMENT_INVALID", "replace_artifact_id", false,
+                    "Pass a non-empty Personal App artifact id from this user and session.");
         }
         if (context == null || blank(context.getSessionId()) || context.getUserId() == null
                 || blank(context.getToolUseId())) {
@@ -139,7 +160,8 @@ public class PublishInteractiveArtifactTool implements Tool {
             if (templateId != null) {
                 return publishTemplate(input, context, templateId, title, fallback, suppliedInitialData);
             }
-            return publishCustom(input, context, filePath, title, fallback, suppliedInitialData);
+            return publishCustom(input, context, entryFile, legacyFilePath,
+                    title, fallback, suppliedInitialData);
         } catch (RuntimeException e) {
             return failure(e);
         }
@@ -172,21 +194,27 @@ public class PublishInteractiveArtifactTool implements Tool {
                 title, fallback, initialData, stateSchema);
         artifactValidator.validateManifest(manifest);
 
-        ChatAttachmentEntity attachment = attachmentService.importInteractiveArtifactBytes(
-                context.getSessionId(), context.getUserId(), context.getToolUseId(),
-                template.filename(), string(input, "caption"), template.htmlBytes(), manifest);
-        return success(attachment, manifest);
+        String replacementId = string(input, "replace_artifact_id");
+        ChatAttachmentEntity attachment = replacementId == null
+                ? attachmentService.importInteractiveArtifactBytes(
+                context.getSessionId(), context.getUserId(), context.getToolUseId(), template.filename(),
+                string(input, "caption"), template.htmlBytes(), manifest)
+                : attachmentService.importInteractiveArtifactBytes(
+                context.getSessionId(), context.getUserId(), context.getToolUseId(), template.filename(),
+                string(input, "caption"), template.htmlBytes(), manifest, replacementId);
+        return success(attachment, manifest, replacementId);
     }
 
     private SkillResult publishCustom(
             Map<String, Object> input,
             SkillContext context,
-            String filePath,
+            String entryFile,
+            String legacyFilePath,
             String title,
             String fallback,
             Map<String, Object> suppliedInitialData) {
         if (blank(context.getArtifactOutputDirectory())) {
-            return executionFailure("ARTIFACT_WORKSPACE_UNAVAILABLE", "file_path", false,
+            return executionFailure("ARTIFACT_WORKSPACE_UNAVAILABLE", "entry_file", false,
                     "Create the custom file in the artifact workspace for the current run.");
         }
         Map<String, Object> stateSchema = optionalMap(input, "state_schema");
@@ -201,39 +229,68 @@ public class PublishInteractiveArtifactTool implements Tool {
         Path file;
         Path workspace;
         try {
-            Path suppliedFile = Path.of(filePath);
-            if (!suppliedFile.isAbsolute()) {
-                return validationFailure("ARTIFACT_FILE_PATH_INVALID", "file_path", false,
-                        "Use an absolute file_path inside the current run artifact workspace.");
-            }
-            file = suppliedFile.normalize();
             workspace = Path.of(context.getArtifactOutputDirectory()).toAbsolutePath().normalize();
+            if (entryFile != null) {
+                Path suppliedEntry = Path.of(entryFile);
+                if (suppliedEntry.isAbsolute()) {
+                    return invalidEntryFile();
+                }
+                Path normalizedEntry = suppliedEntry.normalize();
+                if (normalizedEntry.getNameCount() == 0
+                        || normalizedEntry.startsWith("..")) {
+                    return invalidEntryFile();
+                }
+                file = workspace.resolve(normalizedEntry).normalize();
+                if (!file.startsWith(workspace)) {
+                    return invalidEntryFile();
+                }
+            } else {
+                // Compatibility only for persisted/replayed historical tool calls. This field is intentionally
+                // absent from the model-visible schema so new calls cannot depend on opaque run identifiers.
+                Path suppliedFile = Path.of(legacyFilePath);
+                if (!suppliedFile.isAbsolute()) {
+                    return validationFailure("ARTIFACT_FILE_PATH_INVALID", "file_path", false,
+                            "Rewrite the file in the current run and publish it with relative entry_file.");
+                }
+                file = suppliedFile.normalize();
+            }
         } catch (InvalidPathException e) {
-            return validationFailure("ARTIFACT_FILE_PATH_INVALID", "file_path", false,
-                    "Use an absolute file_path inside the current run artifact workspace.");
+            return entryFile != null ? invalidEntryFile()
+                    : validationFailure("ARTIFACT_FILE_PATH_INVALID", "file_path", false,
+                    "Rewrite the file in the current run and publish it with relative entry_file.");
         }
         if (!file.startsWith(workspace)) {
-            return validationFailure("ARTIFACT_WORKSPACE_MISMATCH", "file_path", false,
-                    "Rewrite the final HTML inside the current run artifact workspace, then publish that new path.");
+            return validationFailure("ARTIFACT_WORKSPACE_MISMATCH", "entry_file", false,
+                    "Rewrite the final HTML in the current run workspace and retry with only its relative entry_file.");
         }
         String filename = file.getFileName() == null
                 ? "" : file.getFileName().toString().toLowerCase(java.util.Locale.ROOT);
         if (!(filename.endsWith(".html") || filename.endsWith(".htm"))) {
-            return validationFailure("ARTIFACT_FILE_EXTENSION_INVALID", "file_path", false,
+            return validationFailure("ARTIFACT_FILE_EXTENSION_INVALID", "entry_file", false,
                     "Write the custom Personal App as a .html or .htm file in the current run workspace.");
         }
         if (Files.notExists(file, LinkOption.NOFOLLOW_LINKS)) {
-            return validationFailure("ARTIFACT_FILE_NOT_FOUND", "file_path", false,
-                    "Write the final HTML file in the current run workspace before publishing it.");
+            return validationFailure("ARTIFACT_FILE_NOT_FOUND", "entry_file", false,
+                    "Write the named entry_file in the current run workspace, then publish again.");
         }
         if (!Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)) {
-            return validationFailure("ARTIFACT_FILE_INVALID", "file_path", false,
+            return validationFailure("ARTIFACT_FILE_INVALID", "entry_file", false,
                     "Use a regular, non-symlink HTML file inside the current run workspace.");
         }
-        ChatAttachmentEntity attachment = attachmentService.importInteractiveArtifact(
+        String replacementId = string(input, "replace_artifact_id");
+        ChatAttachmentEntity attachment = replacementId == null
+                ? attachmentService.importInteractiveArtifact(
                 context.getSessionId(), context.getUserId(), context.getToolUseId(), file,
-                string(input, "caption"), workspace, manifest);
-        return success(attachment, manifest);
+                string(input, "caption"), workspace, manifest)
+                : attachmentService.importInteractiveArtifact(
+                context.getSessionId(), context.getUserId(), context.getToolUseId(), file,
+                string(input, "caption"), workspace, manifest, replacementId);
+        return success(attachment, manifest, replacementId);
+    }
+
+    private SkillResult invalidEntryFile() {
+        return validationFailure("ARTIFACT_ENTRY_FILE_INVALID", "entry_file", false,
+                "Write the final HTML in the current run workspace and pass a relative entry_file without ../.");
     }
 
     private static InteractiveArtifactManifest manifest(
@@ -247,7 +304,8 @@ public class PublishInteractiveArtifactTool implements Tool {
 
     private SkillResult success(
             ChatAttachmentEntity attachment,
-            InteractiveArtifactManifest manifest) {
+            InteractiveArtifactManifest manifest,
+            String replacementId) {
         PublishedArtifact artifact = new PublishedArtifact(
                 attachment.getId(), "interactive_artifact_ref", attachment.getFilename(),
                 attachment.getMimeType(), null, null, manifest.fallback(), manifest.title(), 1);
@@ -257,6 +315,10 @@ public class PublishInteractiveArtifactTool implements Tool {
         output.put("address", "/api/chat/attachments/" + attachment.getId() + "/data");
         output.put("status", "published");
         output.put("title", manifest.title());
+        if (replacementId != null) {
+            output.put("replacesArtifactId", replacementId);
+            output.put("revisionMode", "new_version");
+        }
         return SkillResult.success(json(output), List.of(artifact));
     }
 
@@ -273,27 +335,32 @@ public class PublishInteractiveArtifactTool implements Tool {
             return validationFailure("ARTIFACT_INITIAL_DATA_INVALID", "initial_data", false,
                     "Reduce or correct initial_data and keep it within the advertised limits.");
         }
+        if (detail.contains("replacement") || detail.contains("owned interactive session")) {
+            return validationFailure("ARTIFACT_REPLACEMENT_INVALID", "replace_artifact_id", false,
+                    "Use an existing Personal App artifact id owned by this user in the current session.");
+        }
         if (detail.contains("forbidden")) {
-            return validationFailure("ARTIFACT_FORBIDDEN_CAPABILITY", "file_path", false,
+            return validationFailure("ARTIFACT_FORBIDDEN_CAPABILITY", "entry_file", false,
                     "Remove active external resources, network/device access, inline handlers, or other forbidden capabilities.");
         }
         if (failure instanceof SecurityException
                 || detail.contains("workspace") || detail.contains("unsafe component")
                 || detail.contains("outside the current run")) {
-            return validationFailure("ARTIFACT_WORKSPACE_MISMATCH", "file_path", false,
-                    "Rewrite the final HTML inside the current run artifact workspace, then publish that new path.");
+            return validationFailure("ARTIFACT_WORKSPACE_MISMATCH", "entry_file", false,
+                    "Rewrite the final HTML in the current run workspace and retry with only its relative entry_file.");
         }
         if (detail.contains("size limit") || detail.contains("exceeds")) {
-            return validationFailure("ARTIFACT_FILE_TOO_LARGE", "file_path", false,
+            return validationFailure("ARTIFACT_FILE_TOO_LARGE", "entry_file", false,
                     "Reduce the self-contained HTML below the advertised size limit.");
         }
         if (detail.contains("different content") || detail.contains("idempotency")) {
-            return executionFailure("ARTIFACT_IDEMPOTENCY_CONFLICT", "file_path|template_id", false,
+            return executionFailure("ARTIFACT_IDEMPOTENCY_CONFLICT", "entry_file|template_id", false,
                     "Use a new tool call for different content; do not reuse an earlier tool call identity.");
         }
-        if (detail.contains("valid utf-8") || detail.contains("html is required")) {
-            return validationFailure("ARTIFACT_HTML_INVALID", "file_path", false,
-                    "Write a non-empty UTF-8 HTML document and publish that file again.");
+        if (detail.contains("valid utf-8") || detail.contains("html is required")
+                || detail.contains("document structure")) {
+            return validationFailure("ARTIFACT_HTML_INVALID", "entry_file", false,
+                    "Write a complete UTF-8 HTML document with doctype, html, and a non-empty body, then publish again.");
         }
         if (detail.contains("title length") || detail.contains("fallback length")
                 || detail.contains("manifest is required") || detail.contains("schemaversion")) {
@@ -301,10 +368,10 @@ public class PublishInteractiveArtifactTool implements Tool {
                     "Correct the Personal App title, fallback, or manifest metadata before publishing.");
         }
         if (failure instanceof IllegalArgumentException) {
-            return validationFailure("ARTIFACT_INPUT_INVALID", "file_path|state_schema|initial_data", false,
+            return validationFailure("ARTIFACT_INPUT_INVALID", "entry_file|state_schema|initial_data", false,
                     "Correct the invalid Personal App input before publishing again.");
         }
-        return executionFailure("ARTIFACT_IO_FAILURE", "file_path|template_id", true,
+        return executionFailure("ARTIFACT_IO_FAILURE", "entry_file|template_id", true,
                 "Keep the user goal unchanged and retry once after checking the selected source.");
     }
 
@@ -320,7 +387,7 @@ public class PublishInteractiveArtifactTool implements Tool {
         Map<String, Object> payload = baseFailure(
                 SkillResult.ErrorType.VALIDATION,
                 "ARTIFACT_FORBIDDEN_CAPABILITY",
-                "file_path",
+                "entry_file",
                 false,
                 violation.getSuggestedAction());
         payload.put("violationCode", violation.getViolationCode());
@@ -353,7 +420,25 @@ public class PublishInteractiveArtifactTool implements Tool {
         payload.put("retryable", retryable);
         payload.put("failedField", field);
         payload.put("suggestedAction", action);
+        payload.put("recoveryAction", recoveryAction(code));
+        payload.put("preserveUserGoal", true);
         return payload;
+    }
+
+    private static String recoveryAction(String code) {
+        if (code.contains("WORKSPACE") || code.contains("FILE_") || code.contains("ENTRY_FILE")) {
+            return "WRITE_CURRENT_ENTRY";
+        }
+        if (code.contains("HTML") || code.contains("FORBIDDEN_CAPABILITY")) {
+            return "EDIT_CURRENT_ENTRY";
+        }
+        if (code.contains("REPLACEMENT")) {
+            return "SELECT_OWNED_ARTIFACT";
+        }
+        if (code.contains("IO_FAILURE")) {
+            return "RETRY_PUBLISH";
+        }
+        return "CORRECT_ARGUMENTS";
     }
 
     private String json(Map<String, Object> payload) {

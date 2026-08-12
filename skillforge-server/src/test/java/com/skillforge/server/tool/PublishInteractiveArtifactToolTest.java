@@ -63,7 +63,7 @@ class PublishInteractiveArtifactToolTest {
         SkillContext context = context(workspace);
 
         var result = tool.execute(Map.of(
-                "file_path", html.toString(),
+                "entry_file", "budget.html",
                 "title", "July budget",
                 "fallback", "Offline budget planner",
                 "initial_data", Map.of("food", 2600),
@@ -174,7 +174,7 @@ class PublishInteractiveArtifactToolTest {
         initialData.put("subtitle", null);
 
         SkillResult result = tool.execute(Map.of(
-                "file_path", html.toString(),
+                "entry_file", "null-data.html",
                 "title", "App",
                 "fallback", "Offline app",
                 "initial_data", initialData,
@@ -304,7 +304,7 @@ class PublishInteractiveArtifactToolTest {
                 .containsExactly("ai-daily-brief-v1", "budget-planner-v1");
         assertThat((List<String>) schema.get("required"))
                 .containsExactly("title", "fallback")
-                .doesNotContain("file_path", "template_id", "state_schema");
+                .doesNotContain("entry_file", "template_id", "state_schema");
         assertThat(tool.getDescription())
                 .contains("template_id")
                 .contains("custom self-contained offline HTML")
@@ -314,9 +314,12 @@ class PublishInteractiveArtifactToolTest {
                 .contains("Ordinary href navigation is forbidden")
                 .contains("rewrite")
                 .contains("never publish a historical path directly");
-        assertThat(properties.get("file_path").toString())
+        assertThat(properties)
+                .containsKeys("entry_file", "replace_artifact_id")
+                .doesNotContainKey("file_path");
+        assertThat(properties.get("entry_file").toString())
                 .contains("current run")
-                .containsIgnoringCase("historical run");
+                .containsIgnoringCase("relative");
         assertThat(properties.get("state_schema").toString())
                 .contains("string, number, integer, boolean, object, and array")
                 .contains("additionalProperties")
@@ -329,6 +332,90 @@ class PublishInteractiveArtifactToolTest {
     }
 
     @Test
+    void entryFileRejectsAbsoluteAndEscapingPathsBeforeImport() {
+        for (String entryFile : List.of("/tmp/app.html", "../app.html", "nested/../../app.html")) {
+            SkillResult result = tool.execute(Map.of(
+                    "entry_file", entryFile,
+                    "title", "App",
+                    "fallback", "Offline app",
+                    "state_schema", Map.of("type", "object")), context(tempDir));
+
+            assertThat(json(result.getError()))
+                    .containsEntry("errorCode", "ARTIFACT_ENTRY_FILE_INVALID")
+                    .containsEntry("failedField", "entry_file")
+                    .containsEntry("retryable", false)
+                    .containsEntry("recoveryAction", "WRITE_CURRENT_ENTRY")
+                    .containsEntry("preserveUserGoal", true);
+        }
+        verify(attachmentService, never()).importInteractiveArtifact(
+                any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void replacementPublishesANewTrackedRevision() throws Exception {
+        Path html = tempDir.resolve("revised.html");
+        Files.writeString(html, "<!doctype html><html><body>Revised</body></html>");
+        when(attachmentService.importInteractiveArtifact(
+                eq("session-1"), eq(7L), eq("tool-1"), eq(html), eq(null), eq(tempDir), any(),
+                eq("artifact-original")))
+                .thenReturn(attachment("artifact-revision", "revised.html"));
+
+        SkillResult result = tool.execute(Map.of(
+                "entry_file", "revised.html",
+                "replace_artifact_id", "artifact-original",
+                "title", "Revised app",
+                "fallback", "Revised offline app",
+                "state_schema", Map.of("type", "object")), context(tempDir));
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(json(result.getOutput()))
+                .containsEntry("artifactId", "artifact-revision")
+                .containsEntry("replacesArtifactId", "artifact-original")
+                .containsEntry("revisionMode", "new_version");
+    }
+
+    @Test
+    void invalidReplacementReturnsAnActionableNonRetryableResult() throws Exception {
+        Path html = tempDir.resolve("revised.html");
+        Files.writeString(html, "<!doctype html><html><body>Revised</body></html>");
+        when(attachmentService.importInteractiveArtifact(
+                eq("session-1"), eq(7L), eq("tool-1"), eq(html), eq(null), eq(tempDir), any(),
+                eq("artifact-foreign")))
+                .thenThrow(new IllegalArgumentException(
+                        "Replacement artifact must belong to the owned interactive session"));
+
+        SkillResult result = tool.execute(Map.of(
+                "entry_file", "revised.html",
+                "replace_artifact_id", "artifact-foreign",
+                "title", "Revised app",
+                "fallback", "Revised offline app",
+                "state_schema", Map.of("type", "object")), context(tempDir));
+
+        assertThat(json(result.getError()))
+                .containsEntry("errorCode", "ARTIFACT_REPLACEMENT_INVALID")
+                .containsEntry("failedField", "replace_artifact_id")
+                .containsEntry("retryable", false)
+                .containsEntry("recoveryAction", "SELECT_OWNED_ARTIFACT")
+                .containsEntry("preserveUserGoal", true);
+    }
+
+    @Test
+    void malformedReplacementDoesNotSilentlyPublishAnUntrackedVersion() {
+        SkillResult result = tool.execute(Map.of(
+                "entry_file", "revised.html",
+                "replace_artifact_id", 42,
+                "title", "Revised app",
+                "fallback", "Revised offline app",
+                "state_schema", Map.of("type", "object")), context(tempDir));
+
+        assertThat(json(result.getError()))
+                .containsEntry("errorCode", "ARTIFACT_REPLACEMENT_INVALID")
+                .containsEntry("recoveryAction", "SELECT_OWNED_ARTIFACT");
+        verify(attachmentService, never()).importInteractiveArtifact(
+                any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
     void returnsCustomImportFailureAsSkillResultForTheLlm() throws Exception {
         Path workspace = tempDir;
         Path html = workspace.resolve("app.html");
@@ -338,7 +425,7 @@ class PublishInteractiveArtifactToolTest {
                 .thenThrow(new SecurityException("source is outside the current run workspace"));
 
         SkillResult result = tool.execute(Map.of(
-                "file_path", html.toString(),
+                "entry_file", "app.html",
                 "title", "App",
                 "fallback", "Offline app",
                 "state_schema", Map.of("type", "object", "properties", Map.of())),
@@ -350,7 +437,7 @@ class PublishInteractiveArtifactToolTest {
                 .containsEntry("errorCode", "ARTIFACT_WORKSPACE_MISMATCH")
                 .containsEntry("errorType", "VALIDATION")
                 .containsEntry("retryable", false)
-                .containsEntry("failedField", "file_path")
+                .containsEntry("failedField", "entry_file")
                 .containsKey("suggestedAction");
         assertThat(result.getError()).doesNotContain("<html", "data:text/html;base64");
     }
@@ -361,7 +448,7 @@ class PublishInteractiveArtifactToolTest {
         Files.writeString(file, "<!doctype html><title>App</title>");
 
         SkillResult result = tool.execute(Map.of(
-                "file_path", file.toString(),
+                "entry_file", "app.txt",
                 "title", "App",
                 "fallback", "Offline app",
                 "state_schema", Map.of("type", "object")), context(tempDir));
@@ -384,7 +471,7 @@ class PublishInteractiveArtifactToolTest {
                 .thenThrow(new IllegalArgumentException("Interactive artifact HTML must be valid UTF-8"));
 
         SkillResult result = tool.execute(Map.of(
-                "file_path", html.toString(),
+                "entry_file", "invalid.html",
                 "title", "App",
                 "fallback", "Offline app",
                 "state_schema", Map.of("type", "object")), context(tempDir));
@@ -399,7 +486,7 @@ class PublishInteractiveArtifactToolTest {
     @Test
     void modeConflictReturnsStableStructuredValidationError() {
         SkillResult result = tool.execute(Map.of(
-                "file_path", "/tmp/artifacts/app.html",
+                "entry_file", "app.html",
                 "template_id", "ai-daily-brief-v1",
                 "title", "App",
                 "fallback", "Offline app",
@@ -408,7 +495,7 @@ class PublishInteractiveArtifactToolTest {
         assertThat(result.getErrorType()).isEqualTo(SkillResult.ErrorType.VALIDATION);
         assertThat(json(result.getError()))
                 .containsEntry("errorCode", "ARTIFACT_MODE_CONFLICT")
-                .containsEntry("failedField", "file_path|template_id")
+                .containsEntry("failedField", "entry_file|template_id")
                 .containsEntry("retryable", false);
     }
 
@@ -417,7 +504,7 @@ class PublishInteractiveArtifactToolTest {
         Path missing = tempDir.resolve("missing.html");
 
         SkillResult result = tool.execute(Map.of(
-                "file_path", missing.toString(),
+                "entry_file", "missing.html",
                 "title", "App",
                 "fallback", "Offline app",
                 "state_schema", Map.of("type", "object")), context(tempDir));
@@ -426,7 +513,7 @@ class PublishInteractiveArtifactToolTest {
                 .containsEntry("errorCode", "ARTIFACT_FILE_NOT_FOUND")
                 .containsEntry("errorType", "VALIDATION")
                 .containsEntry("retryable", false)
-                .containsEntry("failedField", "file_path");
+                .containsEntry("failedField", "entry_file");
         verify(attachmentService, never()).importInteractiveArtifact(
                 any(), any(), any(), any(), any(), any(), any());
     }
@@ -458,7 +545,7 @@ class PublishInteractiveArtifactToolTest {
                 .thenThrow(dynamicHtmlInjectionViolation());
 
         SkillResult result = tool.execute(Map.of(
-                "file_path", html.toString(),
+                "entry_file", "app.html",
                 "title", "App",
                 "fallback", "Offline app",
                 "state_schema", Map.of("type", "object")), context(workspace));
@@ -467,7 +554,7 @@ class PublishInteractiveArtifactToolTest {
                 .containsEntry("errorCode", "ARTIFACT_FORBIDDEN_CAPABILITY")
                 .containsEntry("errorType", "VALIDATION")
                 .containsEntry("retryable", false)
-                .containsEntry("failedField", "file_path")
+                .containsEntry("failedField", "entry_file")
                 .containsEntry("violationCode", "DYNAMIC_HTML_INJECTION")
                 .containsEntry("message", "Interactive artifact HTML contains forbidden executable script "
                         + "dynamic HTML injection via innerHTML, outerHTML, or insertAdjacentHTML")

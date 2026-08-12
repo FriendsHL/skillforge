@@ -6,14 +6,14 @@ These files are platform-owned, offline, mobile-first templates loaded from a fi
 
 1. Choose `template_id=ai-daily-brief-v1` or `template_id=budget-planner-v1`.
 2. Pass real business data through `initial_data` when calling `PublishInteractiveArtifact`.
-3. Omit `file_path`; the server imports the allowlisted template bytes directly.
+3. Omit `entry_file`; the server imports the allowlisted template bytes directly.
 4. Omit `state_schema`, or provide the exact platform schema from the matching manifest.
 
 The matching manifest JSON contains fallback demo `initialData` and the platform-owned state schema. Caller `initial_data` overrides the demo data, and bridge-provided data takes precedence inside the App.
 
 The budget template keeps category labels and tones in `initial_data.categories`. Its saved and submitted state has the stable shape `{income, amounts: {[categoryKey]: number}, note}`, so caller-defined category keys survive save, restore, and submit without changing the platform schema.
 
-For a custom Personal App, create a new UTF-8, single-file, self-contained offline HTML file in the current run workspace, then use `file_path` plus its matching `state_schema`. Continue to use `PublishChatArtifact` for ordinary supported images and documents.
+For a custom Personal App, create a new UTF-8, single-file, self-contained offline HTML document in the current run workspace, then use its relative `entry_file` plus the matching `state_schema`. Use `replace_artifact_id` to publish a linked immutable revision. Continue to use `PublishChatArtifact` for ordinary supported images and documents.
 
 ## Safety contract
 

@@ -68,6 +68,49 @@ class InteractiveArtifactImportTest {
     }
 
     @Test
+    void replacementCreatesANewInteractiveRevisionWithoutOverwritingTheSource() throws Exception {
+        Path source = stagingRoot.resolve("revised.html");
+        Files.writeString(source, "<!doctype html><html><body>Revised</body></html>");
+        ChatAttachmentEntity original = interactiveRow(
+                "tool-original", source, 7L, "original.html", "Original",
+                "INTERACTIVE_ARTIFACT_CUSTOM", manifest());
+        original.setId("artifact-original");
+        when(repository.findById("artifact-original")).thenReturn(Optional.of(original));
+        when(repository.findBySessionIdAndSourceToolUseId("session-1", "tool-revision"))
+                .thenReturn(Optional.empty());
+        when(repository.saveAndFlush(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        ChatAttachmentEntity revision = service.importInteractiveArtifact(
+                "session-1", 7L, "tool-revision", source, "Revised", stagingRoot,
+                manifest(), "artifact-original");
+
+        assertThat(revision.getId()).isNotEqualTo(original.getId());
+        assertThat(revision.getDerivedFromAttachmentId()).isEqualTo("artifact-original");
+        assertThat(revision.getDerivationOperation()).isEqualTo("REVISE_INTERACTIVE");
+        assertThat(original.getDerivedFromAttachmentId()).isNull();
+    }
+
+    @Test
+    void replacementRejectsArtifactsOutsideTheOwnedInteractiveSessionBeforeWriting() throws Exception {
+        Path source = stagingRoot.resolve("revised.html");
+        Files.writeString(source, "<!doctype html><html><body>Revised</body></html>");
+        ChatAttachmentEntity foreign = interactiveRow(
+                "tool-foreign", source, 8L, "foreign.html", "Foreign",
+                "INTERACTIVE_ARTIFACT_CUSTOM", manifest());
+        foreign.setId("artifact-foreign");
+        when(repository.findById("artifact-foreign")).thenReturn(Optional.of(foreign));
+
+        assertThatThrownBy(() -> service.importInteractiveArtifact(
+                "session-1", 7L, "tool-revision", source, "Revised", stagingRoot,
+                manifest(), "artifact-foreign"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("owned interactive session");
+
+        assertThat(storageRoot.resolve("session-1")).doesNotExist();
+        verify(repository, never()).saveAndFlush(any());
+    }
+
+    @Test
     void rejectsNetworkHtmlBeforeDatabaseWrite() throws Exception {
         Path source = stagingRoot.resolve("bad.html");
         Files.writeString(source, "<script>fetch('https://example.invalid')</script>");

@@ -239,6 +239,38 @@ class OutboundArtifactMigrationIT {
                 .isEqualTo("[\"RegisterScriptMethod\",\"RegisterCompiledMethod\"]");
     }
 
+    @Test
+    void v191PreservesImageEditsAndAllowsOnlyInteractiveRevisions() {
+        runV181();
+        jdbcTemplate.update("""
+                INSERT INTO t_chat_attachment (id, session_id) VALUES
+                    ('source', 'session-1'),
+                    ('image-edit', 'session-1')
+                """);
+        jdbcTemplate.update("""
+                UPDATE t_chat_attachment
+                SET derived_from_attachment_id = 'source', derivation_operation = 'EDIT_IMAGE'
+                WHERE id = 'image-edit'
+                """);
+
+        runV191();
+        runV191();
+
+        jdbcTemplate.update("""
+                INSERT INTO t_chat_attachment (id, session_id, derived_from_attachment_id,
+                    derivation_operation)
+                VALUES ('app-revision', 'session-1', 'source', 'REVISE_INTERACTIVE')
+                """);
+        assertThat(jdbcTemplate.queryForObject("""
+                SELECT derivation_operation FROM t_chat_attachment WHERE id = 'image-edit'
+                """, String.class)).isEqualTo("EDIT_IMAGE");
+        assertThatThrownBy(() -> jdbcTemplate.update("""
+                INSERT INTO t_chat_attachment (id, session_id, derived_from_attachment_id,
+                    derivation_operation)
+                VALUES ('invalid-revision', 'session-1', 'source', 'OVERWRITE')
+                """)).isInstanceOf(Exception.class);
+    }
+
     private static String toolsFor(String name) {
         return jdbcTemplate.queryForObject(
                 "SELECT tool_ids FROM t_agent WHERE name = ?", String.class, name);
@@ -278,5 +310,17 @@ class OutboundArtifactMigrationIT {
         ScriptUtils.executeSqlScript(
                 connection,
                 new ClassPathResource("db/migration/V187__delegate_code_registration_from_main.sql"));
+    }
+
+    private static void runV181() {
+        ScriptUtils.executeSqlScript(
+                connection,
+                new ClassPathResource("db/migration/V181__add_attachment_derivation.sql"));
+    }
+
+    private static void runV191() {
+        ScriptUtils.executeSqlScript(
+                connection,
+                new ClassPathResource("db/migration/V191__allow_interactive_artifact_revision.sql"));
     }
 }

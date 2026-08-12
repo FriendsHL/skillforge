@@ -38,6 +38,30 @@ class InteractiveArtifactValidatorTest {
     }
 
     @Test
+    void rejectsCdataWrappedHtmlThatWouldRenderAsABlankDocument() {
+        byte[] wrapped = "<![CDATA[<!doctype html><html><body>Visible</body></html>]]>"
+                .getBytes(StandardCharsets.UTF_8);
+
+        assertThatThrownBy(() -> validator.validate(validManifest(), wrapped))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("document structure");
+    }
+
+    @Test
+    void rejectsHtmlFragmentsWithoutAnExplicitDocumentAndBody() {
+        for (String fragment : List.of(
+                "<main>Content</main>",
+                "<!doctype html><html><head><title>Only head</title></head></html>",
+                "<!doctype html><html><body></body></html>")) {
+            assertThatThrownBy(() -> validator.validate(
+                    validManifest(), fragment.getBytes(StandardCharsets.UTF_8)))
+                    .as(fragment)
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("document structure");
+        }
+    }
+
+    @Test
     @SuppressWarnings("unchecked")
     void manifestDefensivelyCopiesNestedJsonWhilePreservingNull() {
         Map<String, Object> nested = new LinkedHashMap<>();
