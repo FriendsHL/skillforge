@@ -369,6 +369,14 @@ const ChatInput: React.FC<ChatInputProps> = React.memo(
     };
 
     const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      // Enter confirms the current IME candidate while composition is active.
+      // Safari may report composition as keyCode 229 instead of isComposing.
+      if (
+        e.key === 'Enter' &&
+        (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229)
+      ) {
+        return;
+      }
       if (isPopupActive) {
         switch (e.key) {
           case 'ArrowDown':

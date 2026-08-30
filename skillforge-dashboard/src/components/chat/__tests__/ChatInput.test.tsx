@@ -162,6 +162,47 @@ describe('ChatInput — popup keyboard interactions', () => {
   });
 });
 
+describe('ChatInput — IME composition Enter', () => {
+  beforeEach(() => exec.mockReset());
+
+  it('does not send plain text while Enter confirms an active composition', () => {
+    const { textarea, handlers } = renderInput();
+    fireEvent.change(textarea, { target: { value: '拼音' } });
+
+    const wasNotCancelled = fireEvent.keyDown(textarea, { key: 'Enter', isComposing: true });
+
+    expect(wasNotCancelled).toBe(true);
+    expect(handlers.onSend).not.toHaveBeenCalled();
+    expect(textarea.value).toBe('拼音');
+  });
+
+  it('sends exactly once when a normal Enter follows the composition Enter', () => {
+    const { textarea, handlers } = renderInput();
+    fireEvent.change(textarea, { target: { value: '拼音' } });
+
+    fireEvent.keyDown(textarea, { key: 'Enter', isComposing: true });
+    expect(handlers.onSend).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(textarea, { key: 'Enter' });
+
+    expect(handlers.onSend).toHaveBeenCalledTimes(1);
+    expect(handlers.onSend).toHaveBeenCalledWith('拼音');
+  });
+
+  it('does not execute the selected slash command for Safari IME keyCode 229', () => {
+    const { textarea, handlers } = renderInput();
+    fireEvent.change(textarea, { target: { value: '/m' } });
+    expect(screen.getByTestId('command-popup')).toBeInTheDocument();
+
+    const wasNotCancelled = fireEvent.keyDown(textarea, { key: 'Enter', keyCode: 229 });
+
+    expect(wasNotCancelled).toBe(true);
+    expect(exec).not.toHaveBeenCalled();
+    expect(handlers.onSend).not.toHaveBeenCalled();
+    expect(textarea.value).toBe('/m');
+  });
+});
+
 describe('ChatInput — displayMode dispatch', () => {
   beforeEach(() => {
     exec.mockReset();
