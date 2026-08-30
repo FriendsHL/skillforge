@@ -103,6 +103,17 @@ final class TaskToolSupport {
         return Math.max(1, Math.min(parsed, max));
     }
 
+    static Long longValue(Map<String, Object> input, String canonical, String... aliases) {
+        Object value = value(input, canonical, aliases);
+        if (value == null) return null;
+        try {
+            if (value instanceof Number number) return number.longValue();
+            return Long.parseLong(value.toString());
+        } catch (Exception exception) {
+            throw new IllegalArgumentException(canonical + " must be an integer");
+        }
+    }
+
     static SkillResult contextError(ObjectMapper objectMapper) {
         return structuredError(new SessionTaskException("TASK_CONTEXT_REQUIRED",
                 "Task tools require an authenticated session context", false, "context",

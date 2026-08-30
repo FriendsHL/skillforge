@@ -229,7 +229,7 @@ public class InfraConfig {
 
     @Bean
     public TaskReminderSource taskReminderSource(
-            SessionTaskService taskService,
+            com.skillforge.server.service.TeamTaskGraphService taskService,
             @Value("${skillforge.reminder.task-state.enabled:true}") boolean enabled,
             @Value("${skillforge.reminder.task-state.interval-turns:1}") int intervalTurns,
             @Value("${skillforge.reminder.task-state.max-tasks:20}") int maxTasks) {

@@ -26,5 +26,5 @@ SkillForge 已支持 SubAgent、Team 和 Coordinator，并在
 
 - 不做真人团队项目管理、组织权限、Sprint 或工时系统。
 - 不让 TaskCreate 自动启动 Agent。
-- 不再新增与 `t_session_task` 平行的 TaskGraph 主表，除非进入 Active 后证明现有模型无法扩展。
+- 不新增与 `t_session_task` 平行的 TaskGraph 主表；领取与审计只使用附属 attempt/event 表。
 - 不在当前 `AGENT-GOAL-AND-TOOL-RECOVERY` 中实现自动协调。

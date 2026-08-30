@@ -5,7 +5,7 @@ import com.skillforge.core.model.ToolSchema;
 import com.skillforge.core.skill.SkillContext;
 import com.skillforge.core.skill.SkillResult;
 import com.skillforge.core.skill.Tool;
-import com.skillforge.server.service.SessionTaskService;
+import com.skillforge.server.service.TaskToolOperations;
 
 import java.util.List;
 import java.util.Map;
@@ -13,10 +13,10 @@ import java.util.Map;
 public class TaskGetTool implements Tool {
     public static final String NAME = "TaskGet";
 
-    private final SessionTaskService taskService;
+    private final TaskToolOperations taskService;
     private final ObjectMapper objectMapper;
 
-    public TaskGetTool(SessionTaskService taskService, ObjectMapper objectMapper) {
+    public TaskGetTool(TaskToolOperations taskService, ObjectMapper objectMapper) {
         this.taskService = taskService;
         this.objectMapper = objectMapper;
     }
@@ -51,10 +51,17 @@ public class TaskGetTool implements Tool {
             return TaskToolSupport.contextError(objectMapper);
         }
         try {
-            return SkillResult.success(TaskToolSupport.json(taskService.get(
-                    TaskToolSupport.sessionId(context),
-                    TaskToolSupport.userId(context),
-                    TaskToolSupport.string(input, "taskId", "task_id", "id")), objectMapper));
+            String sessionId = TaskToolSupport.sessionId(context);
+            Long userId = TaskToolSupport.userId(context);
+            String taskId = TaskToolSupport.string(input, "taskId", "task_id", "id");
+            Object task = taskService.get(sessionId, userId, taskId);
+            var runtime = taskService.runtime(sessionId, userId, taskId);
+            if (runtime.isEmpty()) {
+                return SkillResult.success(TaskToolSupport.json(task, objectMapper));
+            }
+            return SkillResult.success(TaskToolSupport.json(Map.of(
+                    "task", task,
+                    "runtime", runtime.get()), objectMapper));
         } catch (Exception e) {
             return TaskToolSupport.error(e, objectMapper);
         }

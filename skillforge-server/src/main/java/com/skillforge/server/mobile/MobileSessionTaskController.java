@@ -2,7 +2,7 @@ package com.skillforge.server.mobile;
 
 import com.skillforge.server.dto.SessionTaskSnapshotResponse;
 import com.skillforge.server.service.SessionTaskException;
-import com.skillforge.server.service.SessionTaskService;
+import com.skillforge.server.service.TeamTaskGraphService;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -21,9 +21,9 @@ import java.util.Set;
 public class MobileSessionTaskController {
     private static final String SCOPE_CHAT_READ = "chat:read";
 
-    private final SessionTaskService taskService;
+    private final TeamTaskGraphService taskService;
 
-    public MobileSessionTaskController(SessionTaskService taskService) {
+    public MobileSessionTaskController(TeamTaskGraphService taskService) {
         this.taskService = taskService;
     }
 
@@ -37,14 +37,14 @@ public class MobileSessionTaskController {
         if (!scopes.contains(SCOPE_CHAT_READ)) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN);
         }
-        return taskService.snapshot(sessionId, principal.userId(), true);
+        return taskService.snapshot(sessionId, principal.userId(), true, false);
     }
 
     @ExceptionHandler(SessionTaskException.class)
     public ResponseEntity<Map<String, Object>> taskError(SessionTaskException e) {
         HttpStatus status = switch (e.getCode()) {
             case "SESSION_NOT_FOUND", "TASK_NOT_FOUND" -> HttpStatus.NOT_FOUND;
-            case "TASK_CONFLICT" -> HttpStatus.CONFLICT;
+            case "TASK_CONFLICT", "TASK_REVISION_CONFLICT" -> HttpStatus.CONFLICT;
             default -> HttpStatus.BAD_REQUEST;
         };
         return ResponseEntity.status(status).body(Map.of(

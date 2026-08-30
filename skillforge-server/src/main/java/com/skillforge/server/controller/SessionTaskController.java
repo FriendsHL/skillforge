@@ -2,7 +2,7 @@ package com.skillforge.server.controller;
 
 import com.skillforge.server.dto.SessionTaskSnapshotResponse;
 import com.skillforge.server.service.SessionTaskException;
-import com.skillforge.server.service.SessionTaskService;
+import com.skillforge.server.service.TeamTaskGraphService;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -17,20 +17,20 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/chat/sessions")
 public class SessionTaskController {
-    private final SessionTaskService taskService;
-    public SessionTaskController(SessionTaskService taskService) { this.taskService = taskService; }
+    private final TeamTaskGraphService taskService;
+    public SessionTaskController(TeamTaskGraphService taskService) { this.taskService = taskService; }
 
     @GetMapping("/{sessionId}/tasks")
     public SessionTaskSnapshotResponse list(@PathVariable String sessionId,
                                             @RequestParam Long userId) {
-        return taskService.snapshot(sessionId, userId, true);
+        return taskService.snapshot(sessionId, userId, true, false);
     }
 
     @ExceptionHandler(SessionTaskException.class)
     public ResponseEntity<Map<String, Object>> taskError(SessionTaskException e) {
         HttpStatus status = switch (e.getCode()) {
             case "SESSION_NOT_FOUND", "TASK_NOT_FOUND" -> HttpStatus.NOT_FOUND;
-            case "TASK_CONFLICT" -> HttpStatus.CONFLICT;
+            case "TASK_CONFLICT", "TASK_REVISION_CONFLICT" -> HttpStatus.CONFLICT;
             default -> HttpStatus.BAD_REQUEST;
         };
         return ResponseEntity.status(status).body(Map.of(

@@ -8,6 +8,7 @@ import com.skillforge.core.skill.Tool;
 import com.skillforge.server.dto.SessionTaskResponse;
 import com.skillforge.server.dto.SessionTaskSnapshotResponse;
 import com.skillforge.server.service.SessionTaskService;
+import com.skillforge.server.service.TaskToolOperations;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -16,10 +17,10 @@ import java.util.Map;
 public class TaskUpdateTool implements Tool {
     public static final String NAME = "TaskUpdate";
 
-    private final SessionTaskService taskService;
+    private final TaskToolOperations taskService;
     private final ObjectMapper objectMapper;
 
-    public TaskUpdateTool(SessionTaskService taskService, ObjectMapper objectMapper) {
+    public TaskUpdateTool(TaskToolOperations taskService, ObjectMapper objectMapper) {
         this.taskService = taskService;
         this.objectMapper = objectMapper;
     }
@@ -40,6 +41,8 @@ public class TaskUpdateTool implements Tool {
     public ToolSchema getToolSchema() {
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put("taskId", Map.of("type", "string", "description", "Task ID"));
+        properties.put("expectedRevision", Map.of("type", "integer",
+                "description", "TaskGet/TaskList 返回的 version；Team 中必填"));
         properties.put("subject", Map.of("type", "string"));
         properties.put("description", Map.of("type", "string"));
         properties.put("activeForm", Map.of("type", "string"));
@@ -68,6 +71,7 @@ public class TaskUpdateTool implements Tool {
                     TaskToolSupport.sessionId(context),
                     TaskToolSupport.userId(context),
                     taskId,
+                    TaskToolSupport.longValue(input, "expectedRevision", "expected_revision", "version"),
                     new SessionTaskService.UpdateCommand(
                             TaskToolSupport.string(input, "subject", "title", "content"),
                             TaskToolSupport.string(input, "description"),
@@ -89,6 +93,8 @@ public class TaskUpdateTool implements Tool {
             result.put("success", true);
             result.put("task", task);
             result.put("summary", snapshot.summary());
+            taskService.runtime(TaskToolSupport.sessionId(context), TaskToolSupport.userId(context), taskId)
+                    .ifPresent(runtime -> result.put("runtime", runtime));
             return SkillResult.success(TaskToolSupport.json(result, objectMapper));
         } catch (Exception e) {
             return TaskToolSupport.error(e, objectMapper);

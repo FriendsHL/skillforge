@@ -1,6 +1,6 @@
 # SkillForge 文档
 
-> 更新于：2026-08-05（Task/目标连续性/Artifact 恢复已完成自动化与运行态验证）
+> 更新于：2026-08-12（Artifact P0 已收口；Agent Team Task Graph Phase 1 已实现并部署）
 > Agent 规则：先读这里，再只打开当前任务链接到的文档。
 
 ## 从这里开始
@@ -16,6 +16,7 @@
 
 | ID | 标题 | 状态 | 需求包 |
 | --- | --- | --- | --- |
+| **AGENT-TEAM-TASK-GRAPH** | Team 共享 Task、并发领取、租约、解锁与恢复 | Phase 1 implemented / Full automated + runtime migration verified；待真实 Team dogfood | [需求包](requirements/active/2026-08-12-AGENT-TEAM-TASK-GRAPH/index.md) |
 | **AGENT-GOAL-AND-TOOL-RECOVERY** | 持久化 Task、目标连续性与 Artifact 恢复 | implemented / Full automated verified；待浏览器与真机 dogfood | [需求包](requirements/active/2026-08-05-AGENT-GOAL-AND-TOOL-RECOVERY/index.md) |
 | **HARNESS-BENCHMARK-COMPARISON** | SkillForge 与 Claude Code/Codex/OpenHands 的同模型公开 Benchmark 横向评测 | 需求包完成；等待 Context Governance P2–P6 | [需求包](requirements/active/2026-07-29-HARNESS-BENCHMARK-COMPARISON/index.md) |
 | **AGENT-CONTEXT-GOVERNANCE** | System Prompt、Instruction、Reminder、ToolSearch、Memory 与 Compact 连续性治理 | P0–P2 已交付 / Full；P3–P9 已批准分期实施 | [需求包](requirements/active/2026-07-26-AGENT-CONTEXT-GOVERNANCE/index.md) |
@@ -42,7 +43,6 @@
 
 | ID | 状态 | 需求包 |
 | --- | --- | --- |
-| **AGENT-TEAM-TASK-GRAPH** | Backlog / Full；等待真实 Agent Team 共享任务场景触发 | [需求包](requirements/backlog/AGENT-TEAM-TASK-GRAPH/index.md) |
 | **TASK-RESUME-ON-RESTART** | 单实例 kill-running MVP；Root/SubAgent 边界恢复已实现，Workflow/真 kill 验收待完成 | [需求包](requirements/backlog/TASK-RESUME-ON-RESTART/index.md) |
 | **CONTEXT-OVERFLOW-TRIPLE-FULL-COMPACT** | context overflow 最多三次 Full Compact；Core 已实现并通过 Core+Server 回归 | [需求包](requirements/backlog/CONTEXT-OVERFLOW-TRIPLE-FULL-COMPACT/index.md) |
 | **WF-CONCURRENT-PIPELINE** | AUTOEVOLVING V2(d) | [需求包](requirements/backlog/WF-CONCURRENT-PIPELINE/index.md) |

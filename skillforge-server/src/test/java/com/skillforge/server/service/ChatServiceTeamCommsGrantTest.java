@@ -1,5 +1,7 @@
 package com.skillforge.server.service;
 
+import com.skillforge.core.model.AgentDefinition;
+import com.skillforge.server.entity.CollabRunEntity;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -10,9 +12,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Unit tests for {@link ChatService#resolveAllowedToolNames(List, String)} — the
- * tool-allowlist resolver that auto-grants TeamSend + TeamList to collab-run
- * members so subagents can always message + discover each other regardless of the
- * agent's {@code tool_ids} allowlist.
+ * tool-allowlist resolver that auto-grants Team communication and shared Task
+ * tools to collab-run members regardless of the agent's static allowlist.
  */
 class ChatServiceTeamCommsGrantTest {
 
@@ -24,10 +25,11 @@ class ChatServiceTeamCommsGrantTest {
     }
 
     @Test
-    @DisplayName("allowlist + collab run → TeamSend + TeamList auto-granted on top")
+    @DisplayName("allowlist + collab run → Team communication and Task tools auto-granted")
     void allowlistInCollab_grantsTeamComms() {
         Set<String> allowed = ChatService.resolveAllowedToolNames(List.of("Bash", "FileRead"), "collab-1");
-        assertThat(allowed).containsExactlyInAnyOrder("Bash", "FileRead", "TeamSend", "TeamList");
+        assertThat(allowed).containsExactlyInAnyOrder("Bash", "FileRead", "TeamSend", "TeamList",
+                "TaskCreate", "TaskUpdate", "TaskGet", "TaskList");
     }
 
     @Test
@@ -35,7 +37,7 @@ class ChatServiceTeamCommsGrantTest {
     void allowlistOutsideCollab_noGrant() {
         Set<String> allowed = ChatService.resolveAllowedToolNames(List.of("Bash", "FileRead"), null);
         assertThat(allowed).containsExactlyInAnyOrder("Bash", "FileRead");
-        assertThat(allowed).doesNotContain("TeamSend", "TeamList");
+        assertThat(allowed).doesNotContain("TeamSend", "TeamList", "TaskCreate", "TaskUpdate", "TaskGet", "TaskList");
     }
 
     @Test
@@ -43,6 +45,35 @@ class ChatServiceTeamCommsGrantTest {
     void allowlistAlreadyHasTeamTools_idempotent() {
         Set<String> allowed = ChatService.resolveAllowedToolNames(
                 List.of("Bash", "TeamSend"), "collab-1");
-        assertThat(allowed).containsExactlyInAnyOrder("Bash", "TeamSend", "TeamList");
+        assertThat(allowed).containsExactlyInAnyOrder("Bash", "TeamSend", "TeamList",
+                "TaskCreate", "TaskUpdate", "TaskGet", "TaskList");
+    }
+
+    @Test
+    void workerGetsTeamTaskProtocolWithoutLeaderProtocol() {
+        AgentDefinition definition = new AgentDefinition();
+        definition.setSystemPrompt("base");
+        CollabRunEntity run = new CollabRunEntity();
+        run.setLeaderSessionId("leader");
+
+        ChatService.appendTeamTaskPrompt(definition, run, "worker");
+
+        assertThat(definition.getSystemPrompt())
+                .startsWith("base")
+                .contains("## Team Task Protocol", "Only the active owner completes a Task")
+                .doesNotContain("## Team Leader Protocol");
+    }
+
+    @Test
+    void leaderGetsTaskAndCoordinationProtocols() {
+        AgentDefinition definition = new AgentDefinition();
+        CollabRunEntity run = new CollabRunEntity();
+        run.setLeaderSessionId("leader");
+
+        ChatService.appendTeamTaskPrompt(definition, run, "leader");
+
+        assertThat(definition.getSystemPrompt())
+                .contains("## Team Task Protocol", "owner or Team leader may release")
+                .contains("## Team Leader Protocol", "create a persistent Task");
     }
 }

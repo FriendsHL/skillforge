@@ -6,6 +6,7 @@ import com.skillforge.core.skill.SkillContext;
 import com.skillforge.core.skill.SkillResult;
 import com.skillforge.core.skill.Tool;
 import com.skillforge.server.service.SessionTaskService;
+import com.skillforge.server.service.TaskToolOperations;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -14,10 +15,10 @@ import java.util.Map;
 public class TaskCreateTool implements Tool {
     public static final String NAME = "TaskCreate";
 
-    private final SessionTaskService taskService;
+    private final TaskToolOperations taskService;
     private final ObjectMapper objectMapper;
 
-    public TaskCreateTool(SessionTaskService taskService, ObjectMapper objectMapper) {
+    public TaskCreateTool(TaskToolOperations taskService, ObjectMapper objectMapper) {
         this.taskService = taskService;
         this.objectMapper = objectMapper;
     }

@@ -60,4 +60,4 @@ Artifact 工具失败后 Agent 围绕工具错误偏离用户目标的问题。D
 3. [MRD](mrd.md)
 4. [PRD 与行为矩阵](prd.md)
 5. [技术设计](tech-design.md)
-6. [未来 Agent Team Task Graph](../../backlog/AGENT-TEAM-TASK-GRAPH/index.md)
+6. [Agent Team Task Graph](../2026-08-12-AGENT-TEAM-TASK-GRAPH/index.md)

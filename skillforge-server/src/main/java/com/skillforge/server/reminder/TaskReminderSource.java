@@ -13,6 +13,7 @@ import com.skillforge.core.reminder.ReminderSource;
 import com.skillforge.core.reminder.ReminderSourceType;
 import com.skillforge.server.dto.SessionTaskResponse;
 import com.skillforge.server.service.SessionTaskService;
+import com.skillforge.server.service.TaskToolOperations;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -21,12 +22,12 @@ import java.util.List;
 public class TaskReminderSource implements ReminderSource {
     public static final String NAME = "task-state";
     private static final Logger log = LoggerFactory.getLogger(TaskReminderSource.class);
-    private final SessionTaskService taskService;
+    private final TaskToolOperations taskService;
     private final boolean enabled;
     private final int intervalTurns;
     private final int maxTasks;
 
-    public TaskReminderSource(SessionTaskService taskService, boolean enabled, int intervalTurns, int maxTasks) {
+    public TaskReminderSource(TaskToolOperations taskService, boolean enabled, int intervalTurns, int maxTasks) {
         this.taskService = taskService;
         this.enabled = enabled;
         this.intervalTurns = Math.max(1, intervalTurns);

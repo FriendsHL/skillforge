@@ -1,12 +1,13 @@
 # SkillForge ToDo
 
-> 更新于：2026-08-05（Task/目标连续性/Artifact 恢复已完成自动化与运行态验证）
+> 更新于：2026-08-12（Artifact P0 已收口；Agent Team Task Graph Phase 1 已实现并部署，待 dogfood）
 > 规则：这里只放当前执行状态；范围与方案见需求包，交付事实见 [delivery-index.md](delivery-index.md)。
 
 ## 当前队列
 
 | 顺序 | ID | 标题 | 模式 | 状态 | 优先级 | 下一步 |
 | --- | --- | --- | --- | --- | --- | --- |
+| - | **AGENT-TEAM-TASK-GRAPH** | Team 共享 Task、并发领取、租约、解锁与恢复 | Full | Phase 1 implemented；3581 项全量回归与 V192 运行态迁移通过 | P0 | 用户用真实 Team 验收并发领取、kill 回收、依赖解锁与 mailbox 唤醒 |
 | - | **AGENT-GOAL-AND-TOOL-RECOVERY** | 持久化 Task、目标连续性与 Artifact 恢复 | Full | implemented / Full automated verified；待浏览器与真机 dogfood | P0 | 用户验收多轮追加、Task 进度与 Artifact 自定义页面 |
 | - | **AGENT-CONTEXT-GOVERNANCE** | Opus 5 时代的 Agent 上下文与能力治理 | Full | P0–P2、P4–P6 已交付；P3（CLAUDE.md/Instruction Registry）按产品方向跳过 | P7 | Result Provenance、MCP Artifact Bridge |
 | - | **REALTIME-VOICE-CONVERSATION** | iOS 实时语音对话 | Full | Design Proposed；Ark ASR + Seed Pro + TTS，Qwen-compatible | P1 | 用户批准设计后先执行 Phase 0 Ark 活体 Spike |
@@ -33,6 +34,7 @@
 需求包：
 
 - [AGENT-GOAL-AND-TOOL-RECOVERY](requirements/active/2026-08-05-AGENT-GOAL-AND-TOOL-RECOVERY/index.md)
+- [AGENT-TEAM-TASK-GRAPH](requirements/active/2026-08-12-AGENT-TEAM-TASK-GRAPH/index.md)
 - [AGENT-CONTEXT-GOVERNANCE](requirements/active/2026-07-26-AGENT-CONTEXT-GOVERNANCE/index.md)
 - [REALTIME-VOICE-CONVERSATION](requirements/active/2026-07-23-REALTIME-VOICE-CONVERSATION/index.md)
 - [MULTIMODAL-MEDIA-RUNTIME](requirements/active/2026-07-22-MULTIMODAL-MEDIA-RUNTIME/index.md)
@@ -86,7 +88,6 @@
 
 | ID | 触发条件 |
 | --- | --- |
-| **AGENT-TEAM-TASK-GRAPH** | Agent Team/Coordinator 需要共享 owner、依赖、领取、解锁和恢复时升 active |
 | **WF-CONCURRENT-PIPELINE** | AUTOEVOLVING V2(d) 启动或串行 pipeline 成为瓶颈 |
 | **OUTCOMES-RUBRIC-FOUNDATION** | 用户决定把 rubric/grader 升 active |
 | **COMPACT-V2-STORAGE** | recovery 回取或截断 cache 抖动出现真实需求 |

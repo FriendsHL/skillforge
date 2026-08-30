@@ -29,21 +29,23 @@ class TaskToolsTest {
     @Test void updateAcceptsClaudeStyleAliasesAndListExcludesDeletedByDefault(){
         SessionTaskService service=mock(SessionTaskService.class); ObjectMapper mapper=new ObjectMapper().findAndRegisterModules();
         SessionTaskResponse task=new SessionTaskResponse("t1","S","D","A","pending",null,false,List.of(),List.of(),Instant.EPOCH,Instant.EPOCH,0);
-        when(service.update(anyString(),anyLong(),anyString(),any())).thenReturn(new SessionTaskSnapshotResponse("s1",Map.of("total",1L),List.of(task),Instant.EPOCH));
+        when(service.update(anyString(),anyLong(),anyString(),nullable(Long.class),any())).thenReturn(new SessionTaskSnapshotResponse("s1",Map.of("total",1L),List.of(task),Instant.EPOCH));
         SkillContext context=new SkillContext(null,"s1",7L);
         var result=new TaskUpdateTool(service,mapper).execute(Map.of("task_id","t1","active_form","Doing"),context);
         assertThat(result.isSuccess()).isTrue(); ArgumentCaptor<SessionTaskService.UpdateCommand> command=ArgumentCaptor.forClass(SessionTaskService.UpdateCommand.class);
-        verify(service).update(eq("s1"),eq(7L),eq("t1"),command.capture()); assertThat(command.getValue().activeForm()).isEqualTo("Doing");
+        verify(service).update(eq("s1"),eq(7L),eq("t1"),isNull(),command.capture()); assertThat(command.getValue().activeForm()).isEqualTo("Doing");
 
-        when(service.snapshot("s1",7L,false)).thenReturn(new SessionTaskSnapshotResponse("s1",Map.of("total",1L),List.of(task),Instant.EPOCH));
-        var listed=new TaskListTool(service,mapper).execute(Map.of(),context); assertThat(listed.isSuccess()).isTrue(); verify(service).snapshot("s1",7L,false);
+        when(service.snapshot("s1",7L,false,false)).thenReturn(new SessionTaskSnapshotResponse("s1",Map.of("total",1L),List.of(task),Instant.EPOCH));
+        var listed=new TaskListTool(service,mapper).execute(Map.of(),context); assertThat(listed.isSuccess()).isTrue(); verify(service).snapshot("s1",7L,false,false);
     }
     @Test void schemasExposeCanonicalNamesOnly(){
         SessionTaskService service=mock(SessionTaskService.class); ObjectMapper mapper=new ObjectMapper().findAndRegisterModules();
         String update=new TaskUpdateTool(service,mapper).getToolSchema().getInputSchema().toString();
-        assertThat(update).contains("taskId","activeForm","addBlockedBy")
+        assertThat(update).contains("taskId","expectedRevision","activeForm","addBlockedBy")
                 .doesNotContain("task_id","active_form","removeBlockedBy","removeBlocks");
         assertThat(new TaskGetTool(service,mapper).isReadOnly()).isTrue(); assertThat(new TaskListTool(service,mapper).isReadOnly()).isTrue();
+        assertThat(new TaskListTool(service,mapper).getToolSchema().getInputSchema().toString())
+                .contains("availableOnly");
         String create=new TaskCreateTool(service,mapper).getToolSchema().getInputSchema().toString();
         assertThat(create).contains("activeForm", "required=[subject, description]")
                 .doesNotContain("owner", "blockedBy");

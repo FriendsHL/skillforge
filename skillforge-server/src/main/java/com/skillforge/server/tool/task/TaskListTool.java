@@ -7,7 +7,7 @@ import com.skillforge.core.skill.SkillResult;
 import com.skillforge.core.skill.Tool;
 import com.skillforge.server.dto.SessionTaskResponse;
 import com.skillforge.server.dto.SessionTaskSnapshotResponse;
-import com.skillforge.server.service.SessionTaskService;
+import com.skillforge.server.service.TaskToolOperations;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -19,10 +19,10 @@ public class TaskListTool implements Tool {
     private static final Set<String> SUPPORTED_STATUSES =
             Set.of("pending", "in_progress", "completed", "deleted");
 
-    private final SessionTaskService taskService;
+    private final TaskToolOperations taskService;
     private final ObjectMapper objectMapper;
 
-    public TaskListTool(SessionTaskService taskService, ObjectMapper objectMapper) {
+    public TaskListTool(TaskToolOperations taskService, ObjectMapper objectMapper) {
         this.taskService = taskService;
         this.objectMapper = objectMapper;
     }
@@ -54,6 +54,8 @@ public class TaskListTool implements Tool {
                                         "type", "string",
                                         "enum", List.of("pending", "in_progress", "completed", "deleted"))),
                         "includeDeleted", Map.of("type", "boolean", "description", "默认 false"),
+                        "availableOnly", Map.of("type", "boolean",
+                                "description", "Team 中只返回 pending、未阻塞且未被领取的任务"),
                         "limit", Map.of("type", "integer", "minimum", 1, "maximum", 200))));
     }
 
@@ -66,6 +68,8 @@ public class TaskListTool implements Tool {
             boolean includeDeleted = Boolean.TRUE.equals(
                     TaskToolSupport.value(input, "includeDeleted", "include_deleted"));
             int limit = TaskToolSupport.integer(input, "limit", 100, 200);
+            boolean availableOnly = Boolean.TRUE.equals(
+                    TaskToolSupport.value(input, "availableOnly", "available_only"));
             Set<String> statuses = Set.copyOf(TaskToolSupport.strings(input, "statuses"));
             if (!SUPPORTED_STATUSES.containsAll(statuses)) {
                 throw new IllegalArgumentException(
@@ -74,7 +78,8 @@ public class TaskListTool implements Tool {
             SessionTaskSnapshotResponse snapshot = taskService.snapshot(
                     TaskToolSupport.sessionId(context),
                     TaskToolSupport.userId(context),
-                    includeDeleted);
+                    includeDeleted,
+                    availableOnly);
             List<SessionTaskResponse> matched = snapshot.tasks().stream()
                     .filter(task -> statuses.isEmpty() || statuses.contains(task.status()))
                     .toList();

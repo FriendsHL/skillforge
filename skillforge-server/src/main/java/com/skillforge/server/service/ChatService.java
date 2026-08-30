@@ -547,11 +547,11 @@ public class ChatService {
      *
      * <p>Returns {@code null} when no allowlist is configured (empty/absent → all
      * registered tools allowed, unchanged behavior). When an allowlist IS set,
-     * members of a collab run additionally get {@code TeamSend} + {@code TeamList}
-     * auto-granted, so subagents can always message each other (kin-mesh) and
-     * discover teammates regardless of the agent's allowlist. Both team tools are
-     * no-ops outside a collab run and carry their own kin-adjacency / leader-only
-     * guards, so the grant is safe. Name-consistent with the hardcoded tool names
+     * members of a collab run additionally get Team communication and shared Task
+     * tools auto-granted, so workers can discover peers and participate in the
+     * leader's authoritative task graph regardless of their static allowlist.
+     * These tools keep their own context and authorization guards. Name-consistent
+     * with the hardcoded tool names
      * used elsewhere in this method (e.g. the depth-aware exclude set).
      */
     static Set<String> resolveAllowedToolNames(List<String> toolIds, String collabRunId) {
@@ -562,8 +562,41 @@ public class ChatService {
         if (collabRunId != null) {
             allowed.add("TeamSend");
             allowed.add("TeamList");
+            allowed.add("TaskCreate");
+            allowed.add("TaskUpdate");
+            allowed.add("TaskGet");
+            allowed.add("TaskList");
         }
         return allowed;
+    }
+
+    static void appendTeamTaskPrompt(AgentDefinition agentDef, CollabRunEntity collabRun, String sessionId) {
+        if (agentDef == null || collabRun == null || sessionId == null) return;
+        String existing = agentDef.getSystemPrompt() != null ? agentDef.getSystemPrompt() : "";
+        agentDef.setSystemPrompt(existing + "\n\n## Team Task Protocol\n\n"
+                + "All Team members share the leader Session's persistent Task graph; never invent a graph or owner ID.\n"
+                + "- Only the Team leader creates shared Tasks or edits dependencies.\n"
+                + "- Call TaskList(availableOnly=true), then TaskGet to read the latest version before claiming.\n"
+                + "- Claim with TaskUpdate(taskId, expectedRevision, status=in_progress). Do not send owner.\n"
+                + "- Only the active owner completes a Task. The owner or Team leader may release unfinished work with status=pending.\n"
+                + "- A revision conflict means another member changed the graph: refresh with TaskGet/List instead of blind retry.\n"
+                + "- TaskCreate creates work only; it never starts an Agent. TeamCreate is the explicit Agent-spawn action.\n"
+                + "- Do not poll for dependencies. A [TeamTaskEvent] message announces newly available work.\n");
+        if (!sessionId.equals(collabRun.getLeaderSessionId())) return;
+        agentDef.setSystemPrompt(agentDef.getSystemPrompt() + "\n\n## Team Leader Protocol\n\n"
+                + "You are the LEADER of a multi-agent team. Your role is to DELEGATE, not to do the work yourself.\n\n"
+                + "**Workflow:**\n"
+                + "1. Analyze the request and create a persistent Task for each independently verifiable sub-task\n"
+                + "2. Use TeamCreate to spawn members; include the corresponding taskId in each assignment\n"
+                + "3. After spawning all members, STOP calling tools and briefly summarize the delegation\n"
+                + "4. Wait for [TeamResult]/[TeamTaskEvent] messages — do NOT poll TeamList\n"
+                + "5. Once all results arrive, verify Task state and synthesize the final response\n\n"
+                + "**Rules:**\n"
+                + "- Do NOT use Bash, Read, Grep, or other tools yourself — delegate to team members\n"
+                + "- Do NOT do research or investigation yourself — that's what team members are for\n"
+                + "- You MAY use TeamSend to send additional context to a running member\n"
+                + "- You MAY use TeamKill to cancel a member that is no longer needed\n"
+                + "- If a member's result is insufficient, spawn a new member with a refined task\n");
     }
 
     private Message withAttachmentRefs(String sessionId, Long userId, Message userMsg, List<String> attachmentIds) {
@@ -778,24 +811,7 @@ public class ChatService {
             String collabRunIdForPrompt = freshSession.getCollabRunId();
             if (collabRunIdForPrompt != null) {
                 CollabRunEntity collabRunForPrompt = collabRunRepository.findById(collabRunIdForPrompt).orElse(null);
-                if (collabRunForPrompt != null && sessionId.equals(collabRunForPrompt.getLeaderSessionId())) {
-                    // This is the leader session — inject coordination guidelines
-                    String existing = agentDef.getSystemPrompt() != null ? agentDef.getSystemPrompt() : "";
-                    agentDef.setSystemPrompt(existing + "\n\n## Team Leader Protocol\n\n"
-                            + "You are the LEADER of a multi-agent team. Your role is to DELEGATE, not to do the work yourself.\n\n"
-                            + "**Workflow:**\n"
-                            + "1. Analyze the user's request and break it into sub-tasks\n"
-                            + "2. Use TeamCreate to spawn team members for each sub-task (you can spawn multiple in one turn)\n"
-                            + "3. After spawning all members, STOP calling tools and end your turn with a brief summary of what you delegated\n"
-                            + "4. Wait for [TeamResult] messages to arrive automatically — do NOT poll or call TeamList\n"
-                            + "5. Once all results arrive, synthesize them into a final response for the user\n\n"
-                            + "**Rules:**\n"
-                            + "- Do NOT use Bash, Read, Grep, or other tools yourself — delegate to team members\n"
-                            + "- Do NOT do research or investigation yourself — that's what team members are for\n"
-                            + "- You MAY use TeamSend to send additional context to a running member\n"
-                            + "- You MAY use TeamKill to cancel a member that is no longer needed\n"
-                            + "- If a member's result is insufficient, spawn a new member with a refined task\n");
-                }
+                appendTeamTaskPrompt(agentDef, collabRunForPrompt, sessionId);
             }
 
             // 收集 zip 包 Skill 定义

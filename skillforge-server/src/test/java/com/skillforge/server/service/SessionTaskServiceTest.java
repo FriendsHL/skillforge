@@ -127,5 +127,19 @@ class SessionTaskServiceTest {
                     assertThat(error.isRetryable()).isTrue();
                 });
     }
+    @Test void expectedRevisionRejectsStaleTeamUpdateBeforeMutation(){
+        SessionTaskEntity current=task("a","pending",null); taskRows.add(current);
+
+        assertThatThrownBy(()->service.update("s1",7L,"a",9L,new SessionTaskService.UpdateCommand(
+                "updated",null,null,null,false,null,false,null,
+                List.of(),List.of(),List.of(),List.of())))
+                .isInstanceOfSatisfying(SessionTaskException.class,error->{
+                    assertThat(error.getCode()).isEqualTo("TASK_REVISION_CONFLICT");
+                    assertThat(error.isRetryable()).isTrue();
+                });
+
+        assertThat(current.getSubject()).isEqualTo("a");
+        verify(tasks, never()).saveAndFlush(current);
+    }
     private SessionTaskEntity task(String id,String status,String owner){SessionTaskEntity t=new SessionTaskEntity();t.setId(id);t.setSessionId("s1");t.setUserId(7L);t.setSubject(id);t.setDescription(id);t.setActiveForm(id);t.setStatus(status);t.setOwner(owner);return t;}
 }

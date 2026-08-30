@@ -744,7 +744,7 @@ public class ToolBeansConfig {
 
     @Bean
     public com.skillforge.server.tool.task.TaskCreateTool taskCreateTool(
-            com.skillforge.server.service.SessionTaskService taskService,
+            com.skillforge.server.service.TeamTaskGraphService taskService,
             ObjectMapper objectMapper, SkillRegistry skillRegistry) {
         var tool = new com.skillforge.server.tool.task.TaskCreateTool(taskService, objectMapper);
         skillRegistry.registerTool(tool); return tool;
@@ -752,7 +752,7 @@ public class ToolBeansConfig {
 
     @Bean
     public com.skillforge.server.tool.task.TaskUpdateTool taskUpdateTool(
-            com.skillforge.server.service.SessionTaskService taskService,
+            com.skillforge.server.service.TeamTaskGraphService taskService,
             ObjectMapper objectMapper, SkillRegistry skillRegistry) {
         var tool = new com.skillforge.server.tool.task.TaskUpdateTool(taskService, objectMapper);
         skillRegistry.registerTool(tool); return tool;
@@ -760,7 +760,7 @@ public class ToolBeansConfig {
 
     @Bean
     public com.skillforge.server.tool.task.TaskGetTool taskGetTool(
-            com.skillforge.server.service.SessionTaskService taskService,
+            com.skillforge.server.service.TeamTaskGraphService taskService,
             ObjectMapper objectMapper, SkillRegistry skillRegistry) {
         var tool = new com.skillforge.server.tool.task.TaskGetTool(taskService, objectMapper);
         skillRegistry.registerTool(tool); return tool;
@@ -768,7 +768,7 @@ public class ToolBeansConfig {
 
     @Bean
     public com.skillforge.server.tool.task.TaskListTool taskListTool(
-            com.skillforge.server.service.SessionTaskService taskService,
+            com.skillforge.server.service.TeamTaskGraphService taskService,
             ObjectMapper objectMapper, SkillRegistry skillRegistry) {
         var tool = new com.skillforge.server.tool.task.TaskListTool(taskService, objectMapper);
         skillRegistry.registerTool(tool); return tool;

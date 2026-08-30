@@ -33,7 +33,7 @@ import java.util.Set;
 import java.util.UUID;
 
 @Service
-public class SessionTaskService {
+public class SessionTaskService implements TaskToolOperations {
     public static final int MAX_TASKS_PER_SESSION = 500;
     public static final int MAX_METADATA_BYTES = 16 * 1024;
 
@@ -121,9 +121,20 @@ public class SessionTaskService {
     @Transactional
     public SessionTaskSnapshotResponse update(String sessionId, Long actorUserId,
                                               String taskId, UpdateCommand command) {
+        return update(sessionId, actorUserId, taskId, null, command);
+    }
+
+    @Transactional
+    public SessionTaskSnapshotResponse update(String sessionId, Long actorUserId,
+                                              String taskId, Long expectedRevision,
+                                              UpdateCommand command) {
         requireAccessibleSession(sessionId, actorUserId, true);
         requireCommand(command != null, "input", "TASK_INPUT_REQUIRED", "TaskUpdate input is required");
         SessionTaskEntity task = requireTask(sessionId, taskId);
+        if (expectedRevision != null && task.getVersion() != expectedRevision) {
+            throw error("TASK_REVISION_CONFLICT", "Task revision changed concurrently", true,
+                    "expectedRevision", "Call TaskGet and retry with the returned version");
+        }
         List<SessionTaskEntity> tasks = taskRepository.findBySessionIdOrderByCreatedAtAscIdAsc(sessionId);
         Map<String, SessionTaskEntity> byId = byId(tasks);
         List<SessionTaskDependencyEntity> deps = new ArrayList<>(dependencyRepository.findBySessionId(sessionId));
@@ -178,6 +189,13 @@ public class SessionTaskService {
     public SessionTaskSnapshotResponse snapshot(String sessionId, Long actorUserId, boolean includeDeleted) {
         requireAccessibleSession(sessionId, actorUserId, false);
         return snapshotInternal(sessionId, includeDeleted, MAX_TASKS_PER_SESSION);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public SessionTaskSnapshotResponse snapshot(String sessionId, Long actorUserId,
+                                                boolean includeDeleted, boolean availableOnly) {
+        return snapshot(sessionId, actorUserId, includeDeleted);
     }
 
     @Transactional(readOnly = true)
