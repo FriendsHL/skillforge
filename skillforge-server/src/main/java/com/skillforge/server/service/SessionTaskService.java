@@ -36,6 +36,17 @@ import java.util.UUID;
 public class SessionTaskService implements TaskToolOperations {
     public static final int MAX_TASKS_PER_SESSION = 500;
     public static final int MAX_METADATA_BYTES = 16 * 1024;
+    private static final int MAX_GOAL_BRIEF_FIELD_LENGTH = 2_000;
+    private static final int MAX_GOAL_BRIEF_ARRAY_ITEMS = 10;
+    private static final int MAX_GOAL_BRIEF_ARRAY_ITEM_LENGTH = 500;
+    private static final int MAX_GOAL_BRIEF_DISPLAY_LENGTH = 8_000;
+    private static final Set<String> GOAL_BRIEF_KEYS = Set.of(
+            "kind", "schemaVersion", "proposalStatus", "outcome", "representativeExample",
+            "antiGoals", "askBefore", "fieldSources", "sourceQuote");
+    private static final Set<String> GOAL_BRIEF_FIELD_KEYS = Set.of(
+            "outcome", "representativeExample", "antiGoals", "askBefore");
+    private static final Set<String> GOAL_BRIEF_FIELD_SOURCES = Set.of(
+            "USER_STATED", "USER_CONFIRMED", "SYSTEM_INFERRED", "UNKNOWN", "CONFLICTING");
 
     private static final Set<String> STATUSES = Set.of("pending", "in_progress", "completed", "deleted");
     private static final Set<String> TERMINAL = Set.of("completed", "deleted");
@@ -95,7 +106,7 @@ public class SessionTaskService implements TaskToolOperations {
                 ? task.getSubject() : requiredText(command.activeForm(), 512, "activeForm"));
         task.setOwner(normalizeOwner(command.owner()));
         task.setMetadata(validateMetadata(command.metadata()));
-        task.setStatus("pending");
+        task.setStatus(isGoalBrief(task) ? "completed" : "pending");
         taskRepository.save(task);
 
         Set<String> blockedBy = normalizedIds(command.blockedBy(), "blockedBy");
@@ -151,7 +162,10 @@ public class SessionTaskService implements TaskToolOperations {
         deps = new ArrayList<>(dependencyRepository.findBySessionId(sessionId));
 
         String oldStatus = task.getStatus();
-        String targetStatus = command.status() == null ? oldStatus : normalizeStatus(command.status());
+        String requestedStatus = command.status() == null ? oldStatus : normalizeStatus(command.status());
+        String targetStatus = isGoalBrief(task) && !"deleted".equals(requestedStatus)
+                ? "completed"
+                : requestedStatus;
         if ("in_progress".equals(targetStatus) && isBlocked(task.getId(), deps, byId)) {
             throw error("TASK_BLOCKED", "Blocked task cannot be moved to in_progress", false,
                     "status", "Complete or delete every blocking task first");
@@ -217,12 +231,15 @@ public class SessionTaskService implements TaskToolOperations {
                 .map(t -> response(t, deps, byId))
                 .toList();
 
+        List<SessionTaskEntity> ordinaryTasks = all.stream()
+                .filter(task -> !isGoalBrief(task))
+                .toList();
         Map<String, Long> summary = new LinkedHashMap<>();
-        summary.put("total", (long) all.size());
+        summary.put("total", (long) ordinaryTasks.size());
         for (String status : List.of("pending", "in_progress", "completed", "deleted")) {
-            summary.put(status, all.stream().filter(t -> status.equals(t.getStatus())).count());
+            summary.put(status, ordinaryTasks.stream().filter(t -> status.equals(t.getStatus())).count());
         }
-        summary.put("blocked", all.stream()
+        summary.put("blocked", ordinaryTasks.stream()
                 .filter(t -> !TERMINAL.contains(t.getStatus()))
                 .filter(t -> isBlocked(t.getId(), deps, byId)).count());
         return new SessionTaskSnapshotResponse(sessionId, summary, output, Instant.now(clock));
@@ -325,7 +342,48 @@ public class SessionTaskService implements TaskToolOperations {
         return new SessionTaskResponse(task.getId(), task.getSubject(), task.getDescription(),
                 task.getActiveForm(), task.getStatus(), task.getOwner(),
                 isBlocked(task.getId(), deps, byId), blockedBy, blocks,
-                task.getCreatedAt(), task.getUpdatedAt(), task.getVersion());
+                copyMetadata(task.getMetadata()), task.getCreatedAt(), task.getUpdatedAt(), task.getVersion());
+    }
+
+    private static boolean isGoalBrief(SessionTaskEntity task) {
+        Map<String, Object> metadata = task.getMetadata();
+        if (metadata == null || !metadata.keySet().equals(GOAL_BRIEF_KEYS)
+                || !"goal_brief".equals(metadata.get("kind"))
+                || !(metadata.get("schemaVersion") instanceof Number schemaVersion)
+                || schemaVersion.doubleValue() != 1D
+                || !("proposed".equals(metadata.get("proposalStatus"))
+                || "revised".equals(metadata.get("proposalStatus")))) return false;
+        String outcome = boundedString(metadata.get("outcome"), MAX_GOAL_BRIEF_FIELD_LENGTH);
+        String example = boundedString(metadata.get("representativeExample"), MAX_GOAL_BRIEF_FIELD_LENGTH);
+        String quote = boundedString(metadata.get("sourceQuote"), MAX_GOAL_BRIEF_FIELD_LENGTH);
+        List<String> antiGoals = boundedStringList(metadata.get("antiGoals"));
+        List<String> askBefore = boundedStringList(metadata.get("askBefore"));
+        if (outcome == null || example == null || quote == null || antiGoals == null || askBefore == null) return false;
+        if (!(metadata.get("fieldSources") instanceof Map<?, ?> sources)
+                || !sources.keySet().equals(GOAL_BRIEF_FIELD_KEYS)
+                || !sources.values().stream().allMatch(GOAL_BRIEF_FIELD_SOURCES::contains)) return false;
+        int displayLength = outcome.length() + example.length() + quote.length()
+                + antiGoals.stream().mapToInt(String::length).sum()
+                + askBefore.stream().mapToInt(String::length).sum();
+        return displayLength <= MAX_GOAL_BRIEF_DISPLAY_LENGTH;
+    }
+
+    private static String boundedString(Object value, int maxLength) {
+        return value instanceof String text && text.length() <= maxLength ? text : null;
+    }
+
+    private static List<String> boundedStringList(Object value) {
+        if (!(value instanceof List<?> items) || items.size() > MAX_GOAL_BRIEF_ARRAY_ITEMS
+                || items.stream().anyMatch(item -> boundedString(item, MAX_GOAL_BRIEF_ARRAY_ITEM_LENGTH) == null)) {
+            return null;
+        }
+        return items.stream().map(String.class::cast).toList();
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> copyMetadata(Map<String, Object> metadata) {
+        if (metadata == null || metadata.isEmpty()) return new LinkedHashMap<>();
+        return objectMapper.convertValue(metadata, LinkedHashMap.class);
     }
 
     private Map<String, TaskGraphState> graphStates(

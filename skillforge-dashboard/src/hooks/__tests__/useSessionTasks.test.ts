@@ -46,6 +46,7 @@ function task(overrides: Partial<SessionTaskDto> = {}): SessionTaskDto {
     createdAt: '2026-08-05T10:00:00Z',
     updatedAt: '2026-08-05T10:01:00Z',
     version: 1,
+    metadata: null,
     ...overrides,
   };
 }

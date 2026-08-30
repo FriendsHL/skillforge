@@ -1,0 +1,53 @@
+.goal-brief-card {
+  margin: 8px 24px 0;
+  padding: 16px;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border-1));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-surface) 94%, var(--accent) 6%);
+  color: var(--fg-1);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--bg-base) 40%, transparent);
+}
+
+.goal-brief-card__header,
+.goal-brief-card__actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.goal-brief-card__eyebrow,
+.goal-brief-card__status,
+.goal-brief-card__source {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.goal-brief-card__eyebrow { color: var(--accent); }
+.goal-brief-card__header h2 { margin: 2px 0 0; font-size: 14px; font-weight: 600; }
+.goal-brief-card__status { color: var(--fg-3); }
+.goal-brief-card__fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 16px 0; }
+.goal-brief-card__field { min-width: 0; padding: 10px 12px; border: 1px solid var(--border-1); border-radius: 6px; background: var(--bg-surface); }
+.goal-brief-card__field dt { display: flex; justify-content: space-between; gap: 8px; color: var(--fg-2); font-size: 11px; font-weight: 600; }
+.goal-brief-card__field dd { margin: 6px 0 0; overflow-wrap: anywhere; color: var(--fg-1); font-size: 12px; line-height: 1.55; }
+.goal-brief-card__field ul { margin: 0; padding-left: 17px; }
+.goal-brief-card__source { color: var(--fg-4); font-weight: 400; }
+.goal-brief-card__source.is-conflicting { color: var(--warn); }
+.goal-brief-card__quote,
+.goal-brief-card__boundary { margin: 0; overflow-wrap: anywhere; color: var(--fg-3); font-size: 11px; }
+.goal-brief-card__quote { padding: 8px 0 12px; border-top: 1px solid var(--border-1); }
+.goal-brief-card__actions { justify-content: flex-start; }
+.goal-brief-card__actions button { min-height: 30px; padding: 5px 10px; border: 1px solid var(--border-2); border-radius: 4px; background: var(--bg-surface); color: var(--fg-2); font: inherit; font-size: 11px; cursor: pointer; }
+.goal-brief-card__actions button:first-child { border-color: color-mix(in srgb, var(--accent) 55%, var(--border-2)); color: var(--accent); }
+.goal-brief-card__actions button:hover:not(:disabled), .goal-brief-card__actions button:focus-visible { background: var(--bg-hover); }
+.goal-brief-card__actions button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.goal-brief-card__actions button:disabled { cursor: not-allowed; opacity: 0.5; }
+.goal-brief-card__boundary { margin-top: 10px; }
+
+@media (max-width: 767px) {
+  .goal-brief-card { margin: 8px 16px 0; }
+  .goal-brief-card__fields { grid-template-columns: 1fr; }
+  .goal-brief-card__actions { align-items: stretch; flex-direction: column; }
+}

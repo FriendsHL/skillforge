@@ -81,6 +81,7 @@ const getSessionsMock = vi.fn(() =>
   }),
 );
 const retryFailedChatTurnMock = vi.fn(() => Promise.resolve({ data: {} }));
+const sendMessageMock = vi.fn(() => Promise.resolve({ data: {} }));
 const taskHookMocks = vi.hoisted(() => ({
   handleWsEvent: vi.fn(),
   retry: vi.fn(),
@@ -100,7 +101,7 @@ vi.mock('../../api', () => ({
   createSession: vi.fn(() => Promise.resolve({ data: { id: 'new-sess' } })),
   getSessions: (...args: unknown[]) => getSessionsMock(...(args as [])),
   getSessionMessages: vi.fn(() => Promise.resolve({ data: [] })),
-  sendMessage: vi.fn(() => Promise.resolve({ data: {} })),
+  sendMessage: (...args: unknown[]) => sendMessageMock(...(args as [string, unknown])),
   uploadChatAttachment: vi.fn(() => Promise.resolve({ data: { id: 'a' } })),
   cancelChat: vi.fn(() => Promise.resolve({ data: {} })),
   retryFailedChatTurn: (...args: unknown[]) => retryFailedChatTurnMock(...(args as [string, number])),
@@ -236,8 +237,16 @@ vi.mock('../../components/RuntimeBanner', () => ({
   ),
 }));
 vi.mock('../../components/chat/SessionTaskProgress', () => ({
-  default: (props: { error: string | null }) => (
-    <div data-testid="session-task-progress">{props.error ?? 'tasks ready'}</div>
+  default: (props: {
+    error: string | null;
+    goalBriefActionDisabled?: boolean;
+    onGoalBriefAction?: (message: string) => void | Promise<void>;
+  }) => (
+    <div data-testid="session-task-progress">
+      {props.error ?? 'tasks ready'}
+      <span data-testid="goal-brief-action-disabled">{String(!!props.goalBriefActionDisabled)}</span>
+      <button type="button" data-testid="goal-brief-action" onClick={() => void props.onGoalBriefAction?.('goal action message')}>Goal action</button>
+    </div>
   ),
 }));
 vi.mock('../../components/PendingAskCard', () => ({ default: () => <div /> }));
@@ -322,6 +331,7 @@ describe('Chat — system agent send gate (SYSTEM-AGENT-TYPING Phase 2.3)', () =
     getAgentsMock.mockClear();
     getSessionsMock.mockClear();
     retryFailedChatTurnMock.mockClear();
+    sendMessageMock.mockClear();
     taskHookMocks.handleWsEvent.mockClear();
     taskHookMocks.chatHandler.mockClear();
     taskHookMocks.retry.mockClear();
@@ -404,6 +414,20 @@ describe('Chat — system agent send gate (SYSTEM-AGENT-TYPING Phase 2.3)', () =
 
     expect(taskHookMocks.chatHandler).toHaveBeenCalledWith(event);
     expect(taskHookMocks.handleWsEvent).toHaveBeenCalledWith(event);
+  });
+
+  it('routes goal brief actions through the existing send path and disabled state', async () => {
+    renderChatWithAgent(userAgent.id, 's-user-1');
+    await screen.findByTestId('goal-brief-action');
+    expect(screen.getByTestId('goal-brief-action-disabled')).toHaveTextContent('false');
+
+    fireEvent.click(screen.getByTestId('goal-brief-action'));
+
+    await waitFor(() => {
+      expect(sendMessageMock).toHaveBeenCalledWith('s-user-1', {
+        message: 'goal action message', userId: 1, attachmentIds: [],
+      });
+    });
   });
 
   // ---- Phase 2 UX refactor (2026-05-18) — sidebar Tabs --------------------

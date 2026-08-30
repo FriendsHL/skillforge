@@ -1121,6 +1121,8 @@ const Chat: React.FC = () => {
                     loading={sessionTasksLoading}
                     error={sessionTasksError}
                     onRetry={handleSessionTaskRetry}
+                    onGoalBriefAction={handleSend}
+                    goalBriefActionDisabled={inputDisabled}
                   />
                 )}
                 {visiblePendingAsk && (

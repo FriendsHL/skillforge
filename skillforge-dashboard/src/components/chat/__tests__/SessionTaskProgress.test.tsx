@@ -18,6 +18,7 @@ function task(overrides: Partial<SessionTaskDto> = {}): SessionTaskDto {
     createdAt: '2026-08-05T10:00:00Z',
     updatedAt: '2026-08-05T10:01:00Z',
     version: 1,
+    metadata: null,
     ...overrides,
   };
 }
@@ -73,6 +74,66 @@ describe('SessionTaskProgress', () => {
   it('renders nothing when the session has no tasks', () => {
     const { container } = render(
       <SessionTaskProgress tasks={[]} loading={false} error={null} onRetry={vi.fn()} />,
+    );
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it('shows only the latest valid goal brief and excludes briefs from ordinary progress', () => {
+    const goalMetadata = (outcome: string) => ({
+      kind: 'goal_brief', schemaVersion: 1, proposalStatus: 'proposed', outcome,
+      representativeExample: 'A finished deliverable', antiGoals: ['No silent release'],
+      askBefore: ['Publishing'], sourceQuote: outcome,
+      fieldSources: {
+        outcome: 'USER_STATED', representativeExample: 'SYSTEM_INFERRED',
+        antiGoals: 'USER_STATED', askBefore: 'CONFLICTING',
+      },
+    });
+    render(
+      <SessionTaskProgress
+        tasks={[
+          task({ taskId: 'ordinary', status: 'completed' }),
+          task({ taskId: 'brief-a', createdAt: '2026-08-05T10:02:00Z', metadata: goalMetadata('Older goal') }),
+          task({ taskId: 'brief-b', createdAt: '2026-08-05T10:02:00Z', metadata: goalMetadata('Latest goal') }),
+        ]}
+        loading={false}
+        error={null}
+        onRetry={vi.fn()}
+        onGoalBriefAction={vi.fn()}
+        goalBriefActionDisabled={false}
+      />,
+    );
+
+    expect(screen.getByText('Latest goal')).toBeInTheDocument();
+    expect(screen.queryByText('Older goal')).not.toBeInTheDocument();
+    expect(screen.getByText('1 / 1 completed')).toBeInTheDocument();
+  });
+
+  it('falls back to rendering an invalid goal brief as an ordinary task', () => {
+    render(
+      <SessionTaskProgress
+        tasks={[task({ metadata: { kind: 'goal_brief', schemaVersion: 1 } })]}
+        loading={false}
+        error={null}
+        onRetry={vi.fn()}
+        onGoalBriefAction={vi.fn()}
+        goalBriefActionDisabled={false}
+      />,
+    );
+    expect(screen.getByText('0 / 1 completed')).toBeInTheDocument();
+  });
+
+  it('does not show a deleted goal brief', () => {
+    const { container } = render(
+      <SessionTaskProgress
+        tasks={[task({ status: 'deleted', metadata: {
+          kind: 'goal_brief', schemaVersion: 1, proposalStatus: 'proposed', outcome: 'Deleted goal',
+          representativeExample: 'Example', antiGoals: [], askBefore: [], sourceQuote: 'Quote',
+          fieldSources: { outcome: 'USER_STATED', representativeExample: 'UNKNOWN', antiGoals: 'UNKNOWN', askBefore: 'UNKNOWN' },
+        } })]}
+        loading={false}
+        error={null}
+        onRetry={vi.fn()}
+      />,
     );
     expect(container).toBeEmptyDOMElement();
   });

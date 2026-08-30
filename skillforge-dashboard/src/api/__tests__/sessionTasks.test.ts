@@ -6,7 +6,7 @@ vi.mock('../client', () => {
 });
 
 import api from '../client';
-import { getSessionTasks } from '../sessionTasks';
+import { getSessionTasks, parseGoalBrief } from '../sessionTasks';
 
 const mockedGet = (api as unknown as { get: ReturnType<typeof vi.fn> }).get;
 
@@ -30,5 +30,51 @@ describe('sessionTasks API', () => {
     expect(mockedGet).toHaveBeenCalledWith('/chat/sessions/session-1/tasks', {
       params: { userId: 42 },
     });
+  });
+});
+
+describe('parseGoalBrief', () => {
+  const valid = {
+    kind: 'goal_brief',
+    schemaVersion: 1,
+    proposalStatus: 'proposed',
+    outcome: 'Ship the complete feature',
+    representativeExample: 'A verified production release',
+    antiGoals: ['Do not publish without confirmation'],
+    askBefore: ['External code execution'],
+    fieldSources: {
+      outcome: 'USER_STATED',
+      representativeExample: 'SYSTEM_INFERRED',
+      antiGoals: 'USER_CONFIRMED',
+      askBefore: 'CONFLICTING',
+    },
+    sourceQuote: 'Take this requirement through release.',
+  };
+
+  it('parses the complete v1 shallow shape', () => {
+    expect(parseGoalBrief(valid)).toEqual(valid);
+  });
+
+  it.each([
+    [{ ...valid, outcome: undefined }],
+    [{ ...valid, schemaVersion: 2 }],
+    [{ ...valid, proposalStatus: 'approved' }],
+    [{ ...valid, extra: 'not part of v1' }],
+    [{ ...valid, outcome: 'x'.repeat(2001) }],
+    [{ ...valid, antiGoals: Array.from({ length: 11 }, () => 'x') }],
+    [{ ...valid, askBefore: ['x'.repeat(501)] }],
+    [{ ...valid, fieldSources: { ...valid.fieldSources, outcome: 'TRUST_ME' } }],
+    [{ ...valid, fieldSources: { ...valid.fieldSources, extra: 'USER_STATED' } }],
+    [{
+      ...valid,
+      outcome: 'x'.repeat(2000),
+      representativeExample: 'x'.repeat(2000),
+      sourceQuote: 'x'.repeat(2000),
+      antiGoals: ['x'.repeat(500), 'x'.repeat(500), 'x'.repeat(500), 'x'.repeat(500), 'x'],
+    }],
+    [Object.assign(Object.create({ kind: 'goal_brief' }), valid)],
+    [Object.defineProperty({ ...valid }, 'outcome', { enumerable: true, get: () => 'unsafe' })],
+  ])('rejects invalid or malicious metadata %#', (metadata) => {
+    expect(parseGoalBrief(metadata)).toBeNull();
   });
 });

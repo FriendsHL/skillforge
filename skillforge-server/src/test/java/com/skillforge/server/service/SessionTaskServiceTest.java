@@ -70,6 +70,69 @@ class SessionTaskServiceTest {
         assertThat(created.task().activeForm()).isEqualTo("Ship tests"); assertThat(created.task().owner()).isNull();
         assertThat(created.snapshot().tasks()).singleElement().isEqualTo(created.task());
     }
+    @Test void createGoalBriefCompletesItAndExcludesItFromOrdinarySummary(){
+        taskRows.add(task("ordinary","pending",null));
+
+        var created=service.create("s1",7L,new SessionTaskService.CreateCommand(
+                "Confirm goal","Review the proposed goal",null,null,
+                goalBriefMetadata("Ship safely"),List.of()));
+
+        assertThat(created.task().status()).isEqualTo("completed");
+        assertThat(created.task().metadata()).containsEntry("kind","goal_brief");
+        assertThat(created.snapshot().summary()).containsEntry("total",1L)
+                .containsEntry("pending",1L).containsEntry("completed",0L);
+        assertThat(created.snapshot().tasks()).hasSize(2);
+    }
+    @Test void malformedGoalBriefFallsBackToOrdinaryTaskLifecycleAndSummary(){
+        var created=service.create("s1",7L,new SessionTaskService.CreateCommand(
+                "Malformed","Still ordinary",null,null,
+                Map.of("kind","goal_brief"),List.of()));
+
+        assertThat(created.task().status()).isEqualTo("pending");
+        assertThat(created.snapshot().summary()).containsEntry("total",1L)
+                .containsEntry("pending",1L);
+    }
+    @Test void updateToValidGoalBriefForcesCompletedLifecycle(){
+        SessionTaskEntity current=task("a","pending",null); taskRows.add(current);
+
+        var snapshot=service.update("s1",7L,"a",new SessionTaskService.UpdateCommand(
+                null,null,null,"in_progress",false,null,true,goalBriefMetadata("Updated goal"),
+                List.of(),List.of(),List.of(),List.of()));
+
+        assertThat(current.getStatus()).isEqualTo("completed");
+        assertThat(snapshot.summary()).containsEntry("total",0L).containsEntry("completed",0L);
+    }
+    @Test void validGoalBriefCanBeExplicitlyDeleted(){
+        SessionTaskEntity current=task("brief","completed",null);
+        current.setMetadata(goalBriefMetadata("Delete this proposal")); taskRows.add(current);
+
+        service.update("s1",7L,"brief",new SessionTaskService.UpdateCommand(
+                null,null,null,"deleted",false,null,false,null,
+                List.of(),List.of(),List.of(),List.of()));
+
+        assertThat(current.getStatus()).isEqualTo("deleted");
+    }
+    @Test void responseMetadataIsDeepCopiedFromPersistenceState(){
+        SessionTaskEntity stored=task("brief","completed",null);
+        stored.setMetadata(new java.util.LinkedHashMap<>(Map.of(
+                "kind","goal_brief","nested",new java.util.ArrayList<>(List.of("original")))));
+        taskRows.add(stored);
+
+        var response=service.get("s1",7L,"brief");
+        response.metadata().put("kind","changed");
+        ((List<String>) response.metadata().get("nested")).add("changed");
+
+        assertThat(stored.getMetadata()).containsEntry("kind","goal_brief");
+        assertThat((List<Object>) stored.getMetadata().get("nested")).containsExactly("original");
+    }
+    @Test void ordinaryTaskCreateAndSummaryRemainUnchanged(){
+        var created=service.create("s1",7L,new SessionTaskService.CreateCommand(
+                "Ordinary","Do work",null,null,Map.of("kind","note"),List.of()));
+
+        assertThat(created.task().status()).isEqualTo("pending");
+        assertThat(created.snapshot().summary()).containsEntry("total",1L)
+                .containsEntry("pending",1L).containsEntry("completed",0L);
+    }
     @Test void switchingNullOwnerAtomicallyDemotesPreviousTask(){
         SessionTaskEntity old=task("a","in_progress",null), next=task("b","pending"," "); taskRows.addAll(List.of(old,next));
         service.update("s1",7L,"b",new SessionTaskService.UpdateCommand(null,null,null,"in_progress",false,null,false,null,List.of(),List.of(),List.of(),List.of()));
@@ -142,4 +205,13 @@ class SessionTaskServiceTest {
         verify(tasks, never()).saveAndFlush(current);
     }
     private SessionTaskEntity task(String id,String status,String owner){SessionTaskEntity t=new SessionTaskEntity();t.setId(id);t.setSessionId("s1");t.setUserId(7L);t.setSubject(id);t.setDescription(id);t.setActiveForm(id);t.setStatus(status);t.setOwner(owner);return t;}
+    private Map<String,Object> goalBriefMetadata(String outcome){
+        Map<String,Object> metadata=new java.util.LinkedHashMap<>();
+        metadata.put("kind","goal_brief"); metadata.put("schemaVersion",1); metadata.put("proposalStatus","proposed");
+        metadata.put("outcome",outcome); metadata.put("representativeExample","A representative example");
+        metadata.put("antiGoals",List.of("Do not publish")); metadata.put("askBefore",List.of("Publishing"));
+        metadata.put("fieldSources",Map.of("outcome","USER_STATED","representativeExample","SYSTEM_INFERRED","antiGoals","USER_STATED","askBefore","SYSTEM_INFERRED"));
+        metadata.put("sourceQuote","Original request");
+        return metadata;
+    }
 }
