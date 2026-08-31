@@ -19,14 +19,16 @@ class TeamTaskAvailableListenerTest {
         SessionEntity peer = member("worker-2");
         when(sessions.findByCollabRunId("team-1")).thenReturn(List.of(actor, peer));
         when(registry.nextSeqNo("worker-2")).thenReturn(11L);
+        String messageId = TeamTaskAvailableListener.messageIdFor(42L, "worker-2");
         when(registry.enqueueForSession(eq("worker-2"), contains("task-1"),
-                eq("team-task-42-worker-2"), eq(11L))).thenReturn(true);
+                eq(messageId), eq(11L))).thenReturn(true);
         TeamTaskAvailableListener listener = new TeamTaskAvailableListener(sessions, registry);
 
         listener.onTaskAvailable(new TeamTaskAvailableEvent(42L, "team-1", "worker-1", "task-1", "Review"));
 
         verify(registry).enqueueForSession(eq("worker-2"), contains("availableOnly=true"),
-                eq("team-task-42-worker-2"), eq(11L));
+                eq(messageId), eq(11L));
+        org.assertj.core.api.Assertions.assertThat(messageId).hasSize(36);
         verify(registry).maybeResumeSession("worker-2");
         verify(registry, never()).enqueueForSession(eq("worker-1"), anyString(), anyString(), anyLong());
     }

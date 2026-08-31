@@ -61,9 +61,24 @@ public class CollabRunService {
     }
 
     /**
-     * Create a new collaboration run with the given session as leader.
+     * Return the session's running collaboration run, or create one atomically.
+     *
+     * <p>One LLM response may contain multiple TeamCreate calls and the engine may
+     * execute them concurrently. Locking the spawning session makes run creation
+     * idempotent for that response, so every child joins the same collaboration
+     * instead of racing to overwrite {@code session.collabRunId}.</p>
      */
+    @Transactional
     public CollabRunEntity createRun(String leaderSessionId, int maxDepth, int maxTotalAgents) {
+        SessionEntity leader = sessionRepository.findByIdForUpdate(leaderSessionId)
+                .orElseThrow(() -> new IllegalStateException("Leader session not found: " + leaderSessionId));
+        if (leader.getCollabRunId() != null && !leader.getCollabRunId().isBlank()) {
+            CollabRunEntity existing = collabRunRepository.findById(leader.getCollabRunId()).orElse(null);
+            if (existing != null && "RUNNING".equals(existing.getStatus())) {
+                return existing;
+            }
+        }
+
         CollabRunEntity run = new CollabRunEntity();
         run.setCollabRunId(UUID.randomUUID().toString());
         run.setLeaderSessionId(leaderSessionId);
@@ -73,10 +88,10 @@ public class CollabRunService {
         run.setCreatedAt(Instant.now());
         collabRunRepository.save(run);
 
-        // Mark the leader session as belonging to this collab run
-        SessionEntity leader = sessionService.getSession(leaderSessionId);
+        // Mark the spawning session as belonging to this collab run while its row
+        // remains locked, so a concurrent TeamCreate observes this exact run.
         leader.setCollabRunId(run.getCollabRunId());
-        sessionService.saveSession(leader);
+        sessionRepository.save(leader);
 
         log.info("CollabRun created: collabRunId={}, leader={}", run.getCollabRunId(), leaderSessionId);
 

@@ -122,14 +122,12 @@ public class TeamCreateTool implements Tool {
 
             SessionEntity session = sessionService.getSession(sessionId);
 
-            // Auto-create collab run if session doesn't have one
-            String collabRunId = session.getCollabRunId();
-            if (collabRunId == null) {
-                CollabRunEntity collabRun = collabRunService.createRun(sessionId, 2, 20);
-                collabRunId = collabRun.getCollabRunId();
-                // Refresh session to get the updated collabRunId
-                session = sessionService.getSession(sessionId);
-            }
+            // Atomically reuse or create the run. Multiple TeamCreate blocks in one
+            // model response may execute concurrently, so a read-then-create check in
+            // the Tool would split members across different collaboration runs.
+            CollabRunEntity collabRun = collabRunService.createRun(sessionId, 2, 20);
+            String collabRunId = collabRun.getCollabRunId();
+            session = sessionService.getSession(sessionId);
 
             // Spawn the member
             SessionEntity child = collabRunService.spawnMember(

@@ -300,6 +300,7 @@ public class TeamTaskGraphService implements TaskToolOperations {
         String attemptStatus = "error".equals(runtimeStatus) ? "FAILED" : expired ? "EXPIRED" : "RELEASED";
         String eventType = "FAILED".equals(attemptStatus) ? "TASK_FAILED" : "TASK_RELEASED";
         String oldStatus = task.getStatus();
+        boolean ownerMatchesAttempt = active.getWorkerSessionId().equals(task.getOwner());
 
         String recoveredStatus = task.getStatus();
         if ("in_progress".equals(task.getStatus())) {
@@ -308,7 +309,7 @@ public class TeamTaskGraphService implements TaskToolOperations {
                             true, null, false, null,
                             List.of(), List.of(), List.of(), List.of()));
             recoveredStatus = "pending";
-            if (!active.getWorkerSessionId().equals(task.getOwner())) {
+            if (!ownerMatchesAttempt) {
                 attemptStatus = "FAILED";
                 eventType = "TASK_FAILED";
                 reason = "STATE_MISMATCH";

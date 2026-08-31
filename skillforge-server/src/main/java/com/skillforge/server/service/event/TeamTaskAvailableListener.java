@@ -6,8 +6,13 @@ import com.skillforge.server.subagent.SubAgentRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
+
+import java.nio.charset.StandardCharsets;
+import java.util.UUID;
 
 @Component
 public class TeamTaskAvailableListener {
@@ -21,6 +26,7 @@ public class TeamTaskAvailableListener {
     }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void onTaskAvailable(TeamTaskAvailableEvent event) {
         String payload = "[TeamTaskEvent]\n"
                 + "A shared task is now available. Call TaskList with availableOnly=true before claiming.\n"
@@ -29,7 +35,7 @@ public class TeamTaskAvailableListener {
                 + "[/TeamTaskEvent]";
         for (SessionEntity member : sessionRepository.findByCollabRunId(event.collabRunId())) {
             if (member.getId().equals(event.actorSessionId())) continue;
-            String messageId = "team-task-" + event.eventId() + "-" + member.getId();
+            String messageId = messageIdFor(event.eventId(), member.getId());
             try {
                 if (registry.enqueueForSession(member.getId(), payload, messageId,
                         registry.nextSeqNo(member.getId()))) {
@@ -40,5 +46,10 @@ public class TeamTaskAvailableListener {
                         member.getId(), event.taskId(), exception);
             }
         }
+    }
+
+    static String messageIdFor(Long eventId, String memberSessionId) {
+        String dedupKey = "team-task-" + eventId + "-" + memberSessionId;
+        return UUID.nameUUIDFromBytes(dedupKey.getBytes(StandardCharsets.UTF_8)).toString();
     }
 }

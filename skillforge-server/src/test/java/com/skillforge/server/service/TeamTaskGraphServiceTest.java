@@ -320,7 +320,14 @@ class TeamTaskGraphServiceTest {
                 .thenReturn(Optional.of(active), Optional.of(active));
         when(tasks.findByIdAndSessionId("t1", "leader")).thenReturn(Optional.of(row));
         when(taskService.update(eq("leader"), eq(7L), eq("t1"), eq(0L), any()))
-                .thenReturn(snapshot(response("t1", "pending", null, false, 1L)));
+                .thenAnswer(invocation -> {
+                    // Real JPA updates the already-managed row in the same persistence context.
+                    // Preserve this shape so owner validation cannot accidentally inspect the
+                    // cleared post-recovery owner instead of the pre-recovery owner.
+                    row.setStatus("pending");
+                    row.setOwner(null);
+                    return snapshot(response("t1", "pending", null, false, 1L));
+                });
         when(taskService.snapshotForSystem("leader", false, SessionTaskService.MAX_TASKS_PER_SESSION))
                 .thenReturn(snapshot(response("t1", "pending", null, false, 1L)));
 
