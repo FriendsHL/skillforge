@@ -1,14 +1,16 @@
 # SkillForge ToDo
 
-> 更新于：2026-08-12（Artifact P0 已收口；Agent Team Task Graph Phase 1 已实现并部署，待 dogfood）
+> 更新于：2026-08-31（Goal Brief P0a 已交付；Agent Factory 后续方案待讨论；AG-UI 保持关闭）
 > 规则：这里只放当前执行状态；范围与方案见需求包，交付事实见 [delivery-index.md](delivery-index.md)。
 
 ## 当前队列
 
 | 顺序 | ID | 标题 | 模式 | 状态 | 优先级 | 下一步 |
 | --- | --- | --- | --- | --- | --- | --- |
-| - | **AGENT-TEAM-TASK-GRAPH** | Team 共享 Task、并发领取、租约、解锁与恢复 | Full | Phase 1 implemented；3581 项全量回归与 V192 运行态迁移通过 | P0 | 用户用真实 Team 验收并发领取、kill 回收、依赖解锁与 mailbox 唤醒 |
-| - | **AGENT-GOAL-AND-TOOL-RECOVERY** | 持久化 Task、目标连续性与 Artifact 恢复 | Full | implemented / Full automated verified；待浏览器与真机 dogfood | P0 | 用户验收多轮追加、Task 进度与 Artifact 自定义页面 |
+| - | **GOAL-ALIGNED-AGENT-FACTORY** | 主 Agent 入口、专业 Agent 选择/组装与目标对齐能力工厂 | Full | Design proposed；P0a 已交付 | P1 | P0b/P1 及后续产品语义继续讨论，未确认前不启动实现 |
+| - | **GOAL-BRIEF-P0A** | 长期/复杂/新能力/高风险任务的对话内轻量目标卡 | Full | implemented；Full automated + browser verified | P1 | 保持非权威、非授权边界；后续确定性 Goal Contract 另包讨论 |
+| - | **AGENT-TEAM-TASK-GRAPH** | Team 共享 Task、并发领取、租约、解锁与恢复 | Full | Phase 1 implemented；3598 项全量回归 + real Team dogfood verified | P0 | 当前阶段收口；后续自动协调/调度另包讨论 |
+| - | **AGENT-GOAL-AND-TOOL-RECOVERY** | 持久化 Task、目标连续性与 Artifact 恢复 | Full | implemented / Full automated + Dashboard browser verified | P0 | 仅余 iOS 真机 Task/Personal App dogfood |
 | - | **AGENT-CONTEXT-GOVERNANCE** | Opus 5 时代的 Agent 上下文与能力治理 | Full | P0–P2、P4–P6 已交付；P3（CLAUDE.md/Instruction Registry）按产品方向跳过 | P7 | Result Provenance、MCP Artifact Bridge |
 | - | **REALTIME-VOICE-CONVERSATION** | iOS 实时语音对话 | Full | Design Proposed；Ark ASR + Seed Pro + TTS，Qwen-compatible | P1 | 用户批准设计后先执行 Phase 0 Ark 活体 Spike |
 | - | **MULTIMODAL-MEDIA-RUNTIME** | 图片、音频、视频生成/理解、管理端与 iOS 统一呈现 | Full | P0/P1 complete：Main Agent Seedream 真生图、Attachment 转存与跨端 `image_ref` 闭环；Seedance 当前不可新增接入 | P1/P2 | 用户验收同步生图；另行批准后进入 P2 异步 Job、音频与视频 |
@@ -88,6 +90,7 @@
 
 | ID | 触发条件 |
 | --- | --- |
+| **AG-UI-COMPATIBILITY** | Goal Brief 服务端确定性 Gate、现有 WS 恢复基线、真实跨端/外部 Runtime 场景和用户独立批准同时满足；当前保持关闭 |
 | **WF-CONCURRENT-PIPELINE** | AUTOEVOLVING V2(d) 启动或串行 pipeline 成为瓶颈 |
 | **OUTCOMES-RUBRIC-FOUNDATION** | 用户决定把 rubric/grader 升 active |
 | **COMPACT-V2-STORAGE** | recovery 回取或截断 cache 抖动出现真实需求 |

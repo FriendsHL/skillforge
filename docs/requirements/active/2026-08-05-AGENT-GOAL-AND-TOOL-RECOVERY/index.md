@@ -1,6 +1,6 @@
 # AGENT-GOAL-AND-TOOL-RECOVERY — 持久化 Task、目标连续性与 Artifact 恢复
 
-> 状态：implemented / Full automated verified；待用户端浏览器与真机 dogfood
+> 状态：implemented / Full automated + Dashboard browser verified；待 iOS 真机 dogfood
 > 日期：2026-08-05
 > 触发 Session：`7f623dc6-3610-46c2-9b95-6f3e0e1f4764`
 
@@ -51,7 +51,9 @@ Artifact 工具失败后 Agent 围绕工具错误偏离用户目标的问题。D
 - Full Pipeline 第三轮独立审查为 `PASS_WITH_NOTES`，0 blocker / 0 major；审查留下的 3 个测试与呈现小项均已补齐并重新验证。
 - Artifact P0 follow-up：聚焦测试 72/72；后端全量 3558 项执行、0 failure / 0 error、179 skipped；真实
   PostgreSQL 验证 V191 可重复更新派生操作约束，并由完整 Flyway 路径从 V187 升至 V191。
-- 环境限制：当前自动化浏览器通道没有可用实例，因此未声称完成真实浏览器交互验收；用户端浏览器与 iOS 真机体验保留为 dogfood 门。
+- Dashboard browser dogfood（2026-08-31）：会话 `14ffb0c0-a593-422e-9a12-6dc83da7df3b` 创建 A/B 两个有依赖的 Task，B 随 A 完成解除阻塞，最终显示 `2 / 2 completed`；刷新后 Task 进度仍恢复。
+- 同一会话发布 Interactive Artifact `c6bf1a8e-098b-3e01-a60f-afbe5d4820b8`，在 Personal App 中点击 `+1` 后状态从 0 变为 1，页面刷新后 Artifact 与 Task 均可恢复。
+- iOS 真机交互仍保留为独立 dogfood 门，不用 Dashboard 浏览器证据替代。
 
 ## 文档
 

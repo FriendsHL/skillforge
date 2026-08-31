@@ -1,6 +1,6 @@
 # SkillForge 文档
 
-> 更新于：2026-08-12（Artifact P0 已收口；Agent Team Task Graph Phase 1 已实现并部署）
+> 更新于：2026-08-31（Goal Brief P0a 已交付；Goal-aligned Agent Factory 后续方案待讨论；AG-UI 保持关闭）
 > Agent 规则：先读这里，再只打开当前任务链接到的文档。
 
 ## 从这里开始
@@ -16,10 +16,12 @@
 
 | ID | 标题 | 状态 | 需求包 |
 | --- | --- | --- | --- |
-| **AGENT-TEAM-TASK-GRAPH** | Team 共享 Task、并发领取、租约、解锁与恢复 | Phase 1 implemented / Full automated + runtime migration verified；待真实 Team dogfood | [需求包](requirements/active/2026-08-12-AGENT-TEAM-TASK-GRAPH/index.md) |
-| **AGENT-GOAL-AND-TOOL-RECOVERY** | 持久化 Task、目标连续性与 Artifact 恢复 | implemented / Full automated verified；待浏览器与真机 dogfood | [需求包](requirements/active/2026-08-05-AGENT-GOAL-AND-TOOL-RECOVERY/index.md) |
+| **GOAL-ALIGNED-AGENT-FACTORY** | 目标对齐的个人助手能力工厂 | Design proposed / Full；P0a 已交付，P0b/P1 及后续方案待产品讨论 | [需求包](requirements/active/2026-08-26-GOAL-ALIGNED-AGENT-FACTORY/index.md) |
+| **GOAL-BRIEF-P0A** | 对话内轻量目标确认 | implemented / Full automated + browser verified | [需求包](requirements/active/2026-08-26-GOAL-BRIEF-P0A/index.md) |
+| **AGENT-TEAM-TASK-GRAPH** | Team 共享 Task、并发领取、租约、解锁与恢复 | Phase 1 implemented / Full automated + real Team dogfood verified | [需求包](requirements/active/2026-08-12-AGENT-TEAM-TASK-GRAPH/index.md) |
+| **AGENT-GOAL-AND-TOOL-RECOVERY** | 持久化 Task、目标连续性与 Artifact 恢复 | implemented / Full automated + Dashboard browser verified；待 iOS 真机 dogfood | [需求包](requirements/active/2026-08-05-AGENT-GOAL-AND-TOOL-RECOVERY/index.md) |
 | **HARNESS-BENCHMARK-COMPARISON** | SkillForge 与 Claude Code/Codex/OpenHands 的同模型公开 Benchmark 横向评测 | 需求包完成；等待 Context Governance P2–P6 | [需求包](requirements/active/2026-07-29-HARNESS-BENCHMARK-COMPARISON/index.md) |
-| **AGENT-CONTEXT-GOVERNANCE** | System Prompt、Instruction、Reminder、ToolSearch、Memory 与 Compact 连续性治理 | P0–P2 已交付 / Full；P3–P9 已批准分期实施 | [需求包](requirements/active/2026-07-26-AGENT-CONTEXT-GOVERNANCE/index.md) |
+| **AGENT-CONTEXT-GOVERNANCE** | System Prompt、Instruction、Reminder、ToolSearch、Memory 与 Compact 连续性治理 | P0–P2、P2.5、P4–P6 已交付；P3 跳过，P7–P9 待分期实施 | [需求包](requirements/active/2026-07-26-AGENT-CONTEXT-GOVERNANCE/index.md) |
 | **REALTIME-VOICE-CONVERSATION** | iOS 实时语音对话、打断、字幕与 Agent Tool 编排 | Design Proposed / Full；Ark first，Qwen-compatible | [需求包](requirements/active/2026-07-23-REALTIME-VOICE-CONVERSATION/index.md) |
 | **MULTIMODAL-MEDIA-RUNTIME** | 图片、音频、视频生成/理解、管理端与 iOS 统一呈现 | P0/P1 complete / Full；Main Agent Seedream 真生图与跨端 `image_ref` 闭环完成，视频当前不可新增接入 | [需求包](requirements/active/2026-07-22-MULTIMODAL-MEDIA-RUNTIME/index.md) |
 | **IOS-CHAT-CONTROL-AGENTS-EXPERIENCE** | Chat 滚动、身份 Header、Tool 卡片与 Control/Agents 信息架构 | P0 code complete / focused 31/31 + stability 10/10；final Full gate BLOCKED_ENV；P1 Proposed 待确认 | [需求包](requirements/active/2026-07-18-IOS-CHAT-CONTROL-AGENTS-EXPERIENCE/index.md) |
@@ -43,6 +45,7 @@
 
 | ID | 状态 | 需求包 |
 | --- | --- | --- |
+| **AG-UI-COMPATIBILITY** | backlog-disabled；暂不启用、暂不开发 | [需求包](requirements/backlog/AG-UI-COMPATIBILITY/index.md) |
 | **TASK-RESUME-ON-RESTART** | 单实例 kill-running MVP；Root/SubAgent 边界恢复已实现，Workflow/真 kill 验收待完成 | [需求包](requirements/backlog/TASK-RESUME-ON-RESTART/index.md) |
 | **CONTEXT-OVERFLOW-TRIPLE-FULL-COMPACT** | context overflow 最多三次 Full Compact；Core 已实现并通过 Core+Server 回归 | [需求包](requirements/backlog/CONTEXT-OVERFLOW-TRIPLE-FULL-COMPACT/index.md) |
 | **WF-CONCURRENT-PIPELINE** | AUTOEVOLVING V2(d) | [需求包](requirements/backlog/WF-CONCURRENT-PIPELINE/index.md) |
