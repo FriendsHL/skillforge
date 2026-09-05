@@ -222,6 +222,7 @@ public class EngineConfig {
                                            LifecycleHookLoopAdapter lifecycleHookLoopAdapter,
                                            LifecycleHookSkillAdapter lifecycleHookSkillAdapter,
                                            com.skillforge.server.service.MemoryService memoryService,
+                                           com.skillforge.server.reminder.TaskReminderSource taskReminderSource,
                                            com.skillforge.core.context.GlobalSystemPromptProvider globalSystemPromptProvider,
                                            com.skillforge.core.engine.confirm.SessionConfirmCache sessionConfirmCache,
                                            com.skillforge.core.engine.confirm.ToolApprovalRegistry toolApprovalRegistry,
@@ -254,6 +255,7 @@ public class EngineConfig {
         // L1 hybrid recall pick semantically relevant knowledge/project/reference memories.
         engine.setMemoryProvider((userId, taskContext) ->
                 memoryService.getMemoriesForPromptInjection(userId, taskContext));
+        engine.setTaskStateProvider(taskReminderSource::renderForLoop);
         // SKILLFORGE-SYSTEM-PROMPT: inject the platform-wide global system prompt (built-in
         // classpath resource) as the first stable system-prompt segment for every native
         // agent. This replaces the legacy per-user UserConfigEntity.claudeMd injection —

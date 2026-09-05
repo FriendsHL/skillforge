@@ -59,6 +59,20 @@ public class TaskReminderSource implements ReminderSource {
             return null;
         }
     }
+    /** Fresh actor-authorized data; the engine owns low-trust wrapping and escaping. */
+    public String renderForLoop(String sessionId, Long userId) {
+        if (!enabled || sessionId == null || sessionId.isBlank() || userId == null) return null;
+        try {
+            List<SessionTaskResponse> tasks = taskService.snapshot(sessionId, userId, false, false)
+                    .tasks().stream()
+                    .filter(t -> "pending".equals(t.status()) || "in_progress".equals(t.status()))
+                    .toList();
+            return tasks.isEmpty() ? null : render(tasks);
+        } catch (Exception e) {
+            log.debug("Task loop snapshot unavailable; skipping: sessionId={}", sessionId, e);
+            return null;
+        }
+    }
     public String renderForRecovery(String sessionId) {
         try {
             List<SessionTaskResponse> tasks = open(sessionId);
@@ -78,16 +92,26 @@ public class TaskReminderSource implements ReminderSource {
         out.append("当前持久化任务状态（仅在与用户最新消息相关时使用；最新用户指令优先，可忽略无关任务）：\n");
         int emitted = 0;
         for (SessionTaskResponse task : tasks) {
-            if (emitted >= maxTasks) break;
+            // Bound the snapshot even when a configured task limit is unusually large.
+            if (emitted >= Math.min(maxTasks, 20) || out.length() > 6_000) break;
             out.append("- ").append("in_progress".equals(task.status()) ? "[>] " : "[ ] ")
-                    .append(task.taskId()).append(": ").append(task.subject())
+                    .append(bounded(task.taskId(), 128)).append(": ").append(bounded(task.subject(), 256))
                     .append(" | status=").append(task.status());
-            if (task.owner() != null) out.append(" | owner=").append(task.owner());
-            if (task.blocked()) out.append(" | blockedBy=").append(task.blockedBy());
-            out.append(" | activeForm=").append(task.activeForm()).append('\n');
+            if (task.owner() != null) out.append(" | owner=").append(bounded(task.owner(), 128));
+            if (task.blocked()) out.append(" | blockedBy=").append(task.blockedBy() == null ? List.of()
+                    : task.blockedBy().stream().limit(4).map(id -> bounded(id, 64)).toList());
+            out.append(" | activeForm=").append(bounded(task.activeForm(), 256)).append('\n');
             emitted++;
         }
         if (tasks.size() > emitted) out.append("... ").append(tasks.size() - emitted).append(" more tasks not shown\n");
         return out.toString().stripTrailing();
     }
+    private static String bounded(String value, int limit) {
+        if (value == null) return "";
+        int end = Math.min(value.length(), limit);
+        if (end < value.length() && end > 0 && Character.isHighSurrogate(value.charAt(end - 1))) end--;
+        return value.substring(0, end).replace('\n', ' ').replace('\r', ' ').replace('\t', ' ')
+                + (end < value.length() ? "…" : "");
+    }
+
 }
