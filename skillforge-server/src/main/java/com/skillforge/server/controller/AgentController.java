@@ -1,6 +1,7 @@
 package com.skillforge.server.controller;
 
 import com.skillforge.server.entity.AgentEntity;
+import com.skillforge.server.dto.AgentUpdateRequest;
 import com.skillforge.server.exception.AgentNotFoundException;
 import com.skillforge.server.service.AgentService;
 import com.skillforge.server.service.AgentYamlMapper;
@@ -109,9 +110,9 @@ public class AgentController {
 
     @PutMapping("/{id}")
     public ResponseEntity<?> updateAgent(@PathVariable Long id,
-                                          @RequestBody AgentEntity agent) {
+                                          @RequestBody AgentUpdateRequest request) {
         try {
-            AgentEntity updated = agentService.updateAgent(id, agent);
+            AgentEntity updated = agentService.updateAgent(id, request);
             return ResponseEntity.ok(updated);
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));

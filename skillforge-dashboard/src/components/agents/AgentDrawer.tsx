@@ -274,6 +274,7 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
   // Overview — model + maxLoops + thinking edit
   const agentWithExtras = agent as AgentDto & { maxLoops?: number | null };
   const [modelIdDraft, setModelIdDraft] = useState<string>(agent.modelId || '');
+  const [savedSystemModelId, setSavedSystemModelId] = useState<string>(agent.modelId || '');
   const [publicDraft, setPublicDraft] = useState<boolean>(agent.public ?? false);
   const [maxLoopsDraft, setMaxLoopsDraft] = useState<number | null>(
     typeof agentWithExtras.maxLoops === 'number' ? agentWithExtras.maxLoops : null,
@@ -297,6 +298,7 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
   );
   useEffect(() => {
     setModelIdDraft(agent.modelId || '');
+    setSavedSystemModelId(agent.modelId || '');
     setPublicDraft(agent.public ?? false);
     setRoleDraft((agent.role || '').toString());
     setMaxLoopsDraft(typeof agentWithExtras.maxLoops === 'number' ? agentWithExtras.maxLoops : null);
@@ -320,8 +322,9 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
   // Exclude clear-only maxLoops transitions: UpdateAgentRequest.maxLoops is
   // `number | undefined`, so a null draft can't be explicitly sent to clear the
   // server value. Without this guard, Save would fire a false success toast.
-  const overviewDirty =
-    (agent.modelId || '') !== modelIdDraft ||
+  const overviewDirty = isSystemAgent
+    ? savedSystemModelId !== modelIdDraft
+    : (agent.modelId || '') !== modelIdDraft ||
     (agent.public ?? false) !== publicDraft ||
     ((agent.role || '') !== roleDraft) ||
     (maxLoopsDraft !== null && initialMaxLoops !== maxLoopsDraft) ||
@@ -476,7 +479,10 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
 
   const updateMutation = useMutation({
     mutationFn: ({ id, payload }: { id: number; payload: UpdateAgentRequest }) => updateAgent(id, payload),
-    onSuccess: () => {
+    onSuccess: (_response, { id, payload }) => {
+      if (id === agent.id && isSystemAgent && payload.modelId !== undefined) {
+        setSavedSystemModelId(payload.modelId);
+      }
       message.success('Agent updated');
       queryClient.invalidateQueries({ queryKey: ['agents'] });
     },
@@ -620,6 +626,11 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
   };
 
   const handleSaveOverview = () => {
+    if (isSystemAgent) {
+      updateMutation.mutate({ id: agent.id, payload: { modelId: modelIdDraft || undefined } });
+      return;
+    }
+
     const partial: UpdateAgentRequest = {
       modelId: modelIdDraft || undefined,
       role: roleDraft,
@@ -796,7 +807,6 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
                     style={{ width: '100%', marginTop: 4 }}
                     showSearch
                     optionFilterProp="label"
-                    disabled={isSystemAgent}
                     filterOption={(input, option) => {
                       // Custom filter since label is now ReactNode for some options.
                       const opt = modelOptions.find((o) => o.id === option?.value);
@@ -936,9 +946,8 @@ const AgentDrawer: React.FC<AgentDrawerProps> = ({ agent, onClose }) => {
                 <button
                   className="btn-primary-sf"
                   onClick={handleSaveOverview}
-                  disabled={!overviewDirty || updateMutation.isPending || isSystemAgent}
+                  disabled={!overviewDirty || updateMutation.isPending}
                   data-testid="overview-save-btn"
-                  title={isSystemAgent ? 'System agent fields are read-only' : undefined}
                 >
                   {overviewDirty ? 'Save' : 'Saved'}
                 </button>

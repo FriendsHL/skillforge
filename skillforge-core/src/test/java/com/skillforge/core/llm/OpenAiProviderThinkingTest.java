@@ -45,6 +45,58 @@ class OpenAiProviderThinkingTest {
         return JSON.readTree(raw);
     }
 
+    @Test
+    void bailianDeepseek_usesHostedThinkingDialectForEveryModeAndStream() throws Exception {
+        provider = new OpenAiProvider("test-key",
+                "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+                "deepseek-v4-pro-0813");
+        for (String model : List.of("deepseek-v4-pro", "deepseek-v4-pro-0813", "deepseek-v4-flash-0731")) {
+            for (ThinkingMode mode : ThinkingMode.values()) {
+                for (boolean stream : List.of(false, true)) {
+                    LlmRequest request = simpleRequest();
+                    request.setThinkingMode(mode);
+                    request.setReasoningEffort(ReasoningEffort.HIGH);
+                    JsonNode result = JSON.readTree((String) buildRequestBody.invoke(provider, request, model, stream));
+                    assertThat(result.path("enable_thinking").isBoolean()).isTrue();
+                    assertThat(result.path("enable_thinking").asBoolean()).isEqualTo(mode == ThinkingMode.ENABLED);
+                    assertThat(result.has("thinking")).isFalse();
+                    assertThat(result.path("reasoning_effort").asText()).isEqualTo("high");
+                }
+            }
+            assertThat(body(simpleRequest(), model).path("enable_thinking").isBoolean()).isTrue();
+            assertThat(body(simpleRequest(), model).path("enable_thinking").asBoolean()).isFalse();
+        }
+    }
+
+    @Test
+    void bailianDeepseek_normalizesUnsupportedReasoningEffort() throws Exception {
+        provider = new OpenAiProvider("test-key",
+                "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1", "deepseek-v4-pro");
+        for (String model : List.of("deepseek-v4-pro", "deepseek-v4-pro-0813", "deepseek-v4-flash-0731")) {
+            for (ReasoningEffort effort : ReasoningEffort.values()) {
+                LlmRequest request = simpleRequest();
+                request.setThinkingMode(ThinkingMode.ENABLED);
+                request.setReasoningEffort(effort);
+                String expected = effort == ReasoningEffort.MEDIUM
+                        || (effort == ReasoningEffort.LOW && model.equals("deepseek-v4-pro"))
+                        ? "high" : effort.wireValue();
+                assertThat(body(request, model).path("reasoning_effort").asText()).isEqualTo(expected);
+            }
+        }
+    }
+
+    @Test
+    void deepseek_nonTokenPlanHostsRetainNativeDialect() throws Exception {
+        for (String host : List.of("api.deepseek.com", "token-plan.cn-beijing.maas.aliyuncs.com.example.org")) {
+            provider = new OpenAiProvider("test-key", "https://" + host, "deepseek-v4-pro-0813");
+            LlmRequest request = simpleRequest();
+            request.setThinkingMode(ThinkingMode.DISABLED);
+            JsonNode result = body(request, "deepseek-v4-pro-0813");
+            assertThat(result.has("enable_thinking")).isFalse();
+            assertThat(result.path("thinking").path("type").asText()).isEqualTo("disabled");
+        }
+    }
+
     // ---------- QWEN_DASHSCOPE ----------
 
     @Test

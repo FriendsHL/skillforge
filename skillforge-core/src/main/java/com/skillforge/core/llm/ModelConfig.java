@@ -42,8 +42,10 @@ public class ModelConfig {
         m.put("deepseek-coder",        64_000);
         m.put("deepseek-r1",          128_000);
         m.put("deepseek-v4-pro",      128_000);
-        // Alibaba Model Studio / Coding Plan published windows. Keep specific
+        // Alibaba Model Studio / subscription plan published windows. Keep specific
         // prefixes before generic "qwen".
+        m.put("qwen3.8-max",        1_000_000);
+        m.put("qwen3.7-max",        1_000_000);
         m.put("qwen3.6-plus",       1_000_000);
         m.put("qwen3.5-plus",       1_000_000);
         m.put("qwen3-max",            262_144);

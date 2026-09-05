@@ -1,17 +1,4 @@
-/**
- * SYSTEM-AGENT-TYPING Phase 2.2 — AgentDrawer read-only gate for system agents.
- *
- * Cases (per requirements/active/SYSTEM-AGENT-TYPING/index.md task #3 brief):
- *   1. agent.agentType === 'system' → warning banner rendered + Overview Save
- *      button disabled
- *   2. agent.agentType === 'user' → no banner, Delete button enabled
- *   3. agent.agentType === 'system' → Delete button disabled (tooltip explains)
- *   4. agent.agentType === 'system' → Model/Visibility/Role selects all disabled
- *
- * Heavy AgentDrawer dependencies are mocked at the top so the test stays
- * focused on the gate behavior. Existing AgentDrawer test fixture handles the
- * non-system-agent codepaths in `AgentDrawer.test.tsx`.
- */
+/** System agents allow model updates while other Overview fields stay locked. */
 import React from 'react';
 import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -51,14 +38,15 @@ vi.mock('../../../api', () => ({
     Promise.resolve({
       data: [
         {
-          id: 'openai:gpt-4o',
-          label: 'openai:gpt-4o',
-          provider: 'openai',
-          model: 'gpt-4o',
+          id: 'bailian-token-plan:deepseek-v4-pro-0813',
+          label: 'bailian-token-plan:deepseek-v4-pro-0813',
+          provider: 'bailian-token-plan',
+          model: 'deepseek-v4-pro-0813',
           isDefault: false,
-          supportsThinking: false,
-          supportsReasoningEffort: false,
-          protocolFamily: 'openai',
+          supportsThinking: true,
+          supportsReasoningEffort: true,
+          supportsVision: false,
+          protocolFamily: 'deepseek_v4',
         },
       ],
     }),
@@ -131,25 +119,44 @@ it('disables the Delete button for system agents', () => {
     expect(deleteBtn).not.toBeDisabled();
   });
 
-  it('disables Overview Save button + Model/Visibility/Role selects for system agents', async () => {
-    renderDrawer(makeAgent({ agentType: 'system' }));
-
-    // Overview Save is disabled (even if user touched a field via DOM, the
-    // gate ensures Save can't fire).
+  it('saves only the selected model for system agents and keeps other Overview fields locked', async () => {
+    renderDrawer(makeAgent({ agentType: 'system', role: 'worker', public: false }));
     const saveBtn = await screen.findByTestId('overview-save-btn');
     expect(saveBtn).toBeDisabled();
 
-    // The AntD Select component reflects disabled via aria-disabled on
-    // the inner combobox element. Use document selectors since data-testid
-    // is on the wrapper, not the input.
-    const selects = document.querySelectorAll('.ant-select');
-    // Sanity check: drawer rendered the Overview tab with several selects.
-    expect(selects.length).toBeGreaterThanOrEqual(3);
-    let anyDisabled = false;
-    selects.forEach((s) => {
-      if (s.classList.contains('ant-select-disabled')) anyDisabled = true;
+    const modelSelect = screen.getAllByRole('combobox')[0];
+    expect(modelSelect).not.toBeDisabled();
+    fireEvent.mouseDown(modelSelect);
+    fireEvent.click(await screen.findByText('bailian-token-plan:deepseek-v4-pro-0813'));
+    expect(saveBtn).not.toBeDisabled();
+    screen.getAllByRole('combobox').slice(1).forEach((select) => {
+      expect(select).toBeDisabled();
     });
-    expect(anyDisabled).toBe(true);
+    expect(screen.getByRole('spinbutton')).toBeDisabled();
+
+    fireEvent.click(saveBtn);
+    await waitFor(() => expect(updateAgent).toHaveBeenCalledExactlyOnceWith(7, {
+      modelId: 'bailian-token-plan:deepseek-v4-pro-0813',
+    }));
+    await waitFor(() => expect(screen.getByTestId('overview-save-btn')).toBeDisabled());
+    expect(screen.getByTestId('overview-save-btn')).toHaveTextContent('Saved');
+  });
+
+  it('keeps the model change available to retry when saving fails', async () => {
+    vi.mocked(updateAgent).mockRejectedValueOnce(new Error('Unavailable'));
+    renderDrawer(makeAgent());
+    fireEvent.mouseDown(screen.getAllByRole('combobox')[0]);
+    fireEvent.click(await screen.findByText('bailian-token-plan:deepseek-v4-pro-0813'));
+    const saveBtn = screen.getByTestId('overview-save-btn');
+    fireEvent.click(saveBtn);
+
+    expect(await screen.findByText('Failed to update agent')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId('overview-save-btn')).not.toBeDisabled(), { timeout: 5000 });
+    fireEvent.click(screen.getByTestId('overview-save-btn'));
+    await waitFor(() => expect(updateAgent).toHaveBeenCalledTimes(2));
+    expect(updateAgent).toHaveBeenLastCalledWith(7, {
+      modelId: 'bailian-token-plan:deepseek-v4-pro-0813',
+    });
   });
 
   it('disables the ASK/AUTO execution-mode toggle for system agents', () => {

@@ -439,6 +439,23 @@ skillforge:
         #                             # Stream chatStream() does NOT use this; it has a dedicated
         #                             # handshake-phase retry on ConnectException / SSLHandshakeException
         #                             # (2 attempts with 2-5s exponential backoff + jitter).
+      bailian-token-plan:
+        type: openai
+        # Token Plan keys/endpoints are separate from Coding Plan and pay-as-you-go.
+        api-key: ${BAILIAN_TOKEN_PLAN_API_KEY:}
+        base-url: https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+        chat-path: /chat/completions
+        model: qwen3.8-max
+        models:
+          - qwen3.8-max
+          - qwen3.7-max
+          - deepseek-v4-pro
+          - deepseek-v4-pro-0813
+          - deepseek-v4-flash-0731
+        vision-models:
+          - qwen3.8-max
+        context-window-tokens: 1000000
+        read-timeout-seconds: 240
       xiaomi-mimo:
         type: openai
         # IMPORTANT: do NOT include the `/v1` suffix here — OpenAiProvider hard-codes

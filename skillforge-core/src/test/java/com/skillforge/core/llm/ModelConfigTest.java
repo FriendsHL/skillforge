@@ -7,6 +7,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 class ModelConfigTest {
 
     @Test
+    void lookupKnownContextWindow_qwen37_usesMillionTokensWithoutChangingLegacyPro() {
+        assertThat(ModelConfig.lookupKnownContextWindow("qwen3.7-max")).contains(1_000_000);
+        assertThat(ModelConfig.lookupKnownContextWindow("deepseek-v4-pro")).contains(128_000);
+    }
+
+    @Test
     void defaultContextWindowTokens_unknownModelFallback_is64k() {
         assertThat(ModelConfig.DEFAULT_CONTEXT_WINDOW_TOKENS).isEqualTo(64_000);
         assertThat(ModelConfig.lookupKnownContextWindow("unknown-model")).isEmpty();
@@ -14,6 +20,8 @@ class ModelConfigTest {
 
     @Test
     void lookupKnownContextWindow_bailianCodingModels_returnsPublishedLimits() {
+        assertThat(ModelConfig.lookupKnownContextWindow("qwen3.8-max")).contains(1_000_000);
+        assertThat(ModelConfig.lookupKnownContextWindow("qwen3.8-max-2026-09-02")).contains(1_000_000);
         assertThat(ModelConfig.lookupKnownContextWindow("qwen3.6-plus")).contains(1_000_000);
         assertThat(ModelConfig.lookupKnownContextWindow("qwen3.6-plus-2026-04-02")).contains(1_000_000);
         assertThat(ModelConfig.lookupKnownContextWindow("qwen3.5-plus")).contains(1_000_000);

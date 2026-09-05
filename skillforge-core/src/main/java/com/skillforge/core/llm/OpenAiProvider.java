@@ -574,12 +574,21 @@ public class OpenAiProvider implements LlmProvider {
         // Resolve the protocol family from the request's actual model — a single provider
         // instance can serve multiple model families (e.g. bailian hosts qwen + glm-5).
         ProviderProtocolFamily family = ProviderProtocolFamilyResolver.resolve(model);
+        // Token Plan hosts DeepSeek using the DashScope toggle, not the native DeepSeek
+        // thinking object. Scope this adaptation to the exact subscription endpoint.
+        HttpUrl endpoint = HttpUrl.parse(baseUrl);
+        boolean tokenPlanDeepseek = family == ProviderProtocolFamily.DEEPSEEK_V4
+                && endpoint != null
+                && "token-plan.cn-beijing.maas.aliyuncs.com".equals(endpoint.host());
+        ProviderProtocolFamily.ThinkingFieldDialect thinkingDialect = tokenPlanDeepseek
+                ? ProviderProtocolFamily.ThinkingFieldDialect.QWEN_ENABLE_THINKING
+                : family.thinkingFieldDialect;
 
         // --- Thinking-mode toggle (top-level; extra_body is silently dropped by qwen / deepseek). ---
         ThinkingMode mode = request.getThinkingMode();
         if (mode != null && mode != ThinkingMode.AUTO) {
             if (family.supportsThinkingToggle) {
-                switch (family.thinkingFieldDialect) {
+                switch (thinkingDialect) {
                     case QWEN_ENABLE_THINKING ->
                             root.put("enable_thinking", mode == ThinkingMode.ENABLED);
                     case DEEPSEEK_V4_THINKING -> {
@@ -595,14 +604,14 @@ public class OpenAiProvider implements LlmProvider {
                 log.debug("thinkingMode={} requested for model '{}' (family {}); ignored (family does not support toggle)",
                         mode, model, family);
             }
-        } else if (family.defaultsThinkingOn) {
+        } else if (family.defaultsThinkingOn || tokenPlanDeepseek) {
             // Some upstream providers default to thinking ON when the toggle field is omitted
             // (qwen on DashScope, mimo on xiaomimimo.com — both verified live). That causes
             // the agent loop to receive only reasoning_content with empty content (and
             // SessionTitleService to render thinking text as the title). Explicitly write
             // the dialect-appropriate disabled body; users that want thinking must set
             // ThinkingMode.ENABLED on the agent.
-            switch (family.thinkingFieldDialect) {
+            switch (thinkingDialect) {
                 case QWEN_ENABLE_THINKING ->
                         root.put("enable_thinking", false);
                 case DEEPSEEK_V4_THINKING -> {
@@ -620,7 +629,15 @@ public class OpenAiProvider implements LlmProvider {
         // --- reasoning_effort (top-level OpenAI standard; accepted by deepseek-v4 + o1/o3). ---
         ReasoningEffort effort = request.getReasoningEffort();
         if (effort != null && family.supportsReasoningEffort) {
-            root.put("reasoning_effort", effort.wireValue());
+            // Hosted V4 accepts high/max; dated Pro/Flash additionally accept low.
+            // Existing agents may carry medium from another model, so use the hosted default.
+            boolean datedLowSupported = "deepseek-v4-pro-0813".equalsIgnoreCase(model)
+                    || "deepseek-v4-flash-0731".equalsIgnoreCase(model);
+            ReasoningEffort wireEffort = tokenPlanDeepseek
+                    && (effort == ReasoningEffort.MEDIUM
+                        || (effort == ReasoningEffort.LOW && !datedLowSupported))
+                    ? ReasoningEffort.HIGH : effort;
+            root.put("reasoning_effort", wireEffort.wireValue());
         }
 
         // messages - OpenAI puts system prompt as first message

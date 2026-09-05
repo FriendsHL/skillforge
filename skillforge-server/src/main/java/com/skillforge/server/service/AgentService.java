@@ -14,6 +14,7 @@ import com.skillforge.core.model.AgentDefinition;
 import com.skillforge.core.model.ReasoningEffort;
 import com.skillforge.core.model.ThinkingMode;
 import com.skillforge.server.entity.AgentEntity;
+import com.skillforge.server.dto.AgentUpdateRequest;
 import com.skillforge.server.exception.AgentNotFoundException;
 import com.skillforge.server.repository.AgentRepository;
 import org.slf4j.Logger;
@@ -73,6 +74,17 @@ public class AgentService {
     // setter here.
     @Transactional
     public AgentEntity updateAgent(Long id, AgentEntity updated) {
+        return applyUpdate(id, updated, updated.getMcpServerIds() != null);
+    }
+
+    @Transactional
+    public AgentEntity updateAgent(Long id, AgentUpdateRequest request) {
+        // Entity's MCP setter normalizes null to empty for persistence. Keep HTTP
+        // field presence separately so omitted/null MCP does not clear the whitelist.
+        return applyUpdate(id, request.toPatchEntity(), request.mcpServerIds() != null);
+    }
+
+    private AgentEntity applyUpdate(Long id, AgentEntity updated, boolean updateMcpServerIds) {
         validateLifecycleHooksSize(updated);
         validateLifecycleHooksSemantics(updated);
         AgentEntity existing = agentRepository.findById(id)
@@ -107,10 +119,12 @@ public class AgentService {
         // P11 MCP-CLIENT: agent's MCP server enable list (comma-separated names).
         // Treat any non-null value as "user explicitly set this", including empty string
         // which means "clear the whitelist" — null = "leave as-is".
-        if (updated.getMcpServerIds() != null) existing.setMcpServerIds(updated.getMcpServerIds());
+        if (updateMcpServerIds) existing.setMcpServerIds(updated.getMcpServerIds());
         validateToolConfiguration(existing);
         AgentEntity saved = agentRepository.save(existing);
-        log.info("Agent {} updated: fields={}", id, nonNullFieldNames(updated));
+        List<String> updatedFields = nonNullFieldNames(updated);
+        if (!updateMcpServerIds) updatedFields.remove("mcpServerIds");
+        log.info("Agent {} updated: fields={}", id, updatedFields);
         return saved;
     }
 

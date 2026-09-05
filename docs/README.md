@@ -16,6 +16,7 @@
 
 | ID | 标题 | 状态 | 需求包 |
 | --- | --- | --- | --- |
+| **BAILIAN-TOKEN-PLAN** | 百炼五模型与系统 Agent 模型编辑 | 已实现、浏览器验证；上游生成受周额度限制 | [需求包](requirements/active/2026-09-05-BAILIAN-TOKEN-PLAN/index.md) |
 | **GOAL-ALIGNED-AGENT-FACTORY** | 目标对齐的个人助手能力工厂 | Design proposed / Full；P0a 已交付，P0b/P1 及后续方案待产品讨论 | [需求包](requirements/active/2026-08-26-GOAL-ALIGNED-AGENT-FACTORY/index.md) |
 | **GOAL-BRIEF-P0A** | 对话内轻量目标确认 | implemented / Full automated + browser verified | [需求包](requirements/active/2026-08-26-GOAL-BRIEF-P0A/index.md) |
 | **AGENT-TEAM-TASK-GRAPH** | Team 共享 Task、并发领取、租约、解锁与恢复 | Phase 1 implemented / Full automated + real Team dogfood verified | [需求包](requirements/active/2026-08-12-AGENT-TEAM-TASK-GRAPH/index.md) |

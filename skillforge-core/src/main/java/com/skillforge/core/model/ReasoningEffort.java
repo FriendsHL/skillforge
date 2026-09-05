@@ -8,8 +8,8 @@ import java.util.Locale;
 /**
  * Reasoning-effort hint for reasoning-capable provider families (deepseek-v4 / OpenAI o*).
  *
- * <p>Values are transmitted verbatim — SkillForge does not map {@code low}/{@code medium} to
- * {@code high} itself; that is left to the upstream provider (see plan D9 / §10 Test 2).
+ * <p>Values are normally transmitted verbatim. The Bailian Token Plan DeepSeek adapter
+ * maps unsupported levels to the documented {@code high} default when switching models.
  * Families that do not advertise {@code supportsReasoningEffort} ignore this field silently.</p>
  */
 public enum ReasoningEffort {
