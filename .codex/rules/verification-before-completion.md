@@ -11,7 +11,8 @@ Do not claim something is complete, fixed, or passing without fresh verification
 Before any success claim:
 
 1. Identify the command or check that proves it.
-2. Run the full command or check fresh.
+2. Run the relevant command/check against the final state. Evidence from earlier
+   in this turn remains valid only if that state and its dependencies are unchanged.
 3. Read stdout, stderr, exit code, and failure counts.
 4. Verify the output supports the claim.
 5. Report the result with evidence.
@@ -43,6 +44,7 @@ Before any success claim:
 - Backend changes: `mvn -pl skillforge-server -am test` unless a narrower command is justified.
 - Core/provider/tool changes: include the relevant module in Maven, for example `mvn -pl skillforge-core,skillforge-server -am test`.
 - Frontend changes: `cd skillforge-dashboard && npx tsc --noEmit && npm run build`.
-- iOS changes: `cd skillforge-ios && xcodegen generate`, run the relevant tests
-  against an installed simulator, inspect `.xcresult`, then run a Release simulator build.
+- iOS changes: follow `ios-pipeline.md` verification scope; use an installed
+  simulator and inspect `.xcresult`. Regenerate with XcodeGen when project inputs
+  change; Full/build-configuration changes include a Release simulator build.
 - Rule/docs-only changes: no build is required, but run formatting/whitespace checks and inspect the diff.

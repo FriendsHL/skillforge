@@ -42,4 +42,6 @@ For SkillForge cross-layer issues, check boundaries in order:
 - Verify the test, surrounding tests, and actual symptom.
 - Avoid unrelated cleanup.
 
-If three fixes fail, stop and reassess the architecture with the user instead of continuing trial-and-error.
+If attempts stop producing new evidence, reassess the hypothesis and architecture.
+Ask the user only for a material unresolved decision or missing input; do not
+repeat unchanged attempts or stop merely because a fixed attempt count elapsed.

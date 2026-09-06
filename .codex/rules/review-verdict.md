@@ -1,66 +1,19 @@
-# Review Verdict Template
+# Optional Review Record
 
-Use this for Mid/Full pipeline review reports and judge summaries.
+Use for complex reviews or multi-reviewer integration when a structured record
+helps. Ordinary reviews use the concise output in `code-review.md`.
 
-## Reviewer Report
+- **Scope and acceptance:** what was checked, with evidence for missing behavior.
+- **Findings:** blockers, warnings, then nits; include file/line references and
+  concrete impact. Check correctness/security even when requirements are unmet.
+- **Verification:** commands/results, inspected paths, and unverified boundaries.
+- **Decision:** proceed, fix, or blocked, with the reason. Missing requested
+  behavior and scope creep are blockers; style nits do not block delivery.
 
-```markdown
-# <Area> Review - <task> <round>
+For follow-up reviews, mark prior findings fixed, unresolved, or partial with
+fresh evidence, then check new changes and affected paths. Do not move goalposts
+with unrelated nits.
 
-## Stage 1 - Spec Compliance
-- [ ] Acceptance point 1: PASS/FAIL with evidence.
-- [ ] Acceptance point 2: PASS/FAIL with evidence.
-
-Verdict: PASS / FAIL
-
-## Stage 2 - Code Quality
-Only run this stage if Stage 1 passes.
-
-### Blockers
-### Warnings
-### Nits
-
-## Verification Evidence
-- Commands run:
-- Files/lines spot-checked:
-
-## Overall
-PASS / PASS_WITH_WARNINGS / NEEDS_FIX / BLOCKED
-```
-
-Stage 1 failures are blockers. Do not praise code quality when the requested
-behavior is missing or when the implementation includes scope creep.
-
-## Round 2+ Prior Items
-
-For follow-up review, first verify prior blockers/warnings:
-
-```markdown
-## Prior Items Verification
-- r1 BLOCKER-1: FIXED / NOT FIXED / PARTIAL with evidence.
-- r1 W-1: FIXED / NOT FIXED / PARTIAL with evidence.
-```
-
-Only review new issues introduced by the latest changes plus unresolved prior
-items. Do not move goalposts with unrelated nits.
-
-## Judge Summary
-
-```markdown
-# Judge Ruling - <task> <round>
-
-Reviewer reports:
-- Backend: PASS/FAIL path
-- Frontend: PASS/FAIL path
-- Specialty: PASS/FAIL path
-
-## Verdict
-PASS / NEEDS_FIX / BLOCKED
-
-## Consolidated Blockers
-## Consolidated Warnings
-## Folded Nits
-
-## Decision
-Proceed / fix once / upgrade to Full / ask user.
-```
+When combining reviewers, consolidate duplicate findings and resolve conflicting
+claims against code and evidence. Separate self-review from independent review;
+no separate judge persona or temporary file is required.

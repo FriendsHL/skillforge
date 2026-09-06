@@ -35,9 +35,6 @@ Read this before touching `*.java`, JPA entities, repositories, services, Flyway
 
 ## Naming
 
-- Classes/interfaces: `PascalCase`
-- Methods/fields/locals: `camelCase`
-- Constants: `SCREAMING_SNAKE_CASE`
 - Packages: lowercase `com.skillforge.<module>.<layer>`
 - Entities: `*Entity`
 - Repositories: `*Repository`

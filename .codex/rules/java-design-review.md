@@ -1,8 +1,7 @@
 # Java Design Review Rules
 
 Read this for new services/controllers/repositories, structural refactors,
-cross-module abstractions, new interfaces/abstract classes, classes over 500
-lines, or explicit design-review requests.
+cross-module abstractions, or explicit design-review requests.
 
 This is not a replacement for `java.md`; it covers open-ended design judgment.
 
@@ -15,9 +14,8 @@ This is not a replacement for `java.md`; it covers open-ended design judgment.
 
 ## Design Dimensions
 
-- SRP: classes over 500 lines, over 10 public methods, or multiple semantic
-  clusters deserve scrutiny. Classes over 800 lines with 4+ semantic clusters
-  are usually blockers.
+- SRP: inspect unrelated responsibilities and coupled change paths. Size is a
+  diagnostic signal, not a blocker; justify structural findings by concrete impact.
 - DIP: external IO clients, clocks, random IDs, and side-effect boundaries should
   be injected when business logic depends on them.
 - OCP: repeated provider/type if-else chains in multiple locations may need a

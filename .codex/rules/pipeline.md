@@ -1,175 +1,79 @@
-# Codex Pipeline
+# Risk-Based Codex Pipeline
 
-This is the Codex-local translation of `.claude/rules/pipeline.md`.
+This file owns task triage and execution. `think-before-coding.md` owns planning
+and clarification; `code-review.md` owns severity; `verification-before-completion.md`
+owns verification commands. Read specialty rules through the AGENTS index.
 
-## Tool Mapping
+## Triage
 
-- Codex does not assume Claude `TeamCreate` / `SendMessage`.
-- When multi-agent tools are available, discover them with `tool_search` and use
-  bounded explorer/worker/reviewer agents for isolated work.
-- When multi-agent tools are unavailable or not worth the overhead, the main
-  session performs the same phase gates and specialty checklists inline.
-- Use explorer-style agents for bounded codebase investigation and plan inputs.
-- Use worker-style agents for implementation slices with explicit file/module ownership.
-- Use reviewer-style agents for adversarial review and judging when the pipeline needs independent critique.
-- Do not override the model unless the user explicitly asks; inherit the parent model.
-- The main Codex session orchestrates phases, integrates results, resolves conflicts, runs final verification, and reports the outcome.
-- Tell worker agents they are not alone in the codebase, must respect unrelated edits, and must not revert changes made by others.
-- Use `git worktree` when isolation is needed: large feature, risky experiment, dirty main workspace, or parallel branch work. Worktree is not a replacement for review.
-- Do not create a worktree for small, single-scope edits where the current workspace is sufficient.
+Classify the changed behavior and failure boundary, not brief length, file size,
+line count, or module count. Mixed work inherits the highest actual risk; split
+independently verifiable increments when useful.
 
-## Pipeline Triage
+- **Solo:** docs/comments, mechanical edits, harmless constants, or bounded pure
+  functions with strong tests, provided no Full boundary below changes.
+- **Mid:** ordinary bug fixes, UI behavior, established-pattern features, build
+  configuration, and test changes without a Full boundary. This is the default.
+- **Full:** changes to any of these boundaries:
+  - Message persistence/rewrite identity, JSON shape, compact pairing, summary
+    roles, boundaries, or recovery semantics.
+  - Provider wire protocols, streaming tool/reasoning/cache/usage handling,
+    retry/idempotency, or shared FE/BE/iOS contracts.
+  - Authentication/authorization, secrets, untrusted execution, or file/network
+    access controls.
+  - Schema migrations, new persistence entities, JPQL/native query semantics,
+    or transactional consistency.
+  - Lock ownership, leases/heartbeats, cancellation, concurrent state ownership,
+    or lifecycle-hook execution contracts.
+  - Broad architecture migrations or iOS boundaries in `ios-pipeline.md`.
 
-In SkillForge, docs-only and other narrow exceptions are Solo, red-light work is Full, and everything else defaults to Mid.
+Core areas (`AgentLoopEngine`, engine hooks, LLM/compact code, `ChatService`,
+`SessionService`, repositories, Chat UI, Lifecycle Hooks editor) trigger careful
+inspection and relevant specialty rules. Editing a label or isolated presentation
+inside one does not itself require Full. Changing its protected semantics does.
+When the failure boundary is uncertain, investigate before downgrading.
 
-Use Solo only for:
+## Execution
 
-- Single-line change.
-- Pure comments or docs.
-- Config constant adjustment.
-- Mechanical rename or file move.
-- Pure function edit already locked by strong unit tests.
+1. **Research:** inspect the task diff and relevant docs/code; reuse local patterns.
+   Record acceptance points and identify affected invariants. Use the planning
+   rule only when a material decision needs resolution.
+2. **Implement:** main session by default. Add workers only for useful independent
+   slices with explicit file ownership; keep tests with the behavior they verify.
+3. **Review:**
+   - Solo: inspect the diff.
+   - Mid: perform one focused self-review against acceptance points and relevant
+     checklists. Use an independent reviewer when uncertainty warrants it.
+   - Full: request an independent reviewer when tools permit and the work is
+     separable. Otherwise do a distinct checklist-based review and disclose the
+     lack of independent review. Never present self-review as independent.
+   - Check both requirement compliance and correctness/security, even if one
+     already fails. Fix blockers; resolve or explicitly report warnings. Nits do
+     not trigger another loop. Follow-up review checks fixes and affected paths.
+4. **Verify:** the main session inspects the integrated diff and runs the relevant
+   gates from `verification-before-completion.md`. Existing evidence from the
+   current turn can be reused if it covers the final unchanged state; rerun after
+   relevant edits, integration changes, failures, or unresolved concerns.
+5. **Report:** describe behavior, evidence, and material gaps. Commit or push only
+   with user authorization.
 
-Use Full when any red light is present:
+If a new Full boundary appears, retain useful work, upgrade the review, and run
+its verification. Repeated failures require a new hypothesis or plan; ask the user
+only when a material decision or missing input prevents progress, not because an
+arbitrary number of review rounds elapsed.
 
-- Touching core files:
-  - `skillforge-core/src/main/java/com/skillforge/core/engine/AgentLoopEngine.java`
-  - `skillforge-core/src/main/java/com/skillforge/core/engine/hook/*`
-  - `skillforge-core/src/main/java/com/skillforge/core/llm/**`
-  - `skillforge-core/src/main/java/com/skillforge/core/compact/*` (compaction algorithm layer: `ContextCompactorCallback`, Light/Full/SessionMemory strategies, `TokenEstimator`, `CompactableToolRegistry`, boundary detection)
-  - `skillforge-server/src/main/java/com/skillforge/server/service/CompactionService.java` (orchestration layer: stripe lock, 3-phase split, in-flight dedup, persistence, broadcast)
-  - `skillforge-server/src/main/java/com/skillforge/server/service/ChatService.java`
-  - `skillforge-server/src/main/java/com/skillforge/server/service/SessionService.java`
-  - `SessionMessageRepository`
-  - `skillforge-server/src/main/resources/db/migration/V*.sql`
-  - `skillforge-dashboard/src/components/ChatWindow.tsx`
-  - `skillforge-dashboard/src/pages/Chat.tsx`
-  - `skillforge-dashboard/src/components/LifecycleHooksEditor.tsx`
-  - `skillforge-dashboard/src/hooks/useLifecycleHooks.ts`
-  - `skillforge-dashboard/src/constants/lifecycleHooks.ts`
-  - iOS core/security/contract paths listed in `ios-pipeline.md`
-- Multi-invariant paired protocols: `tool_use`/`tool_result`, lock/unlock, transaction begin/commit, request/response, lease/heartbeat.
-- New persistence entity, schema migration, or JPQL/native SQL change.
-- Cross-3-module feature work, a new REST endpoint plus frontend plus tests, or a broad brief over roughly 800 words.
-- Changes touching known footguns.
+## Tool And Agent Use
 
-Use Mid for non-Solo tasks that do not hit Full red lights, including ordinary bug fixes, visible UI behavior changes, field additions without schema changes, new REST endpoints without schema changes, serializer/deserializer config, build plugin changes, new dependencies, single- or dual-module features, and changed test assertions.
-
-Mixed batches inherit the highest-risk item. Do not hide a Full-level change inside a Solo batch.
-
-## Mid Pipeline Shape
-
-1. Phase 0 Research and reuse:
-   - Search the local codebase first.
-   - Use existing project patterns and proven libraries before writing new utility code.
-2. Phase 1 Dev:
-   - Backend-only work: one backend worker.
-   - Frontend-only work: one frontend worker.
-   - iOS-only work: follow the Mid increment in `ios-pipeline.md`.
-   - Cross-stack work: backend and frontend workers in parallel with disjoint ownership.
-   - Tests, docs, and pure config stay attached to the relevant implementation slice unless they are the whole task.
-3. Phase 2 Review, one adversarial round:
-   - Main session collects `git diff HEAD -- ':!docs'` into `/tmp/<task>-diff.patch` when practical.
-   - Reviewer agents read the diff first and spot-check full files only when context is needed.
-   - Judge evaluates reviewer reports immediately.
-   - If there are no blockers, proceed to final verification.
-   - If there are warnings that can be fixed once, send fixes back to the original dev worker, then the main session spot-checks before final verification.
-   - If there is a blocker or architecture-direction issue, upgrade to Full or stop for user direction.
-4. Phase Final Verify and commit:
-   - Main session runs final verification personally.
-   - Commit only after user approval.
-
-## Full Pipeline Shape
-
-1. Phase 0 Research and reuse:
-   - Search the local codebase first.
-   - Use existing project patterns and proven libraries before writing new utility code.
-   - Confirm library/API behavior from primary docs when version-specific behavior matters.
-2. Phase 1 Plan, optional adversarial loop, max 2 rounds:
-   - Plan phase is skipped by default for complete briefs, ordinary bug fixes, established-pattern extensions, and most routine tasks.
-   - Plan phase is required when there are multiple reasonable implementation directions, unclear migration scope, or a prior reviewer found the architecture direction wrong.
-   - Planner drafts a plan into `/tmp/<task>-plan-r{n}.md`.
-   - Reviewer critiques the plan into `/tmp/<task>-plan-review-r{n}.md`.
-   - Judge evaluates plan plus review immediately.
-   - If not accepted after round 2, stop and ask the user for direction.
-3. Phase 2 Dev, parallel where useful:
-   - Backend-only work: one backend worker.
-   - Frontend-only work: one frontend worker.
-   - iOS-only work: follow the Full increment in `ios-pipeline.md`.
-   - Cross-stack work: backend and frontend workers in parallel with disjoint ownership.
-   - Tests, docs, and pure config stay attached to the relevant implementation slice unless they are the whole task.
-   - Planner/dev prompts must require self-check before final response: reread own output, identify the three most likely issues, fix them or justify why they are acceptable, then return only the cleaned result.
-   - Each dev result must explicitly report one of four statuses: `DONE`, `DONE_WITH_CONCERNS`, `NEEDS_CONTEXT`, or `BLOCKED`.
-   - For `DONE_WITH_CONCERNS`, resolve correctness or scope concerns before review; observations can be noted and review can proceed.
-   - For `NEEDS_CONTEXT`, provide the missing context to the original dev worker instead of starting a new worker.
-   - For `BLOCKED`, classify the cause as missing context, insufficient reasoning, oversized task, or incorrect plan; do not blindly retry unchanged.
-4. Phase 3 Review, adversarial loop, max 2 rounds:
-   - Main session collects `git diff HEAD -- ':!docs'` into `/tmp/<task>-diff.patch` when practical.
-   - Reviewer agents read the diff first and spot-check full files only when context is needed.
-   - Use backend/frontend reviewers according to touched areas.
-   - Reviewer reports must be two-stage: first Spec Compliance against the plan, brief, and acceptance points; then Code Quality only if spec compliance passes.
-   - Missing requested behavior or scope creep is a blocker.
-   - Judge evaluates reviewer reports immediately; do not wait for reviewers to self-certify.
-   - Send fixes back to the original dev worker when possible; do not start a fresh dev worker for the same ownership slice.
-   - If not accepted after round 2, stop and ask the user for direction.
-5. Phase 4 Verify and commit:
-   - Main session runs final verification personally.
-   - Frontend changes need real browser checks against the running page, not just build success.
-   - Critical interactions need DOM/text assertions, not only screenshots.
-   - Backend/data changes need API and/or database verification where relevant.
-   - Run relevant build/test commands again from the main session.
-   - Commit only after user approval.
-
-## Review Severity
-
-- `blocker`: data loss, wrong calculation, invariant violation, compile/runtime error, security/auth bug, explicit requirement missing, or silent failure.
-- `warning`: performance, readability, maintainability, naming, or thin tests.
-- `nit`: style, formatting, docs, or minor naming.
-- Reviewer nits go to `/tmp/nits-followup-<task>.md` and do not trigger another fix loop.
-- Judge PASS/FAIL decisions consider blockers and warnings, not nits.
-
-## Specialty Review Routing
-
-Codex may not have Claude `TeamCreate` / named reviewer agents available. Preserve
-the strategy by reading the relevant `.codex/rules/*` specialty checklist and
-using it in the main session review or in any available reviewer/subagent.
-
-- Compact subsystem: read `compact-review.md` in addition to `java.md`.
-- LLM provider subsystem: read `llm-provider-compat.md` in addition to `java.md`.
-- Message persistence shape: read `persistence-shape-invariant.md`.
-- `t_session_message` identity columns or rewrite preservation: read
-  `identity-column-on-rewrite.md`.
-- Flyway/entity/SQL/repository query changes: read `database-review.md`.
-- Auth/input/secrets/file/external URL/security-sensitive changes: read
-  `security-review.md`.
-- New Java service/controller/repository, structural refactor, new interface, or
-  class over 500 lines: read `java-design-review.md`.
-- TypeScript/JavaScript review: read `typescript-review.md`.
-- Native iOS/SwiftUI work: read `ios.md` and `ios-pipeline.md`.
-- Performance work: read `performance-review.md`.
-- Explicit review tasks: read `code-review.md` and report with
-  `review-verdict.md` when inside Mid/Full pipeline.
-
-Specialty rules do not replace the base language rules. They add focused checks.
-
-## Retroactive Full Review
-
-If work started as Solo or Mid and later hits a Full red light, do not hide that
-fact and do not discard useful work by default. Treat the current diff as the dev
-output and run retroactive Full review:
-
-1. Capture `git diff HEAD` to a temporary file when useful.
-2. Read the specialty rules triggered by the changed files.
-3. Review as if the diff were freshly submitted.
-4. Fix blockers or stop for user direction.
-5. Run Phase Final verification before any completion claim.
-
-## Codex-Compatible Execution Notes
-
-- Use `update_plan` for multi-step tracking in the main session.
-- Use `multi_tool_use.parallel` for independent reads and inspections.
-- Use subagents only when available and genuinely helpful; otherwise perform the
-  same checklist-driven review inline.
-- When a Claude command says "Write /tmp/review-*.md", Codex can either write the
-  temporary artifact when useful or summarize the same sections in the final
-  review. Do not create extra files solely for ceremony.
+- Use tools actually exposed by the current runtime; do not assume named planning,
+  discovery, parallel-call, or Claude-specific tools exist.
+- Batch independent reads when supported. Keep dependent edits and checks ordered.
+- Subagents inherit the current model unless the user requests otherwise. Give
+  them bounded scope, ownership, relevant rules, and acceptance criteria.
+- Workers must preserve unrelated edits and report changes, checks, and unresolved
+  concerns or blockers. Reuse the original worker for follow-up when practical.
+- The main session integrates results and judges evidence. Agent reports alone
+  do not prove completion.
+- Use worktrees when isolation helps; a dirty workspace alone does not require
+  one if the task can safely avoid unrelated edits.
+- Plans, review templates, and temporary artifacts are optional aids, not required
+  ceremony. Use `review-verdict.md` when a complex review needs a structured record.

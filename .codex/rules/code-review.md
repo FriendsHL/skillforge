@@ -10,7 +10,8 @@ review. Findings come first, ordered by severity, with file/line references.
 3. Read full changed files or enough surrounding context to avoid hunk-only
    mistakes.
 4. Apply project rules and specialty rules based on touched areas.
-5. Report only issues you are at least 80% confident are real.
+5. Report evidence-backed findings; distinguish uncertain hypotheses from defects.
+6. Check requirement compliance and correctness/security even if either fails.
 
 ## Severity
 
@@ -29,7 +30,8 @@ review. Findings come first, ordered by severity, with file/line references.
   assumption.
 - New/changed DTO fields need Java/TS field-name and type alignment plus at
   least one live curl or roundtrip check when practical.
-- If core files are touched, confirm Full pipeline or retroactive Full review.
+- Confirm risk classification against changed semantics in `pipeline.md`; a core
+  file name alone does not require Full.
 - Feature completion should update delivery docs when the task includes a
   delivery-record expectation; otherwise mention as follow-up.
 

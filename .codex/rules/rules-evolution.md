@@ -16,14 +16,18 @@ agent-like guidance, or auditing whether new rules are worth their context cost.
 
 ## Migration From Claude To Codex
 
-- Preserve strategy, triggers, invariants, severity, and verification.
+- Preserve project invariants and verification. Reassess process and triggers
+  against current workflow instead of copying them unchanged.
 - Convert Claude `TeamCreate`, `SendMessage`, `Write`, and slash-command
-  mechanics into Codex main-session orchestration, `update_plan`, local files,
+  mechanics into capabilities available in the current runtime, optional files,
   and checklist-driven review.
 - Do not copy long agent persona text when a concise rule captures the behavior.
 - Update `AGENTS.md` progressive disclosure when adding a new `.codex/rules`
   file.
 - Run `context-budget.md` audit commands after large rule changes.
+
+Historical source mapping: `../maintenance/claude-strategy-map.md`. Update it
+when changing migration coverage; it is provenance, not an execution policy.
 
 ## Report Shape
 

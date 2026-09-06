@@ -12,9 +12,10 @@ Read this before touching `*.ts`, `*.tsx`, frontend API calls, React components,
 - Avoid `any`; use `unknown` at untrusted boundaries and narrow safely.
 - Do not use `@ts-ignore`. If unavoidable, use `@ts-expect-error` with a reason.
 - Avoid double assertions like `as unknown as X` unless there is a documented reason.
-- API calls live in `src/api/index.ts`; components should not call `axios` directly.
+- API calls live in the existing `src/api/` modules; components should not call
+  `axios` directly.
 - Every API flow handles loading and error states.
-- Fetch independent data with `Promise.all`.
+- Fetch independent data concurrently when failure and cancellation semantics allow.
 
 ## React
 
@@ -38,7 +39,8 @@ Read this before touching `*.ts`, `*.tsx`, frontend API calls, React components,
 - Prefer CSS variables already present in the project.
 - Static styles go in CSS/CSS Modules; inline styles only for dynamic computed values.
 - Do not use `!important`.
-- Long lists over roughly 100 rows need virtualization.
+- Use virtualization when measured list/render cost warrants it; preserve scroll
+  and accessibility behavior.
 - Dispose ECharts instances on unmount.
 - No stray `console.log` in committed code.
 

@@ -15,7 +15,8 @@ identify the bottleneck. Do not guess.
 - Avoid importing whole libraries when small named imports or lighter libraries
   work.
 - Use explicit image dimensions and lazy-load below-fold media.
-- Virtualize lists over roughly 100 rows.
+- Consider virtualization for measured list/render bottlenecks; verify scrolling
+  and accessibility after the change.
 - Memoize expensive computations and frequently re-rendered pure components.
 - Do not create unstable objects/functions in render when passed to memoized
   children.

@@ -1,13 +1,14 @@
 # Claude Strategy To Codex Rules Map
 
-Read this when auditing or extending the migration from `.claude` strategy files
-into Codex rules.
+Historical source mapping, read only when auditing migration coverage. Destination
+names below are relative to `.codex/rules/`. Current behavior is owned by those
+files; the mapping does not require preserving old execution mechanics.
 
 ## Unsupported Claude Mechanics And Codex Equivalents
 
 | Claude concept | Codex-compatible equivalent |
 | --- | --- |
-| `TeamCreate` / `SendMessage` reviewer loops | Main-session orchestration with `update_plan`, optional subagents when available, and checklist-driven inline review |
+| `TeamCreate` / `SendMessage` reviewer loops | Main-session orchestration with available runtime tools and optional subagents |
 | Named Claude agents | Focused `.codex/rules/*` checklists selected by trigger path |
 | Slash commands | Rule files plus ordinary Codex tool execution |
 | `Write /tmp/review-*.md` as required artifact | Optional local temp artifact when useful; otherwise use the same report sections in the response |
@@ -65,9 +66,8 @@ into Codex rules.
 
 ## Migration Rule
 
-When `.claude` changes, update the smallest relevant `.codex/rules` file and this
-map. Do not copy Claude-specific execution mechanics unless Codex has an
-equivalent capability.
+When porting a relevant `.claude` change, update the smallest applicable Codex
+rule and this map. Do not mirror unrelated Claude changes automatically.
 
 ## Codex-Native Extensions
 

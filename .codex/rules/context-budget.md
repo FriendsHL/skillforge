@@ -1,44 +1,25 @@
-# Context Budget Rules
+# Context Budget
 
-Read this when changing agent rules, prompts, commands, plugins, MCP/tool exposure, or when the session feels slower or lower quality.
+Audit when adding prompt/rule/tool exposure or investigating slower or less
+reliable sessions. No calendar-based audit is required.
 
-## When To Audit
+- Keep AGENTS as an index and compact operating rules. Read specialty files only
+  on their triggers; total repository line count is not per-turn context usage.
+- Keep each policy in one owning file; other files link to it. Move historical
+  migration notes to `.codex/maintenance/` and avoid repeated agent personas.
+- Keep tool exposure and agent descriptions focused. Measure actual loaded text
+  and schemas before claiming the largest cost or a performance improvement.
+- Prefer executable checks for deterministic conventions and targeted regression
+  tests for invariants; retain the short rationale and trigger in rules.
 
-- After adding a new rule, agent, command, or prompt-heavy file.
-- When sessions become slow or output quality drops.
-- Before adding more prompt material.
-- Every two to three weeks.
-
-## Rules
-
-- Keep `CLAUDE.md` and `AGENTS.md` as indexes and compact operating rules.
-- Move long maintenance notes into non-auto-loaded meta files.
-- Keep agent descriptions short, ideally 30 words or fewer, because descriptions are loaded frequently.
-- Prefer narrowing path triggers, moving rare guidance to meta files, or adding SkillForge override notes over duplicating large vendored rules.
-- Treat MCP/tool schema growth as the largest context-budget lever.
-
-## Suggested Audit Commands
+After significant edits:
 
 ```bash
-find .claude/rules -name "*.md" -exec wc -l {} \; | sort -n
-find .codex/rules -name "*.md" -exec wc -l {} \; | sort -n
-find .claude/agents -name "*.md" -exec wc -l {} \; 2>/dev/null | sort -n
-wc -l CLAUDE.md AGENTS.md
+rg --files .codex/rules .codex/maintenance
+wc -l AGENTS.md .codex/rules/*.md
+git diff --check -- AGENTS.md .codex
 ```
 
-## Codex Rule Inventory
-
-When adding a `.codex/rules` file, also update `AGENTS.md` with a precise trigger.
-Keep large Claude agent personas out of Codex rules; migrate the checks, not the
-persona. Prefer many focused rules over one huge always-read rule.
-
-After large migrations, run:
-
-```bash
-rg --files .codex/rules | sort
-wc -l .codex/rules/*.md AGENTS.md | sort -n
-git diff --check -- AGENTS.md .codex/rules
-```
-
-Use the result to identify overly heavy always-read files and candidates for
-more precise progressive disclosure.
+Inspect the diff, verify AGENTS covers each rule with a precise trigger, and check
+references after moves. Compare representative task behavior before attributing
+quality or latency gains to fewer lines.

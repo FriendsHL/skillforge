@@ -1,40 +1,15 @@
-# TypeScript Review Rules
+# TypeScript Review Additions
 
-Read this for TypeScript/JavaScript review, especially changed `*.ts`, `*.tsx`,
-frontend API wrappers, hooks, WebSocket UI, and dashboard state.
+Apply `frontend.md` for API contracts, state, effects, styling, and cleanup, and
+`code-review.md` for scope, severity, and output. Do not repeat those checklists.
 
-## Review Setup
-
-- Establish scope from `git diff` and changed files. If reviewing a PR, use the
-  actual merge base rather than assuming `main`.
-- Run the canonical typecheck/build command when practical. For this dashboard,
-  prefer `cd skillforge-dashboard && npx tsc --noEmit`.
-- If TypeScript or lint checks fail, report that before deeper style review.
-- Read surrounding code and call sites, not only diff hunks.
-
-## High-Priority Checks
-
-- No unjustified `any`; use precise types or `unknown` plus narrowing.
-- No unsafe casts that hide real mismatches.
-- Public/shared functions have explicit parameter and return types.
-- No floating promises or `forEach(async ...)`.
-- Independent async work uses `Promise.all` when safe.
-- Errors are not swallowed; `JSON.parse` on untrusted input is guarded.
-- React effects have correct dependencies and cleanup.
-- WebSocket, event listener, timer, and ECharts subscriptions dispose on unmount.
-- Dynamic lists use stable keys, not indexes when reorder is possible.
-- API wrappers and test mocks match the backend's real outer envelope shape.
-- No stray `console.log`.
-
-## Security And Web Checks
-
-- No unsanitized `innerHTML` or `dangerouslySetInnerHTML`.
-- No user-controlled paths, URLs, or shell input without validation/allowlists.
-- No secrets in frontend code other than intentionally public values.
-
-## Severity
-
-- Blocker: typecheck failure, runtime crash risk, auth/security issue, API shape
-  mismatch, unhandled async failure, or missing explicit requirement.
-- Warning: maintainability, performance, or thin tests.
-- Nit: local style and naming only.
+- Trace changed API consumers and mocks to the backend's real outer response
+  envelope; precise TypeScript types alone do not prove the wire contract.
+- Check floating promises, `forEach(async ...)`, guarded parsing of untrusted
+  JSON, and whether casts hide runtime mismatches.
+- Inspect session switches, unmounts, and late responses for stale state or
+  duplicate subscriptions, not just dependency-array syntax.
+- Apply `security-review.md` for HTML/markdown rendering, user-controlled URLs
+  or paths, credentials, and authorization-sensitive changes.
+- Run dashboard gates from `verification-before-completion.md`. Report type/build
+  failures and critical browser-interaction gaps before style observations.

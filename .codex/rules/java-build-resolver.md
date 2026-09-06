@@ -1,29 +1,15 @@
-# Java Build Resolver Rules
+# Java Build Failure Checklist
 
-Read this when Java/Maven/Spring builds or tests fail to compile.
+Use `systematic-debugging.md` for reproduction, hypothesis, minimal fix, and
+verification. This file adds only Java/Maven-specific checks.
 
-## Workflow
-
-1. Run the narrowest failing command and capture the first real error.
-2. Read the affected file and immediate dependencies.
-3. Apply the minimal fix for the build error only.
-4. Re-run the same command.
-5. If it passes, run the relevant surrounding tests.
-
-## Common Patterns
-
-- `cannot find symbol`: missing import, typo, missing dependency, or stale API.
-- incompatible types: fix the type or call site; avoid broad casts unless the
-  domain type really is compatible.
-- wrong method arguments: check overloads and recent signature changes.
-- missing package: add the correct module dependency only after checking existing
-  dependency patterns.
-- annotation processor errors: inspect Lombok/MapStruct/Spring generated code
-  setup before changing business logic.
-
-## Limits
-
-- Do not refactor while fixing the build.
-- Do not suppress warnings or errors without explicit approval.
-- Stop after three failed fix attempts and reassess the architecture or missing
-  external dependency.
+- Locate the first causal error in the failing module, not downstream failures.
+- `cannot find symbol` / missing package: inspect imports, module dependencies,
+  generated sources, and recent API changes before adding dependencies.
+- Incompatible types / wrong arguments: inspect the signature and callers; do not
+  hide a real mismatch with casts.
+- Annotation processing: inspect Lombok/MapStruct/Spring generation setup before
+  changing business logic.
+- Distinguish compilation, test assertion, environment, and external dependency
+  failures. Fix the relevant cause without unrelated refactoring or suppressing
+  a real error to obtain a green build.
