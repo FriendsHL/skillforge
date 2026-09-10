@@ -55,6 +55,20 @@ class ContextRuntimeSnapshotTest {
                 changedCatalog.findByName("mcp_web_search"))).isFalse();
     }
 
+    @Test
+    void invalidSnapshotClearsExistingRuntimeInsteadOfRetainingFutureState() {
+        ToolCatalog catalog = ToolCatalog.fromAuthorizedSchemas(List.of(
+                schema("mcp_web_search", "Search the web")), null);
+        LoopContext context = new LoopContext();
+        context.getToolDiscoveryState().discover(catalog.findByName("mcp_web_search"));
+        context.recordSkillInvocation("research", "hash-v1", "body");
+
+        context.restoreRuntimeSnapshot(new ContextRuntimeSnapshot(
+                99, Map.of("tool:future", "future-hash"), List.of()));
+
+        assertThat(context.runtimeSnapshot()).isEqualTo(ContextRuntimeSnapshot.empty());
+    }
+
     private static ToolSchema schema(String name, String description) {
         return new ToolSchema(name, description, Map.of(
                 "type", "object",

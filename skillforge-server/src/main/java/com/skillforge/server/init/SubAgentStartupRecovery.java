@@ -1,16 +1,21 @@
 package com.skillforge.server.init;
 
 import com.skillforge.server.entity.SessionEntity;
+import com.skillforge.server.config.SessionHistoryProperties;
 import com.skillforge.server.entity.SubAgentRunEntity;
 import com.skillforge.server.repository.SessionRepository;
 import com.skillforge.server.repository.SubAgentRunRepository;
 import com.skillforge.server.service.ChatService;
+import com.skillforge.server.exception.RetryBusyException;
+import com.skillforge.server.session.DurableRecoveryNotReadyException;
+import com.skillforge.server.session.DurableRecoveryRetryableException;
 import com.skillforge.server.subagent.AgentRoster;
 import com.skillforge.server.subagent.SubAgentRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
@@ -41,17 +46,30 @@ public class SubAgentStartupRecovery implements ApplicationRunner {
     private final SubAgentRegistry subAgentRegistry;
     private final ChatService chatService;
     private final AgentRoster agentRoster;
+    private final SessionHistoryProperties sessionHistoryProperties;
 
     public SubAgentStartupRecovery(SubAgentRunRepository runRepository,
                                    SessionRepository sessionRepository,
                                    SubAgentRegistry subAgentRegistry,
                                    ChatService chatService,
                                    AgentRoster agentRoster) {
+        this(runRepository, sessionRepository, subAgentRegistry, chatService, agentRoster,
+                new SessionHistoryProperties());
+    }
+
+    @Autowired
+    public SubAgentStartupRecovery(SubAgentRunRepository runRepository,
+                                   SessionRepository sessionRepository,
+                                   SubAgentRegistry subAgentRegistry,
+                                   ChatService chatService,
+                                   AgentRoster agentRoster,
+                                   SessionHistoryProperties sessionHistoryProperties) {
         this.runRepository = runRepository;
         this.sessionRepository = sessionRepository;
         this.subAgentRegistry = subAgentRegistry;
         this.chatService = chatService;
         this.agentRoster = agentRoster;
+        this.sessionHistoryProperties = sessionHistoryProperties;
     }
 
     @Override
@@ -107,6 +125,24 @@ public class SubAgentStartupRecovery implements ApplicationRunner {
         }
         String rs = child.getRuntimeStatus();
         if ("running".equals(rs)) {
+            if (sessionHistoryProperties.isEnabled()) {
+                log.info("Startup recovery: dispatching fenced child session {} (run {})",
+                        childId, run.getRunId());
+                try {
+                    chatService.resumeInterruptedTurnAsync(childId);
+                } catch (DurableRecoveryNotReadyException
+                         | DurableRecoveryRetryableException
+                         | RetryBusyException notReady) {
+                    // Leave both rows untouched. The durable poller retries after
+                    // the previous owner's DB lease expires.
+                    log.info("Durable child recovery deferred: sessionId={} run={}",
+                            childId, run.getRunId());
+                } catch (RuntimeException recoveryFailure) {
+                    log.error("Durable child recovery failed closed: sessionId={} run={}",
+                            childId, run.getRunId(), recoveryFailure);
+                }
+                return;
+            }
             if (child.getRecoveryAttempts() >= 3) {
                 child.setRuntimeStatus("error");
                 child.setRecoveryState("wedged");
@@ -138,6 +174,11 @@ public class SubAgentStartupRecovery implements ApplicationRunner {
                 subAgentRegistry.notifyParentOfOrphanRun(run,
                         "Startup recovery: failed to resubmit child loop: " + e.getMessage());
             }
+            return;
+        }
+        if ("waiting_user".equals(rs)) {
+            log.info("Startup recovery: preserving waiting child session {} (run {})",
+                    childId, run.getRunId());
             return;
         }
         // idle / error: 子已经收尾,只是 finally 钩子没跑 → 复用 registry 恢复路径

@@ -1,6 +1,9 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Button, Descriptions, Empty, Space, Table, Tag, Typography } from 'antd';
 import type { SessionCompactionCheckpoint } from '../api';
+import CheckpointActionConfirmation, {
+  type CheckpointActionKind,
+} from './chat/CheckpointActionConfirmation';
 
 const { Text } = Typography;
 
@@ -31,7 +34,17 @@ const CheckpointModal: React.FC<CheckpointModalProps> = ({
   onBranch,
   onRestore,
 }) => {
+  const [pendingAction, setPendingAction] = useState<{
+    kind: CheckpointActionKind;
+    checkpointId: string;
+  } | null>(null);
+
   if (!open) return null;
+
+  const close = () => {
+    setPendingAction(null);
+    onClose();
+  };
 
   return (
     <div style={{
@@ -50,7 +63,7 @@ const CheckpointModal: React.FC<CheckpointModalProps> = ({
           background: 'rgba(0, 0, 0, 0.6)',
           backdropFilter: 'blur(4px)',
         }}
-        onClick={onClose}
+        onClick={close}
       />
       
       {/* Modal */}
@@ -93,7 +106,7 @@ const CheckpointModal: React.FC<CheckpointModalProps> = ({
               刷新
             </Button>
             <button
-              onClick={onClose}
+              onClick={close}
               style={{
                 background: 'transparent',
                 border: 'none',
@@ -166,7 +179,8 @@ const CheckpointModal: React.FC<CheckpointModalProps> = ({
                     <Space size={8}>
                       <Button
                         size="small"
-                        onClick={() => onBranch(row.id)}
+                        disabled={actionLoadingId != null}
+                        onClick={() => setPendingAction({ kind: 'branch', checkpointId: row.id })}
                         loading={actionLoadingId === `branch:${row.id}`}
                       >
                         分支
@@ -174,7 +188,8 @@ const CheckpointModal: React.FC<CheckpointModalProps> = ({
                       <Button
                         size="small"
                         danger
-                        onClick={() => onRestore(row.id)}
+                        disabled={actionLoadingId != null}
+                        onClick={() => setPendingAction({ kind: 'restore', checkpointId: row.id })}
                         loading={actionLoadingId === `restore:${row.id}`}
                       >
                         恢复
@@ -198,6 +213,22 @@ const CheckpointModal: React.FC<CheckpointModalProps> = ({
                 分支会创建一个新会话；恢复会覆盖当前会话消息历史。
               </Text>
             </div>
+
+            {pendingAction && (
+              <CheckpointActionConfirmation
+                action={pendingAction.kind}
+                loading={actionLoadingId === `${pendingAction.kind}:${pendingAction.checkpointId}`}
+                onCancel={() => setPendingAction(null)}
+                onConfirm={() => {
+                  if (pendingAction.kind === 'branch') {
+                    onBranch(pendingAction.checkpointId);
+                  } else {
+                    onRestore(pendingAction.checkpointId);
+                  }
+                  setPendingAction(null);
+                }}
+              />
+            )}
 
             {selectedCheckpoint && (
               <Descriptions

@@ -9,6 +9,8 @@ import org.springframework.web.servlet.HandlerInterceptor;
 @Component
 public class AuthInterceptor implements HandlerInterceptor {
 
+    public static final String PRINCIPAL_ATTRIBUTE = "skillforge.platform.principal";
+
     private final AuthService authService;
 
     public AuthInterceptor(AuthService authService) {
@@ -27,6 +29,9 @@ public class AuthInterceptor implements HandlerInterceptor {
             response.sendError(401, "Invalid token");
             return false;
         }
+        // The desktop token is a platform-wide capability, not a user identity. Expose that
+        // authority explicitly so mutation endpoints never manufacture an actor from user input.
+        request.setAttribute(PRINCIPAL_ATTRIBUTE, PlatformAccessPrincipal.platformAdmin());
         return true;
     }
 }

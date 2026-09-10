@@ -52,6 +52,30 @@ public class SessionEntity {
     @Column(columnDefinition = "CLOB")
     private String messagesJson;
 
+    /** Durable generation of this Session's timeline; incremented only by destructive rewrite/restore. */
+    @Column(name = "history_epoch", nullable = false)
+    private long historyEpoch = 0L;
+
+    /** Current durable loop identity; null while no loop owns the Session. */
+    @Column(name = "active_loop_id", length = 36)
+    private String activeLoopId;
+
+    /** Monotonic Session execution fence, distinct from an attempt's immutable origin fence. */
+    @Column(name = "loop_fence", nullable = false)
+    private long loopFence = 0L;
+
+    /** Server instance currently holding the Session loop lease. */
+    @Column(name = "loop_owner_instance_id", length = 128)
+    private String loopOwnerInstanceId;
+
+    /** Database-time lease deadline for the current Session loop owner. */
+    @Column(name = "loop_lease_until")
+    private Instant loopLeaseUntil;
+
+    /** Admission barrier while an audited restore action is being prepared. */
+    @Column(name = "restore_preparing", nullable = false)
+    private boolean restorePreparing = false;
+
     /** 运行时状态: idle / running / waiting_user / error */
     @Column(length = 32)
     private String runtimeStatus = "idle";
@@ -365,6 +389,54 @@ public class SessionEntity {
 
     public void setMessagesJson(String messagesJson) {
         this.messagesJson = messagesJson;
+    }
+
+    public long getHistoryEpoch() {
+        return historyEpoch;
+    }
+
+    public void setHistoryEpoch(long historyEpoch) {
+        this.historyEpoch = historyEpoch;
+    }
+
+    public String getActiveLoopId() {
+        return activeLoopId;
+    }
+
+    public void setActiveLoopId(String activeLoopId) {
+        this.activeLoopId = activeLoopId;
+    }
+
+    public long getLoopFence() {
+        return loopFence;
+    }
+
+    public void setLoopFence(long loopFence) {
+        this.loopFence = loopFence;
+    }
+
+    public String getLoopOwnerInstanceId() {
+        return loopOwnerInstanceId;
+    }
+
+    public void setLoopOwnerInstanceId(String loopOwnerInstanceId) {
+        this.loopOwnerInstanceId = loopOwnerInstanceId;
+    }
+
+    public Instant getLoopLeaseUntil() {
+        return loopLeaseUntil;
+    }
+
+    public void setLoopLeaseUntil(Instant loopLeaseUntil) {
+        this.loopLeaseUntil = loopLeaseUntil;
+    }
+
+    public boolean isRestorePreparing() {
+        return restorePreparing;
+    }
+
+    public void setRestorePreparing(boolean restorePreparing) {
+        this.restorePreparing = restorePreparing;
     }
 
     public String getRuntimeStatus() {

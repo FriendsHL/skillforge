@@ -107,6 +107,22 @@ class SubAgentStartupRecoveryTest {
     }
 
     @Test
+    void waiting_child_staysRunningAndDoesNotNotifyParent() {
+        SubAgentRunEntity r = run("rr-waiting", "c-waiting");
+        SessionEntity c = child("c-waiting", "waiting_user");
+        when(runRepository.findByStatus("RUNNING")).thenReturn(List.of(r));
+        when(sessionRepository.findById("c-waiting")).thenReturn(Optional.of(c));
+
+        recovery.run(null);
+
+        verify(chatService, never()).resumeInterruptedTurnAsync(anyString());
+        verify(subAgentRegistry, never())
+                .onSessionLoopFinished(anyString(), anyString(), anyString(), anyInt(), anyLong());
+        verify(subAgentRegistry, never()).notifyParentOfOrphanRun(any(), anyString());
+        verify(runRepository, never()).save(any());
+    }
+
+    @Test
     void null_child_session_is_cancelled_and_parent_notified() {
         SubAgentRunEntity r = run("rr3", null);
 

@@ -31,6 +31,12 @@ public interface SessionSummaryRepository extends JpaRepository<SessionSummaryEn
     /** All summaries for a session (active + superseded), ordered by covered start_seq. */
     List<SessionSummaryEntity> findBySessionIdOrderByStartSeqAsc(String sessionId);
 
+    /** Summary sidecars that already existed at a selected checkpoint. */
+    List<SessionSummaryEntity> findBySessionIdAndIdLessThanEqualOrderByStartSeqAsc(
+            String sessionId, long summaryIdWatermark);
+
+    Optional<SessionSummaryEntity> findTopBySessionIdOrderByIdDesc(String sessionId);
+
     /** The latest active (non-superseded) summary — highest start_seq, i.e. the current rolling summary. */
     Optional<SessionSummaryEntity> findTopBySessionIdAndSupersededByIsNullOrderByStartSeqDesc(String sessionId);
 
@@ -62,4 +68,20 @@ public interface SessionSummaryRepository extends JpaRepository<SessionSummaryEn
     @Query("DELETE FROM SessionSummaryEntity s WHERE s.sessionId = :sessionId AND s.endSeq > :endSeq")
     int deleteBySessionIdAndEndSeqGreaterThan(@Param("sessionId") String sessionId,
                                               @Param("endSeq") long endSeq);
+
+    @Modifying(clearAutomatically = true)
+    @Transactional
+    @Query("DELETE FROM SessionSummaryEntity s "
+            + "WHERE s.sessionId = :sessionId AND s.id > :summaryIdWatermark")
+    int deleteBySessionIdAfterSummaryIdWatermark(
+            @Param("sessionId") String sessionId,
+            @Param("summaryIdWatermark") long summaryIdWatermark);
+
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Transactional
+    @Query("UPDATE SessionSummaryEntity s SET s.supersededBy = NULL "
+            + "WHERE s.sessionId = :sessionId AND s.supersededBy > :summaryIdWatermark")
+    int reactivateSummariesSupersededAfterWatermark(
+            @Param("sessionId") String sessionId,
+            @Param("summaryIdWatermark") long summaryIdWatermark);
 }

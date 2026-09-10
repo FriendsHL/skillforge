@@ -2,6 +2,7 @@ package com.skillforge.core.engine;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skillforge.core.llm.*;
+import com.skillforge.core.engine.durability.*;
 import com.skillforge.core.model.*;
 import com.skillforge.core.skill.*;
 import org.junit.jupiter.api.Test;
@@ -149,6 +150,23 @@ class AgentLoopEngineTaskReconciliationTest {
         assertThat(result.getStatus()).isEqualTo("completed");
         assertThat(result.getFinalResponse()).isEqualTo("Delivered");
         assertThat(f.provider.prompts).hasSize(1);
+    }
+
+    @Test
+    void terminalText_durableMode_injectsContextWithoutExtraContinuation() {
+        Fixture f = new Fixture(text("Done"));
+        f.context.setDurabilityScope(new LoopDurabilityScope("sid", 1L, 1L,
+                "00000000-0000-0000-0000-000000000001", 1L, "test"));
+        f.context.setExpectedDurableFrontier(DurableFrontier.EMPTY);
+        f.engine.setConversationDurabilitySink(new ConversationDurabilitySink() {
+            public boolean enabled() { return true; }
+            public IntentCommitAck commitIntent(IntentCommitCommand command) { throw new AssertionError("No tools"); }
+        });
+        LoopResult result = f.run(5);
+        assertThat(f.provider.prompts).hasSize(1);
+        assertThat(f.provider.prompts.get(0)).contains("Task 9 in_progress");
+        assertThat(result.getDeferredBroadcastMessages()).singleElement()
+                .extracting(Message::getTextContent).isEqualTo("Done");
     }
 
     @Test

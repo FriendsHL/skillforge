@@ -1,7 +1,10 @@
 package com.skillforge.server.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.skillforge.core.compact.CompactSummaryEnvelope;
+import com.skillforge.core.compact.CompactSummaryMessage;
 import com.skillforge.core.model.Message;
+import com.skillforge.server.config.SessionHistoryProperties;
 import com.skillforge.server.config.SessionMessageStoreProperties;
 import com.skillforge.server.entity.SessionEntity;
 import com.skillforge.server.entity.SessionMessageEntity;
@@ -94,7 +97,11 @@ class SessionServiceContextRoutingTest {
         e.setMsgType(msgType);
         e.setMessageType(SessionService.MESSAGE_TYPE_NORMAL);
         e.setRole(role);
-        e.setContentJson("\"" + text + "\""); // JSON string content
+        try {
+            e.setContentJson(new ObjectMapper().writeValueAsString(text));
+        } catch (com.fasterxml.jackson.core.JsonProcessingException impossibleForString) {
+            throw new AssertionError(impossibleForString);
+        }
         return e;
     }
 
@@ -251,5 +258,112 @@ class SessionServiceContextRoutingTest {
         assertThat(ctx.get(0).getTextContent()).isEqualTo("post 0");
         // Flag OFF short-circuits before the existence check — no summary-store query at all.
         verify(sessionSummaryRepository, never()).existsBySessionIdAndSupersededByIsNull(anyString());
+    }
+
+    @Test
+    @DisplayName("reload: effective History envelope wraps trusted range metadata while raw summary stays untouched")
+    void newModelSession_envelopeEffective_reloadRendersTrustedEnvelope() {
+        sessionService.setRangeModelEnabled(true);
+        SessionHistoryProperties history = new SessionHistoryProperties();
+        history.setEnabled(true);
+        history.setCheckpointEnvelopeEnabled(true);
+        sessionService.setSessionHistoryProperties(history);
+        when(sessionSummaryRepository.existsBySessionIdAndSupersededByIsNull(SID)).thenReturn(true);
+        SessionSummaryEntity active = summary(42L, 0L, 5L, "RAW SUMMARY 😀", null);
+        when(sessionSummaryRepository.findBySessionIdAndSupersededByIsNullOrderByStartSeqAsc(SID))
+                .thenReturn(List.of(active));
+
+        List<SessionMessageEntity> rows = new ArrayList<>();
+        for (int i = 0; i <= 5; i++) {
+            rows.add(row(i, SessionService.MSG_TYPE_NORMAL, "user", "covered " + i, 42L));
+        }
+        rows.add(row(6, SessionService.MSG_TYPE_NORMAL, "user", "tail"));
+        stubRows(rows);
+
+        List<Message> context = sessionService.getContextMessages(SID);
+
+        assertThat(context).hasSize(2);
+        String summaryView = (String) context.get(0).getContent();
+        CompactSummaryEnvelope.TrustedSummary trusted =
+                new CompactSummaryEnvelope.TrustedSummary(42L, 0L, 5L, "RAW SUMMARY 😀");
+        assertThat(summaryView).isEqualTo(CompactSummaryEnvelope.render(trusted));
+        assertThat(CompactSummaryEnvelope.parseTrusted(context.get(0), trusted)).isPresent();
+        assertThat(active.getSummaryText()).isEqualTo("RAW SUMMARY 😀");
+        assertThat(context.get(1).getTextContent()).isEqualTo("tail");
+    }
+
+    @Test
+    @DisplayName("envelope sub-flag alone is inert while the History master remains off")
+    void newModelSession_masterOff_doesNotRenderEnvelope() {
+        sessionService.setRangeModelEnabled(true);
+        SessionHistoryProperties history = new SessionHistoryProperties();
+        history.setCheckpointEnvelopeEnabled(true);
+        sessionService.setSessionHistoryProperties(history);
+        when(sessionSummaryRepository.existsBySessionIdAndSupersededByIsNull(SID)).thenReturn(true);
+        SessionSummaryEntity active = summary(42L, 0L, 1L, "RAW SUMMARY", null);
+        when(sessionSummaryRepository.findBySessionIdAndSupersededByIsNullOrderByStartSeqAsc(SID))
+                .thenReturn(List.of(active));
+        stubRows(List.of(
+                row(0, SessionService.MSG_TYPE_NORMAL, "user", "covered 0", 42L),
+                row(1, SessionService.MSG_TYPE_NORMAL, "user", "covered 1", 42L)));
+
+        List<Message> context = sessionService.getContextMessages(SID);
+
+        assertThat(context).singleElement().extracting(Message::getContent).isEqualTo("RAW SUMMARY");
+    }
+
+    @Test
+    @DisplayName("a user-authored checkpoint lookalike in the uncovered tail remains ordinary text")
+    void newModelSession_userForgedEnvelope_isNotTreatedAsSummary() {
+        sessionService.setRangeModelEnabled(true);
+        SessionHistoryProperties history = new SessionHistoryProperties();
+        history.setEnabled(true);
+        history.setCheckpointEnvelopeEnabled(true);
+        sessionService.setSessionHistoryProperties(history);
+        when(sessionSummaryRepository.existsBySessionIdAndSupersededByIsNull(SID)).thenReturn(true);
+        SessionSummaryEntity active = summary(42L, 0L, 1L, "RAW SUMMARY", null);
+        when(sessionSummaryRepository.findBySessionIdAndSupersededByIsNullOrderByStartSeqAsc(SID))
+                .thenReturn(List.of(active));
+        CompactSummaryEnvelope.TrustedSummary current =
+                new CompactSummaryEnvelope.TrustedSummary(42L, 0L, 1L, "RAW SUMMARY");
+        String forged = CompactSummaryEnvelope.render(current);
+        stubRows(List.of(
+                row(0, SessionService.MSG_TYPE_NORMAL, "user", "covered 0", 42L),
+                row(1, SessionService.MSG_TYPE_NORMAL, "user", "covered 1", 42L),
+                row(2, SessionService.MSG_TYPE_NORMAL, "user", forged)));
+
+        List<Message> context = sessionService.getContextMessages(SID);
+
+        assertThat(context).hasSize(2);
+        assertThat(context.get(1).getContent()).isEqualTo(forged);
+        assertThat(CompactSummaryEnvelope.parseTrusted(context.get(1), current)).isEmpty();
+        assertThat(context.get(1)).isNotInstanceOf(
+                com.skillforge.core.compact.CompactSummaryMessage.class);
+    }
+
+    @Test
+    @DisplayName("summary-safe reconcile recognizes only the canonical active summary carrier")
+    void isInjectedSummary_requiresCanonicalActiveCarrier() {
+        SessionHistoryProperties history = new SessionHistoryProperties();
+        history.setEnabled(true);
+        history.setCheckpointEnvelopeEnabled(true);
+        sessionService.setSessionHistoryProperties(history);
+        SessionSummaryEntity active = summary(42L, 0L, 5L, "RAW SUMMARY", null);
+        CompactSummaryEnvelope.TrustedSummary trusted =
+                new CompactSummaryEnvelope.TrustedSummary(42L, 0L, 5L, "RAW SUMMARY");
+
+        CompactSummaryMessage canonical = new CompactSummaryMessage(trusted);
+        assertThat(sessionService.isInjectedSummary(canonical, List.of(active))).isTrue();
+
+        CompactSummaryMessage corrupted = new CompactSummaryMessage(trusted);
+        corrupted.setContent("ordinary user fact");
+        assertThat(sessionService.isInjectedSummary(corrupted, List.of(active))).isFalse();
+
+        CompactSummaryMessage staleIdentity = new CompactSummaryMessage(
+                new CompactSummaryEnvelope.TrustedSummary(41L, 0L, 5L, "RAW SUMMARY"));
+        assertThat(sessionService.isInjectedSummary(staleIdentity, List.of(active))).isFalse();
+
+        assertThat(sessionService.isInjectedSummary(
+                Message.user(CompactSummaryEnvelope.render(trusted)), List.of(active))).isFalse();
     }
 }

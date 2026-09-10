@@ -1,12 +1,13 @@
 # SkillForge ToDo
 
-> 更新于：2026-08-31（Goal Brief P0a 已交付；Agent Factory 后续方案待讨论；AG-UI 保持关闭）
+> 更新于：2026-09-10（Session History Recovery 专项真实 E2E 通过；两项 durable 问题暂停，Full gate 未关闭）
 > 规则：这里只放当前执行状态；范围与方案见需求包，交付事实见 [delivery-index.md](delivery-index.md)。
 
 ## 当前队列
 
 | 顺序 | ID | 标题 | 模式 | 状态 | 优先级 | 下一步 |
 | --- | --- | --- | --- | --- | --- | --- |
+| - | **SESSION-HISTORY-RECOVERY** | Compact 后的历史事实检索、精确展开与 Session 连续性 | Full | 已实现、专项真实 E2E 通过；完整门禁开放 | P0 | 优先 Search 效率；ACK 回读与取消稳定性两项按用户要求暂停，见需求包审查记录 |
 | - | **GOAL-ALIGNED-AGENT-FACTORY** | 主 Agent 入口、专业 Agent 选择/组装与目标对齐能力工厂 | Full | Design proposed；P0a 已交付 | P1 | P0b/P1 及后续产品语义继续讨论，未确认前不启动实现 |
 | - | **GOAL-BRIEF-P0A** | 长期/复杂/新能力/高风险任务的对话内轻量目标卡 | Full | implemented；Full automated + browser verified | P1 | 保持非权威、非授权边界；后续确定性 Goal Contract 另包讨论 |
 | - | **AGENT-TEAM-TASK-GRAPH** | Team 共享 Task、并发领取、租约、解锁与恢复 | Full | Phase 1 implemented；3598 项全量回归 + real Team dogfood verified | P0 | 当前阶段收口；后续自动协调/调度另包讨论 |
@@ -35,6 +36,7 @@
 
 需求包：
 
+- [SESSION-HISTORY-RECOVERY](requirements/active/2026-09-02-SESSION-HISTORY-RECOVERY/index.md)
 - [AGENT-GOAL-AND-TOOL-RECOVERY](requirements/active/2026-08-05-AGENT-GOAL-AND-TOOL-RECOVERY/index.md)
 - [AGENT-TEAM-TASK-GRAPH](requirements/active/2026-08-12-AGENT-TEAM-TASK-GRAPH/index.md)
 - [AGENT-CONTEXT-GOVERNANCE](requirements/active/2026-07-26-AGENT-CONTEXT-GOVERNANCE/index.md)
@@ -93,7 +95,7 @@
 | **AG-UI-COMPATIBILITY** | Goal Brief 服务端确定性 Gate、现有 WS 恢复基线、真实跨端/外部 Runtime 场景和用户独立批准同时满足；当前保持关闭 |
 | **WF-CONCURRENT-PIPELINE** | AUTOEVOLVING V2(d) 启动或串行 pipeline 成为瓶颈 |
 | **OUTCOMES-RUBRIC-FOUNDATION** | 用户决定把 rubric/grader 升 active |
-| **COMPACT-V2-STORAGE** | recovery 回取或截断 cache 抖动出现真实需求 |
+| **COMPACT-V2-STORAGE** | 已吸收进 SESSION-HISTORY-RECOVERY，不再单独启动 |
 | **CHANNEL-RICH-MESSAGE** | 需要微信原生视频或跨渠道卡片 |
 | **CHANNEL-PUSH-SERVICE** | 出现第二个通用主动推送客户 |
 | **WEBSEARCH-SEARXNG-BACKEND** | 搜索成本、隐私或内网诉求触发 |

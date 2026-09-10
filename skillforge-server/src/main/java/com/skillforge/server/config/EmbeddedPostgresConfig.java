@@ -4,6 +4,7 @@ import io.zonky.test.db.postgres.embedded.EmbeddedPostgres;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.flyway.FlywayDataSource;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.jdbc.DataSourceBuilder;
 import org.springframework.context.annotation.Bean;
@@ -27,6 +28,8 @@ import java.util.Optional;
 public class EmbeddedPostgresConfig {
 
     private static final Logger log = LoggerFactory.getLogger(EmbeddedPostgresConfig.class);
+    private static final String MIGRATOR_ROLE = "postgres";
+    private static final String RUNTIME_ROLE = "skillforge_app";
 
     /**
      * Listener port (default 15432 = dev). The desktop app overrides this to 15433 so
@@ -140,22 +143,57 @@ public class EmbeddedPostgresConfig {
     @Bean
     @Primary
     public DataSource dataSource(EmbeddedPostgres embeddedPostgres) throws SQLException {
-        // Ensure the 'skillforge' database exists (embedded PG starts with only 'postgres')
+        ensureDatabaseAndRuntimeRole();
+        return roleDataSource(RUNTIME_ROLE);
+    }
+
+    /** Flyway owns DDL and append-only audit tables through a separate database role. */
+    @Bean
+    @FlywayDataSource
+    public DataSource flywayDataSource(EmbeddedPostgres embeddedPostgres) throws SQLException {
+        ensureDatabaseAndRuntimeRole();
+        return roleDataSource(MIGRATOR_ROLE);
+    }
+
+    private void ensureDatabaseAndRuntimeRole() throws SQLException {
+        // Embedded PG is loopback/trust-authenticated. The runtime LOGIN has no password
+        // and cannot be used outside this local cluster; production roles are operator-managed.
         try (Connection conn = DriverManager.getConnection(
-                "jdbc:postgresql://localhost:" + port + "/postgres", "postgres", "");
+                "jdbc:postgresql://localhost:" + port + "/postgres", MIGRATOR_ROLE, "");
              Statement stmt = conn.createStatement()) {
+            createDatabaseIfMissing(stmt);
+            createRuntimeRoleIfMissing(stmt);
+            stmt.execute("ALTER ROLE " + RUNTIME_ROLE
+                    + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT");
+            stmt.execute("GRANT CONNECT ON DATABASE skillforge TO " + RUNTIME_ROLE);
+        }
+    }
+
+    private void createDatabaseIfMissing(Statement stmt) throws SQLException {
+        try {
             stmt.execute("CREATE DATABASE skillforge");
             log.info("Created database 'skillforge'.");
         } catch (SQLException e) {
-            if ("42P04".equals(e.getSQLState())) {
-                log.debug("Database 'skillforge' already exists.");
-            } else {
-                throw e;
-            }
+            if (!"42P04".equals(e.getSQLState())) throw e;
+            log.debug("Database 'skillforge' already exists.");
         }
+    }
+
+    private void createRuntimeRoleIfMissing(Statement stmt) throws SQLException {
+        try {
+            stmt.execute("CREATE ROLE " + RUNTIME_ROLE
+                    + " LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT");
+            log.info("Created restricted embedded PostgreSQL runtime role '{}'.", RUNTIME_ROLE);
+        } catch (SQLException e) {
+            if (!"42710".equals(e.getSQLState())) throw e;
+            log.debug("Embedded PostgreSQL runtime role '{}' already exists.", RUNTIME_ROLE);
+        }
+    }
+
+    private DataSource roleDataSource(String username) {
         return DataSourceBuilder.create()
                 .url("jdbc:postgresql://localhost:" + port + "/skillforge")
-                .username("postgres")
+                .username(username)
                 .password("")
                 .driverClassName("org.postgresql.Driver")
                 .build();

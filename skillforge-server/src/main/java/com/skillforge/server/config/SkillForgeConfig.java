@@ -8,12 +8,15 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Bean;
+import org.springframework.beans.factory.InitializingBean;
 
 @Configuration
 @EnableConfigurationProperties({
         LlmProperties.class,
         LifecycleHooksScriptProperties.class,
         SessionMessageStoreProperties.class,
+        SessionHistoryProperties.class,
         MemoryProperties.class,
         SkillImportProperties.class,
         SkillSecurityScanProperties.class,
@@ -29,6 +32,17 @@ import org.springframework.context.annotation.Configuration;
         ContextCapabilityProperties.class
 })
 public class SkillForgeConfig {
+
+    @Bean
+    InitializingBean sessionHistoryStoreConfigurationGuard(
+            SessionHistoryProperties history, SessionMessageStoreProperties store) {
+        return () -> {
+            if (history.isEnabled() && (!store.isRowReadEnabled() || !store.isRowWriteEnabled())) {
+                throw new IllegalStateException(
+                        "Session History requires row-read-enabled=true and row-write-enabled=true");
+            }
+        };
+    }
 
     private static final Logger log = LoggerFactory.getLogger(SkillForgeConfig.class);
 }

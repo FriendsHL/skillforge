@@ -2,6 +2,10 @@ package com.skillforge.server.compact;
 
 import com.skillforge.core.compact.FullCompactStrategy;
 import com.skillforge.core.compact.LightCompactStrategy;
+import com.skillforge.core.compact.CompactSummaryEnvelope;
+import com.skillforge.core.compact.CompactSummaryMessage;
+import com.skillforge.core.compact.TokenEstimator;
+import com.skillforge.core.compact.ContextCompactorCallback;
 import com.skillforge.core.engine.ChatEventBroadcaster;
 import com.skillforge.core.llm.LlmProvider;
 import com.skillforge.core.llm.LlmProviderFactory;
@@ -11,7 +15,9 @@ import com.skillforge.core.llm.LlmStreamHandler;
 import com.skillforge.core.model.ContentBlock;
 import com.skillforge.core.model.Message;
 import com.skillforge.server.config.LlmProperties;
+import com.skillforge.server.config.SessionHistoryProperties;
 import com.skillforge.server.entity.CompactionEventEntity;
+import com.skillforge.server.entity.SessionCompactionCheckpointEntity;
 import com.skillforge.server.entity.SessionEntity;
 import com.skillforge.server.entity.SessionSummaryEntity;
 import com.skillforge.server.repository.AgentRepository;
@@ -26,6 +32,7 @@ import com.skillforge.server.service.SessionService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -42,6 +49,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -109,6 +117,9 @@ class CompactionServiceRangeModelTest {
         agentRepository = mock(AgentRepository.class);
         summaryRepository = mock(SessionSummaryRepository.class);
         messageRepository = mock(SessionMessageRepository.class);
+
+        when(checkpointRepository.findSidecarWatermarkById(anyString()))
+                .thenReturn(Optional.of(1L));
 
         when(llmProperties.getDefaultProvider()).thenReturn("mock");
         when(llmProperties.getProviders()).thenReturn(new HashMap<>());
@@ -224,6 +235,13 @@ class CompactionServiceRangeModelTest {
         messagesStore.put(id, msgs);
     }
 
+    private void inflateCompactablePrefix(String id) {
+        List<Message> messages = messagesStore.get(id);
+        for (int i = 0; i < 8; i++) {
+            messages.set(i, Message.user(("durable compactable fact " + i + " ").repeat(80)));
+        }
+    }
+
     private void seedLightCompactModelViewWithInjectedSummary(String id) {
         List<Message> msgs = new ArrayList<>();
         msgs.add(Message.user("[Context summary from 84 messages compacted at 2026-06-29T07:58:03Z]\n"
@@ -283,7 +301,160 @@ class CompactionServiceRangeModelTest {
         verify(sessionService, never()).saveSessionMessages(eq("sRM"), any());
 
         // Checkpoint still written, pointing at the summary id.
-        verify(checkpointRepository).save(any());
+        verify(checkpointRepository).saveAndFlush(any());
+    }
+
+    @Test
+    @DisplayName("live callback returns the same trusted envelope shape that reload derives, while DB stores raw summary")
+    void rangeModel_envelopeEffective_liveCallbackWrapsOnlyModelView() {
+        seedSession("sLIVE", 30, 0, "idle");
+        seedMessages("sLIVE");
+        inflateCompactablePrefix("sLIVE");
+        SessionHistoryProperties history = new SessionHistoryProperties();
+        history.setEnabled(true);
+        history.setCheckpointEnvelopeEnabled(true);
+        service.setSessionHistoryProperties(history);
+
+        ContextCompactorCallback.CompactCallbackResult callback = service.compactFull(
+                "sLIVE", new ArrayList<>(messagesStore.get("sLIVE")), "engine-hard", "live envelope");
+
+        assertThat(callback.performed).isTrue();
+        SessionSummaryEntity persisted = summaryStore.values().iterator().next();
+        assertThat(persisted.getSummaryText())
+                .contains("RANGE SUMMARY")
+                .doesNotStartWith("<compact-checkpoint");
+        CompactSummaryEnvelope.TrustedSummary trusted = new CompactSummaryEnvelope.TrustedSummary(
+                persisted.getId(), persisted.getStartSeq(), persisted.getEndSeq(),
+                persisted.getSummaryText());
+        assertThat(callback.messages.get(0).getContent())
+                .isEqualTo(CompactSummaryEnvelope.render(trusted));
+        assertThat(callback.messages.subList(1, callback.messages.size()))
+                .containsExactlyElementsOf(messagesStore.get("sLIVE").subList(10, 30));
+        int actualModelViewTokens = TokenEstimator.estimate(callback.messages);
+        assertThat(callback.afterTokens).isEqualTo(actualModelViewTokens);
+        assertThat(callback.tokensReclaimed)
+                .isEqualTo(Math.max(0, callback.beforeTokens - actualModelViewTokens));
+        assertThat(persisted.getTokensAfter()).isEqualTo(actualModelViewTokens);
+        ArgumentCaptor<CompactionEventEntity> eventCaptor =
+                ArgumentCaptor.forClass(CompactionEventEntity.class);
+        verify(eventRepository).save(eventCaptor.capture());
+        assertThat(eventCaptor.getValue().getAfterTokens()).isEqualTo(actualModelViewTokens);
+        assertThat(eventCaptor.getValue().getTokensReclaimed())
+                .isEqualTo(callback.tokensReclaimed);
+        verify(summaryRepository, times(1))
+                .findTopBySessionIdAndSupersededByIsNullOrderByStartSeqDesc("sLIVE");
+    }
+
+    @Test
+    @DisplayName("checkpoint envelope that eliminates net token reclaim remains a true no-op")
+    void rangeModel_envelopeEffective_shortPrefixDoesNotPersistMisleadingCompact() {
+        seedSession("sSHORT", 30, 0, "idle");
+        seedMessages("sSHORT");
+        SessionHistoryProperties history = new SessionHistoryProperties();
+        history.setEnabled(true);
+        history.setCheckpointEnvelopeEnabled(true);
+        service.setSessionHistoryProperties(history);
+        List<Message> current = new ArrayList<>(messagesStore.get("sSHORT"));
+
+        ContextCompactorCallback.CompactCallbackResult callback = service.compactFull(
+                "sSHORT", current, "engine-hard", "short envelope");
+
+        assertThat(callback.performed).isFalse();
+        assertThat(callback.messages).containsExactlyElementsOf(current);
+        assertThat(summaryStore).isEmpty();
+        verify(checkpointRepository, never()).saveAndFlush(any());
+        verify(eventRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("two live compacts expose one current cue and keep every persisted summary body raw")
+    void rangeModel_envelopeEffective_doubleCompact_keepsSingleEnvelope() {
+        seedSession("sDOUBLE", 30, 0, "idle");
+        seedMessages("sDOUBLE");
+        inflateCompactablePrefix("sDOUBLE");
+        SessionHistoryProperties history = new SessionHistoryProperties();
+        history.setEnabled(true);
+        history.setCheckpointEnvelopeEnabled(true);
+        service.setSessionHistoryProperties(history);
+
+        ContextCompactorCallback.CompactCallbackResult first = service.compactFull(
+                "sDOUBLE", new ArrayList<>(messagesStore.get("sDOUBLE")),
+                "engine-hard", "first live envelope");
+        List<Message> secondInput = new ArrayList<>(first.messages);
+        for (int i = 0; i < 10; i++) {
+            Message turn = Message.user("new persisted turn " + i);
+            messagesStore.get("sDOUBLE").add(turn);
+            secondInput.add(turn);
+        }
+        sessionStore.get("sDOUBLE").setMessageCount(40);
+
+        ContextCompactorCallback.CompactCallbackResult second = service.compactFull(
+                "sDOUBLE", secondInput, "engine-hard", "second live envelope");
+
+        assertThat(second.performed).isTrue();
+        String visible = (String) second.messages.get(0).getContent();
+        assertThat(occurrences(visible, "<compact-checkpoint ")).isEqualTo(1);
+        assertThat(occurrences(visible, CompactSummaryEnvelope.RECOVERY_CUE)).isEqualTo(1);
+        assertThat(summaryStore.values())
+                .allSatisfy(summary -> assertThat(summary.getSummaryText())
+                        .doesNotContain("<compact-checkpoint"));
+        String secondPrompt = (String) lastLlmRequest.getMessages().get(0).getContent();
+        assertThat(secondPrompt).doesNotContain("<compact-checkpoint");
+    }
+
+    @Test
+    @DisplayName("reload between two compacts reconstructs one trusted carrier and never summarizes the envelope")
+    void rangeModel_envelopeEffective_reloadBetweenCompacts_keepsSingleEnvelope() {
+        seedSession("sRELOAD", 30, 0, "idle");
+        seedMessages("sRELOAD");
+        inflateCompactablePrefix("sRELOAD");
+        SessionHistoryProperties history = new SessionHistoryProperties();
+        history.setEnabled(true);
+        history.setCheckpointEnvelopeEnabled(true);
+        service.setSessionHistoryProperties(history);
+
+        ContextCompactorCallback.CompactCallbackResult first = service.compactFull(
+                "sRELOAD", new ArrayList<>(messagesStore.get("sRELOAD")),
+                "engine-hard", "first compact");
+        assertThat(first.performed).isTrue();
+        SessionSummaryEntity firstSummary = summaryStore.values().stream()
+                .filter(summary -> summary.getSupersededBy() == null)
+                .findFirst()
+                .orElseThrow();
+
+        for (int i = 0; i < 10; i++) {
+            messagesStore.get("sRELOAD").add(Message.user("post-reload turn " + i));
+        }
+        sessionStore.get("sRELOAD").setMessageCount(40);
+        List<Message> reloaded = new ArrayList<>();
+        reloaded.add(new CompactSummaryMessage(new CompactSummaryEnvelope.TrustedSummary(
+                firstSummary.getId(), firstSummary.getStartSeq(), firstSummary.getEndSeq(),
+                firstSummary.getSummaryText())));
+        reloaded.addAll(messagesStore.get("sRELOAD").subList(10, 40));
+
+        ContextCompactorCallback.CompactCallbackResult second = service.compactFull(
+                "sRELOAD", reloaded, "engine-hard", "second compact after reload");
+
+        assertThat(second.performed).isTrue();
+        assertThat(second.messages.get(0)).isInstanceOf(CompactSummaryMessage.class);
+        String visible = (String) second.messages.get(0).getContent();
+        assertThat(occurrences(visible, "<compact-checkpoint ")).isEqualTo(1);
+        assertThat(occurrences(visible, CompactSummaryEnvelope.RECOVERY_CUE)).isEqualTo(1);
+        assertThat((String) lastLlmRequest.getMessages().get(0).getContent())
+                .doesNotContain("<compact-checkpoint");
+        assertThat(summaryStore.values())
+                .allSatisfy(summary -> assertThat(summary.getSummaryText())
+                        .doesNotContain("<compact-checkpoint"));
+    }
+
+    private int occurrences(String text, String needle) {
+        int count = 0;
+        int from = 0;
+        while ((from = text.indexOf(needle, from)) >= 0) {
+            count++;
+            from += needle.length();
+        }
+        return count;
     }
 
     @Test
@@ -365,6 +536,12 @@ class CompactionServiceRangeModelTest {
         // Exactly one active (non-superseded) summary remains.
         long active = summaryStore.values().stream().filter(x -> x.getSupersededBy() == null).count();
         assertThat(active).isEqualTo(1);
+        ArgumentCaptor<SessionCompactionCheckpointEntity> checkpoints =
+                ArgumentCaptor.forClass(SessionCompactionCheckpointEntity.class);
+        verify(checkpointRepository, times(2)).saveAndFlush(checkpoints.capture());
+        assertThat(checkpoints.getAllValues())
+                .extracting(SessionCompactionCheckpointEntity::getSummaryIdWatermark)
+                .containsExactly(1L, 2L);
 
         // Across both rounds: zero message-row appends/rewrites (no unbounded growth).
         verify(sessionService, never()).appendMessages(eq("sRM2"), any());

@@ -15,6 +15,9 @@ import com.skillforge.server.entity.SessionEntity;
 import com.skillforge.server.dto.SessionReplayDto;
 import com.skillforge.server.channel.router.ChannelConversationResolver;
 import com.skillforge.server.config.LlmProperties;
+import com.skillforge.server.config.SessionHistoryProperties;
+import com.skillforge.server.config.AuthInterceptor;
+import com.skillforge.server.config.PlatformAccessPrincipal;
 import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.ChatAttachmentEntity;
 import com.skillforge.server.exception.AgentNotFoundException;
@@ -25,10 +28,14 @@ import com.skillforge.server.service.CompactionService;
 import com.skillforge.server.service.ContextBreakdownService;
 import com.skillforge.server.service.ReplayService;
 import com.skillforge.server.service.SessionService;
+import com.skillforge.server.session.DurableCancellationRejectedException;
+import com.skillforge.server.session.DurableCancellationRetryableException;
+import com.skillforge.server.session.SessionDurableCancellationService;
 import com.skillforge.server.subagent.SubAgentRegistry;
 import com.skillforge.server.subagent.SubAgentRegistry.SubAgentRun;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -37,6 +44,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -46,6 +54,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.stream.Collectors;
 
@@ -69,7 +78,10 @@ public class ChatController {
     private final ReplayService replayService;
     private final ChannelConversationResolver channelConversationResolver;
     private final ContextBreakdownService contextBreakdownService;
+    private final SessionHistoryProperties sessionHistoryProperties;
+    private final SessionDurableCancellationService durableCancellationService;
 
+    @Autowired
     public ChatController(ChatService chatService,
                           ChatAttachmentService chatAttachmentService,
                           SessionService sessionService,
@@ -82,7 +94,9 @@ public class ChatController {
                           CompactionService compactionService,
                           ReplayService replayService,
                           ChannelConversationResolver channelConversationResolver,
-                          ContextBreakdownService contextBreakdownService) {
+                          ContextBreakdownService contextBreakdownService,
+                          SessionHistoryProperties sessionHistoryProperties,
+                          SessionDurableCancellationService durableCancellationService) {
         this.chatService = chatService;
         this.chatAttachmentService = chatAttachmentService;
         this.sessionService = sessionService;
@@ -96,6 +110,29 @@ public class ChatController {
         this.replayService = replayService;
         this.channelConversationResolver = channelConversationResolver;
         this.contextBreakdownService = contextBreakdownService;
+        this.sessionHistoryProperties = sessionHistoryProperties;
+        this.durableCancellationService = durableCancellationService;
+    }
+
+    /** Legacy test/source compatibility; production uses the fully injected constructor. */
+    public ChatController(ChatService chatService,
+                          ChatAttachmentService chatAttachmentService,
+                          SessionService sessionService,
+                          AgentService agentService,
+                          LlmProperties llmProperties,
+                          PendingAskRegistry pendingAskRegistry,
+                          PendingConfirmationRegistry pendingConfirmationRegistry,
+                          SubAgentRegistry subAgentRegistry,
+                          CancellationRegistry cancellationRegistry,
+                          CompactionService compactionService,
+                          ReplayService replayService,
+                          ChannelConversationResolver channelConversationResolver,
+                          ContextBreakdownService contextBreakdownService) {
+        this(chatService, chatAttachmentService, sessionService, agentService, llmProperties,
+                pendingAskRegistry, pendingConfirmationRegistry, subAgentRegistry,
+                cancellationRegistry, compactionService, replayService,
+                channelConversationResolver, contextBreakdownService,
+                new SessionHistoryProperties(), null);
     }
 
     /**
@@ -231,7 +268,17 @@ public class ChatController {
             return ResponseEntity.badRequest().body(Map.of("error", "message or attachmentIds required"));
         }
         try {
-            chatService.chatAsync(sessionId, request.message(), request.userId(), request.attachmentIds());
+            ChatService.ChatSubmissionAck acknowledgement = chatService.submitUserMessage(
+                    sessionId,
+                    request.message(),
+                    request.userId(),
+                    request.attachmentIds(),
+                    request.requestId());
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("sessionId", sessionId);
+            body.put("status", acknowledgement.status());
+            body.put("requestId", acknowledgement.requestId().toString());
+            return ResponseEntity.accepted().body(body);
         } catch (RejectedExecutionException e) {
             Map<String, Object> body = new LinkedHashMap<>();
             body.put("error", "Server is busy, please try again later");
@@ -245,10 +292,6 @@ public class ChatController {
             body.put("error", e.getMessage());
             return ResponseEntity.status(HttpStatus.CONFLICT).body(body);
         }
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("sessionId", sessionId);
-        body.put("status", "accepted");
-        return ResponseEntity.accepted().body(body);
     }
 
     @PostMapping("/sessions/{sessionId}/attachments")
@@ -503,23 +546,82 @@ public class ChatController {
      */
     @PostMapping("/{sessionId}/cancel")
     public ResponseEntity<Map<String, Object>> cancelChat(@PathVariable String sessionId,
-                                                           @RequestParam Long userId) {
+                                                           @RequestParam Long userId,
+                                                           @RequestParam(required = false)
+                                                           UUID requestId,
+                                                           HttpServletRequest request) {
+        if (sessionHistoryProperties != null && sessionHistoryProperties.isEnabled()) {
+            Object rawPrincipal = request != null
+                    ? request.getAttribute(AuthInterceptor.PRINCIPAL_ATTRIBUTE)
+                    : null;
+            if (!(rawPrincipal instanceof PlatformAccessPrincipal principal)
+                    || principal.authority()
+                            != PlatformAccessPrincipal.Authority.PLATFORM_ADMIN) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of(
+                        "error", "Trusted platform authority is required"));
+            }
+            SessionEntity durableSession;
+            try {
+                durableSession = sessionService.getSession(sessionId);
+            } catch (RuntimeException missing) {
+                return ResponseEntity.status(HttpStatus.NOT_FOUND).build();
+            }
+            if (durableSession.getUserId() == null) {
+                return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of(
+                        "error", "Session has no execution owner"));
+            }
+            UUID stableRequestId = requestId != null ? requestId : UUID.randomUUID();
+            SessionDurableCancellationService.CancellationAck acknowledgement;
+            try {
+                acknowledgement = durableCancellationService.cancel(
+                        new SessionDurableCancellationService.CancellationCommand(
+                                stableRequestId, sessionId, durableSession.getUserId()));
+            } catch (DurableCancellationRetryableException retryable) {
+                return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(Map.of(
+                        "error", "Cancellation is temporarily unavailable; "
+                                + "retry with the same requestId",
+                        "requestId", stableRequestId));
+            } catch (DurableCancellationRejectedException rejected) {
+                return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of(
+                        "error", "No matching running loop for this cancellation request",
+                        "requestId", stableRequestId));
+            }
+            // This is intentionally after the committed durable ACK. The local signal makes the
+            // winning process stop quickly; a remote/missing registry entry does not invalidate
+            // the already committed fence.
+            cancellationRegistry.cancel(sessionId);
+            wakePendingConfirmation(sessionId);
+            chatService.publishDurableCancellationState(acknowledgement);
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("status", acknowledgement.outcome()
+                    == SessionDurableCancellationService.CancellationOutcome
+                            .EXECUTION_OUTCOME_UNCERTAIN
+                    ? "requires_resolution"
+                    : "cancelled");
+            body.put("requestId", acknowledgement.requestId());
+            body.put("outcome", acknowledgement.outcome().name());
+            return ResponseEntity.ok(body);
+        }
         ResponseEntity<SessionEntity> check = requireOwnedSession(sessionId, userId);
         if (!check.getStatusCode().is2xxSuccessful()) {
             return ResponseEntity.status(check.getStatusCode()).build();
         }
         boolean ok = cancellationRegistry.cancel(sessionId);
-        // Additionally wake any pending install confirmation so the engine main thread
-        // exits its latch immediately instead of waiting up to 30 min.
-        try {
-            pendingConfirmationRegistry.completeAllForSession(sessionId, Decision.DENIED);
-        } catch (Exception ignored) {
-        }
+        wakePendingConfirmation(sessionId);
         if (!ok) {
             return ResponseEntity.status(HttpStatus.CONFLICT)
                     .body(Map.of("error", "No running loop for this session"));
         }
         return ResponseEntity.ok(Map.of("status", "cancelling"));
+    }
+
+    private void wakePendingConfirmation(String sessionId) {
+        // Wake a local pending install confirmation only after the cancellation authority has
+        // been accepted. This remains a no-op when the owner is another server instance.
+        try {
+            pendingConfirmationRegistry.completeAllForSession(sessionId, Decision.DENIED);
+        } catch (Exception ignored) {
+        }
     }
 
     /**

@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { getSessionReplay } from '../api';
 import { useAuth } from '../contexts/AuthContext';
 import { IconPause, IconPlay } from './chat/ChatIcons';
+import HistoryResultCard from './chat/HistoryResultCard';
+import { isHistoryToolName } from '../history/historyResultDecoder';
 
 interface ReplayToolCall {
   id?: string;
@@ -323,6 +325,14 @@ const SessionReplay: React.FC<SessionReplayProps> = ({ sessionId }) => {
                           {it.assistantText && (
                             <div className="iter-assistant">{it.assistantText}</div>
                           )}
+                          {it.toolCalls
+                            .filter((toolCall) => isHistoryToolName(toolCall.name))
+                            .map((toolCall, toolIndex) => (
+                              <HistoryResultCard
+                                key={toolCall.id ?? `${toolCall.name}-${toolIndex}`}
+                                output={toolCall.output}
+                              />
+                            ))}
                         </div>
                       );
                     })}

@@ -73,6 +73,14 @@ public class SessionMessageEntity {
     @Column(name = "trace_id", length = 36)
     private String traceId;
 
+    /** Durable writer identity. Must be present or absent together with {@link #writeBatchOrdinal}. */
+    @Column(name = "write_batch_id", length = 36)
+    private String writeBatchId;
+
+    /** Zero-based position inside {@link #writeBatchId}. */
+    @Column(name = "write_batch_ordinal")
+    private Integer writeBatchOrdinal;
+
     /** 预留给后续工具输出裁剪：非空表示该消息已被裁剪。 */
     @Column(name = "pruned_at")
     private Instant prunedAt;
@@ -207,6 +215,22 @@ public class SessionMessageEntity {
 
     public void setTraceId(String traceId) {
         this.traceId = traceId;
+    }
+
+    public String getWriteBatchId() {
+        return writeBatchId;
+    }
+
+    public void setWriteBatchId(String writeBatchId) {
+        this.writeBatchId = writeBatchId;
+    }
+
+    public Integer getWriteBatchOrdinal() {
+        return writeBatchOrdinal;
+    }
+
+    public void setWriteBatchOrdinal(Integer writeBatchOrdinal) {
+        this.writeBatchOrdinal = writeBatchOrdinal;
     }
 
     public Long getCompactedBySummaryId() {

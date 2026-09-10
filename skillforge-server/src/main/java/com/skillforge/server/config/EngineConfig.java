@@ -234,6 +234,8 @@ public class EngineConfig {
                                            com.skillforge.server.service.JpaContextRuntimeStore contextRuntimeStore,
                                            ContextAssemblyProperties contextAssemblyProperties,
                                            ContextCapabilityProperties contextCapabilityProperties,
+                                           SessionHistoryProperties sessionHistoryProperties,
+                                           com.skillforge.server.session.JpaConversationDurabilitySink conversationDurabilitySink,
                                            com.fasterxml.jackson.databind.ObjectMapper objectMapper) {
         String defaultProvider = llmProperties.getDefaultProvider() != null
                 ? llmProperties.getDefaultProvider() : "claude";
@@ -277,6 +279,9 @@ public class EngineConfig {
         engine.setToolSearchEnabled(contextCapabilityProperties.isToolSearchEnabled());
         engine.setDeferredToolSchemasEnabled(
                 contextCapabilityProperties.isDeferredSchemasEnabled());
+        engine.setTrustedCompactSummaryCarrierRequired(
+                sessionHistoryProperties.isCheckpointEnvelopeEffective());
+        engine.setConversationDurabilitySink(conversationDurabilitySink);
         // Q2 (cache-friendly migration, 2026-05-10): reminderBuilder no longer wired into the
         // engine — ChatService injects the <system-reminder> as a ContentBlock on the user
         // Message at chatAsync entry, so it persists with the message and stays byte-identical

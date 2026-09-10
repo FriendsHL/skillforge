@@ -123,7 +123,8 @@ public record ContextAttachment(
             String id, PromptSourceType sourceType, String content,
             Collection<String> sourceIds, PromptPlacement placement,
             PromptCompactPolicy compactPolicy) {
-        if (sourceType != PromptSourceType.MEMORY
+        if (sourceType != PromptSourceType.HISTORY
+                && sourceType != PromptSourceType.MEMORY
                 && sourceType != PromptSourceType.RAG
                 && sourceType != PromptSourceType.WEB
                 && sourceType != PromptSourceType.FILE

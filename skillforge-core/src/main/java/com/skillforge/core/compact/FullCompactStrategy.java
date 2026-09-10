@@ -6,6 +6,7 @@ import com.skillforge.core.llm.LlmResponse;
 import com.skillforge.core.engine.AssistantAttachmentRefSanitizer;
 import com.skillforge.core.model.ContentBlock;
 import com.skillforge.core.model.Message;
+import com.skillforge.core.model.ThinkingMode;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -14,6 +15,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.HashMap;
 import java.util.Map;
 
 /**
@@ -234,9 +236,26 @@ public class FullCompactStrategy {
      */
     public CompactResult applyPrepared(PreparedCompact prep, LlmProvider provider, String modelId,
                                        String priorSummary) {
+        return applyPreparedInternal(prep, provider, modelId, priorSummary, null);
+    }
+
+    /**
+     * Range-summary variant which recognizes a prior envelope only against metadata and raw text
+     * loaded from the authoritative summary row.
+     */
+    public CompactResult applyPreparedWithTrustedSummary(
+            PreparedCompact prep, LlmProvider provider, String modelId,
+            CompactSummaryEnvelope.TrustedSummary priorSummary) {
+        String rawSummary = priorSummary != null ? priorSummary.rawSummary() : null;
+        return applyPreparedInternal(prep, provider, modelId, rawSummary, priorSummary);
+    }
+
+    private CompactResult applyPreparedInternal(
+            PreparedCompact prep, LlmProvider provider, String modelId, String priorSummary,
+            CompactSummaryEnvelope.TrustedSummary trustedPriorSummary) {
         boolean incremental = priorSummary != null && !priorSummary.isBlank();
         List<Message> windowForSummary = incremental
-                ? stripLeadingPriorSummary(prep.window(), priorSummary)
+                ? stripLeadingPriorSummary(prep.window(), priorSummary, trustedPriorSummary)
                 : prep.window();
         String windowSerialized = serializeWindow(windowForSummary);
         String summary = incremental
@@ -263,23 +282,28 @@ public class FullCompactStrategy {
 
     /**
      * Return a copy of {@code window} with the leading message removed when it is a String-content
-     * USER message whose text equals {@code priorSummary} (the injected active-summary head under the
-     * range model). Otherwise return {@code window} unchanged — never throws, never mutates the input.
+     * USER message whose text is either the raw prior summary or the exact trusted envelope derived
+     * from its persisted row. Otherwise return {@code window} unchanged — never mutates the input.
      *
-     * <p>Relies on EXACT text equality: the derived model view injects the head as
-     * {@code Message.user(activeSummary.getSummaryText())} and {@code priorSummary} is that same
-     * persisted {@code summaryText} (no reminder wrapping, no whitespace transform on the summary
-     * message), so {@code s.equals(priorSummary)} matches the head byte-for-byte. If they ever
-     * diverged, this would simply not strip (the prior summary would appear once in the window text
-     * too — verbose, never lossy).
+     * <p>The envelope path additionally requires the expected id/range/raw body captured from the
+     * authoritative summary row. A malformed or user-authored lookalike therefore remains in the
+     * serialized conversation as ordinary evidence.
      */
-    private List<Message> stripLeadingPriorSummary(List<Message> window, String priorSummary) {
+    private List<Message> stripLeadingPriorSummary(
+            List<Message> window, String priorSummary,
+            CompactSummaryEnvelope.TrustedSummary trustedPriorSummary) {
         if (window == null || window.isEmpty()) {
             return window;
         }
         Message first = window.get(0);
-        if (first != null && first.getRole() == Message.Role.USER
-                && first.getContent() instanceof String s && s.equals(priorSummary)) {
+        if (first == null || first.getRole() != Message.Role.USER
+                || !(first.getContent() instanceof String text)) {
+            return window;
+        }
+        boolean isTrustedPrior = trustedPriorSummary != null
+                ? CompactSummaryEnvelope.parseTrusted(first, trustedPriorSummary).isPresent()
+                : text.equals(priorSummary);
+        if (isTrustedPrior) {
             return new ArrayList<>(window.subList(1, window.size()));
         }
         return window;
@@ -339,6 +363,7 @@ public class FullCompactStrategy {
 
     private String serializeWindow(List<Message> window) {
         StringBuilder sb = new StringBuilder();
+        Map<String, String> pendingToolNames = new HashMap<>();
         for (Message m : window) {
             String role = m.getRole() != null ? m.getRole().name().toLowerCase() : "unknown";
             sb.append("[").append(role).append("] ");
@@ -347,6 +372,7 @@ public class FullCompactStrategy {
                 sb.append(s);
             } else if (content instanceof List<?> blocks) {
                 for (Object o : blocks) {
+                    if (appendHistoryPlaceholder(sb, m.getRole(), o, pendingToolNames)) continue;
                     if (o instanceof ContentBlock cb) {
                         if ("text".equals(cb.getType()) && cb.getText() != null) {
                             sb.append(cb.getText()).append(" ");
@@ -354,7 +380,7 @@ public class FullCompactStrategy {
                             sb.append("<tool_use name=").append(cb.getName()).append("> ");
                         } else if ("tool_result".equals(cb.getType())) {
                             String c = cb.getContent() != null ? cb.getContent() : "";
-                            if (c.length() > 500) c = c.substring(0, 500) + "…";
+                            c = truncateByCodePoints(c, 500);
                             sb.append("<tool_result ")
                               .append(Boolean.TRUE.equals(cb.getIsError()) ? "error=true" : "")
                               .append("> ").append(c).append(" ");
@@ -371,7 +397,7 @@ public class FullCompactStrategy {
                         } else if ("tool_result".equals(String.valueOf(type))) {
                             Object c = mm.get("content");
                             String cs = c != null ? c.toString() : "";
-                            if (cs.length() > 500) cs = cs.substring(0, 500) + "…";
+                            cs = truncateByCodePoints(cs, 500);
                             sb.append("<tool_result> ").append(cs).append(" ");
                         } else {
                             String attachmentText = attachmentText(m, mm);
@@ -383,6 +409,66 @@ public class FullCompactStrategy {
             sb.append("\n");
         }
         return sb.toString();
+    }
+
+    /**
+     * Omit retrieval payloads from the summarizer, without changing the persisted messages.
+     * Track occurrences rather than a global set of IDs: a later intent may legitimately reuse
+     * an ID, including one previously owned by History. This follows History materialization's
+     * latest-open-intent rule and preserves ordinary siblings in the same response.
+     */
+    private boolean appendHistoryPlaceholder(
+            StringBuilder out, Message.Role role, Object block, Map<String, String> pendingToolNames) {
+        String type;
+        String id;
+        String name;
+        boolean hasPayload;
+        if (block instanceof ContentBlock typed) {
+            type = typed.getType();
+            id = "tool_use".equals(type) ? typed.getId() : typed.getToolUseId();
+            name = typed.getName();
+            hasPayload = "tool_use".equals(type) ? typed.getInput() != null : typed.getContent() != null;
+        } else if (block instanceof Map<?, ?> map) {
+            type = stringField(map, "type");
+            id = "tool_use".equals(type) ? stringField(map, "id") : stringField(map, "tool_use_id");
+            if (id == null && "tool_result".equals(type)) id = stringField(map, "toolUseId");
+            name = stringField(map, "name");
+            hasPayload = map.containsKey("tool_use".equals(type) ? "input" : "content");
+        } else {
+            return false;
+        }
+        if (role == Message.Role.ASSISTANT && "tool_use".equals(type)) {
+            if (id == null || name == null || !hasPayload) return false;
+            pendingToolNames.put(id, name);
+            if (!isHistoryTool(name)) return false;
+            out.append("<tool_use name=").append(name).append(" id=").append(id)
+                    .append("> [History retrieval omitted] ");
+            return true;
+        }
+        if (role == Message.Role.USER && "tool_result".equals(type) && id != null && hasPayload) {
+            String pairedName = pendingToolNames.remove(id);
+            if (!isHistoryTool(pairedName)) return false;
+            out.append("<tool_result name=").append(pairedName).append(" tool_use_id=").append(id)
+                    .append("> [History retrieval omitted] ");
+            return true;
+        }
+        return false;
+    }
+
+    private static String stringField(Map<?, ?> block, String key) {
+        return block.get(key) instanceof String value ? value : null;
+    }
+
+    private static boolean isHistoryTool(String name) {
+        return "SessionHistorySearch".equals(name) || "SessionHistoryRead".equals(name);
+    }
+
+    private String truncateByCodePoints(String value, int maxCodePoints) {
+        if (value == null || value.codePointCount(0, value.length()) <= maxCodePoints) {
+            return value;
+        }
+        int end = value.offsetByCodePoints(0, maxCodePoints);
+        return value.substring(0, end) + "…";
     }
 
     private String attachmentText(Message message, Object block) {
@@ -621,6 +707,8 @@ public class FullCompactStrategy {
         req.setMessages(Collections.singletonList(Message.user(userText)));
         req.setModel(modelId);
         req.setMaxTokens(MAX_SUMMARY_TOKENS + 200);
+        // This bounded budget is for summary text; hidden reasoning can exhaust it before any text.
+        req.setThinkingMode(ThinkingMode.DISABLED);
         req.setTemperature(0.2);
         LlmResponse resp = provider.chat(req);
         return resp != null ? resp.getContent() : null;

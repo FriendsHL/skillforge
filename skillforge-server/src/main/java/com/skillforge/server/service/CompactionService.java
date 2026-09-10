@@ -2,17 +2,21 @@ package com.skillforge.server.service;
 
 import com.skillforge.core.compact.CompactableToolRegistry;
 import com.skillforge.core.compact.CompactResult;
+import com.skillforge.core.compact.CompactSummaryMessage;
+import com.skillforge.core.compact.CompactSummaryEnvelope;
 import com.skillforge.core.compact.ContextCompactorCallback;
 import com.skillforge.core.compact.FullCompactStrategy;
 import com.skillforge.core.compact.LightCompactStrategy;
 import com.skillforge.core.compact.TokenEstimator;
 import com.skillforge.core.compact.recovery.RecoveryPayloadBuilder;
+import com.skillforge.core.context.runtime.ContextRuntimeAuthority;
 import com.skillforge.core.engine.ChatEventBroadcaster;
 import com.skillforge.core.llm.LlmProvider;
 import com.skillforge.core.llm.LlmProviderFactory;
 import com.skillforge.core.llm.ModelConfig;
 import com.skillforge.core.model.Message;
 import com.skillforge.server.config.LlmProperties;
+import com.skillforge.server.config.SessionHistoryProperties;
 import com.skillforge.server.dto.SessionCompactionCheckpointDto;
 import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.CompactionEventEntity;
@@ -23,8 +27,10 @@ import com.skillforge.server.repository.AgentRepository;
 import com.skillforge.server.repository.CompactionEventRepository;
 import com.skillforge.server.repository.SessionCompactionCheckpointRepository;
 import com.skillforge.server.repository.SessionMessageRepository;
+import com.skillforge.server.repository.SessionMessageInboxRepository;
 import com.skillforge.server.repository.SessionRepository;
 import com.skillforge.server.repository.SessionSummaryRepository;
+import com.skillforge.server.repository.SessionToolAttemptRepository;
 import com.skillforge.server.runtime.RuntimeFailureState;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -120,6 +126,9 @@ public class CompactionService implements ContextCompactorCallback, SessionServi
     private final LlmProviderFactory llmProviderFactory;
     private final LlmProperties llmProperties;
     private final ChatEventBroadcaster broadcaster;
+    private SessionHistoryProperties sessionHistoryProperties;
+    /** Durable Compact admission/revalidation barrier (wired by Spring in production). */
+    private CompactAdmissionService compactAdmissionService;
     private AgentRepository agentRepository;
     /** P9-5: optional — when set, full-compact emits a recovery payload row after retained messages. */
     private RecoveryPayloadBuilder recoveryPayloadBuilder;
@@ -132,6 +141,10 @@ public class CompactionService implements ContextCompactorCallback, SessionServi
      */
     private SessionSummaryRepository sessionSummaryRepository;
     private SessionMessageRepository sessionMessageRepository;
+    private SessionMessageInboxRepository sessionMessageInboxRepository;
+    private SessionToolAttemptRepository sessionToolAttemptRepository;
+    private ContextRuntimeCheckpointService contextRuntimeCheckpointService;
+    private SessionContextRuntimeAuthorityResolver contextRuntimeAuthorityResolver;
 
     /**
      * Feature flag for the range-based compaction model (storage-redesign.md §10, P1). Default
@@ -167,6 +180,23 @@ public class CompactionService implements ContextCompactorCallback, SessionServi
                              LlmProperties llmProperties,
                              ChatEventBroadcaster broadcaster,
                              PlatformTransactionManager transactionManager) {
+        this(sessionRepository, eventRepository, checkpointRepository, sessionService,
+                lightStrategy, fullStrategy, llmProviderFactory, llmProperties, broadcaster,
+                transactionManager, new SessionHistoryProperties());
+    }
+
+    @Autowired
+    public CompactionService(SessionRepository sessionRepository,
+                             CompactionEventRepository eventRepository,
+                             SessionCompactionCheckpointRepository checkpointRepository,
+                             SessionService sessionService,
+                             LightCompactStrategy lightStrategy,
+                             FullCompactStrategy fullStrategy,
+                             LlmProviderFactory llmProviderFactory,
+                             LlmProperties llmProperties,
+                             ChatEventBroadcaster broadcaster,
+                             PlatformTransactionManager transactionManager,
+                             SessionHistoryProperties sessionHistoryProperties) {
         this.sessionRepository = sessionRepository;
         this.eventRepository = eventRepository;
         this.checkpointRepository = checkpointRepository;
@@ -181,12 +211,26 @@ public class CompactionService implements ContextCompactorCallback, SessionServi
         this.llmProviderFactory = llmProviderFactory;
         this.llmProperties = llmProperties;
         this.broadcaster = broadcaster;
+        this.sessionHistoryProperties = java.util.Objects.requireNonNull(
+                sessionHistoryProperties, "sessionHistoryProperties");
         this.transactionTemplate = (transactionManager != null)
                 ? new TransactionTemplate(transactionManager) : null;
         this.sessionLocks = new Object[LOCK_STRIPES];
         for (int i = 0; i < LOCK_STRIPES; i++) {
             this.sessionLocks[i] = new Object();
         }
+    }
+
+    /** Test seam for exercising rollout combinations without a Spring context. */
+    public void setSessionHistoryProperties(SessionHistoryProperties sessionHistoryProperties) {
+        this.sessionHistoryProperties = java.util.Objects.requireNonNull(
+                sessionHistoryProperties, "sessionHistoryProperties");
+    }
+
+    @Autowired
+    public void setCompactAdmissionService(CompactAdmissionService compactAdmissionService) {
+        this.compactAdmissionService = java.util.Objects.requireNonNull(
+                compactAdmissionService, "compactAdmissionService");
     }
 
     /** Optional: 通过 setter 注入以便测试直接 new CompactionService 时不必提供. */
@@ -215,6 +259,19 @@ public class CompactionService implements ContextCompactorCallback, SessionServi
     @Autowired(required = false)
     public void setSessionMessageRepository(SessionMessageRepository sessionMessageRepository) {
         this.sessionMessageRepository = sessionMessageRepository;
+    }
+
+    /** Production-only durable checkpoint/restore collaborators; grouped to keep legacy tests small. */
+    @Autowired
+    public void setCheckpointRuntimeDependencies(
+            SessionMessageInboxRepository sessionMessageInboxRepository,
+            SessionToolAttemptRepository sessionToolAttemptRepository,
+            ContextRuntimeCheckpointService contextRuntimeCheckpointService,
+            SessionContextRuntimeAuthorityResolver contextRuntimeAuthorityResolver) {
+        this.sessionMessageInboxRepository = sessionMessageInboxRepository;
+        this.sessionToolAttemptRepository = sessionToolAttemptRepository;
+        this.contextRuntimeCheckpointService = contextRuntimeCheckpointService;
+        this.contextRuntimeAuthorityResolver = contextRuntimeAuthorityResolver;
     }
 
     /** Test seam: toggle the range-model write path without a Spring context. */
@@ -252,7 +309,7 @@ public class CompactionService implements ContextCompactorCallback, SessionServi
     public List<SessionCompactionCheckpointDto> listCheckpoints(String sessionId, int size) {
         int safeSize = Math.max(1, Math.min(size, 200));
         List<SessionCompactionCheckpointEntity> checkpoints = checkpointRepository
-                .findBySessionIdOrderByCreatedAtDesc(sessionId, PageRequest.of(0, safeSize))
+                .findTimelineBySessionId(sessionId, PageRequest.of(0, safeSize))
                 .getContent();
         List<SessionCompactionCheckpointDto> out = new ArrayList<>(checkpoints.size());
         for (SessionCompactionCheckpointEntity checkpoint : checkpoints) {
@@ -270,11 +327,15 @@ public class CompactionService implements ContextCompactorCallback, SessionServi
     public SessionEntity createBranchFromCheckpoint(String sessionId, String checkpointId, String title) {
         synchronized (lockFor(sessionId)) {
             ensureCheckpointOperationAllowed(sessionId);
-            SessionCompactionCheckpointEntity checkpoint = getCheckpointEntity(sessionId, checkpointId);
-            SessionEntity source = sessionService.getSession(sessionId);
+            requireCheckpointMutationDependencies();
 
             final SessionEntity[] branchRef = new SessionEntity[1];
             runInTransaction(() -> {
+                SessionEntity source = sessionRepository.findByIdForUpdate(sessionId)
+                        .orElseThrow(() -> new CheckpointNotFoundException("Checkpoint not found"));
+                SessionCompactionCheckpointEntity checkpoint =
+                        getCheckpointEntity(sessionId, checkpointId);
+                requireCheckpointTimeline(checkpoint);
                 List<SessionService.AppendMessage> checkpointMessages = buildCheckpointMessages(sessionId, checkpoint);
                 SessionEntity branch = new SessionEntity();
                 branch.setId(UUID.randomUUID().toString());
@@ -289,6 +350,8 @@ public class CompactionService implements ContextCompactorCallback, SessionServi
                 // 整树 origin 一致；正常 production session 默认 production）。
                 branch.setOrigin(source.getOrigin());
                 branch.setExecutionMode(source.getExecutionMode());
+                branch.setRuntimeModelOverride(source.getRuntimeModelOverride());
+                branch.setSkillOverridesJson(source.getSkillOverridesJson());
                 branch.setLightContext(source.isLightContext());
                 branch.setMaxLoops(source.getMaxLoops());
                 branch.setMessagesJson("[]");
@@ -296,13 +359,18 @@ public class CompactionService implements ContextCompactorCallback, SessionServi
                 branch.setStatus("active");
                 branch.setRuntimeStatus("idle");
                 branch = sessionService.saveSession(branch);
+                ContextRuntimeAuthority authority = contextRuntimeAuthorityResolver.resolve(branch);
+                branch.setContextRuntimeJson(contextRuntimeCheckpointService.runtimeForBranch(
+                        checkpoint.getRuntimeSnapshotJson(),
+                        authority.toolCatalog(), authority.skillView()));
+                branch = sessionService.saveSession(branch);
                 sessionService.rewriteMessages(branch.getId(), checkpointMessages);
                 // P2b B2 (§4): range-model branch — copy the source summaries that fall fully within
                 // the branch's seq range to the branch session (new ids, remapped superseded_by),
                 // then re-derive the branch markers. Branch rows keep the source seq_nos (rewrite
                 // reassigns 0..endSeq contiguously, matching source), so summary ranges transfer 1:1.
                 long branchEndSeq = resolveCheckpointEndSeq(checkpoint);
-                copyRangeSummariesToBranch(sessionId, branch.getId(), branchEndSeq);
+                copyRangeSummariesToBranch(sessionId, branch.getId(), checkpoint, branchEndSeq);
                 sessionService.recomputeCompactedMarkers(branch.getId());
                 branchRef[0] = branch;
             });
@@ -317,23 +385,54 @@ public class CompactionService implements ContextCompactorCallback, SessionServi
     public SessionEntity restoreFromCheckpoint(String sessionId, String checkpointId) {
         synchronized (lockFor(sessionId)) {
             ensureCheckpointOperationAllowed(sessionId);
-            SessionCompactionCheckpointEntity checkpoint = getCheckpointEntity(sessionId, checkpointId);
-            long restoreEndSeq = resolveCheckpointEndSeq(checkpoint);
+            requireCheckpointMutationDependencies();
             runInTransaction(() -> {
-                List<SessionService.AppendMessage> checkpointMessages = buildCheckpointMessages(sessionId, checkpoint);
-                sessionService.rewriteMessages(sessionId, checkpointMessages);
-                // restore 后旧 seq 空间失效，清理“位于恢复点之后”的 checkpoint，避免后续回放歧义。
-                checkpointRepository.deleteBySessionIdAfterSeqNo(sessionId, restoreEndSeq);
+                SessionEntity updated = sessionRepository.findByIdForUpdate(sessionId)
+                        .orElseThrow(() -> new CheckpointNotFoundException("Checkpoint not found"));
+                SessionCompactionCheckpointEntity checkpoint =
+                        getCheckpointEntity(sessionId, checkpointId);
+                requireCheckpointTimeline(checkpoint);
+                long restoreEndSeq = resolveCheckpointEndSeq(checkpoint);
+                requireRestoreAdmissible(updated, sessionId);
+
+                ContextRuntimeAuthority authority = contextRuntimeAuthorityResolver.resolve(updated);
+                String restoredRuntime = contextRuntimeCheckpointService.runtimeForRestore(
+                        checkpoint.getRuntimeSnapshotJson(),
+                        authority.toolCatalog(), authority.skillView());
+
+                // Suffix deletion preserves immutable message ids and every prefix identity column.
+                // V198's occurrence FK cascades only archives owned by deleted future messages.
+                sessionMessageRepository.deleteBySessionIdAndSeqNoGreaterThan(
+                        sessionId, restoreEndSeq);
+                // Sequence-backed sidecar order distinguishes later checkpoints even when their
+                // transcript frontier is identical. Legacy null rows predate every ordered row and
+                // remain available only as visible, fail-closed artifacts.
+                checkpointRepository.deleteBySessionIdAfterSidecarWatermark(
+                        sessionId, checkpointId, checkpoint.getSidecarWatermark());
                 // P2b B2 (§4): range-model restore — drop summaries whose covered range extends past
                 // the restore point (their rows no longer exist), then re-derive markers from the
                 // surviving active summaries. rewriteMessages already ran one recompute, but it used
                 // the pre-prune summary set; this post-prune recompute is the authoritative pass.
                 // No-op when the flag is OFF / no summaries. Runs in the SAME restore transaction.
-                if (rangeModelEnabled && sessionSummaryRepository != null) {
+                if (sessionSummaryRepository != null) {
+                    long summaryWatermark = checkpoint.getSummaryIdWatermark();
+                    // A surviving older summary may have been superseded by a post-checkpoint row.
+                    // Clear that future reference before deleting the target, then apply the
+                    // transcript-range guard for completeness.
+                    sessionSummaryRepository.reactivateSummariesSupersededAfterWatermark(
+                            sessionId, summaryWatermark);
+                    sessionSummaryRepository.deleteBySessionIdAfterSummaryIdWatermark(
+                            sessionId, summaryWatermark);
                     sessionSummaryRepository.deleteBySessionIdAndEndSeqGreaterThan(sessionId, restoreEndSeq);
                     sessionService.recomputeCompactedMarkers(sessionId);
                 }
-                SessionEntity updated = sessionService.getSession(sessionId);
+                // Every prior attempt belongs to the old history epoch. The append-only audit has
+                // a scalar attempt id and intentionally survives this runtime prune.
+                sessionToolAttemptRepository.deleteBySessionId(sessionId);
+                sessionService.refreshLegacyMessageMirrorFromRows(updated);
+                updated.setHistoryEpoch(Math.addExact(updated.getHistoryEpoch(), 1L));
+                updated.setContextRuntimeJson(restoredRuntime);
+                updated.setRestorePreparing(false);
                 updated.setRuntimeStatus("idle");
                 RuntimeFailureState.clear(updated);
                 updated.setRuntimeStep("restored_checkpoint");
@@ -360,7 +459,9 @@ public class CompactionService implements ContextCompactorCallback, SessionServi
             return CompactCallbackResult.noOp(currentMessages, "full compact no-op or in-flight");
         }
         CompactResult r = outcome.compactResult();
-        return new CompactCallbackResult(r.getMessages(), true,
+        List<Message> modelMessages = appendPreservedSuffix(
+                renderLiveSummaryIfEnabled(outcome), outcome.preservedSuffix());
+        return new CompactCallbackResult(modelMessages, true,
                 r.getTokensReclaimed(), r.getBeforeTokens(), r.getAfterTokens(),
                 "applied=" + String.join(",", r.getStrategiesApplied()));
     }
@@ -399,7 +500,11 @@ public class CompactionService implements ContextCompactorCallback, SessionServi
                     return;
                 }
 
-                List<Message> messages = sessionService.getContextMessages(sessionId);
+                CompactAdmissionService.AdmissionSnapshot admission =
+                        captureCompactAdmission(sessionId, "light", source);
+
+                List<Message> currentMessages = sessionService.getContextMessages(sessionId);
+                List<Message> messages = prepareLightCompactInput(admission, currentMessages);
                 int contextWindow = resolveContextWindowForSession(session);
                 CompactableToolRegistry registry = resolveToolRegistryForSession(session);
                 CompactResult result = lightStrategy.apply(messages, contextWindow, registry);
@@ -409,7 +514,10 @@ public class CompactionService implements ContextCompactorCallback, SessionServi
                     return;
                 }
 
-                saved[0] = persistCompactResult(sessionId, "light", source, reason, result);
+                revalidateCompactAdmission(admission);
+                PersistedCompact persisted = persistCompactResult(
+                        sessionId, "light", source, reason, result);
+                saved[0] = persisted == null ? null : persisted.event();
             });
             return saved[0];
         }
@@ -453,9 +561,13 @@ public class CompactionService implements ContextCompactorCallback, SessionServi
                     return;
                 }
 
+                CompactAdmissionService.AdmissionSnapshot admission =
+                        captureCompactAdmission(sessionId, "light", source);
+                List<Message> admittedCurrent = prepareLightCompactInput(admission, current);
+
                 int contextWindow = resolveContextWindowForSession(session);
                 CompactableToolRegistry registry = resolveToolRegistryForSession(session);
-                CompactResult result = lightStrategy.apply(current, contextWindow, registry);
+                CompactResult result = lightStrategy.apply(admittedCurrent, contextWindow, registry);
 
                 if (result == null || isTrulyNoOp(result)) {
                     log.info("callback light compact no-op: sessionId={}", sessionId);
@@ -463,8 +575,9 @@ public class CompactionService implements ContextCompactorCallback, SessionServi
                     return;
                 }
 
+                revalidateCompactAdmission(admission);
                 persistCompactResult(sessionId, "light", source, reason, result);
-                out[0] = new CompactCallbackResult(result.getMessages(), true,
+                out[0] = new CompactCallbackResult(mutableMessages(result.getMessages()), true,
                         result.getTokensReclaimed(), result.getBeforeTokens(), result.getAfterTokens(),
                         "applied=" + String.join(",", result.getStrategiesApplied()));
             });
@@ -483,13 +596,15 @@ public class CompactionService implements ContextCompactorCallback, SessionServi
         // ── Phase 1: guard + boundary detection, under stripe lock ──────────────
         FullCompactStrategy.PreparedCompact prep;
         LlmProvider provider;
+        CompactAdmissionService.AdmissionSnapshot admission = null;
+        List<Message> preservedSuffix = List.of();
         // INCREMENTAL-SUMMARY (storage redesign): the prior active summary text, read under the
         // stripe lock for a consistent snapshot, threaded into Phase 2 so the LLM produces an
         // EXTENDED summary (prior summary + new turns) instead of re-summarizing the whole window
         // from scratch. Only meaningful under the range model (legacy getContextMessages slices
         // post-last-boundary, so the prior summary is not present in the legacy window). Null when
         // the flag is OFF / store unwired / no prior summary exists.
-        String priorSummaryText = null;
+        CompactSummaryEnvelope.TrustedSummary priorSummary = null;
 
         synchronized (lockFor(sessionId)) {
             if (!fullCompactInFlight.add(sessionId)) {
@@ -534,9 +649,17 @@ public class CompactionService implements ContextCompactorCallback, SessionServi
                     }
                 }
 
-                List<Message> messages = (inMemoryMessages != null)
-                        ? inMemoryMessages
-                        : sessionService.getContextMessages(sessionId);
+                admission = captureCompactAdmission(sessionId, "full", source);
+                List<Message> messages = inMemoryMessages;
+                if (messages == null && (admission == null || !admission.enforced())) {
+                    // Legacy/feature-off REST path keeps its historical DB read. With admission
+                    // enabled, null deliberately selects the server-captured authoritative view.
+                    messages = sessionService.getContextMessages(sessionId);
+                }
+                CompactAdmissionService.PreparedMessages admittedMessages =
+                        prepareCompactInput(admission, messages);
+                messages = admittedMessages.compactInput();
+                preservedSuffix = admittedMessages.preservedSuffix();
 
                 int contextWindow = resolveContextWindowForSession(session);
                 prep = fullStrategy.prepareCompact(messages, contextWindow);
@@ -566,10 +689,10 @@ public class CompactionService implements ContextCompactorCallback, SessionServi
                 // as the existing summary to EXTEND rather than re-summarize from scratch. Only under
                 // the range model; the legacy path has no active summary row to read.
                 if (rangeModelEnabled && sessionSummaryRepository != null) {
-                    priorSummaryText = sessionSummaryRepository
+                    priorSummary = sessionSummaryRepository
                             .findTopBySessionIdAndSupersededByIsNullOrderByStartSeqDesc(sessionId)
-                            .map(SessionSummaryEntity::getSummaryText)
-                            .filter(t -> t != null && !t.isBlank())
+                            .filter(s -> s.getSummaryText() != null && !s.getSummaryText().isBlank())
+                            .map(this::trustedSummary)
                             .orElse(null);
                 }
 
@@ -586,7 +709,12 @@ public class CompactionService implements ContextCompactorCallback, SessionServi
         // ── Phase 2: LLM call, outside stripe lock ───────────────────────────────
         CompactResult result;
         try {
-            result = fullStrategy.applyPrepared(prep, provider, null, priorSummaryText);
+            result = sessionHistoryProperties.isCheckpointEnvelopeEffective()
+                    ? fullStrategy.applyPreparedWithTrustedSummary(
+                            prep, provider, null, priorSummary)
+                    : fullStrategy.applyPrepared(
+                            prep, provider, null,
+                            priorSummary != null ? priorSummary.rawSummary() : null);
         } catch (Exception e) {
             fullCompactInFlight.remove(sessionId);
             log.error("fullCompact Phase 2 LLM call failed: sessionId={}", sessionId, e);
@@ -597,7 +725,8 @@ public class CompactionService implements ContextCompactorCallback, SessionServi
             throw new RuntimeException("fullCompact Phase 2 failed for sessionId=" + sessionId, e);
         }
 
-        if (result == null || isTrulyNoOp(result) || isIneffective(result)) {
+        if (result == null || isTrulyNoOp(result) || isIneffective(result)
+                || wouldCheckpointEnvelopeBeIneffective(result)) {
             fullCompactInFlight.remove(sessionId);
             log.info("fullCompact no-op (LLM empty or no net reclaim): sessionId={} beforeTokens={} afterTokens={}",
                     sessionId,
@@ -608,32 +737,128 @@ public class CompactionService implements ContextCompactorCallback, SessionServi
 
         // ── Phase 3: persist, under stripe lock + transaction ────────────────────
         final CompactResult finalResult = result;
-        final CompactionEventEntity[] savedEvt = {null};
+        final CompactAdmissionService.AdmissionSnapshot finalAdmission = admission;
+        final PersistedCompact[] persisted = {null};
         try {
             synchronized (lockFor(sessionId)) {
-                runInTransaction(() ->
-                        savedEvt[0] = persistCompactResult(sessionId, "full", source, reason, finalResult)
-                );
+                runInTransaction(() -> {
+                    revalidateCompactAdmission(finalAdmission);
+                    persisted[0] = persistCompactResult(
+                            sessionId, "full", source, reason, finalResult);
+                });
             }
         } finally {
             fullCompactInFlight.remove(sessionId);
         }
 
-        if (savedEvt[0] == null) {
+        if (persisted[0] == null) {
             log.info("fullCompact no-op (range-model persistence skipped): sessionId={} source={}",
                     sessionId, source);
             return null;
         }
 
         log.info("fullCompact done: sessionId={} source={} reclaimed={} tokens",
-                sessionId, source, result.getTokensReclaimed());
-        return new FullCompactOutcome(savedEvt[0], result);
+                sessionId, source, persisted[0].measuredResult().getTokensReclaimed());
+        return new FullCompactOutcome(
+                persisted[0].event(), persisted[0].measuredResult(),
+                persisted[0].rangeSummary(), preservedSuffix);
     }
 
     // ================ 内部辅助 ================
 
+    private CompactAdmissionService.AdmissionSnapshot captureCompactAdmission(
+            String sessionId, String level, String source) {
+        return compactAdmissionService == null
+                ? null
+                : compactAdmissionService.capture(sessionId, level, source);
+    }
+
+    private CompactAdmissionService.PreparedMessages prepareCompactInput(
+            CompactAdmissionService.AdmissionSnapshot admission, List<Message> messages) {
+        return compactAdmissionService == null || admission == null
+                ? new CompactAdmissionService.PreparedMessages(messages, List.of())
+                : compactAdmissionService.prepareFullInput(admission, messages);
+    }
+
+    private List<Message> prepareLightCompactInput(
+            CompactAdmissionService.AdmissionSnapshot admission, List<Message> messages) {
+        return compactAdmissionService == null || admission == null
+                ? messages
+                : compactAdmissionService.prepareLightInput(admission, messages);
+    }
+
+    private void revalidateCompactAdmission(
+            CompactAdmissionService.AdmissionSnapshot admission) {
+        if (compactAdmissionService != null && admission != null) {
+            compactAdmissionService.revalidate(admission);
+        }
+    }
+
+    private List<Message> appendPreservedSuffix(
+            List<Message> compactedMessages, List<Message> preservedSuffix) {
+        List<Message> combined = new ArrayList<>(
+                (compactedMessages == null ? 0 : compactedMessages.size())
+                        + (preservedSuffix == null ? 0 : preservedSuffix.size()));
+        if (compactedMessages != null) {
+            combined.addAll(compactedMessages);
+        }
+        if (preservedSuffix != null) {
+            combined.addAll(preservedSuffix);
+        }
+        // AgentLoopEngine appends the current step's TOOL_RESULT to this callback list after
+        // compact_context returns. Preserve the historical mutable-list callback contract.
+        return combined;
+    }
+
+    private static List<Message> mutableMessages(List<Message> messages) {
+        return messages == null ? new ArrayList<>() : new ArrayList<>(messages);
+    }
+
     /** Holds both the persisted event and the CompactResult for callers that need both. */
-    private record FullCompactOutcome(CompactionEventEntity event, CompactResult compactResult) {}
+    private record FullCompactOutcome(
+            CompactionEventEntity event,
+            CompactResult compactResult,
+            SessionSummaryEntity persistedRangeSummary,
+            List<Message> preservedSuffix) {}
+
+    /** Exact artifacts saved by one persistence transaction; never rediscover via "latest". */
+    private record PersistedCompact(
+            CompactionEventEntity event,
+            SessionSummaryEntity rangeSummary,
+            CompactResult measuredResult) {}
+
+    private List<Message> renderLiveSummaryIfEnabled(FullCompactOutcome outcome) {
+        List<Message> messages = outcome.compactResult().getMessages();
+        if (!rangeModelEnabled || !sessionHistoryProperties.isCheckpointEnvelopeEffective()
+                || messages == null || messages.isEmpty()) {
+            return messages;
+        }
+        if (outcome.persistedRangeSummary() == null) {
+            throw new IllegalStateException(
+                    "Persisted compact summary identity is missing from compact outcome");
+        }
+        CompactSummaryEnvelope.TrustedSummary trusted =
+                trustedSummary(outcome.persistedRangeSummary());
+        Message first = messages.get(0);
+        if (first == null || first.getRole() != Message.Role.USER
+                || !(first.getContent() instanceof String raw)
+                || !raw.equals(trusted.rawSummary())) {
+            throw new IllegalStateException(
+                    "Live compact summary does not match the persisted raw summary");
+        }
+        List<Message> rendered = new ArrayList<>(messages);
+        rendered.set(0, new CompactSummaryMessage(trusted));
+        return rendered;
+    }
+
+    private CompactSummaryEnvelope.TrustedSummary trustedSummary(SessionSummaryEntity summary) {
+        if (summary.getId() == null) {
+            throw new IllegalStateException("Active compact summary is missing persisted identity");
+        }
+        return new CompactSummaryEnvelope.TrustedSummary(
+                summary.getId(), summary.getStartSeq(), summary.getEndSeq(),
+                summary.getSummaryText());
+    }
 
     private boolean isRangeModelSessionWithActiveSummary(String sessionId) {
         return rangeModelEnabled
@@ -644,20 +869,32 @@ public class CompactionService implements ContextCompactorCallback, SessionServi
     /**
      * Persist a CompactResult to DB (messages + session counters + event).
      * Must be called inside a transaction and (for thread safety) under the stripe lock.
-     * Returns the saved CompactionEventEntity, or {@code null} when the range-model persistence path
-     * intentionally converts the compact result into a true no-op.
+     * Returns the exact event and range-summary artifacts saved by this transaction, or {@code null}
+     * when range-model persistence intentionally converts the compact result into a true no-op.
      */
-    private CompactionEventEntity persistCompactResult(String sessionId, String level,
-                                                        String source, String reason,
-                                                        CompactResult result) {
+    private PersistedCompact persistCompactResult(String sessionId, String level,
+                                                   String source, String reason,
+                                                   CompactResult result) {
         SessionEntity fresh = sessionRepository.findById(sessionId).orElseThrow();
+        SessionSummaryEntity persistedRangeSummary = null;
+        CompactResult measuredResult = result;
         if ("full".equalsIgnoreCase(level) && rangeModelEnabled) {
             // === Range-model write path (storage redesign P1, flag ON) ===
             // Writes a t_session_summary range row + marks covered rows, instead of appending a
             // boundary + summary + re-appended young-gen. No message rows are appended/deleted.
             // Falls through to the shared counter/event/broadcast tail below.
-            if (!persistFullRangeModel(sessionId, source, result)) {
+            persistedRangeSummary = persistFullRangeModel(sessionId, source, result);
+            if (persistedRangeSummary == null) {
                 return null;
+            }
+            if (sessionHistoryProperties.isCheckpointEnvelopeEffective()) {
+                measuredResult = withEnvelopeMetrics(result, persistedRangeSummary);
+                // Marker-restamp bulk updates clear the persistence context, so explicitly merge
+                // the exact metrics after the generated identity/range are known. A placeholder id
+                // would make the envelope token count approximate rather than exact.
+                persistedRangeSummary.setTokensBefore(measuredResult.getBeforeTokens());
+                persistedRangeSummary.setTokensAfter(measuredResult.getAfterTokens());
+                persistedRangeSummary = sessionSummaryRepository.save(persistedRangeSummary);
             }
         } else if ("full".equalsIgnoreCase(level)) {
             String summaryText = extractSummaryText(result.getMessages());
@@ -707,7 +944,9 @@ public class CompactionService implements ContextCompactorCallback, SessionServi
                             null,                       // controlId
                             null,                       // answeredAt
                             Collections.emptyMap(),
-                            preservedTraceId));
+                            preservedTraceId,
+                            null,                       // duplicated retained row: new occurrence, no source batch id
+                            null));
                 }
             }
 
@@ -744,7 +983,9 @@ public class CompactionService implements ContextCompactorCallback, SessionServi
             checkpoint.setPreRangeEndSeqNo(Math.max(0, boundarySeqNo - 1));
             checkpoint.setPostRangeStartSeqNo(summarySeqNo);
             checkpoint.setPostRangeEndSeqNo(lastSeqNo);
-            checkpointRepository.save(checkpoint);
+            checkpoint.setRuntimeSnapshotJson(captureCurrentRuntimeSnapshot(sessionId));
+            checkpoint.setSummaryIdWatermark(currentSummaryIdWatermark(sessionId));
+            persistCheckpoint(checkpoint);
         } else {
             List<SessionService.StoredMessage> all = sessionService.getFullHistoryRecords(sessionId);
             int lastBoundary = -1;
@@ -764,7 +1005,8 @@ public class CompactionService implements ContextCompactorCallback, SessionServi
                     rewritten.add(new SessionService.AppendMessage(
                             item.message(), item.msgType(), item.messageType(),
                             item.controlId(), item.answeredAt(),
-                            item.metadata(), item.traceId()));
+                            item.metadata(), item.traceId(),
+                            item.writeBatchId(), item.writeBatchOrdinal()));
                 }
                 for (Message msg : result.getMessages()) {
                     rewritten.add(new SessionService.AppendMessage(
@@ -778,7 +1020,8 @@ public class CompactionService implements ContextCompactorCallback, SessionServi
         fresh.setMessageCount((int) sessionService.countMessageRows(sessionId));
         fresh.setLastCompactedAt(Instant.now());
         fresh.setLastCompactedAtMessageCount(fresh.getMessageCount());
-        fresh.setTotalTokensReclaimed(fresh.getTotalTokensReclaimed() + result.getTokensReclaimed());
+        fresh.setTotalTokensReclaimed(
+                fresh.getTotalTokensReclaimed() + measuredResult.getTokensReclaimed());
         if ("light".equalsIgnoreCase(level)) {
             fresh.setLightCompactCount(fresh.getLightCompactCount() + 1);
         } else {
@@ -786,10 +1029,69 @@ public class CompactionService implements ContextCompactorCallback, SessionServi
         }
         sessionRepository.save(fresh);
 
-        CompactionEventEntity evt = buildEvent(sessionId, level, source, reason, result);
+        CompactionEventEntity evt = buildEvent(sessionId, level, source, reason, measuredResult);
         CompactionEventEntity saved = eventRepository.save(evt);
         broadcastUpdated(fresh);
-        return saved;
+        return new PersistedCompact(saved, persistedRangeSummary, measuredResult);
+    }
+
+    /**
+     * Keep the persisted summary body raw while measuring the exact model-visible checkpoint
+     * envelope. The generated summary id is part of that wire text, so this can only be exact after
+     * the range-summary row has been saved in Phase 3.
+     */
+    private CompactResult withEnvelopeMetrics(
+            CompactResult result, SessionSummaryEntity persistedRangeSummary) {
+        List<Message> rawMessages = result.getMessages();
+        if (rawMessages == null || rawMessages.isEmpty()) {
+            throw new IllegalStateException(
+                    "Range Compact result is missing its raw summary message");
+        }
+        CompactSummaryEnvelope.TrustedSummary trusted = trustedSummary(persistedRangeSummary);
+        Message rawSummary = rawMessages.get(0);
+        if (rawSummary == null || rawSummary.getRole() != Message.Role.USER
+                || !(rawSummary.getContent() instanceof String raw)
+                || !raw.equals(trusted.rawSummary())) {
+            throw new IllegalStateException(
+                    "Range Compact result does not match its persisted raw summary");
+        }
+        List<Message> modelView = new ArrayList<>(rawMessages);
+        modelView.set(0, new CompactSummaryMessage(trusted));
+        int afterTokens = TokenEstimator.estimate(modelView);
+        return new CompactResult(
+                rawMessages,
+                result.getBeforeTokens(),
+                afterTokens,
+                result.getBeforeMessageCount(),
+                result.getAfterMessageCount(),
+                result.getStrategiesApplied());
+    }
+
+    /**
+     * The checkpoint cue is part of the post-Compact model view. Reserve its maximum-width numeric
+     * attributes before Phase 3 so a short summary cannot be persisted as a misleading
+     * "successful" Compact whose real enveloped view reclaims no tokens. Exact metrics are still
+     * recomputed after the generated summary id is known.
+     */
+    private boolean wouldCheckpointEnvelopeBeIneffective(CompactResult result) {
+        if (!rangeModelEnabled || !sessionHistoryProperties.isCheckpointEnvelopeEffective()) {
+            return false;
+        }
+        List<Message> rawMessages = result.getMessages();
+        if (rawMessages == null || rawMessages.isEmpty()) {
+            return true;
+        }
+        Message first = rawMessages.get(0);
+        if (first == null || first.getRole() != Message.Role.USER
+                || !(first.getContent() instanceof String rawSummary)) {
+            return true;
+        }
+        CompactSummaryEnvelope.TrustedSummary maximumWidth =
+                new CompactSummaryEnvelope.TrustedSummary(
+                        Long.MAX_VALUE, 0L, Long.MAX_VALUE, rawSummary);
+        List<Message> upperBoundView = new ArrayList<>(rawMessages);
+        upperBoundView.set(0, new CompactSummaryMessage(maximumWidth));
+        return TokenEstimator.estimate(upperBoundView) >= result.getBeforeTokens();
     }
 
     /**
@@ -817,7 +1119,8 @@ public class CompactionService implements ContextCompactorCallback, SessionServi
      *       up to endSeq); {@code startSeq} is therefore 0.</li>
      * </ul>
      */
-    private boolean persistFullRangeModel(String sessionId, String source, CompactResult result) {
+    private SessionSummaryEntity persistFullRangeModel(
+            String sessionId, String source, CompactResult result) {
         if (sessionSummaryRepository == null) {
             throw new IllegalStateException(
                     "range-model compaction enabled but SessionSummaryRepository not wired");
@@ -842,7 +1145,7 @@ public class CompactionService implements ContextCompactorCallback, SessionServi
         if (compactedCount <= 0 || modelViewFrames.isEmpty()) {
             log.info("range-model fullCompact no-op mapping (compactedCount={} modelViewFrames={}): sessionId={}",
                     compactedCount, modelViewFrames.size(), sessionId);
-            return false;
+            return null;
         }
         int lastWindowIdx = Math.min(compactedCount, modelViewFrames.size()) - 1;
         long endSeq = modelViewFrames.get(lastWindowIdx).endSeq();
@@ -856,7 +1159,7 @@ public class CompactionService implements ContextCompactorCallback, SessionServi
             log.warn("range-model fullCompact no-op (non-monotonic frontier): sessionId={} "
                             + "newEndSeq={} priorActiveMaxEndSeq={} compactedCount={} modelViewFrames={}",
                     sessionId, endSeq, priorMaxEndSeq, compactedCount, modelViewFrames.size());
-            return false;
+            return null;
         }
 
         String summaryText = extractSummaryText(result.getMessages());
@@ -902,8 +1205,10 @@ public class CompactionService implements ContextCompactorCallback, SessionServi
                 ? endSeq
                 : allRecords.get(allRecords.size() - 1).seqNo();
         checkpoint.setPostRangeEndSeqNo(lastRealSeq);
-        checkpointRepository.save(checkpoint);
-        return true;
+        checkpoint.setRuntimeSnapshotJson(captureCurrentRuntimeSnapshot(sessionId));
+        checkpoint.setSummaryIdWatermark(savedSummary.getId());
+        persistCheckpoint(checkpoint);
+        return savedSummary;
     }
 
     private record ModelViewFrame(long endSeq) {}
@@ -986,12 +1291,17 @@ public class CompactionService implements ContextCompactorCallback, SessionServi
      * Summaries whose {@code end_seq > branchEndSeq} are skipped (their rows are not in the branch).
      * No-op when the flag is OFF / store unwired. Runs inside the branch-creation transaction.
      */
-    private void copyRangeSummariesToBranch(String sourceSessionId, String branchId, long branchEndSeq) {
+    private void copyRangeSummariesToBranch(
+            String sourceSessionId,
+            String branchId,
+            SessionCompactionCheckpointEntity checkpoint,
+            long branchEndSeq) {
         if (!rangeModelEnabled || sessionSummaryRepository == null) {
             return;
         }
         List<SessionSummaryEntity> sourceSummaries =
-                sessionSummaryRepository.findBySessionIdOrderByStartSeqAsc(sourceSessionId);
+                sessionSummaryRepository.findBySessionIdAndIdLessThanEqualOrderByStartSeqAsc(
+                        sourceSessionId, checkpoint.getSummaryIdWatermark());
         if (sourceSummaries.isEmpty()) {
             return;
         }
@@ -1143,7 +1453,19 @@ public class CompactionService implements ContextCompactorCallback, SessionServi
         if (!sessionId.equals(checkpoint.getSessionId())) {
             throw new CheckpointNotFoundException("Checkpoint not found");
         }
+        if (checkpoint.getSidecarWatermark() == null) {
+            checkpointRepository.findSidecarWatermarkById(checkpointId)
+                    .ifPresent(checkpoint::setSidecarWatermark);
+        }
         return checkpoint;
+    }
+
+    private void persistCheckpoint(SessionCompactionCheckpointEntity checkpoint) {
+        checkpointRepository.saveAndFlush(checkpoint);
+        long watermark = checkpointRepository.findSidecarWatermarkById(checkpoint.getId())
+                .orElseThrow(() -> new IllegalStateException(
+                        "Checkpoint sidecar watermark was not generated"));
+        checkpoint.setSidecarWatermark(watermark);
     }
 
     private List<SessionService.AppendMessage> buildCheckpointMessages(String sessionId,
@@ -1160,7 +1482,8 @@ public class CompactionService implements ContextCompactorCallback, SessionServi
             out.add(new SessionService.AppendMessage(
                     record.message(), record.msgType(), record.messageType(),
                     record.controlId(), record.answeredAt(),
-                    record.metadata(), record.traceId()));
+                    record.metadata(), record.traceId(),
+                    record.writeBatchId(), record.writeBatchOrdinal()));
         }
         return out;
     }
@@ -1173,6 +1496,23 @@ public class CompactionService implements ContextCompactorCallback, SessionServi
                 : checkpoint.getBoundarySeqNo();
     }
 
+    private void requireCheckpointTimeline(SessionCompactionCheckpointEntity checkpoint) {
+        if (checkpoint.getSidecarWatermark() == null
+                || checkpoint.getSummaryIdWatermark() == null) {
+            throw new IllegalStateException(
+                    "Checkpoint predates deterministic sidecar recovery");
+        }
+    }
+
+    private long currentSummaryIdWatermark(String sessionId) {
+        if (sessionSummaryRepository == null) {
+            return 0L;
+        }
+        return sessionSummaryRepository.findTopBySessionIdOrderByIdDesc(sessionId)
+                .map(SessionSummaryEntity::getId)
+                .orElse(0L);
+    }
+
     private void ensureCheckpointOperationAllowed(String sessionId) {
         if (fullCompactInFlight.contains(sessionId)) {
             throw new IllegalStateException("Cannot mutate checkpoint state while full compact is in progress");
@@ -1180,6 +1520,45 @@ public class CompactionService implements ContextCompactorCallback, SessionServi
         SessionEntity session = sessionService.getSession(sessionId);
         if ("running".equals(session.getRuntimeStatus())) {
             throw new IllegalStateException("Cannot operate on checkpoint while session is running");
+        }
+    }
+
+    private String captureCurrentRuntimeSnapshot(String sessionId) {
+        if (contextRuntimeCheckpointService == null) {
+            return null;
+        }
+        SessionEntity session = sessionRepository.findById(sessionId)
+                .orElseThrow(() -> new IllegalStateException("Session disappeared during checkpoint"));
+        return contextRuntimeCheckpointService.runtimeForResume(session.getContextRuntimeJson());
+    }
+
+    private void requireCheckpointMutationDependencies() {
+        if (sessionMessageRepository == null
+                || sessionMessageInboxRepository == null
+                || sessionToolAttemptRepository == null
+                || contextRuntimeCheckpointService == null
+                || contextRuntimeAuthorityResolver == null) {
+            throw new IllegalStateException("Checkpoint mutation safety dependencies are unavailable");
+        }
+    }
+
+    private void requireRestoreAdmissible(SessionEntity session, String sessionId) {
+        if (session.getActiveLoopId() != null
+                || "running".equals(session.getRuntimeStatus())) {
+            throw new IllegalStateException("Cannot restore while Session has an active claim");
+        }
+        List<String> unresolved = List.of(
+                "INTENT_COMMITTED", "EXECUTING", "WAITING_USER",
+                "UNCERTAIN_PENDING_RESOLUTION");
+        if (!sessionToolAttemptRepository.findBySessionIdAndStateIn(sessionId, unresolved).isEmpty()) {
+            throw new IllegalStateException("Cannot restore with an unresolved Tool attempt");
+        }
+        if (sessionToolAttemptRepository.countBySessionIdAndPostActionState(
+                sessionId, "CLAIMED") != 0L) {
+            throw new IllegalStateException("Cannot restore while a continuation claim is active");
+        }
+        if (sessionMessageInboxRepository.countBySessionId(sessionId) != 0L) {
+            throw new IllegalStateException("Cannot restore with a non-empty message inbox");
         }
     }
 

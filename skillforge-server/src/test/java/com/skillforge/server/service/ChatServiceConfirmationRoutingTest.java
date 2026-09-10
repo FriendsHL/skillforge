@@ -16,6 +16,7 @@ import com.skillforge.observability.api.LlmTraceStore;
 import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.SessionEntity;
 import com.skillforge.server.entity.SessionMessageEntity;
+import com.skillforge.server.memory.SessionDigestExtractor;
 import com.skillforge.server.repository.ModelUsageRepository;
 import com.skillforge.server.subagent.SubAgentRegistry;
 import org.junit.jupiter.api.BeforeEach;
@@ -98,7 +99,7 @@ class ChatServiceConfirmationRoutingTest {
         chatService = new ChatService(agentService, sessionService, skillRegistry,
                 agentLoopEngine, modelUsageRepository, broadcaster, executor,
                 sessionTitleService, subAgentRegistry, cancellationRegistry, compactionService,
-                null, null, new ObjectMapper(), null,
+                null, null, new ObjectMapper(), mock(SessionDigestExtractor.class),
                 new NoopDispatcher(),
                 new SessionConfirmCache(), registry,
                 sid -> sid, mock(LlmTraceStore.class),

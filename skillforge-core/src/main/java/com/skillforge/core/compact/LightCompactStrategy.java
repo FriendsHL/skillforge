@@ -256,12 +256,12 @@ public class LightCompactStrategy {
 
     /**
      * 保留头 {@link #TRUNCATE_HEAD_CHARS} + 尾 {@link #TRUNCATE_TAIL_CHARS} chars,中间替换为
-     * marker。按 char 而非 byte 切——触发阈值是该工具的 byte 阈值
-     * ({@code registry.truncateThresholdBytesFor(toolName)},按工具分桶),但实际截断单位是 Java
-     * char(code unit),避免切坏 UTF-8 多字节序列(中文 / emoji 等)。
+     * marker。触发阈值是该工具的 byte 阈值
+     * ({@code registry.truncateThresholdBytesFor(toolName)},按工具分桶)；保留长度以 Java
+     * char(code unit)计量，但边界会回退到完整 Unicode code point，不会切开
+     * UTF-16 surrogate pair。
      *
-     * <p>Marker 中的 "chars" 指 Java char 数。对超 BMP 字符(emoji)这里没做 codepoint 对齐,
-     * 但日常 tool_result 99% ASCII/CJK BMP,代价可接受。
+     * <p>Marker 中的 "chars" 仍指 Java char 数，以保持既有 wire 契约。
      *
      * <p>调用前提: caller 已确认 content 字节数 &gt; 该工具的 byte 阈值
      * 且未携带幂等 marker。
@@ -274,10 +274,15 @@ public class LightCompactStrategy {
         if (totalChars <= TRUNCATE_HEAD_CHARS + TRUNCATE_TAIL_CHARS) {
             return content;
         }
-        int truncatedChars = totalChars - TRUNCATE_HEAD_CHARS - TRUNCATE_TAIL_CHARS;
+        int headEnd = safePrefixEnd(content, TRUNCATE_HEAD_CHARS);
+        int tailStart = safeSuffixStart(content, totalChars - TRUNCATE_TAIL_CHARS);
+        if (headEnd >= tailStart) {
+            return content;
+        }
+        int truncatedChars = tailStart - headEnd;
         int reducedPct = (int) Math.round((100.0 * truncatedChars) / totalChars);
         StringBuilder sb = new StringBuilder(TRUNCATE_HEAD_CHARS + TRUNCATE_TAIL_CHARS + 128);
-        sb.append(content, 0, TRUNCATE_HEAD_CHARS);
+        sb.append(content, 0, headEnd);
         sb.append("\n... [")
           .append(truncatedChars)
           .append(MARKER_INFIX)
@@ -285,8 +290,28 @@ public class LightCompactStrategy {
           .append(" chars (")
           .append(reducedPct)
           .append("% reduced)] ...\n");
-        sb.append(content, totalChars - TRUNCATE_TAIL_CHARS, totalChars);
+        sb.append(content, tailStart, totalChars);
         return sb.toString();
+    }
+
+    private static int safePrefixEnd(String value, int requestedEnd) {
+        int end = Math.min(Math.max(requestedEnd, 0), value.length());
+        if (end > 0 && end < value.length()
+                && Character.isHighSurrogate(value.charAt(end - 1))
+                && Character.isLowSurrogate(value.charAt(end))) {
+            return end - 1;
+        }
+        return end;
+    }
+
+    private static int safeSuffixStart(String value, int requestedStart) {
+        int start = Math.min(Math.max(requestedStart, 0), value.length());
+        if (start > 0 && start < value.length()
+                && Character.isHighSurrogate(value.charAt(start - 1))
+                && Character.isLowSurrogate(value.charAt(start))) {
+            return start - 1;
+        }
+        return start;
     }
 
     // ==================== Rule 2 ====================
@@ -427,8 +452,9 @@ public class LightCompactStrategy {
         int lastIdx = errorIndices.get(total - 1);
         Message lastError = working.get(lastIdx);
         String lastErrSummary = extractFirstErrorText(lastError);
-        String trimmedLast = lastErrSummary.length() > 200
-                ? lastErrSummary.substring(0, 200) + "…" : lastErrSummary;
+        int previewEnd = safePrefixEnd(lastErrSummary, 200);
+        String trimmedLast = lastErrSummary.length() > previewEnd
+                ? lastErrSummary.substring(0, previewEnd) + "…" : lastErrSummary;
         int folded = 0;
         for (int k = 0; k < total - 1; k++) {
             int idx = errorIndices.get(k);

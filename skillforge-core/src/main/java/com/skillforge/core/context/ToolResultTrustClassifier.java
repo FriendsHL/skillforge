@@ -27,6 +27,10 @@ public final class ToolResultTrustClassifier {
                 || normalized.equals("listrelevantmemories")) {
             return Optional.of(PromptSourceType.RAG);
         }
+        if (normalized.equals("sessionhistorysearch")
+                || normalized.equals("sessionhistoryread")) {
+            return Optional.of(PromptSourceType.HISTORY);
+        }
         return Optional.empty();
     }
 }

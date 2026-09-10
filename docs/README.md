@@ -1,6 +1,6 @@
 # SkillForge 文档
 
-> 更新于：2026-08-31（Goal Brief P0a 已交付；Goal-aligned Agent Factory 后续方案待讨论；AG-UI 保持关闭）
+> 更新于：2026-09-10（Session History Recovery 专项真实 E2E 通过；两项 durable 问题暂停，Full gate 未关闭）
 > Agent 规则：先读这里，再只打开当前任务链接到的文档。
 
 ## 从这里开始
@@ -17,6 +17,7 @@
 | ID | 标题 | 状态 | 需求包 |
 | --- | --- | --- | --- |
 | **BAILIAN-TOKEN-PLAN** | 百炼五模型与系统 Agent 模型编辑 | 已实现、浏览器验证；上游生成受周额度限制 | [需求包](requirements/active/2026-09-05-BAILIAN-TOKEN-PLAN/index.md) |
+| **SESSION-HISTORY-RECOVERY** | Compact 后的历史事实检索、精确展开与 Session 连续性 | Full / 已实现、专项真实 E2E 通过；完整门禁开放 | [需求包](requirements/active/2026-09-02-SESSION-HISTORY-RECOVERY/index.md) |
 | **GOAL-ALIGNED-AGENT-FACTORY** | 目标对齐的个人助手能力工厂 | Design proposed / Full；P0a 已交付，P0b/P1 及后续方案待产品讨论 | [需求包](requirements/active/2026-08-26-GOAL-ALIGNED-AGENT-FACTORY/index.md) |
 | **GOAL-BRIEF-P0A** | 对话内轻量目标确认 | implemented / Full automated + browser verified | [需求包](requirements/active/2026-08-26-GOAL-BRIEF-P0A/index.md) |
 | **AGENT-TEAM-TASK-GRAPH** | Team 共享 Task、并发领取、租约、解锁与恢复 | Phase 1 implemented / Full automated + real Team dogfood verified | [需求包](requirements/active/2026-08-12-AGENT-TEAM-TASK-GRAPH/index.md) |

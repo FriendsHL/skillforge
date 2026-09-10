@@ -1,0 +1,37 @@
+{
+  "metadata": {
+    "model": "scripted-history-agent-v1",
+    "provider": "deterministic-fixture",
+    "contextWindowTokens": 128000,
+    "promptVersion": "session-history-eval-prompt-v1",
+    "fixtureVersion": "session-history-s1-s25-v1",
+    "projectionVersion": 2
+  },
+  "scenarios": [
+    {"id":"S1","expectedPath":"DIRECT","minimumSuccessfulArm":"A","exactRecoveryCase":false,"historyNeeded":false,"refRequired":false,"assertions":["summary-tail-sufficient","history-no-call"]},
+    {"id":"S2","expectedPath":"SEARCH_READ","minimumSuccessfulArm":"C","exactRecoveryCase":true,"historyNeeded":true,"refRequired":true,"assertions":["original-user-ref","exact-seq"]},
+    {"id":"S3","expectedPath":"SEARCH_READ","minimumSuccessfulArm":"C","exactRecoveryCase":true,"historyNeeded":true,"refRequired":true,"assertions":["multiple-hits","latest-original-wins"]},
+    {"id":"S4","expectedPath":"SEARCH_READ","minimumSuccessfulArm":"C","exactRecoveryCase":true,"historyNeeded":true,"refRequired":true,"assertions":["uuid-version-number-path-exact","no-summary-guess"]},
+    {"id":"S5","expectedPath":"SEARCH_READ","minimumSuccessfulArm":"C","exactRecoveryCase":true,"historyNeeded":true,"refRequired":true,"assertions":["tool-use-intent","tool-name-id"]},
+    {"id":"S6","expectedPath":"SEARCH_READ","minimumSuccessfulArm":"C","exactRecoveryCase":true,"historyNeeded":true,"refRequired":true,"assertions":["ordered-tool-result","closed-attempt"]},
+    {"id":"S7","expectedPath":"SEARCH_READ","minimumSuccessfulArm":"C","exactRecoveryCase":true,"historyNeeded":true,"refRequired":true,"assertions":["archive-pagination","unicode-hash","no-raw-duplicate"]},
+    {"id":"S8","expectedPath":"SEARCH_READ","minimumSuccessfulArm":"C","exactRecoveryCase":true,"historyNeeded":true,"refRequired":true,"assertions":["refs-dedup-order","no-fact-recover"]},
+    {"id":"S9","expectedPath":"SEARCH_READ","minimumSuccessfulArm":"C","exactRecoveryCase":true,"historyNeeded":true,"refRequired":true,"assertions":["range-around-tail","cursor-no-gap"]},
+    {"id":"S10","expectedPath":"SEARCH_READ","minimumSuccessfulArm":"C","exactRecoveryCase":true,"historyNeeded":true,"refRequired":true,"assertions":["drift-uses-history","timeline-epoch-unchanged"]},
+    {"id":"S11","expectedPath":"CHECKPOINT_BRANCH","minimumSuccessfulArm":"A","exactRecoveryCase":false,"historyNeeded":false,"refRequired":false,"assertions":["source-unchanged","child-runtime-copied","no-parent-runtime"]},
+    {"id":"S12","expectedPath":"CHECKPOINT_RESTORE","minimumSuccessfulArm":"A","exactRecoveryCase":false,"historyNeeded":false,"refRequired":false,"assertions":["audited-restore","epoch-plus-one","old-ref-stale"]},
+    {"id":"S13","expectedPath":"FENCED_RECOVERY","minimumSuccessfulArm":"A","exactRecoveryCase":false,"historyNeeded":false,"refRequired":false,"assertions":["waiting-control-only","safe-g-plus-one","unsafe-uncertain"]},
+    {"id":"S14","expectedPath":"IDEMPOTENT_RECOVERY","minimumSuccessfulArm":"A","exactRecoveryCase":false,"historyNeeded":false,"refRequired":false,"assertions":["corrupt-runtime-clears","ack-loss-single-result","single-continuation"]},
+    {"id":"S15","expectedPath":"FILE_READ","minimumSuccessfulArm":"A","exactRecoveryCase":false,"historyNeeded":false,"refRequired":false,"assertions":["workspace-authoritative","r0-r1-r2-evaluator-only"]},
+    {"id":"S16","expectedPath":"TASK_LIST","minimumSuccessfulArm":"A","exactRecoveryCase":false,"historyNeeded":false,"refRequired":false,"assertions":["task-db-authoritative","summary-does-not-override"]},
+    {"id":"S17","expectedPath":"SEARCH_READ","minimumSuccessfulArm":"C","exactRecoveryCase":true,"historyNeeded":true,"refRequired":true,"assertions":["original-before-summary","latest-raw-seq"]},
+    {"id":"S18","expectedPath":"SEARCH_READ","minimumSuccessfulArm":"C","exactRecoveryCase":true,"historyNeeded":true,"refRequired":false,"assertions":["exhaustive-no-match","explicit-unknown"]},
+    {"id":"S19","expectedPath":"SEARCH_READ","minimumSuccessfulArm":"C","exactRecoveryCase":true,"historyNeeded":true,"refRequired":true,"assertions":["stored-data-low-trust","derived-self-excluded"]},
+    {"id":"S20","expectedPath":"SERVER_SCOPE","minimumSuccessfulArm":"A","exactRecoveryCase":false,"historyNeeded":false,"refRequired":false,"assertions":["closed-schema-no-identity","cross-session-non-enumeration"]},
+    {"id":"S21","expectedPath":"SEARCH_READ","minimumSuccessfulArm":"C","exactRecoveryCase":true,"historyNeeded":true,"refRequired":true,"assertions":["pre-intent-cutoff","permanent-self-exclusion","cursor-stable-after-close"]},
+    {"id":"S22","expectedPath":"SEARCH_READ","minimumSuccessfulArm":"C","exactRecoveryCase":true,"historyNeeded":true,"refRequired":true,"assertions":["unicode-code-point-safe","chinese-match","wrapper-json-intact"]},
+    {"id":"S23","expectedPath":"COMPACT_ENVELOPE","minimumSuccessfulArm":"D","exactRecoveryCase":true,"historyNeeded":false,"refRequired":false,"assertions":["single-cue","summary-body-byte-unchanged","summary-state-as-of"]},
+    {"id":"S24","expectedPath":"COMPACT_MATRIX","minimumSuccessfulArm":"A","exactRecoveryCase":false,"historyNeeded":false,"refRequired":false,"assertions":["five-full-sources","pre-intent-prefix","ordered-results","open-attempt-denied"]},
+    {"id":"S25","expectedPath":"DIRECT","minimumSuccessfulArm":"A","exactRecoveryCase":false,"historyNeeded":false,"refRequired":false,"assertions":["short-row-store","history-no-call","quality-drop-max-2pp","schema-overhead-gate"]}
+  ]
+}

@@ -29,7 +29,7 @@ public final class LowTrustContextBoundary {
         return switch (sourceType) {
             case WEB -> PromptTrustLevel.UNTRUSTED_EXTERNAL_DATA;
             case SUBAGENT -> PromptTrustLevel.MODEL_GENERATED_DATA;
-            case MEMORY, RAG, FILE -> PromptTrustLevel.STORED_DATA;
+            case HISTORY, MEMORY, RAG, FILE -> PromptTrustLevel.STORED_DATA;
             default -> throw new IllegalArgumentException(
                     "Low-trust boundary is not supported for " + sourceType);
         };

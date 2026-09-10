@@ -2,6 +2,8 @@ package com.skillforge.core.engine;
 
 import com.skillforge.core.model.ContentBlock;
 import com.skillforge.core.model.Message;
+import com.skillforge.core.compact.CompactSummaryEnvelope;
+import com.skillforge.core.compact.CompactSummaryMessage;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -156,6 +158,66 @@ class AgentLoopEngineMaterializerTest {
         assertThat(result.get(0).getTextContent())
                 .isEqualTo("[Previously delivered CSV: output.csv; attachment_id=att-2]");
         assertThat(((ContentBlock) ((List<?>) assistant.getContent()).get(0)).getType()).isEqualTo("csv_ref");
+    }
+
+    @Test
+    @DisplayName("ordered-inbox USER rows merge only in provider copy and appear exactly once")
+    void durableInboxUsers_mergeOnlyForProvider() {
+        LoopContext ctx = new LoopContext();
+        Message first = Message.user("queued-first");
+        Message second = Message.user("queued-second");
+        ctx.markProviderMergeEligibleUser(first);
+        ctx.markProviderMergeEligibleUser(second);
+        List<Message> raw = new ArrayList<>(List.of(first, second));
+
+        List<Message> provider = AgentLoopEngine.applyMaterializer(ctx, raw);
+
+        assertThat(provider).hasSize(1);
+        assertThat(provider.get(0).getTextContent())
+                .isEqualTo("queued-first\n\n---\n\nqueued-second");
+        assertThat(provider.get(0).getTextContent().split("queued-first", -1)).hasSize(2);
+        assertThat(provider.get(0).getTextContent().split("queued-second", -1)).hasSize(2);
+        assertThat(raw).containsExactly(first, second);
+        assertThat(raw).hasSize(2);
+    }
+
+    @Test
+    @DisplayName("tool result, attachment, summary, hidden/control and reasoning are merge barriers")
+    void durableInboxUsers_neverCrossHardBarriers() {
+        Message toolResult = Message.toolResult("tool-1", "done", false);
+        Message attachment = userMessageWithImageRef();
+        Message summary = new CompactSummaryMessage(
+                new CompactSummaryEnvelope.TrustedSummary(1L, 0L, 3L, "summary"));
+        Message hidden = new Message();
+        hidden.setRole(Message.Role.USER);
+        hidden.setContent(List.of(ContentBlock.text("<system-reminder>hidden</system-reminder>")));
+        Message control = Message.user("control-like persisted row");
+        Message reasoning = Message.user("reasoning-user");
+        reasoning.setReasoningContent("internal reasoning");
+        List<Message> barriers = List.of(
+                toolResult, attachment, summary, hidden, control, reasoning);
+
+        for (Message barrier : barriers) {
+            LoopContext ctx = new LoopContext();
+            Message before = Message.user("before");
+            Message after = Message.user("after");
+            ctx.markProviderMergeEligibleUser(before);
+            ctx.markProviderMergeEligibleUser(after);
+            // Even an accidentally marked non-ordinary barrier must remain a barrier. A plain
+            // control/summary is deliberately not marked because origin authority lives outside
+            // the mutable Message JSON shape.
+            if (barrier == toolResult || barrier == attachment
+                    || barrier == hidden || barrier == reasoning) {
+                ctx.markProviderMergeEligibleUser(barrier);
+            }
+
+            List<Message> input = List.of(before, barrier, after);
+            List<Message> provider = AgentLoopEngine.applyMaterializer(ctx, input);
+
+            assertThat(provider).hasSize(3);
+            assertThat(provider.get(0).getTextContent()).isEqualTo("before");
+            assertThat(provider.get(2).getTextContent()).isEqualTo("after");
+        }
     }
 
     // -------------------------- helpers --------------------------

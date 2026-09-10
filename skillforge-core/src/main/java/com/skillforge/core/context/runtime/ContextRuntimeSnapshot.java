@@ -16,7 +16,6 @@ public record ContextRuntimeSnapshot(
     public static final int CURRENT_VERSION = 1;
 
     public ContextRuntimeSnapshot {
-        version = version <= 0 ? CURRENT_VERSION : version;
         discoveredToolSchemaHashes = discoveredToolSchemaHashes == null
                 ? Map.of()
                 : java.util.Collections.unmodifiableMap(

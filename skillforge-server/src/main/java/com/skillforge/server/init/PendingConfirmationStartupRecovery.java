@@ -3,15 +3,21 @@ package com.skillforge.server.init;
 import com.skillforge.core.model.ContentBlock;
 import com.skillforge.core.model.Message;
 import com.skillforge.server.entity.SessionEntity;
+import com.skillforge.server.config.SessionHistoryProperties;
 import com.skillforge.server.repository.SessionRepository;
 import com.skillforge.server.runtime.RuntimeFailureClassifier;
 import com.skillforge.server.runtime.RuntimeFailureFact;
 import com.skillforge.server.runtime.RuntimeFailureState;
 import com.skillforge.server.service.SessionService;
 import com.skillforge.server.service.ChatService;
+import com.skillforge.server.exception.RetryBusyException;
+import com.skillforge.server.session.DurableRecoveryNotReadyException;
+import com.skillforge.server.session.DurableRecoveryRetryableException;
+import com.skillforge.server.session.UnknownOutcomePostActionOrchestrator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.SmartLifecycle;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
@@ -55,15 +61,32 @@ public class PendingConfirmationStartupRecovery implements SmartLifecycle {
     private final SessionRepository sessionRepository;
     private final SessionService sessionService;
     private final ChatService chatService;
+    private final SessionHistoryProperties sessionHistoryProperties;
+    private UnknownOutcomePostActionOrchestrator postActionOrchestrator;
 
     private volatile boolean running = false;
 
     public PendingConfirmationStartupRecovery(SessionRepository sessionRepository,
                                               SessionService sessionService,
                                               ChatService chatService) {
+        this(sessionRepository, sessionService, chatService, new SessionHistoryProperties());
+    }
+
+    @Autowired
+    public PendingConfirmationStartupRecovery(SessionRepository sessionRepository,
+                                              SessionService sessionService,
+                                              ChatService chatService,
+                                              SessionHistoryProperties sessionHistoryProperties) {
         this.sessionRepository = sessionRepository;
         this.sessionService = sessionService;
         this.chatService = chatService;
+        this.sessionHistoryProperties = sessionHistoryProperties;
+    }
+
+    @Autowired
+    void configurePostActionRecovery(
+            UnknownOutcomePostActionOrchestrator postActionOrchestrator) {
+        this.postActionOrchestrator = postActionOrchestrator;
     }
 
     @Override
@@ -102,6 +125,10 @@ public class PendingConfirmationStartupRecovery implements SmartLifecycle {
         // Load all sessions and filter by runtimeStatus in Java — keeps the query surface
         // small (no new JPA derived query) and the dataset is small (active sessions only
         // typically in the low 100s on a dev instance).
+        Set<String> postActionSessions = sessionHistoryProperties.isEnabled()
+                && postActionOrchestrator != null
+                ? postActionOrchestrator.recoverPendingContinuations()
+                : Set.of();
         List<SessionEntity> all = sessionRepository.findAll();
         int scanned = 0;
         int repairedSessions = 0;
@@ -109,6 +136,7 @@ public class PendingConfirmationStartupRecovery implements SmartLifecycle {
         for (SessionEntity s : all) {
             String rs = s.getRuntimeStatus();
             if (!"running".equals(rs) && !"waiting_user".equals(rs)) continue;
+            if (postActionSessions.contains(s.getId())) continue;
             // EVAL-V2 M3a §2.2 R3: eval session 不走 production 的 confirmation 修复路径 ——
             // eval 流程不会出现 install confirmation；万一出现也由 EvalOrchestrator 处理。
             // 跳过这里防止改写 eval session 的 messages 序列影响后续归因分析。
@@ -121,7 +149,20 @@ public class PendingConfirmationStartupRecovery implements SmartLifecycle {
                 continue;
             }
             if ("waiting_user".equals(rs)) {
-                log.info("Recovery: preserving waiting_user sessionId={}", s.getId());
+                if (sessionHistoryProperties.isEnabled()) {
+                    try {
+                        chatService.republishWaitingInteractiveControl(
+                                s.getId(), s.getUserId(), s.getHistoryEpoch());
+                    } catch (DurableRecoveryRetryableException retryable) {
+                        log.info("Durable waiting control recovery deferred: sessionId={}",
+                                s.getId());
+                    } catch (RuntimeException failedClosed) {
+                        log.error("Durable waiting control recovery failed closed: sessionId={}",
+                                s.getId());
+                    }
+                } else {
+                    log.info("Recovery: preserving waiting_user sessionId={}", s.getId());
+                }
                 continue;
             }
             scanned++;
@@ -149,6 +190,21 @@ public class PendingConfirmationStartupRecovery implements SmartLifecycle {
      */
     int repairSession(SessionEntity s) {
         String sessionId = s.getId();
+        if (sessionHistoryProperties.isEnabled()) {
+            try {
+                chatService.resumeInterruptedTurnAsync(sessionId);
+            } catch (DurableRecoveryNotReadyException
+                     | DurableRecoveryRetryableException
+                     | RetryBusyException notReady) {
+                // The periodic durable recovery poller retries after the DB lease
+                // expires. Never downgrade a fenced durable Session to legacy error.
+                log.info("Durable startup recovery deferred: sessionId={}", sessionId);
+            } catch (RuntimeException recoveryFailure) {
+                log.error("Durable startup recovery failed closed: sessionId={}",
+                        sessionId, recoveryFailure);
+            }
+            return 0;
+        }
         List<Message> msgs = sessionService.getFullHistory(sessionId);
         List<String> orphanIds = collectOrphanToolUseIds(msgs);
 

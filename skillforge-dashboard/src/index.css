@@ -2612,6 +2612,205 @@ html[data-density="spacious"] { --density: 1; }
   color: var(--fg-2);
 }
 
+.history-result-card {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border-1);
+  border-radius: 8px;
+  background: var(--bg-2);
+  color: var(--fg-2);
+}
+
+.history-result-heading {
+  color: var(--fg-1);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.history-result-item {
+  min-width: 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-1);
+}
+
+.history-result-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 5px;
+  color: var(--fg-4);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.history-result-meta code {
+  overflow-wrap: anywhere;
+}
+
+.history-result-card pre {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.history-result-invalid,
+.history-result-error {
+  color: var(--err);
+}
+
+.history-result-invalid span,
+.history-result-error span {
+  color: var(--fg-3);
+}
+
+.unknown-outcome-card {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--border-1));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--warn) 6%, var(--bg-1));
+}
+
+.unknown-outcome-card h3,
+.unknown-outcome-card p {
+  margin: 0;
+}
+
+.unknown-outcome-state {
+  color: var(--warn);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.unknown-outcome-warning {
+  padding: 10px;
+  border-left: 3px solid var(--warn);
+  background: var(--bg-2);
+  color: var(--fg-1);
+}
+
+.unknown-outcome-authority {
+  color: var(--fg-3);
+  font-size: 12px;
+}
+
+.unknown-outcome-tools {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.unknown-outcome-tools li {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--border-1);
+  border-radius: 8px;
+  background: var(--bg-2);
+}
+
+.unknown-outcome-tools li > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.unknown-outcome-tools li span {
+  color: var(--fg-4);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.unknown-outcome-tools pre {
+  max-height: 220px;
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--fg-2);
+}
+
+.unknown-outcome-actions,
+.unknown-outcome-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.unknown-outcome-actions button[aria-checked='true'] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.unknown-outcome-inbox {
+  display: grid;
+  gap: 8px;
+}
+
+.unknown-outcome-inbox label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.unknown-outcome-reason {
+  display: grid;
+  gap: 6px;
+}
+
+.unknown-outcome-reason textarea {
+  min-height: 72px;
+  resize: vertical;
+}
+
+.unknown-outcome-confirm {
+  padding: 10px;
+  border: 1px solid var(--border-1);
+  border-radius: 8px;
+  background: var(--bg-2);
+}
+
+.unknown-outcome-confirm strong,
+.unknown-outcome-confirm p {
+  flex-basis: 100%;
+}
+
+.unknown-outcome-feedback {
+  color: var(--warn);
+}
+
+.unknown-outcome-resolved {
+  border-color: color-mix(in srgb, var(--ok) 45%, var(--border-1));
+}
+
+.checkpoint-action-confirm {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--warn);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--warn) 6%, var(--bg-1));
+  color: var(--fg-1);
+}
+
+.checkpoint-action-confirm p {
+  margin: 0;
+  color: var(--fg-2);
+}
+
+.checkpoint-action-confirm > div {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 /* Inflight tool */
 .inflight {
   display: flex;

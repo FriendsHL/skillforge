@@ -50,4 +50,17 @@ class JpaContextRuntimeStoreTest {
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("Session not found");
     }
+
+    @Test
+    void corruptOrUnknownRuntimeLoadsAsEmptyInsteadOfRetainingFutureState() {
+        when(repository.findContextRuntimeJsonById("corrupt"))
+                .thenReturn(Optional.of("{not-json"));
+        when(repository.findContextRuntimeJsonById("future"))
+                .thenReturn(Optional.of("""
+                        {"version":99,"discoveredToolSchemaHashes":{},"invokedSkills":[]}
+                        """));
+
+        assertThat(store.load("corrupt")).contains(ContextRuntimeSnapshot.empty());
+        assertThat(store.load("future")).contains(ContextRuntimeSnapshot.empty());
+    }
 }

@@ -54,6 +54,18 @@ public class SessionCompactionCheckpointEntity {
     @Column(name = "snapshot_ref", columnDefinition = "TEXT")
     private String snapshotRef;
 
+    /** Registry-resolvable Tool/Skill control-plane refs captured at this checkpoint. */
+    @Column(name = "runtime_snapshot_json", columnDefinition = "TEXT")
+    private String runtimeSnapshotJson;
+
+    /** DB-assigned total order for checkpoint sidecars; null only on pre-V196 legacy rows. */
+    @Column(name = "sidecar_watermark", insertable = false, updatable = false)
+    private Long sidecarWatermark;
+
+    /** Highest range-summary identity visible when this checkpoint was committed. */
+    @Column(name = "summary_id_watermark")
+    private Long summaryIdWatermark;
+
     @CreatedDate
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
@@ -139,6 +151,30 @@ public class SessionCompactionCheckpointEntity {
 
     public void setSnapshotRef(String snapshotRef) {
         this.snapshotRef = snapshotRef;
+    }
+
+    public String getRuntimeSnapshotJson() {
+        return runtimeSnapshotJson;
+    }
+
+    public void setRuntimeSnapshotJson(String runtimeSnapshotJson) {
+        this.runtimeSnapshotJson = runtimeSnapshotJson;
+    }
+
+    public Long getSidecarWatermark() {
+        return sidecarWatermark;
+    }
+
+    public void setSidecarWatermark(Long sidecarWatermark) {
+        this.sidecarWatermark = sidecarWatermark;
+    }
+
+    public Long getSummaryIdWatermark() {
+        return summaryIdWatermark;
+    }
+
+    public void setSummaryIdWatermark(Long summaryIdWatermark) {
+        this.summaryIdWatermark = summaryIdWatermark;
     }
 
     public Instant getCreatedAt() {

@@ -18,6 +18,11 @@ import com.skillforge.server.acp.AcpUpdateTranslator;
 import com.skillforge.server.acp.CcAcpUpdateTranslator;
 import com.skillforge.server.acp.ProcessAcpClientFactory;
 import com.skillforge.server.repository.AgentRepository;
+import com.skillforge.server.history.HistoryToolInputValidator;
+import com.skillforge.server.history.SessionHistoryAvailabilityPolicy;
+import com.skillforge.server.history.SessionHistoryScopeFactory;
+import com.skillforge.server.history.SessionHistoryWireFormatter;
+import com.skillforge.server.history.query.SessionHistoryQueryService;
 import com.skillforge.core.engine.LoopContext;
 import com.skillforge.core.engine.PendingAskRegistry;
 import com.skillforge.core.engine.SafetySkillHook;
@@ -60,6 +65,8 @@ import com.skillforge.server.tool.CreateAgentTool;
 import com.skillforge.server.tool.GetAgentConfigTool;
 import com.skillforge.server.tool.GetSessionMessagesTool;
 import com.skillforge.server.tool.GetTraceTool;
+import com.skillforge.server.tool.SessionHistoryReadTool;
+import com.skillforge.server.tool.SessionHistorySearchTool;
 import com.skillforge.server.tool.SubAgentTool;
 import com.skillforge.server.tool.TeamCreateTool;
 import com.skillforge.server.tool.TeamKillTool;
@@ -866,6 +873,36 @@ public class ToolBeansConfig {
         GetSessionMessagesTool tool = new GetSessionMessagesTool(sessionService, objectMapper);
         skillRegistry.registerTool(tool);
         log.info("Registered GetSessionMessagesTool into SkillRegistry");
+        return tool;
+    }
+
+    @Bean
+    public SessionHistorySearchTool sessionHistorySearchTool(
+            HistoryToolInputValidator inputValidator,
+            SessionHistoryQueryService queryService,
+            SessionHistoryWireFormatter wireFormatter,
+            SessionHistoryAvailabilityPolicy availabilityPolicy,
+            SessionHistoryScopeFactory scopeFactory,
+            SkillRegistry skillRegistry) {
+        SessionHistorySearchTool tool = new SessionHistorySearchTool(
+                inputValidator, queryService, wireFormatter, availabilityPolicy, scopeFactory);
+        skillRegistry.registerTool(tool);
+        log.info("Registered SessionHistorySearchTool into SkillRegistry");
+        return tool;
+    }
+
+    @Bean
+    public SessionHistoryReadTool sessionHistoryReadTool(
+            HistoryToolInputValidator inputValidator,
+            SessionHistoryQueryService queryService,
+            SessionHistoryWireFormatter wireFormatter,
+            SessionHistoryAvailabilityPolicy availabilityPolicy,
+            SessionHistoryScopeFactory scopeFactory,
+            SkillRegistry skillRegistry) {
+        SessionHistoryReadTool tool = new SessionHistoryReadTool(
+                inputValidator, queryService, wireFormatter, availabilityPolicy, scopeFactory);
+        skillRegistry.registerTool(tool);
+        log.info("Registered SessionHistoryReadTool into SkillRegistry");
         return tool;
     }
 

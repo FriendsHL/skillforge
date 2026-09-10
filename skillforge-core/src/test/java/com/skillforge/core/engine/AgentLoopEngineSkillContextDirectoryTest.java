@@ -1,5 +1,6 @@
 package com.skillforge.core.engine;
 
+import com.skillforge.core.engine.durability.LoopDurabilityScope;
 import com.skillforge.core.llm.LlmProviderFactory;
 import com.skillforge.core.model.ToolSchema;
 import com.skillforge.core.model.ToolUseBlock;
@@ -29,6 +30,9 @@ class AgentLoopEngineSkillContextDirectoryTest {
         loopContext.setSessionId("sid");
         loopContext.setWorkingDirectory("/workspace/repository");
         loopContext.setArtifactOutputDirectory("/managed/artifacts/trace-1");
+        LoopDurabilityScope durabilityScope = new LoopDurabilityScope(
+                "sid", 41L, 7L, "loop-1", 3L, "node-a");
+        loopContext.setDurabilityScope(durabilityScope);
 
         engine.executeToolCallOutcome(
                 new ToolUseBlock("call-1", "CaptureContext", Map.of()),
@@ -38,6 +42,7 @@ class AgentLoopEngineSkillContextDirectoryTest {
         assertThat(observedContext.get().getWorkingDirectory()).isEqualTo("/workspace/repository");
         assertThat(observedContext.get().getArtifactOutputDirectory())
                 .isEqualTo("/managed/artifacts/trace-1");
+        assertThat(observedContext.get().getDurabilityScope()).isSameAs(durabilityScope);
     }
 
     private static final class CapturingTool implements Tool {

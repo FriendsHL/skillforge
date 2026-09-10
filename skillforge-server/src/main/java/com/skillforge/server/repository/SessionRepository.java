@@ -10,6 +10,7 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -27,6 +28,14 @@ public interface SessionRepository extends JpaRepository<SessionEntity, String> 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT s FROM SessionEntity s WHERE s.id = :id")
     Optional<SessionEntity> findByIdForUpdate(@Param("id") String id);
+
+    /**
+     * Wall-clock database time sampled after a caller has acquired its row locks.
+     * PostgreSQL {@code CURRENT_TIMESTAMP} is fixed at transaction start, which can be stale after
+     * waiting on a lock; {@code clock_timestamp()} keeps lease decisions database-authoritative.
+     */
+    @Query(value = "SELECT clock_timestamp()", nativeQuery = true)
+    Instant currentDatabaseTime();
 
     List<SessionEntity> findByUserIdOrderByUpdatedAtDesc(Long userId);
 

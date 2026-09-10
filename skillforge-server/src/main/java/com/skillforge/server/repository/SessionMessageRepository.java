@@ -20,11 +20,69 @@ public interface SessionMessageRepository extends JpaRepository<SessionMessageEn
     @Query("DELETE FROM SessionMessageEntity m WHERE m.sessionId = :sessionId")
     void deleteBySessionId(@Param("sessionId") String sessionId);
 
+    /** Restore-only suffix prune. Prefix row ids and all identity columns remain untouched. */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Transactional
+    @Query("DELETE FROM SessionMessageEntity m WHERE m.sessionId = :sessionId AND m.seqNo > :seqNo")
+    int deleteBySessionIdAndSeqNoGreaterThan(
+            @Param("sessionId") String sessionId,
+            @Param("seqNo") long seqNo);
+
+    /**
+     * Checks the legacy prefix in one statement, without loading raw payloads into Java.
+     * A pruned row may have either the pre-prune mirror or the exact sanitized mirror
+     * produced by SessionService. All non-tool-result blocks and fields remain exact.
+     */
+    @Query(value = """
+            SELECT NOT EXISTS (
+                SELECT 1
+                FROM jsonb_array_elements(CAST(:legacyJson AS jsonb))
+                     WITH ORDINALITY AS legacy(message, ordinal)
+                LEFT JOIN t_session_message m
+                  ON m.session_id = :sessionId AND m.seq_no = legacy.ordinal - 1
+                WHERE m.id IS NULL
+                   OR m.role IS DISTINCT FROM legacy.message ->> 'role'
+                   OR m.reasoning_content IS DISTINCT FROM legacy.message ->> 'reasoning_content'
+                   OR (
+                       CAST(m.content_json AS jsonb) IS DISTINCT FROM
+                           COALESCE(legacy.message -> 'content', CAST('null' AS jsonb))
+                       AND (
+                           m.pruned_at IS NULL
+                           OR jsonb_typeof(CAST(m.content_json AS jsonb)) IS DISTINCT FROM 'array'
+                           OR COALESCE((
+                               SELECT jsonb_agg(
+                                   CASE WHEN block.value ->> 'type' = 'tool_result'
+                                        THEN block.value || jsonb_build_object(
+                                            'content', '[TOOL OUTPUT PRUNED]')
+                                        ELSE block.value END ORDER BY block.ordinal)
+                               FROM jsonb_array_elements(
+                                   CASE WHEN jsonb_typeof(CAST(m.content_json AS jsonb)) = 'array'
+                                        THEN CAST(m.content_json AS jsonb)
+                                        ELSE CAST('[]' AS jsonb) END)
+                                    WITH ORDINALITY AS block(value, ordinal)
+                           ), CAST('[]' AS jsonb)) IS DISTINCT FROM
+                               COALESCE(legacy.message -> 'content', CAST('null' AS jsonb))
+                       )
+                   )
+            )
+            """, nativeQuery = true)
+    boolean isLegacyPrefixRepresented(
+            @Param("sessionId") String sessionId, @Param("legacyJson") String legacyJson);
+
     long countBySessionId(String sessionId);
 
     Page<SessionMessageEntity> findBySessionIdOrderBySeqNoAsc(String sessionId, Pageable pageable);
 
     Optional<SessionMessageEntity> findTopBySessionIdOrderBySeqNoDesc(String sessionId);
+
+    Optional<SessionMessageEntity> findTopBySessionIdAndSeqNoLessThanOrderBySeqNoDesc(
+            String sessionId, long seqNo);
+
+    List<SessionMessageEntity> findBySessionIdAndWriteBatchIdOrderByWriteBatchOrdinalAsc(
+            String sessionId, String writeBatchId);
+
+    boolean existsBySessionIdAndRoleAndSeqNoGreaterThan(
+            String sessionId, String role, long seqNo);
 
     Optional<SessionMessageEntity> findTopBySessionIdAndMsgTypeAndPrunedAtIsNullOrderBySeqNoDesc(
             String sessionId, String msgType);
@@ -107,6 +165,26 @@ public interface SessionMessageRepository extends JpaRepository<SessionMessageEn
            "ORDER BY m.seqNo DESC")
     List<TraceIdView> findTailTraceIdProjections(
             @Param("sessionId") String sessionId, Pageable pageable);
+
+    /**
+     * Rewrite preservation carrier for the durable writer identity pair. The row id is exposed so
+     * later exact-carrier work can use immutable row identity; Batch 1's legacy rewrite remains
+     * explicitly seq-aligned and must not be treated as exact after a shrinking rewrite.
+     */
+    interface WriteBatchIdentityView {
+        Long getId();
+        long getSeqNo();
+        String getWriteBatchId();
+        Integer getWriteBatchOrdinal();
+    }
+
+    @Query("SELECT m.id AS id, m.seqNo AS seqNo, m.writeBatchId AS writeBatchId, " +
+           "m.writeBatchOrdinal AS writeBatchOrdinal " +
+           "FROM SessionMessageEntity m " +
+           "WHERE m.sessionId = :sessionId " +
+           "AND (m.writeBatchId IS NOT NULL OR m.writeBatchOrdinal IS NOT NULL)")
+    List<WriteBatchIdentityView> findWriteBatchIdentityProjections(
+            @Param("sessionId") String sessionId);
 
     /**
      * COMPACT-IDEMPOTENCY-BOUNDARY-FIX (storage redesign P1): stamp the covering range

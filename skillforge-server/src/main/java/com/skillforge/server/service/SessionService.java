@@ -3,11 +3,14 @@ package com.skillforge.server.service;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.skillforge.core.compact.CompactSummaryMessage;
+import com.skillforge.core.compact.CompactSummaryEnvelope;
 import com.skillforge.core.engine.ChatEventBroadcaster;
 import com.skillforge.core.model.ContentBlock;
 import com.skillforge.core.model.Message;
 import com.skillforge.core.reminder.ReminderBuilder;
 import com.skillforge.server.config.SessionMessageStoreProperties;
+import com.skillforge.server.config.SessionHistoryProperties;
 import com.skillforge.server.dto.SessionMessageDto;
 import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.SessionMessageEntity;
@@ -18,6 +21,7 @@ import com.skillforge.server.repository.AgentRepository;
 import com.skillforge.server.repository.SessionMessageRepository;
 import com.skillforge.server.repository.SessionRepository;
 import com.skillforge.server.repository.SessionSummaryRepository;
+import com.skillforge.server.session.CanonicalToolResultModelView;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -73,6 +77,7 @@ public class SessionService {
     private final AgentRepository agentRepository;
     private final SessionMessageStoreProperties storeProperties;
     private final ObjectMapper objectMapper;
+    private SessionHistoryProperties sessionHistoryProperties;
     private final Object[] appendLockStripes;
     private final TransactionTemplate requiredTxTemplate;
     private final TransactionTemplate requiresNewTxTemplate;
@@ -90,6 +95,9 @@ public class SessionService {
      * 启用 SessionService 而不强制注入归档依赖）。
      */
     private ToolResultArchiveService toolResultArchiveService;
+
+    /** Master-on model projection is read-only and keyed by immutable message/block identity. */
+    private CanonicalToolResultModelView canonicalToolResultModelView;
 
     /** Optional in legacy unit tests; production wires the source-link reconciler. */
     private PersonalAppSourceLinkReconciler personalAppSourceLinkReconciler;
@@ -125,11 +133,25 @@ public class SessionService {
                           SessionMessageStoreProperties storeProperties,
                           ObjectMapper objectMapper,
                           PlatformTransactionManager transactionManager) {
+        this(sessionRepository, sessionMessageRepository, agentRepository, storeProperties,
+                objectMapper, transactionManager, new SessionHistoryProperties());
+    }
+
+    @Autowired
+    public SessionService(SessionRepository sessionRepository,
+                          SessionMessageRepository sessionMessageRepository,
+                          AgentRepository agentRepository,
+                          SessionMessageStoreProperties storeProperties,
+                          ObjectMapper objectMapper,
+                          PlatformTransactionManager transactionManager,
+                          SessionHistoryProperties sessionHistoryProperties) {
         this.sessionRepository = sessionRepository;
         this.sessionMessageRepository = sessionMessageRepository;
         this.agentRepository = agentRepository;
         this.storeProperties = storeProperties;
         this.objectMapper = objectMapper;
+        this.sessionHistoryProperties = Objects.requireNonNull(
+                sessionHistoryProperties, "sessionHistoryProperties");
         this.appendLockStripes = new Object[APPEND_LOCK_STRIPES];
         for (int i = 0; i < APPEND_LOCK_STRIPES; i++) {
             this.appendLockStripes[i] = new Object();
@@ -143,6 +165,12 @@ public class SessionService {
         this.readOnlyTxTemplate.setReadOnly(true);
     }
 
+    /** Test seam for exercising rollout combinations without a Spring context. */
+    public void setSessionHistoryProperties(SessionHistoryProperties sessionHistoryProperties) {
+        this.sessionHistoryProperties = Objects.requireNonNull(
+                sessionHistoryProperties, "sessionHistoryProperties");
+    }
+
     @Autowired(required = false)
     public void setBroadcaster(ChatEventBroadcaster broadcaster) {
         this.broadcaster = broadcaster;
@@ -151,6 +179,12 @@ public class SessionService {
     @Autowired(required = false)
     public void setToolResultArchiveService(ToolResultArchiveService toolResultArchiveService) {
         this.toolResultArchiveService = toolResultArchiveService;
+    }
+
+    @Autowired(required = false)
+    public void setCanonicalToolResultModelView(
+            CanonicalToolResultModelView canonicalToolResultModelView) {
+        this.canonicalToolResultModelView = canonicalToolResultModelView;
     }
 
     @Autowired(required = false)
@@ -355,22 +389,30 @@ public class SessionService {
     }
 
     public record AppendMessage(Message message, String msgType, String messageType, String controlId,
-                                Instant answeredAt, Map<String, Object> metadata, String traceId) {
+                                Instant answeredAt, Map<String, Object> metadata, String traceId,
+                                String writeBatchId, Integer writeBatchOrdinal) {
         public AppendMessage {
             Objects.requireNonNull(message, "message");
             msgType = (msgType == null || msgType.isBlank()) ? MSG_TYPE_NORMAL : msgType;
             messageType = (messageType == null || messageType.isBlank()) ? MESSAGE_TYPE_NORMAL : messageType;
             metadata = (metadata == null) ? Collections.emptyMap() : metadata;
+            validateWriteBatchIdentity(writeBatchId, writeBatchOrdinal);
         }
 
-        /** Backward-compat — defaults traceId to null. */
+        /** Backward-compat — defaults writer identity to null. */
+        public AppendMessage(Message message, String msgType, String messageType, String controlId,
+                             Instant answeredAt, Map<String, Object> metadata, String traceId) {
+            this(message, msgType, messageType, controlId, answeredAt, metadata, traceId, null, null);
+        }
+
+        /** Backward-compat — defaults traceId and writer identity to null. */
         public AppendMessage(Message message, String msgType, String messageType, String controlId,
                              Instant answeredAt, Map<String, Object> metadata) {
-            this(message, msgType, messageType, controlId, answeredAt, metadata, null);
+            this(message, msgType, messageType, controlId, answeredAt, metadata, null, null, null);
         }
 
         public AppendMessage(Message message, String msgType, Map<String, Object> metadata) {
-            this(message, msgType, MESSAGE_TYPE_NORMAL, null, null, metadata, null);
+            this(message, msgType, MESSAGE_TYPE_NORMAL, null, null, metadata, null, null, null);
         }
     }
 
@@ -385,29 +427,81 @@ public class SessionService {
      */
     public record StoredMessage(long seqNo, String msgType, String messageType, String controlId,
                                 Instant answeredAt, Map<String, Object> metadata, Message message,
-                                String traceId, Instant createdAt, Long compactedBySummaryId) {
-        /** Backward-compat — defaults compactedBySummaryId to null. */
+                                String traceId, Instant createdAt, Long compactedBySummaryId,
+                                String writeBatchId, Integer writeBatchOrdinal, Long messageId) {
+        public StoredMessage {
+            validateWriteBatchIdentity(writeBatchId, writeBatchOrdinal);
+        }
+
+        /** Backward-compat — defaults the persistence row id to null. */
+        public StoredMessage(long seqNo, String msgType, String messageType, String controlId,
+                             Instant answeredAt, Map<String, Object> metadata, Message message,
+                             String traceId, Instant createdAt, Long compactedBySummaryId,
+                             String writeBatchId, Integer writeBatchOrdinal) {
+            this(seqNo, msgType, messageType, controlId, answeredAt, metadata, message, traceId,
+                    createdAt, compactedBySummaryId, writeBatchId, writeBatchOrdinal, null);
+        }
+
+        /** Backward-compat — defaults writer identity to null. */
+        public StoredMessage(long seqNo, String msgType, String messageType, String controlId,
+                             Instant answeredAt, Map<String, Object> metadata, Message message,
+                             String traceId, Instant createdAt, Long compactedBySummaryId) {
+            this(seqNo, msgType, messageType, controlId, answeredAt, metadata, message, traceId,
+                    createdAt, compactedBySummaryId, null, null, null);
+        }
+
+        /** Backward-compat — defaults compactedBySummaryId and writer identity to null. */
         public StoredMessage(long seqNo, String msgType, String messageType, String controlId,
                              Instant answeredAt, Map<String, Object> metadata, Message message,
                              String traceId, Instant createdAt) {
-            this(seqNo, msgType, messageType, controlId, answeredAt, metadata, message, traceId, createdAt, null);
+            this(seqNo, msgType, messageType, controlId, answeredAt, metadata, message, traceId,
+                    createdAt, null, null, null, null);
         }
 
         /** Backward-compat — defaults createdAt + compactedBySummaryId to null. */
         public StoredMessage(long seqNo, String msgType, String messageType, String controlId,
                              Instant answeredAt, Map<String, Object> metadata, Message message,
                              String traceId) {
-            this(seqNo, msgType, messageType, controlId, answeredAt, metadata, message, traceId, null, null);
+            this(seqNo, msgType, messageType, controlId, answeredAt, metadata, message, traceId,
+                    null, null, null, null, null);
         }
 
         /** Backward-compat — defaults traceId + createdAt + compactedBySummaryId to null. */
         public StoredMessage(long seqNo, String msgType, String messageType, String controlId,
                              Instant answeredAt, Map<String, Object> metadata, Message message) {
-            this(seqNo, msgType, messageType, controlId, answeredAt, metadata, message, null, null, null);
+            this(seqNo, msgType, messageType, controlId, answeredAt, metadata, message, null,
+                    null, null, null, null, null);
         }
 
         public StoredMessage(long seqNo, String msgType, Map<String, Object> metadata, Message message) {
-            this(seqNo, msgType, MESSAGE_TYPE_NORMAL, null, null, metadata, message, null, null, null);
+            this(seqNo, msgType, MESSAGE_TYPE_NORMAL, null, null, metadata, message, null,
+                    null, null, null, null, null);
+        }
+    }
+
+    private static void validateWriteBatchIdentity(String writeBatchId, Integer writeBatchOrdinal) {
+        if ((writeBatchId == null) != (writeBatchOrdinal == null)) {
+            throw new IllegalArgumentException(
+                    "writeBatchId and writeBatchOrdinal must both be null or both be non-null");
+        }
+        if (writeBatchId != null && writeBatchId.isBlank()) {
+            throw new IllegalArgumentException("writeBatchId must not be blank");
+        }
+        if (writeBatchId != null) {
+            try {
+                UUID parsed = UUID.fromString(writeBatchId);
+                if (!parsed.toString().equals(writeBatchId)
+                        || parsed.version() < 1 || parsed.version() > 5) {
+                    throw new IllegalArgumentException(
+                            "writeBatchId must be a canonical lowercase UUID");
+                }
+            } catch (IllegalArgumentException invalidUuid) {
+                throw new IllegalArgumentException(
+                        "writeBatchId must be a canonical lowercase UUID", invalidUuid);
+            }
+        }
+        if (writeBatchOrdinal != null && writeBatchOrdinal < 0) {
+            throw new IllegalArgumentException("writeBatchOrdinal must be >= 0");
         }
     }
 
@@ -587,6 +681,7 @@ public class SessionService {
             }
         }
         List<Message> out = new ArrayList<>();
+        List<Long> messageIds = new ArrayList<>();
         int start = (lastBoundary >= 0) ? lastBoundary + 1 : 0;
         for (int i = start; i < records.size(); i++) {
             StoredMessage record = records.get(i);
@@ -594,8 +689,9 @@ public class SessionService {
                 continue;
             }
             out.add(record.message());
+            messageIds.add(record.messageId());
         }
-        return applyArchiveSafely(id, out);
+        return applyArchiveSafely(id, out, messageIds);
     }
 
     /**
@@ -633,6 +729,7 @@ public class SessionService {
 
         List<Message> out = new ArrayList<>();
         List<Long> provenance = new ArrayList<>();
+        List<Long> messageIds = new ArrayList<>();
         int i = 0;
         int summaryIdx = 0;
         while (i < records.size()) {
@@ -650,7 +747,7 @@ public class SessionService {
             if (summaryIdx < activeSummaries.size()) {
                 SessionSummaryEntity summary = activeSummaries.get(summaryIdx);
                 if (seq >= summary.getStartSeq() && seq <= summary.getEndSeq()) {
-                    emitSummary(out, provenance, summary.getSummaryText());
+                    emitSummary(out, provenance, messageIds, summary);
                     long endSeq = summary.getEndSeq();
                     i++;
                     while (i < records.size() && records.get(i).seqNo() <= endSeq) {
@@ -664,9 +761,10 @@ public class SessionService {
             // Uncovered row outside every active range.
             out.add(record.message());
             provenance.add(seq);
+            messageIds.add(record.messageId());
             i++;
         }
-        List<Message> archived = applyArchiveSafely(id, out);
+        List<Message> archived = applyArchiveSafely(id, out, messageIds);
         // applyArchiveSafely is documented to substitute tool_result content IN PLACE and never change
         // the list size, so provenance stays index-aligned with the returned messages. Defensive
         // guard (P2a nit): if a future archive implementation ever returns a differently-sized list,
@@ -681,9 +779,30 @@ public class SessionService {
         return new ContextWithProvenance(archived, toLongArray(provenance));
     }
 
-    private void emitSummary(List<Message> out, List<Long> provenance, String summaryText) {
-        out.add(Message.user(summaryText));
+    private void emitSummary(
+            List<Message> out,
+            List<Long> provenance,
+            List<Long> messageIds,
+            SessionSummaryEntity summary) {
+        out.add(modelVisibleSummary(summary));
         provenance.add(PROVENANCE_SUMMARY);
+        messageIds.add(null);
+    }
+
+    private Message modelVisibleSummary(SessionSummaryEntity summary) {
+        if (!sessionHistoryProperties.isCheckpointEnvelopeEffective()) {
+            return Message.user(summary.getSummaryText());
+        }
+        return new CompactSummaryMessage(trustedSummary(summary));
+    }
+
+    private CompactSummaryEnvelope.TrustedSummary trustedSummary(SessionSummaryEntity summary) {
+        if (summary == null || summary.getId() == null) {
+            throw new IllegalStateException("Active compact summary is missing persisted identity");
+        }
+        return new CompactSummaryEnvelope.TrustedSummary(
+                summary.getId(), summary.getStartSeq(), summary.getEndSeq(),
+                summary.getSummaryText());
     }
 
     private long[] toLongArray(List<Long> values) {
@@ -814,14 +933,35 @@ public class SessionService {
     }
 
     /**
-     * P9-2: 调用 ToolResultArchiveService 应用归档替换。归档服务标注 REQUIRES_NEW 事务，
-     * 即便从 readOnly 上下文调用也会启用独立写事务。失败 fallback 到原 messages，
-     * 保证 P9-2 故障时不破坏现有 chat loop（明确失败由 service 内部 log.warn）。
+     * Master-on uses the read-only occurrence resolver; flags-off retains the legacy archive
+     * writer/preview path. Either projection failure keeps the exact raw messages.
      */
-    private List<Message> applyArchiveSafely(String sessionId, List<Message> messages) {
-        if (toolResultArchiveService == null || messages == null || messages.isEmpty()) {
+    private List<Message> applyArchiveSafely(
+            String sessionId,
+            List<Message> messages,
+            List<Long> messageIds) {
+        if (messages == null || messages.isEmpty()) {
             return messages;
         }
+        if (sessionHistoryProperties.isEnabled()) {
+            if (canonicalToolResultModelView == null
+                    || messageIds == null || messageIds.size() != messages.size()) {
+                return messages;
+            }
+            try {
+                List<CanonicalToolResultModelView.MessageOccurrence> occurrences =
+                        new ArrayList<>(messages.size());
+                for (int index = 0; index < messages.size(); index++) {
+                    occurrences.add(new CanonicalToolResultModelView.MessageOccurrence(
+                            messageIds.get(index), messages.get(index)));
+                }
+                return canonicalToolResultModelView.project(sessionId, occurrences);
+            } catch (RuntimeException canonicalProjectionFailure) {
+                log.warn("Canonical Tool result projection failed closed: sessionId={}", sessionId);
+                return messages;
+            }
+        }
+        if (toolResultArchiveService == null) return messages;
         try {
             return toolResultArchiveService.applyArchive(sessionId, messages);
         } catch (Exception e) {
@@ -963,6 +1103,20 @@ public class SessionService {
         updateSessionMessages(id, messages, inputTokens, outputTokens, null);
     }
 
+    /** Updates usage counters without participating in any message reconciliation path. */
+    public void addSessionUsage(String id, long inputTokens, long outputTokens) {
+        synchronized (lockForAppend(id)) {
+            requiredTxTemplate.execute(status -> {
+                SessionEntity session = sessionRepository.findByIdForUpdate(id)
+                        .orElseThrow(() -> new SessionNotFoundException(id));
+                session.setTotalInputTokens(session.getTotalInputTokens() + inputTokens);
+                session.setTotalOutputTokens(session.getTotalOutputTokens() + outputTokens);
+                sessionRepository.save(session);
+                return null;
+            });
+        }
+    }
+
     /**
      * OBS-2 M1: overload that stamps {@code traceId} on every newly appended row from the engine.
      * Existing rows (re-written via boundary preservation / full rewrite) keep their original
@@ -1082,7 +1236,8 @@ public class SessionService {
                             StoredMessage stored = fullRecords.get(i);
                             wraps.add(new AppendMessage(stored.message(), stored.msgType(),
                                     stored.messageType(), stored.controlId(), stored.answeredAt(),
-                                    stored.metadata(), stored.traceId()));
+                                    stored.metadata(), stored.traceId(),
+                                    stored.writeBatchId(), stored.writeBatchOrdinal()));
                         }
                         for (Message message : messages) {
                             wraps.add(new AppendMessage(message, MSG_TYPE_NORMAL, MESSAGE_TYPE_NORMAL,
@@ -1144,24 +1299,14 @@ public class SessionService {
      * real turn that was already stored — strictly preferable to leaking a summary into the
      * user-visible history.
      *
-     * <p><b>Accepted limitation (content-string match)</b>: {@link #isInjectedSummary} identifies an
-     * injected summary by exact text match against the active summary texts. A real USER turn whose
-     * text happens to equal an active summary's text would be filtered (silently dropped) here. This
-     * needs BOTH the B1-lock-miss race AND a USER-role text collision with a (typically long,
-     * LLM-generated) summary — double-rare. When a filter happens we {@code log.warn} so a real-message
-     * drop is observable rather than silent. The full fix is the §3 provenance array (tag each engine
-     * message with its origin so no content heuristic is needed); not done at P2b-1.
+     * <p>When checkpoint envelopes are effective, filtering requires a byte-canonical trusted carrier
+     * whose persisted identity and range match an active summary. With the feature disabled, the
+     * legacy exact-text behavior remains for compatibility.
      */
     private void rangeModelSummarySafeReconcile(String id, List<Message> messages, int prefixLen,
                                                 String traceId) {
-        java.util.Set<String> activeSummaryTexts = new java.util.HashSet<>();
         List<SessionSummaryEntity> active = sessionSummaryRepository
                 .findBySessionIdAndSupersededByIsNullOrderByStartSeqAsc(id);
-        for (SessionSummaryEntity s : active) {
-            if (s.getSummaryText() != null) {
-                activeSummaryTexts.add(s.getSummaryText());
-            }
-        }
         int from = Math.max(0, prefixLen);
         if (messages == null || from >= messages.size()) {
             return; // nothing beyond the prefix to append
@@ -1169,7 +1314,7 @@ public class SessionService {
         List<AppendMessage> wraps = new ArrayList<>(messages.size() - from);
         for (int i = from; i < messages.size(); i++) {
             Message m = messages.get(i);
-            if (isInjectedSummary(m, activeSummaryTexts)) {
+            if (isInjectedSummary(m, active)) {
                 // INV-4: never persist an injected summary as a NORMAL row. Log the filter so a
                 // possible false-positive (a real user turn whose text collides with a summary) is
                 // observable, not a silent drop. See "Accepted limitation" in the javadoc above.
@@ -1185,13 +1330,30 @@ public class SessionService {
         }
     }
 
-    /** True when {@code m} is a String-content user message whose text equals an active summary. */
-    private boolean isInjectedSummary(Message m, java.util.Set<String> activeSummaryTexts) {
-        if (m == null || m.getRole() != Message.Role.USER || activeSummaryTexts.isEmpty()) {
+    /** True only when {@code m} is the model-visible carrier for an active summary. */
+    boolean isInjectedSummary(Message m, List<SessionSummaryEntity> activeSummaries) {
+        if (m == null || m.getRole() != Message.Role.USER
+                || activeSummaries == null || activeSummaries.isEmpty()) {
+            return false;
+        }
+        if (sessionHistoryProperties.isCheckpointEnvelopeEffective()) {
+            for (SessionSummaryEntity summary : activeSummaries) {
+                if (summary != null && CompactSummaryEnvelope.parseTrusted(m, trustedSummary(summary)).isPresent()) {
+                    return true;
+                }
+            }
             return false;
         }
         Object content = m.getContent();
-        return content instanceof String s && activeSummaryTexts.contains(s);
+        if (!(content instanceof String text)) {
+            return false;
+        }
+        for (SessionSummaryEntity summary : activeSummaries) {
+            if (summary != null && Objects.equals(text, summary.getSummaryText())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public SessionEntity saveSession(SessionEntity session) {
@@ -1436,7 +1598,10 @@ public class SessionService {
                     // where a parallel append/rewrite could change trace_ids
                     // between snapshot and the DELETE.
                     Map<Long, String> oldTraceIds = snapshotTraceIds(id);
+                    Map<Long, WriteBatchIdentity> oldWriteBatchIdentities =
+                            snapshotWriteBatchIdentityBySeqNo(id);
                     patched = patchTraceIds(messages, oldTraceIds);
+                    patched = patchWriteBatchIdentities(patched, oldWriteBatchIdentities);
                     rewriteRowsInNewTransaction(id, patched);
                     // P2b B2: DELETE+INSERT drops compacted_by_summary_id on every re-inserted row
                     // (AppendMessage carries no marker). Re-derive markers from the active summary
@@ -1473,6 +1638,19 @@ public class SessionService {
                 return null;
             });
         }
+    }
+
+    /**
+     * Refreshes the legacy Session CLOB/counter after a restore suffix prune.
+     * The caller owns the Session-first transaction and passes its locked entity; this method never
+     * rewrites row messages, so immutable ids and association columns remain unchanged.
+     */
+    void refreshLegacyMessageMirrorFromRows(SessionEntity lockedSession) {
+        Objects.requireNonNull(lockedSession, "lockedSession");
+        List<StoredMessage> records = getFullHistoryRecords(lockedSession.getId());
+        List<Message> messages = records.stream().map(StoredMessage::message).toList();
+        lockedSession.setMessagesJson(messages.isEmpty() ? "[]" : writeJsonSafely(messages));
+        lockedSession.setMessageCount(records.size());
     }
 
     /**
@@ -1527,8 +1705,71 @@ public class SessionService {
                     out = new ArrayList<>(messages);
                 }
                 out.set(i, new AppendMessage(am.message(), am.msgType(), am.messageType(),
-                        am.controlId(), am.answeredAt(), am.metadata(), preserved));
+                        am.controlId(), am.answeredAt(), am.metadata(), preserved,
+                        am.writeBatchId(), am.writeBatchOrdinal()));
             }
+        }
+        return out != null ? out : messages;
+    }
+
+    private record WriteBatchIdentity(String batchId, int ordinal) {}
+
+    /**
+     * Snapshot the complete durable writer identity pair before DELETE+INSERT rewrite. Any half-pair
+     * found through direct/manual database corruption fails closed instead of being normalized away.
+     */
+    private Map<Long, WriteBatchIdentity> snapshotWriteBatchIdentityBySeqNo(String sessionId) {
+        if (sessionMessageRepository == null) {
+            return Collections.emptyMap();
+        }
+        List<SessionMessageRepository.WriteBatchIdentityView> rows =
+                sessionMessageRepository.findWriteBatchIdentityProjections(sessionId);
+        if (rows == null || rows.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        Map<Long, WriteBatchIdentity> map = new HashMap<>(rows.size() * 2);
+        for (SessionMessageRepository.WriteBatchIdentityView row : rows) {
+            validateWriteBatchIdentity(row.getWriteBatchId(), row.getWriteBatchOrdinal());
+            WriteBatchIdentity previous = map.put(row.getSeqNo(), new WriteBatchIdentity(
+                    row.getWriteBatchId(), row.getWriteBatchOrdinal()));
+            if (previous != null) {
+                throw new IllegalStateException(
+                        "duplicate write-batch identity projection for seqNo=" + row.getSeqNo());
+            }
+        }
+        return map;
+    }
+
+    /**
+     * Legacy rewrite preservation is deliberately seq/index aligned: a caller-provided complete
+     * pair wins; otherwise the old pair at the same seq is retained. This does not create exact
+     * identity across a shrinking/reordered rewrite. Batch 2/4 exact-carrier paths must preserve a
+     * logical row explicitly or fail closed before the durable writer is enabled.
+     */
+    private List<AppendMessage> patchWriteBatchIdentities(
+            List<AppendMessage> messages,
+            Map<Long, WriteBatchIdentity> oldIdentities) {
+        if (messages == null || messages.isEmpty()
+                || oldIdentities == null || oldIdentities.isEmpty()) {
+            return messages;
+        }
+        List<AppendMessage> out = null;
+        for (int i = 0; i < messages.size(); i++) {
+            AppendMessage message = messages.get(i);
+            if (message.writeBatchId() != null) {
+                continue;
+            }
+            WriteBatchIdentity preserved = oldIdentities.get((long) i);
+            if (preserved == null) {
+                continue;
+            }
+            if (out == null) {
+                out = new ArrayList<>(messages);
+            }
+            out.set(i, new AppendMessage(
+                    message.message(), message.msgType(), message.messageType(),
+                    message.controlId(), message.answeredAt(), message.metadata(), message.traceId(),
+                    preserved.batchId(), preserved.ordinal()));
         }
         return out != null ? out : messages;
     }
@@ -1687,7 +1928,10 @@ public class SessionService {
                     message,
                     e.getTraceId(),
                     e.getCreatedAt(),
-                    e.getCompactedBySummaryId()));
+                    e.getCompactedBySummaryId(),
+                    e.getWriteBatchId(),
+                    e.getWriteBatchOrdinal(),
+                    e.getId()));
         }
         return out;
     }
@@ -1898,6 +2142,8 @@ public class SessionService {
             e.setCreatedAt(now);
             // OBS-2 M1: persist trace_id (may be null for legacy / pre-trace paths)
             e.setTraceId(append.traceId());
+            e.setWriteBatchId(append.writeBatchId());
+            e.setWriteBatchOrdinal(append.writeBatchOrdinal());
             entities.add(e);
         }
         sessionMessageRepository.saveAll(entities);

@@ -6,6 +6,7 @@ import com.skillforge.core.engine.confirm.PendingConfirmationRegistry;
 import com.skillforge.server.channel.router.ChannelConversationResolver;
 import com.skillforge.server.config.LlmProperties;
 import com.skillforge.server.entity.SessionEntity;
+import com.skillforge.server.dto.ChatRequest;
 import com.skillforge.server.service.AgentService;
 import com.skillforge.server.service.ChatAttachmentService;
 import com.skillforge.server.service.ChatService;
@@ -20,6 +21,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 
 import java.util.Map;
+import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.RejectedExecutionException;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -100,6 +103,41 @@ class ChatControllerRetryTest {
         ResponseEntity<Map<String, Object>> response = controller.retryFailedTurn(SESSION_ID, OWNER);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+    }
+
+    @Test
+    void sendReturnsTheClientOrderedInboxIdentityAndScheduledAck() {
+        UUID requestId = UUID.randomUUID();
+        when(sessionService.getSession(SESSION_ID)).thenReturn(sessionOwnedBy(OWNER));
+        when(chatService.submitUserMessage(
+                SESSION_ID, "queued", OWNER, List.of(), requestId))
+                .thenReturn(new ChatService.ChatSubmissionAck(requestId, "scheduled"));
+
+        ResponseEntity<Map<String, Object>> response = controller.sendMessage(
+                SESSION_ID,
+                new ChatRequest("queued", OWNER, List.of(), requestId));
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
+        assertThat(response.getBody())
+                .containsEntry("sessionId", SESSION_ID)
+                .containsEntry("status", "scheduled")
+                .containsEntry("requestId", requestId.toString());
+    }
+
+    @Test
+    void sendReturnsServerGeneratedIdentityWhenClientOmitsIt() {
+        UUID generated = UUID.randomUUID();
+        when(sessionService.getSession(SESSION_ID)).thenReturn(sessionOwnedBy(OWNER));
+        when(chatService.submitUserMessage(
+                SESSION_ID, "queued", OWNER, List.of(), null))
+                .thenReturn(new ChatService.ChatSubmissionAck(generated, "scheduled"));
+
+        ResponseEntity<Map<String, Object>> response = controller.sendMessage(
+                SESSION_ID,
+                new ChatRequest("queued", OWNER, List.of(), null));
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
+        assertThat(response.getBody()).containsEntry("requestId", generated.toString());
     }
 
     private SessionEntity sessionOwnedBy(long userId) {

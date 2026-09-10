@@ -625,6 +625,55 @@ class LightCompactStrategyTest {
     }
 
     @Test
+    void truncate_never_splits_utf16_surrogate_pairs_at_head_or_tail_boundary() {
+        String original = "a".repeat(LightCompactStrategy.TRUNCATE_HEAD_CHARS - 1)
+                + "😀"
+                + "m".repeat(50_000)
+                + "🚀"
+                + "z".repeat(LightCompactStrategy.TRUNCATE_TAIL_CHARS - 1);
+
+        CompactResult result = strategy.apply(buildBashToolResultMessages(original), 32_000);
+
+        ContentBlock toolResult = findFirstToolResult(result.getMessages());
+        assertThat(toolResult).isNotNull();
+        assertThat(toolResult.getContent()).contains("chars truncated, original size:");
+        assertValidUtf16(toolResult.getContent());
+        assertThat(toolResult.getContent()).startsWith(
+                "a".repeat(LightCompactStrategy.TRUNCATE_HEAD_CHARS - 1));
+        assertThat(toolResult.getContent()).endsWith(
+                "🚀" + "z".repeat(LightCompactStrategy.TRUNCATE_TAIL_CHARS - 1));
+    }
+
+    @Test
+    void folded_error_preview_never_splits_utf16_surrogate_pair() {
+        List<Message> messages = new ArrayList<>();
+        messages.add(filler("start"));
+        for (int i = 1; i <= 4; i++) {
+            messages.add(assistantToolUse(
+                    "emoji-error-" + i, "Bash", Map.of("command", "failing-" + i)));
+            String error = i == 4
+                    ? "e".repeat(199) + "😀" + "tail"
+                    : "error attempt " + i;
+            messages.add(toolResult("emoji-error-" + i, error, true));
+        }
+        for (int i = 0; i < 6; i++) messages.add(filler("tail " + i));
+
+        CompactResult result = strategy.apply(messages, 32_000);
+
+        assertThat(result.getStrategiesApplied()).contains("fold-failed-retries");
+        for (Message message : result.getMessages()) {
+            if (!(message.getContent() instanceof List<?> blocks)) continue;
+            for (Object value : blocks) {
+                if (value instanceof ContentBlock block
+                        && "tool_result".equals(block.getType())
+                        && block.getContent() != null) {
+                    assertValidUtf16(block.getContent());
+                }
+            }
+        }
+    }
+
+    @Test
     void truncate_multiple_large_tool_results_in_same_pass() {
         // Two whitelisted tool_use → tool_result pairs, both with content well over the
         // 10K threshold. A single strategy.apply() must truncate BOTH.
@@ -724,5 +773,18 @@ class LightCompactStrategyTest {
             }
         }
         return false;
+    }
+
+    private static void assertValidUtf16(String value) {
+        for (int index = 0; index < value.length(); index++) {
+            char current = value.charAt(index);
+            if (Character.isHighSurrogate(current)) {
+                assertThat(index + 1).isLessThan(value.length());
+                assertThat(Character.isLowSurrogate(value.charAt(index + 1))).isTrue();
+                index++;
+            } else {
+                assertThat(Character.isLowSurrogate(current)).isFalse();
+            }
+        }
     }
 }

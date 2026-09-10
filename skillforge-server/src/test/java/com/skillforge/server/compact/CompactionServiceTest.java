@@ -5,6 +5,8 @@ import com.skillforge.core.compact.LightCompactStrategy;
 import com.skillforge.core.compact.recovery.FileStateCache;
 import com.skillforge.core.compact.recovery.RecoveryPayloadBuilder;
 import com.skillforge.core.engine.ChatEventBroadcaster;
+import com.skillforge.core.capability.ToolCatalog;
+import com.skillforge.core.context.runtime.ContextRuntimeAuthority;
 import com.skillforge.core.llm.LlmProvider;
 import com.skillforge.core.llm.LlmProviderFactory;
 import com.skillforge.core.llm.LlmRequest;
@@ -13,6 +15,7 @@ import com.skillforge.core.llm.LlmStreamHandler;
 import com.skillforge.core.llm.ModelConfig;
 import com.skillforge.core.model.ContentBlock;
 import com.skillforge.core.model.Message;
+import com.skillforge.core.skill.view.SessionSkillView;
 import com.skillforge.server.config.LlmProperties;
 import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.CompactionEventEntity;
@@ -21,8 +24,13 @@ import com.skillforge.server.entity.SessionCompactionCheckpointEntity;
 import com.skillforge.server.repository.AgentRepository;
 import com.skillforge.server.repository.CompactionEventRepository;
 import com.skillforge.server.repository.SessionCompactionCheckpointRepository;
+import com.skillforge.server.repository.SessionMessageInboxRepository;
+import com.skillforge.server.repository.SessionMessageRepository;
 import com.skillforge.server.repository.SessionRepository;
+import com.skillforge.server.repository.SessionToolAttemptRepository;
 import com.skillforge.server.service.CompactionService;
+import com.skillforge.server.service.ContextRuntimeCheckpointService;
+import com.skillforge.server.service.SessionContextRuntimeAuthorityResolver;
 import com.skillforge.server.service.SessionService;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -38,6 +46,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -48,6 +57,7 @@ import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.when;
 
 class CompactionServiceTest {
@@ -60,6 +70,11 @@ class CompactionServiceTest {
     private LlmProperties llmProperties;
     private ChatEventBroadcaster broadcaster;
     private AgentRepository agentRepository;
+    private SessionMessageRepository messageRepository;
+    private SessionMessageInboxRepository inboxRepository;
+    private SessionToolAttemptRepository attemptRepository;
+    private ContextRuntimeCheckpointService runtimeCheckpointService;
+    private SessionContextRuntimeAuthorityResolver runtimeAuthorityResolver;
     private CompactionService service;
 
     // in-memory storage
@@ -93,12 +108,19 @@ class CompactionServiceTest {
         llmProperties = mock(LlmProperties.class);
         broadcaster = mock(ChatEventBroadcaster.class);
         agentRepository = mock(AgentRepository.class);
+        messageRepository = mock(SessionMessageRepository.class);
+        inboxRepository = mock(SessionMessageInboxRepository.class);
+        attemptRepository = mock(SessionToolAttemptRepository.class);
+        runtimeCheckpointService = mock(ContextRuntimeCheckpointService.class);
+        runtimeAuthorityResolver = mock(SessionContextRuntimeAuthorityResolver.class);
 
         when(llmProperties.getDefaultProvider()).thenReturn("mock");
         when(llmProperties.getProviders()).thenReturn(new HashMap<>());
         when(llmProviderFactory.getProvider("mock")).thenReturn(mockProvider);
 
         when(sessionRepository.findById(anyString())).thenAnswer(inv ->
+                Optional.ofNullable(sessionStore.get(inv.getArgument(0))));
+        when(sessionRepository.findByIdForUpdate(anyString())).thenAnswer(inv ->
                 Optional.ofNullable(sessionStore.get(inv.getArgument(0))));
         when(sessionRepository.save(any(SessionEntity.class))).thenAnswer(inv -> {
             SessionEntity s = inv.getArgument(0);
@@ -131,6 +153,24 @@ class CompactionServiceTest {
                 llmProviderFactory, llmProperties, broadcaster,
                 null /* transactionManager — null OK in unit tests, runInTransaction runs directly */);
         service.setAgentRepository(agentRepository);
+        service.setSessionMessageRepository(messageRepository);
+        service.setCheckpointRuntimeDependencies(
+                inboxRepository, attemptRepository,
+                runtimeCheckpointService, runtimeAuthorityResolver);
+        when(attemptRepository.findBySessionIdAndStateIn(anyString(), any()))
+                .thenReturn(List.of());
+        when(runtimeAuthorityResolver.resolve(any(SessionEntity.class))).thenReturn(
+                new ContextRuntimeAuthority(
+                        ToolCatalog.fromAuthorizedSchemas(List.of(), null),
+                        SessionSkillView.EMPTY));
+        when(runtimeCheckpointService.runtimeForBranch(any(), any(), any()))
+                .thenReturn("{\"version\":1,\"discoveredToolSchemaHashes\":{},\"invokedSkills\":[]}");
+        when(runtimeCheckpointService.runtimeForRestore(any(), any(), any()))
+                .thenReturn("{\"version\":1,\"discoveredToolSchemaHashes\":{},\"invokedSkills\":[]}");
+        when(runtimeCheckpointService.runtimeForResume(any()))
+                .thenReturn("checkpoint-runtime");
+        when(checkpointRepository.findSidecarWatermarkById(anyString()))
+                .thenReturn(Optional.of(1L));
     }
 
     private SessionEntity seedSession(String id, int msgCount, int lastCompactAt, String runtimeStatus) {
@@ -168,8 +208,10 @@ class CompactionServiceTest {
     }
 
     @Test
-    void restoreCheckpoint_clearsStructuredFailureAndPreservesRewrittenRowShape() {
+    void restoreCheckpoint_clearsFailureBumpsEpochAndPrunesOnlyFutureRows() {
         SessionEntity failed = seedSession("sRestore", 2, 0, "error");
+        failed.setHistoryEpoch(7L);
+        failed.setRestorePreparing(true);
         failed.setRuntimeStep("retryable");
         failed.setRuntimeError("stale failure");
         failed.setRuntimeFailureSource("network");
@@ -184,11 +226,14 @@ class CompactionServiceTest {
         checkpoint.setSessionId("sRestore");
         checkpoint.setBoundarySeqNo(1L);
         checkpoint.setReason("manual");
+        checkpoint.setSidecarWatermark(11L);
+        checkpoint.setSummaryIdWatermark(0L);
         when(checkpointRepository.findById("checkpoint-1")).thenReturn(Optional.of(checkpoint));
         when(sessionService.getFullHistoryRecords("sRestore")).thenReturn(List.of(
                 new SessionService.StoredMessage(
                         1L, SessionService.MSG_TYPE_NORMAL, SessionService.MESSAGE_TYPE_NORMAL,
-                        null, null, Map.of(), Message.user("kept"), "trace-kept")));
+                        null, null, Map.of(), Message.user("kept"), "trace-kept",
+                        null, null, "44444444-4444-4444-8444-444444444444", 4)));
 
         SessionEntity restored = service.restoreFromCheckpoint("sRestore", "checkpoint-1");
 
@@ -199,16 +244,80 @@ class CompactionServiceTest {
         assertThat(restored.getRuntimeFailureCode()).isNull();
         assertThat(restored.isRuntimeRetryable()).isFalse();
         assertThat(restored.getRuntimeSideEffects()).isNull();
+        assertThat(restored.getHistoryEpoch()).isEqualTo(8L);
+        assertThat(restored.isRestorePreparing()).isFalse();
+        verify(messageRepository).deleteBySessionIdAndSeqNoGreaterThan("sRestore", 1L);
+        verify(checkpointRepository).deleteBySessionIdAfterSidecarWatermark(
+                "sRestore", "checkpoint-1", 11L);
+        verify(attemptRepository).deleteBySessionId("sRestore");
+        verify(sessionService, never()).rewriteMessages(eq("sRestore"), any());
+    }
 
+    @Test
+    void restoreCheckpoint_rejectsActiveClaimBeforeAnyPrune() {
+        SessionEntity claimed = seedSession("sClaimed", 2, 0, "idle");
+        claimed.setActiveLoopId("loop-1");
+        when(sessionService.getSession("sClaimed")).thenReturn(claimed);
+        SessionCompactionCheckpointEntity checkpoint = new SessionCompactionCheckpointEntity();
+        checkpoint.setId("cp-claimed");
+        checkpoint.setSessionId("sClaimed");
+        checkpoint.setBoundarySeqNo(0L);
+        checkpoint.setSidecarWatermark(12L);
+        checkpoint.setSummaryIdWatermark(0L);
+        when(checkpointRepository.findById("cp-claimed")).thenReturn(Optional.of(checkpoint));
+
+        assertThatThrownBy(() -> service.restoreFromCheckpoint("sClaimed", "cp-claimed"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("active claim");
+        verify(messageRepository, never())
+                .deleteBySessionIdAndSeqNoGreaterThan(anyString(), any(Long.class));
+    }
+
+    @Test
+    @DisplayName("checkpoint branch carries the complete source write-batch pair")
+    void createBranchFromCheckpoint_preservesWriteBatchPair() {
+        SessionEntity source = seedSession("sBranchSource", 1, 0, "idle");
+        source.setTitle("source");
+        source.setStatus("active");
+        source.setOrigin(SessionEntity.ORIGIN_PRODUCTION);
+
+        SessionCompactionCheckpointEntity checkpoint = new SessionCompactionCheckpointEntity();
+        checkpoint.setId("checkpoint-branch");
+        checkpoint.setSessionId(source.getId());
+        checkpoint.setBoundarySeqNo(0L);
+        checkpoint.setSidecarWatermark(13L);
+        checkpoint.setSummaryIdWatermark(0L);
+        when(checkpointRepository.findById("checkpoint-branch")).thenReturn(Optional.of(checkpoint));
+        when(sessionService.getFullHistoryRecords(source.getId())).thenReturn(List.of(
+                new SessionService.StoredMessage(
+                        0L, SessionService.MSG_TYPE_NORMAL, SessionService.MESSAGE_TYPE_NORMAL,
+                        null, null, Map.of(), Message.user("kept"), "trace-kept",
+                        null, null, "55555555-5555-4555-8555-555555555555", 2)));
+
+        AtomicReference<SessionEntity> branchRef = new AtomicReference<>();
+        when(sessionService.saveSession(any(SessionEntity.class))).thenAnswer(invocation -> {
+            SessionEntity saved = invocation.getArgument(0);
+            branchRef.set(saved);
+            return saved;
+        });
+        when(sessionService.getSession(anyString())).thenAnswer(invocation -> {
+            String id = invocation.getArgument(0);
+            return source.getId().equals(id) ? source : branchRef.get();
+        });
+
+        SessionEntity branch = service.createBranchFromCheckpoint(
+                source.getId(), "checkpoint-branch", "branch");
+
+        assertThat(branch).isNotNull();
+        assertThat(branch.getParentSessionId()).isEqualTo(source.getId());
         @SuppressWarnings("unchecked")
         org.mockito.ArgumentCaptor<List<SessionService.AppendMessage>> rewritten =
                 org.mockito.ArgumentCaptor.forClass(List.class);
-        verify(sessionService).rewriteMessages(eq("sRestore"), rewritten.capture());
+        verify(sessionService).rewriteMessages(eq(branch.getId()), rewritten.capture());
         assertThat(rewritten.getValue()).hasSize(1);
-        assertThat(rewritten.getValue().get(0).msgType()).isEqualTo(SessionService.MSG_TYPE_NORMAL);
-        assertThat(rewritten.getValue().get(0).messageType()).isEqualTo(SessionService.MESSAGE_TYPE_NORMAL);
-        assertThat(rewritten.getValue().get(0).traceId()).isEqualTo("trace-kept");
-        verify(checkpointRepository).deleteBySessionIdAfterSeqNo("sRestore", 1L);
+        assertThat(rewritten.getValue().get(0).writeBatchId())
+                .isEqualTo("55555555-5555-4555-8555-555555555555");
+        assertThat(rewritten.getValue().get(0).writeBatchOrdinal()).isEqualTo(2);
     }
 
     /**
@@ -476,12 +585,18 @@ class CompactionServiceTest {
      */
     @Test
     void full_compact_records_llm_summary_as_strategy() {
-        seedSession("sFS", 30, 0, "idle");
+        SessionEntity session = seedSession("sFS", 30, 0, "idle");
+        session.setContextRuntimeJson("current-runtime");
         seedMessages("sFS");
         CompactionEventEntity event = service.compact("sFS", "full", "engine-hard", "full check");
         assertThat(event).isNotNull();
         assertThat(event.getStrategiesApplied()).isEqualTo("llm-summary");
-        verify(checkpointRepository).save(any());
+        org.mockito.ArgumentCaptor<SessionCompactionCheckpointEntity> checkpoint =
+                org.mockito.ArgumentCaptor.forClass(SessionCompactionCheckpointEntity.class);
+        verify(checkpointRepository).saveAndFlush(checkpoint.capture());
+        assertThat(checkpoint.getValue().getRuntimeSnapshotJson())
+                .isEqualTo("checkpoint-runtime");
+        verify(runtimeCheckpointService).runtimeForResume("current-runtime");
     }
 
     /**
@@ -545,6 +660,15 @@ class CompactionServiceTest {
             assertThat(row.traceId())
                     .as("retained row at retainedIdx=%d must carry trace-tail-%d", retainedIdx, retainedIdx)
                     .isEqualTo("trace-tail-" + retainedIdx);
+            // The retained row duplicates an already-persisted source occurrence. Reusing that
+            // source write-batch pair would collide with the scoped unique index and would falsely
+            // identify two physical rows as one durable write occurrence.
+            assertThat(row.writeBatchId())
+                    .as("duplicated retained row must intentionally clear writeBatchId")
+                    .isNull();
+            assertThat(row.writeBatchOrdinal())
+                    .as("duplicated retained row must intentionally clear writeBatchOrdinal")
+                    .isNull();
             retainedIdx++;
         }
         // Sanity: at least one retained row was checked.

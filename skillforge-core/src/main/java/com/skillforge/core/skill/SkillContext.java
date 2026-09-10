@@ -1,5 +1,7 @@
 package com.skillforge.core.skill;
 
+import com.skillforge.core.engine.durability.LoopDurabilityScope;
+
 import java.util.Collections;
 import java.util.Set;
 
@@ -14,6 +16,8 @@ public class SkillContext {
     private Long userId;
     private String toolUseId;
     private String approvalToken;
+    /** Harness-owned current loop identity; never populated from model Tool input. */
+    private LoopDurabilityScope durabilityScope;
 
     /**
      * Memory v2 (PR-2): ids of memories already injected into the system prompt by the
@@ -78,6 +82,14 @@ public class SkillContext {
 
     public void setApprovalToken(String approvalToken) {
         this.approvalToken = approvalToken;
+    }
+
+    public LoopDurabilityScope getDurabilityScope() {
+        return durabilityScope;
+    }
+
+    public void setDurabilityScope(LoopDurabilityScope durabilityScope) {
+        this.durabilityScope = durabilityScope;
     }
 
     /**

@@ -9,6 +9,15 @@ import com.skillforge.core.engine.ChatEventBroadcaster;
 import com.skillforge.core.engine.InteractiveControlRequest;
 import com.skillforge.core.engine.LoopContext;
 import com.skillforge.core.engine.LoopResult;
+import com.skillforge.core.engine.durability.DurableFrontier;
+import com.skillforge.core.engine.durability.ArchivePreparationCommand;
+import com.skillforge.core.engine.durability.ArchivePreparationAck;
+import com.skillforge.core.engine.durability.DurableToolAttemptState;
+import com.skillforge.core.engine.durability.ExecutionClaimCommand;
+import com.skillforge.core.engine.durability.FrozenJson;
+import com.skillforge.core.engine.durability.MessageSnapshot;
+import com.skillforge.core.engine.durability.PersistedBlockOccurrence;
+import com.skillforge.core.engine.durability.DurableToolExecutionIncompleteException;
 import com.skillforge.core.engine.confirm.Decision;
 import com.skillforge.core.engine.confirm.PendingConfirmation;
 import com.skillforge.core.engine.confirm.PendingConfirmationRegistry;
@@ -25,6 +34,7 @@ import com.skillforge.core.skill.SkillRegistry;
 import com.skillforge.observability.api.LlmTraceStore;
 import com.skillforge.observability.api.LlmTraceStore.TraceFinalizeRequest;
 import com.skillforge.server.config.LlmProperties;
+import com.skillforge.server.config.SessionHistoryProperties;
 import com.skillforge.server.entity.AgentEntity;
 import com.skillforge.server.entity.CollabRunEntity;
 import com.skillforge.server.entity.ModelUsageEntity;
@@ -42,11 +52,25 @@ import com.skillforge.server.runtime.RuntimeFailureFact;
 import com.skillforge.server.runtime.RuntimeFailureState;
 import com.skillforge.server.subagent.CollabRunService;
 import com.skillforge.server.subagent.SubAgentRegistry;
+import com.skillforge.server.session.SessionDurableCompletionReconciler;
+import com.skillforge.server.session.SessionDurableCancellationService;
+import com.skillforge.server.session.SessionInteractiveControlTransactionService;
+import com.skillforge.server.session.OccurrenceArchivePreparation;
+import com.skillforge.server.session.SessionLoopAdmissionService;
+import com.skillforge.server.session.SessionLoopLeaseHeartbeat;
+import com.skillforge.server.session.SessionQueuedUserInboxService;
+import com.skillforge.server.session.DurableSessionRecoveryCoordinator;
+import com.skillforge.server.session.DurableRecoveryFailureException;
+import com.skillforge.server.session.DurableRecoveryRetryableException;
+import com.skillforge.server.session.ResolvedUnknownContinuationRun;
+import com.skillforge.server.session.SessionRunCoordinator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.dao.TransientDataAccessException;
+import org.springframework.transaction.CannotCreateTransactionException;
 import org.springframework.stereotype.Service;
 
 
@@ -115,6 +139,146 @@ public class ChatService {
     private final LlmProperties llmProperties;
     private final ArtifactWorkspaceService artifactWorkspaceService;
     private final ConcurrentHashMap<String, AtomicInteger> activeLoopTaskCounts = new ConcurrentHashMap<>();
+    /** Covers the executor handoff gap before runLoop increments activeLoopTaskCounts. */
+    private final Set<String> durableRecoveryReservations = ConcurrentHashMap.newKeySet();
+
+    /** Optional only for direct-constructor tests; all three beans are present in production. */
+    private SessionHistoryProperties sessionHistoryProperties;
+    private SessionLoopAdmissionService sessionLoopAdmissionService;
+    private SessionDurableCompletionReconciler sessionDurableCompletionReconciler;
+    private SessionLoopLeaseHeartbeat sessionLoopLeaseHeartbeat;
+    private DurableSessionRecoveryCoordinator durableSessionRecoveryCoordinator;
+    private SessionDurableCancellationService sessionDurableCancellationService;
+    private SessionInteractiveControlTransactionService interactiveControlTransactions;
+    private OccurrenceArchivePreparation occurrenceArchivePreparation;
+    private SessionQueuedUserInboxService sessionQueuedUserInboxService;
+    private SessionRunCoordinator sessionRunCoordinator;
+
+    @Autowired
+    void configureSessionDurability(
+            SessionHistoryProperties properties,
+            SessionLoopAdmissionService admissionService,
+            SessionDurableCompletionReconciler completionReconciler,
+            SessionLoopLeaseHeartbeat leaseHeartbeat,
+            DurableSessionRecoveryCoordinator recoveryCoordinator) {
+        this.sessionHistoryProperties = properties;
+        this.sessionLoopAdmissionService = admissionService;
+        this.sessionDurableCompletionReconciler = completionReconciler;
+        this.sessionLoopLeaseHeartbeat = leaseHeartbeat;
+        this.durableSessionRecoveryCoordinator = recoveryCoordinator;
+    }
+
+    @Autowired
+    void configureDurableCancellation(
+            SessionDurableCancellationService cancellationService) {
+        this.sessionDurableCancellationService = cancellationService;
+    }
+
+    @Autowired
+    void configureDurableInteractiveContinuation(
+            SessionInteractiveControlTransactionService interactiveTransactions,
+            OccurrenceArchivePreparation archivePreparation) {
+        this.interactiveControlTransactions = interactiveTransactions;
+        this.occurrenceArchivePreparation = archivePreparation;
+    }
+
+    @Autowired
+    void configureDurableQueuedUserInbox(
+            SessionQueuedUserInboxService queuedUserInboxService) {
+        this.sessionQueuedUserInboxService = queuedUserInboxService;
+    }
+
+    @Autowired
+    void configureResolvedUnknownContinuation(SessionRunCoordinator runCoordinator) {
+        this.sessionRunCoordinator = runCoordinator;
+    }
+
+    /** Re-emits only already committed unknown-result occurrences. */
+    public void republishResolvedUnknownResults(List<PersistedBlockOccurrence> results) {
+        if (broadcaster == null || results == null) return;
+        results.stream()
+                .sorted(java.util.Comparator.comparingInt(
+                        PersistedBlockOccurrence::resultBatchOrdinal))
+                .forEach(block -> {
+                    try {
+                        broadcaster.messageAppended(
+                                block.sessionId(), block.traceId(),
+                                Message.toolResult(
+                                        block.toolUseId(), block.content(), block.error(),
+                                        block.errorType()));
+                    } catch (RuntimeException publishFailure) {
+                        log.warn("Resolved unknown result broadcast failed: sessionId={}",
+                                block.sessionId());
+                    }
+                });
+    }
+
+    /** Starts Provider continuation only after the durable post-action gates have accepted it. */
+    public void continueResolvedUnknownAsync(ResolvedUnknownContinuationRun run) {
+        if (run == null || sessionRunCoordinator == null) {
+            throw new IllegalStateException("Resolved unknown continuation is unavailable");
+        }
+        startResolvedUnknownContinuation(run);
+    }
+
+    private void startResolvedUnknownContinuation(ResolvedUnknownContinuationRun run) {
+        synchronized (compactionService.lockFor(run.scope().sessionId())) {
+            String sessionId = run.scope().sessionId();
+            SessionEntity session = sessionService.getSession(sessionId);
+            if (!"running".equals(session.getRuntimeStatus())
+                    || !java.util.Objects.equals(session.getUserId(), run.scope().userId())
+                    || session.getHistoryEpoch() != run.scope().historyEpoch()
+                    || !run.scope().loopId().equals(session.getActiveLoopId())
+                    || session.getLoopFence() != run.scope().loopFence()
+                    || !run.scope().ownerInstanceId().equals(
+                            session.getLoopOwnerInstanceId())
+                    || session.getLoopLeaseUntil() == null
+                    || !session.getLoopLeaseUntil().equals(run.leaseUntil())) {
+                throw new IllegalStateException(
+                        "Resolved unknown continuation authority changed");
+            }
+            if (hasActiveLoopTask(sessionId)
+                    || !durableRecoveryReservations.add(sessionId)) {
+                throw new RetryBusyException();
+            }
+
+            ResumeLoopSubmission submission;
+            try {
+                submission = reserveResumeLoop();
+            } catch (RuntimeException | Error error) {
+                durableRecoveryReservations.remove(sessionId);
+                throw error;
+            }
+            try {
+                List<Message> history = sessionService.getContextMessages(sessionId);
+                if (history.isEmpty()) {
+                    throw new IllegalStateException(
+                            "Resolved unknown continuation has no persisted boundary");
+                }
+                AgentEntity agent = agentService.getAgent(session.getAgentId());
+                String traceId = UUID.randomUUID().toString();
+                String rootTraceId = sessionService.getActiveRootTraceId(sessionId);
+                if (rootTraceId == null) {
+                    rootTraceId = traceId;
+                    sessionService.setActiveRootTraceId(sessionId, rootTraceId);
+                }
+                if (broadcaster != null) {
+                    broadcaster.sessionStatus(
+                            sessionId, "running", "Continuing resolved unknown outcome", null);
+                }
+                DurableSessionRecoveryCoordinator.RecoveryPlan plan =
+                        DurableSessionRecoveryCoordinator.RecoveryPlan
+                                .resolvedUnknownContinuation(run);
+                submission.start(new ResumeLoopRequest(
+                        sessionId, run.scope().userId(), agent, history, traceId,
+                        rootTraceId, null, null, plan));
+            } catch (RuntimeException | Error error) {
+                submission.abort(error);
+                durableRecoveryReservations.remove(sessionId);
+                throw error;
+            }
+        }
+    }
 
     /**
      * P12: publishes {@link SessionLoopFinishedEvent} in the loop teardown finally
@@ -288,6 +452,32 @@ public class ChatService {
 
     public void chatAsync(String sessionId, String userMessage, Long userId,
                           List<String> attachmentIds, boolean preserveActiveRoot) {
+        chatAsyncWithRequestId(
+                sessionId, userMessage, userId, attachmentIds,
+                preserveActiveRoot, UUID.randomUUID());
+    }
+
+    /** Dashboard/API entrypoint with a retry-stable ordered-inbox identity. */
+    public ChatSubmissionAck submitUserMessage(
+            String sessionId,
+            String userMessage,
+            Long userId,
+            List<String> attachmentIds,
+            UUID requestId) {
+        UUID effectiveRequestId = requestId != null ? requestId : UUID.randomUUID();
+        chatAsyncWithRequestId(
+                sessionId, userMessage, userId, attachmentIds,
+                false, effectiveRequestId);
+        return new ChatSubmissionAck(effectiveRequestId, "scheduled");
+    }
+
+    private void chatAsyncWithRequestId(
+            String sessionId,
+            String userMessage,
+            Long userId,
+            List<String> attachmentIds,
+            boolean preserveActiveRoot,
+            UUID requestId) {
         List<String> normalizedAttachmentIds = attachmentIds != null ? attachmentIds : List.of();
         String normalizedUserMessage = userMessage != null ? userMessage : "";
         // 1. 读当前 session 和 agent
@@ -301,7 +491,21 @@ public class ChatService {
             // Re-read session inside lock to avoid TOCTOU on runtimeStatus
             session = sessionService.getSession(sessionId);
 
+            // Atomic durable completion releases the DB scope before the old loop's
+            // post-commit broadcasts and hooks finish. Keep a new local turn out of
+            // that teardown window so old idle/cache events cannot race the new run.
+            if (!"running".equals(session.getRuntimeStatus())
+                    && hasActiveLoopTask(sessionId)) {
+                throw new RetryBusyException();
+            }
+
             if ("waiting_user".equals(session.getRuntimeStatus())) {
+                if (isDurableConversationEnabled()) {
+                    // Direct input cannot silently rewrite a durable control. Supersede must
+                    // eventually use the same claimed full-vector resolution protocol.
+                    throw new IllegalStateException(
+                            "Durable interactive control must be answered explicitly");
+                }
                 if (sessionService.findPendingConfirmation(sessionId).isPresent()) {
                     throw new IllegalStateException("pending confirmation must be resolved first");
                 }
@@ -317,10 +521,54 @@ public class ChatService {
 
             // If session is already running, enqueue the message instead of starting a new loop
             if ("running".equals(session.getRuntimeStatus())) {
-                if (!normalizedAttachmentIds.isEmpty()) {
+                if (isDurableConversationEnabled()) {
+                    if (!normalizedAttachmentIds.isEmpty()) {
+                        throw new IllegalStateException(
+                                "Attachments cannot be queued while the session is running");
+                    }
+                    if (sessionQueuedUserInboxService == null) {
+                        throw new IllegalStateException(
+                                "Durable queued-user inbox is not configured");
+                    }
+                    SessionQueuedUserInboxService.AcceptanceAck acceptance =
+                            sessionQueuedUserInboxService.acceptOrRoute(
+                                    sessionId,
+                                    userId,
+                                    requestId,
+                                    MessageSnapshot.capture(
+                                            Message.user(normalizedUserMessage)));
+                    if (acceptance.mode()
+                            == SessionQueuedUserInboxService.AcceptanceMode
+                                    .QUEUED_RECOVERY_REQUIRED) {
+                        // Acceptance is already committed. The periodic poller remains the
+                        // durable retry owner if an immediate fenced claim cannot be scheduled.
+                        try {
+                            resumeDurableInterruptedTurnAsync(sessionId);
+                        } catch (RuntimeException recoveryDeferred) {
+                            log.info("Queued USER accepted; fenced recovery deferred: sessionId={}",
+                                    sessionId);
+                        }
+                        return;
+                    }
+                    if (acceptance.mode()
+                                    == SessionQueuedUserInboxService.AcceptanceMode.QUEUED_LIVE
+                            || acceptance.mode()
+                                    == SessionQueuedUserInboxService.AcceptanceMode.ALREADY_DRAINED) {
+                        return;
+                    }
+                    // The DB loop closed between the runtime read and inbox acceptance. Re-enter
+                    // normal admission below with the same request identity.
+                    session = sessionService.getSession(sessionId);
+                    if (hasActiveLoopTask(sessionId)) {
+                        throw new RetryBusyException();
+                    }
+                }
+                if (!isDurableConversationEnabled() && !normalizedAttachmentIds.isEmpty()) {
                     throw new IllegalStateException("Attachments cannot be queued while the session is running");
                 }
-                LoopContext ctx = cancellationRegistry.getContext(sessionId);
+                LoopContext ctx = isDurableConversationEnabled()
+                        ? null
+                        : cancellationRegistry.getContext(sessionId);
                 if (ctx != null) {
                     ctx.enqueueUserMessage(normalizedUserMessage);
                     try {
@@ -410,7 +658,23 @@ public class ChatService {
             Message userMsg = buildUserMessageWithReminder(
                     sessionId, userId, normalizedUserMessage, history, agentEntity);
             userMsg = withAttachmentRefs(sessionId, userId, userMsg, normalizedAttachmentIds);
-            long userSeqNo = sessionService.appendNormalMessages(sessionId, List.of(userMsg), traceId);
+            final SessionLoopAdmissionService.AdmissionAck durableAdmission;
+            final long userSeqNo;
+            if (isDurableConversationEnabled()) {
+                String loopId = UUID.randomUUID().toString();
+                durableAdmission = admitDurableLoop(
+                        sessionId,
+                        userId,
+                        requestId,
+                        loopId,
+                        MessageSnapshot.capture(userMsg),
+                        traceId);
+                userSeqNo = durableAdmission.userMessage().seqNo();
+            } else {
+                durableAdmission = null;
+                userSeqNo = sessionService.appendNormalMessages(
+                        sessionId, List.of(userMsg), traceId);
+            }
             if (chatAttachmentService != null && !normalizedAttachmentIds.isEmpty()) {
                 chatAttachmentService.bindToMessage(sessionId, userId, normalizedAttachmentIds, userSeqNo);
             }
@@ -428,13 +692,25 @@ public class ChatService {
                         // ABORT: persist error state, broadcast, do not submit to executor.
                         log.warn("SessionStart hook aborted session {}; refusing to start loop", sessionId);
                         session = sessionService.getSession(sessionId);
-                        session.setRuntimeStatus("error");
-                        RuntimeFailureFact failure = RUNTIME_FAILURE_CLASSIFIER.hookFailure(
-                                "SESSION_START_HOOK_ABORTED",
-                                "A session start policy stopped the run.");
-                        RuntimeFailureState.apply(session, failure);
-                        session.setCompletedAt(java.time.Instant.now());
-                        sessionService.saveSession(session);
+                        if (durableAdmission != null) {
+                            RuntimeFailureFact failure = RUNTIME_FAILURE_CLASSIFIER.hookFailure(
+                                    "SESSION_START_HOOK_ABORTED",
+                                    "A session start policy stopped the run.");
+                            if (!sessionLoopAdmissionService.failIfNoBlockingAttempt(
+                                    durableAdmission.scope(), failure)) {
+                                throw new IllegalStateException(
+                                        "Durable SessionStart failure requires recovery");
+                            }
+                            session = sessionService.getSession(sessionId);
+                        } else {
+                            session.setRuntimeStatus("error");
+                            RuntimeFailureFact failure = RUNTIME_FAILURE_CLASSIFIER.hookFailure(
+                                    "SESSION_START_HOOK_ABORTED",
+                                    "A session start policy stopped the run.");
+                            RuntimeFailureState.apply(session, failure);
+                            session.setCompletedAt(java.time.Instant.now());
+                            sessionService.saveSession(session);
+                        }
                         if (broadcaster != null) {
                             broadcastFailureStatus(sessionId, session);
                             broadcaster.userEvent(session.getUserId(),
@@ -449,11 +725,13 @@ public class ChatService {
 
             // 3. 更新 runtime 状态 + 记录 lastUserMessageAt
             session = sessionService.getSession(sessionId);
-            session.setRuntimeStatus("running");
-            RuntimeFailureState.clear(session);
-            session.setRuntimeStep("Starting");
-            session.setLastUserMessageAt(java.time.Instant.now());
-            sessionService.saveSession(session);
+            if (durableAdmission == null) {
+                session.setRuntimeStatus("running");
+                RuntimeFailureState.clear(session);
+                session.setRuntimeStep("Starting");
+                session.setLastUserMessageAt(java.time.Instant.now());
+                sessionService.saveSession(session);
+            }
 
             // 4. 广播 user message + running 状态
             // OBS-2 M1 §A.1 row 4 / §D.5: 广播 traceId，供前端 trace 关联。
@@ -475,20 +753,35 @@ public class ChatService {
             try {
                 chatLoopExecutor.execute(() -> runLoop(
                         sessionId, normalizedUserMessage, userMsgWithReminder, userId,
-                        agentEntity, historyForLoop, capturedTraceId, capturedRootTraceId));
+                        agentEntity, historyForLoop, capturedTraceId, capturedRootTraceId,
+                        durableAdmission));
             } catch (RejectedExecutionException rejected) {
                 // The user row is already durable, but the loop never started: zero SSE,
                 // zero tools, and therefore a safe retry through retryFailedTurnAsync.
-                SessionEntity rejectedSession = sessionService.getSession(sessionId);
-                rejectedSession.setRuntimeStatus("error");
-                rejectedSession.setCompletedAt(java.time.Instant.now());
-                RuntimeFailureFact queueFailure = fullHistory.isEmpty()
+                if (durableAdmission != null) {
+                    RuntimeFailureFact queueFailure = fullHistory.isEmpty()
                         ? RUNTIME_FAILURE_CLASSIFIER.harnessFailure(
                                 "EXECUTOR_BUSY", "The agent runtime is busy.", "possible")
                         : RUNTIME_FAILURE_CLASSIFIER.retryableHarnessFailure(
                                 "EXECUTOR_BUSY", "The agent runtime is busy. Please retry.");
-                RuntimeFailureState.apply(rejectedSession, queueFailure);
-                sessionService.saveSession(rejectedSession);
+                    if (!sessionLoopAdmissionService.failIfNoBlockingAttempt(
+                            durableAdmission.scope(), queueFailure)) {
+                        throw new IllegalStateException(
+                                "Durable executor rejection requires recovery");
+                    }
+                }
+                SessionEntity rejectedSession = sessionService.getSession(sessionId);
+                if (durableAdmission == null) {
+                    rejectedSession.setRuntimeStatus("error");
+                    rejectedSession.setCompletedAt(java.time.Instant.now());
+                    RuntimeFailureFact queueFailure = fullHistory.isEmpty()
+                            ? RUNTIME_FAILURE_CLASSIFIER.harnessFailure(
+                                    "EXECUTOR_BUSY", "The agent runtime is busy.", "possible")
+                            : RUNTIME_FAILURE_CLASSIFIER.retryableHarnessFailure(
+                                    "EXECUTOR_BUSY", "The agent runtime is busy. Please retry.");
+                    RuntimeFailureState.apply(rejectedSession, queueFailure);
+                    sessionService.saveSession(rejectedSession);
+                }
                 if (broadcaster != null) {
                     try {
                         broadcastFailureStatus(sessionId, rejectedSession);
@@ -704,12 +997,60 @@ public class ChatService {
                          Message userMsgWithReminder, Long userId,
                          AgentEntity agentEntity, List<Message> history,
                          String externalTraceId, String externalRootTraceId) {
+        runLoop(sessionId, userMessage, userMsgWithReminder, userId, agentEntity, history,
+                externalTraceId, externalRootTraceId, null);
+    }
+
+    private void runLoop(String sessionId, String userMessage,
+                         Message userMsgWithReminder, Long userId,
+                         AgentEntity agentEntity, List<Message> history,
+                         String externalTraceId, String externalRootTraceId,
+                         SessionLoopAdmissionService.AdmissionAck durableAdmission) {
+        runLoop(sessionId, userMessage, userMsgWithReminder, userId, agentEntity, history,
+                externalTraceId, externalRootTraceId, durableAdmission, null);
+    }
+
+    private void runLoop(String sessionId, String userMessage,
+                         Message userMsgWithReminder, Long userId,
+                         AgentEntity agentEntity, List<Message> history,
+                         String externalTraceId, String externalRootTraceId,
+                         SessionLoopAdmissionService.AdmissionAck durableAdmission,
+                         DurableSessionRecoveryCoordinator.RecoveryPlan recoveryPlan) {
+        DurableLoopContinuation continuation = runLoopOnce(
+                sessionId, userMessage, userMsgWithReminder, userId, agentEntity, history,
+                externalTraceId, externalRootTraceId, durableAdmission, recoveryPlan);
+        while (continuation != null) {
+            continuation = runLoopOnce(
+                    continuation.sessionId(),
+                    null,
+                    null,
+                    continuation.userId(),
+                    continuation.agentEntity(),
+                    continuation.history(),
+                    continuation.traceId(),
+                    continuation.rootTraceId(),
+                    continuation.authority(),
+                    null);
+        }
+    }
+
+    private DurableLoopContinuation runLoopOnce(
+                         String sessionId, String userMessage,
+                         Message userMsgWithReminder, Long userId,
+                         AgentEntity agentEntity, List<Message> history,
+                         String externalTraceId, String externalRootTraceId,
+                         SessionLoopAdmissionService.AdmissionAck durableAdmission,
+                         DurableSessionRecoveryCoordinator.RecoveryPlan recoveryPlan) {
         // OBS-2 M1 §D.8.2: 显式 startedAt 给 §D.8.3 catch 块 finalize 使用。
         final long startedAt = System.currentTimeMillis();
         String finalMessage = null;
         int toolCallCount = 0;
         String finalStatus = "completed";
         SessionEntity deferredErrorSession = null;
+        SessionDurableCancellationService.CancellationAck committedCancellation = null;
+        SessionLoopLeaseHeartbeat.Handle durableHeartbeat = null;
+        boolean durableTerminalAccepted = !isDurableConversationEnabled();
+        final UUID completionBatchId = UUID.randomUUID();
         // OBS-2 M1 §D.1: traceId 在 runLoop 入口必须存在 — 优先使用调用方传入的，否则 fallback 生成。
         final String traceId = externalTraceId != null ? externalTraceId : UUID.randomUUID().toString();
         LoopContext preCtx = null;
@@ -823,6 +1164,24 @@ public class ChatService {
             log.info("Running agent loop (async): sessionId={}, agentId={}, mode={}", sessionId, agentEntity.getId(), mode);
             // 预建 LoopContext 并注册到 CancellationRegistry, 让 /cancel 端点可以找到它
             preCtx = new LoopContext();
+            if (isDurableConversationEnabled()) {
+                if ((durableAdmission == null) == (recoveryPlan == null)) {
+                    throw new IllegalStateException(
+                            "Durable loop requires exactly one authority acknowledgement");
+                }
+                var scope = durableAdmission != null
+                        ? durableAdmission.scope()
+                        : recoveryPlan.admission().scope();
+                var frontier = durableAdmission != null
+                        ? durableAdmission.frontier()
+                        : recoveryPlan.frontier();
+                preCtx.setDurabilityScope(scope);
+                preCtx.setExpectedDurableFrontier(frontier);
+                if (recoveryPlan != null) {
+                    preCtx.setRecoveredToolAttempt(recoveryPlan.recoveredToolAttempt());
+                }
+                durableHeartbeat = sessionLoopLeaseHeartbeat.start(scope);
+            }
             if (artifactWorkspace != null) {
                 preCtx.setArtifactOutputDirectory(artifactWorkspace.toString());
             }
@@ -944,6 +1303,10 @@ public class ChatService {
             List<String> remaining = preCtx.drainPendingUserMessages();
             List<Message> finalMessages = result.getMessages();
             if (!remaining.isEmpty()) {
+                if (isDurableConversationEnabled()) {
+                    throw new IllegalStateException(
+                            "Durable queued messages require the ordered inbox");
+                }
                 for (String text : remaining) {
                     finalMessages.add(Message.user(text));
                 }
@@ -959,11 +1322,22 @@ public class ChatService {
                     || "max_tokens_exhausted".equals(resultStatus);
             if (isSilentExit && finalMessage != null && !finalMessage.isBlank()) {
                 finalStatus = resultStatus;   // ← 同步 finalStatus，确保 subAgentRegistry 和 SessionEnd hook 收到正确 reason
-                Message notifyMsg = Message.assistant(finalMessage);
-                finalMessages.add(notifyMsg);
+                Message notifyMsg;
+                if (isDurableConversationEnabled()
+                        && result.getDeferredBroadcastMessages().size() == 1) {
+                    notifyMsg = result.getDeferredBroadcastMessages().get(0);
+                    mergeTerminalNotice(notifyMsg, finalMessage);
+                } else {
+                    notifyMsg = Message.assistant(finalMessage);
+                    finalMessages.add(notifyMsg);
+                }
                 // OBS-2 M1 §A.1 row 5 / §D.3: 静默退出 notify 也归当前 trace。
-                if (broadcaster != null) {
+                if (broadcaster != null && !isDurableConversationEnabled()) {
                     broadcaster.messageAppended(sessionId, preCtx.getTraceId(), notifyMsg);
+                } else if (isDurableConversationEnabled()) {
+                    if (result.getDeferredBroadcastMessages().isEmpty()) {
+                        result.getDeferredBroadcastMessages().add(notifyMsg);
+                    }
                 }
                 log.info("Silent exit notified to user: status={}, sessionId={}", resultStatus, sessionId);
             }
@@ -972,8 +1346,129 @@ public class ChatService {
 
             // 保存最终 messages(engine 已经把 user msg + 之后所有消息组装好了)
             // OBS-2 M1 §D.5: 透传 traceId 让 engine 输出（assistant / tool_result）行 trace_id 不为 null。
-            sessionService.updateSessionMessages(sessionId, finalMessages,
-                    result.getTotalInputTokens(), result.getTotalOutputTokens(), traceId);
+            if (isDurableConversationEnabled() && waitingUser) {
+                if (preCtx.getDurabilityScope() == null
+                        || preCtx.getExpectedDurableFrontier() == null
+                        || result.getPendingControl() == null) {
+                    throw new IllegalStateException(
+                            "Durable waiting control is missing database authority");
+                }
+                durableHeartbeat.assertAuthoritative();
+                durableHeartbeat.close();
+                durableHeartbeat = null;
+                sessionLoopAdmissionService.parkForManualContinuation(
+                        preCtx.getDurabilityScope(),
+                        com.skillforge.core.engine.durability.DurableToolAttemptState.WAITING_USER,
+                        null);
+                completeResolvedUnknownTranscript(recoveryPlan);
+                durableTerminalAccepted = true;
+                result.setDeferredBroadcastMessages(List.of());
+            } else if (isDurableConversationEnabled()) {
+                if (preCtx.getDurabilityScope() == null
+                        || preCtx.getExpectedDurableFrontier() == null) {
+                    throw new IllegalStateException(
+                            "Durable loop completion is missing database authority");
+                }
+                MessageSnapshot terminalAssistant = durableTerminalAssistant(result);
+                if (terminalAssistant == null) {
+                    if (finalMessage == null || finalMessage.isBlank()) {
+                        throw new IllegalStateException(
+                                "Durable loop has no terminal assistant to reconcile");
+                    }
+                    Message terminal = Message.assistant(finalMessage);
+                    result.setDeferredBroadcastMessages(List.of(terminal));
+                    terminalAssistant = MessageSnapshot.capture(terminal);
+                }
+                durableHeartbeat.assertAuthoritative();
+                durableHeartbeat.close();
+                durableHeartbeat = null;
+                SessionDurableCompletionReconciler.CompletionAck completionAck =
+                        reconcileDurableCompletion(
+                        preCtx.getDurabilityScope(),
+                        preCtx.getExpectedDurableFrontier(),
+                        completionBatchId,
+                        terminalAssistant,
+                        traceId,
+                        result.getTotalInputTokens(),
+                        result.getTotalOutputTokens());
+                completeResolvedUnknownTranscript(recoveryPlan);
+                if (completionAck.continuationRequired()) {
+                    // The terminal assistant was committed before the queued USER rows, and the
+                    // completion transaction retained this exact loop/fence under the Session
+                    // lock. Continue on the same authority so input accepted during the final
+                    // Provider call cannot be stranded after an idle transition.
+                    Message committedIntermediate =
+                            completionAck.terminalAssistant().message().toMessage();
+                    if (broadcaster != null) {
+                        try {
+                            broadcaster.messageAppended(
+                                    sessionId, traceId, committedIntermediate);
+                        } catch (RuntimeException broadcastFailure) {
+                            log.warn("Intermediate terminal broadcast failed: sessionId={}",
+                                    sessionId);
+                        }
+                    }
+                    if (chatAttachmentService != null) {
+                        try {
+                            chatAttachmentService.markPublishedFromMessages(
+                                    List.of(committedIntermediate));
+                        } catch (RuntimeException attachmentFailure) {
+                            log.warn("Intermediate attachment publication repair failed: sessionId={}",
+                                    sessionId);
+                        }
+                    }
+                    if (artifactWorkspaceService != null && artifactWorkspace != null) {
+                        try {
+                            artifactWorkspaceService.deleteWorkspace(artifactWorkspace);
+                            artifactWorkspace = null;
+                        } catch (RuntimeException cleanupFailure) {
+                            log.warn("Intermediate artifact workspace cleanup deferred: sessionId={}",
+                                    sessionId);
+                        }
+                    }
+
+                    ModelUsageEntity intermediateUsage = new ModelUsageEntity();
+                    intermediateUsage.setUserId(userId);
+                    intermediateUsage.setAgentId(agentEntity.getId());
+                    intermediateUsage.setSessionId(sessionId);
+                    intermediateUsage.setModelId(agentDef.getModelId());
+                    intermediateUsage.setInputTokens((int) result.getTotalInputTokens());
+                    intermediateUsage.setOutputTokens((int) result.getTotalOutputTokens());
+                    try {
+                        intermediateUsage.setToolCalls(
+                                objectMapper.writeValueAsString(result.getToolCalls()));
+                    } catch (JsonProcessingException serializationFailure) {
+                        intermediateUsage.setToolCalls("[]");
+                    }
+                    modelUsageRepository.save(intermediateUsage);
+
+                    SessionLoopAdmissionService.AdmissionAck continuationAuthority =
+                            new SessionLoopAdmissionService.AdmissionAck(
+                                    preCtx.getDurabilityScope(),
+                                    completionAck.terminalAssistant(),
+                                    completionAck.postCompletionFrontier(),
+                                    completionAck.continuationLeaseUntil());
+                    List<Message> continuationHistory =
+                            sessionService.getContextMessages(sessionId);
+                    durableTerminalAccepted = false;
+                    result.setDeferredBroadcastMessages(List.of());
+                    return new DurableLoopContinuation(
+                            sessionId,
+                            userId,
+                            agentEntity,
+                            continuationHistory,
+                            UUID.randomUUID().toString(),
+                            externalRootTraceId,
+                            continuationAuthority);
+                }
+                durableTerminalAccepted = true;
+                result.setDeferredBroadcastMessages(completionAck.terminalAssistant() == null
+                        ? List.of()
+                        : List.of(completionAck.terminalAssistant().message().toMessage()));
+            } else {
+                sessionService.updateSessionMessages(sessionId, finalMessages,
+                        result.getTotalInputTokens(), result.getTotalOutputTokens(), traceId);
+            }
 
             List<Message> deferredArtifactMessages = result.getDeferredBroadcastMessages();
             if (deferredArtifactMessages != null && !deferredArtifactMessages.isEmpty()) {
@@ -1004,7 +1499,9 @@ public class ChatService {
             }
 
             if (waitingUser) {
-                persistPendingControl(sessionId, result.getPendingControl());
+                if (!isDurableConversationEnabled()) {
+                    persistPendingControl(sessionId, result.getPendingControl());
+                }
                 ModelUsageEntity usage = new ModelUsageEntity();
                 usage.setUserId(userId);
                 usage.setAgentId(agentEntity.getId());
@@ -1020,18 +1517,20 @@ public class ChatService {
                 modelUsageRepository.save(usage);
 
                 SessionEntity s = sessionService.getSession(sessionId);
-                s.setCompletedAt(java.time.Instant.now());
-                s.setRuntimeStatus("waiting_user");
-                RuntimeFailureState.clear(s);
-                s.setRuntimeStep("waiting_control");
-                clearRecoveryState(s);
-                sessionService.saveSession(s);
+                if (!isDurableConversationEnabled()) {
+                    s.setCompletedAt(java.time.Instant.now());
+                    s.setRuntimeStatus("waiting_user");
+                    RuntimeFailureState.clear(s);
+                    s.setRuntimeStep("waiting_control");
+                    clearRecoveryState(s);
+                    sessionService.saveSession(s);
+                }
                 if (broadcaster != null) {
                     broadcaster.sessionStatus(sessionId, "waiting_user", "waiting_control", null);
                     broadcaster.userEvent(s.getUserId(), sessionUpdatedPayload(s, s.getMessageCount()));
                 }
                 finalStatus = "waiting_user";
-                return;
+                return null;
             }
 
             // 记录 ModelUsage
@@ -1054,26 +1553,28 @@ public class ChatService {
             // 取消退出也是 idle, 通过 step="cancelled" 标注, 避免引入新的 runtimeStatus 枚举值
             // aborted_by_hook → error + message，视为用户显式拒绝的流程
             SessionEntity s = sessionService.getSession(sessionId);
-            s.setCompletedAt(java.time.Instant.now());
-            if (wasAbortedByHook) {
-                s.setRuntimeStatus("error");
-                RuntimeFailureState.apply(s, RUNTIME_FAILURE_CLASSIFIER.hookFailure(
-                        "LIFECYCLE_HOOK_ABORTED", "A lifecycle policy stopped the run."));
-            } else {
+            if (!isDurableConversationEnabled()) {
+                s.setCompletedAt(java.time.Instant.now());
+                if (wasAbortedByHook) {
+                    s.setRuntimeStatus("error");
+                    RuntimeFailureState.apply(s, RUNTIME_FAILURE_CLASSIFIER.hookFailure(
+                            "LIFECYCLE_HOOK_ABORTED", "A lifecycle policy stopped the run."));
+                } else {
                 // SubAgent terminate guard: 父显式 'terminate' 子 session 时 handleTerminate
                 // 把 child.runtime_status 设为 "terminated"。loop teardown 不能 downgrade 它
                 // 回 "idle"。与 SubAgentRegistry.onSessionLoopFinished 里 TERMINATED 的
                 // status guard 对称。仅守 idle 路径；"error"（hook abort / exception）仍按
                 // 真实失败反映。Broadcast 仍发 "idle"（前端不引入 "terminated" 枚举），DB 持
                 // 久态保留 "terminated" 供 'list' / panel 读取。
-                if (!"terminated".equals(s.getRuntimeStatus())) {
-                    s.setRuntimeStatus("idle");
+                    if (!"terminated".equals(s.getRuntimeStatus())) {
+                        s.setRuntimeStatus("idle");
+                    }
+                    RuntimeFailureState.clear(s);
+                    s.setRuntimeStep(wasCancelled ? "cancelled" : null);
+                    clearRecoveryState(s);
                 }
-                RuntimeFailureState.clear(s);
-                s.setRuntimeStep(wasCancelled ? "cancelled" : null);
-                clearRecoveryState(s);
+                sessionService.saveSession(s);
             }
-            sessionService.saveSession(s);
             if (broadcaster != null) {
                 if (wasAbortedByHook) {
                     broadcastFailureStatus(sessionId, s);
@@ -1107,10 +1608,65 @@ public class ChatService {
         } catch (Exception e) {
             log.error("Agent loop failed: sessionId={}", sessionId, e);
             finalStatus = "error";
+            if (durableHeartbeat != null) {
+                durableHeartbeat.close();
+                durableHeartbeat = null;
+            }
+            RuntimeFailureFact classifiedFailure = RUNTIME_FAILURE_CLASSIFIER.classify(
+                    e, failureEvidence(sessionId, preCtx));
+            if (isDurableConversationEnabled() && preCtx != null
+                    && preCtx.getDurabilityScope() != null) {
+                try {
+                    if (sessionDurableCancellationService != null) {
+                        committedCancellation = sessionDurableCancellationService
+                                .findCommittedForTarget(preCtx.getDurabilityScope())
+                                .orElse(null);
+                    }
+                    if (committedCancellation != null) {
+                        if (committedCancellation.outcome()
+                                == SessionDurableCancellationService.CancellationOutcome
+                                        .EXECUTION_OUTCOME_UNCERTAIN) {
+                            finalMessage = "Cancellation requires Tool outcome resolution";
+                            durableTerminalAccepted = false;
+                        } else {
+                            finalStatus = "cancelled";
+                            finalMessage = "Cancelled by user";
+                            durableTerminalAccepted = true;
+                        }
+                    } else if (e instanceof DurableRecoveryRetryableException) {
+                        durableTerminalAccepted = false;
+                    } else if (e instanceof DurableToolExecutionIncompleteException incomplete
+                            && incomplete.isUserCancelled()
+                            && preCtx.getActiveDurableExecution() != null) {
+                        sessionLoopAdmissionService.parkCancelledExecution(
+                                preCtx.getDurabilityScope(),
+                                preCtx.getActiveDurableExecution(),
+                                new RuntimeFailureFact(
+                                        "user_action",
+                                        "CANCELLED_TOOL_OUTCOME_UNCERTAIN",
+                                        false,
+                                        "possible",
+                                        "Cancellation was requested while a Tool may still be running."));
+                        durableTerminalAccepted = true;
+                    } else {
+                        durableTerminalAccepted = sessionLoopAdmissionService
+                                .failIfNoBlockingAttempt(
+                                        preCtx.getDurabilityScope(), classifiedFailure);
+                    }
+                    if (!durableTerminalAccepted && committedCancellation == null) {
+                        log.info("Durable loop retained for recovery: sessionId={}", sessionId);
+                    }
+                } catch (RuntimeException unresolvedOrStale) {
+                    durableTerminalAccepted = false;
+                    log.info("Stale durable loop cannot mutate Session: sessionId={}", sessionId);
+                }
+            }
             // 用户友好错误信息：根据 cause chain 识别常见异常类型映射成 actionable 中文提示，
             // 写入 runtime_error / WS error 推给前端展示。完整 stack trace 仅记日志（line above），
             // 不再回灌前端避免暴露内部结构 + 让用户能直接看懂"该重试 / 调超时 / 检查网络"。
-            finalMessage = "Agent loop failed";
+            if (finalMessage == null || finalMessage.isBlank()) {
+                finalMessage = "Agent loop failed";
+            }
             // OBS-2 M1 §D.8.3 (r2 review r2): exception path 保底 finalize trace。
             // engine 抛 unhandled exception 时确保 t_llm_trace.status 不留 'running'。
             // toolCallCount/eventCount 用 0/0 fallback（exception 路径下 engine 局部计数器
@@ -1120,8 +1676,10 @@ public class ChatService {
             try {
                 traceStore.finalizeTrace(new TraceFinalizeRequest(
                         traceId,
-                        "error",
-                        "agent_loop_exception",
+                        finalStatus,
+                        "cancelled".equals(finalStatus)
+                                ? "user_cancelled"
+                                : "agent_loop_exception",
                         System.currentTimeMillis() - startedAt,
                         0, 0,
                         Instant.now()));
@@ -1129,13 +1687,35 @@ public class ChatService {
                 /* observability 失败不影响主路径 */
             }
             try {
+                if (committedCancellation != null) {
+                    SessionEntity s = sessionService.getSession(sessionId);
+                    if (committedCancellation.outcome()
+                            == SessionDurableCancellationService.CancellationOutcome
+                                    .EXECUTION_OUTCOME_UNCERTAIN) {
+                        // The controller that committed/replayed the receipt owns the
+                        // authoritative WS projection. The stale worker only tears down local
+                        // resources; publishing here would duplicate the same terminal state.
+                    } else {
+                        try {
+                            AgentDefinition cancelledDef = agentService.toAgentDefinition(agentEntity);
+                            lifecycleHookDispatcher.fireSessionEnd(
+                                    cancelledDef, sessionId, userId,
+                                    s.getMessageCount(), "cancelled");
+                        } catch (Exception hookErr) {
+                            log.warn("SessionEnd hook dispatch on cancellation failed: {}",
+                                    hookErr.toString());
+                        }
+                    }
+                } else if (isDurableConversationEnabled() && !durableTerminalAccepted) {
+                    deferredErrorSession = null;
+                } else {
                 SessionEntity s = sessionService.getSession(sessionId);
-                s.setCompletedAt(java.time.Instant.now());
-                s.setRuntimeStatus("error");
-                RuntimeFailureFact failure = RUNTIME_FAILURE_CLASSIFIER.classify(
-                        e, failureEvidence(sessionId, preCtx));
-                RuntimeFailureState.apply(s, failure);
-                sessionService.saveSession(s);
+                if (!isDurableConversationEnabled()) {
+                    s.setCompletedAt(java.time.Instant.now());
+                    s.setRuntimeStatus("error");
+                    RuntimeFailureState.apply(s, classifiedFailure);
+                    sessionService.saveSession(s);
+                }
                 deferredErrorSession = s;
                 // SessionEnd hook on error path as well (reason=error)
                 try {
@@ -1145,10 +1725,14 @@ public class ChatService {
                 } catch (Exception hookErr) {
                     log.warn("SessionEnd hook dispatch on error path failed: {}", hookErr.toString());
                 }
+                }
             } catch (Exception inner) {
                 log.error("Failed to mark session error: sessionId={}", sessionId, inner);
             }
         } finally {
+            if (durableHeartbeat != null) {
+                durableHeartbeat.close();
+            }
             // Ensure CancellationRegistry is cleaned up (may already be done in happy path)
             try {
                 cancellationRegistry.unregister(sessionId);
@@ -1157,7 +1741,9 @@ public class ChatService {
             // Wake any pending install confirmation for this session (cancel cascade).
             // Safe to always invoke — no-op when no pending confirmation exists.
             try {
-                if (!"waiting_user".equals(finalStatus) && pendingConfirmationRegistry != null) {
+                if ((!isDurableConversationEnabled() || durableTerminalAccepted)
+                        && !"waiting_user".equals(finalStatus)
+                        && pendingConfirmationRegistry != null) {
                     pendingConfirmationRegistry.completeAllForSession(sessionId, Decision.DENIED);
                 }
             } catch (Exception ignored) {
@@ -1165,7 +1751,8 @@ public class ChatService {
             // r3: only a true root session clears its install-confirm cache. Child sessions
             // inherit the root's approvals and must not wipe them on their own loop end.
             try {
-                if (!"waiting_user".equals(finalStatus) && sessionConfirmCache != null) {
+                if ((!isDurableConversationEnabled() || durableTerminalAccepted)
+                        && !"waiting_user".equals(finalStatus) && sessionConfirmCache != null) {
                     String rootSid = rootSessionLookup != null
                             ? rootSessionLookup.resolveRoot(sessionId)
                             : sessionId;
@@ -1177,7 +1764,8 @@ public class ChatService {
             }
             // SubAgent 回调钩子:如果这是子 session,把结果 push 到父;如果这是父,drain 等待中的子结果
             try {
-                if (!"waiting_user".equals(finalStatus)) {
+                if ((!isDurableConversationEnabled() || durableTerminalAccepted)
+                        && !"waiting_user".equals(finalStatus)) {
                     subAgentRegistry.onSessionLoopFinished(sessionId, finalMessage, finalStatus,
                             toolCallCount, System.currentTimeMillis() - startedAt);
                 }
@@ -1190,15 +1778,18 @@ public class ChatService {
             // scheduled-task session is terminal from the schedule's POV (run.status=paused).
             // Defensive: any listener exception MUST NOT bubble into the loop teardown.
             try {
-                applicationEventPublisher.publishEvent(new SessionLoopFinishedEvent(
-                        sessionId, finalMessage, finalStatus, userId));
+                if (!isDurableConversationEnabled() || durableTerminalAccepted) {
+                    applicationEventPublisher.publishEvent(new SessionLoopFinishedEvent(
+                            sessionId, finalMessage, finalStatus, userId));
+                }
             } catch (Exception evtErr) {
                 log.error("SessionLoopFinishedEvent publish failed: sessionId={}", sessionId, evtErr);
             }
 
             // CollabRun hooks: cancel cascade FIRST, then notify completion (null-safe for tests)
             try {
-                if (!"waiting_user".equals(finalStatus)
+                if ((!isDurableConversationEnabled() || durableTerminalAccepted)
+                        && !"waiting_user".equals(finalStatus)
                         && collabRunService != null && collabRunRepository != null) {
                     SessionEntity finishedSession = sessionService.getSession(sessionId);
                     String finishedCollabRunId = finishedSession.getCollabRunId();
@@ -1231,12 +1822,162 @@ public class ChatService {
                                     deferredErrorSession.getMessageCount()));
                 }
             } finally {
+                durableRecoveryReservations.remove(sessionId);
                 markLoopTaskFinished(sessionId);
+            }
+        }
+        return null;
+    }
+
+    private record DurableLoopContinuation(
+            String sessionId,
+            Long userId,
+            AgentEntity agentEntity,
+            List<Message> history,
+            String traceId,
+            String rootTraceId,
+            SessionLoopAdmissionService.AdmissionAck authority) {
+    }
+
+    private boolean isDurableConversationEnabled() {
+        return sessionHistoryProperties != null
+                && sessionHistoryProperties.isEnabled()
+                && sessionLoopAdmissionService != null
+                && sessionDurableCompletionReconciler != null
+                && sessionLoopLeaseHeartbeat != null
+                && durableSessionRecoveryCoordinator != null;
+    }
+
+    /** Stable synchronous acceptance returned before the asynchronous loop produces output. */
+    public record ChatSubmissionAck(UUID requestId, String status) {
+        public ChatSubmissionAck {
+            java.util.Objects.requireNonNull(requestId, "requestId");
+            if (status == null || status.isBlank()) {
+                throw new IllegalArgumentException("status must not be blank");
             }
         }
     }
 
+    private SessionLoopAdmissionService.AdmissionAck admitDurableLoop(
+            String sessionId,
+            long userId,
+            UUID admissionRequestId,
+            String loopId,
+            MessageSnapshot userMessage,
+            String traceId) {
+        for (int attempt = 0; attempt < 3; attempt++) {
+            try {
+                return sessionLoopAdmissionService.admit(
+                        sessionId, userId, admissionRequestId, loopId, userMessage, traceId);
+            } catch (IllegalStateException failure) {
+                // Retry the exact immutable admission identity.
+            }
+        }
+        throw new IllegalStateException("Durable loop admission failed");
+    }
+
+    private SessionDurableCompletionReconciler.CompletionAck reconcileDurableCompletion(
+            com.skillforge.core.engine.durability.LoopDurabilityScope scope,
+            DurableFrontier acknowledgedFrontier,
+            UUID completionBatchId,
+            MessageSnapshot terminalAssistant,
+            String traceId,
+            long inputTokens,
+            long outputTokens) {
+        boolean onlyRetryableFailures = true;
+        for (int attempt = 0; attempt < 3; attempt++) {
+            try {
+                return sessionDurableCompletionReconciler.reconcile(
+                        scope, acknowledgedFrontier, completionBatchId,
+                        terminalAssistant, traceId, inputTokens, outputTokens);
+            } catch (DurableRecoveryRetryableException retryable) {
+                // Retry the exact immutable completion identity.
+            } catch (IllegalStateException failure) {
+                // Retry the exact immutable completion identity.
+                onlyRetryableFailures = false;
+            }
+        }
+        if (onlyRetryableFailures) throw new DurableRecoveryRetryableException();
+        throw new IllegalStateException("Durable completion reconciliation failed");
+    }
+
+    private void completeResolvedUnknownTranscript(
+            DurableSessionRecoveryCoordinator.RecoveryPlan recoveryPlan) {
+        if (recoveryPlan == null || recoveryPlan.postActionClaim() == null) return;
+        if (sessionRunCoordinator == null
+                || sessionRunCoordinator.acceptTranscriptContinuation(
+                                recoveryPlan.postActionClaim())
+                        .disposition()
+                        == SessionRunCoordinator.HandoffDisposition.HANDOFF_REJECTED) {
+            throw new DurableRecoveryRetryableException();
+        }
+    }
+
+    /** Explicit Engine carrier: durable unpersisted suffix is either empty or one assistant. */
+    private static MessageSnapshot durableTerminalAssistant(LoopResult result) {
+        List<Message> pending = result.getDeferredBroadcastMessages();
+        if (pending == null || pending.isEmpty()) return null;
+        if (pending.size() != 1) {
+            throw new IllegalStateException("Durable terminal suffix is not singular");
+        }
+        Message terminal = pending.get(0);
+        if (terminal == null || terminal.getRole() != Message.Role.ASSISTANT
+                || !terminal.getToolUseBlocks().isEmpty()) {
+            throw new IllegalStateException("Durable terminal suffix is invalid");
+        }
+        return MessageSnapshot.capture(terminal);
+    }
+
+    private static void mergeTerminalNotice(Message terminal, String notice) {
+        if (terminal == null || terminal.getRole() != Message.Role.ASSISTANT
+                || notice == null || notice.isBlank()) {
+            throw new IllegalStateException("Durable terminal notice cannot be merged");
+        }
+        if (terminal.getContent() instanceof String text) {
+            terminal.setContent(text.isBlank() ? notice : text + "\n\n" + notice);
+            return;
+        }
+        if (terminal.getContent() instanceof List<?> existing) {
+            List<Object> blocks = new ArrayList<>();
+            blocks.add(ContentBlock.text(notice));
+            blocks.addAll(existing);
+            terminal.setContent(blocks);
+            return;
+        }
+        throw new IllegalStateException("Durable terminal notice has unsupported content");
+    }
+
+    /** Publishes only the authoritative state committed with a durable cancellation receipt. */
+    public void publishDurableCancellationState(
+            SessionDurableCancellationService.CancellationAck acknowledgement) {
+        if (acknowledgement == null || broadcaster == null) return;
+        SessionEntity session = sessionService.getSession(acknowledgement.sessionId());
+        if (!java.util.Objects.equals(session.getUserId(), acknowledgement.userId())
+                || session.getHistoryEpoch() != acknowledgement.historyEpoch()
+                || session.getLoopFence() != acknowledgement.targetLoopFence()
+                || session.getActiveLoopId() != null) {
+            throw new IllegalStateException(
+                    "Durable cancellation state is no longer authoritative");
+        }
+        if (acknowledgement.outcome()
+                == SessionDurableCancellationService.CancellationOutcome
+                        .EXECUTION_OUTCOME_UNCERTAIN) {
+            broadcastFailureStatus(acknowledgement.sessionId(), session);
+        } else {
+            broadcaster.sessionStatus(
+                    acknowledgement.sessionId(), "idle", "cancelled", null);
+        }
+        broadcaster.userEvent(session.getUserId(),
+                sessionUpdatedPayload(session, session.getMessageCount()));
+    }
+
     public void answerAsk(String sessionId, String askId, String answer, Long userId) {
+        if (isDurableConversationEnabled()) {
+            answerDurableInteractive(
+                    sessionId, askId, answer, null, userId,
+                    com.skillforge.core.engine.durability.InteractiveStepPlanner.CallKind.ASK_USER);
+            return;
+        }
         SessionMessageEntity control = sessionService.getControlMessage(
                 sessionId, SessionService.MESSAGE_TYPE_ASK_USER, askId);
         Map<String, Object> metadata = readMetadata(control);
@@ -1325,6 +2066,13 @@ public class ChatService {
             answerAcpConfirmation(sessionId, confirmationId, decision, userId);
             return;
         }
+        if (isDurableConversationEnabled()) {
+            answerDurableInteractive(
+                    sessionId, confirmationId,
+                    decision.name().toLowerCase(java.util.Locale.ROOT), decision, userId,
+                    com.skillforge.core.engine.durability.InteractiveStepPlanner.CallKind.CONFIRMATION);
+            return;
+        }
         SessionMessageEntity control = controlOpt.get();
         log.info("Confirmation answered via ENGINE path: userId={} sessionId={} confirmationId={} decision={}",
                 userId, sessionId, confirmationId, decision);
@@ -1404,6 +2152,299 @@ public class ChatService {
         }
     }
 
+    private void answerDurableInteractive(
+            String sessionId,
+            String controlId,
+            String answer,
+            Decision decision,
+            Long userId,
+            com.skillforge.core.engine.durability.InteractiveStepPlanner.CallKind expectedKind) {
+        if (interactiveControlTransactions == null || occurrenceArchivePreparation == null) {
+            throw new IllegalStateException(
+                    "Durable interactive continuation is not configured");
+        }
+        if (userId == null) throw new IllegalArgumentException("userId is required");
+
+        synchronized (compactionService.lockFor(sessionId)) {
+            SessionEntity session = sessionService.getSession(sessionId);
+            String continuationLoopId =
+                    DurableSessionRecoveryCoordinator.stableRecoveryLoopId(sessionId);
+            SessionLoopAdmissionService.ManualContinuationClaimAck continuation =
+                    sessionLoopAdmissionService.claimManualContinuation(
+                            sessionId, userId, session.getHistoryEpoch(), continuationLoopId);
+            SessionLoopLeaseHeartbeat.Handle heartbeat =
+                    sessionLoopLeaseHeartbeat.start(continuation.scope());
+            try {
+                UUID claimRequestId = durableInteractiveId("claim", sessionId, controlId);
+                ExecutionClaimCommand claimCommand = new ExecutionClaimCommand(
+                        continuation.scope(), continuation.attemptId(), continuation.stepId(),
+                        claimRequestId, DurableToolAttemptState.WAITING_USER, 0L);
+                SessionInteractiveControlTransactionService.InteractiveAnswerClaimAck claim =
+                        interactiveControlTransactions.claimAnswerForDispatch(
+                                claimCommand, controlId);
+                if (claim.selectedControl().kind() != expectedKind) {
+                    throw new IllegalStateException(
+                            "Interactive control kind does not match answer endpoint");
+                }
+
+                SessionInteractiveControlTransactionService.InteractiveResultAck result;
+                if (claim.execution().state() == DurableToolAttemptState.RESULTS_COMMITTED) {
+                    result = interactiveControlTransactions.loadCommittedAnswerResults(
+                            claim.execution(), controlId);
+                    requireDurableResolutionMatch(result, expectedKind, answer, decision);
+                } else {
+                    if (claim.execution().state() != DurableToolAttemptState.EXECUTING) {
+                        throw new IllegalStateException(
+                                "Interactive answer did not acquire a valid execution generation");
+                    }
+                    if (expectedKind
+                            == com.skillforge.core.engine.durability.InteractiveStepPlanner.CallKind
+                                    .CONFIRMATION
+                            && decision == Decision.APPROVED
+                            && !claim.dispatchGranted()) {
+                        throw new RetryBusyException();
+                    }
+                    Message selectedResult = buildDurableInteractiveResult(
+                            session, claim, expectedKind, answer, decision, userId);
+                    SessionInteractiveControlTransactionService.ResolutionKind resolutionKind =
+                            expectedKind
+                                    == com.skillforge.core.engine.durability.InteractiveStepPlanner
+                                            .CallKind.ASK_USER
+                                    ? SessionInteractiveControlTransactionService.ResolutionKind
+                                            .ANSWERED
+                                    : decision == Decision.APPROVED
+                                            ? SessionInteractiveControlTransactionService
+                                                    .ResolutionKind.APPROVED
+                                            : SessionInteractiveControlTransactionService
+                                                    .ResolutionKind.DENIED;
+                    result = interactiveControlTransactions.commitAnswerResults(
+                            new SessionInteractiveControlTransactionService.InteractiveResultCommand(
+                                    claim.execution(), controlId,
+                                    durableInteractiveId("results", sessionId, controlId),
+                                    MessageSnapshot.capture(selectedResult), resolutionKind,
+                                    answer, "card",
+                                    durableInteractiveId("trace", sessionId, controlId).toString()));
+                    requireDurableResolutionMatch(result, expectedKind, answer, decision);
+                }
+
+                ArchivePreparationCommand archiveCommand =
+                        ArchivePreparationCommand.from(result.results());
+                occurrenceArchivePreparation.ensurePrepared(archiveCommand);
+                heartbeat.assertAuthoritative();
+                occurrenceArchivePreparation.withResultVisibilityAuthority(
+                        archiveCommand,
+                        () -> publishDurableInteractiveResults(result));
+            } finally {
+                heartbeat.close();
+            }
+
+            try {
+                // The recovery coordinator uses the same stable loop identity installed by the
+                // manual claim, so this is an exact continuation rather than a second takeover.
+                resumeDurableInterruptedTurnAsync(sessionId);
+            } catch (RetryBusyException alreadyResuming) {
+                log.info("Durable interactive continuation is already running: sessionId={}",
+                        sessionId);
+            }
+        }
+    }
+
+    private Message buildDurableInteractiveResult(
+            SessionEntity session,
+            SessionInteractiveControlTransactionService.InteractiveAnswerClaimAck claim,
+            com.skillforge.core.engine.durability.InteractiveStepPlanner.CallKind kind,
+            String answer,
+            Decision decision,
+            Long userId) {
+        String toolUseId = claim.selectedControl().call().toolUseId();
+        if (kind == com.skillforge.core.engine.durability.InteractiveStepPlanner.CallKind.ASK_USER) {
+            return Message.toolResult(toolUseId, "User answered: " + answer, false);
+        }
+        if (decision == null) {
+            throw new IllegalArgumentException("confirmation decision is required");
+        }
+        Object thawedInput = claim.selectedControl().call().input().toJavaValue();
+        if (!(thawedInput instanceof Map<?, ?>)) {
+            throw new IllegalStateException("Durable confirmation Tool input is invalid");
+        }
+        Map<String, Object> canonicalInput = mapValue(thawedInput);
+        Map<String, Object> payload = mapValue(claim.control().metadata().get("payload"));
+        Map<String, Object> extra = mapValue(payload.get("extra"));
+        if (!claim.selectedControl().call().input().equals(
+                FrozenJson.capture(extra.get("toolInput")))) {
+            throw new IllegalStateException(
+                    "Durable confirmation payload does not match its Tool intent");
+        }
+        AgentEntity agentEntity = agentService.getAgent(session.getAgentId());
+        AgentDefinition agentDef = agentService.toAgentDefinition(agentEntity);
+        String modelOverride = session.getRuntimeModelOverride();
+        if (modelOverride != null && !modelOverride.isBlank()) {
+            agentDef.setModelId(modelOverride);
+        }
+        return agentLoopEngine.completeConfirmedToolAfterDurableClaim(
+                agentDef, session.getId(), userId, toolUseId,
+                claim.selectedControl().call().toolName(), canonicalInput,
+                stringValue(extra.get("confirmationKind")),
+                stringValue(extra.get("installTool")),
+                stringValue(extra.get("installTarget")), decision);
+    }
+
+    private static void requireDurableResolutionMatch(
+            SessionInteractiveControlTransactionService.InteractiveResultAck result,
+            com.skillforge.core.engine.durability.InteractiveStepPlanner.CallKind expectedKind,
+            String answer,
+            Decision decision) {
+        Map<String, Object> metadata = result.control().metadata();
+        String expectedState = expectedKind
+                == com.skillforge.core.engine.durability.InteractiveStepPlanner.CallKind.ASK_USER
+                ? "answered"
+                : decision == Decision.APPROVED ? "approved" : "denied";
+        if (!expectedState.equals(metadata.get("state"))
+                || !java.util.Objects.equals(answer, metadata.get("answer"))
+                || !"card".equals(metadata.get("answerMode"))) {
+            throw new IllegalStateException(
+                    "Interactive control was already resolved with a different answer");
+        }
+    }
+
+    private void publishDurableInteractiveResults(
+            SessionInteractiveControlTransactionService.InteractiveResultAck result) {
+        if (broadcaster == null) return;
+        for (var occurrence : result.results().results()) {
+            broadcaster.messageAppended(
+                    result.results().executionScope().sessionId(),
+                    occurrence.traceId(), occurrence.message().toMessage());
+        }
+    }
+
+    private void publishRecoveredResultBlocks(ArchivePreparationAck archive) {
+        if (broadcaster == null || archive == null) return;
+        archive.resultBlocks().stream()
+                .sorted(java.util.Comparator.comparingInt(
+                        com.skillforge.core.engine.durability.PersistedBlockOccurrence
+                                ::resultBatchOrdinal))
+                .forEach(block -> {
+                    try {
+                        broadcaster.messageAppended(
+                                block.sessionId(), block.traceId(),
+                                Message.toolResult(
+                                        block.toolUseId(), block.content(), block.error(),
+                                        block.errorType()));
+                    } catch (RuntimeException publishFailure) {
+                        // The durable row remains authoritative and will appear on refresh. A
+                        // transient client transport failure must not invalidate its archive gate.
+                        log.warn("Recovered Tool result broadcast failed: sessionId={}",
+                                block.sessionId(), publishFailure);
+                    }
+                });
+    }
+
+    /**
+     * Re-emits a durable parked control after restart without claiming execution authority.
+     * The transaction service revalidates the scanned owner/epoch and exact persisted payload;
+     * this method never schedules the engine, Provider, or selected Tool.
+     */
+    public void republishWaitingInteractiveControl(
+            String sessionId, long expectedUserId, long expectedHistoryEpoch) {
+        if (!isDurableConversationEnabled()) return;
+        SessionInteractiveControlTransactionService.InteractiveIntentAck waiting;
+        try {
+            waiting = interactiveControlTransactions.loadParkedWaitingControl(
+                    sessionId, expectedUserId, expectedHistoryEpoch);
+        } catch (DurableRecoveryRetryableException retryable) {
+            throw retryable;
+        } catch (RuntimeException corruptOrMissing) {
+            try {
+                interactiveControlTransactions.recordParkedWaitingControlRecoveryFailure(
+                        sessionId, expectedUserId, expectedHistoryEpoch);
+            } catch (RuntimeException recordFailure) {
+                log.error("Waiting control recovery failure could not be recorded: sessionId={}",
+                        sessionId);
+            }
+            throw new DurableRecoveryFailureException();
+        }
+        if (broadcaster != null) {
+            publishRecoveredInteractiveControl(sessionId, waiting);
+            broadcaster.sessionStatus(
+                    sessionId, "waiting_user", "waiting_control", null);
+        }
+    }
+
+    private void publishRecoveredInteractiveControl(
+            String sessionId,
+            SessionInteractiveControlTransactionService.InteractiveIntentAck waiting) {
+        if (broadcaster == null || waiting == null) return;
+        try {
+            Map<String, Object> payload = mapValue(
+                    waiting.control().metadata().get("payload"));
+            String kind = stringValue(payload.get("interactionKind"));
+            String controlId = waiting.control().controlId();
+            if ("ask_user".equals(kind)) {
+                ChatEventBroadcaster.AskUserEvent event =
+                        new ChatEventBroadcaster.AskUserEvent();
+                event.askId = controlId;
+                event.question = stringValue(payload.get("question"));
+                event.context = stringValue(payload.get("context"));
+                event.allowOther = Boolean.TRUE.equals(payload.get("allowOther"));
+                Object rawOptions = payload.get("options");
+                event.options = rawOptions instanceof List<?> options
+                        ? options.stream().map(ChatService::askOption).toList()
+                        : List.of();
+                broadcaster.askUser(sessionId, event);
+                return;
+            }
+            if ("confirmation".equals(kind)) {
+                Map<String, Object> extra = mapValue(payload.get("extra"));
+                Object rawOptions = payload.get("options");
+                List<com.skillforge.core.engine.confirm.ConfirmationPromptPayload
+                        .ConfirmationChoice> choices = rawOptions instanceof List<?> options
+                        ? options.stream().map(ChatService::confirmationChoice).toList()
+                        : List.of();
+                Instant expiresAt = null;
+                String rawExpiry = stringValue(extra.get("expiresAt"));
+                if (rawExpiry != null && !rawExpiry.isBlank()) {
+                    expiresAt = Instant.parse(rawExpiry);
+                }
+                broadcaster.confirmationRequired(sessionId,
+                        new com.skillforge.core.engine.confirm.ConfirmationPromptPayload(
+                                controlId, sessionId,
+                                stringValue(extra.get("installTool")),
+                                stringValue(extra.get("installTarget")),
+                                stringValue(extra.get("commandPreview")),
+                                stringValue(payload.get("question")),
+                                stringValue(payload.get("context")),
+                                choices, expiresAt));
+            }
+        } catch (RuntimeException malformedOrUnavailable) {
+            log.warn("Recovered interactive control could not be republished", malformedOrUnavailable);
+        }
+    }
+
+    private static ChatEventBroadcaster.AskUserEvent.Option askOption(Object raw) {
+        Map<String, Object> option = mapValue(raw);
+        return new ChatEventBroadcaster.AskUserEvent.Option(
+                String.valueOf(option.getOrDefault("label", "")),
+                stringValue(option.get("description")));
+    }
+
+    private static com.skillforge.core.engine.confirm.ConfirmationPromptPayload
+            .ConfirmationChoice confirmationChoice(Object raw) {
+        Map<String, Object> option = mapValue(raw);
+        return new com.skillforge.core.engine.confirm.ConfirmationPromptPayload
+                .ConfirmationChoice(
+                        String.valueOf(option.getOrDefault("value", "")),
+                        String.valueOf(option.getOrDefault("label", "")),
+                        String.valueOf(option.getOrDefault("style", "")));
+    }
+
+    private static UUID durableInteractiveId(
+            String purpose, String sessionId, String controlId) {
+        String identity = "skillforge:durable-interactive:" + purpose + ":"
+                + sessionId + ":" + controlId;
+        return UUID.nameUUIDFromBytes(
+                identity.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
+
     /** Reserve executor capacity before consuming a one-shot control message. */
     private ResumeLoopSubmission reserveResumeLoop() {
         CompletableFuture<ResumeLoopRequest> prepared = new CompletableFuture<>();
@@ -1416,7 +2457,7 @@ public class ChatService {
             }
             runLoop(request.sessionId(), request.userMessage(), request.userMessageBlock(),
                     request.userId(), request.agentEntity(), request.history(),
-                    request.traceId(), request.rootTraceId());
+                    request.traceId(), request.rootTraceId(), null, request.recoveryPlan());
         });
         return new ResumeLoopSubmission(prepared);
     }
@@ -1429,7 +2470,8 @@ public class ChatService {
             String traceId,
             String rootTraceId,
             String userMessage,
-            Message userMessageBlock) {
+            Message userMessageBlock,
+            DurableSessionRecoveryCoordinator.RecoveryPlan recoveryPlan) {
 
         private ResumeLoopRequest(String sessionId,
                                   Long userId,
@@ -1438,7 +2480,7 @@ public class ChatService {
                                   String traceId,
                                   String rootTraceId) {
             this(sessionId, userId, agentEntity, history, traceId, rootTraceId,
-                    null, null);
+                    null, null, null);
         }
     }
 
@@ -1458,6 +2500,10 @@ public class ChatService {
      * allocates a fresh trace and starts the loop from that prefix.
      */
     public void retryFailedTurnAsync(String sessionId) {
+        if (isDurableConversationEnabled()) {
+            throw new IllegalStateException(
+                    "Durable failed-turn recovery requires the fenced recovery coordinator");
+        }
         synchronized (compactionService.lockFor(sessionId)) {
             SessionEntity session = sessionService.getSession(sessionId);
             if (!"error".equals(session.getRuntimeStatus())) {
@@ -1508,7 +2554,7 @@ public class ChatService {
                 }
                 submission.start(new ResumeLoopRequest(
                         sessionId, executionUserId, agentEntity, historyPrefix,
-                        retryTraceId, retryRootTraceId, retryUserMessage, failedUserTurn));
+                        retryTraceId, retryRootTraceId, retryUserMessage, failedUserTurn, null));
             } catch (RuntimeException | Error error) {
                 submission.abort(error);
                 throw error;
@@ -1522,6 +2568,10 @@ public class ChatService {
      * turn, while a paired tool_result tail is passed as completed history.
      */
     public void resumeInterruptedTurnAsync(String sessionId) {
+        if (isDurableConversationEnabled()) {
+            resumeDurableInterruptedTurnAsync(sessionId);
+            return;
+        }
         synchronized (compactionService.lockFor(sessionId)) {
             SessionEntity session = sessionService.getSession(sessionId);
             if (!"running".equals(session.getRuntimeStatus())) {
@@ -1572,9 +2622,179 @@ public class ChatService {
                             sessionUpdatedPayload(session, session.getMessageCount()));
                 }
                 submission.start(new ResumeLoopRequest(sessionId, executionUserId, agent,
-                        history, traceId, rootTraceId, userText, userBlock));
+                        history, traceId, rootTraceId, userText, userBlock, null));
             } catch (RuntimeException | Error error) {
                 submission.abort(error);
+                throw error;
+            }
+        }
+    }
+
+    private void resumeDurableInterruptedTurnAsync(String sessionId) {
+        synchronized (compactionService.lockFor(sessionId)) {
+            SessionEntity session = sessionService.getSession(sessionId);
+            if (!"running".equals(session.getRuntimeStatus())) {
+                throw new IllegalStateException("session is not an interrupted running task");
+            }
+            if (hasActiveLoopTask(sessionId)
+                    || !durableRecoveryReservations.add(sessionId)) {
+                throw new RetryBusyException();
+            }
+            Long executionUserId = session.getUserId();
+            if (executionUserId == null) {
+                durableRecoveryReservations.remove(sessionId);
+                throw new IllegalStateException("session has no execution owner");
+            }
+
+            ResumeLoopSubmission submission;
+            try {
+                // Reserve local capacity before changing the distributed lease owner.
+                submission = reserveResumeLoop();
+            } catch (RuntimeException | Error error) {
+                durableRecoveryReservations.remove(sessionId);
+                throw error;
+            }
+            DurableSessionRecoveryCoordinator.RecoveryPlan plan = null;
+            try {
+                plan = durableSessionRecoveryCoordinator.recover(sessionId, executionUserId);
+                if (plan.disposition()
+                        == DurableSessionRecoveryCoordinator.RecoveryDisposition.WAITING_USER) {
+                    sessionLoopAdmissionService.parkForManualContinuation(
+                            plan.admission().scope(),
+                            com.skillforge.core.engine.durability.DurableToolAttemptState.WAITING_USER,
+                            null);
+                    submission.abort(new IllegalStateException("recovery is waiting for user input"));
+                    durableRecoveryReservations.remove(sessionId);
+                    if (broadcaster != null) {
+                        publishRecoveredInteractiveControl(
+                                sessionId, plan.recoveredWaitingControl());
+                        broadcaster.sessionStatus(
+                                sessionId, "waiting_user", "waiting_control", null);
+                    }
+                    return;
+                }
+                if (plan.disposition()
+                        == DurableSessionRecoveryCoordinator.RecoveryDisposition
+                                .UNCERTAIN_PENDING_RESOLUTION
+                        || plan.disposition()
+                        == DurableSessionRecoveryCoordinator.RecoveryDisposition
+                                .MANUAL_CONTINUATION) {
+                    boolean unresolved = plan.disposition()
+                            == DurableSessionRecoveryCoordinator.RecoveryDisposition
+                                    .UNCERTAIN_PENDING_RESOLUTION;
+                    RuntimeFailureFact uncertainty = RUNTIME_FAILURE_CLASSIFIER.harnessFailure(
+                            unresolved
+                                    ? "TOOL_OUTCOME_UNCERTAIN"
+                                    : "RESOLUTION_CONTINUATION_PENDING",
+                            unresolved
+                                    ? "A previous Tool may have completed; explicit resolution is required."
+                                    : "The resolved Tool outcome requires an explicit continuation claim.",
+                            "possible");
+                    sessionLoopAdmissionService.parkForManualContinuation(
+                            plan.admission().scope(),
+                            unresolved
+                                    ? com.skillforge.core.engine.durability
+                                            .DurableToolAttemptState
+                                            .UNCERTAIN_PENDING_RESOLUTION
+                                    : com.skillforge.core.engine.durability
+                                            .DurableToolAttemptState.RESOLVED_UNKNOWN,
+                            uncertainty);
+                    submission.abort(new IllegalStateException(
+                            unresolved
+                                    ? "recovery requires resolution"
+                                    : "recovery requires a continuation claim"));
+                    durableRecoveryReservations.remove(sessionId);
+                    if (broadcaster != null) {
+                        SessionEntity parked = sessionService.getSession(sessionId);
+                        broadcastFailureStatus(sessionId, parked);
+                        broadcaster.userEvent(parked.getUserId(),
+                                sessionUpdatedPayload(parked, parked.getMessageCount()));
+                    }
+                    return;
+                }
+
+                if (plan.archiveVisibilityCommand() != null) {
+                    ArchivePreparationCommand recoveredArchiveCommand =
+                            plan.archiveVisibilityCommand();
+                    ArchivePreparationAck recoveredArchive = plan.archivePreparation();
+                    occurrenceArchivePreparation.withResultVisibilityAuthority(
+                            recoveredArchiveCommand,
+                            () -> publishRecoveredResultBlocks(recoveredArchive));
+                }
+
+                List<Message> persisted = sessionService.getContextMessages(sessionId);
+                if (persisted.isEmpty()) {
+                    throw new IllegalStateException("session has no persisted recovery boundary");
+                }
+                List<Message> history;
+                String userText = null;
+                Message userBlock = null;
+                Message tail = persisted.get(persisted.size() - 1);
+                if (plan.disposition()
+                        == DurableSessionRecoveryCoordinator.RecoveryDisposition.TOOL_REPLAY) {
+                    if (tail.getRole() != Message.Role.ASSISTANT
+                            || tail.getToolUseBlocks().isEmpty()) {
+                        throw new IllegalStateException(
+                                "recovered Tool intent is not the transcript tail");
+                    }
+                    history = new ArrayList<>(persisted.subList(0, persisted.size() - 1));
+                } else if (plan.admission().attemptId() == null
+                        && isRetryableUserTurn(tail)) {
+                    history = new ArrayList<>(persisted.subList(0, persisted.size() - 1));
+                    userText = extractRetryUserText(tail);
+                    userBlock = tail;
+                } else if (plan.admission().attemptId() == null
+                        && isPlainAssistantTurn(tail)) {
+                    // Completion reconciliation keeps the loop lease only when a queued
+                    // USER exists. If the JVM dies before that inbox row is drained, the
+                    // committed terminal assistant is still the transcript tail. Resume
+                    // with the full history so AgentLoopEngine can drain the durable inbox
+                    // at its next provider boundary without inventing another USER.
+                    history = new ArrayList<>(persisted);
+                } else if (isToolResultMessage(tail)) {
+                    history = new ArrayList<>(persisted);
+                } else {
+                    throw new IllegalStateException(
+                            "session tail is not a durable recovery boundary");
+                }
+
+                AgentEntity agent = agentService.getAgent(session.getAgentId());
+                String traceId = UUID.randomUUID().toString();
+                String rootTraceId = sessionService.getActiveRootTraceId(sessionId);
+                if (rootTraceId == null) {
+                    rootTraceId = traceId;
+                    sessionService.setActiveRootTraceId(sessionId, rootTraceId);
+                }
+                if (broadcaster != null) {
+                    try {
+                        broadcaster.sessionStatus(sessionId, "running", "Recovering", null);
+                    } catch (RuntimeException broadcastFailure) {
+                        log.warn("Durable recovery status broadcast failed: sessionId={}",
+                                sessionId, broadcastFailure);
+                    }
+                }
+                submission.start(new ResumeLoopRequest(
+                        sessionId, executionUserId, agent, history, traceId, rootTraceId,
+                        userText, userBlock, plan));
+            } catch (RuntimeException | Error error) {
+                submission.abort(error);
+                durableRecoveryReservations.remove(sessionId);
+                boolean retryable = error instanceof DurableRecoveryRetryableException
+                        || error instanceof TransientDataAccessException
+                        || error instanceof CannotCreateTransactionException;
+                if (plan != null && !retryable) {
+                    try {
+                        sessionLoopAdmissionService.parkRecoveryFailure(
+                                plan.admission().scope(),
+                                RUNTIME_FAILURE_CLASSIFIER.harnessFailure(
+                                        "DURABLE_RECOVERY_DISPATCH_FAILED",
+                                        "The durable recovery boundary could not be dispatched.",
+                                        "possible"));
+                    } catch (RuntimeException staleOrAlreadyParked) {
+                        log.info("Durable recovery scope was already closed: sessionId={}",
+                                sessionId);
+                    }
+                }
                 throw error;
             }
         }
@@ -1590,6 +2810,12 @@ public class ChatService {
             if (block instanceof Map<?, ?> map && "tool_result".equals(String.valueOf(map.get("type")))) return true;
         }
         return false;
+    }
+
+    private static boolean isPlainAssistantTurn(Message message) {
+        return message != null
+                && message.getRole() == Message.Role.ASSISTANT
+                && message.getToolUseBlocks().isEmpty();
     }
 
     private static void clearRecoveryState(SessionEntity session) {
@@ -1693,7 +2919,7 @@ public class ChatService {
         }
     }
 
-    private void markLoopTaskStarted(String sessionId) {
+    void markLoopTaskStarted(String sessionId) {
         if (sessionId == null) return;
         activeLoopTaskCounts.compute(sessionId, (ignored, count) -> {
             AtomicInteger next = count != null ? count : new AtomicInteger();
@@ -1702,7 +2928,7 @@ public class ChatService {
         });
     }
 
-    private void markLoopTaskFinished(String sessionId) {
+    void markLoopTaskFinished(String sessionId) {
         if (sessionId == null) return;
         activeLoopTaskCounts.computeIfPresent(sessionId,
                 (ignored, count) -> count.decrementAndGet() <= 0 ? null : count);
@@ -1710,7 +2936,8 @@ public class ChatService {
 
     private boolean hasActiveLoopTask(String sessionId) {
         AtomicInteger count = activeLoopTaskCounts.get(sessionId);
-        return count != null && count.get() > 0;
+        return durableRecoveryReservations.contains(sessionId)
+                || (count != null && count.get() > 0);
     }
 
     /**

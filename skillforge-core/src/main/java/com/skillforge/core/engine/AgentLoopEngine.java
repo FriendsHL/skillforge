@@ -3,6 +3,7 @@ package com.skillforge.core.engine;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.skillforge.core.compact.CompactableToolRegistry;
+import com.skillforge.core.compact.CompactSummaryEnvelope;
 import com.skillforge.core.compact.ContextCompactTool;
 import com.skillforge.core.compact.ContextCompactorCallback;
 import com.skillforge.core.compact.ContextCompactorCallback.CompactCallbackResult;
@@ -22,6 +23,8 @@ import com.skillforge.core.context.LowTrustContextBoundary;
 import com.skillforge.core.context.ToolResultTrustClassifier;
 import com.skillforge.core.context.PromptObservationHashes;
 import com.skillforge.core.context.runtime.ContextRuntimeStore;
+import com.skillforge.core.context.runtime.ContextRuntimeAuthority;
+import com.skillforge.core.context.runtime.ContextRuntimeSnapshotResolver;
 import com.skillforge.core.engine.confirm.ChannelUnavailableException;
 import com.skillforge.core.engine.confirm.ConfirmationPrompter;
 import com.skillforge.core.engine.confirm.ConfirmationPromptPayload;
@@ -30,6 +33,34 @@ import com.skillforge.core.engine.confirm.InstallTargetParser;
 import com.skillforge.core.engine.confirm.RootSessionLookup;
 import com.skillforge.core.engine.confirm.SessionConfirmCache;
 import com.skillforge.core.engine.confirm.ToolApprovalRegistry;
+import com.skillforge.core.engine.durability.DurableFrontier;
+import com.skillforge.core.engine.durability.DurableToolAttemptState;
+import com.skillforge.core.engine.durability.DurableToolExecutionIncompleteException;
+import com.skillforge.core.engine.durability.ConversationDurabilitySink;
+import com.skillforge.core.engine.durability.ArchivePreparationAck;
+import com.skillforge.core.engine.durability.ArchivePreparationCommand;
+import com.skillforge.core.engine.durability.ArchivePreparationState;
+import com.skillforge.core.engine.durability.ExecutionClaimAck;
+import com.skillforge.core.engine.durability.ExecutionClaimCommand;
+import com.skillforge.core.engine.durability.IntentCommitAck;
+import com.skillforge.core.engine.durability.IntentCommitCommand;
+import com.skillforge.core.engine.durability.InteractiveIntentAck;
+import com.skillforge.core.engine.durability.InteractiveIntentCommand;
+import com.skillforge.core.engine.durability.InteractiveStepPlanner;
+import com.skillforge.core.engine.durability.LoopDurabilityScope;
+import com.skillforge.core.engine.durability.MessageSnapshot;
+import com.skillforge.core.engine.durability.PersistedMessageOccurrence;
+import com.skillforge.core.engine.durability.PersistedBlockOccurrence;
+import com.skillforge.core.engine.durability.QueuedUserDrainAck;
+import com.skillforge.core.engine.durability.QueuedUserDrainItem;
+import com.skillforge.core.engine.durability.FrozenJson;
+import com.skillforge.core.engine.durability.ReplaySafety;
+import com.skillforge.core.engine.durability.RecoveredToolAttempt;
+import com.skillforge.core.engine.durability.ToolCallIntent;
+import com.skillforge.core.engine.durability.ToolCallManifest;
+import com.skillforge.core.engine.durability.ToolExecutionScheduler;
+import com.skillforge.core.engine.durability.ToolResultCommitAck;
+import com.skillforge.core.engine.durability.ToolResultCommitCommand;
 import com.skillforge.core.llm.CompactThresholds;
 import com.skillforge.core.llm.LlmContextLengthExceededException;
 import com.skillforge.core.llm.LlmProvider;
@@ -48,9 +79,11 @@ import com.skillforge.core.capability.ToolDescriptor;
 import com.skillforge.core.capability.ToolSearchCapability;
 import com.skillforge.core.model.ToolUseBlock;
 import com.skillforge.core.skill.SkillContext;
+import com.skillforge.core.skill.PreWrappedLowTrustTool;
 import com.skillforge.core.skill.PublishedArtifact;
 import com.skillforge.core.skill.SkillRegistry;
 import com.skillforge.core.skill.SkillResult;
+import com.skillforge.core.skill.SystemResidentTool;
 import com.skillforge.core.skill.Tool;
 
 import org.slf4j.Logger;
@@ -66,6 +99,7 @@ import java.util.Optional;
 import java.time.Instant;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
@@ -97,6 +131,14 @@ public class AgentLoopEngine {
     private final List<LoopHook> loopHooks;
     private final List<SkillHook> skillHooks;
     private final List<ContextProvider> contextProviders;
+    /** Explicitly disabled by default so existing CLI/tests retain the legacy path. */
+    private ConversationDurabilitySink conversationDurabilitySink = ConversationDurabilitySink.disabled();
+    /** Injectable future-creation seam; production compatibility uses the common pool. */
+    private ToolExecutionScheduler toolExecutionScheduler = ToolExecutionScheduler.commonPool();
+    /** Bounded Tool-vector wait; configurable only through the explicit test/runtime seam. */
+    private long toolExecutionTimeoutMillis = 120_000L;
+    /** Envelope-enabled runtimes must never infer summary provenance from user-controlled text. */
+    private boolean trustedCompactSummaryCarrierRequired;
     /** 可选:实时事件广播(server 注入 WebSocket 实现)。null 时降级为无广播模式。 */
     private ChatEventBroadcaster broadcaster;
     /** 可选:ask_user 待答复注册中心。null 时 ask_user 调用会直接返回错误。 */
@@ -214,6 +256,29 @@ public class AgentLoopEngine {
     /** Setter injection: 延迟注入,避免 core 模块强依赖 server 组件。 */
     public void setBroadcaster(ChatEventBroadcaster broadcaster) {
         this.broadcaster = broadcaster;
+    }
+
+    public void setConversationDurabilitySink(ConversationDurabilitySink conversationDurabilitySink) {
+        this.conversationDurabilitySink = conversationDurabilitySink != null
+                ? conversationDurabilitySink
+                : ConversationDurabilitySink.disabled();
+    }
+
+    public void setToolExecutionScheduler(ToolExecutionScheduler toolExecutionScheduler) {
+        this.toolExecutionScheduler = toolExecutionScheduler != null
+                ? toolExecutionScheduler
+                : ToolExecutionScheduler.commonPool();
+    }
+
+    public void setToolExecutionTimeoutMillis(long toolExecutionTimeoutMillis) {
+        if (toolExecutionTimeoutMillis <= 0L) {
+            throw new IllegalArgumentException("toolExecutionTimeoutMillis must be positive");
+        }
+        this.toolExecutionTimeoutMillis = toolExecutionTimeoutMillis;
+    }
+
+    public void setTrustedCompactSummaryCarrierRequired(boolean required) {
+        this.trustedCompactSummaryCarrierRequired = required;
     }
 
     public void setPendingAskRegistry(PendingAskRegistry pendingAskRegistry) {
@@ -494,10 +559,32 @@ public class AgentLoopEngine {
         }
         context.setMessages(messages);
 
+        // Durability identity is caller/server authority, not hook-owned state. Capture it
+        // before any hook can replace or mutate the LoopContext. When durability is disabled,
+        // hooks retain the legacy freedom to alter these optional carrier fields.
+        ConversationDurabilitySink durabilitySink = this.conversationDurabilitySink;
+        boolean durabilityEnabled = durabilitySink.enabled();
+        LoopDurabilityScope authoritativeDurabilityScope = durabilityEnabled
+                ? context.getDurabilityScope()
+                : null;
+        DurableFrontier authoritativeExpectedFrontier = durabilityEnabled
+                ? context.getExpectedDurableFrontier()
+                : null;
+        if (authoritativeDurabilityScope != null) {
+            requireDurabilityScope(authoritativeDurabilityScope, sessionId, userId);
+        }
+
         // 2. 执行所有 LoopHook.beforeLoop()
         for (LoopHook hook : loopHooks) {
             LoopContext prev = context;
             context = hook.beforeLoop(context);
+            if (durabilityEnabled) {
+                reconcileHookDurabilityAuthority(
+                        prev,
+                        context,
+                        authoritativeDurabilityScope,
+                        authoritativeExpectedFrontier);
+            }
             if (context == null) {
                 log.warn("LoopHook interrupted the loop before start");
                 // Check whether the hook set abortedByHook on the pre-hook context for richer reason.
@@ -530,13 +617,17 @@ public class AgentLoopEngine {
         // Clear any breaker state carried over from the previous turn so recovery does not
         // depend solely on the 60s half-open window.
         loopCtx.resetCompactFailures();
-        restoreContextRuntime(loopCtx);
 
         // Plan r2 §5: resolve per-session skill view (system + user packages, minus disabled).
         // Inject into LoopContext so collectTools / executeToolCall can read from it.
         // If resolver is not wired (legacy / test paths), preserve old "all skill defs" behavior
         // by leaving skillView null and falling back to skillRegistry.getAllSkillDefinitions().
         ensureSkillViewResolved(loopCtx, agentDef);
+
+        // Resolve persisted refs only after the current registry and per-Session authorization
+        // surface exists. A snapshot is historical state, never an authorization grant.
+        resolveContextRuntimeAuthority(agentDef, loopCtx);
+        restoreContextRuntime(loopCtx);
 
         // 4. 构建 system prompt（注入全局 CLAUDE.md）
         // PROMPT-CACHE-MVP §Q3: split prompt into stable + dynamic sections so Anthropic
@@ -644,6 +735,10 @@ public class AgentLoopEngine {
         // 5.5 解析要使用的 LlmProvider 和模型名
         String[] resolvedModel = new String[1];
         LlmProvider llmProvider = resolveProvider(agentDef, resolvedModel);
+        RecoveredToolAttempt recoveredToolAttempt = loopCtx.getRecoveredToolAttempt();
+        if (recoveredToolAttempt != null) {
+            llmProvider = new OneShotRecoveredProvider(llmProvider, recoveredToolAttempt.intent());
+        }
         String actualModelId = resolvedModel[0];
 
         // OBS-2 M1: capture loop start time for finalize totalDurationMs.
@@ -756,8 +851,18 @@ public class AgentLoopEngine {
             // 每次迭代开头清掉"本轮已压缩"标志 —— 这是防止无限压缩循环的核心
             loopCtx.resetCompactedThisIteration();
 
-            // Drain any queued user messages into the conversation
-            if (injectQueuedMessages(loopCtx, messages)) {
+            // A recovered Tool intent must execute and close its exact result vector before any
+            // inbox input can enter the transcript. All other durable Provider boundaries drain
+            // the canonical DB inbox completely; legacy mode retains its in-memory queue.
+            if (durabilityEnabled) {
+                boolean executingRecoveredIntent = loopCtx.getRecoveredToolAttempt() != null
+                        && loopCtx.getLoopCount() == 0;
+                if (!executingRecoveredIntent) {
+                    drainDurableQueuedUsers(
+                            durabilitySink, loopCtx, externalContext, messages);
+                }
+            } else if (injectQueuedMessages(loopCtx, messages)) {
+                // A new user turn supersedes any pending check of the earlier delivery.
                 taskReconciliationAttempted = true;
                 taskReconciliationPrompt = "";
                 deliveredBeforeTaskCheck = null;
@@ -1059,7 +1164,8 @@ public class AgentLoopEngine {
                         if (text != null && !text.isEmpty()) {
                             loopCtx.recordProviderStreamDelta();
                         }
-                        if (broadcaster != null && broadcastSid != null && text != null && !text.isEmpty()) {
+                        if (!durabilityEnabled && broadcaster != null && broadcastSid != null
+                                && text != null && !text.isEmpty()) {
                             broadcaster.assistantDelta(broadcastSid, text);
                             broadcaster.textDelta(broadcastSid, text);
                         }
@@ -1069,7 +1175,8 @@ public class AgentLoopEngine {
                         if (reasoning != null && !reasoning.isEmpty()) {
                             loopCtx.recordProviderStreamDelta();
                         }
-                        if (broadcaster != null && broadcastSid != null && reasoning != null && !reasoning.isEmpty()) {
+                        if (!durabilityEnabled && broadcaster != null && broadcastSid != null
+                                && reasoning != null && !reasoning.isEmpty()) {
                             broadcaster.reasoningDelta(broadcastSid, reasoning);
                         }
                     }
@@ -1083,7 +1190,7 @@ public class AgentLoopEngine {
                         if (jsonFragment != null && !jsonFragment.isEmpty()) {
                             loopCtx.recordProviderStreamDelta();
                         }
-                        if (broadcaster != null && broadcastSid != null && toolUseId != null
+                        if (!durabilityEnabled && broadcaster != null && broadcastSid != null && toolUseId != null
                                 && jsonFragment != null && !jsonFragment.isEmpty()) {
                             broadcaster.toolUseDelta(broadcastSid, toolUseId,
                                     streamToolNames.getOrDefault(toolUseId, ""), jsonFragment);
@@ -1091,7 +1198,7 @@ public class AgentLoopEngine {
                     }
                     @Override public void onToolUseEnd(String toolUseId, java.util.Map<String, Object> parsedInput) {
                         loopCtx.recordProviderStreamDelta();
-                        if (broadcaster != null && broadcastSid != null && toolUseId != null) {
+                        if (!durabilityEnabled && broadcaster != null && broadcastSid != null && toolUseId != null) {
                             broadcaster.toolUseComplete(broadcastSid, toolUseId, parsedInput);
                         }
                     }
@@ -1101,14 +1208,14 @@ public class AgentLoopEngine {
                     }
                     @Override public void onComplete(LlmResponse fullResponse) {
                         respHolder.set(fullResponse);
-                        if (broadcaster != null && broadcastSid != null) {
+                        if (!durabilityEnabled && broadcaster != null && broadcastSid != null) {
                             broadcaster.assistantStreamEnd(broadcastSid);
                         }
                         streamDone.countDown();
                     }
                     @Override public void onError(Throwable error) {
                         errHolder.set(error);
-                        if (broadcaster != null && broadcastSid != null) {
+                        if (!durabilityEnabled && broadcaster != null && broadcastSid != null) {
                             broadcaster.assistantStreamEnd(broadcastSid);
                         }
                         streamDone.countDown();
@@ -1265,18 +1372,23 @@ public class AgentLoopEngine {
             // OBS-1 TraceLlmCallObserver continues to write t_llm_span (kind='llm') via
             // its hook into the LLM provider streaming path — no logic change here.
 
-            // d. 将 assistant 响应加入 messages. Artifact-bearing terminal messages are
-            // broadcast by ChatService only after persistence reconciliation.
-            Message assistantMsg = buildAssistantMessage(response);
-            messages.add(assistantMsg);
+            // d. Build the candidate. Tool-use assistants cross the optional durable intent
+            // barrier before they are appended, broadcast, registered, compacted, or scheduled.
+            Message assistantCandidate = buildAssistantMessage(response);
 
             // e. 判断是否 tool_use
             if (!response.isToolUse()) {
+                Message assistantMsg = assistantCandidate;
+                messages.add(assistantMsg);
                 // Before breaking, check if user queued new messages while we were streaming
                 if (injectQueuedMessages(loopCtx, messages)) {
                     taskReconciliationAttempted = true;
                     taskReconciliationPrompt = "";
                     deliveredBeforeTaskCheck = null;
+                    if (durabilityEnabled) {
+                        throw new IllegalStateException(
+                                "Durable queued messages require the ordered inbox");
+                    }
                     broadcastMessageAppended(loopCtx, assistantMsg);
                     if (loopCtx.getLoopCount() + 1 >= loopCtx.getMaxLoops()) {
                         log.warn("Queued message(s) arrived but loop is at max iterations, appending without LLM processing");
@@ -1285,14 +1397,18 @@ public class AgentLoopEngine {
                     loopCtx.incrementLoopCount();
                     continue;
                 }
-                if (mergeArtifactsIntoAssistant(assistantMsg, pendingArtifacts)) {
+                boolean containsPublishedArtifacts =
+                        mergeArtifactsIntoAssistant(assistantMsg, pendingArtifacts);
+                if (containsPublishedArtifacts || durabilityEnabled) {
+                    // ChatService broadcasts this only after append-only final reconciliation.
                     deferredBroadcastMessages.add(assistantMsg);
                 } else {
                     broadcastMessageAppended(loopCtx, assistantMsg);
                 }
-                // Keep the delivered assistant exactly once. A single follow-up
+                // Keep the delivered assistant exactly once. A single legacy-only follow-up
                 // lets the model verify relevant task state through ordinary authorized tools.
-                if (!taskReconciliationAttempted && !loopCtx.isCancelled()
+                // Durable text continuation needs its own frontier protocol and stays disabled.
+                if (!durabilityEnabled && !taskReconciliationAttempted && !loopCtx.isCancelled()
                         && loopCtx.getLoopCount() + 2 < loopCtx.getMaxLoops()
                         && (!enforceMaxInputTokens || loopCtx.getTotalInputTokens() <= maxInputTokens)
                         && loopCtx.getElapsedMs() <= resolveMaxDurationMs(agentDef)) {
@@ -1316,16 +1432,142 @@ public class AgentLoopEngine {
                 log.info("AgentLoop completed with text response at loop {}", loopCtx.getLoopCount() + 1);
                 break;
             }
+
+            List<ToolUseBlock> providerToolUseBlocks = response.getValidToolUseBlocks();
+            final List<ToolUseBlock> toolUseBlocks;
+            Message assistantMsg = assistantCandidate;
+            IntentCommitAck durableIntentAck = null;
+            ExecutionClaimAck durableExecutionClaimAck = null;
+            InteractiveIntentAck durableInteractiveAck = null;
+            InteractiveControlRequest durablePendingControl = null;
+            if (durabilityEnabled) {
+                LoopDurabilityScope origin = requireDurabilityScope(
+                        loopCtx.getDurabilityScope(), sessionId, userId);
+                DurableFrontier expectedFrontier = loopCtx.getExpectedDurableFrontier();
+                if (expectedFrontier == null) {
+                    throw new IllegalStateException(
+                            "Durable conversation requires an expected transcript frontier");
+                }
+                IntentCommitAck ack;
+                List<ToolUseBlock> committedToolUseBlocks;
+                if (recoveredToolAttempt != null) {
+                    ack = recoveredToolAttempt.intent();
+                    ExecutionClaimAck recoveredClaim = recoveredToolAttempt.execution();
+                    DurableFrontier assistantFrontier = new DurableFrontier(
+                            ack.assistant().messageId(), ack.assistant().seqNo());
+                    if (!origin.equals(recoveredClaim.executionScope())
+                            || !expectedFrontier.equals(assistantFrontier)
+                            || !ack.assistant().message().equals(
+                                    MessageSnapshot.capture(assistantCandidate))) {
+                        throw new IllegalStateException(
+                                "Recovered durable Tool attempt is inconsistent");
+                    }
+                    assistantMsg = ack.assistant().message().toMessage();
+                    durableIntentAck = ack;
+                    durableExecutionClaimAck = recoveredClaim;
+                    committedToolUseBlocks = materializeToolCalls(ack.manifest());
+                    recoveredToolAttempt = null;
+                    loopCtx.setRecoveredToolAttempt(null);
+                } else {
+                    ToolCallManifest manifest = buildToolCallManifest(providerToolUseBlocks);
+                    IntentCommitCommand command = new IntentCommitCommand(
+                            origin,
+                            UUID.randomUUID(),
+                            UUID.randomUUID().toString(),
+                            MessageSnapshot.capture(assistantCandidate),
+                            manifest,
+                            expectedFrontier,
+                            loopCtx.getTraceId());
+                    Optional<InteractiveStepPlanner.InteractiveStepPlan> interactivePlan =
+                            new InteractiveStepPlanner().plan(
+                                    manifest,
+                                    call -> classifyInteractiveCall(
+                                            providerToolUseBlocks.get(call.providerOrdinal()),
+                                            loopCtx));
+                    if (interactivePlan.isPresent()) {
+                        InteractiveStepPlanner.InteractiveStepPlan plan = interactivePlan.get();
+                        ToolUseBlock selected = providerToolUseBlocks.get(
+                                plan.selectedControl().providerOrdinal());
+                        InteractiveControlRequest pendingControl =
+                                buildDurableInteractiveControl(selected, assistantCandidate, loopCtx);
+                        InteractiveIntentCommand interactiveCommand = new InteractiveIntentCommand(
+                                command,
+                                plan,
+                                pendingControl.getControlId(),
+                                pendingControl.getQuestion() != null
+                                        ? pendingControl.getQuestion()
+                                        : "",
+                                FrozenJson.capture(durableControlPayload(pendingControl)));
+                        durableInteractiveAck = requireInteractiveIntentAck(
+                                interactiveCommand,
+                                durabilitySink.commitInteractiveIntent(interactiveCommand));
+                        ack = durableInteractiveAck.intent();
+                        assistantMsg = ack.assistant().message().toMessage();
+                        durablePendingControl = materializeDurableControl(
+                                durableInteractiveAck, interactiveCommand.payload());
+                    } else {
+                        ack = durabilitySink.commitIntent(command);
+                        assistantMsg = requireIntentAck(command, ack);
+                    }
+                    durableIntentAck = ack;
+                    committedToolUseBlocks = materializeToolCalls(ack.manifest());
+                }
+                // Interactive vectors are already WAITING_USER and own a provider-filtered
+                // control row. Ordinary vectors must acquire execution authority now.
+                if (durableExecutionClaimAck == null && durableInteractiveAck == null) {
+                    ExecutionClaimCommand claimCommand = new ExecutionClaimCommand(
+                            origin,
+                            ack.attemptId(),
+                            ack.stepId(),
+                            UUID.randomUUID(),
+                            DurableToolAttemptState.INTENT_COMMITTED,
+                            0L);
+                    ExecutionClaimAck claimAck = durabilitySink.claimExecution(claimCommand);
+                    requireExecutionClaimAck(claimCommand, claimAck);
+                    durableExecutionClaimAck = claimAck;
+                }
+                if (durableExecutionClaimAck != null) {
+                    loopCtx.setActiveDurableExecution(durableExecutionClaimAck);
+                }
+                PersistedMessageOccurrence durableTail = durableInteractiveAck != null
+                        ? durableInteractiveAck.control()
+                        : ack.assistant();
+                DurableFrontier committedFrontier = new DurableFrontier(
+                        durableTail.messageId(), durableTail.seqNo());
+                loopCtx.setExpectedDurableFrontier(committedFrontier);
+                if (externalContext != null && externalContext != loopCtx) {
+                    externalContext.setExpectedDurableFrontier(committedFrontier);
+                }
+                // The provider response remains mutable and the sink may retain or mutate it.
+                // Every consumer after the barrier must use the persisted, frozen ACK payload.
+                toolUseBlocks = committedToolUseBlocks;
+            } else {
+                toolUseBlocks = providerToolUseBlocks;
+            }
+            messages.add(assistantMsg);
             broadcastMessageAppended(loopCtx, assistantMsg);
 
+            if (durableInteractiveAck != null) {
+                publishDurableInteractiveControl(loopCtx, durablePendingControl);
+                insertAttachmentOnlyBeforeLastMessage(
+                        messages, pendingArtifacts, deferredBroadcastMessages);
+                LoopResult waiting = buildResult(
+                        loopCtx, messages, "", toolCallRecords, deferredBroadcastMessages);
+                waiting.setStatus("waiting_user");
+                waiting.setPendingControl(durablePendingControl);
+                finalizeTraceSafe(loopCtx, "ok", null, obsLoopStartMs,
+                        obsToolCallCount, obsEventCount);
+                return waiting;
+            }
+
             // 处理 tool_use: 先把 ask_user / compact_context 从列表里拆出来走特殊分支,其余并行执行
-            List<ToolUseBlock> toolUseBlocks = response.getValidToolUseBlocks();
             log.info("Processing {} tool call(s) at loop {}", toolUseBlocks.size(), loopCtx.getLoopCount() + 1);
 
             List<CompletableFuture<ToolExecutionOutcome>> futures = new ArrayList<>();
             Map<Integer, CompletableFuture<ToolExecutionOutcome>> futuresByIndex = new HashMap<>();
             java.util.Set<Integer> timedOutToolIndexes = new java.util.HashSet<>();
             Map<Integer, ToolExecutionOutcome> askResults = new HashMap<>();
+            Map<Integer, DeferredToolEvent> deferredToolEvents = new ConcurrentHashMap<>();
             for (int i = 0; i < toolUseBlocks.size(); i++) {
                 ToolUseBlock block = toolUseBlocks.get(i);
                 if (AskUserTool.NAME.equals(block.getName())) {
@@ -1437,12 +1679,18 @@ public class AgentLoopEngine {
                 } else {
                     final int idx = i;
                     final ToolUseBlock fblock = block;
-                    if (broadcaster != null && loopCtx.getSessionId() != null) {
-                        broadcaster.toolStarted(loopCtx.getSessionId(), fblock.getId(), fblock.getName(), fblock.getInput());
+                    final Map<String, Object> deferredEventInput =
+                            copyToolInput(fblock.getInput());
+                    if (!durabilityEnabled && broadcaster != null && loopCtx.getSessionId() != null) {
+                        broadcaster.toolStarted(
+                                loopCtx.getSessionId(),
+                                fblock.getId(),
+                                fblock.getName(),
+                                copyToolInput(fblock.getInput()));
                     }
                     final long toolStart = System.currentTimeMillis();
                     final int currentIteration = loopCtx.getLoopCount();
-                    CompletableFuture<ToolExecutionOutcome> future = CompletableFuture.supplyAsync(() -> {
+                    CompletableFuture<ToolExecutionOutcome> future = toolExecutionScheduler.submit(() -> {
                         ToolExecutionOutcome outcome = null;
                         Message r = null;
                         String status = "success";
@@ -1481,7 +1729,15 @@ public class AgentLoopEngine {
                                         fblock.getName(), toolOutputText.length(), truncatedOutput.length());
                             }
                             toolOutputText = truncatedOutput;
-                            if (broadcaster != null && loopCtx.getSessionId() != null) {
+                            if (durabilityEnabled) {
+                                deferredToolEvents.put(idx, new DeferredToolEvent(
+                                        fblock.getId(),
+                                        fblock.getName(),
+                                        deferredEventInput,
+                                        status,
+                                        dur,
+                                        errorMsg));
+                            } else if (broadcaster != null && loopCtx.getSessionId() != null) {
                                 broadcaster.toolFinished(loopCtx.getSessionId(), fblock.getId(), status, dur, errorMsg);
                             }
                             // OBS-2 M4: legacy TOOL_CALL span (t_trace_span) write path closed.
@@ -1510,41 +1766,137 @@ public class AgentLoopEngine {
                 }
             }
 
-            // 等待所有并行 tool 执行完成 (A-1: 120s timeout)
-            try {
-                CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
-                        .get(120, java.util.concurrent.TimeUnit.SECONDS);
-            } catch (java.util.concurrent.TimeoutException e) {
-                log.warn("Tool execution timed out after 120s, cancelling remaining futures");
-                futuresByIndex.forEach((index, future) -> {
-                    if (!future.isDone()) timedOutToolIndexes.add(index);
-                });
-                futures.forEach(f -> f.cancel(true));
-            } catch (java.util.concurrent.ExecutionException e) {
-                log.error("Tool execution failed", e.getCause());
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                log.warn("Tool execution wait interrupted, cancelling futures");
-                futuresByIndex.forEach((index, future) -> {
-                    if (!future.isDone()) timedOutToolIndexes.add(index);
-                });
-                futures.forEach(f -> f.cancel(true));
+            // Wait in short intervals so a user cancellation cannot remain blocked behind
+            // a long-running Tool until the full timeout expires.
+            CompletableFuture<Void> allTools = CompletableFuture.allOf(
+                    futures.toArray(new CompletableFuture[0]));
+            long toolDeadlineNanos = System.nanoTime()
+                    + java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(
+                            toolExecutionTimeoutMillis);
+            while (!allTools.isDone()) {
+                boolean userCancelled = loopCtx.isCancelled();
+                long remainingNanos = toolDeadlineNanos - System.nanoTime();
+                if (userCancelled || remainingNanos <= 0L) {
+                    if (userCancelled) {
+                        cancelled = true;
+                        log.info("Tool execution wait cancelled by user");
+                    } else {
+                        log.warn("Tool execution timed out after {}ms, cancelling remaining futures",
+                                toolExecutionTimeoutMillis);
+                    }
+                    futuresByIndex.forEach((index, future) -> {
+                        if (!future.isDone()) timedOutToolIndexes.add(index);
+                    });
+                    futures.forEach(future -> future.cancel(true));
+                    break;
+                }
+                long waitMillis = Math.max(1L, Math.min(100L,
+                        java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(remainingNanos)));
+                try {
+                    allTools.get(waitMillis, java.util.concurrent.TimeUnit.MILLISECONDS);
+                } catch (java.util.concurrent.TimeoutException pollAgain) {
+                    // Re-check cancellation and the absolute deadline.
+                } catch (java.util.concurrent.ExecutionException executionFailure) {
+                    log.error("Tool execution failed", executionFailure.getCause());
+                    break;
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    log.warn("Tool execution wait interrupted, cancelling futures");
+                    futuresByIndex.forEach((index, future) -> {
+                        if (!future.isDone()) timedOutToolIndexes.add(index);
+                    });
+                    futures.forEach(future -> future.cancel(true));
+                    break;
+                }
             }
 
-            // Append every paired tool_result first, in original call order.
+            if (durabilityEnabled && !timedOutToolIndexes.isEmpty()) {
+                // CompletableFuture cancellation does not prove that an underlying
+                // filesystem/process/network side effect stopped. Keep the attempt
+                // EXECUTING so a later fenced recovery can replay only safe calls or
+                // move unsafe calls to UNCERTAIN; never persist a fabricated timeout
+                // vector as if the effect had definitely ended.
+                throw new DurableToolExecutionIncompleteException(cancelled);
+            }
+            if (loopCtx.isCancelled()) cancelled = true;
+
+            // Build every paired candidate first, in original provider order. Under durability,
+            // none of these mutable candidates or their Tool events become visible before the
+            // complete vector is committed and returned as immutable database ACK occurrences.
             List<ToolExecutionOutcome> orderedOutcomes = new ArrayList<>(toolUseBlocks.size());
             for (int i = 0; i < toolUseBlocks.size(); i++) {
                 ToolExecutionOutcome outcome = orderedOutcome(
                         i, toolUseBlocks.get(i), askResults, timedOutToolIndexes);
                 orderedOutcomes.add(outcome);
-                Message toolResult = outcome.toolResult();
+            }
+            List<Message> committedResults;
+            ToolResultCommitAck durableResultAck = null;
+            if (durabilityEnabled) {
+                if (durableIntentAck == null || durableExecutionClaimAck == null) {
+                    throw new IllegalStateException(
+                            "Durable Tool result closure requires execution authority");
+                }
+                DurableFrontier preResultFrontier = new DurableFrontier(
+                        durableIntentAck.assistant().messageId(),
+                        durableIntentAck.assistant().seqNo());
+                ToolResultCommitCommand resultCommand = new ToolResultCommitCommand(
+                        durableExecutionClaimAck.executionScope(),
+                        durableIntentAck.attemptId(),
+                        durableIntentAck.stepId(),
+                        durableExecutionClaimAck.claimRequestId(),
+                        durableExecutionClaimAck.executionGeneration(),
+                        UUID.randomUUID(),
+                        orderedOutcomes.stream()
+                                .map(ToolExecutionOutcome::toolResult)
+                                .map(MessageSnapshot::capture)
+                                .toList(),
+                        preResultFrontier,
+                        durableIntentAck.assistantPayloadHash(),
+                        durableIntentAck.manifestHash(),
+                        loopCtx.getTraceId());
+                ToolResultCommitAck resultAck = durabilitySink.commitResults(resultCommand);
+                committedResults = requireToolResultAck(resultCommand, resultAck);
+                durableResultAck = resultAck;
+                loopCtx.setActiveDurableExecution(null);
+                loopCtx.setExpectedDurableFrontier(resultAck.postResultFrontier());
+                if (externalContext != null && externalContext != loopCtx) {
+                    externalContext.setExpectedDurableFrontier(resultAck.postResultFrontier());
+                }
+                // Archive preparation is also the continuation-authority gate. It must
+                // run before any result/tool-finished visibility so an expired stale
+                // generation cannot publish after another coordinator has taken over.
+                ArchivePreparationCommand archiveCommand =
+                        ArchivePreparationCommand.from(durableResultAck);
+                ArchivePreparationAck archiveAck =
+                        durabilitySink.prepareResultArchive(archiveCommand);
+                requireArchivePreparationAck(archiveCommand, archiveAck);
+                List<Message> visibleResults = committedResults;
+                durabilitySink.withResultVisibilityAuthority(
+                        archiveCommand,
+                        () -> {
+                            broadcastDeferredToolEvents(
+                                    loopCtx, toolUseBlocks, deferredToolEvents);
+                            for (Message result : visibleResults) {
+                                broadcastMessageAppended(loopCtx, result);
+                            }
+                        });
+            } else {
+                committedResults = orderedOutcomes.stream()
+                        .map(ToolExecutionOutcome::toolResult)
+                        .toList();
+            }
+            for (Message toolResult : committedResults) {
                 messages.add(toolResult);
-                broadcastMessageAppended(loopCtx, toolResult);
+                if (!durabilityEnabled) {
+                    broadcastMessageAppended(loopCtx, toolResult);
+                }
             }
             // Only after all pairs are closed, collect successful artifacts in that same order.
             for (ToolExecutionOutcome outcome : orderedOutcomes) {
                 pendingArtifacts.addAll(outcome.artifacts());
             }
+
+            if (cancelled) break;
 
             // f. loopCount++
             loopCtx.incrementLoopCount();
@@ -1863,6 +2215,83 @@ public class AgentLoopEngine {
     }
 
     /**
+     * Drain all bounded inbox pages before Provider use and advance the exact durable frontier.
+     * Each committed raw occurrence remains a separate in-memory Message; only the later
+     * provider materializer may coalesce marked adjacent occurrences.
+     */
+    private void drainDurableQueuedUsers(
+            ConversationDurabilitySink durabilitySink,
+            LoopContext loopCtx,
+            LoopContext externalContext,
+            List<Message> messages) {
+        LoopDurabilityScope scope = requireDurabilityScope(
+                loopCtx.getDurabilityScope(), loopCtx.getSessionId(), loopCtx.getUserId());
+        DurableFrontier expected = loopCtx.getExpectedDurableFrontier();
+        if (expected == null) {
+            throw new IllegalStateException("Durable queued USER drain requires a frontier");
+        }
+        while (true) {
+            QueuedUserDrainAck ack = durabilitySink.drainQueuedUsers(scope, expected);
+            requireQueuedUserDrainAck(scope, expected, ack);
+            for (QueuedUserDrainItem item : ack.items()) {
+                Message drained = item.message().message().toMessage();
+                messages.add(drained);
+                loopCtx.markProviderMergeEligibleUser(drained);
+                broadcastMessageAppended(loopCtx, drained);
+            }
+            expected = ack.postDrainFrontier();
+            loopCtx.setExpectedDurableFrontier(expected);
+            if (externalContext != null && externalContext != loopCtx) {
+                externalContext.setExpectedDurableFrontier(expected);
+            }
+            if (ack.remainingCount() == 0L) {
+                return;
+            }
+            if (ack.items().isEmpty()) {
+                throw new IllegalStateException(
+                        "Durable queued USER drain made no progress");
+            }
+        }
+    }
+
+    private static void requireQueuedUserDrainAck(
+            LoopDurabilityScope scope,
+            DurableFrontier expected,
+            QueuedUserDrainAck ack) {
+        if (ack == null
+                || !scope.equals(ack.scope())
+                || !expected.equals(ack.preDrainFrontier())) {
+            throw new IllegalStateException("Durable queued USER drain ACK changed authority");
+        }
+        long expectedSeq = expected.maxSeq() + 1L;
+        long tailId = expected.maxMessageId();
+        for (QueuedUserDrainItem item : ack.items()) {
+            PersistedMessageOccurrence occurrence = item.message();
+            MessageSnapshot snapshot = occurrence.message();
+            if (occurrence.seqNo() != expectedSeq++
+                    || snapshot.role() != Message.Role.USER
+                    || snapshot.reasoningContent() != null
+                    || !(snapshot.content().toJavaValue() instanceof String)
+                    || !"NORMAL".equals(occurrence.msgType())
+                    || !"normal".equals(occurrence.messageType())
+                    || occurrence.controlId() != null
+                    || occurrence.answeredAt() != null
+                    || !occurrence.metadata().isEmpty()
+                    || occurrence.traceId() != null) {
+                throw new IllegalStateException(
+                        "Durable queued USER drain ACK is not an exact conversational USER");
+            }
+            tailId = occurrence.messageId();
+        }
+        DurableFrontier expectedPost = ack.items().isEmpty()
+                ? expected
+                : new DurableFrontier(tailId, expectedSeq - 1L);
+        if (!expectedPost.equals(ack.postDrainFrontier())) {
+            throw new IllegalStateException("Durable queued USER drain ACK has a false frontier");
+        }
+    }
+
+    /**
      * Plan r2 §5 + W-BE-3 fail-secure — resolve the SkillView for this session and inject
      * into LoopContext. Resolver returning {@code null} or throwing collapses to
      * {@link com.skillforge.core.skill.view.SessionSkillView#EMPTY} so a broken resolver
@@ -1889,6 +2318,22 @@ public class AgentLoopEngine {
     }
 
     /**
+     * Builds the same authoritative Tool/Skill surface used by the live provider request.
+     * Checkpoint branch/restore code calls this seam rather than reconstructing Engine rules.
+     */
+    public ContextRuntimeAuthority resolveContextRuntimeAuthority(
+            AgentDefinition agentDef, LoopContext loopCtx) {
+        if (loopCtx == null || agentDef == null) {
+            return new ContextRuntimeAuthority(null,
+                    com.skillforge.core.skill.view.SessionSkillView.EMPTY);
+        }
+        ensureSkillViewResolved(loopCtx, agentDef);
+        collectTools(loopCtx, loopCtx.getExecutionMode(),
+                loopCtx.getExcludedSkillNames(), loopCtx.getAllowedToolNames());
+        return new ContextRuntimeAuthority(loopCtx.getToolCatalog(), loopCtx.getSkillView());
+    }
+
+    /**
      * Plan r2 §5 — resolve the SkillDefinition list that THIS session is allowed to see.
      * Reads from {@code LoopContext.skillView} when wired (production path).
      * Falls back to {@code skillRegistry.getAllSkillDefinitions()} when not (legacy / test).
@@ -1906,8 +2351,8 @@ public class AgentLoopEngine {
      * 收集所有可用的工具 schema：内置 Tool + Skill loader + (可选) ask_user。
      * <p>Plan r2 §5 (B-3) 边界：
      * <ul>
-     *   <li>L1092 内置 Tool 段保持原状 — 只受 excludedSkillNames / allowedToolNames 过滤；
-     *       view 不管内置 Tool。</li>
+     *   <li>普通内置 Tool 受 excludedSkillNames / allowedToolNames 过滤；view 不管内置 Tool。
+     *       平台 system-resident Tool 由可信运行时状态决定并绕过 Agent 配置过滤。</li>
      *   <li>Skill loader 段改读 LoopContext.skillView.all() —
      *       view 已经在解析时排除 disabled_system_skills，调用方不再叠加 excludedSkillNames。</li>
      * </ul>
@@ -1916,6 +2361,21 @@ public class AgentLoopEngine {
                                           java.util.Set<String> excludedSkillNames,
                                           java.util.Set<String> allowedToolNames) {
         List<ToolSchema> tools = new ArrayList<>();
+        SkillContext trustedContext = createSkillContext(loopCtx, null, null);
+        Map<String, SystemResidentTool.Status> systemGroupStatuses =
+                resolveSystemToolGroupStatuses(trustedContext);
+        Map<Tool, SystemResidentTool.Status> systemStatuses = new java.util.IdentityHashMap<>();
+        java.util.Set<String> supersededToolNames = new java.util.LinkedHashSet<>();
+        for (Tool candidate : skillRegistry.getAllTools()) {
+            if (candidate instanceof SystemResidentTool systemTool) {
+                SystemResidentTool.Status status = systemGroupStatuses.get(
+                        systemTool.getSystemToolGroup());
+                systemStatuses.put(candidate, status);
+                if (status != SystemResidentTool.Status.DISABLED) {
+                    supersededToolNames.addAll(systemTool.getSupersededToolNames());
+                }
+            }
+        }
 
         // 内置 Tool (filter out excluded skills for depth-aware multi-agent collab,
         // and apply allowedToolNames whitelist if configured) — view 不影响这一段。
@@ -1925,10 +2385,18 @@ public class AgentLoopEngine {
             if (SKILL_LOADER_TOOL_NAME.equals(tool.getName())) {
                 continue;
             }
-            if (excludedSkillNames != null && excludedSkillNames.contains(tool.getName())) {
+            if (supersededToolNames.contains(tool.getName())) {
                 continue;
             }
-            if (allowedToolNames != null && !allowedToolNames.isEmpty()
+            boolean systemResident = tool instanceof SystemResidentTool;
+            if (systemResident && systemStatuses.get(tool) != SystemResidentTool.Status.AVAILABLE) {
+                continue;
+            }
+            if (!systemResident && excludedSkillNames != null
+                    && excludedSkillNames.contains(tool.getName())) {
+                continue;
+            }
+            if (!systemResident && allowedToolNames != null && !allowedToolNames.isEmpty()
                     && !tool.getName().startsWith("mcp_")   // mcp tools bypass the built-in toolIds
                                                             // whitelist; governed solely by the
                                                             // mcp-server gate below (mirrors the
@@ -2596,9 +3064,17 @@ public class AgentLoopEngine {
     private ToolExecutionOutcome runToolSyncOutcomeWithBroadcast(ToolUseBlock block, LoopContext loopCtx,
                                                                  List<ToolCallRecord> toolCallRecords,
                                                                  String approvalToken) {
+        return runToolSyncOutcome(
+                block, loopCtx, toolCallRecords, approvalToken, true);
+    }
+
+    private ToolExecutionOutcome runToolSyncOutcome(ToolUseBlock block, LoopContext loopCtx,
+                                                     List<ToolCallRecord> toolCallRecords,
+                                                     String approvalToken,
+                                                     boolean publishLifecycle) {
         String sid = loopCtx.getSessionId();
         long start = System.currentTimeMillis();
-        if (broadcaster != null && sid != null) {
+        if (publishLifecycle && broadcaster != null && sid != null) {
             broadcaster.toolStarted(sid, block.getId(), block.getName(), block.getInput());
         }
         ToolExecutionOutcome outcome = null;
@@ -2627,7 +3103,7 @@ public class AgentLoopEngine {
         } finally {
             long dur = System.currentTimeMillis() - start;
             loopCtx.recordToolCall(block.getName());
-            if (broadcaster != null && sid != null) {
+            if (publishLifecycle && broadcaster != null && sid != null) {
                 broadcaster.toolFinished(sid, block.getId(), status, dur, errorMsg);
             }
         }
@@ -2643,6 +3119,42 @@ public class AgentLoopEngine {
                                          String installTool,
                                          String installTarget,
                                          Decision decision) {
+        return completeConfirmedTool(
+                agentDef, sessionId, userId, toolUseId, toolName, input,
+                confirmationKind, installTool, installTarget, decision, true);
+    }
+
+    /**
+     * Executes an approved interactive Tool only after the caller has committed a durable
+     * execution claim. No Tool lifecycle event is published here: the caller must first commit
+     * and archive the complete result vector, then publish only that durable result.
+     */
+    public Message completeConfirmedToolAfterDurableClaim(AgentDefinition agentDef,
+                                         String sessionId,
+                                         Long userId,
+                                         String toolUseId,
+                                         String toolName,
+                                         Map<String, Object> input,
+                                         String confirmationKind,
+                                         String installTool,
+                                         String installTarget,
+                                         Decision decision) {
+        return completeConfirmedTool(
+                agentDef, sessionId, userId, toolUseId, toolName, input,
+                confirmationKind, installTool, installTarget, decision, false);
+    }
+
+    private Message completeConfirmedTool(AgentDefinition agentDef,
+                                         String sessionId,
+                                         Long userId,
+                                         String toolUseId,
+                                         String toolName,
+                                         Map<String, Object> input,
+                                         String confirmationKind,
+                                         String installTool,
+                                         String installTarget,
+                                         Decision decision,
+                                         boolean publishLifecycle) {
         Map<String, Object> safeInput = input != null ? input : Collections.emptyMap();
         if (decision != Decision.APPROVED) {
             String target = installTarget != null ? installTarget : agentMutationTargetLabel(toolName, safeInput);
@@ -2668,7 +3180,8 @@ public class AgentLoopEngine {
             if (sessionConfirmCache != null) {
                 sessionConfirmCache.approve(rootSid, installTool, installTarget);
             }
-            return runToolSyncWithBroadcast(block, loopCtx, toolCallRecords, null);
+            return runToolSyncOutcome(
+                    block, loopCtx, toolCallRecords, null, publishLifecycle).toolResult();
         }
         if ("agent_mutation".equals(confirmationKind)) {
             if (toolApprovalRegistry == null) {
@@ -2678,7 +3191,8 @@ public class AgentLoopEngine {
             }
             String token = toolApprovalRegistry.issue(
                     sessionId, toolName, toolUseId, java.time.Duration.ofMinutes(5));
-            return runToolSyncWithBroadcast(block, loopCtx, toolCallRecords, token);
+            return runToolSyncOutcome(
+                    block, loopCtx, toolCallRecords, token, publishLifecycle).toolResult();
         }
         return Message.toolResult(toolUseId,
                 "Unknown confirmation kind: " + confirmationKind, true);
@@ -2752,7 +3266,9 @@ public class AgentLoopEngine {
         if (loopCtx == null || messages == null) {
             return messages;
         }
-        List<Message> sanitized = AssistantAttachmentRefSanitizer.sanitize(messages);
+        List<Message> providerUsers = ProviderQueuedUserMaterializer.materialize(
+                loopCtx, messages);
+        List<Message> sanitized = AssistantAttachmentRefSanitizer.sanitize(providerUsers);
         MessageMaterializer materializer = loopCtx.getMessageMaterializer();
         if (materializer == null) {
             return sanitized;
@@ -3074,6 +3590,66 @@ public class AgentLoopEngine {
         return out.toString();
     }
 
+    private static SkillContext createSkillContext(
+            LoopContext loopContext,
+            String toolUseId,
+            String approvalToken) {
+        SkillContext context = new SkillContext(
+                loopContext != null ? loopContext.getWorkingDirectory() : null,
+                loopContext != null ? loopContext.getSessionId() : null,
+                loopContext != null ? loopContext.getUserId() : null);
+        if (loopContext != null) {
+            context.setArtifactOutputDirectory(loopContext.getArtifactOutputDirectory());
+            context.setInjectedMemoryIds(loopContext.getInjectedMemoryIds());
+            context.setDurabilityScope(loopContext.getDurabilityScope());
+        }
+        context.setToolUseId(toolUseId);
+        context.setApprovalToken(approvalToken);
+        return context;
+    }
+
+    private SystemResidentTool.Status resolveSystemToolStatus(
+            SystemResidentTool tool,
+            SkillContext context) {
+        try {
+            SystemResidentTool.Status status = tool.getSystemToolStatus(context);
+            return status != null ? status : SystemResidentTool.Status.UNAVAILABLE;
+        } catch (RuntimeException unavailable) {
+            // Exposure is fail-closed. Do not log context or persistence details from a
+            // system capability's readiness check.
+            log.warn("System-resident Tool readiness failed: tool={}", tool.getName());
+            return SystemResidentTool.Status.UNAVAILABLE;
+        }
+    }
+
+    private Map<String, SystemResidentTool.Status> resolveSystemToolGroupStatuses(
+            SkillContext context) {
+        Map<String, SystemResidentTool.Status> statuses = new HashMap<>();
+        for (Tool candidate : skillRegistry.getAllTools()) {
+            if (!(candidate instanceof SystemResidentTool systemTool)) continue;
+            String group = systemTool.getSystemToolGroup();
+            SystemResidentTool.Status candidateStatus = resolveSystemToolStatus(
+                    systemTool, context);
+            statuses.merge(group, candidateStatus, (left, right) ->
+                    left == right ? left : SystemResidentTool.Status.UNAVAILABLE);
+        }
+        return statuses;
+    }
+
+    private boolean isSupersededSystemToolName(String toolName, SkillContext context) {
+        Map<String, SystemResidentTool.Status> groupStatuses =
+                resolveSystemToolGroupStatuses(context);
+        for (Tool candidate : skillRegistry.getAllTools()) {
+            if (!(candidate instanceof SystemResidentTool systemTool)) continue;
+            SystemResidentTool.Status status = groupStatuses.get(systemTool.getSystemToolGroup());
+            if (status != SystemResidentTool.Status.DISABLED
+                    && systemTool.getSupersededToolNames().contains(toolName)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private void restoreContextRuntime(LoopContext context) {
         if (contextRuntimeStore == null || context == null
                 || context.getSessionId() == null || context.getSessionId().isBlank()) {
@@ -3081,6 +3657,8 @@ public class AgentLoopEngine {
         }
         try {
             contextRuntimeStore.load(context.getSessionId())
+                    .map(snapshot -> ContextRuntimeSnapshotResolver.resolve(
+                            snapshot, context.getToolCatalog(), context.getSkillView()))
                     .ifPresent(context::restoreRuntimeSnapshot);
         } catch (RuntimeException ex) {
             log.warn("Context runtime restore failed; continuing without checkpoint: sessionId={}",
@@ -3108,7 +3686,8 @@ public class AgentLoopEngine {
      */
     String renderSkillRecoveryAppendix(
             LoopContext context, List<Message> messages) {
-        if (context == null || !containsCompactSummary(messages)) return "";
+        if (context == null || !containsCompactSummary(
+                messages, trustedCompactSummaryCarrierRequired)) return "";
         List<com.skillforge.core.context.runtime.SkillInvocationRef> refs =
                 context.runtimeSnapshot().invokedSkills().stream()
                         .sorted(java.util.Comparator.comparingLong(
@@ -3157,10 +3736,15 @@ public class AgentLoopEngine {
                 + "\n</context-recovery>";
     }
 
-    private static boolean containsCompactSummary(List<Message> messages) {
+    private static boolean containsCompactSummary(
+            List<Message> messages, boolean trustedCarrierRequired) {
         if (messages == null) return false;
         for (Message message : messages) {
             if (message == null || message.getContent() == null) continue;
+            if (CompactSummaryEnvelope.parseTrustedCarrier(message).isPresent()) {
+                return true;
+            }
+            if (trustedCarrierRequired) continue;
             Object content = message.getContent();
             if (content instanceof String text
                     && text.startsWith("[Context summary from ")) {
@@ -3202,11 +3786,29 @@ public class AgentLoopEngine {
         String skillName = block.getName();
         String toolUseId = block.getId();
         Map<String, Object> input = block.getInput() != null ? block.getInput() : Collections.emptyMap();
+        Map<String, Object> recordedInput = copyToolInput(input);
         long startTime = System.currentTimeMillis();
 
         log.debug("Executing tool call: skill={}, id={}", skillName, toolUseId);
 
         try {
+            Optional<Tool> registeredTool = skillRegistry.getTool(skillName);
+            SkillContext registeredToolContext = registeredTool.isPresent()
+                    ? createSkillContext(loopContext, toolUseId, approvalToken)
+                    : null;
+            if (registeredTool.isPresent()
+                    && !(registeredTool.get() instanceof SystemResidentTool)
+                    && isSupersededSystemToolName(skillName, registeredToolContext)) {
+                String hint = "[NOT ALLOWED] tool '" + skillName
+                        + "' is not available while its system replacement is enabled.";
+                toolCallRecords.add(new ToolCallRecord(
+                        skillName, recordedInput, hint, false,
+                        System.currentTimeMillis() - startTime, startTime));
+                recordTelemetry(skillName, false, SkillResult.ErrorType.NOT_ALLOWED.name());
+                return Message.toolResult(
+                        toolUseId, hint, true, SkillResult.ErrorType.NOT_ALLOWED.name());
+            }
+
             // P11 MCP INV-4: per-agent enable filter for MCP-sourced tools. Hallucinated /
             // out-of-list mcp_<server>_<tool> calls are rejected before dispatch even if the
             // tool happens to exist in skillRegistry (LLM may know the name from a prior
@@ -3227,7 +3829,7 @@ public class AgentLoopEngine {
                     hint = "[NOT ALLOWED] MCP tool '" + skillName + "' belongs to a server "
                             + "that is not enabled for this agent. Stop calling it.";
                 }
-                toolCallRecords.add(new ToolCallRecord(skillName, input, hint, false, denyDuration, startTime));
+                toolCallRecords.add(new ToolCallRecord(skillName, recordedInput, hint, false, denyDuration, startTime));
                 log.warn("MCP NOT_ALLOWED short-circuit: tool={}, count={}", skillName, notAllowedCount);
                 recordTelemetry(skillName, false, SkillResult.ErrorType.NOT_ALLOWED.name());
                 return Message.toolResult(toolUseId, hint, true,
@@ -3237,7 +3839,7 @@ public class AgentLoopEngine {
             // Plan r2 §5 (B-4) — view 授权前置检查（反 hijack 短路）。
             // 仅对 NON-built-in name 生效；built-in Tool / 引擎特殊 tool（ask_user / compact_context）
             // 不进 view，直接走原路径。
-            boolean isBuiltinTool = skillRegistry.getTool(skillName).isPresent();
+            boolean isBuiltinTool = registeredTool.isPresent();
             boolean isEngineSpecial = SKILL_LOADER_TOOL_NAME.equals(skillName)
                     || AskUserTool.NAME.equals(skillName)
                     || ContextCompactTool.NAME.equals(skillName)
@@ -3257,7 +3859,7 @@ public class AgentLoopEngine {
                     hint = "[NOT ALLOWED] skill '" + skillName + "' is not available for this agent. "
                             + "Stop calling it; choose from the available skill list.";
                 }
-                toolCallRecords.add(new ToolCallRecord(skillName, input, hint, false, denyDuration, startTime));
+                toolCallRecords.add(new ToolCallRecord(skillName, recordedInput, hint, false, denyDuration, startTime));
                 log.warn("NOT_ALLOWED short-circuit: skill={}, count={}", skillName, notAllowedCount);
                 recordTelemetry(skillName, false, SkillResult.ErrorType.NOT_ALLOWED.name());
                 return Message.toolResult(toolUseId, hint, true,
@@ -3285,7 +3887,7 @@ public class AgentLoopEngine {
                     String error = "[NOT DISCOVERED] tool '" + skillName
                             + "' is authorized but deferred. Call ToolSearch first.";
                     toolCallRecords.add(new ToolCallRecord(
-                            skillName, input, error, false,
+                            skillName, recordedInput, error, false,
                             System.currentTimeMillis() - startTime, startTime));
                     recordTelemetry(
                             skillName, false, SkillResult.ErrorType.NOT_ALLOWED.name());
@@ -3306,7 +3908,7 @@ public class AgentLoopEngine {
                 SkillDefinition skillDef = skillDefOpt.get();
                 String content = skillDef.getPromptContent() != null ? skillDef.getPromptContent() : "";
                 long duration = System.currentTimeMillis() - startTime;
-                toolCallRecords.add(new ToolCallRecord(skillName, input, content, true, duration, startTime));
+                toolCallRecords.add(new ToolCallRecord(skillName, recordedInput, content, true, duration, startTime));
                 log.debug("SkillDefinition '{}' returned promptContent, duration={}ms", skillName, duration);
                 // Plan r2 §7 (B-2 critical injection point — r1 missed this branch).
                 recordTelemetry(skillName, true, null);
@@ -3314,19 +3916,10 @@ public class AgentLoopEngine {
             }
 
             // 检查是否为内置 Tool
-            Optional<Tool> toolOpt = skillRegistry.getTool(skillName);
+            Optional<Tool> toolOpt = registeredTool;
             if (toolOpt.isPresent()) {
                 Tool tool = toolOpt.get();
-                SkillContext skillContext = new SkillContext(
-                        loopContext.getWorkingDirectory(),
-                        loopContext.getSessionId(),
-                        loopContext.getUserId());
-                skillContext.setArtifactOutputDirectory(loopContext.getArtifactOutputDirectory());
-                skillContext.setToolUseId(toolUseId);
-                skillContext.setApprovalToken(approvalToken);
-                // Memory v2 (PR-2): forward already-injected memory ids so tools (memory_search)
-                // can exclude them from results — avoids double-presenting the same memory.
-                skillContext.setInjectedMemoryIds(loopContext.getInjectedMemoryIds());
+                SkillContext skillContext = registeredToolContext;
 
                 // 执行 SkillHook.beforeSkillExecute()
                 Map<String, Object> processedInput = input;
@@ -3336,7 +3929,7 @@ public class AgentLoopEngine {
                         log.warn("SkillHook rejected execution of skill '{}'", skillName);
                         long duration = System.currentTimeMillis() - startTime;
                         String errorMsg = "Tool execution rejected by hook";
-                        toolCallRecords.add(new ToolCallRecord(skillName, input, errorMsg, false, duration, startTime));
+                        toolCallRecords.add(new ToolCallRecord(skillName, recordedInput, errorMsg, false, duration, startTime));
                         recordTelemetry(skillName, false, SkillResult.ErrorType.EXECUTION.name());
                         return Message.toolResult(toolUseId, errorMsg, true);
                     }
@@ -3351,7 +3944,7 @@ public class AgentLoopEngine {
                     String hint = "[RETRY NEEDED] " + skillName
                             + " missing required argument(s): " + String.join(", ", missingRequired)
                             + ". Re-emit the tool call with all required fields populated.";
-                    toolCallRecords.add(new ToolCallRecord(skillName, input, hint, false, duration, startTime));
+                    toolCallRecords.add(new ToolCallRecord(skillName, recordedInput, hint, false, duration, startTime));
                     log.warn("Pre-validation rejected '{}': missing required {}", skillName, missingRequired);
                     recordTelemetry(skillName, false, SkillResult.ErrorType.VALIDATION.name());
                     return Message.toolResult(toolUseId, hint, true, SkillResult.ErrorType.VALIDATION.name());
@@ -3377,11 +3970,11 @@ public class AgentLoopEngine {
                 if (contextAssemblyEnabled && result.isSuccess()) {
                     Optional<com.skillforge.core.context.PromptSourceType> source =
                             ToolResultTrustClassifier.classify(skillName);
-                    if (source.isPresent()) {
+                    if (source.isPresent() && !(tool instanceof PreWrappedLowTrustTool)) {
                         output = LowTrustContextBoundary.wrap(source.get(), output);
                     }
                 }
-                toolCallRecords.add(new ToolCallRecord(skillName, input, output, result.isSuccess(), duration, startTime));
+                toolCallRecords.add(new ToolCallRecord(skillName, recordedInput, output, result.isSuccess(), duration, startTime));
                 log.debug("Tool '{}' executed, success={}, duration={}ms", skillName, result.isSuccess(), duration);
                 String errorType = (!result.isSuccess() && result.getErrorType() != null)
                         ? result.getErrorType().name()
@@ -3396,7 +3989,7 @@ public class AgentLoopEngine {
             // 找不到 Tool
             long duration = System.currentTimeMillis() - startTime;
             String errorMsg = "Unknown skill: " + skillName;
-            toolCallRecords.add(new ToolCallRecord(skillName, input, errorMsg, false, duration, startTime));
+            toolCallRecords.add(new ToolCallRecord(skillName, recordedInput, errorMsg, false, duration, startTime));
             log.warn("Tool '{}' not found in registry", skillName);
             recordTelemetry(skillName, false, SkillResult.ErrorType.EXECUTION.name());
             return Message.toolResult(toolUseId, errorMsg, true);
@@ -3406,7 +3999,7 @@ public class AgentLoopEngine {
             // 当作 execution failure 触发不必要的 compaction。
             long duration = System.currentTimeMillis() - startTime;
             String errorMsg = "Invalid arguments: " + e.getMessage();
-            toolCallRecords.add(new ToolCallRecord(skillName, input, errorMsg, false, duration, startTime));
+            toolCallRecords.add(new ToolCallRecord(skillName, recordedInput, errorMsg, false, duration, startTime));
             log.warn("Tool '{}' rejected invalid arguments: {}", skillName, e.getMessage());
             recordTelemetry(skillName, false, SkillResult.ErrorType.VALIDATION.name());
             return Message.toolResult(toolUseId, errorMsg, true, SkillResult.ErrorType.VALIDATION.name());
@@ -3414,7 +4007,7 @@ public class AgentLoopEngine {
             // 异常不中断循环，返回 error tool_result
             long duration = System.currentTimeMillis() - startTime;
             String errorMsg = "Tool execution error: " + e.getMessage();
-            toolCallRecords.add(new ToolCallRecord(skillName, input, errorMsg, false, duration, startTime));
+            toolCallRecords.add(new ToolCallRecord(skillName, recordedInput, errorMsg, false, duration, startTime));
             log.error("Tool '{}' threw exception", skillName, e);
             recordTelemetry(skillName, false, SkillResult.ErrorType.EXECUTION.name());
             return Message.toolResult(toolUseId, errorMsg, true);
@@ -3430,13 +4023,636 @@ public class AgentLoopEngine {
         }
     }
 
+    private static void reconcileHookDurabilityAuthority(
+            LoopContext previous,
+            LoopContext replacement,
+            LoopDurabilityScope authoritativeScope,
+            DurableFrontier authoritativeFrontier) {
+        if (!java.util.Objects.equals(previous.getDurabilityScope(), authoritativeScope)
+                || !java.util.Objects.equals(
+                        previous.getExpectedDurableFrontier(), authoritativeFrontier)) {
+            throw new IllegalStateException("LoopHook cannot mutate durable conversation authority");
+        }
+        if (replacement == null || replacement == previous) {
+            return;
+        }
+
+        LoopDurabilityScope replacementScope = replacement.getDurabilityScope();
+        DurableFrontier replacementFrontier = replacement.getExpectedDurableFrontier();
+        if (replacementScope != null
+                && !java.util.Objects.equals(replacementScope, authoritativeScope)) {
+            throw new IllegalStateException("LoopHook cannot replace durable conversation scope");
+        }
+        if (replacementFrontier != null
+                && !java.util.Objects.equals(replacementFrontier, authoritativeFrontier)) {
+            throw new IllegalStateException("LoopHook cannot replace durable conversation frontier");
+        }
+        if (replacementScope == null) {
+            replacement.setDurabilityScope(authoritativeScope);
+        }
+        if (replacementFrontier == null) {
+            replacement.setExpectedDurableFrontier(authoritativeFrontier);
+        }
+    }
+
+    private static LoopDurabilityScope requireDurabilityScope(LoopDurabilityScope scope,
+                                                              String sessionId,
+                                                              Long userId) {
+        if (scope == null) {
+            throw new IllegalStateException("Durable conversation requires a loop durability scope");
+        }
+        if (!scope.sessionId().equals(sessionId)
+                || userId == null
+                || scope.userId() != userId.longValue()) {
+            throw new IllegalStateException("Loop durability scope does not match the active conversation");
+        }
+        return scope;
+    }
+
+    private ToolCallManifest buildToolCallManifest(List<ToolUseBlock> toolUseBlocks) {
+        List<ToolCallIntent> calls = new ArrayList<>(toolUseBlocks.size());
+        for (int i = 0; i < toolUseBlocks.size(); i++) {
+            ToolUseBlock block = toolUseBlocks.get(i);
+            ReplaySafety safety = skillRegistry.getTool(block.getName())
+                    .map(tool -> tool.isReadOnly()
+                            ? ReplaySafety.READ_ONLY_REPLAYABLE
+                            : ReplaySafety.MUTATING)
+                    .orElse(ReplaySafety.UNKNOWN);
+            calls.add(new ToolCallIntent(
+                    i,
+                    block.getId(),
+                    block.getName(),
+                    FrozenJson.capture(block.getInput() != null ? block.getInput() : Map.of()),
+                    safety));
+        }
+        ReplaySafety aggregate = ReplaySafety.aggregate(
+                calls.stream().map(ToolCallIntent::replaySafety).toList());
+        return new ToolCallManifest(calls, aggregate);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<ToolUseBlock> materializeToolCalls(ToolCallManifest manifest) {
+        List<ToolUseBlock> calls = new ArrayList<>(manifest.calls().size());
+        for (ToolCallIntent call : manifest.calls()) {
+            Object thawed = call.input().toJavaValue();
+            if (!(thawed instanceof Map<?, ?>)) {
+                throw new IllegalStateException(
+                        "Durable intent acknowledgement contains a non-object Tool input");
+            }
+            calls.add(new ToolUseBlock(
+                    call.toolUseId(), call.toolName(), (Map<String, Object>) thawed));
+        }
+        return List.copyOf(calls);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> copyToolInput(Map<String, Object> input) {
+        Object copy = FrozenJson.capture(input == null ? Map.of() : input).toJavaValue();
+        return (Map<String, Object>) copy;
+    }
+
+    private InteractiveStepPlanner.CallKind classifyInteractiveCall(
+            ToolUseBlock call, LoopContext loopCtx) {
+        if (AskUserTool.NAME.equals(call.getName())) {
+            return InteractiveStepPlanner.CallKind.ASK_USER;
+        }
+        if (isInstallRequiringConfirmation(call)) {
+            if (confirmationPrompter == null) {
+                return InteractiveStepPlanner.CallKind.NORMAL;
+            }
+            Map<String, Object> input = call.getInput() != null
+                    ? call.getInput()
+                    : Collections.emptyMap();
+            InstallTargetParser.Parsed parsed = InstallTargetParser.parse(
+                    String.valueOf(input.getOrDefault("command", "")));
+            String rootSid = resolveRootSessionIdCached(loopCtx.getSessionId(), loopCtx);
+            if (sessionConfirmCache != null
+                    && sessionConfirmCache.isApproved(
+                            rootSid, parsed.toolName(), parsed.installTarget())) {
+                return InteractiveStepPlanner.CallKind.NORMAL;
+            }
+            return InteractiveStepPlanner.CallKind.CONFIRMATION;
+        }
+        if (isAgentMutationRequiringConfirmation(call)) {
+            Map<String, Object> input = call.getInput() != null
+                    ? call.getInput()
+                    : Collections.emptyMap();
+            Optional<Tool> tool = skillRegistry.getTool(call.getName());
+            if (confirmationPrompter == null
+                    || toolApprovalRegistry == null
+                    || tool.isEmpty()
+                    || !findMissingRequiredFields(tool.get(), input).isEmpty()) {
+                return InteractiveStepPlanner.CallKind.NORMAL;
+            }
+            return InteractiveStepPlanner.CallKind.CONFIRMATION;
+        }
+        return InteractiveStepPlanner.CallKind.NORMAL;
+    }
+
+    private InteractiveControlRequest buildDurableInteractiveControl(
+            ToolUseBlock selected, Message assistant, LoopContext loopCtx) {
+        if (AskUserTool.NAME.equals(selected.getName())) {
+            return buildAskUserControl(selected, assistant);
+        }
+        String controlId = UUID.randomUUID().toString();
+        Map<String, Object> input = selected.getInput() != null
+                ? selected.getInput()
+                : Collections.emptyMap();
+        ConfirmationPromptPayload payload;
+        String confirmationKind;
+        if (isInstallRequiringConfirmation(selected)) {
+            String command = String.valueOf(input.getOrDefault("command", ""));
+            InstallTargetParser.Parsed parsed = InstallTargetParser.parse(command);
+            payload = new ConfirmationPromptPayload(
+                    controlId,
+                    loopCtx.getSessionId(),
+                    parsed.toolName(),
+                    parsed.installTarget(),
+                    truncateForResult(command),
+                    "Install confirmation",
+                    "The agent wants to run an install command. Review it before approving.",
+                    List.of(
+                            new ConfirmationPromptPayload.ConfirmationChoice(
+                                    "approved", "Approve", "primary"),
+                            new ConfirmationPromptPayload.ConfirmationChoice(
+                                    "denied", "Deny", "danger")),
+                    Instant.now().plusSeconds(installConfirmTimeoutSeconds));
+            confirmationKind = "install";
+        } else if (isAgentMutationRequiringConfirmation(selected)) {
+            String target = agentMutationTargetLabel(selected.getName(), input);
+            boolean create = "CreateAgent".equals(selected.getName());
+            payload = new ConfirmationPromptPayload(
+                    controlId,
+                    loopCtx.getSessionId(),
+                    selected.getName(),
+                    target,
+                    truncateForResult(mapToJson(input)),
+                    create ? "Create Agent approval" : "Update Agent approval",
+                    "The agent wants to " + (create ? "create" : "update")
+                            + " Agent `" + target + "`.",
+                    List.of(
+                            new ConfirmationPromptPayload.ConfirmationChoice(
+                                    "approved", create ? "Create Agent" : "Update Agent", "primary"),
+                            new ConfirmationPromptPayload.ConfirmationChoice(
+                                    "denied", "Deny", "danger")),
+                    Instant.now().plusSeconds(installConfirmTimeoutSeconds));
+            confirmationKind = "agent_mutation";
+        } else {
+            throw new IllegalStateException("Selected durable control is not interactive");
+        }
+        return buildConfirmationControl(selected, payload, confirmationKind, input);
+    }
+
+    private static Map<String, Object> durableControlPayload(InteractiveControlRequest control) {
+        LinkedHashMap<String, Object> payload = new LinkedHashMap<>();
+        payload.put("controlId", control.getControlId());
+        payload.put("interactionKind", control.getInteractionKind());
+        payload.put("toolUseId", control.getToolUseId());
+        payload.put("toolName", control.getToolName());
+        payload.put("question", control.getQuestion());
+        payload.put("context", control.getContext());
+        payload.put("options", control.getOptions());
+        payload.put("allowOther", control.isAllowOther());
+        payload.put("extra", control.getExtra());
+        return payload;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static InteractiveControlRequest materializeDurableControl(
+            InteractiveIntentAck ack, FrozenJson expectedPayload) {
+        Object value = expectedPayload.toJavaValue();
+        if (!(value instanceof Map<?, ?> raw)) {
+            throw new IllegalStateException("Durable interactive control payload is invalid");
+        }
+        Map<String, Object> payload = (Map<String, Object>) raw;
+        InteractiveControlRequest control = new InteractiveControlRequest();
+        control.setControlId((String) payload.get("controlId"));
+        control.setInteractionKind((String) payload.get("interactionKind"));
+        control.setToolUseId((String) payload.get("toolUseId"));
+        control.setToolName((String) payload.get("toolName"));
+        control.setQuestion((String) payload.get("question"));
+        control.setContext((String) payload.get("context"));
+        Object rawOptions = payload.get("options");
+        control.setOptions(rawOptions instanceof List<?> options
+                ? (List<Map<String, Object>>) (List<?>) options
+                : List.of());
+        control.setAllowOther(Boolean.TRUE.equals(payload.get("allowOther")));
+        Object rawExtra = payload.get("extra");
+        control.setExtra(rawExtra instanceof Map<?, ?> extra
+                ? (Map<String, Object>) extra
+                : Map.of());
+        control.setAssistantToolUseMessage(ack.intent().assistant().message().toMessage());
+        if (!ack.control().controlId().equals(control.getControlId())
+                || !ack.selectedControl().call().toolUseId().equals(control.getToolUseId())
+                || !ack.selectedControl().call().toolName().equals(control.getToolName())) {
+            throw new IllegalStateException("Durable interactive control identity is invalid");
+        }
+        return control;
+    }
+
+    private void publishDurableInteractiveControl(
+            LoopContext loopCtx, InteractiveControlRequest control) {
+        if (broadcaster == null || control == null || loopCtx.getSessionId() == null) return;
+        if ("ask_user".equals(control.getInteractionKind())) {
+            ChatEventBroadcaster.AskUserEvent event = new ChatEventBroadcaster.AskUserEvent();
+            event.askId = control.getControlId();
+            event.question = control.getQuestion();
+            event.context = control.getContext();
+            event.allowOther = control.isAllowOther();
+            event.options = control.getOptions().stream()
+                    .map(option -> new ChatEventBroadcaster.AskUserEvent.Option(
+                            String.valueOf(option.getOrDefault("label", "")),
+                            option.get("description") != null
+                                    ? String.valueOf(option.get("description"))
+                                    : null))
+                    .toList();
+            broadcaster.askUser(loopCtx.getSessionId(), event);
+            return;
+        }
+        if ("confirmation".equals(control.getInteractionKind())) {
+            Map<String, Object> extra = control.getExtra();
+            List<ConfirmationPromptPayload.ConfirmationChoice> choices = control.getOptions().stream()
+                    .map(option -> new ConfirmationPromptPayload.ConfirmationChoice(
+                            String.valueOf(option.getOrDefault("value", "")),
+                            String.valueOf(option.getOrDefault("label", "")),
+                            String.valueOf(option.getOrDefault("style", ""))))
+                    .toList();
+            Instant expiresAt = extra.get("expiresAt") instanceof String value
+                    && !value.isBlank() ? Instant.parse(value) : null;
+            broadcaster.confirmationRequired(loopCtx.getSessionId(), new ConfirmationPromptPayload(
+                    control.getControlId(),
+                    loopCtx.getSessionId(),
+                    stringValue(extra.get("installTool")),
+                    stringValue(extra.get("installTarget")),
+                    stringValue(extra.get("commandPreview")),
+                    control.getQuestion(),
+                    control.getContext(),
+                    choices,
+                    expiresAt));
+        }
+    }
+
+    private static InteractiveIntentAck requireInteractiveIntentAck(
+            InteractiveIntentCommand command, InteractiveIntentAck ack) {
+        if (ack == null) {
+            throw new IllegalStateException(
+                    "Durable interactive intent returned no acknowledgement");
+        }
+        requireIntentAck(command.intent(), ack.intent());
+        if (!command.plan().selectedControl().equals(ack.selectedControl())) {
+            throw new IllegalStateException(
+                    "Durable interactive selection does not match the command");
+        }
+        PersistedMessageOccurrence control = ack.control();
+        Map<String, Object> metadata = control.metadata();
+        Object rawPayload = metadata.get("payload");
+        String interactionKind = command.plan().selectedControl().kind()
+                == InteractiveStepPlanner.CallKind.ASK_USER
+                        ? "ask_user"
+                        : "confirmation";
+        if (!"SYSTEM_EVENT".equals(control.msgType())
+                || !interactionKind.equals(control.messageType())
+                || !command.controlId().equals(control.controlId())
+                || control.answeredAt() != null
+                || control.writeBatchOrdinal() != 0
+                || !java.util.Objects.equals(command.intent().traceId(), control.traceId())
+                || control.message().role() != Message.Role.ASSISTANT
+                || !control.message().toMessage().getToolUseBlocks().isEmpty()
+                || !command.displayText().equals(control.message().toMessage().getTextContent())
+                || !command.controlId().equals(metadata.get("controlId"))
+                || !interactionKind.equals(metadata.get("interactionKind"))
+                || !command.plan().selectedControl().call().toolUseId()
+                        .equals(metadata.get("toolUseId"))
+                || !command.plan().selectedControl().call().toolName()
+                        .equals(metadata.get("toolName"))
+                || !Integer.valueOf(command.plan().selectedControl().providerOrdinal())
+                        .equals(metadata.get("providerOrdinal"))
+                || !"pending".equals(metadata.get("state"))
+                || !(metadata.get("attemptId") instanceof Number attemptId)
+                || attemptId.longValue() != ack.intent().attemptId()
+                || !ack.intent().stepId().toString().equals(metadata.get("stepId"))
+                || !command.payload().equals(FrozenJson.capture(rawPayload))) {
+            throw new IllegalStateException(
+                    "Durable interactive control acknowledgement is invalid");
+        }
+        return ack;
+    }
+
+    private static Message requireIntentAck(IntentCommitCommand command, IntentCommitAck ack) {
+        if (ack == null) {
+            throw new IllegalStateException("Durable intent commit returned no acknowledgement");
+        }
+        if (!command.stepId().equals(ack.stepId())) {
+            throw new IllegalStateException("Durable intent acknowledgement step does not match the command");
+        }
+        if (!command.manifest().equals(ack.manifest())) {
+            throw new IllegalStateException("Durable intent acknowledgement manifest does not match the command");
+        }
+        if (ack.replaySafety() != command.manifest().replaySafety()) {
+            throw new IllegalStateException("Durable intent acknowledgement replay safety does not match the command");
+        }
+        if (!command.expectedPreIntentFrontier().equals(ack.preIntentFrontier())) {
+            throw new IllegalStateException("Durable intent acknowledgement frontier does not match the command");
+        }
+        if (!command.writeBatchId().equals(ack.assistant().writeBatchId())
+                || ack.assistant().writeBatchOrdinal() != 0) {
+            throw new IllegalStateException("Durable intent acknowledgement write identity does not match the command");
+        }
+        if (!command.assistant().equals(ack.assistant().message())) {
+            throw new IllegalStateException("Durable intent acknowledgement assistant does not match the command");
+        }
+        if (!java.util.Objects.equals(command.traceId(), ack.assistant().traceId())) {
+            throw new IllegalStateException("Durable intent acknowledgement trace does not match the command");
+        }
+        if (!"NORMAL".equals(ack.assistant().msgType())
+                || !"normal".equals(ack.assistant().messageType())
+                || ack.assistant().controlId() != null
+                || ack.assistant().answeredAt() != null
+                || !ack.assistant().metadata().isEmpty()) {
+            throw new IllegalStateException(
+                    "Durable intent acknowledgement assistant occurrence has invalid fields");
+        }
+        long expectedAssistantSeq;
+        try {
+            expectedAssistantSeq = Math.addExact(
+                    command.expectedPreIntentFrontier().maxSeq(), 1L);
+        } catch (ArithmeticException invalidFrontier) {
+            throw new IllegalStateException(
+                    "Durable intent acknowledgement sequence does not follow the frontier");
+        }
+        if (ack.assistant().seqNo() != expectedAssistantSeq
+                || ack.assistant().messageId()
+                        <= command.expectedPreIntentFrontier().maxMessageId()) {
+            throw new IllegalStateException(
+                    "Durable intent acknowledgement sequence does not follow the frontier");
+        }
+        Message persisted = ack.assistant().message().toMessage();
+        if (persisted.getRole() != Message.Role.ASSISTANT) {
+            throw new IllegalStateException("Durable intent acknowledgement is not an assistant message");
+        }
+        return persisted;
+    }
+
+    private static void requireExecutionClaimAck(
+            ExecutionClaimCommand command, ExecutionClaimAck ack) {
+        if (ack == null) {
+            throw new IllegalStateException(
+                    "Durable execution claim returned no acknowledgement");
+        }
+        if (ack.attemptId() != command.attemptId()
+                || !ack.stepId().equals(command.stepId())
+                || !ack.claimRequestId().equals(command.claimRequestId())) {
+            throw new IllegalStateException(
+                    "Durable execution claim acknowledgement identity does not match the command");
+        }
+        if (!ack.executionScope().equals(command.claimant())) {
+            throw new IllegalStateException(
+                    "Durable execution claim acknowledgement scope does not match the command");
+        }
+        if (ack.state() != DurableToolAttemptState.EXECUTING
+                || ack.executionGeneration() != command.expectedGeneration() + 1L) {
+            throw new IllegalStateException(
+                    "Durable execution claim acknowledgement state is invalid");
+        }
+        if (!ack.executionLeaseUntil().isAfter(ack.claimedAt())) {
+            throw new IllegalStateException(
+                    "Durable execution claim acknowledgement lease is invalid");
+        }
+    }
+
+    private static List<Message> requireToolResultAck(
+            ToolResultCommitCommand command, ToolResultCommitAck ack) {
+        if (ack == null) {
+            throw new IllegalStateException(
+                    "Durable Tool result commit returned no acknowledgement");
+        }
+        if (ack.attemptId() != command.attemptId()
+                || !ack.stepId().equals(command.stepId())
+                || !ack.resultBatchId().equals(command.resultBatchId())) {
+            throw new IllegalStateException(
+                    "Durable Tool result acknowledgement identity does not match the command");
+        }
+        if (!ack.executionScope().equals(command.executionScope())
+                || ack.executionGeneration() != command.executionGeneration()) {
+            throw new IllegalStateException(
+                    "Durable Tool result acknowledgement execution authority is invalid");
+        }
+        if (!ack.preResultFrontier().equals(command.expectedPreResultFrontier())
+                || !ack.assistantPayloadHash().equals(command.assistantPayloadHash())
+                || !ack.manifestHash().equals(command.manifestHash())
+                || ack.results().size() != command.results().size()) {
+            throw new IllegalStateException(
+                    "Durable Tool result acknowledgement vector is invalid");
+        }
+
+        long expectedSeq;
+        try {
+            expectedSeq = Math.addExact(command.expectedPreResultFrontier().maxSeq(), 1L);
+        } catch (ArithmeticException invalidFrontier) {
+            throw new IllegalStateException(
+                    "Durable Tool result acknowledgement sequence is invalid");
+        }
+        long previousMessageId = command.expectedPreResultFrontier().maxMessageId();
+        List<Message> persistedResults = new ArrayList<>(ack.results().size());
+        for (int ordinal = 0; ordinal < ack.results().size(); ordinal++) {
+            PersistedMessageOccurrence occurrence = ack.results().get(ordinal);
+            if (!command.resultBatchId().toString().equals(occurrence.writeBatchId())
+                    || occurrence.writeBatchOrdinal() != ordinal
+                    || occurrence.seqNo() != expectedSeq + ordinal
+                    || occurrence.messageId() <= previousMessageId
+                    || !command.results().get(ordinal).equals(occurrence.message())
+                    || !java.util.Objects.equals(command.traceId(), occurrence.traceId())
+                    || !"NORMAL".equals(occurrence.msgType())
+                    || !"normal".equals(occurrence.messageType())
+                    || occurrence.controlId() != null
+                    || occurrence.answeredAt() != null
+                    || !occurrence.metadata().isEmpty()) {
+                throw new IllegalStateException(
+                        "Durable Tool result acknowledgement occurrence is invalid");
+            }
+            Message persisted = occurrence.message().toMessage();
+            if (persisted.getRole() != Message.Role.USER) {
+                throw new IllegalStateException(
+                        "Durable Tool result acknowledgement is not a user message");
+            }
+            requirePersistedBlockOccurrence(
+                    command, occurrence, ack.resultBlocks().get(ordinal), persisted, ordinal);
+            persistedResults.add(persisted);
+            previousMessageId = occurrence.messageId();
+        }
+        PersistedMessageOccurrence last = ack.results().get(ack.results().size() - 1);
+        DurableFrontier expectedPostFrontier = new DurableFrontier(
+                last.messageId(), last.seqNo());
+        if (!expectedPostFrontier.equals(ack.postResultFrontier())) {
+            throw new IllegalStateException(
+                    "Durable Tool result acknowledgement post frontier is invalid");
+        }
+        return List.copyOf(persistedResults);
+    }
+
+    private static void requirePersistedBlockOccurrence(
+            ToolResultCommitCommand command,
+            PersistedMessageOccurrence messageOccurrence,
+            PersistedBlockOccurrence blockOccurrence,
+            Message persisted,
+            int ordinal) {
+        if (!(persisted.getContent() instanceof List<?> blocks) || blocks.size() != 1
+                || !(blocks.get(0) instanceof Map<?, ?> block)
+                || !(block.get("tool_use_id") instanceof String toolUseId)
+                || !(block.get("content") instanceof String content)
+                || !(block.get("is_error") instanceof Boolean isError)) {
+            throw new IllegalStateException(
+                    "Durable Tool result acknowledgement block occurrence is invalid");
+        }
+        Object rawErrorType = block.get("error_type");
+        if (blockOccurrence.messageId() != messageOccurrence.messageId()
+                || blockOccurrence.seqNo() != messageOccurrence.seqNo()
+                || !blockOccurrence.sessionId().equals(command.executionScope().sessionId())
+                || !blockOccurrence.resultBatchId().equals(command.resultBatchId())
+                || blockOccurrence.resultBatchOrdinal() != ordinal
+                || blockOccurrence.blockIndex() != 0
+                || !blockOccurrence.toolUseId().equals(toolUseId)
+                || !blockOccurrence.content().equals(content)
+                || blockOccurrence.error() != isError
+                || !java.util.Objects.equals(blockOccurrence.errorType(), rawErrorType)
+                || !java.util.Objects.equals(blockOccurrence.traceId(), command.traceId())) {
+            throw new IllegalStateException(
+                    "Durable Tool result acknowledgement block occurrence is invalid");
+        }
+    }
+
+    private static void requireArchivePreparationAck(
+            ArchivePreparationCommand command, ArchivePreparationAck ack) {
+        if (ack == null) {
+            throw new IllegalStateException(
+                    "Durable Tool result archive preparation returned no acknowledgement");
+        }
+        if (ack.attemptId() != command.attemptId()
+                || !ack.stepId().equals(command.stepId())
+                || !ack.resultBatchId().equals(command.resultBatchId())
+                || !ack.executionScope().equals(command.executionScope())
+                || ack.executionGeneration() != command.executionGeneration()
+                || !ack.resultBlocks().equals(command.resultBlocks())) {
+            throw new IllegalStateException(
+                    "Durable Tool result archive acknowledgement identity is invalid");
+        }
+        if (ack.totalCount() != command.resultBlocks().size()
+                || (ack.state() == ArchivePreparationState.PREPARED
+                    && ack.preparedCount() != ack.totalCount())
+                || (ack.state() == ArchivePreparationState.RAW_FALLBACK
+                    && ack.preparedCount() != 0)) {
+            throw new IllegalStateException(
+                    "Durable Tool result archive acknowledgement state is invalid");
+        }
+    }
+
+    private void broadcastDeferredToolEvents(
+            LoopContext loopCtx,
+            List<ToolUseBlock> toolCalls,
+            Map<Integer, DeferredToolEvent> deferredEvents) {
+        if (broadcaster == null || loopCtx.getSessionId() == null) return;
+        for (int ordinal = 0; ordinal < toolCalls.size(); ordinal++) {
+            DeferredToolEvent event = deferredEvents.get(ordinal);
+            if (event == null) continue;
+            ToolUseBlock call = toolCalls.get(ordinal);
+            if (!call.getId().equals(event.toolUseId())
+                    || !call.getName().equals(event.toolName())) {
+                throw new IllegalStateException("Deferred durable Tool event identity is invalid");
+            }
+            broadcaster.toolStarted(
+                    loopCtx.getSessionId(),
+                    event.toolUseId(),
+                    event.toolName(),
+                    copyToolInput(event.input()));
+            broadcaster.toolFinished(
+                    loopCtx.getSessionId(),
+                    event.toolUseId(),
+                    event.status(),
+                    event.durationMs(),
+                    event.error());
+        }
+    }
+
+    private record DeferredToolEvent(
+            String toolUseId,
+            String toolName,
+            Map<String, Object> input,
+            String status,
+            long durationMs,
+            String error) {
+    }
+
+    /** Emits one already-persisted assistant intent, then delegates all later Provider calls. */
+    private static final class OneShotRecoveredProvider implements LlmProvider {
+        private final LlmProvider delegate;
+        private final LlmResponse recoveredResponse;
+        private final java.util.concurrent.atomic.AtomicBoolean pending =
+                new java.util.concurrent.atomic.AtomicBoolean(true);
+
+        private OneShotRecoveredProvider(LlmProvider delegate, IntentCommitAck intent) {
+            this.delegate = java.util.Objects.requireNonNull(delegate, "delegate");
+            Message assistant = intent.assistant().message().toMessage();
+            LlmResponse response = new LlmResponse();
+            response.setContent(assistant.getTextContent());
+            response.setReasoningContent(assistant.getReasoningContent());
+            response.setToolUseBlocks(materializeToolCalls(intent.manifest()));
+            response.setStopReason("tool_use");
+            this.recoveredResponse = response;
+        }
+
+        @Override
+        public String getName() {
+            return delegate.getName();
+        }
+
+        @Override
+        public LlmResponse chat(LlmRequest request) {
+            if (pending.compareAndSet(true, false)) return recoveredResponse;
+            return delegate.chat(request);
+        }
+
+        @Override
+        public LlmResponse chat(LlmRequest request, LlmCallContext context) {
+            if (pending.compareAndSet(true, false)) return recoveredResponse;
+            return delegate.chat(request, context);
+        }
+
+        @Override
+        public void chatStream(
+                LlmRequest request,
+                com.skillforge.core.llm.LlmStreamHandler handler) {
+            if (pending.compareAndSet(true, false)) {
+                handler.onComplete(recoveredResponse);
+                return;
+            }
+            delegate.chatStream(request, handler);
+        }
+
+        @Override
+        public void chatStream(
+                LlmRequest request,
+                LlmCallContext context,
+                com.skillforge.core.llm.LlmStreamHandler handler) {
+            if (pending.compareAndSet(true, false)) {
+                handler.onComplete(recoveredResponse);
+                return;
+            }
+            delegate.chatStream(request, context, handler);
+        }
+
+        @Override
+        public CompactThresholds getCompactThresholds() {
+            return delegate.getCompactThresholds();
+        }
+    }
+
     static ToolExecutionOutcome orderedOutcome(int index, ToolUseBlock toolCall,
                                                Map<Integer, ToolExecutionOutcome> outcomes,
                                                java.util.Set<Integer> timedOutIndexes) {
         ToolExecutionOutcome outcome = timedOutIndexes.contains(index) ? null : outcomes.get(index);
         if (outcome != null && outcome.toolResult() != null) return outcome;
         return ToolExecutionOutcome.withoutArtifacts(Message.toolResult(
-                toolCall.getId(), "Tool execution timed out after 120 seconds", true));
+                toolCall.getId(), "Tool execution timed out before the result barrier", true));
     }
 
     private boolean mergeArtifactsIntoAssistant(Message assistant,

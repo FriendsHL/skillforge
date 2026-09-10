@@ -81,7 +81,9 @@ const getSessionsMock = vi.fn(() =>
   }),
 );
 const retryFailedChatTurnMock = vi.fn(() => Promise.resolve({ data: {} }));
+const cancelChatMock = vi.fn(() => Promise.resolve({ data: {} }));
 const sendMessageMock = vi.fn(() => Promise.resolve({ data: {} }));
+const getUnknownOutcomeTargetMock = vi.fn(() => Promise.resolve({ status: 204, data: undefined }));
 const taskHookMocks = vi.hoisted(() => ({
   handleWsEvent: vi.fn(),
   retry: vi.fn(),
@@ -95,6 +97,9 @@ const chatSessionSettersCapture: {
     setRuntimeError: (error: string) => void;
   };
 } = { current: null };
+const cancellingSetterCapture: {
+  current: null | React.Dispatch<React.SetStateAction<boolean>>;
+} = { current: null };
 
 vi.mock('../../api', () => ({
   getAgents: (...args: unknown[]) => getAgentsMock(...(args as [])),
@@ -103,7 +108,7 @@ vi.mock('../../api', () => ({
   getSessionMessages: vi.fn(() => Promise.resolve({ data: [] })),
   sendMessage: (...args: unknown[]) => sendMessageMock(...(args as [string, unknown])),
   uploadChatAttachment: vi.fn(() => Promise.resolve({ data: { id: 'a' } })),
-  cancelChat: vi.fn(() => Promise.resolve({ data: {} })),
+  cancelChat: (...args: unknown[]) => cancelChatMock(...(args as [string, number, string])),
   retryFailedChatTurn: (...args: unknown[]) => retryFailedChatTurnMock(...(args as [string, number])),
   answerAsk: vi.fn(() => Promise.resolve({ data: {} })),
   setSessionMode: vi.fn(() => Promise.resolve({ data: {} })),
@@ -114,6 +119,12 @@ vi.mock('../../api', () => ({
   getSessionCheckpoint: vi.fn(() => Promise.resolve({ data: {} })),
   branchFromCheckpoint: vi.fn(() => Promise.resolve({ data: {} })),
   restoreFromCheckpoint: vi.fn(() => Promise.resolve({ data: {} })),
+  getUnknownOutcomeTarget: (...args: unknown[]) => getUnknownOutcomeTargetMock(...(args as [string])),
+  isUnknownOutcomeTarget: (value: unknown, sessionId: string) => (
+    !!value && typeof value === 'object'
+      && (value as { sessionId?: unknown }).sessionId === sessionId
+      && (value as { state?: unknown }).state === 'UNCERTAIN_PENDING_RESOLUTION'
+  ),
   getCollabRunMembers: vi.fn(() => Promise.resolve({ data: { members: [] } })),
   submitConfirmation: vi.fn(() => Promise.resolve({ data: {} })),
   extractList: <T,>(res: { data: T[] | { items?: T[] } }): T[] => {
@@ -178,7 +189,12 @@ vi.mock('../../hooks/useChatSession', () => ({
   },
 }));
 vi.mock('../../hooks/useChatWsEventHandler', () => ({
-  useChatWsEventHandler: () => taskHookMocks.chatHandler,
+  useChatWsEventHandler: (options: {
+    setCancelling: React.Dispatch<React.SetStateAction<boolean>>;
+  }) => {
+    cancellingSetterCapture.current = options.setCancelling;
+    return taskHookMocks.chatHandler;
+  },
 }));
 vi.mock('../../hooks/useSessionTasks', () => ({
   useSessionTasks: () => ({
@@ -219,10 +235,22 @@ vi.mock('../../components/RuntimeBanner', () => ({
   default: (props: {
     runtimeStatus: string;
     runtimeStep: string;
+    cancelling: boolean;
     retrying: boolean;
+    onCancel: () => void;
     onRetry: () => void;
   }) => (
     <div data-testid="runtime-banner">
+      {props.runtimeStatus === 'running' && (
+        <button
+          type="button"
+          data-testid="runtime-cancel"
+          disabled={props.cancelling}
+          onClick={props.onCancel}
+        >
+          {props.cancelling ? 'Cancelling' : 'Cancel'}
+        </button>
+      )}
       {props.runtimeStatus === 'error' && props.runtimeStep === 'retryable' && (
         <button
           type="button"
@@ -251,6 +279,13 @@ vi.mock('../../components/chat/SessionTaskProgress', () => ({
 }));
 vi.mock('../../components/PendingAskCard', () => ({ default: () => <div /> }));
 vi.mock('../../components/InstallConfirmationCard', () => ({ default: () => <div /> }));
+vi.mock('../../components/chat/UnknownOutcomeResolutionCard', () => ({
+  default: (props: { target: { sessionId: string; attemptId: number } }) => (
+    <div data-testid="unknown-outcome-card">
+      {props.target.sessionId}:{props.target.attemptId}
+    </div>
+  ),
+}));
 // ChatSidebar shim — surface props (activeAgentTab, scoped agent list,
 // selectedAgent, callbacks) so the Phase 2 UX refactor tests can drive tab
 // switches and assert agent picker scope without depending on AntD Tabs
@@ -266,6 +301,7 @@ vi.mock('../../components/ChatSidebar', () => ({
     selectedAgent?: number;
     activeAgentTab?: 'user' | 'system';
     onSelectAgent?: (id: number) => void;
+    onSelectSession?: (id: string) => void;
     onAgentTabChange?: (next: 'user' | 'system') => void;
   }) => {
     const tab = props.activeAgentTab ?? 'user';
@@ -294,6 +330,11 @@ vi.mock('../../components/ChatSidebar', () => ({
           type="button"
           data-testid="chat-sidebar-tab-system"
           onClick={() => props.onAgentTabChange?.('system')}
+        />
+        <button
+          type="button"
+          data-testid="chat-sidebar-session-other"
+          onClick={() => props.onSelectSession?.('s-user-2')}
         />
       </aside>
     );
@@ -331,12 +372,18 @@ describe('Chat — system agent send gate (SYSTEM-AGENT-TYPING Phase 2.3)', () =
     getAgentsMock.mockClear();
     getSessionsMock.mockClear();
     retryFailedChatTurnMock.mockClear();
-    sendMessageMock.mockClear();
+    cancelChatMock.mockReset();
+    cancelChatMock.mockResolvedValue({ data: {} });
+    sendMessageMock.mockReset();
+    sendMessageMock.mockResolvedValue({ data: {} });
+    getUnknownOutcomeTargetMock.mockReset();
+    getUnknownOutcomeTargetMock.mockResolvedValue({ status: 204, data: undefined });
     taskHookMocks.handleWsEvent.mockClear();
     taskHookMocks.chatHandler.mockClear();
     taskHookMocks.retry.mockClear();
     taskHookMocks.socketHandler = null;
     chatSessionSettersCapture.current = null;
+    cancellingSetterCapture.current = null;
     // Phase 2 UX refactor — chat sidebar tab is persisted in localStorage.
     // Clear between tests so localStorage state from one case doesn't leak
     // into the next (which would otherwise auto-flip the tab before the
@@ -389,6 +436,46 @@ describe('Chat — system agent send gate (SYSTEM-AGENT-TYPING Phase 2.3)', () =
     expect(screen.getByTestId('chat-window-input-disabled').textContent).toBe('false');
   });
 
+  it('discovers the current Session uncertain attempt without leaking it across sessions', async () => {
+    getUnknownOutcomeTargetMock.mockImplementation((sessionId: string) => Promise.resolve({
+      status: 200,
+      data: {
+        sessionId,
+        attemptId: sessionId === 's-user-1' ? 41 : 42,
+        historyEpoch: 3,
+        executionGeneration: 8,
+        executionFence: 13,
+        state: 'UNCERTAIN_PENDING_RESOLUTION',
+        actorAuthority: 'OWNER',
+        calls: [{
+          providerOrdinal: 0,
+          toolUseId: `tool-use-${sessionId}`,
+          toolName: 'ShellTool',
+          input: '{}',
+        }],
+        inboxIds: [],
+      },
+    }));
+    renderChatWithAgent(userAgent.id, 's-user-1');
+
+    expect(await screen.findByTestId('unknown-outcome-card')).toHaveTextContent('s-user-1:41');
+    fireEvent.click(screen.getByTestId('chat-sidebar-session-other'));
+    await waitFor(() => {
+      expect(screen.getByTestId('unknown-outcome-card')).toHaveTextContent('s-user-2:42');
+    });
+  });
+
+  it('renders a forbidden unknown-outcome lookup exactly like no pending attempt', async () => {
+    getUnknownOutcomeTargetMock.mockRejectedValue({
+      response: { status: 403, data: { error: 'secret cross-owner attempt' } },
+    });
+    renderChatWithAgent(userAgent.id, 's-user-1');
+
+    await waitFor(() => expect(getUnknownOutcomeTargetMock).toHaveBeenCalled());
+    expect(screen.queryByTestId('unknown-outcome-card')).not.toBeInTheDocument();
+    expect(screen.queryByText(/secret cross-owner/)).not.toBeInTheDocument();
+  });
+
   it('keeps Chat usable when the independent task region fails to load', async () => {
     renderChatWithAgent(userAgent.id);
 
@@ -426,8 +513,58 @@ describe('Chat — system agent send gate (SYSTEM-AGENT-TYPING Phase 2.3)', () =
     await waitFor(() => {
       expect(sendMessageMock).toHaveBeenCalledWith('s-user-1', {
         message: 'goal action message', userId: 1, attachmentIds: [],
+        requestId: expect.stringMatching(
+          /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+        ),
       });
     });
+  });
+
+  it('reuses the same message requestId after an ambiguous network failure', async () => {
+    sendMessageMock
+      .mockRejectedValueOnce(new Error('Network Error'))
+      .mockResolvedValueOnce({ data: { status: 'scheduled' } })
+      .mockResolvedValueOnce({ data: { status: 'scheduled' } });
+    renderChatWithAgent(userAgent.id, 's-user-1');
+    await screen.findByTestId('goal-brief-action');
+
+    fireEvent.click(screen.getByTestId('goal-brief-action'));
+    await waitFor(() => expect(sendMessageMock).toHaveBeenCalledTimes(1));
+    const firstRequestId = String(
+      (sendMessageMock.mock.calls[0]?.[1] as { requestId?: string })?.requestId,
+    );
+
+    fireEvent.click(screen.getByTestId('goal-brief-action'));
+    await waitFor(() => expect(sendMessageMock).toHaveBeenCalledTimes(2));
+    expect(
+      (sendMessageMock.mock.calls[1]?.[1] as { requestId?: string })?.requestId,
+    ).toBe(firstRequestId);
+
+    fireEvent.click(screen.getByTestId('goal-brief-action'));
+    await waitFor(() => expect(sendMessageMock).toHaveBeenCalledTimes(3));
+    expect(
+      (sendMessageMock.mock.calls[2]?.[1] as { requestId?: string })?.requestId,
+    ).not.toBe(firstRequestId);
+  });
+
+  it('reuses the same message requestId after executor rejection because acceptance is durable', async () => {
+    sendMessageMock
+      .mockRejectedValueOnce({ response: { status: 429 } })
+      .mockResolvedValueOnce({ data: { status: 'scheduled' } });
+    renderChatWithAgent(userAgent.id, 's-user-1');
+    await screen.findByTestId('goal-brief-action');
+
+    fireEvent.click(screen.getByTestId('goal-brief-action'));
+    await waitFor(() => expect(sendMessageMock).toHaveBeenCalledTimes(1));
+    const firstRequestId = String(
+      (sendMessageMock.mock.calls[0]?.[1] as { requestId?: string })?.requestId,
+    );
+
+    fireEvent.click(screen.getByTestId('goal-brief-action'));
+    await waitFor(() => expect(sendMessageMock).toHaveBeenCalledTimes(2));
+    expect(
+      (sendMessageMock.mock.calls[1]?.[1] as { requestId?: string })?.requestId,
+    ).toBe(firstRequestId);
   });
 
   // ---- Phase 2 UX refactor (2026-05-18) — sidebar Tabs --------------------
@@ -519,5 +656,102 @@ describe('Chat — system agent send gate (SYSTEM-AGENT-TYPING Phase 2.3)', () =
     await waitFor(() => {
       expect(screen.queryByTestId('runtime-retry')).not.toBeInTheDocument();
     });
+  });
+
+  it('reuses one cancellation requestId after network and ambiguous 5xx failures', async () => {
+    cancelChatMock
+      .mockRejectedValueOnce(new Error('Network Error'))
+      .mockRejectedValueOnce({ response: { status: 503 } })
+      .mockRejectedValueOnce({ response: { status: 502 } })
+      .mockResolvedValueOnce({ data: { status: 'cancelling' } });
+    renderChatWithAgent(userAgent.id, 's-user-1');
+    await screen.findByTestId('chat-window');
+
+    act(() => chatSessionSettersCapture.current?.setRuntimeStatus('running'));
+    fireEvent.click(await screen.findByTestId('runtime-cancel'));
+    await waitFor(() => expect(cancelChatMock).toHaveBeenCalledTimes(1));
+    const firstRequestId = String(cancelChatMock.mock.calls[0]?.[2]);
+    expect(firstRequestId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+    );
+
+    await waitFor(() => expect(screen.getByTestId('runtime-cancel')).not.toBeDisabled());
+    fireEvent.click(screen.getByTestId('runtime-cancel'));
+    await waitFor(() => expect(cancelChatMock).toHaveBeenCalledTimes(2));
+    expect(cancelChatMock.mock.calls[1]?.[2]).toBe(firstRequestId);
+
+    await waitFor(() => expect(screen.getByTestId('runtime-cancel')).not.toBeDisabled());
+    fireEvent.click(screen.getByTestId('runtime-cancel'));
+    await waitFor(() => expect(cancelChatMock).toHaveBeenCalledTimes(3));
+    expect(cancelChatMock.mock.calls[2]?.[2]).toBe(firstRequestId);
+
+    await waitFor(() => expect(screen.getByTestId('runtime-cancel')).not.toBeDisabled());
+    fireEvent.click(screen.getByTestId('runtime-cancel'));
+    await waitFor(() => expect(cancelChatMock).toHaveBeenCalledTimes(4));
+    expect(cancelChatMock.mock.calls[3]?.[2]).toBe(firstRequestId);
+
+    await waitFor(() => expect(screen.getByTestId('runtime-cancel')).not.toBeDisabled());
+    fireEvent.click(screen.getByTestId('runtime-cancel'));
+    await waitFor(() => expect(cancelChatMock).toHaveBeenCalledTimes(5));
+    expect(cancelChatMock.mock.calls[4]?.[2]).not.toBe(firstRequestId);
+  });
+
+  it('clears a rejected cancellation requestId after an explicit 409', async () => {
+    cancelChatMock
+      .mockRejectedValueOnce({ response: { status: 409 } })
+      .mockResolvedValueOnce({ data: { status: 'cancelling' } });
+    renderChatWithAgent(userAgent.id, 's-user-1');
+    await screen.findByTestId('chat-window');
+
+    act(() => chatSessionSettersCapture.current?.setRuntimeStatus('running'));
+    fireEvent.click(await screen.findByTestId('runtime-cancel'));
+    await waitFor(() => expect(cancelChatMock).toHaveBeenCalledTimes(1));
+    const rejectedRequestId = String(cancelChatMock.mock.calls[0]?.[2]);
+
+    await waitFor(() => expect(screen.getByTestId('runtime-cancel')).not.toBeDisabled());
+    fireEvent.click(screen.getByTestId('runtime-cancel'));
+    await waitFor(() => expect(cancelChatMock).toHaveBeenCalledTimes(2));
+    expect(cancelChatMock.mock.calls[1]?.[2]).not.toBe(rejectedRequestId);
+  });
+
+  it('never carries a failed cancellation requestId into another session', async () => {
+    let rejectOldRequest: ((reason?: unknown) => void) | undefined;
+    const oldRequest = new Promise<never>((_resolve, reject) => {
+      rejectOldRequest = reject;
+    });
+    cancelChatMock
+      .mockReturnValueOnce(oldRequest)
+      .mockRejectedValueOnce({ response: { status: 503 } })
+      .mockResolvedValueOnce({ data: { status: 'cancelling' } });
+    renderChatWithAgent(userAgent.id, 's-user-1');
+    await screen.findByTestId('chat-window');
+
+    act(() => chatSessionSettersCapture.current?.setRuntimeStatus('running'));
+    fireEvent.click(await screen.findByTestId('runtime-cancel'));
+    await waitFor(() => expect(cancelChatMock).toHaveBeenCalledTimes(1));
+    const oldSessionRequestId = String(cancelChatMock.mock.calls[0]?.[2]);
+
+    fireEvent.click(screen.getByTestId('chat-sidebar-session-other'));
+    await waitFor(() => {
+      expect(screen.queryByTestId('runtime-cancel')).not.toBeInTheDocument();
+    });
+    act(() => chatSessionSettersCapture.current?.setRuntimeStatus('running'));
+    fireEvent.click(await screen.findByTestId('runtime-cancel'));
+
+    await waitFor(() => expect(cancelChatMock).toHaveBeenCalledTimes(2));
+    expect(cancelChatMock.mock.calls[1]?.[0]).toBe('s-user-2');
+    const newSessionRequestId = String(cancelChatMock.mock.calls[1]?.[2]);
+    expect(newSessionRequestId).not.toBe(oldSessionRequestId);
+
+    await waitFor(() => expect(screen.getByTestId('runtime-cancel')).not.toBeDisabled());
+    await act(async () => rejectOldRequest?.(new Error('Late network failure')));
+    fireEvent.click(screen.getByTestId('runtime-cancel'));
+
+    await waitFor(() => expect(cancelChatMock).toHaveBeenCalledTimes(3));
+    expect(cancelChatMock.mock.calls[2]).toEqual([
+      's-user-2',
+      1,
+      newSessionRequestId,
+    ]);
   });
 });

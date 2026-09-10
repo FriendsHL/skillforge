@@ -18,6 +18,8 @@ import {
 import CommandPopup from './chat/CommandPopup';
 import CommandResultModal from './chat/CommandResultModal';
 import TaskToolCallCard from './chat/TaskToolCallCard';
+import HistoryResultCard from './chat/HistoryResultCard';
+import { isHistoryToolName } from '../history/historyResultDecoder';
 import { RoleAvatar } from './chat/primitives';
 import {
   IconAttach,
@@ -730,7 +732,9 @@ const ToolCallRow: React.FC<ToolCallRowProps> = ({ tc }) => {
               <div className="tool-section-label">
                 output · {outputText.split('\n').length} lines
               </div>
-              <pre>{outputText}</pre>
+              {isHistoryToolName(tc.name)
+                ? <HistoryResultCard output={outputText} />
+                : <pre>{outputText}</pre>}
             </div>
           )}
         </div>

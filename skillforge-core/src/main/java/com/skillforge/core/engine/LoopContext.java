@@ -7,6 +7,10 @@ import com.skillforge.core.capability.ToolDiscoveryState;
 import com.skillforge.core.compact.TokenEstimator;
 import com.skillforge.core.context.runtime.ContextRuntimeSnapshot;
 import com.skillforge.core.context.runtime.SkillInvocationRef;
+import com.skillforge.core.engine.durability.DurableFrontier;
+import com.skillforge.core.engine.durability.LoopDurabilityScope;
+import com.skillforge.core.engine.durability.RecoveredToolAttempt;
+import com.skillforge.core.engine.durability.ExecutionClaimAck;
 import com.skillforge.core.skill.view.SessionSkillView;
 
 import java.util.ArrayList;
@@ -20,6 +24,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.IdentityHashMap;
 
 /**
  * 循环上下文，贯穿整个 Agent Loop 生命周期。
@@ -30,6 +35,13 @@ public class LoopContext {
     private List<Message> messages;
     private String sessionId;
     private Long userId;
+    /** Server-authoritative loop identity used by the optional durable Tool protocol. */
+    private LoopDurabilityScope durabilityScope;
+    /** Durable transcript frontier on which the next Provider request is based. */
+    private DurableFrontier expectedDurableFrontier;
+    /** One-shot persisted Tool vector to execute before the next real Provider call. */
+    private RecoveredToolAttempt recoveredToolAttempt;
+    private ExecutionClaimAck activeDurableExecution;
     /**
      * OBS-2 M1: trace id (UUID) 由 ChatService 在 chatStream / answerAsk / answerConfirmation
      * 入口生成，透传到 engine。AgentLoopEngine 使用此值作为 rootSpan id（AGENT_LOOP），
@@ -198,6 +210,13 @@ public class LoopContext {
      * <p>{@code null} (default) → no materialization, messages pass through unchanged.
      */
     private MessageMaterializer messageMaterializer;
+
+    /**
+     * Object-identity marks for USER messages committed by the ordered inbox during this loop.
+     * They are used only by the transient Provider materializer; raw messages remain separate.
+     */
+    private final Set<Message> providerMergeEligibleUsers =
+            Collections.newSetFromMap(new IdentityHashMap<>());
 
     public LoopContext() {
         this.messages = new ArrayList<>();
@@ -394,6 +413,34 @@ public class LoopContext {
 
     public void setAllowedMcpServerNames(Set<String> allowedMcpServerNames) {
         this.allowedMcpServerNames = allowedMcpServerNames;
+    }
+
+    public LoopDurabilityScope getDurabilityScope() {
+        return durabilityScope;
+    }
+
+    public void setDurabilityScope(LoopDurabilityScope durabilityScope) {
+        this.durabilityScope = durabilityScope;
+    }
+
+    public DurableFrontier getExpectedDurableFrontier() {
+        return expectedDurableFrontier;
+    }
+
+    public void setExpectedDurableFrontier(DurableFrontier expectedDurableFrontier) {
+        this.expectedDurableFrontier = expectedDurableFrontier;
+    }
+
+    /** Marks one exact in-memory inbox occurrence as eligible for provider-only coalescing. */
+    public void markProviderMergeEligibleUser(Message message) {
+        if (message != null) {
+            providerMergeEligibleUsers.add(message);
+        }
+    }
+
+    /** Identity-based check; callers cannot mark a reconstructed summary/control by equal text. */
+    boolean isProviderMergeEligibleUser(Message message) {
+        return message != null && providerMergeEligibleUsers.contains(message);
     }
 
     /** Enqueue a user message to be injected at the next iteration boundary. Thread-safe. */
@@ -656,11 +703,15 @@ public class LoopContext {
     }
 
     public void restoreRuntimeSnapshot(ContextRuntimeSnapshot snapshot) {
+        // Restore is replacement, never merge. Clear first so an invalid/legacy checkpoint cannot
+        // retain runtime capabilities learned after the requested checkpoint.
+        toolDiscoveryState.restore(Map.of());
+        invokedSkills.clear();
+        skillInvocationSequence.set(0L);
         if (snapshot == null || snapshot.version() != ContextRuntimeSnapshot.CURRENT_VERSION) {
             return;
         }
         toolDiscoveryState.restore(snapshot.discoveredToolSchemaHashes());
-        invokedSkills.clear();
         long maxSequence = 0L;
         for (SkillInvocationRef ref : snapshot.invokedSkills()) {
             if (ref == null || ref.skillId().isBlank()) continue;
@@ -704,5 +755,21 @@ public class LoopContext {
 
     public void setMessageMaterializer(MessageMaterializer messageMaterializer) {
         this.messageMaterializer = messageMaterializer;
+    }
+
+    public RecoveredToolAttempt getRecoveredToolAttempt() {
+        return recoveredToolAttempt;
+    }
+
+    public void setRecoveredToolAttempt(RecoveredToolAttempt recoveredToolAttempt) {
+        this.recoveredToolAttempt = recoveredToolAttempt;
+    }
+
+    public ExecutionClaimAck getActiveDurableExecution() {
+        return activeDurableExecution;
+    }
+
+    public void setActiveDurableExecution(ExecutionClaimAck activeDurableExecution) {
+        this.activeDurableExecution = activeDurableExecution;
     }
 }

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Modal, message } from 'antd';
+import { Alert, message } from 'antd';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import ChatWindow from '../components/ChatWindow';
 import SessionReplay from '../components/SessionReplay';
@@ -36,10 +36,13 @@ import {
   restoreFromCheckpoint,
   getCollabRunMembers,
   submitConfirmation,
+  getUnknownOutcomeTarget,
+  isUnknownOutcomeTarget,
   extractList,
   type ConfirmationDecision,
   type ConfirmationPromptPayload,
   type SessionCompactionCheckpoint,
+  type UnknownOutcomeTarget,
 } from '../api';
 import { z } from 'zod';
 import { AgentSchema, SessionSchema, safeParseList } from '../api/schemas';
@@ -58,6 +61,7 @@ import { useSessionTasks } from '../hooks/useSessionTasks';
 import { useAuth } from '../contexts/AuthContext';
 import { useLocalStorageString } from '../hooks/useLocalStorageString';
 import SessionTaskProgress from '../components/chat/SessionTaskProgress';
+import UnknownOutcomeResolutionCard from '../components/chat/UnknownOutcomeResolutionCard';
 
 interface PendingAskOption {
   label: string;
@@ -73,6 +77,37 @@ interface PendingAsk {
 
 const MAX_PEER_MESSAGES = 50;
 const DEFAULT_CONTEXT_WINDOW_TOKENS = 200000;
+
+interface CancelRequestIdentity {
+  sessionId: string;
+  requestId: string;
+}
+
+interface SendRequestIdentity {
+  sessionId: string;
+  payloadKey: string;
+  requestId: string;
+}
+
+const createCancelRequestId = (): string => {
+  const cryptoApi = globalThis.crypto;
+  if (typeof cryptoApi?.randomUUID === 'function') {
+    return cryptoApi.randomUUID();
+  }
+
+  const bytes = new Uint8Array(16);
+  if (typeof cryptoApi?.getRandomValues === 'function') {
+    cryptoApi.getRandomValues(bytes);
+  } else {
+    for (let i = 0; i < bytes.length; i += 1) {
+      bytes[i] = Math.floor(Math.random() * 256);
+    }
+  }
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (value) => value.toString(16).padStart(2, '0'));
+  return `${hex.slice(0, 4).join('')}-${hex.slice(4, 6).join('')}-${hex.slice(6, 8).join('')}-${hex.slice(8, 10).join('')}-${hex.slice(10).join('')}`;
+};
 
 const Chat: React.FC = () => {
   const { sessionId: urlSessionId } = useParams<{ sessionId?: string }>();
@@ -145,14 +180,18 @@ const Chat: React.FC = () => {
   const [checkpoints, setCheckpoints] = useState<SessionCompactionCheckpoint[]>([]);
   const [selectedCheckpoint, setSelectedCheckpoint] = useState<SessionCompactionCheckpoint>();
   const [checkpointActionLoading, setCheckpointActionLoading] = useState<string | null>(null);
+  const [unknownOutcomeTarget, setUnknownOutcomeTarget] = useState<UnknownOutcomeTarget | null>(null);
   const [compacting, setCompacting] = useState(false);
   const [compactionNotice, setCompactionNotice] = useState(false);
   const [transientSessionId, setTransientSessionId] = useState(activeSessionId);
   const [collabMembers, setCollabMembers] = useState<CollabMember[]>([]);
   const [peerMessages, setPeerMessages] = useState<PeerMessage[]>([]);
   const activeSessionIdRef = useRef<string | undefined>(activeSessionId);
+  const cancelRequestRef = useRef<CancelRequestIdentity | null>(null);
+  const sendRequestRef = useRef<SendRequestIdentity | null>(null);
   const checkpointLoadSeqRef = useRef(0);
   const checkpointDetailSeqRef = useRef(0);
+  const unknownOutcomeFetchSeqRef = useRef(0);
 
   // SYSTEM-AGENT-TYPING Phase 2 UX refactor (2026-05-18) — sidebar tab state
   // lives here (not in ChatSidebar) so it persists across remounts via
@@ -252,6 +291,8 @@ const Chat: React.FC = () => {
   }, [selectedAgent, userId, agents]);
 
   useEffect(() => {
+    cancelRequestRef.current = null;
+    sendRequestRef.current = null;
     setTransientSessionId(activeSessionId);
     setPendingAsk(null);
     setPendingConfirm(null);
@@ -273,6 +314,8 @@ const Chat: React.FC = () => {
     setCheckpoints([]);
     setSelectedCheckpoint(undefined);
     setCheckpointModalOpen(false);
+    unknownOutcomeFetchSeqRef.current += 1;
+    setUnknownOutcomeTarget(null);
   }, [activeSessionId]);
 
   useChatSession(activeSessionId, {
@@ -294,6 +337,37 @@ const Chat: React.FC = () => {
     setFullCompactCount,
     setTotalTokensReclaimed,
   });
+
+  const refreshUnknownOutcome = useCallback(async (requestedSessionId?: string) => {
+    const sessionId = requestedSessionId ?? activeSessionIdRef.current;
+    if (!sessionId) return;
+    const fetchSeq = ++unknownOutcomeFetchSeqRef.current;
+    try {
+      const response = await getUnknownOutcomeTarget(sessionId);
+      if (fetchSeq !== unknownOutcomeFetchSeqRef.current
+          || sessionId !== activeSessionIdRef.current) return;
+      if (response.status === 204) {
+        setUnknownOutcomeTarget(null);
+      } else if (isUnknownOutcomeTarget(response.data as unknown, sessionId)) {
+        setUnknownOutcomeTarget(response.data);
+      } else {
+        setUnknownOutcomeTarget(null);
+      }
+    } catch (error: unknown) {
+      if (fetchSeq !== unknownOutcomeFetchSeqRef.current
+          || sessionId !== activeSessionIdRef.current) return;
+      const status = (error as { response?: { status?: number } })?.response?.status;
+      // 403 must be indistinguishable from absence in the UI; 404 also covers
+      // master-off. 409 is a fail-closed ambiguous backend state.
+      if (status === 403 || status === 404 || status === 409) {
+        setUnknownOutcomeTarget(null);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeSessionId) void refreshUnknownOutcome(activeSessionId);
+  }, [activeSessionId, refreshUnknownOutcome]);
 
   // Short model name for LLM_CALL span labels (strip "provider:" prefix)
   const llmModelName = useMemo(() => {
@@ -334,7 +408,13 @@ const Chat: React.FC = () => {
   const handleWsEvent = useCallback((event: unknown): void => {
     handleChatWsEvent(event);
     handleSessionTasksWsEvent(event);
-  }, [handleChatWsEvent, handleSessionTasksWsEvent]);
+    if (event && typeof event === 'object') {
+      const type = (event as { type?: unknown }).type;
+      if (type === 'session_status' || type === 'message_appended' || type === 'messages_snapshot') {
+        void refreshUnknownOutcome();
+      }
+    }
+  }, [handleChatWsEvent, handleSessionTasksWsEvent, refreshUnknownOutcome]);
   const handleSessionTaskRetry = useCallback((): void => {
     void retrySessionTasks();
   }, [retrySessionTasks]);
@@ -510,10 +590,37 @@ const Chat: React.FC = () => {
         return;
       }
     }
+    const payloadKey = JSON.stringify([text, uploaded]);
+    let sendRequest = sendRequestRef.current;
+    if (sendRequest?.sessionId !== sid || sendRequest.payloadKey !== payloadKey) {
+      sendRequest = {
+        sessionId: sid,
+        payloadKey,
+        requestId: createCancelRequestId(),
+      };
+      sendRequestRef.current = sendRequest;
+    }
     try {
-      await sendMessage(sid, { message: text, userId, attachmentIds: uploaded });
+      await sendMessage(sid, {
+        message: text,
+        userId,
+        attachmentIds: uploaded,
+        requestId: sendRequest.requestId,
+      });
+      if (sendRequestRef.current === sendRequest) {
+        sendRequestRef.current = null;
+      }
     } catch (e: unknown) {
       const status = (e as { response?: { status?: number } })?.response?.status;
+      // Preserve the identity only for ambiguous delivery failures. A retry of the same
+      // payload then replays the exact inbox/admission UUID instead of duplicating the USER.
+      // 429 is returned after the durable USER admission when only the local executor
+      // submission is rejected. Reusing the same identity is therefore required to avoid
+      // appending the accepted USER again when the operator retries the send action.
+      if (status != null && status < 500 && status !== 429
+          && sendRequestRef.current === sendRequest) {
+        sendRequestRef.current = null;
+      }
       if (status === 429) {
         message.error('Server is busy, please try again later');
       } else {
@@ -836,19 +943,6 @@ const Chat: React.FC = () => {
 
   const handleRestoreCheckpoint = async (checkpointId: string) => {
     if (!activeSessionId) return;
-    const ok = await new Promise<boolean>((resolve) => {
-      Modal.confirm({
-        title: '确认恢复到该 checkpoint？',
-        content: '恢复会覆盖当前会话消息历史，此操作不可撤销。',
-        okText: '确认恢复',
-        okButtonProps: { danger: true },
-        cancelText: '取消',
-        onOk: () => resolve(true),
-        onCancel: () => resolve(false),
-      });
-    });
-    if (!ok) return;
-
     setCheckpointActionLoading(`restore:${checkpointId}`);
     try {
       await restoreFromCheckpoint(activeSessionId, checkpointId, userId);
@@ -869,17 +963,38 @@ const Chat: React.FC = () => {
 
   const handleCancel = async () => {
     if (!activeSessionId || cancelling) return;
+    const sessionId = activeSessionId;
+    let request = cancelRequestRef.current;
+    if (request?.sessionId !== sessionId) {
+      request = { sessionId, requestId: createCancelRequestId() };
+      cancelRequestRef.current = request;
+    }
     setCancelling(true);
     try {
-      await cancelChat(activeSessionId, userId);
+      const response = await cancelChat(sessionId, userId, request.requestId);
+      if (cancelRequestRef.current === request) {
+        cancelRequestRef.current = null;
+      }
+      if (response.data?.status === 'requires_resolution') {
+        await refreshUnknownOutcome(sessionId);
+      }
     } catch (e: unknown) {
       const status = (e as { response?: { status?: number } })?.response?.status;
       if (status === 409) {
+        if (cancelRequestRef.current === request) {
+          cancelRequestRef.current = null;
+        }
         message.info('No active loop running');
+      } else if (status === 503 || status == null) {
+        message.error('Cancel temporarily unavailable; retry to continue');
       } else {
         message.error('Cancel failed');
       }
-      setCancelling(false);
+    } finally {
+      // The durable request id survives every ambiguous failure (network or any
+      // 5xx), but the button must become usable so the user can retry it. A late
+      // response from an old Session must never change the active Session UI.
+      if (activeSessionIdRef.current === sessionId) setCancelling(false);
     }
   };
 
@@ -1112,6 +1227,21 @@ const Chat: React.FC = () => {
               />
             )}
 
+            {unknownOutcomeTarget && unknownOutcomeTarget.sessionId === activeSessionId && (
+              <UnknownOutcomeResolutionCard
+                target={unknownOutcomeTarget}
+                onResolved={() => {
+                  setUnknownOutcomeTarget(null);
+                  message.success('Unknown outcome decision recorded.');
+                  void refreshMessagesAfterMutation();
+                }}
+                onUnavailable={() => {
+                  setUnknownOutcomeTarget(null);
+                  message.warning('Unknown outcome resolution is no longer available; refresh the Session state.');
+                }}
+              />
+            )}
+
             {viewMode === 'chat' ? (
               <>
                 {activeSessionId && (
@@ -1217,6 +1347,7 @@ const Chat: React.FC = () => {
         events={compactEvents}
       />
       <CheckpointModal
+        key={activeSessionId ?? 'no-session'}
         open={checkpointModalOpen}
         loading={checkpointsLoading}
         checkpoints={checkpoints}

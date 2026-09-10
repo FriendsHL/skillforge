@@ -6,10 +6,13 @@ spring:
     name: skillforge
 
   datasource:
-    # embedded-postgres 启动后会覆盖此 URL，此处作为外部 PG 的备用配置
+    # EmbeddedPostgresConfig overrides these with two local role-specific beans.
+    # For external PG, provision the fixed skillforge_app runtime LOGIN separately
+    # from the Flyway owner. V197 grants target this exact role, so only its password
+    # is configurable; changing the username would silently bypass the grant contract.
     url: jdbc:postgresql://localhost:15432/skillforge
-    username: postgres
-    password: postgres
+    username: skillforge_app
+    password: ${SKILLFORGE_DB_RUNTIME_PASSWORD:}
     driver-class-name: org.postgresql.Driver
 
   jpa:
@@ -34,6 +37,9 @@ spring:
   flyway:
     enabled: true
     locations: classpath:db/migration
+    # DDL/audit owner. Never reuse the restricted runtime role here.
+    user: ${SKILLFORGE_DB_MIGRATOR_USERNAME:postgres}
+    password: ${SKILLFORGE_DB_MIGRATOR_PASSWORD:postgres}
     baseline-on-migrate: true     # 首次迁移时自动 baseline
     # OPT-REPORT-V1.2 r2: ignore "deleted" markers left over from an earlier
     # mistaken `mvn flyway:repair` against skillforge-server alone (which
@@ -268,6 +274,15 @@ skillforge:
     # harvest:
     #   repo-root: <your-checkout-root>/
 
+  # SESSION-HISTORY-RECOVERY rollout is fail-closed. These are the only six
+  # frozen switches/limits; all production capabilities remain disabled in Batch 1.
+  session-history:
+    enabled: false
+    checkpoint-envelope-enabled: false
+    search-index-enabled: false
+    max-provider-wire-chars: 32000
+    recovery-eval-enabled: false
+
   session-message-store:
     row-read-enabled: true
     row-write-enabled: true
@@ -323,7 +338,7 @@ skillforge:
     range-model:
       enabled: true
     recovery:
-      enabled: true
+      enabled: false
       max-files: 5
       max-tokens-per-file: 5000
   # REMINDER-MVP: <system-reminder> framework + reminder sources.

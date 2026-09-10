@@ -12,6 +12,7 @@ public enum PromptSourceType {
     BEHAVIOR_RULES,
     RUNTIME_CONTEXT,
     SESSION_CONTEXT,
+    HISTORY,
     MEMORY,
     RAG,
     WEB,

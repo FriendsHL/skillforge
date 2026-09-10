@@ -8,18 +8,32 @@ import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.util.Optional;
+
 public interface SessionCompactionCheckpointRepository
         extends JpaRepository<SessionCompactionCheckpointEntity, String> {
 
-    Page<SessionCompactionCheckpointEntity> findBySessionIdOrderByCreatedAtDesc(
-            String sessionId, Pageable pageable);
+    @Query("""
+            SELECT c FROM SessionCompactionCheckpointEntity c
+            WHERE c.sessionId = :sessionId
+            ORDER BY CASE WHEN c.sidecarWatermark IS NULL THEN 1 ELSE 0 END,
+                     c.sidecarWatermark DESC
+            """)
+    Page<SessionCompactionCheckpointEntity> findTimelineBySessionId(
+            @Param("sessionId") String sessionId, Pageable pageable);
+
+    @Query("SELECT c.sidecarWatermark FROM SessionCompactionCheckpointEntity c WHERE c.id = :id")
+    Optional<Long> findSidecarWatermarkById(@Param("id") String id);
 
     @Modifying
     @Query("""
             DELETE FROM SessionCompactionCheckpointEntity c
             WHERE c.sessionId = :sessionId
-              AND (c.postRangeEndSeqNo IS NULL OR c.postRangeEndSeqNo > :seqNo)
+              AND c.id <> :retainedCheckpointId
+              AND c.sidecarWatermark > :sidecarWatermark
             """)
-    void deleteBySessionIdAfterSeqNo(@Param("sessionId") String sessionId,
-                                     @Param("seqNo") Long seqNo);
+    int deleteBySessionIdAfterSidecarWatermark(
+            @Param("sessionId") String sessionId,
+            @Param("retainedCheckpointId") String retainedCheckpointId,
+            @Param("sidecarWatermark") long sidecarWatermark);
 }

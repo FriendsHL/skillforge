@@ -3,6 +3,7 @@ package com.skillforge.server.init;
 import com.skillforge.core.model.ContentBlock;
 import com.skillforge.core.model.Message;
 import com.skillforge.server.entity.SessionEntity;
+import com.skillforge.server.config.SessionHistoryProperties;
 import com.skillforge.server.repository.SessionRepository;
 import com.skillforge.server.service.ChatService;
 import com.skillforge.server.service.SessionService;
@@ -92,6 +93,26 @@ class PendingConfirmationStartupRecoveryTest {
         verify(sessionService, never()).appendNormalMessages(anyString(), any());
         verify(chatService, never()).resumeInterruptedTurnAsync(anyString());
         assertThat(sess.getRuntimeStatus()).isEqualTo("waiting_user");
+    }
+
+    @Test
+    @DisplayName("durable waiting_user republishes its persisted control without resuming")
+    void durableWaitingUserRepublishesPersistedControl() {
+        SessionHistoryProperties properties = new SessionHistoryProperties();
+        properties.setEnabled(true);
+        recovery = new PendingConfirmationStartupRecovery(
+                sessionRepo, sessionService, chatService, properties);
+        SessionEntity sess = s("sid1", "waiting_user");
+        sess.setUserId(101L);
+        sess.setHistoryEpoch(7L);
+        when(sessionRepo.findAll()).thenReturn(List.of(sess));
+
+        recovery.runRecovery();
+
+        verify(chatService).republishWaitingInteractiveControl("sid1", 101L, 7L);
+        verify(chatService, never()).resumeInterruptedTurnAsync(anyString());
+        verify(sessionService, never()).getFullHistory(anyString());
+        verify(sessionService, never()).saveSession(any());
     }
 
     @Test

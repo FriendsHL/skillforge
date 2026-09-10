@@ -30,8 +30,21 @@ export const deleteSessions = (ids: string[], userId: number) =>
   api.delete<DeleteSessionsResponse>('/chat/sessions', { data: { ids }, params: { userId } });
 
 // Chat API
-export const sendMessage = (sessionId: string, data: { message: string; userId: number; attachmentIds?: string[] }) =>
-  api.post(`/chat/${sessionId}`, data);
+export interface SendMessageRequest {
+  message: string;
+  userId: number;
+  attachmentIds?: string[];
+  requestId?: string;
+}
+
+export interface SendMessageResponse {
+  sessionId: string;
+  status: string;
+  requestId: string;
+}
+
+export const sendMessage = (sessionId: string, data: SendMessageRequest) =>
+  api.post<SendMessageResponse>(`/chat/${sessionId}`, data);
 
 export interface ChatAttachmentResponse {
   id: string;
@@ -74,8 +87,20 @@ export const getChatAttachmentBlob = (
     params: sessionId ? { userId, sessionId } : { userId },
     responseType: 'blob',
   });
-export const cancelChat = (sessionId: string, userId: number) =>
-  api.post(`/chat/${sessionId}/cancel`, null, { params: { userId } });
+export interface CancelChatResponse {
+  status: string;
+  requestId?: string;
+  outcome?: string;
+}
+
+export const cancelChat = (
+  sessionId: string,
+  userId: number,
+  requestId?: string,
+) =>
+  api.post<CancelChatResponse>(`/chat/${sessionId}/cancel`, null, {
+    params: requestId ? { userId, requestId } : { userId },
+  });
 export const retryFailedChatTurn = (sessionId: string, userId: number) =>
   api.post(`/chat/${sessionId}/retry`, null, { params: { userId } });
 export const answerAsk = (sessionId: string, askId: string, answer: string, userId: number) =>
@@ -266,3 +291,178 @@ export const pruneSessionToolOutputs = (sessionId: string, userId: number, limit
   api.post<PruneToolOutputsResult>(`/chat/sessions/${sessionId}/prune-tools`, { limit }, { params: { userId } });
 export const getSessionReplay = (sessionId: string, userId: number) =>
   api.get(`/chat/sessions/${sessionId}/replay`, { params: { userId } });
+
+// ─── Unknown Tool outcome resolution ──────────────────────────────────────
+// These DTOs intentionally mirror the backend's closed request/discovery/ACK
+// records. There is no generic response envelope on either endpoint.
+export type UnknownOutcomeAction =
+  | 'CONTINUE_CURRENT_TIMELINE'
+  | 'PREPARE_RESTORE';
+
+export type UnknownOutcomeInboxDispositionKind =
+  | 'KEEP_FOR_CONTINUE'
+  | 'KEEP_FOR_RESTORE'
+  | 'DISCARD_FOR_RESTORE';
+
+export interface UnknownOutcomeInboxDisposition {
+  inboxId: string;
+  disposition: UnknownOutcomeInboxDispositionKind;
+}
+
+export interface UnknownOutcomeToolCall {
+  providerOrdinal: number;
+  toolUseId: string;
+  toolName: string;
+  /** Exact JSON display projection created from the server-verified immutable manifest. */
+  input: string;
+}
+
+export interface UnknownOutcomeTarget {
+  sessionId: string;
+  attemptId: number;
+  historyEpoch: number;
+  executionGeneration: number;
+  executionFence: number;
+  state: 'UNCERTAIN_PENDING_RESOLUTION';
+  actorAuthority: 'OWNER' | 'ADMIN';
+  calls: UnknownOutcomeToolCall[];
+  inboxIds: string[];
+}
+
+export function isUnknownOutcomeTarget(
+  value: unknown,
+  expectedSessionId: string,
+): value is UnknownOutcomeTarget {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const row = value as Record<string, unknown>;
+  const expectedKeys = [
+    'sessionId', 'attemptId', 'historyEpoch', 'executionGeneration',
+    'executionFence', 'state', 'actorAuthority', 'calls', 'inboxIds',
+  ];
+  if (Object.keys(row).length !== expectedKeys.length
+      || !expectedKeys.every((key) => Object.hasOwn(row, key))) return false;
+  if (row.sessionId !== expectedSessionId
+    || !Number.isSafeInteger(row.attemptId) || (row.attemptId as number) <= 0
+    || !Number.isSafeInteger(row.historyEpoch) || (row.historyEpoch as number) < 0
+    || !Number.isSafeInteger(row.executionGeneration) || (row.executionGeneration as number) <= 0
+    || !Number.isSafeInteger(row.executionFence) || (row.executionFence as number) < 0
+    || row.state !== 'UNCERTAIN_PENDING_RESOLUTION'
+    || (row.actorAuthority !== 'OWNER' && row.actorAuthority !== 'ADMIN')
+    || !Array.isArray(row.calls) || row.calls.length === 0
+    || !Array.isArray(row.inboxIds)
+    || !row.inboxIds.every((id) => typeof id === 'string' && id.length > 0)
+    || new Set(row.inboxIds).size !== row.inboxIds.length) return false;
+  const toolUseIds = new Set<string>();
+  return row.calls.every((candidate, index) => {
+    if (typeof candidate !== 'object' || candidate === null || Array.isArray(candidate)) {
+      return false;
+    }
+    const call = candidate as Record<string, unknown>;
+    if (Object.keys(call).length !== 4
+      || !Object.hasOwn(call, 'providerOrdinal')
+      || !Object.hasOwn(call, 'toolUseId')
+      || !Object.hasOwn(call, 'toolName')
+      || !Object.hasOwn(call, 'input')
+      || call.providerOrdinal !== index
+      || typeof call.toolUseId !== 'string' || call.toolUseId.length === 0
+      || typeof call.toolName !== 'string' || call.toolName.length === 0
+      || typeof call.input !== 'string' || call.input.length === 0
+      || toolUseIds.has(call.toolUseId)) return false;
+    try {
+      const input = JSON.parse(call.input) as unknown;
+      if (typeof input !== 'object' || input === null || Array.isArray(input)) return false;
+    } catch {
+      return false;
+    }
+    toolUseIds.add(call.toolUseId);
+    return true;
+  });
+}
+
+export interface UnknownOutcomeResolutionRequest {
+  resolutionRequestId: string;
+  expectedHistoryEpoch: number;
+  expectedExecutionGeneration: number;
+  expectedExecutionFence: number;
+  action: UnknownOutcomeAction;
+  reason: string;
+  inboxDispositions: UnknownOutcomeInboxDisposition[];
+}
+
+export interface UnknownOutcomeResolutionAck {
+  resolutionRequestId: string;
+  sessionId: string;
+  attemptId: number;
+  stepId: string;
+  historyEpoch: number;
+  executionGeneration: number;
+  executionFence: number;
+  actorAuthority: 'OWNER' | 'ADMIN';
+  action: UnknownOutcomeAction;
+  resultBatchId: string;
+  outcomeState: 'RESOLVED_UNKNOWN';
+  inboxDispositions: UnknownOutcomeInboxDisposition[];
+  postActionState: 'PENDING' | 'NONE';
+  restorePreparing: boolean;
+  auditId: number;
+  resolvedAt: string;
+}
+
+export function isUnknownOutcomeResolutionAck(
+  value: unknown,
+  target: UnknownOutcomeTarget,
+  command: UnknownOutcomeResolutionRequest,
+): value is UnknownOutcomeResolutionAck {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const row = value as Record<string, unknown>;
+  const expectedKeys = [
+    'resolutionRequestId', 'sessionId', 'attemptId', 'stepId', 'historyEpoch',
+    'executionGeneration', 'executionFence', 'actorAuthority', 'action',
+    'resultBatchId', 'outcomeState', 'inboxDispositions', 'postActionState',
+    'restorePreparing', 'auditId', 'resolvedAt',
+  ];
+  if (Object.keys(row).length !== expectedKeys.length
+      || !expectedKeys.every((key) => Object.hasOwn(row, key))) return false;
+  if (row.resolutionRequestId !== command.resolutionRequestId
+      || row.sessionId !== target.sessionId
+      || row.attemptId !== target.attemptId
+      || row.historyEpoch !== target.historyEpoch
+      || row.executionGeneration !== target.executionGeneration
+      || row.executionFence !== target.executionFence
+      || (row.actorAuthority !== 'OWNER' && row.actorAuthority !== 'ADMIN')
+      || row.action !== command.action
+      || row.outcomeState !== 'RESOLVED_UNKNOWN'
+      || !Number.isSafeInteger(row.auditId) || (row.auditId as number) <= 0
+      || typeof row.stepId !== 'string' || row.stepId.length === 0
+      || typeof row.resultBatchId !== 'string' || row.resultBatchId.length === 0
+      || typeof row.resolvedAt !== 'string' || Number.isNaN(Date.parse(row.resolvedAt))
+      || !Array.isArray(row.inboxDispositions)) return false;
+  const continueAction = command.action === 'CONTINUE_CURRENT_TIMELINE';
+  if (row.postActionState !== (continueAction ? 'PENDING' : 'NONE')
+      || row.restorePreparing !== !continueAction
+      || row.inboxDispositions.length !== command.inboxDispositions.length) return false;
+  return row.inboxDispositions.every((candidate, index) => {
+    if (typeof candidate !== 'object' || candidate === null || Array.isArray(candidate)) return false;
+    const disposition = candidate as Record<string, unknown>;
+    const expected = command.inboxDispositions[index];
+    return Object.keys(disposition).length === 2
+      && Object.hasOwn(disposition, 'inboxId')
+      && Object.hasOwn(disposition, 'disposition')
+      && disposition.inboxId === expected.inboxId
+      && disposition.disposition === expected.disposition;
+  });
+}
+
+export const getUnknownOutcomeTarget = (sessionId: string) =>
+  api.get<UnknownOutcomeTarget>(
+    `/sessions/${sessionId}/tool-attempts/unknown-outcome`,
+  );
+
+export const resolveUnknownOutcome = (
+  sessionId: string,
+  attemptId: number,
+  command: UnknownOutcomeResolutionRequest,
+) => api.post<UnknownOutcomeResolutionAck>(
+  `/sessions/${sessionId}/tool-attempts/${attemptId}/resolve-unknown`,
+  command,
+);

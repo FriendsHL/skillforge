@@ -161,7 +161,7 @@ public class CompactionConfig {
     public RecoveryPayloadBuilder recoveryPayloadBuilder(
             FileStateCache fileStateCache,
             com.skillforge.server.reminder.TaskReminderSource taskReminderSource,
-            @Value("${skillforge.compact.recovery.enabled:true}") boolean enabled,
+            @Value("${skillforge.compact.recovery.enabled:false}") boolean enabled,
             @Value("${skillforge.compact.recovery.max-files:5}") int maxFiles,
             @Value("${skillforge.compact.recovery.max-tokens-per-file:5000}") int maxTokensPerFile) {
         RecoveryPayloadBuilder builder = new RecoveryPayloadBuilder(fileStateCache);

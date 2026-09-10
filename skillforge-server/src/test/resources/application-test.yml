@@ -12,6 +12,11 @@ skillforge:
 # customizer bean 加载与否。Test 环境 ETL 都 off（不跑 legacy 回填）。
 spring:
   flyway:
+    # Persistence tests create isolated PostgreSQL instances with dynamic credentials.
+    # Keep their Flyway owner aligned with that test datasource; production separation
+    # is asserted against main application.yml by EmbeddedPostgresConfigTest.
+    user: ${spring.datasource.username}
+    password: ${spring.datasource.password}
     placeholders:
       etl_mode: off
       etl_trace_span_mode: off
